@@ -1028,7 +1028,12 @@ def run_installer(path: Path) -> int:
     result.add_row("Configuration", str(path))
     result.add_row("Transport", "verified")
     result.add_row("Proxmox", "verified")
-    result.add_row("Gold", "verified")
+    result.add_row(
+        "Gold",
+        "PVE + guest verified"
+        if gold_readiness.guest_checked
+        else f"PVE verified; guest not checked ({gold_readiness.power_state})",
+    )
     result.add_row("Storage", "configured")
     result.add_row("Config", "validated and written")
     if backup is not None:
