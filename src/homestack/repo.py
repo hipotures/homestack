@@ -14,8 +14,13 @@ import uuid
 
 from .config import Config, validate_repository_spec
 from .lifecycle import resolve_workspace_target
-from .models import AppError
-from .status import resolve_existing_workspace
+from .models import AppError, validate_name
+from .proxmox import (
+    cluster_vm_resource,
+    qm_config_on_node,
+    qm_status_on_node,
+    require_workspace_tag,
+)
 from .transports.base import Transport, run_local, run_local_passthrough
 from .ui import console
 
@@ -615,13 +620,43 @@ def rotate_repository_key(
     }
 
 
+def repository_workspace_info(
+    session: Transport, cfg: Config, vmid: int
+) -> dict[str, str | int]:
+    """Resolve only the workspace identity needed for repository operations."""
+    if vmid == cfg.gold_vmid:
+        raise AppError(f"Refusing repository operation on Gold VM {cfg.gold_vmid}")
+
+    resource = cluster_vm_resource(session, vmid)
+    if resource is None:
+        raise AppError(f"VMID {vmid} does not exist")
+    node = str(resource.get("node") or "")
+    if not node:
+        raise AppError(f"VM {vmid} has no node in cluster inventory")
+
+    vm_cfg = qm_config_on_node(session, cfg, node, vmid)
+    require_workspace_tag(vmid, vm_cfg)
+    name = str(vm_cfg.get("name") or "").strip()
+    if not name:
+        raise AppError(f"VM {vmid} has no name")
+    validate_name(name)
+
+    status = str(resource.get("status") or "").strip()
+    if not status:
+        status = qm_status_on_node(session, cfg, node, vmid)
+    return {
+        "vmid": vmid,
+        "name": name,
+        "node": node,
+        "status": status,
+    }
+
+
 def open_repository_workspace(
     session: Transport, cfg: Config, target: str | int
 ) -> tuple[int, str, WorkspaceRepoSSH]:
     vmid = resolve_workspace_target(session, cfg, target)
-    info = resolve_existing_workspace(
-        session, cfg, vmid, require_network=False
-    )
+    info = repository_workspace_info(session, cfg, vmid)
     if info["status"] != "running":
         raise AppError(
             f"Workspace VM {vmid} is {info['status']}; "

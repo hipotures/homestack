@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 import unittest
+from unittest.mock import patch
 
 from homestack import models, repo
 from support import test_config
@@ -31,6 +32,46 @@ class RepositoryHelpersTests(unittest.TestCase):
             repo.resolve_repository_argument(cfg, None, "tklivetracker"),
             "hipotures/tklivetracker",
         )
+
+    def test_repository_workspace_info_ignores_legacy_lifecycle_layout(self) -> None:
+        cfg = test_config()
+        resource = {
+            "vmid": 201,
+            "type": "qemu",
+            "node": "example-node-1",
+            "status": "running",
+        }
+        vm_cfg = {
+            "name": "tklivetracker",
+            "tags": "homestack-ws",
+            "virtiofs0": "legacy-mapping",
+        }
+        with patch.object(
+            repo, "cluster_vm_resource", return_value=resource
+        ), patch.object(
+            repo, "qm_config_on_node", return_value=vm_cfg
+        ):
+            info = repo.repository_workspace_info(object(), cfg, 201)
+        self.assertEqual(info["name"], "tklivetracker")
+        self.assertEqual(info["status"], "running")
+
+    def test_repository_workspace_info_still_requires_workspace_tag(self) -> None:
+        cfg = test_config()
+        resource = {
+            "vmid": 201,
+            "type": "qemu",
+            "node": "example-node-1",
+            "status": "running",
+        }
+        with patch.object(
+            repo, "cluster_vm_resource", return_value=resource
+        ), patch.object(
+            repo,
+            "qm_config_on_node",
+            return_value={"name": "tklivetracker", "tags": ""},
+        ):
+            with self.assertRaisesRegex(models.AppError, "homestack-ws"):
+                repo.repository_workspace_info(object(), cfg, 201)
 
     def test_repository_paths_use_persistent_home(self) -> None:
         checkout, key, public_key = repo.repository_paths(
