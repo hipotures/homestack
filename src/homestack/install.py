@@ -22,6 +22,12 @@ from .config import (
     validate_config_text,
     validate_sync_path_spec,
 )
+from .discovery import (
+    discover_environment,
+    discover_hardware_identities,
+    show_discovery_report,
+    verified_sessions,
+)
 from .models import AppError, GOLD_TAG, integer_value
 from .proxmox import (
     cluster_node_statuses,
@@ -36,6 +42,7 @@ from .proxmox import (
 )
 from .transports import open_transport
 from .transports.base import Transport
+from .transports.herdr import HerdrCandidate
 from .ui import console
 
 
@@ -110,17 +117,112 @@ def _existing_action(path: Path) -> str:
     return Prompt.ask("Choose an action", choices=["1", "2", "3"], default="1")
 
 
-def _configure_transport(base: Config) -> Config:
-    console.print(Panel.fit("Transport: Herdr", title="TRANSPORT"))
-    workspace = _ask_text("Herdr workspace", base.herdr_workspace)
-    tab = _ask_text("Herdr tab", base.herdr_tab)
-    control = _ask_text("Expected/control PVE node", base.control_node)
+def _configure_transport_manual(base: Config, *, use_defaults: bool) -> Config:
+    console.print(Panel.fit("Manual Herdr configuration", title="TRANSPORT"))
+    workspace = _ask_text(
+        "Herdr workspace",
+        base.herdr_workspace if use_defaults else None,
+    )
+    tab = _ask_text(
+        "Herdr tab",
+        base.herdr_tab if use_defaults else None,
+    )
+    control = _ask_text(
+        "Expected/control PVE node",
+        base.control_node if use_defaults else None,
+    )
     return replace(
         base,
         transport_type="herdr",
         control_node=control,
         herdr_workspace=workspace,
         herdr_tab=tab,
+    )
+
+
+def _configure_transport(
+    base: Config,
+    report: dict[str, Any],
+    *,
+    prefer_existing: bool,
+) -> Config:
+    verified = verified_sessions(report)
+    if not verified:
+        show_discovery_report(report)
+        console.print(
+            "[yellow]No verified Proxmox session was discovered in Herdr.[/yellow]\n"
+            "Open a Herdr tab, SSH to the Proxmox node as root, leave it at the root "
+            "shell prompt, and retry."
+        )
+        if not Confirm.ask("Enter Herdr connection manually?", default=False):
+            raise AppError("No verified Herdr Proxmox session is available")
+        return _configure_transport_manual(base, use_defaults=prefer_existing)
+
+    preferred_index: int | None = None
+    if prefer_existing:
+        for index, entry in enumerate(verified):
+            candidate = entry.get("candidate", {})
+            transport = entry.get("transport") or {}
+            if (
+                candidate.get("workspace") == base.herdr_workspace
+                and candidate.get("tab") == base.herdr_tab
+                and transport.get("host") == base.control_node
+            ):
+                preferred_index = index
+                break
+
+    if len(verified) == 1:
+        selected = verified[0]
+        candidate = selected["candidate"]
+        transport = selected.get("transport") or {}
+        console.print(
+            Panel.fit(
+                f"Workspace : {candidate.get('workspace')}\n"
+                f"Tab       : {candidate.get('tab')}\n"
+                f"SSH       : {candidate.get('ssh_target')}\n"
+                f"PVE node  : {transport.get('host') or candidate.get('prompt_host')}",
+                title="Detected Proxmox session",
+            )
+        )
+        if not Confirm.ask("Use this detected session?", default=True):
+            return _configure_transport_manual(base, use_defaults=prefer_existing)
+    else:
+        table = Table(title="Verified Proxmox sessions")
+        table.add_column("#", justify="right")
+        table.add_column("Workspace")
+        table.add_column("Tab")
+        table.add_column("SSH target")
+        table.add_column("PVE node")
+        for index, entry in enumerate(verified, 1):
+            candidate = entry["candidate"]
+            transport = entry.get("transport") or {}
+            table.add_row(
+                str(index),
+                str(candidate.get("workspace") or "—"),
+                str(candidate.get("tab") or "—"),
+                str(candidate.get("ssh_target") or "—"),
+                str(transport.get("host") or candidate.get("prompt_host") or "—"),
+            )
+        console.print(table)
+        default_index = (preferred_index + 1) if preferred_index is not None else 1
+        while True:
+            choice = IntPrompt.ask("Select the HomeStack control session", default=default_index)
+            if 1 <= choice <= len(verified):
+                selected = verified[choice - 1]
+                break
+            console.print(f"[yellow]Choose a number between 1 and {len(verified)}.[/yellow]")
+
+    candidate = HerdrCandidate.from_dict(selected["candidate"])
+    transport = selected.get("transport") or {}
+    control_node = str(
+        transport.get("host") or candidate.prompt_host or candidate.ssh_host
+    )
+    return replace(
+        base,
+        transport_type="herdr",
+        control_node=control_node,
+        herdr_workspace=candidate.workspace,
+        herdr_tab=candidate.tab,
     )
 
 
@@ -365,19 +467,8 @@ def _configure_network(cfg: Config) -> tuple[str, int, str, tuple[str, ...]]:
     return prefix, network.prefixlen, gateway, dns
 
 
-def _discover_hardware_identities() -> list[str]:
-    ssh_dir = Path.home() / ".ssh"
-    if not ssh_dir.is_dir():
-        return []
-    candidates = []
-    for path in sorted(ssh_dir.glob("*_sk")):
-        if path.is_file() and not path.name.endswith(".pub"):
-            candidates.append(f"~/.ssh/{path.name}")
-    return candidates
-
-
 def _configure_identities(cfg: Config) -> tuple[str, ...]:
-    discovered = _discover_hardware_identities()
+    discovered = discover_hardware_identities()
     if discovered:
         console.print(Panel.fit("\n".join(discovered), title="Detected hardware-backed SSH identities"))
     while True:
@@ -463,6 +554,7 @@ def run_installer(path: Path) -> int:
         raise AppError("HomeStack installation is interactive and requires a TTY")
 
     existing = path.exists()
+    action = "new"
     if existing:
         action = _existing_action(path)
         if action == "1":
@@ -472,8 +564,14 @@ def run_installer(path: Path) -> int:
     else:
         base = _fresh_config(path)
 
-    base = _configure_transport(base)
-    console.print("Verifying Herdr administrative session and Proxmox access…")
+    console.print("Discovering local Herdr and Proxmox environment…")
+    discovery_report = discover_environment()
+    base = _configure_transport(
+        base,
+        discovery_report,
+        prefer_existing=(action == "2"),
+    )
+    console.print("Verifying selected Herdr administrative session and Proxmox access…")
     with open_transport(base) as session:
         statuses = cluster_node_statuses(session)
         resources = cluster_vm_resources(session)

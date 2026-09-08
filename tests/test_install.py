@@ -9,6 +9,7 @@ import unittest
 from unittest.mock import patch
 
 from homestack import cli, config, install, models
+from homestack.transports.herdr import HerdrCandidate
 from support import test_config
 
 
@@ -31,6 +32,22 @@ class InstallCliTests(unittest.TestCase):
         self.assertEqual(parser.parse_args(['install']).command, 'install')
         with patch('sys.argv', ['homestack', 'install', '--help']), patch.object(
             cli, 'load_config', side_effect=AssertionError('must not load config')
+        ):
+            self.assertEqual(cli.main(), 0)
+
+    def test_discover_dispatches_without_loading_config(self) -> None:
+        report = {
+            "ok": True,
+            "config_used": False,
+            "read_only": True,
+            "local": {"commands": {}, "hardware_ssh_identities": []},
+            "sessions": [],
+            "errors": [],
+        }
+        with patch("sys.argv", ["homestack", "discover", "--json"]), patch(
+            "homestack.discovery.discover_environment", return_value=report
+        ), patch.object(
+            cli, "load_config", side_effect=AssertionError("must not load config")
         ):
             self.assertEqual(cli.main(), 0)
 
@@ -87,12 +104,20 @@ class ExistingConfigSafetyTests(unittest.TestCase):
             config.publish_config(existing)
             seen: list[config.Config] = []
 
-            def capture(cfg: config.Config) -> config.Config:
+            def capture(
+                cfg: config.Config,
+                report: dict[str, object],
+                *,
+                prefer_existing: bool,
+            ) -> config.Config:
+                self.assertTrue(prefer_existing)
                 seen.append(cfg)
                 raise models.AppError('stop after defaults')
 
             with patch.object(install.sys.stdin, 'isatty', return_value=True), patch.object(
                 install, '_existing_action', return_value='2'
+            ), patch.object(
+                install, 'discover_environment', return_value={'sessions': []}
             ), patch.object(install, '_configure_transport', side_effect=capture):
                 with self.assertRaisesRegex(models.AppError, 'stop after defaults'):
                     install.run_installer(path)
@@ -107,12 +132,20 @@ class ExistingConfigSafetyTests(unittest.TestCase):
             ))
             seen: list[config.Config] = []
 
-            def capture(cfg: config.Config) -> config.Config:
+            def capture(
+                cfg: config.Config,
+                report: dict[str, object],
+                *,
+                prefer_existing: bool,
+            ) -> config.Config:
+                self.assertFalse(prefer_existing)
                 seen.append(cfg)
                 raise models.AppError('stop after defaults')
 
             with patch.object(install.sys.stdin, 'isatty', return_value=True), patch.object(
                 install, '_existing_action', return_value='3'
+            ), patch.object(
+                install, 'discover_environment', return_value={'sessions': []}
             ), patch.object(install, '_configure_transport', side_effect=capture):
                 with self.assertRaisesRegex(models.AppError, 'stop after defaults'):
                     install.run_installer(path)
@@ -186,6 +219,55 @@ class DiscoveryTests(unittest.TestCase):
         self.assertTrue(all(command.startswith('pvesh get ') for command in session.commands))
 
 
+class InstallerTransportDiscoveryTests(unittest.TestCase):
+    def _entry(self, workspace: str, tab: str, host: str) -> dict[str, object]:
+        candidate = HerdrCandidate(
+            workspace=workspace,
+            workspace_id=f"ws-{workspace}",
+            tab=tab,
+            tab_id=f"tab-{tab}",
+            pane_id=f"pane-{tab}",
+            ssh_target=f"root@{host}",
+            ssh_host=host,
+            ssh_user="root",
+            ssh_cmdline=f"ssh root@{host}",
+            prompt_host=host,
+        )
+        return {
+            "candidate": candidate.as_dict(),
+            "verified": True,
+            "transport": {"host": host, "uid": 0, "type": "herdr"},
+        }
+
+    def test_single_detected_session_populates_transport_without_placeholder_defaults(self) -> None:
+        report = {"sessions": [self._entry("infra", "node-tab", "example-node-2")]}
+        with patch.object(install.Confirm, "ask", return_value=True):
+            cfg = install._configure_transport(
+                install._fresh_config(Path("/tmp/example.toml")),
+                report,
+                prefer_existing=False,
+            )
+        self.assertEqual(cfg.herdr_workspace, "infra")
+        self.assertEqual(cfg.herdr_tab, "node-tab")
+        self.assertEqual(cfg.control_node, "example-node-2")
+
+    def test_multiple_detected_sessions_require_selection(self) -> None:
+        report = {
+            "sessions": [
+                self._entry("infra", "pve1", "example-node-1"),
+                self._entry("infra", "pve2", "example-node-2"),
+            ]
+        }
+        with patch.object(install.IntPrompt, "ask", return_value=2):
+            cfg = install._configure_transport(
+                test_config(),
+                report,
+                prefer_existing=False,
+            )
+        self.assertEqual(cfg.herdr_tab, "pve2")
+        self.assertEqual(cfg.control_node, "example-node-2")
+
+
 class InstallerValueTests(unittest.TestCase):
     def test_network_validation_preserves_vmid_mapping(self) -> None:
         answers = iter(['10.20.30.0/24', '10.20.30.1', '10.20.30.53, 1.1.1.1'])
@@ -198,7 +280,7 @@ class InstallerValueTests(unittest.TestCase):
     def test_selected_ssh_identities_are_paths_only_and_ordered(self) -> None:
         with patch.object(
             install.Prompt, 'ask', return_value='~/.ssh/key_a_sk, ~/.ssh/key_b_sk'
-        ), patch.object(install, '_discover_hardware_identities', return_value=[]):
+        ), patch.object(install, 'discover_hardware_identities', return_value=[]):
             identities = install._configure_identities(test_config())
         self.assertEqual(identities, ('~/.ssh/key_a_sk', '~/.ssh/key_b_sk'))
 

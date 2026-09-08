@@ -21,12 +21,22 @@ The desktop also needs `herdr`, `ssh`, and `rsync`. Proxmox nodes need `qm`, `pv
 
 ## Configuration
 
-Copy `config.example.toml` to the per-user runtime location and customize the copy:
+Inspect the local Herdr/Proxmox environment without reading a HomeStack config or changing Proxmox resources:
 
 ```bash
-mkdir -p ~/.config/homestack
-cp config.example.toml ~/.config/homestack/config.toml
+uv run homestack discover
+uv run homestack discover --json
 ```
+
+Create or reconfigure the runtime config with the interactive installer:
+
+```bash
+uv run homestack install
+```
+
+The installer uses the same read-only discovery mechanism first, selects a verified root Herdr session, then asks only for configuration choices that cannot be discovered safely. An existing runtime config is never silently overwritten; reconfiguration is explicit and the previous file is backed up before atomic replacement.
+
+Manual configuration from `config.example.toml` remains available when needed.
 
 The default is `~/.config/homestack/config.toml`, or `$XDG_CONFIG_HOME/homestack/config.toml` when `XDG_CONFIG_HOME` is set. Override it for any invocation with `--config PATH`:
 
@@ -67,6 +77,8 @@ Commands use unique begin/end envelopes and the transport parses results from th
 ## Commands
 
 ```bash
+uv run homestack discover
+uv run homestack install
 uv run homestack transport
 uv run homestack create 200 example-workspace
 uv run homestack create 200 example-workspace --home-size 20G

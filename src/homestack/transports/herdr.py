@@ -27,6 +27,57 @@ class HerdrTarget:
     ssh_cmdline: str
 
 
+@dataclass(frozen=True)
+class HerdrCandidate:
+    workspace: str
+    workspace_id: str
+    tab: str
+    tab_id: str
+    pane_id: str
+    ssh_target: str
+    ssh_host: str
+    ssh_user: str | None
+    ssh_cmdline: str
+    prompt_host: str | None
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "workspace": self.workspace,
+            "workspace_id": self.workspace_id,
+            "tab": self.tab,
+            "tab_id": self.tab_id,
+            "pane_id": self.pane_id,
+            "ssh_target": self.ssh_target,
+            "ssh_host": self.ssh_host,
+            "ssh_user": self.ssh_user,
+            "ssh_cmdline": self.ssh_cmdline,
+            "prompt_host": self.prompt_host,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "HerdrCandidate":
+        return cls(
+            workspace=str(data["workspace"]),
+            workspace_id=str(data["workspace_id"]),
+            tab=str(data["tab"]),
+            tab_id=str(data["tab_id"]),
+            pane_id=str(data["pane_id"]),
+            ssh_target=str(data["ssh_target"]),
+            ssh_host=str(data["ssh_host"]),
+            ssh_user=(str(data["ssh_user"]) if data.get("ssh_user") else None),
+            ssh_cmdline=str(data["ssh_cmdline"]),
+            prompt_host=(str(data["prompt_host"]) if data.get("prompt_host") else None),
+        )
+
+
+@dataclass(frozen=True)
+class HerdrBootstrapConfig:
+    control_node: str
+    herdr_workspace: str
+    herdr_tab: str
+    herdr_debug: bool = True
+
+
 ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 
 
@@ -51,6 +102,147 @@ def herdr_json(args: list[str], *, check: bool = True) -> dict[str, Any]:
             )
         return {"error": {"code": "local-command", "message": (proc.stderr or proc.stdout).strip()}}
     return parse_json_response(proc.stdout, f"herdr {' '.join(args)}")
+
+
+SSH_OPTIONS_WITH_ARGUMENT = {
+    "-b",
+    "-c",
+    "-D",
+    "-E",
+    "-e",
+    "-F",
+    "-I",
+    "-i",
+    "-J",
+    "-L",
+    "-l",
+    "-m",
+    "-O",
+    "-o",
+    "-p",
+    "-Q",
+    "-R",
+    "-S",
+    "-W",
+    "-w",
+}
+
+
+def _ssh_target_from_argv(argv: list[str]) -> str | None:
+    index = 1
+    while index < len(argv):
+        token = argv[index]
+        if token == "--":
+            return argv[index + 1] if index + 1 < len(argv) else None
+        if token in SSH_OPTIONS_WITH_ARGUMENT:
+            index += 2
+            continue
+        if token.startswith("-"):
+            index += 1
+            continue
+        return token
+    return None
+
+
+def _split_ssh_target(target: str) -> tuple[str | None, str]:
+    user: str | None = None
+    host = target
+    if "@" in target:
+        user, host = target.rsplit("@", 1)
+        user = user or None
+    return user, host
+
+
+def _prompt_host_for_pane(pane_id: str) -> str | None:
+    proc = run_local(
+        [
+            "herdr",
+            "pane",
+            "read",
+            pane_id,
+            "--source",
+            "detection",
+        ],
+        check=False,
+    )
+    if proc.returncode != 0:
+        return None
+    cleaned = strip_ansi(proc.stdout)
+    nonempty = [line.rstrip() for line in cleaned.splitlines() if line.strip()]
+    if not nonempty:
+        return None
+    match = re.search(r"root@([A-Za-z0-9._-]+)(?::[^#\n]*)?#\s*$", nonempty[-1])
+    return match.group(1) if match else None
+
+
+def discover_herdr_candidates() -> list[HerdrCandidate]:
+    """Discover open Herdr tabs that currently contain one foreground SSH session."""
+    if shutil.which("herdr") is None:
+        raise AppError("Required local command 'herdr' was not found")
+
+    workspaces = herdr_json(["workspace", "list"])
+    workspace_items = workspaces.get("result", {}).get("workspaces", [])
+    candidates: list[HerdrCandidate] = []
+
+    for workspace_item in workspace_items:
+        workspace = str(workspace_item.get("label") or "").strip()
+        workspace_id = str(workspace_item.get("workspace_id") or "").strip()
+        if not workspace or not workspace_id:
+            continue
+
+        tabs = herdr_json(["tab", "list", "--workspace", workspace_id])
+        tab_items = tabs.get("result", {}).get("tabs", [])
+        panes = herdr_json(["pane", "list", "--workspace", workspace_id])
+        pane_items = panes.get("result", {}).get("panes", [])
+
+        for tab_item in tab_items:
+            tab = str(tab_item.get("label") or "").strip()
+            tab_id = str(tab_item.get("tab_id") or "").strip()
+            if not tab or not tab_id:
+                continue
+            matching_panes = [
+                item for item in pane_items if str(item.get("tab_id") or "") == tab_id
+            ]
+            if len(matching_panes) != 1:
+                continue
+            pane_id = str(matching_panes[0].get("pane_id") or "").strip()
+            if not pane_id:
+                continue
+
+            process_info = herdr_json(["pane", "process-info", "--pane", pane_id])
+            info = process_info.get("result", {}).get("process_info", {})
+            foreground = info.get("foreground_processes", []) or []
+            ssh_processes = [
+                item for item in foreground if str(item.get("name") or "") == "ssh"
+            ]
+            if len(ssh_processes) != 1:
+                continue
+
+            ssh = ssh_processes[0]
+            argv = [str(value) for value in ssh.get("argv", [])]
+            ssh_target = _ssh_target_from_argv(argv)
+            if not ssh_target:
+                continue
+            ssh_user, ssh_host = _split_ssh_target(ssh_target)
+            if not ssh_host:
+                continue
+            cmdline = str(ssh.get("cmdline") or " ".join(argv))
+            candidates.append(
+                HerdrCandidate(
+                    workspace=workspace,
+                    workspace_id=workspace_id,
+                    tab=tab,
+                    tab_id=tab_id,
+                    pane_id=pane_id,
+                    ssh_target=ssh_target,
+                    ssh_host=ssh_host,
+                    ssh_user=ssh_user,
+                    ssh_cmdline=cmdline,
+                    prompt_host=_prompt_host_for_pane(pane_id),
+                )
+            )
+
+    return candidates
 
 
 def strip_ansi(text: str) -> str:
@@ -98,7 +290,7 @@ def parse_remote_returncode(text: str, token: str) -> int | None:
 
 
 class HerdrSession:
-    def __init__(self, cfg: Config) -> None:
+    def __init__(self, cfg: Config | HerdrBootstrapConfig) -> None:
         self.cfg = cfg
         self.target: HerdrTarget | None = None
         self._verification: dict[str, Any] | None = None
@@ -455,7 +647,7 @@ class HerdrSession:
         return value
 
     def verify(self) -> dict[str, Any]:
-        target = self.discover()
+        target = self.target or self.discover()
         self.wait_for_prompt()
         probe_command = (
             "printf '{\"ok\":true,\"host\":\"%s\",\"uid\":%s}\\n' "
@@ -518,6 +710,30 @@ class PaneLock:
                 fcntl.flock(self.handle.fileno(), fcntl.LOCK_UN)
             finally:
                 self.handle.close()
+
+
+@contextmanager
+def open_herdr_candidate(candidate: HerdrCandidate) -> Iterator[HerdrSession]:
+    """Open and verify a discovered Herdr SSH candidate without loading HomeStack config."""
+    if shutil.which("herdr") is None:
+        raise AppError("Required local command 'herdr' was not found")
+    control_node = candidate.prompt_host or candidate.ssh_host
+    bootstrap = HerdrBootstrapConfig(
+        control_node=control_node,
+        herdr_workspace=candidate.workspace,
+        herdr_tab=candidate.tab,
+        herdr_debug=True,
+    )
+    with PaneLock(control_node):
+        session = HerdrSession(bootstrap)
+        session.target = HerdrTarget(
+            workspace_id=candidate.workspace_id,
+            tab_id=candidate.tab_id,
+            pane_id=candidate.pane_id,
+            ssh_cmdline=candidate.ssh_cmdline,
+        )
+        session.verify()
+        yield session
 
 
 @contextmanager

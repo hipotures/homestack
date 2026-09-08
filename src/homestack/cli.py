@@ -32,6 +32,10 @@ def show_help(cfg_path: Path) -> None:
     commands.add_column("Command")
     commands.add_column("Description")
     commands.add_row(
+        f"{cmd} discover",
+        "Read-only discovery of local Herdr sessions and reachable Proxmox environments; no config required.",
+    )
+    commands.add_row(
         f"{cmd} install",
         "Interactively discover Proxmox and write the runtime configuration.",
     )
@@ -85,6 +89,7 @@ def show_help(cfg_path: Path) -> None:
     options.add_row("-h, --help", "Show this help screen.")
 
     examples = (
+        f"{cmd} discover\n"
         f"{cmd} transport\n"
         f"{cmd} create 200 example-workspace\n"
         f"{cmd} create 200 example-workspace --storage example-storage\n"
@@ -112,6 +117,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("-y", "--yes", action="store_true", dest="global_yes")
 
     sub = parser.add_subparsers(dest="command")
+
+    discover = sub.add_parser("discover", add_help=False)
+    discover.add_argument("--json", action="store_true")
+    discover.add_argument("-h", "--help", action="store_true", dest="sub_help")
 
     install = sub.add_parser("install", add_help=False)
     install.add_argument("-h", "--help", action="store_true", dest="sub_help")
@@ -174,6 +183,16 @@ def main() -> int:
     json_mode = bool(args.global_json or getattr(args, "json", False))
 
     try:
+        if args.command == "discover":
+            from .discovery import discover_environment, show_discovery_report
+
+            result = discover_environment()
+            if json_mode:
+                emit_json(result)
+            else:
+                show_discovery_report(result)
+            return 0 if result.get("ok") else 1
+
         if args.command == "install":
             from .install import run_installer
 
