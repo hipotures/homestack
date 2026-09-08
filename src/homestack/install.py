@@ -346,6 +346,9 @@ def _select_numbered(
 ) -> tuple[str, ...]:
     if not options:
         return ()
+    if len(options) == 1:
+        console.print(f"  [1] {options[0]}")
+        return (options[0],)
     for index, value in enumerate(options, 1):
         console.print(f"  [{index}] {value}")
     default_indices = [str(options.index(value) + 1) for value in defaults if value in options]

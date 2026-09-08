@@ -173,6 +173,15 @@ class DiscoveryTests(unittest.TestCase):
         self.assertEqual(options['pve2'], ['shared'])
         self.assertEqual(unverified, {'pve2'})
 
+    def test_single_numbered_option_is_selected_without_prompt(self) -> None:
+        with patch.object(
+            install.Prompt,
+            'ask',
+            side_effect=AssertionError('single option must not prompt'),
+        ):
+            selected = install._select_numbered('select', ['local-lvm'])
+        self.assertEqual(selected, ('local-lvm',))
+
     def test_first_selected_storage_is_preserved_as_layout_default(self) -> None:
         with patch.object(install.Prompt, 'ask', return_value='2,1'):
             selected = install._select_numbered('select', ['slow', 'fast'])
