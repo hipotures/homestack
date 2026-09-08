@@ -204,11 +204,11 @@ One SSH ControlMaster connection is established and reused for checks, directory
 
 ## Repository provisioning
 
-Repository setup is explicit and independent of create, refresh, migrate, and sync. Configure an optional default repository and checkout root:
+Repository setup is explicit and independent of create, refresh, migrate, and sync. Configure the default GitHub owner and checkout root:
 
 ```toml
 [repo]
-default_repository = "owner/repository"
+owner = "owner"
 checkout_root = "~/DEV"
 ```
 
@@ -219,7 +219,7 @@ uv run homestack repo WORKSPACE
 uv run homestack repo WORKSPACE OWNER/REPO
 ```
 
-An explicit `OWNER/REPO` overrides `[repo] default_repository`. Without either value, the command fails without making changes. The command first inspects the workspace and GitHub state, then offers `Exit`, `Setup`, or `Rotate key`.
+Without an explicit repository, HomeStack resolves the workspace first and uses `[repo] owner` plus the actual workspace name: `homestack repo WORKSPACE` means `OWNER/WORKSPACE`. This also applies to numeric VMID targets, so `homestack repo 200` uses the resolved workspace name rather than `OWNER/200`. An explicit `OWNER/REPO` overrides this default. If neither an explicit repository nor `[repo] owner` is available, the command fails without making changes. The command first inspects the workspace and GitHub state, then offers `Exit`, `Setup`, or `Rotate key`.
 
 Setup creates one Ed25519 deploy-key pair below `~/.ssh/homestack/github/` inside the workspace persistent home. The private key never leaves the workspace. HomeStack reads only the public key over the existing hardware-authenticated workspace SSH connection and registers it through the trusted desktop's authenticated `gh` session as a read-write GitHub deploy key.
 

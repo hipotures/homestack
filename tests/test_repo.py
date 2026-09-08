@@ -8,23 +8,29 @@ from support import test_config
 
 
 class RepositoryHelpersTests(unittest.TestCase):
-    def test_repository_argument_uses_explicit_value_or_config_default(self) -> None:
-        cfg = replace(
-            test_config(),
-            repo_default_repository="example/default",
-        )
+    def test_repository_argument_uses_explicit_value_or_owner_workspace_default(self) -> None:
+        cfg = replace(test_config(), repo_owner="example-owner")
         self.assertEqual(
             repo.resolve_repository_argument(
-                cfg, "hipotures/tklivetracker"
+                cfg, "hipotures/tklivetracker", "workspace-name"
             ),
             "hipotures/tklivetracker",
         )
         self.assertEqual(
-            repo.resolve_repository_argument(cfg, None),
-            "example/default",
+            repo.resolve_repository_argument(cfg, None, "workspace-name"),
+            "example-owner/workspace-name",
         )
-        with self.assertRaisesRegex(models.AppError, "default_repository"):
-            repo.resolve_repository_argument(test_config(), None)
+        with self.assertRaisesRegex(models.AppError, "\\[repo\\] owner"):
+            repo.resolve_repository_argument(
+                test_config(), None, "workspace-name"
+            )
+
+    def test_numeric_target_can_resolve_to_workspace_named_repository(self) -> None:
+        cfg = replace(test_config(), repo_owner="hipotures")
+        self.assertEqual(
+            repo.resolve_repository_argument(cfg, None, "tklivetracker"),
+            "hipotures/tklivetracker",
+        )
 
     def test_repository_paths_use_persistent_home(self) -> None:
         checkout, key, public_key = repo.repository_paths(

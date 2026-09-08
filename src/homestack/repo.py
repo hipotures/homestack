@@ -102,13 +102,16 @@ class WorkspaceRepoSSH:
             pass
 
 
-def resolve_repository_argument(cfg: Config, explicit: str | None) -> str:
-    value = explicit if explicit is not None else cfg.repo_default_repository
-    if not value:
+def resolve_repository_argument(
+    cfg: Config, explicit: str | None, workspace_name: str
+) -> str:
+    if explicit is not None:
+        return validate_repository_spec(explicit)
+    if not cfg.repo_owner:
         raise AppError(
-            "Repository was not specified and [repo] default_repository is not configured"
+            "Repository was not specified and [repo] owner is not configured"
         )
-    return validate_repository_spec(value)
+    return validate_repository_spec(f"{cfg.repo_owner}/{workspace_name}")
 
 
 def repository_paths(cfg: Config, repository: str) -> tuple[str, str, str]:

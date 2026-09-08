@@ -54,7 +54,7 @@ class Config:
     sync_paths: tuple[str, ...] = ()
     sync_commands: tuple[str, ...] = ()
     sync_verbose: bool = False
-    repo_default_repository: str | None = None
+    repo_owner: str | None = None
     repo_checkout_root: str = "~/DEV"
 
 
@@ -68,14 +68,26 @@ DEFAULT_CONFIG = default_config_path()
 
 
 HOMESTACK_STORAGE_RE = re.compile(r"^homestack-storage-[1-9][0-9]*$")
+GITHUB_OWNER_RE = re.compile(
+    r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38}[A-Za-z0-9])?$"
+)
 GITHUB_REPOSITORY_RE = re.compile(
     r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38}[A-Za-z0-9])?/[A-Za-z0-9_.-]{1,100}$"
 )
 
 
+def validate_repo_owner(value: str) -> str:
+    if not isinstance(value, str):
+        raise AppError("[repo] owner must be a string")
+    text = value.strip()
+    if GITHUB_OWNER_RE.fullmatch(text) is None:
+        raise AppError(f"Invalid GitHub repository owner {value!r}")
+    return text
+
+
 def validate_repository_spec(value: str) -> str:
     if not isinstance(value, str):
-        raise AppError("[repo] default_repository must be a string")
+        raise AppError("Repository must be a string")
     text = value.strip()
     if GITHUB_REPOSITORY_RE.fullmatch(text) is None:
         raise AppError(f"Invalid GitHub repository {value!r}; expected OWNER/REPO")
@@ -276,15 +288,11 @@ def load_config(path: Path) -> Config:
     repo_data = data.get("repo") or {}
     if not isinstance(repo_data, dict):
         raise AppError("[repo] must be a TOML table")
-    raw_default_repository = repo_data.get("default_repository", "")
-    if not isinstance(raw_default_repository, str):
-        raise AppError("[repo] default_repository must be a string")
-    default_repository_text = raw_default_repository.strip()
-    repo_default_repository = (
-        validate_repository_spec(default_repository_text)
-        if default_repository_text
-        else None
-    )
+    raw_repo_owner = repo_data.get("owner", "")
+    if not isinstance(raw_repo_owner, str):
+        raise AppError("[repo] owner must be a string")
+    repo_owner_text = raw_repo_owner.strip()
+    repo_owner = validate_repo_owner(repo_owner_text) if repo_owner_text else None
     repo_checkout_root = validate_repo_checkout_root(
         repo_data.get("checkout_root", "~/DEV")
     )
@@ -403,7 +411,7 @@ def load_config(path: Path) -> Config:
         sync_paths=sync_paths,
         sync_commands=sync_commands,
         sync_verbose=sync_verbose,
-        repo_default_repository=repo_default_repository,
+        repo_owner=repo_owner,
         repo_checkout_root=repo_checkout_root,
     )
 
@@ -469,7 +477,7 @@ def config_to_toml(cfg: Config) -> str:
             f"log_level = {_toml_string(cfg.workspace_ssh.log_level)}",
             "",
             "[repo]",
-            f"default_repository = {_toml_string(cfg.repo_default_repository or '')}",
+            f"owner = {_toml_string(cfg.repo_owner or '')}",
             f"checkout_root = {_toml_string(cfg.repo_checkout_root)}",
             "",
             "[sync]",

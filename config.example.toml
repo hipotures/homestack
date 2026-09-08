@@ -46,7 +46,7 @@ identities_only = true
 log_level = "FATAL"
 
 [repo]
-default_repository = "example-owner/example-repository"
+owner = "example-owner"
 checkout_root = "~/DEV"
 
 [sync]

@@ -398,9 +398,11 @@ def main() -> int:
                     setup_repository,
                 )
 
-                repository = resolve_repository_argument(cfg, args.repository)
                 vmid, workspace_name, workspace_connection = open_repository_workspace(
                     session, cfg, args.target
+                )
+                repository = resolve_repository_argument(
+                    cfg, args.repository, workspace_name
                 )
                 with workspace_connection as repo_workspace:
                     state = inspect_repository(
