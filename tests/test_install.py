@@ -482,3 +482,77 @@ class InstallerValueTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+
+class InstallDraftResumeTests(unittest.TestCase):
+    def test_draft_round_trip_restores_completed_values_without_placeholder_leakage(self) -> None:
+        base = install._fresh_config(Path("/tmp/example.toml"))
+        cfg = replace(
+            base,
+            control_node="pve2",
+            node="pve2",
+            gold_vmid=101,
+            herdr_workspace="PVE",
+            herdr_tab="pve2",
+            user_name="user",
+            user_uid=1000,
+            user_gid=1000,
+            workspace_ssh=replace(base.workspace_ssh, user="user"),
+        )
+        completed = {"transport", "gold", "user", "gold_readiness"}
+        text = install._install_draft_to_toml(
+            cfg,
+            completed,
+            {"gold_state": "PVE + guest verified", "gold_power_state": "running"},
+        )
+        self.assertIn("install_draft = true", text)
+        self.assertIn("gold_vmid = 101", text)
+        self.assertNotIn("[network]", text)
+        self.assertNotIn("192.0.2", text)
+
+        import tomllib
+        restored = install._config_from_install_draft(
+            cfg.path,
+            tomllib.loads(text),
+        )
+        self.assertEqual(restored.gold_vmid, 101)
+        self.assertEqual(restored.node, "pve2")
+        self.assertEqual(restored.control_node, "pve2")
+        self.assertEqual(restored.user_name, "user")
+
+    def test_checkpoint_persists_stage_immediately(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.toml"
+            cfg = replace(
+                install._fresh_config(path),
+                control_node="pve1",
+                herdr_workspace="PVE",
+                herdr_tab="pve1",
+            )
+            completed: set[str] = set()
+            install._checkpoint_install(
+                path,
+                cfg,
+                completed,
+                {},
+                "transport",
+                enabled=True,
+            )
+            self.assertTrue(path.exists())
+            draft = config.load_install_draft(path)
+            self.assertEqual(draft["install"]["completed"], ["transport"])
+
+    def test_resume_action_defaults_to_continue(self) -> None:
+        with patch.object(install, "_show_resume_state"), patch.object(
+            install.Prompt, "ask", return_value="1"
+        ) as prompt:
+            self.assertEqual(
+                install._draft_action(Path("/tmp/example.toml"), {"transport"}),
+                "1",
+            )
+        prompt.assert_called_once_with(
+            "Choose an action",
+            choices=["1", "2", "3"],
+            default="1",
+        )

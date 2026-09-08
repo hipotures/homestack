@@ -36,7 +36,9 @@ uv run homestack install
 
 HomeStack reserves one Herdr workspace named exactly `PVE` for Proxmox administration. Put one or more tabs in that workspace, with each usable tab containing exactly one pane running an interactive root SSH session to a Proxmox node and left at that node's root shell prompt. Naming tabs after their nodes, for example `pve1`, `pve2`, and `pve3`, is recommended. Other Herdr workspaces are outside HomeStack's discovery scope and are not probed.
 
-The installer uses this dedicated `PVE` workspace for read-only discovery, selects a verified root Herdr session, then asks only for configuration choices that cannot be discovered safely. It discovers workspace network profiles from existing HomeStack VMs and read-only PVE network/DNS data on the Gold VM's inherited bridge, lets the user choose when more than one profile is available, and asks only for missing network fields. Hardware-backed SSH identities are selected by number instead of being repeated as a long comma-separated path default. An existing runtime config is never silently overwritten; reconfiguration is explicit and the previous file is backed up before atomic replacement.
+The installer uses this dedicated `PVE` workspace for read-only discovery, selects a verified root Herdr session, then asks only for configuration choices that cannot be discovered safely. A first-time installation is checkpointed stage by stage into the requested config path as an explicit install draft. After each completed stage the selected values are atomically saved; if a later stage fails, is interrupted, or needs manual preparation (for example Gold readiness), rerunning `homestack install` with the same `--config` path offers to continue and skips completed stages. The draft is deliberately not accepted by normal runtime commands and becomes a normal configuration only after final validation and confirmation. Restarting from scratch is explicit. Reconfiguring an already valid runtime config keeps the old config intact until the replacement is fully validated.
+
+The installer discovers workspace network profiles from existing HomeStack VMs and read-only PVE network/DNS data on the Gold VM's inherited bridge, lets the user choose when more than one profile is available, and asks only for missing network fields. Hardware-backed SSH identities are selected by number instead of being repeated as a long comma-separated path default.
 
 Manual configuration from `config.example.toml` remains available when needed.
 
@@ -160,6 +162,8 @@ Do not boot the finalized Gold again unless you intend to update and re-finalize
 Gold's root may contain any system-wide packages and configuration that should reappear after every `refresh`. Project data and user state should not be baked into Gold: workspace `/home/<USER>` is a separate persistent ext4 disk and survives root refreshes and migrations.
 
 ### Installer readiness check
+
+Gold readiness is a required, checkpointed installer stage. Transport selection, Gold selection, and workspace-account values are saved before it runs. If the check fails, fix the Gold VM and rerun the same installer command; those completed stages are loaded from the draft and are not asked again.
 
 After Gold selection and workspace-account selection, `homestack install` performs a non-destructive readiness check. It validates the PVE role tag, root/data-disk layout, `net0`, Cloud-Init drive, QEMU Guest Agent option, and boot order. If Gold is running, it also checks QEMU Guest Agent access, required guest tools, the configured user/UID/GID, the no-`sudo` policy, regular-user policy, root SSH keys, and a workspace public-key source.
 
