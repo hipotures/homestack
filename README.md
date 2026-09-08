@@ -118,14 +118,20 @@ Gold may live on any storage available to its node. Its source root volume name 
 
 ### Guest contract
 
-Current HomeStack guest initialization targets a systemd Linux guest using Cloud-Init and NetworkManager. For Debian/Ubuntu-family Gold images, install the equivalent of:
+Current HomeStack guest initialization targets a systemd Linux guest using Cloud-Init and NetworkManager. For Debian/Ubuntu-family Gold images, the required baseline is:
 
 ```bash
 apt-get update
-apt-get install -y cloud-init qemu-guest-agent network-manager openssh-server e2fsprogs util-linux rsync
+apt-get install -y cloud-init qemu-guest-agent network-manager openssh-server e2fsprogs util-linux
 ```
 
-Run administrative preparation as `root`; HomeStack does not use `sudo`. `rsync` is required inside workspaces when `homestack sync` is used.
+Install `rsync` only if `homestack sync` will be used:
+
+```bash
+apt-get install -y rsync
+```
+
+Run administrative preparation as `root`; HomeStack does not use `sudo`. The Gold readiness table labels every check as `required` or `optional`. Missing required checks block the installer stage; missing optional capabilities are reported but do not block final configuration.
 
 The guest must contain the configured workspace account before cloning. With the default HomeStack settings this is:
 
@@ -165,7 +171,7 @@ Gold's root may contain any system-wide packages and configuration that should r
 
 Gold readiness is a required, checkpointed installer stage. Transport selection, Gold selection, and workspace-account values are saved before it runs. If the check fails, fix the Gold VM and rerun the same installer command; those completed stages are loaded from the draft and are not asked again.
 
-After Gold selection and workspace-account selection, `homestack install` performs a non-destructive readiness check. It validates the PVE role tag, root/data-disk layout, `net0`, Cloud-Init drive, QEMU Guest Agent option, and boot order. If Gold is running, it also checks QEMU Guest Agent access, required guest tools, the configured user/UID/GID, the no-`sudo` policy, regular-user policy, root SSH keys, and a workspace public-key source.
+After Gold selection and workspace-account selection, `homestack install` performs a non-destructive readiness check. Required checks validate the PVE role tag, root/data-disk layout, `net0`, Cloud-Init drive, QEMU Guest Agent option, and boot order. If Gold is running, required guest and security checks also cover QEMU Guest Agent access, the mandatory guest tools, the configured user/UID/GID, the no-`sudo` policy, regular-user policy, root SSH keys, and a workspace public-key source. `rsync` is an optional capability and is checked separately because it is needed only for `homestack sync`.
 
 The installer never starts Gold just to inspect it. A stopped Gold can therefore pass the PVE-side contract when it has valid Proxmox `sshkeys`, but the installer reports guest checks as not inspected. Runtime `create` and `refresh` verification still fail closed if the resulting workspace violates the account, SSH, persistent-home, or guest requirements.
 

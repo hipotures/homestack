@@ -29,6 +29,7 @@ class GoldCheck:
     name: str
     status: str
     detail: str
+    requirement: str = "required"
 
 
 @dataclass(frozen=True)
@@ -40,7 +41,19 @@ class GoldReadiness:
 
     @property
     def failures(self) -> tuple[GoldCheck, ...]:
-        return tuple(check for check in self.checks if check.status == "fail")
+        return tuple(
+            check
+            for check in self.checks
+            if check.status == "fail" and check.requirement == "required"
+        )
+
+    @property
+    def optional_failures(self) -> tuple[GoldCheck, ...]:
+        return tuple(
+            check
+            for check in self.checks
+            if check.status == "fail" and check.requirement == "optional"
+        )
 
     @property
     def ok(self) -> bool:
@@ -126,8 +139,23 @@ def check_gold_readiness(
         if progress is not None:
             progress(description, completed, total)
 
-    def add(scope: str, name: str, ok: bool, detail: str) -> None:
-        checks.append(GoldCheck(scope, name, "pass" if ok else "fail", detail))
+    def add(
+        scope: str,
+        name: str,
+        ok: bool,
+        detail: str,
+        *,
+        requirement: str = "required",
+    ) -> None:
+        checks.append(
+            GoldCheck(
+                scope,
+                name,
+                "pass" if ok else "fail",
+                detail,
+                requirement=requirement,
+            )
+        )
 
     update("Read Gold Proxmox configuration", 0)
     vm_cfg = qm_config_on_node(session, cfg, node, vmid)
@@ -204,22 +232,31 @@ def check_gold_readiness(
             pve_keys_ok,
             pve_keys_detail + "; required while Gold is stopped",
         )
-        for name in (
-            "QEMU Guest Agent response",
-            "Required guest tools",
-            "Workspace account",
-            "Regular user policy",
-            "No sudo",
-            "Root authorized_keys",
+        for scope, name in (
+            ("guest", "QEMU Guest Agent response"),
+            ("guest", "Required guest tools"),
+            ("guest", "Workspace account"),
+            ("security", "Regular user policy"),
+            ("security", "No sudo"),
+            ("security", "Root authorized_keys"),
         ):
             checks.append(
                 GoldCheck(
-                    "guest",
+                    scope,
                     name,
                     "skip",
                     f"not inspected because Gold is {power_state}",
                 )
             )
+        checks.append(
+            GoldCheck(
+                "guest",
+                "rsync for homestack sync",
+                "skip",
+                f"not inspected because Gold is {power_state}",
+                requirement="optional",
+            )
+        )
         update("Gold guest inspection skipped", total)
         return GoldReadiness(vmid, node, power_state, tuple(checks))
 
@@ -240,15 +277,26 @@ def check_gold_readiness(
         "responding" if qga_ok else (qga.output.strip() or f"exit {qga.returncode}"),
     )
     if not qga_ok:
-        for name in (
-            "Required guest tools",
-            "Workspace account",
-            "Regular user policy",
-            "No sudo",
-            "Root authorized_keys",
-            "Workspace public-key source",
+        for scope, name in (
+            ("guest", "Required guest tools"),
+            ("guest", "Workspace account"),
+            ("security", "Regular user policy"),
+            ("security", "No sudo"),
+            ("security", "Root authorized_keys"),
+            ("security", "Workspace public-key source"),
         ):
-            checks.append(GoldCheck("guest", name, "skip", "QEMU Guest Agent unavailable"))
+            checks.append(
+                GoldCheck(scope, name, "skip", "QEMU Guest Agent unavailable")
+            )
+        checks.append(
+            GoldCheck(
+                "guest",
+                "rsync for homestack sync",
+                "skip",
+                "QEMU Guest Agent unavailable",
+                requirement="optional",
+            )
+        )
         update("Gold readiness check failed", total)
         return GoldReadiness(vmid, node, power_state, tuple(checks))
 
@@ -284,6 +332,21 @@ def check_gold_readiness(
         not missing_tools,
         "all present" if not missing_tools else "missing: " + ", ".join(missing_tools),
     )
+    rsync_state = guest_out_on_node(
+        session,
+        cfg,
+        node,
+        vmid,
+        "if command -v rsync >/dev/null 2>&1; then echo PRESENT; else echo ABSENT; fi",
+        check=False,
+    )
+    add(
+        "guest",
+        "rsync for homestack sync",
+        rsync_state == "PRESENT",
+        "installed" if rsync_state == "PRESENT" else "not installed; sync will be unavailable",
+        requirement="optional",
+    )
 
     update("Check Gold accounts and privilege policy", 4)
     account = guest_out_on_node(
@@ -318,7 +381,7 @@ def check_gold_readiness(
     ).splitlines()
     expected_regular = f"{cfg.user_name}:{cfg.user_uid}:{cfg.user_gid}"
     add(
-        "guest",
+        "security",
         "Regular user policy",
         regular_users == [expected_regular],
         ", ".join(regular_users) if regular_users else "none",
@@ -332,7 +395,12 @@ def check_gold_readiness(
         "if command -v sudo >/dev/null 2>&1; then echo PRESENT; else echo ABSENT; fi",
         check=False,
     )
-    add("guest", "No sudo", sudo_state == "ABSENT", sudo_state or "unknown")
+    add(
+        "security",
+        "No sudo",
+        sudo_state == "ABSENT",
+        "not installed" if sudo_state == "ABSENT" else "installed",
+    )
 
     update("Check Gold SSH public-key sources", 5)
     root_keys = guest_out_on_node(
@@ -343,7 +411,12 @@ def check_gold_readiness(
         "test -s /root/.ssh/authorized_keys && echo OK || echo MISSING",
         check=False,
     )
-    add("guest", "Root authorized_keys", root_keys == "OK", root_keys or "unknown")
+    add(
+        "security",
+        "Root authorized_keys",
+        root_keys == "OK",
+        "present" if root_keys == "OK" else "missing",
+    )
 
     user_key_detail = pve_keys_detail
     user_keys_ok = pve_keys_ok
@@ -365,7 +438,7 @@ def check_gold_readiness(
             )
         except AppError as exc:
             user_key_detail = str(exc)
-    add("guest", "Workspace public-key source", user_keys_ok, user_key_detail)
+    add("security", "Workspace public-key source", user_keys_ok, user_key_detail)
 
     update("Gold readiness check complete", total)
     return GoldReadiness(vmid, node, power_state, tuple(checks))

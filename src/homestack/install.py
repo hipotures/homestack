@@ -194,6 +194,7 @@ def _show_gold_readiness(readiness: GoldReadiness) -> None:
     table = Table(title=f"Gold VM {readiness.vmid} readiness")
     table.add_column("Scope")
     table.add_column("Check")
+    table.add_column("Requirement")
     table.add_column("Result")
     table.add_column("Detail")
     status_text = {
@@ -205,10 +206,17 @@ def _show_gold_readiness(readiness: GoldReadiness) -> None:
         table.add_row(
             check.scope,
             check.name,
+            check.requirement,
             status_text.get(check.status, check.status),
             check.detail,
         )
     console.print(table)
+    if readiness.optional_failures:
+        console.print(
+            "[yellow]Optional Gold capabilities are missing: "
+            + ", ".join(check.name for check in readiness.optional_failures)
+            + ".[/yellow]"
+        )
     if readiness.ok and not readiness.guest_checked:
         console.print(
             "[yellow]Gold guest checks were not run because the VM is stopped. "
