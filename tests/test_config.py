@@ -141,3 +141,42 @@ class ConfigTests(unittest.TestCase):
             with self.assertRaises(models.AppError):
                 config.publish_config(invalid)
             self.assertEqual(path.read_bytes(), original)
+
+
+
+class InstallDraftTests(unittest.TestCase):
+    def test_runtime_loader_rejects_install_draft_with_resume_hint(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.toml"
+            config.publish_install_draft(
+                path,
+                """version = 1
+install_draft = true
+
+[install]
+completed = ["transport"]
+""",
+            )
+            self.assertTrue(config.is_install_draft(path))
+            draft = config.load_install_draft(path)
+            self.assertEqual(draft["install"]["completed"], ["transport"])
+            with self.assertRaisesRegex(models.AppError, "configuration is incomplete"):
+                config.load_config(path)
+
+    def test_final_publish_replaces_draft_without_creating_draft_backup(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.toml"
+            config.publish_install_draft(
+                path,
+                """version = 1
+install_draft = true
+
+[install]
+completed = ["transport"]
+""",
+            )
+            cfg = replace(test_config(), path=path)
+            backup = config.publish_config(cfg)
+            self.assertIsNone(backup)
+            self.assertFalse(config.is_install_draft(path))
+            self.assertEqual(config.load_config(path).gold_vmid, cfg.gold_vmid)

@@ -95,7 +95,7 @@ def _need(data: dict[str, Any], section: str, key: str) -> Any:
         raise AppError(f"Missing configuration value [{section}] {key}") from exc
 
 
-def load_config(path: Path) -> Config:
+def _load_toml_document(path: Path) -> dict[str, Any]:
     try:
         with path.open("rb") as handle:
             data = tomllib.load(handle)
@@ -103,6 +103,37 @@ def load_config(path: Path) -> Config:
         raise AppError(f"Configuration file not found: {path}") from exc
     except tomllib.TOMLDecodeError as exc:
         raise AppError(f"Invalid TOML configuration {path}: {exc}") from exc
+    if not isinstance(data, dict):
+        raise AppError(f"Invalid TOML configuration {path}: expected a table document")
+    return data
+
+
+def is_install_draft(path: Path) -> bool:
+    if not path.exists():
+        return False
+    return _load_toml_document(path).get("install_draft") is True
+
+
+def load_install_draft(path: Path) -> dict[str, Any]:
+    data = _load_toml_document(path)
+    if data.get("version") != 1 or data.get("install_draft") is not True:
+        raise AppError(f"Configuration is not an unfinished HomeStack installation: {path}")
+    install = data.get("install")
+    if not isinstance(install, dict):
+        raise AppError("Install draft is missing the [install] table")
+    completed = install.get("completed")
+    if not isinstance(completed, list) or any(not isinstance(item, str) for item in completed):
+        raise AppError("[install] completed must be an array of stage names")
+    return data
+
+
+def load_config(path: Path) -> Config:
+    data = _load_toml_document(path)
+    if data.get("install_draft") is True:
+        raise AppError(
+            f"HomeStack configuration is incomplete: {path}. "
+            "Run 'homestack install' with the same --config path to continue."
+        )
 
     version = data.get("version")
     if version != 1:
@@ -431,6 +462,46 @@ def _backup_path(path: Path) -> Path:
     return path.with_name(f"{path.name}.backup-{stamp}")
 
 
+def publish_install_draft(path: Path, text: str) -> None:
+    """Atomically publish resumable installer state without making it a runtime config."""
+    try:
+        data = tomllib.loads(text)
+    except tomllib.TOMLDecodeError as exc:
+        raise AppError(f"Generated install draft is invalid TOML: {exc}") from exc
+    if data.get("version") != 1 or data.get("install_draft") is not True:
+        raise AppError("Generated install draft is missing its draft marker")
+    install = data.get("install")
+    if not isinstance(install, dict) or not isinstance(install.get("completed"), list):
+        raise AppError("Generated install draft is missing [install] completed")
+
+    payload = text.encode("utf-8")
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    temporary: Path | None = None
+    try:
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix=f".{path.name}.", suffix=".draft.tmp", dir=path.parent
+        )
+        temporary = Path(temporary_name)
+        try:
+            os.fchmod(descriptor, 0o600)
+            with os.fdopen(descriptor, "wb", closefd=False) as handle:
+                handle.write(payload)
+                handle.flush()
+                os.fsync(handle.fileno())
+        finally:
+            os.close(descriptor)
+        os.replace(temporary, path)
+        temporary = None
+        directory_fd = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+
+
 def publish_config(cfg: Config) -> Path | None:
     """Validate and atomically publish cfg, backing up an existing target."""
     target = cfg.path
@@ -454,7 +525,7 @@ def publish_config(cfg: Config) -> Path | None:
 
         load_config(temporary)
 
-        if target.exists():
+        if target.exists() and not is_install_draft(target):
             backup = _backup_path(target)
             _write_bytes_fsynced(backup, target.read_bytes(), exclusive=True)
 
