@@ -1,0 +1,20 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "homestack"
+version = "0.1.0"
+description = "Proxmox workspace lifecycle management from a trusted desktop"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { file = "LICENSE" }
+dependencies = [
+    "rich>=13.9.4",
+]
+
+[project.scripts]
+homestack = "homestack.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/homestack"]

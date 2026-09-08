@@ -1,0 +1,59 @@
+version = 1
+
+[node]
+name = "pve-example-1"
+gold_vmid = 100
+
+[control]
+node = "pve-example-1"
+
+[storage_layouts]
+homestack-storage-1 = ["example-storage"]
+homestack-storage-2 = ["example-storage"]
+
+[root]
+disk = "scsi0"
+
+[home]
+disk = "scsi1"
+default_size = "20G"
+
+[display]
+storage_unit = "GiB"
+storage_decimals = 0
+
+[network]
+prefix = "192.0.2"
+cidr = 24
+gateway = "192.0.2.1"
+dns = ["192.0.2.53"]
+
+[cloud_init]
+snippet_storage = "local"
+snippet_dir = "/var/lib/vz/snippets"
+
+[user]
+name = "developer"
+uid = 1000
+gid = 1000
+
+[workspace_ssh]
+user = "developer"
+identity_files = [
+    "~/.ssh/example-hardware-key"
+]
+identities_only = true
+log_level = "FATAL"
+
+[sync]
+verbose = false
+paths = []
+commands = []
+
+[transport]
+type = "herdr"
+
+[transport.herdr]
+workspace = "example-workspace"
+tab = "example-node"
+debug = true
