@@ -230,7 +230,7 @@ class RefreshPowerStateTests(unittest.TestCase):
                 commands.append(command)
                 return models.RemoteResult(0, '')
         session = Session()
-        guest_values = ['test1', '2: eth0    inet 192.0.2.200/24 brd 192.0.2.255', '/dev/sdb ext4 /home/user', 'HS_HOME_200', 'uid=1000(user) gid=1000(user) groups=1000(user)', 'OK', 'OK', 'ABSENT', 'nocloud']
+        guest_values = ['test1', '2: eth0    inet 192.0.2.200/24 brd 192.0.2.255', '/dev/sdb ext4 /home/user', 'HS_HOME_200', 'uid=1000(user) gid=1000(user) groups=1000(user)', 'OK', 'OK', 'user:1000:1000', 'ABSENT', 'nocloud']
         with patch.object(lifecycle, 'resolve_existing_workspace', return_value=self._workspace_info('running')), patch.object(lifecycle, 'shutdown_vm') as shutdown, patch.object(lifecycle, 'qm_config', side_effect=self._qm_configs()), patch.object(lifecycle, 'root_import_spec', return_value='example-storage-a:0,import-from=gold'), patch.object(lifecycle, 'run_transfer_with_progress'), patch.object(lifecycle, 'rename_attached_disk_volume'), patch.object(lifecycle, 'verify_workspace_role_tags'), patch.object(lifecycle, 'write_snippets'), patch.object(lifecycle, 'qm_status', return_value='running'), patch.object(lifecycle, 'wait_for_qga') as wait_qga, patch.object(lifecycle, 'guest_out', side_effect=guest_values), patch.object(lifecycle, 'guest_exec'), patch.object(lifecycle, 'forget_local_ssh_host', return_value=[]):
             result = lifecycle.refresh_workspace(session, cfg, self._plan('running'), json_mode=True)
         shutdown.assert_called_once_with(session, 200)
