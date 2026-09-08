@@ -39,6 +39,7 @@ from .discovery import (
     show_discovery_report,
     verified_sessions,
 )
+from .gold import GoldReadiness, check_gold_readiness
 from .models import AppError, GOLD_TAG, integer_value
 from .proxmox import (
     cluster_node_statuses,
@@ -156,6 +157,59 @@ def _discover_networks_with_progress(
             gold_vmid,
             gold_node,
             progress=update,
+        )
+
+
+def _check_gold_with_progress(
+    session: Transport,
+    cfg: Config,
+    gold_node: str,
+    gold_vmid: int,
+) -> GoldReadiness:
+    with _install_progress() as progress:
+        task = progress.add_task("Read Gold Proxmox configuration", total=1)
+
+        def update(description: str, completed: int, total: int) -> None:
+            progress.update(
+                task,
+                description=description,
+                completed=completed,
+                total=total,
+            )
+
+        return check_gold_readiness(
+            session,
+            cfg,
+            gold_node,
+            gold_vmid,
+            progress=update,
+        )
+
+
+def _show_gold_readiness(readiness: GoldReadiness) -> None:
+    table = Table(title=f"Gold VM {readiness.vmid} readiness")
+    table.add_column("Scope")
+    table.add_column("Check")
+    table.add_column("Result")
+    table.add_column("Detail")
+    status_text = {
+        "pass": "[green]✓ pass[/green]",
+        "fail": "[red]✗ fail[/red]",
+        "skip": "[dim]— not checked[/dim]",
+    }
+    for check in readiness.checks:
+        table.add_row(
+            check.scope,
+            check.name,
+            status_text.get(check.status, check.status),
+            check.detail,
+        )
+    console.print(table)
+    if readiness.ok and not readiness.guest_checked:
+        console.print(
+            "[yellow]Gold guest checks were not run because the VM is stopped. "
+            "The PVE contract and Proxmox public-key source are valid, but guest packages "
+            "and account policy remain unverified.[/yellow]"
         )
 
 
@@ -819,6 +873,7 @@ def _show_summary(
     cfg: Config,
     statuses: list[dict[str, Any]],
     gold_node: str,
+    gold_readiness: GoldReadiness,
     unverified_nodes: set[str],
 ) -> None:
     table = Table(title="HOMESTACK INSTALL", show_header=False)
@@ -831,7 +886,12 @@ def _show_summary(
     for item in statuses:
         note = " (storage metadata not node-verified)" if item["node"] in unverified_nodes else ""
         table.add_row(f"  {item['node']}", f"{item['status']}{note}")
-    table.add_row("Gold", f"VMID {cfg.gold_vmid} on {gold_node} (verified)")
+    gold_state = (
+        "PVE + guest verified"
+        if gold_readiness.guest_checked
+        else f"PVE verified; guest not checked ({gold_readiness.power_state})"
+    )
+    table.add_row("Gold", f"VMID {cfg.gold_vmid} on {gold_node} ({gold_state})")
     for item in statuses:
         layout = homestack_storage_layout_name(str(item["node"]))
         if layout in cfg.storage_layouts:
@@ -881,6 +941,30 @@ def run_installer(path: Path) -> int:
             preferred_vmid=base.gold_vmid if action == "2" else None,
         )
         base = replace(base, node=gold_node, gold_vmid=gold_vmid)
+        user_name = _ask_text("Workspace user", base.user_name)
+        user_uid = _ask_int("Workspace UID", base.user_uid)
+        user_gid = _ask_int("Workspace GID", base.user_gid)
+        base = replace(
+            base,
+            user_name=user_name,
+            user_uid=user_uid,
+            user_gid=user_gid,
+            workspace_ssh=replace(base.workspace_ssh, user=user_name),
+        )
+        gold_readiness = _check_gold_with_progress(
+            session,
+            base,
+            gold_node,
+            gold_vmid,
+        )
+        _show_gold_readiness(gold_readiness)
+        if not gold_readiness.ok:
+            failed = ", ".join(check.name for check in gold_readiness.failures)
+            raise AppError(
+                f"Selected Gold VM {gold_vmid} does not satisfy the HomeStack Gold contract: "
+                f"{failed}"
+            )
+
         layouts, unverified_nodes = _configure_storage(
             session, base, statuses, definitions
         )
@@ -902,9 +986,6 @@ def run_installer(path: Path) -> int:
         network_candidates,
         prefer_existing=(action == "2"),
     )
-    user_name = _ask_text("Workspace user", base.user_name)
-    user_uid = _ask_int("Workspace UID", base.user_uid)
-    user_gid = _ask_int("Workspace GID", base.user_gid)
     home_size, _ = parse_home_size(_ask_text("Default persistent home size", base.default_home_size))
     identities = _configure_identities(base)
     sync_paths, sync_commands, sync_verbose = _configure_sync(base)
@@ -935,7 +1016,7 @@ def run_installer(path: Path) -> int:
         sync_verbose=sync_verbose,
     )
     validate_config_text(config_to_toml(cfg))
-    _show_summary(cfg, statuses, gold_node, unverified_nodes)
+    _show_summary(cfg, statuses, gold_node, gold_readiness, unverified_nodes)
     if not Confirm.ask("Write this configuration?", default=False):
         console.print("[bold]Cancelled. No configuration was written.[/bold]")
         return 0
