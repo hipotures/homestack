@@ -477,7 +477,7 @@ def create_workspace(
         regular_users = guest_out(
             session,
             vmid,
-            "awk -F: '$3 >= 1000 && $3 < 65534 {print $1 ":" $3 ":" $4}' /etc/passwd",
+            """awk -F: '$3 >= 1000 && $3 < 65534 {print $1 ":" $3 ":" $4}' /etc/passwd""",
         ).splitlines()
         expected_regular_user = f"{cfg.user_name}:{cfg.user_uid}:{cfg.user_gid}"
         if regular_users != [expected_regular_user]:
@@ -937,7 +937,7 @@ def refresh_workspace(
             regular_users = guest_out(
                 session,
                 vmid,
-                "awk -F: '$3 >= 1000 && $3 < 65534 {print $1 ":" $3 ":" $4}' /etc/passwd",
+                """awk -F: '$3 >= 1000 && $3 < 65534 {print $1 ":" $3 ":" $4}' /etc/passwd""",
             ).splitlines()
             expected_regular_user = f"{cfg.user_name}:{cfg.user_uid}:{cfg.user_gid}"
             if regular_users != [expected_regular_user]:

@@ -313,7 +313,7 @@ def check_gold_readiness(
         cfg,
         node,
         vmid,
-        "awk -F: '$3 >= 1000 && $3 < 65534 {print $1 ":" $3 ":" $4}' /etc/passwd",
+        """awk -F: '$3 >= 1000 && $3 < 65534 {print $1 ":" $3 ":" $4}' /etc/passwd""",
         check=False,
     ).splitlines()
     expected_regular = f"{cfg.user_name}:{cfg.user_uid}:{cfg.user_gid}"
