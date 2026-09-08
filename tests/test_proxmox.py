@@ -36,6 +36,32 @@ class ControlNodeTests(unittest.TestCase):
         )
         self.assertEqual(session.command, 'pvesh get /nodes --output-format json')
 
+class NetworkInventoryTests(unittest.TestCase):
+    def test_node_network_and_dns_use_read_only_pvesh_get(self) -> None:
+        class Session:
+            def __init__(self) -> None:
+                self.commands: list[str] = []
+
+            def run_json_value(self, command: str, **_: object):
+                self.commands.append(command)
+                if command.endswith('/network --output-format json'):
+                    return [{'iface': 'vmbr0', 'type': 'bridge'}]
+                if command.endswith('/dns --output-format json'):
+                    return {'dns1': '192.0.2.1'}
+                raise AssertionError(command)
+
+        session = Session()
+        self.assertEqual(
+            proxmox.node_network_inventory(session, 'example-node-1')[0]['iface'],
+            'vmbr0',
+        )
+        self.assertEqual(
+            proxmox.node_dns_config(session, 'example-node-1')['dns1'],
+            '192.0.2.1',
+        )
+        self.assertTrue(all(command.startswith('pvesh get ') for command in session.commands))
+
+
 class VmStatusTests(unittest.TestCase):
 
     def test_qm_status_uses_proxmox_json_api(self) -> None:

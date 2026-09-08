@@ -2,19 +2,25 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+import ipaddress
 from pathlib import Path
+import re
 import shutil
 from typing import Any
 
 from rich.panel import Panel
 from rich.table import Table
 
-from .models import AppError, GOLD_TAG
+from .models import AppError, GOLD_TAG, WORKSPACE_TAG
 from .proxmox import (
     cluster_node_statuses,
     cluster_storage_definitions,
     cluster_vm_resources,
     has_tag,
+    node_dns_config,
+    node_network_inventory,
+    qm_config_on_node,
 )
 from .transports.herdr import (
     HerdrCandidate,
@@ -22,6 +28,205 @@ from .transports.herdr import (
     open_herdr_candidate,
 )
 from .ui import console
+
+
+@dataclass(frozen=True)
+class NetworkCandidate:
+    cidr: str
+    bridge: str | None
+    gateway: str | None
+    dns_servers: tuple[str, ...]
+    source: str
+
+
+def _config_option(value: str | None, key: str) -> str | None:
+    if not value:
+        return None
+    for item in str(value).split(","):
+        token = item.strip()
+        if "=" not in token:
+            continue
+        item_key, item_value = token.split("=", 1)
+        if item_key == key:
+            return item_value.strip() or None
+    return None
+
+
+def _parse_dns_values(value: str | None) -> tuple[str, ...]:
+    if not value:
+        return ()
+    result: list[str] = []
+    for token in re.split(r"[\s,;]+", value.strip()):
+        if not token:
+            continue
+        try:
+            ipaddress.IPv4Address(token)
+        except ValueError:
+            continue
+        if token not in result:
+            result.append(token)
+    return tuple(result)
+
+
+def _mapping_compatible(network: ipaddress.IPv4Network) -> bool:
+    return str(network.network_address).endswith(".0") and network.prefixlen <= 24
+
+
+def _network_from_ipconfig(value: str | None) -> tuple[str, str | None] | None:
+    ip_value = _config_option(value, "ip")
+    if not ip_value or ip_value in {"dhcp", "manual"}:
+        return None
+    try:
+        interface = ipaddress.IPv4Interface(ip_value)
+    except ValueError:
+        return None
+    if not _mapping_compatible(interface.network):
+        return None
+    return str(interface.network), _config_option(value, "gw")
+
+
+def _network_from_pve_interface(item: dict[str, Any]) -> str | None:
+    address = str(item.get("address") or "").strip()
+    cidr = item.get("cidr")
+    netmask = str(item.get("netmask") or "").strip()
+
+    try:
+        if "/" in address:
+            network = ipaddress.IPv4Interface(address).network
+        elif address and cidr is not None and str(cidr).strip():
+            cidr_text = str(cidr).strip()
+            if "/" in cidr_text:
+                network = ipaddress.IPv4Interface(cidr_text).network
+            else:
+                network = ipaddress.IPv4Interface(f"{address}/{cidr_text}").network
+        elif address and netmask:
+            network = ipaddress.IPv4Interface(f"{address}/{netmask}").network
+        else:
+            return None
+    except ValueError:
+        return None
+
+    if not _mapping_compatible(network):
+        return None
+    return str(network)
+
+
+def _pve_dns_servers(data: dict[str, Any]) -> tuple[str, ...]:
+    values: list[str] = []
+    for key in ("dns1", "dns2", "dns3"):
+        value = str(data.get(key) or "").strip()
+        if not value:
+            continue
+        try:
+            ipaddress.IPv4Address(value)
+        except ValueError:
+            continue
+        if value not in values:
+            values.append(value)
+    return tuple(values)
+
+
+def discover_workspace_networks(
+    session: Any,
+    cfg: Any,
+    resources: list[dict[str, Any]],
+    gold_vmid: int,
+    gold_node: str,
+) -> list[NetworkCandidate]:
+    """Discover network profiles compatible with the Gold VM's inherited net0 bridge."""
+    gold_cfg = qm_config_on_node(session, cfg, gold_node, gold_vmid)
+    gold_bridge = _config_option(gold_cfg.get("net0"), "bridge")
+
+    try:
+        dns_fallback = _pve_dns_servers(node_dns_config(session, gold_node))
+    except AppError:
+        dns_fallback = ()
+
+    candidates: list[NetworkCandidate] = []
+
+    def add(candidate: NetworkCandidate) -> None:
+        key = (candidate.cidr, candidate.bridge)
+        for index, existing in enumerate(candidates):
+            if (existing.cidr, existing.bridge) != key:
+                continue
+            candidates[index] = NetworkCandidate(
+                cidr=existing.cidr,
+                bridge=existing.bridge,
+                gateway=existing.gateway or candidate.gateway,
+                dns_servers=existing.dns_servers or candidate.dns_servers,
+                source=existing.source,
+            )
+            return
+        candidates.append(candidate)
+
+    for resource in resources:
+        if not has_tag(resource.get("tags"), WORKSPACE_TAG):
+            continue
+        vmid = int(resource["vmid"])
+        node = str(resource.get("node") or "").strip()
+        if not node:
+            continue
+        try:
+            vm_cfg = qm_config_on_node(session, cfg, node, vmid)
+        except AppError:
+            continue
+        bridge = _config_option(vm_cfg.get("net0"), "bridge")
+        if gold_bridge and bridge and bridge != gold_bridge:
+            continue
+        network_data = _network_from_ipconfig(vm_cfg.get("ipconfig0"))
+        if network_data is None:
+            continue
+        cidr, gateway = network_data
+        add(
+            NetworkCandidate(
+                cidr=cidr,
+                bridge=bridge or gold_bridge,
+                gateway=gateway,
+                dns_servers=_parse_dns_values(vm_cfg.get("nameserver")) or dns_fallback,
+                source=f"HomeStack workspace VM {vmid}",
+            )
+        )
+
+    gold_network = _network_from_ipconfig(gold_cfg.get("ipconfig0"))
+    if gold_network is not None:
+        cidr, gateway = gold_network
+        add(
+            NetworkCandidate(
+                cidr=cidr,
+                bridge=gold_bridge,
+                gateway=gateway,
+                dns_servers=_parse_dns_values(gold_cfg.get("nameserver")) or dns_fallback,
+                source=f"Gold VM {gold_vmid}",
+            )
+        )
+
+    try:
+        interfaces = node_network_inventory(session, gold_node)
+    except AppError:
+        interfaces = []
+
+    for item in interfaces:
+        bridge = str(item.get("iface") or "").strip()
+        item_type = str(item.get("type") or "").strip().lower()
+        if item_type not in {"bridge", "ovsbridge"}:
+            continue
+        if gold_bridge and bridge != gold_bridge:
+            continue
+        cidr = _network_from_pve_interface(item)
+        if cidr is None:
+            continue
+        gateway = str(item.get("gateway") or "").strip() or None
+        add(
+            NetworkCandidate(
+                cidr=cidr,
+                bridge=bridge or None,
+                gateway=gateway,
+                dns_servers=dns_fallback,
+                source=f"PVE bridge {bridge} on {gold_node}",
+            )
+        )
+
+    return candidates
 
 
 def discover_hardware_identities() -> list[str]:
@@ -201,8 +406,10 @@ def show_discovery_report(report: dict[str, Any]) -> None:
 
 
 __all__ = [
+    "NetworkCandidate",
     "discover_environment",
     "discover_hardware_identities",
+    "discover_workspace_networks",
     "show_discovery_report",
     "verified_sessions",
 ]

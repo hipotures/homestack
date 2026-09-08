@@ -168,6 +168,73 @@ class EnvironmentDiscoveryTests(unittest.TestCase):
         self.assertEqual(report["sessions"][0]["nodes"][0]["node"], "pve1")
         self.assertEqual(report["sessions"][0]["gold_candidates"][0]["vmid"], 101)
 
+    def test_workspace_network_discovery_prefers_existing_workspace_on_gold_bridge(self) -> None:
+        resources = [
+            {
+                'type': 'qemu',
+                'vmid': 101,
+                'name': 'gold',
+                'node': 'pve2',
+                'tags': 'homestack-gold',
+            },
+            {
+                'type': 'qemu',
+                'vmid': 200,
+                'name': 'ws',
+                'node': 'pve2',
+                'tags': 'homestack-ws',
+            },
+        ]
+
+        def fake_qm(_session: object, _cfg: object, _node: str, vmid: int):
+            if vmid == 101:
+                return {'net0': 'virtio=AA:BB:CC:DD:EE:01,bridge=vmbr1'}
+            if vmid == 200:
+                return {
+                    'net0': 'virtio=AA:BB:CC:DD:EE:02,bridge=vmbr1',
+                    'ipconfig0': 'ip=192.168.100.200/24,gw=192.168.100.1',
+                }
+            raise AssertionError(vmid)
+
+        with patch.object(discovery, 'qm_config_on_node', side_effect=fake_qm), patch.object(
+            discovery,
+            'node_network_inventory',
+            return_value=[
+                {
+                    'iface': 'vmbr0',
+                    'type': 'bridge',
+                    'address': '192.168.1.11',
+                    'netmask': '255.255.255.0',
+                    'gateway': '192.168.1.1',
+                },
+                {
+                    'iface': 'vmbr1',
+                    'type': 'bridge',
+                    'address': '192.168.100.11',
+                    'netmask': '255.255.255.0',
+                    'gateway': '192.168.100.1',
+                },
+            ],
+        ), patch.object(
+            discovery,
+            'node_dns_config',
+            return_value={'dns1': '192.168.100.1'},
+        ):
+            candidates = discovery.discover_workspace_networks(
+                object(),
+                object(),
+                resources,
+                101,
+                'pve2',
+            )
+
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0].cidr, '192.168.100.0/24')
+        self.assertEqual(candidates[0].bridge, 'vmbr1')
+        self.assertEqual(candidates[0].gateway, '192.168.100.1')
+        self.assertEqual(candidates[0].dns_servers, ('192.168.100.1',))
+        self.assertEqual(candidates[0].source, 'HomeStack workspace VM 200')
+
     def test_hardware_identity_discovery_accepts_suffix_after_sk(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             home = Path(directory)

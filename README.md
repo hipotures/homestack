@@ -34,7 +34,7 @@ Create or reconfigure the runtime config with the interactive installer:
 uv run homestack install
 ```
 
-The installer uses the same read-only discovery mechanism first, selects a verified root Herdr session, then asks only for configuration choices that cannot be discovered safely. An existing runtime config is never silently overwritten; reconfiguration is explicit and the previous file is backed up before atomic replacement.
+The installer uses the same read-only discovery mechanism first, selects a verified root Herdr session, then asks only for configuration choices that cannot be discovered safely. It discovers workspace network profiles from existing HomeStack VMs and read-only PVE network/DNS data on the Gold VM's inherited bridge, lets the user choose when more than one profile is available, and asks only for missing network fields. Hardware-backed SSH identities are selected by number instead of being repeated as a long comma-separated path default. An existing runtime config is never silently overwritten; reconfiguration is explicit and the previous file is backed up before atomic replacement.
 
 Manual configuration from `config.example.toml` remains available when needed.
 

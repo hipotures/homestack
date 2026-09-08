@@ -195,7 +195,7 @@ class DiscoveryTests(unittest.TestCase):
         ), patch.object(install.Confirm, 'ask', return_value=True):
             self.assertEqual(install._choose_gold(session, test_config(), resources), (101, 'pve1'))
 
-    def test_zero_or_ambiguous_gold_requires_explicit_vmid(self) -> None:
+    def test_zero_gold_requires_explicit_vmid_and_multiple_gold_uses_numbered_selection(self) -> None:
         zero = [{'type': 'qemu', 'vmid': 102, 'name': 'candidate', 'node': 'pve1'}]
         ambiguous = [
             {'type': 'qemu', 'vmid': 101, 'name': 'gold1', 'node': 'pve1', 'tags': 'homestack-gold'},
@@ -211,8 +211,13 @@ class DiscoveryTests(unittest.TestCase):
             install.IntPrompt, 'ask', return_value=102
         ) as prompt:
             self.assertEqual(install._choose_gold(session, test_config(), zero), (102, 'pve1'))
+        prompt.assert_called_once_with('Gold VMID')
+
+        with patch.object(install, '_validated_gold', side_effect=validated), patch.object(
+            install.IntPrompt, 'ask', return_value=2
+        ) as prompt:
             self.assertEqual(install._choose_gold(session, test_config(), ambiguous), (102, 'pve2'))
-        self.assertEqual(prompt.call_count, 2)
+        prompt.assert_called_once_with('Select Gold VM')
 
     def test_fresh_install_does_not_offer_placeholder_or_non_gold_vmid_as_default(self) -> None:
         resources = [
@@ -345,20 +350,76 @@ class InstallerTransportDiscoveryTests(unittest.TestCase):
 
 
 class InstallerValueTests(unittest.TestCase):
-    def test_network_validation_preserves_vmid_mapping(self) -> None:
-        answers = iter(['10.20.30.0/24', '10.20.30.1', '10.20.30.53, 1.1.1.1'])
-        with patch.object(install.Prompt, 'ask', side_effect=lambda *args, **kwargs: next(answers)):
+    def test_discovered_network_profile_is_selected_as_one_unit(self) -> None:
+        candidate = install.NetworkCandidate(
+            cidr='10.20.30.0/24',
+            bridge='vmbr1',
+            gateway='10.20.30.1',
+            dns_servers=('10.20.30.53', '1.1.1.1'),
+            source='PVE bridge vmbr1',
+        )
+        with patch.object(install.Confirm, 'ask', return_value=True), patch.object(
+            install.Prompt,
+            'ask',
+            side_effect=AssertionError('complete profile must not ask for network fields'),
+        ):
             self.assertEqual(
-                install._configure_network(test_config()),
+                install._configure_network(
+                    test_config(),
+                    [candidate],
+                    prefer_existing=False,
+                ),
                 ('10.20.30', 24, '10.20.30.1', ('10.20.30.53', '1.1.1.1')),
             )
 
-    def test_selected_ssh_identities_are_paths_only_and_ordered(self) -> None:
+    def test_manual_network_has_no_placeholder_defaults_on_fresh_install(self) -> None:
+        answers = iter(['10.20.30.0/24', '10.20.30.1', '10.20.30.53, 1.1.1.1'])
+        calls: list[tuple[str, object]] = []
+
+        def answer(label: str, **kwargs: object) -> str:
+            calls.append((label, kwargs.get('default')))
+            return next(answers)
+
+        with patch.object(install.Prompt, 'ask', side_effect=answer):
+            self.assertEqual(
+                install._configure_network(
+                    install._fresh_config(Path('/tmp/example.toml')),
+                    [],
+                    prefer_existing=False,
+                ),
+                ('10.20.30', 24, '10.20.30.1', ('10.20.30.53', '1.1.1.1')),
+            )
+        self.assertEqual(
+            calls,
+            [
+                ('Workspace network CIDR', None),
+                ('Gateway', None),
+                ('DNS servers (comma-separated)', None),
+            ],
+        )
+
+    def test_detected_ssh_identities_use_number_selection_not_long_path_default(self) -> None:
+        cfg = install._fresh_config(Path('/tmp/example.toml'))
+        discovered = [
+            '~/.ssh/id_ed25519_sk_yubikey1',
+            '~/.ssh/id_ed25519_sk_yubikey2',
+            '~/.ssh/id_ed25519_sk_yubikey3',
+        ]
         with patch.object(
-            install.Prompt, 'ask', return_value='~/.ssh/key_a_sk, ~/.ssh/key_b_sk'
-        ), patch.object(install, 'discover_hardware_identities', return_value=[]):
-            identities = install._configure_identities(test_config())
-        self.assertEqual(identities, ('~/.ssh/key_a_sk', '~/.ssh/key_b_sk'))
+            install, 'discover_hardware_identities', return_value=discovered
+        ), patch.object(install.Prompt, 'ask', return_value='3,1') as prompt:
+            identities = install._configure_identities(cfg)
+        self.assertEqual(
+            identities,
+            (
+                '~/.ssh/id_ed25519_sk_yubikey3',
+                '~/.ssh/id_ed25519_sk_yubikey1',
+            ),
+        )
+        prompt.assert_called_once_with(
+            'Select workspace SSH identities',
+            default='1,2,3',
+        )
 
     def test_declining_sync_returns_valid_empty_current_schema_values(self) -> None:
         with patch.object(install.Confirm, 'ask', return_value=False):

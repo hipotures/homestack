@@ -23,8 +23,10 @@ from .config import (
     validate_sync_path_spec,
 )
 from .discovery import (
+    NetworkCandidate,
     discover_environment,
     discover_hardware_identities,
+    discover_workspace_networks,
     show_discovery_report,
     verified_sessions,
 )
@@ -271,6 +273,37 @@ def _choose_gold(
         if Confirm.ask("Use this Gold VM?", default=True):
             return int(resource["vmid"]), str(resource["node"])
 
+    if len(valid) > 1:
+        table = Table(title="Gold VM candidates")
+        table.add_column("#", justify="right")
+        table.add_column("VMID", justify="right")
+        table.add_column("Name")
+        table.add_column("Node")
+        valid_vmids = [int(resource["vmid"]) for resource, _ in valid]
+        for index, (resource, vm_cfg) in enumerate(valid, 1):
+            table.add_row(
+                str(index),
+                str(resource["vmid"]),
+                str(resource.get("name") or vm_cfg.get("name") or "-"),
+                str(resource.get("node") or "-"),
+            )
+        console.print(table)
+        default_index = (
+            valid_vmids.index(preferred_vmid) + 1
+            if preferred_vmid in valid_vmids
+            else None
+        )
+        while True:
+            choice = (
+                IntPrompt.ask("Select Gold VM", default=default_index)
+                if default_index is not None
+                else IntPrompt.ask("Select Gold VM")
+            )
+            if 1 <= choice <= len(valid):
+                resource, _ = valid[choice - 1]
+                return int(resource["vmid"]), str(resource["node"])
+            console.print(f"[yellow]Choose a number between 1 and {len(valid)}.[/yellow]")
+
     if resources:
         table = Table(title="Available virtual machines")
         table.add_column("VMID", justify="right")
@@ -431,26 +464,56 @@ def _configure_snippets(cfg: Config, definitions: list[dict[str, Any]]) -> tuple
     return selected, snippet_dir
 
 
-def _configure_network(cfg: Config) -> tuple[str, int, str, tuple[str, ...]]:
-    default_network = f"{cfg.network_prefix}.0/{cfg.network_cidr}"
+def _validate_network_values(
+    network: ipaddress.IPv4Network,
+    gateway: str,
+    dns: tuple[str, ...],
+) -> tuple[str, int, str, tuple[str, ...]]:
+    octets = str(network.network_address).split(".")
+    if octets[3] != "0" or network.prefixlen > 24:
+        raise AppError(
+            "The current VMID mapping requires a network ending in .0 with at least "
+            "the full .2-.254 host range."
+        )
+    try:
+        gateway_ip = ipaddress.IPv4Address(gateway)
+    except ValueError as exc:
+        raise AppError("Gateway must be a valid IPv4 address.") from exc
+    if gateway_ip not in network:
+        raise AppError("Gateway must be inside the workspace network.")
+    if not dns:
+        raise AppError("At least one DNS server is required.")
+    try:
+        for value in dns:
+            ipaddress.IPv4Address(value)
+    except ValueError as exc:
+        raise AppError(f"Invalid DNS address: {exc}") from exc
+    return ".".join(octets[:3]), network.prefixlen, gateway, dns
+
+
+def _configure_network_manual(
+    cfg: Config,
+    *,
+    use_defaults: bool,
+) -> tuple[str, int, str, tuple[str, ...]]:
+    default_network = f"{cfg.network_prefix}.0/{cfg.network_cidr}" if use_defaults else None
     while True:
         raw = _ask_text("Workspace network CIDR", default_network)
         try:
             network = ipaddress.IPv4Network(raw, strict=True)
+            if not str(network.network_address).endswith(".0") or network.prefixlen > 24:
+                raise ValueError(
+                    "the current VMID mapping requires a network ending in .0 "
+                    "with at least the full .2-.254 host range"
+                )
         except ValueError as exc:
-            console.print(f"[yellow]Invalid IPv4 network: {exc}[/yellow]")
+            console.print(f"[yellow]Invalid workspace network: {exc}[/yellow]")
             continue
-        octets = str(network.network_address).split(".")
-        if octets[3] != "0" or network.prefixlen > 24:
-            console.print(
-                "[yellow]The current VMID mapping requires a network ending in .0 with at least "
-                "the full .2-.254 host range.[/yellow]"
-            )
-            continue
-        prefix = ".".join(octets[:3])
         break
+
+    gateway_default = cfg.gateway if use_defaults else None
     while True:
-        gateway = _ask_text("Gateway", cfg.gateway)
+        gateway = _ask_text("Gateway", gateway_default)
         try:
             gateway_ip = ipaddress.IPv4Address(gateway)
         except ValueError:
@@ -460,8 +523,10 @@ def _configure_network(cfg: Config) -> tuple[str, int, str, tuple[str, ...]]:
             console.print("[yellow]Gateway must be inside the workspace network.[/yellow]")
             continue
         break
+
+    dns_default = cfg.dns_servers if use_defaults else ()
     while True:
-        dns = _ask_list("DNS servers (comma-separated)", cfg.dns_servers)
+        dns = _ask_list("DNS servers (comma-separated)", dns_default)
         try:
             for value in dns:
                 ipaddress.IPv4Address(value)
@@ -469,26 +534,140 @@ def _configure_network(cfg: Config) -> tuple[str, int, str, tuple[str, ...]]:
             console.print(f"[yellow]Invalid DNS address: {exc}[/yellow]")
             continue
         break
+
+    prefix = ".".join(str(network.network_address).split(".")[:3])
     console.print(f"Example mapping: VMID 200 → {prefix}.200")
     return prefix, network.prefixlen, gateway, dns
 
 
+def _configure_network(
+    cfg: Config,
+    candidates: list[NetworkCandidate],
+    *,
+    prefer_existing: bool,
+) -> tuple[str, int, str, tuple[str, ...]]:
+    current_cidr = f"{cfg.network_prefix}.0/{cfg.network_cidr}"
+    preferred_index: int | None = None
+    if prefer_existing:
+        for index, candidate in enumerate(candidates):
+            if candidate.cidr == current_cidr and candidate.gateway == cfg.gateway:
+                preferred_index = index
+                break
+
+    if not candidates:
+        console.print("[yellow]No workspace network profile could be discovered automatically.[/yellow]")
+        return _configure_network_manual(cfg, use_defaults=prefer_existing)
+
+    table = Table(title="Detected workspace networks")
+    table.add_column("#", justify="right")
+    table.add_column("Network")
+    table.add_column("Bridge")
+    table.add_column("Gateway")
+    table.add_column("DNS")
+    table.add_column("Source")
+    for index, candidate in enumerate(candidates, 1):
+        table.add_row(
+            str(index),
+            candidate.cidr,
+            candidate.bridge or "—",
+            candidate.gateway or "not detected",
+            ", ".join(candidate.dns_servers) if candidate.dns_servers else "not detected",
+            candidate.source,
+        )
+    console.print(table)
+
+    if len(candidates) == 1:
+        selected = candidates[0]
+    else:
+        default_index = preferred_index + 1 if preferred_index is not None else None
+        while True:
+            choice = (
+                IntPrompt.ask("Select workspace network", default=default_index)
+                if default_index is not None
+                else IntPrompt.ask("Select workspace network")
+            )
+            if 1 <= choice <= len(candidates):
+                selected = candidates[choice - 1]
+                break
+            console.print(f"[yellow]Choose a number between 1 and {len(candidates)}.[/yellow]")
+
+    network = ipaddress.IPv4Network(selected.cidr, strict=True)
+
+    gateway = selected.gateway
+    while gateway is None:
+        value = _ask_text("Gateway")
+        try:
+            gateway_ip = ipaddress.IPv4Address(value)
+        except ValueError:
+            console.print("[yellow]Gateway must be a valid IPv4 address.[/yellow]")
+            continue
+        if gateway_ip not in network:
+            console.print("[yellow]Gateway must be inside the workspace network.[/yellow]")
+            continue
+        gateway = value
+
+    dns = selected.dns_servers
+    while not dns:
+        values = _ask_list("DNS servers (comma-separated)")
+        try:
+            for value in values:
+                ipaddress.IPv4Address(value)
+        except ValueError as exc:
+            console.print(f"[yellow]Invalid DNS address: {exc}[/yellow]")
+            continue
+        dns = values
+
+    prefix, cidr, gateway, dns = _validate_network_values(network, gateway, dns)
+    console.print(
+        Panel.fit(
+            f"Network : {selected.cidr}\n"
+            f"Bridge  : {selected.bridge or 'inherited from Gold'}\n"
+            f"Gateway : {gateway}\n"
+            f"DNS     : {', '.join(dns)}\n"
+            f"VMID 200: {prefix}.200",
+            title="Workspace network",
+        )
+    )
+    if Confirm.ask("Use this network profile?", default=True):
+        return prefix, cidr, gateway, dns
+    return _configure_network_manual(cfg, use_defaults=prefer_existing)
+
+
 def _configure_identities(cfg: Config) -> tuple[str, ...]:
     discovered = discover_hardware_identities()
-    if discovered:
-        console.print(Panel.fit("\n".join(discovered), title="Detected hardware-backed SSH identities"))
-    while True:
-        identities = _ask_list(
-            "Workspace SSH IdentityFile path(s), comma-separated",
-            cfg.workspace_ssh.identity_files if cfg.workspace_ssh.identity_files else tuple(discovered),
-        )
-        invalid = [
-            value for value in identities
-            if any(ch.isspace() for ch in value) or any(ch in value for ch in ("\x00", "\n", "\r"))
-        ]
-        if not invalid and len(set(identities)) == len(identities):
-            return identities
-        console.print("[yellow]Identity paths must be unique and contain no whitespace.[/yellow]")
+    options = list(dict.fromkeys((*cfg.workspace_ssh.identity_files, *discovered)))
+    if not options:
+        while True:
+            identities = _ask_list("Workspace SSH IdentityFile path(s), comma-separated")
+            invalid = [
+                value
+                for value in identities
+                if any(ch.isspace() for ch in value)
+                or any(ch in value for ch in ("\x00", "\n", "\r"))
+            ]
+            if not invalid and len(set(identities)) == len(identities):
+                return identities
+            console.print("[yellow]Identity paths must be unique and contain no whitespace.[/yellow]")
+
+    defaults = (
+        cfg.workspace_ssh.identity_files
+        if cfg.workspace_ssh.identity_files
+        else tuple(options)
+    )
+    table = Table(title="Hardware-backed SSH identities")
+    table.add_column("#", justify="right")
+    table.add_column("IdentityFile")
+    table.add_column("Selected")
+    for index, value in enumerate(options, 1):
+        table.add_row(str(index), value, "yes" if value in defaults else "no")
+    console.print(table)
+
+    selected = _select_numbered(
+        "Select workspace SSH identities",
+        options,
+        defaults,
+    )
+    return selected
 
 
 def _configure_sync(cfg: Config) -> tuple[tuple[str, ...], tuple[str, ...], bool]:
@@ -546,9 +725,15 @@ def _show_summary(
         layout = homestack_storage_layout_name(str(item["node"]))
         if layout in cfg.storage_layouts:
             table.add_row(f"Storage {item['node']}", ", ".join(cfg.storage_layouts[layout]))
-    table.add_row("Network", f"{cfg.network_prefix}.0/{cfg.network_cidr}; gateway {cfg.gateway}")
+    table.add_row("Network", f"{cfg.network_prefix}.0/{cfg.network_cidr}")
+    table.add_row("Gateway", cfg.gateway)
+    table.add_row("DNS", ", ".join(cfg.dns_servers))
     table.add_row("Workspace", f"{cfg.user_name} ({cfg.user_uid}:{cfg.user_gid}); home {cfg.default_home_size}")
-    table.add_row("SSH identities", str(len(cfg.workspace_ssh.identity_files)))
+    table.add_row(
+        "SSH identities",
+        f"{len(cfg.workspace_ssh.identity_files)} selected\n"
+        + "\n".join(cfg.workspace_ssh.identity_files),
+    )
     table.add_row("Snippets", f"{cfg.snippet_storage}: {cfg.snippet_dir}")
     table.add_row("Sync", f"{len(cfg.sync_paths)} paths; {len(cfg.sync_commands)} commands")
     console.print(table)
@@ -597,8 +782,19 @@ def run_installer(path: Path) -> int:
             raise AppError(f"Gold node {gold_node!r} has no configured HomeStack storage")
         default_storage = layouts[active_layout][0]
         snippet_storage, snippet_dir = _configure_snippets(base, definitions)
+        network_candidates = discover_workspace_networks(
+            session,
+            base,
+            resources,
+            gold_vmid,
+            gold_node,
+        )
 
-    prefix, cidr, gateway, dns = _configure_network(base)
+    prefix, cidr, gateway, dns = _configure_network(
+        base,
+        network_candidates,
+        prefer_existing=(action == "2"),
+    )
     user_name = _ask_text("Workspace user", base.user_name)
     user_uid = _ask_int("Workspace UID", base.user_uid)
     user_gid = _ask_int("Workspace GID", base.user_gid)

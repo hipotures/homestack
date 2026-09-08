@@ -587,6 +587,28 @@ def node_storage_inventory(session: Transport, node: str) -> list[dict[str, Any]
     return [dict(item) for item in data if isinstance(item, dict) and item.get("storage")]
 
 
+def node_network_inventory(session: Transport, node: str) -> list[dict[str, Any]]:
+    """Return the read-only network configuration reported by one PVE node."""
+    data = session.run_json_value(
+        f"pvesh get /nodes/{shlex.quote(node)}/network --output-format json",
+        timeout=30,
+    )
+    if not isinstance(data, list):
+        raise AppError(f"Proxmox network inventory on {node} did not return a JSON array")
+    return [dict(item) for item in data if isinstance(item, dict) and item.get("iface")]
+
+
+def node_dns_config(session: Transport, node: str) -> dict[str, Any]:
+    """Return the read-only DNS configuration reported by one PVE node."""
+    data = session.run_json_value(
+        f"pvesh get /nodes/{shlex.quote(node)}/dns --output-format json",
+        timeout=30,
+    )
+    if not isinstance(data, dict):
+        raise AppError(f"Proxmox DNS configuration on {node} did not return a JSON object")
+    return dict(data)
+
+
 def cluster_nodes(session: Transport) -> list[str]:
     return [item["node"] for item in cluster_node_statuses(session)]
 
