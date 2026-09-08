@@ -27,6 +27,37 @@ class ReadOnlySession:
 
 
 class InstallerProgressTests(unittest.TestCase):
+    def test_verified_transport_progress_keeps_session_open_until_context_exit(self) -> None:
+        state = {"open": False}
+
+        @contextmanager
+        def fake_transport(_cfg: config.Config):
+            state["open"] = True
+            try:
+                yield object()
+            finally:
+                state["open"] = False
+
+        class FakeProgress:
+            def add_task(self, *_args: object, **_kwargs: object) -> int:
+                return 1
+
+            def start(self) -> None:
+                pass
+
+            def update(self, *_args: object, **_kwargs: object) -> None:
+                pass
+
+            def stop(self) -> None:
+                pass
+
+        with patch.object(install, "open_transport", side_effect=fake_transport), patch.object(
+            install, "_install_progress", return_value=FakeProgress()
+        ):
+            with install._open_transport_with_progress(test_config()):
+                self.assertTrue(state["open"])
+            self.assertFalse(state["open"])
+
     def test_progress_descriptions_do_not_use_ellipsis(self) -> None:
         descriptions = [
             "Scan Herdr SSH sessions",

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import replace
 import ipaddress
 from pathlib import Path
@@ -81,6 +82,27 @@ def _discover_environment_with_progress() -> dict[str, Any]:
             )
 
         return discover_environment(progress=update)
+
+
+@contextmanager
+def _open_transport_with_progress(cfg: Config):
+    progress = _install_progress()
+    task = progress.add_task(
+        "Verify selected Herdr administrative session",
+        total=1,
+    )
+    progress.start()
+    try:
+        with open_transport(cfg) as session:
+            progress.update(
+                task,
+                completed=1,
+                description="Herdr administrative session verified",
+            )
+            progress.stop()
+            yield session
+    finally:
+        progress.stop()
 
 
 def _load_proxmox_inventory_with_progress(
@@ -850,21 +872,8 @@ def run_installer(path: Path) -> int:
         discovery_report,
         prefer_existing=(action == "2"),
     )
-    transport_progress = _install_progress()
-    transport_task = transport_progress.add_task(
-        "Verify selected Herdr administrative session",
-        total=1,
-    )
-    transport_progress.start()
-    try:
-        with open_transport(base) as session:
-            transport_progress.update(
-                transport_task,
-                completed=1,
-                description="Herdr administrative session verified",
-            )
-            transport_progress.stop()
-            statuses, resources, definitions = _load_proxmox_inventory_with_progress(session)
+    with _open_transport_with_progress(base) as session:
+        statuses, resources, definitions = _load_proxmox_inventory_with_progress(session)
         gold_vmid, gold_node = _choose_gold(
             session,
             base,
@@ -887,8 +896,6 @@ def run_installer(path: Path) -> int:
             gold_vmid,
             gold_node,
         )
-    finally:
-        transport_progress.stop()
 
     prefix, cidr, gateway, dns = _configure_network(
         base,
