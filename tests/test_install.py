@@ -232,7 +232,7 @@ class DiscoveryTests(unittest.TestCase):
             return item, {'scsi0': 'store:disk', 'tags': 'homestack-gold'}
 
         with patch.object(install, '_validated_gold', side_effect=validated), patch.object(
-            install.IntPrompt, 'ask', return_value=101
+            install.IntPrompt, 'ask', return_value=1
         ) as prompt:
             self.assertEqual(
                 install._choose_gold(
@@ -244,7 +244,7 @@ class DiscoveryTests(unittest.TestCase):
                 (101, 'pve2'),
             )
 
-        prompt.assert_called_once_with('Gold VMID')
+        prompt.assert_called_once_with('Select Gold VM')
 
     def test_reconfigure_offers_current_gold_only_when_it_is_still_valid(self) -> None:
         resources = [
@@ -259,7 +259,7 @@ class DiscoveryTests(unittest.TestCase):
             return item, {'scsi0': 'store:disk', 'tags': 'homestack-gold'}
 
         with patch.object(install, '_validated_gold', side_effect=validated), patch.object(
-            install.IntPrompt, 'ask', return_value=101
+            install.IntPrompt, 'ask', return_value=1
         ) as prompt:
             self.assertEqual(
                 install._choose_gold(
@@ -270,10 +270,10 @@ class DiscoveryTests(unittest.TestCase):
                 ),
                 (101, 'pve2'),
             )
-        prompt.assert_called_once_with('Gold VMID', default=101)
+        prompt.assert_called_once_with('Select Gold VM', default=1)
 
         with patch.object(install, '_validated_gold', side_effect=validated), patch.object(
-            install.IntPrompt, 'ask', return_value=117
+            install.IntPrompt, 'ask', return_value=2
         ) as prompt:
             self.assertEqual(
                 install._choose_gold(
@@ -284,7 +284,7 @@ class DiscoveryTests(unittest.TestCase):
                 ),
                 (117, 'pve1'),
             )
-        prompt.assert_called_once_with('Gold VMID')
+        prompt.assert_called_once_with('Select Gold VM')
 
     def test_discovery_helpers_issue_only_read_only_queries(self) -> None:
         responses = {
