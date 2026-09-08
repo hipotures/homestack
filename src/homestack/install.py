@@ -249,6 +249,8 @@ def _choose_gold(
     session: Transport,
     cfg: Config,
     resources: list[dict[str, Any]],
+    *,
+    preferred_vmid: int | None = None,
 ) -> tuple[int, str]:
     tagged = [item for item in resources if has_tag(item.get("tags"), GOLD_TAG)]
     valid: list[tuple[dict[str, Any], dict[str, str]]] = []
@@ -283,7 +285,8 @@ def _choose_gold(
                 "yes" if has_tag(item.get("tags"), GOLD_TAG) else "no",
             )
         console.print(table)
-    default_vmid = cfg.gold_vmid if any(int(x["vmid"]) == cfg.gold_vmid for x in resources) else None
+    valid_vmids = {int(resource["vmid"]) for resource, _ in valid}
+    default_vmid = preferred_vmid if preferred_vmid in valid_vmids else None
     while True:
         vmid = int(
             IntPrompt.ask("Gold VMID", default=default_vmid)
@@ -576,7 +579,12 @@ def run_installer(path: Path) -> int:
         statuses = cluster_node_statuses(session)
         resources = cluster_vm_resources(session)
         definitions = cluster_storage_definitions(session)
-        gold_vmid, gold_node = _choose_gold(session, base, resources)
+        gold_vmid, gold_node = _choose_gold(
+            session,
+            base,
+            resources,
+            preferred_vmid=base.gold_vmid if action == "2" else None,
+        )
         base = replace(base, node=gold_node, gold_vmid=gold_vmid)
         layouts, unverified_nodes = _configure_storage(
             session, base, statuses, definitions

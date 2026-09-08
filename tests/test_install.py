@@ -205,6 +205,73 @@ class DiscoveryTests(unittest.TestCase):
             self.assertEqual(install._choose_gold(session, test_config(), ambiguous), (102, 'pve2'))
         self.assertEqual(prompt.call_count, 2)
 
+    def test_fresh_install_does_not_offer_placeholder_or_non_gold_vmid_as_default(self) -> None:
+        resources = [
+            {'type': 'qemu', 'vmid': 100, 'name': 'desktop', 'node': 'pve1'},
+            {'type': 'qemu', 'vmid': 101, 'name': 'gold', 'node': 'pve2', 'tags': 'homestack-gold'},
+            {'type': 'qemu', 'vmid': 117, 'name': 'gold-local-test', 'node': 'pve1', 'tags': 'homestack-gold'},
+        ]
+        session = ReadOnlySession()
+
+        def validated(_session: object, _cfg: object, resources: list[dict[str, object]], vmid: int):
+            item = next(item for item in resources if item['vmid'] == vmid)
+            return item, {'scsi0': 'store:disk', 'tags': 'homestack-gold'}
+
+        with patch.object(install, '_validated_gold', side_effect=validated), patch.object(
+            install.IntPrompt, 'ask', return_value=101
+        ) as prompt:
+            self.assertEqual(
+                install._choose_gold(
+                    session,
+                    install._fresh_config(Path('/tmp/example.toml')),
+                    resources,
+                    preferred_vmid=None,
+                ),
+                (101, 'pve2'),
+            )
+
+        prompt.assert_called_once_with('Gold VMID')
+
+    def test_reconfigure_offers_current_gold_only_when_it_is_still_valid(self) -> None:
+        resources = [
+            {'type': 'qemu', 'vmid': 100, 'name': 'desktop', 'node': 'pve1'},
+            {'type': 'qemu', 'vmid': 101, 'name': 'gold', 'node': 'pve2', 'tags': 'homestack-gold'},
+            {'type': 'qemu', 'vmid': 117, 'name': 'gold-local-test', 'node': 'pve1', 'tags': 'homestack-gold'},
+        ]
+        session = ReadOnlySession()
+
+        def validated(_session: object, _cfg: object, resources: list[dict[str, object]], vmid: int):
+            item = next(item for item in resources if item['vmid'] == vmid)
+            return item, {'scsi0': 'store:disk', 'tags': 'homestack-gold'}
+
+        with patch.object(install, '_validated_gold', side_effect=validated), patch.object(
+            install.IntPrompt, 'ask', return_value=101
+        ) as prompt:
+            self.assertEqual(
+                install._choose_gold(
+                    session,
+                    test_config(),
+                    resources,
+                    preferred_vmid=101,
+                ),
+                (101, 'pve2'),
+            )
+        prompt.assert_called_once_with('Gold VMID', default=101)
+
+        with patch.object(install, '_validated_gold', side_effect=validated), patch.object(
+            install.IntPrompt, 'ask', return_value=117
+        ) as prompt:
+            self.assertEqual(
+                install._choose_gold(
+                    session,
+                    test_config(),
+                    resources,
+                    preferred_vmid=100,
+                ),
+                (117, 'pve1'),
+            )
+        prompt.assert_called_once_with('Gold VMID')
+
     def test_discovery_helpers_issue_only_read_only_queries(self) -> None:
         responses = {
             'pvesh get /nodes --output-format json': [{'node': 'pve1', 'status': 'online'}],
