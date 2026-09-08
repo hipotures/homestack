@@ -78,6 +78,8 @@ class HerdrBootstrapConfig:
     herdr_debug: bool = True
 
 
+HERDR_PVE_WORKSPACE = "PVE"
+
 ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 
 
@@ -176,71 +178,87 @@ def _prompt_host_for_pane(pane_id: str) -> str | None:
 
 
 def discover_herdr_candidates() -> list[HerdrCandidate]:
-    """Discover open Herdr tabs that currently contain one foreground SSH session."""
+    """Discover SSH sessions only inside the dedicated Herdr PVE workspace."""
     if shutil.which("herdr") is None:
         raise AppError("Required local command 'herdr' was not found")
 
     workspaces = herdr_json(["workspace", "list"])
     workspace_items = workspaces.get("result", {}).get("workspaces", [])
+    matches = [
+        item
+        for item in workspace_items
+        if str(item.get("label") or "").strip() == HERDR_PVE_WORKSPACE
+    ]
+    if not matches:
+        raise AppError(
+            f"Required Herdr workspace {HERDR_PVE_WORKSPACE!r} is not open. "
+            "Create/open that workspace and add one tab per Proxmox node."
+        )
+    if len(matches) != 1:
+        raise AppError(
+            f"Multiple Herdr workspaces named {HERDR_PVE_WORKSPACE!r} were found"
+        )
+
+    workspace_item = matches[0]
+    workspace = HERDR_PVE_WORKSPACE
+    workspace_id = str(workspace_item.get("workspace_id") or "").strip()
+    if not workspace_id:
+        raise AppError(
+            f"Herdr workspace {HERDR_PVE_WORKSPACE!r} has no workspace_id"
+        )
+
+    tabs = herdr_json(["tab", "list", "--workspace", workspace_id])
+    tab_items = tabs.get("result", {}).get("tabs", [])
+    panes = herdr_json(["pane", "list", "--workspace", workspace_id])
+    pane_items = panes.get("result", {}).get("panes", [])
     candidates: list[HerdrCandidate] = []
 
-    for workspace_item in workspace_items:
-        workspace = str(workspace_item.get("label") or "").strip()
-        workspace_id = str(workspace_item.get("workspace_id") or "").strip()
-        if not workspace or not workspace_id:
+    for tab_item in tab_items:
+        tab = str(tab_item.get("label") or "").strip()
+        tab_id = str(tab_item.get("tab_id") or "").strip()
+        if not tab or not tab_id:
+            continue
+        matching_panes = [
+            item for item in pane_items if str(item.get("tab_id") or "") == tab_id
+        ]
+        if len(matching_panes) != 1:
+            continue
+        pane_id = str(matching_panes[0].get("pane_id") or "").strip()
+        if not pane_id:
             continue
 
-        tabs = herdr_json(["tab", "list", "--workspace", workspace_id])
-        tab_items = tabs.get("result", {}).get("tabs", [])
-        panes = herdr_json(["pane", "list", "--workspace", workspace_id])
-        pane_items = panes.get("result", {}).get("panes", [])
+        process_info = herdr_json(["pane", "process-info", "--pane", pane_id])
+        info = process_info.get("result", {}).get("process_info", {})
+        foreground = info.get("foreground_processes", []) or []
+        ssh_processes = [
+            item for item in foreground if str(item.get("name") or "") == "ssh"
+        ]
+        if len(ssh_processes) != 1:
+            continue
 
-        for tab_item in tab_items:
-            tab = str(tab_item.get("label") or "").strip()
-            tab_id = str(tab_item.get("tab_id") or "").strip()
-            if not tab or not tab_id:
-                continue
-            matching_panes = [
-                item for item in pane_items if str(item.get("tab_id") or "") == tab_id
-            ]
-            if len(matching_panes) != 1:
-                continue
-            pane_id = str(matching_panes[0].get("pane_id") or "").strip()
-            if not pane_id:
-                continue
-
-            process_info = herdr_json(["pane", "process-info", "--pane", pane_id])
-            info = process_info.get("result", {}).get("process_info", {})
-            foreground = info.get("foreground_processes", []) or []
-            ssh_processes = [
-                item for item in foreground if str(item.get("name") or "") == "ssh"
-            ]
-            if len(ssh_processes) != 1:
-                continue
-
-            ssh = ssh_processes[0]
-            argv = [str(value) for value in ssh.get("argv", [])]
-            ssh_target = _ssh_target_from_argv(argv)
-            if not ssh_target:
-                continue
-            ssh_user, ssh_host = _split_ssh_target(ssh_target)
-            if not ssh_host:
-                continue
-            cmdline = str(ssh.get("cmdline") or " ".join(argv))
-            candidates.append(
-                HerdrCandidate(
-                    workspace=workspace,
-                    workspace_id=workspace_id,
-                    tab=tab,
-                    tab_id=tab_id,
-                    pane_id=pane_id,
-                    ssh_target=ssh_target,
-                    ssh_host=ssh_host,
-                    ssh_user=ssh_user,
-                    ssh_cmdline=cmdline,
-                    prompt_host=_prompt_host_for_pane(pane_id),
-                )
+        ssh = ssh_processes[0]
+        argv = [str(value) for value in ssh.get("argv", [])]
+        ssh_target = _ssh_target_from_argv(argv)
+        if not ssh_target:
+            continue
+        ssh_user, ssh_host = _split_ssh_target(ssh_target)
+        if not ssh_host:
+            continue
+        cmdline = str(ssh.get("cmdline") or " ".join(argv))
+        candidates.append(
+            HerdrCandidate(
+                workspace=workspace,
+                workspace_id=workspace_id,
+                tab=tab,
+                tab_id=tab_id,
+                pane_id=pane_id,
+                ssh_target=ssh_target,
+                ssh_host=ssh_host,
+                ssh_user=ssh_user,
+                ssh_cmdline=cmdline,
+                prompt_host=_prompt_host_for_pane(pane_id),
             )
+        )
 
     return candidates
 

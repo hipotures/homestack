@@ -34,7 +34,9 @@ Create or reconfigure the runtime config with the interactive installer:
 uv run homestack install
 ```
 
-The installer uses the same read-only discovery mechanism first, selects a verified root Herdr session, then asks only for configuration choices that cannot be discovered safely. It discovers workspace network profiles from existing HomeStack VMs and read-only PVE network/DNS data on the Gold VM's inherited bridge, lets the user choose when more than one profile is available, and asks only for missing network fields. Hardware-backed SSH identities are selected by number instead of being repeated as a long comma-separated path default. An existing runtime config is never silently overwritten; reconfiguration is explicit and the previous file is backed up before atomic replacement.
+HomeStack reserves one Herdr workspace named exactly `PVE` for Proxmox administration. Put one or more tabs in that workspace, with each usable tab containing exactly one pane running an interactive root SSH session to a Proxmox node and left at that node's root shell prompt. Naming tabs after their nodes, for example `pve1`, `pve2`, and `pve3`, is recommended. Other Herdr workspaces are outside HomeStack's discovery scope and are not probed.
+
+The installer uses this dedicated `PVE` workspace for read-only discovery, selects a verified root Herdr session, then asks only for configuration choices that cannot be discovered safely. It discovers workspace network profiles from existing HomeStack VMs and read-only PVE network/DNS data on the Gold VM's inherited bridge, lets the user choose when more than one profile is available, and asks only for missing network fields. Hardware-backed SSH identities are selected by number instead of being repeated as a long comma-separated path default. An existing runtime config is never silently overwritten; reconfiguration is explicit and the previous file is backed up before atomic replacement.
 
 Manual configuration from `config.example.toml` remains available when needed.
 
@@ -55,8 +57,8 @@ The selected remote backend is explicit:
 type = "herdr"
 
 [transport.herdr]
-workspace = "example-workspace"
-tab = "example-node"
+workspace = "PVE"
+tab = "pve1"
 debug = true
 ```
 
@@ -64,7 +66,7 @@ Herdr is the only implemented backend. A small transport factory owns backend se
 
 ## Trust and transport model
 
-HomeStack remains a trusted-desktop tool. It drives one already authenticated SSH root shell in the configured Herdr workspace, tab, and pane. Before remote work it verifies that:
+HomeStack remains a trusted-desktop tool. Bootstrap discovery inspects only the Herdr workspace named `PVE`; it does not execute probes in unrelated Herdr workspaces. After configuration, HomeStack drives one already authenticated SSH root shell in the configured Herdr workspace, tab, and pane. Before remote work it verifies that:
 
 - the configured workspace and tab each match exactly once;
 - the tab has exactly one pane;

@@ -242,7 +242,7 @@ def _fresh_config(path: Path) -> Config:
             identities_only=True,
             log_level="FATAL",
         ),
-        herdr_workspace="pve",
+        herdr_workspace="PVE",
         herdr_tab="pve1",
         herdr_debug=True,
         storage_display_unit="GiB",

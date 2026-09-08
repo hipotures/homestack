@@ -52,27 +52,32 @@ class HerdrCandidateDiscoveryTests(unittest.TestCase):
             "root@pve2",
         )
 
-    def test_discovery_keeps_only_single_pane_foreground_ssh_tabs(self) -> None:
+    def test_discovery_only_scans_dedicated_pve_workspace(self) -> None:
+        requests: list[list[str]] = []
+
         def fake_json(args: list[str], **_: object) -> dict[str, object]:
+            requests.append(args)
             if args == ["workspace", "list"]:
                 return {
                     "result": {
                         "workspaces": [
-                            {"label": "infra", "workspace_id": "ws1"},
+                            {"label": "V-RT", "workspace_id": "ws-rt"},
+                            {"label": "PVE", "workspace_id": "ws-pve"},
+                            {"label": "V-TKL", "workspace_id": "ws-tkl"},
                         ]
                     }
                 }
-            if args == ["tab", "list", "--workspace", "ws1"]:
+            if args == ["tab", "list", "--workspace", "ws-pve"]:
                 return {
                     "result": {
                         "tabs": [
-                            {"label": "pve", "tab_id": "tab1"},
+                            {"label": "pve2", "tab_id": "tab1"},
                             {"label": "shell", "tab_id": "tab2"},
                             {"label": "split", "tab_id": "tab3"},
                         ]
                     }
                 }
-            if args == ["pane", "list", "--workspace", "ws1"]:
+            if args == ["pane", "list", "--workspace", "ws-pve"]:
                 return {
                     "result": {
                         "panes": [
@@ -124,10 +129,32 @@ class HerdrCandidateDiscoveryTests(unittest.TestCase):
             candidates = herdr.discover_herdr_candidates()
 
         self.assertEqual(len(candidates), 1)
-        self.assertEqual(candidates[0].workspace, "infra")
-        self.assertEqual(candidates[0].tab, "pve")
+        self.assertEqual(candidates[0].workspace, "PVE")
+        self.assertEqual(candidates[0].tab, "pve2")
         self.assertEqual(candidates[0].ssh_target, "root@pve2")
         self.assertEqual(candidates[0].prompt_host, "pve2")
+        self.assertFalse(
+            any("ws-rt" in request or "ws-tkl" in request for request in requests)
+        )
+
+    def test_discovery_requires_dedicated_pve_workspace(self) -> None:
+        def fake_json(args: list[str], **_: object) -> dict[str, object]:
+            if args == ["workspace", "list"]:
+                return {
+                    "result": {
+                        "workspaces": [
+                            {"label": "V-RT", "workspace_id": "ws-rt"},
+                            {"label": "V-TKL", "workspace_id": "ws-tkl"},
+                        ]
+                    }
+                }
+            raise AssertionError(f"unexpected Herdr request: {args}")
+
+        with patch.object(herdr.shutil, "which", return_value="/usr/bin/herdr"), patch.object(
+            herdr, "herdr_json", side_effect=fake_json
+        ):
+            with self.assertRaisesRegex(models.AppError, "workspace 'PVE' is not open"):
+                herdr.discover_herdr_candidates()
 
 
 class EnvironmentDiscoveryTests(unittest.TestCase):
