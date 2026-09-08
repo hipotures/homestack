@@ -479,12 +479,6 @@ class InstallerValueTests(unittest.TestCase):
         self.assertEqual(commands, ('command one', 'command two'))
         self.assertFalse(verbose)
 
-
-if __name__ == '__main__':
-    unittest.main()
-
-
-
 class InstallDraftResumeTests(unittest.TestCase):
     def test_draft_round_trip_restores_completed_values_without_placeholder_leakage(self) -> None:
         base = install._fresh_config(Path("/tmp/example.toml"))
@@ -556,3 +550,6 @@ class InstallDraftResumeTests(unittest.TestCase):
             choices=["1", "2", "3"],
             default="1",
         )
+
+if __name__ == '__main__':
+    unittest.main()

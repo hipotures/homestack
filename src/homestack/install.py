@@ -1547,3 +1547,6 @@ def run_installer(path: Path) -> int:
     console.print(result)
     console.print("Next: homestack transport   or   homestack status")
     return 0
+
+
+__all__ = ["run_installer"]
