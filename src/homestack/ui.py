@@ -906,6 +906,57 @@ def show_status_result(result: dict[str, Any]) -> None:
     show_kv_panel(f"WORKSPACE STATUS — VM {result['vmid']}", sections)
 
 
+def show_repository_status(result: dict[str, Any]) -> None:
+    status = str(result.get("status") or "unknown")
+    if status == "ready":
+        status_text = "[green]✓ ready[/green]"
+    elif status == "not configured":
+        status_text = "[dim]not configured[/dim]"
+    else:
+        status_text = f"[yellow]{escape(status)}[/yellow]"
+
+    deploy_state = str(result.get("deploy_key_state") or "missing")
+    deploy_id = result.get("deploy_key_id")
+    deploy_text = escape(deploy_state)
+    if isinstance(deploy_id, int):
+        deploy_text += f" [dim](ID {deploy_id})[/dim]"
+
+    tools = result.get("tools") or {}
+    tool_text = ", ".join(
+        f"{name}: {'yes' if tools.get(name) else 'missing'}"
+        for name in ("git", "ssh", "ssh-keygen")
+    )
+    sections = [
+        [
+            ("Workspace", escape(str(result.get("workspace") or "—"))),
+            ("Repository", escape(str(result.get("repository") or "—"))),
+            ("Status", status_text),
+        ],
+        [
+            ("Checkout", escape(str(result.get("checkout") or "—"))),
+            ("Checkout state", escape(str(result.get("checkout_state") or "—"))),
+            ("Working tree", escape(str(result.get("working_tree") or "—"))),
+            ("Origin", escape(str(result.get("origin") or "—"))),
+        ],
+        [
+            ("Key", escape(str(result.get("key_path") or "—"))),
+            ("Key state", escape(str(result.get("key_state") or "—"))),
+            ("Fingerprint", escape(str(result.get("key_fingerprint") or "—"))),
+            ("GitHub deploy key", deploy_text),
+            ("Git access", escape(str(result.get("access") or "—"))),
+            ("Repo SSH config", escape(str(result.get("ssh_config_state") or "—"))),
+            ("Workspace tools", escape(tool_text)),
+        ],
+    ]
+    if result.get("message"):
+        sections.append([("Result", escape(str(result["message"])))])
+    show_kv_panel(f"REPOSITORY — {result.get('workspace') or 'workspace'}", sections)
+
+
+def show_repository_menu() -> None:
+    console.print("[bold][1][/bold] Exit   [bold][2][/bold] Setup   [bold][3][/bold] Rotate key")
+
+
 def show_transport_result(result: dict[str, Any]) -> None:
     transport = result["transport"]
     pve = result["pve"]

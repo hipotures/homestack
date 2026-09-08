@@ -9,7 +9,7 @@ import json
 import sys
 from rich.panel import Panel
 from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn, TimeElapsedColumn
-from rich.prompt import Confirm
+from rich.prompt import Confirm, Prompt
 from rich.table import Table
 
 from .config import default_config_path, load_config
@@ -19,7 +19,7 @@ from .proxmox import parse_home_size
 from .status import global_status, transport_status, workspace_status
 from .sync import build_sync_plan, sync_workspace
 from .transports import open_transport
-from .ui import console, show_create_plan, show_destroy_plan, show_destroy_result, show_error, show_global_status, show_migrate_plan, show_refresh_plan, show_status_result, show_sync_plan, show_sync_result, show_transport_result
+from .ui import console, show_create_plan, show_destroy_plan, show_destroy_result, show_error, show_global_status, show_migrate_plan, show_refresh_plan, show_repository_menu, show_repository_status, show_status_result, show_sync_plan, show_sync_result, show_transport_result
 
 def emit_json(obj: dict[str, Any]) -> None:
     print(json.dumps(obj, ensure_ascii=False, indent=2, sort_keys=True))
@@ -60,6 +60,10 @@ def show_help(cfg_path: Path) -> None:
         "Synchronize configured desktop files/directories into the workspace persistent home.",
     )
     commands.add_row(
+        f"{cmd} repo VMID|NAME [OWNER/REPO]",
+        "Inspect, set up, or rotate the GitHub repository deploy key for a workspace.",
+    )
+    commands.add_row(
         f"{cmd} status",
         "Show the global HomeStack VM and storage dashboard.",
     )
@@ -97,6 +101,7 @@ def show_help(cfg_path: Path) -> None:
         f"{cmd} migrate 200 pve-example-2 --target-storage example-storage\n"
         f"{cmd} sync 200\n"
         f"{cmd} sync example-workspace\n"
+        f"{cmd} repo example-workspace\n"
         f"{cmd} destroy 200\n"
         f"{cmd} destroy 200 --json\n"
         f"{cmd} status\n"
@@ -159,6 +164,12 @@ def build_parser() -> argparse.ArgumentParser:
     sync.add_argument("--json", action="store_true")
     sync.add_argument("-y", "--yes", action="store_true")
     sync.add_argument("-h", "--help", action="store_true", dest="sub_help")
+
+    repo = sub.add_parser("repo", add_help=False)
+    repo.add_argument("target")
+    repo.add_argument("repository", nargs="?")
+    repo.add_argument("--json", action="store_true")
+    repo.add_argument("-h", "--help", action="store_true", dest="sub_help")
 
     status = sub.add_parser("status", add_help=False)
     status.add_argument("target", nargs="?")
@@ -377,6 +388,46 @@ def main() -> int:
                 else:
                     show_sync_result(result)
                 return 0 if result.get("ok") else 1
+
+            if args.command == "repo":
+                from .repo import (
+                    inspect_repository,
+                    open_repository_workspace,
+                    resolve_repository_argument,
+                    rotate_repository_key,
+                    setup_repository,
+                )
+
+                repository = resolve_repository_argument(cfg, args.repository)
+                vmid, workspace_name, workspace_connection = open_repository_workspace(
+                    session, cfg, args.target
+                )
+                with workspace_connection as repo_workspace:
+                    state = inspect_repository(
+                        cfg, repo_workspace, vmid, workspace_name, repository
+                    )
+                    if json_mode:
+                        emit_json(state)
+                        return 0
+
+                    show_repository_status(state)
+                    if not sys.stdin.isatty():
+                        raise AppError(
+                            "Interactive repository action selection requires a TTY; "
+                            "use --json for status-only output"
+                        )
+                    show_repository_menu()
+                    action = Prompt.ask("Action", choices=["1", "2", "3"], default="1")
+                    if action == "1":
+                        return 0
+                    if action == "2":
+                        result = setup_repository(cfg, repo_workspace, state)
+                    else:
+                        result = rotate_repository_key(cfg, repo_workspace, state)
+                    if result.get("message"):
+                        console.print(f"[bold]{result['message']}[/bold]")
+                    show_repository_status(result)
+                    return 0 if result.get("ready") else 1
 
             if args.command == "status":
                 if args.target is None:

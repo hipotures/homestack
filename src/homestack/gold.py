@@ -257,6 +257,15 @@ def check_gold_readiness(
                 requirement="optional",
             )
         )
+        checks.append(
+            GoldCheck(
+                "guest",
+                "git/ssh-keygen for homestack repo",
+                "skip",
+                f"not inspected because Gold is {power_state}",
+                requirement="optional",
+            )
+        )
         update("Gold guest inspection skipped", total)
         return GoldReadiness(vmid, node, power_state, tuple(checks))
 
@@ -292,6 +301,15 @@ def check_gold_readiness(
             GoldCheck(
                 "guest",
                 "rsync for homestack sync",
+                "skip",
+                "QEMU Guest Agent unavailable",
+                requirement="optional",
+            )
+        )
+        checks.append(
+            GoldCheck(
+                "guest",
+                "git/ssh-keygen for homestack repo",
                 "skip",
                 "QEMU Guest Agent unavailable",
                 requirement="optional",
@@ -345,6 +363,26 @@ def check_gold_readiness(
         "rsync for homestack sync",
         rsync_state == "PRESENT",
         "installed" if rsync_state == "PRESENT" else "not installed; sync will be unavailable",
+        requirement="optional",
+    )
+    repo_tool_words = " ".join(shlex.quote(tool) for tool in ("git", "ssh-keygen"))
+    missing_repo_tools = guest_out_on_node(
+        session,
+        cfg,
+        node,
+        vmid,
+        "for c in "
+        + repo_tool_words
+        + '; do command -v "$c" >/dev/null 2>&1 || printf "%s\\n" "$c"; done',
+        check=False,
+    ).splitlines()
+    add(
+        "guest",
+        "git/ssh-keygen for homestack repo",
+        not missing_repo_tools,
+        "all present"
+        if not missing_repo_tools
+        else "missing: " + ", ".join(missing_repo_tools),
         requirement="optional",
     )
 

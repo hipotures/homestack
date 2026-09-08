@@ -17,7 +17,7 @@ uv run homestack --help
 uv run python -m homestack --help
 ```
 
-The desktop also needs `herdr`, `ssh`, and `rsync`. Proxmox nodes need `qm`, `pvesh`, `pvesm`, `perl`, `base64`, `ssh`, and `scp`.
+The desktop also needs `herdr`, `ssh`, and `rsync`. GitHub repository provisioning additionally requires an authenticated `gh` CLI on the trusted desktop. Proxmox nodes need `qm`, `pvesh`, `pvesm`, `perl`, `base64`, `ssh`, and `scp`.
 
 ## Configuration
 
@@ -90,6 +90,8 @@ uv run homestack create 200 example-workspace --storage example-storage
 uv run homestack refresh 200
 uv run homestack migrate 200 pve-example-2 --target-storage example-storage
 uv run homestack sync 200
+uv run homestack repo example-workspace
+uv run homestack repo example-workspace owner/repository
 uv run homestack destroy 200
 uv run homestack status
 uv run homestack status 200
@@ -131,6 +133,8 @@ Install `rsync` only if `homestack sync` will be used:
 apt-get install -y rsync
 ```
 
+`homestack repo` additionally requires `git` and `ssh-keygen` in the workspace. These are optional Gold capabilities because repository provisioning is independent of the VM lifecycle.
+
 Run administrative preparation as `root`; HomeStack does not use `sudo`. The Gold readiness table labels every check as `required` or `optional`. Missing required checks block the installer stage; missing optional capabilities are reported but do not block final configuration.
 
 The guest must contain the configured workspace account before cloning. With the default HomeStack settings this is:
@@ -171,7 +175,7 @@ Gold's root may contain any system-wide packages and configuration that should r
 
 Gold readiness is a required, checkpointed installer stage. Transport selection, Gold selection, and workspace-account values are saved before it runs. If the check fails, fix the Gold VM and rerun the same installer command; those completed stages are loaded from the draft and are not asked again.
 
-After Gold selection and workspace-account selection, `homestack install` performs a non-destructive readiness check. Required checks validate the PVE role tag, root/data-disk layout, `net0`, Cloud-Init drive, QEMU Guest Agent option, and boot order. If Gold is running, required guest and security checks also cover QEMU Guest Agent access, the mandatory guest tools, the configured user/UID/GID, the no-`sudo` policy, regular-user policy, root SSH keys, and a workspace public-key source. `rsync` is an optional capability and is checked separately because it is needed only for `homestack sync`.
+After Gold selection and workspace-account selection, `homestack install` performs a non-destructive readiness check. Required checks validate the PVE role tag, root/data-disk layout, `net0`, Cloud-Init drive, QEMU Guest Agent option, and boot order. If Gold is running, required guest and security checks also cover QEMU Guest Agent access, the mandatory guest tools, the configured user/UID/GID, the no-`sudo` policy, regular-user policy, root SSH keys, and a workspace public-key source. `rsync` is an optional capability needed only for `homestack sync`; `git` and `ssh-keygen` are optional capabilities needed only for `homestack repo`.
 
 The installer never starts Gold just to inspect it. A stopped Gold can therefore pass the PVE-side contract when it has valid Proxmox `sshkeys`, but the installer reports guest checks as not inspected. Runtime `create` and `refresh` verification still fail closed if the resulting workspace violates the account, SSH, persistent-home, or guest requirements.
 
@@ -197,6 +201,31 @@ After a successful create, HomeStack writes and fsyncs a mode-`0600` temporary w
 Synchronization is explicit and never runs as part of create, refresh, or migration. `[sync] paths` contains normalized `~/...` desktop paths; an ending slash denotes a directory. Optional commands run in order as the workspace user only after all configured paths synchronize successfully.
 
 One SSH ControlMaster connection is established and reused for checks, directory creation, rsync, verification, and post-sync commands. Fresh authentication methods are disabled on child connections, so a broken control socket fails instead of requesting another hardware-key interaction. HomeStack does not use password authentication, a fallback key, `sudo`, or credentials stored on PVE hosts.
+
+## Repository provisioning
+
+Repository setup is explicit and independent of create, refresh, migrate, and sync. Configure an optional default repository and checkout root:
+
+```toml
+[repo]
+default_repository = "owner/repository"
+checkout_root = "~/DEV"
+```
+
+Run either form:
+
+```bash
+uv run homestack repo WORKSPACE
+uv run homestack repo WORKSPACE OWNER/REPO
+```
+
+An explicit `OWNER/REPO` overrides `[repo] default_repository`. Without either value, the command fails without making changes. The command first inspects the workspace and GitHub state, then offers `Exit`, `Setup`, or `Rotate key`.
+
+Setup creates one Ed25519 deploy-key pair below `~/.ssh/homestack/github/` inside the workspace persistent home. The private key never leaves the workspace. HomeStack reads only the public key over the existing hardware-authenticated workspace SSH connection and registers it through the trusted desktop's authenticated `gh` session as a read-write GitHub deploy key.
+
+The checkout lives at `<checkout_root>/<repo-name>`. If it does not exist, HomeStack clones it over SSH. If the correct repository already exists, HomeStack preserves the working tree and history, changes only the remote/checkout SSH configuration when necessary, and never performs `git reset`, `git clean`, or a destructive reclone. Re-running Setup on a fully configured repository is a no-op. If the GitHub deploy key disappeared but the local key pair remains valid, Setup re-registers the existing public key.
+
+Rotate key replaces only the repository deploy key. It removes the matching GitHub deploy key, generates a new workspace-local key pair at the same path, registers the new public key as read-write, and verifies Git access. The checkout and working tree are not modified.
 
 ## Status
 

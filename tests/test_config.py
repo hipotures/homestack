@@ -40,6 +40,11 @@ class ConfigTests(unittest.TestCase):
         )
         self.assertTrue(loaded.workspace_ssh.identities_only)
         self.assertEqual(loaded.workspace_ssh.log_level, 'FATAL')
+        self.assertEqual(
+            loaded.repo_default_repository,
+            'example-owner/example-repository',
+        )
+        self.assertEqual(loaded.repo_checkout_root, '~/DEV')
 
     def test_workspace_ssh_validation_matches_ssh_config_contract(self) -> None:
         example = Path(__file__).resolve().parents[1] / 'config.example.toml'
@@ -76,6 +81,31 @@ class ConfigTests(unittest.TestCase):
                     with self.assertRaises(models.AppError):
                         config.load_config(path)
 
+    def test_repo_config_validation(self) -> None:
+        example = Path(__file__).resolve().parents[1] / 'config.example.toml'
+        original = example.read_text(encoding='utf-8')
+        invalid_cases = {
+            'repository URL': original.replace(
+                'default_repository = "example-owner/example-repository"',
+                'default_repository = "https://github.com/example-owner/example-repository"',
+            ),
+            'checkout outside home': original.replace(
+                'checkout_root = "~/DEV"',
+                'checkout_root = "/tmp/DEV"',
+            ),
+            'checkout traversal': original.replace(
+                'checkout_root = "~/DEV"',
+                'checkout_root = "~/DEV/../other"',
+            ),
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            for label, text in invalid_cases.items():
+                with self.subTest(label=label):
+                    path = Path(directory) / 'config.toml'
+                    path.write_text(text, encoding='utf-8')
+                    with self.assertRaises(models.AppError):
+                        config.load_config(path)
+
     def test_unsupported_transport_fails_clearly(self) -> None:
         example = Path(__file__).resolve().parents[1] / 'config.example.toml'
         text = example.read_text().replace('type = "herdr"', 'type = "ssh"')
@@ -91,12 +121,16 @@ class ConfigTests(unittest.TestCase):
             sync_paths=('~/.config/app/', '~/notes.txt'),
             sync_commands=('first --flag', 'second'),
             sync_verbose=True,
+            repo_default_repository='example-owner/example-project',
+            repo_checkout_root='~/DEV',
         )
         loaded = config.validate_config_text(config.config_to_toml(cfg))
         self.assertEqual(loaded.storage_layouts, cfg.storage_layouts)
         self.assertEqual(loaded.workspace_ssh, cfg.workspace_ssh)
         self.assertEqual(loaded.sync_paths, cfg.sync_paths)
         self.assertEqual(loaded.sync_commands, cfg.sync_commands)
+        self.assertEqual(loaded.repo_default_repository, cfg.repo_default_repository)
+        self.assertEqual(loaded.repo_checkout_root, cfg.repo_checkout_root)
         self.assertNotIn('installer', config.config_to_toml(cfg))
 
     def test_publish_new_config_uses_private_mode(self) -> None:

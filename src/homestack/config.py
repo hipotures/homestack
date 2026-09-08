@@ -54,6 +54,8 @@ class Config:
     sync_paths: tuple[str, ...] = ()
     sync_commands: tuple[str, ...] = ()
     sync_verbose: bool = False
+    repo_default_repository: str | None = None
+    repo_checkout_root: str = "~/DEV"
 
 
 def default_config_path() -> Path:
@@ -66,6 +68,36 @@ DEFAULT_CONFIG = default_config_path()
 
 
 HOMESTACK_STORAGE_RE = re.compile(r"^homestack-storage-[1-9][0-9]*$")
+GITHUB_REPOSITORY_RE = re.compile(
+    r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38}[A-Za-z0-9])?/[A-Za-z0-9_.-]{1,100}$"
+)
+
+
+def validate_repository_spec(value: str) -> str:
+    if not isinstance(value, str):
+        raise AppError("[repo] default_repository must be a string")
+    text = value.strip()
+    if GITHUB_REPOSITORY_RE.fullmatch(text) is None:
+        raise AppError(f"Invalid GitHub repository {value!r}; expected OWNER/REPO")
+    _, name = text.split("/", 1)
+    if name in {".", ".."}:
+        raise AppError(f"Invalid GitHub repository name: {name!r}")
+    return text
+
+
+def validate_repo_checkout_root(value: str) -> str:
+    if not isinstance(value, str):
+        raise AppError("[repo] checkout_root must be a string")
+    text = value.strip()
+    if not text.startswith("~/"):
+        raise AppError("[repo] checkout_root must start with '~/'")
+    relative = text[2:].rstrip("/")
+    if not relative:
+        raise AppError("[repo] checkout_root must be below the workspace home directory")
+    parts = relative.split("/")
+    if any(part in {"", ".", ".."} for part in parts):
+        raise AppError("[repo] checkout_root must be a normalized path below '~/'")
+    return "~/" + "/".join(parts)
 
 
 def validate_sync_path_spec(value: str) -> tuple[str, bool]:
@@ -241,6 +273,22 @@ def load_config(path: Path) -> Config:
     if not isinstance(sync_verbose, bool):
         raise AppError("[sync] verbose must be true or false")
 
+    repo_data = data.get("repo") or {}
+    if not isinstance(repo_data, dict):
+        raise AppError("[repo] must be a TOML table")
+    raw_default_repository = repo_data.get("default_repository", "")
+    if not isinstance(raw_default_repository, str):
+        raise AppError("[repo] default_repository must be a string")
+    default_repository_text = raw_default_repository.strip()
+    repo_default_repository = (
+        validate_repository_spec(default_repository_text)
+        if default_repository_text
+        else None
+    )
+    repo_checkout_root = validate_repo_checkout_root(
+        repo_data.get("checkout_root", "~/DEV")
+    )
+
     workspace_ssh_data = data.get("workspace_ssh")
     if not isinstance(workspace_ssh_data, dict):
         raise AppError("Missing or invalid [workspace_ssh] configuration table")
@@ -355,6 +403,8 @@ def load_config(path: Path) -> Config:
         sync_paths=sync_paths,
         sync_commands=sync_commands,
         sync_verbose=sync_verbose,
+        repo_default_repository=repo_default_repository,
+        repo_checkout_root=repo_checkout_root,
     )
 
 
@@ -417,6 +467,10 @@ def config_to_toml(cfg: Config) -> str:
             f"identity_files = {_toml_array(cfg.workspace_ssh.identity_files)}",
             f"identities_only = {str(cfg.workspace_ssh.identities_only).lower()}",
             f"log_level = {_toml_string(cfg.workspace_ssh.log_level)}",
+            "",
+            "[repo]",
+            f"default_repository = {_toml_string(cfg.repo_default_repository or '')}",
+            f"checkout_root = {_toml_string(cfg.repo_checkout_root)}",
             "",
             "[sync]",
             f"verbose = {str(cfg.sync_verbose).lower()}",

@@ -30,6 +30,13 @@ class ParserTests(unittest.TestCase):
         self.assertEqual(migrate.target, 'test1')
         self.assertEqual(migrate.target_node, 'example-node-2')
         self.assertEqual(migrate.target_storage, 'example-storage-b')
+        repo_default = parser.parse_args(['repo', 'test1'])
+        self.assertEqual(repo_default.target, 'test1')
+        self.assertIsNone(repo_default.repository)
+        repo_explicit = parser.parse_args(
+            ['repo', 'test1', 'hipotures/tklivetracker']
+        )
+        self.assertEqual(repo_explicit.repository, 'hipotures/tklivetracker')
         self.assertIsNone(parser.parse_args(['status']).target)
         self.assertEqual(parser.parse_args(['status', '200']).target, '200')
         self.assertEqual(parser.parse_args(['status', 'test1']).target, 'test1')

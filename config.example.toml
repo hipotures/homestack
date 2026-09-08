@@ -45,6 +45,10 @@ identity_files = [
 identities_only = true
 log_level = "FATAL"
 
+[repo]
+default_repository = "example-owner/example-repository"
+checkout_root = "~/DEV"
+
 [sync]
 verbose = false
 paths = []
