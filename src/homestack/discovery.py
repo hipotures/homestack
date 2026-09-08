@@ -7,7 +7,7 @@ import ipaddress
 from pathlib import Path
 import re
 import shutil
-from typing import Any
+from typing import Any, Callable
 
 from rich.panel import Panel
 from rich.table import Table
@@ -132,15 +132,28 @@ def discover_workspace_networks(
     resources: list[dict[str, Any]],
     gold_vmid: int,
     gold_node: str,
+    *,
+    progress: Callable[[str, int, int], None] | None = None,
 ) -> list[NetworkCandidate]:
     """Discover network profiles compatible with the Gold VM's inherited net0 bridge."""
+    workspace_resources = [
+        item for item in resources if has_tag(item.get("tags"), WORKSPACE_TAG)
+    ]
+    total_steps = len(workspace_resources) + 3
+    if progress is not None:
+        progress("Read Gold network configuration", 0, total_steps)
+
     gold_cfg = qm_config_on_node(session, cfg, gold_node, gold_vmid)
     gold_bridge = _config_option(gold_cfg.get("net0"), "bridge")
+    if progress is not None:
+        progress("Read PVE DNS configuration", 1, total_steps)
 
     try:
         dns_fallback = _pve_dns_servers(node_dns_config(session, gold_node))
     except AppError:
         dns_fallback = ()
+    if progress is not None:
+        progress("Inspect existing HomeStack workspace networks", 2, total_steps)
 
     candidates: list[NetworkCandidate] = []
 
@@ -159,9 +172,8 @@ def discover_workspace_networks(
             return
         candidates.append(candidate)
 
-    for resource in resources:
-        if not has_tag(resource.get("tags"), WORKSPACE_TAG):
-            continue
+    completed_steps = 2
+    for resource in workspace_resources:
         vmid = int(resource["vmid"])
         node = str(resource.get("node") or "").strip()
         if not node:
@@ -186,6 +198,13 @@ def discover_workspace_networks(
                 source=f"HomeStack workspace VM {vmid}",
             )
         )
+        completed_steps += 1
+        if progress is not None:
+            progress(
+                f"Inspect HomeStack workspace VM {vmid}",
+                completed_steps,
+                total_steps,
+            )
 
     gold_network = _network_from_ipconfig(gold_cfg.get("ipconfig0"))
     if gold_network is not None:
@@ -200,6 +219,8 @@ def discover_workspace_networks(
             )
         )
 
+    if progress is not None:
+        progress("Read PVE bridge configuration", total_steps - 1, total_steps)
     try:
         interfaces = node_network_inventory(session, gold_node)
     except AppError:
@@ -226,6 +247,8 @@ def discover_workspace_networks(
             )
         )
 
+    if progress is not None:
+        progress("Workspace network discovery complete", total_steps, total_steps)
     return candidates
 
 
@@ -259,7 +282,10 @@ def _gold_summary(item: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def discover_environment() -> dict[str, Any]:
+def discover_environment(
+    *,
+    progress: Callable[[str, int, int], None] | None = None,
+) -> dict[str, Any]:
     """Discover usable Herdr/Proxmox sessions without loading HomeStack config."""
     commands = {
         name: shutil.which(name) is not None
@@ -281,13 +307,27 @@ def discover_environment() -> dict[str, Any]:
         report["errors"].append("Required local command 'herdr' was not found")
         return report
 
+    if progress is not None:
+        progress("Scan Herdr SSH sessions", 0, 1)
     try:
         candidates = discover_herdr_candidates()
     except AppError as exc:
         report["errors"].append(str(exc))
+        if progress is not None:
+            progress("Herdr session discovery failed", 1, 1)
         return report
 
-    for candidate in candidates:
+    total_steps = max(1, len(candidates) + 1)
+    if progress is not None:
+        progress("Herdr SSH sessions discovered", 1, total_steps)
+
+    for index, candidate in enumerate(candidates, 1):
+        if progress is not None:
+            progress(
+                f"Verify {candidate.workspace}/{candidate.tab}",
+                index,
+                total_steps,
+            )
         entry: dict[str, Any] = {
             "candidate": candidate.as_dict(),
             "verified": False,
@@ -327,8 +367,16 @@ def discover_environment() -> dict[str, Any]:
         except (AppError, OSError) as exc:
             entry["error"] = str(exc)
         report["sessions"].append(entry)
+        if progress is not None:
+            progress(
+                f"Checked {candidate.workspace}/{candidate.tab}",
+                index + 1,
+                total_steps,
+            )
 
     report["ok"] = any(entry["verified"] for entry in report["sessions"])
+    if progress is not None:
+        progress("Environment discovery complete", total_steps, total_steps)
     return report
 
 

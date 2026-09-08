@@ -26,6 +26,19 @@ class ReadOnlySession:
         return self.responses[command]
 
 
+class InstallerProgressTests(unittest.TestCase):
+    def test_progress_descriptions_do_not_use_ellipsis(self) -> None:
+        descriptions = [
+            "Scan Herdr SSH sessions",
+            "Verify selected Herdr administrative session",
+            "Load Proxmox node inventory",
+            "Load Proxmox VM inventory",
+            "Load Proxmox storage inventory",
+            "Read Gold network configuration",
+        ]
+        self.assertTrue(all("…" not in value and "..." not in value for value in descriptions))
+
+
 class InstallCliTests(unittest.TestCase):
     def test_install_parser_and_help_do_not_require_config(self) -> None:
         parser = cli.build_parser()

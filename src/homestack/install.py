@@ -10,6 +10,14 @@ import sys
 from typing import Any, Callable
 
 from rich.panel import Panel
+from rich.progress import (
+    BarColumn,
+    Progress,
+    SpinnerColumn,
+    TaskProgressColumn,
+    TextColumn,
+    TimeElapsedColumn,
+)
 from rich.prompt import Confirm, IntPrompt, Prompt
 from rich.table import Table
 
@@ -46,6 +54,87 @@ from .transports import open_transport
 from .transports.base import Transport
 from .transports.herdr import HerdrCandidate
 from .ui import console
+
+
+def _install_progress() -> Progress:
+    return Progress(
+        SpinnerColumn(),
+        TextColumn("[bold]{task.description}"),
+        BarColumn(),
+        TaskProgressColumn(),
+        TimeElapsedColumn(),
+        console=console,
+        refresh_per_second=8,
+    )
+
+
+def _discover_environment_with_progress() -> dict[str, Any]:
+    with _install_progress() as progress:
+        task = progress.add_task("Scan Herdr SSH sessions", total=1)
+
+        def update(description: str, completed: int, total: int) -> None:
+            progress.update(
+                task,
+                description=description,
+                completed=completed,
+                total=total,
+            )
+
+        return discover_environment(progress=update)
+
+
+def _load_proxmox_inventory_with_progress(
+    session: Transport,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    with _install_progress() as progress:
+        task = progress.add_task("Load Proxmox node inventory", total=3)
+        statuses = cluster_node_statuses(session)
+        progress.update(
+            task,
+            advance=1,
+            description="Load Proxmox VM inventory",
+        )
+        resources = cluster_vm_resources(session)
+        progress.update(
+            task,
+            advance=1,
+            description="Load Proxmox storage inventory",
+        )
+        definitions = cluster_storage_definitions(session)
+        progress.update(
+            task,
+            advance=1,
+            description="Proxmox inventory loaded",
+        )
+    return statuses, resources, definitions
+
+
+def _discover_networks_with_progress(
+    session: Transport,
+    cfg: Config,
+    resources: list[dict[str, Any]],
+    gold_vmid: int,
+    gold_node: str,
+) -> list[NetworkCandidate]:
+    with _install_progress() as progress:
+        task = progress.add_task("Read Gold network configuration", total=1)
+
+        def update(description: str, completed: int, total: int) -> None:
+            progress.update(
+                task,
+                description=description,
+                completed=completed,
+                total=total,
+            )
+
+        return discover_workspace_networks(
+            session,
+            cfg,
+            resources,
+            gold_vmid,
+            gold_node,
+            progress=update,
+        )
 
 
 def _fresh_config(path: Path) -> Config:
@@ -755,18 +844,27 @@ def run_installer(path: Path) -> int:
     else:
         base = _fresh_config(path)
 
-    console.print("Discovering local Herdr and Proxmox environment…")
-    discovery_report = discover_environment()
+    discovery_report = _discover_environment_with_progress()
     base = _configure_transport(
         base,
         discovery_report,
         prefer_existing=(action == "2"),
     )
-    console.print("Verifying selected Herdr administrative session and Proxmox access…")
-    with open_transport(base) as session:
-        statuses = cluster_node_statuses(session)
-        resources = cluster_vm_resources(session)
-        definitions = cluster_storage_definitions(session)
+    transport_progress = _install_progress()
+    transport_task = transport_progress.add_task(
+        "Verify selected Herdr administrative session",
+        total=1,
+    )
+    transport_progress.start()
+    try:
+        with open_transport(base) as session:
+            transport_progress.update(
+                transport_task,
+                completed=1,
+                description="Herdr administrative session verified",
+            )
+            transport_progress.stop()
+            statuses, resources, definitions = _load_proxmox_inventory_with_progress(session)
         gold_vmid, gold_node = _choose_gold(
             session,
             base,
@@ -782,13 +880,15 @@ def run_installer(path: Path) -> int:
             raise AppError(f"Gold node {gold_node!r} has no configured HomeStack storage")
         default_storage = layouts[active_layout][0]
         snippet_storage, snippet_dir = _configure_snippets(base, definitions)
-        network_candidates = discover_workspace_networks(
+        network_candidates = _discover_networks_with_progress(
             session,
             base,
             resources,
             gold_vmid,
             gold_node,
         )
+    finally:
+        transport_progress.stop()
 
     prefix, cidr, gateway, dns = _configure_network(
         base,

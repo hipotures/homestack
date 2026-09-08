@@ -235,6 +235,29 @@ class EnvironmentDiscoveryTests(unittest.TestCase):
         self.assertEqual(candidates[0].dns_servers, ('192.168.100.1',))
         self.assertEqual(candidates[0].source, 'HomeStack workspace VM 200')
 
+    def test_environment_discovery_reports_progress_without_changing_read_only_queries(self) -> None:
+        session = FakeDiscoverySession()
+        events: list[tuple[str, int, int]] = []
+
+        @contextmanager
+        def fake_open(_candidate: herdr.HerdrCandidate):
+            yield session
+
+        with patch.object(discovery.shutil, "which", return_value="/usr/bin/tool"), patch.object(
+            discovery, "discover_hardware_identities", return_value=[]
+        ), patch.object(
+            discovery, "discover_herdr_candidates", return_value=[self._candidate()]
+        ), patch.object(discovery, "open_herdr_candidate", side_effect=fake_open):
+            report = discovery.discover_environment(
+                progress=lambda description, completed, total: events.append(
+                    (description, completed, total)
+                )
+            )
+
+        self.assertTrue(report["ok"])
+        self.assertEqual(events[-1], ("Environment discovery complete", 2, 2))
+        self.assertTrue(all(command.startswith("pvesh get ") for command in session.commands))
+
     def test_hardware_identity_discovery_accepts_suffix_after_sk(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             home = Path(directory)
