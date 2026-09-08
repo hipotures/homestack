@@ -93,6 +93,76 @@ uv run homestack status 200
 
 Lifecycle targets may be a numeric VMID or exact workspace name. `create`, `refresh`, `migrate`, `sync`, and `destroy` resolve and display a plan before confirmation. Use `--yes` for non-interactive execution and `--json` for machine-readable plans/results.
 
+## Preparing a Gold VM
+
+Gold is a user-maintained base VM, not a HomeStack-generated operating-system image. HomeStack intentionally leaves the OS, system packages, development tools, and other root-filesystem contents under the user's control, but the VM must satisfy a small contract so that cloning, refresh, persistent home, networking, SSH, and guest verification remain deterministic.
+
+### Proxmox VM contract
+
+Prepare a QEMU VM with the following properties:
+
+- add the exact HomeStack role tag `homestack-gold`; do not also tag the VM `homestack-ws`;
+- attach the disposable OS root as `scsi0` and include `scsi0` in the VM boot order;
+- do not attach a persistent-home disk or other data disks to Gold; HomeStack creates workspace `scsi1` itself, and a full clone would otherwise copy unrelated disks;
+- configure exactly the primary workspace NIC as `net0`; HomeStack derives the workspace MAC and bridge from it;
+- attach a Proxmox Cloud-Init drive;
+- enable the Proxmox QEMU Guest Agent option;
+- avoid host-specific passthrough devices in Gold;
+- configure at least one valid public SSH key in Proxmox `sshkeys` if Gold will normally remain stopped. This lets HomeStack obtain workspace public keys without booting Gold.
+
+Gold may live on any storage available to its node. Its source root volume name is discovered from `scsi0` and does not need a HomeStack workspace volume name.
+
+### Guest contract
+
+Current HomeStack guest initialization targets a systemd Linux guest using Cloud-Init and NetworkManager. For Debian/Ubuntu-family Gold images, install the equivalent of:
+
+```bash
+apt-get update
+apt-get install -y cloud-init qemu-guest-agent network-manager openssh-server e2fsprogs util-linux rsync
+```
+
+Run administrative preparation as `root`; HomeStack does not use `sudo`. `rsync` is required inside workspaces when `homestack sync` is used.
+
+The guest must contain the configured workspace account before cloning. With the default HomeStack settings this is:
+
+```text
+root
+user  UID 1000  GID 1000
+```
+
+The workspace account must not have root escalation. The intended HomeStack security model has no `sudo` package in Gold or workspaces. There must be no additional regular user accounts with UID 1000-65533. System/service accounts are unaffected by this rule.
+
+Root must have a usable `/root/.ssh/authorized_keys`. Workspace public keys are taken first from the Proxmox `sshkeys` setting and, when Gold is running with QEMU Guest Agent available, may fall back to `/home/<USER>/.ssh/authorized_keys`. Only public keys belong in Gold or Proxmox configuration; private hardware-key material remains on the trusted desktop.
+
+HomeStack-generated Cloud-Init explicitly disables SSH password authentication and requests regeneration of cloned SSH host keys. The current network snippet uses `renderer: NetworkManager`, so NetworkManager is a current Gold requirement rather than an arbitrary recommendation.
+
+### Finalize Gold before normal use
+
+After installing and configuring the guest, enable the services required on cloned workspaces:
+
+```bash
+systemctl enable qemu-guest-agent
+systemctl enable NetworkManager
+systemctl enable ssh
+```
+
+For an image that will normally remain stopped, clean Cloud-Init state and the machine ID immediately before the final shutdown:
+
+```bash
+cloud-init clean --logs --machine-id
+poweroff
+```
+
+Do not boot the finalized Gold again unless you intend to update and re-finalize it. `cloud-init clean --machine-id` prevents clones from inheriting the Gold machine identity. HomeStack's per-workspace Cloud-Init metadata supplies a new instance identity and hostname, while `ssh_deletekeys: true` regenerates SSH host keys.
+
+Gold's root may contain any system-wide packages and configuration that should reappear after every `refresh`. Project data and user state should not be baked into Gold: workspace `/home/<USER>` is a separate persistent ext4 disk and survives root refreshes and migrations.
+
+### Installer readiness check
+
+After Gold selection and workspace-account selection, `homestack install` performs a non-destructive readiness check. It validates the PVE role tag, root/data-disk layout, `net0`, Cloud-Init drive, QEMU Guest Agent option, and boot order. If Gold is running, it also checks QEMU Guest Agent access, required guest tools, the configured user/UID/GID, the no-`sudo` policy, regular-user policy, root SSH keys, and a workspace public-key source.
+
+The installer never starts Gold just to inspect it. A stopped Gold can therefore pass the PVE-side contract when it has valid Proxmox `sshkeys`, but the installer reports guest checks as not inspected. Runtime `create` and `refresh` verification still fail closed if the resulting workspace violates the account, SSH, persistent-home, or guest requirements.
+
 ## Storage and lifecycle invariants
 
 - Gold is the configured `gold_vmid` and must have the exact `homestack-gold` tag.
@@ -106,7 +176,7 @@ Lifecycle targets may be a numeric VMID or exact workspace name. `create`, `refr
 - Cleanup removes only verified HomeStack volumes and exact stale references; unrelated `unusedN` entries and volumes are untouched.
 - Destroy re-resolves the workspace role and persistent-home identity before deleting the VM and attached home.
 
-Gold's source root name is discovered from its configured `scsi0`; Gold itself does not need the workspace root naming convention. Refresh clones that source into the existing VM and preserves its configuration, MAC, role tag, cloud-init disk, and persistent home.
+Gold's source root name is discovered from its configured `scsi0`; Gold itself does not need the workspace root naming convention. Refresh clones that source into the existing VM and preserves its configuration, MAC, role tag, Cloud-Init disk, and persistent home. The full Gold preparation and readiness contract is described above.
 
 ## Workspace SSH and synchronization
 

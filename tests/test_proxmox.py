@@ -196,6 +196,8 @@ class HomeDiskTests(unittest.TestCase):
         self.assertIn('rm -rf -- "$home_path/lost+found"', vendor)
         self.assertIn('expected_serial=HS_HOME_200', vendor)
         self.assertIn('LABEL=%s %s ext4 defaults 0 2', vendor)
+        self.assertIn('systemd-escape --path --suffix=mount "$home_path"', vendor)
+        self.assertNotIn('home-user.mount', vendor)
         self.assertNotIn('virtiofs', vendor.lower())
 
     def test_refresh_snippet_refuses_blank_home(self) -> None:
@@ -205,6 +207,9 @@ class HomeDiskTests(unittest.TestCase):
             captured[path.name] = content
         with patch.object(cloudinit, 'remote_write_text', side_effect=capture):
             cloudinit.write_snippets(FakeSession(), test_config(), 'test1', 200, 'BC:24:11:00:00:01', '192.0.2.200', 'HS_HOME_200', replace=True, preserve_home=True)
+        user_data = captured['homestack-test1-user.yaml']
+        self.assertIn('ssh_pwauth: false', user_data)
+        self.assertIn('ssh_deletekeys: true', user_data)
         vendor = captured['homestack-test1-vendor.yaml']
         self.assertIn('allow_format=0', vendor)
         self.assertIn('persistent home is blank during refresh; refusing mkfs', vendor)

@@ -51,8 +51,10 @@ class CreateWorkspaceCompletionTests(unittest.TestCase):
                 return 'OK'
             if command.startswith('cat '):
                 return 'ssh-ed25519 AAAATEST test'
-            if 'getent passwd ubuntu' in command:
-                return 'ABSENT'
+            if command.startswith("awk -F:"):
+                return "user:1000:1000"
+            if "command -v sudo" in command:
+                return "ABSENT"
             if 'cloud-id' in command:
                 return ''
             raise AssertionError(command)

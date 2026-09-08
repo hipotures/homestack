@@ -61,6 +61,8 @@ def write_snippets(
     user_data = f"""#cloud-config
 users: []
 disable_root: false
+ssh_pwauth: false
+ssh_deletekeys: true
 preserve_hostname: false
 hostname: {name}
 manage_etc_hosts: true
@@ -115,8 +117,9 @@ runcmd:
           exit 74
       fi
 
-      systemctl disable --now home-user.mount >/dev/null 2>&1 || true
-      rm -f /etc/systemd/system/home-user.mount
+      home_mount_unit="$(systemd-escape --path --suffix=mount "$home_path")"
+      systemctl disable --now "$home_mount_unit" >/dev/null 2>&1 || true
+      rm -f "/etc/systemd/system/$home_mount_unit"
       mkdir -p "$home_path"
       sed -i "\\|[[:space:]]$home_path[[:space:]]|d" /etc/fstab
       printf '\\nLABEL=%s %s ext4 defaults 0 2\\n' "$expected_label" "$home_path" >> /etc/fstab

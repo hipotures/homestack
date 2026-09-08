@@ -474,13 +474,25 @@ def create_workspace(
         if root_key_ok != "OK":
             raise AppError("Verification failed: root authorized_keys is missing")
 
-        ubuntu_state = guest_out(
+        regular_users = guest_out(
             session,
             vmid,
-            "if getent passwd ubuntu >/dev/null 2>&1; then echo PRESENT; else echo ABSENT; fi",
+            "awk -F: '$3 >= 1000 && $3 < 65534 {print $1 ":" $3 ":" $4}' /etc/passwd",
+        ).splitlines()
+        expected_regular_user = f"{cfg.user_name}:{cfg.user_uid}:{cfg.user_gid}"
+        if regular_users != [expected_regular_user]:
+            raise AppError(
+                "Verification failed: unexpected regular user accounts: "
+                + (", ".join(regular_users) if regular_users else "none")
+            )
+
+        sudo_state = guest_out(
+            session,
+            vmid,
+            "if command -v sudo >/dev/null 2>&1; then echo PRESENT; else echo ABSENT; fi",
         )
-        if ubuntu_state != "ABSENT":
-            raise AppError("Verification failed: unwanted 'ubuntu' user exists")
+        if sudo_state != "ABSENT":
+            raise AppError("Verification failed: sudo is installed in the workspace")
 
         cloud_id = guest_out(
             session,
@@ -922,13 +934,24 @@ def refresh_workspace(
             )
             if root_key_state != "OK":
                 raise AppError("Refresh verification failed: root authorized_keys is missing")
-            ubuntu_state = guest_out(
+            regular_users = guest_out(
                 session,
                 vmid,
-                "if getent passwd ubuntu >/dev/null 2>&1; then echo PRESENT; else echo ABSENT; fi",
+                "awk -F: '$3 >= 1000 && $3 < 65534 {print $1 ":" $3 ":" $4}' /etc/passwd",
+            ).splitlines()
+            expected_regular_user = f"{cfg.user_name}:{cfg.user_uid}:{cfg.user_gid}"
+            if regular_users != [expected_regular_user]:
+                raise AppError(
+                    "Refresh verification failed: unexpected regular user accounts: "
+                    + (", ".join(regular_users) if regular_users else "none")
+                )
+            sudo_state = guest_out(
+                session,
+                vmid,
+                "if command -v sudo >/dev/null 2>&1; then echo PRESENT; else echo ABSENT; fi",
             )
-            if ubuntu_state != "ABSENT":
-                raise AppError("Refresh verification failed: unwanted 'ubuntu' user exists")
+            if sudo_state != "ABSENT":
+                raise AppError("Refresh verification failed: sudo is installed in the workspace")
             cloud_id = guest_out(
                 session,
                 vmid,
