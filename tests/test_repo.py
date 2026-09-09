@@ -160,6 +160,29 @@ class RepositorySetupPlanTests(unittest.TestCase):
         self.assertNotIn("reset", actions)
         self.assertNotIn("clean", actions)
 
+    def test_fresh_setup_steps_are_visible_in_execution_order(self) -> None:
+        actions = repo.repository_setup_actions(
+            self._state(
+                checkout_state="missing",
+                key_state="missing",
+                deploy_key_state="missing",
+                origin=None,
+                ssh_config_state="missing",
+                access="not-tested",
+            )
+        )
+        self.assertEqual(
+            repo.repository_setup_steps(actions),
+            (
+                "Generate deploy key",
+                "Reconcile GitHub deploy key",
+                "Clone repository",
+                "Configure repository SSH",
+                "Verify Git access",
+                "Refresh repository status",
+            ),
+        )
+
     def test_conflicting_checkout_is_rejected(self) -> None:
         for checkout_state in (
             "not-a-repository",

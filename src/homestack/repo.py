@@ -12,6 +12,15 @@ import shutil
 import subprocess
 import uuid
 
+from rich.progress import (
+    BarColumn,
+    Progress,
+    SpinnerColumn,
+    TaskProgressColumn,
+    TextColumn,
+    TimeElapsedColumn,
+)
+
 from .config import Config, validate_repository_spec
 from .lifecycle import resolve_workspace_target
 from .models import AppError, validate_name
@@ -23,6 +32,41 @@ from .proxmox import (
 )
 from .transports.base import Transport, run_local, run_local_passthrough
 from .ui import console
+
+
+def _repository_progress() -> Progress:
+    return Progress(
+        SpinnerColumn(),
+        TextColumn("[bold]{task.description}"),
+        BarColumn(),
+        TaskProgressColumn(),
+        TimeElapsedColumn(),
+        console=console,
+        refresh_per_second=8,
+    )
+
+
+def repository_setup_steps(actions: tuple[str, ...]) -> tuple[str, ...]:
+    steps: list[str] = []
+    key_steps = {
+        "generate-key": "Generate deploy key",
+        "derive-public-key": "Restore public deploy key",
+        "replace-missing-private-key": "Replace incomplete deploy key",
+    }
+    for action, label in key_steps.items():
+        if action in actions:
+            steps.append(label)
+            break
+    steps.append("Reconcile GitHub deploy key")
+    if "clone" in actions:
+        steps.append("Clone repository")
+    elif "set-origin" in actions:
+        steps.append("Configure Git remote")
+    if "clone" in actions or "set-ssh-command" in actions:
+        steps.append("Configure repository SSH")
+    steps.append("Verify Git access")
+    steps.append("Refresh repository status")
+    return tuple(steps)
 
 
 class WorkspaceRepoSSH:
@@ -477,85 +521,109 @@ def setup_repository(
     vmid = int(state["vmid"])
     checkout, key, public_key_path = repository_paths(cfg, repository)
     title = f"HomeStack {name}"
+    steps = repository_setup_steps(actions)
 
-    if "generate-key" in actions:
-        _generate_key(ws, key, public_key_path, repository)
-    elif "derive-public-key" in actions:
-        ws.run(
-            f"umask 077 && ssh-keygen -y -f {shlex.quote(key)} "
-            f"> {shlex.quote(public_key_path)} && "
-            f"chmod 644 {shlex.quote(public_key_path)}"
-        )
-    elif "replace-missing-private-key" in actions:
-        if isinstance(state.get("deploy_key_id"), int):
-            _delete_key(repository, int(state["deploy_key_id"]))
-        ws.run(f"rm -f -- {shlex.quote(public_key_path)}")
-        _generate_key(ws, key, public_key_path, repository)
+    with _repository_progress() as progress:
+        task = progress.add_task(steps[0], total=len(steps))
 
-    public_key = _output(ws, f"cat {shlex.quote(public_key_path)}")
-    identity = _identity(public_key)
-    if not identity:
-        raise AppError("Workspace did not produce a valid public deploy key")
-
-    keys = _keys(repository)
-    matching = _matching_key(keys, public_key)
-    if matching and matching.get("read_only"):
-        if not isinstance(matching.get("id"), int):
-            raise AppError("GitHub returned a deploy key without a numeric ID")
-        _delete_key(repository, int(matching["id"]))
-        matching = None
-
-    if not matching:
-        for item in keys:
-            same_title = str(item.get("title") or "") == title
-            different_key = (
-                _identity(str(item.get("key") or "")) != identity
+        if "generate-key" in actions:
+            progress.update(task, description="Generate deploy key")
+            _generate_key(ws, key, public_key_path, repository)
+            progress.advance(task)
+        elif "derive-public-key" in actions:
+            progress.update(task, description="Restore public deploy key")
+            ws.run(
+                f"umask 077 && ssh-keygen -y -f {shlex.quote(key)} "
+                f"> {shlex.quote(public_key_path)} && "
+                f"chmod 644 {shlex.quote(public_key_path)}"
             )
-            if (
-                same_title
-                and different_key
-                and isinstance(item.get("id"), int)
-            ):
-                _delete_key(repository, int(item["id"]))
-        _add_key(repository, title, public_key)
+            progress.advance(task)
+        elif "replace-missing-private-key" in actions:
+            progress.update(task, description="Replace incomplete deploy key")
+            if isinstance(state.get("deploy_key_id"), int):
+                _delete_key(repository, int(state["deploy_key_id"]))
+            ws.run(f"rm -f -- {shlex.quote(public_key_path)}")
+            _generate_key(ws, key, public_key_path, repository)
+            progress.advance(task)
 
-    remote_url = f"git@github.com:{repository}.git"
-    if "clone" in actions:
-        ws.run(
-            f"mkdir -p -- "
-            f"{shlex.quote(str(PurePosixPath(checkout).parent))}"
-        )
-        ws.run(
+        progress.update(task, description="Reconcile GitHub deploy key")
+        public_key = _output(ws, f"cat {shlex.quote(public_key_path)}")
+        identity = _identity(public_key)
+        if not identity:
+            raise AppError("Workspace did not produce a valid public deploy key")
+
+        keys = _keys(repository)
+        matching = _matching_key(keys, public_key)
+        if matching and matching.get("read_only"):
+            if not isinstance(matching.get("id"), int):
+                raise AppError("GitHub returned a deploy key without a numeric ID")
+            _delete_key(repository, int(matching["id"]))
+            matching = None
+
+        if not matching:
+            for item in keys:
+                same_title = str(item.get("title") or "") == title
+                different_key = (
+                    _identity(str(item.get("key") or "")) != identity
+                )
+                if (
+                    same_title
+                    and different_key
+                    and isinstance(item.get("id"), int)
+                ):
+                    _delete_key(repository, int(item["id"]))
+            _add_key(repository, title, public_key)
+        progress.advance(task)
+
+        remote_url = f"git@github.com:{repository}.git"
+        if "clone" in actions:
+            progress.update(task, description="Clone repository")
+            ws.run(
+                f"mkdir -p -- "
+                f"{shlex.quote(str(PurePosixPath(checkout).parent))}"
+            )
+            ws.run(
+                f"GIT_SSH_COMMAND={shlex.quote(_bootstrap_ssh(key))} "
+                f"git clone -- {shlex.quote(remote_url)} {shlex.quote(checkout)}"
+            )
+            progress.advance(task)
+        elif "set-origin" in actions:
+            progress.update(task, description="Configure Git remote")
+            ws.run(
+                f"git -C {shlex.quote(checkout)} remote set-url origin "
+                f"{shlex.quote(remote_url)}"
+            )
+            progress.advance(task)
+
+        if "clone" in actions or "set-ssh-command" in actions:
+            progress.update(task, description="Configure repository SSH")
+            ws.run(
+                f"git -C {shlex.quote(checkout)} config --local core.sshCommand "
+                f"{shlex.quote(_stored_ssh(key))}"
+            )
+            progress.advance(task)
+
+        progress.update(task, description="Verify Git access")
+        verify = ws.run(
             f"GIT_SSH_COMMAND={shlex.quote(_bootstrap_ssh(key))} "
-            f"git clone -- {shlex.quote(remote_url)} {shlex.quote(checkout)}"
+            f"git ls-remote {shlex.quote(remote_url)} HEAD",
+            check=False,
         )
-    elif "set-origin" in actions:
-        ws.run(
-            f"git -C {shlex.quote(checkout)} remote set-url origin "
-            f"{shlex.quote(remote_url)}"
-        )
+        if verify.returncode != 0:
+            raise AppError(
+                "Repository setup completed but Git access verification failed"
+            )
+        progress.advance(task)
 
-    if "clone" in actions or "set-ssh-command" in actions:
-        ws.run(
-            f"git -C {shlex.quote(checkout)} config --local core.sshCommand "
-            f"{shlex.quote(_stored_ssh(key))}"
-        )
+        progress.update(task, description="Refresh repository status")
+        refreshed = inspect_repository(cfg, ws, vmid, name, repository)
+        progress.advance(task)
 
-    verify = ws.run(
-        f"GIT_SSH_COMMAND={shlex.quote(_bootstrap_ssh(key))} "
-        f"git ls-remote {shlex.quote(remote_url)} HEAD",
-        check=False,
-    )
-    if verify.returncode != 0:
-        raise AppError(
-            "Repository setup completed but Git access verification failed"
-        )
     return {
-        **inspect_repository(cfg, ws, vmid, name, repository),
+        **refreshed,
         "changed": True,
         "message": "Repository setup completed.",
     }
-
 
 def rotate_repository_key(
     cfg: Config, ws: WorkspaceRepoSSH, state: dict[str, Any]
@@ -576,49 +644,67 @@ def rotate_repository_key(
     temporary = key + f".rotate-{uuid.uuid4().hex[:8]}"
     temporary_pub = temporary + ".pub"
 
-    try:
-        ws.run(
-            f"umask 077 && ssh-keygen -q -t ed25519 "
-            f"-f {shlex.quote(temporary)} -N '' "
-            f"-C {shlex.quote('homestack:' + repository)}"
-        )
-        _delete_key(repository, int(state["deploy_key_id"]))
-        ws.run(
-            f"mv -f -- {shlex.quote(temporary)} {shlex.quote(key)} && "
-            f"mv -f -- {shlex.quote(temporary_pub)} "
-            f"{shlex.quote(public_key_path)} && "
-            f"chmod 600 {shlex.quote(key)} && "
-            f"chmod 644 {shlex.quote(public_key_path)}"
-        )
-        _add_key(
-            repository,
-            f"HomeStack {name}",
-            _output(ws, f"cat {shlex.quote(public_key_path)}"),
-        )
-    finally:
-        ws.run(
-            f"rm -f -- {shlex.quote(temporary)} "
-            f"{shlex.quote(temporary_pub)}",
+    with _repository_progress() as progress:
+        task = progress.add_task("Generate replacement deploy key", total=6)
+        try:
+            ws.run(
+                f"umask 077 && ssh-keygen -q -t ed25519 "
+                f"-f {shlex.quote(temporary)} -N '' "
+                f"-C {shlex.quote('homestack:' + repository)}"
+            )
+            progress.advance(task)
+
+            progress.update(task, description="Remove previous GitHub deploy key")
+            _delete_key(repository, int(state["deploy_key_id"]))
+            progress.advance(task)
+
+            progress.update(task, description="Install replacement deploy key")
+            ws.run(
+                f"mv -f -- {shlex.quote(temporary)} {shlex.quote(key)} && "
+                f"mv -f -- {shlex.quote(temporary_pub)} "
+                f"{shlex.quote(public_key_path)} && "
+                f"chmod 600 {shlex.quote(key)} && "
+                f"chmod 644 {shlex.quote(public_key_path)}"
+            )
+            progress.advance(task)
+
+            progress.update(task, description="Register GitHub deploy key")
+            _add_key(
+                repository,
+                f"HomeStack {name}",
+                _output(ws, f"cat {shlex.quote(public_key_path)}"),
+            )
+            progress.advance(task)
+        finally:
+            ws.run(
+                f"rm -f -- {shlex.quote(temporary)} "
+                f"{shlex.quote(temporary_pub)}",
+                check=False,
+            )
+
+        remote_url = f"git@github.com:{repository}.git"
+        progress.update(task, description="Verify Git access")
+        verify = ws.run(
+            f"GIT_SSH_COMMAND={shlex.quote(_bootstrap_ssh(key))} "
+            f"git ls-remote {shlex.quote(remote_url)} HEAD",
             check=False,
         )
+        if verify.returncode != 0:
+            raise AppError(
+                "Deploy key was rotated but Git access verification failed. "
+                "Re-run Setup to repair registration."
+            )
+        progress.advance(task)
 
-    remote_url = f"git@github.com:{repository}.git"
-    verify = ws.run(
-        f"GIT_SSH_COMMAND={shlex.quote(_bootstrap_ssh(key))} "
-        f"git ls-remote {shlex.quote(remote_url)} HEAD",
-        check=False,
-    )
-    if verify.returncode != 0:
-        raise AppError(
-            "Deploy key was rotated but Git access verification failed. "
-            "Re-run Setup to repair registration."
-        )
+        progress.update(task, description="Refresh repository status")
+        refreshed = inspect_repository(cfg, ws, vmid, name, repository)
+        progress.advance(task)
+
     return {
-        **inspect_repository(cfg, ws, vmid, name, repository),
+        **refreshed,
         "changed": True,
         "message": "Repository deploy key rotated.",
     }
-
 
 def repository_workspace_info(
     session: Transport, cfg: Config, vmid: int
