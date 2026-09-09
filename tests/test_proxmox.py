@@ -36,6 +36,25 @@ class ControlNodeTests(unittest.TestCase):
         )
         self.assertEqual(session.command, 'pvesh get /nodes --output-format json')
 
+    def test_node_bound_storage_command_is_routed_when_control_node_differs(self) -> None:
+        cfg = replace(test_config(), node='example-node-1', control_node='example-node-2')
+        session = FakeSession()
+        proxmox.allocate_named_raw_volume(
+            session,
+            cfg,
+            'example-node-1',
+            'example-storage-a',
+            200,
+            'vm-200-hs-home-user',
+            '20G',
+        )
+        self.assertEqual(len(session.commands), 1)
+        self.assertTrue(
+            session.commands[0].startswith(
+                "ssh -o BatchMode=yes root@example-node-1 'pvesm alloc "
+            )
+        )
+
 class NetworkInventoryTests(unittest.TestCase):
     def test_node_network_and_dns_use_read_only_pvesh_get(self) -> None:
         class Session:
@@ -76,7 +95,10 @@ class VmStatusTests(unittest.TestCase):
                 self.commands.append(command)
                 return {'status': 'running'}
         session = JsonSession()
-        self.assertEqual(proxmox.qm_status(session, 200), 'running')
+        self.assertEqual(
+            proxmox.qm_status_on_node(session, test_config(), 'example-node-1', 200),
+            'running',
+        )
         self.assertEqual(session.commands, ['pvesh get /nodes/example-node-1/qemu/200/status/current --output-format json'])
 
 class VmConfigTests(unittest.TestCase):
@@ -93,7 +115,9 @@ class VmConfigTests(unittest.TestCase):
                 self.commands.append(command)
                 return {'name': 'test1', 'tags': 'homestack-ws', 'scsi1': 'example-storage-a:vm-200-disk-1,discard=on,iothread=1,serial=HS_HOME_200,size=20G,ssd=1', 'memory': 4096}
         session = JsonSession()
-        config = proxmox.qm_config(session, 200)
+        config = proxmox.qm_config_on_node(
+            session, test_config(), 'example-node-1', 200
+        )
         self.assertEqual(config['name'], 'test1')
         self.assertEqual(config['tags'], 'homestack-ws')
         self.assertEqual(config['memory'], '4096')
@@ -142,7 +166,15 @@ class HomeDiskTests(unittest.TestCase):
                 self.commands.append(command)
                 return models.RemoteResult(0, '')
         session = Session()
-        volume = proxmox.allocate_named_raw_volume(session, 'example-storage-a', 200, 'vm-200-hs-home-user', '20G')
+        volume = proxmox.allocate_named_raw_volume(
+            session,
+            test_config(),
+            'example-node-1',
+            'example-storage-a',
+            200,
+            'vm-200-hs-home-user',
+            '20G',
+        )
         self.assertEqual(volume, 'example-storage-a:vm-200-hs-home-user')
         self.assertEqual(session.commands, ['pvesm alloc example-storage-a 200 vm-200-hs-home-user 20G --format raw'])
 
@@ -161,7 +193,14 @@ class HomeDiskTests(unittest.TestCase):
                 self.commands.append(command)
                 return models.RemoteResult(0, 'example-storage-a:vm-200-hs-root-default\n')
         session = Session()
-        result = proxmox.pve_rename_volume(session, 'example-storage-a:vm-200-disk-0', 200, 'vm-200-hs-root-default')
+        result = proxmox.pve_rename_volume(
+            session,
+            test_config(),
+            'example-node-1',
+            'example-storage-a:vm-200-disk-0',
+            200,
+            'vm-200-hs-root-default',
+        )
         self.assertEqual(result, 'example-storage-a:vm-200-hs-root-default')
         self.assertEqual(len(session.commands), 1)
         self.assertIn('PVE::Storage::rename_volume', session.commands[0])
@@ -173,11 +212,6 @@ class HomeDiskTests(unittest.TestCase):
         self.assertEqual(proxmox.disk_storage(disk), 'example-storage-a')
         self.assertEqual(guest.parse_disk_size_gb(disk), 20.0)
 
-    def test_root_import_spec_clones_gold_root_into_existing_workspace(self) -> None:
-        cfg = test_config()
-        gold = 'local-zfs:vm-101-disk-0,iothread=1,size=16G'
-        self.assertEqual(proxmox.root_import_spec('example-storage-a', gold), 'example-storage-a:0,import-from=local-zfs:vm-101-disk-0,iothread=1')
-
     def test_boot_order_contains_root_disk(self) -> None:
         self.assertTrue(proxmox.boot_order_contains_disk('order=ide2;scsi0;net0', 'scsi0'))
         self.assertFalse(proxmox.boot_order_contains_disk('order=ide2;net0', 'scsi0'))
@@ -186,10 +220,17 @@ class HomeDiskTests(unittest.TestCase):
     def test_create_snippet_formats_only_blank_new_home(self) -> None:
         captured: dict[str, str] = {}
 
-        def capture(_session: object, path: Path, content: str, _mode: int) -> None:
+        def capture(
+            _session: object,
+            _cfg: object,
+            _node: str,
+            path: Path,
+            content: str,
+            _mode: int,
+        ) -> None:
             captured[path.name] = content
         with patch.object(cloudinit, 'remote_write_text', side_effect=capture):
-            cloudinit.write_snippets(FakeSession(), test_config(), 'test1', 200, 'BC:24:11:00:00:01', '192.0.2.200', 'HS_HOME_200', authorized_keys='ssh-ed25519 AAAATEST test\n')
+            cloudinit.write_snippets(FakeSession(), test_config(), 'example-node-1', 'test1', 200, 'BC:24:11:00:00:01', '192.0.2.200', 'HS_HOME_200', authorized_keys='ssh-ed25519 AAAATEST test\n')
         vendor = captured['homestack-test1-vendor.yaml']
         self.assertIn('allow_format=1', vendor)
         self.assertIn('mkfs.ext4 -m 0 -L', vendor)
@@ -203,10 +244,17 @@ class HomeDiskTests(unittest.TestCase):
     def test_refresh_snippet_refuses_blank_home(self) -> None:
         captured: dict[str, str] = {}
 
-        def capture(_session: object, path: Path, content: str, _mode: int) -> None:
+        def capture(
+            _session: object,
+            _cfg: object,
+            _node: str,
+            path: Path,
+            content: str,
+            _mode: int,
+        ) -> None:
             captured[path.name] = content
         with patch.object(cloudinit, 'remote_write_text', side_effect=capture):
-            cloudinit.write_snippets(FakeSession(), test_config(), 'test1', 200, 'BC:24:11:00:00:01', '192.0.2.200', 'HS_HOME_200', replace=True, preserve_home=True)
+            cloudinit.write_snippets(FakeSession(), test_config(), 'example-node-1', 'test1', 200, 'BC:24:11:00:00:01', '192.0.2.200', 'HS_HOME_200', replace=True, preserve_home=True)
         user_data = captured['homestack-test1-user.yaml']
         self.assertIn('ssh_pwauth: false', user_data)
         self.assertIn('ssh_deletekeys: true', user_data)
@@ -233,8 +281,49 @@ class QgaWaitTests(unittest.TestCase):
                 return models.RemoteResult(0, '')
         session = Session()
         with patch.object(time, 'sleep', return_value=None):
-            guest.wait_for_qga(session, 200, timeout=30)
+            guest.wait_for_qga_on_node(
+                session, test_config(), 'example-node-1', 200, timeout=30
+            )
         self.assertEqual(session.calls, 2)
+
+    def test_guest_exec_polls_pid_until_explicit_completion(self) -> None:
+        class Session:
+
+            def __init__(self) -> None:
+                self.commands: list[str] = []
+
+            def run(self, command: str, **_: object) -> models.RemoteResult:
+                self.commands.append(command)
+                if command.startswith('qm guest exec 200 -- '):
+                    return models.RemoteResult(0, '{"pid":42}\n')
+                if command == 'qm guest exec-status 200 42':
+                    return models.RemoteResult(
+                        0, '{"exited":1,"exitcode":0,"out-data":"ready\\n"}\n'
+                    )
+                raise AssertionError(command)
+
+        session = Session()
+        result = guest.guest_out_on_node(
+            session,
+            test_config(),
+            'example-node-1',
+            200,
+            'echo ready',
+        )
+        self.assertEqual(result, 'ready')
+        self.assertEqual(len(session.commands), 2)
+        self.assertEqual(session.commands[1], 'qm guest exec-status 200 42')
+
+    def test_guest_exec_rejects_incomplete_non_pid_response(self) -> None:
+        class Session:
+
+            def run(self, _command: str, **_: object) -> models.RemoteResult:
+                return models.RemoteResult(0, '{"out-data":"not finished"}\n')
+
+        with self.assertRaisesRegex(models.AppError, 'incomplete response'):
+            guest.guest_exec_on_node(
+                Session(), test_config(), 'example-node-1', 200, 'true'
+            )
 
 class SnippetMigrationTests(unittest.TestCase):
 

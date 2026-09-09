@@ -267,13 +267,17 @@ def strip_ansi(text: str) -> str:
     return ANSI_RE.sub("", text).replace("\r", "")
 
 
-def wrap_remote_command(command: str, token: str) -> str:
+def wrap_remote_command(command: str, token: str, *, timeout: int | None = None) -> str:
     qtoken = shlex.quote(token)
+    child = shlex.join(["/bin/sh", "-c", command])
+    if timeout is not None:
+        child = shlex.join(
+            ["timeout", "--foreground", "-k", "5s", f"{timeout}s", "/bin/sh", "-c", command]
+        )
     return (
         f"hs_t={qtoken}; "
         "printf '__HS_BEGIN__%s\\n' \"$hs_t\"; "
-        f"{command}; "
-        "rc=$?; "
+        f"if {child}; then rc=0; else rc=$?; fi; "
         "printf '\\n__HS_END__%s:%d\\n' \"$hs_t\" \"$rc\""
     )
 
@@ -479,7 +483,7 @@ class HerdrSession:
         self.wait_for_prompt()
         token = uuid.uuid4().hex
         end_prefix = f"__HS_END__{token}:"
-        wrapped = wrap_remote_command(command, token)
+        wrapped = wrap_remote_command(command, token, timeout=timeout)
 
         run_proc = run_local(["herdr", "pane", "run", self.pane_id, wrapped], check=False)
         if run_proc.returncode != 0:
@@ -499,7 +503,7 @@ class HerdrSession:
                 "--source",
                 "recent-unwrapped",
                 "--timeout",
-                str(timeout * 1000),
+                str((timeout + 10) * 1000),
             ],
             check=False,
         )
@@ -558,7 +562,7 @@ class HerdrSession:
         token = uuid.uuid4().hex
         begin = f"__HS_BEGIN__{token}"
         end_prefix = f"__HS_END__{token}:"
-        wrapped = wrap_remote_command(command, token)
+        wrapped = wrap_remote_command(command, token, timeout=timeout)
 
         run_proc = run_local(["herdr", "pane", "run", self.pane_id, wrapped], check=False)
         if run_proc.returncode != 0:
@@ -568,7 +572,7 @@ class HerdrSession:
                 + (f"\n{detail}" if detail else "")
             )
 
-        deadline = time.monotonic() + timeout
+        deadline = time.monotonic() + timeout + 10
         rc: int | None = None
         recent = ""
         while time.monotonic() < deadline:

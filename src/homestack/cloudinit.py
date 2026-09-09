@@ -8,18 +8,25 @@ import shlex
 import uuid
 
 from .config import Config
-from .guest import remote_path_exists
+from .guest import remote_path_exists_on_node
 from .models import AppError, integer_value
-from .proxmox import qm_config_on_node
+from .proxmox import node_run, qm_config_on_node
 from .transports.base import Transport
 
-def remote_write_text(session: Transport, path: Path, content: str, mode: int) -> None:
+def remote_write_text(
+    session: Transport,
+    cfg: Config,
+    node: str,
+    path: Path,
+    content: str,
+    mode: int,
+) -> None:
     encoded = base64.b64encode(content.encode("utf-8")).decode("ascii")
     command = (
         f"printf %s {shlex.quote(encoded)} | base64 -d > {shlex.quote(str(path))} && "
         f"chmod {mode:o} {shlex.quote(str(path))}"
     )
-    session.run(command)
+    node_run(session, cfg, node, command)
 
 
 def snippet_names(name: str) -> dict[str, str]:
@@ -34,6 +41,7 @@ def snippet_names(name: str) -> dict[str, str]:
 def write_snippets(
     session: Transport,
     cfg: Config,
+    node: str,
     name: str,
     vmid: int,
     mac: str,
@@ -46,13 +54,13 @@ def write_snippets(
     cidr: int | None = None,
     gateway: str | None = None,
 ) -> dict[str, Path]:
-    session.run(f"mkdir -p {shlex.quote(str(cfg.snippet_dir))}")
+    node_run(session, cfg, node, f"mkdir -p {shlex.quote(str(cfg.snippet_dir))}")
     names = snippet_names(name)
     paths = {kind: cfg.snippet_dir / filename for kind, filename in names.items()}
 
     if not replace:
         for snippet_path in paths.values():
-            if remote_path_exists(session, snippet_path):
+            if remote_path_exists_on_node(session, cfg, node, snippet_path):
                 raise AppError(f"Cloud-Init snippet already exists: {snippet_path}")
 
     if not preserve_home and not authorized_keys:
@@ -170,7 +178,7 @@ local-hostname: {name}
         "meta": meta_data,
     }
     for kind, snippet_path in paths.items():
-        remote_write_text(session, snippet_path, contents[kind], 0o644)
+        remote_write_text(session, cfg, node, snippet_path, contents[kind], 0o644)
 
     return paths
 
@@ -209,13 +217,16 @@ def snippet_references(
 def stale_create_snippets(
     session: Transport,
     cfg: Config,
+    node: str,
     name: str,
 ) -> list[Path]:
     paths = [
         cfg.snippet_dir / filename
         for filename in snippet_names(name).values()
     ]
-    existing = [path for path in paths if remote_path_exists(session, path)]
+    existing = [
+        path for path in paths if remote_path_exists_on_node(session, cfg, node, path)
+    ]
     if not existing:
         return []
 
@@ -231,10 +242,11 @@ def stale_create_snippets(
 def remove_stale_create_snippets(
     session: Transport,
     cfg: Config,
+    node: str,
     name: str,
     expected_paths: list[str],
 ) -> None:
-    current = stale_create_snippets(session, cfg, name)
+    current = stale_create_snippets(session, cfg, node, name)
     current_strings = sorted(str(path) for path in current)
     expected = sorted(expected_paths)
     if current_strings != expected:
@@ -243,8 +255,8 @@ def remove_stale_create_snippets(
             "re-run create and review the new plan."
         )
     for path in current:
-        session.run(f"rm -f {shlex.quote(str(path))}")
-        if remote_path_exists(session, path):
+        node_run(session, cfg, node, f"rm -f {shlex.quote(str(path))}")
+        if remote_path_exists_on_node(session, cfg, node, path):
             raise AppError(f"Failed to remove stale Cloud-Init snippet: {path}")
 
 

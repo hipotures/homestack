@@ -112,6 +112,19 @@ class ConfigTests(unittest.TestCase):
             with self.assertRaisesRegex(models.AppError, 'Unsupported transport type'):
                 config.load_config(path)
 
+    def test_root_and_home_must_use_different_disk_slots(self) -> None:
+        example = Path(__file__).resolve().parents[1] / 'config.example.toml'
+        text = example.read_text(encoding='utf-8').replace(
+            '[home]\ndisk = "scsi1"', '[home]\ndisk = "scsi0"'
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'config.toml'
+            path.write_text(text, encoding='utf-8')
+            with self.assertRaisesRegex(
+                models.AppError, 'root.*home.*different slots'
+            ):
+                config.load_config(path)
+
     def test_generated_toml_round_trips_through_normal_loader(self) -> None:
         cfg = replace(
             test_config(),

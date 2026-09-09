@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import subprocess
 import unittest
 
 from homestack import models, proxmox
@@ -56,6 +57,26 @@ class TransportTests(unittest.TestCase):
         assert result is not None
         self.assertEqual(result.returncode, 7)
         self.assertEqual(result.output, 'new')
+
+    def test_remote_exit_is_isolated_and_still_emits_completion_marker(self) -> None:
+        token = 'exit-isolated'
+        wrapped = transports_herdr.wrap_remote_command('exit 81', token, timeout=5)
+        proc = subprocess.run(
+            ['/bin/sh', '-c', wrapped],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        self.assertEqual(proc.returncode, 0)
+        result = transports_herdr.parse_remote_envelope(proc.stdout, token)
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertEqual(result.returncode, 81)
+
+    def test_remote_timeout_is_applied_to_the_child_command(self) -> None:
+        wrapped = transports_herdr.wrap_remote_command('sleep 30', 'bounded', timeout=2)
+        self.assertIn('timeout --foreground -k 5s 2s /bin/sh -c', wrapped)
 
     def test_node_shell_command(self) -> None:
         cfg = test_config()

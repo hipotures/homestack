@@ -4,15 +4,18 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
+import base64
+import json
 import re
 import shlex
+import uuid
 from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn, TimeElapsedColumn
 
 from .cloudinit import cicustom_value, remove_stale_create_snippets, snippet_names, stale_create_snippets, sync_snippets_to_node, write_snippets
 from .config import Config
-from .guest import derive_ip, extract_mac, guest_exec, guest_out, guest_out_on_node, parse_disk_size_gb, wait_for_qga, wait_for_qga_on_node
+from .guest import derive_ip, extract_mac, guest_exec_on_node, guest_out_on_node, parse_disk_size_gb, wait_for_qga_on_node
 from .models import AppError, WORKSPACE_TAG, integer_value, validate_name
-from .proxmox import allocate_named_raw_volume, boot_order_contains_disk, check_remote_requirements, cluster_nodes, cluster_vm_resource, disk_option, has_tag, home_label, home_volume_name, node_run, node_shell_command, parse_home_size, qm_config, qm_config_on_node, qm_exists, qm_status, qm_status_on_node, rename_attached_disk_volume, require_gold_tag, resolve_homestack_storage, root_import_spec, root_volume_name, set_workspace_role_tags, shutdown_vm_on_node, storage_capacity, verify_workspace_role_tags
+from .proxmox import allocate_named_raw_volume, boot_order_contains_disk, check_remote_requirements, cluster_nodes, cluster_vm_resource, disk_option, has_tag, home_label, home_volume_name, node_run, node_shell_command, parse_home_size, qm_config_on_node, qm_exists_on_node, qm_status_on_node, rename_attached_disk_volume, require_gold_tag, resolve_homestack_storage, root_volume_name, set_workspace_role_tags, shutdown_vm_on_node, storage_capacity, verify_workspace_role_tags
 from .status import occupancy_level, resolve_existing_workspace, vm_volume_inventory
 from .transports.base import Transport
 from .ui import console, human_bytes, show_create_result, show_kv_panel, show_refresh_result, ui_vm_status
@@ -88,35 +91,19 @@ def resolve_workspace_target(session: Transport, cfg: Config, target: str | int)
     raise AppError(f"No HomeStack workspace named {text!r} exists.")
 
 
-def shutdown_vm(session: Transport, vmid: int, timeout: int = 90) -> None:
-    status = qm_status(session, vmid)
-    if status == "stopped":
-        return
-    if status != "running":
-        raise AppError(f"VM {vmid} has unexpected status {status!r}; refusing shutdown")
-    result = session.run(
-        f"qm shutdown {vmid} --timeout {timeout}",
-        check=False,
-        timeout=timeout + 30,
-    )
-    final_status = qm_status(session, vmid)
-    if result.returncode != 0 or final_status != "stopped":
-        raise AppError(
-            f"VM {vmid} did not shut down cleanly. Current status: {final_status}. "
-            "HomeStack will not force-stop it automatically."
-        )
-
-
 def run_transfer_with_progress(
     session: Transport,
+    cfg: Config,
+    node: str,
     command: str,
     *,
     progress: Progress | None,
     description: str,
     timeout: int = 3600,
 ) -> None:
+    routed_command = node_shell_command(cfg, node, command)
     if progress is None:
-        session.run(command, timeout=timeout)
+        session.run(routed_command, timeout=timeout)
         return
 
     transfer_task = progress.add_task(description, total=100)
@@ -144,7 +131,7 @@ def run_transfer_with_progress(
 
     try:
         session.run_with_progress(
-            command,
+            routed_command,
             update_transfer,
             timeout=timeout,
             poll_interval=0.5,
@@ -156,6 +143,7 @@ def run_transfer_with_progress(
 def clone_full(
     session: Transport,
     cfg: Config,
+    node: str,
     vmid: int,
     name: str,
     storage: str,
@@ -178,6 +166,8 @@ def clone_full(
     )
     run_transfer_with_progress(
         session,
+        cfg,
+        node,
         command,
         progress=progress,
         description="  ↳ Root disk",
@@ -195,14 +185,20 @@ def build_create_plan(
 ) -> dict[str, Any]:
     validate_name(name)
     ip = derive_ip(cfg, vmid)
-    check_remote_requirements(session)
+    check_remote_requirements(session, cfg, cfg.node)
 
-    if cluster_vm_resource(session, cfg.gold_vmid) is None:
+    gold_resource = cluster_vm_resource(session, cfg.gold_vmid)
+    if gold_resource is None:
         raise AppError(f"Gold VM {cfg.gold_vmid} does not exist")
+    gold_node = str(gold_resource.get("node") or "")
+    if gold_node != cfg.node:
+        raise AppError(
+            f"Gold VM {cfg.gold_vmid} is on {gold_node!r}, expected configured node {cfg.node!r}"
+        )
     if cluster_vm_resource(session, vmid) is not None:
         raise AppError(f"VMID {vmid} already exists")
 
-    gold_cfg = qm_config(session, cfg.gold_vmid)
+    gold_cfg = qm_config_on_node(session, cfg, cfg.node, cfg.gold_vmid)
     require_gold_tag(cfg.gold_vmid, gold_cfg)
     disk_cfg = gold_cfg.get(cfg.root_disk)
     if not disk_cfg:
@@ -215,7 +211,7 @@ def build_create_plan(
 
     authorized_keys, key_source = get_workspace_authorized_keys(session, cfg)
     key_records = parse_authorized_key_records(authorized_keys)
-    stale_snippets = stale_create_snippets(session, cfg, name)
+    stale_snippets = stale_create_snippets(session, cfg, cfg.node, name)
 
     return {
         "command": "create",
@@ -258,6 +254,7 @@ def create_workspace(
     json_mode: bool,
 ) -> dict[str, Any]:
     vmid = int(plan["vmid"])
+    node = str(plan["node"])
     name = str(plan["name"])
     ip = str(plan["ip"])
     home_fs_label = str(plan["home_label"])
@@ -295,7 +292,7 @@ def create_workspace(
         start_step("Stale Cloud-Init snippets")
         stale_paths = [str(path) for path in plan.get("stale_snippets", [])]
         if stale_paths:
-            remove_stale_create_snippets(session, cfg, name, stale_paths)
+            remove_stale_create_snippets(session, cfg, node, name, stale_paths)
         finish_step()
 
         start_step("SSH keys")
@@ -307,6 +304,7 @@ def create_workspace(
         clone_full(
             session,
             cfg,
+            node,
             vmid,
             name,
             str(plan["root_storage"]),
@@ -316,6 +314,7 @@ def create_workspace(
         rename_attached_disk_volume(
             session,
             cfg,
+            node,
             vmid,
             cfg.root_disk,
             root_volume_name(vmid),
@@ -325,6 +324,8 @@ def create_workspace(
         start_step("Persistent home disk")
         home_volume = allocate_named_raw_volume(
             session,
+            cfg,
+            node,
             str(plan["home_storage"]),
             vmid,
             home_volume_name(vmid, cfg.user_name),
@@ -334,18 +335,28 @@ def create_workspace(
             f"{home_volume},discard=on,iothread=1,ssd=1,serial={home_fs_label}"
         )
         try:
-            session.run(
+            node_run(
+                session,
+                cfg,
+                node,
                 shlex.join(["qm", "set", str(vmid), f"--{cfg.home_disk}", home_spec]),
                 timeout=600,
             )
         except Exception:
-            session.run(shlex.join(["pvesm", "free", home_volume]), check=False, timeout=600)
+            node_run(
+                session,
+                cfg,
+                node,
+                shlex.join(["pvesm", "free", home_volume]),
+                check=False,
+                timeout=600,
+            )
             raise
         finish_step()
 
         start_step("Clone identity")
-        set_workspace_role_tags(session, vmid)
-        cloned_cfg = qm_config(session, vmid)
+        set_workspace_role_tags(session, cfg, node, vmid)
+        cloned_cfg = qm_config_on_node(session, cfg, node, vmid)
         net0 = cloned_cfg.get("net0")
         if not net0:
             raise AppError(f"Cloned VM {vmid} has no net0")
@@ -361,6 +372,7 @@ def create_workspace(
         paths = write_snippets(
             session,
             cfg,
+            node,
             name,
             vmid,
             mac,
@@ -372,7 +384,10 @@ def create_workspace(
         finish_step()
 
         start_step("VM configuration")
-        session.run(
+        node_run(
+            session,
+            cfg,
+            node,
             shlex.join(
                 [
                     "qm",
@@ -383,37 +398,41 @@ def create_workspace(
                 ]
             )
         )
-        session.run(shlex.join(["qm", "set", str(vmid), "--cicustom", cicustom_value(cfg, name)]))
-        session.run(shlex.join(["qm", "cloudinit", "update", str(vmid)]))
-        verify_workspace_role_tags(vmid, qm_config(session, vmid))
+        node_run(session, cfg, node, shlex.join(["qm", "set", str(vmid), "--cicustom", cicustom_value(cfg, name)]))
+        node_run(session, cfg, node, shlex.join(["qm", "cloudinit", "update", str(vmid)]))
+        verify_workspace_role_tags(vmid, qm_config_on_node(session, cfg, node, vmid))
         finish_step()
 
         start_step("Boot")
-        session.run(shlex.join(["qm", "start", str(vmid)]))
+        node_run(session, cfg, node, shlex.join(["qm", "start", str(vmid)]))
         boot_started = True
         finish_step()
 
         start_step("Verify workspace")
-        wait_for_qga(session, vmid, timeout=600)
-        guest_exec(
+        wait_for_qga_on_node(session, cfg, node, vmid, timeout=600)
+        guest_exec_on_node(
             session,
+            cfg,
+            node,
             vmid,
             "command -v cloud-init >/dev/null 2>&1 && "
             "timeout 180 cloud-init status --wait >/dev/null 2>&1 || true",
             check=False,
         )
 
-        actual_hostname = guest_out(session, vmid, "hostname")
+        actual_hostname = guest_out_on_node(session, cfg, node, vmid, "hostname")
         if actual_hostname != name:
             raise AppError(f"Verification failed: hostname is {actual_hostname!r}, expected {name!r}")
 
-        actual_addr = guest_out(session, vmid, "ip -4 -o addr show dev eth0")
+        actual_addr = guest_out_on_node(session, cfg, node, vmid, "ip -4 -o addr show dev eth0")
         expected_addr = f"{ip}/{cfg.network_cidr}"
         if expected_addr not in actual_addr:
             raise AppError(f"Verification failed: eth0 does not have {expected_addr}\n{actual_addr}")
 
-        mount = guest_out(
+        mount = guest_out_on_node(
             session,
+            cfg,
+            node,
             vmid,
             f"findmnt -n -o SOURCE,FSTYPE,TARGET /home/{cfg.user_name}",
         )
@@ -421,8 +440,10 @@ def create_workspace(
             raise AppError(
                 f"Verification failed: /home/{cfg.user_name} is not mounted as ext4\n{mount}"
             )
-        mounted_label = guest_out(
+        mounted_label = guest_out_on_node(
             session,
+            cfg,
+            node,
             vmid,
             f"findmnt -n -o SOURCE /home/{cfg.user_name} | xargs -r blkid -s LABEL -o value",
         )
@@ -432,20 +453,24 @@ def create_workspace(
                 f"expected {home_fs_label!r}"
             )
 
-        user_id = guest_out(session, vmid, f"id {shlex.quote(cfg.user_name)}")
+        user_id = guest_out_on_node(session, cfg, node, vmid, f"id {shlex.quote(cfg.user_name)}")
         if f"uid={cfg.user_uid}({cfg.user_name})" not in user_id:
             raise AppError(f"Verification failed: unexpected user identity: {user_id}")
 
-        user_key_ok = guest_out(
+        user_key_ok = guest_out_on_node(
             session,
+            cfg,
+            node,
             vmid,
             f"test -s /home/{cfg.user_name}/.ssh/authorized_keys && echo OK || echo MISSING",
         )
         if user_key_ok != "OK":
             raise AppError("Verification failed: user authorized_keys is missing")
 
-        actual_authorized_keys = guest_out(
+        actual_authorized_keys = guest_out_on_node(
             session,
+            cfg,
+            node,
             vmid,
             f"cat /home/{cfg.user_name}/.ssh/authorized_keys",
         )
@@ -466,16 +491,20 @@ def create_workspace(
                 parts.append("unexpected: " + ", ".join(record["label"] for record in unexpected_records))
             raise AppError("Verification failed: SSH public keys mismatch (" + "; ".join(parts) + ")")
 
-        root_key_ok = guest_out(
+        root_key_ok = guest_out_on_node(
             session,
+            cfg,
+            node,
             vmid,
             "test -s /root/.ssh/authorized_keys && echo OK || echo MISSING",
         )
         if root_key_ok != "OK":
             raise AppError("Verification failed: root authorized_keys is missing")
 
-        regular_users = guest_out(
+        regular_users = guest_out_on_node(
             session,
+            cfg,
+            node,
             vmid,
             """awk -F: '$3 >= 1000 && $3 < 65534 {print $1 ":" $3 ":" $4}' /etc/passwd""",
         ).splitlines()
@@ -486,16 +515,20 @@ def create_workspace(
                 + (", ".join(regular_users) if regular_users else "none")
             )
 
-        sudo_state = guest_out(
+        sudo_state = guest_out_on_node(
             session,
+            cfg,
+            node,
             vmid,
             "if command -v sudo >/dev/null 2>&1; then echo PRESENT; else echo ABSENT; fi",
         )
         if sudo_state != "ABSENT":
             raise AppError("Verification failed: sudo is installed in the workspace")
 
-        cloud_id = guest_out(
+        cloud_id = guest_out_on_node(
             session,
+            cfg,
+            node,
             vmid,
             "command -v cloud-id >/dev/null 2>&1 && cloud-id || true",
             check=False,
@@ -503,7 +536,7 @@ def create_workspace(
         finish_step()
 
         ssh_known_hosts_removed = forget_local_ssh_host(ip)
-        final_status = qm_status(session, vmid)
+        final_status = qm_status_on_node(session, cfg, node, vmid)
 
         start_step("Local SSH config")
         try:
@@ -546,16 +579,16 @@ def create_workspace(
             progress.stop()
 
         if not boot_started:
-            if created_vm and qm_exists(session, vmid):
-                session.run(f"qm destroy {vmid} --purge 1", check=False, timeout=600)
+            if created_vm and qm_exists_on_node(session, cfg, node, vmid):
+                node_run(session, cfg, node, f"qm destroy {vmid} --purge 1", check=False, timeout=600)
             for path in created_snippets:
-                session.run(f"rm -f {shlex.quote(str(path))}", check=False)
+                node_run(session, cfg, node, f"rm -f {shlex.quote(str(path))}", check=False)
         raise
 
 
 def build_destroy_plan(session: Transport, cfg: Config, vmid: int) -> dict[str, Any]:
-    check_remote_requirements(session)
     info = resolve_existing_workspace(session, cfg, vmid, require_network=False)
+    check_remote_requirements(session, cfg, str(info["node"]))
     usage = info["home_usage"]
     size_bytes = usage.get("size_bytes")
     used_bytes = usage.get("used_bytes")
@@ -628,7 +661,8 @@ def destroy_workspace(
 
     names = snippet_names(name)
     for cleanup_node in cluster_nodes(session):
-        for filename in names.values():
+        filenames = [*names.values(), _refresh_journal_path(cfg, vmid).name]
+        for filename in filenames:
             node_run(
                 session,
                 cfg,
@@ -657,8 +691,426 @@ def destroy_workspace(
     }
 
 
+def _refresh_journal_path(cfg: Config, vmid: int) -> Path:
+    return cfg.snippet_dir / f"homestack-vm{vmid}-refresh.json"
+
+
+def _read_refresh_journal(
+    session: Transport, cfg: Config, node: str, vmid: int
+) -> dict[str, Any] | None:
+    path = _refresh_journal_path(cfg, vmid)
+    result = node_run(
+        session,
+        cfg,
+        node,
+        f"test -s {shlex.quote(str(path))} && cat {shlex.quote(str(path))}",
+        check=False,
+    )
+    if result.returncode == 1:
+        return None
+    if result.returncode != 0:
+        raise AppError(f"Could not read refresh journal {path}: {result.output}")
+    try:
+        value = json.loads(result.output)
+    except json.JSONDecodeError as exc:
+        raise AppError(f"Refresh journal {path} is not valid JSON") from exc
+    try:
+        journal_vmid = int(value.get("vmid", -1)) if isinstance(value, dict) else -1
+    except (TypeError, ValueError):
+        journal_vmid = -1
+    if not isinstance(value, dict) or journal_vmid != vmid:
+        raise AppError(f"Refresh journal {path} has an invalid VM identity")
+    _validate_refresh_journal(cfg, value)
+    return value
+
+
+def _validate_refresh_journal(cfg: Config, journal: dict[str, Any]) -> None:
+    try:
+        vmid = int(journal["vmid"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise AppError("Refresh journal has an invalid VM identity") from exc
+    if journal.get("version") != 1:
+        raise AppError("Refresh journal has an unsupported version")
+    transaction_id = str(journal.get("transaction_id") or "")
+    if re.fullmatch(r"[0-9a-f]{32}", transaction_id) is None:
+        raise AppError("Refresh journal has an invalid transaction identity")
+    if journal.get("phase") not in {
+        "prepared",
+        "imported",
+        "switching",
+        "switched",
+        "verifying",
+        "verified",
+    }:
+        raise AppError("Refresh journal has an invalid phase")
+    if journal.get("initial_status") not in {"running", "stopped"}:
+        raise AppError("Refresh journal has an invalid initial power state")
+    if re.fullmatch(
+        r"[A-Za-z0-9][A-Za-z0-9.-]*", str(journal.get("node") or "")
+    ) is None:
+        raise AppError("Refresh journal has an invalid node")
+    if journal.get("root_disk") != cfg.root_disk or journal.get("home_disk") != cfg.home_disk:
+        raise AppError("Current disk-slot configuration does not match the refresh journal")
+    if cfg.root_disk == cfg.home_disk:
+        raise AppError("Root and persistent-home disk slots must be different")
+    if re.fullmatch(r"unused[0-9]+", str(journal.get("new_unused_key") or "")) is None:
+        raise AppError("Refresh journal has an invalid staging disk slot")
+
+    old_volume = str(journal.get("old_root_volume") or "")
+    home_volume = str(journal.get("home_volume") or "")
+    old_spec = str(journal.get("old_root_spec") or "")
+    new_volume = str(journal.get("new_root_volume") or "")
+    phase = str(journal["phase"])
+    if ":" not in old_volume or old_spec.split(",", 1)[0].strip() != old_volume:
+        raise AppError("Refresh journal has an invalid original root identity")
+    if ":" not in home_volume or home_volume == old_volume:
+        raise AppError("Refresh journal has an invalid persistent-home identity")
+    if str(journal.get("home_label") or "") != home_label(vmid):
+        raise AppError("Refresh journal has an invalid persistent-home label")
+    if new_volume and (":" not in new_volume or new_volume in {old_volume, home_volume}):
+        raise AppError("Refresh journal has an invalid staged root identity")
+    if phase != "prepared" and not new_volume:
+        raise AppError("Refresh journal is missing the staged root identity")
+    old_unused_key = str(journal.get("old_unused_key") or "")
+    if old_unused_key and re.fullmatch(r"unused[0-9]+", old_unused_key) is None:
+        raise AppError("Refresh journal has an invalid original-root staging slot")
+
+
+def _write_refresh_journal(
+    session: Transport,
+    cfg: Config,
+    node: str,
+    vmid: int,
+    journal: dict[str, Any],
+) -> None:
+    path = _refresh_journal_path(cfg, vmid)
+    payload = base64.b64encode(
+        (json.dumps(journal, sort_keys=True) + "\n").encode("utf-8")
+    ).decode("ascii")
+    directory = shlex.quote(str(path.parent))
+    target = shlex.quote(str(path))
+    command = (
+        f"mkdir -p {directory} && "
+        f"hs_journal=$(mktemp {directory}/.homestack-refresh.XXXXXX) && "
+        "trap 'rm -f \"$hs_journal\"' EXIT HUP INT TERM && "
+        f"printf %s {shlex.quote(payload)} | base64 -d > \"$hs_journal\" && "
+        "chmod 600 \"$hs_journal\" && "
+        f"mv -f \"$hs_journal\" {target}"
+    )
+    node_run(session, cfg, node, command)
+
+
+def _remove_refresh_journal(
+    session: Transport, cfg: Config, node: str, vmid: int
+) -> None:
+    node_run(
+        session,
+        cfg,
+        node,
+        f"rm -f {shlex.quote(str(_refresh_journal_path(cfg, vmid)))}",
+    )
+
+
+def _unused_refs(vm_cfg: dict[str, str]) -> dict[str, str]:
+    return {
+        key: str(value).split(",", 1)[0].strip()
+        for key, value in vm_cfg.items()
+        if re.fullmatch(r"unused[0-9]+", key)
+    }
+
+
+def _unused_key_for_volume(vm_cfg: dict[str, str], volume: str) -> str | None:
+    matches = [key for key, value in _unused_refs(vm_cfg).items() if value == volume]
+    if len(matches) > 1:
+        raise AppError(f"Volume {volume!r} has multiple unused references: {matches}")
+    return matches[0] if matches else None
+
+
+def _free_unused_key(vm_cfg: dict[str, str]) -> str:
+    for index in range(256):
+        key = f"unused{index}"
+        if key not in vm_cfg:
+            return key
+    raise AppError("VM has no free unused disk slot for a staged root")
+
+
+def _digest_args(vm_cfg: dict[str, str]) -> list[str]:
+    digest = str(vm_cfg.get("digest") or "").strip()
+    return ["--digest", digest] if digest else []
+
+
+def _root_attachment_spec(volume: str, gold_disk_config: str) -> str:
+    parts = [volume]
+    for key in ("iothread", "discard", "ssd", "cache", "aio", "backup", "replicate", "ro"):
+        value = disk_option(gold_disk_config, key)
+        if value is not None:
+            parts.append(f"{key}={value}")
+    return ",".join(parts)
+
+
+def _assert_refresh_home(
+    cfg: Config, vmid: int, vm_cfg: dict[str, str], journal: dict[str, Any]
+) -> None:
+    home_cfg = str(vm_cfg.get(cfg.home_disk) or "")
+    home_volume = home_cfg.split(",", 1)[0].strip()
+    expected_volume = str(journal["home_volume"])
+    expected_label = str(journal["home_label"])
+    if home_volume != expected_volume or disk_option(home_cfg, "serial") != expected_label:
+        raise AppError(
+            f"Persistent home identity changed during refresh of VM {vmid}; "
+            "refusing further disk changes"
+        )
+
+
+def _unlink_disk(
+    session: Transport,
+    cfg: Config,
+    node: str,
+    vmid: int,
+    disk: str,
+    vm_cfg: dict[str, str],
+    *,
+    force: bool,
+) -> dict[str, str]:
+    args = ["qm", "disk", "unlink", str(vmid), "--idlist", disk]
+    if force:
+        args.extend(["--force", "1"])
+    args.extend(_digest_args(vm_cfg))
+    node_run(session, cfg, node, shlex.join(args), timeout=600)
+    return qm_config_on_node(session, cfg, node, vmid)
+
+
+def _set_vm_values(
+    session: Transport,
+    cfg: Config,
+    node: str,
+    vmid: int,
+    vm_cfg: dict[str, str],
+    values: list[tuple[str, str]],
+) -> dict[str, str]:
+    args = ["qm", "set", str(vmid)]
+    for key, value in values:
+        args.extend([f"--{key}", value])
+    args.extend(_digest_args(vm_cfg))
+    node_run(session, cfg, node, shlex.join(args), timeout=600)
+    return qm_config_on_node(session, cfg, node, vmid)
+
+
+def _delete_unused_volume(
+    session: Transport,
+    cfg: Config,
+    node: str,
+    vmid: int,
+    vm_cfg: dict[str, str],
+    volume: str,
+    *,
+    require_reference: bool = False,
+) -> dict[str, str]:
+    key = _unused_key_for_volume(vm_cfg, volume)
+    if key is None:
+        if require_reference:
+            raise AppError(
+                f"Cannot safely delete volume {volume!r}: its unused reference is missing"
+            )
+        return vm_cfg
+    return _unlink_disk(session, cfg, node, vmid, key, vm_cfg, force=True)
+
+
+def _verify_refreshed_guest(
+    session: Transport,
+    cfg: Config,
+    node: str,
+    vmid: int,
+    name: str,
+    ip: str,
+    cidr: int,
+    home_fs_label: str,
+) -> str | None:
+    wait_for_qga_on_node(session, cfg, node, vmid, timeout=600)
+    guest_exec_on_node(
+        session,
+        cfg,
+        node,
+        vmid,
+        "command -v cloud-init >/dev/null 2>&1 && "
+        "timeout 180 cloud-init status --wait >/dev/null 2>&1 || true",
+        check=False,
+        timeout=240,
+    )
+    if guest_out_on_node(session, cfg, node, vmid, "hostname") != name:
+        raise AppError("Refresh verification failed: workspace hostname is incorrect")
+    actual_addr = guest_out_on_node(session, cfg, node, vmid, "ip -4 -o addr show dev eth0")
+    if f"{ip}/{cidr}" not in actual_addr:
+        raise AppError(f"Refresh verification failed: eth0 does not have {ip}/{cidr}")
+    mount = guest_out_on_node(
+        session, cfg, node, vmid, f"findmnt -n -o SOURCE,FSTYPE,TARGET /home/{cfg.user_name}"
+    )
+    if "ext4" not in mount or f"/home/{cfg.user_name}" not in mount:
+        raise AppError(f"Refresh verification failed: /home/{cfg.user_name} is not ext4")
+    mounted_label = guest_out_on_node(
+        session,
+        cfg,
+        node,
+        vmid,
+        f"findmnt -n -o SOURCE /home/{cfg.user_name} | xargs -r blkid -s LABEL -o value",
+    )
+    if mounted_label != home_fs_label:
+        raise AppError(f"Refresh verification failed: home label is {mounted_label!r}")
+    user_id = guest_out_on_node(
+        session, cfg, node, vmid, f"id {shlex.quote(cfg.user_name)}"
+    )
+    if f"uid={cfg.user_uid}({cfg.user_name})" not in user_id:
+        raise AppError(f"Refresh verification failed: unexpected user identity: {user_id}")
+    for command, message in (
+        (
+            f"test -s /home/{cfg.user_name}/.ssh/authorized_keys && echo OK || echo MISSING",
+            "persistent user authorized_keys is missing",
+        ),
+        ("test -s /root/.ssh/authorized_keys && echo OK || echo MISSING", "root authorized_keys is missing"),
+    ):
+        if guest_out_on_node(session, cfg, node, vmid, command) != "OK":
+            raise AppError(f"Refresh verification failed: {message}")
+    regular_users = guest_out_on_node(
+        session,
+        cfg,
+        node,
+        vmid,
+        """awk -F: '$3 >= 1000 && $3 < 65534 {print $1 ":" $3 ":" $4}' /etc/passwd""",
+    ).splitlines()
+    if regular_users != [f"{cfg.user_name}:{cfg.user_uid}:{cfg.user_gid}"]:
+        raise AppError("Refresh verification failed: unexpected regular user accounts")
+    sudo_state = guest_out_on_node(
+        session,
+        cfg,
+        node,
+        vmid,
+        "if command -v sudo >/dev/null 2>&1; then echo PRESENT; else echo ABSENT; fi",
+    )
+    if sudo_state != "ABSENT":
+        raise AppError("Refresh verification failed: sudo is installed in the workspace")
+    return guest_out_on_node(
+        session,
+        cfg,
+        node,
+        vmid,
+        "command -v cloud-id >/dev/null 2>&1 && cloud-id || true",
+        check=False,
+    ) or None
+
+
+def _recover_refresh(
+    session: Transport, cfg: Config, journal: dict[str, Any]
+) -> dict[str, Any]:
+    _validate_refresh_journal(cfg, journal)
+    vmid = int(journal["vmid"])
+    node = str(journal["node"])
+    phase = str(journal.get("phase") or "")
+    current_status = qm_status_on_node(session, cfg, node, vmid)
+    if current_status == "running":
+        shutdown_vm_on_node(session, cfg, node, vmid)
+    vm_cfg = qm_config_on_node(session, cfg, node, vmid)
+    _assert_refresh_home(cfg, vmid, vm_cfg, journal)
+    old_volume = str(journal["old_root_volume"])
+    new_volume = str(journal.get("new_root_volume") or "")
+    if not new_volume:
+        candidate = _unused_refs(vm_cfg).get(str(journal.get("new_unused_key") or ""), "")
+        if candidate and candidate not in {old_volume, str(journal["home_volume"])}:
+            new_volume = candidate
+            journal["new_root_volume"] = candidate
+
+    if phase == "verified":
+        if str(vm_cfg.get(cfg.root_disk, "")).split(",", 1)[0] != new_volume:
+            raise AppError("Verified refresh journal does not match the attached root")
+        vm_cfg = _delete_unused_volume(
+            session, cfg, node, vmid, vm_cfg, old_volume
+        )
+        if str(journal["initial_status"]) == "running":
+            node_run(session, cfg, node, f"qm start {vmid}", timeout=300)
+        _remove_refresh_journal(session, cfg, node, vmid)
+        return {"mode": "recover", "recovery": "completed verified cleanup"}
+
+    attached_root = str(vm_cfg.get(cfg.root_disk) or "")
+    attached_volume = attached_root.split(",", 1)[0].strip()
+    if attached_volume == new_volume and new_volume:
+        vm_cfg = _unlink_disk(
+            session, cfg, node, vmid, cfg.root_disk, vm_cfg, force=False
+        )
+        _assert_refresh_home(cfg, vmid, vm_cfg, journal)
+        attached_volume = ""
+    if attached_volume not in {"", old_volume}:
+        raise AppError(
+            f"Refresh recovery found unexpected root volume {attached_volume!r}"
+        )
+    if not attached_volume:
+        if _unused_key_for_volume(vm_cfg, old_volume) is None:
+            raise AppError("Refresh recovery cannot find the original root volume")
+        vm_cfg = _set_vm_values(
+            session,
+            cfg,
+            node,
+            vmid,
+            vm_cfg,
+            [(cfg.root_disk, str(journal["old_root_spec"]))],
+        )
+    if str(vm_cfg.get(cfg.root_disk, "")).split(",", 1)[0] != old_volume:
+        raise AppError("Refresh recovery did not restore the original root")
+    if _unused_key_for_volume(vm_cfg, old_volume) is not None:
+        raise AppError("Original root is both attached and retained as an unused disk")
+    _assert_refresh_home(cfg, vmid, vm_cfg, journal)
+    if new_volume:
+        vm_cfg = _delete_unused_volume(
+            session,
+            cfg,
+            node,
+            vmid,
+            vm_cfg,
+            new_volume,
+            require_reference=True,
+        )
+    restore_values = [
+        (key, str(journal[key]))
+        for key in ("boot", "ipconfig0", "cicustom")
+        if journal.get(key)
+    ]
+    if restore_values:
+        vm_cfg = _set_vm_values(
+            session, cfg, node, vmid, vm_cfg, restore_values
+        )
+    node_run(session, cfg, node, f"qm cloudinit update {vmid}", check=False, timeout=120)
+    if str(journal["initial_status"]) == "running":
+        node_run(session, cfg, node, f"qm start {vmid}", timeout=300)
+    _remove_refresh_journal(session, cfg, node, vmid)
+    return {"mode": "recover", "recovery": "rolled back to original root"}
+
+
 def build_refresh_plan(session: Transport, cfg: Config, vmid: int) -> dict[str, Any]:
-    check_remote_requirements(session)
+    resource = cluster_vm_resource(session, vmid)
+    if resource is None:
+        raise AppError(f"VMID {vmid} does not exist")
+    node = str(resource.get("node") or "")
+    if not node:
+        raise AppError(f"VM {vmid} has no node in cluster inventory")
+    journal = _read_refresh_journal(session, cfg, node, vmid)
+    if journal is not None:
+        if str(journal.get("node") or "") != node:
+            raise AppError(
+                f"Refresh journal belongs to node {journal.get('node')!r}, but VM {vmid} is on {node!r}"
+            )
+        return {
+            "command": "refresh",
+            "mode": "recover",
+            "vmid": vmid,
+            "name": str(journal.get("name") or f"VM {vmid}"),
+            "node": node,
+            "status": str(resource.get("status") or "unknown"),
+            "home_label": journal.get("home_label"),
+            "home_volume": journal.get("home_volume"),
+            "recovery_phase": journal.get("phase"),
+            "journal": journal,
+            "config": str(cfg.path),
+        }
+
+    check_remote_requirements(session, cfg, node)
     info = resolve_existing_workspace(session, cfg, vmid, require_network=True)
     if info["node"] != cfg.node:
         raise AppError(
@@ -668,15 +1120,22 @@ def build_refresh_plan(session: Transport, cfg: Config, vmid: int) -> dict[str, 
     root_storage = str(info.get("root_storage") or "")
     resolve_homestack_storage(cfg, info["node"], root_storage)
 
-    if cluster_vm_resource(session, cfg.gold_vmid) is None:
+    gold_resource = cluster_vm_resource(session, cfg.gold_vmid)
+    if gold_resource is None:
         raise AppError(f"Gold VM {cfg.gold_vmid} does not exist")
-    gold_cfg = qm_config(session, cfg.gold_vmid)
+    gold_node = str(gold_resource.get("node") or "")
+    if gold_node != cfg.node:
+        raise AppError(
+            f"Gold VM {cfg.gold_vmid} is on {gold_node!r}, expected configured node {cfg.node!r}"
+        )
+    gold_cfg = qm_config_on_node(session, cfg, gold_node, cfg.gold_vmid)
     require_gold_tag(cfg.gold_vmid, gold_cfg)
     disk_cfg = gold_cfg.get(cfg.root_disk)
     if not disk_cfg:
         raise AppError(f"Gold VM {cfg.gold_vmid} has no {cfg.root_disk} disk")
     return {
         "command": "refresh",
+        "mode": "replace",
         "vmid": vmid,
         "name": info["name"],
         "node": info["node"],
@@ -690,13 +1149,12 @@ def build_refresh_plan(session: Transport, cfg: Config, vmid: int) -> dict[str, 
         "root_disk_gb": parse_disk_size_gb(disk_cfg),
         "gold_root_disk_config": disk_cfg,
         "gold_root_volume": disk_cfg.split(",", 1)[0],
-        "root_volume_name": root_volume_name(vmid),
         "home_disk": info["home_disk"],
         "home_storage": info["home_storage"],
         "home_label": info["home_label"],
         "home_volume": info["home_volume"],
         "home_policy": "preserve persistent disk exactly; never format during refresh",
-        "power_state_policy": "preserve pre-refresh power state",
+        "power_state_policy": "verify by boot and restore pre-refresh power state",
         "config": str(cfg.path),
     }
 
@@ -708,284 +1166,208 @@ def refresh_workspace(
     *,
     json_mode: bool,
 ) -> dict[str, Any]:
+    if plan.get("mode") == "recover":
+        recovery = _recover_refresh(session, cfg, dict(plan["journal"]))
+        result = {"ok": True, **plan, **recovery, "status": "recovered"}
+        if not json_mode:
+            show_kv_panel(
+                "REFRESH RECOVERED",
+                [[("VMID", str(plan["vmid"])), ("Recovery", str(recovery["recovery"]))]],
+            )
+        return result
+
     vmid = int(plan["vmid"])
+    node = str(plan["node"])
     name = str(plan["name"])
     ip = str(plan["ip"])
     cidr = int(plan["cidr"])
     gateway = str(plan["gateway"])
     home_fs_label = str(plan["home_label"])
-    gold_root_disk_config = str(plan["gold_root_disk_config"])
     initial_status = str(plan.get("status") or "")
     if initial_status not in {"running", "stopped"}:
         raise AppError(
             f"Workspace VM {vmid} has unsupported pre-refresh power state {initial_status!r}"
         )
-    was_running = initial_status == "running"
-    desired_status = initial_status
-    cloud_id: str | None = None
 
     progress: Progress | None = None
     overall = None
-    old_root_removed = False
-    new_root_attached = False
-
+    journal: dict[str, Any] | None = None
     try:
         if not json_mode:
             progress = Progress(
-                SpinnerColumn(),
-                TextColumn("[bold]{task.description}"),
-                BarColumn(),
-                TaskProgressColumn(),
-                TimeElapsedColumn(),
-                console=console,
+                SpinnerColumn(), TextColumn("[bold]{task.description}"), BarColumn(),
+                TaskProgressColumn(), TimeElapsedColumn(), console=console,
                 refresh_per_second=2,
             )
             progress.start()
-            overall = progress.add_task(
-                "Refresh workspace",
-                total=9 if was_running else 6,
-            )
+            overall = progress.add_task("Refresh workspace", total=9)
 
-        def start_step(description: str) -> None:
+        def step(description: str) -> None:
             if progress is not None and overall is not None:
                 progress.update(overall, description=description)
 
-        def finish_step() -> None:
+        def done() -> None:
             if progress is not None and overall is not None:
                 progress.update(overall, advance=1)
 
         current = resolve_existing_workspace(session, cfg, vmid, require_network=True)
-        current_status = str(current.get("status") or "")
-        if current_status != desired_status:
-            raise AppError(
-                f"Workspace VM {vmid} power state changed after refresh confirmation: "
-                f"{desired_status!r} → {current_status!r}. Re-run refresh to confirm the new state."
-            )
-
-        if was_running:
-            start_step("Shutdown workspace")
-            shutdown_vm(session, vmid)
-            finish_step()
-            current = resolve_existing_workspace(session, cfg, vmid, require_network=True)
-
-        if current["home_label"] != home_fs_label:
+        if str(current["status"]) != initial_status:
+            raise AppError("Workspace power state changed after refresh confirmation")
+        if current["home_volume"] != plan["home_volume"]:
             raise AppError("Persistent home identity changed after refresh confirmation")
-        current_cfg = current["vm_config"]
-        boot_config = current_cfg.get("boot", "")
+        vm_cfg = dict(current["vm_config"])
+        boot_config = str(vm_cfg.get("boot") or "")
         if not boot_order_contains_disk(boot_config, cfg.root_disk):
-            raise AppError(
-                f"Workspace VM {vmid} boot order does not include {cfg.root_disk}: "
-                f"{boot_config!r}"
-            )
-        net0 = current_cfg.get("net0")
+            raise AppError(f"Workspace boot order does not include {cfg.root_disk}")
+        net0 = str(vm_cfg.get("net0") or "")
         if not net0:
             raise AppError(f"Workspace VM {vmid} has no net0")
         mac = extract_mac(net0)
+        unused_key = _free_unused_key(vm_cfg)
+        journal = {
+            "version": 1,
+            "transaction_id": uuid.uuid4().hex,
+            "phase": "prepared",
+            "vmid": vmid,
+            "name": name,
+            "node": node,
+            "initial_status": initial_status,
+            "old_root_spec": str(vm_cfg[cfg.root_disk]),
+            "old_root_volume": str(current["root_volume"]),
+            "root_disk": cfg.root_disk,
+            "new_root_volume": "",
+            "new_unused_key": unused_key,
+            "old_unused_key": "",
+            "home_volume": str(plan["home_volume"]),
+            "home_label": home_fs_label,
+            "home_disk": cfg.home_disk,
+            "boot": boot_config,
+            "ipconfig0": str(vm_cfg.get("ipconfig0") or ""),
+            "cicustom": str(vm_cfg.get("cicustom") or ""),
+        }
+        _write_refresh_journal(session, cfg, node, vmid, journal)
 
-        start_step("Delete disposable root")
-        session.run(
-            shlex.join(
-                [
-                    "qm",
-                    "disk",
-                    "unlink",
-                    str(vmid),
-                    "--idlist",
-                    cfg.root_disk,
-                    "--force",
-                    "1",
-                ]
-            ),
-            timeout=600,
+        step("Import Gold root safely")
+        source = node_run(
+            session, cfg, node,
+            shlex.join(["pvesm", "path", str(plan["gold_root_volume"])]),
+        ).output.strip().splitlines()
+        if not source or not source[-1].strip():
+            raise AppError("Proxmox did not return a path for the Gold root volume")
+        import_command = shlex.join(
+            ["qm", "disk", "import", str(vmid), source[-1].strip(),
+             str(plan["root_storage"]), "--target-disk", unused_key]
         )
-        old_root_removed = True
-        after_unlink = qm_config(session, vmid)
-        if after_unlink.get(cfg.root_disk):
-            raise AppError(f"Old root disk {cfg.root_disk} is still attached after unlink")
-        home_after_unlink = after_unlink.get(cfg.home_disk, "")
-        if disk_option(home_after_unlink, "serial") != home_fs_label:
-            raise AppError("Persistent home identity changed while replacing the root disk")
-        finish_step()
-
-        start_step("Clone Gold root")
-        import_spec = root_import_spec(str(plan["root_storage"]), gold_root_disk_config)
         run_transfer_with_progress(
-            session,
-            shlex.join(["qm", "set", str(vmid), f"--{cfg.root_disk}", import_spec]),
-            progress=progress,
-            description="  ↳ Gold root",
-            timeout=3600,
+            session, cfg, node, import_command, progress=progress,
+            description="  ↳ Gold root", timeout=3600,
         )
-        new_root_attached = True
-        rename_attached_disk_volume(
-            session,
-            cfg,
-            vmid,
-            cfg.root_disk,
-            root_volume_name(vmid),
+        vm_cfg = qm_config_on_node(session, cfg, node, vmid)
+        _assert_refresh_home(cfg, vmid, vm_cfg, journal)
+        new_volume = _unused_refs(vm_cfg).get(unused_key, "")
+        if not new_volume or new_volume in {journal["old_root_volume"], journal["home_volume"]}:
+            raise AppError("Imported root did not produce a distinct unused volume")
+        journal["new_root_volume"] = new_volume
+        journal["phase"] = "imported"
+        _write_refresh_journal(session, cfg, node, vmid, journal)
+        done()
+
+        step("Stop workspace")
+        if initial_status == "running":
+            shutdown_vm_on_node(session, cfg, node, vmid)
+        done()
+
+        step("Switch root disks")
+        vm_cfg = qm_config_on_node(session, cfg, node, vmid)
+        _assert_refresh_home(cfg, vmid, vm_cfg, journal)
+        if str(vm_cfg[cfg.root_disk]).split(",", 1)[0] != journal["old_root_volume"]:
+            raise AppError("Root identity changed before refresh switch")
+        journal["phase"] = "switching"
+        _write_refresh_journal(session, cfg, node, vmid, journal)
+        vm_cfg = _unlink_disk(
+            session, cfg, node, vmid, cfg.root_disk, vm_cfg, force=False
         )
-        session.run(shlex.join(["qm", "set", str(vmid), "--boot", boot_config]))
-        refreshed_cfg = qm_config(session, vmid)
-        if not refreshed_cfg.get(cfg.root_disk):
-            raise AppError(f"Refreshed VM {vmid} has no {cfg.root_disk}")
-        if not boot_order_contains_disk(refreshed_cfg.get("boot", ""), cfg.root_disk):
-            raise AppError(
-                f"Refreshed VM {vmid} boot order lost {cfg.root_disk}: "
-                f"{refreshed_cfg.get('boot', '')!r}"
-            )
-        home_after_import = refreshed_cfg.get(cfg.home_disk, "")
-        if disk_option(home_after_import, "serial") != home_fs_label:
-            raise AppError("Persistent home identity changed after cloning the Gold root")
-        verify_workspace_role_tags(vmid, refreshed_cfg)
-        if refreshed_cfg.get("name", "").strip() != name:
-            raise AppError("Workspace name changed during root refresh")
-        finish_step()
+        old_unused = _unused_key_for_volume(vm_cfg, str(journal["old_root_volume"]))
+        if old_unused is None:
+            raise AppError("Proxmox did not retain the original root as an unused disk")
+        journal["old_unused_key"] = old_unused
+        _write_refresh_journal(session, cfg, node, vmid, journal)
+        vm_cfg = _set_vm_values(
+            session, cfg, node, vmid, vm_cfg,
+            [(cfg.root_disk, _root_attachment_spec(new_volume, str(plan["gold_root_disk_config"])))],
+        )
+        if str(vm_cfg.get(cfg.root_disk, "")).split(",", 1)[0] != new_volume:
+            raise AppError("New root was not attached to the configured root slot")
+        if _unused_key_for_volume(vm_cfg, new_volume) is not None:
+            raise AppError("New root is both attached and retained as an unused disk")
+        _assert_refresh_home(cfg, vmid, vm_cfg, journal)
+        journal["phase"] = "switched"
+        _write_refresh_journal(session, cfg, node, vmid, journal)
+        done()
 
-        start_step("Persistent home identity")
-        if refreshed_cfg.get("virtiofs0"):
-            raise AppError("Legacy virtiofs0 appeared during root refresh")
-        finish_step()
-
-        start_step("Cloud-Init snippets")
+        step("Cloud-Init snippets")
         write_snippets(
+            session, cfg, node, name, vmid, mac, ip, home_fs_label,
+            replace=True, preserve_home=True, cidr=cidr, gateway=gateway,
+        )
+        done()
+
+        step("VM configuration")
+        vm_cfg = qm_config_on_node(session, cfg, node, vmid)
+        vm_cfg = _set_vm_values(
+            session, cfg, node, vmid, vm_cfg,
+            [("boot", boot_config), ("ipconfig0", f"ip={ip}/{cidr},gw={gateway}"),
+             ("cicustom", cicustom_value(cfg, name))],
+        )
+        verify_workspace_role_tags(vmid, vm_cfg)
+        node_run(session, cfg, node, f"qm cloudinit update {vmid}", timeout=120)
+        done()
+
+        step("Boot verification")
+        journal["phase"] = "verifying"
+        _write_refresh_journal(session, cfg, node, vmid, journal)
+        node_run(session, cfg, node, f"qm start {vmid}", timeout=300)
+        cloud_id = _verify_refreshed_guest(
+            session, cfg, node, vmid, name, ip, cidr, home_fs_label
+        )
+        done()
+
+        step("Restore power state")
+        if initial_status == "stopped":
+            shutdown_vm_on_node(session, cfg, node, vmid)
+        done()
+
+        step("Delete previous root")
+        journal["phase"] = "verified"
+        _write_refresh_journal(session, cfg, node, vmid, journal)
+        vm_cfg = qm_config_on_node(session, cfg, node, vmid)
+        _assert_refresh_home(cfg, vmid, vm_cfg, journal)
+        _delete_unused_volume(
             session,
             cfg,
-            name,
+            node,
             vmid,
-            mac,
-            ip,
-            home_fs_label,
-            replace=True,
-            preserve_home=True,
-            cidr=cidr,
-            gateway=gateway,
+            vm_cfg,
+            str(journal["old_root_volume"]),
+            require_reference=True,
         )
-        finish_step()
+        _remove_refresh_journal(session, cfg, node, vmid)
+        journal = None
+        done()
 
-        start_step("VM configuration")
-        session.run(
-            shlex.join(
-                ["qm", "set", str(vmid), "--ipconfig0", f"ip={ip}/{cidr},gw={gateway}"]
-            )
-        )
-        session.run(shlex.join(["qm", "set", str(vmid), "--cicustom", cicustom_value(cfg, name)]))
-        session.run(shlex.join(["qm", "cloudinit", "update", str(vmid)]))
-        verify_workspace_role_tags(vmid, qm_config(session, vmid))
-        finish_step()
-
-        if was_running:
-            start_step("Start workspace")
-            session.run(shlex.join(["qm", "start", str(vmid)]))
-            finish_step()
-
-            start_step("Verify workspace")
-            wait_for_qga(session, vmid, timeout=600)
-            guest_exec(
-                session,
-                vmid,
-                "command -v cloud-init >/dev/null 2>&1 && "
-                "timeout 180 cloud-init status --wait >/dev/null 2>&1 || true",
-                check=False,
-            )
-            actual_hostname = guest_out(session, vmid, "hostname")
-            if actual_hostname != name:
-                raise AppError(
-                    f"Refresh verification failed: hostname is {actual_hostname!r}, expected {name!r}"
-                )
-            actual_addr = guest_out(session, vmid, "ip -4 -o addr show dev eth0")
-            expected_addr = f"{ip}/{cidr}"
-            if expected_addr not in actual_addr:
-                raise AppError(
-                    f"Refresh verification failed: eth0 does not have {expected_addr}\n{actual_addr}"
-                )
-            mount = guest_out(
-                session,
-                vmid,
-                f"findmnt -n -o SOURCE,FSTYPE,TARGET /home/{cfg.user_name}",
-            )
-            if "ext4" not in mount or f"/home/{cfg.user_name}" not in mount:
-                raise AppError(
-                    f"Refresh verification failed: /home/{cfg.user_name} is not ext4\n{mount}"
-                )
-            mounted_label = guest_out(
-                session,
-                vmid,
-                f"findmnt -n -o SOURCE /home/{cfg.user_name} | xargs -r blkid -s LABEL -o value",
-            )
-            if mounted_label != home_fs_label:
-                raise AppError(
-                    f"Refresh verification failed: home label is {mounted_label!r}, "
-                    f"expected {home_fs_label!r}"
-                )
-            user_id = guest_out(session, vmid, f"id {shlex.quote(cfg.user_name)}")
-            if f"uid={cfg.user_uid}({cfg.user_name})" not in user_id:
-                raise AppError(f"Refresh verification failed: unexpected user identity: {user_id}")
-            user_key_state = guest_out(
-                session,
-                vmid,
-                f"test -s /home/{cfg.user_name}/.ssh/authorized_keys && echo OK || echo MISSING",
-            )
-            if user_key_state != "OK":
-                raise AppError("Refresh verification failed: persistent user authorized_keys is missing")
-            root_key_state = guest_out(
-                session,
-                vmid,
-                "test -s /root/.ssh/authorized_keys && echo OK || echo MISSING",
-            )
-            if root_key_state != "OK":
-                raise AppError("Refresh verification failed: root authorized_keys is missing")
-            regular_users = guest_out(
-                session,
-                vmid,
-                """awk -F: '$3 >= 1000 && $3 < 65534 {print $1 ":" $3 ":" $4}' /etc/passwd""",
-            ).splitlines()
-            expected_regular_user = f"{cfg.user_name}:{cfg.user_uid}:{cfg.user_gid}"
-            if regular_users != [expected_regular_user]:
-                raise AppError(
-                    "Refresh verification failed: unexpected regular user accounts: "
-                    + (", ".join(regular_users) if regular_users else "none")
-                )
-            sudo_state = guest_out(
-                session,
-                vmid,
-                "if command -v sudo >/dev/null 2>&1; then echo PRESENT; else echo ABSENT; fi",
-            )
-            if sudo_state != "ABSENT":
-                raise AppError("Refresh verification failed: sudo is installed in the workspace")
-            cloud_id = guest_out(
-                session,
-                vmid,
-                "command -v cloud-id >/dev/null 2>&1 && cloud-id || true",
-                check=False,
-            ) or None
-            finish_step()
-
-        start_step("Verify final power state")
-        final_status = qm_status(session, vmid)
-        if final_status != desired_status:
+        final_status = qm_status_on_node(session, cfg, node, vmid)
+        if final_status != initial_status:
             raise AppError(
-                f"Refresh completed but VM {vmid} power state is {final_status!r}; "
-                f"expected {desired_status!r} to preserve its pre-refresh state"
+                f"Refresh completed with power state {final_status!r}, expected {initial_status!r}"
             )
-        finish_step()
-
         ssh_known_hosts_removed = forget_local_ssh_host(ip)
-
         result = {
-            "ok": True,
-            **plan,
-            "status": final_status,
-            "mac": mac,
-            "home_preserved": True,
-            "user_authorized_keys_present": True if was_running else None,
-            "guest_verified": was_running,
-            "power_state_preserved": True,
-            "cloud_id": cloud_id,
+            "ok": True, **plan, "status": final_status, "mac": mac,
+            "home_preserved": True, "guest_verified": True,
+            "power_state_preserved": True, "cloud_id": cloud_id,
+            "rollback_performed": False, "cleanup_pending": False,
             "ssh_known_hosts_removed": ssh_known_hosts_removed,
-            "ssh": {
-                "root": f"ssh root@{ip}",
-                "user": f"ssh {cfg.user_name}@{ip}",
-            },
+            "ssh": {"root": f"ssh root@{ip}", "user": f"ssh {cfg.user_name}@{ip}"},
         }
         if progress is not None:
             progress.stop()
@@ -995,13 +1377,18 @@ def refresh_workspace(
     except Exception as exc:
         if progress is not None:
             progress.stop()
-        if old_root_removed and not new_root_attached:
+        if journal is None:
+            raise
+        try:
+            recovery = _recover_refresh(session, cfg, journal)
+        except Exception as recovery_exc:
             raise AppError(
-                f"Refresh stopped after deleting the disposable root disk of VM {vmid}. "
-                f"Persistent home {cfg.home_disk} remains attached and was not modified. "
-                f"Original error: {exc}"
+                f"Refresh failed: {exc}. Automatic recovery also failed: {recovery_exc}. "
+                f"Transaction journal retained at {_refresh_journal_path(cfg, vmid)}."
             ) from exc
-        raise
+        raise AppError(
+            f"Refresh failed: {exc}. Automatic recovery succeeded: {recovery['recovery']}."
+        ) from exc
 
 
 def migration_volume_key(volume: str) -> str:
@@ -1100,8 +1487,9 @@ def build_migrate_plan(
     target_node: str,
     target_storage: str,
 ) -> dict[str, Any]:
-    check_remote_requirements(session)
     info = resolve_existing_workspace(session, cfg, vmid, require_network=False)
+    check_remote_requirements(session, cfg, str(info["node"]))
+    check_remote_requirements(session, cfg, target_node)
     if target_node == info["node"]:
         raise AppError(f"VM {vmid} is already on node {target_node}")
     unused_refs = sorted(

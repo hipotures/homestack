@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from io import StringIO
 import unittest
+from unittest.mock import patch
 
 from homestack import models, proxmox, status, ui
 
@@ -21,6 +22,29 @@ class VmVolumeInventoryTests(unittest.TestCase):
         cfg = test_config()
         vm_cfg = {'ide0': 'example-storage-a:vm-200-cloudinit,media=cdrom,size=4M', 'ide2': 'none,media=cdrom', 'scsi0': 'example-storage-a:vm-200-hs-root-default,iothread=1,size=16G', 'scsi1': 'example-storage-a:vm-200-hs-home-user,discard=on,iothread=1,serial=HS_HOME_200,size=20G,ssd=1', 'unused0': 'example-storage-a:vm-200-disk-0', 'name': 'test1'}
         self.assertEqual(status.vm_volume_inventory(vm_cfg, cfg), [{'slot': 'ide0', 'role': 'cloud-init', 'volume': 'example-storage-a:vm-200-cloudinit', 'storage': 'example-storage-a', 'size': '4M'}, {'slot': 'scsi0', 'role': 'root', 'volume': 'example-storage-a:vm-200-hs-root-default', 'storage': 'example-storage-a', 'size': '16G'}, {'slot': 'scsi1', 'role': 'home', 'volume': 'example-storage-a:vm-200-hs-home-user', 'storage': 'example-storage-a', 'size': '20G'}, {'slot': 'unused0', 'role': 'unused', 'volume': 'example-storage-a:vm-200-disk-0', 'storage': 'example-storage-a', 'size': None}])
+
+    def test_workspace_rejects_root_and_home_pointing_to_same_volume(self) -> None:
+        shared = 'example-storage-a:vm-200-hs-home-user'
+        vm_cfg = {
+            'name': 'test1',
+            'tags': 'homestack-ws',
+            'scsi0': f'{shared},size=20G',
+            'scsi1': f'{shared},serial=HS_HOME_200,size=20G',
+        }
+        with patch.object(
+            status,
+            'cluster_vm_resource',
+            return_value={'node': 'example-node-1', 'status': 'stopped'},
+        ), patch.object(
+            status, 'qm_config_on_node', return_value=vm_cfg
+        ), patch.object(
+            status, 'workspace_home_usage'
+        ) as usage:
+            with self.assertRaisesRegex(models.AppError, 'same volume'):
+                status.resolve_existing_workspace(
+                    object(), test_config(), 200, require_network=False
+                )
+        usage.assert_not_called()
 
 class VolumeRenameCleanupTests(unittest.TestCase):
 
@@ -48,7 +72,13 @@ class VolumeRenameCleanupTests(unittest.TestCase):
                 self.deleted.add(match.group(1))
                 return models.RemoteResult(0, '')
         session = Session()
-        removed = proxmox.cleanup_renamed_volume_unused_refs(session, test_config(), 200, 'example-storage-a:vm-200-disk-0')
+        removed = proxmox.cleanup_renamed_volume_unused_refs(
+            session,
+            test_config(),
+            'example-node-1',
+            200,
+            'example-storage-a:vm-200-disk-0',
+        )
         self.assertEqual(removed, ['unused0'])
         self.assertEqual(session.commands, ['qm set 200 --delete unused0'])
         self.assertNotIn('unused1', session.deleted)
@@ -72,7 +102,13 @@ class VolumeRenameCleanupTests(unittest.TestCase):
                 return models.RemoteResult(0, '')
         session = Session()
         with self.assertRaisesRegex(models.AppError, 'source volume still exists'):
-            proxmox.cleanup_renamed_volume_unused_refs(session, test_config(), 200, 'example-storage-a:vm-200-disk-0')
+            proxmox.cleanup_renamed_volume_unused_refs(
+                session,
+                test_config(),
+                'example-node-1',
+                200,
+                'example-storage-a:vm-200-disk-0',
+            )
         self.assertEqual(session.commands, [])
 
 class OrphanedVolumeTests(unittest.TestCase):

@@ -467,6 +467,13 @@ def resolve_existing_workspace(
     if not home_cfg:
         raise AppError(f"VM {vmid} has no persistent home disk {cfg.home_disk}")
     expected_label = home_label(vmid)
+    root_volume = root_cfg.split(",", 1)[0].strip()
+    home_volume = home_cfg.split(",", 1)[0].strip()
+    if root_volume == home_volume:
+        raise AppError(
+            f"VM {vmid} root disk {cfg.root_disk} and persistent home {cfg.home_disk} "
+            f"reference the same volume {root_volume!r}"
+        )
     serial = disk_option(home_cfg, "serial")
     if serial != expected_label:
         raise AppError(
@@ -490,11 +497,11 @@ def resolve_existing_workspace(
         "vm_config": vm_cfg,
         "root_disk": cfg.root_disk,
         "root_disk_config": root_cfg,
-        "root_volume": root_cfg.split(",", 1)[0],
+        "root_volume": root_volume,
         "root_storage": disk_storage(root_cfg),
         "home_disk": cfg.home_disk,
         "home_disk_config": home_cfg,
-        "home_volume": home_cfg.split(",", 1)[0],
+        "home_volume": home_volume,
         "home_storage": disk_storage(home_cfg),
         "home_label": expected_label,
         "home_usage": usage,

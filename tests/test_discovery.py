@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from homestack import discovery
+from homestack import discovery, models
 from homestack.transports import herdr
 
 

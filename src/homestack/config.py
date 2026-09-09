@@ -381,6 +381,15 @@ def load_config(path: Path) -> Config:
         )
     default_storage = active_layout[0]
 
+    root_disk = str(_need(data, "root", "disk")).strip()
+    home_disk = str(_need(data, "home", "disk")).strip()
+    if not root_disk or not home_disk:
+        raise AppError("[root] disk and [home] disk must be non-empty")
+    if root_disk == home_disk:
+        raise AppError(
+            f"[root] disk and [home] disk must use different slots; both are {root_disk!r}"
+        )
+
     return Config(
         path=path,
         transport_type=transport_type,
@@ -389,9 +398,9 @@ def load_config(path: Path) -> Config:
         gold_vmid=int(_need(data, "node", "gold_vmid")),
         storage_layouts=storage_layouts,
         root_storage=default_storage,
-        root_disk=str(_need(data, "root", "disk")),
+        root_disk=root_disk,
         home_storage=default_storage,
-        home_disk=str(_need(data, "home", "disk")),
+        home_disk=home_disk,
         default_home_size=str(_need(data, "home", "default_size")),
         network_prefix=str(_need(data, "network", "prefix")),
         network_cidr=int(_need(data, "network", "cidr")),

@@ -11,9 +11,9 @@ import shutil
 import tempfile
 
 from .config import Config
-from .guest import guest_exec
+from .guest import guest_exec_on_node
 from .models import AppError
-from .proxmox import qm_config, qm_status
+from .proxmox import cluster_vm_resource, node_run, qm_config_on_node, qm_status_on_node
 from .transports.base import Transport, run_local
 
 def forget_local_ssh_host(host: str) -> list[str]:
@@ -146,7 +146,13 @@ def parse_authorized_key_records(text: str) -> list[dict[str, str]]:
 
 
 def get_workspace_authorized_keys(session: Transport, cfg: Config) -> tuple[str, str]:
-    gold_cfg = qm_config(session, cfg.gold_vmid)
+    resource = cluster_vm_resource(session, cfg.gold_vmid)
+    if resource is None:
+        raise AppError(f"Gold VM {cfg.gold_vmid} does not exist")
+    gold_node = str(resource.get("node") or "").strip()
+    if not gold_node:
+        raise AppError(f"Gold VM {cfg.gold_vmid} has no node in cluster inventory")
+    gold_cfg = qm_config_on_node(session, cfg, gold_node, cfg.gold_vmid)
     configured_keys = gold_cfg.get("sshkeys")
     if configured_keys:
         try:
@@ -157,13 +163,19 @@ def get_workspace_authorized_keys(session: Transport, cfg: Config) -> tuple[str,
         except AppError:
             pass
 
-    if qm_status(session, cfg.gold_vmid) != "running":
+    if qm_status_on_node(session, cfg, gold_node, cfg.gold_vmid) != "running":
         raise AppError(
             f"Gold VM {cfg.gold_vmid} is stopped and its Proxmox sshkeys setting "
             "does not contain usable public keys."
         )
 
-    if session.run(f"qm guest cmd {cfg.gold_vmid} ping", check=False).returncode != 0:
+    if node_run(
+        session,
+        cfg,
+        gold_node,
+        f"qm guest cmd {cfg.gold_vmid} ping",
+        check=False,
+    ).returncode != 0:
         raise AppError(f"Gold VM {cfg.gold_vmid} QEMU Guest Agent is not available")
 
     candidates = (
@@ -171,8 +183,10 @@ def get_workspace_authorized_keys(session: Transport, cfg: Config) -> tuple[str,
         "/root/.ssh/authorized_keys",
     )
     for candidate in candidates:
-        result = guest_exec(
+        result = guest_exec_on_node(
             session,
+            cfg,
+            gold_node,
             cfg.gold_vmid,
             f"test -s {shlex.quote(candidate)} && cat {shlex.quote(candidate)}",
             check=False,

@@ -76,7 +76,9 @@ HomeStack remains a trusted-desktop tool. Bootstrap discovery inspects only the 
 - the terminal is at the expected root prompt;
 - an end-to-end probe returns the expected hostname and UID 0.
 
-Commands use unique begin/end envelopes and the transport parses results from the pane. `debug = true` retains command output in Herdr scrollback; `false` clears it after parsing. HomeStack stores no Proxmox token or private credential on a PVE host and never adds password, fallback-key, or `sudo` authentication paths.
+Commands run in an isolated child shell with an explicit timeout and unique begin/end envelopes, so a remote `exit` cannot close the long-lived SSH shell and every completed command has an exit marker. `debug = true` retains command output in Herdr scrollback; `false` clears it after parsing. HomeStack stores no Proxmox token or private credential on a PVE host and never adds password, fallback-key, or `sudo` authentication paths.
+
+The configured control node is only the transport entry point. Operations tied to a VM or local storage are explicitly routed to the node that owns that resource, including when it differs from the control node.
 
 ## Commands
 
@@ -183,16 +185,17 @@ The installer never starts Gold just to inspect it. A stopped Gold can therefore
 
 - Gold is the configured `gold_vmid` and must have the exact `homestack-gold` tag.
 - Workspaces have the exact `homestack-ws` role tag.
-- `scsi0` is the disposable root; `scsi1` is persistent home.
+- `scsi0` is the disposable root; `scsi1` is persistent home. The configured root and home slots must always be different.
 - Persistent home is ext4 with label `HS_HOME_<VMID>`.
-- Workspace volumes are named `vm-<VMID>-hs-root-default` and `vm-<VMID>-hs-home-<USER>`.
+- Persistent-home volumes are named `vm-<VMID>-hs-home-<USER>`. A newly created root is named `vm-<VMID>-hs-root-default`; a refreshed root may retain the collision-free name allocated by Proxmox during staging.
 - Create placement and migration targets must belong to the node's configured `storage_layouts` list.
-- Refresh replaces only the disposable root, keeps home attached, rechecks state before destructive work, and restores the previous power state.
+- Refresh stages a new root while the old root remains recoverable, keeps home attached, boots and verifies the guest, and deletes the old root only after verification succeeds. A workspace that was stopped is temporarily booted for verification and stopped again afterward.
+- Refresh writes an atomic transaction journal beside the Cloud-Init snippets. On failure it rolls back to the original root; if recovery itself is interrupted, the next `refresh` detects the journal and offers recovery instead of starting another replacement.
 - Migration is offline, copies cloud-init snippets before shutdown, preserves home, and restores the previous power state.
 - Cleanup removes only verified HomeStack volumes and exact stale references; unrelated `unusedN` entries and volumes are untouched.
 - Destroy re-resolves the workspace role and persistent-home identity before deleting the VM and attached home.
 
-Gold's source root name is discovered from its configured `scsi0`; Gold itself does not need the workspace root naming convention. Refresh clones that source into the existing VM and preserves its configuration, MAC, role tag, Cloud-Init disk, and persistent home. The full Gold preparation and readiness contract is described above.
+Gold's source root name is discovered from its configured `scsi0`; Gold itself does not need the workspace root naming convention. Refresh imports that source as a staged unused disk, preserves the VM configuration, MAC, role tag, Cloud-Init disk, and persistent home, and waits for QEMU Guest Agent commands to report explicit process completion before accepting their results. The full Gold preparation and readiness contract is described above.
 
 ## Workspace SSH and synchronization
 

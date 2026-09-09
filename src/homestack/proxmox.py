@@ -15,20 +15,20 @@ HOMESTACK_VOLUME_RE = re.compile(
 )
 
 
-def command_exists(session: Transport, name: str) -> bool:
-    return session.run(f"command -v {shlex.quote(name)} >/dev/null 2>&1", check=False).returncode == 0
+def command_exists_on_node(
+    session: Transport, cfg: Config, node: str, name: str
+) -> bool:
+    return node_run(
+        session,
+        cfg,
+        node,
+        f"command -v {shlex.quote(name)} >/dev/null 2>&1",
+        check=False,
+    ).returncode == 0
 
 
-def qm_exists(session: Transport, vmid: int) -> bool:
-    return session.run(f"qm status {vmid}", check=False).returncode == 0
-
-
-def qm_status(session: Transport, vmid: int) -> str:
-    return qm_status_on_node(session, session.cfg, session.cfg.node, vmid)
-
-
-def qm_config(session: Transport, vmid: int) -> dict[str, str]:
-    return qm_config_on_node(session, session.cfg, session.cfg.node, vmid)
+def qm_exists_on_node(session: Transport, cfg: Config, node: str, vmid: int) -> bool:
+    return qm_status_on_node(session, cfg, node, vmid) != "absent"
 
 
 def parse_tags(value: Any) -> frozenset[str]:
@@ -68,9 +68,16 @@ def verify_workspace_role_tags(vmid: int, vm_cfg: dict[str, str]) -> None:
         )
 
 
-def set_workspace_role_tags(session: Transport, vmid: int) -> None:
-    session.run(shlex.join(["qm", "set", str(vmid), "--tags", WORKSPACE_TAG]))
-    verify_workspace_role_tags(vmid, qm_config(session, vmid))
+def set_workspace_role_tags(
+    session: Transport, cfg: Config, node: str, vmid: int
+) -> None:
+    node_run(
+        session,
+        cfg,
+        node,
+        shlex.join(["qm", "set", str(vmid), "--tags", WORKSPACE_TAG]),
+    )
+    verify_workspace_role_tags(vmid, qm_config_on_node(session, cfg, node, vmid))
 
 
 def disk_storage(disk_config: str | None) -> str | None:
@@ -304,9 +311,11 @@ def shutdown_vm_on_node(
         )
 
 
-def check_remote_requirements(session: Transport) -> None:
-    required = ("qm", "pvesh", "pvesm", "perl", "base64", "ssh", "scp")
-    missing = [name for name in required if not command_exists(session, name)]
+def check_remote_requirements(session: Transport, cfg: Config, node: str) -> None:
+    required = ("qm", "pvesh", "pvesm", "perl", "base64", "ssh", "scp", "timeout")
+    missing = [
+        name for name in required if not command_exists_on_node(session, cfg, node, name)
+    ]
     if missing:
         raise AppError("Missing required commands on Proxmox node: " + ", ".join(missing))
 
@@ -344,12 +353,17 @@ def named_volume_id(storage: str, volume_name: str) -> str:
 
 def allocate_named_raw_volume(
     session: Transport,
+    cfg: Config,
+    node: str,
     storage: str,
     vmid: int,
     volume_name: str,
     size: str,
 ) -> str:
-    result = session.run(
+    result = node_run(
+        session,
+        cfg,
+        node,
         shlex.join(
             [
                 "pvesm",
@@ -371,6 +385,8 @@ def allocate_named_raw_volume(
 
 def pve_rename_volume(
     session: Transport,
+    cfg: Config,
+    node: str,
     source_volume: str,
     vmid: int,
     target_volume_name: str,
@@ -381,7 +397,10 @@ def pve_rename_volume(
         "$cfg,$ARGV[0],int($ARGV[1]),$ARGV[2]); "
         'print "$new\\n";'
     )
-    result = session.run(
+    result = node_run(
+        session,
+        cfg,
+        node,
         shlex.join(
             [
                 "perl",
@@ -414,11 +433,12 @@ def replace_disk_volume(disk_config: str, volume: str) -> str:
 def cleanup_renamed_volume_unused_refs(
     session: Transport,
     cfg: Config,
+    node: str,
     vmid: int,
     source_volume: str,
 ) -> list[str]:
     """Remove only stale unusedN references created while renaming one VM volume."""
-    vm_cfg = qm_config_on_node(session, cfg, cfg.node, vmid)
+    vm_cfg = qm_config_on_node(session, cfg, node, vmid)
     matching = sorted(
         key
         for key, value in vm_cfg.items()
@@ -432,7 +452,7 @@ def cleanup_renamed_volume_unused_refs(
         raise AppError(f"Cannot verify renamed source volume {source_volume!r}")
     storage, _ = source_volume.split(":", 1)
     inventory = session.run_json_value(
-        f"pvesh get /nodes/{shlex.quote(cfg.node)}/storage/{shlex.quote(storage)}/content "
+        f"pvesh get /nodes/{shlex.quote(node)}/storage/{shlex.quote(storage)}/content "
         "--content images --output-format json",
         timeout=30,
     )
@@ -452,12 +472,15 @@ def cleanup_renamed_volume_unused_refs(
         )
 
     for key in matching:
-        session.run(
+        node_run(
+            session,
+            cfg,
+            node,
             shlex.join(["qm", "set", str(vmid), "--delete", key]),
             timeout=120,
         )
 
-    remaining_cfg = qm_config_on_node(session, cfg, cfg.node, vmid)
+    remaining_cfg = qm_config_on_node(session, cfg, node, vmid)
     remaining = [
         key
         for key, value in remaining_cfg.items()
@@ -475,11 +498,12 @@ def cleanup_renamed_volume_unused_refs(
 def rename_attached_disk_volume(
     session: Transport,
     cfg: Config,
+    node: str,
     vmid: int,
     disk: str,
     target_volume_name: str,
 ) -> str:
-    vm_cfg = qm_config(session, vmid)
+    vm_cfg = qm_config_on_node(session, cfg, node, vmid)
     disk_cfg = vm_cfg.get(disk, "")
     if not disk_cfg:
         raise AppError(f"VM {vmid} has no {disk}")
@@ -488,10 +512,15 @@ def rename_attached_disk_volume(
     if source_name == target_volume_name:
         return source_volume
 
-    new_volume = pve_rename_volume(session, source_volume, vmid, target_volume_name)
+    new_volume = pve_rename_volume(
+        session, cfg, node, source_volume, vmid, target_volume_name
+    )
     new_spec = replace_disk_volume(disk_cfg, new_volume)
     try:
-        session.run(
+        node_run(
+            session,
+            cfg,
+            node,
             shlex.join(["qm", "set", str(vmid), f"--{disk}", new_spec]),
             timeout=600,
         )
@@ -502,13 +531,13 @@ def rename_attached_disk_volume(
             f"Original error: {exc}"
         ) from exc
 
-    updated = qm_config(session, vmid).get(disk, "")
+    updated = qm_config_on_node(session, cfg, node, vmid).get(disk, "")
     actual = updated.split(",", 1)[0].strip()
     if actual != new_volume:
         raise AppError(
             f"VM {vmid} {disk} volume naming failed: expected {new_volume!r}, got {actual!r}"
         )
-    cleanup_renamed_volume_unused_refs(session, cfg, vmid, source_volume)
+    cleanup_renamed_volume_unused_refs(session, cfg, node, vmid, source_volume)
     return new_volume
 
 
@@ -661,19 +690,6 @@ def qm_status_on_node(session: Transport, cfg: Config, node: str, vmid: int) -> 
         return "unknown"
     status = str(data.get("status") or "").strip()
     return status or "unknown"
-
-
-def root_import_spec(target_storage: str, gold_disk_config: str) -> str:
-    source_volume = gold_disk_config.split(",", 1)[0].strip()
-    if not source_volume or ":" not in source_volume:
-        raise AppError(f"Cannot parse Gold root volume from {gold_disk_config!r}")
-
-    parts = [f"{target_storage}:0", f"import-from={source_volume}"]
-    for key in ("iothread", "discard", "ssd", "cache", "aio", "backup", "replicate", "ro"):
-        value = disk_option(gold_disk_config, key)
-        if value is not None:
-            parts.append(f"{key}={value}")
-    return ",".join(parts)
 
 
 def boot_order_contains_disk(boot_config: str, disk: str) -> bool:

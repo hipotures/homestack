@@ -262,13 +262,18 @@ def main() -> int:
                 vmid = resolve_workspace_target(session, cfg, args.target)
                 plan = build_refresh_plan(session, cfg, vmid)
                 assume_yes = bool(args.global_yes or getattr(args, "yes", False))
+                recovery_mode = plan.get("mode") == "recover"
                 if not assume_yes:
                     if json_mode:
                         emit_json(
                             {
                                 "ok": False,
                                 "confirmation_required": True,
-                                "message": "No changes made. Re-run with --yes to replace the VM root.",
+                                "message": (
+                                    "No changes made. Re-run with --yes to recover the interrupted refresh."
+                                    if recovery_mode
+                                    else "No changes made. Re-run with --yes to replace the VM root."
+                                ),
                                 "plan": plan,
                             }
                         )
@@ -278,7 +283,12 @@ def main() -> int:
                         raise AppError(
                             "Interactive confirmation requires a TTY; use --yes for automation"
                         )
-                    if not Confirm.ask("Refresh this workspace root?", default=False):
+                    question = (
+                        "Recover this interrupted workspace refresh?"
+                        if recovery_mode
+                        else "Refresh this workspace root?"
+                    )
+                    if not Confirm.ask(question, default=False):
                         console.print("[bold]Cancelled. No changes were made.[/bold]")
                         return 0
 

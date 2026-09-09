@@ -498,6 +498,17 @@ def show_migrate_plan(plan: dict[str, Any]) -> None:
 
 
 def show_refresh_plan(plan: dict[str, Any]) -> None:
+    if plan.get("mode") == "recover":
+        show_kv_panel(
+            "REFRESH RECOVERY PLAN — NO CHANGES MADE YET",
+            [
+                [("VMID", str(plan["vmid"])), ("Name", str(plan["name"]))],
+                [("Interrupted phase", str(plan.get("recovery_phase") or "unknown")),
+                 ("Action", "[yellow]recover or finish cleanup[/yellow]")],
+                [("Persistent home", f'[green]PRESERVE[/green] {plan.get("home_label") or "—"}')],
+            ],
+        )
+        return
     disk = (
         f'{plan["root_disk_gb"]:g}G [dim]from Gold[/dim]'
         if plan.get("root_disk_gb") is not None
@@ -507,7 +518,7 @@ def show_refresh_plan(plan: dict[str, Any]) -> None:
         [("VMID", str(plan["vmid"])), ("Name", str(plan["name"])), ("Status", ui_vm_status(plan.get("status")))],
         [
             ("Source", f'Gold VM {plan["gold_vmid"]}'),
-            ("Root action", "[yellow]DELETE + FULL CLONE[/yellow]"),
+            ("Root action", "[yellow]STAGE + VERIFY + REPLACE[/yellow]"),
             ("Root disk", f'{disk} on {plan["root_storage"]}'),
         ],
         [("IP", f'{plan["ip"]}/{plan["cidr"]}'), ("Gateway", str(plan["gateway"]))],

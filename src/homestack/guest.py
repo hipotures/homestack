@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 import json
 import re
 import shlex
@@ -14,8 +14,16 @@ from .models import AppError
 from .proxmox import home_label, node_run
 from .transports.base import Transport
 
-def remote_path_exists(session: Transport, path: Path) -> bool:
-    return session.run(f"test -e {shlex.quote(str(path))}", check=False).returncode == 0
+def remote_path_exists_on_node(
+    session: Transport, cfg: Config, node: str, path: Path
+) -> bool:
+    return node_run(
+        session,
+        cfg,
+        node,
+        f"test -e {shlex.quote(str(path))}",
+        check=False,
+    ).returncode == 0
 
 
 def parse_qm_guest_exec(stdout: str) -> dict[str, Any]:
@@ -42,18 +50,21 @@ def parse_qm_guest_exec(stdout: str) -> dict[str, Any]:
     raise AppError(f"Could not parse QEMU Guest Agent response:\n{text}")
 
 
-def guest_exec(
-    session: Transport,
+def _complete_guest_exec(
+    run: Callable[..., Any],
     vmid: int,
     shell_command: str,
     *,
-    check: bool = True,
+    check: bool,
+    timeout: int,
+    context: str,
 ) -> dict[str, Any]:
+    deadline = time.monotonic() + timeout
     command = f"qm guest exec {vmid} -- /bin/sh -lc {shlex.quote(shell_command)}"
-    result = session.run(command, check=False)
+    result = run(command, check=False, timeout=min(60, timeout))
     if result.returncode != 0:
         if check:
-            raise AppError(f"QEMU Guest Agent exec failed for VM {vmid}: {result.output}")
+            raise AppError(f"QEMU Guest Agent exec failed for {context}: {result.output}")
         return {
             "exited": 1,
             "exitcode": result.returncode,
@@ -62,50 +73,56 @@ def guest_exec(
         }
 
     parsed = parse_qm_guest_exec(result.output)
-    exitcode = int(parsed.get("exitcode", 0) or 0)
-    exited = int(parsed.get("exited", 1) or 0)
+    if "pid" in parsed and not parsed.get("exited"):
+        try:
+            pid = int(parsed["pid"])
+        except (TypeError, ValueError) as exc:
+            raise AppError(f"QEMU Guest Agent returned an invalid pid for {context}") from exc
+        while time.monotonic() < deadline:
+            status = run(
+                f"qm guest exec-status {vmid} {pid}",
+                check=False,
+                timeout=min(30, max(1, int(deadline - time.monotonic()))),
+            )
+            if status.returncode != 0:
+                if check:
+                    raise AppError(
+                        f"QEMU Guest Agent status failed for {context}: {status.output}"
+                    )
+                return {
+                    "exited": 1,
+                    "exitcode": status.returncode,
+                    "out-data": status.output,
+                    "err-data": "",
+                }
+            parsed = parse_qm_guest_exec(status.output)
+            if parsed.get("exited"):
+                break
+            time.sleep(0.2)
+        else:
+            raise AppError(
+                f"Guest command did not finish in {context} within {timeout}s: {shell_command}"
+            )
+
+    if "exited" not in parsed or not parsed.get("exited") or "exitcode" not in parsed:
+        raise AppError(f"QEMU Guest Agent returned an incomplete response for {context}: {parsed}")
+    try:
+        exitcode = int(parsed["exitcode"])
+    except (TypeError, ValueError) as exc:
+        raise AppError(f"QEMU Guest Agent returned an invalid exit code for {context}") from exc
+    exited = int(parsed["exited"] or 0)
     if check and (not exited or exitcode != 0):
         out = str(parsed.get("out-data", "")).strip()
         err = str(parsed.get("err-data", "")).strip()
         raise AppError(
-            f"Guest command failed in VM {vmid} (exit={exitcode}): {shell_command}"
+            f"Guest command failed in {context} (exit={exitcode}): {shell_command}"
             + (f"\n{err or out}" if (err or out) else "")
         )
     return parsed
 
 
-def guest_out(
-    session: Transport,
-    vmid: int,
-    shell_command: str,
-    *,
-    check: bool = True,
-) -> str:
-    result = guest_exec(session, vmid, shell_command, check=check)
-    return str(result.get("out-data", "")).strip()
-
-
 def qga_ping_command(vmid: int) -> str:
     return f"timeout -k 2s 5s qm guest cmd {vmid} ping"
-
-
-def wait_for_qga(session: Transport, vmid: int, timeout: int = 300) -> None:
-    deadline = time.monotonic() + timeout
-    last = ""
-    while time.monotonic() < deadline:
-        try:
-            result = session.run(qga_ping_command(vmid), check=False, timeout=10)
-        except AppError as exc:
-            last = str(exc)
-        else:
-            if result.returncode == 0:
-                return
-            last = result.output.strip() or f"exit={result.returncode}"
-        time.sleep(2)
-    raise AppError(
-        f"VM {vmid} did not expose a working QEMU Guest Agent within {timeout}s"
-        + (f": {last}" if last else "")
-    )
 
 
 def derive_ip(cfg: Config, vmid: int) -> str:
@@ -259,24 +276,19 @@ def guest_exec_on_node(
     shell_command: str,
     *,
     check: bool = True,
+    timeout: int = 300,
 ) -> dict[str, Any]:
-    command = f"qm guest exec {vmid} -- /bin/sh -lc {shlex.quote(shell_command)}"
-    result = node_run(session, cfg, node, command, check=False)
-    if result.returncode != 0:
-        if check:
-            raise AppError(f"QEMU Guest Agent exec failed for VM {vmid} on {node}: {result.output}")
-        return {"exited": 1, "exitcode": result.returncode, "out-data": result.output, "err-data": ""}
-    parsed = parse_qm_guest_exec(result.output)
-    exitcode = int(parsed.get("exitcode", 0) or 0)
-    exited = int(parsed.get("exited", 1) or 0)
-    if check and (not exited or exitcode != 0):
-        out = str(parsed.get("out-data", "")).strip()
-        err = str(parsed.get("err-data", "")).strip()
-        raise AppError(
-            f"Guest command failed in VM {vmid} on {node} (exit={exitcode}): {shell_command}"
-            + (f"\\n{err or out}" if (err or out) else "")
-        )
-    return parsed
+    def run(command: str, **kwargs: Any) -> Any:
+        return node_run(session, cfg, node, command, **kwargs)
+
+    return _complete_guest_exec(
+        run,
+        vmid,
+        shell_command,
+        check=check,
+        timeout=timeout,
+        context=f"VM {vmid} on {node}",
+    )
 
 
 def guest_out_on_node(
@@ -287,6 +299,15 @@ def guest_out_on_node(
     shell_command: str,
     *,
     check: bool = True,
+    timeout: int = 300,
 ) -> str:
-    result = guest_exec_on_node(session, cfg, node, vmid, shell_command, check=check)
+    result = guest_exec_on_node(
+        session,
+        cfg,
+        node,
+        vmid,
+        shell_command,
+        check=check,
+        timeout=timeout,
+    )
     return str(result.get("out-data", "")).strip()

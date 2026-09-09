@@ -111,7 +111,7 @@ class LocalSSHConfigTests(unittest.TestCase):
             self.assertTrue(main_config.exists())
 
     def test_create_failure_does_not_generate_ssh_config(self) -> None:
-        plan = {'vmid': 200, 'name': 'test1', 'ip': '192.0.2.200', 'home_label': 'HS_HOME_200', 'home_size_gib': 20, 'root_storage': 'example-storage-a', 'stale_snippets': []}
+        plan = {'vmid': 200, 'name': 'test1', 'node': 'example-node-1', 'ip': '192.0.2.200', 'home_label': 'HS_HOME_200', 'home_size_gib': 20, 'root_storage': 'example-storage-a', 'stale_snippets': []}
         with patch.object(lifecycle, 'get_workspace_authorized_keys', return_value=('ssh-ed25519 AAAATEST test\n', 'test')), patch.object(lifecycle, 'clone_full', side_effect=models.AppError('clone failed')), patch.object(lifecycle, 'write_local_ssh_config') as write_config:
             with self.assertRaisesRegex(models.AppError, 'clone failed'):
                 lifecycle.create_workspace(FakeSession(), test_config(), plan, json_mode=True)
@@ -143,3 +143,37 @@ class KnownHostsTests(unittest.TestCase):
             removed = workspace_ssh.forget_local_ssh_host('192.0.2.200')
         self.assertEqual(removed, [])
         self.assertFalse(any((cmd[1] == '-R' for cmd in calls)))
+
+
+class GoldKeyRoutingTests(unittest.TestCase):
+
+    def test_guest_key_fallback_runs_on_gold_owner_node(self) -> None:
+        cfg = replace(test_config(), control_node='example-node-1')
+        guest_result = {
+            'exited': 1,
+            'exitcode': 0,
+            'out-data': 'ssh-ed25519 AAAATEST routed\n',
+        }
+        with patch.object(
+            workspace_ssh,
+            'cluster_vm_resource',
+            return_value={'node': 'example-node-2', 'status': 'running'},
+        ), patch.object(
+            workspace_ssh, 'qm_config_on_node', return_value={}
+        ) as qm_config, patch.object(
+            workspace_ssh, 'qm_status_on_node', return_value='running'
+        ) as qm_status, patch.object(
+            workspace_ssh,
+            'node_run',
+            return_value=models.RemoteResult(0, ''),
+        ) as node_run, patch.object(
+            workspace_ssh, 'guest_exec_on_node', return_value=guest_result
+        ) as guest_exec:
+            keys, source = workspace_ssh.get_workspace_authorized_keys(object(), cfg)
+
+        self.assertIn('AAAATEST', keys)
+        self.assertIn('/home/user/.ssh/authorized_keys', source)
+        self.assertEqual(qm_config.call_args.args[2], 'example-node-2')
+        self.assertEqual(qm_status.call_args.args[2], 'example-node-2')
+        self.assertEqual(node_run.call_args.args[2], 'example-node-2')
+        self.assertEqual(guest_exec.call_args.args[2], 'example-node-2')

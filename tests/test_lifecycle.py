@@ -23,6 +23,7 @@ class CreateWorkspaceCompletionTests(unittest.TestCase):
         plan = {
             'vmid': 200,
             'name': 'test1',
+            'node': 'example-node-1',
             'ip': '192.0.2.200',
             'home_label': 'HS_HOME_200',
             'home_size_gib': 20,
@@ -36,7 +37,14 @@ class CreateWorkspaceCompletionTests(unittest.TestCase):
             'tags': 'homestack-ws',
         }
 
-        def guest_value(_session: object, _vmid: int, command: str, **_: object) -> str:
+        def guest_value(
+            _session: object,
+            _cfg: object,
+            _node: str,
+            _vmid: int,
+            command: str,
+            **_: object,
+        ) -> str:
             if command == 'hostname':
                 return 'test1'
             if command.startswith('ip -4'):
@@ -73,8 +81,8 @@ class CreateWorkspaceCompletionTests(unittest.TestCase):
                 'clone_full',
                 'rename_attached_disk_volume',
                 'set_workspace_role_tags',
-                'wait_for_qga',
-                'guest_exec',
+                'wait_for_qga_on_node',
+                'guest_exec_on_node',
             ):
                 stack.enter_context(patch.object(lifecycle, name))
             stack.enter_context(
@@ -84,7 +92,7 @@ class CreateWorkspaceCompletionTests(unittest.TestCase):
                     return_value='example-storage-a:vm-200-hs-home-user',
                 )
             )
-            stack.enter_context(patch.object(lifecycle, 'qm_config', return_value=vm_config))
+            stack.enter_context(patch.object(lifecycle, 'qm_config_on_node', return_value=vm_config))
             stack.enter_context(
                 patch.object(
                     lifecycle,
@@ -92,11 +100,11 @@ class CreateWorkspaceCompletionTests(unittest.TestCase):
                     return_value={'user': Path('/tmp/user.yaml')},
                 )
             )
-            stack.enter_context(patch.object(lifecycle, 'guest_out', side_effect=guest_value))
+            stack.enter_context(patch.object(lifecycle, 'guest_out_on_node', side_effect=guest_value))
             stack.enter_context(
                 patch.object(lifecycle, 'forget_local_ssh_host', return_value=[])
             )
-            stack.enter_context(patch.object(lifecycle, 'qm_status', return_value='running'))
+            stack.enter_context(patch.object(lifecycle, 'qm_status_on_node', return_value='running'))
             if ssh_config_error is None:
                 stack.enter_context(
                     patch.object(
@@ -187,58 +195,273 @@ class RefreshPowerStateTests(unittest.TestCase):
 
     @staticmethod
     def _plan(status: str) -> dict[str, object]:
-        return {'command': 'refresh', 'vmid': 200, 'name': 'test1', 'node': 'example-node-1', 'status': status, 'ip': '192.0.2.200', 'cidr': 24, 'gateway': '192.0.2.1', 'gold_vmid': 101, 'root_storage': 'example-storage-a', 'root_disk': 'scsi0', 'root_disk_gb': 16.0, 'gold_root_disk_config': 'example-storage-a:vm-101-disk-0,size=16G', 'gold_root_volume': 'example-storage-a:vm-101-disk-0', 'root_volume_name': 'vm-200-hs-root-default', 'home_disk': 'scsi1', 'home_storage': 'example-storage-a', 'home_label': 'HS_HOME_200', 'home_volume': 'example-storage-a:vm-200-hs-home-user'}
+        return {'command': 'refresh', 'vmid': 200, 'name': 'test1', 'node': 'example-node-1', 'status': status, 'ip': '192.0.2.200', 'cidr': 24, 'gateway': '192.0.2.1', 'gold_vmid': 101, 'root_storage': 'example-storage-a', 'root_disk': 'scsi0', 'root_disk_gb': 16.0, 'gold_root_disk_config': 'example-storage-a:vm-101-disk-0,size=16G', 'gold_root_volume': 'example-storage-a:vm-101-disk-0', 'home_disk': 'scsi1', 'home_storage': 'example-storage-a', 'home_label': 'HS_HOME_200', 'home_volume': 'example-storage-a:vm-200-hs-home-user'}
 
     @staticmethod
     def _workspace_info(status: str) -> dict[str, object]:
-        return {'vmid': 200, 'name': 'test1', 'node': 'example-node-1', 'status': status, 'home_label': 'HS_HOME_200', 'vm_config': {'name': 'test1', 'tags': 'homestack-ws', 'boot': 'order=scsi0;net0', 'net0': 'virtio=BC:24:11:00:00:01,bridge=vmbr0', 'scsi0': 'example-storage-a:vm-200-hs-root-default,size=16G', 'scsi1': 'example-storage-a:vm-200-hs-home-user,serial=HS_HOME_200,size=20G'}}
+        return {
+            'vmid': 200,
+            'name': 'test1',
+            'node': 'example-node-1',
+            'status': status,
+            'root_volume': 'example-storage-a:vm-200-hs-root-default',
+            'home_label': 'HS_HOME_200',
+            'home_volume': 'example-storage-a:vm-200-hs-home-user',
+            'vm_config': {
+                'name': 'test1',
+                'tags': 'homestack-ws',
+                'boot': 'order=scsi0;net0',
+                'net0': 'virtio=BC:24:11:00:00:01,bridge=vmbr0',
+                'scsi0': 'example-storage-a:vm-200-hs-root-default,size=16G',
+                'scsi1': 'example-storage-a:vm-200-hs-home-user,serial=HS_HOME_200,size=20G',
+            },
+        }
 
-    @staticmethod
-    def _qm_configs() -> list[dict[str, str]]:
-        without_root = {'name': 'test1', 'tags': 'homestack-ws', 'boot': 'order=scsi0;net0', 'net0': 'virtio=BC:24:11:00:00:01,bridge=vmbr0', 'scsi1': 'example-storage-a:vm-200-hs-home-user,serial=HS_HOME_200,size=20G'}
-        with_root = {**without_root, 'scsi0': 'example-storage-a:vm-200-hs-root-default,size=16G'}
-        return [without_root, with_root, with_root]
-
-    def test_stopped_workspace_stays_stopped_after_refresh(self) -> None:
+    def _run_refresh(
+        self, status: str, *, verification_error: Exception | None = None
+    ) -> tuple[dict[str, object] | None, dict[str, object], list[str]]:
         cfg = test_config()
-        commands: list[str] = []
+        old_root = 'example-storage-a:vm-200-hs-root-default'
+        new_root = 'example-storage-a:vm-200-disk-9'
+        home = 'example-storage-a:vm-200-hs-home-user'
+        state: dict[str, object] = {
+            'root': old_root,
+            'unused': {},
+            'status': status,
+            'journal': None,
+        }
+        events: list[str] = []
 
-        class Session:
+        def vm_config(*_: object, **__: object) -> dict[str, str]:
+            result = {
+                'name': 'test1',
+                'tags': 'homestack-ws',
+                'boot': 'order=scsi0;net0',
+                'ipconfig0': 'ip=192.0.2.200/24,gw=192.0.2.1',
+                'cicustom': 'user=local:snippets/old-user.yaml',
+                'net0': 'virtio=BC:24:11:00:00:01,bridge=vmbr0',
+                'scsi1': f'{home},serial=HS_HOME_200,size=20G',
+                'digest': 'abc123',
+            }
+            if state['root']:
+                result['scsi0'] = f"{state['root']},size=16G"
+            result.update(state['unused'])
+            return result
 
-            def run(self, command: str, **_: object):
-                commands.append(command)
-                return models.RemoteResult(0, '')
-        session = Session()
-        with patch.object(lifecycle, 'resolve_existing_workspace', return_value=self._workspace_info('stopped')), patch.object(lifecycle, 'shutdown_vm') as shutdown, patch.object(lifecycle, 'qm_config', side_effect=self._qm_configs()), patch.object(lifecycle, 'root_import_spec', return_value='example-storage-a:0,import-from=gold'), patch.object(lifecycle, 'run_transfer_with_progress'), patch.object(lifecycle, 'rename_attached_disk_volume'), patch.object(lifecycle, 'verify_workspace_role_tags'), patch.object(lifecycle, 'write_snippets'), patch.object(lifecycle, 'qm_status', return_value='stopped'), patch.object(lifecycle, 'wait_for_qga') as wait_qga, patch.object(lifecycle, 'guest_out') as guest_out, patch.object(lifecycle, 'guest_exec') as guest_exec, patch.object(lifecycle, 'forget_local_ssh_host', return_value=[]):
-            result = lifecycle.refresh_workspace(session, cfg, self._plan('stopped'), json_mode=True)
-        shutdown.assert_not_called()
-        wait_qga.assert_not_called()
-        guest_out.assert_not_called()
-        guest_exec.assert_not_called()
-        self.assertFalse(any((command == 'qm start 200' for command in commands)))
+        def transfer(*_: object, **__: object) -> None:
+            events.append('import-new')
+            state['unused'] = {'unused0': new_root}
+
+        def unlink(
+            _session: object,
+            _cfg: object,
+            _node: str,
+            _vmid: int,
+            disk: str,
+            _vm_cfg: dict[str, str],
+            *,
+            force: bool,
+        ) -> dict[str, str]:
+            unused = dict(state['unused'])
+            if disk == 'scsi0' and not force:
+                events.append(f"detach-{state['root']}")
+                free_slot = next(
+                    f'unused{index}'
+                    for index in range(10)
+                    if f'unused{index}' not in unused
+                )
+                unused[free_slot] = str(state['root'])
+                state['root'] = ''
+            elif disk in unused and force:
+                events.append(f'delete-{unused[disk]}')
+                del unused[disk]
+            else:
+                raise AssertionError((disk, force, unused))
+            state['unused'] = unused
+            return vm_config()
+
+        def set_values(
+            _session: object,
+            _cfg: object,
+            _node: str,
+            _vmid: int,
+            _vm_cfg: dict[str, str],
+            values: list[tuple[str, str]],
+        ) -> dict[str, str]:
+            unused = dict(state['unused'])
+            for key, value in values:
+                if key != 'scsi0':
+                    continue
+                volume = value.split(',', 1)[0]
+                events.append(f'attach-{volume}')
+                state['root'] = volume
+                unused = {
+                    slot: candidate
+                    for slot, candidate in unused.items()
+                    if candidate != volume
+                }
+            state['unused'] = unused
+            return vm_config()
+
+        def node_run(
+            _session: object,
+            _cfg: object,
+            _node: str,
+            command: str,
+            **__: object,
+        ) -> models.RemoteResult:
+            events.append(command)
+            if command.startswith('pvesm path '):
+                return models.RemoteResult(0, '/dev/example/gold-root\n')
+            if command == 'qm start 200':
+                state['status'] = 'running'
+            return models.RemoteResult(0, '')
+
+        def shutdown(*_: object, **__: object) -> None:
+            events.append('shutdown')
+            state['status'] = 'stopped'
+
+        def verify(*_: object, **__: object) -> str:
+            events.append('verify-guest')
+            if verification_error is not None:
+                raise verification_error
+            return 'nocloud'
+
+        def write_journal(
+            _session: object,
+            _cfg: object,
+            _node: str,
+            _vmid: int,
+            journal: dict[str, object],
+        ) -> None:
+            state['journal'] = dict(journal)
+
+        def remove_journal(*_: object, **__: object) -> None:
+            events.append('remove-journal')
+            state['journal'] = None
+
+        self.last_refresh_state = state
+        self.last_refresh_events = events
+        result: dict[str, object] | None = None
+        with patch.object(
+            lifecycle,
+            'resolve_existing_workspace',
+            return_value=self._workspace_info(status),
+        ), patch.object(
+            lifecycle, 'qm_config_on_node', side_effect=vm_config
+        ), patch.object(
+            lifecycle, 'run_transfer_with_progress', side_effect=transfer
+        ), patch.object(
+            lifecycle, '_unlink_disk', side_effect=unlink
+        ), patch.object(
+            lifecycle, '_set_vm_values', side_effect=set_values
+        ), patch.object(
+            lifecycle, 'node_run', side_effect=node_run
+        ), patch.object(
+            lifecycle, 'shutdown_vm_on_node', side_effect=shutdown
+        ), patch.object(
+            lifecycle, '_verify_refreshed_guest', side_effect=verify
+        ), patch.object(
+            lifecycle, '_write_refresh_journal', side_effect=write_journal
+        ), patch.object(
+            lifecycle, '_remove_refresh_journal', side_effect=remove_journal
+        ), patch.object(
+            lifecycle, 'write_snippets'
+        ), patch.object(
+            lifecycle, 'verify_workspace_role_tags'
+        ), patch.object(
+            lifecycle, 'qm_status_on_node', side_effect=lambda *_: state['status']
+        ), patch.object(
+            lifecycle, 'forget_local_ssh_host', return_value=[]
+        ):
+            result = lifecycle.refresh_workspace(
+                object(), cfg, self._plan(status), json_mode=True
+            )
+        return result, state, events
+
+    def test_stopped_workspace_is_booted_verified_then_stopped(self) -> None:
+        result, state, events = self._run_refresh('stopped')
+        assert result is not None
+        self.assertLess(events.index('verify-guest'), events.index('shutdown'))
+        self.assertLess(
+            events.index('verify-guest'),
+            events.index('delete-example-storage-a:vm-200-hs-root-default'),
+        )
+        self.assertEqual(state['status'], 'stopped')
+        self.assertEqual(state['root'], 'example-storage-a:vm-200-disk-9')
+        self.assertEqual(state['unused'], {})
+        self.assertIsNone(state['journal'])
         self.assertEqual(result['status'], 'stopped')
-        self.assertFalse(result['guest_verified'])
-        self.assertTrue(result['power_state_preserved'])
-
-    def test_running_workspace_is_restarted_after_refresh(self) -> None:
-        cfg = test_config()
-        commands: list[str] = []
-
-        class Session:
-
-            def run(self, command: str, **_: object):
-                commands.append(command)
-                return models.RemoteResult(0, '')
-        session = Session()
-        guest_values = ['test1', '2: eth0    inet 192.0.2.200/24 brd 192.0.2.255', '/dev/sdb ext4 /home/user', 'HS_HOME_200', 'uid=1000(user) gid=1000(user) groups=1000(user)', 'OK', 'OK', 'user:1000:1000', 'ABSENT', 'nocloud']
-        with patch.object(lifecycle, 'resolve_existing_workspace', return_value=self._workspace_info('running')), patch.object(lifecycle, 'shutdown_vm') as shutdown, patch.object(lifecycle, 'qm_config', side_effect=self._qm_configs()), patch.object(lifecycle, 'root_import_spec', return_value='example-storage-a:0,import-from=gold'), patch.object(lifecycle, 'run_transfer_with_progress'), patch.object(lifecycle, 'rename_attached_disk_volume'), patch.object(lifecycle, 'verify_workspace_role_tags'), patch.object(lifecycle, 'write_snippets'), patch.object(lifecycle, 'qm_status', return_value='running'), patch.object(lifecycle, 'wait_for_qga') as wait_qga, patch.object(lifecycle, 'guest_out', side_effect=guest_values), patch.object(lifecycle, 'guest_exec'), patch.object(lifecycle, 'forget_local_ssh_host', return_value=[]):
-            result = lifecycle.refresh_workspace(session, cfg, self._plan('running'), json_mode=True)
-        shutdown.assert_called_once_with(session, 200)
-        wait_qga.assert_called_once_with(session, 200, timeout=600)
-        self.assertIn('qm start 200', commands)
-        self.assertEqual(result['status'], 'running')
         self.assertTrue(result['guest_verified'])
         self.assertTrue(result['power_state_preserved'])
+
+    def test_failed_verification_restores_old_root_and_deletes_only_new_root(self) -> None:
+        with self.assertRaisesRegex(models.AppError, 'Automatic recovery succeeded'):
+            self._run_refresh(
+                'stopped', verification_error=models.AppError('bad guest state')
+            )
+        self.assertEqual(
+            self.last_refresh_state['root'],
+            'example-storage-a:vm-200-hs-root-default',
+        )
+        self.assertEqual(self.last_refresh_state['unused'], {})
+        self.assertEqual(self.last_refresh_state['status'], 'stopped')
+        self.assertIsNone(self.last_refresh_state['journal'])
+        self.assertIn(
+            'delete-example-storage-a:vm-200-disk-9', self.last_refresh_events
+        )
+        self.assertNotIn(
+            'delete-example-storage-a:vm-200-hs-root-default',
+            self.last_refresh_events,
+        )
+
+    def test_existing_journal_builds_recovery_plan_without_normal_resolution(self) -> None:
+        journal = {
+            'vmid': 200,
+            'name': 'test1',
+            'node': 'example-node-1',
+            'phase': 'switching',
+            'home_label': 'HS_HOME_200',
+            'home_volume': 'example-storage-a:vm-200-hs-home-user',
+        }
+        with patch.object(
+            lifecycle,
+            'cluster_vm_resource',
+            return_value={'node': 'example-node-1', 'status': 'stopped'},
+        ), patch.object(
+            lifecycle, '_read_refresh_journal', return_value=journal
+        ), patch.object(
+            lifecycle, 'resolve_existing_workspace'
+        ) as resolve:
+            plan = lifecycle.build_refresh_plan(object(), test_config(), 200)
+        resolve.assert_not_called()
+        self.assertEqual(plan['mode'], 'recover')
+        self.assertEqual(plan['recovery_phase'], 'switching')
+
+    def test_recovery_rejects_journal_that_targets_persistent_home(self) -> None:
+        journal = {
+            'version': 1,
+            'transaction_id': 'a' * 32,
+            'phase': 'imported',
+            'vmid': 200,
+            'name': 'test1',
+            'node': 'example-node-1',
+            'initial_status': 'stopped',
+            'old_root_spec': 'example-storage-a:vm-200-old-root,size=16G',
+            'old_root_volume': 'example-storage-a:vm-200-old-root',
+            'root_disk': 'scsi0',
+            'new_root_volume': 'example-storage-a:vm-200-hs-home-user',
+            'new_unused_key': 'unused0',
+            'old_unused_key': '',
+            'home_volume': 'example-storage-a:vm-200-hs-home-user',
+            'home_label': 'HS_HOME_200',
+            'home_disk': 'scsi1',
+            'boot': 'order=scsi0;net0',
+            'ipconfig0': 'ip=192.0.2.200/24,gw=192.0.2.1',
+            'cicustom': 'user=local:snippets/test1.yaml',
+        }
+        with self.assertRaisesRegex(models.AppError, 'staged root identity'):
+            lifecycle._recover_refresh(object(), test_config(), journal)
 
 class MigrationPowerStateTests(unittest.TestCase):
 
@@ -389,7 +612,14 @@ class ProgressTests(unittest.TestCase):
                 callback('mirror-scsi0: transferred 3.1 GiB of 16.0 GiB (31.88%) in 13s\nmirror-scsi0: transferred 5.8 GiB of 16.0 GiB (36.14%) in 18s\n')
                 return models.RemoteResult(0, '')
         progress = FakeProgress()
-        lifecycle.run_transfer_with_progress(TransferSession(), 'qm set 200 --scsi0 ...', progress=progress, description='  ↳ Gold root')
+        lifecycle.run_transfer_with_progress(
+            TransferSession(),
+            test_config(),
+            'example-node-1',
+            'qm set 200 --scsi0 ...',
+            progress=progress,
+            description='  ↳ Gold root',
+        )
         self.assertEqual(progress.removed, [7])
         self.assertTrue(progress.updates)
         self.assertEqual(progress.updates[-1]['completed'], 36.14)
