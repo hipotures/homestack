@@ -1662,8 +1662,6 @@ def migrate_workspace(
             raise AppError(
                 f"Persistent home identity check failed after migration to {target_node}"
             )
-        if target_cfg.get("virtiofs0"):
-            raise AppError("Legacy virtiofs0 appeared after migration")
         finish_step()
 
         start_step("Update Cloud-Init")

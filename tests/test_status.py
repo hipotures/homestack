@@ -46,6 +46,32 @@ class VmVolumeInventoryTests(unittest.TestCase):
                 )
         usage.assert_not_called()
 
+    def test_workspace_allows_virtiofs_devices(self) -> None:
+        vm_cfg = {
+            'name': 'test1',
+            'tags': 'homestack-ws',
+            'scsi0': 'example-storage-a:vm-200-hs-root-default,size=16G',
+            'scsi1': (
+                'example-storage-a:vm-200-hs-home-user,'
+                'serial=HS_HOME_200,size=20G'
+            ),
+            'virtiofs0': 'user-managed-mapping',
+        }
+        with patch.object(
+            status,
+            'cluster_vm_resource',
+            return_value={'node': 'example-node-1', 'status': 'stopped'},
+        ), patch.object(
+            status, 'qm_config_on_node', return_value=vm_cfg
+        ), patch.object(
+            status, 'workspace_home_usage', return_value={'used': 1, 'total': 2}
+        ):
+            info = status.resolve_existing_workspace(
+                object(), test_config(), 200, require_network=False
+            )
+
+        self.assertEqual(info['vm_config']['virtiofs0'], 'user-managed-mapping')
+
 class VolumeRenameCleanupTests(unittest.TestCase):
 
     def test_cleanup_removes_only_missing_renamed_source_refs(self) -> None:

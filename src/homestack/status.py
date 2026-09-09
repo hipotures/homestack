@@ -479,11 +479,6 @@ def resolve_existing_workspace(
         raise AppError(
             f"VM {vmid} {cfg.home_disk} serial is {serial!r}, expected {expected_label!r}"
         )
-    if vm_cfg.get("virtiofs0"):
-        raise AppError(
-            f"VM {vmid} still has legacy virtiofs0 configured; refusing new HomeStack lifecycle"
-        )
-
     network: dict[str, Any] = {}
     if require_network:
         network = parse_ipconfig0(vm_cfg.get("ipconfig0", ""))
