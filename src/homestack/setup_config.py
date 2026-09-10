@@ -38,6 +38,7 @@ class ApplicationParams:
     non_interactive: str = ""
     bin_dirs: tuple[str, ...] = ("~/.local/bin",)
     requires_absent: tuple[str, ...] = ()
+    backup_paths: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -150,7 +151,7 @@ def parse_setup(raw: Any) -> SetupConfig:
         base = entries.get(item_id, {}).copy()
         if "command" in data and data["command"] != base.get("command"):
             # A customized payload cannot inherit a safety claim about another recipe.
-            base.update(interaction="interactive", non_interactive="", check="", requires_absent=())
+            base.update(interaction="interactive", non_interactive="", check="", requires_absent=(), backup_paths=())
         base.update(data)
         entries[item_id] = base
     parsed = []
@@ -168,7 +169,7 @@ def parse_setup(raw: Any) -> SetupConfig:
         if set(params) - set(cls.__dataclass_fields__):
             raise AppError(f"Unknown parameters for setup item {data['id']}")
         try:
-            for key in ("prerequisites", "bin_dirs", "requires_absent", "prerequisite_checks"):
+            for key in ("prerequisites", "bin_dirs", "requires_absent", "prerequisite_checks", "backup_paths"):
                 if key in params:
                     params[key] = _strings(params[key], key)
             p = cls(**params)
@@ -196,7 +197,7 @@ def parse_setup(raw: Any) -> SetupConfig:
                     raise AppError("Application prerequisites must be executable names")
             if any(":" in path for path in p.bin_dirs):
                 raise AppError("Application bin_dirs must not contain PATH separators")
-            for path in (*p.bin_dirs, *p.requires_absent):
+            for path in (*p.bin_dirs, *p.requires_absent, *p.backup_paths):
                 validate_sync_path_spec(path)
         parsed.append(Entry(data["id"], data["group"], handler, data["label"], data["description"], p,
                             _strings(data.get("depends_on", ()), "depends_on")))

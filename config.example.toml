@@ -138,6 +138,7 @@ prerequisite_checks = []
 non_interactive = ""
 bin_dirs = ["~/.local/bin"]
 requires_absent = []
+backup_paths = []
 
 [[setup.items]]
 id = "opencode"
@@ -155,6 +156,7 @@ prerequisite_checks = []
 non_interactive = ""
 bin_dirs = ["~/.opencode/bin", "~/.local/bin"]
 requires_absent = []
+backup_paths = []
 
 [[setup.items]]
 id = "hermes"
@@ -172,3 +174,4 @@ prerequisite_checks = ["node -e \"const v=process.versions.node; const [a,b]=v.s
 non_interactive = ""
 bin_dirs = ["~/.local/bin", "~/.hermes/bin", "~/.hermes/node/bin"]
 requires_absent = ["~/.hermes/hermes-agent"]
+backup_paths = []

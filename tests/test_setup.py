@@ -46,6 +46,13 @@ class DefinitionTests(unittest.TestCase):
         self.assertFalse(p.check)
         self.assertFalse(p.non_interactive)
 
+    def test_application_backup_paths_round_trip_and_validate_below_home(self):
+        setup_cfg = definitions.parse_setup({'items': [{'id': 'codex', 'backup_paths': ['~/.config/codex/', '~/.codex/settings.json']}]})
+        params = next(e.params for e in setup_cfg.items if e.id == 'codex')
+        self.assertEqual(params.backup_paths, ('~/.config/codex/', '~/.codex/settings.json'))
+        with self.assertRaises(AppError):
+            definitions.parse_setup({'items': [{'id': 'codex', 'backup_paths': ['/tmp/outside']}]})
+
     def test_exact_legacy_payloads_and_codex_dedup(self):
         payload = '  printf "private value"\n'
         cfg = replace(test_config(), sync_commands=(definitions.CODEX_RECIPE, payload, payload), sync_paths=('~/notes',))
@@ -238,16 +245,22 @@ class EngineTests(unittest.TestCase):
                 setup.apply_entry(ws, cfg, setup.Plan(TARGET, (custom,), unattended=True), custom, {}, nullcontext)
             self.assertNotIn('SECRET', str(raised.exception))
 
-    def test_installed_check_skip_and_failed_postcheck(self):
+    def test_installed_application_selection_runs_update_and_failed_postcheck_stops(self):
         cfg = test_config()
         ws = Mock()
         ws.run.return_value = completed()
-        state = setup.preflight_entry(ws, cfg, setup.Plan(TARGET, (entry('codex'),)), entry('codex'))
-        self.assertTrue(state['ready'])
-        self.assertEqual(setup.apply_entry(ws, cfg, setup.Plan(TARGET, (entry('codex'),)), entry('codex'), state, nullcontext)[0], 'already-ready')
+        with patch.object(setup, 'require_tool'), patch.object(setup, 'guest', return_value={'ok': True}):
+            state = setup.preflight_entry(ws, cfg, setup.Plan(TARGET, (entry('codex'),)), entry('codex'))
+        self.assertTrue(state['installed'])
+        ws.run.reset_mock()
+        ws.run.side_effect = [completed(), completed()]
+        status, detail = setup.apply_entry(ws, cfg, setup.Plan(TARGET, (entry('codex'),)), entry('codex'), state, nullcontext)
+        self.assertEqual(status, 'succeeded')
+        self.assertIn('updated', detail)
+        self.assertEqual(ws.run.call_count, 2)
         ws.run.side_effect = [completed(), completed(1)]
         with self.assertRaisesRegex(AppError, 'verification failed'):
-            setup.apply_entry(ws, cfg, setup.Plan(TARGET, (entry('codex'),)), entry('codex'), {}, nullcontext)
+            setup.apply_entry(ws, cfg, setup.Plan(TARGET, (entry('codex'),)), entry('codex'), {'installed': False}, nullcontext)
 
     def test_interactive_pty_handoff_restores_on_failure(self):
         events = []
@@ -376,7 +389,7 @@ class EnvironmentTests(unittest.TestCase):
             self.assertIn('CUSTOM_BASHRC=preserved', first)
             self.assertIn('.bash_profile', self.apply(home)['paths'])
             self.assertEqual(first, (home / '.bashrc').read_text())
-            self.assertEqual(len(list(home.glob('.bashrc.homestack-backup-*'))), 1)
+            self.assertFalse(list(home.glob('.bashrc.homestack-backup-*')))
             env = {**os.environ, 'HOME': str(home), 'PATH': '/usr/bin:/bin'}
             for args in (['bash', '--noprofile', '--rcfile', str(home / '.bashrc'), '-ic'], ['bash', '--noprofile', '-lc']):
                 # -noprofile avoids the desktop's /etc/profile resetting the temporary HOME.
@@ -403,14 +416,14 @@ class EnvironmentTests(unittest.TestCase):
             with self.assertRaisesRegex(guest.GuestError, 'source-cycle'):
                 self.apply(home)
 
-    def test_unchanged_atomic_write_no_backup_changed_preserves_content(self):
+    def test_atomic_write_is_noop_when_unchanged_and_never_creates_sidecar_backups(self):
         with tempfile.TemporaryDirectory() as tmp:
             p = Path(tmp) / '.profile'
             p.write_text('custom\n')
             self.assertFalse(guest.atomic_write(p, 'custom\n'))
-            self.assertFalse(list(Path(tmp).glob('*.homestack-backup-*')))
             self.assertTrue(guest.atomic_write(p, 'custom\nnew\n'))
-            self.assertEqual(next(Path(tmp).glob('*.homestack-backup-*')).read_text(), 'custom\n')
+            self.assertEqual(p.read_text(), 'custom\nnew\n')
+            self.assertFalse(list(Path(tmp).glob('*.homestack-backup-*')))
 
     def test_destination_symlink_ancestor_and_recursive_conflict(self):
         with tempfile.TemporaryDirectory() as tmp:

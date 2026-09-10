@@ -7,6 +7,9 @@ from __future__ import annotations
 import json
 import os
 import re
+import hashlib
+import shutil
+from datetime import datetime, timezone
 from pathlib import Path
 import stat
 import subprocess
@@ -18,7 +21,223 @@ class GuestError(Exception):
     pass
 
 
-def safe_path(home: Path, relative: str, *, directory: bool = False, recursive: bool = False) -> Path:
+STATE_DIR = ".local/state/homestack"
+STATE_FILE = STATE_DIR + "/setup.json"
+
+
+def iso_now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def _state_root(home: Path, *, create: bool = False) -> Path:
+    root = safe_path(home, STATE_DIR, directory=True)
+    if create:
+        root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        os.chmod(root, 0o700)
+    return root
+
+
+def _atomic_bytes(path: Path, payload: bytes, *, mode: int = 0o600) -> None:
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix=".homestack-", dir=path.parent)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            os.fchmod(handle.fileno(), mode)
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+        directory = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+
+
+def _digest_path(path: Path) -> tuple[str, int]:
+    digest = hashlib.sha256()
+    if path.is_file():
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest(), path.stat().st_size
+    if not path.is_dir():
+        raise GuestError("Managed path is neither a regular file nor a directory")
+    total = 0
+    for root, directories, files in os.walk(path, followlinks=False):
+        directories.sort()
+        files.sort()
+        base = Path(root)
+        for name in directories:
+            child = base / name
+            if child.is_symlink():
+                raise GuestError("Managed directory contains a symlink")
+            relative = child.relative_to(path).as_posix().encode()
+            digest.update(b"D\0" + relative + b"\0")
+        for name in files:
+            child = base / name
+            info = child.lstat()
+            if child.is_symlink() or not stat.S_ISREG(info.st_mode):
+                raise GuestError("Managed directory contains a symlink or special file")
+            relative = child.relative_to(path).as_posix().encode()
+            digest.update(b"F\0" + relative + b"\0")
+            with child.open("rb") as handle:
+                for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                    digest.update(chunk)
+                    total += len(chunk)
+    return digest.hexdigest(), total
+
+
+def _birthtime_ns(path: Path, info: os.stat_result) -> int | None:
+    value = getattr(info, "st_birthtime_ns", None)
+    if isinstance(value, int) and value > 0:
+        return value
+    try:
+        result = subprocess.run(
+            ["stat", "-c", "%W", "--", str(path)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        seconds = int(result.stdout.strip()) if result.returncode == 0 else 0
+    except (OSError, ValueError):
+        seconds = 0
+    return seconds * 1_000_000_000 if seconds > 0 else None
+
+
+def path_metadata(home: Path, relative: str) -> dict:
+    path = safe_path(home, relative, directory=None)
+    if not path.exists():
+        return {"path": relative, "exists": False}
+    info = path.stat()
+    digest, size = _digest_path(path)
+    metadata = {
+        "path": relative,
+        "exists": True,
+        "type": "directory" if path.is_dir() else "file",
+        "sha256": digest,
+        "size": size,
+        "mtime_ns": info.st_mtime_ns,
+    }
+    birthtime_ns = _birthtime_ns(path, info)
+    if birthtime_ns is not None:
+        metadata["birthtime_ns"] = birthtime_ns
+    return metadata
+
+
+def _registry_path(home: Path) -> Path:
+    return safe_path(home, STATE_FILE)
+
+
+def load_registry(home: Path, *, vmid: int | None = None, name: str | None = None) -> dict | None:
+    path = _registry_path(home)
+    if path.is_symlink():
+        raise GuestError("HomeStack setup state is a symlink")
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, ValueError) as exc:
+        raise GuestError("HomeStack setup state is invalid") from exc
+    if not isinstance(data, dict) or data.get("version") != 1 or not isinstance(data.get("items", {}), dict):
+        raise GuestError("Unsupported HomeStack setup state")
+    workspace = data.get("workspace", {})
+    if vmid is not None and workspace and workspace.get("vmid") != vmid:
+        raise GuestError("HomeStack setup state belongs to another workspace")
+    return data
+
+
+def write_registry(home: Path, data: dict) -> None:
+    root = _state_root(home, create=True)
+    payload = (json.dumps(data, indent=2, sort_keys=True) + "\n").encode()
+    _atomic_bytes(root / "setup.json", payload)
+
+
+def create_snapshot(home: Path, paths: list[str], item_ids: list[str], *, vmid: int, name: str) -> dict:
+    metadata = []
+    existing = []
+    for relative in dict.fromkeys(paths):
+        item = path_metadata(home, relative)
+        metadata.append(item)
+        if item["exists"]:
+            existing.append(relative)
+    registry = load_registry(home, vmid=vmid, name=name)
+    if not existing:
+        return {"created": False, "path": None, "id": None}
+    root = _state_root(home, create=True)
+    stem = datetime.now().strftime("%Y%m%d_%H%M%S")
+    identifier = stem
+    index = 1
+    while (root / identifier).exists():
+        identifier = f"{stem}-{index:02d}"
+        index += 1
+    snapshot = root / identifier
+    snapshot.mkdir(mode=0o700)
+    home_copy = snapshot / "home"
+    for relative in existing:
+        source = safe_path(home, relative)
+        destination = home_copy / relative
+        destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        if source.is_dir():
+            shutil.copytree(source, destination, symlinks=False)
+        else:
+            shutil.copy2(source, destination)
+    state_path = _registry_path(home)
+    if registry is not None:
+        shutil.copy2(state_path, snapshot / "setup.before.json")
+    manifest = {
+        "version": 1,
+        "created_at": iso_now(),
+        "workspace": {"vmid": vmid, "name": name},
+        "items": list(dict.fromkeys(item_ids)),
+        "files": metadata,
+    }
+    _atomic_bytes(snapshot / "snapshot.json", (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode())
+    return {"created": True, "id": identifier, "path": f"~/{STATE_DIR}/{identifier}"}
+
+
+def record_item(home: Path, data: dict) -> dict:
+    vmid, name = int(data["vmid"]), str(data["name"])
+    registry = load_registry(home, vmid=vmid, name=name) or {
+        "version": 1,
+        "workspace": {"vmid": vmid, "name": name, "home": str(home), "home_label": f"HS_HOME_{vmid}"},
+        "items": {},
+    }
+    now = iso_now()
+    registry["workspace"] = {
+        "vmid": vmid,
+        "name": name,
+        "home": str(home),
+        "home_label": f"HS_HOME_{vmid}",
+    }
+    items = registry.setdefault("items", {})
+    previous = items.get(data["id"], {}) if isinstance(items.get(data["id"]), dict) else {}
+    current = {
+        "handler": data["handler"],
+        "first_managed_at": previous.get("first_managed_at", now),
+        "last_applied_at": now,
+    }
+    if data.get("snapshot"):
+        current["last_snapshot"] = data["snapshot"]
+    paths = list(dict.fromkeys(data.get("paths", [])))
+    if paths:
+        current["files"] = [path_metadata(home, relative) for relative in paths]
+    if data["handler"] == "application":
+        if previous.get("installed_at"):
+            current["installed_at"] = previous["installed_at"]
+        elif data.get("installed"):
+            current["installed_at"] = now
+    if data.get("repository"):
+        current["repository"] = data["repository"]
+    items[data["id"]] = current
+    registry["updated_at"] = now
+    write_registry(home, registry)
+    return current
+
+
+def safe_path(home: Path, relative: str, *, directory: bool | None = False, recursive: bool = False) -> Path:
     parts = relative.split("/")
     if not relative or any(p in {"", ".", ".."} for p in parts):
         raise GuestError("Unsafe path below persistent home")
@@ -35,9 +254,10 @@ def safe_path(home: Path, relative: str, *, directory: bool = False, recursive: 
                 raise GuestError(f"Ownership conflict at ~/{'/'.join(parts[:index + 1])}")
             if path.is_dir() and not os.access(path, os.W_OK | os.X_OK):
                 raise GuestError("Destination ancestor is not writable")
-            must_dir = index < len(parts) - 1 or directory
-            if (must_dir and not path.is_dir()) or (not must_dir and not path.is_file()):
-                raise GuestError(f"File type conflict at ~/{'/'.join(parts[:index + 1])}")
+            if directory is not None:
+                must_dir = index < len(parts) - 1 or directory
+                if (must_dir and not path.is_dir()) or (not must_dir and not path.is_file()):
+                    raise GuestError(f"File type conflict at ~/{'/'.join(parts[:index + 1])}")
     if recursive and path.is_dir():
         def unreadable(error):
             raise GuestError("Destination tree cannot be inspected") from error
@@ -147,29 +367,8 @@ def atomic_write(path: Path, content: str) -> bool:
     old = path.read_bytes() if path.exists() else None
     if old == payload:
         return False
-    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    if old is not None:
-        backup = path.with_name(path.name + f".homestack-backup-{time.time_ns()}")
-        with backup.open("xb") as handle:
-            os.chmod(backup, 0o600)
-            handle.write(old)
-            handle.flush()
-            os.fsync(handle.fileno())
-    fd, temporary = tempfile.mkstemp(prefix=".homestack-", dir=path.parent)
-    try:
-        with os.fdopen(fd, "wb") as handle:
-            os.fchmod(handle.fileno(), stat.S_IMODE(path.stat().st_mode) & 0o700 if old is not None else 0o600)
-            handle.write(payload)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, path)
-        directory = os.open(path.parent, os.O_RDONLY)
-        try:
-            os.fsync(directory)
-        finally:
-            os.close(directory)
-    finally:
-        Path(temporary).unlink(missing_ok=True)
+    mode = stat.S_IMODE(path.stat().st_mode) & 0o700 if old is not None else 0o600
+    _atomic_bytes(path, payload, mode=mode)
     return True
 
 
@@ -179,6 +378,58 @@ def run(data: dict) -> dict:
     if op == "identity":
         verify_identity(data)
         return {"ok": True}
+    if op == "state-read":
+        registry = load_registry(home, vmid=int(data["vmid"]), name=str(data["name"]))
+        return {"ok": True, "registry": registry, "state_path": "~/" + STATE_FILE}
+    if op == "metadata":
+        return {"ok": True, "items": [path_metadata(home, relative) for relative in data.get("paths", [])]}
+    if op == "snapshot":
+        return {"ok": True, **create_snapshot(home, data.get("paths", []), data.get("items", []),
+                                                vmid=int(data["vmid"]), name=str(data["name"]))}
+    if op == "state-record":
+        return {"ok": True, "item": record_item(home, data), "state_path": "~/" + STATE_FILE}
+    if op == "repositories":
+        checkout_root = str(data["checkout_root"]).strip("/")
+        results = {}
+        git = shutil.which("git")
+        for repository in data.get("repositories", []):
+            owner, repo_name = repository.split("/", 1)
+            relative = checkout_root + "/" + repo_name
+            try:
+                checkout = safe_path(home, relative, directory=True)
+                if not checkout.exists():
+                    results[repository] = {"state": "absent", "ready": False, "exists": False}
+                    continue
+                info = checkout.stat()
+                meta = {"path": relative, "exists": True, "type": "directory", "mtime_ns": info.st_mtime_ns}
+                if not checkout.is_dir() or not (checkout / ".git").is_dir():
+                    results[repository] = {"state": "conflict", "ready": False, "exists": True, "metadata": meta}
+                    continue
+                remote = ""
+                core_ssh = ""
+                if git:
+                    remote = subprocess.run([git, "-C", str(checkout), "remote", "get-url", "origin"], capture_output=True, text=True).stdout.strip()
+                    core_ssh = subprocess.run([git, "-C", str(checkout), "config", "--local", "--get", "core.sshCommand"], capture_output=True, text=True).stdout.strip()
+                private = home / ".ssh" / "homestack" / "github" / f"{owner}-{repo_name}"
+                public = Path(str(private) + ".pub")
+                accepted = {
+                    f"git@github.com:{repository}.git", f"git@github.com:{repository}",
+                    f"https://github.com/{repository}.git", f"https://github.com/{repository}",
+                    f"ssh://git@github.com/{repository}.git", f"ssh://git@github.com/{repository}",
+                }
+                expected_ssh = f"ssh -i {private} -o IdentitiesOnly=yes"
+                ready = bool(git and remote in accepted and private.is_file() and public.is_file() and core_ssh == expected_ssh)
+                results[repository] = {
+                    "state": "configured" if ready else "present",
+                    "ready": ready,
+                    "exists": True,
+                    "metadata": meta,
+                    "remote": remote or None,
+                    "key_pair": private.is_file() and public.is_file(),
+                }
+            except GuestError as exc:
+                results[repository] = {"state": "conflict", "ready": False, "exists": True, "detail": str(exc)}
+        return {"ok": True, "repositories": results}
     if op == "environment":
         updates = environment_updates(home, data["profile"], data["bins"])
         # Check the actual selected shell parser before any persistent write.

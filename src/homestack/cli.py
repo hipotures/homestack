@@ -54,7 +54,9 @@ def show_help(cfg_path: Path) -> None:
         f"{cmd} migrate VMID|NAME NODE --target-storage STORAGE",
         "Offline-migrate root, persistent home and cloud-init disk; copy snippets first.",
     )
-    commands.add_row(f"{cmd} setup VMID|NAME [files=… env=… app=… repo=…]", "Explicit workspace setup; setup list displays stable catalog indices.")
+    commands.add_row(f"{cmd} setup VMID|NAME [files=… env=… app=… repo=…]", "Inspect and apply explicit workspace setup selections; interactive setup keeps one SSH session open.")
+    commands.add_row(f"{cmd} setup list", "List setup catalog items without connecting to a workspace.")
+    commands.add_row(f"{cmd} setup status VMID|NAME", "Inspect installed/configured workspace setup state without applying changes.")
     commands.add_row(
         f"{cmd} sync VMID|NAME",
         "Synchronize configured desktop files/directories into the workspace persistent home.",
@@ -99,6 +101,9 @@ def show_help(cfg_path: Path) -> None:
         f"{cmd} create 200 example-workspace --storage example-storage\n"
         f"{cmd} refresh 200\n"
         f"{cmd} migrate 200 pve-example-2 --target-storage example-storage\n"
+        f"{cmd} setup list\n"
+        f"{cmd} setup status example-workspace\n"
+        f"{cmd} setup example-workspace\n"
         f"{cmd} sync 200\n"
         f"{cmd} sync example-workspace\n"
         f"{cmd} repo example-workspace\n"
@@ -166,7 +171,7 @@ def build_parser() -> argparse.ArgumentParser:
     sync.add_argument("-h", "--help", action="store_true", dest="sub_help")
 
     setup = sub.add_parser("setup", description="Prepare explicit Files, Environment, Applications and Repositories selections.")
-    setup.add_argument("target", nargs="?", help="VMID, exact workspace name, or list for targetless catalog discovery")
+    setup.add_argument("target", nargs="?", help="VMID, exact workspace name, list, or status")
     setup.add_argument("selectors", nargs="*", help="files/f=ID,ID env/e=ID app/a=ID repo/r=OWNER/REPO; 0/all selects a category")
     for command in (setup, sync):
         if command is sync:

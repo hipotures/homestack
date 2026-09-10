@@ -8,10 +8,11 @@ from rich.prompt import Confirm
 from rich.table import Table
 
 from .models import AppError
-from .setup import build_plan, execute_plan, resolve_target
+from .setup import build_plan, execute_plan, inspect_workspace_state, resolve_target
 from .setup_catalog import load_catalog, parse_assignments, save_snapshot, select_entries
 from .setup_config import FileParams, effective_entries
 from .transports import open_transport
+from .workspace_ssh import WorkspaceSSH
 
 
 def show_catalog(cfg, catalog):
@@ -43,12 +44,79 @@ def show_plan(console, plan):
     console.print(table)
 
 
+def _timestamp_text(item: dict, key: str) -> str:
+    values = [
+        file.get(key)
+        for file in item.get("files", [])
+        if isinstance(file, dict) and isinstance(file.get(key), int)
+    ]
+    if not values:
+        return "—"
+    from datetime import datetime, timezone
+    return datetime.fromtimestamp(max(values) / 1_000_000_000, timezone.utc).isoformat(
+        timespec="seconds"
+    ).replace("+00:00", "Z")
+
+
+def show_workspace_setup_status(cfg, target, state):
+    console = Console()
+    console.print(f"Setup status: {target['name']} (VM {target['vmid']}) {target.get('ip', '')}", markup=False)
+    console.print(f"Checked: {state['checked_at']}    Registry: {state['state_path']} ({'present' if state['registry_present'] else 'not created'})", markup=False)
+    table = Table()
+    for heading in ("Group", "Item", "State", "Installed", "First managed", "Last applied", "Created", "Modified"):
+        table.add_column(heading)
+    visible = 0
+    for identity, item in state["items"].items():
+        label = item.get("label") or identity
+        empty = item.get("state") in {
+            "absent",
+            "not installed",
+            "not configured",
+            "shell missing",
+            "unknown; no installation check",
+        }
+        if empty and not item.get("managed") and not item.get("exists"):
+            continue
+        visible += 1
+        table.add_row(
+            item.get("group", item.get("handler", "")),
+            label,
+            item.get("state", "unknown"),
+            item.get("installed_at") or "—",
+            item.get("first_managed_at") or "—",
+            item.get("last_applied_at") or "—",
+            _timestamp_text(item, "birthtime_ns"),
+            _timestamp_text(item, "mtime_ns"),
+        )
+    if visible:
+        console.print(table)
+    else:
+        console.print("No installed, configured, modified, or HomeStack-managed setup items were detected.")
+
+
 def run_setup(args, cfg, *, json_mode: bool, assume_yes: bool) -> int:
     console = Console(stderr=json_mode)
     emit = lambda data: print(json.dumps(data, indent=2))
     is_sync = args.command == "sync"
     tokens = getattr(args, "selectors", [])
     target_arg = args.target
+    if target_arg == "status" and not is_sync:
+        if len(tokens) != 1 or assume_yes or args.dry_run or args.non_interactive or args.catalog:
+            raise AppError("Usage: homestack setup status VMID|NAME [--json]")
+        status_target = tokens[0]
+        catalog = load_catalog(cfg, repositories=True)
+        with open_transport(cfg) as session:
+            target = resolve_target(session, cfg, status_target)
+        if not json_mode:
+            console.print("SSH: authenticate once to inspect workspace setup state; the connection closes after status.")
+        with WorkspaceSSH.configured(cfg, target) as workspace:
+            state = inspect_workspace_state(workspace, cfg, target, catalog.entries)
+        result = {"ok": True, "command": "setup status", "target": target, **state}
+        if json_mode:
+            emit(result)
+        else:
+            show_workspace_setup_status(cfg, target, state)
+        return 0
     if target_arg == "list" and not is_sync:
         if tokens or assume_yes or args.dry_run or args.non_interactive or args.catalog:
             raise AppError("setup list is targetless discovery; execution selectors/options are not accepted")
@@ -84,7 +152,12 @@ def run_setup(args, cfg, *, json_mode: bool, assume_yes: bool) -> int:
         target = resolve_target(session, cfg, target_arg)
     if not entries:
         from .setup_tui import SetupApp
-        result = SetupApp(cfg, target).run()
+        catalog = load_catalog(cfg, repositories=True)
+        save_snapshot(cfg, catalog)
+        console.print("SSH: authenticate once; this session remains open until setup exits.")
+        with WorkspaceSSH.configured(cfg, target) as workspace:
+            state = inspect_workspace_state(workspace, cfg, target, catalog.entries)
+            result = SetupApp(cfg, target, catalog=catalog, workspace=workspace, state=state).run()
         return 0 if result is None or result.get("ok") else 1
     plan = build_plan(cfg, target, entries, catalog_id=catalog_id, unattended=unattended)
     if args.dry_run:
@@ -111,6 +184,8 @@ def run_setup(args, cfg, *, json_mode: bool, assume_yes: bool) -> int:
     if json_mode:
         emit(result)
     else:
+        if result.get("snapshot", {}).get("created"):
+            console.print(f"Snapshot: {result['snapshot']['path']}", markup=False)
         for item in result["results"]:
             console.print(f"{item['label']}: {item['status']} — {item['detail']}", markup=False)
     return 0 if result["ok"] else 1
