@@ -243,7 +243,12 @@ class SetupApp(App):
         self.details_identity = identity
         content = self.details(identity)
         self._details_line_count = len(content.splitlines())
-        self.query_one("#details", Static).update(content)
+        rendered = Text(content)
+        if content.startswith("Status: "):
+            status = content.splitlines()[0].removeprefix("Status: ")
+            color = {"UPDATE": "red", "INSTALL": "green"}.get(status, "yellow")
+            rendered.stylize(f"bold {color}", 0, len(content.splitlines()[0]))
+        self.query_one("#details", Static).update(rendered)
         self.update_details_focus()
         self.call_after_refresh(self.update_details_focus)
 
@@ -440,7 +445,16 @@ class SetupApp(App):
 
         p = entry.params
         live = self.state_item(entry.id)
+        status = (
+            "UPDATE"
+            if live.get("ready") or live.get("will_overwrite")
+            else "UNKNOWN"
+            if not live or live.get("state", "unknown").startswith("unknown")
+            else "INSTALL"
+        )
         lines = [
+            "Status: " + status,
+            "",
             entry.label,
             entry.description,
             "",
