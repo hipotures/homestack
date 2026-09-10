@@ -10,8 +10,9 @@ from textual import events, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, Horizontal, VerticalScroll
+from textual.message import Message
 from textual.screen import ModalScreen
-from textual.widgets import Button, Footer, Input, Static, Tree
+from textual.widgets import Footer, Input, Static, Tree
 from textual.worker import get_current_worker
 
 from .models import AppError
@@ -26,6 +27,82 @@ def _mtime_text(value):
     return datetime.fromtimestamp(value / 1_000_000_000, timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
+class CompactAction(Static, can_focus=True):
+    """One-row action with a timer scoped to its pending key badge."""
+
+    DEFAULT_CSS = """
+    CompactAction { height: 1; width: auto; }
+    CompactAction:focus { background: $boost; text-style: bold underline; }
+    CompactAction:disabled { text-style: dim; }
+    """
+    BINDINGS = [Binding("enter", "activate", show=False)]
+
+    class Pressed(Message):
+        def __init__(self, control):
+            self.action = control
+            super().__init__()
+
+        @property
+        def control(self):
+            return self.action
+
+    def __init__(self, key, label, *, id):
+        super().__init__(id=id, markup=False)
+        self.key = key
+        self.label = label
+        self.pending = False
+        self.blink_bright = False
+        self._blink_timer = None
+
+    def on_mount(self):
+        self._blink_timer = self.set_interval(1.0, self.advance_blink, pause=True)
+        if self.pending:
+            self._blink_timer.resume()
+
+    def on_unmount(self):
+        if self._blink_timer is not None:
+            self._blink_timer.stop()
+            self._blink_timer = None
+
+    def set_pending(self, pending):
+        if pending == self.pending:
+            return
+        self.pending = pending
+        self.blink_bright = pending
+        if self._blink_timer is not None:
+            if pending:
+                self._blink_timer.resume()
+            else:
+                self._blink_timer.pause()
+        self.refresh()
+
+    def advance_blink(self):
+        if self.pending and not self.disabled:
+            self.blink_bright = not self.blink_bright
+            self.refresh()
+
+    def render(self):
+        color = "white"
+        if self.disabled:
+            color = "#6e7681"
+        elif self.pending:
+            color = "bold #d29922" if self.blink_bright else "#6e7681"
+        text = Text(no_wrap=True, overflow="ellipsis")
+        text.append(f"[ {self.key} ]", style=f"{color} on #30363d")
+        text.append(" " + self.label)
+        return text
+
+    def action_activate(self):
+        if not self.disabled:
+            self.post_message(self.Pressed(self))
+
+    def on_click(self, event: events.Click):
+        if event.button == 1:
+            event.stop()
+            self.focus()
+            self.action_activate()
+
+
 class SetupTree(Tree[str]):
     auto_expand = False
     BINDINGS = [
@@ -33,7 +110,7 @@ class SetupTree(Tree[str]):
         Binding("0", "select_branch", "Select branch"),
         Binding("left", "collapse", "Collapse"),
         Binding("right", "expand", "Expand"),
-        Binding("enter", "details", "Details"),
+        Binding("enter", "review", "Review & apply"),
     ]
 
     def render_label(self, node, base_style, style):
@@ -78,16 +155,20 @@ class SetupTree(Tree[str]):
             node.expand()
             self.call_after_refresh(self.move_cursor, node)
 
-    def action_details(self):
-        self.app.action_details()
+    def action_review(self):
+        self.app.review()
 
 
 class Review(ModalScreen[bool]):
-    BINDINGS = [("escape", "back", "Back")]
+    BINDINGS = [("escape", "back", "Back"), ("enter", "confirm", "Confirm")]
     CSS = (
         "Review { align: center middle; } "
         "#review-box { width: 90%; height: 85%; border: solid $accent; "
-        "background: $surface; padding: 1 2; } #review-actions { height: 3; }"
+        "background: $surface; padding: 1 2; overflow-x: hidden; } "
+        "#review-content { height: 1fr; overflow-x: hidden; } "
+        "#review-actions { height: 1; } "
+        "#back { width: 13; } #apply { width: 1fr; } "
+        "Review.narrow #review-box { width: 100%; padding: 1 0; }"
     )
 
     def __init__(self, text: str, *, apply: bool):
@@ -96,18 +177,29 @@ class Review(ModalScreen[bool]):
         self.apply = apply
 
     def compose(self) -> ComposeResult:
-        with VerticalScroll(id="review-box"):
-            yield Static(self.text, markup=False)
+        with Container(id="review-box"):
+            with VerticalScroll(id="review-content"):
+                yield Static(Text(self.text, overflow="fold", no_wrap=False))
             with Horizontal(id="review-actions"):
-                yield Button("Back", id="back")
+                yield CompactAction("Esc", "Back", id="back")
                 if self.apply:
-                    yield Button("Apply this plan", variant="primary", id="apply")
+                    yield CompactAction("Enter", "Apply this plan", id="apply")
 
-    def on_button_pressed(self, event: Button.Pressed):
-        self.dismiss(event.button.id == "apply")
+    def on_mount(self):
+        self.query_one("#apply" if self.apply else "#back", CompactAction).focus()
+
+    def on_resize(self, event: events.Resize):
+        self.set_class(event.size.width < 50, "narrow")
+
+    def on_compact_action_pressed(self, event: CompactAction.Pressed):
+        event.stop()
+        self.dismiss(event.control.id == "apply")
 
     def action_back(self):
         self.dismiss(False)
+
+    def action_confirm(self):
+        self.dismiss(self.apply)
 
 
 class SetupApp(App):
@@ -120,19 +212,20 @@ class SetupApp(App):
     #browser { height: 1fr; layout: vertical; }
     #tree { height: 1fr; width: 1fr; border: solid $panel; }
     #tree:focus { border: solid $accent; }
-    #details-pane { height: 8; max-height: 40%; width: 1fr; border: solid $panel; padding: 0 1; }
+    #details-pane { height: 8; max-height: 40%; width: 1fr; border: solid $panel; padding: 0 1; overflow-x: hidden; }
     #details-pane:focus { border: solid $accent; }
-    #details { height: auto; }
+    #details { height: auto; width: 1fr; }
     #browser.wide { layout: horizontal; }
     #browser.wide #tree { width: 3fr; height: 1fr; }
     #browser.wide #details-pane { width: 2fr; height: 1fr; max-height: 100%; }
-    #controls { height: 3; }
+    #controls { height: 1; }
+    #review { width: 2fr; }
+    #cancel { width: 1fr; }
     """
 
     BINDINGS = [
         ("/", "filter", "Filter"),
-        ("d", "details", "Full details"),
-        ("D", "details", "Full details"),
+        ("enter", "review", "Review & apply"),
         ("f5", "refresh_state", "Refresh state"),
         ("escape", "cancel", "Cancel"),
         ("ctrl+r", "refresh_catalog", "Refresh catalog"),
@@ -181,16 +274,16 @@ class SetupApp(App):
             yield SetupTree(Text("[ ] Setup"), data="root", id="tree")
             with VerticalScroll(id="details-pane", can_focus=False):
                 yield Static(
-                    "Highlight an item for details. D opens full details. Enter never applies.",
+                    "Highlight an item for details. Enter reviews selected actions.",
                     id="details",
                     markup=False,
                 )
         yield Static("Nothing selected", id="counts", markup=False)
         with Horizontal(id="controls"):
-            yield Button("Review & apply", id="review", variant="primary")
-            yield Button("Cancel", id="cancel")
+            yield CompactAction("Enter", "Review & apply", id="review")
+            yield CompactAction("Esc", "Cancel", id="cancel")
         yield Static(
-            "↑↓ Move  ←→ Expand/collapse  Space Toggle  Tab Focus  / Filter  F5 Refresh state",
+            "↑↓ Move  ←→ Expand/collapse  Space Toggle  Enter Review & apply  Tab Focus  / Filter  F5 Refresh state",
             id="keys",
             markup=False,
         )
@@ -243,7 +336,7 @@ class SetupApp(App):
         self.details_identity = identity
         content = self.details(identity)
         self._details_line_count = len(content.splitlines())
-        rendered = Text(content)
+        rendered = Text(content, overflow="fold", no_wrap=False)
         if content.startswith("Status: "):
             status = content.splitlines()[0].removeprefix("Status: ")
             color = {"UPDATE": "red", "INSTALL": "green"}.get(status, "yellow")
@@ -371,6 +464,7 @@ class SetupApp(App):
         self.show_details(node.data)
 
     def update_counts(self):
+        self.update_review_action()
         counts = ", ".join(
             f"{group.label}: {sum(entry.id in self.selected and entry.group == group.id for entry in self.catalog.entries)}"
             for group in self.cfg.setup.groups
@@ -385,6 +479,11 @@ class SetupApp(App):
             f"{counts} | Hidden selected: {hidden}"
             + (" | Bulk selection: visible matches only" if self.filter_text else "")
         )
+
+    def update_review_action(self):
+        action = self.query_one("#review", CompactAction)
+        action.disabled = self.busy
+        action.set_pending(bool(self.selected) and not self.busy)
 
     def toggle_node(self, node, *, select=False):
         if not node or self.busy:
@@ -411,7 +510,7 @@ class SetupApp(App):
     def on_tree_node_highlighted(self, event: Tree.NodeHighlighted):
         self.show_details(event.node.data)
 
-    def details(self, identity, *, full=False):
+    def details(self, identity):
         entry = next((entry for entry in self.catalog.entries if entry.id == identity), None)
         if not entry:
             group = next((group for group in self.cfg.setup.groups if group.id == identity), None)
@@ -435,12 +534,12 @@ class SetupApp(App):
                 "0 selects the branch; a filter scopes bulk actions to visible matches.",
                 "Tab / Shift+Tab moves focus. PageUp/PageDown or the mouse wheel scrolls details.",
                 "F5 refreshes guest state through the existing SSH session.",
-                "D / Enter opens full details; never applies.",
+                "Ctrl+R refreshes the catalog and guest state.",
+                "Enter reviews selected actions; confirmation is required before writes.",
             ]
-            if full:
-                lines += ["", f"State registry: {self.workspace_state.get('state_path')}"]
-                if self.catalog.snapshot_id:
-                    lines += ["Catalog: " + self.catalog.snapshot_id]
+            lines += ["", f"State registry: {self.workspace_state.get('state_path')}"]
+            if self.catalog.snapshot_id:
+                lines += ["Catalog: " + self.catalog.snapshot_id]
             return "\n".join(lines)
 
         p = entry.params
@@ -482,10 +581,11 @@ class SetupApp(App):
                 ]
                 if file.get("birthtime_ns"):
                     lines += ["Created: " + _mtime_text(file.get("birthtime_ns"))]
+                if file.get("size") is not None:
+                    lines += [f"Size: {file['size']} bytes"]
                 lines += ["Modified: " + _mtime_text(file.get("mtime_ns"))]
         lines += [""]
-        if full:
-            lines += ["ID: " + entry.id]
+        lines += ["ID: " + entry.id]
 
         if isinstance(p, ApplicationParams):
             lines += [
@@ -497,20 +597,19 @@ class SetupApp(App):
                 "Backup paths:",
                 *(p.backup_paths or ("none declared",)),
             ]
-            if full:
-                known = {
-                    item.params.command
-                    for item in defaults()
-                    if isinstance(item.params, ApplicationParams)
-                }
-                lines += [
-                    "Command: "
-                    + (
-                        p.command
-                        if p.command in known
-                        else "[Custom payload withheld: review command in the local configuration; it may contain secrets]"
-                    )
-                ]
+            known = {
+                item.params.command
+                for item in defaults()
+                if isinstance(item.params, ApplicationParams)
+            }
+            lines += [
+                "Command: "
+                + (
+                    p.command
+                    if p.command in known
+                    else "[Custom payload withheld: review command in the local configuration; it may contain secrets]"
+                )
+            ]
         elif isinstance(p, RepositoryParams):
             owner, name = p.repository.split("/", 1)
             lines += [
@@ -527,8 +626,7 @@ class SetupApp(App):
                     f"Created: {timestamps.get('created_at') or 'unknown'}",
                     f"Last push: {timestamps.get('pushed_at') or 'none'}",
                 ]
-            if full:
-                lines += ["", "Repository: " + p.repository]
+            lines += ["", "Repository: " + p.repository]
         elif isinstance(p, FileParams):
             lines += [
                 "Source (desktop):",
@@ -547,10 +645,9 @@ class SetupApp(App):
     def action_filter(self):
         self.query_one(Input).focus()
 
-    def action_details(self):
-        node = self.query_one(SetupTree).cursor_node
-        if node:
-            self.push_screen(Review(self.details(node.data, full=True), apply=False))
+    def action_review(self):
+        if not isinstance(self.focused, Input):
+            self.review()
 
     def action_cancel(self):
         if self.busy:
@@ -565,13 +662,19 @@ class SetupApp(App):
         else:
             self.exit(self.result)
 
-    def on_button_pressed(self, event: Button.Pressed):
-        if event.button.id == "cancel":
+    def on_compact_action_pressed(self, event: CompactAction.Pressed):
+        event.stop()
+        if event.control.id == "cancel":
             self.action_cancel()
-        elif event.button.id == "review" and not self.busy:
+        elif event.control.id == "review":
             self.review()
 
     def review(self):
+        if self.busy:
+            return
+        if not self.selected:
+            self.notify("No setup actions selected.")
+            return
         selected = tuple(entry for entry in self.catalog.entries if entry.id in self.selected)
         if any(not self.available(entry) for entry in selected):
             self.notify(
@@ -637,6 +740,7 @@ class SetupApp(App):
     def review_answer(self, approved):
         if approved:
             self.busy = True
+            self.update_review_action()
             self.cancel_requested.clear()
             self.execute()
 

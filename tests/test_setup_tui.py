@@ -6,9 +6,9 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from textual.widgets import Button, Input, Static
+from textual.widgets import Input, Static
 from homestack import setup_catalog as catalog, setup_config as definitions
-from homestack.setup_tui import SetupApp, SetupTree, Review
+from homestack.setup_tui import CompactAction, SetupApp, SetupTree, Review
 from support import test_config
 
 TARGET = {'name': 'workspace', 'vmid': 200, 'ip': '192.0.2.200'}
@@ -66,7 +66,7 @@ class SetupTUITests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(app.nodes['env'].is_expanded)
             await pilot.press('enter')
             self.assertIsInstance(app.screen, Review)
-            self.assertFalse(app.screen.apply)
+            self.assertTrue(app.screen.apply)
             await pilot.press('escape')
             self.assertFalse(app.busy)
             await pilot.press('escape')
@@ -219,10 +219,12 @@ class SetupInteractionTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(app.selected, {'codex'})
 
     async def test_details_tab_page_keys_and_wheel_do_not_change_selection(self):
+        import asyncio
         from textual.containers import VerticalScroll
         from textual.events import MouseScrollDown
 
-        app = TestApp(test_config(), TARGET)
+        app = TestApp(replace(test_config(), sync_paths=('~/short-fixture',)), TARGET)
+        short_entry = next(e for e in app.catalog.entries if e.handler == 'file')
         app.catalog.entries = tuple(
             replace(e, description='\n'.join(f'Detail line {i}' for i in range(100)))
             if e.id == 'bash' else e for e in app.catalog.entries
@@ -250,9 +252,21 @@ class SetupInteractionTests(unittest.IsolatedAsyncioTestCase):
             self.assertGreater(pane.scroll_y, before)
             self.assertEqual(tree.scroll_y, tree_scroll)
             self.assertFalse(app.selected)
-            # Changing the highlighted item resets details to the top. A short
-            # panel is skipped in the tab order without trapping keyboard focus.
-            tree.select_node(app.nodes['codex'])
+            # A short file detail fits without scrolling even with complete
+            # metadata; installer command length must not determine this case.
+            # Wait for Textual's deferred layout/focus update, not just the
+            # highlight event, which still sees the previous content height.
+            settled = asyncio.Event()
+            update_focus = app.update_details_focus
+
+            def focus_updated():
+                update_focus()
+                if app.details_identity == short_entry.id and not pane.can_focus:
+                    settled.set()
+
+            with patch.object(app, 'update_details_focus', side_effect=focus_updated):
+                tree.select_node(app.nodes[short_entry.id])
+                await asyncio.wait_for(settled.wait(), timeout=5)
             await pilot.pause()
             self.assertEqual(pane.scroll_y, 0)
             self.assertFalse(pane.can_focus)
@@ -300,7 +314,7 @@ class SetupInteractionTests(unittest.IsolatedAsyncioTestCase):
             await self.click_part(pilot, app, entry.id, 'checkbox')
             self.assertEqual(app.selected, {entry.id})
             self.assertIn('~/DEV/project', app.details(entry.id))
-            self.assertIn('example-owner/project', app.details(entry.id, full=True))
+            self.assertIn('example-owner/project', app.details(entry.id))
             self.assertIn('Last push: 2026-09-10T00:00:00Z', app.details(entry.id))
             self.assertIn('Recent first', app.details('repo'))
             # A click on the root checkbox does not re-open a collapsed root.
@@ -337,3 +351,233 @@ class SetupInteractionTests(unittest.IsolatedAsyncioTestCase):
             self.assertGreater(tree.scroll_y, 0)
             self.assertEqual(pane.scroll_y, details_scroll)
             self.assertEqual(app.selected, {entries[-1].id})
+
+
+class SetupActionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_enter_opens_review_and_requires_a_second_confirmation(self):
+        app = TestApp(test_config(), TARGET)
+        with patch.object(app, 'execute') as execute:
+            async with app.run_test(size=(120, 40)) as pilot:
+                tree = app.query_one(SetupTree)
+                tree.select_node(app.nodes['codex'])
+                await pilot.press('space', 'enter')
+                await pilot.pause()
+                self.assertIsInstance(app.screen, Review)
+                self.assertTrue(app.screen.apply)
+                self.assertEqual(app.focused.id, 'apply')
+                execute.assert_not_called()
+                self.assertFalse(app.busy)
+                await pilot.press('enter')
+                execute.assert_called_once_with()
+                self.assertTrue(app.busy)
+                action = app.query_one('#review', CompactAction)
+                self.assertTrue(action.disabled)
+                self.assertFalse(action.pending)
+                app.review()
+                execute.assert_called_once()
+
+    async def test_empty_selection_and_filter_enter_do_not_prepare_a_plan(self):
+        app = TestApp(test_config(), TARGET)
+        with patch.object(app, 'prepare_review') as prepare, patch.object(app, 'notify') as notify:
+            async with app.run_test(size=(120, 40)) as pilot:
+                await pilot.press('enter')
+                prepare.assert_not_called()
+                notify.assert_called_with('No setup actions selected.')
+                app.selected = {'codex'}
+                app.query_one(Input).focus()
+                await pilot.press('c', 'enter')
+                self.assertEqual(app.query_one(Input).value, 'c')
+                prepare.assert_not_called()
+                self.assertNotIsInstance(app.screen, Review)
+
+    async def test_compact_mouse_actions_back_focus_and_escape(self):
+        app = TestApp(test_config(), TARGET)
+        with patch.object(app, 'execute') as execute:
+            async with app.run_test(size=(120, 40)) as pilot:
+                app.selected = {'codex'}
+                app.update_counts()
+                await pilot.click('#review')
+                await pilot.pause()
+                self.assertIsInstance(app.screen, Review)
+                for control in app.screen.query(CompactAction):
+                    self.assertEqual(control.size.height, 1)
+                    self.assertTrue(control.can_focus)
+                await pilot.press('shift+tab')
+                self.assertEqual(app.focused.id, 'back')
+                await pilot.press('enter')
+                self.assertNotIsInstance(app.screen, Review)
+                execute.assert_not_called()
+                await pilot.click('#review')
+                await pilot.pause()
+                await pilot.press('escape')
+                self.assertNotIsInstance(app.screen, Review)
+                await pilot.click('#review')
+                await pilot.pause()
+                await pilot.click('#back')
+                execute.assert_not_called()
+                await pilot.click('#review')
+                await pilot.pause()
+                await pilot.click('#apply')
+                execute.assert_called_once()
+
+    async def test_details_enter_and_tab_order(self):
+        app = TestApp(test_config(), TARGET)
+        async with app.run_test(size=(80, 24)) as pilot:
+            tree = app.query_one(SetupTree)
+            tree.select_node(app.nodes['codex'])
+            await pilot.press('space')
+            await pilot.pause()
+            await pilot.press('tab')
+            self.assertEqual(app.focused.id, 'details-pane')
+            await pilot.press('enter')
+            await pilot.pause()
+            self.assertIsInstance(app.screen, Review)
+            await pilot.press('escape')
+            app.query_one('#review', CompactAction).focus()
+            await pilot.press('tab')
+            self.assertEqual(app.focused.id, 'cancel')
+            await pilot.press('shift+tab')
+            self.assertEqual(app.focused.id, 'review')
+
+    async def test_pending_badge_transitions_include_hidden_selections(self):
+        app = TestApp(test_config(), TARGET)
+        async with app.run_test(size=(120, 40)) as pilot:
+            action = app.query_one('#review', CompactAction)
+            normal = action.render().spans[0].style
+            self.assertFalse(action.pending)
+            app.selected = {'codex'}
+            app.update_counts()
+            action._blink_timer.pause()
+            self.assertTrue(action.pending)
+            bright = action.render().spans[0].style
+            self.assertIn('#d29922', bright)
+            action.advance_blink()
+            self.assertIn('#6e7681', action.render().spans[0].style)
+            action.advance_blink()
+            self.assertEqual(action.render().spans[0].style, bright)
+            app.query_one(Input).value = 'bash'
+            await pilot.pause()
+            self.assertTrue(action.pending)
+            self.assertNotIn('codex', app.nodes)
+            app.selected.clear()
+            app.update_counts()
+            self.assertFalse(action.pending)
+            self.assertEqual(action.render().spans[0].style, normal)
+            action.advance_blink()
+            self.assertEqual(action.render().spans[0].style, normal)
+        self.assertIsNone(action._blink_timer)
+
+    async def test_success_clears_selection_and_restores_ready_green(self):
+        state = {'items': {'codex': {'ready': True, 'state': 'installed'}}}
+        app = TestApp(test_config(), TARGET, state=state)
+        async with app.run_test(size=(120, 40)) as pilot:
+            entry = next(e for e in app.catalog.entries if e.id == 'codex')
+            self.assertEqual(app.entry_style(entry), 'green')
+            app.toggle_node(app.nodes['codex'])
+            self.assertEqual(app.entry_style(entry), 'bold red')
+            self.assertTrue(app.query_one('#review', CompactAction).pending)
+            app.busy = True
+            app.update_review_action()
+            self.assertFalse(app.query_one('#review', CompactAction).pending)
+            app.finished({'ok': True, 'results': [
+                {'id': 'codex', 'label': 'Codex', 'status': 'succeeded', 'detail': 'done'}
+            ]}, state)
+            await pilot.pause()
+            self.assertFalse(app.selected)
+            self.assertEqual(app.entry_style(entry), 'green')
+            self.assertFalse(app.screen.apply)
+            self.assertEqual(app.screen.query_one('#back', CompactAction).size.height, 1)
+            await pilot.press('escape')
+            self.assertFalse(app.query_one('#review', CompactAction).pending)
+            self.assertFalse(app.query_one('#review', CompactAction).disabled)
+
+    async def test_complete_details_fold_at_narrow_and_wide_widths(self):
+        app = TestApp(test_config(), TARGET)
+        entry = next(e for e in app.catalog.entries if e.id == 'codex')
+        description = 'Long description ' + 'unbroken-path-' * 60
+        app.catalog.entries = tuple(replace(e, description=description) if e.id == 'codex'
+                                    else e for e in app.catalog.entries)
+        async with app.run_test(size=(120, 40)) as pilot:
+            app.query_one(SetupTree).select_node(app.nodes['codex'])
+            for width, height in ((120, 40), (80, 24), (40, 30), (140, 42)):
+                await pilot.resize_terminal(width, height)
+                await pilot.pause()
+                details = app.query_one('#details', Static)
+                pane = app.query_one('#details-pane')
+                content = details.render().plain
+                self.assertIn('ID: codex', content)
+                self.assertIn('Command: ' + entry.params.command, content)
+                self.assertIn(description, content)
+                self.assertEqual(pane.max_scroll_x, 0)
+                self.assertGreater(pane.max_scroll_y, 0)
+                self.assertGreater(details.size.height, len(content.splitlines()))
+                for control in app.query(CompactAction):
+                    self.assertEqual(control.size.height, 1)
+                    self.assertLessEqual(control.region.right, width)
+                    self.assertGreaterEqual(control.content_size.width, control.render().cell_len)
+                    self.assertIn(control.label, control.render_line(0).text)
+            self.assertIn('State registry:', app.details('root'))
+            self.assertIn('State registry:', app.details('app'))
+
+    async def test_narrow_confirmation_actions_keep_complete_labels(self):
+        app = TestApp(test_config(), TARGET)
+        async with app.run_test(size=(40, 30)) as pilot:
+            app.push_screen(Review('\n'.join(f'Action {i}' for i in range(100)), apply=True))
+            await pilot.pause()
+            self.assertGreater(app.screen.query_one('#review-content').max_scroll_y, 0)
+            for control in app.screen.query(CompactAction):
+                self.assertEqual(control.size.height, 1)
+                self.assertGreaterEqual(control.content_size.width, control.render().cell_len)
+                self.assertIn(control.label, control.render_line(0).text)
+                self.assertLessEqual(control.region.right, 40)
+            await pilot.press('escape')
+
+    def test_custom_commands_stay_redacted_and_no_button_or_details_action_remains(self):
+        import inspect
+        from homestack import setup_tui
+        app = TestApp(test_config(), TARGET)
+        app.catalog.entries = tuple(replace(e, params=replace(e.params, command='SECRET_PAYLOAD'))
+                                    if e.id == 'codex' else e for e in app.catalog.entries)
+        self.assertNotIn('SECRET_PAYLOAD', app.details('codex'))
+        self.assertIn('Custom payload withheld', app.details('codex'))
+        self.assertNotIn('Button', inspect.getsource(setup_tui))
+        self.assertFalse(hasattr(SetupApp, 'action_details'))
+
+    def test_complete_details_preserve_state_metadata_and_overwrite_colors(self):
+        app = TestApp(test_config(), TARGET, state={
+            'checked_at': '2026-09-11T01:00:00Z',
+            'items': {'bash': {
+                'ready': False, 'will_overwrite': True, 'state': 'needs update',
+                'first_managed_at': 'first-managed', 'installed_at': 'installed',
+                'last_applied_at': 'last-applied', 'last_snapshot': '~/snapshot/example',
+                'files': [{'path': '.bashrc', 'exists': True, 'size': 123,
+                           'sha256': 'abcdef0123456789', 'mtime_ns': 1_000_000_000,
+                           'birthtime_ns': 1_000_000_000}],
+            }},
+        })
+        content = app.details('bash')
+        for value in ('ID: bash', 'Status: UPDATE', 'first-managed', 'last-applied',
+                      '~/snapshot/example', 'Managed path: ~/.bashrc',
+                      'SHA-256: abcdef0123456789', 'Size: 123 bytes',
+                      'Created: 1970-01-01T00:00:01Z', 'Modified: 1970-01-01T00:00:01Z',
+                      'State checked: 2026-09-11T01:00:00Z', 'Managed paths:'):
+            self.assertIn(value, content)
+        entry = next(e for e in app.catalog.entries if e.id == 'bash')
+        self.assertEqual(app.entry_style(entry), '')
+        app.selected = {'bash'}
+        self.assertEqual(app.entry_style(entry), 'bold red')
+
+    async def test_stale_rebuild_restore_cannot_replace_newer_highlight(self):
+        app = TestApp(test_config(), TARGET)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            tree = app.query_one(SetupTree)
+            old_generation = app._rebuild_generation
+            app.rebuild()
+            await pilot.pause()
+            tree.move_cursor(app.nodes['codex'])
+            app.restore_cursor('bash', 'root', old_generation)
+            self.assertEqual(tree.cursor_node.data, 'codex')
+            app.restore_cursor('bash', 'root', app._rebuild_generation)
+            self.assertEqual(tree.cursor_node.data, 'codex')
+            self.assertIn('ID: codex', app.query_one('#details', Static).render().plain)
