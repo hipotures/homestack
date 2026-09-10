@@ -17,9 +17,8 @@ from .lifecycle import build_create_plan, build_destroy_plan, build_migrate_plan
 from .models import AppError
 from .proxmox import parse_home_size
 from .status import global_status, transport_status, workspace_status
-from .sync import build_sync_plan, sync_workspace
 from .transports import open_transport
-from .ui import console, show_create_plan, show_destroy_plan, show_destroy_result, show_error, show_global_status, show_migrate_plan, show_refresh_plan, show_repository_menu, show_repository_status, show_status_result, show_sync_plan, show_sync_result, show_transport_result
+from .ui import console, show_create_plan, show_destroy_plan, show_destroy_result, show_error, show_global_status, show_migrate_plan, show_refresh_plan, show_repository_menu, show_repository_status, show_status_result, show_transport_result
 
 def emit_json(obj: dict[str, Any]) -> None:
     print(json.dumps(obj, ensure_ascii=False, indent=2, sort_keys=True))
@@ -55,6 +54,7 @@ def show_help(cfg_path: Path) -> None:
         f"{cmd} migrate VMID|NAME NODE --target-storage STORAGE",
         "Offline-migrate root, persistent home and cloud-init disk; copy snippets first.",
     )
+    commands.add_row(f"{cmd} setup VMID|NAME [files=… env=… app=… repo=…]", "Explicit workspace setup; setup list displays stable catalog indices.")
     commands.add_row(
         f"{cmd} sync VMID|NAME",
         "Synchronize configured desktop files/directories into the workspace persistent home.",
@@ -84,7 +84,7 @@ def show_help(cfg_path: Path) -> None:
         "--storage STORAGE",
         "Create root and persistent home on an allowed storage instead of the layout default.",
     )
-    options.add_row("-y, --yes", "Skip interactive confirmation for create, refresh, migrate, sync or destroy.")
+    options.add_row("-y, --yes", "Accept the plan for setup, create, refresh, migrate, sync or destroy.")
     options.add_row(
         "--json",
         "Return JSON. Commands requiring confirmation return the resolved plan without --yes.",
@@ -165,6 +165,19 @@ def build_parser() -> argparse.ArgumentParser:
     sync.add_argument("-y", "--yes", action="store_true")
     sync.add_argument("-h", "--help", action="store_true", dest="sub_help")
 
+    setup = sub.add_parser("setup", description="Prepare explicit Files, Environment, Applications and Repositories selections.")
+    setup.add_argument("target", nargs="?", help="VMID, exact workspace name, or list for targetless catalog discovery")
+    setup.add_argument("selectors", nargs="*", help="files/f=ID,ID env/e=ID app/a=ID repo/r=OWNER/REPO; 0/all selects a category")
+    for command in (setup, sync):
+        if command is sync:
+            command.add_argument("selectors", nargs="*", help="Optional files=ID,ID selection (default: all configured Files)")
+        else:
+            command.add_argument("--json", action="store_true")
+            command.add_argument("-y", "--yes", action="store_true")
+        command.add_argument("--catalog", help="Immutable catalog snapshot ID for numeric selections")
+        command.add_argument("--dry-run", action="store_true", help="Plan without guest SSH or remote writes")
+        command.add_argument("--non-interactive", action="store_true", help="Forbid dialogs; hardware authentication may still require touch")
+
     repo = sub.add_parser("repo", add_help=False)
     repo.add_argument("target")
     repo.add_argument("repository", nargs="?")
@@ -210,6 +223,10 @@ def main() -> int:
             return run_installer(args.config)
 
         cfg = load_config(args.config)
+        if args.command in {"setup", "sync"}:
+            from .setup_cli import run_setup
+            return run_setup(args, cfg, json_mode=json_mode,
+                             assume_yes=bool(args.global_yes or getattr(args, "yes", False)))
         with open_transport(cfg) as session:
 
             if args.command == "transport":
@@ -367,37 +384,6 @@ def main() -> int:
                 if json_mode:
                     emit_json(result)
                 return 0
-
-            if args.command == "sync":
-                vmid = resolve_workspace_target(session, cfg, args.target)
-                plan = build_sync_plan(session, cfg, vmid)
-                assume_yes = bool(args.global_yes or getattr(args, "yes", False))
-                if not assume_yes:
-                    if json_mode:
-                        emit_json(
-                            {
-                                "ok": False,
-                                "confirmation_required": True,
-                                "message": "No changes made. Re-run with --yes to execute sync.",
-                                "plan": plan,
-                            }
-                        )
-                        return 3
-                    show_sync_plan(plan)
-                    if not sys.stdin.isatty():
-                        raise AppError(
-                            "Interactive confirmation requires a TTY; use --yes for automation"
-                        )
-                    if not Confirm.ask("Synchronize these workspace files?", default=False):
-                        console.print("[bold]Cancelled. No changes were made.[/bold]")
-                        return 0
-
-                result = sync_workspace(cfg, plan, json_mode=json_mode)
-                if json_mode:
-                    emit_json(result)
-                else:
-                    show_sync_result(result)
-                return 0 if result.get("ok") else 1
 
             if args.command == "repo":
                 from .repo import (

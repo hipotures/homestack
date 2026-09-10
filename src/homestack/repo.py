@@ -5,7 +5,6 @@ from __future__ import annotations
 from pathlib import PurePosixPath
 from typing import Any
 import json
-import os
 import re
 import shlex
 import shutil
@@ -30,11 +29,13 @@ from .proxmox import (
     qm_status_on_node,
     require_workspace_tag,
 )
-from .transports.base import Transport, run_local, run_local_passthrough
+from .transports.base import Transport, run_local
 from .ui import console
+from .workspace_ssh import WorkspaceSSH
+from .guest import derive_ip
 
 
-def _repository_progress() -> Progress:
+def _repository_progress(*, quiet: bool = False) -> Progress:
     return Progress(
         SpinnerColumn(),
         TextColumn("[bold]{task.description}"),
@@ -43,6 +44,7 @@ def _repository_progress() -> Progress:
         TimeElapsedColumn(),
         console=console,
         refresh_per_second=8,
+        disable=quiet,
     )
 
 
@@ -67,88 +69,6 @@ def repository_setup_steps(actions: tuple[str, ...]) -> tuple[str, ...]:
     steps.append("Verify Git access")
     steps.append("Refresh repository status")
     return tuple(steps)
-
-
-class WorkspaceRepoSSH:
-    """One hardware-authenticated SSH connection reused for repository work."""
-
-    def __init__(self, alias: str, vmid: int) -> None:
-        self.alias = alias
-        self.control = f"/tmp/hs-repo-{os.getuid()}-{vmid}-{uuid.uuid4().hex[:8]}"
-        self.opened = False
-
-    def __enter__(self) -> WorkspaceRepoSSH:
-        if shutil.which("ssh") is None:
-            raise AppError("Required local command 'ssh' was not found")
-        console.print(
-            "[dim]SSH: waiting for workspace authentication; "
-            "touch the security key when requested.[/dim]"
-        )
-        result = run_local_passthrough(
-            [
-                "ssh",
-                "-M",
-                "-S",
-                self.control,
-                "-o",
-                "ControlPersist=60",
-                "-o",
-                "StrictHostKeyChecking=accept-new",
-                "-o",
-                "PasswordAuthentication=no",
-                "-o",
-                "KbdInteractiveAuthentication=no",
-                "-f",
-                self.alias,
-                "true",
-            ]
-        )
-        if result.returncode != 0:
-            raise AppError(f"Could not open SSH session to workspace {self.alias!r}")
-        self.opened = True
-        check = run_local(
-            ["ssh", "-S", self.control, "-O", "check", self.alias],
-            check=False,
-        )
-        if check.returncode != 0:
-            self.__exit__(None, None, None)
-            raise AppError(
-                f"Workspace SSH ControlMaster is unavailable for {self.alias!r}"
-            )
-        return self
-
-    def run(
-        self, command: str, *, check: bool = True
-    ) -> subprocess.CompletedProcess[str]:
-        options = [
-            "-S",
-            self.control,
-            "-o",
-            "ControlMaster=no",
-            "-o",
-            "PubkeyAuthentication=no",
-            "-o",
-            "PasswordAuthentication=no",
-            "-o",
-            "KbdInteractiveAuthentication=no",
-            "-o",
-            "GSSAPIAuthentication=no",
-            "-o",
-            "HostbasedAuthentication=no",
-        ]
-        return run_local(["ssh", *options, self.alias, command], check=check)
-
-    def __exit__(self, *_: object) -> None:
-        if self.opened:
-            run_local(
-                ["ssh", "-S", self.control, "-O", "exit", self.alias],
-                check=False,
-            )
-            self.opened = False
-        try:
-            os.unlink(self.control)
-        except OSError:
-            pass
 
 
 def resolve_repository_argument(
@@ -203,7 +123,10 @@ def _bootstrap_ssh(key: str) -> str:
 def _gh(args: list[str]) -> subprocess.CompletedProcess[str]:
     if shutil.which("gh") is None:
         raise AppError("Required local command 'gh' was not found")
-    return run_local(["gh", "api", *args])
+    result = run_local(["gh", "api", "--hostname", "github.com", *args], check=False)
+    if result.returncode:
+        raise AppError("Desktop GitHub request failed; check gh authentication and repository administration permissions")
+    return result
 
 
 def _github_json(args: list[str], expected: type) -> Any:
@@ -217,8 +140,8 @@ def _github_json(args: list[str], expected: type) -> Any:
 
 
 def _keys(repository: str) -> list[dict[str, Any]]:
-    value = _github_json([f"repos/{repository}/keys?per_page=100"], list)
-    return [item for item in value if isinstance(item, dict)]
+    pages = _github_json(["--paginate", "--slurp", f"repos/{repository}/keys?per_page=100"], list)
+    return [item for page in pages for item in page if isinstance(item, dict)]
 
 
 def _matching_key(
@@ -260,17 +183,18 @@ def _delete_key(repository: str, key_id: int) -> None:
     _gh(["--method", "DELETE", f"repos/{repository}/keys/{key_id}"])
 
 
-def _output(ws: WorkspaceRepoSSH, command: str) -> str:
+def _output(ws: WorkspaceSSH, command: str) -> str:
     result = ws.run(command, check=False)
     return result.stdout.strip() if result.returncode == 0 else ""
 
 
 def inspect_repository(
     cfg: Config,
-    ws: WorkspaceRepoSSH,
+    ws: WorkspaceSSH,
     vmid: int,
     name: str,
     repository: str,
+    *, verify_access: bool = True,
 ) -> dict[str, Any]:
     repository = validate_repository_spec(repository)
     _github_json([f"repos/{repository}"], dict)
@@ -385,7 +309,7 @@ def inspect_repository(
     )
 
     access = "not-tested"
-    if tools["git"] and tools["ssh"] and private:
+    if verify_access and tools["git"] and tools["ssh"] and private:
         remote_url = f"git@github.com:{repository}.git"
         result = ws.run(
             f"GIT_SSH_COMMAND={shlex.quote(_bootstrap_ssh(key))} "
@@ -474,7 +398,7 @@ def repository_setup_actions(state: dict[str, Any]) -> tuple[str, ...]:
 
 
 def _generate_key(
-    ws: WorkspaceRepoSSH, key: str, public_key: str, repository: str
+    ws: WorkspaceSSH, key: str, public_key: str, repository: str
 ) -> None:
     github_dir = str(PurePosixPath(key).parent)
     homestack_dir = str(PurePosixPath(github_dir).parent)
@@ -505,7 +429,7 @@ def _require_tools(state: dict[str, Any]) -> None:
 
 
 def setup_repository(
-    cfg: Config, ws: WorkspaceRepoSSH, state: dict[str, Any]
+    cfg: Config, ws: WorkspaceSSH, state: dict[str, Any], *, quiet: bool = False
 ) -> dict[str, Any]:
     _require_tools(state)
     actions = repository_setup_actions(state)
@@ -523,7 +447,7 @@ def setup_repository(
     title = f"HomeStack {name}"
     steps = repository_setup_steps(actions)
 
-    with _repository_progress() as progress:
+    with _repository_progress(quiet=quiet) as progress:
         task = progress.add_task(steps[0], total=len(steps))
 
         if "generate-key" in actions:
@@ -561,17 +485,6 @@ def setup_repository(
             matching = None
 
         if not matching:
-            for item in keys:
-                same_title = str(item.get("title") or "") == title
-                different_key = (
-                    _identity(str(item.get("key") or "")) != identity
-                )
-                if (
-                    same_title
-                    and different_key
-                    and isinstance(item.get("id"), int)
-                ):
-                    _delete_key(repository, int(item["id"]))
             _add_key(repository, title, public_key)
         progress.advance(task)
 
@@ -621,12 +534,12 @@ def setup_repository(
 
     return {
         **refreshed,
-        "changed": True,
+        "changed": any(action != "verify-access" for action in actions),
         "message": "Repository setup completed.",
     }
 
 def rotate_repository_key(
-    cfg: Config, ws: WorkspaceRepoSSH, state: dict[str, Any]
+    cfg: Config, ws: WorkspaceSSH, state: dict[str, Any]
 ) -> dict[str, Any]:
     _require_tools(state)
     if (
@@ -740,7 +653,7 @@ def repository_workspace_info(
 
 def open_repository_workspace(
     session: Transport, cfg: Config, target: str | int
-) -> tuple[int, str, WorkspaceRepoSSH]:
+) -> tuple[int, str, WorkspaceSSH]:
     vmid = resolve_workspace_target(session, cfg, target)
     info = repository_workspace_info(session, cfg, vmid)
     if info["status"] != "running":
@@ -749,4 +662,4 @@ def open_repository_workspace(
             "repository operations require a running VM."
         )
     name = str(info["name"])
-    return vmid, name, WorkspaceRepoSSH(name, vmid)
+    return vmid, name, WorkspaceSSH.configured(cfg, {**info, "ip": derive_ip(cfg, vmid)})

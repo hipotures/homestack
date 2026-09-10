@@ -17,7 +17,7 @@ uv run homestack --help
 uv run python -m homestack --help
 ```
 
-The desktop also needs `herdr`, `ssh`, and `rsync`. GitHub repository provisioning additionally requires an authenticated `gh` CLI on the trusted desktop. Proxmox nodes need `qm`, `pvesh`, `pvesm`, `perl`, `base64`, `ssh`, and `scp`.
+The desktop also needs `herdr` and `ssh`. File transfers additionally require `rsync`. GitHub repository provisioning additionally requires an authenticated `gh` CLI on the trusted desktop. Proxmox nodes need `qm`, `pvesh`, `pvesm`, `perl`, `base64`, `ssh`, and `scp`.
 
 ## Configuration
 
@@ -99,7 +99,7 @@ uv run homestack status
 uv run homestack status 200
 ```
 
-Lifecycle targets may be a numeric VMID or exact workspace name. `create`, `refresh`, `migrate`, `sync`, and `destroy` resolve and display a plan before confirmation. Use `--yes` for non-interactive execution and `--json` for machine-readable plans/results.
+Lifecycle targets may be a numeric VMID or exact workspace name. `create`, `refresh`, `migrate`, `sync`, and `destroy` resolve and display a plan before confirmation. Use `--yes` to accept a plan and `--json` for machine-readable plans/results.
 
 ## Preparing a Gold VM
 
@@ -201,9 +201,107 @@ Gold's source root name is discovered from its configured `scsi0`; Gold itself d
 
 After a successful create, HomeStack writes and fsyncs a mode-`0600` temporary workspace entry below `~/.ssh/config.d/homestack/`, atomically publishes it, and only then removes stale entries for the same VMID. A publication failure therefore preserves the previous working alias. If this local step fails after VM verification, HomeStack reports that the VM was created successfully and does not roll it back. Known-host removal is likewise narrow.
 
-Synchronization is explicit and never runs as part of create, refresh, or migration. `[sync] paths` contains normalized `~/...` desktop paths; an ending slash denotes a directory. Optional commands run in order as the workspace user only after all configured paths synchronize successfully.
+Synchronization is explicit and never runs as part of create, refresh, or migration. `sync` is a Files-only shortcut through the setup engine. With no selectors it selects all configured Files; `sync WORKSPACE files=ID,ID` narrows the selection. Legacy `[sync] paths` remain selectable Files; an ending slash denotes a directory. Legacy `[sync] commands` are selectable Applications under `setup` and **never run under sync**. `[sync] verbose = true` reports additional file preparation, transfer and verification phases without printing file contents.
 
-One SSH ControlMaster connection is established and reused for checks, directory creation, rsync, verification, and post-sync commands. Fresh authentication methods are disabled on child connections, so a broken control socket fails instead of requesting another hardware-key interaction. HomeStack does not use password authentication, a fallback key, `sudo`, or credentials stored on PVE hosts.
+One SSH ControlMaster connection is established and reused for checks, directory creation, rsync, verification, and all selected setup handlers. Fresh authentication methods are disabled on child connections, so a broken control socket fails instead of requesting another hardware-key interaction. HomeStack does not use password authentication, a fallback key, `sudo`, or credentials stored on PVE hosts.
+
+## Unified workspace setup
+
+`setup` is an explicit user-space operation, independent of `install`, `create`, `refresh`, and `migrate`. It runs on the trusted desktop, resolves the exact workspace through verified Herdr/PVE infrastructure, and operates as the configured unprivileged guest account. Nothing is selected automatically. Applications and repositories do not require selecting Files or copying GitHub authentication.
+
+```bash
+# Desktop catalog discovery: no Herdr or guest SSH connection.
+uv run homestack setup list
+uv run homestack setup list --json
+
+# Full-screen keyboard selection, starting with nothing selected.
+uv run homestack setup hermes
+
+# Numeric selections refer to the last displayed compatible catalog.
+# Check the actual indices in your listing; these numbers are illustrative.
+uv run homestack setup hermes f=1 e=1 a=1,2
+
+# Use the catalog identifier printed by setup list for concurrent sessions.
+uv run homestack setup hermes env=1 app=1 --catalog CATALOG_ID --dry-run
+
+# Stable IDs are preferable for scripts; repository identity is explicit.
+uv run homestack setup hermes env=bash app=codex,opencode --yes
+uv run homestack setup hermes repo=hipotures/homestack --yes
+uv run homestack setup 200 env=bash app=codex --dry-run
+uv run homestack setup hermes env=bash app=codex --yes --non-interactive --json
+```
+
+The groups are **Files** (`files`, `f`), **Environment** (`env`, `e`), **Applications** (`app`, `a`), and **Repositories** (`repo`, `r`). Select comma-separated one-based indices or stable IDs. `0` or `all` selects the entire explicitly named category and cannot be mixed with other values. Omitted groups select nothing. Repeating an equivalent assignment deduplicates it; conflicting repeated assignments, unknown IDs and invalid indices are errors. `--yes` accepts only the HomeStack plan; it neither selects actions nor answers installer questions.
+
+An explicit VMID or exact workspace name is always required for execution. With selectors, HomeStack displays a plain plan and confirmation. Without selectors, an interactive terminal opens the Textual interface; non-TTY execution reports an actionable error. Without `--yes`, JSON/non-TTY/`--non-interactive` invocations return a plan with `confirmation_required: true` and exit 3. `--dry-run` performs local validation and read-only target resolution, but no guest SSH, transfers, installer commands or GitHub deploy-key writes. Guest state remains `unknown`.
+
+`--non-interactive` and JSON execution disallow interactive installers unless a configured, verified `non_interactive` recipe exists. They do not bypass hardware authentication: the configured security key may still require touch. HomeStack never switches identities to make an unattended run work. JSON stdout contains only the result; progress goes to stderr. Captured installer commands/output and onboarding transcripts are not put in results or logs. Without a configured installation check, a successful command is reported with installation state still unknown.
+
+### Catalog identity and numbering
+
+Listings include category index, stable ID, label, file path or repository identity, desktop availability, and available repository timestamps. They never claim to know guest installation state. Repository discovery uses authenticated desktop `gh api` with all pages, including accessible private repositories belonging to `[repo] owner`. Discovery failures remain visible and do not disable unrelated groups. GitHub host is explicitly `github.com`, matching the existing repository provisioning service.
+
+```toml
+[repo]
+owner = "example-owner"
+checkout_root = "~/DEV"
+sort = "recent" # recent (default), created, or name
+```
+
+`recent` sorts descending by the later of creation and push time; missing push dates use creation time. Full repository name breaks ties deterministically. Explicit multi-repository selection is supported and is unrelated to the workspace name.
+
+Each displayed catalog saves a version-1 immutable metadata snapshot below `$XDG_STATE_HOME/homestack/catalogs/` (default `~/.local/state/homestack/catalogs/`). It is scoped to the resolved configuration path and catalog-definition fingerprint. Repository mappings additionally bind the GitHub host/account/account ID, configured owner, checkout root and sort. Snapshots store IDs and repository identities, not commands, tokens or file contents. Files/Environment/Applications-only numeric execution does not require GitHub access. Missing/incompatible snapshots instruct you to list again. An explicit `--catalog ID` keeps using that immutable mapping after later listings; a new push never silently changes an old numeric selection. Selected repository identity and administration permission are rechecked before application.
+
+### Terminal controls
+
+One scrollable checkbox tree contains all groups, with persistent target, details, selection counts and Review/Cancel controls. Parent checkboxes reflect empty, full or partial selection. Up/Down moves, Left/Right collapses/expands, Space toggles an item or branch, and `0` selects the current branch. `/` focuses the filter; bulk selection with a filter affects **visible matches only**. Hidden selections remain counted and appear in review. `D` or Enter opens details; Enter on the tree never applies. Tab navigates controls. Escape closes details/review, clears an active filter, or cancels selection.
+
+`Ctrl+R` explicitly reloads the catalog in a worker. Selections retain stable identity; removed items remain visible and must be deselected before applying. Review offers Back with the same selection, then explicit Apply. No guest SSH is opened while browsing. HomeStack suspends the TUI for hardware authentication and for interactive SSH PTY installers, then restores it, including on failure. Background catalog/execution work leaves navigation responsive. Cancel during background execution takes effect at the next action boundary; an interactive installer receives Ctrl+C through its actual terminal. A final per-item summary remains available. Full details show built-in commands; custom payloads are withheld in the UI because arbitrary shell text can embed secrets—inspect those in the local configuration.
+
+### Catalog configuration and migration
+
+Older configurations receive built-in Bash (`bash`), Zsh (`zsh`), Fish (`fish`), Nushell (`nu`), Codex (`codex`), OpenCode (`opencode`), and Hermes Agent (`hermes`) definitions in memory. Presence never selects or executes them. `config.example.toml` contains the complete neutral catalog.
+
+Use `[[setup.items]]` to customize by stable ID. Existing definitions merge field by field, once per ID; duplicate definitions in one document are rejected. Changing an application's command clears inherited installation checks and unattended safety declarations. Explicitly supply the new command's `interaction`, `check`, and optional `non_interactive` recipe. Supported handler parameters are validated; unknown fields are errors. Application interpreters are Bash or Zsh so pipeline failures propagate. Group labels/descriptions live separately in `[[setup.groups]]`; additional groups can reuse existing handler types without renderer changes.
+
+```toml
+[[setup.items]]
+id = "notes"
+group = "files"
+handler = "file"
+label = "Notes directory"
+description = "Copy desktop notes into persistent home without deleting guest files."
+path = "~/notes/"
+
+[[setup.items]]
+id = "codex"
+label = "Codex CLI"
+# Other built-in fields remain available; override command only deliberately.
+
+# A custom application requires group, handler, label, description and command.
+# Optional: interpreter, interaction, prerequisites, prerequisite_checks, check,
+# non_interactive, bin_dirs, requires_absent, depends_on.
+```
+
+`depends_on = ["ID"]` requires those actions to be explicitly selected and displays their order; it never silently selects credentials or applications. Cycles and missing dependencies block the plan.
+
+Legacy `[sync] paths` become Files with stable `legacy-file-<hash>` IDs. Legacy `[sync] commands` become Applications while retaining the exact payload, including whitespace. Exact matches to existing application commands (including the known Codex non-interactive recipe) deduplicate safely. Arbitrary legacy commands get stable `legacy-app-<hash>` IDs and conservative interactive classification; no unattended flags are inferred. They never execute through `sync`.
+
+Migration is explicit: run `setup list`, identify each legacy entry, add a `[[setup.items]]` definition with the displayed ID and original path/command, supply a short label/description and verified application interaction/checks, then remove that entry from `[sync]`. Review the proposed TOML yourself; HomeStack does not rewrite live configuration on load/list/setup. The runtime serializer and install reconfiguration/draft-resume paths retain the new fields. Configuration publication retains existing atomic writes and backups. Declining optional sync reconfiguration preserves existing entries.
+
+### Execution and safety
+
+After approval, one private, owned ControlMaster remains alive throughout preflight and execution, including local GitHub calls. Every child SSH/rsync/PTY session requires that master and disables fresh authentication; losing the master fails closed. Socket cleanup runs on normal completion, errors and cancellation. Before writes the engine verifies hostname, account, UID/GID, expected home, and the dedicated ext4 mount labeled `HS_HOME_<VMID>`.
+
+All selected actions are preflighted before any mutates state. Environment normally precedes Files, Applications and Repositories; explicit selected dependencies take precedence. Overlapping writes (including Files versus startup profiles and colliding checkout/key paths) are rejected. A blocked preflight leaves the plan unapplied. Execution stops on failure, retains successful outcomes and marks remaining items `not-run`; results use `succeeded`, `already-ready`, `failed`, `blocked`, and `not-run`. Overall failure exits 1. Third-party installers are not transactional and are never blindly retried.
+
+Files retain home-relative rsync semantics and never delete unselected destinations. Only selected source types/trees are validated for execution. Source/destination symlinks, special files and unsafe ancestors are rejected. Transfers do not preserve desktop ownership; guest ownership is verified and permissions restrict access to the configured user. File content is never printed. No SSH identity, authentication configuration, application credential or key rotation is implicitly selected.
+
+Environment profiles repair minimal homes with managed blocks, atomic writes and private backups only when content changes. They preserve custom and installer-added lines, avoid repeated PATH entries, and do not change the login shell. Bash handles `.bash_profile`/`.bash_login` precedence over `.profile`, configures `.bashrc`, and uses system bash-completion when available. Zsh initializes its built-in completion; Fish uses its native startup syntax; Nushell updates `env.nu` and `config.nu`. Ambiguous startup source cycles, malformed blocks and symlinks block reconciliation. Shell syntax is checked before writing using the selected binary. Missing shell binaries are reported for separate Gold preparation/refresh.
+
+Application execution has explicit interpreter, HOME, working directory and PATH regardless of Environment selection. User bin directories are declarative. The default recipes follow [Codex installation](https://developers.openai.com/codex/cli/), [OpenCode installation](https://opencode.ai/docs/), and [Hermes installation](https://hermes-agent.nousresearch.com/docs/getting-started/installation/) and its [official stage installer](https://github.com/NousResearch/hermes-agent/blob/main/scripts/install.sh). Codex preserves the known `CODEX_NON_INTERACTIVE=1` recipe. OpenCode is non-interactive and uses `~/.opencode/bin`. Hermes uses the official repository/venv/python-deps/node-deps/path/config/complete stages, omitting system-package preparation, browser/computer-use installation, desktop, gateway and provider onboarding. Its conservative recipe requires a working supported Node/npm and compiler toolchain from Gold, preventing the upstream Node bootstrap's system-library installation path. Existing incomplete Hermes source installations block automatic replacement. Version checks establish installed software only; provider readiness remains separate.
+
+Guest `python3` and `findmnt` support identity/path/atomic-write verification. Files alone require desktop/guest rsync. Repository actions require guest git/ssh/ssh-keygen and authenticated desktop GitHub administration access; desktop tokens stay on the desktop. Missing prerequisites never trigger Gold edits, privileged fallbacks, package installation, lifecycle operations or automatic credential copies. Repositories reuse isolated checkout-local SSH configuration and existing keys; setup never pulls, resets, cleans, rotates keys, runs project installation scripts, or discards dirty worktrees. Incomplete/read-only deploy-key repair is left to explicit standalone repository maintenance.
 
 ## Repository provisioning
 

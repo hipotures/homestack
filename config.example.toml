@@ -48,6 +48,7 @@ log_level = "FATAL"
 [repo]
 owner = "example-owner"
 checkout_root = "~/DEV"
+sort = "recent"
 
 [sync]
 verbose = false
@@ -58,6 +59,116 @@ commands = []
 type = "herdr"
 
 [transport.herdr]
-workspace = "example-workspace"
+workspace = "PVE"
 tab = "example-node"
 debug = true
+
+# All catalog entries are opt-in. Files are user-defined; no authentication files
+# are selected or copied implicitly. Override a built-in by stable ID.
+
+[[setup.groups]]
+id = "files"
+label = "Files"
+description = "Desktop files copied into persistent home; no deletes."
+
+[[setup.groups]]
+id = "env"
+label = "Environment"
+description = "User shell profiles; login shell stays unchanged."
+
+[[setup.groups]]
+id = "app"
+label = "Applications"
+description = "Explicit user-space installers; onboarding is separate."
+
+[[setup.groups]]
+id = "repo"
+label = "Repositories"
+description = "GitHub checkouts with workspace-local deploy keys."
+
+[[setup.items]]
+id = "bash"
+group = "env"
+handler = "environment"
+label = "Bash"
+description = "Prepare Bash startup files and user executable paths."
+depends_on = []
+profile = "bash"
+
+[[setup.items]]
+id = "zsh"
+group = "env"
+handler = "environment"
+label = "Zsh"
+description = "Prepare Zsh startup files and user executable paths."
+depends_on = []
+profile = "zsh"
+
+[[setup.items]]
+id = "fish"
+group = "env"
+handler = "environment"
+label = "Fish"
+description = "Prepare Fish startup files and user executable paths."
+depends_on = []
+profile = "fish"
+
+[[setup.items]]
+id = "nu"
+group = "env"
+handler = "environment"
+label = "Nushell"
+description = "Prepare Nushell startup files and user executable paths."
+depends_on = []
+profile = "nu"
+
+[[setup.items]]
+id = "codex"
+group = "app"
+handler = "application"
+label = "Codex"
+description = "Install Codex CLI. Sign-in remains separate."
+depends_on = []
+command = "curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh"
+interpreter = "bash"
+interaction = "non-interactive"
+prerequisites = ["curl", "tar"]
+check = "codex --version"
+prerequisite_checks = []
+non_interactive = ""
+bin_dirs = ["~/.local/bin"]
+requires_absent = []
+
+[[setup.items]]
+id = "opencode"
+group = "app"
+handler = "application"
+label = "OpenCode"
+description = "Install OpenCode. Provider configuration remains separate."
+depends_on = []
+command = "curl -fsSL https://opencode.ai/install | bash"
+interpreter = "bash"
+interaction = "non-interactive"
+prerequisites = ["curl", "tar"]
+check = "opencode --version"
+prerequisite_checks = []
+non_interactive = ""
+bin_dirs = ["~/.opencode/bin", "~/.local/bin"]
+requires_absent = []
+
+[[setup.items]]
+id = "hermes"
+group = "app"
+handler = "application"
+label = "Hermes Agent"
+description = "Install the Hermes CLI through user-space bootstrap stages. No browser, desktop, gateway or provider setup. Run hermes setup separately."
+depends_on = []
+command = "installer=$(mktemp)\ntrap 'rm -f -- \"$installer\"' EXIT\ncurl -fsSL https://hermes-agent.nousresearch.com/install.sh -o \"$installer\"\nfor stage in repository venv python-deps node-deps path config complete; do\n    bash \"$installer\" --stage \"$stage\" --non-interactive --skip-browser --skip-computer-use\ndone"
+interpreter = "bash"
+interaction = "non-interactive"
+prerequisites = ["git", "curl", "tar", "xz", "node", "npm", "g++", "make"]
+check = "hermes --version"
+prerequisite_checks = ["node -e \"const v=process.versions.node; const [a,b]=v.split('.').map(Number); process.exit(!v.includes('-') && ((a===22 && b>=22)||(a===24 && b>=11)||a>=26) ? 0 : 1)\"", "npm --version | node -e \"let v='';process.stdin.on('data',x=>v+=x).on('end',()=>{const [a,b]=v.trim().split('.').map(Number);process.exit(a===11 && b>=10 && b<=16 ? 1 : 0)})\""]
+non_interactive = ""
+bin_dirs = ["~/.local/bin", "~/.hermes/bin", "~/.hermes/node/bin"]
+requires_absent = ["~/.hermes/hermes-agent"]

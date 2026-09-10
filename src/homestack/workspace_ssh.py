@@ -206,3 +206,92 @@ def get_workspace_authorized_keys(session: Transport, cfg: Config) -> tuple[str,
         f"Gold VM {cfg.gold_vmid} has no usable public keys in its Proxmox sshkeys "
         f"setting, /home/{cfg.user_name}/.ssh/authorized_keys, or /root/.ssh/authorized_keys"
     )
+
+
+class WorkspaceSSH:
+    """One owned, non-expiring master; children cannot authenticate independently.
+
+    options is constructor injection for service tests, never a CLI auth switch.
+    """
+
+    def __init__(self, target: str, vmid: int, *, options: tuple[str, ...] = ()) -> None:
+        self.alias = target
+        self.options = list(options)
+        self.directory: tempfile.TemporaryDirectory | None = None
+        self.control = ""
+        self.opened = False
+
+    @classmethod
+    def configured(cls, cfg: Config, target: dict) -> WorkspaceSSH:
+        options = ["-o", f"IdentitiesOnly={'yes' if cfg.workspace_ssh.identities_only else 'no'}",
+                   "-o", f"LogLevel={cfg.workspace_ssh.log_level}"]
+        for identity in cfg.workspace_ssh.identity_files:
+            options += ["-i", str(Path(identity).expanduser())]
+        return cls(f"{cfg.user_name}@{target['ip']}", int(target['vmid']), options=tuple(options))
+
+    @property
+    def child_options(self) -> list[str]:
+        return [*self.options, "-S", self.control, "-o", "ControlMaster=no",
+                "-o", "BatchMode=yes", "-o", "ProxyCommand=false",
+                *[part for auth in ("Pubkey", "Password", "KbdInteractive", "GSSAPI", "Hostbased")
+                  for part in ("-o", f"{auth}Authentication=no")]]
+
+    def __enter__(self) -> WorkspaceSSH:
+        import subprocess
+        if shutil.which("ssh") is None:
+            raise AppError("Required local command 'ssh' was not found")
+        self.directory = tempfile.TemporaryDirectory(prefix="hs-ssh-")
+        self.control = str(Path(self.directory.name) / "master")
+        try:
+            # stderr remains attached for hardware user presence; stdout is never polluted.
+            result = subprocess.run(["ssh", *self.options, "-M", "-S", self.control,
+                                     "-o", "ControlPersist=yes", "-o", "StrictHostKeyChecking=accept-new",
+                                     "-o", "PasswordAuthentication=no", "-o", "KbdInteractiveAuthentication=no",
+                                     "-fN", self.alias], stdout=subprocess.DEVNULL)
+            self.opened = result.returncode == 0
+            if not self.opened:
+                raise AppError("Could not establish workspace SSH master")
+            self.require_master()
+            return self
+        except BaseException:
+            self.__exit__()
+            raise
+
+    def require_master(self) -> None:
+        if not self.opened or run_local(["ssh", *self.child_options, "-O", "check", self.alias], check=False).returncode:
+            raise AppError("Shared workspace SSH master is unavailable; no reauthentication attempted")
+
+    def run(self, command: str, *, check: bool = True, interactive: bool = False):
+        import subprocess
+        self.require_master()
+        argv = ["ssh", *self.child_options, "-tt" if interactive else "-T", self.alias, command]
+        if interactive:
+            result = subprocess.run(argv, text=True)
+        else:
+            result = subprocess.run(argv, text=True, stdin=subprocess.DEVNULL,
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if result.returncode == 255:
+            raise AppError("Workspace SSH transport failed; no reauthentication attempted")
+        if check and result.returncode:
+            # Arbitrary installer output and commands may include credentials.
+            raise AppError(f"Workspace command failed (exit {result.returncode}); output withheld")
+        return result
+
+    def transfer(self, source: str, destination: str) -> None:
+        self.require_master()
+        result = run_local(["rsync", "-a", "--no-owner", "--no-group", "--protect-args",
+                            "--no-links", "--chmod=Du=rwx,Dgo=,Fu=rwX,Fgo=",
+                            "-e", shlex.join(["ssh", *self.child_options]), "--", source,
+                            f"{self.alias}:{destination}"], check=False)
+        if result.returncode:
+            raise AppError(f"File transfer failed (exit {result.returncode}); output withheld")
+
+    def __exit__(self, *_: object) -> None:
+        try:
+            if self.opened or (self.control and Path(self.control).exists()):
+                run_local(["ssh", *self.child_options, "-O", "exit", self.alias], check=False)
+        finally:
+            self.opened = False
+            if self.directory:
+                self.directory.cleanup()
+                self.directory = None

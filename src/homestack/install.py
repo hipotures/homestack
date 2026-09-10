@@ -44,6 +44,7 @@ from .discovery import (
     verified_sessions,
 )
 from .gold import GoldReadiness, check_gold_readiness
+from .setup_config import parse_setup, setup_to_toml
 from .models import AppError, GOLD_TAG, integer_value
 from .proxmox import (
     cluster_node_statuses,
@@ -427,12 +428,20 @@ def _install_draft_to_toml(
             ]
         )
 
-    return "\n".join(lines)
+    lines.extend(["[repo]", f"owner = {_toml_string(cfg.repo_owner or '')}",
+                  f"checkout_root = {_toml_string(cfg.repo_checkout_root)}",
+                  f"sort = {_toml_string(cfg.repo_sort)}"])
+    return "\n".join(lines) + setup_to_toml(cfg.setup)
 
 
 def _config_from_install_draft(path: Path, data: dict[str, Any]) -> Config:
     completed = set(str(item) for item in data["install"]["completed"])
     cfg = _fresh_config(path)
+    repo_data = data.get("repo", {})
+    cfg = replace(cfg, setup=parse_setup(data.get("setup", {})),
+                  repo_owner=repo_data.get("owner") or None,
+                  repo_checkout_root=repo_data.get("checkout_root", "~/DEV"),
+                  repo_sort=repo_data.get("sort", "recent"))
 
     if "transport" in completed:
         control = data.get("control") or {}
@@ -1182,7 +1191,7 @@ def _configure_identities(cfg: Config) -> tuple[str, ...]:
 def _configure_sync(cfg: Config) -> tuple[tuple[str, ...], tuple[str, ...], bool]:
     current = bool(cfg.sync_paths or cfg.sync_commands)
     if not Confirm.ask("Configure workspace sync now?", default=current):
-        return (), (), False
+        return cfg.sync_paths, cfg.sync_commands, cfg.sync_verbose
     paths: list[str] = []
     console.print("Enter sync paths in order. Leave blank when finished.")
     pending_paths = list(cfg.sync_paths)
@@ -1201,15 +1210,15 @@ def _configure_sync(cfg: Config) -> tuple[tuple[str, ...], tuple[str, ...], bool
             continue
         paths.append(value)
     commands: list[str] = []
-    console.print("Enter post-sync commands in order. Leave blank when finished.")
+    console.print("Enter legacy application commands (setup only; never run by sync). Leave blank when finished.")
     pending_commands = list(cfg.sync_commands)
     while True:
         existing = pending_commands.pop(0) if pending_commands else ""
-        value = Prompt.ask("Post-sync command", default=existing).strip()
-        if not value:
+        value = Prompt.ask("Legacy application command", default=existing)
+        if not value.strip():
             break
         commands.append(value)
-    verbose = Confirm.ask("Verbose rsync output?", default=cfg.sync_verbose)
+    verbose = Confirm.ask("Detailed file progress?", default=cfg.sync_verbose)
     return tuple(paths), tuple(commands), verbose
 
 
@@ -1245,7 +1254,7 @@ def _show_summary(
         + "\n".join(cfg.workspace_ssh.identity_files),
     )
     table.add_row("Snippets", f"{cfg.snippet_storage}: {cfg.snippet_dir}")
-    table.add_row("Sync", f"{len(cfg.sync_paths)} paths; {len(cfg.sync_commands)} commands")
+    table.add_row("Sync", f"{len(cfg.sync_paths)} Files; {len(cfg.sync_commands)} legacy Applications (setup only)")
     console.print(table)
 
 

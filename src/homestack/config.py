@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 import os
 from pathlib import Path
@@ -13,6 +13,7 @@ import re
 import tomllib
 
 from .models import AppError
+from .setup_config import SetupConfig, parse_setup, setup_to_toml
 
 
 @dataclass(frozen=True)
@@ -56,6 +57,8 @@ class Config:
     sync_verbose: bool = False
     repo_owner: str | None = None
     repo_checkout_root: str = "~/DEV"
+    repo_sort: str = "recent"
+    setup: SetupConfig = field(default_factory=SetupConfig)
 
 
 def default_config_path() -> Path:
@@ -279,7 +282,7 @@ def load_config(path: Path) -> Config:
         command = raw_command.strip()
         if not command:
             raise AppError("[sync] commands entries must not be empty")
-        sync_commands_list.append(command)
+        sync_commands_list.append(raw_command)
     sync_commands = tuple(sync_commands_list)
     sync_verbose = sync.get("verbose", False)
     if not isinstance(sync_verbose, bool):
@@ -296,6 +299,11 @@ def load_config(path: Path) -> Config:
     repo_checkout_root = validate_repo_checkout_root(
         repo_data.get("checkout_root", "~/DEV")
     )
+
+    repo_sort = repo_data.get("sort", "recent")
+    if not isinstance(repo_sort, str) or repo_sort not in {"recent", "created", "name"}:
+        raise AppError("[repo] sort must be recent, created or name")
+    setup = parse_setup(data.get("setup", {}))
 
     workspace_ssh_data = data.get("workspace_ssh")
     if not isinstance(workspace_ssh_data, dict):
@@ -422,6 +430,8 @@ def load_config(path: Path) -> Config:
         sync_verbose=sync_verbose,
         repo_owner=repo_owner,
         repo_checkout_root=repo_checkout_root,
+        repo_sort=repo_sort,
+        setup=setup,
     )
 
 
@@ -488,6 +498,7 @@ def config_to_toml(cfg: Config) -> str:
             "[repo]",
             f"owner = {_toml_string(cfg.repo_owner or '')}",
             f"checkout_root = {_toml_string(cfg.repo_checkout_root)}",
+            f"sort = {_toml_string(cfg.repo_sort)}",
             "",
             "[sync]",
             f"verbose = {str(cfg.sync_verbose).lower()}",
@@ -504,7 +515,7 @@ def config_to_toml(cfg: Config) -> str:
             "",
         ]
     )
-    return "\n".join(lines)
+    return "\n".join(lines) + setup_to_toml(cfg.setup)
 
 
 def validate_config_text(text: str) -> Config:

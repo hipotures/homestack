@@ -32,7 +32,7 @@ class ConfigTests(unittest.TestCase):
         example = Path(__file__).resolve().parents[1] / 'config.example.toml'
         loaded = config.load_config(example)
         self.assertEqual(loaded.transport_type, 'herdr')
-        self.assertEqual(loaded.herdr_workspace, 'example-workspace')
+        self.assertEqual(loaded.herdr_workspace, 'PVE')
         self.assertEqual(loaded.workspace_ssh.user, 'developer')
         self.assertEqual(
             loaded.workspace_ssh.identity_files,
@@ -141,7 +141,7 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(loaded.sync_commands, cfg.sync_commands)
         self.assertEqual(loaded.repo_owner, cfg.repo_owner)
         self.assertEqual(loaded.repo_checkout_root, cfg.repo_checkout_root)
-        self.assertNotIn('installer', config.config_to_toml(cfg))
+        self.assertNotIn('install_draft', config.config_to_toml(cfg))
 
     def test_publish_new_config_uses_private_mode(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
