@@ -1,13 +1,14 @@
-"""Keyboard catalog selection and explicit review using the shared setup engine."""
+"""Mouse/keyboard catalog selection and review using the shared setup engine."""
 from __future__ import annotations
 
 import threading
 
+from rich.style import Style
 from rich.text import Text
-from textual import work
+from textual import events, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, VerticalScroll
+from textual.containers import Container, Horizontal, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Button, Footer, Input, Static, Tree
 from textual.worker import get_current_worker
@@ -15,7 +16,7 @@ from textual.worker import get_current_worker
 from .models import AppError
 from .setup import build_plan, execute_plan, write_paths
 from .setup_catalog import Catalog, load_catalog, save_snapshot
-from .setup_config import ApplicationParams, defaults
+from .setup_config import ApplicationParams, FileParams, RepositoryParams, defaults
 
 
 class SetupTree(Tree[str]):
@@ -23,6 +24,32 @@ class SetupTree(Tree[str]):
     BINDINGS = [Binding("space", "check", "Toggle"), Binding("0", "select_branch", "Select branch"),
                 Binding("left", "collapse", "Collapse"), Binding("right", "expand", "Expand"),
                 Binding("enter", "details", "Details")]
+
+    def render_label(self, node, base_style, style):
+        label = super().render_label(node, base_style, style)
+        # Tag only the checkbox, not the disclosure arrow or the item label.
+        # Rendered metadata follows scrolling and variable-width Unicode text.
+        prefix = len(self.ICON_NODE_EXPANDED if node.is_expanded else self.ICON_NODE) if node.allow_expand else 0
+        label.stylize(Style(meta={"setup_checkbox": node.data}), prefix, prefix + 3)
+        return label
+
+    async def _on_click(self, event: events.Click) -> None:
+        # Textual also dispatches inherited handlers unless explicitly prevented.
+        # Delegating only non-checkbox clicks avoids double toggles and preserves
+        # the Tree's native label/disclosure-arrow behavior.
+        event.prevent_default()
+        if event.button != 1:
+            return
+        identity = event.style.meta.get("setup_checkbox")
+        if identity is not None:
+            event.stop()
+            node = self.app.nodes.get(identity)
+            if node is not None:
+                self.focus()
+                self.move_cursor(node)
+                self.app.toggle_node(node)
+        else:
+            await super()._on_click(event)
 
     def action_check(self):
         self.app.toggle_node(self.cursor_node)
@@ -76,10 +103,18 @@ class Review(ModalScreen[bool]):
 class SetupApp(App):
     """Selection identity is independent of rendered rows and filtering."""
     CSS = """
-    #target, #counts { height: auto; padding: 0 1; }
+    #target, #counts, #keys { height: auto; padding: 0 1; }
+    #counts.has-hidden { color: $warning; text-style: bold; }
     #filter { height: 3; }
-    #tree { height: 1fr; }
-    #details { height: 7; border: solid $accent; padding: 0 1; overflow-y: auto; }
+    #browser { height: 1fr; layout: vertical; }
+    #tree { height: 1fr; width: 1fr; border: solid $panel; }
+    #tree:focus { border: solid $accent; }
+    #details-pane { height: 8; max-height: 40%; width: 1fr; border: solid $panel; padding: 0 1; }
+    #details-pane:focus { border: solid $accent; }
+    #details { height: auto; }
+    #browser.wide { layout: horizontal; }
+    #browser.wide #tree { width: 3fr; height: 1fr; }
+    #browser.wide #details-pane { width: 2fr; height: 1fr; max-height: 100%; }
     #controls { height: 3; }
     """
     BINDINGS = [("/", "filter", "Filter"), ("d", "details", "Full details"),
@@ -100,22 +135,63 @@ class SetupApp(App):
         self.result = None
         self.action_states = {}
         self.pending_plan = None
+        self.details_identity = None
+        self.ssh_status = "not connected"
 
     def compose(self) -> ComposeResult:
-        yield Static(f"Workspace: {self.target['name']} (VM {self.target['vmid']})    SSH: not connected", id="target", markup=False)
+        yield Static(self.target_label(), id="target", markup=False)
         yield Input(placeholder="Filter (/). Bulk selection affects visible matches only.", id="filter")
-        yield SetupTree(Text("[ ] Setup"), data="root", id="tree")
+        with Container(id="browser"):
+            yield SetupTree(Text("[ ] Setup"), data="root", id="tree")
+            with VerticalScroll(id="details-pane", can_focus=False):
+                yield Static("Highlight an item for details. D opens full details. Enter never applies.", id="details", markup=False)
         yield Static("Nothing selected", id="counts", markup=False)
-        yield Static("Highlight an item for details. D opens full details. Enter never applies.", id="details", markup=False)
         with Horizontal(id="controls"):
             yield Button("Review & apply", id="review", variant="primary")
             yield Button("Cancel", id="cancel")
+        yield Static("↑↓ Move  ←→ Expand/collapse  Space Toggle  Tab Focus  / Filter", id="keys", markup=False)
         yield Footer()
 
+    def target_label(self, progress=""):
+        parts = [f"Workspace: {self.target['name']} (VM {self.target['vmid']})"]
+        if self.target.get("ip"):
+            parts.append(str(self.target["ip"]))
+        parts.append(f"SSH: {self.ssh_status}")
+        if self.catalog.snapshot_id:
+            parts.append(f"Catalog: {self.catalog.snapshot_id[:8]}")
+        if progress:
+            parts.append(progress)
+        return "    ".join(parts)
+
     def on_mount(self):
+        # Content wrapping may settle in a later layout pass than Static.update.
+        self.watch(self.query_one("#details-pane"), "virtual_size",
+                   lambda: self.call_after_refresh(self.update_details_focus))
+        self.update_layout()
         self.rebuild()
         self.query_one(SetupTree).focus()
         self.action_refresh_catalog()
+
+    def on_resize(self, event: events.Resize):
+        self.update_layout(event.size.width)
+
+    def update_layout(self, width=None):
+        self.query_one("#browser").set_class((self.size.width if width is None else width) >= 110, "wide")
+        self.call_after_refresh(self.update_details_focus)
+
+    def update_details_focus(self):
+        pane = self.query_one("#details-pane", VerticalScroll)
+        pane.can_focus = pane.max_scroll_y > 0
+        if not pane.can_focus and pane.has_focus:
+            self.query_one(SetupTree).focus()
+
+    def show_details(self, identity):
+        pane = self.query_one("#details-pane", VerticalScroll)
+        if identity != self.details_identity:
+            pane.scroll_to(y=0, animate=False, force=True)
+        self.details_identity = identity
+        self.query_one("#details", Static).update(self.details(identity))
+        self.call_after_refresh(self.update_details_focus)
 
     def available(self, entry):
         state = self.catalog.availability.get(entry.id, "unknown")
@@ -139,11 +215,16 @@ class SetupApp(App):
         expanded = {key: node.is_expanded for key, node in self.nodes.items()}
         tree.clear()
         tree.root.set_label(Text(f"{self.checkbox('root')} Setup"))
-        tree.root.expand()
+        if expanded.get("root", True):
+            tree.root.expand()
+        else:
+            tree.root.collapse()
         self.nodes = {"root": tree.root}
         for group in self.cfg.setup.groups:
             extra = f" — {self.catalog.repository_error}" if group.id == "repo" and self.catalog.repository_error else ""
-            node = tree.root.add(Text(f"{self.checkbox(group.id)} {group.label}{extra}"), data=group.id, expand=expanded.get(group.id, True))
+            entries = [e for e in self.catalog.entries if e.group == group.id]
+            count = sum(e.id in self.selected for e in entries)
+            node = tree.root.add(Text(f"{self.checkbox(group.id)} {group.label}  {count}/{len(entries)}{extra}"), data=group.id, expand=expanded.get(group.id, group.id != "repo"))
             self.nodes[group.id] = node
             for index, entry in enumerate((e for e in self.catalog.entries if e.group == group.id), 1):
                 if not self.matches(entry):
@@ -153,15 +234,35 @@ class SetupApp(App):
                 suffix = "" if self.available(entry) else f" — {state}"
                 if entry.id in self.action_states:
                     suffix += " — " + self.action_states[entry.id]
-                label = f"{'[x]' if entry.id in self.selected else '[ ]'} {index}. {entry.label}{interaction}{suffix}"
+                label = f"{'[x]' if entry.id in self.selected else '[ ]'} {index}. {self.entry_label(entry)}{interaction}{suffix}"
                 self.nodes[entry.id] = node.add_leaf(Text(label), data=entry.id)
-        self.call_after_refresh(tree.move_cursor, self.nodes.get(previous, tree.root))
+        self.call_after_refresh(self.restore_cursor, previous)
         self.update_counts()
+
+    def restore_cursor(self, identity):
+        node = self.nodes.get(identity, self.nodes["root"])
+        # Never leave the cursor pointing into a collapsed branch.
+        ancestor = node.parent
+        while ancestor:
+            if not ancestor.is_expanded:
+                node = ancestor
+            ancestor = ancestor.parent
+        self.query_one(SetupTree).move_cursor(node)
+        self.show_details(node.data)
+
+    def entry_label(self, entry):
+        if isinstance(entry.params, RepositoryParams) and entry.label == entry.params.repository:
+            owner, name = entry.params.repository.split("/", 1)
+            if self.cfg.repo_owner and owner.casefold() == self.cfg.repo_owner.casefold():
+                return name
+        return entry.label
 
     def update_counts(self):
         counts = ", ".join(f"{g.label}: {sum(e.id in self.selected and e.group == g.id for e in self.catalog.entries)}" for g in self.cfg.setup.groups)
         hidden = sum(e.id in self.selected and not self.matches(e) for e in self.catalog.entries)
-        self.query_one("#counts", Static).update(f"{counts} | Hidden selected: {hidden}" + (" | Bulk selection: visible matches only" if self.filter_text else ""))
+        summary = self.query_one("#counts", Static)
+        summary.set_class(hidden > 0, "has-hidden")
+        summary.update(f"{counts} | Hidden selected: {hidden}" + (" | Bulk selection: visible matches only" if self.filter_text else ""))
 
     def toggle_node(self, node, *, select=False):
         if not node or self.busy:
@@ -186,25 +287,52 @@ class SetupApp(App):
         self.rebuild()
 
     def on_tree_node_highlighted(self, event: Tree.NodeHighlighted):
-        self.query_one("#details", Static).update(self.details(event.node.data))
+        self.show_details(event.node.data)
 
     def details(self, identity, *, full=False):
         entry = next((e for e in self.catalog.entries if e.id == identity), None)
         if not entry:
-            return "Space toggles selectable descendants. 0 selects the branch. Filtering scopes bulk actions to visible matches. Enter opens details."
+            group = next((g for g in self.cfg.setup.groups if g.id == identity), None)
+            lines = [group.label if group else "Workspace setup"]
+            if group:
+                lines += [group.description]
+            if identity == "repo":
+                sort = {"recent": "Recent first", "created": "Newest created first", "name": "Name"}
+                lines += [f"Owner: {self.cfg.repo_owner or 'not configured'}", f"Sort: {sort.get(self.cfg.repo_sort, self.cfg.repo_sort)}"]
+                if self.catalog.repository_error:
+                    lines += [self.catalog.repository_error]
+            lines += ["", "Space or checkbox click toggles items.", "Click a name to view details without selecting.",
+                      "Click an arrow or use Left/Right to collapse/expand.", "0 selects the branch; a filter scopes bulk actions to visible matches.",
+                      "Tab / Shift+Tab moves focus. PageUp/PageDown or the mouse wheel scrolls details.", "D / Enter opens full details; never applies."]
+            if full and self.catalog.snapshot_id:
+                lines += ["", "Catalog: " + self.catalog.snapshot_id]
+            return "\n".join(lines)
         p = entry.params
-        lines = [f"{entry.label} ({entry.id})", entry.description,
-                 "Availability: " + self.catalog.availability.get(entry.id, "unknown"), "Guest state: unknown until approved preflight"]
+        lines = [entry.label, entry.description, "", "Availability: " + self.catalog.availability.get(entry.id, "unknown"),
+                 "Guest state: unknown until approved preflight", ""]
+        if full:
+            lines += ["ID: " + entry.id]
         if isinstance(p, ApplicationParams):
-            lines += [f"Interpreter: {p.interpreter}; interaction: {p.interaction}", "Prerequisites: " + ", ".join(p.prerequisites),
-                      "Executable paths: " + ", ".join(p.bin_dirs)]
+            lines += [f"Interpreter: {p.interpreter}", f"Interaction: {p.interaction}", "Prerequisites: " + (", ".join(p.prerequisites) or "none"),
+                      "Executable paths:", *p.bin_dirs]
             if full:
                 known = {e.params.command for e in defaults() if isinstance(e.params, ApplicationParams)}
                 lines += ["Command: " + (p.command if p.command in known else "[Custom payload withheld: review command in the local configuration; it may contain secrets]")]
+        elif isinstance(p, RepositoryParams):
+            owner, name = p.repository.split("/", 1)
+            lines += [f"Owner: {owner}", f"Repository: {name}", "", "Checkout:", f"{self.cfg.repo_checkout_root.rstrip('/')}/{name}"]
+            timestamps = (self.catalog.timestamps or {}).get(entry.id, {})
+            if timestamps:
+                lines += ["", f"Created: {timestamps.get('created_at') or 'unknown'}", f"Last push: {timestamps.get('pushed_at') or 'none'}"]
+            if full:
+                paths = write_paths(self.cfg, entry)
+                lines += ["", "Managed paths:", *("~/" + path for path in paths)]
+        elif isinstance(p, FileParams):
+            lines += ["Source (desktop):", p.path, "", "Destination (workspace):", *["~/" + path for path in write_paths(self.cfg, entry)]]
         else:
-            lines += ["Paths: " + ", ".join("~/" + path for path in write_paths(self.cfg, entry))]
+            lines += ["Managed paths:", *["~/" + path for path in write_paths(self.cfg, entry)]]
         if entry.depends_on:
-            lines += ["Requires explicit selection: " + ", ".join(entry.depends_on)]
+            lines += ["", "Requires explicit selection: " + ", ".join(entry.depends_on)]
         return "\n".join(lines)
 
     def action_filter(self):
@@ -297,7 +425,8 @@ class SetupApp(App):
 
     def update_progress(self, identity, state):
         self.action_states[identity] = state
-        self.query_one("#target", Static).update(f"Workspace: {self.target['name']}    SSH: connected    {identity}: {state}")
+        self.ssh_status = "connected"
+        self.query_one("#target", Static).update(self.target_label(f"{identity}: {state}"))
         self.rebuild()
 
     def finished(self, result):
@@ -305,7 +434,8 @@ class SetupApp(App):
         self.busy = False
         self.action_states = {r["id"]: r["status"] for r in result["results"]}
         self.rebuild()
-        self.query_one("#target", Static).update(f"Workspace: {self.target['name']}    SSH: disconnected")
+        self.ssh_status = "disconnected"
+        self.query_one("#target", Static).update(self.target_label())
         lines = ["Setup finished" if result["ok"] else "Setup stopped", ""]
         lines += [f"{r['label']}: {r['status']} — {r['detail']}" for r in result["results"]]
         self.push_screen(Review("\n".join(lines), apply=False))
@@ -329,7 +459,7 @@ class SetupApp(App):
         except OSError:
             self.notify("Catalog snapshot could not be saved; stable-ID selection remains available", severity="warning")
         else:
-            self.query_one("#target", Static).update(f"Workspace: {self.target['name']} (VM {self.target['vmid']})    SSH: not connected    Catalog: {catalog.snapshot_id}")
+            self.query_one("#target", Static).update(self.target_label())
 
     def replace_catalog(self, catalog: Catalog):
         if self.busy:
