@@ -82,7 +82,7 @@ class CompactAction(Static, can_focus=True):
             self.refresh()
 
     def render(self):
-        color = "white"
+        color = "#d29922"
         if self.disabled:
             color = "#6e7681"
         elif self.pending:
@@ -278,7 +278,7 @@ class SetupApp(App):
                                ("/", "Filter"), ("F5", "Refresh")):
                 if navigation:
                     navigation.append("   ")
-                navigation.append(key, style="white")
+                navigation.append(key, style="#d29922")
                 navigation.append(" " + label, style="dim")
             yield Static(navigation, id="navigation")
             yield CompactAction("Enter", "Review & apply", id="review")

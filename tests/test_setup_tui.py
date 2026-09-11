@@ -446,6 +446,8 @@ class SetupActionTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(action.render().plain, 'Enter Review & apply')
             self.assertEqual(action.render().spans[0].end, len('Enter'))
             normal = action.render().spans[0].style
+            self.assertEqual(normal, '#d29922')
+            self.assertEqual(app.query_one('#cancel', CompactAction).render().spans[0].style, normal)
             self.assertFalse(action.pending)
             app.selected = {'codex'}
             app.update_selection()
