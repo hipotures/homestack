@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import PurePosixPath
-from typing import Any
+from typing import Any, Callable
 import json
 import re
 import shlex
@@ -429,7 +429,12 @@ def _require_tools(state: dict[str, Any]) -> None:
 
 
 def setup_repository(
-    cfg: Config, ws: WorkspaceSSH, state: dict[str, Any], *, quiet: bool = False
+    cfg: Config,
+    ws: WorkspaceSSH,
+    state: dict[str, Any],
+    *,
+    quiet: bool = False,
+    activity: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     _require_tools(state)
     actions = repository_setup_actions(state)
@@ -451,10 +456,14 @@ def setup_repository(
         task = progress.add_task(steps[0], total=len(steps))
 
         if "generate-key" in actions:
+            if activity:
+                activity("Generate deploy key")
             progress.update(task, description="Generate deploy key")
             _generate_key(ws, key, public_key_path, repository)
             progress.advance(task)
         elif "derive-public-key" in actions:
+            if activity:
+                activity("Restore public deploy key")
             progress.update(task, description="Restore public deploy key")
             ws.run(
                 f"umask 077 && ssh-keygen -y -f {shlex.quote(key)} "
@@ -463,6 +472,8 @@ def setup_repository(
             )
             progress.advance(task)
         elif "replace-missing-private-key" in actions:
+            if activity:
+                activity("Replace incomplete deploy key")
             progress.update(task, description="Replace incomplete deploy key")
             if isinstance(state.get("deploy_key_id"), int):
                 _delete_key(repository, int(state["deploy_key_id"]))
@@ -470,6 +481,8 @@ def setup_repository(
             _generate_key(ws, key, public_key_path, repository)
             progress.advance(task)
 
+        if activity:
+            activity("Reconcile GitHub deploy key")
         progress.update(task, description="Reconcile GitHub deploy key")
         public_key = _output(ws, f"cat {shlex.quote(public_key_path)}")
         identity = _identity(public_key)
@@ -490,6 +503,8 @@ def setup_repository(
 
         remote_url = f"git@github.com:{repository}.git"
         if "clone" in actions:
+            if activity:
+                activity("Clone repository")
             progress.update(task, description="Clone repository")
             ws.run(
                 f"mkdir -p -- "
@@ -501,6 +516,8 @@ def setup_repository(
             )
             progress.advance(task)
         elif "set-origin" in actions:
+            if activity:
+                activity("Configure Git remote")
             progress.update(task, description="Configure Git remote")
             ws.run(
                 f"git -C {shlex.quote(checkout)} remote set-url origin "
@@ -509,6 +526,8 @@ def setup_repository(
             progress.advance(task)
 
         if "clone" in actions or "set-ssh-command" in actions:
+            if activity:
+                activity("Configure repository SSH")
             progress.update(task, description="Configure repository SSH")
             ws.run(
                 f"git -C {shlex.quote(checkout)} config --local core.sshCommand "
@@ -516,6 +535,8 @@ def setup_repository(
             )
             progress.advance(task)
 
+        if activity:
+            activity("Verify Git access")
         progress.update(task, description="Verify Git access")
         verify = ws.run(
             f"GIT_SSH_COMMAND={shlex.quote(_bootstrap_ssh(key))} "
@@ -528,6 +549,8 @@ def setup_repository(
             )
         progress.advance(task)
 
+        if activity:
+            activity("Refresh repository status")
         progress.update(task, description="Refresh repository status")
         refreshed = inspect_repository(cfg, ws, vmid, name, repository)
         progress.advance(task)

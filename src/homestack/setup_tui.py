@@ -1,6 +1,7 @@
 """Mouse/keyboard workspace setup selector with persistent SSH state inspection."""
 from __future__ import annotations
 
+import re
 import threading
 from datetime import datetime, timezone
 
@@ -205,6 +206,111 @@ class Review(ModalScreen[bool]):
         self.dismiss(True)
 
 
+class Execution(ModalScreen[bool]):
+    """Live setup activity and the final execution result."""
+
+    BINDINGS = [
+        Binding("escape", "cancel", "Cancel"),
+        Binding("enter", "close", "OK"),
+    ]
+    CSS = (
+        "Execution { align: center middle; } "
+        "#execution-box { width: 90%; height: 85%; border: solid $accent; "
+        "background: $surface; padding: 1 2; overflow-x: hidden; } "
+        "#execution-title { height: auto; } "
+        "#execution-log { height: 1fr; overflow-x: hidden; } "
+        "#execution-content { width: 1fr; height: auto; } "
+        "#execution-actions { display: none; height: 1; align-horizontal: center; } "
+        "Execution.narrow #execution-box { width: 100%; padding: 1 0; }"
+    )
+
+    def __init__(self):
+        super().__init__()
+        self.lines: list[str] = []
+        self.finished = False
+
+    def compose(self) -> ComposeResult:
+        with Container(id="execution-box"):
+            yield Static("Setup running", id="execution-title", markup=False)
+            with VerticalScroll(id="execution-log"):
+                yield Static("", id="execution-content", markup=False)
+            with Horizontal(id="execution-actions"):
+                yield CompactAction("Enter", "OK", id="ok", keycap=True)
+
+    def on_mount(self):
+        action = self.query_one("#ok", CompactAction)
+        action.disabled = not self.finished
+        self.query_one("#execution-actions").display = self.finished
+        self.query_one("#execution-title", Static).update(
+            "Setup finished" if self.finished else "Setup running"
+        )
+        self.query_one("#execution-content", Static).update(
+            Text("\n".join(self.lines), overflow="fold", no_wrap=False)
+        )
+        if self.finished:
+            action.focus()
+
+    def on_resize(self, event: events.Resize):
+        self.set_class(event.size.width < 50, "narrow")
+
+    @staticmethod
+    def _clean_line(identity, message):
+        prefix = "" if identity is None else f"{identity}: "
+        value = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", str(message))
+        value = " ".join(value.split())
+        value = "".join(char for char in value if char >= " " and char != "\x7f")
+        if not value:
+            return ""
+        return prefix + value[:500]
+
+    def _update_content(self):
+        if not self.is_mounted:
+            return
+        content = self.query_one("#execution-content", Static)
+        content.update(Text("\n".join(self.lines), overflow="fold", no_wrap=False))
+        log = self.query_one("#execution-log", VerticalScroll)
+        content.call_after_refresh(log.scroll_end, animate=False, force=True)
+
+    def add_activity(self, identity, message):
+        line = self._clean_line(identity, message)
+        if line:
+            self.lines.append(line)
+            self._update_content()
+
+    def show_result(self, result):
+        self.finished = True
+        status = "Setup finished" if result.get("ok") else "Setup stopped"
+        self.lines += ["", status]
+        if result.get("snapshot", {}).get("created"):
+            self.lines += ["Snapshot: " + result["snapshot"]["path"]]
+        self.lines += [
+            f"{item['label']}: {item['status']} — {item['detail']}"
+            for item in result.get("results", [])
+        ]
+        if self.is_mounted:
+            self.query_one("#execution-title", Static).update(status)
+            self.query_one("#execution-actions").display = True
+            action = self.query_one("#ok", CompactAction)
+            action.disabled = False
+            action.focus()
+        self._update_content()
+
+    def on_compact_action_pressed(self, event: CompactAction.Pressed):
+        event.stop()
+        if event.control.id == "ok" and self.finished:
+            self.dismiss(False)
+
+    def action_cancel(self):
+        if self.finished:
+            self.dismiss(False)
+        else:
+            self.app.action_cancel()
+
+    def action_close(self):
+        if self.finished:
+            self.dismiss(False)
+
+
 class SetupApp(App):
     """Selection is session-local; colors reflect the last inspected guest state."""
 
@@ -261,6 +367,7 @@ class SetupApp(App):
         self.result = None
         self.action_states = {}
         self.pending_plan = None
+        self.execution_screen = None
         self.details_identity = None
         self._details_line_count = 0
         self._rebuild_generation = 0
@@ -652,6 +759,7 @@ class SetupApp(App):
     def action_cancel(self):
         if self.busy:
             self.cancel_requested.set()
+            self.append_activity(None, "Cancellation requested")
             self.notify(
                 "Cancellation requested; waiting for the current operation to return. "
                 "Interactive installers use Ctrl+C in their terminal."
@@ -748,7 +856,17 @@ class SetupApp(App):
             self.busy = True
             self.update_review_action()
             self.cancel_requested.clear()
+            self.execution_screen = Execution()
+            self.execution_screen.add_activity(
+                None, f"Start setup for {self.target['name']} (VM {self.target['vmid']})"
+            )
+            self.push_screen(self.execution_screen, self.execution_answer)
             self.execute()
+
+    def execution_answer(self, _answer):
+        self.execution_screen = None
+        if self.is_running:
+            self.query_one(SetupTree).focus()
 
     def terminal(self, operation):
         return self.call_from_thread(self.terminal_on_main, operation)
@@ -773,21 +891,56 @@ class SetupApp(App):
                 raise AppError("Cancelled; remaining actions were not run")
             self.call_from_thread(self.update_progress, identity, state)
 
-        kwargs = {"terminal": self.terminal, "progress": progress}
+        def activity(identity, message):
+            self.call_from_thread(self.append_activity, identity, message)
+
+        kwargs = {"terminal": self.terminal, "progress": progress, "activity": activity}
         if self.workspace is not None:
             kwargs["workspace"] = self.workspace
-        result = self.executor(self.cfg, self.pending_plan, **kwargs)
+        try:
+            result = self.executor(self.cfg, self.pending_plan, **kwargs)
+        except (AppError, KeyboardInterrupt, OSError) as exc:
+            detail = (
+                "Cancelled; remaining actions were not run"
+                if isinstance(exc, KeyboardInterrupt)
+                else str(exc)
+                if isinstance(exc, AppError)
+                else "Local transport or file operation failed; output withheld"
+            )
+            result = {
+                "ok": False,
+                "plan": self.pending_plan.public(),
+                "results": [
+                    {
+                        "id": entry.id,
+                        "label": entry.label,
+                        "group": entry.group,
+                        "status": "failed" if index == 0 else "not-run",
+                        "detail": detail,
+                    }
+                    for index, entry in enumerate(self.pending_plan.entries)
+                ],
+                "snapshot": {"created": False, "id": None, "path": None},
+            }
+            activity(None, "Setup execution stopped")
         state = self.workspace_state
         if self.workspace is not None:
             try:
+                activity(None, "Refresh workspace state")
                 state = inspect_workspace_state(
                     self.workspace, self.cfg, self.target, self.catalog.entries
                 )
+                activity(None, "Workspace state refreshed")
             except AppError as exc:
+                activity(None, "Workspace state refresh failed")
                 self.call_from_thread(
                     self.notify, f"State refresh failed: {exc}", severity="warning"
                 )
         self.call_from_thread(self.finished, result, state)
+
+    def append_activity(self, identity, message):
+        if self.execution_screen is not None:
+            self.execution_screen.add_activity(identity, message)
 
     def update_progress(self, identity, state):
         self.action_states[identity] = state
@@ -810,15 +963,10 @@ class SetupApp(App):
         self.ssh_status = "connected" if self.workspace is not None else "disconnected"
         self.rebuild()
         self.query_one("#target", Static).update(self.target_label())
-        lines = ["Setup finished" if result["ok"] else "Setup stopped", ""]
-        if result.get("snapshot", {}).get("created"):
-            lines += ["Snapshot: " + result["snapshot"]["path"], ""]
-        lines += [
-            f"{item['label']}: {item['status']} — {item['detail']}"
-            for item in result["results"]
-        ]
-        self.notify("\n".join(lines), severity="information" if result["ok"] else "error", timeout=10)
-        self.query_one(SetupTree).focus()
+        if self.execution_screen is not None:
+            self.execution_screen.show_result(result)
+        else:
+            self.query_one(SetupTree).focus()
 
     def action_refresh_state(self):
         if not self.busy and self.workspace is not None:

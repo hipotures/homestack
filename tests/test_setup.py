@@ -158,6 +158,23 @@ class CatalogTests(unittest.TestCase):
 
 
 class PlanTests(unittest.TestCase):
+    def test_repository_clone_never_snapshots_checkout_contents(self):
+        cfg = test_config()
+        repository = definitions.Entry(
+            'owner/project', 'repo', 'repository', 'Project', 'Repository',
+            definitions.RepositoryParams('owner/project'),
+        )
+        checkout = f'/home/{cfg.user_name}/src/project'
+
+        self.assertEqual(setup.backup_paths_for_entry(cfg, repository, {
+            'repository': {'checkout_state': 'missing', 'checkout': checkout},
+            'actions': ('generate-key', 'clone', 'verify-access'),
+        }), ())
+        self.assertEqual(setup.backup_paths_for_entry(cfg, repository, {
+            'repository': {'checkout_state': 'ready', 'checkout': checkout},
+            'actions': ('set-origin', 'verify-access'),
+        }), ('src/project/.git/config',))
+
     def test_independent_apps_repositories_and_explicit_dependencies(self):
         cfg = replace(test_config(), sync_paths=('~/missing',))
         self.assertEqual(setup.build_plan(cfg, TARGET, (entry('codex'),)).entries, (entry('codex'),))
@@ -197,6 +214,44 @@ class PlanTests(unittest.TestCase):
 
 
 class EngineTests(unittest.TestCase):
+    def test_execution_activity_reports_preflight_snapshot_shell_write_and_state_record(self):
+        cfg = test_config()
+        bash = entry('bash')
+        plan = setup.build_plan(cfg, TARGET, (bash,))
+        ws = Mock()
+        events = []
+
+        def guest_operation(_ws, _cfg, operation, **values):
+            if operation == 'snapshot':
+                return {'created': True, 'id': 'snapshot-id', 'path': '~/.local/state/homestack/snapshot-id'}
+            if operation == 'environment':
+                return {'changed': ['.profile']}
+            return {}
+
+        state = {'changed': ['.profile'], 'paths': ['.bashrc', '.profile']}
+        with patch.object(setup, 'require_tool'), \
+                patch.object(setup, 'preflight_entry', return_value=state), \
+                patch.object(setup, 'guest', side_effect=guest_operation):
+            result = setup.execute_plan(
+                cfg,
+                plan,
+                workspace=ws,
+                activity=lambda identity, message: events.append((identity, message)),
+            )
+
+        self.assertTrue(result['ok'])
+        messages = [message for _identity, message in events]
+        for expected in (
+            'Verify workspace connection',
+            'Preflight Bash',
+            'Create operation snapshot',
+            'Operation snapshot created: ~/.local/state/homestack/snapshot-id',
+            'Write Bash shell configuration',
+            'Record setup state',
+            'Setup execution complete',
+        ):
+            self.assertIn(expected, messages)
+
     def test_all_preflight_before_mutation_one_connection_and_stop_on_failure(self):
         cfg = test_config()
         plan = setup.build_plan(cfg, TARGET, (entry('bash'), entry('codex'), entry('opencode')))

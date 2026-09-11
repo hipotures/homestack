@@ -470,24 +470,41 @@ def preflight_entry(ws, cfg: Config, plan: Plan, entry: Entry) -> dict:
     raise AppError("Unknown setup action handler")
 
 
-def apply_entry(ws, cfg: Config, plan: Plan, entry: Entry, state: dict, terminal: Callable, *, progress=lambda identity, state: None):
+def apply_entry(
+    ws,
+    cfg: Config,
+    plan: Plan,
+    entry: Entry,
+    state: dict,
+    terminal: Callable,
+    *,
+    progress=lambda identity, state: None,
+    activity=lambda identity, message: None,
+):
     p = entry.params
     if isinstance(p, EnvironmentParams):
+        activity(entry.id, f"Write {entry.label} shell configuration")
         result = guest(ws, cfg, "environment", profile=p.profile, bins=all_bins(cfg), apply=True)
         if not result["changed"]:
+            activity(entry.id, "Shell configuration already matches")
             return "already-ready", "Shell configuration already matches; no files changed"
+        activity(entry.id, "Shell configuration written")
         return "succeeded", "Shell configuration verified"
     if isinstance(p, FileParams):
         if not state.get("changed", True):
+            activity(entry.id, "Files already match the desktop source")
             return "already-ready", "Destination already matches the desktop source"
         item = source_item(cfg, entry)
+        activity(entry.id, f"Prepare destination ~/{item['relative']}")
         if cfg.sync_verbose:
             progress(entry.id, "preparing destination")
         guest(ws, cfg, "file", relative=item["relative"], directory=item["is_directory"], prepare=True)
         suffix = "/" if item["is_directory"] else ""
+        activity(entry.id, f"Copy to ~/{item['relative']}")
         if cfg.sync_verbose:
             progress(entry.id, "transferring files")
         ws.transfer(item["local_path"] + suffix, item["destination"])
+        activity(entry.id, f"Verify destination ~/{item['relative']}")
         if cfg.sync_verbose:
             progress(entry.id, "verifying destination ownership")
         guest(ws, cfg, "file", relative=item["relative"], directory=item["is_directory"], verify=True)
@@ -497,20 +514,44 @@ def apply_entry(ws, cfg: Config, plan: Plan, entry: Entry, state: dict, terminal
         command = p.non_interactive if plan.unattended and p.non_interactive else p.command
         def install():
             return ws.run(command_environment(cfg, command, interpreter=p.interpreter, bins=p.bin_dirs), check=False, interactive=interactive)
-        result = terminal(install) if interactive else install()
+        activity(entry.id, "Run application installer")
+        if interactive:
+            activity(entry.id, "Start interactive installer")
+            result = terminal(install)
+            activity(entry.id, "Interactive installer finished")
+        else:
+            result = install()
         if result.returncode:
             raise AppError(f"Installer failed (exit {result.returncode}); output withheld")
-        if p.check and ws.run(command_environment(cfg, p.check, interpreter=p.interpreter, bins=p.bin_dirs), check=False).returncode:
-            raise AppError("Installer exited successfully but installation verification failed")
+        if p.check:
+            activity(entry.id, "Verify application installation")
+            if ws.run(command_environment(cfg, p.check, interpreter=p.interpreter, bins=p.bin_dirs), check=False).returncode:
+                raise AppError("Installer exited successfully but installation verification failed")
         action = "updated" if state.get("installed") else "installed"
         return "succeeded", ((f"Application {action}; installation check passed; onboarding remains separate") if p.check else f"Application {action}; command exited successfully; no installation check is configured")
-    state = repo.setup_repository(cfg, ws, state["repository"], quiet=True)
+    activity(entry.id, "Configure repository")
+    state = repo.setup_repository(
+        cfg,
+        ws,
+        state["repository"],
+        quiet=True,
+        activity=lambda message: activity(entry.id, message),
+    )
     if not state.get("ready"):
         raise AppError("Repository provisioning finished but verification failed")
     return ("succeeded" if state.get("changed") else "already-ready", "Repository Git access verified; working tree preserved")
 
 
-def execute_plan(cfg: Config, plan: Plan, *, connection_factory=None, workspace=None, terminal=lambda operation: operation(), progress=lambda item, state: None) -> dict:
+def execute_plan(
+    cfg: Config,
+    plan: Plan,
+    *,
+    connection_factory=None,
+    workspace=None,
+    terminal=lambda operation: operation(),
+    progress=lambda item, state: None,
+    activity=lambda identity, message: None,
+) -> dict:
     factory = connection_factory or WorkspaceSSH.configured
     results = [{"id": e.id, "label": e.label, "group": e.group, "status": "not-run", "detail": ""} for e in plan.entries]
     current = None
@@ -519,12 +560,15 @@ def execute_plan(cfg: Config, plan: Plan, *, connection_factory=None, workspace=
     try:
         plan = build_plan(cfg, plan.target, plan.entries, catalog_id=plan.catalog_id, unattended=plan.unattended)
         with ExitStack() as stack:
+            activity(None, "Verify workspace connection")
             ws = workspace or terminal(lambda: stack.enter_context(factory(cfg, plan.target)))
             require_tool(ws, cfg, "python3")
             guest(ws, cfg, "identity", user=cfg.user_name, uid=cfg.user_uid, gid=cfg.user_gid,
                   name=plan.target["name"], vmid=plan.target["vmid"])
+            activity(None, "Workspace identity verified")
             states = {}
             for entry, current in zip(plan.entries, results):
+                activity(entry.id, f"Preflight {entry.label}")
                 progress(entry.id, "checking")
                 try:
                     states[entry.id] = preflight_entry(ws, cfg, plan, entry)
@@ -533,6 +577,7 @@ def execute_plan(cfg: Config, plan: Plan, *, connection_factory=None, workspace=
                     current.update(status="blocked", detail=str(exc))
                     progress(entry.id, "blocked")
             if any(r["status"] == "blocked" for r in results):
+                activity(None, "Setup stopped during preflight")
                 return {"ok": False, "plan": plan.public(), "results": results, "snapshot": snapshot}
             current = None
 
@@ -540,17 +585,31 @@ def execute_plan(cfg: Config, plan: Plan, *, connection_factory=None, workspace=
             for entry in plan.entries:
                 backup_paths.extend(backup_paths_for_entry(cfg, entry, states[entry.id]))
             if backup_paths:
+                activity(None, "Create operation snapshot")
                 snapshot = guest(ws, cfg, "snapshot", paths=list(dict.fromkeys(backup_paths)),
                                  items=[entry.id for entry in plan.entries],
                                  vmid=plan.target["vmid"], name=plan.target["name"])
+                activity(None, "Operation snapshot created: " + str(snapshot.get("path") or "unknown"))
             preflight_complete = True
 
             for entry, current in zip(plan.entries, results):
+                activity(entry.id, f"Apply {entry.label}")
                 progress(entry.id, "running")
-                status, detail = apply_entry(ws, cfg, plan, entry, states[entry.id], terminal, progress=progress)
+                status, detail = apply_entry(
+                    ws,
+                    cfg,
+                    plan,
+                    entry,
+                    states[entry.id],
+                    terminal,
+                    progress=progress,
+                    activity=activity,
+                )
                 current.update(status=status, detail=detail)
+                activity(entry.id, "Record setup state")
                 record_entry_state(ws, cfg, plan, entry, states[entry.id], snapshot_id=snapshot.get("id"))
                 progress(entry.id, status)
+            activity(None, "Setup execution complete")
     except (AppError, KeyboardInterrupt, OSError) as exc:
         status = "failed" if preflight_complete else "blocked"
         detail = "Cancelled; remaining actions were not run" if isinstance(exc, KeyboardInterrupt) else (str(exc) if isinstance(exc, AppError) else "Local transport or file operation failed; output withheld")
@@ -559,4 +618,5 @@ def execute_plan(cfg: Config, plan: Plan, *, connection_factory=None, workspace=
         else:
             for item in results:
                 item.update(status="blocked", detail=detail)
+        activity(None, "Setup execution stopped")
     return {"ok": all(r["status"] in {"succeeded", "already-ready"} for r in results), "plan": plan.public(), "results": results, "snapshot": snapshot}

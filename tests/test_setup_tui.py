@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 from textual.widgets import Input, Static
 from homestack import setup_catalog as catalog, setup_config as definitions
-from homestack.setup_tui import CompactAction, SetupApp, SetupTree, Review
+from homestack.setup_tui import CompactAction, Execution, SetupApp, SetupTree, Review
 from support import test_config
 
 TARGET = {'name': 'workspace', 'vmid': 200, 'ip': '192.0.2.200'}
@@ -20,6 +20,16 @@ class TestApp(SetupApp):
 
     def save_displayed_catalog(self, catalog):
         pass
+
+    def prepare_review(self, selected, catalog):
+        from homestack.setup import build_plan
+
+        self.show_review(build_plan(
+            self.cfg,
+            self.target,
+            selected,
+            catalog_id=catalog.snapshot_id,
+        ), catalog)
 
 
 class SetupTUITests(unittest.IsolatedAsyncioTestCase):
@@ -100,7 +110,10 @@ class SetupTUITests(unittest.IsolatedAsyncioTestCase):
             tree.select_node(app.nodes['codex'])
             tree.focus()
             await pilot.press('enter')
+            await pilot.pause()
             self.assertFalse(app.busy)
+            if isinstance(app.screen, Review):
+                await pilot.press('escape')
 
     def test_suspend_restored_even_if_body_raises(self):
         from contextlib import contextmanager
@@ -118,10 +131,10 @@ class SetupTUITests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(events, ['suspend', 'restore'])
 
     async def test_worker_terminal_handoff_runs_driver_on_main_thread(self):
-        import asyncio
         import threading
         from contextlib import contextmanager
         events = []
+        values = []
         main = threading.get_ident()
         @contextmanager
         def suspended():
@@ -129,10 +142,16 @@ class SetupTUITests(unittest.IsolatedAsyncioTestCase):
             yield
             events.append(("restore", threading.get_ident()))
         app = TestApp(test_config(), TARGET)
-        async with app.run_test():
+        async with app.run_test() as pilot:
             with patch.object(app, "suspend", suspended):
-                value = await asyncio.to_thread(app.terminal, lambda: threading.get_ident())
-        self.assertEqual(value, main)
+                worker = threading.Thread(
+                    target=lambda: values.append(app.terminal(lambda: threading.get_ident()))
+                )
+                worker.start()
+                while worker.is_alive():
+                    await pilot.pause()
+                worker.join()
+        self.assertEqual(values, [main])
         self.assertEqual(events, [("suspend", main), ("restore", main)])
 
 
@@ -375,6 +394,10 @@ class SetupActionTests(unittest.IsolatedAsyncioTestCase):
                 self.assertFalse(action.pending)
                 app.review()
                 execute.assert_called_once()
+                app.finished({'ok': True, 'results': [], 'snapshot': {'created': False}})
+                await pilot.pause()
+                await pilot.press('enter')
+                await pilot.pause()
 
     async def test_empty_selection_notifies_and_filter_enter_reviews(self):
         app = TestApp(test_config(), TARGET)
@@ -419,6 +442,110 @@ class SetupActionTests(unittest.IsolatedAsyncioTestCase):
                 await pilot.pause()
                 await pilot.click('#apply')
                 execute.assert_called_once()
+                app.finished({'ok': True, 'results': [], 'snapshot': {'created': False}})
+                await pilot.pause()
+                self.assertIsInstance(app.screen, Execution)
+                await pilot.press('enter')
+                await pilot.pause()
+                self.assertNotIsInstance(app.screen, Execution)
+                self.assertIsNone(app.execution_screen)
+
+    async def test_execution_modal_shows_activity_and_closes_with_ok_or_escape(self):
+        app = TestApp(test_config(), TARGET)
+        with patch.object(app, 'execute'):
+            async with app.run_test(size=(120, 40)) as pilot:
+                app.selected = {'codex'}
+                app.pending_plan = object()
+                app.review_answer(True)
+                await pilot.pause()
+                self.assertIsInstance(app.screen, Execution)
+                app.append_activity(None, 'Verify workspace connection')
+                app.append_activity('codex', 'Run application installer')
+                app.finished({
+                    'ok': True,
+                    'results': [{
+                        'id': 'codex', 'label': 'Codex', 'status': 'succeeded',
+                        'detail': 'done',
+                    }],
+                    'snapshot': {'created': False},
+                })
+                await pilot.pause()
+                content = app.screen.query_one('#execution-content', Static).render().plain
+                self.assertIn('Verify workspace connection', content)
+                self.assertIn('codex: Run application installer', content)
+                self.assertIn('Setup finished', content)
+                ok = app.screen.query_one('#ok', CompactAction)
+                self.assertFalse(ok.disabled)
+                self.assertTrue(ok.can_focus)
+                self.assertEqual(app.focused.id, 'ok')
+                self.assertEqual(ok.render().plain, ' Enter  OK')
+                self.assertIn('on #30363d', ok.render().spans[0].style)
+                await pilot.press('escape')
+                self.assertNotIsInstance(app.screen, Execution)
+
+    async def test_execution_escape_requests_cancel_then_mouse_ok_closes_result(self):
+        app = TestApp(test_config(), TARGET)
+        with patch.object(app, 'execute') as execute:
+            async with app.run_test(size=(120, 40)) as pilot:
+                app.selected = {'codex'}
+                app.pending_plan = object()
+                app.review_answer(True)
+                await pilot.pause()
+                execute.assert_called_once_with()
+                self.assertIsInstance(app.screen, Execution)
+                self.assertTrue(app.busy)
+                self.assertFalse(app.screen.query_one('#execution-actions').display)
+                self.assertTrue(app.screen.query_one('#ok', CompactAction).disabled)
+
+                await pilot.press('escape')
+                await pilot.pause()
+                self.assertTrue(app.cancel_requested.is_set())
+                self.assertIsInstance(app.screen, Execution)
+                self.assertIn('Cancellation requested', app.screen.lines)
+
+                app.finished({
+                    'ok': False,
+                    'results': [{
+                        'id': 'codex', 'label': 'Codex', 'status': 'failed',
+                        'detail': 'Cancelled; remaining actions were not run',
+                    }],
+                    'snapshot': {'created': False},
+                })
+                await pilot.pause()
+                self.assertTrue(app.screen.query_one('#execution-actions').display)
+                self.assertEqual(app.focused.id, 'ok')
+                self.assertIn('Setup stopped', app.screen.lines)
+                await pilot.click('#ok')
+                await pilot.pause()
+                self.assertNotIsInstance(app.screen, Execution)
+                self.assertEqual(app.focused.id, 'tree')
+
+    async def test_execution_activity_removes_control_characters_and_limits_lines(self):
+        screen = Execution()
+        screen.add_activity('id', 'one\n\x1b[31msecret\x1b[0m')
+        self.assertEqual(screen.lines, ['id: one secret'])
+
+    async def test_execution_log_keeps_wrapped_final_result_visible(self):
+        app = TestApp(test_config(), TARGET)
+        async with app.run_test(size=(45, 20)) as pilot:
+            screen = Execution()
+            app.push_screen(screen)
+            await pilot.pause()
+            for index in range(30):
+                screen.add_activity('repo', f'{index}: ' + 'long-path-' * 30)
+            screen.show_result({
+                'ok': True,
+                'results': [{
+                    'id': 'repo', 'label': 'Repository', 'status': 'succeeded',
+                    'detail': 'Repository Git access verified',
+                }],
+                'snapshot': {'created': False},
+            })
+            await pilot.pause()
+            log = screen.query_one('#execution-log')
+            self.assertEqual(log.max_scroll_x, 0)
+            self.assertGreater(log.max_scroll_y, 0)
+            self.assertEqual(log.scroll_y, log.max_scroll_y)
 
     async def test_details_enter_and_tab_order(self):
         app = TestApp(test_config(), TARGET)
