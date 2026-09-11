@@ -9,10 +9,10 @@ from rich.text import Text
 from textual import events, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Container, Horizontal, VerticalScroll
+from textual.containers import Container, Horizontal, HorizontalScroll, VerticalScroll
 from textual.message import Message
 from textual.screen import ModalScreen
-from textual.widgets import Footer, Input, Static, Tree
+from textual.widgets import Input, Static, Tree
 from textual.worker import get_current_worker
 
 from .models import AppError
@@ -28,11 +28,11 @@ def _mtime_text(value):
 
 
 class CompactAction(Static, can_focus=True):
-    """One-row action with a timer scoped to its pending key badge."""
+    """One-row action with a timer scoped to its pending key."""
 
     DEFAULT_CSS = """
     CompactAction { height: 1; width: auto; }
-    CompactAction:focus { background: $boost; text-style: bold underline; }
+    CompactAction:focus { text-style: underline; }
     CompactAction:disabled { text-style: dim; }
     """
     BINDINGS = [Binding("enter", "activate", show=False)]
@@ -88,7 +88,7 @@ class CompactAction(Static, can_focus=True):
         elif self.pending:
             color = "bold #d29922" if self.blink_bright else "#6e7681"
         text = Text(no_wrap=True, overflow="ellipsis")
-        text.append(f"[ {self.key} ]", style=f"{color} on #30363d")
+        text.append(self.key, style=color)
         text.append(" " + self.label)
         return text
 
@@ -166,15 +166,14 @@ class Review(ModalScreen[bool]):
         "#review-box { width: 90%; height: 85%; border: solid $accent; "
         "background: $surface; padding: 1 2; overflow-x: hidden; } "
         "#review-content { height: 1fr; overflow-x: hidden; } "
-        "#review-actions { height: 1; } "
-        "#back { width: 13; } #apply { width: 1fr; } "
+        "#review-actions { height: 1; align-horizontal: center; } "
+        "#back { margin-right: 3; } "
         "Review.narrow #review-box { width: 100%; padding: 1 0; }"
     )
 
-    def __init__(self, text: str, *, apply: bool):
+    def __init__(self, text: str):
         super().__init__()
         self.text = text
-        self.apply = apply
 
     def compose(self) -> ComposeResult:
         with Container(id="review-box"):
@@ -182,11 +181,10 @@ class Review(ModalScreen[bool]):
                 yield Static(Text(self.text, overflow="fold", no_wrap=False))
             with Horizontal(id="review-actions"):
                 yield CompactAction("Esc", "Back", id="back")
-                if self.apply:
-                    yield CompactAction("Enter", "Apply this plan", id="apply")
+                yield CompactAction("Enter", "Apply this plan", id="apply")
 
     def on_mount(self):
-        self.query_one("#apply" if self.apply else "#back", CompactAction).focus()
+        self.query_one("#apply", CompactAction).focus()
 
     def on_resize(self, event: events.Resize):
         self.set_class(event.size.width < 50, "narrow")
@@ -199,28 +197,24 @@ class Review(ModalScreen[bool]):
         self.dismiss(False)
 
     def action_confirm(self):
-        self.dismiss(self.apply)
+        self.dismiss(True)
 
 
 class SetupApp(App):
     """Selection is session-local; colors reflect the last inspected guest state."""
 
     CSS = """
-    #target, #counts, #keys { height: auto; padding: 0 1; }
-    #counts.has-hidden { color: $warning; text-style: bold; }
+    #target { height: auto; padding: 0 1; }
     #filter { height: 3; }
-    #browser { height: 1fr; layout: vertical; }
-    #tree { height: 1fr; width: 1fr; border: solid $panel; }
+    #browser { height: 1fr; layout: horizontal; }
+    #tree { height: 1fr; width: 3fr; border: solid $panel; }
     #tree:focus { border: solid $accent; }
-    #details-pane { height: 8; max-height: 40%; width: 1fr; border: solid $panel; padding: 0 1; overflow-x: hidden; }
+    #details-pane { height: 1fr; width: 2fr; border: solid $panel; padding: 0 1; overflow-x: hidden; }
     #details-pane:focus { border: solid $accent; }
     #details { height: auto; width: 1fr; }
-    #browser.wide { layout: horizontal; }
-    #browser.wide #tree { width: 3fr; height: 1fr; }
-    #browser.wide #details-pane { width: 2fr; height: 1fr; max-height: 100%; }
-    #controls { height: 1; }
-    #review { width: 2fr; }
-    #cancel { width: 1fr; }
+    #setup-footer { height: 1; scrollbar-size-horizontal: 0; }
+    #navigation { width: auto; height: 1; margin-right: 3; }
+    #review { margin-right: 3; }
     """
 
     BINDINGS = [
@@ -278,16 +272,17 @@ class SetupApp(App):
                     id="details",
                     markup=False,
                 )
-        yield Static("Nothing selected", id="counts", markup=False)
-        with Horizontal(id="controls"):
+        with HorizontalScroll(id="setup-footer", can_focus=False):
+            navigation = Text(no_wrap=True)
+            for key, label in (("↑↓", "Move"), ("←→", "Expand"), ("Space", "Toggle"),
+                               ("/", "Filter"), ("F5", "Refresh")):
+                if navigation:
+                    navigation.append("   ")
+                navigation.append(key, style="white")
+                navigation.append(" " + label, style="dim")
+            yield Static(navigation, id="navigation")
             yield CompactAction("Enter", "Review & apply", id="review")
             yield CompactAction("Esc", "Cancel", id="cancel")
-        yield Static(
-            "↑↓ Move  ←→ Expand/collapse  Space Toggle  Enter Review & apply  Tab Focus  / Filter  F5 Refresh state",
-            id="keys",
-            markup=False,
-        )
-        yield Footer()
 
     def target_label(self, progress=""):
         parts = [f"Workspace: {self.target['name']} (VM {self.target['vmid']})"]
@@ -298,6 +293,10 @@ class SetupApp(App):
             parts.append(f"State: {self.workspace_state['checked_at']}")
         if self.catalog.snapshot_id:
             parts.append(f"Catalog: {self.catalog.snapshot_id[:8]}")
+        hidden = sum(entry.id in self.selected and not self.matches(entry)
+                     for entry in self.catalog.entries) if self.filter_text else 0
+        if hidden:
+            parts.append(f"Hidden selected: {hidden}")
         if progress:
             parts.append(progress)
         return "    ".join(parts)
@@ -308,18 +307,11 @@ class SetupApp(App):
             "virtual_size",
             lambda: self.call_after_refresh(self.update_details_focus),
         )
-        self.update_layout()
+        self.call_after_refresh(self.update_details_focus)
         self.rebuild()
         self.query_one(SetupTree).focus()
 
     def on_resize(self, event: events.Resize):
-        self.update_layout(event.size.width)
-
-    def update_layout(self, width=None):
-        self.query_one("#browser").set_class(
-            (self.size.width if width is None else width) >= 110,
-            "wide",
-        )
         self.call_after_refresh(self.update_details_focus)
 
     def update_details_focus(self):
@@ -441,7 +433,7 @@ class SetupApp(App):
         generation = self._rebuild_generation
         expected_cursor = tree.cursor_node.data if tree.cursor_node else None
         self.call_after_refresh(self.restore_cursor, previous, expected_cursor, generation)
-        self.update_counts()
+        self.update_selection()
 
     def restore_cursor(self, identity, expected_cursor=None, generation=None):
         if generation is not None and generation != self._rebuild_generation:
@@ -463,22 +455,9 @@ class SetupApp(App):
         tree.move_cursor(node)
         self.show_details(node.data)
 
-    def update_counts(self):
+    def update_selection(self):
         self.update_review_action()
-        counts = ", ".join(
-            f"{group.label}: {sum(entry.id in self.selected and entry.group == group.id for entry in self.catalog.entries)}"
-            for group in self.cfg.setup.groups
-        )
-        hidden = sum(
-            entry.id in self.selected and not self.matches(entry)
-            for entry in self.catalog.entries
-        )
-        summary = self.query_one("#counts", Static)
-        summary.set_class(hidden > 0, "has-hidden")
-        summary.update(
-            f"{counts} | Hidden selected: {hidden}"
-            + (" | Bulk selection: visible matches only" if self.filter_text else "")
-        )
+        self.query_one("#target", Static).update(self.target_label())
 
     def update_review_action(self):
         action = self.query_one("#review", CompactAction)
@@ -646,8 +625,10 @@ class SetupApp(App):
         self.query_one(Input).focus()
 
     def action_review(self):
-        if not isinstance(self.focused, Input):
-            self.review()
+        self.review()
+
+    def on_input_submitted(self, event: Input.Submitted):
+        self.review()
 
     def action_cancel(self):
         if self.busy:
@@ -735,7 +716,7 @@ class SetupApp(App):
                     "WARNING: no application backup_paths are declared; external installer changes outside HomeStack-managed files cannot be restored."
                 ]
             lines += [""]
-        self.push_screen(Review("\n".join(lines), apply=True), self.review_answer)
+        self.push_screen(Review("\n".join(lines)), self.review_answer)
 
     def review_answer(self, approved):
         if approved:
@@ -786,8 +767,8 @@ class SetupApp(App):
     def update_progress(self, identity, state):
         self.action_states[identity] = state
         self.ssh_status = "connected"
-        self.query_one("#target", Static).update(self.target_label(f"{identity}: {state}"))
         self.rebuild()
+        self.query_one("#target", Static).update(self.target_label(f"{identity}: {state}"))
 
     def finished(self, result, state=None):
         self.result = result
@@ -811,7 +792,8 @@ class SetupApp(App):
             f"{item['label']}: {item['status']} — {item['detail']}"
             for item in result["results"]
         ]
-        self.push_screen(Review("\n".join(lines), apply=False))
+        self.notify("\n".join(lines), severity="information" if result["ok"] else "error", timeout=10)
+        self.query_one(SetupTree).focus()
 
     def action_refresh_state(self):
         if not self.busy and self.workspace is not None:

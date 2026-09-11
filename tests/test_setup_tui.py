@@ -28,6 +28,9 @@ class SetupTUITests(unittest.IsolatedAsyncioTestCase):
         async with app.run_test(size=(100, 40)) as pilot:
             tree = app.query_one(SetupTree)
             self.assertFalse(app.selected)
+            for selector in ('#counts', '#controls', '#keys', 'Footer'):
+                self.assertFalse(app.query(selector))
+            self.assertNotIn('Hidden selected:', str(app.query_one('#target').render()))
             tree.select_node(app.nodes['bash'])
             await pilot.press('space')
             self.assertEqual(app.selected, {'bash'})
@@ -48,7 +51,7 @@ class SetupTUITests(unittest.IsolatedAsyncioTestCase):
             tree.select_node(app.nodes['codex'])
             await pilot.press('space')
             self.assertEqual(app.selected, {'bash', 'codex'})
-            self.assertIn('Hidden selected: 1', str(app.query_one('#counts', Static).render()))
+            self.assertIn('Hidden selected: 1', str(app.query_one('#target', Static).render()))
             app.review()
             await pilot.pause()
             self.assertIsInstance(app.screen, Review)
@@ -66,7 +69,6 @@ class SetupTUITests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(app.nodes['env'].is_expanded)
             await pilot.press('enter')
             self.assertIsInstance(app.screen, Review)
-            self.assertTrue(app.screen.apply)
             await pilot.press('escape')
             self.assertFalse(app.busy)
             await pilot.press('escape')
@@ -209,7 +211,7 @@ class SetupInteractionTests(unittest.IsolatedAsyncioTestCase):
             await pilot.pause()
             await self.click_part(pilot, app, 'env', 'checkbox')
             self.assertEqual(app.selected, {'bash', 'codex'})
-            self.assertIn('Hidden selected: 1', str(app.query_one('#counts', Static).render()))
+            self.assertIn('Hidden selected: 1', str(app.query_one('#target', Static).render()))
             app.busy = True
             await self.click_part(pilot, app, 'bash', 'checkbox')
             await pilot.press('space')
@@ -282,14 +284,13 @@ class SetupInteractionTests(unittest.IsolatedAsyncioTestCase):
             await self.click_part(pilot, app, 'bash', 'checkbox')
             await pilot.resize_terminal(80, 24)
             await pilot.pause()
-            self.assertGreaterEqual(pane.region.y, tree.region.bottom)
+            self.assertGreaterEqual(pane.region.x, tree.region.right)
             self.assertGreater(tree.size.height, 0)
             self.assertEqual(app.selected, {'bash'})
             self.assertEqual(tree.cursor_node.data, 'bash')
-            for name in ('counts', 'controls', 'keys'):
-                widget = app.query_one('#' + name)
-                self.assertLessEqual(widget.region.bottom, 24)
-                self.assertGreater(widget.size.height, 0)
+            footer = app.query_one('#setup-footer')
+            self.assertEqual(footer.region.bottom, 24)
+            self.assertEqual(footer.size.height, 1)
             await pilot.resize_terminal(140, 42)
             await pilot.pause()
             self.assertGreaterEqual(pane.region.x, tree.region.right)
@@ -363,7 +364,6 @@ class SetupActionTests(unittest.IsolatedAsyncioTestCase):
                 await pilot.press('space', 'enter')
                 await pilot.pause()
                 self.assertIsInstance(app.screen, Review)
-                self.assertTrue(app.screen.apply)
                 self.assertEqual(app.focused.id, 'apply')
                 execute.assert_not_called()
                 self.assertFalse(app.busy)
@@ -376,7 +376,7 @@ class SetupActionTests(unittest.IsolatedAsyncioTestCase):
                 app.review()
                 execute.assert_called_once()
 
-    async def test_empty_selection_and_filter_enter_do_not_prepare_a_plan(self):
+    async def test_empty_selection_notifies_and_filter_enter_reviews(self):
         app = TestApp(test_config(), TARGET)
         with patch.object(app, 'prepare_review') as prepare, patch.object(app, 'notify') as notify:
             async with app.run_test(size=(120, 40)) as pilot:
@@ -387,7 +387,7 @@ class SetupActionTests(unittest.IsolatedAsyncioTestCase):
                 app.query_one(Input).focus()
                 await pilot.press('c', 'enter')
                 self.assertEqual(app.query_one(Input).value, 'c')
-                prepare.assert_not_called()
+                prepare.assert_called_once()
                 self.assertNotIsInstance(app.screen, Review)
 
     async def test_compact_mouse_actions_back_focus_and_escape(self):
@@ -395,7 +395,7 @@ class SetupActionTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(app, 'execute') as execute:
             async with app.run_test(size=(120, 40)) as pilot:
                 app.selected = {'codex'}
-                app.update_counts()
+                app.update_selection()
                 await pilot.click('#review')
                 await pilot.pause()
                 self.assertIsInstance(app.screen, Review)
@@ -439,14 +439,16 @@ class SetupActionTests(unittest.IsolatedAsyncioTestCase):
             await pilot.press('shift+tab')
             self.assertEqual(app.focused.id, 'review')
 
-    async def test_pending_badge_transitions_include_hidden_selections(self):
+    async def test_pending_key_transitions_include_hidden_selections(self):
         app = TestApp(test_config(), TARGET)
         async with app.run_test(size=(120, 40)) as pilot:
             action = app.query_one('#review', CompactAction)
+            self.assertEqual(action.render().plain, 'Enter Review & apply')
+            self.assertEqual(action.render().spans[0].end, len('Enter'))
             normal = action.render().spans[0].style
             self.assertFalse(action.pending)
             app.selected = {'codex'}
-            app.update_counts()
+            app.update_selection()
             action._blink_timer.pause()
             self.assertTrue(action.pending)
             bright = action.render().spans[0].style
@@ -460,7 +462,7 @@ class SetupActionTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(action.pending)
             self.assertNotIn('codex', app.nodes)
             app.selected.clear()
-            app.update_counts()
+            app.update_selection()
             self.assertFalse(action.pending)
             self.assertEqual(action.render().spans[0].style, normal)
             action.advance_blink()
@@ -485,9 +487,8 @@ class SetupActionTests(unittest.IsolatedAsyncioTestCase):
             await pilot.pause()
             self.assertFalse(app.selected)
             self.assertEqual(app.entry_style(entry), 'green')
-            self.assertFalse(app.screen.apply)
-            self.assertEqual(app.screen.query_one('#back', CompactAction).size.height, 1)
-            await pilot.press('escape')
+            self.assertNotIsInstance(app.screen, Review)
+            self.assertEqual(app.focused.id, 'tree')
             self.assertFalse(app.query_one('#review', CompactAction).pending)
             self.assertFalse(app.query_one('#review', CompactAction).disabled)
 
@@ -513,8 +514,11 @@ class SetupActionTests(unittest.IsolatedAsyncioTestCase):
                 self.assertGreater(details.size.height, len(content.splitlines()))
                 for control in app.query(CompactAction):
                     self.assertEqual(control.size.height, 1)
+                    control.focus()
+                    await pilot.pause()
+                    await pilot.wait_for_scheduled_animations()
                     self.assertLessEqual(control.region.right, width)
-                    self.assertGreaterEqual(control.content_size.width, control.render().cell_len)
+                    self.assertGreaterEqual(control.region.x, 0)
                     self.assertIn(control.label, control.render_line(0).text)
             self.assertIn('State registry:', app.details('root'))
             self.assertIn('State registry:', app.details('app'))
@@ -522,9 +526,16 @@ class SetupActionTests(unittest.IsolatedAsyncioTestCase):
     async def test_narrow_confirmation_actions_keep_complete_labels(self):
         app = TestApp(test_config(), TARGET)
         async with app.run_test(size=(40, 30)) as pilot:
-            app.push_screen(Review('\n'.join(f'Action {i}' for i in range(100)), apply=True))
+            app.push_screen(Review('\n'.join(f'Action {i}' for i in range(100))))
             await pilot.pause()
             self.assertGreater(app.screen.query_one('#review-content').max_scroll_y, 0)
+            back = app.screen.query_one('#back', CompactAction)
+            apply = app.screen.query_one('#apply', CompactAction)
+            row = app.screen.query_one('#review-actions')
+            self.assertEqual(back.render().plain, 'Esc Back')
+            self.assertEqual(apply.render().plain, 'Enter Apply this plan')
+            self.assertLessEqual(abs((back.region.x + apply.region.right) -
+                                     (row.region.x + row.region.right)), 1)
             for control in app.screen.query(CompactAction):
                 self.assertEqual(control.size.height, 1)
                 self.assertGreaterEqual(control.content_size.width, control.render().cell_len)
