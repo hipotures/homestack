@@ -372,7 +372,9 @@ class SetupApp(App):
     def entry_style(self, entry):
         state = self.state_item(entry.id)
         if isinstance(entry.params, EnvironmentParams) and state.get("ready"):
-            return "yellow" if state.get("changed_since_apply") else "green"
+            if state.get("changed_since_apply"):
+                return "bold red" if entry.id in self.selected else "yellow"
+            return "green"
         if entry.id in self.selected and (state.get("ready") or state.get("will_overwrite")):
             return "bold red"
         if state.get("ready"):
