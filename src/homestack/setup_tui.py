@@ -373,7 +373,7 @@ class SetupApp(App):
         state = self.state_item(entry.id)
         if isinstance(entry.params, EnvironmentParams) and state.get("ready"):
             if state.get("changed_since_apply"):
-                return "bold red" if entry.id in self.selected else "yellow"
+                return "bold red" if entry.id in self.selected else "green"
             return "green"
         if entry.id in self.selected and (state.get("ready") or state.get("will_overwrite")):
             return "bold red"
