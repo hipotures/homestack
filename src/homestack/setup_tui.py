@@ -46,10 +46,11 @@ class CompactAction(Static, can_focus=True):
         def control(self):
             return self.action
 
-    def __init__(self, key, label, *, id):
+    def __init__(self, key, label, *, id, keycap=False):
         super().__init__(id=id, markup=False)
         self.key = key
         self.label = label
+        self.keycap = keycap
         self.pending = False
         self.blink_bright = False
         self._blink_timer = None
@@ -88,8 +89,12 @@ class CompactAction(Static, can_focus=True):
         elif self.pending:
             color = "bold #d29922" if self.blink_bright else "#6e7681"
         text = Text(no_wrap=True, overflow="ellipsis")
-        text.append(self.key, style=color)
-        text.append(" " + self.label)
+        if self.keycap:
+            text.append(f" {self.key} ", style="#bfc1c3 on #30363d")
+            text.append(" " + self.label, style="#8b949e")
+        else:
+            text.append(self.key, style=color)
+            text.append(" " + self.label)
         return text
 
     def action_activate(self):
@@ -180,8 +185,8 @@ class Review(ModalScreen[bool]):
             with VerticalScroll(id="review-content"):
                 yield Static(Text(self.text, overflow="fold", no_wrap=False))
             with Horizontal(id="review-actions"):
-                yield CompactAction("Esc", "Back", id="back")
-                yield CompactAction("Enter", "Apply this plan", id="apply")
+                yield CompactAction("Esc", "Back", id="back", keycap=True)
+                yield CompactAction("Enter", "Apply this plan", id="apply", keycap=True)
 
     def on_mount(self):
         self.query_one("#apply", CompactAction).focus()

@@ -534,11 +534,15 @@ class SetupActionTests(unittest.IsolatedAsyncioTestCase):
             back = app.screen.query_one('#back', CompactAction)
             apply = app.screen.query_one('#apply', CompactAction)
             row = app.screen.query_one('#review-actions')
-            self.assertEqual(back.render().plain, 'Esc Back')
-            self.assertEqual(apply.render().plain, 'Enter Apply this plan')
+            self.assertEqual(back.render().plain, ' Esc  Back')
+            self.assertEqual(apply.render().plain, ' Enter  Apply this plan')
             self.assertLessEqual(abs((back.region.x + apply.region.right) -
                                      (row.region.x + row.region.right)), 1)
             for control in app.screen.query(CompactAction):
+                rendered = control.render()
+                self.assertEqual(rendered.spans[0].end, len(control.key) + 2)
+                self.assertIn('on #30363d', rendered.spans[0].style)
+                self.assertNotIn('on ', rendered.spans[1].style)
                 self.assertEqual(control.size.height, 1)
                 self.assertGreaterEqual(control.content_size.width, control.render().cell_len)
                 self.assertIn(control.label, control.render_line(0).text)
