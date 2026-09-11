@@ -264,7 +264,7 @@ class HostStateTests(unittest.TestCase):
         self.assertEqual(item["last_applied_at"], "2026-09-11T00:01:00Z")
         self.assertNotIn("version", item)
 
-    def test_environment_inspection_reports_file_drift_without_reconciliation(self):
+    def test_environment_inspection_reports_file_drift_requiring_overwrite(self):
         cfg = test_config()
         bash = entry("bash")
         with tempfile.TemporaryDirectory() as tmp:
@@ -308,10 +308,10 @@ class HostStateTests(unittest.TestCase):
             with (home / ".profile").open("a", encoding="utf-8") as handle:
                 handle.write("#\n")
             modified = inspect()
-            self.assertTrue(modified["ready"])
-            self.assertFalse(modified["will_overwrite"])
+            self.assertFalse(modified["ready"])
+            self.assertTrue(modified["will_overwrite"])
             self.assertEqual(modified["changed_since_apply"], [".profile"])
-            self.assertEqual(modified["state"], "modified")
+            self.assertEqual(modified["state"], "needs update")
 
             (home / ".bashrc").unlink()
             missing = inspect()
@@ -372,8 +372,8 @@ class HostStateTests(unittest.TestCase):
             self.assertEqual([item["path"] for item in manifest["files"]], [".profile"])
             self.assertEqual((snapshot / "home/.profile").read_bytes(), modified_profile)
             self.assertNotEqual((home / ".profile").stat().st_ino, original_profile_inode)
-            self.assertNotEqual((home / ".profile").read_bytes(), original_profile)
-            self.assertEqual((home / ".profile").read_bytes(), modified_profile)
+            self.assertEqual((home / ".profile").read_bytes(), original_profile)
+            self.assertNotEqual((home / ".profile").read_bytes(), modified_profile)
             self.assertEqual((home / ".bashrc").stat().st_ino, original_bashrc_inode)
             self.assertEqual((home / ".bashrc").read_bytes(), original_bashrc)
             before = json.loads((snapshot / "setup.before.json").read_text())

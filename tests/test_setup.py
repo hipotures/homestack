@@ -378,29 +378,45 @@ class EnvironmentTests(unittest.TestCase):
     def apply(self, home, profile='bash'):
         return guest.run({'operation': 'environment', 'home': str(home), 'profile': profile, 'bins': ['~/.local/bin', '~/.opencode/bin'], 'apply': True})
 
-    def test_bash_minimal_home_existing_customizations_login_precedence_and_repeat(self):
+    def preflight(self, home, profile='bash'):
+        return guest.run({'operation': 'environment', 'home': str(home), 'profile': profile,
+                          'bins': ['~/.local/bin', '~/.opencode/bin'], 'apply': False})
+
+    def test_bash_generates_canonical_files_replaces_existing_content_and_is_idempotent(self):
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp)
             (home / '.bashrc').write_text('export CUSTOM_BASHRC=preserved\n')
             (home / '.bash_profile').write_text('export CUSTOM_LOGIN=preserved\n')
             (home / '.profile').write_text('export WRONG_LOGIN=used\n')
-            self.apply(home)
-            first = (home / '.bashrc').read_text()
-            self.assertIn('CUSTOM_BASHRC=preserved', first)
-            self.assertIn('.bash_profile', self.apply(home)['paths'])
-            self.assertEqual(first, (home / '.bashrc').read_text())
+            before = {(home / name): (home / name).read_bytes() for name in ('.bashrc', '.bash_profile', '.profile')}
+            inodes = {(home / name): (home / name).stat().st_ino for name in ('.bashrc', '.bash_profile', '.profile')}
+            self.assertEqual(self.preflight(home)['changed'], ['.bashrc', '.bash_profile'])
+            self.assertEqual({path: path.read_bytes() for path in before}, before)
+            self.assertEqual({path: path.stat().st_ino for path in inodes}, inodes)
+
+            result = self.apply(home)
+            self.assertEqual(result['changed'], ['.bashrc', '.bash_profile'])
+            expected = guest.environment_updates(home, 'bash', ['~/.local/bin', '~/.opencode/bin'])
+            self.assertEqual((home / '.bashrc').read_text(), expected['.bashrc'])
+            self.assertEqual((home / '.bash_profile').read_text(), expected['.bash_profile'])
+            self.assertNotIn('CUSTOM_BASHRC', (home / '.bashrc').read_text())
+            self.assertNotIn('CUSTOM_LOGIN', (home / '.bash_profile').read_text())
+            self.assertEqual((home / '.profile').read_bytes(), before[home / '.profile'])
+            first = (home / '.bashrc').read_bytes()
+            self.assertEqual(self.apply(home)['changed'], [])
+            self.assertEqual(first, (home / '.bashrc').read_bytes())
             self.assertFalse(list(home.glob('.bashrc.homestack-backup-*')))
             env = {**os.environ, 'HOME': str(home), 'PATH': '/usr/bin:/bin'}
             for args in (['bash', '--noprofile', '--rcfile', str(home / '.bashrc'), '-ic'], ['bash', '--noprofile', '-lc']):
                 # -noprofile avoids the desktop's /etc/profile resetting the temporary HOME.
-                command = ('source "$HOME/.bash_profile"; ' if '-lc' in args else '') + 'printf "%s|%s|%s" "$CUSTOM_BASHRC" "${CUSTOM_LOGIN:-}" "$PATH"'
+                command = ('source "$HOME/.bash_profile"; ' if '-lc' in args else '') + 'printf "%s|%s|%s" "${CUSTOM_BASHRC:-}" "${CUSTOM_LOGIN:-}" "$PATH"'
                 result = subprocess.run([*args, command], env=env, capture_output=True, text=True)
                 self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertIn('preserved', result.stdout)
+                self.assertNotIn('preserved', result.stdout)
                 self.assertEqual(result.stdout.count(str(home / '.local/bin')), 1)
             self.assertEqual((home / '.profile').read_text(), 'export WRONG_LOGIN=used\n')
 
-    def test_missing_bash_files_symlink_malformed_block_and_cycle(self):
+    def test_bash_login_precedence_and_unsafe_paths(self):
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp)
             self.assertEqual(set(self.apply(home)['paths']), {'.bashrc', '.profile'})
@@ -409,12 +425,30 @@ class EnvironmentTests(unittest.TestCase):
             with self.assertRaisesRegex(guest.GuestError, 'Symlink'):
                 self.apply(home)
             (home / '.bashrc').unlink()
-            (home / '.bashrc').write_text('# >>> HomeStack bash >>>\n')
-            with self.assertRaisesRegex(guest.GuestError, 'Malformed'):
+            (home / '.bash_profile').symlink_to(home / '.profile')
+            with self.assertRaisesRegex(guest.GuestError, 'Symlink'):
                 self.apply(home)
-            (home / '.bashrc').write_text('source ~/.profile\n')
-            with self.assertRaisesRegex(guest.GuestError, 'source-cycle'):
-                self.apply(home)
+
+    def test_non_bash_templates_replace_existing_content_deterministically(self):
+        cases = {
+            'zsh': ('.zshenv', '.zshrc'),
+            'fish': ('.config/fish/conf.d/homestack.fish',),
+            'nu': ('.config/nushell/env.nu', '.config/nushell/config.nu'),
+        }
+        for profile, relatives in cases.items():
+            with self.subTest(profile=profile), tempfile.TemporaryDirectory() as tmp:
+                home = Path(tmp)
+                for relative in relatives:
+                    path = home / relative
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_text(f'custom {profile}\n')
+                updates = guest.environment_updates(home, profile, ['~/.local/bin', '~/.opencode/bin'])
+                self.assertEqual(tuple(updates), relatives)
+                for relative, content in updates.items():
+                    self.assertNotIn(f'custom {profile}', content)
+                    self.assertTrue(guest.atomic_write(home / relative, content))
+                    self.assertEqual((home / relative).read_text(), content)
+                    self.assertFalse(guest.atomic_write(home / relative, content))
 
     def test_atomic_write_is_noop_when_unchanged_and_never_creates_sidecar_backups(self):
         with tempfile.TemporaryDirectory() as tmp:

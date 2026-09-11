@@ -371,8 +371,10 @@ class SetupApp(App):
 
     def entry_style(self, entry):
         state = self.state_item(entry.id)
-        if isinstance(entry.params, EnvironmentParams) and state.get("ready"):
-            if state.get("changed_since_apply"):
+        if isinstance(entry.params, EnvironmentParams) and (
+            state.get("ready") or (state.get("managed") and state.get("state") == "needs update")
+        ):
+            if state.get("changed_since_apply") or state.get("will_overwrite"):
                 return "bold red" if entry.id in self.selected else "green"
             return "green"
         if entry.id in self.selected and (state.get("ready") or state.get("will_overwrite")):
@@ -554,8 +556,8 @@ class SetupApp(App):
         ]
         if live.get("changed_since_apply"):
             lines += ["Changed since last apply:", *["~/" + path for path in live["changed_since_apply"]]]
-            if live.get("ready"):
-                lines += ["HomeStack configuration matches; user changes are preserved."]
+            if live.get("will_overwrite"):
+                lines += ["Changed files will be backed up before replacement with HomeStack configuration."]
         if self.workspace_state.get("checked_at"):
             lines += ["State checked: " + self.workspace_state["checked_at"]]
         if live.get("first_managed_at"):

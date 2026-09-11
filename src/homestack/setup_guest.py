@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import hashlib
 import shutil
 from datetime import datetime, timezone
@@ -294,20 +293,6 @@ def verify_identity(data: dict) -> None:
         raise GuestError("Persistent home mount/label mismatch; refusing writes")
 
 
-def managed(text: str, identity: str, body: str) -> str:
-    begin, end = f"# >>> HomeStack {identity} >>>", f"# <<< HomeStack {identity} <<<"
-    block = begin + "\n" + body.rstrip() + "\n" + end + "\n"
-    if begin in text or end in text:
-        if text.count(begin) != 1 or text.count(end) != 1 or text.index(end) < text.index(begin):
-            raise GuestError("Malformed HomeStack managed block; reconcile it manually")
-        start = text.index(begin)
-        finish = text.index(end) + len(end)
-        if text[finish:finish + 1] == "\n":
-            finish += 1
-        return text[:start] + block + text[finish:]
-    return text + ("\n" if text and not text.endswith("\n") else "") + block
-
-
 def posix_paths(bin_dirs: list[str]) -> str:
     # User-controlled paths are serialized by the caller and quoted as literals.
     import shlex
@@ -323,7 +308,7 @@ def environment_updates(home: Path, profile: str, bins: list[str]) -> dict[str, 
     import shlex
     paths = posix_paths(bins)
     if profile == "bash":
-        body = paths + '''
+        bashrc = paths + '''
 case $- in *i*)
     if ! declare -F _completion_loader >/dev/null && [ -r /usr/share/bash-completion/bash_completion ]; then
         . /usr/share/bash-completion/bash_completion
@@ -332,16 +317,8 @@ case $- in *i*)
         login = next((p for p in (".bash_profile", ".bash_login", ".profile") if (home / p).exists() or (home / p).is_symlink()), ".profile")
         safe_path(home, login)
         safe_path(home, ".bashrc")
-        login_text = (home / login).read_text() if (home / login).exists() else ""
-        bash_text = (home / ".bashrc").read_text() if (home / ".bashrc").exists() else ""
-        # Do not add an edge to startup files that already source a login file.
-        if any(p in bash_text for p in (".bash_profile", ".bash_login", ".profile")):
-            raise GuestError("Bash startup source-cycle risk; reconcile login-file references in .bashrc")
-        login_body = paths
-        outside_managed = re.sub(r"(?ms)^# >>> HomeStack bash-login >>>\n.*?^# <<< HomeStack bash-login <<<\n?", "", login_text)
-        if ".bashrc" not in "\n".join(line for line in outside_managed.splitlines() if not line.lstrip().startswith("#")):
-            login_body += '\nif [ -n "${BASH_VERSION:-}" ] && [ -r "$HOME/.bashrc" ]; then\n    . "$HOME/.bashrc"\nfi'
-        return {".bashrc": managed(bash_text, "bash", body), login: managed(login_text, "bash-login", login_body)}
+        login_body = paths + '\nif [ -n "${BASH_VERSION:-}" ] && [ -r "$HOME/.bashrc" ]; then\n    . "$HOME/.bashrc"\nfi'
+        return {".bashrc": bashrc.rstrip() + "\n", login: login_body.rstrip() + "\n"}
     if profile == "zsh":
         specs = {".zshenv": paths,
                  ".zshrc": 'if (( ! $+functions[compdef] )); then\n    autoload -Uz compinit\n    compinit -i\nfi'}
@@ -359,15 +336,15 @@ case $- in *i*)
         raise GuestError("Unknown shell profile")
     result = {}
     for relative, body in specs.items():
-        path = safe_path(home, relative)
-        result[relative] = managed(path.read_text() if path.exists() else "", profile, body)
+        safe_path(home, relative)
+        result[relative] = body.rstrip() + "\n"
     return result
 
 
-def atomic_write(path: Path, content: str, *, force: bool = False) -> bool:
+def atomic_write(path: Path, content: str) -> bool:
     payload = content.encode()
     old = path.read_bytes() if path.exists() else None
-    if old == payload and not force:
+    if old == payload:
         return False
     mode = stat.S_IMODE(path.stat().st_mode) & 0o700 if old is not None else 0o600
     _atomic_bytes(path, payload, mode=mode)
@@ -434,7 +411,6 @@ def run(data: dict) -> dict:
         return {"ok": True, "repositories": results}
     if op == "environment":
         updates = environment_updates(home, data["profile"], data["bins"])
-        overwrite_paths = set(data.get("overwrite_paths", ()))
         # Check the actual selected shell parser before any persistent write.
         for relative, content in updates.items():
             safe_path(home, relative)
@@ -450,12 +426,11 @@ def run(data: dict) -> dict:
                 if parsed.returncode or parsed.stdout.strip() != "true":
                     raise GuestError(f"Nushell startup syntax check failed at ~/{relative}")
         changed = [relative for relative, content in updates.items()
-                   if relative in overwrite_paths
-                   or not (home / relative).exists()
+                   if not (home / relative).exists()
                    or (home / relative).read_text() != content]
         if data.get("apply"):
             for relative in changed:
-                atomic_write(safe_path(home, relative), updates[relative], force=relative in overwrite_paths)
+                atomic_write(safe_path(home, relative), updates[relative])
         return {"ok": True, "paths": list(updates), "changed": changed}
     if op == "paths":
         for item in data["paths"]:

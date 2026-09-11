@@ -600,18 +600,25 @@ class SetupActionTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn('Update / reapply existing state', app.screen.text)
             await pilot.press('escape')
 
-    async def test_modified_shell_file_is_visible_without_claiming_overwrite(self):
+    def test_managed_environment_with_missing_shell_is_not_green(self):
         app = TestApp(test_config(), TARGET, state={
-            'items': {'bash': {'ready': True, 'state': 'modified',
-                               'will_overwrite': False, 'changed_since_apply': ['.profile']}},
+            'items': {'bash': {'ready': False, 'managed': True, 'state': 'shell missing'}},
+        })
+        bash = next(entry for entry in app.catalog.entries if entry.id == 'bash')
+        self.assertEqual(app.entry_style(bash), '')
+
+    async def test_modified_shell_file_shows_backup_and_overwrite(self):
+        app = TestApp(test_config(), TARGET, state={
+            'items': {'bash': {'ready': False, 'managed': True, 'state': 'needs update',
+                               'will_overwrite': True, 'changed_since_apply': ['.profile']}},
         })
         async with app.run_test(size=(120, 40)) as pilot:
             app.query_one(SetupTree).select_node(app.nodes['bash'])
             await pilot.pause()
             content = app.query_one('#details', Static).render().plain
-            self.assertTrue(content.startswith('Status: MODIFIED'))
+            self.assertTrue(content.startswith('Status: UPDATE'))
             self.assertIn('Changed since last apply:\n~/.profile', content)
-            self.assertIn('user changes are preserved', content)
+            self.assertIn('backed up before replacement', content)
             bash = next(entry for entry in app.catalog.entries if entry.id == 'bash')
             self.assertEqual(app.entry_style(bash), 'green')
             app.toggle_node(app.nodes['bash'])
