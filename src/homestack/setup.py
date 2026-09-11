@@ -452,7 +452,9 @@ def apply_entry(ws, cfg: Config, plan: Plan, entry: Entry, state: dict, terminal
     p = entry.params
     if isinstance(p, EnvironmentParams):
         result = guest(ws, cfg, "environment", profile=p.profile, bins=all_bins(cfg), apply=True)
-        return ("succeeded" if result["changed"] else "already-ready", "Shell configuration verified")
+        if not result["changed"]:
+            return "already-ready", "Shell configuration already matches; no files changed"
+        return "succeeded", "Shell configuration verified"
     if isinstance(p, FileParams):
         if not state.get("changed", True):
             return "already-ready", "Destination already matches the desktop source"

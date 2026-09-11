@@ -584,6 +584,22 @@ class SetupActionTests(unittest.IsolatedAsyncioTestCase):
         app.selected = {'bash'}
         self.assertEqual(app.entry_style(entry), 'bold red')
 
+    async def test_ready_environment_review_does_not_claim_an_update(self):
+        app = TestApp(test_config(), TARGET, state={
+            'items': {'bash': {'ready': True, 'state': 'configured'}},
+        })
+        async with app.run_test(size=(120, 40)) as pilot:
+            self.assertTrue(app.details('bash').startswith('Status: NO CHANGES'))
+            app.toggle_node(app.nodes['bash'])
+            bash = next(entry for entry in app.catalog.entries if entry.id == 'bash')
+            self.assertEqual(app.entry_style(bash), 'green')
+            app.review()
+            await pilot.pause()
+            self.assertIsInstance(app.screen, Review)
+            self.assertIn('Verify shell configuration; write only if changes are needed', app.screen.text)
+            self.assertNotIn('Update / reapply existing state', app.screen.text)
+            await pilot.press('escape')
+
     async def test_stale_rebuild_restore_cannot_replace_newer_highlight(self):
         app = TestApp(test_config(), TARGET)
         async with app.run_test(size=(120, 40)) as pilot:

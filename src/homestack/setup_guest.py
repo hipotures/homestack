@@ -221,6 +221,8 @@ def record_item(home: Path, data: dict) -> dict:
     }
     if data.get("snapshot"):
         current["last_snapshot"] = data["snapshot"]
+    elif previous.get("last_snapshot"):
+        current["last_snapshot"] = previous["last_snapshot"]
     paths = list(dict.fromkeys(data.get("paths", [])))
     if paths:
         current["files"] = [path_metadata(home, relative) for relative in paths]

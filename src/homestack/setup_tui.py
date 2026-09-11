@@ -18,7 +18,7 @@ from textual.worker import get_current_worker
 from .models import AppError
 from .setup import build_plan, execute_plan, inspect_workspace_state, write_paths
 from .setup_catalog import Catalog, load_catalog, save_snapshot
-from .setup_config import ApplicationParams, FileParams, RepositoryParams, defaults
+from .setup_config import ApplicationParams, EnvironmentParams, FileParams, RepositoryParams, defaults
 
 
 def _mtime_text(value):
@@ -336,7 +336,7 @@ class SetupApp(App):
         rendered = Text(content, overflow="fold", no_wrap=False)
         if content.startswith("Status: "):
             status = content.splitlines()[0].removeprefix("Status: ")
-            color = {"UPDATE": "red", "INSTALL": "green"}.get(status, "yellow")
+            color = {"UPDATE": "red", "INSTALL": "green", "NO CHANGES": "green"}.get(status, "yellow")
             rendered.stylize(f"bold {color}", 0, len(content.splitlines()[0]))
         self.query_one("#details", Static).update(rendered)
         self.update_details_focus()
@@ -371,6 +371,8 @@ class SetupApp(App):
 
     def entry_style(self, entry):
         state = self.state_item(entry.id)
+        if isinstance(entry.params, EnvironmentParams) and state.get("ready"):
+            return "green"
         if entry.id in self.selected and (state.get("ready") or state.get("will_overwrite")):
             return "bold red"
         if state.get("ready"):
@@ -529,7 +531,9 @@ class SetupApp(App):
         p = entry.params
         live = self.state_item(entry.id)
         status = (
-            "UPDATE"
+            "NO CHANGES"
+            if isinstance(p, EnvironmentParams) and live.get("ready")
+            else "UPDATE"
             if live.get("ready") or live.get("will_overwrite")
             else "UNKNOWN"
             if not live or live.get("state", "unknown").startswith("unknown")
@@ -699,7 +703,9 @@ class SetupApp(App):
         for entry in self.pending_plan.entries:
             live = self.state_item(entry.id)
             action = (
-                "Update / reapply existing state"
+                "Verify shell configuration; write only if changes are needed"
+                if isinstance(entry.params, EnvironmentParams)
+                else "Update / reapply existing state"
                 if live.get("ready")
                 else "Overwrite existing configuration"
                 if live.get("will_overwrite")

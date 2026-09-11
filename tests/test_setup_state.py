@@ -71,6 +71,82 @@ class GuestStateTests(unittest.TestCase):
             self.assertTrue(all(item.get("mtime_ns") for item in bash["files"]))
             self.assertEqual(bash["last_snapshot"], snapshot["id"])
 
+    def test_state_record_preserves_snapshot_for_noop_and_replaces_new_snapshot(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            (home / ".bashrc").write_text("export CUSTOM=1\n", encoding="utf-8")
+            first_snapshot = setup_guest.run({
+                "operation": "snapshot",
+                "home": str(home),
+                "vmid": 200,
+                "name": "workspace",
+                "items": ["bash"],
+                "paths": [".bashrc"],
+            })
+            self.assertTrue(first_snapshot["created"])
+
+            first_apply = setup_guest.run({
+                "operation": "environment",
+                "home": str(home),
+                "profile": "bash",
+                "bins": ["~/.local/bin"],
+                "apply": True,
+            })
+            self.assertTrue(first_apply["changed"])
+            setup_guest.run({
+                "operation": "state-record",
+                "home": str(home),
+                "vmid": 200,
+                "name": "workspace",
+                "id": "bash",
+                "handler": "environment",
+                "paths": first_apply["paths"],
+                "snapshot": first_snapshot["id"],
+            })
+
+            no_op = setup_guest.run({
+                "operation": "environment",
+                "home": str(home),
+                "profile": "bash",
+                "bins": ["~/.local/bin"],
+                "apply": True,
+            })
+            self.assertFalse(no_op["changed"])
+            preserved = setup_guest.run({
+                "operation": "state-record",
+                "home": str(home),
+                "vmid": 200,
+                "name": "workspace",
+                "id": "bash",
+                "handler": "environment",
+                "paths": no_op["paths"],
+                "snapshot": None,
+            })["item"]
+            self.assertEqual(preserved["last_snapshot"], first_snapshot["id"])
+
+            (home / ".bashrc").write_text("export CUSTOM=2\n", encoding="utf-8")
+            second_snapshot = setup_guest.run({
+                "operation": "snapshot",
+                "home": str(home),
+                "vmid": 200,
+                "name": "workspace",
+                "items": ["bash"],
+                "paths": [".bashrc"],
+            })
+            self.assertTrue(second_snapshot["created"])
+            self.assertNotEqual(second_snapshot["id"], first_snapshot["id"])
+            replaced = setup_guest.run({
+                "operation": "state-record",
+                "home": str(home),
+                "vmid": 200,
+                "name": "workspace",
+                "id": "bash",
+                "handler": "environment",
+                "paths": no_op["paths"],
+                "snapshot": second_snapshot["id"],
+            })["item"]
+            self.assertEqual(replaced["last_snapshot"], second_snapshot["id"])
+
     def test_application_registry_stores_dates_but_no_version_output(self):
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp)
@@ -161,6 +237,16 @@ class GuestStateTests(unittest.TestCase):
 
 
 class HostStateTests(unittest.TestCase):
+    def test_matching_environment_reports_no_files_changed(self):
+        cfg = test_config()
+        bash = entry("bash")
+        plan = setup.build_plan(cfg, TARGET, (bash,))
+        with patch.object(setup, "guest", return_value={"changed": []}):
+            result = setup.apply_entry(Mock(), cfg, plan, bash, {}, lambda operation: operation())
+        self.assertEqual(result, (
+            "already-ready", "Shell configuration already matches; no files changed",
+        ))
+
     def test_inspection_uses_live_check_and_registry_metadata_without_storing_version(self):
         cfg = test_config()
         ws = Mock()
