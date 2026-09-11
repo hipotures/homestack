@@ -114,13 +114,23 @@ class RepositorySetupPlanTests(unittest.TestCase):
             "origin": "git@github.com:hipotures/tklivetracker.git",
             "ssh_config_state": "ready",
             "access": "working",
+            "working_tree": "clean",
+            "head_state": "attached",
+            "branch": "main",
+            "upstream": "origin/main",
+            "upstream_remote": "origin",
+            "upstream_merge": "refs/heads/main",
+            "upstream_ref": "refs/remotes/origin/main",
+            "ahead": 0,
+            "behind": 0,
         }
         state.update(updates)
         return state
 
-    def test_ready_repository_is_noop(self) -> None:
+    def test_ready_repository_fetches_before_reporting_noop(self) -> None:
         self.assertEqual(
-            repo.repository_setup_actions(self._state()), ()
+            repo.repository_setup_actions(self._state()),
+            ("fetch-upstream", "verify-access"),
         )
 
     def test_existing_https_checkout_is_not_recloned(self) -> None:
@@ -140,6 +150,7 @@ class RepositorySetupPlanTests(unittest.TestCase):
                 "register-key",
                 "set-origin",
                 "set-ssh-command",
+                "fetch-upstream",
                 "verify-access",
             ),
         )
@@ -197,6 +208,28 @@ class RepositorySetupPlanTests(unittest.TestCase):
                     repo.repository_setup_actions(
                         self._state(checkout_state=checkout_state)
                     )
+
+    def test_dirty_checkout_is_rejected(self) -> None:
+        with self.assertRaisesRegex(models.AppError, "uncommitted.*untracked"):
+            repo.repository_setup_actions(self._state(working_tree="modified"))
+
+    def test_history_is_rechecked_after_fetch(self) -> None:
+        for ahead, behind in ((1, 0), (1, 1)):
+            with self.subTest(ahead=ahead, behind=behind):
+                self.assertIn(
+                    "fetch-upstream",
+                    repo.repository_setup_actions(
+                        self._state(ahead=ahead, behind=behind)
+                    ),
+                )
+
+    def test_detached_head_is_rejected(self) -> None:
+        with self.assertRaisesRegex(models.AppError, "detached HEAD"):
+            repo.repository_setup_actions(self._state(head_state="detached", branch=None))
+
+    def test_missing_upstream_is_rejected(self) -> None:
+        with self.assertRaisesRegex(models.AppError, "no configured upstream"):
+            repo.repository_setup_actions(self._state(upstream=None))
 
 
 if __name__ == "__main__":

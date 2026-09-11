@@ -62,7 +62,10 @@ def repository_setup_steps(actions: tuple[str, ...]) -> tuple[str, ...]:
     steps.append("Reconcile GitHub deploy key")
     if "clone" in actions:
         steps.append("Clone repository")
-    elif "set-origin" in actions:
+    if "fetch-upstream" in actions:
+        steps.append("Fetch repository upstream")
+        steps.append("Inspect and update repository")
+    if "set-origin" in actions:
         steps.append("Configure Git remote")
     if "clone" in actions or "set-ssh-command" in actions:
         steps.append("Configure repository SSH")
@@ -188,6 +191,74 @@ def _output(ws: WorkspaceSSH, command: str) -> str:
     return result.stdout.strip() if result.returncode == 0 else ""
 
 
+def _upstream_counts(ws: WorkspaceSSH, checkout: str) -> tuple[int, int] | None:
+    result = ws.run(
+        f"git -C {shlex.quote(checkout)} rev-list --left-right --count "
+        "HEAD...@{upstream}",
+        check=False,
+    )
+    if result.returncode:
+        return None
+    fields = result.stdout.split()
+    if len(fields) != 2:
+        return None
+    try:
+        return int(fields[0]), int(fields[1])
+    except ValueError:
+        return None
+
+
+def _repository_checkout_error(state: dict[str, Any]) -> AppError | None:
+    if state.get("working_tree") == "modified":
+        return AppError(
+            "Checkout has uncommitted, staged, or untracked changes; "
+            "refusing to update it"
+        )
+    if state.get("working_tree") != "clean":
+        return AppError(
+            "Could not inspect the checkout's working tree; refusing to update it"
+        )
+    if state.get("head_state") != "attached" or not state.get("branch"):
+        return AppError(
+            "Checkout is in detached HEAD state; refusing to update it"
+        )
+    if not state.get("upstream"):
+        return AppError(
+            "Current branch has no configured upstream; refusing to update it"
+        )
+    if (
+        not state.get("upstream_remote")
+        or state.get("upstream_remote") == "."
+        or not state.get("upstream_merge")
+        or not state.get("upstream_ref")
+    ):
+        return AppError(
+            "Current branch does not track a fetchable remote branch; "
+            "refusing to update it"
+        )
+    return None
+
+
+def _repository_history_error(state: dict[str, Any]) -> AppError | None:
+    counts = state.get("ahead"), state.get("behind")
+    if not all(isinstance(value, int) and value >= 0 for value in counts):
+        return AppError(
+            "Could not determine the checkout's upstream history; "
+            "refusing to update it"
+        )
+    ahead, behind = counts
+    if ahead:
+        if behind:
+            return AppError(
+                "Checkout history has diverged from its upstream; refusing to update it"
+            )
+        return AppError(
+            "Checkout contains local commits ahead of its upstream; "
+            "refusing to update it"
+        )
+    return None
+
+
 def inspect_repository(
     cfg: Config,
     ws: WorkspaceSSH,
@@ -214,6 +285,14 @@ def inspect_repository(
     checkout_state = "missing"
     origin: str | None = None
     working_tree = "unavailable"
+    head_state = "unavailable"
+    branch: str | None = None
+    upstream: str | None = None
+    upstream_remote: str | None = None
+    upstream_merge: str | None = None
+    upstream_ref: str | None = None
+    ahead: int | None = None
+    behind: int | None = None
     if exists and tools["git"]:
         inside = ws.run(
             f"git -C {shlex.quote(checkout)} rev-parse --is-inside-work-tree",
@@ -237,14 +316,49 @@ def inspect_repository(
             else:
                 checkout_state = "repository-without-recognized-origin"
             status = ws.run(
-                f"git -C {shlex.quote(checkout)} status --porcelain",
+                f"git -C {shlex.quote(checkout)} status --porcelain "
+                "--untracked-files=all",
                 check=False,
             )
             working_tree = (
-                "clean"
-                if status.returncode == 0 and not status.stdout.strip()
-                else "modified"
+                "unavailable"
+                if status.returncode
+                else ("modified" if status.stdout.strip() else "clean")
             )
+            branch_result = ws.run(
+                f"git -C {shlex.quote(checkout)} symbolic-ref --quiet --short HEAD",
+                check=False,
+            )
+            if branch_result.returncode == 0 and branch_result.stdout.strip():
+                head_state = "attached"
+                branch = branch_result.stdout.strip()
+                upstream_result = ws.run(
+                    f"git -C {shlex.quote(checkout)} rev-parse "
+                    "--abbrev-ref --symbolic-full-name @{upstream}",
+                    check=False,
+                )
+                if upstream_result.returncode == 0 and upstream_result.stdout.strip():
+                    upstream = upstream_result.stdout.strip()
+                    upstream_remote = _output(
+                        ws,
+                        f"git -C {shlex.quote(checkout)} config --get "
+                        f"{shlex.quote(f'branch.{branch}.remote')}",
+                    ) or None
+                    upstream_merge = _output(
+                        ws,
+                        f"git -C {shlex.quote(checkout)} config --get "
+                        f"{shlex.quote(f'branch.{branch}.merge')}",
+                    ) or None
+                    upstream_ref = _output(
+                        ws,
+                        f"git -C {shlex.quote(checkout)} rev-parse "
+                        "--symbolic-full-name @{upstream}",
+                    ) or None
+                    counts = _upstream_counts(ws, checkout)
+                    if counts is not None:
+                        ahead, behind = counts
+            else:
+                head_state = "detached"
     elif exists:
         checkout_state = "uninspectable"
 
@@ -340,6 +454,14 @@ def inspect_repository(
         "checkout": checkout,
         "checkout_state": checkout_state,
         "working_tree": working_tree,
+        "head_state": head_state,
+        "branch": branch,
+        "upstream": upstream,
+        "upstream_remote": upstream_remote,
+        "upstream_merge": upstream_merge,
+        "upstream_ref": upstream_ref,
+        "ahead": ahead,
+        "behind": behind,
         "origin": origin,
         "key_path": key,
         "key_state": key_state,
@@ -388,10 +510,13 @@ def repository_setup_actions(state: dict[str, Any]) -> tuple[str, ...]:
     if checkout == "missing":
         actions.append("clone")
     else:
+        if error := _repository_checkout_error(state):
+            raise error
         if not str(state.get("origin") or "").startswith("git@github.com:"):
             actions.append("set-origin")
         if state.get("ssh_config_state") != "ready":
             actions.append("set-ssh-command")
+        actions.append("fetch-upstream")
     if actions or state.get("access") != "working":
         actions.append("verify-access")
     return tuple(actions)
@@ -428,6 +553,45 @@ def _require_tools(state: dict[str, Any]) -> None:
         )
 
 
+def _fetch_upstream(
+    ws: WorkspaceSSH,
+    checkout: str,
+    key: str,
+    repository: str,
+    upstream: str,
+    remote: str,
+    merge_ref: str,
+    upstream_ref: str,
+) -> None:
+    configured_url = _output(
+        ws,
+        f"git -C {shlex.quote(checkout)} remote get-url {shlex.quote(remote)}",
+    )
+    if not configured_url:
+        raise AppError(
+            f"Configured upstream remote {remote!r} is missing; "
+            "refusing to update it"
+        )
+    fetch_url = (
+        f"git@github.com:{repository}.git"
+        if repository_from_remote(configured_url) == repository
+        else configured_url
+    )
+    refspec = f"{merge_ref}:{upstream_ref}"
+    result = ws.run(
+        f"GIT_SSH_COMMAND={shlex.quote(_bootstrap_ssh(key))} "
+        f"git -C {shlex.quote(checkout)} -c core.hooksPath=/dev/null "
+        "fetch --no-tags -- "
+        f"{shlex.quote(fetch_url)} {shlex.quote(refspec)}",
+        check=False,
+    )
+    if result.returncode:
+        raise AppError(
+            f"Could not fetch configured repository upstream {upstream}; "
+            "the working tree was not modified"
+        )
+
+
 def setup_repository(
     cfg: Config,
     ws: WorkspaceSSH,
@@ -451,6 +615,7 @@ def setup_repository(
     checkout, key, public_key_path = repository_paths(cfg, repository)
     title = f"HomeStack {name}"
     steps = repository_setup_steps(actions)
+    fast_forwarded = False
 
     with _repository_progress(quiet=quiet) as progress:
         task = progress.add_task(steps[0], total=len(steps))
@@ -515,7 +680,85 @@ def setup_repository(
                 f"git clone -- {shlex.quote(remote_url)} {shlex.quote(checkout)}"
             )
             progress.advance(task)
-        elif "set-origin" in actions:
+
+        if "fetch-upstream" in actions:
+            if activity:
+                activity("Fetch repository upstream")
+            progress.update(task, description="Fetch repository upstream")
+            _fetch_upstream(
+                ws,
+                checkout,
+                key,
+                repository,
+                str(state["upstream"]),
+                str(state["upstream_remote"]),
+                str(state["upstream_merge"]),
+                str(state["upstream_ref"]),
+            )
+            progress.advance(task)
+
+            status = ws.run(
+                f"git -C {shlex.quote(checkout)} status --porcelain "
+                "--untracked-files=all",
+                check=False,
+            )
+            counts = _upstream_counts(ws, checkout)
+            current_state = {
+                **state,
+                "working_tree": (
+                    "unavailable"
+                    if status.returncode
+                    else ("modified" if status.stdout.strip() else "clean")
+                ),
+                "ahead": counts[0] if counts is not None else None,
+                "behind": counts[1] if counts is not None else None,
+            }
+            if error := _repository_checkout_error(current_state):
+                raise error
+            if error := _repository_history_error(current_state):
+                raise error
+            ahead, behind = counts  # validated by _repository_history_error
+            if behind:
+                if activity:
+                    activity("Fast-forward repository")
+                progress.update(task, description="Fast-forward repository")
+                merge_options = f"branch.{state['branch']}.mergeOptions="
+                merged = ws.run(
+                    f"git -C {shlex.quote(checkout)} "
+                    f"-c {shlex.quote(merge_options)} "
+                    "-c core.hooksPath=/dev/null "
+                    "merge --ff-only --no-squash --no-autostash "
+                    "--no-overwrite-ignore @{upstream}",
+                    check=False,
+                )
+                if merged.returncode:
+                    raise AppError(
+                        "Repository could not be fast-forwarded; "
+                        "no reset or cleanup was attempted"
+                    )
+                verified_counts = _upstream_counts(ws, checkout)
+                status = ws.run(
+                    f"git -C {shlex.quote(checkout)} status --porcelain "
+                    "--untracked-files=all",
+                    check=False,
+                )
+                if (
+                    verified_counts != (0, 0)
+                    or status.returncode != 0
+                    or status.stdout.strip()
+                ):
+                    raise AppError(
+                        "Repository fast-forward completed without a clean "
+                        "up-to-date checkout"
+                    )
+                fast_forwarded = True
+            else:
+                if activity:
+                    activity("Repository already up to date")
+                progress.update(task, description="Repository already up to date")
+            progress.advance(task)
+
+        if "set-origin" in actions:
             if activity:
                 activity("Configure Git remote")
             progress.update(task, description="Configure Git remote")
@@ -555,11 +798,22 @@ def setup_repository(
         refreshed = inspect_repository(cfg, ws, vmid, name, repository)
         progress.advance(task)
 
+    configuration_changed = any(
+        action not in {"verify-access", "fetch-upstream"}
+        for action in actions
+    )
+    if fast_forwarded:
+        message = "Repository fast-forwarded to its upstream."
+    elif configuration_changed:
+        message = "Repository setup completed."
+    else:
+        message = "Repository is already up to date."
     return {
         **refreshed,
-        "changed": any(action != "verify-access" for action in actions),
-        "message": "Repository setup completed.",
+        "changed": fast_forwarded or configuration_changed,
+        "message": message,
     }
+
 
 def rotate_repository_key(
     cfg: Config, ws: WorkspaceSSH, state: dict[str, Any]

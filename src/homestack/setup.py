@@ -539,7 +539,10 @@ def apply_entry(
     )
     if not state.get("ready"):
         raise AppError("Repository provisioning finished but verification failed")
-    return ("succeeded" if state.get("changed") else "already-ready", "Repository Git access verified; working tree preserved")
+    return (
+        "succeeded" if state.get("changed") else "already-ready",
+        str(state.get("message") or "Repository Git access verified"),
+    )
 
 
 def execute_plan(
