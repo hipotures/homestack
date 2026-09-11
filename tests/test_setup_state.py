@@ -318,6 +318,128 @@ class HostStateTests(unittest.TestCase):
             self.assertIn(".bashrc", missing["changed_since_apply"])
             self.assertIn(".profile", missing["changed_since_apply"])
 
+    def test_execute_plan_snapshots_external_shell_drift_before_recording_baseline(self):
+        cfg = test_config()
+        bash = entry("bash")
+        plan = setup.build_plan(cfg, TARGET, (bash,))
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            initial = setup_guest.run({
+                "operation": "environment",
+                "home": str(home),
+                "profile": "bash",
+                "bins": setup.all_bins(cfg),
+                "apply": True,
+            })
+            setup_guest.run({
+                "operation": "state-record",
+                "home": str(home),
+                "vmid": TARGET["vmid"],
+                "name": TARGET["name"],
+                "id": bash.id,
+                "handler": bash.handler,
+                "paths": initial["paths"],
+                "snapshot": None,
+            })
+            root = home / ".local/state/homestack"
+            baseline = json.loads((root / "setup.json").read_text())
+            baseline_profile = next(item for item in baseline["items"][bash.id]["files"] if item["path"] == ".profile")
+            original_profile = (home / ".profile").read_bytes()
+            original_profile_inode = (home / ".profile").stat().st_ino
+            original_bashrc = (home / ".bashrc").read_bytes()
+            original_bashrc_inode = (home / ".bashrc").stat().st_ino
+            with (home / ".profile").open("a", encoding="utf-8") as handle:
+                handle.write("# external edit\n")
+            modified_profile = (home / ".profile").read_bytes()
+
+            workspace = Mock()
+            workspace.run.return_value = Mock(returncode=0, stdout="", stderr="")
+
+            def route_guest(_ws, _cfg, operation, **values):
+                if operation == "identity":
+                    return {"ok": True}
+                return setup_guest.run({"operation": operation, "home": str(home), **values})
+
+            with patch.object(setup, "guest", side_effect=route_guest), patch.object(setup, "require_tool"):
+                result = setup.execute_plan(cfg, plan, workspace=workspace)
+
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["results"][0]["status"], "succeeded")
+            self.assertEqual(result["results"][0]["detail"], "Shell configuration verified")
+            self.assertTrue(result["snapshot"]["created"])
+            snapshot = root / result["snapshot"]["id"]
+            manifest = json.loads((snapshot / "snapshot.json").read_text())
+            self.assertEqual([item["path"] for item in manifest["files"]], [".profile"])
+            self.assertEqual((snapshot / "home/.profile").read_bytes(), modified_profile)
+            self.assertNotEqual((home / ".profile").stat().st_ino, original_profile_inode)
+            self.assertNotEqual((home / ".profile").read_bytes(), original_profile)
+            self.assertEqual((home / ".profile").read_bytes(), modified_profile)
+            self.assertEqual((home / ".bashrc").stat().st_ino, original_bashrc_inode)
+            self.assertEqual((home / ".bashrc").read_bytes(), original_bashrc)
+            before = json.loads((snapshot / "setup.before.json").read_text())
+            before_profile = next(item for item in before["items"][bash.id]["files"] if item["path"] == ".profile")
+            self.assertEqual(before_profile["sha256"], baseline_profile["sha256"])
+            current = json.loads((root / "setup.json").read_text())
+            current_profile = next(item for item in current["items"][bash.id]["files"] if item["path"] == ".profile")
+            self.assertEqual(current_profile["sha256"], setup_guest.path_metadata(home, ".profile")["sha256"])
+
+            snapshots = sorted(path.name for path in root.iterdir() if path.is_dir())
+            with patch.object(setup, "guest", side_effect=route_guest), patch.object(setup, "require_tool"):
+                repeated = setup.execute_plan(cfg, plan, workspace=workspace)
+            self.assertTrue(repeated["ok"])
+            self.assertEqual(repeated["results"][0]["status"], "already-ready")
+            self.assertFalse(repeated["snapshot"]["created"])
+            self.assertEqual(snapshots, sorted(path.name for path in root.iterdir() if path.is_dir()))
+
+    def test_execute_plan_snapshot_failure_leaves_shell_and_registry_untouched(self):
+        cfg = test_config()
+        bash = entry("bash")
+        plan = setup.build_plan(cfg, TARGET, (bash,))
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            initial = setup_guest.run({
+                "operation": "environment",
+                "home": str(home),
+                "profile": "bash",
+                "bins": setup.all_bins(cfg),
+                "apply": True,
+            })
+            setup_guest.run({
+                "operation": "state-record",
+                "home": str(home),
+                "vmid": TARGET["vmid"],
+                "name": TARGET["name"],
+                "id": bash.id,
+                "handler": bash.handler,
+                "paths": initial["paths"],
+                "snapshot": None,
+            })
+            with (home / ".profile").open("a", encoding="utf-8") as handle:
+                handle.write("# external edit\n")
+            profile_before = (home / ".profile").read_bytes()
+            profile_inode_before = (home / ".profile").stat().st_ino
+            registry_path = home / ".local/state/homestack/setup.json"
+            registry_before = registry_path.read_bytes()
+            workspace = Mock()
+            workspace.run.return_value = Mock(returncode=0, stdout="", stderr="")
+
+            def route_guest(_ws, _cfg, operation, **values):
+                if operation == "identity":
+                    return {"ok": True}
+                if operation == "snapshot":
+                    raise setup.AppError("snapshot failed")
+                return setup_guest.run({"operation": operation, "home": str(home), **values})
+
+            with patch.object(setup, "guest", side_effect=route_guest), patch.object(setup, "require_tool"):
+                result = setup.execute_plan(cfg, plan, workspace=workspace)
+
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["results"][0]["status"], "blocked")
+            self.assertFalse(result["snapshot"]["created"])
+            self.assertEqual((home / ".profile").read_bytes(), profile_before)
+            self.assertEqual((home / ".profile").stat().st_ino, profile_inode_before)
+            self.assertEqual(registry_path.read_bytes(), registry_before)
+
     def test_execute_plan_can_reuse_caller_owned_workspace(self):
         cfg = test_config()
         plan = setup.build_plan(cfg, TARGET, (entry("codex"),))

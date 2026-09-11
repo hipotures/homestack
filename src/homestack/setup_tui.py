@@ -711,7 +711,9 @@ class SetupApp(App):
         for entry in self.pending_plan.entries:
             live = self.state_item(entry.id)
             action = (
-                "Verify shell configuration; write only if changes are needed"
+                "Back up modified shell files; overwrite configuration"
+                if isinstance(entry.params, EnvironmentParams) and live.get("changed_since_apply")
+                else "Verify shell configuration; write only if changes are needed"
                 if isinstance(entry.params, EnvironmentParams)
                 else "Update / reapply existing state"
                 if live.get("ready")

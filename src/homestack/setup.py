@@ -118,6 +118,22 @@ def _remote_metadata(ws, cfg: Config, paths: list[str]) -> dict[str, dict]:
     return {item["path"]: item for item in result.get("items", []) if isinstance(item, dict) and isinstance(item.get("path"), str)}
 
 
+def changed_paths_since_apply(record: dict, current_metadata: dict[str, dict]) -> list[str]:
+    changed = []
+    registered_files = record.get("files", [])
+    if not isinstance(registered_files, list):
+        return changed
+    for registered in registered_files:
+        if not isinstance(registered, dict) or not isinstance(registered.get("path"), str):
+            continue
+        path = registered["path"]
+        current = current_metadata.get(path, {"path": path, "exists": False})
+        if (bool(current.get("exists")) != bool(registered.get("exists"))
+                or (current.get("exists") and current.get("sha256") != registered.get("sha256"))):
+            changed.append(path)
+    return changed
+
+
 def inspect_workspace_state(ws, cfg: Config, target: dict, entries: tuple[Entry, ...]) -> dict:
     """Read current setup state without modifying the workspace."""
     require_tool(ws, cfg, "python3")
@@ -183,17 +199,7 @@ def inspect_workspace_state(ws, cfg: Config, target: dict, entries: tuple[Entry,
                 item["exists"] = bool(existing)
                 current_metadata = {path: remote_metadata[path] for path in write_paths(cfg, entry)
                                     if path in remote_metadata}
-                changed_since_apply = []
-                registered_files = record.get("files", [])
-                if isinstance(registered_files, list):
-                    for registered in registered_files:
-                        if not isinstance(registered, dict) or not isinstance(registered.get("path"), str):
-                            continue
-                        path = registered["path"]
-                        current = current_metadata.get(path, {"path": path, "exists": False})
-                        if (bool(current.get("exists")) != bool(registered.get("exists"))
-                                or (current.get("exists") and current.get("sha256") != registered.get("sha256"))):
-                            changed_since_apply.append(path)
+                changed_since_apply = changed_paths_since_apply(record, current_metadata)
                 item["changed_since_apply"] = changed_since_apply
                 # Existing shell files are an overwrite risk even if deeper
                 # inspection later fails (for example a malformed managed block).
@@ -253,7 +259,7 @@ def backup_paths_for_entry(cfg: Config, entry: Entry, state: dict) -> tuple[str,
     if isinstance(p, FileParams):
         return write_paths(cfg, entry) if state.get("changed", True) else ()
     if isinstance(p, EnvironmentParams):
-        return tuple(state.get("changed", ()))
+        return tuple(dict.fromkeys((*state.get("changed", ()), *state.get("changed_since_apply", ()))))
     if isinstance(p, ApplicationParams):
         return tuple(path[2:].rstrip("/") for path in p.backup_paths)
     if isinstance(p, RepositoryParams):
@@ -423,7 +429,16 @@ def preflight_entry(ws, cfg: Config, plan: Plan, entry: Entry) -> dict:
         return {"file": item, "remote": remote, "local": local, "changed": changed}
     if isinstance(p, EnvironmentParams):
         require_tool(ws, cfg, p.profile)
-        return guest(ws, cfg, "environment", profile=p.profile, bins=all_bins(cfg))
+        state_doc = guest(ws, cfg, "state-read", vmid=plan.target["vmid"], name=plan.target["name"])
+        registry = state_doc.get("registry") or {}
+        registered = registry.get("items", {}) if isinstance(registry, dict) else {}
+        record = registered.get(entry.id, {}) if isinstance(registered, dict) else {}
+        if not isinstance(record, dict):
+            record = {}
+        current_metadata = _remote_metadata(ws, cfg, list(write_paths(cfg, entry)))
+        state = guest(ws, cfg, "environment", profile=p.profile, bins=all_bins(cfg))
+        state["changed_since_apply"] = changed_paths_since_apply(record, current_metadata)
+        return state
     if isinstance(p, ApplicationParams):
         require_tool(ws, cfg, p.interpreter, p.bin_dirs)
         installed = False
@@ -467,7 +482,8 @@ def preflight_entry(ws, cfg: Config, plan: Plan, entry: Entry) -> dict:
 def apply_entry(ws, cfg: Config, plan: Plan, entry: Entry, state: dict, terminal: Callable, *, progress=lambda identity, state: None):
     p = entry.params
     if isinstance(p, EnvironmentParams):
-        result = guest(ws, cfg, "environment", profile=p.profile, bins=all_bins(cfg), apply=True)
+        result = guest(ws, cfg, "environment", profile=p.profile, bins=all_bins(cfg), apply=True,
+                       overwrite_paths=list(state.get("changed_since_apply", ())))
         if not result["changed"]:
             return "already-ready", "Shell configuration already matches; no files changed"
         return "succeeded", "Shell configuration verified"

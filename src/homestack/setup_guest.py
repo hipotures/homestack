@@ -364,10 +364,10 @@ case $- in *i*)
     return result
 
 
-def atomic_write(path: Path, content: str) -> bool:
+def atomic_write(path: Path, content: str, *, force: bool = False) -> bool:
     payload = content.encode()
     old = path.read_bytes() if path.exists() else None
-    if old == payload:
+    if old == payload and not force:
         return False
     mode = stat.S_IMODE(path.stat().st_mode) & 0o700 if old is not None else 0o600
     _atomic_bytes(path, payload, mode=mode)
@@ -434,6 +434,7 @@ def run(data: dict) -> dict:
         return {"ok": True, "repositories": results}
     if op == "environment":
         updates = environment_updates(home, data["profile"], data["bins"])
+        overwrite_paths = set(data.get("overwrite_paths", ()))
         # Check the actual selected shell parser before any persistent write.
         for relative, content in updates.items():
             safe_path(home, relative)
@@ -449,10 +450,12 @@ def run(data: dict) -> dict:
                 if parsed.returncode or parsed.stdout.strip() != "true":
                     raise GuestError(f"Nushell startup syntax check failed at ~/{relative}")
         changed = [relative for relative, content in updates.items()
-                   if not (home / relative).exists() or (home / relative).read_text() != content]
+                   if relative in overwrite_paths
+                   or not (home / relative).exists()
+                   or (home / relative).read_text() != content]
         if data.get("apply"):
             for relative in changed:
-                atomic_write(safe_path(home, relative), updates[relative])
+                atomic_write(safe_path(home, relative), updates[relative], force=relative in overwrite_paths)
         return {"ok": True, "paths": list(updates), "changed": changed}
     if op == "paths":
         for item in data["paths"]:

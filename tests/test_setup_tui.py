@@ -622,6 +622,7 @@ class SetupActionTests(unittest.IsolatedAsyncioTestCase):
             app.review()
             await pilot.pause()
             self.assertIn('Changed since last apply: ~/.profile', app.screen.text)
+            self.assertIn('Back up modified shell files; overwrite configuration', app.screen.text)
             self.assertNotIn('Overwrite existing configuration', app.screen.text)
             await pilot.press('escape')
 
