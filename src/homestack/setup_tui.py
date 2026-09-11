@@ -372,7 +372,7 @@ class SetupApp(App):
     def entry_style(self, entry):
         state = self.state_item(entry.id)
         if isinstance(entry.params, EnvironmentParams) and state.get("ready"):
-            return "green"
+            return "yellow" if state.get("changed_since_apply") else "green"
         if entry.id in self.selected and (state.get("ready") or state.get("will_overwrite")):
             return "bold red"
         if state.get("ready"):
@@ -531,7 +531,9 @@ class SetupApp(App):
         p = entry.params
         live = self.state_item(entry.id)
         status = (
-            "NO CHANGES"
+            "MODIFIED"
+            if isinstance(p, EnvironmentParams) and live.get("ready") and live.get("changed_since_apply")
+            else "NO CHANGES"
             if isinstance(p, EnvironmentParams) and live.get("ready")
             else "UPDATE"
             if live.get("ready") or live.get("will_overwrite")
@@ -548,6 +550,10 @@ class SetupApp(App):
             "Availability: " + self.catalog.availability.get(entry.id, "unknown"),
             "Workspace state: " + live.get("state", "unknown"),
         ]
+        if live.get("changed_since_apply"):
+            lines += ["Changed since last apply:", *["~/" + path for path in live["changed_since_apply"]]]
+            if live.get("ready"):
+                lines += ["HomeStack configuration matches; user changes are preserved."]
         if self.workspace_state.get("checked_at"):
             lines += ["State checked: " + self.workspace_state["checked_at"]]
         if live.get("first_managed_at"):
@@ -718,6 +724,8 @@ class SetupApp(App):
                 "Action: " + action,
                 "Requires selection: " + (", ".join(entry.depends_on) or "none"),
             ]
+            if live.get("changed_since_apply"):
+                lines += ["Changed since last apply: " + ", ".join("~/" + path for path in live["changed_since_apply"])]
             if (
                 isinstance(entry.params, ApplicationParams)
                 and live.get("ready")

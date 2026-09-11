@@ -600,6 +600,27 @@ class SetupActionTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn('Update / reapply existing state', app.screen.text)
             await pilot.press('escape')
 
+    async def test_modified_shell_file_is_visible_without_claiming_overwrite(self):
+        app = TestApp(test_config(), TARGET, state={
+            'items': {'bash': {'ready': True, 'state': 'modified',
+                               'will_overwrite': False, 'changed_since_apply': ['.profile']}},
+        })
+        async with app.run_test(size=(120, 40)) as pilot:
+            app.query_one(SetupTree).select_node(app.nodes['bash'])
+            await pilot.pause()
+            content = app.query_one('#details', Static).render().plain
+            self.assertTrue(content.startswith('Status: MODIFIED'))
+            self.assertIn('Changed since last apply:\n~/.profile', content)
+            self.assertIn('user changes are preserved', content)
+            bash = next(entry for entry in app.catalog.entries if entry.id == 'bash')
+            self.assertEqual(app.entry_style(bash), 'yellow')
+            app.toggle_node(app.nodes['bash'])
+            app.review()
+            await pilot.pause()
+            self.assertIn('Changed since last apply: ~/.profile', app.screen.text)
+            self.assertNotIn('Overwrite existing configuration', app.screen.text)
+            await pilot.press('escape')
+
     async def test_stale_rebuild_restore_cannot_replace_newer_highlight(self):
         app = TestApp(test_config(), TARGET)
         async with app.run_test(size=(120, 40)) as pilot:

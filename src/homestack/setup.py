@@ -181,6 +181,20 @@ def inspect_workspace_state(ws, cfg: Config, target: dict, entries: tuple[Entry,
                 existing = [remote_metadata[path] for path in write_paths(cfg, entry) if remote_metadata.get(path, {}).get("exists")]
                 item["files"] = existing
                 item["exists"] = bool(existing)
+                current_metadata = {path: remote_metadata[path] for path in write_paths(cfg, entry)
+                                    if path in remote_metadata}
+                changed_since_apply = []
+                registered_files = record.get("files", [])
+                if isinstance(registered_files, list):
+                    for registered in registered_files:
+                        if not isinstance(registered, dict) or not isinstance(registered.get("path"), str):
+                            continue
+                        path = registered["path"]
+                        current = current_metadata.get(path, {"path": path, "exists": False})
+                        if (bool(current.get("exists")) != bool(registered.get("exists"))
+                                or (current.get("exists") and current.get("sha256") != registered.get("sha256"))):
+                            changed_since_apply.append(path)
+                item["changed_since_apply"] = changed_since_apply
                 # Existing shell files are an overwrite risk even if deeper
                 # inspection later fails (for example a malformed managed block).
                 item["will_overwrite"] = bool(existing)
@@ -194,6 +208,8 @@ def inspect_workspace_state(ws, cfg: Config, target: dict, entries: tuple[Entry,
                     item["ready"] = not changed
                     item["will_overwrite"] = any(remote_metadata.get(path, {}).get("exists") for path in changed)
                     item["state"] = "configured" if item["ready"] else ("needs update" if item["will_overwrite"] else "not configured")
+                    if item["ready"] and changed_since_apply:
+                        item["state"] = "modified"
                     item["managed_paths"] = list(desired.get("paths", []))
             elif isinstance(p, ApplicationParams):
                 if p.check:

@@ -264,6 +264,60 @@ class HostStateTests(unittest.TestCase):
         self.assertEqual(item["last_applied_at"], "2026-09-11T00:01:00Z")
         self.assertNotIn("version", item)
 
+    def test_environment_inspection_reports_file_drift_without_reconciliation(self):
+        cfg = test_config()
+        bash = entry("bash")
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            applied = setup_guest.run({
+                "operation": "environment",
+                "home": str(home),
+                "profile": "bash",
+                "bins": setup.all_bins(cfg),
+                "apply": True,
+            })
+            self.assertTrue(applied["changed"])
+            setup_guest.run({
+                "operation": "state-record",
+                "home": str(home),
+                "vmid": TARGET["vmid"],
+                "name": TARGET["name"],
+                "id": bash.id,
+                "handler": bash.handler,
+                "paths": applied["paths"],
+                "snapshot": None,
+            })
+
+            ws = Mock()
+            ws.run.return_value = Mock(returncode=0, stdout="", stderr="")
+
+            def inspect_guest(_ws, _cfg, operation, **values):
+                if operation == "identity":
+                    return {"ok": True}
+                return setup_guest.run({"operation": operation, "home": str(home), **values})
+
+            def inspect():
+                with patch.object(setup, "require_tool"), patch.object(setup, "guest", side_effect=inspect_guest):
+                    return setup.inspect_workspace_state(ws, cfg, TARGET, (bash,))["items"][bash.id]
+
+            unchanged = inspect()
+            self.assertTrue(unchanged["ready"])
+            self.assertFalse(unchanged["will_overwrite"])
+            self.assertEqual(unchanged["changed_since_apply"], [])
+
+            with (home / ".profile").open("a", encoding="utf-8") as handle:
+                handle.write("#\n")
+            modified = inspect()
+            self.assertTrue(modified["ready"])
+            self.assertFalse(modified["will_overwrite"])
+            self.assertEqual(modified["changed_since_apply"], [".profile"])
+            self.assertEqual(modified["state"], "modified")
+
+            (home / ".bashrc").unlink()
+            missing = inspect()
+            self.assertIn(".bashrc", missing["changed_since_apply"])
+            self.assertIn(".profile", missing["changed_since_apply"])
+
     def test_execute_plan_can_reuse_caller_owned_workspace(self):
         cfg = test_config()
         plan = setup.build_plan(cfg, TARGET, (entry("codex"),))
