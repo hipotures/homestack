@@ -41,6 +41,11 @@ class ParserTests(unittest.TestCase):
         self.assertEqual(parser.parse_args(['status', '200']).target, '200')
         self.assertEqual(parser.parse_args(['status', 'test1']).target, 'test1')
 
+    def test_sync_command_is_rejected(self) -> None:
+        with self.assertRaises(SystemExit) as raised:
+            cli.build_parser().parse_args(['sync', '200'])
+        self.assertEqual(raised.exception.code, 2)
+
 
 class CreatePlanRenderingTests(unittest.TestCase):
     def test_create_plan_shows_target_node(self) -> None:

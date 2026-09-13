@@ -133,7 +133,7 @@ class GoldReadinessTests(unittest.TestCase):
         self.assertTrue(result.ok)
         self.assertEqual(
             [check.name for check in result.optional_failures],
-            ["rsync for homestack sync"],
+            ["rsync for Setup Files"],
         )
 
 

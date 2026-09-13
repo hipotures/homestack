@@ -14,6 +14,13 @@ from support import test_config
 TARGET = {'name': 'workspace', 'vmid': 200, 'ip': '192.0.2.200'}
 
 
+def config_with_file(path: str):
+    return replace(test_config(), setup=definitions.parse_setup({'items': [
+        {'id': 'fixture-file', 'group': 'files', 'handler': 'file', 'label': 'Fixture file',
+         'description': 'Fixture file', 'path': path},
+    ]}))
+
+
 class TestApp(SetupApp):
     def action_refresh_catalog(self):
         pass
@@ -96,7 +103,7 @@ class SetupTUITests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn('bash', app.selected)
 
     async def test_unavailable_files_visible_dont_disable_apps_and_no_execution_on_enter(self):
-        cfg = replace(test_config(), sync_paths=('~/missing-setup-fixture',))
+        cfg = config_with_file('~/missing-setup-fixture')
         with tempfile.TemporaryDirectory() as tmp, patch.object(Path, 'home', return_value=Path(tmp)):
             app = TestApp(cfg, TARGET)
         async with app.run_test(size=(100, 40)) as pilot:
@@ -218,7 +225,7 @@ class SetupInteractionTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(app.busy)
 
     async def test_mouse_respects_filter_unavailable_items_and_busy_guard(self):
-        cfg = replace(test_config(), sync_paths=('~/missing-setup-fixture',))
+        cfg = config_with_file('~/missing-setup-fixture')
         with tempfile.TemporaryDirectory() as tmp, patch.object(Path, 'home', return_value=Path(tmp)):
             app = TestApp(cfg, TARGET)
         async with app.run_test(size=(120, 40)) as pilot:
@@ -244,7 +251,7 @@ class SetupInteractionTests(unittest.IsolatedAsyncioTestCase):
         from textual.containers import VerticalScroll
         from textual.events import MouseScrollDown
 
-        app = TestApp(replace(test_config(), sync_paths=('~/short-fixture',)), TARGET)
+        app = TestApp(config_with_file('~/short-fixture'), TARGET)
         short_entry = next(e for e in app.catalog.entries if e.handler == 'file')
         app.catalog.entries = tuple(
             replace(e, description='\n'.join(f'Detail line {i}' for i in range(100)))

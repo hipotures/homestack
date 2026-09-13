@@ -17,9 +17,8 @@ class CreateWorkspaceCompletionTests(unittest.TestCase):
         self,
         *,
         ssh_config_error: Exception | None = None,
-        sync_paths: tuple[str, ...] = (),
     ) -> tuple[dict[str, object], FakeSession]:
-        cfg = replace(test_config(), sync_paths=sync_paths)
+        cfg = test_config()
         plan = {
             'vmid': 200,
             'name': 'test1',
@@ -133,11 +132,9 @@ class CreateWorkspaceCompletionTests(unittest.TestCase):
             self.run_verified_create(ssh_config_error=models.AppError('disk full'))
         self.assertFalse(any(command.startswith('qm destroy ') for command in self.last_session.commands))
 
-    def test_generated_sync_command_uses_installed_cli_name(self) -> None:
-        result, _session = self.run_verified_create(
-            sync_paths=('~/.config/example/settings.json',)
-        )
-        self.assertEqual(result['sync_command'], 'homestack sync 200')
+    def test_create_result_has_no_sync_command(self) -> None:
+        result, _session = self.run_verified_create()
+        self.assertNotIn('sync_command', result)
 
 class WorkspaceTargetTests(unittest.TestCase):
 

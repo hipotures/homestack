@@ -465,19 +465,9 @@ class InstallerValueTests(unittest.TestCase):
             default='1,2,3',
         )
 
-    def test_declining_sync_returns_valid_empty_current_schema_values(self) -> None:
-        with patch.object(install.Confirm, 'ask', return_value=False):
-            self.assertEqual(install._configure_sync(test_config()), ((), (), False))
-
-    def test_sync_paths_and_commands_preserve_input_order(self) -> None:
-        prompts = iter(['~/first', '~/second/', '', 'command one', 'command two', ''])
-        with patch.object(install.Confirm, 'ask', side_effect=[True, False]), patch.object(
-            install.Prompt, 'ask', side_effect=lambda *args, **kwargs: next(prompts)
-        ):
-            paths, commands, verbose = install._configure_sync(test_config())
-        self.assertEqual(paths, ('~/first', '~/second/'))
-        self.assertEqual(commands, ('command one', 'command two'))
-        self.assertFalse(verbose)
+    def test_install_has_no_sync_stage_or_configuration_hook(self) -> None:
+        self.assertNotIn('sync', install.INSTALL_STAGE_ORDER)
+        self.assertFalse(hasattr(install, '_configure_sync'))
 
 class InstallDraftResumeTests(unittest.TestCase):
     def test_draft_round_trip_restores_completed_values_without_placeholder_leakage(self) -> None:

@@ -48,7 +48,7 @@ The default is `~/.config/homestack/config.toml`, or `$XDG_CONFIG_HOME/homestack
 uv run homestack --config /path/to/config.toml status
 ```
 
-Only the neutral example belongs in this repository. A real `config.toml` and private sync paths, credentials, node names, addresses, storage IDs, Herdr names, and SSH identity paths must remain outside it.
+Only the neutral example belongs in this repository. A real `config.toml` and private setup file paths, credentials, node names, addresses, storage IDs, Herdr names, and SSH identity paths must remain outside it.
 
 Configure the generated workspace SSH entry in `[workspace_ssh]`: `user` must match `[user] name`, `identity_files` lists the desktop's hardware-backed private-key paths, `identities_only` controls OpenSSH's `IdentitiesOnly`, and `log_level` selects a supported OpenSSH log level. HomeStack writes these configured values without hardcoded key paths and does not add password or implicit key fallback authentication.
 
@@ -91,7 +91,6 @@ uv run homestack create 200 example-workspace --home-size 20G
 uv run homestack create 200 example-workspace --storage example-storage
 uv run homestack refresh 200
 uv run homestack migrate 200 pve-example-2 --target-storage example-storage
-uv run homestack sync 200
 uv run homestack repo example-workspace
 uv run homestack repo example-workspace owner/repository
 uv run homestack destroy 200
@@ -99,7 +98,7 @@ uv run homestack status
 uv run homestack status 200
 ```
 
-Lifecycle targets may be a numeric VMID or exact workspace name. `create`, `refresh`, `migrate`, `sync`, and `destroy` resolve and display a plan before confirmation. Use `--yes` to accept a plan and `--json` for machine-readable plans/results.
+Lifecycle targets may be a numeric VMID or exact workspace name. `create`, `refresh`, `migrate`, and `destroy` resolve and display a plan before confirmation. Use `--yes` to accept a plan and `--json` for machine-readable plans/results.
 
 ## Preparing a Gold VM
 
@@ -129,7 +128,7 @@ apt-get update
 apt-get install -y cloud-init qemu-guest-agent network-manager openssh-server e2fsprogs util-linux
 ```
 
-Install `rsync` only if `homestack sync` will be used:
+Install `rsync` for Setup Files transfers:
 
 ```bash
 apt-get install -y rsync
@@ -177,7 +176,7 @@ Gold's root may contain any system-wide packages and configuration that should r
 
 Gold readiness is a required, checkpointed installer stage. Transport selection, Gold selection, and workspace-account values are saved before it runs. If the check fails, fix the Gold VM and rerun the same installer command; those completed stages are loaded from the draft and are not asked again.
 
-After Gold selection and workspace-account selection, `homestack install` performs a non-destructive readiness check. Required checks validate the PVE role tag, root/data-disk layout, `net0`, Cloud-Init drive, QEMU Guest Agent option, and boot order. If Gold is running, required guest and security checks also cover QEMU Guest Agent access, the mandatory guest tools, the configured user/UID/GID, the no-`sudo` policy, regular-user policy, root SSH keys, and a workspace public-key source. `rsync` is an optional capability needed only for `homestack sync`; `git` and `ssh-keygen` are optional capabilities needed only for `homestack repo`.
+After Gold selection and workspace-account selection, `homestack install` performs a non-destructive readiness check. Required checks validate the PVE role tag, root/data-disk layout, `net0`, Cloud-Init drive, QEMU Guest Agent option, and boot order. If Gold is running, required guest and security checks also cover QEMU Guest Agent access, the mandatory guest tools, the configured user/UID/GID, the no-`sudo` policy, regular-user policy, root SSH keys, and a workspace public-key source. `rsync` is an optional capability needed for Setup Files; `git` and `ssh-keygen` are optional capabilities needed only for `homestack repo`.
 
 The installer never starts Gold just to inspect it. A stopped Gold can therefore pass the PVE-side contract when it has valid Proxmox `sshkeys`, but the installer reports guest checks as not inspected. Runtime `create` and `refresh` verification still fail closed if the resulting workspace violates the account, SSH, persistent-home, or guest requirements.
 
@@ -197,11 +196,11 @@ The installer never starts Gold just to inspect it. A stopped Gold can therefore
 
 Gold's source root name is discovered from its configured `scsi0`; Gold itself does not need the workspace root naming convention. Refresh imports that source as a staged unused disk, preserves the VM configuration, MAC, role tag, Cloud-Init disk, and persistent home, and waits for QEMU Guest Agent commands to report explicit process completion before accepting their results. The full Gold preparation and readiness contract is described above.
 
-## Workspace SSH and synchronization
+## Workspace SSH
 
 After a successful create, HomeStack writes and fsyncs a mode-`0600` temporary workspace entry below `~/.ssh/config.d/homestack/`, atomically publishes it, and only then removes stale entries for the same VMID. A publication failure therefore preserves the previous working alias. If this local step fails after VM verification, HomeStack reports that the VM was created successfully and does not roll it back. Known-host removal is likewise narrow.
 
-Synchronization is explicit and never runs as part of create, refresh, or migration. `sync` is a Files-only shortcut through the setup engine. With no selectors it selects all configured Files; `sync WORKSPACE files=ID,ID` narrows the selection. Legacy `[sync] paths` remain selectable Files; an ending slash denotes a directory. Legacy `[sync] commands` are selectable Applications under `setup` and **never run under sync**. `[sync] verbose = true` reports additional file preparation, transfer and verification phases without printing file contents.
+Setup Files are explicit `setup` selections and never run as part of create, refresh, or migration. Define each file or directory as a `[[setup.items]]` entry and select it with `setup WORKSPACE files=ID,ID`; an ending slash denotes a directory. File preparation, transfer, and verification phases never print file contents.
 
 One SSH ControlMaster connection is established and reused for checks, directory creation, rsync, verification, and all selected setup handlers. Fresh authentication methods are disabled on child connections, so a broken control socket fails instead of requesting another hardware-key interaction. HomeStack does not use password authentication, a fallback key, `sudo`, or credentials stored on PVE hosts.
 
@@ -270,7 +269,7 @@ The single-line footer uses plain colored keys without boxes. Its actions suppor
 After confirmation, a centered execution window shows a live, wrapped activity log for preflight, snapshots, file copies, shell configuration, installers, repository provisioning, and state recording. Repository activity includes deploy-key work, cloning, Git configuration, and verification when those steps are needed. The log reports sanitized operation names and results; arbitrary command payloads and raw stdout/stderr remain withheld. Interactive installers continue in their terminal and the activity window resumes afterward. Esc requests cancellation while work is running. When execution and the live-state refresh finish, the updated main setup screen remains underneath the result log and a single centered `Enter OK` action becomes available; Enter, Esc, or a mouse click closes it and returns focus to the tree.
 
 
-### Catalog configuration and migration
+### Catalog configuration
 
 Older configurations receive built-in Bash (`bash`), Zsh (`zsh`), Fish (`fish`), Nushell (`nu`), Codex (`codex`), OpenCode (`opencode`), and Hermes Agent (`hermes`) definitions in memory. Presence never selects or executes them. `config.example.toml` contains the complete neutral catalog.
 
@@ -297,9 +296,7 @@ label = "Codex CLI"
 
 `depends_on = ["ID"]` requires those actions to be explicitly selected and displays their order; it never silently selects credentials or applications. Cycles and missing dependencies block the plan.
 
-Legacy `[sync] paths` become Files with stable `legacy-file-<hash>` IDs. Legacy `[sync] commands` become Applications while retaining the exact payload, including whitespace. Exact matches to existing application commands (including the known Codex non-interactive recipe) deduplicate safely. Arbitrary legacy commands get stable `legacy-app-<hash>` IDs and conservative interactive classification; no unattended flags are inferred. They never execute through `sync`.
-
-Migration is explicit: run `setup list`, identify each legacy entry, add a `[[setup.items]]` definition with the displayed ID and original path/command, supply a short label/description and verified application interaction/checks, then remove that entry from `[sync]`. Review the proposed TOML yourself; HomeStack does not rewrite live configuration on load/list/setup. The runtime serializer and install reconfiguration/draft-resume paths retain the new fields. Configuration publication retains existing atomic writes and backups. Declining optional sync reconfiguration preserves existing entries.
+Configuration is explicit: add a `[[setup.items]]` definition with a stable ID, handler, label, description, and handler parameters. Review the proposed TOML yourself; HomeStack does not rewrite live configuration on load/list/setup. Configuration publication retains existing atomic writes and backups.
 
 ### Execution and safety
 
@@ -326,7 +323,7 @@ Before an approved plan overwrites an existing declared path, HomeStack creates 
 
 ## Repository provisioning
 
-Repository setup is explicit and independent of create, refresh, migrate, and sync. Configure the default GitHub owner and checkout root:
+Repository setup is explicit and independent of create, refresh, and migrate. Configure the default GitHub owner and checkout root:
 
 ```toml
 [repo]

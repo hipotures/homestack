@@ -53,18 +53,15 @@ class DefinitionTests(unittest.TestCase):
         with self.assertRaises(AppError):
             definitions.parse_setup({'items': [{'id': 'codex', 'backup_paths': ['/tmp/outside']}]})
 
-    def test_exact_legacy_payloads_and_codex_dedup(self):
-        payload = '  printf "private value"\n'
-        cfg = replace(test_config(), sync_commands=(definitions.CODEX_RECIPE, payload, payload), sync_paths=('~/notes',))
+    def test_explicit_setup_file_round_trip(self):
+        cfg = replace(test_config(), setup=definitions.parse_setup({'items': [
+            {'id': 'notes', 'group': 'files', 'handler': 'file', 'label': 'Notes',
+             'description': 'Explicit notes file', 'path': '~/notes'},
+        ]}))
         loaded = config.validate_config_text(config.config_to_toml(cfg))
-        self.assertEqual(loaded.sync_commands, cfg.sync_commands)
-        items = definitions.effective_entries(loaded)
-        self.assertEqual(sum(isinstance(e.params, definitions.ApplicationParams) and e.params.command == definitions.CODEX_RECIPE for e in items), 1)
-        legacy = [e for e in items if e.id.startswith('legacy-app-')]
-        self.assertEqual(len(legacy), 1)
-        self.assertEqual(legacy[0].params.command, payload)
-        self.assertEqual(legacy[0].params.interaction, 'interactive')
-        self.assertEqual(legacy[0].id, definitions.legacy_id('app', payload))
+        self.assertEqual(loaded.setup, cfg.setup)
+        notes = next(e for e in loaded.setup.items if e.id == 'notes')
+        self.assertEqual(notes.params, definitions.FileParams('~/notes'))
 
     def test_draft_preserves_setup_and_repo_without_reconstruction(self):
         cfg = replace(test_config(), repo_owner='example', repo_sort='name', setup=definitions.parse_setup({'items': [{'id': 'codex', 'label': 'Custom label'}]}))
@@ -140,7 +137,11 @@ class CatalogTests(unittest.TestCase):
             self.assertEqual(catalog.select_entries(self.cfg, ['repo=1'], catalog_id=first)[0][0].id, 'owner/first')
             self.assertEqual(catalog.select_entries(self.cfg, ['repo=1'])[0][0].id, 'owner/second')
         self.assertNotEqual(first, second)
-        for cfg in (replace(self.cfg, sync_commands=('private command',)), replace(self.cfg, path=Path('/tmp/different.toml'))):
+        altered_setup = definitions.parse_setup({'items': [
+            {'id': 'catalog-file', 'group': 'files', 'handler': 'file', 'label': 'Catalog file',
+             'description': 'Catalog file', 'path': '~/catalog-file'},
+        ]})
+        for cfg in (replace(self.cfg, setup=altered_setup), replace(self.cfg, path=Path('/tmp/different.toml'))):
             with self.assertRaises(AppError):
                 catalog.select_entries(cfg, ['env=1'], catalog_id=first)
         with patch.object(catalog, 'github_identity', return_value={**self.identity, 'account_id': 9}), self.assertRaisesRegex(AppError, 'identity'):
@@ -176,7 +177,10 @@ class PlanTests(unittest.TestCase):
         }), ('src/project/.git/config',))
 
     def test_independent_apps_repositories_and_explicit_dependencies(self):
-        cfg = replace(test_config(), sync_paths=('~/missing',))
+        cfg = replace(test_config(), setup=definitions.parse_setup({'items': [
+            {'id': 'missing-file', 'group': 'files', 'handler': 'file', 'label': 'Missing file',
+             'description': 'Missing file', 'path': '~/missing'},
+        ]}))
         self.assertEqual(setup.build_plan(cfg, TARGET, (entry('codex'),)).entries, (entry('codex'),))
         selected, _ = catalog.select_entries(cfg, ['repo=owner/project'])
         self.assertEqual(setup.build_plan(cfg, TARGET, selected).entries, selected)

@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from homestack import config, models
+from homestack import setup_config as definitions
 from support import test_config
 
 
@@ -128,20 +129,31 @@ class ConfigTests(unittest.TestCase):
     def test_generated_toml_round_trips_through_normal_loader(self) -> None:
         cfg = replace(
             test_config(),
-            sync_paths=('~/.config/app/', '~/notes.txt'),
-            sync_commands=('first --flag', 'second'),
-            sync_verbose=True,
+            setup=definitions.parse_setup({'items': [
+                {'id': 'app-settings', 'group': 'files', 'handler': 'file', 'label': 'App settings',
+                 'description': 'Application settings', 'path': '~/.config/app/'},
+                {'id': 'notes', 'group': 'files', 'handler': 'file', 'label': 'Notes',
+                 'description': 'Notes', 'path': '~/notes.txt'},
+            ]}),
             repo_owner='example-owner',
             repo_checkout_root='~/DEV',
         )
         loaded = config.validate_config_text(config.config_to_toml(cfg))
         self.assertEqual(loaded.storage_layouts, cfg.storage_layouts)
         self.assertEqual(loaded.workspace_ssh, cfg.workspace_ssh)
-        self.assertEqual(loaded.sync_paths, cfg.sync_paths)
-        self.assertEqual(loaded.sync_commands, cfg.sync_commands)
+        self.assertEqual(loaded.setup, cfg.setup)
         self.assertEqual(loaded.repo_owner, cfg.repo_owner)
         self.assertEqual(loaded.repo_checkout_root, cfg.repo_checkout_root)
         self.assertNotIn('install_draft', config.config_to_toml(cfg))
+
+    def test_obsolete_sync_section_is_rejected(self) -> None:
+        example = Path(__file__).resolve().parents[1] / 'config.example.toml'
+        text = example.read_text(encoding='utf-8') + '\n[sync]\npaths = ["~/obsolete"]\n'
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'config.toml'
+            path.write_text(text, encoding='utf-8')
+            with self.assertRaisesRegex(models.AppError, r'\[sync\].*not supported'):
+                config.load_config(path)
 
     def test_publish_new_config_uses_private_mode(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
