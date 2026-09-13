@@ -13,7 +13,7 @@ from homestack.setup import Plan
 from homestack.setup_catalog import Catalog, select_entries
 from homestack.setup_cli import show_plan
 from homestack.setup_tui import SetupApp, SetupTree
-from support import test_config
+from support import example_config, runtime_example_config, test_config
 
 
 TARGET = {"name": "workspace", "vmid": 200, "ip": "192.0.2.200"}
@@ -49,6 +49,26 @@ def fixture_config():
 
 
 class StructuredCatalogTests(unittest.TestCase):
+    def test_runtime_nested_values_are_cataloged_from_explicit_toml(self):
+        cfg = runtime_example_config()
+        row = next(
+            item for item in Catalog(tuple(cfg.setup.items), {}, timestamps={}).rows(cfg)
+            if item["id"] == "codex"
+        )
+        config = row["config_files"][0]
+        self.assertEqual(config["values"]["agents"]["enabled"], True)
+        self.assertEqual(config["values"]["agents"]["max_concurrent_threads_per_session"], 12)
+        self.assertIn(
+            definitions.config_entry_id("codex", "config", ("agents", "enabled")),
+            config["selectors"],
+        )
+        self.assertIn(
+            definitions.config_entry_id(
+                "codex", "config", ("agents", "max_concurrent_threads_per_session")
+            ),
+            config["selectors"],
+        )
+
     def test_rows_keep_application_index_and_expose_nested_values_and_selectors(self):
         cfg, application = fixture_config()
         catalog = Catalog(tuple(cfg.setup.items), {}, timestamps={})
@@ -77,8 +97,25 @@ class StructuredTUITests(unittest.IsolatedAsyncioTestCase):
     def default_leaf_id(key):
         return definitions.config_entry_id("codex", "config", key)
 
-    async def test_hierarchical_counters_use_visible_semantic_levels(self):
+    async def test_absent_codex_config_declaration_has_no_config_nodes(self):
         app = SetupApp(test_config(), TARGET)
+        async with app.run_test(size=(120, 40)):
+            self.assertIn("codex", app.nodes)
+            self.assertNotIn("codex:config", app.nodes)
+            self.assertFalse(any(identity.startswith("codex:config:") for identity in app.nodes))
+
+    async def test_runtime_nested_values_appear_in_tui_without_python_catalog_changes(self):
+        app = SetupApp(runtime_example_config(), TARGET)
+        async with app.run_test(size=(120, 40)):
+            agents_id = self.default_leaf_id(("agents", "enabled"))
+            max_threads_id = self.default_leaf_id(("agents", "max_concurrent_threads_per_session"))
+            self.assertIn(agents_id, app.nodes)
+            self.assertIn(max_threads_id, app.nodes)
+            self.assertIn("enabled = true", app.nodes[agents_id].label.plain)
+            self.assertIn("max_concurrent_threads_per_session = 12", app.nodes[max_threads_id].label.plain)
+
+    async def test_hierarchical_counters_use_visible_semantic_levels(self):
+        app = SetupApp(example_config(), TARGET)
         async with app.run_test(size=(120, 40)):
             self.assertIn("Applications  0/3", app.nodes["app"].label.plain)
             self.assertIn("0/8", app.nodes["codex"].label.plain)
@@ -95,11 +132,11 @@ class StructuredTUITests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("Applications  2/3", app.nodes["app"].label.plain)
 
     async def test_config_file_and_section_counters_count_only_leaf_descendants(self):
-        app = SetupApp(test_config(), TARGET)
+        app = SetupApp(example_config(), TARGET)
         async with app.run_test(size=(120, 40)):
             app.toggle_node(app.nodes["codex"])
             codex_leaves = definitions.config_entries(
-                next(entry for entry in test_config().setup.items if entry.id == "codex")
+                next(entry for entry in example_config().setup.items if entry.id == "codex")
             )
             self.assertEqual(
                 app.selected,
@@ -126,13 +163,13 @@ class StructuredTUITests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("context_management  1/1", app.nodes[context_id].label.plain)
 
     async def test_section_bulk_selection_only_selects_managed_leaf_descendants(self):
-        app = SetupApp(test_config(), TARGET)
+        app = SetupApp(example_config(), TARGET)
         async with app.run_test(size=(120, 40)):
             section_id = definitions.config_entry_id("codex", "config", ("tui",))
             tui_leaves = {
                 leaf.id
                 for leaf in definitions.config_entries(
-                    next(entry for entry in test_config().setup.items if entry.id == "codex")
+                    next(entry for entry in example_config().setup.items if entry.id == "codex")
                 )
                 if leaf.params.key[:1] == ("tui",)
             }
@@ -147,7 +184,7 @@ class StructuredTUITests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(app.checkbox(section_id), "[ ]")
 
     async def test_installer_only_application_is_partial_and_group_counts_applications(self):
-        app = SetupApp(test_config(), TARGET)
+        app = SetupApp(example_config(), TARGET)
         async with app.run_test(size=(120, 40)):
             app.toggle_node(app.nodes["codex"])
             app.toggle_node(app.nodes["codex:config"])
@@ -158,7 +195,7 @@ class StructuredTUITests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("Applications  1/3", app.nodes["app"].label.plain)
 
     async def test_application_group_tri_state_tracks_involved_visible_applications(self):
-        app = SetupApp(test_config(), TARGET)
+        app = SetupApp(example_config(), TARGET)
         async with app.run_test(size=(120, 40)):
             self.assertEqual(app.checkbox("app"), "[ ]")
 
@@ -180,7 +217,7 @@ class StructuredTUITests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("Applications  3/3", app.nodes["app"].label.plain)
 
     async def test_application_and_config_details_distinguish_state_and_counts(self):
-        cfg = test_config()
+        cfg = example_config()
         leaves = definitions.config_entries(next(entry for entry in cfg.setup.items if entry.id == "codex"))
         states = {leaf.id: {"state": "matching"} for leaf in leaves}
         states[leaves[0].id] = {"state": "different"}
@@ -208,7 +245,7 @@ class StructuredTUITests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("Workspace state: 2 matching", section_details)
 
     async def test_filtered_bulk_selection_preserves_hidden_selected_counts(self):
-        app = SetupApp(test_config(), TARGET)
+        app = SetupApp(example_config(), TARGET)
         async with app.run_test(size=(120, 40)) as pilot:
             app.toggle_node(app.nodes["codex"])
             app.query_one("#filter").value = "approvals_reviewer"

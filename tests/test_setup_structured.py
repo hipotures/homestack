@@ -10,14 +10,14 @@ from unittest.mock import Mock, patch
 
 from homestack import setup, setup_config as definitions, setup_guest
 from homestack.models import AppError
-from support import test_config
+from support import example_config, example_setup, test_config
 
 
 TARGET = {"vmid": 200, "name": "workspace", "home": "/home/user", "user": "user"}
 
 
 def codex():
-    return next(e for e in definitions.defaults() if e.id == "codex")
+    return next(e for e in example_setup().items if e.id == "codex")
 
 
 def report(status="ok", overall="fail"):
@@ -81,7 +81,7 @@ class StructuredExecutionTests(unittest.TestCase):
         self.path = self.home / ".codex/config.toml"
         self.path.parent.mkdir()
         self.path.write_text('model = "private-workspace-model"\n[tui]\ntheme = "custom"\n')
-        self.cfg = test_config()
+        self.cfg = example_config()
         self.app = codex()
         self.leaves = definitions.config_entries(self.app)
         self.events = []

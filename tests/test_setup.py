@@ -16,7 +16,7 @@ import tomllib
 
 from homestack import cli, config, install, setup, setup_catalog as catalog, setup_config as definitions, setup_guest as guest, workspace_ssh
 from homestack.models import AppError
-from support import test_config
+from support import EXAMPLE_CONFIG_PATH, example_config_from_text, example_setup, runtime_example_config, test_config
 
 TARGET = {"vmid": 200, "name": "workspace", "ip": "192.0.2.200", "home": "/home/user", "user": "user"}
 
@@ -30,6 +30,112 @@ def completed(code=0, output=""):
 
 
 class DefinitionTests(unittest.TestCase):
+    def test_builtin_codex_has_no_implicit_configuration_or_validator(self):
+        for setup_cfg in (
+            definitions.SetupConfig(),
+            definitions.parse_setup({}),
+            definitions.parse_setup({"items": [{"id": "codex", "label": "Local Codex"}]}),
+        ):
+            with self.subTest(setup=setup_cfg):
+                application = next(entry for entry in setup_cfg.items if entry.id == "codex")
+                self.assertEqual(application.params.config_files, ())
+                self.assertIsNone(application.params.validation)
+                self.assertEqual(definitions.config_entries(application), ())
+
+    def test_runtime_toml_extends_builtin_codex_by_id_only(self):
+        setup_cfg = definitions.parse_setup(tomllib.loads('''
+[[items]]
+id = "codex"
+[items.validation]
+command = "codex doctor --json"
+type = "json-path"
+path = ["checks", "config.load", "status"]
+accepted = ["ok", "warning"]
+[[items.config_files]]
+id = "config"
+path = "~/.codex/config.toml"
+format = "toml"
+[items.config_files.values.agents]
+enabled = true
+'''))
+        application = next(item for item in setup_cfg.items if item.id == "codex")
+        self.assertEqual(application.params.command, entry("codex").params.command)
+        self.assertEqual(application.params.config_files[0].values, {"agents": {"enabled": True}})
+        self.assertEqual(application.params.validation.command, "codex doctor --json")
+
+    def test_example_codex_configuration_and_validator_round_trip_normally_and_in_draft(self):
+        application = next(entry for entry in example_setup().items if entry.id == "codex")
+        self.assertEqual(
+            application.params.config_files,
+            (
+                definitions.ConfigFile(
+                    id="config",
+                    path="~/.codex/config.toml",
+                    format="toml",
+                    values={
+                        "approvals_reviewer": "user",
+                        "approval_policy": "never",
+                        "sandbox_mode": "danger-full-access",
+                        "tui": {
+                            "status_line": [
+                                "model-with-reasoning", "current-dir", "project-name",
+                                "hostname", "five-hour-limit", "weekly-limit",
+                                "context-used", "git-branch", "branch-changes",
+                            ],
+                            "status_line_use_colors": True,
+                        },
+                        "features": {
+                            "multi_agent": True,
+                            "multi_agent_v2": True,
+                            "context_management": {"experimental_mode": True},
+                        },
+                    },
+                ),
+            ),
+        )
+        self.assertEqual(
+            application.params.validation,
+            definitions.ConfigValidation(
+                command="codex doctor --json",
+                type="json-path",
+                path=("checks", "config.load", "status"),
+                accepted=("ok", "warning"),
+            ),
+        )
+
+        cfg = replace(test_config(), setup=example_setup())
+        self.assertEqual(config.validate_config_text(config.config_to_toml(cfg)).setup, cfg.setup)
+        draft = install._install_draft_to_toml(cfg, {"transport"}, {})
+        resumed = install._config_from_install_draft(cfg.path, tomllib.loads(draft))
+        self.assertEqual(resumed.setup, cfg.setup)
+
+    def test_removing_an_explicit_option_does_not_restore_it_on_round_trip(self):
+        text = EXAMPLE_CONFIG_PATH.read_text(encoding="utf-8").replace(
+            'approval_policy = "never"\n', "", 1
+        )
+        cfg = example_config_from_text(text)
+        application = next(entry for entry in cfg.setup.items if entry.id == "codex")
+        values = application.params.config_files[0].values
+        self.assertNotIn("approval_policy", values)
+        serialized = config.config_to_toml(cfg)
+        self.assertNotIn("approval_policy =", serialized)
+        self.assertNotIn(
+            "approval_policy",
+            next(entry for entry in config.validate_config_text(serialized).setup.items if entry.id == "codex").params.config_files[0].values,
+        )
+
+    def test_new_nested_runtime_values_survive_normal_and_draft_round_trips(self):
+        cfg = runtime_example_config()
+        application = next(entry for entry in cfg.setup.items if entry.id == "codex")
+        values = application.params.config_files[0].values
+        self.assertEqual(values["agents"]["enabled"], True)
+        self.assertEqual(values["agents"]["max_concurrent_threads_per_session"], 12)
+        normal = config.validate_config_text(config.config_to_toml(cfg))
+        draft = install._install_draft_to_toml(cfg, {"transport"}, {})
+        resumed = install._config_from_install_draft(cfg.path, tomllib.loads(draft))
+        self.assertEqual(normal.setup, cfg.setup)
+        self.assertEqual(resumed.setup, cfg.setup)
+
     def test_structured_definitions_and_optional_validator_round_trip_through_drafts(self):
         setup_cfg = definitions.parse_setup({'items': [{
             'id': 'codex', 'validation': False, 'config_files': [

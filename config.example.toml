@@ -135,6 +135,8 @@ bin_dirs = ["~/.local/bin"]
 requires_absent = []
 backup_paths = []
 
+# Optional runtime configuration: these values and the validator below are not
+# built into HomeStack. Declare them under Codex in your own HomeStack config.
 [[setup.items.config_files]]
 id = "config"
 path = "~/.codex/config.toml"

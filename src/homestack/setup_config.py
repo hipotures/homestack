@@ -94,9 +94,7 @@ class Entry:
         data = asdict(self)
         params = data.pop("params")
         if isinstance(self.params, ApplicationParams) and self.params.validation is None:
-            # TOML has no null value.  An explicit false preserves a user's
-            # choice to disable an inherited validator when a built-in
-            # application is overridden.
+            # TOML has no null value; false represents no application validator.
             params["validation"] = False
         data.update(params)
         return data
@@ -109,43 +107,6 @@ DEFAULT_GROUPS = (
     Group("repo", "Repositories", "GitHub checkouts with workspace-local deploy keys."),
 )
 CODEX_RECIPE = "curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh"
-CODEX_CONFIG_VALIDATION = ConfigValidation(
-    command="codex doctor --json",
-    type="json-path",
-    path=("checks", "config.load", "status"),
-    accepted=("ok", "warning"),
-)
-CODEX_CONFIG_FILE = ConfigFile(
-    id="config",
-    path="~/.codex/config.toml",
-    format="toml",
-    values={
-        "approvals_reviewer": "user",
-        "approval_policy": "never",
-        "sandbox_mode": "danger-full-access",
-        "tui": {
-            "status_line": [
-                "model-with-reasoning",
-                "current-dir",
-                "project-name",
-                "hostname",
-                "five-hour-limit",
-                "weekly-limit",
-                "context-used",
-                "git-branch",
-                "branch-changes",
-            ],
-            "status_line_use_colors": True,
-        },
-        "features": {
-            "multi_agent": True,
-            "multi_agent_v2": True,
-            "context_management": {
-                "experimental_mode": True,
-            },
-        },
-    },
-)
 # Download separately so installer stdin remains the real terminal when required.
 HERMES_RECIPE = '''installer=$(mktemp)
 trap 'rm -f -- "$installer"' EXIT
@@ -241,8 +202,7 @@ def defaults() -> tuple[Entry, ...]:
              for i, label in profiles]
     items.extend([
         Entry("codex", "app", "application", "Codex", "Install Codex CLI. Sign-in remains separate.",
-              ApplicationParams(CODEX_RECIPE, interaction="non-interactive", prerequisites=("curl", "tar"), check="codex --version",
-                                config_files=(CODEX_CONFIG_FILE,), validation=CODEX_CONFIG_VALIDATION)),
+              ApplicationParams(CODEX_RECIPE, interaction="non-interactive", prerequisites=("curl", "tar"), check="codex --version")),
         Entry("opencode", "app", "application", "OpenCode", "Install OpenCode. Provider configuration remains separate.",
               ApplicationParams("curl -fsSL https://opencode.ai/install | bash", interaction="non-interactive",
                                 prerequisites=("curl", "tar"), check="opencode --version", bin_dirs=("~/.opencode/bin", "~/.local/bin"))),

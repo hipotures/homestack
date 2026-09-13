@@ -1,8 +1,13 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
+import tempfile
 
 from homestack import config, models
+
+
+EXAMPLE_CONFIG_PATH = Path(__file__).resolve().parents[1] / "config.example.toml"
 
 
 def test_config() -> config.Config:
@@ -43,6 +48,37 @@ def test_config() -> config.Config:
         storage_display_unit="GiB",
         storage_display_decimals=0,
     )
+
+
+def example_setup():
+    """Load setup declarations explicitly from the checked-in TOML example."""
+    return config.load_config(EXAMPLE_CONFIG_PATH).setup
+
+
+def example_config() -> config.Config:
+    return replace(test_config(), setup=example_setup())
+
+
+def example_config_from_text(text: str) -> config.Config:
+    """Load a modified example document through the normal runtime loader."""
+    with tempfile.TemporaryDirectory(prefix="homestack-example-") as directory:
+        path = Path(directory) / "config.toml"
+        path.write_text(text, encoding="utf-8")
+        loaded = config.load_config(path)
+    return replace(test_config(), setup=loaded.setup)
+
+
+def runtime_example_config() -> config.Config:
+    """Load the example with arbitrary newer Codex values through TOML."""
+    text = EXAMPLE_CONFIG_PATH.read_text(encoding="utf-8")
+    marker = 'sandbox_mode = "danger-full-access"\n\n'
+    additions = (
+        marker
+        + "[setup.items.config_files.values.agents]\n"
+        + "enabled = true\n"
+        + "max_concurrent_threads_per_session = 12\n\n"
+    )
+    return example_config_from_text(text.replace(marker, additions, 1))
 
 
 class FakeSession:
