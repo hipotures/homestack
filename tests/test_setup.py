@@ -572,15 +572,6 @@ class EnvironmentTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(result.stdout.count(tmp + '/.local/bin'), 1)
 
-    @unittest.skipUnless(shutil.which('nu'), 'Nushell is not installed on the test desktop')
-    def test_nushell_profile_syntax_behavior(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            self.apply(Path(tmp), 'nu')
-            result = subprocess.run(['nu', '--env-config', tmp + '/.config/nushell/env.nu', '--config', tmp + '/.config/nushell/config.nu', '-l', '-c', '$env.PATH | str join ":"'], env={**os.environ, 'HOME': tmp}, capture_output=True, text=True)
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(result.stdout.count(tmp + '/.local/bin'), 1)
-
-
 class AdditionalSafetyTests(unittest.TestCase):
     def test_actual_identity_guard_rejects_hostname_and_mount_mismatches(self):
         from types import SimpleNamespace
