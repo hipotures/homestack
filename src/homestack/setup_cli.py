@@ -29,17 +29,37 @@ def show_catalog(cfg, catalog):
     console.print(table)
     if catalog.repository_error:
         console.print(catalog.repository_error, markup=False)
+    for row in catalog.rows(cfg):
+        for config in row.get("config_files", ()):
+            console.print(
+                f"{row['id']}: {config['path']} ({config['format']})",
+                markup=False,
+            )
+            console.print(
+                "  Selectors: " + ", ".join(
+                    f"{row['group']}={selector}" for selector in config.get("selectors", ())
+                ),
+                markup=False,
+            )
+            console.print(
+                "  Desired values: " + json.dumps(config.get("values", {}), ensure_ascii=False),
+                markup=False,
+            )
     console.print("Guest installation state is unknown. Numeric selectors reuse this snapshot; use stable IDs in long-lived scripts.")
 
 
 def show_plan(console, plan):
     console.print(f"Setup: {plan.target['name']} (VM {plan.target['vmid']}) — guest state unknown", markup=False)
     table = Table()
-    for heading in ("Group", "ID", "Action", "Paths / prerequisites", "Dependencies"):
+    for heading in ("Group", "ID", "Action", "Paths / prerequisites", "Desired", "Dependencies"):
         table.add_column(heading)
     for action in plan.public()["actions"]:
         location = action.get("destination") or action.get("repository") or action.get("profile") or ", ".join(action.get("prerequisites", ()))
-        table.add_row(action["group"], action["id"], action["label"], location, ", ".join(action["depends_on"]) or "none")
+        desired = ""
+        if "key" in action:
+            desired = f"{json.dumps(action['key'], ensure_ascii=False)} = {json.dumps(action.get('desired'), ensure_ascii=False)}"
+        table.add_row(action["group"], action["id"], action["label"], location, desired,
+                      ", ".join(action["depends_on"]) or "none")
     console.print(table)
 
 
@@ -67,6 +87,12 @@ def show_workspace_setup_status(cfg, target, state):
     visible = 0
     for identity, item in state["items"].items():
         label = item.get("label") or identity
+        if item.get("handler") == "structured" or (
+            item.get("application") and item.get("config_file") and item.get("key")
+        ):
+            key = item.get("key")
+            key_text = ".".join(str(segment) for segment in key) if isinstance(key, list) else str(key)
+            label = f"{item.get('application', 'application')} {item.get('config_file')} {key_text}"
         empty = item.get("state") in {
             "absent",
             "not installed",

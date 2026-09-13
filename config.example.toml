@@ -135,6 +135,43 @@ bin_dirs = ["~/.local/bin"]
 requires_absent = []
 backup_paths = []
 
+[[setup.items.config_files]]
+id = "config"
+path = "~/.codex/config.toml"
+format = "toml"
+
+[setup.items.config_files.values]
+approvals_reviewer = "user"
+approval_policy = "never"
+sandbox_mode = "danger-full-access"
+
+[setup.items.config_files.values.tui]
+status_line = [
+    "model-with-reasoning",
+    "current-dir",
+    "project-name",
+    "hostname",
+    "five-hour-limit",
+    "weekly-limit",
+    "context-used",
+    "git-branch",
+    "branch-changes",
+]
+status_line_use_colors = true
+
+[setup.items.config_files.values.features]
+multi_agent = true
+multi_agent_v2 = true
+
+[setup.items.config_files.values.features.context_management]
+experimental_mode = true
+
+[setup.items.validation]
+command = "codex doctor --json"
+type = "json-path"
+path = ["checks", "config.load", "status"]
+accepted = ["ok", "warning"]
+
 [[setup.items]]
 id = "opencode"
 group = "app"

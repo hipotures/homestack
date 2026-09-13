@@ -2,9 +2,12 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
-import json
 import re
 from typing import Any
+from collections.abc import Mapping
+from urllib.parse import quote, unquote
+
+import tomlkit
 
 from .models import AppError
 
@@ -27,6 +30,26 @@ class EnvironmentParams:
 
 
 @dataclass(frozen=True)
+class ConfigValidation:
+    """A command used to validate an application after setup changes."""
+
+    command: str
+    type: str = "exit-code"
+    path: tuple[str, ...] = ()
+    accepted: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class ConfigFile:
+    """One application-owned structured configuration document."""
+
+    id: str
+    path: str
+    format: str
+    values: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class ApplicationParams:
     command: str
     interpreter: str = "bash"
@@ -38,11 +61,23 @@ class ApplicationParams:
     bin_dirs: tuple[str, ...] = ("~/.local/bin",)
     requires_absent: tuple[str, ...] = ()
     backup_paths: tuple[str, ...] = ()
+    config_files: tuple[ConfigFile, ...] = ()
+    validation: ConfigValidation | None = None
 
 
 @dataclass(frozen=True)
 class RepositoryParams:
     repository: str
+
+
+@dataclass(frozen=True)
+class StructuredParams:
+    """Internal setup entry parameters for one managed config leaf."""
+
+    application: str
+    config: ConfigFile
+    key: tuple[str, ...]
+    value: Any
 
 
 @dataclass(frozen=True)
@@ -52,12 +87,18 @@ class Entry:
     handler: str
     label: str
     description: str
-    params: FileParams | EnvironmentParams | ApplicationParams | RepositoryParams
+    params: FileParams | EnvironmentParams | ApplicationParams | RepositoryParams | StructuredParams
     depends_on: tuple[str, ...] = ()
 
     def definition(self) -> dict[str, Any]:
         data = asdict(self)
-        data.update(data.pop("params"))
+        params = data.pop("params")
+        if isinstance(self.params, ApplicationParams) and self.params.validation is None:
+            # TOML has no null value.  An explicit false preserves a user's
+            # choice to disable an inherited validator when a built-in
+            # application is overridden.
+            params["validation"] = False
+        data.update(params)
         return data
 
 
@@ -68,6 +109,43 @@ DEFAULT_GROUPS = (
     Group("repo", "Repositories", "GitHub checkouts with workspace-local deploy keys."),
 )
 CODEX_RECIPE = "curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh"
+CODEX_CONFIG_VALIDATION = ConfigValidation(
+    command="codex doctor --json",
+    type="json-path",
+    path=("checks", "config.load", "status"),
+    accepted=("ok", "warning"),
+)
+CODEX_CONFIG_FILE = ConfigFile(
+    id="config",
+    path="~/.codex/config.toml",
+    format="toml",
+    values={
+        "approvals_reviewer": "user",
+        "approval_policy": "never",
+        "sandbox_mode": "danger-full-access",
+        "tui": {
+            "status_line": [
+                "model-with-reasoning",
+                "current-dir",
+                "project-name",
+                "hostname",
+                "five-hour-limit",
+                "weekly-limit",
+                "context-used",
+                "git-branch",
+                "branch-changes",
+            ],
+            "status_line_use_colors": True,
+        },
+        "features": {
+            "multi_agent": True,
+            "multi_agent_v2": True,
+            "context_management": {
+                "experimental_mode": True,
+            },
+        },
+    },
+)
 # Download separately so installer stdin remains the real terminal when required.
 HERMES_RECIPE = '''installer=$(mktemp)
 trap 'rm -f -- "$installer"' EXIT
@@ -77,6 +155,85 @@ for stage in repository venv python-deps node-deps path config complete; do
 done'''
 
 
+_SETUP_ID_RE = re.compile(r"[a-z][a-z0-9_-]*")
+
+
+def _config_leaf_paths(values: Mapping[str, Any], prefix: tuple[str, ...] = ()):
+    for key, value in values.items():
+        child = prefix + (key,)
+        if isinstance(value, Mapping):
+            yield from _config_leaf_paths(value, child)
+        else:
+            yield child, value
+
+
+def _json_pointer_escape(value: str) -> str:
+    return value.replace("~", "~0").replace("/", "~1")
+
+
+def _json_pointer_unescape(value: str) -> str:
+    # Decode in this order so a literal '~01' remains '~1', per RFC 6901.
+    return value.replace("~1", "/").replace("~0", "~")
+
+
+def _selector_escape(value: str) -> str:
+    # Stable selector IDs use ':' as field separators and ','/'=' as CLI
+    # delimiters. Percent-escape those characters and '%' itself.
+    return quote(value, safe="~./-_")
+
+
+def _selector_unescape(value: str) -> str:
+    return unquote(value)
+
+
+def config_entry_id(application: str, config: str, key: tuple[str, ...]) -> str:
+    """Return the stable ID used for a generated structured leaf entry."""
+    pointer = "/" + "/".join(
+        _selector_escape(_json_pointer_escape(segment)) for segment in key
+    )
+    return f"{application}:{config}:{pointer}"
+
+
+def config_entry_key(identifier: str) -> tuple[str, str, tuple[str, ...]]:
+    """Decode a generated structured leaf ID.
+
+    This is intentionally small and strict so selector implementations can
+    share the same stable ID grammar without splitting dotted source keys.
+    """
+    parts = identifier.split(":", 2)
+    if len(parts) != 3 or not _SETUP_ID_RE.fullmatch(parts[0]) or not _SETUP_ID_RE.fullmatch(parts[1]) or not parts[2].startswith("/"):
+        raise AppError("Invalid structured configuration selector")
+    encoded_segments = parts[2][1:].split("/")
+    if not encoded_segments:
+        raise AppError("Invalid structured configuration selector")
+    try:
+        key = tuple(_json_pointer_unescape(_selector_unescape(segment)) for segment in encoded_segments)
+    except (UnicodeDecodeError, ValueError) as exc:
+        raise AppError("Invalid structured configuration selector") from exc
+    return parts[0], parts[1], key
+
+
+def config_entries(entry: Entry) -> tuple[Entry, ...]:
+    """Expand an application into one internal entry per configured leaf."""
+    if not isinstance(entry.params, ApplicationParams):
+        return ()
+    result: list[Entry] = []
+    for config in entry.params.config_files:
+        for key, value in _config_leaf_paths(config.values):
+            label = key[-1]
+            result.append(
+                Entry(
+                    id=config_entry_id(entry.id, config.id, key),
+                    group=entry.group,
+                    handler="structured",
+                    label=label,
+                    description=f"Set {config.path} {'.'.join(key)}",
+                    params=StructuredParams(entry.id, config, key, value),
+                )
+            )
+    return tuple(result)
+
+
 def defaults() -> tuple[Entry, ...]:
     profiles = [("bash", "Bash"), ("zsh", "Zsh"), ("fish", "Fish"), ("nu", "Nushell")]
     items = [Entry(i, "env", "environment", label,
@@ -84,7 +241,8 @@ def defaults() -> tuple[Entry, ...]:
              for i, label in profiles]
     items.extend([
         Entry("codex", "app", "application", "Codex", "Install Codex CLI. Sign-in remains separate.",
-              ApplicationParams(CODEX_RECIPE, interaction="non-interactive", prerequisites=("curl", "tar"), check="codex --version")),
+              ApplicationParams(CODEX_RECIPE, interaction="non-interactive", prerequisites=("curl", "tar"), check="codex --version",
+                                config_files=(CODEX_CONFIG_FILE,), validation=CODEX_CONFIG_VALIDATION)),
         Entry("opencode", "app", "application", "OpenCode", "Install OpenCode. Provider configuration remains separate.",
               ApplicationParams("curl -fsSL https://opencode.ai/install | bash", interaction="non-interactive",
                                 prerequisites=("curl", "tar"), check="opencode --version", bin_dirs=("~/.opencode/bin", "~/.local/bin"))),
@@ -113,6 +271,101 @@ def _strings(value: Any, key: str) -> tuple[str, ...]:
     return tuple(value)
 
 
+def _config_values(value: Any, *, format: str, key_path: tuple[str, ...] = ()) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        raise AppError("Structured configuration values must be a table")
+
+    def normalize(item: Any, path: tuple[str, ...]) -> Any:
+        if isinstance(item, Mapping):
+            normalized = {}
+            for key, child in item.items():
+                if not isinstance(key, str) or "\0" in key:
+                    raise AppError("Structured configuration keys must be text")
+                normalized[key] = normalize(child, path + (key,))
+            return normalized
+        if isinstance(item, (list, tuple)):
+            return [normalize(child, path) for child in item]
+        if item is None:
+            # The setup file itself is TOML, and null has no TOML spelling.
+            # Keeping the desired-value domain portable also avoids assigning
+            # null a deletion meaning in JSON/YAML.
+            raise AppError("Structured configuration values cannot be null")
+        if isinstance(item, bool):
+            return item
+        if isinstance(item, int):
+            return item
+        if isinstance(item, float):
+            if item != item or item in (float("inf"), float("-inf")):
+                raise AppError("Structured configuration numbers must be finite")
+            return item
+        if isinstance(item, str) and "\0" not in item:
+            return item
+        raise AppError("Structured configuration values must use scalar, array or table values")
+
+    return normalize(value, key_path)
+
+
+def _config_validation(value: Any) -> ConfigValidation | None:
+    if value is None or value is False:
+        return None
+    if isinstance(value, ConfigValidation):
+        value = asdict(value)
+    if not isinstance(value, Mapping) or set(value) - {"command", "type", "path", "accepted"}:
+        raise AppError("Application validation must be a table with command, type, path and accepted")
+    command = value.get("command", "")
+    if not isinstance(command, str) or not command.strip() or "\0" in command:
+        raise AppError("Application validation command must be valid text")
+    validation_type = value.get("type", "exit-code")
+    if not isinstance(validation_type, str):
+        raise AppError("Application validation type must be exit-code or json-path")
+    if validation_type not in {"exit-code", "json-path"}:
+        raise AppError("Application validation type must be exit-code or json-path")
+    path = _strings(value.get("path", ()), "validation.path")
+    accepted = _strings(value.get("accepted", ()), "validation.accepted")
+    if validation_type == "json-path" and (not path or not accepted):
+        raise AppError("JSON-path application validation requires path and accepted")
+    if validation_type == "exit-code" and path:
+        raise AppError("Exit-code application validation cannot specify a JSON path")
+    return ConfigValidation(command, validation_type, path, accepted)
+
+
+def _config_files(value: Any, application: str, seen_paths: set[str]) -> tuple[ConfigFile, ...]:
+    from .config import validate_home_path_spec
+
+    if not isinstance(value, (list, tuple)):
+        raise AppError(f"Application {application} config_files must be an array of tables")
+    parsed: list[ConfigFile] = []
+    seen_ids: set[str] = set()
+    for data in value:
+        if isinstance(data, ConfigFile):
+            data = asdict(data)
+        if not isinstance(data, Mapping) or set(data) - {"id", "path", "format", "values"}:
+            raise AppError(f"Invalid structured configuration file for application {application}")
+        config_id = data.get("id", "")
+        if not isinstance(config_id, str) or not _SETUP_ID_RE.fullmatch(config_id) or config_id in seen_ids:
+            raise AppError(f"Invalid or duplicate structured configuration file ID for {application}")
+        seen_ids.add(config_id)
+        path = data.get("path")
+        if not isinstance(path, str) or "\0" in path:
+            raise AppError(f"Structured configuration file {config_id} needs a valid path")
+        try:
+            relative, is_directory = validate_home_path_spec(path)
+        except AppError as exc:
+            raise AppError(f"Structured configuration file {config_id} has an unsafe path") from exc
+        if is_directory:
+            raise AppError(f"Structured configuration file {config_id} must name a file")
+        if relative in seen_paths:
+            raise AppError(f"Duplicate structured configuration file path {path}")
+        seen_paths.add(relative)
+        format_name = data.get("format")
+        if not isinstance(format_name, str) or format_name.lower() not in {"toml", "json", "yaml"}:
+            raise AppError(f"Structured configuration file {config_id} format must be TOML, JSON or YAML")
+        format_name = format_name.lower()
+        values = _config_values(data.get("values", {}), format=format_name)
+        parsed.append(ConfigFile(config_id, path, format_name, values))
+    return tuple(parsed)
+
+
 def parse_setup(raw: Any) -> SetupConfig:
     from .config import validate_home_path_spec, validate_repository_spec
     if not isinstance(raw, dict) or set(raw) - {"groups", "items"}:
@@ -136,6 +389,7 @@ def parse_setup(raw: Any) -> SetupConfig:
             raise AppError("Setup group description must be text")
         groups[group_id] = Group(**base)
     entries = {e.id: e.definition() for e in defaults()}
+    config_paths: set[str] = set()
     seen.clear()
     raw_items = raw.get("items", [])
     if not isinstance(raw_items, list):
@@ -150,7 +404,7 @@ def parse_setup(raw: Any) -> SetupConfig:
         base = entries.get(item_id, {}).copy()
         if "command" in data and data["command"] != base.get("command"):
             # A customized payload cannot inherit a safety claim about another recipe.
-            base.update(interaction="interactive", non_interactive="", check="", requires_absent=(), backup_paths=())
+            base.update(interaction="interactive", non_interactive="", check="", requires_absent=(), backup_paths=(), validation=None)
         base.update(data)
         entries[item_id] = base
     parsed = []
@@ -171,6 +425,9 @@ def parse_setup(raw: Any) -> SetupConfig:
             for key in ("prerequisites", "bin_dirs", "requires_absent", "prerequisite_checks", "backup_paths"):
                 if key in params:
                     params[key] = _strings(params[key], key)
+            if handler == "application":
+                params["config_files"] = _config_files(params.get("config_files", ()), data["id"], config_paths)
+                params["validation"] = _config_validation(params.get("validation"))
             p = cls(**params)
         except TypeError as exc:
             raise AppError(f"Invalid parameters for setup item {data['id']}") from exc
@@ -204,11 +461,13 @@ def parse_setup(raw: Any) -> SetupConfig:
 
 
 def setup_to_toml(setup: SetupConfig) -> str:
-    lines = []
-    for group in setup.groups:
-        lines += ["", "[[setup.groups]]"]
-        lines.extend(f"{k} = {json.dumps(v)}" for k, v in asdict(group).items())
-    for entry in setup.items:
-        lines += ["", "[[setup.items]]"]
-        lines.extend(f"{k} = {json.dumps(v)}" for k, v in entry.definition().items())
-    return "\n".join(lines) + "\n"
+    # tomlkit emits nested arrays-of-tables and tables with valid TOML
+    # delimiters. JSON serialization here would turn nested values into an
+    # invalid TOML object (JSON uses ':' where TOML uses '=').
+    payload = {
+        "setup": {
+            "groups": [asdict(group) for group in setup.groups],
+            "items": [entry.definition() for entry in setup.items],
+        }
+    }
+    return "\n" + tomlkit.dumps(payload)

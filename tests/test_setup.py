@@ -30,6 +30,23 @@ def completed(code=0, output=""):
 
 
 class DefinitionTests(unittest.TestCase):
+    def test_structured_definitions_and_optional_validator_round_trip_through_drafts(self):
+        setup_cfg = definitions.parse_setup({'items': [{
+            'id': 'codex', 'validation': False, 'config_files': [
+                {'id': 'json', 'path': '~/app.json', 'format': 'json',
+                 'values': {'foo.bar': {'array': [1, True, 'x']}}},
+                {'id': 'yaml', 'path': '~/app.yaml', 'format': 'yaml',
+                 'values': {'enabled': True, 'empty': []}},
+            ],
+        }]})
+        cfg = replace(test_config(), setup=setup_cfg)
+        self.assertEqual(config.validate_config_text(config.config_to_toml(cfg)).setup, setup_cfg)
+        draft = install._install_draft_to_toml(cfg, {'transport'}, {})
+        self.assertEqual(install._config_from_install_draft(cfg.path, tomllib.loads(draft)).setup, setup_cfg)
+        application = next(e for e in setup_cfg.items if e.id == 'codex')
+        self.assertIsNone(application.params.validation)
+        self.assertIn(('foo.bar', 'array'), [leaf.params.key for leaf in definitions.config_entries(application)])
+
     def test_defaults_and_override_roundtrip(self):
         cfg = replace(test_config(), setup=definitions.parse_setup({"items": [{"id": "codex", "label": "My Codex"}]}), repo_sort="created")
         restored = config.validate_config_text(config.config_to_toml(cfg))
@@ -181,13 +198,15 @@ class PlanTests(unittest.TestCase):
             {'id': 'missing-file', 'group': 'files', 'handler': 'file', 'label': 'Missing file',
              'description': 'Missing file', 'path': '~/missing'},
         ]}))
-        self.assertEqual(setup.build_plan(cfg, TARGET, (entry('codex'),)).entries, (entry('codex'),))
+        self.assertEqual(setup.build_plan(cfg, TARGET, (entry('codex'),)).entries,
+                         (entry('codex'), *definitions.config_entries(entry('codex'))))
         selected, _ = catalog.select_entries(cfg, ['repo=owner/project'])
         self.assertEqual(setup.build_plan(cfg, TARGET, selected).entries, selected)
         custom = replace(entry('codex'), depends_on=('bash',))
         with self.assertRaisesRegex(AppError, 'explicit selection'):
             setup.build_plan(cfg, TARGET, (custom,))
-        self.assertEqual([e.id for e in setup.build_plan(cfg, TARGET, (custom, entry('bash'))).entries], ['bash', 'codex'])
+        self.assertEqual([e.id for e in setup.build_plan(cfg, TARGET, (custom, entry('bash'))).entries],
+                         ['bash', 'codex', *(e.id for e in definitions.config_entries(custom))])
 
     def test_selected_overlap_missing_source_and_source_symlink(self):
         cfg = test_config()
@@ -258,7 +277,7 @@ class EngineTests(unittest.TestCase):
 
     def test_all_preflight_before_mutation_one_connection_and_stop_on_failure(self):
         cfg = test_config()
-        plan = setup.build_plan(cfg, TARGET, (entry('bash'), entry('codex'), entry('opencode')))
+        plan = setup.build_plan(cfg, TARGET, (entry('bash'), entry('codex'), entry('opencode')), include_configs=False)
         ws = Mock()
         factory = Mock(return_value=ws)
         ws.__enter__ = Mock(return_value=ws)
@@ -282,7 +301,7 @@ class EngineTests(unittest.TestCase):
 
     def test_blocked_preflight_prevents_all_selected_writes(self):
         cfg = test_config()
-        plan = setup.build_plan(cfg, TARGET, (entry('bash'), entry('codex')))
+        plan = setup.build_plan(cfg, TARGET, (entry('bash'), entry('codex')), include_configs=False)
         ws = Mock()
         with patch.object(setup, 'require_tool'), patch.object(setup, 'guest'), patch.object(setup, 'preflight_entry', side_effect=[AppError('Missing bash'), {}]), patch.object(setup, 'apply_entry') as apply:
             result = setup.execute_plan(cfg, plan, connection_factory=lambda c,t: nullcontext(ws))
@@ -345,6 +364,14 @@ class EngineTests(unittest.TestCase):
 
 
 class SSHTests(unittest.TestCase):
+    def test_noninteractive_command_streams_input_without_putting_it_in_argv(self):
+        ws = workspace_ssh.WorkspaceSSH('user@192.0.2.200', 200)
+        with patch.object(ws, 'require_master'), patch('subprocess.run', return_value=completed()) as run:
+            ws.run('python3 -', input_text='PRIVATE_PAYLOAD')
+        self.assertEqual(run.call_args.kwargs['input'], 'PRIVATE_PAYLOAD')
+        self.assertNotIn('stdin', run.call_args.kwargs)
+        self.assertNotIn('PRIVATE_PAYLOAD', ' '.join(run.call_args.args[0]))
+
     def test_one_master_private_socket_options_and_fail_closed_children(self):
         calls = []
         def run(argv, **kwargs):

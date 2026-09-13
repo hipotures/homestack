@@ -7,6 +7,10 @@ from __future__ import annotations
 import json
 import os
 import hashlib
+import base64
+import binascii
+import errno
+import secrets
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
@@ -53,6 +57,410 @@ def _atomic_bytes(path: Path, payload: bytes, *, mode: int = 0o600) -> None:
             os.close(directory)
     finally:
         Path(temporary).unlink(missing_ok=True)
+
+
+def _relative_parts(relative: str) -> list[str]:
+    parts = relative.split("/")
+    if not relative or any(part in {"", ".", ".."} for part in parts):
+        raise GuestError("Unsafe path below persistent home")
+    return parts
+
+
+def _check_directory_fd(descriptor: int, label: str) -> None:
+    try:
+        info = os.fstat(descriptor)
+    except OSError as exc:
+        raise GuestError(f"{label} cannot be inspected") from exc
+    if not stat.S_ISDIR(info.st_mode):
+        raise GuestError(f"{label} is not a directory")
+    if info.st_uid != os.getuid() or info.st_gid != os.getgid():
+        raise GuestError(f"{label} ownership conflict")
+    if not os.access(f"/proc/self/fd/{descriptor}", os.W_OK | os.X_OK):
+        raise GuestError(f"{label} is not writable")
+
+
+def _open_home_fd(home: Path) -> int:
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    try:
+        descriptor = os.open(home, flags)
+    except FileNotFoundError as exc:
+        raise GuestError("Persistent home is missing") from exc
+    except OSError as exc:
+        if getattr(exc, "errno", None) == errno.ELOOP:
+            raise GuestError("Persistent home is a symlink") from exc
+        raise GuestError("Persistent home is not a directory") from exc
+    try:
+        _check_directory_fd(descriptor, "Persistent home")
+    except Exception:
+        os.close(descriptor)
+        raise
+    return descriptor
+
+
+def _open_directory_chain(root_fd: int, parts: list[str], *, create: bool = False,
+                          label: str = "Destination ancestor") -> int | None:
+    current = os.dup(root_fd)
+    try:
+        for index, part in enumerate(parts):
+            flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+            try:
+                child = os.open(part, flags, dir_fd=current)
+            except FileNotFoundError:
+                if not create:
+                    os.close(current)
+                    return None
+                try:
+                    os.mkdir(part, mode=0o700, dir_fd=current)
+                except FileExistsError:
+                    pass
+                try:
+                    child = os.open(part, flags, dir_fd=current)
+                except OSError as exc:
+                    if getattr(exc, "errno", None) == errno.ELOOP:
+                        raise GuestError(f"{label} is a symlink") from exc
+                    raise GuestError(f"{label} cannot be opened") from exc
+            except OSError as exc:
+                if getattr(exc, "errno", None) == errno.ELOOP:
+                    raise GuestError(f"{label} is a symlink") from exc
+                if getattr(exc, "errno", None) == errno.ENOTDIR:
+                    raise GuestError(f"{label} is not a directory") from exc
+                raise GuestError(f"{label} cannot be opened") from exc
+            try:
+                _check_directory_fd(child, f"{label} at component {index + 1}")
+            except Exception:
+                os.close(child)
+                raise
+            os.close(current)
+            current = child
+        return current
+    except Exception:
+        try:
+            os.close(current)
+        except OSError:
+            pass
+        raise
+
+
+class _PinnedFile:
+    def __init__(self, parent_fd: int | None, leaf: str):
+        self.parent_fd = parent_fd
+        self.leaf = leaf
+
+    def close(self) -> None:
+        if self.parent_fd is not None:
+            os.close(self.parent_fd)
+            self.parent_fd = None
+
+    def __enter__(self) -> "_PinnedFile":
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self.close()
+
+
+def _open_pinned_from_root(root_fd: int, relative: str, *, create_parents: bool = False) -> _PinnedFile:
+    parts = _relative_parts(relative)
+    parent_fd = _open_directory_chain(root_fd, parts[:-1], create=create_parents)
+    return _PinnedFile(parent_fd, parts[-1])
+
+
+def _open_pinned_file(home: Path, relative: str, *, create_parents: bool = False) -> _PinnedFile:
+    root_fd = _open_home_fd(home)
+    try:
+        return _open_pinned_from_root(root_fd, relative, create_parents=create_parents)
+    finally:
+        os.close(root_fd)
+
+
+def _read_pinned_file(target: _PinnedFile, label: str = "Structured configuration") -> tuple[bytes | None, str | None, int | None]:
+    if target.parent_fd is None:
+        return None, None, None
+    flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+    try:
+        descriptor = os.open(target.leaf, flags, dir_fd=target.parent_fd)
+    except FileNotFoundError:
+        return None, None, None
+    except OSError as exc:
+        if getattr(exc, "errno", None) == errno.ELOOP:
+            raise GuestError(f"{label} path is a symlink") from exc
+        raise GuestError(f"{label} cannot be read") from exc
+    handle = None
+    try:
+        info = os.fstat(descriptor)
+        if stat.S_ISLNK(info.st_mode):
+            raise GuestError(f"{label} path is a symlink")
+        if not stat.S_ISREG(info.st_mode):
+            raise GuestError(f"{label} path is not a regular file")
+        if info.st_uid != os.getuid() or info.st_gid != os.getgid():
+            raise GuestError(f"{label} ownership conflict")
+        handle = os.fdopen(descriptor, "rb")
+        descriptor = None
+        with handle:
+            content = handle.read()
+    except GuestError:
+        raise
+    except OSError as exc:
+        raise GuestError(f"{label} cannot be read") from exc
+    finally:
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+    return content, hashlib.sha256(content).hexdigest(), stat.S_IMODE(info.st_mode)
+
+
+def _assert_pinned_leaf(target: _PinnedFile, label: str) -> None:
+    if target.parent_fd is None:
+        raise GuestError(f"{label} parent is missing")
+    try:
+        info = os.stat(target.leaf, dir_fd=target.parent_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return
+    except OSError as exc:
+        raise GuestError(f"{label} cannot be inspected") from exc
+    if stat.S_ISLNK(info.st_mode):
+        raise GuestError(f"{label} path is a symlink")
+    if not stat.S_ISREG(info.st_mode):
+        raise GuestError(f"{label} path is not a regular file")
+    if info.st_uid != os.getuid() or info.st_gid != os.getgid():
+        raise GuestError(f"{label} ownership conflict")
+
+
+def _atomic_bytes_pinned(target: _PinnedFile, payload: bytes, *, mode: int) -> None:
+    if target.parent_fd is None:
+        raise GuestError("Structured configuration parent is missing")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+    descriptor = None
+    temporary = None
+    for _ in range(32):
+        candidate = ".homestack-" + secrets.token_hex(12)
+        try:
+            descriptor = os.open(candidate, flags, mode=0o600, dir_fd=target.parent_fd)
+            temporary = candidate
+            break
+        except FileExistsError:
+            continue
+        except OSError as exc:
+            raise GuestError("Structured configuration temporary file could not be created") from exc
+    if descriptor is None or temporary is None:
+        raise GuestError("Structured configuration temporary file could not be created")
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            descriptor = None
+            os.fchmod(handle.fileno(), mode)
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        _assert_pinned_leaf(target, "Structured configuration")
+        os.replace(temporary, target.leaf, src_dir_fd=target.parent_fd, dst_dir_fd=target.parent_fd)
+        temporary = None
+        os.fsync(target.parent_fd)
+    except OSError as exc:
+        raise GuestError("Structured configuration could not be written") from exc
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        if temporary is not None:
+            try:
+                os.unlink(temporary, dir_fd=target.parent_fd)
+            except FileNotFoundError:
+                pass
+            except OSError:
+                pass
+
+
+def _unlink_pinned_file(target: _PinnedFile) -> None:
+    _assert_pinned_leaf(target, "Structured configuration")
+    try:
+        os.unlink(target.leaf, dir_fd=target.parent_fd)
+        os.fsync(target.parent_fd)
+    except FileNotFoundError as exc:
+        raise GuestError("Structured configuration disappeared during restore") from exc
+    except OSError as exc:
+        raise GuestError("Structured configuration could not be removed") from exc
+
+
+def structured_read(home: Path, relative: str) -> dict:
+    with _open_pinned_file(home, relative) as target:
+        content, digest, mode = _read_pinned_file(target)
+    return {
+        "ok": True,
+        "content": base64.b64encode(content).decode("ascii") if content is not None else None,
+        "sha256": digest,
+        "mode": mode,
+    }
+
+
+def _decode_structured_content(value: object) -> bytes:
+    if not isinstance(value, str):
+        raise GuestError("Structured configuration content must be base64 text")
+    try:
+        return base64.b64decode(value.encode("ascii"), validate=True)
+    except (UnicodeEncodeError, binascii.Error, ValueError) as exc:
+        raise GuestError("Structured configuration content is not valid base64") from exc
+
+
+def _validate_expected_digest(value: object, *, allow_none: bool) -> str | None:
+    if value is None and allow_none:
+        return None
+    if not isinstance(value, str) or len(value) != hashlib.sha256().digest_size * 2:
+        raise GuestError("Invalid structured configuration SHA-256")
+    try:
+        int(value, 16)
+    except ValueError as exc:
+        raise GuestError("Invalid structured configuration SHA-256") from exc
+    return value.lower()
+
+
+def structured_write(home: Path, relative: str, content_value: object, expected_value: object) -> dict:
+    payload = _decode_structured_content(content_value)
+    expected = _validate_expected_digest(expected_value, allow_none=True)
+    with _open_pinned_file(home, relative) as target:
+        current, digest, _ = _read_pinned_file(target)
+        if digest != expected:
+            if expected is None:
+                detail = "expected the structured configuration file to be absent"
+            else:
+                detail = "structured configuration changed since inspection"
+            raise GuestError(f"Structured configuration CAS conflict: {detail}")
+        if current == payload:
+            return {"ok": True, "changed": False}
+        if target.parent_fd is not None:
+            latest, latest_digest, latest_mode = _read_pinned_file(target)
+            if latest_digest != expected:
+                raise GuestError("Structured configuration CAS conflict: file changed during preparation")
+            _atomic_bytes_pinned(target, payload, mode=latest_mode if latest_mode is not None else 0o600)
+            return {"ok": True, "changed": True}
+
+    # Only a previously absent parent chain needs a second path resolution.
+    # Existing targets keep their already-pinned parent directory through the
+    # final CAS check and atomic replacement.
+    with _open_pinned_file(home, relative, create_parents=True) as target:
+        latest, latest_digest, latest_mode = _read_pinned_file(target)
+        if latest_digest != expected:
+            raise GuestError("Structured configuration CAS conflict: file changed during preparation")
+        _atomic_bytes_pinned(target, payload, mode=latest_mode if latest_mode is not None else 0o600)
+    return {"ok": True, "changed": True}
+
+
+def _validate_snapshot_id(identifier: object) -> str:
+    if not isinstance(identifier, str) or not identifier or "/" in identifier or identifier in {".", ".."}:
+        raise GuestError("Invalid operation snapshot")
+    return identifier
+
+
+def _open_snapshot_fd(home: Path, identifier: object) -> int:
+    snapshot_id = _validate_snapshot_id(identifier)
+    home_fd = _open_home_fd(home)
+    state_fd = None
+    try:
+        state_fd = _open_directory_chain(home_fd, _relative_parts(STATE_DIR), label="Operation snapshot ancestor")
+        if state_fd is None:
+            raise GuestError("Operation snapshot is missing")
+        flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+        try:
+            snapshot_fd = os.open(snapshot_id, flags, dir_fd=state_fd)
+        except FileNotFoundError as exc:
+            raise GuestError("Operation snapshot is missing") from exc
+        except OSError as exc:
+            if getattr(exc, "errno", None) == errno.ELOOP:
+                raise GuestError("Operation snapshot is a symlink") from exc
+            raise GuestError("Operation snapshot is not a directory") from exc
+        try:
+            _check_directory_fd(snapshot_fd, "Operation snapshot")
+        except Exception:
+            os.close(snapshot_fd)
+            raise
+        return snapshot_fd
+    finally:
+        if state_fd is not None:
+            os.close(state_fd)
+        os.close(home_fd)
+
+
+def _open_snapshot_source(home: Path, identifier: object, relative: str) -> tuple[dict, bytes | None, int | None]:
+    snapshot_fd = _open_snapshot_fd(home, identifier)
+    try:
+        manifest_target = _PinnedFile(os.dup(snapshot_fd), "snapshot.json")
+        try:
+            manifest_bytes, _, _ = _read_pinned_file(manifest_target, "Operation snapshot manifest")
+        finally:
+            manifest_target.close()
+        if manifest_bytes is None:
+            raise GuestError("Operation snapshot manifest is missing")
+        try:
+            manifest_data = json.loads(manifest_bytes.decode("utf-8"))
+        except (UnicodeDecodeError, ValueError, TypeError) as exc:
+            raise GuestError("Operation snapshot manifest is invalid") from exc
+        if not isinstance(manifest_data, dict) or manifest_data.get("version") != 1:
+            raise GuestError("Unsupported operation snapshot")
+        files = manifest_data.get("files")
+        if not isinstance(files, list):
+            raise GuestError("Operation snapshot manifest is invalid")
+        entry = next((item for item in files if isinstance(item, dict) and item.get("path") == relative), None)
+        if entry is None:
+            raise GuestError("Requested path is not part of the operation snapshot")
+        if entry.get("exists") is False:
+            return entry, None, None
+        if entry.get("exists") is not True or entry.get("type") != "file":
+            raise GuestError("Operation snapshot manifest is invalid")
+        expected_digest = entry.get("sha256")
+        if not isinstance(expected_digest, str):
+            raise GuestError("Operation snapshot manifest is invalid")
+        home_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+        try:
+            snapshot_home_fd = os.open("home", home_flags, dir_fd=snapshot_fd)
+        except FileNotFoundError as exc:
+            raise GuestError("Operation snapshot home is missing") from exc
+        except OSError as exc:
+            if getattr(exc, "errno", None) == errno.ELOOP:
+                raise GuestError("Operation snapshot home is a symlink") from exc
+            raise GuestError("Operation snapshot home is not a directory") from exc
+        try:
+            _check_directory_fd(snapshot_home_fd, "Operation snapshot home")
+            source = _open_pinned_from_root(snapshot_home_fd, relative)
+        finally:
+            os.close(snapshot_home_fd)
+        try:
+            payload, payload_digest, mode = _read_pinned_file(source, "Operation snapshot payload")
+        finally:
+            source.close()
+        if payload is None:
+            raise GuestError("Operation snapshot payload is missing")
+        if payload_digest != expected_digest:
+            raise GuestError("Operation snapshot payload does not match its manifest")
+        return entry, payload, mode
+    finally:
+        os.close(snapshot_fd)
+
+
+def structured_restore(home: Path, relative: str, snapshot_value: object,
+                       expected_value: object, existed_value: object) -> dict:
+    if not isinstance(existed_value, bool):
+        raise GuestError("Invalid structured configuration existence flag")
+    expected = _validate_expected_digest(expected_value, allow_none=False)
+    with _open_pinned_file(home, relative) as target:
+        if snapshot_value is None:
+            if existed_value:
+                raise GuestError("Operation snapshot is required to restore an existing file")
+            original = None
+            original_mode = None
+        else:
+            manifest_entry, original, original_mode = _open_snapshot_source(home, snapshot_value, relative)
+            if (manifest_entry.get("exists") is True) != existed_value:
+                raise GuestError("Operation snapshot presence does not match restore request")
+
+        _, current_digest, _ = _read_pinned_file(target)
+        if current_digest != expected:
+            raise GuestError("Structured configuration restore CAS conflict")
+        if not existed_value:
+            _unlink_pinned_file(target)
+            return {"ok": True, "changed": True}
+        if original is None or original_mode is None:
+            raise GuestError("Operation snapshot payload is missing")
+        _atomic_bytes_pinned(target, original, mode=original_mode)
+        return {"ok": True, "changed": True}
 
 
 def _digest_path(path: Path) -> tuple[str, int]:
@@ -362,6 +770,13 @@ def run(data: dict) -> dict:
         return {"ok": True, "registry": registry, "state_path": "~/" + STATE_FILE}
     if op == "metadata":
         return {"ok": True, "items": [path_metadata(home, relative) for relative in data.get("paths", [])]}
+    if op == "structured-read":
+        return structured_read(home, str(data["relative"]))
+    if op == "structured-write":
+        return structured_write(home, str(data["relative"]), data.get("content"), data.get("expected_sha256"))
+    if op == "structured-restore":
+        return structured_restore(home, str(data["relative"]), data.get("snapshot"),
+                                  data.get("expected_sha256"), data.get("existed"))
     if op == "snapshot":
         return {"ok": True, **create_snapshot(home, data.get("paths", []), data.get("items", []),
                                                 vmid=int(data["vmid"]), name=str(data["name"]))}

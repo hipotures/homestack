@@ -261,14 +261,17 @@ class WorkspaceSSH:
         if not self.opened or run_local(["ssh", *self.child_options, "-O", "check", self.alias], check=False).returncode:
             raise AppError("Shared workspace SSH master is unavailable; no reauthentication attempted")
 
-    def run(self, command: str, *, check: bool = True, interactive: bool = False):
+    def run(self, command: str, *, check: bool = True, interactive: bool = False, input_text: str | None = None):
         import subprocess
+        if interactive and input_text is not None:
+            raise AppError("Interactive workspace commands cannot receive scripted input")
         self.require_master()
         argv = ["ssh", *self.child_options, "-tt" if interactive else "-T", self.alias, command]
         if interactive:
             result = subprocess.run(argv, text=True)
         else:
-            result = subprocess.run(argv, text=True, stdin=subprocess.DEVNULL,
+            input_options = {"stdin": subprocess.DEVNULL} if input_text is None else {"input": input_text}
+            result = subprocess.run(argv, text=True, **input_options,
                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         if result.returncode == 255:
             raise AppError("Workspace SSH transport failed; no reauthentication attempted")

@@ -442,7 +442,9 @@ class HostStateTests(unittest.TestCase):
 
     def test_execute_plan_can_reuse_caller_owned_workspace(self):
         cfg = test_config()
-        plan = setup.build_plan(cfg, TARGET, (entry("codex"),))
+        application = entry("codex")
+        application = replace(application, params=replace(application.params, config_files=(), validation=None))
+        plan = setup.build_plan(cfg, TARGET, (application,))
         ws = Mock()
         factory = Mock(side_effect=AssertionError("must not create another SSH session"))
         with patch.object(setup, "require_tool"), \

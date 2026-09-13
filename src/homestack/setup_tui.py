@@ -4,6 +4,8 @@ from __future__ import annotations
 import re
 import threading
 from datetime import datetime, timezone
+import json
+from collections.abc import Mapping
 
 from rich.style import Style
 from rich.text import Text
@@ -19,7 +21,17 @@ from textual.worker import get_current_worker
 from .models import AppError
 from .setup import build_plan, execute_plan, inspect_workspace_state, write_paths
 from .setup_catalog import Catalog, load_catalog, save_snapshot
-from .setup_config import ApplicationParams, EnvironmentParams, FileParams, RepositoryParams, defaults
+from .setup_config import (
+    ApplicationParams,
+    ConfigFile,
+    EnvironmentParams,
+    FileParams,
+    RepositoryParams,
+    StructuredParams,
+    config_entries,
+    config_entry_id,
+    defaults,
+)
 
 
 def _mtime_text(value):
@@ -360,6 +372,11 @@ class SetupApp(App):
             "state_path": "~/.local/state/homestack/setup.json",
         }
         self.selected: set[str] = set()
+        # Catalog.entries intentionally contains only real setup entries. The
+        # generated leaves below are session-local selection entries so the
+        # catalog's numeric application indexes remain stable.
+        self.selection_entries: dict[str, object] = {}
+        self.config_nodes: dict[str, dict] = {}
         self.filter_text = ""
         self.nodes = {}
         self.busy = False
@@ -372,6 +389,7 @@ class SetupApp(App):
         self._details_line_count = 0
         self._rebuild_generation = 0
         self.ssh_status = "connected" if workspace is not None else "not connected"
+        self._refresh_selection_entries()
 
     def compose(self) -> ComposeResult:
         yield Static(self.target_label(), id="target", markup=False)
@@ -405,8 +423,10 @@ class SetupApp(App):
             parts.append(f"State: {self.workspace_state['checked_at']}")
         if self.catalog.snapshot_id:
             parts.append(f"Catalog: {self.catalog.snapshot_id[:8]}")
-        hidden = sum(entry.id in self.selected and not self.matches(entry)
-                     for entry in self.catalog.entries) if self.filter_text else 0
+        hidden = sum(
+            identity in self.selected and not self._identity_visible(identity)
+            for identity in self.selection_entries
+        ) if self.filter_text else 0
         if hidden:
             parts.append(f"Hidden selected: {hidden}")
         if progress:
@@ -443,14 +463,18 @@ class SetupApp(App):
         rendered = Text(content, overflow="fold", no_wrap=False)
         if content.startswith("Status: "):
             status = content.splitlines()[0].removeprefix("Status: ")
-            color = {"UPDATE": "red", "INSTALL": "green", "NO CHANGES": "green"}.get(status, "yellow")
+            color = {"UPDATE": "red", "INSTALL": "green", "NO CHANGES": "green",
+                     "UNAVAILABLE": "yellow"}.get(status, "yellow")
             rendered.stylize(f"bold {color}", 0, len(content.splitlines()[0]))
         self.query_one("#details", Static).update(rendered)
         self.update_details_focus()
         self.call_after_refresh(self.update_details_focus)
 
     def available(self, entry):
-        state = self.catalog.availability.get(entry.id, "unknown")
+        if isinstance(entry.params, StructuredParams):
+            state = self.catalog.availability.get(entry.params.application, "unknown")
+        else:
+            state = self.catalog.availability.get(entry.id, "unknown")
         return not (
             state in {"missing", "type mismatch", "removed"}
             or state.startswith("unavailable")
@@ -459,13 +483,115 @@ class SetupApp(App):
     def matches(self, entry):
         return self.filter_text in f"{entry.label} {entry.id} {entry.description}".casefold()
 
+    @staticmethod
+    def _config_node_id(application: str, config: ConfigFile, key: tuple[str, ...] = ()):
+        return f"{application}:{config.id}" if not key else config_entry_id(application, config.id, key)
+
+    @staticmethod
+    def _config_value(value):
+        if isinstance(value, Mapping):
+            return {str(key): SetupApp._config_value(child) for key, child in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [SetupApp._config_value(child) for child in value]
+        return value
+
+    @staticmethod
+    def _compact_value(value, limit=96):
+        rendered = json.dumps(SetupApp._config_value(value), ensure_ascii=False, separators=(",", ":"))
+        return rendered if len(rendered) <= limit else rendered[: max(0, limit - 1)] + "…"
+
+    def _refresh_selection_entries(self):
+        entries = {}
+        for entry in self.catalog.entries:
+            entries[entry.id] = entry
+            if isinstance(entry.params, ApplicationParams):
+                for leaf in config_entries(entry):
+                    entries[leaf.id] = leaf
+        self.selection_entries = entries
+
+    def _config_leaves(self, application: str, config: str, prefix=()):
+        return tuple(
+            entry for entry in self.selection_entries.values()
+            if isinstance(entry.params, StructuredParams)
+            and entry.params.application == application
+            and entry.params.config.id == config
+            and entry.params.key[:len(prefix)] == prefix
+        )
+
+    def _config_node_matches(self, identity):
+        meta = self.config_nodes.get(identity)
+        if not meta or not self.filter_text:
+            return False
+        text = f"{meta.get('label', '')} {identity} {meta.get('path', '')}".casefold()
+        return self.filter_text in text
+
+    def _identity_visible(self, identity):
+        if not self.filter_text:
+            return True
+        entry = self.selection_entries.get(identity)
+        if entry is not None and self.matches(entry):
+            return True
+        meta = self.config_nodes.get(identity)
+        if meta and self._config_node_matches(identity):
+            return True
+        return False
+
+    def _branch_visible(self, identity):
+        if not self.filter_text:
+            return True
+        if self._identity_visible(identity):
+            return True
+        entry = self.selection_entries.get(identity)
+        if entry is not None and isinstance(entry.params, ApplicationParams):
+            return any(self._identity_visible(leaf.id) for leaf in config_entries(entry))
+        meta = self.config_nodes.get(identity)
+        if meta:
+            application = self.selection_entries.get(meta["application"])
+            if application is not None and self.matches(application):
+                return True
+            return any(self._identity_visible(leaf.id) for leaf in self._config_leaves(
+                meta["application"], meta["config"].id, meta["key"]
+            ))
+        return False
+
+    def _descendant_ids(self, identity, *, visible=False):
+        if identity == "root":
+            ids = list(self.selection_entries)
+        elif identity in {group.id for group in self.cfg.setup.groups}:
+            ids = [entry.id for entry in self.selection_entries.values() if entry.group == identity]
+        elif identity in self.selection_entries:
+            entry = self.selection_entries[identity]
+            if isinstance(entry.params, ApplicationParams):
+                ids = [entry.id, *(leaf.id for leaf in config_entries(entry))]
+            elif isinstance(entry.params, StructuredParams):
+                ids = [entry.id]
+            else:
+                ids = [entry.id]
+        elif identity in self.config_nodes:
+            meta = self.config_nodes[identity]
+            ids = [leaf.id for leaf in self._config_leaves(
+                meta["application"], meta["config"].id, meta["key"]
+            )]
+        else:
+            ids = []
+        if not visible or not self.filter_text:
+            return ids
+        # A matching application/file/section makes its managed descendants
+        # visible, which keeps a filtered bulk operation useful. Otherwise
+        # only directly matching selectable leaves are included.
+        if identity in self.selection_entries:
+            entry = self.selection_entries[identity]
+            if isinstance(entry.params, ApplicationParams) and self.matches(entry):
+                return ids
+        if identity in self.config_nodes and self._config_node_matches(identity):
+            return ids
+        return [item_id for item_id in ids if self._identity_visible(item_id)]
+
     def descendants(self, identity, *, visible=False):
         return [
-            entry
-            for entry in self.catalog.entries
-            if (identity == "root" or entry.group == identity or entry.id == identity)
-            and self.available(entry)
-            and (not visible or self.matches(entry))
+            self.selection_entries[item_id]
+            for item_id in self._descendant_ids(identity, visible=visible)
+            if self.available(self.selection_entries[item_id])
         ]
 
     def checkbox(self, identity):
@@ -498,7 +624,7 @@ class SetupApp(App):
         return entry.label
 
     def entry_text(self, entry, index, interaction, suffix):
-        text = Text(f"{'[x]' if entry.id in self.selected else '[ ]'} {index}. ")
+        text = Text(f"{self.checkbox(entry.id)} {index}. ")
         text.append(self.entry_label(entry), style=self.entry_style(entry))
         if interaction:
             text.append(interaction, style="dim")
@@ -506,10 +632,67 @@ class SetupApp(App):
             text.append(suffix, style="dim")
         return text
 
+    def config_leaf_text(self, entry):
+        p = entry.params
+        value = self._compact_value(p.value)
+        text = Text(f"{self.checkbox(entry.id)} {p.key[-1]} = {value}")
+        text.stylize(self.entry_style(entry), 4, len(text))
+        live = self.state_item(entry.id)
+        if live.get("state") in {"unavailable", "parse error", "structural conflict"}:
+            text.append(" — " + str(live["state"]), style="dim")
+        elif entry.id in self.action_states:
+            text.append(" — " + self.action_states[entry.id], style="dim")
+        return text
+
+    def config_branch(self, application, config, prefix=(), parent=None, expanded=None):
+        """Add one config subtree and return its node, if visible."""
+        identity = self._config_node_id(application.id, config, prefix)
+        is_file = not prefix
+        label = config.path if is_file else prefix[-1]
+        meta = {
+            "application": application.id,
+            "config": config,
+            "key": prefix,
+            "label": label,
+            "path": config.path,
+        }
+        self.config_nodes[identity] = meta
+
+        children = list(config.values.items()) if is_file else []
+        if not is_file:
+            value = config.values
+            for key in prefix:
+                if not isinstance(value, Mapping):
+                    value = {}
+                    break
+                value = value.get(key, {})
+            children = list(value.items()) if isinstance(value, Mapping) else []
+        visible = self._branch_visible(identity)
+        if not visible:
+            return None
+        node = parent.add(Text(f"{self.checkbox(identity)} {label}"), data=identity,
+                          expand=expanded.get(identity, True))
+        self.nodes[identity] = node
+        for key, value in children:
+            child = prefix + (key,)
+            if isinstance(value, Mapping):
+                self.config_branch(application, config, child, node, expanded)
+                continue
+            leaf_id = config_entry_id(application.id, config.id, child)
+            leaf = self.selection_entries.get(leaf_id)
+            if leaf is None or (self.filter_text and not self._identity_visible(leaf_id)
+                                and not self._config_node_matches(identity)
+                                and not self._identity_visible(application.id)):
+                continue
+            self.nodes[leaf_id] = node.add_leaf(self.config_leaf_text(leaf), data=leaf_id)
+        return node
+
     def rebuild(self):
         tree = self.query_one(SetupTree)
         previous = tree.cursor_node.data if tree.cursor_node else "root"
         expanded = {key: node.is_expanded for key, node in self.nodes.items()}
+        self._refresh_selection_entries()
+        self.config_nodes = {}
         tree.clear()
         tree.root.set_label(Text(f"{self.checkbox('root')} Setup"))
         if expanded.get("root", True):
@@ -524,15 +707,16 @@ class SetupApp(App):
                 else ""
             )
             entries = [entry for entry in self.catalog.entries if entry.group == group.id]
-            count = sum(entry.id in self.selected for entry in entries)
+            branch_ids = self._descendant_ids(group.id)
+            count = sum(item_id in self.selected for item_id in branch_ids)
             node = tree.root.add(
-                Text(f"{self.checkbox(group.id)} {group.label}  {count}/{len(entries)}{extra}"),
+                Text(f"{self.checkbox(group.id)} {group.label}  {count}/{len(branch_ids)}{extra}"),
                 data=group.id,
                 expand=expanded.get(group.id, group.id != "repo"),
             )
             self.nodes[group.id] = node
             for index, entry in enumerate(entries, 1):
-                if not self.matches(entry):
+                if not self._branch_visible(entry.id):
                     continue
                 availability = self.catalog.availability.get(entry.id, "unknown")
                 interaction = (
@@ -544,9 +728,19 @@ class SetupApp(App):
                 suffix = "" if self.available(entry) else f" — {availability}"
                 if entry.id in self.action_states:
                     suffix += " — " + self.action_states[entry.id]
-                self.nodes[entry.id] = node.add_leaf(
-                    self.entry_text(entry, index, interaction, suffix), data=entry.id
-                )
+                if isinstance(entry.params, ApplicationParams) and entry.params.config_files:
+                    app_node = node.add(
+                        self.entry_text(entry, index, interaction, suffix),
+                        data=entry.id,
+                        expand=expanded.get(entry.id, True),
+                    )
+                    self.nodes[entry.id] = app_node
+                    for config in entry.params.config_files:
+                        self.config_branch(entry, config, parent=app_node, expanded=expanded)
+                else:
+                    self.nodes[entry.id] = node.add_leaf(
+                        self.entry_text(entry, index, interaction, suffix), data=entry.id
+                    )
         self._rebuild_generation += 1
         generation = self._rebuild_generation
         expected_cursor = tree.cursor_node.data if tree.cursor_node else None
@@ -594,6 +788,12 @@ class SetupApp(App):
             identity = node.parent.data
         items = self.descendants(identity, visible=bool(self.filter_text))
         ids = {entry.id for entry in items}
+        if not ids:
+            # Keep removed/unavailable selections deselectable after a catalog
+            # refresh, while still preventing a new selection of them.
+            self.selected.difference_update(self._descendant_ids(identity))
+            self.rebuild()
+            return
         if not select and ids and ids <= self.selected:
             self.selected -= ids
         else:
@@ -609,6 +809,32 @@ class SetupApp(App):
 
     def details(self, identity):
         entry = next((entry for entry in self.catalog.entries if entry.id == identity), None)
+        if entry is None:
+            entry = self.selection_entries.get(identity)
+        if entry is None and identity in self.config_nodes:
+            meta = self.config_nodes[identity]
+            config = meta["config"]
+            prefix = meta["key"]
+            leaves = self._config_leaves(meta["application"], config.id, prefix)
+            lines = [
+                "Configuration file" if not prefix else "Configuration section",
+                "",
+                meta["label"],
+                "",
+                f"Application: {meta['application']}",
+                f"Path: {config.path}",
+                f"Format: {config.format}",
+                "",
+                "Managed desired values:",
+            ]
+            if not leaves:
+                lines.append("none declared")
+            else:
+                for leaf in leaves:
+                    desired = json.dumps(self._config_value(leaf.params.value), ensure_ascii=False, indent=2)
+                    lines += [".".join(leaf.params.key), desired]
+            lines += ["", "ID: " + identity]
+            return "\n".join(lines)
         if not entry:
             group = next((group for group in self.cfg.setup.groups if group.id == identity), None)
             lines = [group.label if group else "Workspace setup"]
@@ -641,17 +867,25 @@ class SetupApp(App):
 
         p = entry.params
         live = self.state_item(entry.id)
-        status = (
-            "MODIFIED"
-            if isinstance(p, EnvironmentParams) and live.get("ready") and live.get("changed_since_apply")
-            else "NO CHANGES"
-            if isinstance(p, EnvironmentParams) and live.get("ready")
-            else "UPDATE"
-            if live.get("ready") or live.get("will_overwrite")
-            else "UNKNOWN"
-            if not live or live.get("state", "unknown").startswith("unknown")
-            else "INSTALL"
-        )
+        if isinstance(p, StructuredParams):
+            status = {
+                "matching": "NO CHANGES",
+                "missing": "INSTALL",
+                "different": "UPDATE",
+                "unavailable": "UNAVAILABLE",
+            }.get(live.get("state"), "UNKNOWN")
+        else:
+            status = (
+                "MODIFIED"
+                if isinstance(p, EnvironmentParams) and live.get("ready") and live.get("changed_since_apply")
+                else "NO CHANGES"
+                if isinstance(p, EnvironmentParams) and live.get("ready")
+                else "UPDATE"
+                if live.get("ready") or live.get("will_overwrite")
+                else "UNKNOWN"
+                if not live or live.get("state", "unknown").startswith("unknown")
+                else "INSTALL"
+            )
         lines = [
             "Status: " + status,
             "",
@@ -715,6 +949,17 @@ class SetupApp(App):
                     else "[Custom payload withheld: review command in the local configuration; it may contain secrets]"
                 )
             ]
+            if p.validation is not None:
+                lines += [
+                    "Application validator:",
+                    f"Type: {p.validation.type}",
+                    "Path: " + (".".join(p.validation.path) or "none"),
+                    "Accepted: " + (", ".join(p.validation.accepted) or "exit code 0"),
+                ]
+            if p.config_files:
+                lines += ["Structured configuration files:"]
+                for config in p.config_files:
+                    lines += [f"{config.path} ({config.format})"]
         elif isinstance(p, RepositoryParams):
             owner, name = p.repository.split("/", 1)
             lines += [
@@ -742,6 +987,16 @@ class SetupApp(App):
             ]
         else:
             lines += ["Managed paths:", *["~/" + path for path in write_paths(self.cfg, entry)]]
+
+        if isinstance(p, StructuredParams):
+            lines += [
+                "Application: " + p.application,
+                "Configuration file: " + p.config.path,
+                "Format: " + p.config.format,
+                "Key path: " + ".".join(p.key),
+                "Desired value:",
+                json.dumps(self._config_value(p.value), ensure_ascii=False, indent=2),
+            ]
 
         if entry.depends_on:
             lines += ["", "Requires explicit selection: " + ", ".join(entry.depends_on)]
@@ -783,7 +1038,10 @@ class SetupApp(App):
         if not self.selected:
             self.notify("No setup actions selected.")
             return
-        selected = tuple(entry for entry in self.catalog.entries if entry.id in self.selected)
+        selected = tuple(
+            entry for entry in self.selection_entries.values()
+            if entry.id in self.selected
+        )
         if any(not self.available(entry) for entry in selected):
             self.notify(
                 "A selected entry was removed or is unavailable. Deselect it before applying.",
@@ -800,6 +1058,7 @@ class SetupApp(App):
                 self.target,
                 selected,
                 catalog_id=catalog.snapshot_id,
+                include_configs=False,
             )
         except AppError as exc:
             if self.is_running and not get_current_worker().is_cancelled:
@@ -809,7 +1068,12 @@ class SetupApp(App):
             self.call_from_thread(self.show_review, plan, catalog)
 
     def show_review(self, plan, catalog):
-        if self.busy or self.catalog is not catalog or {entry.id for entry in plan.entries} != self.selected:
+        plan_ids = {entry.id for entry in plan.entries}
+        if (
+            self.busy
+            or self.catalog is not catalog
+            or plan_ids != self.selected
+        ):
             self.notify("Selection changed while preparing the plan. Review the current selection again.")
             return
         self.pending_plan = plan
@@ -820,24 +1084,38 @@ class SetupApp(App):
         ]
         for entry in self.pending_plan.entries:
             live = self.state_item(entry.id)
-            action = (
-                "Back up modified shell files; overwrite configuration"
-                if isinstance(entry.params, EnvironmentParams) and live.get("changed_since_apply")
-                else "Verify shell configuration; write only if changes are needed"
-                if isinstance(entry.params, EnvironmentParams)
-                else "Update / reapply existing state"
-                if live.get("ready")
-                else "Overwrite existing configuration"
-                if live.get("will_overwrite")
-                else "Install / configure"
-            )
+            if isinstance(entry.params, StructuredParams):
+                action = {
+                    "matching": "Verify declared value; no file write is needed",
+                    "missing": "Add declared value",
+                    "different": "Patch declared value",
+                    "unavailable": "Blocked: configuration path is unavailable",
+                }.get(live.get("state"), "Inspect and patch declared value")
+            else:
+                action = (
+                    "Back up modified shell files; overwrite configuration"
+                    if isinstance(entry.params, EnvironmentParams) and live.get("changed_since_apply")
+                    else "Verify shell configuration; write only if changes are needed"
+                    if isinstance(entry.params, EnvironmentParams)
+                    else "Update / reapply existing state"
+                    if live.get("ready")
+                    else "Overwrite existing configuration"
+                    if live.get("will_overwrite")
+                    else "Install / configure"
+                )
             lines += [
                 f"{entry.group}: {entry.label} ({entry.id})"
-                + (" [hidden by filter]" if not self.matches(entry) else ""),
+                + (" [hidden by filter]" if self.filter_text and not self._identity_visible(entry.id) else ""),
                 entry.description,
                 "Action: " + action,
                 "Requires selection: " + (", ".join(entry.depends_on) or "none"),
             ]
+            if isinstance(entry.params, StructuredParams):
+                lines += [
+                    "Desired key: " + ".".join(entry.params.key),
+                    "Desired value:",
+                    json.dumps(self._config_value(entry.params.value), ensure_ascii=False, indent=2),
+                ]
             if live.get("changed_since_apply"):
                 lines += ["Changed since last apply: " + ", ".join("~/" + path for path in live["changed_since_apply"])]
             if (
@@ -1038,6 +1316,7 @@ class SetupApp(App):
         self.catalog = catalog
         if state is not None:
             self.workspace_state = state
+        self._refresh_selection_entries()
         self.rebuild()
         self.call_after_refresh(self.save_displayed_catalog, catalog)
         if removed:

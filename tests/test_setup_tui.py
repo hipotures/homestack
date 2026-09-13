@@ -36,6 +36,7 @@ class TestApp(SetupApp):
             self.target,
             selected,
             catalog_id=catalog.snapshot_id,
+            include_configs=False,
         ), catalog)
 
 
@@ -67,14 +68,14 @@ class SetupTUITests(unittest.IsolatedAsyncioTestCase):
             await pilot.pause()
             tree.select_node(app.nodes['codex'])
             await pilot.press('space')
-            self.assertEqual(app.selected, {'bash', 'codex'})
+            self.assertEqual(app.selected, {'bash', *app._descendant_ids('codex')})
             self.assertIn('Hidden selected: 1', str(app.query_one('#target', Static).render()))
             app.review()
             await pilot.pause()
             self.assertIsInstance(app.screen, Review)
             self.assertIn('[hidden by filter]', app.screen.text)
             await pilot.press('escape')
-            self.assertEqual(app.selected, {'bash', 'codex'})
+            self.assertEqual(app.selected, {'bash', *app._descendant_ids('codex')})
             self.assertFalse(app.busy)
             app.query_one(Input).value = ''
             await pilot.pause()
@@ -424,7 +425,7 @@ class SetupActionTests(unittest.IsolatedAsyncioTestCase):
         app = TestApp(test_config(), TARGET)
         with patch.object(app, 'execute') as execute:
             async with app.run_test(size=(120, 40)) as pilot:
-                app.selected = {'codex'}
+                app.selected = set(app._descendant_ids('codex'))
                 app.update_selection()
                 await pilot.click('#review')
                 await pilot.pause()
@@ -618,7 +619,8 @@ class SetupActionTests(unittest.IsolatedAsyncioTestCase):
             app.update_review_action()
             self.assertFalse(app.query_one('#review', CompactAction).pending)
             app.finished({'ok': True, 'results': [
-                {'id': 'codex', 'label': 'Codex', 'status': 'succeeded', 'detail': 'done'}
+                {'id': identity, 'label': identity, 'status': 'succeeded', 'detail': 'done'}
+                for identity in app._descendant_ids('codex')
             ]}, state)
             await pilot.pause()
             self.assertFalse(app.selected)

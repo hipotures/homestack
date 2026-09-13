@@ -10,11 +10,21 @@ from pathlib import Path
 import re
 import tempfile
 import uuid
+from collections.abc import Mapping
 
 from .config import Config, validate_repository_spec
 from .models import AppError
 from .repo import _github_json
-from .setup_config import Entry, FileParams, EnvironmentParams, ApplicationParams, RepositoryParams
+from .setup_config import (
+    ApplicationParams,
+    Entry,
+    EnvironmentParams,
+    FileParams,
+    RepositoryParams,
+    StructuredParams,
+    config_entries,
+    config_entry_key,
+)
 
 ALIASES = {"f": "files", "e": "env", "a": "app", "r": "repo"}
 
@@ -33,16 +43,49 @@ class Catalog:
         for group in cfg.setup.groups:
             for i, entry in enumerate((e for e in self.entries if e.group == group.id), 1):
                 location = getattr(entry.params, "path", getattr(entry.params, "repository", ""))
+                config_files = []
                 if isinstance(entry.params, ApplicationParams):
                     location = ", ".join(entry.params.bin_dirs)
+                    for config in entry.params.config_files:
+                        leaves = [
+                            leaf
+                            for leaf in config_entries(entry)
+                            if leaf.params.config.id == config.id
+                        ]
+                        config_files.append({
+                            "id": config.id,
+                            "path": config.path,
+                            "format": config.format,
+                            "values": _catalog_value(config.values),
+                            "selectors": [leaf.id for leaf in leaves],
+                        })
                 elif isinstance(entry.params, EnvironmentParams):
                     from .setup import write_paths
                     location = ", ".join("~/" + p for p in write_paths(cfg, entry))
-                rows.append({"index": i, "id": entry.id, "group": group.id, "label": entry.label,
-                             "path_or_repository": location,
-                             "availability": self.availability.get(entry.id, "unknown"), "guest_state": "unknown",
-                             **(self.timestamps or {}).get(entry.id, {})})
+                row = {"index": i, "id": entry.id, "group": group.id, "label": entry.label,
+                       "path_or_repository": location,
+                       "availability": self.availability.get(entry.id, "unknown"), "guest_state": "unknown",
+                       "selector": f"{group.id}={entry.id}",
+                       **(self.timestamps or {}).get(entry.id, {})}
+                if isinstance(entry.params, ApplicationParams):
+                    row["config_files"] = config_files
+                rows.append(row)
         return rows
+
+
+def _catalog_value(value):
+    """Return declared values in a stable JSON-friendly shape.
+
+    Config definitions are allowed to use tuples internally, while catalog
+    output is consumed by both the JSON CLI and callers that serialize rows.
+    Mapping keys remain literal keys; in particular, dotted keys are never
+    interpreted as path syntax here.
+    """
+    if isinstance(value, Mapping):
+        return {key: _catalog_value(child) for key, child in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_catalog_value(child) for child in value]
+    return value
 
 
 def github_identity(cfg: Config) -> dict:
@@ -234,6 +277,36 @@ def select_entries(cfg: Config, tokens: list[str], *, catalog_id: str | None = N
                         value = existing.id
                     else:
                         entries[repository] = Entry(repository, "repo", "repository", repository, "Explicit repository checkout.", RepositoryParams(repository))
+                # Structured leaves are generated from an application
+                # definition and are deliberately absent from Catalog.entries
+                # so numeric application indexes remain stable.  Accept their
+                # stable IDs in the same app selector namespace for granular
+                # non-interactive selection.
+                if value not in entries and ":" in value:
+                    try:
+                        application_id, config_id, key = config_entry_key(value)
+                    except AppError:
+                        application_id = config_id = ""
+                        key = ()
+                    application = entries.get(application_id)
+                    if (
+                        application is not None
+                        and isinstance(application.params, ApplicationParams)
+                        and application.group == group
+                    ):
+                        leaf = next(
+                            (
+                                item
+                                for item in config_entries(application)
+                                if isinstance(item.params, StructuredParams)
+                                and item.params.config.id == config_id
+                                and item.params.key == key
+                            ),
+                            None,
+                        )
+                        if leaf is not None:
+                            entries[leaf.id] = leaf
+                            value = leaf.id
                 ids = [value]
             for item_id in ids:
                 entry = entries.get(item_id)

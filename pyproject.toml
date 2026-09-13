@@ -12,6 +12,8 @@ license = { file = "LICENSE" }
 dependencies = [
     "rich>=13.9.4",
     "textual>=8.0,<9",
+    "tomlkit>=0.13.3",
+    "ruamel.yaml>=0.18.15",
 ]
 
 [project.scripts]

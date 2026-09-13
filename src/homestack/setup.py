@@ -19,10 +19,10 @@ from .guest import derive_ip
 from .lifecycle import resolve_workspace_target
 from .models import AppError
 from . import repo
-from .setup_config import ApplicationParams, Entry, FileParams, EnvironmentParams, RepositoryParams
+from .setup_config import ApplicationParams, Entry, FileParams, EnvironmentParams, RepositoryParams, StructuredParams, config_entries
 from .workspace_ssh import WorkspaceSSH
 
-ORDER = {"environment": 0, "file": 1, "application": 2, "repository": 3}
+ORDER = {"environment": 0, "file": 1, "application": 2, "structured": 3, "repository": 4}
 
 
 @dataclass(frozen=True)
@@ -46,7 +46,13 @@ class Plan:
                 extra = {"interpreter": p.interpreter, "interaction": p.interaction,
                          "prerequisites": p.prerequisites, "bin_dirs": p.bin_dirs,
                          "backup_paths": p.backup_paths,
-                         "installation_check": "configured" if p.check else "unknown"}
+                         "installation_check": "configured" if p.check else "unknown",
+                         "validation": ({"type": p.validation.type, "path": list(p.validation.path),
+                                         "accepted": list(p.validation.accepted)} if p.validation else None)}
+            elif isinstance(p, StructuredParams):
+                extra = {"application": p.application, "config_file": p.config.id,
+                         "destination": p.config.path, "format": p.config.format,
+                         "key": list(p.key), "desired": p.value}
             return {"id": entry.id, "group": entry.group, "label": entry.label,
                     "description": entry.description, "handler": entry.handler,
                     "depends_on": entry.depends_on, "remote_state": "unknown", **extra}
@@ -136,6 +142,7 @@ def changed_paths_since_apply(record: dict, current_metadata: dict[str, dict]) -
 
 def inspect_workspace_state(ws, cfg: Config, target: dict, entries: tuple[Entry, ...]) -> dict:
     """Read current setup state without modifying the workspace."""
+    entries = expand_config_entries(entries)
     require_tool(ws, cfg, "python3")
     guest(ws, cfg, "identity", user=cfg.user_name, uid=cfg.user_uid, gid=cfg.user_gid,
           name=target["name"], vmid=target["vmid"])
@@ -159,6 +166,7 @@ def inspect_workspace_state(ws, cfg: Config, target: dict, entries: tuple[Entry,
         repo_states = guest(ws, cfg, "repositories", checkout_root=checkout_root, repositories=repositories).get("repositories", {})
 
     items = {}
+    documents = {}
     for entry in entries:
         record = registered.get(entry.id, {}) if isinstance(registered, dict) else {}
         if not isinstance(record, dict):
@@ -181,8 +189,26 @@ def inspect_workspace_state(ws, cfg: Config, target: dict, entries: tuple[Entry,
             "detail": "",
         }
         p = entry.params
+        if isinstance(p, StructuredParams):
+            item.update(key=list(p.key), desired=p.value, config_file=p.config.path,
+                        application=p.application)
         try:
-            if isinstance(p, FileParams):
+            if isinstance(p, StructuredParams):
+                path = p.config.path
+                if path not in documents:
+                    siblings = tuple(e for e in entries if isinstance(e.params, StructuredParams) and e.params.config.path == path)
+                    try:
+                        documents[path] = inspect_config_file(ws, cfg, siblings, inspection=True)
+                    except AppError as exc:
+                        documents[path] = exc
+                document = documents[path]
+                if isinstance(document, AppError):
+                    raise document
+                leaf_state = document["leaves"][entry.id]
+                item.update(state=leaf_state, ready=leaf_state == "matching",
+                            exists=document["sha256"] is not None,
+                            will_overwrite=document["sha256"] is not None and leaf_state != "matching")
+            elif isinstance(p, FileParams):
                 source = source_item(cfg, entry)
                 local = local_metadata(Path(source["local_path"]))
                 remote = remote_metadata.get(source["relative"], {"path": source["relative"], "exists": False})
@@ -256,6 +282,8 @@ def inspect_workspace_state(ws, cfg: Config, target: dict, entries: tuple[Entry,
 
 def backup_paths_for_entry(cfg: Config, entry: Entry, state: dict) -> tuple[str, ...]:
     p = entry.params
+    if isinstance(p, StructuredParams):
+        return write_paths(cfg, entry) if state.get("changed") else ()
     if isinstance(p, FileParams):
         return write_paths(cfg, entry) if state.get("changed", True) else ()
     if isinstance(p, EnvironmentParams):
@@ -322,6 +350,8 @@ def source_item(cfg: Config, entry: Entry) -> dict:
 
 def write_paths(cfg: Config, entry: Entry) -> tuple[str, ...]:
     p = entry.params
+    if isinstance(p, StructuredParams):
+        return (p.config.path[2:],)
     if isinstance(p, FileParams):
         return (p.path[2:].rstrip("/"),)
     if isinstance(p, EnvironmentParams):
@@ -332,7 +362,27 @@ def write_paths(cfg: Config, entry: Entry) -> tuple[str, ...]:
     return ()
 
 
-def build_plan(cfg: Config, target: dict, entries: tuple[Entry, ...], *, catalog_id: str | None = None, unattended: bool = False) -> Plan:
+def expand_config_entries(entries: tuple[Entry, ...]) -> tuple[Entry, ...]:
+    expanded = {}
+    for entry in entries:
+        expanded[entry.id] = entry
+        if isinstance(entry.params, ApplicationParams):
+            expanded.update((leaf.id, leaf) for leaf in config_entries(entry))
+    return tuple(expanded.values())
+
+
+def application_units(entries):
+    """Keep each application's installer and patches together in plan order."""
+    units = {}
+    for entry in entries:
+        owner = entry.params.application if isinstance(entry.params, StructuredParams) else entry.id
+        units.setdefault(owner, []).append(entry)
+    return units
+
+
+def build_plan(cfg: Config, target: dict, entries: tuple[Entry, ...], *, catalog_id: str | None = None, unattended: bool = False, include_configs: bool = True) -> Plan:
+    if include_configs:
+        entries = expand_config_entries(entries)
     if not entries or not target.get("vmid") or not target.get("name"):
         raise AppError("An explicit resolved workspace and at least one action are required")
     if cfg.user_uid <= 0 or cfg.user_gid <= 0 or cfg.user_name == "root":
@@ -348,6 +398,8 @@ def build_plan(cfg: Config, target: dict, entries: tuple[Entry, ...], *, catalog
         if entry.id in visiting:
             raise AppError("Selected setup dependencies form a cycle")
         visiting.add(entry.id)
+        if isinstance(entry.params, StructuredParams) and entry.params.application in selected:
+            visit(selected[entry.params.application])
         for dependency in entry.depends_on:
             if dependency not in selected:
                 raise AppError(f"{entry.id} requires explicit selection of {dependency}; no actions were added")
@@ -356,6 +408,7 @@ def build_plan(cfg: Config, target: dict, entries: tuple[Entry, ...], *, catalog
         ordered.append(entry)
     for entry in sorted(entries, key=lambda e: ORDER[e.handler]):
         visit(entry)
+    ordered = [entry for unit in application_units(ordered).values() for entry in unit]
     writes = []
     for entry in ordered:
         p = entry.params
@@ -366,8 +419,12 @@ def build_plan(cfg: Config, target: dict, entries: tuple[Entry, ...], *, catalog
         for path in write_paths(cfg, entry):
             for previous, other in writes:
                 if path == previous or path.startswith(previous + "/") or previous.startswith(path + "/"):
-                    raise AppError(f"Overlapping selected writes: {other} and {entry.id} at ~/{path}")
-            writes.append((path, entry.id))
+                    if (path == previous and isinstance(p, StructuredParams)
+                            and isinstance(other.params, StructuredParams)
+                            and p.application == other.params.application and p.config == other.params.config):
+                        continue
+                    raise AppError(f"Overlapping selected writes: {other.id} and {entry.id} at ~/{path}")
+            writes.append((path, entry))
     return Plan(target, tuple(ordered), catalog_id, unattended)
 
 
@@ -390,8 +447,10 @@ def command_environment(cfg: Config, command: str, *, interpreter: str = "bash",
 def guest(ws, cfg: Config, operation: str, **values) -> dict:
     source = Path(__file__).with_name("setup_guest.py").read_text()
     payload = json.dumps({"home": f"/home/{cfg.user_name}", "operation": operation, **values})
-    code = "import base64; exec(base64.b64decode(" + repr(base64.b64encode(source.encode()).decode()) + ")); main(" + repr(payload) + ")"
-    result = ws.run(command_environment(cfg, "python3 -c " + shlex.quote(code), interpreter="sh", pipefail=False))
+    # Stream the program and payload so remote configuration never enters
+    # process arguments and document size is not limited by ARG_MAX.
+    code = source + "\nmain(" + repr(payload) + ")\n"
+    result = ws.run(command_environment(cfg, "python3 -", interpreter="sh", pipefail=False), input_text=code)
     try:
         data = json.loads(result.stdout)
     except (ValueError, TypeError) as exc:
@@ -415,8 +474,59 @@ def all_bins(cfg: Config) -> list[str]:
     return list(dict.fromkeys(["~/.local/bin", *(p for e in cfg.setup.items if isinstance(e.params, ApplicationParams) for p in e.params.bin_dirs)]))
 
 
+def inspect_config_file(ws, cfg: Config, entries: tuple[Entry, ...], *, inspection: bool = False) -> dict:
+    """Keep remote bytes private to the operation, never in public plans or state."""
+    from .setup_documents import inspect_document, merge_document
+    config = entries[0].params.config
+    remote = guest(ws, cfg, "structured-read", relative=config.path[2:])
+    try:
+        original = base64.b64decode(remote["content"], validate=True).decode("utf-8") if remote.get("content") is not None else None
+    except (ValueError, UnicodeError) as exc:
+        raise AppError(f"Configuration cannot be decoded: {config.path}") from exc
+    leaves = [(e.params.key, e.params.value) for e in entries]
+    if inspection:
+        candidate, statuses = None, inspect_document(config.format, original, leaves)
+    else:
+        candidate, statuses = merge_document(config.format, original, leaves)
+    return {"candidate": candidate, "sha256": remote.get("sha256"),
+            "changed": any(value != "matching" for value in statuses),
+            "leaves": dict(zip((e.id for e in entries), statuses))}
+
+
+def validate_application_config(ws, cfg: Config, application: Entry) -> None:
+    validator = application.params.validation
+    if validator is None:
+        return
+    p = application.params
+    label = ".".join(validator.path[:-1]) or ".".join(validator.path)
+    prefix = f"{application.label} configuration validation failed: "
+    try:
+        result = ws.run(command_environment(cfg, validator.command, interpreter=p.interpreter, bins=p.bin_dirs), check=False)
+        if validator.type == "exit-code":
+            if result.returncode:
+                raise AppError(prefix + f"validator exited with status {result.returncode}")
+            return
+        if result.returncode in {126, 127, 255}:
+            raise AppError(prefix + "validator unavailable")
+        value = json.loads(result.stdout)
+        for key in validator.path:
+            if not isinstance(value, dict) or key not in value:
+                raise AppError(prefix + "missing status path")
+            value = value[key]
+    except (ValueError, TypeError):
+        raise AppError(prefix + "malformed JSON") from None
+    except OSError:
+        raise AppError(prefix + "validator unavailable") from None
+    if not isinstance(value, str) or value not in validator.accepted:
+        # Never echo arbitrary remote strings: a report can contain credentials.
+        status = value if isinstance(value, str) and value in {"ok", "warning", "fail"} else "unaccepted status"
+        raise AppError(prefix + f"{label}={status}")
+
+
 def preflight_entry(ws, cfg: Config, plan: Plan, entry: Entry) -> dict:
     p = entry.params
+    if isinstance(p, StructuredParams):
+        return inspect_config_file(ws, cfg, (entry,))
     if isinstance(p, FileParams):
         if shutil.which("rsync") is None:
             raise AppError("Required desktop rsync was not found")
@@ -440,7 +550,8 @@ def preflight_entry(ws, cfg: Config, plan: Plan, entry: Entry) -> dict:
             installed = result.returncode == 0
         guest(ws, cfg, "paths", paths=[{"relative": path[2:], "directory": True} for path in p.bin_dirs] +
               [{"relative": path[2:].rsplit("/", 1)[0], "directory": True} for path in p.requires_absent if "/" in path[2:]] +
-              [{"relative": path[2:].rstrip("/"), "directory": path.endswith("/")} for path in p.backup_paths])
+              [{"relative": path[2:].rstrip("/"), "directory": path.endswith("/")} for path in p.backup_paths] +
+              [{"relative": config.path[2:]} for config in p.config_files])
         if not installed:
             for path in p.requires_absent:
                 result = ws.run(command_environment(cfg, "test ! -e " + shlex.quote(f"/home/{cfg.user_name}/" + path[2:]) + " && test ! -L " + shlex.quote(f"/home/{cfg.user_name}/" + path[2:]), interpreter="sh", pipefail=False), check=False)
@@ -555,7 +666,9 @@ def execute_plan(
     preflight_complete = False
     snapshot = {"created": False, "id": None, "path": None}
     try:
-        plan = build_plan(cfg, plan.target, plan.entries, catalog_id=plan.catalog_id, unattended=plan.unattended)
+        plan = build_plan(cfg, plan.target, plan.entries, catalog_id=plan.catalog_id, unattended=plan.unattended, include_configs=False)
+        by_id = {result["id"]: result for result in results}
+        results = [by_id[entry.id] for entry in plan.entries]
         with ExitStack() as stack:
             activity(None, "Verify workspace connection")
             ws = workspace or terminal(lambda: stack.enter_context(factory(cfg, plan.target)))
@@ -564,11 +677,27 @@ def execute_plan(
                   name=plan.target["name"], vmid=plan.target["vmid"])
             activity(None, "Workspace identity verified")
             states = {}
+            config_groups = {}
+            for entry in plan.entries:
+                if isinstance(entry.params, StructuredParams):
+                    config_groups.setdefault(entry.params.config.path, []).append(entry)
+            documents = {}
             for entry, current in zip(plan.entries, results):
                 activity(entry.id, f"Preflight {entry.label}")
                 progress(entry.id, "checking")
                 try:
-                    states[entry.id] = preflight_entry(ws, cfg, plan, entry)
+                    if isinstance(entry.params, StructuredParams):
+                        path = entry.params.config.path
+                        if path not in documents:
+                            try:
+                                documents[path] = inspect_config_file(ws, cfg, tuple(config_groups[path]))
+                            except AppError as exc:
+                                documents[path] = exc
+                        if isinstance(documents[path], AppError):
+                            raise documents[path]
+                        states[entry.id] = documents[path]
+                    else:
+                        states[entry.id] = preflight_entry(ws, cfg, plan, entry)
                     progress(entry.id, "preflight-ready")
                 except AppError as exc:
                     current.update(status="blocked", detail=str(exc))
@@ -579,8 +708,11 @@ def execute_plan(
             current = None
 
             backup_paths = []
+            selected_applications = {e.id for e in plan.entries if isinstance(e.params, ApplicationParams)}
             for entry in plan.entries:
                 backup_paths.extend(backup_paths_for_entry(cfg, entry, states[entry.id]))
+                if isinstance(entry.params, StructuredParams) and entry.params.application in selected_applications:
+                    backup_paths.extend(write_paths(cfg, entry))
             if backup_paths:
                 activity(None, "Create operation snapshot")
                 snapshot = guest(ws, cfg, "snapshot", paths=list(dict.fromkeys(backup_paths)),
@@ -589,23 +721,65 @@ def execute_plan(
                 activity(None, "Operation snapshot created: " + str(snapshot.get("path") or "unknown"))
             preflight_complete = True
 
-            for entry, current in zip(plan.entries, results):
-                activity(entry.id, f"Apply {entry.label}")
-                progress(entry.id, "running")
-                status, detail = apply_entry(
-                    ws,
-                    cfg,
-                    plan,
-                    entry,
-                    states[entry.id],
-                    terminal,
-                    progress=progress,
-                    activity=activity,
-                )
-                current.update(status=status, detail=detail)
-                activity(entry.id, "Record setup state")
-                record_entry_state(ws, cfg, plan, entry, states[entry.id], snapshot_id=snapshot.get("id"))
-                progress(entry.id, status)
+            applications = {e.id: e for e in cfg.setup.items if isinstance(e.params, ApplicationParams)}
+            applications.update({e.id: e for e in plan.entries if isinstance(e.params, ApplicationParams)})
+            result_by_id = {result["id"]: result for result in results}
+            for owner, entries in application_units(plan.entries).items():
+                applied_configs = {}
+                completed_files = {}
+                try:
+                    for entry in entries:
+                        current = result_by_id[entry.id]
+                        activity(entry.id, f"Apply {entry.label}")
+                        progress(entry.id, "running")
+                        if isinstance(entry.params, StructuredParams):
+                            path = entry.params.config.path
+                            if path not in completed_files:
+                                # Installers may edit the document; merge against its final content.
+                                document = inspect_config_file(ws, cfg, tuple(config_groups[path]))
+                                if owner not in selected_applications and document["sha256"] != documents[path]["sha256"]:
+                                    raise AppError(f"Configuration changed since preflight: {path}; rerun setup")
+                                if document["changed"]:
+                                    candidate = document["candidate"].encode()
+                                    guest(ws, cfg, "structured-write", relative=path[2:],
+                                          content=base64.b64encode(candidate).decode(), expected_sha256=document["sha256"])
+                                    applied_configs[path] = hashlib.sha256(candidate).hexdigest()
+                                completed_files[path] = document
+                            leaf = completed_files[path]["leaves"][entry.id]
+                            status = "already-ready" if leaf == "matching" else "succeeded"
+                            detail = "Managed value already matches" if leaf == "matching" else "Managed value patched"
+                        else:
+                            status, detail = apply_entry(ws, cfg, plan, entry, states[entry.id], terminal,
+                                                         progress=progress, activity=activity)
+                        current.update(status=status, detail=detail)
+
+                    application = applications.get(owner)
+                    if application is not None and application.params.validation is not None and (owner in selected_applications or applied_configs):
+                        current = result_by_id[entries[0].id]
+                        activity(owner, "Validate final application configuration")
+                        validate_application_config(ws, cfg, application)
+                except (AppError, KeyboardInterrupt, OSError):
+                    restore_errors = []
+                    for path, digest in reversed(tuple(applied_configs.items())):
+                        try:
+                            guest(ws, cfg, "structured-restore", relative=path[2:], snapshot=snapshot.get("id"),
+                                  expected_sha256=digest, existed=documents[path]["sha256"] is not None)
+                            activity(None, f"Restored configuration {path}")
+                        except (AppError, OSError):
+                            restore_errors.append(path)
+                    for entry in entries:
+                        result = result_by_id[entry.id]
+                        if result["status"] in {"succeeded", "already-ready"}:
+                            result.update(status="failed", detail="Final validation or execution failed; setup state was not recorded")
+                    if restore_errors:
+                        raise AppError("Configuration restoration failed; inspect the operation snapshot: " + ", ".join(restore_errors)) from None
+                    raise
+
+                for entry in entries:
+                    current = result_by_id[entry.id]
+                    activity(entry.id, "Record setup state")
+                    record_entry_state(ws, cfg, plan, entry, states[entry.id], snapshot_id=snapshot.get("id"))
+                    progress(entry.id, current["status"])
             activity(None, "Setup execution complete")
     except (AppError, KeyboardInterrupt, OSError) as exc:
         status = "failed" if preflight_complete else "blocked"
