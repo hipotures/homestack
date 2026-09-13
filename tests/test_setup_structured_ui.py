@@ -73,6 +73,157 @@ class StructuredCatalogTests(unittest.TestCase):
 
 
 class StructuredTUITests(unittest.IsolatedAsyncioTestCase):
+    @staticmethod
+    def default_leaf_id(key):
+        return definitions.config_entry_id("codex", "config", key)
+
+    async def test_hierarchical_counters_use_visible_semantic_levels(self):
+        app = SetupApp(test_config(), TARGET)
+        async with app.run_test(size=(120, 40)):
+            self.assertIn("Applications  0/3", app.nodes["app"].label.plain)
+            self.assertIn("0/8", app.nodes["codex"].label.plain)
+            self.assertNotRegex(app.nodes["opencode"].label.plain, r"\d+/\d+")
+            self.assertNotRegex(app.nodes["hermes"].label.plain, r"\d+/\d+")
+            self.assertFalse(app.nodes["codex"].is_expanded)
+            self.assertFalse(app.nodes["codex:config"].is_expanded)
+
+            app.toggle_node(app.nodes[self.default_leaf_id(("approvals_reviewer",))])
+            self.assertIn("Applications  1/3", app.nodes["app"].label.plain)
+            self.assertIn("Codex  1/8", app.nodes["codex"].label.plain)
+
+            app.toggle_node(app.nodes["opencode"])
+            self.assertIn("Applications  2/3", app.nodes["app"].label.plain)
+
+    async def test_config_file_and_section_counters_count_only_leaf_descendants(self):
+        app = SetupApp(test_config(), TARGET)
+        async with app.run_test(size=(120, 40)):
+            app.toggle_node(app.nodes["codex"])
+            codex_leaves = definitions.config_entries(
+                next(entry for entry in test_config().setup.items if entry.id == "codex")
+            )
+            self.assertEqual(
+                app.selected,
+                {"codex", *(leaf.id for leaf in codex_leaves)},
+            )
+            file_id = "codex:config"
+            tui_id = self.default_leaf_id(("tui",))
+            colors_id = self.default_leaf_id(("tui", "status_line_use_colors"))
+            features_id = self.default_leaf_id(("features",))
+            context_id = self.default_leaf_id(("features", "context_management"))
+
+            self.assertIn("Codex  8/8", app.nodes["codex"].label.plain)
+            self.assertIn("~/.codex/config.toml  8/8", app.nodes[file_id].label.plain)
+            self.assertIn("tui  2/2", app.nodes[tui_id].label.plain)
+            self.assertIn("features  3/3", app.nodes[features_id].label.plain)
+            self.assertIn("context_management  1/1", app.nodes[context_id].label.plain)
+
+            app.toggle_node(app.nodes[colors_id])
+            self.assertEqual(app.checkbox("codex"), "[-]")
+            self.assertIn("Codex  7/8", app.nodes["codex"].label.plain)
+            self.assertIn("~/.codex/config.toml  7/8", app.nodes[file_id].label.plain)
+            self.assertIn("tui  1/2", app.nodes[tui_id].label.plain)
+            self.assertIn("features  3/3", app.nodes[features_id].label.plain)
+            self.assertIn("context_management  1/1", app.nodes[context_id].label.plain)
+
+    async def test_section_bulk_selection_only_selects_managed_leaf_descendants(self):
+        app = SetupApp(test_config(), TARGET)
+        async with app.run_test(size=(120, 40)):
+            section_id = definitions.config_entry_id("codex", "config", ("tui",))
+            tui_leaves = {
+                leaf.id
+                for leaf in definitions.config_entries(
+                    next(entry for entry in test_config().setup.items if entry.id == "codex")
+                )
+                if leaf.params.key[:1] == ("tui",)
+            }
+
+            app.toggle_node(app.nodes[section_id])
+            self.assertEqual(app.selected, tui_leaves)
+            self.assertEqual(app.checkbox(section_id), "[x]")
+            self.assertIn("tui  2/2", app.nodes[section_id].label.plain)
+
+            app.toggle_node(app.nodes[section_id])
+            self.assertFalse(app.selected)
+            self.assertEqual(app.checkbox(section_id), "[ ]")
+
+    async def test_installer_only_application_is_partial_and_group_counts_applications(self):
+        app = SetupApp(test_config(), TARGET)
+        async with app.run_test(size=(120, 40)):
+            app.toggle_node(app.nodes["codex"])
+            app.toggle_node(app.nodes["codex:config"])
+
+            self.assertEqual(app.selected, {"codex"})
+            self.assertEqual(app.checkbox("codex"), "[-]")
+            self.assertIn("Codex  0/8", app.nodes["codex"].label.plain)
+            self.assertIn("Applications  1/3", app.nodes["app"].label.plain)
+
+    async def test_application_group_tri_state_tracks_involved_visible_applications(self):
+        app = SetupApp(test_config(), TARGET)
+        async with app.run_test(size=(120, 40)):
+            self.assertEqual(app.checkbox("app"), "[ ]")
+
+            app.toggle_node(app.nodes[self.default_leaf_id(("approvals_reviewer",))])
+            self.assertEqual(app.checkbox("app"), "[-]")
+            self.assertIn("Applications  1/3", app.nodes["app"].label.plain)
+
+            app.toggle_node(app.nodes["codex"])
+            app.toggle_node(app.nodes["opencode"])
+            self.assertEqual(app.checkbox("app"), "[-]")
+            self.assertIn("Applications  2/3", app.nodes["app"].label.plain)
+
+            app.toggle_node(app.nodes["hermes"])
+            self.assertEqual(app.checkbox("app"), "[x]")
+            self.assertIn("Applications  3/3", app.nodes["app"].label.plain)
+
+            app.toggle_node(app.nodes[self.default_leaf_id(("approvals_reviewer",))])
+            self.assertEqual(app.checkbox("app"), "[-]")
+            self.assertIn("Applications  3/3", app.nodes["app"].label.plain)
+
+    async def test_application_and_config_details_distinguish_state_and_counts(self):
+        cfg = test_config()
+        leaves = definitions.config_entries(next(entry for entry in cfg.setup.items if entry.id == "codex"))
+        states = {leaf.id: {"state": "matching"} for leaf in leaves}
+        states[leaves[0].id] = {"state": "different"}
+        app = SetupApp(
+            cfg,
+            TARGET,
+            state={"items": {"codex": {"state": "installed"}, **states}},
+        )
+        async with app.run_test(size=(120, 40)):
+            app.selected = {leaf.id for leaf in leaves[1:]}
+            application_details = app.details("codex")
+            self.assertIn("Application state: installed", application_details)
+            self.assertIn("Install/update: not selected", application_details)
+            self.assertIn("Configuration: selected 7/8 managed options", application_details)
+
+            file_details = app.details("codex:config")
+            self.assertIn("Configuration: selected 7/8 managed options", file_details)
+            self.assertIn("Workspace state: 1 different, 7 matching", file_details)
+
+            app.selected = {self.default_leaf_id(("tui", "status_line"))}
+            section_details = app.details(
+                definitions.config_entry_id("codex", "config", ("tui",))
+            )
+            self.assertIn("Configuration: selected 1/2 managed options", section_details)
+            self.assertIn("Workspace state: 2 matching", section_details)
+
+    async def test_filtered_bulk_selection_preserves_hidden_selected_counts(self):
+        app = SetupApp(test_config(), TARGET)
+        async with app.run_test(size=(120, 40)) as pilot:
+            app.toggle_node(app.nodes["codex"])
+            app.query_one("#filter").value = "approvals_reviewer"
+            await pilot.pause()
+
+            self.assertIn("Applications  1/3", app.nodes["app"].label.plain)
+            self.assertIn("Codex  8/8", app.nodes["codex"].label.plain)
+            self.assertIn("~/.codex/config.toml  8/8", app.nodes["codex:config"].label.plain)
+
+            app.toggle_node(app.nodes["codex:config"])
+            self.assertIn("Applications  1/3", app.nodes["app"].label.plain)
+            self.assertIn("Codex  7/8", app.nodes["codex"].label.plain)
+            self.assertIn("~/.codex/config.toml  7/8", app.nodes["codex:config"].label.plain)
+            self.assertIn(self.default_leaf_id(("tui", "status_line")), app.selected)
+
     async def test_config_branches_start_collapsed_and_preserve_manual_expansion(self):
         cfg, _ = fixture_config()
         app = SetupApp(cfg, TARGET)

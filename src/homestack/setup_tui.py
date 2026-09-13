@@ -595,9 +595,28 @@ class SetupApp(App):
         ]
 
     def checkbox(self, identity):
+        entry = self.selection_entries.get(identity)
+        group_entries = [item for item in self.catalog.entries if item.group == identity]
+        if any(isinstance(item.params, ApplicationParams) for item in group_entries):
+            states = [self.checkbox(item.id) for item in group_entries]
+            return "[x]" if all(state == "[x]" for state in states) else "[-]" if any(state != "[ ]" for state in states) else "[ ]"
+        if (entry is not None and isinstance(entry.params, ApplicationParams)) or identity in self.config_nodes:
+            ids = self._descendant_ids(identity)
+            count = sum(item_id in self.selected for item_id in ids)
+            return "[x]" if ids and count == len(ids) else "[-]" if count else "[ ]"
         entries = self.descendants(identity)
         count = sum(entry.id in self.selected for entry in entries)
         return "[x]" if entries and count == len(entries) else "[-]" if count else "[ ]"
+
+    def config_selection_count(self, identity):
+        """Count declared options independently of the install/update action.
+
+        Like existing selection state, totals survive filtering and collapsing;
+        only bulk toggles are scoped to filter matches.
+        """
+        leaves = [item_id for item_id in self._descendant_ids(identity)
+                  if isinstance(self.selection_entries[item_id].params, StructuredParams)]
+        return sum(item_id in self.selected for item_id in leaves), len(leaves)
 
     def state_item(self, identity):
         return self.workspace_state.get("items", {}).get(identity, {})
@@ -626,6 +645,10 @@ class SetupApp(App):
     def entry_text(self, entry, index, interaction, suffix):
         text = Text(f"{self.checkbox(entry.id)} {index}. ")
         text.append(self.entry_label(entry), style=self.entry_style(entry))
+        if isinstance(entry.params, ApplicationParams):
+            selected, total = self.config_selection_count(entry.id)
+            if total:
+                text.append(f"  {selected}/{total}", style="dim")
         if interaction:
             text.append(interaction, style="dim")
         if suffix:
@@ -670,7 +693,8 @@ class SetupApp(App):
         visible = self._branch_visible(identity)
         if not visible:
             return None
-        node = parent.add(Text(f"{self.checkbox(identity)} {label}"), data=identity,
+        selected, total = self.config_selection_count(identity)
+        node = parent.add(Text(f"{self.checkbox(identity)} {label}  {selected}/{total}"), data=identity,
                           expand=expanded.get(identity, False))
         self.nodes[identity] = node
         for key, value in children:
@@ -707,10 +731,9 @@ class SetupApp(App):
                 else ""
             )
             entries = [entry for entry in self.catalog.entries if entry.group == group.id]
-            branch_ids = self._descendant_ids(group.id)
-            count = sum(item_id in self.selected for item_id in branch_ids)
+            count = sum(bool(self.selected.intersection(self._descendant_ids(entry.id))) for entry in entries)
             node = tree.root.add(
-                Text(f"{self.checkbox(group.id)} {group.label}  {count}/{len(branch_ids)}{extra}"),
+                Text(f"{self.checkbox(group.id)} {group.label}  {count}/{len(entries)}{extra}"),
                 data=group.id,
                 expand=expanded.get(group.id, group.id != "repo"),
             )
@@ -816,6 +839,11 @@ class SetupApp(App):
             config = meta["config"]
             prefix = meta["key"]
             leaves = self._config_leaves(meta["application"], config.id, prefix)
+            selected, total = self.config_selection_count(identity)
+            states = {}
+            for leaf in leaves:
+                state = self.state_item(leaf.id).get("state", "unknown")
+                states[state] = states.get(state, 0) + 1
             lines = [
                 "Configuration file" if not prefix else "Configuration section",
                 "",
@@ -824,6 +852,8 @@ class SetupApp(App):
                 f"Application: {meta['application']}",
                 f"Path: {config.path}",
                 f"Format: {config.format}",
+                f"Configuration: selected {selected}/{total} managed options",
+                "Workspace state: " + (", ".join(f"{count} {state}" for state, count in sorted(states.items())) or "unknown"),
                 "",
                 "Managed desired values:",
             ]
@@ -893,8 +923,14 @@ class SetupApp(App):
             entry.description,
             "",
             "Availability: " + self.catalog.availability.get(entry.id, "unknown"),
-            "Workspace state: " + live.get("state", "unknown"),
+            ("Application state: " if isinstance(p, ApplicationParams) else "Workspace state: ") + live.get("state", "unknown"),
         ]
+        if isinstance(p, ApplicationParams):
+            selected, total = self.config_selection_count(entry.id)
+            lines += [
+                "Install/update: " + ("selected" if entry.id in self.selected else "not selected"),
+                f"Configuration: selected {selected}/{total} managed options" if total else "Configuration: no managed options",
+            ]
         if live.get("changed_since_apply"):
             lines += ["Changed since last apply:", *["~/" + path for path in live["changed_since_apply"]]]
             if live.get("will_overwrite"):
