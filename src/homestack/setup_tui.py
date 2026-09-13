@@ -671,7 +671,7 @@ class SetupApp(App):
         if not visible:
             return None
         node = parent.add(Text(f"{self.checkbox(identity)} {label}"), data=identity,
-                          expand=expanded.get(identity, True))
+                          expand=expanded.get(identity, False))
         self.nodes[identity] = node
         for key, value in children:
             child = prefix + (key,)
@@ -732,7 +732,7 @@ class SetupApp(App):
                     app_node = node.add(
                         self.entry_text(entry, index, interaction, suffix),
                         data=entry.id,
-                        expand=expanded.get(entry.id, True),
+                        expand=expanded.get(entry.id, False),
                     )
                     self.nodes[entry.id] = app_node
                     for config in entry.params.config_files:

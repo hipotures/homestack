@@ -73,6 +73,22 @@ class StructuredCatalogTests(unittest.TestCase):
 
 
 class StructuredTUITests(unittest.IsolatedAsyncioTestCase):
+    async def test_config_branches_start_collapsed_and_preserve_manual_expansion(self):
+        cfg, _ = fixture_config()
+        app = SetupApp(cfg, TARGET)
+        async with app.run_test(size=(120, 40)):
+            branches = ("codex", "codex:config", definitions.config_entry_id("codex", "config", ("tui",)))
+            for identity in branches:
+                self.assertFalse(app.nodes[identity].is_expanded)
+            for identity in branches:
+                app.nodes[identity].expand()
+            app.rebuild()
+            for identity in branches:
+                self.assertTrue(app.nodes[identity].is_expanded)
+            app.nodes["codex"].collapse()
+            app.rebuild()
+            self.assertFalse(app.nodes["codex"].is_expanded)
+
     async def test_config_tree_has_file_sections_and_leaves_without_root_group(self):
         cfg, application = fixture_config()
         app = SetupApp(cfg, TARGET)
