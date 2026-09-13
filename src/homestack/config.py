@@ -52,9 +52,6 @@ class Config:
     herdr_debug: bool
     storage_display_unit: str
     storage_display_decimals: int
-    sync_paths: tuple[str, ...] = ()
-    sync_commands: tuple[str, ...] = ()
-    sync_verbose: bool = False
     repo_owner: str | None = None
     repo_checkout_root: str = "~/DEV"
     repo_sort: str = "recent"
@@ -115,22 +112,22 @@ def validate_repo_checkout_root(value: str) -> str:
     return "~/" + "/".join(parts)
 
 
-def validate_sync_path_spec(value: str) -> tuple[str, bool]:
+def validate_home_path_spec(value: str) -> tuple[str, bool]:
     if not value.startswith("~/"):
-        raise AppError(f"Sync path must start with '~/': {value!r}")
+        raise AppError(f"Home path must start with '~/': {value!r}")
     if "\x00" in value or "\n" in value or "\r" in value:
-        raise AppError(f"Sync path contains an invalid control character: {value!r}")
+        raise AppError(f"Home path contains an invalid control character: {value!r}")
 
     relative = value[2:]
     is_directory = relative.endswith("/")
     relative_core = relative[:-1] if is_directory else relative
     if not relative_core:
-        raise AppError("Syncing the entire home directory ('~/') is not allowed")
+        raise AppError("Using the entire home directory ('~/') is not allowed")
 
     parts = relative_core.split("/")
     if any(part in {"", ".", ".."} for part in parts):
         raise AppError(
-            f"Sync path must be a normalized path below '~/' without '.' or '..': {value!r}"
+            f"Home path must be a normalized path below '~/' without '.' or '..': {value!r}"
         )
     return relative_core, is_directory
 
@@ -171,6 +168,8 @@ def load_install_draft(path: Path) -> dict[str, Any]:
     completed = install.get("completed")
     if not isinstance(completed, list) or any(not isinstance(item, str) for item in completed):
         raise AppError("[install] completed must be an array of stage names")
+    if "sync" in completed:
+        raise AppError("Install draft contains obsolete 'sync' stage; discard it and run a new install")
     return data
 
 
@@ -185,6 +184,8 @@ def load_config(path: Path) -> Config:
     version = data.get("version")
     if version != 1:
         raise AppError(f"Unsupported config version: {version!r}; expected 1")
+    if "sync" in data:
+        raise AppError("Obsolete [sync] configuration is not supported; use [[setup.items]] file entries")
 
     dns = tuple(str(x) for x in _need(data, "network", "dns"))
     if not dns:
@@ -255,38 +256,6 @@ def load_config(path: Path) -> Config:
         raise AppError("[display] storage_decimals must be an integer") from exc
     if not 0 <= storage_display_decimals <= 4:
         raise AppError("[display] storage_decimals must be between 0 and 4")
-
-    sync = data.get("sync") or {}
-    if not isinstance(sync, dict):
-        raise AppError("[sync] must be a TOML table")
-    raw_sync_paths = sync.get("paths", [])
-    if not isinstance(raw_sync_paths, list):
-        raise AppError("[sync] paths must be an array")
-    sync_paths_list: list[str] = []
-    for raw_path in raw_sync_paths:
-        if not isinstance(raw_path, str):
-            raise AppError("[sync] paths entries must be strings")
-        value = raw_path.strip()
-        validate_sync_path_spec(value)
-        sync_paths_list.append(value)
-    if len(set(sync_paths_list)) != len(sync_paths_list):
-        raise AppError("[sync] paths contains duplicate entries")
-    sync_paths = tuple(sync_paths_list)
-    raw_sync_commands = sync.get("commands", [])
-    if not isinstance(raw_sync_commands, list):
-        raise AppError("[sync] commands must be an array")
-    sync_commands_list: list[str] = []
-    for raw_command in raw_sync_commands:
-        if not isinstance(raw_command, str):
-            raise AppError("[sync] commands entries must be strings")
-        command = raw_command.strip()
-        if not command:
-            raise AppError("[sync] commands entries must not be empty")
-        sync_commands_list.append(raw_command)
-    sync_commands = tuple(sync_commands_list)
-    sync_verbose = sync.get("verbose", False)
-    if not isinstance(sync_verbose, bool):
-        raise AppError("[sync] verbose must be true or false")
 
     repo_data = data.get("repo") or {}
     if not isinstance(repo_data, dict):
@@ -425,9 +394,6 @@ def load_config(path: Path) -> Config:
         herdr_debug=herdr_debug,
         storage_display_unit=storage_display_unit,
         storage_display_decimals=storage_display_decimals,
-        sync_paths=sync_paths,
-        sync_commands=sync_commands,
-        sync_verbose=sync_verbose,
         repo_owner=repo_owner,
         repo_checkout_root=repo_checkout_root,
         repo_sort=repo_sort,
@@ -499,11 +465,6 @@ def config_to_toml(cfg: Config) -> str:
             f"owner = {_toml_string(cfg.repo_owner or '')}",
             f"checkout_root = {_toml_string(cfg.repo_checkout_root)}",
             f"sort = {_toml_string(cfg.repo_sort)}",
-            "",
-            "[sync]",
-            f"verbose = {str(cfg.sync_verbose).lower()}",
-            f"paths = {_toml_array(cfg.sync_paths)}",
-            f"commands = {_toml_array(cfg.sync_commands)}",
             "",
             "[transport]",
             f"type = {_toml_string(cfg.transport_type)}",

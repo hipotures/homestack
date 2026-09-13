@@ -10,7 +10,6 @@ from rich.table import Table
 from .models import AppError
 from .setup import build_plan, execute_plan, inspect_workspace_state, resolve_target
 from .setup_catalog import load_catalog, parse_assignments, save_snapshot, select_entries
-from .setup_config import FileParams, effective_entries
 from .transports import open_transport
 from .workspace_ssh import WorkspaceSSH
 
@@ -97,10 +96,9 @@ def show_workspace_setup_status(cfg, target, state):
 def run_setup(args, cfg, *, json_mode: bool, assume_yes: bool) -> int:
     console = Console(stderr=json_mode)
     emit = lambda data: print(json.dumps(data, indent=2))
-    is_sync = args.command == "sync"
     tokens = getattr(args, "selectors", [])
     target_arg = args.target
-    if target_arg == "status" and not is_sync:
+    if target_arg == "status":
         if len(tokens) != 1 or assume_yes or args.dry_run or args.non_interactive or args.catalog:
             raise AppError("Usage: homestack setup status VMID|NAME [--json]")
         status_target = tokens[0]
@@ -117,7 +115,7 @@ def run_setup(args, cfg, *, json_mode: bool, assume_yes: bool) -> int:
         else:
             show_workspace_setup_status(cfg, target, state)
         return 0
-    if target_arg == "list" and not is_sync:
+    if target_arg == "list":
         if tokens or assume_yes or args.dry_run or args.non_interactive or args.catalog:
             raise AppError("setup list is targetless discovery; execution selectors/options are not accepted")
         catalog = load_catalog(cfg, repositories=True)
@@ -133,15 +131,8 @@ def run_setup(args, cfg, *, json_mode: bool, assume_yes: bool) -> int:
     if not tokens and args.catalog:
         raise AppError("--catalog requires explicit selectors; use setup list to inspect a catalog")
     unattended = bool(json_mode or getattr(args, "non_interactive", False) or not sys.stdin.isatty())
-    if is_sync and not tokens:
-        entries = tuple(e for e in effective_entries(cfg) if isinstance(e.params, FileParams))
-        catalog_id = None
-        if not entries:
-            raise AppError("No Files configured; add [[setup.items]] file entries or legacy [sync] paths")
-    elif tokens:
-        assignments = parse_assignments(tokens, cfg)
-        if is_sync and set(assignments) != {"files"}:
-            raise AppError("sync accepts only Files selections; use setup for other groups")
+    if tokens:
+        parse_assignments(tokens, cfg)
         entries, catalog_id = select_entries(cfg, tokens, catalog_id=args.catalog)
     else:
         if unattended or getattr(args, "dry_run", False):

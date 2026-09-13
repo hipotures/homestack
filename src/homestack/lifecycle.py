@@ -565,7 +565,6 @@ def create_workspace(
                 "root": f"ssh root@{ip}",
                 "user": f"ssh {cfg.user_name}@{ip}",
             },
-            "sync_command": f"homestack sync {vmid}" if cfg.sync_paths else None,
         }
 
         if progress is not None:

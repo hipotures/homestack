@@ -1,14 +1,14 @@
-"""Sync support for HomeStack."""
+"""Setup Files planning support for HomeStack."""
 
 from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
 
-from .config import Config, validate_sync_path_spec
+from .config import Config, validate_home_path_spec
 
-def sync_plan_item(cfg: Config, configured_path: str) -> dict[str, Any]:
-    relative, is_directory = validate_sync_path_spec(configured_path)
+def file_plan_item(cfg: Config, configured_path: str) -> dict[str, Any]:
+    relative, is_directory = validate_home_path_spec(configured_path)
     source = Path.home() / relative
     destination = Path("/home") / cfg.user_name / relative
     expected_type = "directory" if is_directory else "file"

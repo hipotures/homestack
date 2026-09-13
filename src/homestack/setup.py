@@ -293,8 +293,8 @@ def record_entry_state(ws, cfg: Config, plan: Plan, entry: Entry, state: dict, *
 
 
 def source_item(cfg: Config, entry: Entry) -> dict:
-    from .sync import sync_plan_item
-    item = sync_plan_item(cfg, entry.params.path)
+    from .setup_files import file_plan_item
+    item = file_plan_item(cfg, entry.params.path)
     if item["status"] != "ready":
         raise AppError(f"Selected file {entry.id}: {item['status']} ({item['detail']})")
     source = Path(item["local_path"])
@@ -496,17 +496,11 @@ def apply_entry(
             return "already-ready", "Destination already matches the desktop source"
         item = source_item(cfg, entry)
         activity(entry.id, f"Prepare destination ~/{item['relative']}")
-        if cfg.sync_verbose:
-            progress(entry.id, "preparing destination")
         guest(ws, cfg, "file", relative=item["relative"], directory=item["is_directory"], prepare=True)
         suffix = "/" if item["is_directory"] else ""
         activity(entry.id, f"Copy to ~/{item['relative']}")
-        if cfg.sync_verbose:
-            progress(entry.id, "transferring files")
         ws.transfer(item["local_path"] + suffix, item["destination"])
         activity(entry.id, f"Verify destination ~/{item['relative']}")
-        if cfg.sync_verbose:
-            progress(entry.id, "verifying destination ownership")
         guest(ws, cfg, "file", relative=item["relative"], directory=item["is_directory"], verify=True)
         return "succeeded", "Transfer and destination ownership verified"
     if isinstance(p, ApplicationParams):

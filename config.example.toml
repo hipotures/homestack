@@ -50,11 +50,6 @@ owner = "example-owner"
 checkout_root = "~/DEV"
 sort = "recent"
 
-[sync]
-verbose = false
-paths = []
-commands = []
-
 [transport]
 type = "herdr"
 

@@ -251,7 +251,7 @@ def check_gold_readiness(
         checks.append(
             GoldCheck(
                 "guest",
-                "rsync for homestack sync",
+                "rsync for Setup Files",
                 "skip",
                 f"not inspected because Gold is {power_state}",
                 requirement="optional",
@@ -300,7 +300,7 @@ def check_gold_readiness(
         checks.append(
             GoldCheck(
                 "guest",
-                "rsync for homestack sync",
+                "rsync for Setup Files",
                 "skip",
                 "QEMU Guest Agent unavailable",
                 requirement="optional",
@@ -360,9 +360,9 @@ def check_gold_readiness(
     )
     add(
         "guest",
-        "rsync for homestack sync",
+        "rsync for Setup Files",
         rsync_state == "PRESENT",
-        "installed" if rsync_state == "PRESENT" else "not installed; sync will be unavailable",
+        "installed" if rsync_state == "PRESENT" else "not installed; Setup Files will be unavailable",
         requirement="optional",
     )
     repo_tool_words = " ".join(shlex.quote(tool) for tool in ("git", "ssh-keygen"))

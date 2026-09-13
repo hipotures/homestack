@@ -193,11 +193,6 @@ def show_create_result(result: dict[str, Any]) -> None:
                 "SSH config",
                 str(result["ssh_config_path"]).replace(str(Path.home()), "~", 1),
             ),
-            *(
-                [("Sync files", str(result["sync_command"]))]
-                if result.get("sync_command")
-                else []
-            ),
         ],
     ]
     console.print()

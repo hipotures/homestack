@@ -33,7 +33,6 @@ from .config import (
     publish_config,
     publish_install_draft,
     validate_config_text,
-    validate_sync_path_spec,
 )
 from .discovery import (
     NetworkCandidate,
@@ -274,7 +273,6 @@ INSTALL_STAGE_ORDER = (
     "network",
     "home",
     "ssh",
-    "sync",
 )
 
 INSTALL_STAGE_LABELS = {
@@ -287,7 +285,6 @@ INSTALL_STAGE_LABELS = {
     "network": "Workspace network",
     "home": "Persistent home size",
     "ssh": "Workspace SSH identities",
-    "sync": "Workspace sync (optional)",
 }
 
 
@@ -417,17 +414,6 @@ def _install_draft_to_toml(
             ]
         )
 
-    if "sync" in done:
-        lines.extend(
-            [
-                "[sync]",
-                f"verbose = {str(cfg.sync_verbose).lower()}",
-                f"paths = {_toml_array(cfg.sync_paths)}",
-                f"commands = {_toml_array(cfg.sync_commands)}",
-                "",
-            ]
-        )
-
     lines.extend(["[repo]", f"owner = {_toml_string(cfg.repo_owner or '')}",
                   f"checkout_root = {_toml_string(cfg.repo_checkout_root)}",
                   f"sort = {_toml_string(cfg.repo_sort)}"])
@@ -436,6 +422,8 @@ def _install_draft_to_toml(
 
 def _config_from_install_draft(path: Path, data: dict[str, Any]) -> Config:
     completed = set(str(item) for item in data["install"]["completed"])
+    if "sync" in completed:
+        raise AppError("Install draft contains obsolete 'sync' stage; discard it and run a new install")
     cfg = _fresh_config(path)
     repo_data = data.get("repo", {})
     cfg = replace(cfg, setup=parse_setup(data.get("setup", {})),
@@ -530,15 +518,6 @@ def _config_from_install_draft(path: Path, data: dict[str, Any]) -> Config:
                 identities_only=bool(ssh["identities_only"]),
                 log_level=str(ssh["log_level"]),
             ),
-        )
-
-    if "sync" in completed:
-        sync = data.get("sync") or {}
-        cfg = replace(
-            cfg,
-            sync_paths=tuple(str(item) for item in sync.get("paths", [])),
-            sync_commands=tuple(str(item) for item in sync.get("commands", [])),
-            sync_verbose=bool(sync.get("verbose", False)),
         )
 
     return cfg
@@ -1188,40 +1167,6 @@ def _configure_identities(cfg: Config) -> tuple[str, ...]:
     return selected
 
 
-def _configure_sync(cfg: Config) -> tuple[tuple[str, ...], tuple[str, ...], bool]:
-    current = bool(cfg.sync_paths or cfg.sync_commands)
-    if not Confirm.ask("Configure workspace sync now?", default=current):
-        return cfg.sync_paths, cfg.sync_commands, cfg.sync_verbose
-    paths: list[str] = []
-    console.print("Enter sync paths in order. Leave blank when finished.")
-    pending_paths = list(cfg.sync_paths)
-    while True:
-        existing = pending_paths.pop(0) if pending_paths else ""
-        value = Prompt.ask("Sync path", default=existing).strip()
-        if not value:
-            break
-        try:
-            validate_sync_path_spec(value)
-        except AppError as exc:
-            console.print(f"[yellow]{exc}[/yellow]")
-            continue
-        if value in paths:
-            console.print(f"[yellow]Duplicate sync path: {value}[/yellow]")
-            continue
-        paths.append(value)
-    commands: list[str] = []
-    console.print("Enter legacy application commands (setup only; never run by sync). Leave blank when finished.")
-    pending_commands = list(cfg.sync_commands)
-    while True:
-        existing = pending_commands.pop(0) if pending_commands else ""
-        value = Prompt.ask("Legacy application command", default=existing)
-        if not value.strip():
-            break
-        commands.append(value)
-    verbose = Confirm.ask("Detailed file progress?", default=cfg.sync_verbose)
-    return tuple(paths), tuple(commands), verbose
-
-
 def _show_summary(
     cfg: Config,
     statuses: list[dict[str, Any]],
@@ -1254,7 +1199,6 @@ def _show_summary(
         + "\n".join(cfg.workspace_ssh.identity_files),
     )
     table.add_row("Snippets", f"{cfg.snippet_storage}: {cfg.snippet_dir}")
-    table.add_row("Sync", f"{len(cfg.sync_paths)} Files; {len(cfg.sync_commands)} legacy Applications (setup only)")
     console.print(table)
 
 
@@ -1506,23 +1450,6 @@ def run_installer(path: Path) -> int:
             completed,
             metadata,
             "ssh",
-            enabled=checkpoint_enabled,
-        )
-
-    if "sync" not in completed:
-        sync_paths, sync_commands, sync_verbose = _configure_sync(base)
-        base = replace(
-            base,
-            sync_paths=sync_paths,
-            sync_commands=sync_commands,
-            sync_verbose=sync_verbose,
-        )
-        _checkpoint_install(
-            path,
-            base,
-            completed,
-            metadata,
-            "sync",
             enabled=checkpoint_enabled,
         )
 

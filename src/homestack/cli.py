@@ -58,10 +58,6 @@ def show_help(cfg_path: Path) -> None:
     commands.add_row(f"{cmd} setup list", "List setup catalog items without connecting to a workspace.")
     commands.add_row(f"{cmd} setup status VMID|NAME", "Inspect installed/configured workspace setup state without applying changes.")
     commands.add_row(
-        f"{cmd} sync VMID|NAME",
-        "Synchronize configured desktop files/directories into the workspace persistent home.",
-    )
-    commands.add_row(
         f"{cmd} repo VMID|NAME [OWNER/REPO]",
         "Inspect, set up, or rotate the GitHub repository deploy key for a workspace.",
     )
@@ -86,7 +82,7 @@ def show_help(cfg_path: Path) -> None:
         "--storage STORAGE",
         "Create root and persistent home on an allowed storage instead of the layout default.",
     )
-    options.add_row("-y, --yes", "Accept the plan for setup, create, refresh, migrate, sync or destroy.")
+    options.add_row("-y, --yes", "Accept the plan for setup, create, refresh, migrate or destroy.")
     options.add_row(
         "--json",
         "Return JSON. Commands requiring confirmation return the resolved plan without --yes.",
@@ -104,8 +100,6 @@ def show_help(cfg_path: Path) -> None:
         f"{cmd} setup list\n"
         f"{cmd} setup status example-workspace\n"
         f"{cmd} setup example-workspace\n"
-        f"{cmd} sync 200\n"
-        f"{cmd} sync example-workspace\n"
         f"{cmd} repo example-workspace\n"
         f"{cmd} destroy 200\n"
         f"{cmd} destroy 200 --json\n"
@@ -164,24 +158,14 @@ def build_parser() -> argparse.ArgumentParser:
     migrate.add_argument("-y", "--yes", action="store_true")
     migrate.add_argument("-h", "--help", action="store_true", dest="sub_help")
 
-    sync = sub.add_parser("sync", add_help=False)
-    sync.add_argument("target")
-    sync.add_argument("--json", action="store_true")
-    sync.add_argument("-y", "--yes", action="store_true")
-    sync.add_argument("-h", "--help", action="store_true", dest="sub_help")
-
     setup = sub.add_parser("setup", description="Prepare explicit Files, Environment, Applications and Repositories selections.")
     setup.add_argument("target", nargs="?", help="VMID, exact workspace name, list, or status")
     setup.add_argument("selectors", nargs="*", help="files/f=ID,ID env/e=ID app/a=ID repo/r=OWNER/REPO; 0/all selects a category")
-    for command in (setup, sync):
-        if command is sync:
-            command.add_argument("selectors", nargs="*", help="Optional files=ID,ID selection (default: all configured Files)")
-        else:
-            command.add_argument("--json", action="store_true")
-            command.add_argument("-y", "--yes", action="store_true")
-        command.add_argument("--catalog", help="Immutable catalog snapshot ID for numeric selections")
-        command.add_argument("--dry-run", action="store_true", help="Plan without guest SSH or remote writes")
-        command.add_argument("--non-interactive", action="store_true", help="Forbid dialogs; hardware authentication may still require touch")
+    setup.add_argument("--json", action="store_true")
+    setup.add_argument("-y", "--yes", action="store_true")
+    setup.add_argument("--catalog", help="Immutable catalog snapshot ID for numeric selections")
+    setup.add_argument("--dry-run", action="store_true", help="Plan without guest SSH or remote writes")
+    setup.add_argument("--non-interactive", action="store_true", help="Forbid dialogs; hardware authentication may still require touch")
 
     repo = sub.add_parser("repo", add_help=False)
     repo.add_argument("target")
@@ -228,7 +212,7 @@ def main() -> int:
             return run_installer(args.config)
 
         cfg = load_config(args.config)
-        if args.command in {"setup", "sync"}:
+        if args.command == "setup":
             from .setup_cli import run_setup
             return run_setup(args, cfg, json_mode=json_mode,
                              assume_yes=bool(args.global_yes or getattr(args, "yes", False)))

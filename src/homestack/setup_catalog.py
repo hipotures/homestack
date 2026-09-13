@@ -14,7 +14,7 @@ import uuid
 from .config import Config, validate_repository_spec
 from .models import AppError
 from .repo import _github_json
-from .setup_config import Entry, FileParams, EnvironmentParams, ApplicationParams, RepositoryParams, effective_entries
+from .setup_config import Entry, FileParams, EnvironmentParams, ApplicationParams, RepositoryParams
 
 ALIASES = {"f": "files", "e": "env", "a": "app", "r": "repo"}
 
@@ -84,12 +84,12 @@ def discover_repositories(cfg: Config) -> tuple[dict, list[dict]]:
 
 
 def load_catalog(cfg: Config, *, repositories: bool = False) -> Catalog:
-    entries = list(effective_entries(cfg))
+    entries = list(cfg.setup.items)
     availability = {}
     for entry in entries:
         if isinstance(entry.params, FileParams):
-            from .sync import sync_plan_item
-            availability[entry.id] = sync_plan_item(cfg, entry.params.path)["status"]
+            from .setup_files import file_plan_item
+            availability[entry.id] = file_plan_item(cfg, entry.params.path)["status"]
         else:
             availability[entry.id] = "guest state unknown"
     catalog = Catalog(tuple(entries), availability, timestamps={})
@@ -114,7 +114,7 @@ def load_catalog(cfg: Config, *, repositories: bool = False) -> Catalog:
 
 
 def fingerprint(cfg: Config) -> str:
-    payload = {"items": [e.definition() for e in effective_entries(cfg)],
+    payload = {"items": [e.definition() for e in cfg.setup.items],
                "groups": [(g.id, g.label, g.description) for g in cfg.setup.groups]}
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
 
@@ -203,7 +203,7 @@ def parse_assignments(tokens: list[str], cfg: Config) -> dict[str, tuple[str, ..
 def select_entries(cfg: Config, tokens: list[str], *, catalog_id: str | None = None) -> tuple[tuple[Entry, ...], str | None]:
     assignments = parse_assignments(tokens, cfg)
     numeric_groups = {g for g, values in assignments.items() if any(v.isdecimal() for v in values)}
-    entries = {e.id: e for e in effective_entries(cfg)}
+    entries = {e.id: e for e in cfg.setup.items}
     repository_groups = {"repo", *(e.group for e in entries.values() if isinstance(e.params, RepositoryParams))}
     snapshot = read_snapshot(cfg, catalog_id, repositories=bool(repository_groups & assignments.keys())) if numeric_groups or catalog_id else None
     if snapshot:

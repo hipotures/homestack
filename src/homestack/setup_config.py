@@ -1,8 +1,7 @@
-"""Validated setup catalog definitions, defaults, and legacy adaptation."""
+"""Validated setup catalog definitions and defaults."""
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
-import hashlib
 import json
 import re
 from typing import Any
@@ -115,7 +114,7 @@ def _strings(value: Any, key: str) -> tuple[str, ...]:
 
 
 def parse_setup(raw: Any) -> SetupConfig:
-    from .config import validate_sync_path_spec, validate_repository_spec
+    from .config import validate_home_path_spec, validate_repository_spec
     if not isinstance(raw, dict) or set(raw) - {"groups", "items"}:
         raise AppError("[setup] accepts only groups and items")
     groups = {g.id: g for g in DEFAULT_GROUPS}
@@ -178,7 +177,7 @@ def parse_setup(raw: Any) -> SetupConfig:
         if isinstance(p, FileParams):
             if not isinstance(p.path, str):
                 raise AppError("File path must be a string")
-            validate_sync_path_spec(p.path)
+            validate_home_path_spec(p.path)
         if isinstance(p, EnvironmentParams) and (not isinstance(p.profile, str) or p.profile not in {"bash", "zsh", "fish", "nu"}):
             raise AppError("Environment profile must be bash, zsh, fish or nu")
         if isinstance(p, RepositoryParams):
@@ -198,33 +197,10 @@ def parse_setup(raw: Any) -> SetupConfig:
             if any(":" in path for path in p.bin_dirs):
                 raise AppError("Application bin_dirs must not contain PATH separators")
             for path in (*p.bin_dirs, *p.requires_absent, *p.backup_paths):
-                validate_sync_path_spec(path)
+                validate_home_path_spec(path)
         parsed.append(Entry(data["id"], data["group"], handler, data["label"], data["description"], p,
                             _strings(data.get("depends_on", ()), "depends_on")))
     return SetupConfig(tuple(groups.values()), tuple(parsed))
-
-
-def legacy_id(kind: str, payload: str) -> str:
-    return f"legacy-{kind}-" + hashlib.sha256(payload.encode()).hexdigest()[:16]
-
-
-def effective_entries(cfg: Any) -> tuple[Entry, ...]:
-    items = list(cfg.setup.items)
-    paths = {e.params.path for e in items if isinstance(e.params, FileParams)}
-    for path in cfg.sync_paths:
-        if path not in paths:
-            items.append(Entry(legacy_id("file", path), "files", "file", path, "Legacy sync path. Move to [[setup.items]] to customize its label.", FileParams(path)))
-            paths.add(path)
-    commands = {e.params.command for e in items if isinstance(e.params, ApplicationParams)}
-    for command in cfg.sync_commands:
-        if command in commands:
-            continue
-        items.append(Entry(legacy_id("app", command), "app", "application", "Legacy application " + str(len([e for e in items if e.id.startswith('legacy-app-')]) + 1),
-                           "Preserved legacy sync command. Review the payload in configuration and explicitly declare its interaction mode before unattended use.", ApplicationParams(command)))
-        commands.add(command)
-    if len({e.id for e in items}) != len(items):
-        raise AppError("A configured stable ID conflicts with a legacy setup entry; reconcile the duplicate ID")
-    return tuple(items)
 
 
 def setup_to_toml(setup: SetupConfig) -> str:
