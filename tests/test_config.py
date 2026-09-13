@@ -201,6 +201,21 @@ class ConfigTests(unittest.TestCase):
 
 
 class InstallDraftTests(unittest.TestCase):
+    def test_obsolete_sync_stage_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.toml"
+            config.publish_install_draft(
+                path,
+                """version = 1
+install_draft = true
+
+[install]
+completed = ["transport", "sync"]
+""",
+            )
+            with self.assertRaisesRegex(models.AppError, "obsolete 'sync' stage"):
+                config.load_install_draft(path)
+
     def test_runtime_loader_rejects_install_draft_with_resume_hint(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "config.toml"

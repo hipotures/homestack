@@ -470,6 +470,13 @@ class InstallerValueTests(unittest.TestCase):
         self.assertFalse(hasattr(install, '_configure_sync'))
 
 class InstallDraftResumeTests(unittest.TestCase):
+    def test_config_restore_rejects_obsolete_sync_stage(self) -> None:
+        data = {
+            "install": {"completed": ["transport", "sync"]},
+        }
+        with self.assertRaisesRegex(models.AppError, "obsolete 'sync' stage"):
+            install._config_from_install_draft(Path("/tmp/example.toml"), data)
+
     def test_draft_round_trip_restores_completed_values_without_placeholder_leakage(self) -> None:
         base = install._fresh_config(Path("/tmp/example.toml"))
         cfg = replace(

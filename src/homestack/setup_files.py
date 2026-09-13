@@ -7,6 +7,7 @@ from typing import Any
 
 from .config import Config, validate_home_path_spec
 
+
 def file_plan_item(cfg: Config, configured_path: str) -> dict[str, Any]:
     relative, is_directory = validate_home_path_spec(configured_path)
     source = Path.home() / relative

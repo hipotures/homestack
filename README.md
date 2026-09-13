@@ -271,7 +271,7 @@ After confirmation, a centered execution window shows a live, wrapped activity l
 
 ### Catalog configuration
 
-Older configurations receive built-in Bash (`bash`), Zsh (`zsh`), Fish (`fish`), Nushell (`nu`), Codex (`codex`), OpenCode (`opencode`), and Hermes Agent (`hermes`) definitions in memory. Presence never selects or executes them. `config.example.toml` contains the complete neutral catalog.
+Every configuration receives built-in Bash (`bash`), Zsh (`zsh`), Fish (`fish`), Nushell (`nu`), Codex (`codex`), OpenCode (`opencode`), and Hermes Agent (`hermes`) definitions in memory. Presence never selects or executes them. `config.example.toml` contains the complete neutral catalog.
 
 Use `[[setup.items]]` to customize by stable ID. Existing definitions merge field by field, once per ID; duplicate definitions in one document are rejected. Changing an application's command clears inherited installation checks and unattended safety declarations. Explicitly supply the new command's `interaction`, `check`, and optional `non_interactive` recipe. Supported handler parameters are validated; unknown fields are errors. Application interpreters are Bash or Zsh so pipeline failures propagate. Group labels/descriptions live separately in `[[setup.groups]]`; additional groups can reuse existing handler types without renderer changes.
 
