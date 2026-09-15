@@ -56,6 +56,26 @@ class BackupCliTests(unittest.TestCase):
             timeout=timeout,
         )
 
+    def run_edit(self, home: Path, cwd: Path, selected_indices: list[int], *, cancelled: bool = False) -> int:
+        """Run edit_command with a deterministic selector result."""
+
+        module = runpy.run_path(str(BK))
+        paths = module["Paths"].from_home(home)
+        result = module["SelectorResult"](selected_indices, cancelled=cancelled)
+        previous = Path.cwd()
+        try:
+            os.chdir(cwd)
+            with patch.dict(
+                module["edit_command"].__globals__,
+                {
+                    "selector_tty_available": lambda: True,
+                    "run_edit_selector": lambda *args, **kwargs: result,
+                },
+            ):
+                return module["edit_command"](paths)
+        finally:
+            os.chdir(previous)
+
     def setUp(self) -> None:
         self._temporary_home = tempfile.TemporaryDirectory(prefix="bk-home-")
         self.home = Path(self._temporary_home.name)
@@ -218,13 +238,22 @@ class BackupCliTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertIn("bk", result.stdout.lower())
                 self.assertIn("usage", result.stdout.lower())
+                self.assertIn("edit", result.stdout.lower())
+                self.assertNotIn("add immediate children", result.stdout.lower())
+                self.assertNotIn("remove configured", result.stdout.lower())
                 self.assertFalse((self.home / "backup" / "backup.yaml").exists())
 
     def test_no_config_commands_are_safe_noops_and_status_is_unconfigured(self) -> None:
-        for args in (("list",), ("l",), ("del",), ("d",), ("status",), ("s",)):
+        for args in (("list",), ("l",), ("status",), ("s",)):
             with self.subTest(args=args):
                 result = self.run_bk(self.home, *args)
                 self.assertEqual(result.returncode, 0, result.stderr)
+        for args in (("edit",), ("e",)):
+            with self.subTest(args=args):
+                result = self.run_bk(self.home, *args)
+                self.assertEqual(result.returncode, 2)
+                self.assertIn("interactive TTY", (result.stdout + result.stderr))
+                self.assertIn("bk list", (result.stdout + result.stderr))
         run_result = self.run_bk(self.home, "run")
         self.assertEqual(run_result.returncode, 0, run_result.stderr)
         self.assertFalse(self.config_path(self.home).exists())
@@ -233,16 +262,23 @@ class BackupCliTests(unittest.TestCase):
         self.assertEqual(self.status_value(status, "status"), "unconfigured")
         self.assertFalse(self.config_path(self.home).exists())
 
-    def test_first_add_creates_canonical_config_with_self_source_and_default_retention(self) -> None:
+    def test_obsolete_add_and_delete_commands_are_unknown(self) -> None:
+        for command in ("add", "a", "del", "d"):
+            with self.subTest(command=command):
+                result = self.run_bk(self.home, command)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("unknown command", (result.stdout + result.stderr).lower())
+
+    def test_first_edit_creates_canonical_config_with_self_source_and_default_retention(self) -> None:
         working = self.home / "work"
         working.mkdir()
         selected = working / "source with spaces"
         selected.mkdir()
         (selected / "note.txt").write_text("hello", encoding="utf-8")
 
-        result = self.run_bk(self.home, "add", cwd=working, input_text="1\n")
+        result = self.run_edit(self.home, working, [1])
 
-        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result, 0)
         config = self.config_path(self.home)
         self.assertTrue(config.exists())
         self.assertIn("version: 1", config.read_text(encoding="utf-8"))
@@ -251,72 +287,131 @@ class BackupCliTests(unittest.TestCase):
             self.config_sources(config),
             [str(config.resolve()), str(selected.resolve())],
         )
-        self.assertIn(str(selected), result.stdout)
-        self.assertIn("~/backup/backup.yaml", result.stdout)
-        self.assertNotIn("~/backup/backup.yaml.", result.stdout)
 
-    def test_add_without_a_selection_does_not_create_configuration(self) -> None:
+    def test_edit_without_a_selection_does_not_create_configuration(self) -> None:
         working = self.home / "empty"
         working.mkdir()
 
-        result = self.run_bk(self.home, "add", cwd=working, input_text="\n")
+        result = self.run_edit(self.home, working, [])
 
-        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result, 0)
         self.assertFalse(self.config_path(self.home).exists())
 
-    def test_add_accepts_arbitrary_selection_separators(self) -> None:
+    def test_edit_cancel_does_not_create_configuration(self) -> None:
+        working = self.home / "empty"
+        working.mkdir()
+
+        result = self.run_edit(self.home, working, [1], cancelled=True)
+
+        self.assertEqual(result, 1)
+        self.assertFalse(self.config_path(self.home).exists())
+
+    def test_edit_cancel_does_not_modify_existing_configuration(self) -> None:
+        working = self.home / "work"
+        working.mkdir()
+        source = working / "source"
+        source.touch()
+        config = self.write_config(self.home, [self.config_path(self.home), source])
+        before = config.read_bytes()
+
+        result = self.run_edit(self.home, working, [], cancelled=True)
+
+        self.assertEqual(result, 1)
+        self.assertEqual(config.read_bytes(), before)
+
+    def test_edit_preserves_order_and_applies_additions_and_removals(self) -> None:
         working = self.home / "work"
         working.mkdir()
         first = working / "first"
         second = working / "second"
         first.touch()
         second.touch()
+        elsewhere = self.home / "elsewhere"
+        elsewhere.touch()
+        config = self.write_config(self.home, [self.config_path(self.home), elsewhere, first])
 
-        result = self.run_bk(self.home, "add", cwd=working, input_text="1(anything)2\n")
+        module = runpy.run_path(str(BK))
+        paths = module["Paths"].from_home(self.home)
+        items, groups, selected = module["build_edit_selector"](paths, module["immediate_children"](working), module["read_config"](paths))
+        self.assertEqual([item.index for item in items if item.path == first], [1])
+        self.assertEqual([item.index for item in items if item.path == second], [2])
+        elsewhere_index = next(item.index for item in items if item.path == elsewhere)
+        self.assertEqual(selected, {1, elsewhere_index})
+        self.assertFalse(groups[1].expanded)
 
-        self.assertEqual(result.returncode, 0, result.stderr)
+        # Select second and unselect the existing first source.  The existing
+        # elsewhere source stays first; the new current-directory source is
+        # appended in displayed order.
+        result = self.run_edit(self.home, working, [elsewhere_index, 2])
+
+        self.assertEqual(result, 0)
         self.assertEqual(
             self.config_sources(self.config_path(self.home))[1:],
-            [str(first.resolve()), str(second.resolve())],
+            [str(elsewhere.resolve()), str(second.resolve())],
         )
-        self.assertIn("Immediate children", result.stdout)
-        self.assertNotIn("\x1b[?1000", result.stdout)
 
-    def test_add_lists_hidden_immediate_child_and_exact_duplicate_is_report_only(self) -> None:
+    def test_edit_applies_additions_and_removals_with_one_atomic_config_write(self) -> None:
+        working = self.home / "work"
+        working.mkdir()
+        first = working / "first"
+        second = working / "second"
+        first.touch()
+        second.touch()
+        elsewhere = self.home / "elsewhere"
+        elsewhere.touch()
+        self.write_config(self.home, [self.config_path(self.home), elsewhere, first])
+
+        module = runpy.run_path(str(BK))
+        paths = module["Paths"].from_home(self.home)
+        config = module["read_config"](paths)
+        items, groups, selected = module["build_edit_selector"](
+            paths, module["immediate_children"](working), config
+        )
+        elsewhere_index = next(item.index for item in items if item.path == elsewhere)
+        state = module["SelectorState"](
+            items, groups=groups, selected_indices={2, elsewhere_index}
+        )
+        writes = []
+
+        with patch.dict(
+            module["apply_edit_selection"].__globals__,
+            {"write_config": lambda write_paths, value: writes.append((write_paths, value))},
+        ):
+            changed = module["apply_edit_selection"](paths, config, state)
+
+        self.assertTrue(changed)
+        self.assertEqual(len(writes), 1)
+        self.assertEqual(writes[0][0], paths)
+        self.assertEqual(writes[0][1].sources, [paths.config.resolve(), elsewhere.resolve(), second.resolve()])
+
+    def test_edit_lists_hidden_children_and_exact_configured_path_starts_checked(self) -> None:
         working = self.home / "work"
         working.mkdir()
         selected = working / ".hidden source"
         selected.mkdir()
         (selected / "payload").write_text("first", encoding="utf-8")
 
-        first = self.run_bk(self.home, "a", cwd=working, input_text="1\n")
-        self.assertEqual(first.returncode, 0, first.stderr)
-        before = self.config_path(self.home).read_bytes()
-        duplicate = self.run_bk(self.home, "add", cwd=working, input_text="1\n")
-        self.assertEqual(duplicate.returncode, 0, duplicate.stderr)
-        self.assertIn("already", duplicate.stdout.lower())
-        self.assertIn("already configured", duplicate.stdout.lower())
-        self.assertEqual(self.config_path(self.home).read_bytes(), before)
+        self.assertEqual(self.run_edit(self.home, working, [1]), 0)
+        module = runpy.run_path(str(BK))
+        paths = module["Paths"].from_home(self.home)
+        config = module["read_config"](paths)
+        items, _groups, selected_indices = module["build_edit_selector"](
+            paths, module["immediate_children"](working), config
+        )
+        item = next(item for item in items if item.path == selected)
+        self.assertTrue(item.label.endswith("/"))
+        self.assertIn(item.index, selected_indices)
         self.assertEqual(self.config_sources(self.config_path(self.home)).count(str(selected.resolve())), 1)
-        self.assertIn(selected.name, first.stdout)
 
-    def test_delete_keeps_self_entry_and_aliases_run_and_status_work(self) -> None:
+    def test_edit_removing_last_user_source_keeps_self_entry(self) -> None:
         working = self.home / "work"
         working.mkdir()
         selected = working / "source"
         selected.mkdir()
         (selected / "file").write_text("data", encoding="utf-8")
-        added = self.run_bk(self.home, "a", cwd=working, input_text="1\n")
-        self.assertEqual(added.returncode, 0, added.stderr)
-
-        deleted = self.run_bk(self.home, "d", cwd=working, input_text="1\n")
+        self.assertEqual(self.run_edit(self.home, working, [1]), 0)
+        self.assertEqual(self.run_edit(self.home, working, [], cancelled=False), 0)
         sources = self.config_sources(self.config_path(self.home))
-        # Implementations may show the protected self-entry as a non-selectable
-        # row (making the user source number 2) or omit it from the choices.
-        if str(selected.resolve()) in sources:
-            deleted = self.run_bk(self.home, "del", cwd=working, input_text="2\n")
-            sources = self.config_sources(self.config_path(self.home))
-        self.assertEqual(deleted.returncode, 0, deleted.stderr)
         self.assertEqual(sources, [str(self.config_path(self.home).resolve())])
 
         run = self.run_bk(self.home, "r")
@@ -329,9 +424,10 @@ class BackupCliTests(unittest.TestCase):
         runtime = self.backup_dir(self.home)
         runtime.mkdir()
         (runtime / "archive").mkdir()
-        from_home = self.run_bk(self.home, "add", cwd=self.home, input_text="1\n")
+        # The non-TTY editor fails before it can mutate anything.
+        from_home = self.run_bk(self.home, "edit", cwd=self.home)
         self.assertNotEqual(from_home.returncode, 0)
-        self.assertIn("backup", (from_home.stdout + from_home.stderr).lower())
+        self.assertIn("TTY", (from_home.stdout + from_home.stderr))
         self.assertFalse(self.config_path(self.home).exists())
 
         another_home = self.home / "nested-home"
@@ -339,19 +435,14 @@ class BackupCliTests(unittest.TestCase):
         another_runtime = another_home / "backup"
         another_runtime.mkdir()
         (another_runtime / "archive").mkdir()
-        from_runtime = self.run_bk(
-            another_home,
-            "add",
-            cwd=another_runtime,
-            input_text="1\n",
-        )
+        from_runtime = self.run_bk(another_home, "edit", cwd=another_runtime)
         self.assertNotEqual(from_runtime.returncode, 0)
         self.assertFalse((another_runtime / "backup.yaml").exists())
 
         working = self.home / "work"
         working.mkdir()
         (working / "home-link").symlink_to(self.home, target_is_directory=True)
-        from_runtime_parent = self.run_bk(self.home, "add", cwd=working, input_text="1\n")
+        from_runtime_parent = self.run_bk(self.home, "edit", cwd=working)
         self.assertNotEqual(from_runtime_parent.returncode, 0)
         self.assertFalse(self.config_path(self.home).exists())
 
@@ -395,11 +486,8 @@ class BackupCliTests(unittest.TestCase):
         child = parent / "config.yaml"
         child.write_text("child content", encoding="utf-8")
 
-        added_parent = self.run_bk(self.home, "add", cwd=dev, input_text="1\n")
-        added_child = self.run_bk(self.home, "add", cwd=parent, input_text="1\n")
-
-        self.assertEqual(added_parent.returncode, 0, added_parent.stderr)
-        self.assertEqual(added_child.returncode, 0, added_child.stderr)
+        self.assertEqual(self.run_edit(self.home, dev, [1]), 0)
+        self.assertEqual(self.run_edit(self.home, parent, [1, 2]), 0)
         config = self.config_path(self.home)
 
         listed = self.json_output(self.run_bk(self.home, "list", "--json"))
@@ -988,26 +1076,43 @@ class BackupCliTests(unittest.TestCase):
 
 
 class SelectorTests(unittest.TestCase):
-    """Deterministic tests for the optional TTY selector state machine."""
+    """Deterministic tests for the unified source editor state machine."""
 
     @classmethod
     def setUpClass(cls) -> None:
         cls.module = runpy.run_path(str(BK))
         cls.item = cls.module["SelectorItem"]
+        cls.group = cls.module["SelectorGroup"]
 
     def items(self):
         return [
-            self.item(1, ".agents", "directory"),
-            self.item(2, ".codex", "directory"),
-            self.item(3, "config.yaml", "file"),
-            self.item(4, "backup", "directory", False, "BK-managed; not selectable"),
+            self.item(1, ".agents/", "directory", path=Path("/work/.agents")),
+            self.item(2, ".codex/", "directory", path=Path("/work/.codex")),
+            self.item(3, "config.yaml", "file", path=Path("/work/config.yaml")),
+            self.item(4, "backup/", "directory", False, "BK-managed; not selectable", Path("/work/backup")),
+            self.item(5, "~/elsewhere/", "directory", path=Path("/home/user/elsewhere"), group="elsewhere"),
         ]
 
-    def state(self):
-        return self.module["SelectorState"](self.items())
+    def groups(self):
+        return [
+            self.group("current", "Current directory", True),
+            self.group("elsewhere", "Configured elsewhere", False),
+        ]
 
-    def test_keyboard_state_and_space_toggle_share_one_selection(self) -> None:
+    def state(self, selected=None):
+        return self.module["SelectorState"](
+            self.items(), groups=self.groups(), selected_indices=set(selected or ())
+        )
+
+    def run_selector(self, keys, selected=None):
+        return self.module["run_edit_selector"](
+            self.items(), self.groups(), set(selected or ()), context=Path("/work"), curses_module=_FakeCurses(keys=keys)
+        )
+
+    def test_edit_commands_are_represented_by_one_state(self) -> None:
         state = self.state()
+        self.assertEqual([group.expanded for group in state.groups], [True, False])
+        self.assertEqual(state.focus_index, 1)
         state.move_focus(1)
         self.assertTrue(state.toggle())
         self.assertEqual(state.selected_indices, {2})
@@ -1015,213 +1120,166 @@ class SelectorTests(unittest.TestCase):
         self.assertEqual(state.selected_count, 1)
 
     def test_typed_numeric_forms_update_checkboxes_and_canonical_text(self) -> None:
-        for raw in ("1,2,3", "1 2 3", "1, 2 3", "1(any separator)2.3"):
+        for raw in ("1,2,3", "1 2 3", "1, 2 3", "1 2,3"):
             with self.subTest(raw=raw):
                 state = self.state()
                 self.assertTrue(state.edit_selection_text(raw))
                 self.assertEqual(state.selected_indices, {1, 2, 3})
                 self.assertEqual(state.selection_text(), "1,2,3")
 
-    def test_protected_rows_cannot_be_selected_by_numeric_input(self) -> None:
+    def test_protected_and_runtime_rows_cannot_be_selected(self) -> None:
         state = self.state()
         self.assertFalse(state.edit_selection_text("4"))
         self.assertEqual(state.selected_indices, set())
         self.assertIn("non-selectable", state.error or "")
+        self.assertFalse(state.toggle(4))
 
-    def test_already_configured_add_rows_are_visible_and_not_selectable(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="bk-selector-existing-") as temporary:
-            home = Path(temporary)
-            paths = self.module["Paths"].from_home(home)
-            configured = home / "configured"
-            configured.touch()
-            items = self.module["add_selector_items"](paths, [configured], {configured})
+        protected = self.item(
+            None,
+            "backup.yaml",
+            "file",
+            False,
+            "protected self-entry",
+            Path("/home/user/backup/backup.yaml"),
+        )
+        protected_state = self.module["SelectorState"](
+            [protected], groups=self.groups(), selected_indices=set()
+        )
+        fake_curses = _FakeCurses()
+        self.module["_selector_render"](
+            fake_curses.screen, protected_state, Path("/home/user/backup"), 0, fake_curses
+        )
+        rendered = "\n".join(value for _row, value, _width, _attribute in fake_curses.screen.lines)
+        self.assertIn("[x]", rendered)
+        self.assertIn("protected self-entry", rendered)
+        self.assertNotIn(". backup.yaml", rendered)
 
-        self.assertEqual(items[0].state, "already configured")
-        self.assertFalse(items[0].selectable)
-        state = self.module["SelectorState"](items)
-        self.assertFalse(state.toggle(1))
-        self.assertFalse(state.edit_selection_text("1"))
-        self.assertEqual(state.selected_indices, set())
+    def test_configured_elsewhere_stays_selected_when_collapsed_and_numbered_stably(self) -> None:
+        state = self.state(selected={5})
+        self.assertEqual(state.selection_text(), "5")
+        before = [item.index for item in state.items]
+        state.toggle_group("elsewhere")
+        self.assertEqual([item.index for item in state.items], before)
+        self.assertEqual(state.selection_text(), "5")
+        self.assertIn(("item", 5), state.visible_nodes())
+        state.toggle_group("elsewhere")
+        self.assertEqual(state.selection_text(), "5")
 
-    def test_mouse_row_toggle_updates_selection_and_input(self) -> None:
+    def test_parent_and_child_entries_remain_independent(self) -> None:
+        state = self.state()
+        state.set_selection({1, 3})
+        self.assertEqual(state.selection_text(), "1,3")
+        state.toggle(1)
+        self.assertEqual(state.selected_indices, {3})
+
+    def test_mouse_row_and_group_toggles_use_the_same_selection_state(self) -> None:
         state = self.state()
         fake_curses = _FakeCurses()
-        screen = fake_curses.screen
         scroll = self.module["_selector_mouse_event"](
-            screen,
-            state,
-            "add",
-            3,
-            fake_curses.BUTTON1_PRESSED,
-            0,
-            8,
-            fake_curses,
+            fake_curses.screen, state, 4, fake_curses.BUTTON1_PRESSED, 0, 8, fake_curses
         )
         self.assertEqual(scroll, 0)
         self.assertEqual(state.selected_indices, {2})
         self.assertEqual(state.input_buffer, "2")
-
         self.module["_selector_mouse_event"](
-            screen,
-            state,
-            "add",
-            5,
-            fake_curses.BUTTON1_PRESSED,
-            0,
-            8,
-            fake_curses,
+            fake_curses.screen, state, 2, fake_curses.BUTTON1_PRESSED, 0, 8, fake_curses
         )
+        self.assertFalse(state.groups[0].expanded)
         self.assertEqual(state.selected_indices, {2})
 
-    def test_typed_key_sequences_and_list_toggle_remain_synchronized(self) -> None:
+    def test_typed_key_sequences_and_space_toggle_remain_synchronized(self) -> None:
         cases = (
             ([ord("1"), ord(","), ord("2"), 10], [1, 2]),
             ([ord("1"), ord(" "), ord("2"), 10], [1, 2]),
             ([ord("1"), ord(","), ord(" "), ord("3"), 10], [1, 3]),
-            ([ord("1"), _FakeCurses.KEY_DOWN, ord(" "), 10], [1, 2]),
+            ([ord("j"), ord(" "), 10], [2]),
         )
         for keys, expected in cases:
             with self.subTest(keys=keys):
-                result = self.module["run_curses_selector"](
-                    self.items(),
-                    operation="add",
-                    context=Path("/tmp/work"),
-                    curses_module=_FakeCurses(keys=keys),
-                )
+                result = self.run_selector(keys)
                 self.assertEqual(result.selected_indices, expected)
 
-    def test_multi_digit_tokens_survive_normalization_and_protected_prefixes(self) -> None:
-        items = [self.item(index, f"item-{index}") for index in range(1, 41)]
-        cases = (
-            ([ord("3"), ord(","), ord("1"), ord("2"), 10], [3, 12]),
-            ([ord("1"), ord("2"), ord(","), ord("3"), 10], [3, 12]),
-            ([ord("1"), ord("2"), ord(","), ord("1"), ord("2"), 10], [12]),
+    def test_invalid_typed_numbers_do_not_corrupt_the_current_selection(self) -> None:
+        invalid_first = self.run_selector(
+            [ord("9"), _FakeCurses.KEY_DOWN, 10], selected={2, 3}
         )
-        for keys, expected in cases:
-            with self.subTest(keys=keys):
-                result = self.module["run_curses_selector"](
-                    items,
-                    operation="add",
-                    context=Path("/tmp/work"),
-                    curses_module=_FakeCurses(keys=keys),
-                )
-                self.assertEqual(result.selected_indices, expected)
+        self.assertEqual(invalid_first.selected_indices, [2, 3])
 
-        protected_prefix = [
-            self.item(index, f"item-{index}", selectable=index != 1)
-            for index in range(1, 13)
+        invalid_continuation = self.run_selector(
+            [ord("1"), ord("9"), _FakeCurses.KEY_DOWN, 10]
+        )
+        self.assertEqual(invalid_continuation.selected_indices, [1])
+
+    def test_stable_multi_digit_numbers_include_collapsed_entries(self) -> None:
+        items = [
+            self.item(index, f"item-{index}", path=Path(f"/work/item-{index}"))
+            for index in range(1, 41)
         ]
-        result = self.module["run_curses_selector"](
-            protected_prefix,
-            operation="add",
-            context=Path("/tmp/work"),
-            curses_module=_FakeCurses(keys=[ord("1"), ord("2"), 10]),
+        groups = [
+            self.group("current", "Current directory", True),
+            self.group("elsewhere", "Configured elsewhere", False),
+        ]
+        result = self.module["run_edit_selector"](
+            items,
+            groups,
+            set(),
+            context=Path("/work"),
+            curses_module=_FakeCurses(keys=[ord("3"), ord(","), ord("1"), ord("2"), 10]),
         )
-        self.assertEqual(result.selected_indices, [12])
+        self.assertEqual(result.selected_indices, [3, 12])
 
-        state = self.module["SelectorState"](items)
-        for value in "12,3":
-            self.module["_selector_insert_input"](state, value)
-        self.assertEqual(state.input_buffer, "3,12")
-        self.assertEqual(state.input_cursor, 1)
-        self.module["_selector_backspace"](state)
-        self.assertEqual(state.selected_indices, {12})
-
-    def test_header_and_selection_render_from_the_same_state(self) -> None:
-        state = self.state()
-        fake_curses = _FakeCurses()
-        self.module["_selector_render"](
-            fake_curses.screen,
-            state,
-            "add",
-            Path("/tmp/work"),
-            0,
-            fake_curses,
-        )
-        state.edit_selection_text("1,3")
-        fake_curses.screen.lines.clear()
-        self.module["_selector_render"](
-            fake_curses.screen,
-            state,
-            "add",
-            Path("/tmp/work"),
-            0,
-            fake_curses,
-        )
+    def test_header_rows_render_synchronized_count_and_directory_slashes(self) -> None:
+        state = self.state(selected={1, 5})
+        fake_curses = _FakeCurses(width=80)
+        self.module["_selector_render"](fake_curses.screen, state, Path("/work"), 0, fake_curses)
         rendered = "\n".join(value for _row, value, _width, _attribute in fake_curses.screen.lines)
-        self.assertIn("Selected 2/3", rendered)
-        self.assertIn("Selection: 1,3", rendered)
+        self.assertIn("Configured 2", rendered)
+        self.assertIn("Current directory", rendered)
+        self.assertIn(".agents/", rendered)
+        self.assertIn("▶ Configured elsewhere", rendered)
+        self.assertIn("Selection: 1,5", rendered)
+        self.assertIn("Enter Apply", rendered)
+        self.assertIn("Esc/Ctrl-Q Cancel", rendered)
 
-        narrow_curses = _FakeCurses(height=12, width=80)
-        self.module["_selector_render"](
-            narrow_curses.screen,
-            state,
-            "add",
-            Path("/tmp/") / ("very-long-directory-" * 8),
-            0,
-            narrow_curses,
-        )
-        narrow_header = next(value for row, value, _width, _attribute in narrow_curses.screen.lines if row == 0)
-        self.assertIn("Selected 2/3", narrow_header)
-
-    def test_enter_applies_keyboard_selection_and_escape_cancels(self) -> None:
-        fake_curses = _FakeCurses(keys=[ord("j"), ord(" "), 10])
-        result = self.module["run_curses_selector"](
-            self.items(), operation="add", context=Path("/tmp/work"), curses_module=fake_curses
-        )
-        self.assertEqual(result.selected_indices, [2])
-        self.assertFalse(result.cancelled)
-        self.assertEqual(fake_curses.mouse_masks[-1], 0)
-
-        cancelled_curses = _FakeCurses(keys=[27])
-        cancelled = self.module["run_curses_selector"](
-            self.items(), operation="delete", context=Path("/tmp/backup.yaml"), curses_module=cancelled_curses
-        )
-        self.assertTrue(cancelled.cancelled)
-        self.assertEqual(cancelled.selected_indices, [])
-        self.assertEqual(cancelled_curses.mouse_masks[-1], 0)
-
-    def test_ctrl_c_and_exceptions_restore_terminal_state(self) -> None:
-        for key in (3, KeyboardInterrupt()):
+    def test_enter_applies_and_cancel_keys_restore_terminal_state(self) -> None:
+        applied = self.run_selector([ord("j"), ord(" "), 10])
+        self.assertEqual(applied.selected_indices, [2])
+        self.assertFalse(applied.cancelled)
+        for key in (27, 17, 3, KeyboardInterrupt()):
             with self.subTest(key=key):
                 fake_curses = _FakeCurses(keys=[key])
-                result = self.module["run_curses_selector"](
-                    self.items(), operation="add", context=Path("/tmp/work"), curses_module=fake_curses
+                result = self.module["run_edit_selector"](
+                    self.items(), self.groups(), set(), context=Path("/work"), curses_module=fake_curses
                 )
                 self.assertTrue(result.cancelled)
                 self.assertEqual(fake_curses.mouse_masks[-1], 0)
                 self.assertIn(False, fake_curses.screen.keypad_values)
                 self.assertGreaterEqual(fake_curses.endwin_calls, 1)
                 self.assertEqual(fake_curses.cursor_visibility, 2)
+                self.assertEqual(fake_curses.raw_calls, 1)
+                self.assertEqual(fake_curses.noraw_calls, 1)
 
-        fake_curses = _FakeCurses(keys=[RuntimeError("render failure")])
+    def test_horizontal_group_controls_preserve_selection(self) -> None:
+        state = self.state(selected={5})
+        state.focus_node = ("group", "elsewhere")
+        state.horizontal(1)
+        self.assertTrue(state.groups[1].expanded)
+        state.horizontal(-1)
+        self.assertFalse(state.groups[1].expanded)
+        self.assertEqual(state.selected_indices, {5})
+
+    def test_exception_restores_terminal_state(self) -> None:
+        fake_curses = _FakeCurses(keys=[RuntimeError("selector failure")])
         with self.assertRaises(RuntimeError):
-            self.module["run_curses_selector"](
-                self.items(), operation="add", context=Path("/tmp/work"), curses_module=fake_curses
+            self.module["run_edit_selector"](
+                self.items(), self.groups(), set(), context=Path("/work"), curses_module=fake_curses
             )
         self.assertEqual(fake_curses.mouse_masks[-1], 0)
         self.assertIn(False, fake_curses.screen.keypad_values)
         self.assertGreaterEqual(fake_curses.endwin_calls, 1)
         self.assertEqual(fake_curses.cursor_visibility, 2)
-
-    def test_cancelled_delete_leaves_backup_configuration_unchanged(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="bk-selector-cancel-") as temporary:
-            home = Path(temporary)
-            paths = self.module["Paths"].from_home(home)
-            source = home / "source"
-            source.touch()
-            paths.runtime.mkdir()
-            config = self.module["Config"](1, 7, [paths.config, source])
-            self.module["write_config"](paths, config)
-            before = paths.config.read_bytes()
-            cancelled = self.module["SelectorResult"]([], cancelled=True)
-
-            command_globals = self.module["del_command"].__globals__
-            with patch.dict(command_globals, {"select_entries": lambda *args, **kwargs: cancelled}):
-                result = self.module["del_command"](paths)
-
-            self.assertEqual(result, 1)
-            self.assertEqual(paths.config.read_bytes(), before)
+        self.assertEqual(fake_curses.raw_calls, 1)
+        self.assertEqual(fake_curses.noraw_calls, 1)
 
 
 class _FakeScreen:
@@ -1284,6 +1342,8 @@ class _FakeCurses:
         self.mouse_masks: list[int] = []
         self.endwin_calls = 0
         self.cursor_visibility = 2
+        self.raw_calls = 0
+        self.noraw_calls = 0
 
     def initscr(self) -> _FakeScreen:
         return self.screen
@@ -1294,11 +1354,11 @@ class _FakeCurses:
     def echo(self) -> None:
         pass
 
-    def cbreak(self) -> None:
-        pass
+    def raw(self) -> None:
+        self.raw_calls += 1
 
-    def nocbreak(self) -> None:
-        pass
+    def noraw(self) -> None:
+        self.noraw_calls += 1
 
     def mousemask(self, mask: int) -> None:
         self.mouse_masks.append(mask)
