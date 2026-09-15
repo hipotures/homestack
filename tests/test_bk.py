@@ -372,6 +372,18 @@ class BackupCliTests(unittest.TestCase):
         self.assertEqual(self.status_value(status, "status"), "ok")
         self.assertNotIn("\x1b[", json.dumps(status))
 
+    def test_human_run_displays_backup_progress(self) -> None:
+        source = self.home / "source"
+        source.mkdir()
+        (source / "data").write_text("progress", encoding="utf-8")
+        self.write_config(self.home, [self.config_path(self.home), source])
+
+        result = self.run_bk(self.home, "run")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Backup ready", result.stdout)
+        self.assertIn("Backup completed", result.stdout)
+
     def test_overlapping_sources_are_allowed_and_independently_archived(self) -> None:
         dev = self.home / "DEV"
         parent = dev / "foo"

@@ -31,6 +31,14 @@ from urllib.parse import quote
 
 try:
     from rich.console import Console
+    from rich.progress import (
+        BarColumn,
+        Progress,
+        SpinnerColumn,
+        TaskProgressColumn,
+        TextColumn,
+        TimeElapsedColumn,
+    )
     from rich.prompt import Prompt
     from rich.table import Table
 except ImportError as exc:  # pragma: no cover - the guest contract provides Rich
@@ -154,6 +162,37 @@ class ArchivePair:
     archive: Path
     log: Path
     stamp: str
+
+
+class BackupProgress:
+    """Render live backup phases for a human-facing run."""
+
+    def __init__(self) -> None:
+        self._progress = Progress(
+            SpinnerColumn(),
+            TextColumn("{task.description}"),
+            BarColumn(),
+            TaskProgressColumn(),
+            TimeElapsedColumn(),
+            console=console,
+        )
+        self._task_id: int | None = None
+
+    def __enter__(self) -> BackupProgress:
+        self._progress.start()
+        return self
+
+    def __exit__(self, _exc_type: object, _exc: object, _traceback: object) -> None:
+        self._progress.stop()
+
+    def stage(self, description: str, *, total: int | None = None) -> None:
+        if self._task_id is not None:
+            self._progress.remove_task(self._task_id)
+        self._task_id = self._progress.add_task(description, total=total)
+
+    def advance(self) -> None:
+        if self._task_id is not None:
+            self._progress.advance(self._task_id)
 
 
 def normalize_path(path: str | os.PathLike[str]) -> Path:
@@ -655,7 +694,7 @@ def validate_plan_entry(entry: PlanEntry) -> None:
         raise BKError(f"source file changed after classification: {entry.source_path}")
 
 
-def build_snapshot_plan(config: Config) -> PlanSummary:
+def build_snapshot_plan(config: Config, progress: BackupProgress | None = None) -> PlanSummary:
     classification_cache: dict[tuple[int, int], ClassResult] = {}
     source_plans: list[SourcePlan] = []
 
@@ -704,6 +743,8 @@ def build_snapshot_plan(config: Config) -> PlanSummary:
             visit(source_index, source, Path(child.path), relative / child.name, target)
 
     for index, source in enumerate(config.sources, start=1):
+        if progress is not None:
+            progress.stage(f"Scanning source {index}/{len(config.sources)}")
         root_kind, _ = lstat_kind(source)
         target = SourcePlan(index=index, source=source, root_kind=root_kind)
         visit(index, source, source, Path(), target)
@@ -876,6 +917,7 @@ def materialize_plan(
     plan: PlanSummary,
     run_directory: Path,
     log_lines: list[str] | None = None,
+    progress: BackupProgress | None = None,
 ) -> tuple[Path, list[str]]:
     payload = run_directory / "payload"
     payload.mkdir(mode=0o700)
@@ -885,6 +927,8 @@ def materialize_plan(
         root = payload / f"{source_plan.index:04d}" / source_label(source_plan.source)
         for entry in source_plan.entries:
             if entry.skip_sidecar:
+                if progress is not None:
+                    progress.advance()
                 continue
             validate_plan_entry(entry)
             destination = entry_destination(payload, entry, source_plan.source)
@@ -907,6 +951,8 @@ def materialize_plan(
                     copy_regular_file(entry.source_path, destination)
             else:  # pragma: no cover - plan construction rejects this
                 raise BKError(f"unsupported staged entry kind {entry.kind}: {entry.source_path}")
+            if progress is not None:
+                progress.advance()
 
     manifest = {
         "schema": "bk-archive",
@@ -1381,7 +1427,13 @@ def backup_lock(paths: Paths) -> Iterator[None]:
             os.close(descriptor)
 
 
-def run_backup(paths: Paths, config: Config, *, already_locked: bool) -> tuple[int, dict[str, Any]]:
+def run_backup(
+    paths: Paths,
+    config: Config,
+    *,
+    already_locked: bool,
+    progress: BackupProgress | None = None,
+) -> tuple[int, dict[str, Any]]:
     if not already_locked:
         raise BKError("internal backup execution requires the caller to hold the run lock")
     started = datetime.now().astimezone()
@@ -1402,8 +1454,13 @@ def run_backup(paths: Paths, config: Config, *, already_locked: bool) -> tuple[i
             run_directory = Path(tempfile.mkdtemp(prefix="run-", dir=paths.work))
             run_identity = directory_identity(run_directory, "staging")
             try:
-                plan = build_snapshot_plan(config)
-                payload, _ = materialize_plan(plan, run_directory, details)
+                if progress is not None:
+                    progress.stage("Scanning and classifying sources")
+                plan = build_snapshot_plan(config, progress)
+                if progress is not None:
+                    entry_count = sum(len(source.entries) for source in plan.sources)
+                    progress.stage("Creating staged snapshot", total=entry_count)
+                payload, _ = materialize_plan(plan, run_directory, details, progress)
                 manifest = run_directory / "manifest.json"
                 if not manifest.is_file():
                     raise BKError("staging manifest was not created")
@@ -1414,6 +1471,8 @@ def run_backup(paths: Paths, config: Config, *, already_locked: bool) -> tuple[i
                 )
                 os.close(descriptor)
                 archive_temporary = Path(temporary_name)
+                if progress is not None:
+                    progress.stage("Compressing snapshot")
                 create_gzip_tar(payload, archive_temporary)
                 archive_size = archive_temporary.stat().st_size
                 cleanup_run_directory(
@@ -1469,6 +1528,8 @@ def run_backup(paths: Paths, config: Config, *, already_locked: bool) -> tuple[i
                         pass
                     raise BKError(f"cannot publish timestamped backup pair: {exc}") from exc
 
+                if progress is not None:
+                    progress.stage("Publishing backup")
                 publish_current_links(paths, pair)
                 current_published = True
                 retained = prune_archives(paths, config.retention)
@@ -1479,6 +1540,9 @@ def run_backup(paths: Paths, config: Config, *, already_locked: bool) -> tuple[i
                 status = make_status(paths, config, "ok", started, finished, duration, None, None)
                 status["retained_successful_archives"] = retained
                 write_status(paths, status)
+                if progress is not None:
+                    progress.stage("Backup ready", total=1)
+                    progress.advance()
                 return 0, status
             finally:
                 if archive_temporary is not None:
@@ -1765,7 +1829,16 @@ def run_command(paths: Paths, json_mode: bool) -> int:
                         code = 0
                         result = unconfigured_result()
                     else:
-                        code, result = run_backup(paths, config, already_locked=True)
+                        if json_mode:
+                            code, result = run_backup(paths, config, already_locked=True)
+                        else:
+                            with BackupProgress() as progress:
+                                code, result = run_backup(
+                                    paths,
+                                    config,
+                                    already_locked=True,
+                                    progress=progress,
+                                )
         except BackupAlreadyRunning as exc:
             code = 75
             result = {
