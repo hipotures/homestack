@@ -18,11 +18,11 @@ from .config import Config
 from .guest import derive_ip
 from .lifecycle import resolve_workspace_target
 from .models import AppError
-from . import repo
-from .setup_config import ApplicationParams, Entry, FileParams, EnvironmentParams, RepositoryParams, StructuredParams, config_entries
+from . import backup, repo
+from .setup_config import ApplicationParams, BackupParams, Entry, FileParams, EnvironmentParams, RepositoryParams, StructuredParams, config_entries
 from .workspace_ssh import WorkspaceSSH
 
-ORDER = {"environment": 0, "file": 1, "application": 2, "structured": 3, "repository": 4}
+ORDER = {"environment": 0, "file": 1, "application": 2, "structured": 3, "repository": 4, "backup": 5}
 
 
 @dataclass(frozen=True)
@@ -42,6 +42,11 @@ class Plan:
                 extra = {"profile": p.profile}
             elif isinstance(p, RepositoryParams):
                 extra = {"repository": p.repository}
+            elif isinstance(p, BackupParams):
+                extra = {
+                    "destinations": ["~/" + path for path in backup.managed_paths()],
+                    "timer": "backup.timer",
+                }
             elif isinstance(p, ApplicationParams):
                 extra = {"interpreter": p.interpreter, "interaction": p.interaction,
                          "prerequisites": p.prerequisites, "bin_dirs": p.bin_dirs,
@@ -255,12 +260,14 @@ def inspect_workspace_state(ws, cfg: Config, target: dict, entries: tuple[Entry,
                     item["state"] = "managed; verification unavailable"
                 else:
                     item["state"] = "unknown; no installation check"
-                backup = [remote_metadata[path[2:].rstrip("/")] for path in p.backup_paths
-                          if remote_metadata.get(path[2:].rstrip("/"), {}).get("exists")]
-                item["files"] = backup
-                item["will_overwrite"] = item["ready"] or bool(backup)
+                backup_files = [remote_metadata[path[2:].rstrip("/")] for path in p.backup_paths
+                                if remote_metadata.get(path[2:].rstrip("/"), {}).get("exists")]
+                item["files"] = backup_files
+                item["will_overwrite"] = item["ready"] or bool(backup_files)
                 if p.backup_paths:
                     item["backup_paths"] = list(p.backup_paths)
+            elif isinstance(p, BackupParams):
+                item.update(backup.inspect(ws, cfg))
             elif isinstance(p, RepositoryParams):
                 live = repo_states.get(p.repository, {}) if isinstance(repo_states, dict) else {}
                 item.update({k: live.get(k) for k in ("state", "ready", "exists", "detail", "remote", "key_pair") if k in live})
@@ -290,6 +297,8 @@ def backup_paths_for_entry(cfg: Config, entry: Entry, state: dict) -> tuple[str,
         return tuple(state.get("changed", ()))
     if isinstance(p, ApplicationParams):
         return tuple(path[2:].rstrip("/") for path in p.backup_paths)
+    if isinstance(p, BackupParams):
+        return tuple(state.get("snapshot_paths", ()))
     if isinstance(p, RepositoryParams):
         repository = state.get("repository", {})
         actions = state.get("actions", ())
@@ -305,6 +314,8 @@ def record_entry_state(ws, cfg: Config, plan: Plan, entry: Entry, state: dict, *
         paths = write_paths(cfg, entry)
     elif isinstance(entry.params, EnvironmentParams):
         paths = tuple(state.get("paths", ()))
+    elif isinstance(entry.params, BackupParams):
+        paths = backup.managed_paths()
     values = {
         "vmid": plan.target["vmid"],
         "name": plan.target["name"],
@@ -357,6 +368,8 @@ def write_paths(cfg: Config, entry: Entry) -> tuple[str, ...]:
     if isinstance(p, EnvironmentParams):
         return {"bash": (".bashrc", ".profile", ".bash_profile", ".bash_login"), "zsh": (".zshenv", ".zshrc"),
                 "fish": (".config/fish/conf.d/homestack.fish",), "nu": (".config/nushell/env.nu", ".config/nushell/config.nu")}[p.profile]
+    if isinstance(p, BackupParams):
+        return backup.managed_paths()
     if isinstance(p, RepositoryParams):
         return tuple(path.removeprefix(f"/home/{cfg.user_name}/") for path in repo.repository_paths(cfg, p.repository))
     return ()
@@ -563,6 +576,8 @@ def preflight_entry(ws, cfg: Config, plan: Plan, entry: Entry) -> dict:
             if ws.run(command_environment(cfg, command, interpreter=p.interpreter, bins=p.bin_dirs), check=False).returncode:
                 raise AppError(f"{entry.id}: prerequisite check {index} failed; inspect the recipe requirements and prepare Gold separately")
         return {"installed": installed, "ready": installed}
+    if isinstance(p, BackupParams):
+        return backup.preflight(ws, cfg)
     if isinstance(p, RepositoryParams):
         metadata = repo._github_json([f"repos/{p.repository}"], dict)
         if metadata.get("full_name", "").casefold() != p.repository.casefold() or not metadata.get("permissions", {}).get("admin") or metadata.get("archived") or metadata.get("disabled"):
@@ -634,20 +649,26 @@ def apply_entry(
                 raise AppError("Installer exited successfully but installation verification failed")
         action = "updated" if state.get("installed") else "installed"
         return "succeeded", ((f"Application {action}; installation check passed; onboarding remains separate") if p.check else f"Application {action}; command exited successfully; no installation check is configured")
-    activity(entry.id, "Configure repository")
-    state = repo.setup_repository(
-        cfg,
-        ws,
-        state["repository"],
-        quiet=True,
-        activity=lambda message: activity(entry.id, message),
-    )
-    if not state.get("ready"):
-        raise AppError("Repository provisioning finished but verification failed")
-    return (
-        "succeeded" if state.get("changed") else "already-ready",
-        str(state.get("message") or "Repository Git access verified"),
-    )
+    if isinstance(p, BackupParams):
+        return backup.apply(
+            ws, cfg, state, activity=lambda message: activity(entry.id, message)
+        )
+    if isinstance(p, RepositoryParams):
+        activity(entry.id, "Configure repository")
+        state = repo.setup_repository(
+            cfg,
+            ws,
+            state["repository"],
+            quiet=True,
+            activity=lambda message: activity(entry.id, message),
+        )
+        if not state.get("ready"):
+            raise AppError("Repository provisioning finished but verification failed")
+        return (
+            "succeeded" if state.get("changed") else "already-ready",
+            str(state.get("message") or "Repository Git access verified"),
+        )
+    raise AppError("Unknown setup action handler")
 
 
 def execute_plan(

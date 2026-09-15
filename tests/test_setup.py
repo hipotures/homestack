@@ -159,7 +159,7 @@ enabled = true
         self.assertEqual(cfg.setup, restored.setup)
         self.assertEqual(restored.repo_sort, "created")
         self.assertEqual(len([e for e in restored.setup.items if e.id == 'codex']), 1)
-        self.assertEqual({e.id for e in restored.setup.items}, {'bash', 'zsh', 'fish', 'nu', 'codex', 'opencode', 'hermes'})
+        self.assertEqual({e.id for e in restored.setup.items}, {'bash', 'zsh', 'fish', 'nu', 'codex', 'opencode', 'hermes', 'bk'})
 
     def test_changed_command_loses_inherited_safety_claim(self):
         cfg = definitions.parse_setup({'items': [{'id': 'codex', 'command': 'custom SECRET'}]})

@@ -17,6 +17,7 @@ from .models import AppError
 from .repo import _github_json
 from .setup_config import (
     ApplicationParams,
+    BackupParams,
     Entry,
     EnvironmentParams,
     FileParams,
@@ -26,7 +27,7 @@ from .setup_config import (
     config_entry_key,
 )
 
-ALIASES = {"f": "files", "e": "env", "a": "app", "r": "repo"}
+ALIASES = {"f": "files", "e": "env", "a": "app", "r": "repo", "b": "backup"}
 
 
 @dataclass
@@ -62,6 +63,9 @@ class Catalog:
                 elif isinstance(entry.params, EnvironmentParams):
                     from .setup import write_paths
                     location = ", ".join("~/" + p for p in write_paths(cfg, entry))
+                elif isinstance(entry.params, BackupParams):
+                    from .backup import managed_paths
+                    location = ", ".join("~/" + path for path in managed_paths())
                 row = {"index": i, "id": entry.id, "group": group.id, "label": entry.label,
                        "path_or_repository": location,
                        "availability": self.availability.get(entry.id, "unknown"), "guest_state": "unknown",
@@ -225,7 +229,7 @@ def parse_assignments(tokens: list[str], cfg: Config) -> dict[str, tuple[str, ..
     assignments = {}
     for token in tokens:
         if token.count("=") != 1:
-            raise AppError("Selectors must use group=item,item (files/f, env/e, app/a, repo/r)")
+            raise AppError("Selectors must use group=item,item (files/f, env/e, app/a, repo/r, backup/b)")
         key, value = token.split("=")
         key = ALIASES.get(key, key)
         if key not in groups:

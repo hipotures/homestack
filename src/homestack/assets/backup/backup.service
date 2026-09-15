@@ -1,0 +1,6 @@
+[Unit]
+Description=Run BK workspace backup
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/bk run

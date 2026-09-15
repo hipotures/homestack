@@ -54,7 +54,13 @@ def show_plan(console, plan):
     for heading in ("Group", "ID", "Action", "Paths / prerequisites", "Desired", "Dependencies"):
         table.add_column(heading)
     for action in plan.public()["actions"]:
-        location = action.get("destination") or action.get("repository") or action.get("profile") or ", ".join(action.get("prerequisites", ()))
+        location = (
+            action.get("destination")
+            or ", ".join(action.get("destinations", ()))
+            or action.get("repository")
+            or action.get("profile")
+            or ", ".join(action.get("prerequisites", ()))
+        )
         desired = ""
         if "key" in action:
             desired = f"{json.dumps(action['key'], ensure_ascii=False)} = {json.dumps(action.get('desired'), ensure_ascii=False)}"
@@ -162,7 +168,7 @@ def run_setup(args, cfg, *, json_mode: bool, assume_yes: bool) -> int:
         entries, catalog_id = select_entries(cfg, tokens, catalog_id=args.catalog)
     else:
         if unattended or getattr(args, "dry_run", False):
-            raise AppError("No actions selected. Run setup list, then specify env=bash, app=codex or another selector")
+            raise AppError("No actions selected. Run setup list, then specify env=bash, app=codex, backup=bk or another selector")
         entries, catalog_id = (), None
     # Local selection validation always precedes even read-only target resolution.
     with open_transport(cfg) as session:

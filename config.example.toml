@@ -81,6 +81,19 @@ id = "repo"
 label = "Repositories"
 description = "GitHub checkouts with workspace-local deploy keys."
 
+[[setup.groups]]
+id = "backup"
+label = "Backup"
+description = "Persistent-home BK backup tool and nightly user timer."
+
+[[setup.items]]
+id = "bk"
+group = "backup"
+handler = "backup"
+label = "BK"
+description = "Install the persistent-home BK backup tool and nightly user timer."
+depends_on = []
+
 [[setup.items]]
 id = "bash"
 group = "env"

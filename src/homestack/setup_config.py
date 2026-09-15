@@ -71,6 +71,11 @@ class RepositoryParams:
 
 
 @dataclass(frozen=True)
+class BackupParams:
+    pass
+
+
+@dataclass(frozen=True)
 class StructuredParams:
     """Internal setup entry parameters for one managed config leaf."""
 
@@ -87,7 +92,7 @@ class Entry:
     handler: str
     label: str
     description: str
-    params: FileParams | EnvironmentParams | ApplicationParams | RepositoryParams | StructuredParams
+    params: FileParams | EnvironmentParams | ApplicationParams | RepositoryParams | BackupParams | StructuredParams
     depends_on: tuple[str, ...] = ()
 
     def definition(self) -> dict[str, Any]:
@@ -105,6 +110,7 @@ DEFAULT_GROUPS = (
     Group("env", "Environment", "User shell profiles; login shell stays unchanged."),
     Group("app", "Applications", "Explicit user-space installers; onboarding is separate."),
     Group("repo", "Repositories", "GitHub checkouts with workspace-local deploy keys."),
+    Group("backup", "Backup", "Persistent-home BK backup tool and nightly user timer."),
 )
 CODEX_RECIPE = "curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh"
 # Download separately so installer stdin remains the real terminal when required.
@@ -215,6 +221,9 @@ def defaults() -> tuple[Entry, ...]:
                                 ),
                                 check="hermes --version", bin_dirs=("~/.local/bin", "~/.hermes/bin", "~/.hermes/node/bin"),
                                 requires_absent=("~/.hermes/hermes-agent",))),
+        Entry("bk", "backup", "backup", "BK",
+              "Install the persistent-home BK backup tool and nightly user timer.",
+              BackupParams()),
     ])
     return tuple(items)
 
@@ -338,7 +347,7 @@ def parse_setup(raw: Any) -> SetupConfig:
         if not isinstance(data, dict) or set(data) - {"id", "label", "description"}:
             raise AppError("Invalid setup group definition")
         group_id = data.get("id", "")
-        if not isinstance(group_id, str) or not re.fullmatch(r"[a-z][a-z0-9_-]*", group_id) or group_id in seen or group_id in {"root", "f", "e", "a", "r", *(e.id for e in defaults())}:
+        if not isinstance(group_id, str) or not re.fullmatch(r"[a-z][a-z0-9_-]*", group_id) or group_id in seen or group_id in {"root", "f", "e", "a", "r", "b", *(e.id for e in defaults())}:
             raise AppError("Invalid or duplicate setup group ID")
         seen.add(group_id)
         base = asdict(groups[group_id]) if group_id in groups else {}
@@ -368,7 +377,7 @@ def parse_setup(raw: Any) -> SetupConfig:
         base.update(data)
         entries[item_id] = base
     parsed = []
-    types = {"file": FileParams, "environment": EnvironmentParams, "application": ApplicationParams, "repository": RepositoryParams}
+    types = {"file": FileParams, "environment": EnvironmentParams, "application": ApplicationParams, "repository": RepositoryParams, "backup": BackupParams}
     common = {"id", "group", "handler", "label", "description", "depends_on"}
     for data in entries.values():
         handler = data.get("handler")

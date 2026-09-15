@@ -344,6 +344,83 @@ def structured_write(home: Path, relative: str, content_value: object, expected_
     return {"ok": True, "changed": True}
 
 
+def inspect_managed_files(home: Path, paths: object) -> dict:
+    if not isinstance(paths, list) or any(not isinstance(path, str) for path in paths):
+        raise GuestError("Managed setup paths must be a list of text paths")
+    items = []
+    for relative in dict.fromkeys(paths):
+        with _open_pinned_file(home, relative) as target:
+            content, digest, mode = _read_pinned_file(target, "Managed setup asset")
+        items.append(
+            {"path": relative, "exists": False}
+            if content is None
+            else {
+                "path": relative,
+                "exists": True,
+                "type": "file",
+                "sha256": digest,
+                "size": len(content),
+                "mode": mode,
+            }
+        )
+    return {"ok": True, "items": items}
+
+
+def install_managed_files(home: Path, directories: object, files: object) -> dict:
+    if not isinstance(directories, list) or any(not isinstance(path, str) for path in directories):
+        raise GuestError("Managed setup directories must be a list of text paths")
+    if not isinstance(files, list):
+        raise GuestError("Managed setup files must be a list")
+
+    prepared = []
+    for item in files:
+        if not isinstance(item, dict) or set(item) != {
+            "path", "content", "sha256", "expected_sha256", "mode"
+        }:
+            raise GuestError("Managed setup file definition is invalid")
+        relative = item["path"]
+        if not isinstance(relative, str):
+            raise GuestError("Managed setup file path must be text")
+        _relative_parts(relative)
+        payload = _decode_structured_content(item["content"])
+        desired = _validate_expected_digest(item["sha256"], allow_none=False)
+        if hashlib.sha256(payload).hexdigest() != desired:
+            raise GuestError("Managed setup asset does not match its declared SHA-256")
+        expected = _validate_expected_digest(item["expected_sha256"], allow_none=True)
+        mode = item["mode"]
+        if not isinstance(mode, int) or isinstance(mode, bool) or mode < 0 or mode > 0o777:
+            raise GuestError("Managed setup file mode is invalid")
+        prepared.append((relative, payload, expected, mode))
+
+    home_fd = _open_home_fd(home)
+    try:
+        for relative in dict.fromkeys(directories):
+            descriptor = _open_directory_chain(
+                home_fd,
+                _relative_parts(relative),
+                create=True,
+                label="Managed setup directory",
+            )
+            if descriptor is not None:
+                os.close(descriptor)
+    finally:
+        os.close(home_fd)
+
+    changed = []
+    for relative, payload, expected, mode in prepared:
+        with _open_pinned_file(home, relative) as target:
+            current, digest, current_mode = _read_pinned_file(
+                target, "Managed setup asset"
+            )
+            if digest != expected:
+                raise GuestError(f"Managed setup asset changed since preflight: ~/{relative}")
+            if current == payload and current_mode == mode:
+                continue
+            _atomic_bytes_pinned(target, payload, mode=mode)
+        changed.append(relative)
+    return {"ok": True, "changed": changed}
+
+
 def _validate_snapshot_id(identifier: object) -> str:
     if not isinstance(identifier, str) or not identifier or "/" in identifier or identifier in {".", ".."}:
         raise GuestError("Invalid operation snapshot")
@@ -777,6 +854,12 @@ def run(data: dict) -> dict:
     if op == "structured-restore":
         return structured_restore(home, str(data["relative"]), data.get("snapshot"),
                                   data.get("expected_sha256"), data.get("existed"))
+    if op == "managed-files-inspect":
+        return inspect_managed_files(home, data.get("paths"))
+    if op == "managed-files-install":
+        return install_managed_files(
+            home, data.get("directories"), data.get("files")
+        )
     if op == "snapshot":
         return {"ok": True, **create_snapshot(home, data.get("paths", []), data.get("items", []),
                                                 vmid=int(data["vmid"]), name=str(data["name"]))}

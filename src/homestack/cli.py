@@ -54,7 +54,7 @@ def show_help(cfg_path: Path) -> None:
         f"{cmd} migrate VMID|NAME NODE --target-storage STORAGE",
         "Offline-migrate root, persistent home and cloud-init disk; copy snippets first.",
     )
-    commands.add_row(f"{cmd} setup VMID|NAME [files=… env=… app=… repo=…]", "Inspect and apply explicit workspace setup selections; interactive setup keeps one SSH session open.")
+    commands.add_row(f"{cmd} setup VMID|NAME [files=… env=… app=… repo=… backup=…]", "Inspect and apply explicit workspace setup selections; interactive setup keeps one SSH session open.")
     commands.add_row(f"{cmd} setup list", "List setup catalog items without connecting to a workspace.")
     commands.add_row(f"{cmd} setup status VMID|NAME", "Inspect installed/configured workspace setup state without applying changes.")
     commands.add_row(
@@ -100,6 +100,7 @@ def show_help(cfg_path: Path) -> None:
         f"{cmd} setup list\n"
         f"{cmd} setup status example-workspace\n"
         f"{cmd} setup example-workspace\n"
+        f"{cmd} setup example-workspace backup=bk\n"
         f"{cmd} repo example-workspace\n"
         f"{cmd} destroy 200\n"
         f"{cmd} destroy 200 --json\n"
@@ -158,9 +159,9 @@ def build_parser() -> argparse.ArgumentParser:
     migrate.add_argument("-y", "--yes", action="store_true")
     migrate.add_argument("-h", "--help", action="store_true", dest="sub_help")
 
-    setup = sub.add_parser("setup", description="Prepare explicit Files, Environment, Applications and Repositories selections.")
+    setup = sub.add_parser("setup", description="Prepare explicit Files, Environment, Applications, Repositories and Backup selections.")
     setup.add_argument("target", nargs="?", help="VMID, exact workspace name, list, or status")
-    setup.add_argument("selectors", nargs="*", help="files/f=ID,ID env/e=ID app/a=ID repo/r=OWNER/REPO; 0/all selects a category")
+    setup.add_argument("selectors", nargs="*", help="files/f=ID,ID env/e=ID app/a=ID repo/r=OWNER/REPO backup/b=ID; 0/all selects a category")
     setup.add_argument("--json", action="store_true")
     setup.add_argument("-y", "--yes", action="store_true")
     setup.add_argument("--catalog", help="Immutable catalog snapshot ID for numeric selections")
