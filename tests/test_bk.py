@@ -1120,12 +1120,21 @@ class SelectorTests(unittest.TestCase):
         self.assertEqual(state.selected_count, 1)
 
     def test_typed_numeric_forms_update_checkboxes_and_canonical_text(self) -> None:
-        for raw in ("1,2,3", "1 2 3", "1, 2 3", "1 2,3"):
+        for raw in ("1,2,3", "1 2 3", "1, 2, 3", "1 2,3"):
             with self.subTest(raw=raw):
                 state = self.state()
                 self.assertTrue(state.edit_selection_text(raw))
                 self.assertEqual(state.selected_indices, {1, 2, 3})
                 self.assertEqual(state.selection_text(), "1,2,3")
+
+    def test_numeric_parser_rejects_non_separator_text_without_changing_selection(self) -> None:
+        for raw in ("1x2", "-1", "1.2", "abc", "1,,2", "1,"):
+            with self.subTest(raw=raw):
+                state = self.state(selected={2, 3})
+                self.assertFalse(state.edit_selection_text(raw))
+                self.assertEqual(state.selected_indices, {2, 3})
+                self.assertEqual(state.selection_text(), "2,3")
+                self.assertIn("commas or spaces", state.error or "")
 
     def test_protected_and_runtime_rows_cannot_be_selected(self) -> None:
         state = self.state()
@@ -1229,14 +1238,26 @@ class SelectorTests(unittest.TestCase):
         self.assertEqual(result.selected_indices, [3, 12])
 
     def test_header_rows_render_synchronized_count_and_directory_slashes(self) -> None:
-        state = self.state(selected={1, 5})
+        protected = self.item(
+            None,
+            "backup.yaml",
+            "file",
+            False,
+            "protected self-entry",
+            Path("/home/user/backup/backup.yaml"),
+        )
+        state = self.module["SelectorState"](
+            [*self.items(), protected],
+            groups=self.groups(),
+            selected_indices={1, 5},
+        )
         fake_curses = _FakeCurses(width=80)
         self.module["_selector_render"](fake_curses.screen, state, Path("/work"), 0, fake_curses)
         rendered = "\n".join(value for _row, value, _width, _attribute in fake_curses.screen.lines)
         self.assertIn("Configured 2", rendered)
-        self.assertIn("Current directory", rendered)
+        self.assertIn("Current directory  1/3", rendered)
         self.assertIn(".agents/", rendered)
-        self.assertIn("▶ Configured elsewhere", rendered)
+        self.assertIn("▶ Configured elsewhere  1/1", rendered)
         self.assertIn("Selection: 1,5", rendered)
         self.assertIn("Enter Apply", rendered)
         self.assertIn("Esc/Ctrl-Q Cancel", rendered)

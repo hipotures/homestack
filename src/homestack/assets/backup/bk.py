@@ -386,9 +386,12 @@ def write_config(paths: Paths, config: Config) -> None:
 def parse_selection(raw: str, count: int) -> list[int]:
     """Parse the numeric selector's natural comma/space-separated forms."""
 
-    values = re.findall(r"[0-9]+", raw)
-    if not values:
+    stripped = raw.strip()
+    if not stripped:
         return []
+    if re.fullmatch(r"[0-9]+(?:(?:\s*,\s*|\s+)[0-9]+)*", stripped) is None:
+        raise BKError("selection must contain only numbers separated by commas or spaces")
+    values = re.findall(r"[0-9]+", raw)
     selected: list[int] = []
     errors: list[str] = []
     for value in values:
@@ -501,6 +504,9 @@ class SelectorState:
 
     def group_selected_count(self, group: SelectorGroup) -> int:
         return sum(index in self.selected_indices for index in group.item_indices if index is not None)
+
+    def group_selectable_count(self, group: SelectorGroup) -> int:
+        return sum(item.selectable for item in self.items if item.group == group.key)
 
     def visible_nodes(self) -> list[tuple[str, str | int | None]]:
         nodes: list[tuple[str, str | int | None]] = []
@@ -1025,7 +1031,10 @@ def _selector_keep_focus_visible(state: SelectorState, scroll: int, visible: int
 
 def _selector_group_text(group: SelectorGroup, state: SelectorState, width: int) -> str:
     marker = "▼" if group.expanded else "▶"
-    return f"{marker} {group.label}  {state.group_selected_count(group)}/{len(group.item_indices)}"[: max(0, width)]
+    return (
+        f"{marker} {group.label}  "
+        f"{state.group_selected_count(group)}/{state.group_selectable_count(group)}"
+    )[: max(0, width)]
 
 
 def _selector_row_text(item: SelectorItem, selected: bool, width: int) -> str:
