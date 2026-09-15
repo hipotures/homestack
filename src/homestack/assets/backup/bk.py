@@ -114,6 +114,7 @@ class Config:
     version: int
     retention: int
     sources: list[Path]
+    respect_gitignore: bool = True
 
 
 @dataclass
@@ -340,8 +341,10 @@ def parse_config_text(text: str, config_path: Path, paths: Paths) -> Config:
         # A final newline is part of the canonical writer format.  Refusing it
         # also prevents accidentally accepting a truncated manually edited file.
         raise ConfigError("backup.yaml must end with a newline")
-    if len(lines) < 3:
-        raise ConfigError("backup.yaml must contain version, retention, and sources")
+    if len(lines) < 4:
+        raise ConfigError(
+            "backup.yaml must contain version, retention, respect_gitignore, and sources"
+        )
     if lines[0] != "version: 1":
         match = re.fullmatch(r"version: ([0-9]+)", lines[0])
         if not match:
@@ -353,11 +356,15 @@ def parse_config_text(text: str, config_path: Path, paths: Paths) -> Config:
     retention = int(retention_match.group(1))
     if retention < 1:
         raise ConfigError("backup.yaml retention must be an integer greater than or equal to 1")
-    if lines[2] != "sources:":
+    respect_gitignore_match = re.fullmatch(r"respect_gitignore: (true|false)", lines[2])
+    if not respect_gitignore_match:
+        raise ConfigError("backup.yaml has an invalid respect_gitignore line")
+    respect_gitignore = respect_gitignore_match.group(1) == "true"
+    if lines[3] != "sources:":
         raise ConfigError("backup.yaml must contain a sources section")
 
     source_values: list[Path] = []
-    for line_number, line in enumerate(lines[3:], start=4):
+    for line_number, line in enumerate(lines[4:], start=5):
         if not line.startswith("  - "):
             raise ConfigError(f"backup.yaml has invalid source syntax on line {line_number}")
         encoded = line[4:]
@@ -391,7 +398,12 @@ def parse_config_text(text: str, config_path: Path, paths: Paths) -> Config:
             continue
         if path_is_runtime(source, paths):
             raise ConfigError(f"backup.yaml source {source} is inside the protected BK runtime")
-    return Config(version=CONFIG_VERSION, retention=retention, sources=source_values)
+    return Config(
+        version=CONFIG_VERSION,
+        retention=retention,
+        sources=source_values,
+        respect_gitignore=respect_gitignore,
+    )
 
 
 def read_config(paths: Paths) -> Config | None:
@@ -412,7 +424,13 @@ def read_config(paths: Paths) -> Config | None:
 
 
 def write_config(paths: Paths, config: Config) -> None:
-    lines = ["version: 1", f"retention: {config.retention}", "sources:"]
+    respect_gitignore = "true" if config.respect_gitignore else "false"
+    lines = [
+        "version: 1",
+        f"retention: {config.retention}",
+        f"respect_gitignore: {respect_gitignore}",
+        "sources:",
+    ]
     lines.extend(f"  - {json.dumps(str(source), ensure_ascii=False)}" for source in config.sources)
     atomic_write_bytes(paths.config, ("\n".join(lines) + "\n").encode("utf-8"), mode=0o600)
 
@@ -1785,7 +1803,12 @@ def apply_edit_selection(paths: Paths, config: Config | None, state: SelectorSta
         ensure_runtime_directory(paths)
         new_config = Config(CONFIG_VERSION, DEFAULT_RETENTION, [normalize_path(paths.config), *final_sources])
     else:
-        new_config = Config(config.version, config.retention, [config.sources[0], *final_sources])
+        new_config = Config(
+            config.version,
+            config.retention,
+            [config.sources[0], *final_sources],
+            config.respect_gitignore,
+        )
     write_config(paths, new_config)
     return True
 
@@ -1882,11 +1905,92 @@ def validate_plan_entry(entry: PlanEntry) -> None:
         raise BKError(f"source file changed after classification: {entry.source_path}")
 
 
+def git_worktree_root(directory: Path) -> Path | None:
+    """Return the containing Git worktree root, or ``None`` outside a worktree."""
+
+    environment = os.environ.copy()
+    environment["LC_ALL"] = "C"
+    try:
+        completed = subprocess.run(
+            ["git", "-C", str(directory), "rev-parse", "--show-toplevel"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+            env=environment,
+        )
+    except FileNotFoundError as exc:
+        raise BKError("Git is required when respect_gitignore is true") from exc
+    except OSError as exc:
+        raise BKError(f"cannot inspect Git worktree for {directory}: {exc}") from exc
+    if completed.returncode != 0:
+        detail = os.fsdecode(completed.stderr).strip()
+        if "not a git repository" in detail.lower() or "must be run in a work tree" in detail.lower():
+            return None
+        raise BKError(f"cannot inspect Git worktree for {directory}: {detail or 'unknown Git error'}")
+    encoded_root = completed.stdout[:-1] if completed.stdout.endswith(b"\n") else completed.stdout
+    if not encoded_root:
+        raise BKError(f"Git returned no worktree root for {directory}")
+    return lexically_real(Path(os.fsdecode(encoded_root)))
+
+
+def git_directory_entries(directory: Path, worktree_root: Path) -> set[Path]:
+    """Return Git-selected paths and their ancestors relative to a directory."""
+
+    real_directory = lexically_real(directory)
+    if not path_is_within(real_directory, worktree_root):
+        raise BKError(f"Git worktree root does not contain configured directory: {directory}")
+    relative_directory = Path(os.path.relpath(real_directory, worktree_root))
+    pathspec = "." if relative_directory == Path(".") else f":(literal){relative_directory}"
+    try:
+        completed = subprocess.run(
+            [
+                "git",
+                "ls-files",
+                "-z",
+                "--cached",
+                "--others",
+                "--exclude-standard",
+                "--",
+                pathspec,
+            ],
+            cwd=worktree_root,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+    except OSError as exc:
+        raise BKError(f"cannot list Git files for {directory}: {exc}") from exc
+    if completed.returncode != 0:
+        detail = os.fsdecode(completed.stderr).strip()
+        raise BKError(f"cannot list Git files for {directory}: {detail or 'unknown Git error'}")
+
+    entries = {Path()}
+    for encoded_path in completed.stdout.split(b"\0"):
+        if not encoded_path:
+            continue
+        git_path = Path(os.fsdecode(encoded_path))
+        candidate = normalize_path(worktree_root / git_path)
+        if not path_is_within(candidate, real_directory):
+            raise BKError(f"Git returned a path outside configured directory {directory}: {git_path}")
+        relative = Path(os.path.relpath(candidate, real_directory))
+        for depth in range(1, len(relative.parts) + 1):
+            entries.add(Path(*relative.parts[:depth]))
+    return entries
+
+
 def build_snapshot_plan(config: Config, progress: BackupProgress | None = None) -> PlanSummary:
     classification_cache: dict[tuple[int, int], ClassResult] = {}
     source_plans: list[SourcePlan] = []
 
-    def visit(source_index: int, source: Path, current: Path, relative: Path, target: SourcePlan) -> None:
+    def visit(
+        source_index: int,
+        source: Path,
+        current: Path,
+        relative: Path,
+        target: SourcePlan,
+        *,
+        allowed_paths: set[Path] | None = None,
+    ) -> None:
         kind, metadata = lstat_kind(current)
         if kind == "file":
             identity = (metadata.st_dev, metadata.st_ino)
@@ -1928,14 +2032,28 @@ def build_snapshot_plan(config: Config, progress: BackupProgress | None = None) 
         except OSError as exc:
             raise BKError(f"cannot traverse source directory {current}: {exc}") from exc
         for child in children:
-            visit(source_index, source, Path(child.path), relative / child.name, target)
+            child_relative = relative / child.name
+            if allowed_paths is None or child_relative in allowed_paths:
+                visit(
+                    source_index,
+                    source,
+                    Path(child.path),
+                    child_relative,
+                    target,
+                    allowed_paths=allowed_paths,
+                )
 
     for index, source in enumerate(config.sources, start=1):
         if progress is not None:
             progress.stage(f"Scanning source {index}/{len(config.sources)}")
         root_kind, _ = lstat_kind(source)
         target = SourcePlan(index=index, source=source, root_kind=root_kind)
-        visit(index, source, source, Path(), target)
+        worktree_root = git_worktree_root(source) if config.respect_gitignore and root_kind == "directory" else None
+        if worktree_root is None:
+            visit(index, source, source, Path(), target)
+        else:
+            allowed_paths = git_directory_entries(source, worktree_root)
+            visit(index, source, source, Path(), target, allowed_paths=allowed_paths)
         source_plans.append(target)
 
     # Sidecar decisions are made after the full traversal.  Every regular file

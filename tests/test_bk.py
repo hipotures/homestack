@@ -144,10 +144,16 @@ class BackupCliTests(unittest.TestCase):
         retention: int = 7,
         *,
         version: int = 1,
+        respect_gitignore: bool = True,
     ) -> Path:
         backup = cls.backup_dir(home)
         backup.mkdir(parents=True, exist_ok=True)
-        lines = [f"version: {version}", f"retention: {retention}", "sources:"]
+        lines = [
+            f"version: {version}",
+            f"retention: {retention}",
+            f"respect_gitignore: {'true' if respect_gitignore else 'false'}",
+            "sources:",
+        ]
         lines.extend(f"  - {json.dumps(str(source.resolve()))}" for source in sources)
         path = backup / "backup.yaml"
         path.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -329,10 +335,40 @@ class BackupCliTests(unittest.TestCase):
         self.assertTrue(config.exists())
         self.assertIn("version: 1", config.read_text(encoding="utf-8"))
         self.assertIn("retention: 7", config.read_text(encoding="utf-8"))
+        self.assertIn("respect_gitignore: true", config.read_text(encoding="utf-8"))
         self.assertEqual(
             self.config_sources(config),
             [str(config.resolve()), str(selected.resolve())],
         )
+
+    def test_config_accepts_only_canonical_gitignore_booleans(self) -> None:
+        module = runpy.run_path(str(BK))
+        paths = module["Paths"].from_home(self.home)
+        self_source = json.dumps(str(paths.config))
+
+        def config_text(value: str) -> str:
+            return (
+                "version: 1\n"
+                "retention: 7\n"
+                f"respect_gitignore: {value}\n"
+                "sources:\n"
+                f"  - {self_source}\n"
+            )
+
+        self.assertTrue(
+            module["parse_config_text"](config_text("true"), paths.config, paths).respect_gitignore
+        )
+        self.assertFalse(
+            module["parse_config_text"](config_text("false"), paths.config, paths).respect_gitignore
+        )
+        for invalid in ("True", "False", "yes", "1", '"true"'):
+            with self.subTest(invalid=invalid):
+                with self.assertRaises(module["ConfigError"]):
+                    module["parse_config_text"](config_text(invalid), paths.config, paths)
+
+        paths.runtime.mkdir()
+        module["write_config"](paths, module["Config"](1, 7, [paths.config], False))
+        self.assertIn("respect_gitignore: false\n", paths.config.read_text(encoding="utf-8"))
 
     def test_edit_without_a_selection_does_not_create_configuration(self) -> None:
         working = self.home / "empty"
@@ -899,6 +935,173 @@ class BackupCliTests(unittest.TestCase):
                 first.kill()
                 first.communicate(timeout=5)
 
+    def test_gitignore_false_preserves_unfiltered_traversal_without_git(self) -> None:
+        repository = self.home / "repository"
+        source = repository / "source"
+        source.mkdir(parents=True)
+        subprocess.run(["git", "-C", str(repository), "init", "-q"], check=True)
+        (repository / ".gitignore").write_text("source/ignored.txt\n", encoding="utf-8")
+        ignored = source / "ignored.txt"
+        ignored.write_text("included", encoding="utf-8")
+        module = runpy.run_path(str(BK))
+        config = module["Config"](1, 7, [source], False)
+
+        def unexpected_git_call(_source: Path) -> Path | None:
+            self.fail("respect_gitignore=false must not invoke Git")
+
+        with patch.dict(
+            module["build_snapshot_plan"].__globals__,
+            {"git_worktree_root": unexpected_git_call},
+        ):
+            plan = module["build_snapshot_plan"](config)
+
+        self.assertIn(ignored, {entry.source_path for entry in plan.sources[0].entries})
+
+    def test_gitignore_filters_directory_plan_before_classification_and_byte_counting(self) -> None:
+        repository = self.home / "repository"
+        source = repository / "source"
+        nested = source / "nested"
+        ignored_directory = source / "ignored-directory"
+        nested.mkdir(parents=True)
+        ignored_directory.mkdir()
+        subprocess.run(["git", "-C", str(repository), "init", "-q"], check=True)
+        (repository / ".gitignore").write_text(
+            "source/ignored.txt\nsource/ignored-directory/\nsource/tracked.txt\n",
+            encoding="utf-8",
+        )
+        (nested / ".gitignore").write_text("*.tmp\n", encoding="utf-8")
+        tracked = source / "tracked.txt"
+        untracked = source / "untracked.txt"
+        nested_kept = nested / "kept.txt"
+        ignored = source / "ignored.txt"
+        nested_ignored = nested / "ignored.tmp"
+        ignored_child = ignored_directory / "secret.bin"
+        tracked.write_bytes(b"tracked")
+        untracked.write_bytes(b"untracked")
+        nested_kept.write_bytes(b"nested")
+        ignored.write_bytes(b"ignored" * 100)
+        nested_ignored.write_bytes(b"nested ignored" * 100)
+        ignored_child.write_bytes(b"directory ignored" * 100)
+        subprocess.run(
+            ["git", "-C", str(repository), "add", "-f", "source/tracked.txt"],
+            check=True,
+        )
+        module = runpy.run_path(str(BK))
+        config = module["Config"](1, 7, [source], True)
+        classified: list[Path] = []
+        classify = module["classify_regular_file"]
+
+        def record_classification(path: Path) -> object:
+            classified.append(path)
+            return classify(path)
+
+        with patch.dict(
+            module["build_snapshot_plan"].__globals__,
+            {"classify_regular_file": record_classification},
+        ):
+            plan = module["build_snapshot_plan"](config)
+
+        planned = {entry.source_path for entry in plan.sources[0].entries}
+        included_files = {tracked, untracked, nested_kept, nested / ".gitignore"}
+        self.assertTrue(included_files <= planned)
+        self.assertTrue({ignored, nested_ignored, ignored_child}.isdisjoint(planned))
+        self.assertTrue({ignored, nested_ignored, ignored_child}.isdisjoint(classified))
+        self.assertEqual(
+            plan.input_bytes,
+            sum(path.stat().st_size for path in included_files),
+        )
+
+    def test_explicit_ignored_file_remains_an_independent_source(self) -> None:
+        repository = self.home / "repository"
+        source = repository / "source"
+        source.mkdir(parents=True)
+        subprocess.run(["git", "-C", str(repository), "init", "-q"], check=True)
+        (repository / ".gitignore").write_text("source/ignored.txt\n", encoding="utf-8")
+        ignored = source / "ignored.txt"
+        ignored.write_text("explicit", encoding="utf-8")
+        module = runpy.run_path(str(BK))
+        config = module["Config"](1, 7, [source, ignored], True)
+
+        plan = module["build_snapshot_plan"](config)
+
+        self.assertNotIn(ignored, {entry.source_path for entry in plan.sources[0].entries})
+        self.assertEqual([entry.source_path for entry in plan.sources[1].entries], [ignored])
+        run_directory = self.home / "run"
+        run_directory.mkdir()
+        payload, _log = module["materialize_plan"](plan, run_directory)
+        self.assertEqual((payload / "0002" / "ignored.txt").read_text(encoding="utf-8"), "explicit")
+
+    def test_git_plan_never_descends_through_a_replaced_directory_symlink(self) -> None:
+        repository = self.home / "repository"
+        source = repository / "source"
+        tracked_directory = source / "tracked"
+        tracked_directory.mkdir(parents=True)
+        tracked_file = tracked_directory / "secret.txt"
+        tracked_file.write_text("indexed", encoding="utf-8")
+        subprocess.run(["git", "-C", str(repository), "init", "-q"], check=True)
+        subprocess.run(
+            ["git", "-C", str(repository), "add", "source/tracked/secret.txt"],
+            check=True,
+        )
+        tracked_file.unlink()
+        tracked_directory.rmdir()
+        outside = self.home / "outside"
+        outside.mkdir()
+        sentinel = outside / "secret.txt"
+        sentinel.write_text("must survive", encoding="utf-8")
+        tracked_directory.symlink_to(outside, target_is_directory=True)
+        module = runpy.run_path(str(BK))
+        config = module["Config"](1, 7, [source], True)
+
+        plan = module["build_snapshot_plan"](config)
+        run_directory = self.home / "run"
+        run_directory.mkdir()
+        module["materialize_plan"](plan, run_directory)
+
+        planned = {entry.source_path for entry in plan.sources[0].entries}
+        self.assertIn(tracked_directory, planned)
+        self.assertNotIn(tracked_directory / "secret.txt", planned)
+        self.assertEqual(sentinel.read_text(encoding="utf-8"), "must survive")
+
+    def test_git_plan_rejects_source_changed_to_symlink_during_detection(self) -> None:
+        repository = self.home / "repository"
+        source = repository / "source"
+        source.mkdir(parents=True)
+        subprocess.run(["git", "-C", str(repository), "init", "-q"], check=True)
+        outside = self.home / "outside"
+        outside.mkdir()
+        sentinel = outside / "sentinel"
+        sentinel.write_text("must survive", encoding="utf-8")
+        module = runpy.run_path(str(BK))
+        config = module["Config"](1, 7, [source], True)
+
+        def replace_source(_source: Path) -> Path:
+            source.rmdir()
+            source.symlink_to(outside, target_is_directory=True)
+            return repository
+
+        with patch.dict(
+            module["build_snapshot_plan"].__globals__,
+            {"git_worktree_root": replace_source},
+        ):
+            with self.assertRaises(module["BKError"]):
+                module["build_snapshot_plan"](config)
+
+        self.assertEqual(sentinel.read_text(encoding="utf-8"), "must survive")
+
+    def test_non_git_directory_uses_normal_traversal_when_gitignore_is_enabled(self) -> None:
+        source = self.home / "source"
+        nested = source / "nested"
+        nested.mkdir(parents=True)
+        included = nested / "data.txt"
+        included.write_text("included", encoding="utf-8")
+        module = runpy.run_path(str(BK))
+        config = module["Config"](1, 7, [source], True)
+
+        plan = module["build_snapshot_plan"](config)
+
+        self.assertIn(included, {entry.source_path for entry in plan.sources[0].entries})
+
     def test_classifier_is_file_command_and_each_regular_file_is_classified_once(self) -> None:
         source = self.home / "tree"
         nested = source / "nested"
@@ -1317,15 +1520,19 @@ class BackupCliTests(unittest.TestCase):
             "unsupported version": f"version: 2\nretention: 7\nsources:\n  - {self_source}\n",
             "invalid retention": f"version: 1\nretention: no\nsources:\n  - {self_source}\n",
             "zero retention": f"version: 1\nretention: 0\nsources:\n  - {self_source}\n",
-            "relative source": 'version: 1\nretention: 7\nsources:\n  - "relative/path"\n',
+            "relative source": (
+                'version: 1\nretention: 7\nrespect_gitignore: true\nsources:\n  - "relative/path"\n'
+            ),
             "self is not first": (
-                "version: 1\nretention: 7\nsources:\n"
+                "version: 1\nretention: 7\nrespect_gitignore: true\nsources:\n"
                 "  - %s\n  - %s\n"
                 % (encoded_source, self_source)
             ),
-            "missing sources": "version: 1\nretention: 7\nsources: []\n",
+            "missing sources": (
+                "version: 1\nretention: 7\nrespect_gitignore: true\nsources: []\n"
+            ),
             "source contains runtime": (
-                "version: 1\nretention: 7\nsources:\n"
+                "version: 1\nretention: 7\nrespect_gitignore: true\nsources:\n"
                 f"  - {self_source}\n  - {json.dumps(str(self.home))}\n"
             ),
         }
