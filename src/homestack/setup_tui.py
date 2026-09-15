@@ -23,6 +23,7 @@ from .setup import build_plan, execute_plan, inspect_workspace_state, write_path
 from .setup_catalog import Catalog, load_catalog, save_snapshot
 from .setup_config import (
     ApplicationParams,
+    BackupParams,
     ConfigFile,
     EnvironmentParams,
     FileParams,
@@ -32,6 +33,18 @@ from .setup_config import (
     config_entry_id,
     defaults,
 )
+
+
+def _backup_retrieval_details(vmid: int) -> list[str]:
+    return [
+        "Restricted SSH retrieval: two desktop ED25519 key pairs (private + .pub)",
+        f"Archive key: ~/.ssh/homestack/backup/vm{vmid}-bk-archive",
+        f"Status key: ~/.ssh/homestack/backup/vm{vmid}-bk-status",
+        "Generate missing pairs; repair missing public keys; reuse valid pairs without rotation.",
+        "Install only public keys in guest ~/.ssh/authorized_keys; preserve unrelated entries.",
+        "Forced commands: cat of ~/backup/backup.tgz or ~/backup/status.json only; no shell or forwarding.",
+        "Private keys stay on the desktop. User backup configuration and data remain unchanged.",
+    ]
 
 
 def _mtime_text(value):
@@ -931,6 +944,8 @@ class SetupApp(App):
                 "Install/update: " + ("selected" if entry.id in self.selected else "not selected"),
                 f"Configuration: selected {selected}/{total} managed options" if total else "Configuration: no managed options",
             ]
+        if isinstance(p, BackupParams):
+            lines += ["", *_backup_retrieval_details(self.target["vmid"])]
         if live.get("changed_since_apply"):
             lines += ["Changed since last apply:", *["~/" + path for path in live["changed_since_apply"]]]
             if live.get("will_overwrite"):
@@ -1127,6 +1142,8 @@ class SetupApp(App):
                     "different": "Patch declared value",
                     "unavailable": "Blocked: configuration path is unavailable",
                 }.get(live.get("state"), "Inspect and patch declared value")
+            elif isinstance(entry.params, BackupParams):
+                action = "Reconcile BK assets, user timer and restricted SSH retrieval keys"
             else:
                 action = (
                     "Back up modified shell files; overwrite configuration"
@@ -1146,6 +1163,8 @@ class SetupApp(App):
                 "Action: " + action,
                 "Requires selection: " + (", ".join(entry.depends_on) or "none"),
             ]
+            if isinstance(entry.params, BackupParams):
+                lines += _backup_retrieval_details(self.target["vmid"])
             if isinstance(entry.params, StructuredParams):
                 lines += [
                     "Desired key: " + ".".join(entry.params.key),
