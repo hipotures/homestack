@@ -402,6 +402,158 @@ def parse_selection(raw: str, count: int) -> list[int]:
     return selected
 
 
+@dataclass(frozen=True)
+class SelectorItem:
+    """One row in the interactive add/delete selector."""
+
+    index: int
+    label: str
+    kind: str = ""
+    selectable: bool = True
+    state: str = ""
+
+
+@dataclass
+class SelectorState:
+    """The single source of truth shared by the selector's input and rows."""
+
+    items: list[SelectorItem]
+    selected_indices: set[int] = field(default_factory=set)
+    focus_index: int | None = None
+    input_buffer: str = ""
+    input_cursor: int = 0
+    input_active: bool = False
+    input_editing: bool = False
+    input_token: str = ""
+    input_token_index: int | None = None
+    input_token_added: bool = False
+    error: str | None = None
+
+    def __post_init__(self) -> None:
+        selectable = {item.index for item in self.items if item.selectable}
+        if not self.selected_indices <= selectable:
+            raise BKError("selector selection contains a non-selectable entry")
+        if self.focus_index not in selectable:
+            self.focus_index = next((item.index for item in self.items if item.selectable), None)
+        self.input_buffer = self.selection_text()
+        self.input_cursor = len(self.input_buffer)
+
+    @property
+    def selectable_count(self) -> int:
+        return sum(item.selectable for item in self.items)
+
+    @property
+    def selected_count(self) -> int:
+        return len(self.selected_indices)
+
+    @property
+    def selectable_indices(self) -> list[int]:
+        return [item.index for item in self.items if item.selectable]
+
+    def selection_text(self) -> str:
+        """Return the canonical list-order representation of the selection."""
+
+        return ",".join(str(item.index) for item in self.items if item.index in self.selected_indices)
+
+    def set_selection(self, indices: list[int] | set[int]) -> None:
+        selected = set(indices)
+        selectable = set(self.selectable_indices)
+        invalid = sorted(selected - selectable)
+        if invalid:
+            raise BKError(
+                "selection contains non-selectable number(s): "
+                + ", ".join(str(index) for index in invalid)
+            )
+        self.selected_indices = selected
+        self.input_buffer = self.selection_text()
+        self.input_cursor = len(self.input_buffer)
+        self.input_token = ""
+        self.input_token_index = None
+        self.input_token_added = False
+        self.input_editing = False
+        self.error = None
+
+    def set_selection_text(self, raw: str) -> None:
+        """Parse and apply one numeric selector value atomically."""
+
+        selected = parse_selection(raw, len(self.items))
+        self.set_selection(selected)
+
+    def edit_selection_text(self, raw: str, cursor: int | None = None) -> bool:
+        """Apply a composed numeric value while preserving one selection set.
+
+        Invalid input never changes ``selected_indices`` or the canonical text.
+        """
+
+        try:
+            selected = parse_selection(raw, len(self.items))
+            self.set_selection(selected)
+        except BKError as exc:
+            self.error = str(exc)
+            self.input_buffer = self.selection_text()
+            self.input_cursor = len(self.input_buffer)
+            self.input_editing = True
+            return False
+        self.input_buffer = self.selection_text()
+        requested_cursor = cursor if cursor is not None else len(self.input_buffer)
+        self.input_cursor = max(0, min(len(self.input_buffer), requested_cursor))
+        self.input_editing = True
+        self.error = None
+        return True
+
+    def toggle(self, index: int | None = None) -> bool:
+        """Toggle a selectable row and synchronize the input representation."""
+
+        target = self.focus_index if index is None else index
+        if target is None or target not in self.selectable_indices:
+            return False
+        self.focus_index = target
+        if target in self.selected_indices:
+            self.selected_indices.remove(target)
+        else:
+            self.selected_indices.add(target)
+        self.input_buffer = self.selection_text()
+        self.input_cursor = len(self.input_buffer)
+        self.input_editing = False
+        self.input_active = False
+        self.input_token = ""
+        self.input_token_index = None
+        self.input_token_added = False
+        self.error = None
+        return True
+
+    def move_focus(self, offset: int) -> None:
+        choices = self.selectable_indices
+        if not choices:
+            self.focus_index = None
+            return
+        try:
+            position = choices.index(self.focus_index) if self.focus_index is not None else 0
+        except ValueError:
+            position = 0
+        self.focus_index = choices[max(0, min(len(choices) - 1, position + offset))]
+
+    def focus_home(self) -> None:
+        choices = self.selectable_indices
+        self.focus_index = choices[0] if choices else None
+
+    def focus_end(self) -> None:
+        choices = self.selectable_indices
+        self.focus_index = choices[-1] if choices else None
+
+
+@dataclass(frozen=True)
+class SelectorResult:
+    """Result returned by either the curses selector or its prompt fallback."""
+
+    selected_indices: list[int]
+    cancelled: bool = False
+
+
+class SelectorUnavailable(Exception):
+    """The terminal cannot support the interactive curses selector."""
+
+
 def item_kind(path: Path) -> tuple[bool, str]:
     try:
         mode = os.lstat(path).st_mode
@@ -536,21 +688,582 @@ def print_add_candidates(paths: Paths, children: list[Path]) -> None:
     console.print(table)
 
 
+def print_delete_candidates(removable: list[Path]) -> None:
+    table = Table(title="Removable backup sources", show_header=True, header_style="bold")
+    table.add_column("#", justify="right")
+    table.add_column("Path")
+    for index, source in enumerate(removable, start=1):
+        table.add_row(str(index), str(source))
+    console.print(table)
+
+
+def add_selector_items(paths: Paths, children: list[Path]) -> list[SelectorItem]:
+    """Build compact add rows without changing the immediate-child semantics."""
+
+    items: list[SelectorItem] = []
+    config_path = normalize_path(paths.config)
+    for index, child in enumerate(children, start=1):
+        exists, kind = item_kind(child)
+        candidate = normalize_path(child)
+        if candidate == config_path:
+            selectable = False
+            state = "protected self-entry"
+        elif path_is_runtime(child, paths):
+            selectable = False
+            state = "BK-managed; not selectable"
+        else:
+            selectable = True
+            state = "present" if exists else "missing"
+        items.append(
+            SelectorItem(
+                index=index,
+                label=child.name,
+                kind=kind,
+                selectable=selectable,
+                state=state,
+            )
+        )
+    return items
+
+
+def selector_tty_available() -> bool:
+    """Whether a full-screen selector is safe for the current terminal."""
+
+    try:
+        return bool(
+            sys.stdin.isatty()
+            and sys.stdout.isatty()
+            and os.environ.get("TERM") not in {None, "", "dumb", "unknown"}
+        )
+    except (AttributeError, OSError):
+        return False
+
+
+def _selector_key(curses_module: Any, name: str, default: int) -> int:
+    return int(getattr(curses_module, name, default))
+
+
+def _selector_addnstr(screen: Any, row: int, column: int, value: str, width: int, attribute: int = 0) -> None:
+    if width <= 0:
+        return
+    try:
+        screen.addnstr(row, column, value, width, attribute)
+    except (AttributeError, TypeError):
+        # Small fake screens used by tests may expose only the four-argument
+        # form.  Real curses screens accept the attribute argument.
+        screen.addnstr(row, column, value, width)
+
+
+def _selector_mouse_mask(curses_module: Any) -> int:
+    mask = 0
+    for name in (
+        "BUTTON1_PRESSED",
+        "BUTTON4_PRESSED",
+        "BUTTON5_PRESSED",
+    ):
+        mask |= int(getattr(curses_module, name, 0))
+    return mask
+
+
+class SelectorTerminal:
+    """Own curses terminal state and restore it on every exit path."""
+
+    def __init__(self, curses_module: Any) -> None:
+        self.curses = curses_module
+        self.screen: Any | None = None
+        self.started = False
+        self.keypad_enabled = False
+        self.cbreak_enabled = False
+        self.mouse_enabled = False
+        self.cursor_visibility: int | None = None
+
+    def start(self) -> Any:
+        try:
+            self.screen = self.curses.initscr()
+            self.started = True
+            self.curses.noecho()
+            self.curses.cbreak()
+            self.cbreak_enabled = True
+            self.screen.keypad(True)
+            self.keypad_enabled = True
+            self.curses.mousemask(_selector_mouse_mask(self.curses))
+            self.mouse_enabled = True
+            try:
+                self.cursor_visibility = self.curses.curs_set(0)
+            except Exception:
+                pass
+            return self.screen
+        except Exception as exc:
+            self.close()
+            raise SelectorUnavailable(f"cannot initialize the interactive selector: {exc}") from exc
+
+    def close(self) -> None:
+        """Restore mouse reporting, keypad, echo, cbreak, and the screen."""
+
+        if not self.started:
+            return
+        # Every cleanup operation is attempted even if an earlier curses call
+        # fails.  This matters when a terminal is detached during selection.
+        if self.mouse_enabled:
+            try:
+                self.curses.mousemask(0)
+            except Exception:
+                pass
+            self.mouse_enabled = False
+        if self.keypad_enabled and self.screen is not None:
+            try:
+                self.screen.keypad(False)
+            except Exception:
+                pass
+            self.keypad_enabled = False
+        try:
+            self.curses.echo()
+        except Exception:
+            pass
+        if self.cbreak_enabled:
+            try:
+                self.curses.nocbreak()
+            except Exception:
+                pass
+            self.cbreak_enabled = False
+        if self.cursor_visibility is not None:
+            try:
+                self.curses.curs_set(self.cursor_visibility)
+            except Exception:
+                pass
+        try:
+            self.curses.endwin()
+        except Exception:
+            pass
+        self.started = False
+
+
+def _selector_visible_window(state: SelectorState, height: int) -> tuple[int, int, int]:
+    list_top = 2
+    input_row = max(list_top + 1, height - 2)
+    visible = max(1, input_row - list_top - 1)
+    return list_top, input_row, visible
+
+
+def _selector_keep_focus_visible(state: SelectorState, scroll: int, visible: int) -> int:
+    if state.focus_index is None:
+        return max(0, scroll)
+    try:
+        position = next(index for index, item in enumerate(state.items) if item.index == state.focus_index)
+    except StopIteration:
+        return max(0, scroll)
+    if position < scroll:
+        return position
+    if position >= scroll + visible:
+        return position - visible + 1
+    return scroll
+
+
+def _selector_row_text(item: SelectorItem, selected: bool, operation: str, width: int) -> str:
+    marker = "x" if selected else " "
+    value = f"[{marker}]  {item.index}. {item.label}"
+    if operation == "add":
+        value += f"  {item.kind}"
+        if not item.selectable:
+            value += f"  ({item.state})"
+    return value[: max(0, width)]
+
+
+def _selector_header(operation: str, context: Path, state: SelectorState, width: int) -> str:
+    """Keep the synchronized count visible by truncating only the context."""
+
+    available = max(0, width - 1)
+    left = f" BK · {operation.title()}"
+    count = f"Selected {state.selected_count}/{state.selectable_count}"
+    if available <= len(count):
+        return count[:available]
+    fixed = len(left) + len(count) + 6
+    if available < fixed:
+        left_width = max(0, available - len(count) - 2)
+        return f"{left[:left_width]}  {count}"[-available:]
+    context_width = available - fixed
+    context_text = display_path(context)
+    if len(context_text) > context_width:
+        context_text = context_text[: max(0, context_width - 1)] + "…"
+    return f"{left}   {context_text:<{context_width}}   {count}"
+
+
+def _selector_render(
+    screen: Any,
+    state: SelectorState,
+    operation: str,
+    context: Path,
+    scroll: int,
+    curses_module: Any,
+) -> int:
+    height, width = screen.getmaxyx()
+    screen.erase()
+    list_top, input_row, visible = _selector_visible_window(state, height)
+    scroll = _selector_keep_focus_visible(state, scroll, visible)
+    header = _selector_header(operation, context, state, width)
+    _selector_addnstr(screen, 0, 0, header, max(0, width - 1), getattr(curses_module, "A_BOLD", 0))
+
+    for row_offset, item in enumerate(state.items[scroll : scroll + visible]):
+        row = list_top + row_offset
+        focused = item.index == state.focus_index
+        text = _selector_row_text(item, item.index in state.selected_indices, operation, width - 1)
+        attribute = getattr(curses_module, "A_REVERSE", 0) if focused else 0
+        if not item.selectable:
+            attribute |= getattr(curses_module, "A_DIM", 0)
+        _selector_addnstr(screen, row, 0, text, max(0, width - 1), attribute)
+
+    # The displayed selector is always derived from the canonical selection
+    # set.  ``input_buffer`` is only transient composition state between
+    # keystrokes and is never a second source of truth.
+    selector_text = state.selection_text()
+    if state.error:
+        selector_text = f"{selector_text}  ({state.error})"
+    input_value = f"Selection: {selector_text}"
+    _selector_addnstr(screen, input_row, 0, input_value, max(0, width - 1), 0)
+    help_row = min(height - 1, input_row + 1)
+    help_text = "↑↓ Move   Space Toggle   Type Numbers   Click Toggle   Enter Apply   Esc Cancel"
+    _selector_addnstr(screen, help_row, 0, help_text, max(0, width - 1), getattr(curses_module, "A_DIM", 0))
+    try:
+        if state.input_active:
+            screen.move(input_row, min(max(0, width - 1), len("Selection: ") + state.input_cursor))
+            self_curs_set = getattr(curses_module, "curs_set", None)
+            if self_curs_set is not None:
+                self_curs_set(1)
+        else:
+            self_curs_set = getattr(curses_module, "curs_set", None)
+            if self_curs_set is not None:
+                self_curs_set(0)
+    except Exception:
+        pass
+    screen.refresh()
+    return scroll
+
+
+def _selector_insert_input(state: SelectorState, value: str) -> None:
+    if not state.input_editing:
+        state.selected_indices.clear()
+        state.input_buffer = ""
+        state.input_cursor = 0
+        state.input_editing = True
+        state.input_token = ""
+        state.input_token_index = None
+        state.input_token_added = False
+    if value in {",", " "}:
+        state.input_token = ""
+        state.input_token_index = None
+        state.input_token_added = False
+        state.error = None
+        return
+    _selector_update_input_token(state, state.input_token + value)
+
+
+def _selector_update_input_token(state: SelectorState, token: str) -> None:
+    """Replace the in-progress numeric token without losing earlier tokens."""
+
+    selected = set(state.selected_indices)
+    if state.input_token_added and state.input_token_index is not None:
+        selected.discard(state.input_token_index)
+
+    state.input_token = token
+    state.input_token_index = None
+    state.input_token_added = False
+    state.error = None
+    if token:
+        index = int(token)
+        items = {item.index: item for item in state.items}
+        item = items.get(index)
+        if item is None:
+            state.error = f"selection contains invalid number(s): {index}"
+        elif not item.selectable:
+            state.error = f"selection contains non-selectable number(s): {index}"
+        else:
+            state.input_token_index = index
+            state.input_token_added = index not in selected
+            selected.add(index)
+
+    state.selected_indices = selected
+    state.input_buffer = state.selection_text()
+    state.input_cursor = len(state.input_buffer)
+    if state.input_token_index is not None:
+        cursor = 0
+        for item in state.items:
+            if item.index not in state.selected_indices:
+                continue
+            cursor += len(str(item.index))
+            if item.index == state.input_token_index:
+                state.input_cursor = cursor
+                break
+            cursor += 1
+
+
+def _selector_backspace(state: SelectorState) -> None:
+    if not state.input_editing or not state.input_token:
+        return
+    _selector_update_input_token(state, state.input_token[:-1])
+
+
+def _selector_focus_list(state: SelectorState) -> None:
+    """Finish numeric composition so list navigation and Space work together."""
+
+    state.input_active = False
+    state.input_editing = False
+    state.input_token = ""
+    state.input_token_index = None
+    state.input_token_added = False
+    state.input_buffer = state.selection_text()
+    state.input_cursor = len(state.input_buffer)
+    state.error = None
+
+
+def _selector_mouse_event(
+    screen: Any,
+    state: SelectorState,
+    operation: str,
+    y: int,
+    bstate: int,
+    scroll: int,
+    visible: int,
+    curses_module: Any,
+) -> int:
+    list_top, input_row, _ = _selector_visible_window(state, screen.getmaxyx()[0])
+    button4 = int(getattr(curses_module, "BUTTON4_PRESSED", 0))
+    button5 = int(getattr(curses_module, "BUTTON5_PRESSED", 0))
+    if bstate & button4:
+        state.move_focus(-max(1, visible // 2))
+        return _selector_keep_focus_visible(state, scroll, visible)
+    if bstate & button5:
+        state.move_focus(max(1, visible // 2))
+        return _selector_keep_focus_visible(state, scroll, visible)
+    left_event = int(getattr(curses_module, "BUTTON1_CLICKED", 0))
+    left_event |= int(getattr(curses_module, "BUTTON1_PRESSED", 0))
+    if not bstate & left_event:
+        return scroll
+    if list_top <= y < list_top + visible:
+        position = scroll + y - list_top
+        if 0 <= position < len(state.items):
+            item = state.items[position]
+            if item.selectable:
+                state.toggle(item.index)
+    elif y == input_row:
+        state.input_active = True
+        state.input_editing = False
+        state.input_token = ""
+        state.input_token_index = None
+        state.input_token_added = False
+        state.input_cursor = len(state.input_buffer)
+    return _selector_keep_focus_visible(state, scroll, visible)
+
+
+def run_curses_selector(
+    items: list[SelectorItem],
+    *,
+    operation: str,
+    context: Path,
+    curses_module: Any | None = None,
+) -> SelectorResult:
+    """Run the compact selector, returning one synchronized selection result."""
+
+    if curses_module is None:
+        import curses as curses_module
+
+    terminal = SelectorTerminal(curses_module)
+    try:
+        screen = terminal.start()
+        state = SelectorState(items)
+        scroll = 0
+        while True:
+            height, _ = screen.getmaxyx()
+            list_top, input_row, visible = _selector_visible_window(state, height)
+            scroll = _selector_keep_focus_visible(state, scroll, visible)
+            scroll = _selector_render(screen, state, operation, context, scroll, curses_module)
+            key = screen.getch()
+            if key in (27, 3):
+                return SelectorResult([], cancelled=True)
+            if key in (
+                _selector_key(curses_module, "KEY_ENTER", 10),
+                10,
+                13,
+            ):
+                if state.error:
+                    continue
+                return SelectorResult(
+                    [item.index for item in state.items if item.index in state.selected_indices]
+                )
+            if key in (9, _selector_key(curses_module, "KEY_BTAB", -1)):
+                if state.input_active:
+                    _selector_focus_list(state)
+                else:
+                    state.input_active = True
+                    state.input_editing = False
+                    state.input_token = ""
+                    state.input_token_index = None
+                    state.input_token_added = False
+                    state.input_cursor = len(state.input_buffer)
+                continue
+
+            key_up = _selector_key(curses_module, "KEY_UP", -101)
+            key_down = _selector_key(curses_module, "KEY_DOWN", -102)
+            key_home = _selector_key(curses_module, "KEY_HOME", -103)
+            key_end = _selector_key(curses_module, "KEY_END", -104)
+            key_page_up = _selector_key(curses_module, "KEY_PPAGE", -105)
+            key_page_down = _selector_key(curses_module, "KEY_NPAGE", -106)
+            key_backspace = _selector_key(curses_module, "KEY_BACKSPACE", 263)
+            key_delete = _selector_key(curses_module, "KEY_DC", 330)
+            key_mouse = _selector_key(curses_module, "KEY_MOUSE", -109)
+
+            if key == key_mouse:
+                try:
+                    _mouse_id, _mouse_x, mouse_y, _mouse_z, mouse_state = curses_module.getmouse()
+                except Exception:
+                    continue
+                scroll = _selector_mouse_event(
+                    screen,
+                    state,
+                    operation,
+                    mouse_y,
+                    mouse_state,
+                    scroll,
+                    visible,
+                    curses_module,
+                )
+                continue
+            if key in (key_up, ord("k")):
+                _selector_focus_list(state)
+                state.move_focus(-1)
+                continue
+            if key in (key_down, ord("j")):
+                _selector_focus_list(state)
+                state.move_focus(1)
+                continue
+            if key == key_home:
+                _selector_focus_list(state)
+                state.focus_home()
+                continue
+            if key == key_end:
+                _selector_focus_list(state)
+                state.focus_end()
+                continue
+            if key == key_page_up:
+                _selector_focus_list(state)
+                state.move_focus(-visible)
+                continue
+            if key == key_page_down:
+                _selector_focus_list(state)
+                state.move_focus(visible)
+                continue
+
+            if state.input_active:
+                if key in (key_backspace, key_delete, 8, 127):
+                    _selector_backspace(state)
+                elif key == 21:  # Ctrl-U clears the current numeric editor.
+                    state.selected_indices.clear()
+                    state.input_buffer = ""
+                    state.input_cursor = 0
+                    state.input_token = ""
+                    state.input_token_index = None
+                    state.input_token_added = False
+                    state.error = None
+                elif isinstance(key, int) and (key in (ord(","), ord(" ")) or 48 <= key <= 57):
+                    _selector_insert_input(state, chr(key))
+                continue
+
+            if key == ord(" "):
+                state.toggle()
+            elif isinstance(key, int) and 48 <= key <= 57:
+                state.input_active = True
+                state.input_editing = False
+                _selector_insert_input(state, chr(key))
+            elif key == ord(","):
+                state.input_active = True
+                state.input_editing = False
+                _selector_insert_input(state, ",")
+    except KeyboardInterrupt:
+        return SelectorResult([], cancelled=True)
+    finally:
+        terminal.close()
+
+
+def parse_selector_input(raw: str, items: list[SelectorItem]) -> list[int]:
+    """Parse fallback input while rejecting protected/non-selectable rows."""
+
+    selected = parse_selection(raw, len(items))
+    unavailable = [index for index in selected if not items[index - 1].selectable]
+    if unavailable:
+        raise BKError(
+            "selection contains non-selectable number(s): "
+            + ", ".join(str(index) for index in unavailable)
+        )
+    return selected
+
+
+def prompt_selector(
+    items: list[SelectorItem],
+    *,
+    operation: str,
+    fallback_printer: Any,
+) -> SelectorResult:
+    """Use the original Rich table and prompt when no usable TTY is present."""
+
+    fallback_printer()
+    try:
+        raw = Prompt.ask(
+            f"Select entries to {'add' if operation == 'add' else 'delete'} (numbers separated by any characters)",
+            default="",
+        )
+    except (EOFError, KeyboardInterrupt):
+        return SelectorResult([], cancelled=True)
+    try:
+        return SelectorResult(parse_selector_input(raw, items))
+    except BKError:
+        raise
+
+
+def select_entries(
+    items: list[SelectorItem],
+    *,
+    operation: str,
+    context: Path,
+    fallback_printer: Any,
+) -> SelectorResult:
+    """Choose the curses selector when possible, otherwise use Rich fallback."""
+
+    if not selector_tty_available():
+        return prompt_selector(items, operation=operation, fallback_printer=fallback_printer)
+    try:
+        return run_curses_selector(items, operation=operation, context=context)
+    except (ImportError, SelectorUnavailable):
+        return prompt_selector(items, operation=operation, fallback_printer=fallback_printer)
+    except Exception as exc:
+        # A terminal can disappear after initialization (for example when an
+        # SSH pane closes).  Fall back only for the standard curses capability
+        # error; unexpected selector bugs must remain visible.
+        try:
+            import curses
+        except ImportError:
+            raise
+        if isinstance(exc, curses.error):
+            return prompt_selector(items, operation=operation, fallback_printer=fallback_printer)
+        raise
+
+
 def add_command(paths: Paths) -> int:
     config = read_config(paths)
     children = immediate_children(Path.cwd())
     if children:
-        print_add_candidates(paths, children)
         try:
-            raw = Prompt.ask("Select entries to add (numbers separated by any characters)", default="")
-        except (EOFError, KeyboardInterrupt):
-            console.print("Add cancelled.")
-            return 1
-        try:
-            selected_numbers = parse_selection(raw, len(children))
+            selection = select_entries(
+                add_selector_items(paths, children),
+                operation="add",
+                context=Path.cwd(),
+                fallback_printer=lambda: print_add_candidates(paths, children),
+            )
         except BKError as exc:
             error_console.print(str(exc))
             return 2
+        if selection.cancelled:
+            console.print("Add cancelled.")
+            return 1
+        selected_numbers = selection.selected_indices
     else:
         console.print(f"{Path.cwd()} has no immediate children to add.")
         selected_numbers = []
@@ -607,22 +1320,20 @@ def del_command(paths: Paths) -> int:
     if not removable:
         console.print("The protected backup.yaml self-entry is the only source; there is nothing to remove.")
         return 0
-    table = Table(title="Removable backup sources", show_header=True, header_style="bold")
-    table.add_column("#", justify="right")
-    table.add_column("Path")
-    for index, source in enumerate(removable, start=1):
-        table.add_row(str(index), str(source))
-    console.print(table)
     try:
-        raw = Prompt.ask("Select entries to delete (numbers separated by any characters)", default="")
-    except (EOFError, KeyboardInterrupt):
-        console.print("Delete cancelled.")
-        return 1
-    try:
-        selected = parse_selection(raw, len(removable))
+        selection = select_entries(
+            [SelectorItem(index=index, label=str(source)) for index, source in enumerate(removable, start=1)],
+            operation="delete",
+            context=paths.config,
+            fallback_printer=lambda: print_delete_candidates(removable),
+        )
     except BKError as exc:
         error_console.print(str(exc))
         return 2
+    if selection.cancelled:
+        console.print("Delete cancelled.")
+        return 1
+    selected = selection.selected_indices
     if not selected:
         console.print("No sources were removed.")
         return 0

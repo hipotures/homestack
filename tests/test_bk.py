@@ -279,6 +279,8 @@ class BackupCliTests(unittest.TestCase):
             self.config_sources(self.config_path(self.home))[1:],
             [str(first.resolve()), str(second.resolve())],
         )
+        self.assertIn("Immediate children", result.stdout)
+        self.assertNotIn("\x1b[?1000", result.stdout)
 
     def test_add_lists_hidden_immediate_child_and_exact_duplicate_is_report_only(self) -> None:
         working = self.home / "work"
@@ -981,6 +983,319 @@ class BackupCliTests(unittest.TestCase):
         self.assertEqual(after_stat.st_ino, before_stat.st_ino)
         self.assertEqual(after_stat.st_mtime_ns, before_stat.st_mtime_ns)
         self.assertTrue(source.is_dir())
+
+
+class SelectorTests(unittest.TestCase):
+    """Deterministic tests for the optional TTY selector state machine."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.module = runpy.run_path(str(BK))
+        cls.item = cls.module["SelectorItem"]
+
+    def items(self):
+        return [
+            self.item(1, ".agents", "directory"),
+            self.item(2, ".codex", "directory"),
+            self.item(3, "config.yaml", "file"),
+            self.item(4, "backup", "directory", False, "BK-managed; not selectable"),
+        ]
+
+    def state(self):
+        return self.module["SelectorState"](self.items())
+
+    def test_keyboard_state_and_space_toggle_share_one_selection(self) -> None:
+        state = self.state()
+        state.move_focus(1)
+        self.assertTrue(state.toggle())
+        self.assertEqual(state.selected_indices, {2})
+        self.assertEqual(state.selection_text(), "2")
+        self.assertEqual(state.selected_count, 1)
+
+    def test_typed_numeric_forms_update_checkboxes_and_canonical_text(self) -> None:
+        for raw in ("1,2,3", "1 2 3", "1, 2 3", "1(any separator)2.3"):
+            with self.subTest(raw=raw):
+                state = self.state()
+                self.assertTrue(state.edit_selection_text(raw))
+                self.assertEqual(state.selected_indices, {1, 2, 3})
+                self.assertEqual(state.selection_text(), "1,2,3")
+
+    def test_protected_rows_cannot_be_selected_by_numeric_input(self) -> None:
+        state = self.state()
+        self.assertFalse(state.edit_selection_text("4"))
+        self.assertEqual(state.selected_indices, set())
+        self.assertIn("non-selectable", state.error or "")
+
+    def test_mouse_row_toggle_updates_selection_and_input(self) -> None:
+        state = self.state()
+        fake_curses = _FakeCurses()
+        screen = fake_curses.screen
+        scroll = self.module["_selector_mouse_event"](
+            screen,
+            state,
+            "add",
+            3,
+            fake_curses.BUTTON1_PRESSED,
+            0,
+            8,
+            fake_curses,
+        )
+        self.assertEqual(scroll, 0)
+        self.assertEqual(state.selected_indices, {2})
+        self.assertEqual(state.input_buffer, "2")
+
+        self.module["_selector_mouse_event"](
+            screen,
+            state,
+            "add",
+            5,
+            fake_curses.BUTTON1_PRESSED,
+            0,
+            8,
+            fake_curses,
+        )
+        self.assertEqual(state.selected_indices, {2})
+
+    def test_typed_key_sequences_and_list_toggle_remain_synchronized(self) -> None:
+        cases = (
+            ([ord("1"), ord(","), ord("2"), 10], [1, 2]),
+            ([ord("1"), ord(" "), ord("2"), 10], [1, 2]),
+            ([ord("1"), ord(","), ord(" "), ord("3"), 10], [1, 3]),
+            ([ord("1"), _FakeCurses.KEY_DOWN, ord(" "), 10], [1, 2]),
+        )
+        for keys, expected in cases:
+            with self.subTest(keys=keys):
+                result = self.module["run_curses_selector"](
+                    self.items(),
+                    operation="add",
+                    context=Path("/tmp/work"),
+                    curses_module=_FakeCurses(keys=keys),
+                )
+                self.assertEqual(result.selected_indices, expected)
+
+    def test_multi_digit_tokens_survive_normalization_and_protected_prefixes(self) -> None:
+        items = [self.item(index, f"item-{index}") for index in range(1, 41)]
+        cases = (
+            ([ord("3"), ord(","), ord("1"), ord("2"), 10], [3, 12]),
+            ([ord("1"), ord("2"), ord(","), ord("3"), 10], [3, 12]),
+            ([ord("1"), ord("2"), ord(","), ord("1"), ord("2"), 10], [12]),
+        )
+        for keys, expected in cases:
+            with self.subTest(keys=keys):
+                result = self.module["run_curses_selector"](
+                    items,
+                    operation="add",
+                    context=Path("/tmp/work"),
+                    curses_module=_FakeCurses(keys=keys),
+                )
+                self.assertEqual(result.selected_indices, expected)
+
+        protected_prefix = [
+            self.item(index, f"item-{index}", selectable=index != 1)
+            for index in range(1, 13)
+        ]
+        result = self.module["run_curses_selector"](
+            protected_prefix,
+            operation="add",
+            context=Path("/tmp/work"),
+            curses_module=_FakeCurses(keys=[ord("1"), ord("2"), 10]),
+        )
+        self.assertEqual(result.selected_indices, [12])
+
+        state = self.module["SelectorState"](items)
+        for value in "12,3":
+            self.module["_selector_insert_input"](state, value)
+        self.assertEqual(state.input_buffer, "3,12")
+        self.assertEqual(state.input_cursor, 1)
+        self.module["_selector_backspace"](state)
+        self.assertEqual(state.selected_indices, {12})
+
+    def test_header_and_selection_render_from_the_same_state(self) -> None:
+        state = self.state()
+        fake_curses = _FakeCurses()
+        self.module["_selector_render"](
+            fake_curses.screen,
+            state,
+            "add",
+            Path("/tmp/work"),
+            0,
+            fake_curses,
+        )
+        state.edit_selection_text("1,3")
+        fake_curses.screen.lines.clear()
+        self.module["_selector_render"](
+            fake_curses.screen,
+            state,
+            "add",
+            Path("/tmp/work"),
+            0,
+            fake_curses,
+        )
+        rendered = "\n".join(value for _row, value, _width, _attribute in fake_curses.screen.lines)
+        self.assertIn("Selected 2/3", rendered)
+        self.assertIn("Selection: 1,3", rendered)
+
+        narrow_curses = _FakeCurses(height=12, width=80)
+        self.module["_selector_render"](
+            narrow_curses.screen,
+            state,
+            "add",
+            Path("/tmp/") / ("very-long-directory-" * 8),
+            0,
+            narrow_curses,
+        )
+        narrow_header = next(value for row, value, _width, _attribute in narrow_curses.screen.lines if row == 0)
+        self.assertIn("Selected 2/3", narrow_header)
+
+    def test_enter_applies_keyboard_selection_and_escape_cancels(self) -> None:
+        fake_curses = _FakeCurses(keys=[ord("j"), ord(" "), 10])
+        result = self.module["run_curses_selector"](
+            self.items(), operation="add", context=Path("/tmp/work"), curses_module=fake_curses
+        )
+        self.assertEqual(result.selected_indices, [2])
+        self.assertFalse(result.cancelled)
+        self.assertEqual(fake_curses.mouse_masks[-1], 0)
+
+        cancelled_curses = _FakeCurses(keys=[27])
+        cancelled = self.module["run_curses_selector"](
+            self.items(), operation="delete", context=Path("/tmp/backup.yaml"), curses_module=cancelled_curses
+        )
+        self.assertTrue(cancelled.cancelled)
+        self.assertEqual(cancelled.selected_indices, [])
+        self.assertEqual(cancelled_curses.mouse_masks[-1], 0)
+
+    def test_ctrl_c_and_exceptions_restore_terminal_state(self) -> None:
+        for key in (3, KeyboardInterrupt()):
+            with self.subTest(key=key):
+                fake_curses = _FakeCurses(keys=[key])
+                result = self.module["run_curses_selector"](
+                    self.items(), operation="add", context=Path("/tmp/work"), curses_module=fake_curses
+                )
+                self.assertTrue(result.cancelled)
+                self.assertEqual(fake_curses.mouse_masks[-1], 0)
+                self.assertIn(False, fake_curses.screen.keypad_values)
+                self.assertGreaterEqual(fake_curses.endwin_calls, 1)
+                self.assertEqual(fake_curses.cursor_visibility, 2)
+
+        fake_curses = _FakeCurses(keys=[RuntimeError("render failure")])
+        with self.assertRaises(RuntimeError):
+            self.module["run_curses_selector"](
+                self.items(), operation="add", context=Path("/tmp/work"), curses_module=fake_curses
+            )
+        self.assertEqual(fake_curses.mouse_masks[-1], 0)
+        self.assertIn(False, fake_curses.screen.keypad_values)
+        self.assertGreaterEqual(fake_curses.endwin_calls, 1)
+        self.assertEqual(fake_curses.cursor_visibility, 2)
+
+    def test_cancelled_delete_leaves_backup_configuration_unchanged(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="bk-selector-cancel-") as temporary:
+            home = Path(temporary)
+            paths = self.module["Paths"].from_home(home)
+            source = home / "source"
+            source.touch()
+            paths.runtime.mkdir()
+            config = self.module["Config"](1, 7, [paths.config, source])
+            self.module["write_config"](paths, config)
+            before = paths.config.read_bytes()
+            cancelled = self.module["SelectorResult"]([], cancelled=True)
+
+            command_globals = self.module["del_command"].__globals__
+            with patch.dict(command_globals, {"select_entries": lambda *args, **kwargs: cancelled}):
+                result = self.module["del_command"](paths)
+
+            self.assertEqual(result, 1)
+            self.assertEqual(paths.config.read_bytes(), before)
+
+
+class _FakeScreen:
+    def __init__(self, keys: list[object] | None = None, *, height: int = 12, width: int = 100) -> None:
+        self.keys = list(keys or [])
+        self.height = height
+        self.width = width
+        self.lines: list[tuple[int, str, int, int]] = []
+        self.keypad_values: list[bool] = []
+        self.moves: list[tuple[int, int]] = []
+
+    def getmaxyx(self) -> tuple[int, int]:
+        return (self.height, self.width)
+
+    def erase(self) -> None:
+        pass
+
+    def addnstr(self, row: int, _column: int, value: str, width: int, attribute: int = 0) -> None:
+        self.lines.append((row, value, width, attribute))
+
+    def refresh(self) -> None:
+        pass
+
+    def getch(self) -> object:
+        if not self.keys:
+            raise AssertionError("fake selector input was exhausted")
+        key = self.keys.pop(0)
+        if isinstance(key, BaseException):
+            raise key
+        return key
+
+    def keypad(self, enabled: bool) -> None:
+        self.keypad_values.append(enabled)
+
+    def move(self, row: int, column: int) -> None:
+        self.moves.append((row, column))
+
+
+class _FakeCurses:
+    KEY_UP = 1001
+    KEY_DOWN = 1002
+    KEY_HOME = 1003
+    KEY_END = 1004
+    KEY_PPAGE = 1005
+    KEY_NPAGE = 1006
+    KEY_BACKSPACE = 1007
+    KEY_DC = 1008
+    KEY_MOUSE = 1009
+    KEY_BTAB = 1010
+    BUTTON1_CLICKED = 1
+    BUTTON1_PRESSED = 2
+    BUTTON4_PRESSED = 4
+    BUTTON5_PRESSED = 8
+    A_BOLD = 1
+    A_REVERSE = 2
+    A_DIM = 4
+
+    def __init__(self, keys: list[object] | None = None, *, height: int = 12, width: int = 100) -> None:
+        self.screen = _FakeScreen(keys, height=height, width=width)
+        self.mouse_masks: list[int] = []
+        self.endwin_calls = 0
+        self.cursor_visibility = 2
+
+    def initscr(self) -> _FakeScreen:
+        return self.screen
+
+    def noecho(self) -> None:
+        pass
+
+    def echo(self) -> None:
+        pass
+
+    def cbreak(self) -> None:
+        pass
+
+    def nocbreak(self) -> None:
+        pass
+
+    def mousemask(self, mask: int) -> None:
+        self.mouse_masks.append(mask)
+
+    def mouseinterval(self, _interval: int) -> None:
+        pass
+
+    def curs_set(self, visible: int) -> int:
+        previous = self.cursor_visibility
+        self.cursor_visibility = visible
+        return previous
+
+    def endwin(self) -> None:
+        self.endwin_calls += 1
 
 
 if __name__ == "__main__":
