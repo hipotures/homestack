@@ -3237,7 +3237,7 @@ def run_command(paths: Paths, json_mode: bool) -> int:
                         code = 0
                         result = unconfigured_result()
                     else:
-                        if json_mode:
+                        if json_mode or not sys.stdout.isatty():
                             code, result = run_backup(paths, config, already_locked=True)
                         else:
                             with BackupProgress() as progress:

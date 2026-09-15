@@ -549,7 +549,7 @@ class BackupCliTests(unittest.TestCase):
         self.assertEqual(self.status_value(status, "status"), "ok")
         self.assertNotIn("\x1b[", json.dumps(status))
 
-    def test_human_run_displays_backup_progress(self) -> None:
+    def test_non_tty_human_run_omits_backup_progress(self) -> None:
         source = self.home / "source"
         source.mkdir()
         (source / "data").write_text("progress", encoding="utf-8")
@@ -558,7 +558,7 @@ class BackupCliTests(unittest.TestCase):
         result = self.run_bk(self.home, "run")
 
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("Backup ready", result.stdout)
+        self.assertNotIn("Backup ready", result.stdout)
         self.assertNotIn("Backup completed", result.stdout)
         self.assertRegex(result.stdout, r"Created: \d{4}-\d{2}-\d{2}T.*[+-]\d{2}:\d{2}")
         archive = self.archive_files(self.home)[0]
