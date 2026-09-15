@@ -20,6 +20,51 @@ from unittest.mock import patch
 BK = Path(__file__).resolve().parents[1] / "src" / "homestack" / "assets" / "backup" / "bk.py"
 
 
+class RecordingProgress:
+    """Minimal progress recorder for deterministic byte-accounting tests."""
+
+    def __init__(self) -> None:
+        self.records: list[dict[str, object]] = []
+        self.current: dict[str, object] | None = None
+
+    def stage(
+        self,
+        description: str,
+        *,
+        total: int | None = None,
+        byte_progress: bool = False,
+    ) -> None:
+        self.current = {
+            "description": description,
+            "total": total,
+            "byte_progress": byte_progress,
+            "completed": 0,
+            "advances": [],
+            "values": [0],
+        }
+        self.records.append(self.current)
+
+    def advance(self, amount: int = 1) -> None:
+        assert self.current is not None
+        completed = int(self.current["completed"]) + amount
+        self.current["completed"] = completed
+        advances = self.current["advances"]
+        values = self.current["values"]
+        assert isinstance(advances, list)
+        assert isinstance(values, list)
+        advances.append(amount)
+        values.append(completed)
+
+    def complete(self) -> None:
+        assert self.current is not None
+        total = self.current["total"]
+        assert isinstance(total, int)
+        self.current["completed"] = total
+        values = self.current["values"]
+        assert isinstance(values, list)
+        values.append(total)
+
+
 class BackupCliTests(unittest.TestCase):
     """Regression coverage for the standalone guest-side ``bk`` command."""
 
@@ -488,6 +533,61 @@ class BackupCliTests(unittest.TestCase):
         self.assertNotIn("Current log:", result.stdout)
         self.assertEqual(result.stdout.strip().splitlines()[-1], "Status: OK")
 
+    def test_staging_progress_uses_recursive_plan_bytes_and_finishes_exactly(self) -> None:
+        module = runpy.run_path(str(BK))
+        source = self.home / "source"
+        nested = source / "nested"
+        nested.mkdir(parents=True)
+        (source / "first.bin").write_bytes(b"a" * 19)
+        (nested / "second.bin").write_bytes(b"b" * 23)
+        (nested / "empty").touch()
+        (source / "link").symlink_to("first.bin")
+        config = module["Config"](version=1, retention=7, sources=[source])
+        plan = module["build_snapshot_plan"](config)
+        progress = RecordingProgress()
+        paths = module["Paths"].from_home(self.home)
+        paths.runtime.mkdir()
+
+        with patch.dict(
+            module["run_backup"].__globals__,
+            {"build_snapshot_plan": lambda *_args, **_kwargs: plan},
+        ):
+            with module["backup_lock"](paths):
+                code, _status = module["run_backup"](
+                    paths,
+                    config,
+                    already_locked=True,
+                    progress=progress,
+                )
+
+        self.assertEqual(code, 0)
+        self.assertEqual(plan.input_bytes, 42)
+        staged = next(
+            record
+            for record in progress.records
+            if record["description"] == "Creating staged snapshot"
+        )
+        self.assertEqual(staged["total"], plan.input_bytes)
+        self.assertTrue(staged["byte_progress"])
+        self.assertEqual(staged["completed"], plan.input_bytes)
+        values = staged["values"]
+        assert isinstance(values, list)
+        self.assertTrue(all(0 <= int(value) <= plan.input_bytes for value in values))
+
+    def test_regular_file_copy_reports_incremental_bytes(self) -> None:
+        module = runpy.run_path(str(BK))
+        source = self.home / "large.bin"
+        source.write_bytes(b"x" * (2 * 1024 * 1024 + 17))
+        destination = self.home / "copied.bin"
+        reported: list[int] = []
+
+        module["copy_regular_file"](source, destination, reported.append)
+
+        self.assertGreater(len(reported), 1)
+        self.assertEqual(reported[-1], source.stat().st_size)
+        self.assertEqual(reported, sorted(reported))
+        self.assertEqual(destination.read_bytes(), source.read_bytes())
+
     def test_overlapping_sources_are_allowed_and_independently_archived(self) -> None:
         dev = self.home / "DEV"
         parent = dev / "foo"
@@ -900,6 +1000,74 @@ class BackupCliTests(unittest.TestCase):
             self.assertEqual(checked.execute("PRAGMA integrity_check").fetchone()[0], "ok")
             self.assertEqual(checked.execute("SELECT count(*) FROM records").fetchone()[0], row_count)
 
+    def test_sqlite_progress_reaches_exact_planned_byte_weight(self) -> None:
+        database = self.home / "database"
+        with sqlite3.connect(database) as connection:
+            connection.execute("CREATE TABLE data (value BLOB)")
+            connection.execute("INSERT INTO data VALUES (zeroblob(2097152))")
+            connection.commit()
+        module = runpy.run_path(str(BK))
+        destination = self.home / "staged"
+        planned_size = database.stat().st_size
+        reported: list[int] = []
+
+        module["copy_sqlite_file"](
+            database,
+            destination,
+            [],
+            planned_size,
+            reported.append,
+        )
+
+        self.assertGreater(len(reported), 1)
+        self.assertEqual(reported[-1], planned_size)
+        self.assertTrue(all(0 <= value <= planned_size for value in reported))
+
+    def test_sqlite_retry_rolls_back_progress_before_counting_retry(self) -> None:
+        database = self.home / "database"
+        with sqlite3.connect(database) as connection:
+            connection.execute("CREATE TABLE data (value TEXT)")
+            connection.commit()
+        module = runpy.run_path(str(BK))
+        config = module["Config"](version=1, retention=7, sources=[database])
+        plan = module["build_snapshot_plan"](config)
+        run_directory = self.home / "run"
+        run_directory.mkdir()
+        progress = RecordingProgress()
+        progress.stage("Creating staged snapshot", total=plan.input_bytes, byte_progress=True)
+        attempts = 0
+
+        def copy_attempt(
+            _source: Path,
+            destination: Path,
+            _log_lines: list[str],
+            planned_size: int,
+            report_bytes: object,
+        ) -> None:
+            nonlocal attempts
+            attempts += 1
+            destination.write_bytes(b"staged")
+            assert callable(report_bytes)
+            report_bytes(planned_size)
+            if attempts == 1:
+                raise module["_RetryableSQLiteSnapshot"]("retry once")
+
+        with patch.dict(
+            module["copy_sqlite_file"].__globals__,
+            {"_copy_sqlite_attempt": copy_attempt},
+        ):
+            module["materialize_plan"](plan, run_directory, progress=progress)
+
+        self.assertEqual(attempts, 2)
+        assert progress.current is not None
+        self.assertEqual(progress.current["completed"], plan.input_bytes)
+        advances = progress.current["advances"]
+        values = progress.current["values"]
+        assert isinstance(advances, list)
+        assert isinstance(values, list)
+        self.assertIn(-plan.input_bytes, advances)
+        self.assertTrue(all(0 <= int(value) <= plan.input_bytes for value in values))
+
     def test_closed_wal_database_change_during_backup_retries_and_succeeds(self) -> None:
         database = self.home / "closed-state"
         connection, row_count = self.create_wal_database(database)
@@ -933,7 +1101,12 @@ class BackupCliTests(unittest.TestCase):
         destination = self.home / "staged"
         log_lines: list[str] = []
         with patch.object(module["sqlite3"], "connect", side_effect=connect):
-            module["copy_sqlite_file"](database, destination, log_lines)
+            module["copy_sqlite_file"](
+                database,
+                destination,
+                log_lines,
+                database.stat().st_size,
+            )
 
         self.assertTrue(mutated)
         self.assertIn("retry", "\n".join(log_lines).lower())
@@ -974,7 +1147,12 @@ class BackupCliTests(unittest.TestCase):
 
         destination = self.home / "staged"
         with patch.object(module["sqlite3"], "connect", side_effect=connect):
-            module["copy_sqlite_file"](database, destination, [])
+            module["copy_sqlite_file"](
+                database,
+                destination,
+                [],
+                database.stat().st_size,
+            )
 
         with sqlite3.connect(destination) as checked:
             self.assertEqual(checked.execute("PRAGMA integrity_check").fetchone()[0], "ok")
@@ -994,7 +1172,12 @@ class BackupCliTests(unittest.TestCase):
                 side_effect=sqlite3.DatabaseError("stable read failure"),
             ):
                 with self.assertRaises(module["BKError"]) as raised:
-                    module["copy_sqlite_file"](database, destination, [])
+                    module["copy_sqlite_file"](
+                        database,
+                        destination,
+                        [],
+                        database.stat().st_size,
+                    )
 
         self.assertIn("stable read failure", str(raised.exception))
         sleep.assert_not_called()
@@ -1017,7 +1200,12 @@ class BackupCliTests(unittest.TestCase):
         with patch.object(module["time"], "sleep") as sleep:
             with patch.dict(module["copy_sqlite_file"].__globals__, {"sqlite_open_policy": reject_policy}):
                 with self.assertRaises(module["BKError"]) as raised:
-                    module["copy_sqlite_file"](database, destination, log_lines)
+                    module["copy_sqlite_file"](
+                        database,
+                        destination,
+                        log_lines,
+                        database.stat().st_size,
+                    )
 
         self.assertIn("5 attempts", str(raised.exception))
         self.assertEqual(policy_calls, 5)

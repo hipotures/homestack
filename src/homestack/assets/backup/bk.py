@@ -26,18 +26,20 @@ from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Callable, Iterator
 from urllib.parse import quote
 
 try:
     from rich.console import Console
     from rich.progress import (
         BarColumn,
+        DownloadColumn,
         Progress,
         SpinnerColumn,
         TaskProgressColumn,
         TextColumn,
         TimeElapsedColumn,
+        TimeRemainingColumn,
     )
     from rich.table import Table
 except ImportError as exc:  # pragma: no cover - the guest contract provides Rich
@@ -171,15 +173,25 @@ class BackupProgress:
     """Render live backup phases for a human-facing run."""
 
     def __init__(self) -> None:
-        self._progress = Progress(
+        self._standard_columns = (
             SpinnerColumn(),
             TextColumn("{task.description}"),
             BarColumn(),
             TaskProgressColumn(),
             TimeElapsedColumn(),
-            console=console,
         )
+        self._byte_columns = (
+            SpinnerColumn(),
+            TextColumn("{task.description}"),
+            BarColumn(),
+            DownloadColumn(binary_units=True),
+            TaskProgressColumn(),
+            TimeRemainingColumn(compact=True, elapsed_when_finished=True),
+        )
+        self._progress = Progress(*self._standard_columns, console=console)
         self._task_id: int | None = None
+        self._completed = 0
+        self._total: int | None = None
 
     def __enter__(self) -> BackupProgress:
         self._progress.start()
@@ -188,14 +200,32 @@ class BackupProgress:
     def __exit__(self, _exc_type: object, _exc: object, _traceback: object) -> None:
         self._progress.stop()
 
-    def stage(self, description: str, *, total: int | None = None) -> None:
+    def stage(
+        self,
+        description: str,
+        *,
+        total: int | None = None,
+        byte_progress: bool = False,
+    ) -> None:
         if self._task_id is not None:
             self._progress.remove_task(self._task_id)
+        self._progress.columns = self._byte_columns if byte_progress else self._standard_columns
+        self._completed = 0
+        self._total = total
         self._task_id = self._progress.add_task(description, total=total)
 
-    def advance(self) -> None:
+    def advance(self, amount: int = 1) -> None:
         if self._task_id is not None:
-            self._progress.advance(self._task_id)
+            completed = max(0, self._completed + amount)
+            if self._total is not None:
+                completed = min(completed, self._total)
+            self._completed = completed
+            self._progress.update(self._task_id, completed=completed)
+
+    def complete(self) -> None:
+        if self._task_id is not None and self._total is not None:
+            self._completed = self._total
+            self._progress.update(self._task_id, completed=self._total)
 
 
 def normalize_path(path: str | os.PathLike[str]) -> Path:
@@ -1989,9 +2019,20 @@ def copy_symlink(source: Path, destination: Path) -> None:
         raise BKError(f"cannot preserve symlink {source}: {exc}") from exc
 
 
-def copy_regular_file(source: Path, destination: Path) -> None:
+def copy_regular_file(
+    source: Path,
+    destination: Path,
+    report_bytes: Callable[[int], None] | None = None,
+) -> None:
     try:
-        shutil.copy2(source, destination, follow_symlinks=False)
+        copied = 0
+        with source.open("rb") as source_stream, destination.open("wb") as destination_stream:
+            while chunk := source_stream.read(1024 * 1024):
+                destination_stream.write(chunk)
+                copied += len(chunk)
+                if report_bytes is not None:
+                    report_bytes(copied)
+        shutil.copystat(source, destination, follow_symlinks=False)
     except OSError as exc:
         raise BKError(f"cannot stage file {source}: {exc}") from exc
 
@@ -2081,6 +2122,8 @@ def _copy_sqlite_attempt(
     source: Path,
     destination: Path,
     log_lines: list[str],
+    planned_size: int,
+    report_bytes: Callable[[int], None] | None = None,
 ) -> None:
     """Perform one SQLite online-backup attempt.
 
@@ -2096,7 +2139,18 @@ def _copy_sqlite_attempt(
         source_uri, policy, immutable_guard = sqlite_open_policy(source)
         source_connection = sqlite3.connect(source_uri, uri=True, timeout=30)
         destination_connection = sqlite3.connect(str(destination), timeout=30)
-        source_connection.backup(destination_connection, pages=0, sleep=0.1)
+
+        def report_sqlite_pages(_status: int, remaining: int, total: int) -> None:
+            if report_bytes is not None and total > 0:
+                completed_pages = max(0, min(total, total - remaining))
+                report_bytes(planned_size * completed_pages // total)
+
+        source_connection.backup(
+            destination_connection,
+            pages=256,
+            progress=report_sqlite_pages,
+            sleep=0.1,
+        )
         destination_connection.commit()
         result = destination_connection.execute("PRAGMA quick_check").fetchone()
         if not result or str(result[0]).lower() != "ok":
@@ -2135,7 +2189,13 @@ def _copy_sqlite_attempt(
                 pass
 
 
-def copy_sqlite_file(source: Path, destination: Path, log_lines: list[str]) -> None:
+def copy_sqlite_file(
+    source: Path,
+    destination: Path,
+    log_lines: list[str],
+    planned_size: int,
+    report_bytes: Callable[[int], None] | None = None,
+) -> None:
     """Create a verified SQLite snapshot, retrying only transient WAL races."""
 
     succeeded = False
@@ -2144,8 +2204,16 @@ def copy_sqlite_file(source: Path, destination: Path, log_lines: list[str]) -> N
         for attempt in range(1, SQLITE_SNAPSHOT_ATTEMPTS + 1):
             _remove_staged_sqlite_artifacts(destination)
             try:
-                _copy_sqlite_attempt(source, destination, log_lines)
+                _copy_sqlite_attempt(
+                    source,
+                    destination,
+                    log_lines,
+                    planned_size,
+                    report_bytes,
+                )
             except _RetryableSQLiteSnapshot as exc:
+                if report_bytes is not None:
+                    report_bytes(0)
                 retry_messages.append(str(exc))
                 log_lines.append(
                     f"SQLite snapshot retry {attempt}/{SQLITE_SNAPSHOT_ATTEMPTS}: {exc}"
@@ -2157,6 +2225,8 @@ def copy_sqlite_file(source: Path, destination: Path, log_lines: list[str]) -> N
                 time.sleep(SQLITE_RETRY_BACKOFF_SECONDS * attempt)
                 continue
             succeeded = True
+            if report_bytes is not None:
+                report_bytes(planned_size)
             if retry_messages:
                 log_lines.append(
                     f"SQLite snapshot succeeded after {len(retry_messages) + 1} attempts"
@@ -2180,8 +2250,6 @@ def materialize_plan(
         root = payload / f"{source_plan.index:04d}" / source_label(source_plan.source)
         for entry in source_plan.entries:
             if entry.skip_sidecar:
-                if progress is not None:
-                    progress.advance()
                 continue
             validate_plan_entry(entry)
             destination = entry_destination(payload, entry, source_plan.source)
@@ -2197,15 +2265,32 @@ def materialize_plan(
                 destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
                 if not entry.classification:
                     raise BKError(f"missing classification for staged file {entry.source_path}")
+                entry_completed = 0
+
+                def report_entry_bytes(completed: int) -> None:
+                    nonlocal entry_completed
+                    completed = max(0, min(completed, entry.size))
+                    if progress is not None:
+                        progress.advance(completed - entry_completed)
+                    entry_completed = completed
+
                 if entry.classification.handler == "sqlite":
                     log_lines.append(f"Classified SQLite: {entry.source_path}: {entry.classification.output}")
-                    copy_sqlite_file(entry.source_path, destination, log_lines)
+                    copy_sqlite_file(
+                        entry.source_path,
+                        destination,
+                        log_lines,
+                        entry.size,
+                        report_entry_bytes,
+                    )
                 else:
-                    copy_regular_file(entry.source_path, destination)
+                    copy_regular_file(entry.source_path, destination, report_entry_bytes)
+                report_entry_bytes(entry.size)
             else:  # pragma: no cover - plan construction rejects this
                 raise BKError(f"unsupported staged entry kind {entry.kind}: {entry.source_path}")
-            if progress is not None:
-                progress.advance()
+
+    if progress is not None:
+        progress.complete()
 
     manifest = {
         "schema": "bk-archive",
@@ -2680,8 +2765,11 @@ def run_backup(
                     progress.stage("Scanning and classifying sources")
                 plan = build_snapshot_plan(config, progress)
                 if progress is not None:
-                    entry_count = sum(len(source.entries) for source in plan.sources)
-                    progress.stage("Creating staged snapshot", total=entry_count)
+                    progress.stage(
+                        "Creating staged snapshot",
+                        total=plan.input_bytes,
+                        byte_progress=True,
+                    )
                 payload, _ = materialize_plan(plan, run_directory, details, progress)
                 manifest = run_directory / "manifest.json"
                 if not manifest.is_file():
