@@ -228,7 +228,7 @@ def _assert_pinned_leaf(target: _PinnedFile, label: str) -> None:
 
 
 def _atomic_bytes_pinned(target: _PinnedFile, payload: bytes, *, mode: int,
-                         before_replace=None) -> None:
+                         before_replace=None, create_only: bool = False) -> bool:
     if target.parent_fd is None:
         raise GuestError("Structured configuration parent is missing")
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
@@ -256,9 +256,18 @@ def _atomic_bytes_pinned(target: _PinnedFile, payload: bytes, *, mode: int,
         _assert_pinned_leaf(target, "Structured configuration")
         if before_replace is not None:
             before_replace()
-        os.replace(temporary, target.leaf, src_dir_fd=target.parent_fd, dst_dir_fd=target.parent_fd)
+        if create_only:
+            try:
+                os.link(temporary, target.leaf, src_dir_fd=target.parent_fd,
+                        dst_dir_fd=target.parent_fd, follow_symlinks=False)
+            except FileExistsError:
+                return False
+            os.unlink(temporary, dir_fd=target.parent_fd)
+        else:
+            os.replace(temporary, target.leaf, src_dir_fd=target.parent_fd, dst_dir_fd=target.parent_fd)
         temporary = None
         os.fsync(target.parent_fd)
+        return True
     except OSError as exc:
         raise GuestError("Structured configuration could not be written") from exc
     finally:
@@ -1309,9 +1318,26 @@ def atomic_write(path: Path, content: str) -> bool:
     return True
 
 
+def backup_configuration(home: Path, *, create: bool = False) -> dict:
+    """Initialize missing user configuration without replacing an existing file."""
+    relative = ".config/bk/backup.yaml"
+    with _open_pinned_file(home, relative, create_parents=create) as target:
+        current, _, _ = _read_pinned_file(target, "BK configuration")
+        if current is not None or not create:
+            return {"ok": True, "exists": current is not None, "created": False}
+        lines = ["version: 1", f"destination: {json.dumps(str(home / 'backup'))}",
+                 "retention: 7", "respect_gitignore: true", "sources:",
+                 f"  - {json.dumps(str(home / relative))}"]
+        created = _atomic_bytes_pinned(target, ("\n".join(lines) + "\n").encode(),
+                                       mode=0o600, create_only=True)
+        return {"ok": True, "exists": True, "created": created}
+
+
 def run(data: dict) -> dict:
     home = Path(data["home"])
     op = data["operation"]
+    if op == "backup-config":
+        return backup_configuration(home, create=data.get("create") is True)
     if op == "identity":
         verify_identity(data)
         return {"ok": True}

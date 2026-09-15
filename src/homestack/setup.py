@@ -46,6 +46,7 @@ class Plan:
                 extra = {
                     "destinations": ["~/" + path for path in backup.managed_paths()],
                     "timer": "backup.timer",
+                    "create_configuration_if_missing": "~/.config/bk/backup.yaml",
                 }
                 if not self.target.get("local"):
                     extra["restricted_authorized_keys"] = "~/.ssh/authorized_keys"
@@ -371,7 +372,7 @@ def write_paths(cfg: Config, entry: Entry) -> tuple[str, ...]:
         return {"bash": (".bashrc", ".profile", ".bash_profile", ".bash_login"), "zsh": (".zshenv", ".zshrc"),
                 "fish": (".config/fish/conf.d/homestack.fish",), "nu": (".config/nushell/env.nu", ".config/nushell/config.nu")}[p.profile]
     if isinstance(p, BackupParams):
-        return backup.managed_state_paths()
+        return (*backup.managed_state_paths(), ".config/bk/backup.yaml")
     if isinstance(p, RepositoryParams):
         return tuple(path.removeprefix(f"/home/{cfg.user_name}/") for path in repo.repository_paths(cfg, p.repository))
     return ()

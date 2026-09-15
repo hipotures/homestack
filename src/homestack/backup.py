@@ -794,6 +794,7 @@ def inspect(ws, cfg, vmid: int, *, check_requirements: bool = True) -> dict:
         ],
     )
     actual = guest(ws, cfg, "managed-files-inspect", paths=list(managed_paths()))
+    configuration = guest(ws, cfg, "backup-config")
     files = actual.get("items", [])
     by_path = {item["path"]: item for item in files}
     desired = desired_hashes()
@@ -813,7 +814,8 @@ def inspect(ws, cfg, vmid: int, *, check_requirements: bool = True) -> dict:
     timer_enabled, timer_active = _timer_state(ws, cfg)
     any_installed = any(item.get("exists") for item in files)
     ready = (not changed and timer_enabled and timer_active
-             and retrieval["ready"] and authorization.get("ready", False))
+             and retrieval["ready"] and authorization.get("ready", False)
+             and configuration["exists"])
     state = (
         "configured"
         if ready
@@ -834,6 +836,7 @@ def inspect(ws, cfg, vmid: int, *, check_requirements: bool = True) -> dict:
         "timer_active": timer_active,
         "retrieval": retrieval,
         "authorization": authorization,
+        "configuration_exists": configuration["exists"],
     }
 
 
@@ -887,6 +890,8 @@ def apply(ws, cfg, vmid: int, state: dict, *, activity=lambda message: None) -> 
         directories=[path for path in MANAGED_DIRECTORIES if not local or path != "backup"],
         files=files,
     )
+    activity("Create missing BK configuration; preserve existing user settings")
+    guest(ws, cfg, "backup-config", create=True)
     unit_paths = {
         ".config/systemd/user/backup.service",
         ".config/systemd/user/backup.timer",

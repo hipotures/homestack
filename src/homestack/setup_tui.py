@@ -43,7 +43,8 @@ def _backup_retrieval_details(vmid: int) -> list[str]:
         "Generate missing pairs; repair missing public keys; reuse valid pairs without rotation.",
         "Install only public keys in guest ~/.ssh/authorized_keys; preserve unrelated entries.",
         "Forced commands: cat of ~/backup/backup.tgz or ~/backup/status.json only; no shell or forwarding.",
-        "Private keys stay on the desktop. User backup configuration and data remain unchanged.",
+        "Create missing ~/.config/bk/backup.yaml with default destination ~/backup",
+        "Private keys stay on the desktop. Existing backup configuration and data remain unchanged.",
     ]
 
 
@@ -456,7 +457,8 @@ class SetupApp(App):
         if self.target.get("local"):
             return ["Install ~/.local/bin/bk and the backup.service / backup.timer user units.",
                     "Enable the nightly user timer. No SSH keys or authorized_keys changes.",
-                    "Run bk edit to create ~/backup/backup.yaml and select sources.",
+                    "Create missing ~/.config/bk/backup.yaml with default destination ~/backup",
+                    "Run bk edit to select sources. The configuration always backs itself up.",
                     "Existing backup configuration and data remain unchanged."]
         return _backup_retrieval_details(self.target["vmid"])
 

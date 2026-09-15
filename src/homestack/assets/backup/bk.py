@@ -92,14 +92,18 @@ class Paths:
     lock: Path
 
     @classmethod
-    def from_home(cls, home: Path | None = None) -> "Paths":
+    def from_home(
+        cls,
+        home: Path | None = None,
+        destination: Path | None = None,
+    ) -> "Paths":
         selected_home = home or Path.home()
         selected_home = Path(os.path.abspath(os.path.normpath(str(selected_home))))
-        runtime = selected_home / "backup"
+        runtime = normalize_path(destination) if destination is not None else selected_home / "backup"
         return cls(
             home=selected_home,
             runtime=runtime,
-            config=runtime / "backup.yaml",
+            config=selected_home / ".config" / "bk" / "backup.yaml",
             current_archive=runtime / "backup.tgz",
             current_log=runtime / "backup.log",
             status=runtime / "status.json",
@@ -115,6 +119,7 @@ class Config:
     retention: int
     sources: list[Path]
     respect_gitignore: bool = True
+    destination: Path | None = None
 
 
 @dataclass
@@ -252,30 +257,99 @@ def lexically_real(path: Path) -> Path:
 
 
 def path_is_runtime(path: Path, paths: Paths) -> bool:
-    """Reject sources that are within, or would contain, BK's runtime tree."""
+    """Reject sources that are within BK's runtime tree.
+
+    A configured source may contain the runtime destination.  The planner
+    excludes that subtree while walking the source, so rejecting the ancestor
+    here would make that supported layout impossible.
+    """
 
     candidate = normalize_path(path)
     runtime = normalize_path(paths.runtime)
-    if path_is_within(candidate, runtime) or path_is_within(runtime, candidate):
+    if path_is_within(candidate, runtime):
         return True
     real_candidate = lexically_real(candidate)
     real_runtime = lexically_real(runtime)
-    return path_is_within(real_candidate, real_runtime) or path_is_within(real_runtime, real_candidate)
+    return path_is_within(real_candidate, real_runtime)
+
+
+def validate_directory_chain(path: Path, label: str) -> None:
+    """Reject symlinked or non-directory components in an absolute path.
+
+    Missing components are allowed here; callers decide whether they may be
+    created.  This lets config parsing validate a destination before a backup
+    disk is mounted while still preventing a later mkdir from following a
+    symlinked ancestor.
+    """
+
+    candidate = normalize_path(path)
+    parts = candidate.parts
+    current = Path(parts[0])
+    for part in parts[1:]:
+        current /= part
+        try:
+            metadata = os.lstat(current)
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            raise BKError(f"cannot inspect {label} path component {current}: {exc}") from exc
+        if stat.S_ISLNK(metadata.st_mode):
+            raise BKError(f"{label} path contains a symlink: {current}")
+        if not stat.S_ISDIR(metadata.st_mode):
+            raise BKError(f"{label} path component is not a directory: {current}")
+
+
+def validate_destination(
+    destination: Path,
+    home: Path,
+    config_path: Path,
+    *,
+    error_type: type[Exception] = BKError,
+) -> Path:
+    """Validate one configured destination without resolving symlinks."""
+
+    try:
+        candidate = normalize_path(destination)
+    except BKError as exc:
+        raise error_type(f"backup destination is invalid: {exc}") from exc
+    selected_home = normalize_path(home)
+    protected_config = normalize_path(config_path)
+    if candidate == Path(candidate.anchor):
+        raise error_type("backup destination cannot be the filesystem root")
+    if candidate == selected_home:
+        raise error_type("backup destination cannot be the home directory")
+    if path_is_within(protected_config, candidate):
+        raise error_type(
+            f"backup destination cannot contain the protected config file: {protected_config}"
+        )
+    try:
+        validate_directory_chain(candidate, "backup destination")
+    except BKError as exc:
+        raise error_type(str(exc)) from exc
+    return candidate
 
 
 def ensure_runtime_directory(paths: Paths) -> None:
     """Create the runtime directory, refusing symlinked or non-directory roots."""
 
+    runtime = validate_destination(paths.runtime, paths.home, paths.config)
+    inside_home = path_is_within(runtime, normalize_path(paths.home))
     if os.path.lexists(paths.runtime):
         if paths.runtime.is_symlink():
             raise BKError(f"BK runtime path is a symlink, refusing to use it: {paths.runtime}")
         if not paths.runtime.is_dir():
             raise BKError(f"BK runtime path is not a directory: {paths.runtime}")
     else:
+        if not inside_home:
+            raise BKError(
+                f"configured backup destination is unavailable; outside-home destinations "
+                f"must already exist: {runtime}"
+            )
         try:
-            paths.runtime.mkdir(mode=0o700)
+            paths.runtime.mkdir(mode=0o700, parents=True)
         except OSError as exc:
             raise BKError(f"cannot create BK runtime directory {paths.runtime}: {exc}") from exc
+    validate_directory_chain(runtime, "BK runtime")
 
 
 def ensure_archive_and_work_directories(paths: Paths) -> None:
@@ -291,7 +365,13 @@ def ensure_archive_and_work_directories(paths: Paths) -> None:
                 raise BKError(f"cannot create BK {label} directory {directory}: {exc}") from exc
 
 
-def atomic_write_bytes(path: Path, data: bytes, mode: int | None = None) -> None:
+def atomic_write_bytes(
+    path: Path,
+    data: bytes,
+    mode: int | None = None,
+    *,
+    expected_data: bytes | None = None,
+) -> None:
     """Write one managed file using a same-directory temporary and replace."""
 
     parent = path.parent
@@ -307,6 +387,13 @@ def atomic_write_bytes(path: Path, data: bytes, mode: int | None = None) -> None
             os.fsync(handle.fileno())
         if mode is not None:
             os.chmod(temporary, mode)
+        if expected_data is not None:
+            try:
+                current_data = path.read_bytes()
+            except OSError as exc:
+                raise BKError(f"managed file changed while being updated: {path}") from exc
+            if current_data != expected_data:
+                raise BKError(f"managed file changed while being updated: {path}")
         os.replace(temporary, path)
         temporary = None
         try:
@@ -328,111 +415,224 @@ def atomic_write_bytes(path: Path, data: bytes, mode: int | None = None) -> None
                 pass
 
 
+CONFIG_SCALAR_KEYS = ("version", "destination", "retention", "respect_gitignore")
+
+
+def _parse_destination_value(raw: str, line_number: int) -> str:
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ConfigError(f"backup.yaml has an invalid destination on line {line_number}") from exc
+    if not isinstance(value, str) or not value:
+        raise ConfigError(f"backup.yaml destination on line {line_number} must be a non-empty string")
+    if not os.path.isabs(value):
+        raise ConfigError(f"backup.yaml destination on line {line_number} must be absolute: {value}")
+    return value
+
+
 def parse_config_text(text: str, config_path: Path, paths: Paths) -> Config:
     """Parse the deliberately small canonical BK YAML subset.
 
-    Supported syntax is exactly the form emitted by :func:`write_config`.
-    JSON string quoting is used for list values, which handles spaces and
-    unusual path characters without needing a general YAML implementation.
+    Scalar options may be omitted and receive their current defaults.  Every
+    present option and every source line is still parsed strictly; this keeps
+    schema repair limited to genuinely missing options.
     """
 
     lines = text.splitlines()
-    if text and not text.endswith(("\n", "\r")):
+    if not text or not text.endswith(("\n", "\r")):
         # A final newline is part of the canonical writer format.  Refusing it
         # also prevents accidentally accepting a truncated manually edited file.
         raise ConfigError("backup.yaml must end with a newline")
-    if len(lines) < 4:
-        raise ConfigError(
-            "backup.yaml must contain version, retention, respect_gitignore, and sources"
-        )
-    if lines[0] != "version: 1":
-        match = re.fullmatch(r"version: ([0-9]+)", lines[0])
-        if not match:
-            raise ConfigError("backup.yaml has an invalid version line")
-        raise ConfigError(f"unsupported backup.yaml version: {match.group(1)}")
-    retention_match = re.fullmatch(r"retention: ([0-9]+)", lines[1])
-    if not retention_match:
-        raise ConfigError("backup.yaml has an invalid retention line")
-    retention = int(retention_match.group(1))
-    if retention < 1:
-        raise ConfigError("backup.yaml retention must be an integer greater than or equal to 1")
-    respect_gitignore_match = re.fullmatch(r"respect_gitignore: (true|false)", lines[2])
-    if not respect_gitignore_match:
-        raise ConfigError("backup.yaml has an invalid respect_gitignore line")
-    respect_gitignore = respect_gitignore_match.group(1) == "true"
-    if lines[3] != "sources:":
-        raise ConfigError("backup.yaml must contain a sources section")
 
+    scalar_values: dict[str, object] = {}
     source_values: list[Path] = []
-    for line_number, line in enumerate(lines[4:], start=5):
-        if not line.startswith("  - "):
-            raise ConfigError(f"backup.yaml has invalid source syntax on line {line_number}")
-        encoded = line[4:]
-        try:
-            value = json.loads(encoded)
-        except json.JSONDecodeError as exc:
-            raise ConfigError(f"backup.yaml has invalid source quoting on line {line_number}") from exc
-        if not isinstance(value, str) or not value:
-            raise ConfigError(f"backup.yaml source on line {line_number} must be a non-empty string")
-        if not os.path.isabs(value):
-            raise ConfigError(f"backup.yaml source on line {line_number} must be absolute: {value}")
-        try:
-            source = normalize_path(value)
-        except BKError as exc:
-            raise ConfigError(f"backup.yaml source on line {line_number} is invalid: {exc}") from exc
-        if value != str(source):
-            raise ConfigError(f"backup.yaml source on line {line_number} is not canonical: {value}")
-        if source in source_values:
-            # Exact duplicates are not produced by BK and make source order
-            # needlessly ambiguous.  Parent/child overlap remains legal.
-            raise ConfigError(f"backup.yaml contains duplicate source: {source}")
-        source_values.append(source)
+    seen_keys: set[str] = set()
+    in_sources = False
+    for line_number, line in enumerate(lines, start=1):
+        if not line:
+            raise ConfigError(f"backup.yaml has invalid syntax on line {line_number}")
+        if in_sources:
+            if not line.startswith("  - "):
+                raise ConfigError(f"backup.yaml has invalid source syntax on line {line_number}")
+            encoded = line[4:]
+            try:
+                value = json.loads(encoded)
+            except json.JSONDecodeError as exc:
+                raise ConfigError(f"backup.yaml has invalid source quoting on line {line_number}") from exc
+            if not isinstance(value, str) or not value:
+                raise ConfigError(f"backup.yaml source on line {line_number} must be a non-empty string")
+            if not os.path.isabs(value):
+                raise ConfigError(f"backup.yaml source on line {line_number} must be absolute: {value}")
+            try:
+                source = normalize_path(value)
+            except BKError as exc:
+                raise ConfigError(f"backup.yaml source on line {line_number} is invalid: {exc}") from exc
+            if value != str(source):
+                raise ConfigError(f"backup.yaml source on line {line_number} is not canonical: {value}")
+            if source in source_values:
+                # Exact duplicates are not produced by BK and make source order
+                # needlessly ambiguous.  Parent/child overlap remains legal.
+                raise ConfigError(f"backup.yaml contains duplicate source: {source}")
+            source_values.append(source)
+            continue
 
+        if line == "sources:":
+            if "sources" in seen_keys:
+                raise ConfigError("backup.yaml contains a duplicate sources section")
+            seen_keys.add("sources")
+            in_sources = True
+            continue
+        match = re.fullmatch(r"([A-Za-z_][A-Za-z0-9_]*):(?: (.*))?", line)
+        if not match:
+            raise ConfigError(f"backup.yaml has invalid syntax on line {line_number}")
+        key, raw_value = match.group(1), match.group(2)
+        if key not in CONFIG_SCALAR_KEYS:
+            raise ConfigError(f"backup.yaml has an unknown key on line {line_number}: {key}")
+        if key in seen_keys:
+            raise ConfigError(f"backup.yaml contains a duplicate key: {key}")
+        seen_keys.add(key)
+        raw_value = raw_value or ""
+        if key == "version":
+            match_version = re.fullmatch(r"([0-9]+)", raw_value)
+            if not match_version:
+                raise ConfigError("backup.yaml has an invalid version line")
+            version = int(match_version.group(1))
+            if version != CONFIG_VERSION:
+                raise ConfigError(f"unsupported backup.yaml version: {match_version.group(1)}")
+            scalar_values[key] = version
+        elif key == "retention":
+            match_retention = re.fullmatch(r"([0-9]+)", raw_value)
+            if not match_retention:
+                raise ConfigError("backup.yaml has an invalid retention line")
+            retention = int(match_retention.group(1))
+            if retention < 1:
+                raise ConfigError("backup.yaml retention must be an integer greater than or equal to 1")
+            scalar_values[key] = retention
+        elif key == "respect_gitignore":
+            if raw_value not in {"true", "false"}:
+                raise ConfigError("backup.yaml has an invalid respect_gitignore line")
+            scalar_values[key] = raw_value == "true"
+        else:
+            scalar_values[key] = _parse_destination_value(raw_value, line_number)
+
+    if not in_sources:
+        raise ConfigError("backup.yaml must contain a sources section")
     if not source_values:
         raise ConfigError("backup.yaml must contain the protected self source first")
+
     expected_self = normalize_path(config_path)
     if source_values[0] != expected_self:
         raise ConfigError(f"backup.yaml source number 1 must be {expected_self}")
+
+    destination_value = scalar_values.get("destination")
+    if destination_value is None:
+        destination = normalize_path(paths.home / "backup")
+    else:
+        assert isinstance(destination_value, str)
+        try:
+            destination = normalize_path(destination_value)
+        except BKError as exc:
+            raise ConfigError(f"backup.yaml destination is invalid: {exc}") from exc
+        if destination_value != str(destination):
+            raise ConfigError(f"backup.yaml destination is not canonical: {destination_value}")
+    destination = validate_destination(
+        destination,
+        paths.home,
+        expected_self,
+        error_type=ConfigError,
+    )
+    configured_paths = Paths.from_home(paths.home, destination)
+    destination_real = lexically_real(destination)
+    for source in source_values:
+        if path_is_within(source, destination) or path_is_within(lexically_real(source), destination_real):
+            raise ConfigError(f"backup.yaml source {source} is inside the configured backup destination")
     for index, source in enumerate(source_values):
         if index == 0:
             continue
-        if path_is_runtime(source, paths):
+        if path_is_runtime(source, configured_paths):
             raise ConfigError(f"backup.yaml source {source} is inside the protected BK runtime")
     return Config(
-        version=CONFIG_VERSION,
-        retention=retention,
+        version=int(scalar_values.get("version", CONFIG_VERSION)),
+        retention=int(scalar_values.get("retention", DEFAULT_RETENTION)),
         sources=source_values,
-        respect_gitignore=respect_gitignore,
+        respect_gitignore=bool(scalar_values.get("respect_gitignore", True)),
+        destination=destination,
     )
 
 
 def read_config(paths: Paths) -> Config | None:
+    try:
+        validate_directory_chain(paths.config.parent, "backup configuration")
+    except BKError as exc:
+        raise ConfigError(str(exc)) from exc
     if not os.path.lexists(paths.config):
         return None
     if paths.config.is_symlink() or not paths.config.is_file():
         raise ConfigError(f"backup configuration is not a regular file: {paths.config}")
     try:
-        text = paths.config.read_text(encoding="utf-8")
+        original_data = paths.config.read_bytes()
+        text = original_data.decode("utf-8")
     except (OSError, UnicodeError) as exc:
         raise ConfigError(f"cannot read backup configuration {paths.config}: {exc}") from exc
     try:
-        return parse_config_text(text, paths.config, paths)
+        config = parse_config_text(text, paths.config, paths)
     except ConfigError:
         raise
     except Exception as exc:  # pragma: no cover - defensive parser boundary
         raise ConfigError(f"cannot parse backup configuration {paths.config}: {exc}") from exc
+    present_keys = {
+        line.split(":", 1)[0]
+        for line in text.splitlines()
+        if ":" in line and not line.startswith("  ")
+    }
+    missing_keys = [key for key in CONFIG_SCALAR_KEYS if key not in present_keys]
+    if missing_keys:
+        try:
+            write_config(paths, config, expected_data=original_data)
+        except BKError as exc:
+            raise ConfigError(f"cannot update backup configuration {paths.config}: {exc}") from exc
+        error_console.print(
+            f"Updated {paths.config}: added missing option(s) {', '.join(missing_keys)}"
+        )
+    return config
 
 
-def write_config(paths: Paths, config: Config) -> None:
+def ensure_config_parent(paths: Paths) -> None:
+    parent = normalize_path(paths.config.parent)
+    validate_directory_chain(parent, "backup configuration")
+    if not parent.is_dir():
+        try:
+            parent.mkdir(mode=0o700, parents=True)
+        except OSError as exc:
+            raise BKError(f"cannot create backup configuration directory {parent}: {exc}") from exc
+
+
+def write_config(
+    paths: Paths,
+    config: Config,
+    *,
+    expected_data: bytes | None = None,
+) -> None:
+    ensure_config_parent(paths)
+    if os.path.lexists(paths.config) and (paths.config.is_symlink() or not paths.config.is_file()):
+        raise BKError(f"backup configuration is not a regular file: {paths.config}")
+    destination = config.destination or normalize_path(paths.home / "backup")
+    destination = validate_destination(destination, paths.home, paths.config)
     respect_gitignore = "true" if config.respect_gitignore else "false"
     lines = [
         "version: 1",
+        f"destination: {json.dumps(str(destination), ensure_ascii=False)}",
         f"retention: {config.retention}",
         f"respect_gitignore: {respect_gitignore}",
         "sources:",
     ]
     lines.extend(f"  - {json.dumps(str(source), ensure_ascii=False)}" for source in config.sources)
-    atomic_write_bytes(paths.config, ("\n".join(lines) + "\n").encode("utf-8"), mode=0o600)
+    atomic_write_bytes(
+        paths.config,
+        ("\n".join(lines) + "\n").encode("utf-8"),
+        mode=0o600,
+        expected_data=expected_data,
+    )
 
 
 def parse_selection(raw: str, count: int) -> list[int]:
@@ -868,13 +1068,20 @@ def command_json(args: list[str]) -> tuple[list[str], bool]:
 def list_command(paths: Paths, json_mode: bool) -> int:
     config = read_config(paths)
     if config is None:
-        result = {"configured": False, "version": CONFIG_VERSION, "retention": None, "sources": []}
+        result = {
+            "configured": False,
+            "version": CONFIG_VERSION,
+            "retention": None,
+            "destination": str(paths.runtime),
+            "sources": [],
+        }
         if json_mode:
             emit_json(result)
         else:
             console.print("No backup configuration exists; no sources are configured.")
         return 0
 
+    configured_paths = Paths.from_home(paths.home, config.destination)
     sources: list[dict[str, Any]] = []
     for index, source in enumerate(config.sources, start=1):
         exists, kind = item_kind(source)
@@ -891,6 +1098,7 @@ def list_command(paths: Paths, json_mode: bool) -> int:
         "configured": True,
         "version": config.version,
         "retention": config.retention,
+        "destination": str(configured_paths.runtime),
         "sources": sources,
     }
     if json_mode:
@@ -907,6 +1115,7 @@ def list_command(paths: Paths, json_mode: bool) -> int:
         table.add_row(str(source["index"]), source["path"], state, source["kind"])
     console.print(table)
     console.print(f"Retention: {config.retention} successful backup(s)")
+    console.print(f"Destination: {configured_paths.runtime}")
     return 0
 
 
@@ -1800,14 +2009,19 @@ def apply_edit_selection(paths: Paths, config: Config | None, state: SelectorSta
     if config is None and not final_sources:
         return False
     if config is None:
-        ensure_runtime_directory(paths)
-        new_config = Config(CONFIG_VERSION, DEFAULT_RETENTION, [normalize_path(paths.config), *final_sources])
+        new_config = Config(
+            CONFIG_VERSION,
+            DEFAULT_RETENTION,
+            [normalize_path(paths.config), *final_sources],
+            destination=normalize_path(paths.runtime),
+        )
     else:
         new_config = Config(
             config.version,
             config.retention,
             [config.sources[0], *final_sources],
             config.respect_gitignore,
+            config.destination,
         )
     write_config(paths, new_config)
     return True
@@ -1821,8 +2035,9 @@ def edit_command(paths: Paths) -> int:
         return 2
     try:
         config = read_config(paths)
+        configured_paths = Paths.from_home(paths.home, config.destination) if config is not None else paths
         children = immediate_children(Path.cwd())
-        items, groups, selected = build_edit_selector(paths, children, config)
+        items, groups, selected = build_edit_selector(configured_paths, children, config)
         result = run_edit_selector(items, groups, selected, context=Path.cwd())
     except (BKError, SelectorUnavailable) as exc:
         error_console.print(str(exc))
@@ -1833,7 +2048,7 @@ def edit_command(paths: Paths) -> int:
 
     state = SelectorState(items, groups=groups, selected_indices=set(result.selected_indices))
     try:
-        changed = apply_edit_selection(paths, config, state)
+        changed = apply_edit_selection(configured_paths, config, state)
     except BKError as exc:
         error_console.print(str(exc))
         return 2
@@ -1981,6 +2196,12 @@ def git_directory_entries(directory: Path, worktree_root: Path) -> set[Path]:
 def build_snapshot_plan(config: Config, progress: BackupProgress | None = None) -> PlanSummary:
     classification_cache: dict[tuple[int, int], ClassResult] = {}
     source_plans: list[SourcePlan] = []
+    configured_destination = (
+        normalize_path(config.destination) if config.destination is not None else None
+    )
+    configured_destination_real = (
+        lexically_real(configured_destination) if configured_destination is not None else None
+    )
 
     def visit(
         source_index: int,
@@ -2033,6 +2254,18 @@ def build_snapshot_plan(config: Config, progress: BackupProgress | None = None) 
             raise BKError(f"cannot traverse source directory {current}: {exc}") from exc
         for child in children:
             child_relative = relative / child.name
+            child_path = normalize_path(child.path)
+            if configured_destination is not None and (
+                path_is_within(child_path, configured_destination)
+                or path_is_within(
+                    lexically_real(child_path),
+                    configured_destination_real,
+                )
+            ):
+                # The destination can sit below a configured source.  Skip it
+                # before lstat/classification so the destination is never
+                # recursively scanned as source data.
+                continue
             if allowed_paths is None or child_relative in allowed_paths:
                 visit(
                     source_index,
@@ -3090,46 +3323,11 @@ def status_without_configuration(json_mode: bool) -> int:
     return 0
 
 
-def record_config_failure(paths: Paths, started: datetime, started_monotonic: float, error: str) -> dict[str, Any]:
-    """Record a failed run whose configuration could not be parsed."""
-
-    ensure_runtime_directory(paths)
-    finished = datetime.now().astimezone()
-    duration = time.monotonic() - started_monotonic
-    history = history_entries(paths) if paths.archive.is_dir() and not paths.archive.is_symlink() else []
-    status: dict[str, Any] = {
-        "schema": "bk-status",
-        "version": STATUS_VERSION,
-        "status": "failed",
-        "configured": True,
-        "attempt": {
-            "started_at": iso_timestamp(started),
-            "finished_at": iso_timestamp(finished),
-            "duration_seconds": round(duration, 3),
-        },
-        "last_attempt_started_at": iso_timestamp(started),
-        "last_attempt_finished_at": iso_timestamp(finished),
-        "last_attempt_duration_seconds": round(duration, 3),
-        "last_successful_backup_timestamp": history[0]["created_at"] if history else None,
-        "current_backup_path": None,
-        "current_backup_size": None,
-        "current_successful_log_path": None,
-        "current_backup_created_at": None,
-        "failed_log_path": None,
-        "configured_retention": None,
-        "retained_successful_archives": len(history),
-        "history": history,
-        "error": error,
-    }
-    status.update(current_backup_info(paths, history))
-    write_status(paths, status)
-    return status
-
-
 def status_command(paths: Paths, json_mode: bool) -> int:
     config = read_config(paths)
     if config is None:
         return status_without_configuration(json_mode)
+    paths = Paths.from_home(paths.home, config.destination)
     existing = read_existing_status(paths)
     if existing is None:
         history = history_entries(paths) if paths.archive.is_dir() else []
@@ -3222,21 +3420,30 @@ def run_command(paths: Paths, json_mode: bool) -> int:
         code = 0
         result = unconfigured_result()
     else:
-        ensure_runtime_directory(paths)
         try:
-            with backup_lock(paths):
-                started = datetime.now().astimezone()
-                started_monotonic = time.monotonic()
+            config = read_config(paths)
+        except ConfigError as exc:
+            # The destination cannot be trusted until the entire config has
+            # parsed.  In particular, do not record this failure in the
+            # default runtime when a custom destination is malformed or
+            # unavailable.
+            code = 1
+            result = {
+                "schema": "bk-status",
+                "version": STATUS_VERSION,
+                "status": "failed",
+                "configured": None,
+                "error": str(exc),
+            }
+        else:
+            if config is None:
+                code = 0
+                result = unconfigured_result()
+            else:
+                paths = Paths.from_home(paths.home, config.destination)
+                ensure_runtime_directory(paths)
                 try:
-                    config = read_config(paths)
-                except ConfigError as exc:
-                    code = 1
-                    result = record_config_failure(paths, started, started_monotonic, str(exc))
-                else:
-                    if config is None:
-                        code = 0
-                        result = unconfigured_result()
-                    else:
+                    with backup_lock(paths):
                         if json_mode or not sys.stdout.isatty():
                             code, result = run_backup(paths, config, already_locked=True)
                         else:
@@ -3247,16 +3454,16 @@ def run_command(paths: Paths, json_mode: bool) -> int:
                                     already_locked=True,
                                     progress=progress,
                                 )
-        except BackupAlreadyRunning as exc:
-            code = 75
-            result = {
-                "schema": "bk-status",
-                "version": STATUS_VERSION,
-                "status": "failed",
-                "configured": True,
-                "error": str(exc),
-                "busy": True,
-            }
+                except BackupAlreadyRunning as exc:
+                    code = 75
+                    result = {
+                        "schema": "bk-status",
+                        "version": STATUS_VERSION,
+                        "status": "failed",
+                        "configured": True,
+                        "error": str(exc),
+                        "busy": True,
+                    }
 
     if code == 0 and result["status"] == "unconfigured":
         if json_mode:

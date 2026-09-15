@@ -333,13 +333,30 @@ To install BK for the current local user instead of a workspace, use the same Se
 uv run homestack setup --local backup=bk
 ```
 
-Local Setup installs only `~/.local/bin/bk` and the `backup.service` / `backup.timer` units under `~/.config/systemd/user/`, then enables the nightly user timer. It uses the existing Setup preflight, operation snapshots and state registry. It does not connect to PVE or SSH, generate retrieval keys, or modify `authorized_keys`. Run `bk edit` to create `~/backup/backup.yaml` and select sources; the installer does not create the backup directory or rewrite existing backup data. Enabling the persistent timer may trigger a missed backup for already-configured sources. System Python must already provide Rich, SQLite and curses; `file`, `git` and a working user systemd manager are also required. No packages are installed automatically.
+Local Setup installs `~/.local/bin/bk` and the `backup.service` / `backup.timer` units under `~/.config/systemd/user/`, then enables the nightly user timer. It also creates `~/.config/bk/backup.yaml` if absent, with the default destination `~/backup` and the configuration itself as its first protected source. Existing configuration is never replaced by Setup. It uses the existing Setup preflight, operation snapshots and state registry. It does not connect to PVE or SSH, generate retrieval keys, or modify `authorized_keys`. Run `bk edit` to select sources. Enabling the persistent timer may trigger a backup. System Python must already provide Rich, SQLite and curses; `file`, `git` and a working user systemd manager are also required. No packages are installed automatically.
 
 Use `homestack setup --local` for the interactive Backup selector, `homestack setup --local backup=bk --dry-run` to preview the plan, or `homestack setup --local status` to inspect the installation. `--yes` and `--json` follow normal Setup behavior. Local Setup currently supports the Backup category only.
 
 Select BK with `homestack setup WORKSPACE backup=bk` or `homestack setup WORKSPACE b=bk`. HomeStack installs `~/.local/bin/bk`, `~/.config/systemd/user/backup.service`, and `~/.config/systemd/user/backup.timer`, creates `~/backup/` when needed, and enables the user timer. These paths live in persistent home and therefore survive `homestack refresh`.
 
-HomeStack manages the executable, two unit files, and restricted SSH retrieval credentials. It never creates or rewrites `~/backup/backup.yaml` and never manages archives, logs, status, locks, or staging data under `~/backup/`. Run `bk edit` inside the workspace to choose sources. Run `bk run` for a manual backup and `bk status` to inspect the latest attempt and retained backups. An installation with no `backup.yaml`, archive, or status file is valid; the timer's unconfigured run is a successful no-op.
+HomeStack manages the executable, two unit files, and restricted SSH retrieval credentials. On installation it creates a missing `~/.config/bk/backup.yaml`, but never replaces or normalizes an existing one. Archives, logs, status, locks and staging data remain user-owned. Run `bk edit` inside the workspace to choose sources. Run `bk run` for a manual backup and `bk status` to inspect the latest attempt and retained backups. With only the protected self-entry, a run backs up the configuration itself. If configuration is absent, `bk run` remains a successful no-op.
+
+BK reads configuration only from `~/.config/bk/backup.yaml`. The initial configuration uses absolute paths derived from the current user's home:
+
+```yaml
+version: 1
+destination: "/home/user/backup"
+retention: 7
+respect_gitignore: true
+sources:
+  - "/home/user/.config/bk/backup.yaml"
+```
+
+Change `destination` to choose where BK stores its archives, logs, status and staging directory. The configuration remains its protected first source regardless of destination. BK excludes destination contents from directory traversal so backups cannot recursively include themselves. Changing destination does not move existing backups. Workspace SSH retrieval keys retain their fixed `~/backup` paths; use the default destination there unless retrieval is separately reconfigured.
+
+An outside-home destination must already exist before a run. Prepare and mount external storage yourself; BK does not mount disks, create a missing external destination, or fall back to another directory. An existing directory alone is not proof that the intended disk is mounted.
+
+Missing scalar options are added atomically with their defaults when BK reads an otherwise valid configuration. Existing values and source selections are preserved; invalid values remain errors. BK does not search the former configuration location: move or recreate the file manually and ensure its first source is the new absolute configuration path.
 
 The user timer runs nightly at 03:15. `Persistent=true` catches up a missed activation when the user systemd manager next starts. It does not keep the timer running while that manager is stopped, and HomeStack does not enable lingering.
 
