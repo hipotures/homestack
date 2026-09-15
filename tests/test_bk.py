@@ -256,6 +256,7 @@ class BackupCliTests(unittest.TestCase):
                 self.assertIn("bk list", (result.stdout + result.stderr))
         run_result = self.run_bk(self.home, "run")
         self.assertEqual(run_result.returncode, 0, run_result.stderr)
+        self.assertEqual(run_result.stdout.strip().splitlines()[-1], "Status: UNCONFIGURED")
         self.assertFalse(self.config_path(self.home).exists())
         self.assertFalse(self.archive_files(self.home))
         status = self.json_output(self.run_bk(self.home, "status", "--json"))
@@ -477,7 +478,13 @@ class BackupCliTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("Backup ready", result.stdout)
-        self.assertIn("Backup completed", result.stdout)
+        self.assertNotIn("Backup completed", result.stdout)
+        self.assertRegex(result.stdout, r"Created: \d{4}-\d{2}-\d{2}T.*[+-]\d{2}:\d{2}")
+        archive = self.archive_files(self.home)[0]
+        log = self.log_for_archive(archive)
+        self.assertIn(f"Archive: {archive}", result.stdout)
+        self.assertIn(f"Log: {log}", result.stdout)
+        self.assertEqual(result.stdout.strip().splitlines()[-1], "Status: OK")
 
     def test_overlapping_sources_are_allowed_and_independently_archived(self) -> None:
         dev = self.home / "DEV"
@@ -582,7 +589,8 @@ class BackupCliTests(unittest.TestCase):
         self.assertIn("unsupported", (result.stdout + result.stderr).lower())
         self.assertFalse(self.archive_files(self.home))
         self.assertTrue(fifo.exists())
-        self.assertTrue((self.backup_dir(self.home) / "last-failed.log").exists())
+        self.assertFalse((self.backup_dir(self.home) / "last-failed.log").exists())
+        self.assertEqual(result.stderr.strip().splitlines()[-1], "Status: FAILED")
 
     def test_successful_archive_and_log_are_hardlinked_current_paths(self) -> None:
         source = self.home / "source"
@@ -698,17 +706,19 @@ class BackupCliTests(unittest.TestCase):
         self.assertEqual(os.stat(current).st_ino, before_archive_inode)
         self.assertEqual(os.stat(current_log).st_ino, before_log_inode)
         self.assertEqual([path.name for path in self.archive_files(self.home)], before_archives)
-        failed_log = self.backup_dir(self.home) / "last-failed.log"
-        self.assertTrue(failed_log.exists())
-        self.assertIn("fail", failed_log.read_text(encoding="utf-8").lower())
         status = self.json_output(self.run_bk(self.home, "status", "--json"))
         self.assertEqual(self.status_value(status, "status"), "failed")
+        self.assertIsNone(status["failed_log_path"])
         error = self.status_value(status, "error", "error_summary", "last_error")
         self.assertIn("data.txt", str(error))
         human = self.run_bk(self.home, "status")
         self.assertEqual(human.returncode, 0, human.stderr)
         self.assertIn("failed", human.stdout.lower())
         self.assertIn("successful", human.stdout.lower())
+        run_output = failed.stdout + failed.stderr
+        self.assertNotIn("Backup ready", run_output)
+        self.assertNotIn("Backup completed", run_output)
+        self.assertIn("Status: FAILED", run_output)
 
     def test_concurrent_run_is_rejected_by_persistent_lock(self) -> None:
         source = self.home / "source"
@@ -888,22 +898,26 @@ class BackupCliTests(unittest.TestCase):
             self.assertEqual(checked.execute("PRAGMA integrity_check").fetchone()[0], "ok")
             self.assertEqual(checked.execute("SELECT count(*) FROM records").fetchone()[0], row_count)
 
-    def test_closed_wal_database_change_during_backup_is_rejected(self) -> None:
+    def test_closed_wal_database_change_during_backup_retries_and_succeeds(self) -> None:
         database = self.home / "closed-state"
-        connection, _ = self.create_wal_database(database)
+        connection, row_count = self.create_wal_database(database)
         connection.close()
         module = runpy.run_path(str(BK))
         real_connect = sqlite3.connect
+        mutated = False
 
         class MutatingSourceConnection:
             def __init__(self, wrapped: sqlite3.Connection) -> None:
                 self.wrapped = wrapped
 
             def backup(self, destination: sqlite3.Connection, **kwargs: object) -> None:
+                nonlocal mutated
                 self.wrapped.backup(destination, **kwargs)
-                with real_connect(database) as writer:
-                    writer.execute("INSERT INTO records(value) VALUES ('changed during backup')")
-                    writer.commit()
+                if not mutated:
+                    mutated = True
+                    with real_connect(database) as writer:
+                        writer.execute("INSERT INTO records(value) VALUES ('changed during backup')")
+                        writer.commit()
 
             def close(self) -> None:
                 self.wrapped.close()
@@ -915,9 +929,99 @@ class BackupCliTests(unittest.TestCase):
             return opened
 
         destination = self.home / "staged"
+        log_lines: list[str] = []
         with patch.object(module["sqlite3"], "connect", side_effect=connect):
-            with self.assertRaises(module["BKError"]):
-                module["copy_sqlite_file"](database, destination, [])
+            module["copy_sqlite_file"](database, destination, log_lines)
+
+        self.assertTrue(mutated)
+        self.assertIn("retry", "\n".join(log_lines).lower())
+        with sqlite3.connect(destination) as checked:
+            self.assertEqual(checked.execute("PRAGMA integrity_check").fetchone()[0], "ok")
+            self.assertEqual(checked.execute("SELECT count(*) FROM records").fetchone()[0], row_count + 1)
+
+    def test_closed_wal_backup_error_after_source_change_is_retried(self) -> None:
+        database = self.home / "closed-state"
+        connection, row_count = self.create_wal_database(database)
+        connection.close()
+        module = runpy.run_path(str(BK))
+        real_connect = sqlite3.connect
+        changed = False
+
+        class FailingChangedSourceConnection:
+            def __init__(self, wrapped: sqlite3.Connection) -> None:
+                self.wrapped = wrapped
+
+            def backup(self, destination: sqlite3.Connection, **kwargs: object) -> None:
+                nonlocal changed
+                if not changed:
+                    changed = True
+                    with real_connect(database) as writer:
+                        writer.execute("INSERT INTO records(value) VALUES ('changed before failure')")
+                        writer.commit()
+                    raise sqlite3.DatabaseError("source changed during immutable backup")
+                self.wrapped.backup(destination, **kwargs)
+
+            def close(self) -> None:
+                self.wrapped.close()
+
+        def connect(target: str, *args: object, **kwargs: object) -> sqlite3.Connection | FailingChangedSourceConnection:
+            opened = real_connect(target, *args, **kwargs)
+            if kwargs.get("uri") and "immutable=1" in target:
+                return FailingChangedSourceConnection(opened)
+            return opened
+
+        destination = self.home / "staged"
+        with patch.object(module["sqlite3"], "connect", side_effect=connect):
+            module["copy_sqlite_file"](database, destination, [])
+
+        with sqlite3.connect(destination) as checked:
+            self.assertEqual(checked.execute("PRAGMA integrity_check").fetchone()[0], "ok")
+            self.assertEqual(checked.execute("SELECT count(*) FROM records").fetchone()[0], row_count + 1)
+
+    def test_stable_sqlite_backup_error_is_not_retried(self) -> None:
+        database = self.home / "closed-state"
+        connection, _ = self.create_wal_database(database)
+        connection.close()
+        module = runpy.run_path(str(BK))
+        destination = self.home / "staged"
+
+        with patch.object(module["time"], "sleep") as sleep:
+            with patch.object(
+                module["sqlite3"],
+                "connect",
+                side_effect=sqlite3.DatabaseError("stable read failure"),
+            ):
+                with self.assertRaises(module["BKError"]) as raised:
+                    module["copy_sqlite_file"](database, destination, [])
+
+        self.assertIn("stable read failure", str(raised.exception))
+        sleep.assert_not_called()
+
+    def test_closed_wal_database_retry_exhaustion_is_bounded_and_cleans_staging(self) -> None:
+        database = self.home / "closed-state"
+        connection, _ = self.create_wal_database(database)
+        connection.close()
+        module = runpy.run_path(str(BK))
+        retry = module["_RetryableSQLiteSnapshot"]("transient WAL state")
+        destination = self.home / "staged"
+        log_lines: list[str] = []
+        policy_calls = 0
+
+        def reject_policy(*_args: object, **_kwargs: object) -> object:
+            nonlocal policy_calls
+            policy_calls += 1
+            raise retry
+
+        with patch.object(module["time"], "sleep") as sleep:
+            with patch.dict(module["copy_sqlite_file"].__globals__, {"sqlite_open_policy": reject_policy}):
+                with self.assertRaises(module["BKError"]) as raised:
+                    module["copy_sqlite_file"](database, destination, log_lines)
+
+        self.assertIn("5 attempts", str(raised.exception))
+        self.assertEqual(policy_calls, 5)
+        self.assertEqual(sleep.call_count, 4)
+        self.assertEqual(len([line for line in log_lines if "retry" in line.lower()]), 5)
+        self.assertFalse(destination.exists())
 
     def test_sidecar_named_directory_is_not_suppressed(self) -> None:
         source = self.home / "source"
@@ -1048,12 +1152,11 @@ class BackupCliTests(unittest.TestCase):
                 self.assertRegex(diagnostic, r"config|invalid|malformed|unsupported|source|retention")
                 self.assertEqual(config.read_bytes(), before)
                 self.assertFalse(self.archive_files(self.home))
-                failed_log = backup / "last-failed.log"
                 status_path = backup / "status.json"
-                self.assertTrue(failed_log.exists())
-                self.assertIn("failed", failed_log.read_text(encoding="utf-8").lower())
+                self.assertFalse((backup / "last-failed.log").exists())
                 recorded = json.loads(status_path.read_text(encoding="utf-8"))
                 self.assertEqual(recorded["status"], "failed")
+                self.assertIsNone(recorded["failed_log_path"])
                 self.assertTrue(recorded["error"])
 
     def test_source_files_and_directories_are_not_modified_by_snapshot(self) -> None:

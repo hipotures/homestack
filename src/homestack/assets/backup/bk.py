@@ -48,6 +48,8 @@ CONFIG_VERSION = 1
 DEFAULT_RETENTION = 7
 STATUS_VERSION = 1
 SQLITE_SIDECAR_SUFFIXES = ("-wal", "-shm", "-journal")
+SQLITE_SNAPSHOT_ATTEMPTS = 5
+SQLITE_RETRY_BACKOFF_SECONDS = 0.1
 ARCHIVE_RE = re.compile(
     r"^backup-(?P<stamp>\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2})"
     r"(?:-(?P<collision>\d+))?\.tgz$"
@@ -69,6 +71,10 @@ class BackupAlreadyRunning(BKError):
     """Another BK process currently owns the run lock."""
 
 
+class _RetryableSQLiteSnapshot(BKError):
+    """A transient SQLite state that is safe to retry."""
+
+
 @dataclass(frozen=True)
 class Paths:
     """All BK-managed paths for one home directory."""
@@ -79,7 +85,6 @@ class Paths:
     current_archive: Path
     current_log: Path
     status: Path
-    failed_log: Path
     archive: Path
     work: Path
     lock: Path
@@ -96,7 +101,6 @@ class Paths:
             current_archive=runtime / "backup.tgz",
             current_log=runtime / "backup.log",
             status=runtime / "status.json",
-            failed_log=runtime / "last-failed.log",
             archive=runtime / "archive",
             work=runtime / ".work",
             lock=runtime / ".bk.lock",
@@ -2013,15 +2017,81 @@ def sqlite_open_policy(source: Path) -> tuple[str, str, tuple[int, int, int, int
         guard = (metadata.st_dev, metadata.st_ino, metadata.st_size, metadata.st_mtime_ns)
         return sqlite_source_uri(source, immutable=True), "guarded immutable read-only (closed WAL database)", guard
     if os.path.lexists(wal) and not os.path.lexists(shm):
-        raise BKError(
-            f"SQLite WAL exists without its shared-memory sidecar; refusing to create source state: {source}"
+        raise _RetryableSQLiteSnapshot(
+            f"SQLite WAL exists without its shared-memory sidecar; waiting for a stable WAL state: {source}"
         )
     return sqlite_source_uri(source), "read-only SQLite connection", None
 
 
-def copy_sqlite_file(source: Path, destination: Path, log_lines: list[str]) -> None:
+def sqlite_guard_changed(source: Path, expected: tuple[int, int, int, int]) -> bool:
+    """Whether a guarded closed-WAL source changed or became active."""
+
+    try:
+        metadata = os.lstat(source)
+    except OSError as exc:
+        raise BKError(f"cannot verify guarded SQLite source {source}: {exc}") from exc
+    current = (metadata.st_dev, metadata.st_ino, metadata.st_size, metadata.st_mtime_ns)
+    wal = source.with_name(source.name + "-wal")
+    shm = source.with_name(source.name + "-shm")
+    return current != expected or os.path.lexists(wal) or os.path.lexists(shm)
+
+
+def retry_if_guard_changed(
+    source: Path,
+    expected: tuple[int, int, int, int] | None,
+    cause: BaseException,
+) -> None:
+    """Convert a failed immutable attempt into a retry only after proven change."""
+
+    if expected is not None and sqlite_guard_changed(source, expected):
+        raise _RetryableSQLiteSnapshot(
+            f"closed WAL database changed during its guarded snapshot: {source}"
+        ) from cause
+
+
+def _remove_staged_sqlite_artifacts(destination: Path, *, keep_database: bool = False) -> None:
+    """Remove one staged SQLite destination and its sidecars.
+
+    The caller provides a path in BK's private staging directory.  Cleanup is
+    deliberately limited to those exact paths and never follows a symlink or
+    recursively removes a directory.
+    """
+
+    sidecars = tuple(
+        destination.with_name(destination.name + suffix)
+        for suffix in SQLITE_SIDECAR_SUFFIXES
+    )
+    candidates = sidecars if keep_database else (destination, *sidecars)
+    for candidate in candidates:
+        try:
+            metadata = os.lstat(candidate)
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            raise BKError(f"cannot inspect staged SQLite artifact {candidate}: {exc}") from exc
+        if stat.S_ISDIR(metadata.st_mode):
+            raise BKError(f"cannot clean staged SQLite directory {candidate}")
+        try:
+            candidate.unlink()
+        except OSError as exc:
+            raise BKError(f"cannot remove staged SQLite artifact {candidate}: {exc}") from exc
+
+
+def _copy_sqlite_attempt(
+    source: Path,
+    destination: Path,
+    log_lines: list[str],
+) -> None:
+    """Perform one SQLite online-backup attempt.
+
+    A closed-WAL guard failure is kept distinct from ordinary SQLite errors so
+    the caller can safely discard this staged copy and retry with a fresh
+    source-open policy.
+    """
+
     source_connection: sqlite3.Connection | None = None
     destination_connection: sqlite3.Connection | None = None
+    immutable_guard: tuple[int, int, int, int] | None = None
     try:
         source_uri, policy, immutable_guard = sqlite_open_policy(source)
         source_connection = sqlite3.connect(source_uri, uri=True, timeout=30)
@@ -2031,19 +2101,26 @@ def copy_sqlite_file(source: Path, destination: Path, log_lines: list[str]) -> N
         result = destination_connection.execute("PRAGMA quick_check").fetchone()
         if not result or str(result[0]).lower() != "ok":
             raise BKError(f"SQLite integrity check failed for {source}: {result!r}")
-        if immutable_guard is not None:
-            metadata = os.lstat(source)
-            current_guard = (metadata.st_dev, metadata.st_ino, metadata.st_size, metadata.st_mtime_ns)
-            wal = source.with_name(source.name + "-wal")
-            shm = source.with_name(source.name + "-shm")
-            if current_guard != immutable_guard or os.path.lexists(wal) or os.path.lexists(shm):
-                raise BKError(f"closed WAL database changed during its guarded snapshot: {source}")
+        if immutable_guard is not None and sqlite_guard_changed(source, immutable_guard):
+            raise _RetryableSQLiteSnapshot(
+                f"closed WAL database changed during its guarded snapshot: {source}"
+            )
         log_lines.append(f"SQLite snapshot: {source} -> {destination}")
         log_lines.append(f"SQLite source policy: {policy}")
         log_lines.append("SQLite backup result: online backup completed; PRAGMA quick_check: ok")
-    except BKError:
+    except _RetryableSQLiteSnapshot:
+        raise
+    except BKError as exc:
+        retry_if_guard_changed(source, immutable_guard, exc)
         raise
     except (sqlite3.Error, OSError) as exc:
+        retry_if_guard_changed(source, immutable_guard, exc)
+        wal = source.with_name(source.name + "-wal")
+        shm = source.with_name(source.name + "-shm")
+        if os.path.lexists(wal) and not os.path.lexists(shm):
+            raise _RetryableSQLiteSnapshot(
+                f"SQLite WAL state changed while opening or copying the database: {source}"
+            ) from exc
         raise BKError(f"SQLite backup failed for {source}: {exc}") from exc
     finally:
         if destination_connection is not None:
@@ -2056,15 +2133,37 @@ def copy_sqlite_file(source: Path, destination: Path, log_lines: list[str]) -> N
                 source_connection.close()
             except sqlite3.Error:
                 pass
-        # A destination connection should not leave stale SQLite sidecars in
-        # the staged payload.  These are paths BK itself created under .work.
-        for suffix in SQLITE_SIDECAR_SUFFIXES:
-            sidecar = destination.with_name(destination.name + suffix)
+
+
+def copy_sqlite_file(source: Path, destination: Path, log_lines: list[str]) -> None:
+    """Create a verified SQLite snapshot, retrying only transient WAL races."""
+
+    succeeded = False
+    retry_messages: list[str] = []
+    try:
+        for attempt in range(1, SQLITE_SNAPSHOT_ATTEMPTS + 1):
+            _remove_staged_sqlite_artifacts(destination)
             try:
-                if sidecar.is_file() or sidecar.is_symlink():
-                    sidecar.unlink()
-            except OSError as exc:
-                raise BKError(f"cannot remove staged SQLite sidecar {sidecar}: {exc}") from exc
+                _copy_sqlite_attempt(source, destination, log_lines)
+            except _RetryableSQLiteSnapshot as exc:
+                retry_messages.append(str(exc))
+                log_lines.append(
+                    f"SQLite snapshot retry {attempt}/{SQLITE_SNAPSHOT_ATTEMPTS}: {exc}"
+                )
+                if attempt == SQLITE_SNAPSHOT_ATTEMPTS:
+                    raise BKError(
+                        f"SQLite backup failed after {SQLITE_SNAPSHOT_ATTEMPTS} attempts for {source}: {exc}"
+                    ) from exc
+                time.sleep(SQLITE_RETRY_BACKOFF_SECONDS * attempt)
+                continue
+            succeeded = True
+            if retry_messages:
+                log_lines.append(
+                    f"SQLite snapshot succeeded after {len(retry_messages) + 1} attempts"
+                )
+            return
+    finally:
+        _remove_staged_sqlite_artifacts(destination, keep_database=succeeded)
 
 
 def materialize_plan(
@@ -2444,16 +2543,12 @@ def make_status(
     finished: datetime,
     duration: float,
     error: str | None,
-    failed_path: Path | None,
 ) -> dict[str, Any]:
     history = history_entries(paths)
     current = current_backup_info(paths, history)
     last_success = None
     if history:
         last_success = history[0]["created_at"]
-    failed_log_path = str(failed_path) if failed_path is not None else (
-        str(paths.failed_log) if _managed_regular_file(paths.failed_log) else None
-    )
     result: dict[str, Any] = {
         "schema": "bk-status",
         "version": STATUS_VERSION,
@@ -2472,7 +2567,7 @@ def make_status(
         "retained_successful_archives": len(history),
         "history": history,
         "error": error,
-        "failed_log_path": failed_log_path,
+        "failed_log_path": None,
     }
     result.update(current)
     return result
@@ -2480,10 +2575,6 @@ def make_status(
 
 def write_status(paths: Paths, status: dict[str, Any]) -> None:
     atomic_write_bytes(paths.status, (json.dumps(status, indent=2, ensure_ascii=False) + "\n").encode("utf-8"), mode=0o600)
-
-
-def write_failure_log(paths: Paths, content: str) -> None:
-    atomic_write_bytes(paths.failed_log, content.encode("utf-8"), mode=0o600)
 
 
 def remove_unpublished_pair(pair: ArchivePair | None) -> None:
@@ -2534,29 +2625,6 @@ def create_run_log(
         lines.append("Special handlers:")
         lines.extend(f"  {line}" for line in log_lines)
     lines.append("Status: OK")
-    return "\n".join(lines) + "\n"
-
-
-def create_failure_log(
-    started: datetime,
-    finished: datetime,
-    duration: float,
-    config: Config,
-    error: str,
-    details: list[str],
-) -> str:
-    lines = [
-        "BK backup run",
-        f"Started: {iso_timestamp(started)}",
-        f"Finished: {iso_timestamp(finished)}",
-        f"Duration seconds: {duration:.3f}",
-        f"Configured sources: {len(config.sources)}",
-        f"Status: FAILED",
-        f"Error: {error}",
-    ]
-    if details:
-        lines.append("Diagnostics:")
-        lines.extend(f"  {detail}" for detail in details)
     return "\n".join(lines) + "\n"
 
 
@@ -2691,7 +2759,7 @@ def run_backup(
                 duration = time.monotonic() - started_monotonic
                 # The paired log is complete before current-link publication;
                 # retention is deterministic and reflected in status.json.
-                status = make_status(paths, config, "ok", started, finished, duration, None, None)
+                status = make_status(paths, config, "ok", started, finished, duration, None)
                 status["retained_successful_archives"] = retained
                 write_status(paths, status)
                 if progress is not None:
@@ -2718,7 +2786,7 @@ def run_backup(
             duration = time.monotonic() - started_monotonic
             warning = f"backup was published, but post-publication maintenance failed: {exc}"
             try:
-                status = make_status(paths, config, "ok", started, finished, duration, None, None)
+                status = make_status(paths, config, "ok", started, finished, duration, None)
                 status["warning"] = warning
                 write_status(paths, status)
             except BKError as status_error:
@@ -2743,11 +2811,7 @@ def run_backup(
                 f"symlinks={plan.symlink_count}, sqlite={plan.sqlite_count}"
             )
         try:
-            write_failure_log(
-                paths,
-                create_failure_log(started, finished, duration, config, error, details),
-            )
-            status = make_status(paths, config, "failed", started, finished, duration, error, paths.failed_log)
+            status = make_status(paths, config, "failed", started, finished, duration, error)
             write_status(paths, status)
         except BKError as status_error:
             error = f"{error}; additionally could not update failure diagnostics: {status_error}"
@@ -2765,7 +2829,7 @@ def run_backup(
             duration = time.monotonic() - started_monotonic
             warning = f"backup was published, but unexpected post-publication maintenance failed: {exc}"
             try:
-                status = make_status(paths, config, "ok", started, finished, duration, None, None)
+                status = make_status(paths, config, "ok", started, finished, duration, None)
                 status["warning"] = warning
                 write_status(paths, status)
             except BKError as status_error:
@@ -2786,8 +2850,7 @@ def run_backup(
         error = f"unexpected BK failure: {exc}"
         details.append("".join(traceback.format_exception_only(type(exc), exc)).strip())
         try:
-            write_failure_log(paths, create_failure_log(started, finished, duration, config, error, details))
-            status = make_status(paths, config, "failed", started, finished, duration, error, paths.failed_log)
+            status = make_status(paths, config, "failed", started, finished, duration, error)
             write_status(paths, status)
         except BKError:
             status = {"schema": "bk-status", "version": STATUS_VERSION, "status": "failed", "error": error}
@@ -2827,19 +2890,6 @@ def record_config_failure(paths: Paths, started: datetime, started_monotonic: fl
     ensure_runtime_directory(paths)
     finished = datetime.now().astimezone()
     duration = time.monotonic() - started_monotonic
-    failure_log = "\n".join(
-        (
-            "BK backup run",
-            f"Started: {iso_timestamp(started)}",
-            f"Finished: {iso_timestamp(finished)}",
-            f"Duration seconds: {duration:.3f}",
-            "Configured sources: unavailable because backup.yaml is invalid",
-            "Status: FAILED",
-            f"Error: {error}",
-            "",
-        )
-    )
-    write_failure_log(paths, failure_log)
     history = history_entries(paths) if paths.archive.is_dir() and not paths.archive.is_symlink() else []
     status: dict[str, Any] = {
         "schema": "bk-status",
@@ -2859,7 +2909,7 @@ def record_config_failure(paths: Paths, started: datetime, started_monotonic: fl
         "current_backup_size": None,
         "current_successful_log_path": None,
         "current_backup_created_at": None,
-        "failed_log_path": str(paths.failed_log),
+        "failed_log_path": None,
         "configured_retention": None,
         "retained_successful_archives": len(history),
         "history": history,
@@ -2891,7 +2941,7 @@ def status_command(paths: Paths, json_mode: bool) -> int:
             "retained_successful_archives": len(history),
             "history": history,
             "error": None,
-            "failed_log_path": str(paths.failed_log) if _managed_regular_file(paths.failed_log) else None,
+            "failed_log_path": None,
         }
         result.update(current_backup_info(paths, history))
     else:
@@ -2901,6 +2951,7 @@ def status_command(paths: Paths, json_mode: bool) -> int:
         result["retained_successful_archives"] = len(history)
         result["history"] = history
         result["last_successful_backup_timestamp"] = history[0]["created_at"] if history else None
+        result["failed_log_path"] = None
         result.update(current_backup_info(paths, history))
     if json_mode:
         emit_json(result)
@@ -2920,9 +2971,6 @@ def render_status(status: dict[str, Any], paths: Paths) -> None:
         console.print(f"  Duration     {attempt.get('duration_seconds', 'unknown')} seconds")
     if status.get("error"):
         console.print(f"  Error        {status['error']}")
-    if status.get("failed_log_path") and value == "FAILED":
-        console.print(f"  Log          {status['failed_log_path']}")
-
     console.print("\n[bold]Last successful backup[/bold]")
     current_path = status.get("current_backup_path")
     if current_path:
@@ -3009,20 +3057,40 @@ def run_command(paths: Paths, json_mode: bool) -> int:
             emit_json(result)
         else:
             console.print(result["message"])
+            console.print("Status: UNCONFIGURED")
         return 0
     if json_mode:
         emit_json(result)
     elif code == 0:
-        console.print(f"Backup completed: {result.get('current_backup_path', paths.current_archive)}")
-        console.print(f"Log: {result.get('current_successful_log_path', paths.current_log)}")
+        history = result.get("history")
+        latest: dict[str, Any] = {}
+        current_path = result.get("current_backup_path")
+        if isinstance(history, list) and isinstance(current_path, str):
+            for entry in history:
+                if not isinstance(entry, dict) or not isinstance(entry.get("archive_path"), str):
+                    continue
+                try:
+                    if os.path.samefile(current_path, entry["archive_path"]):
+                        latest = entry
+                        break
+                except OSError:
+                    continue
+        created = latest.get("created_at") or result.get("current_backup_created_at", "unknown")
+        archive = latest.get("archive_path") or result.get("current_backup_path", paths.current_archive)
+        log = latest.get("log_path") or result.get("current_successful_log_path", paths.current_log)
+        console.print(f"Created: {created}")
+        console.print(f"Archive: {archive}")
+        console.print(f"Log: {log}")
+        console.print(f"Current archive: {result.get('current_backup_path', paths.current_archive)}")
+        console.print(f"Current log: {result.get('current_successful_log_path', paths.current_log)}")
         if result.get("warning"):
             error_console.print(f"Warning: {result['warning']}")
+        console.print("Status: OK")
     else:
-        error_console.print(f"Backup failed: {result.get('error', 'unknown error')}")
-        if result.get("failed_log_path"):
-            error_console.print(f"Failure log: {result['failed_log_path']}")
+        error_console.print(f"Error: {result.get('error', 'unknown error')}")
         if result.get("current_backup_path"):
             error_console.print("The previous valid current backup was preserved.")
+        error_console.print("Status: FAILED")
     return code
 
 
