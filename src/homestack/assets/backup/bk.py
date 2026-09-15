@@ -3081,8 +3081,6 @@ def run_command(paths: Paths, json_mode: bool) -> int:
         console.print(f"Created: {created}")
         console.print(f"Archive: {archive}")
         console.print(f"Log: {log}")
-        console.print(f"Current archive: {result.get('current_backup_path', paths.current_archive)}")
-        console.print(f"Current log: {result.get('current_successful_log_path', paths.current_log)}")
         if result.get("warning"):
             error_console.print(f"Warning: {result['warning']}")
         console.print("Status: OK")

@@ -484,6 +484,8 @@ class BackupCliTests(unittest.TestCase):
         log = self.log_for_archive(archive)
         self.assertIn(f"Archive: {archive}", result.stdout)
         self.assertIn(f"Log: {log}", result.stdout)
+        self.assertNotIn("Current archive:", result.stdout)
+        self.assertNotIn("Current log:", result.stdout)
         self.assertEqual(result.stdout.strip().splitlines()[-1], "Status: OK")
 
     def test_overlapping_sources_are_allowed_and_independently_archived(self) -> None:
