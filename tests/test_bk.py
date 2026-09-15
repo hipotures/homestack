@@ -264,6 +264,22 @@ class BackupCliTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertFalse(self.config_path(self.home).exists())
 
+    def test_add_accepts_arbitrary_selection_separators(self) -> None:
+        working = self.home / "work"
+        working.mkdir()
+        first = working / "first"
+        second = working / "second"
+        first.touch()
+        second.touch()
+
+        result = self.run_bk(self.home, "add", cwd=working, input_text="1(anything)2\n")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            self.config_sources(self.config_path(self.home))[1:],
+            [str(first.resolve()), str(second.resolve())],
+        )
+
     def test_add_lists_hidden_immediate_child_and_exact_duplicate_is_report_only(self) -> None:
         working = self.home / "work"
         working.mkdir()

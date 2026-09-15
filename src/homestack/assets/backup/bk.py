@@ -346,7 +346,7 @@ def write_config(paths: Paths, config: Config) -> None:
 
 
 def parse_selection(raw: str, count: int) -> list[int]:
-    values = raw.split()
+    values = re.findall(r"[0-9]+", raw)
     if not values:
         return []
     selected: list[int] = []
@@ -503,7 +503,7 @@ def add_command(paths: Paths) -> int:
     if children:
         print_add_candidates(paths, children)
         try:
-            raw = Prompt.ask("Select entries to add (space-separated numbers)", default="")
+            raw = Prompt.ask("Select entries to add (numbers separated by any characters)", default="")
         except (EOFError, KeyboardInterrupt):
             console.print("Add cancelled.")
             return 1
@@ -575,7 +575,7 @@ def del_command(paths: Paths) -> int:
         table.add_row(str(index), str(source))
     console.print(table)
     try:
-        raw = Prompt.ask("Select entries to delete (space-separated numbers)", default="")
+        raw = Prompt.ask("Select entries to delete (numbers separated by any characters)", default="")
     except (EOFError, KeyboardInterrupt):
         console.print("Delete cancelled.")
         return 1
