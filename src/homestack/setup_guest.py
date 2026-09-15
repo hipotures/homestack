@@ -1166,6 +1166,9 @@ def record_item(home: Path, data: dict) -> dict:
         "home": str(home),
         "home_label": f"HS_HOME_{vmid}",
     }
+    if vmid == 0:
+        registry["workspace"].pop("home_label")
+        registry["workspace"]["kind"] = "local"
     items = registry.setdefault("items", {})
     previous = items.get(data["id"], {}) if isinstance(items.get(data["id"]), dict) else {}
     current = {

@@ -56,6 +56,7 @@ def show_help(cfg_path: Path) -> None:
     )
     commands.add_row(f"{cmd} setup VMID|NAME [files=… env=… app=… repo=… backup=…]", "Inspect and apply explicit workspace setup selections; interactive setup keeps one SSH session open.")
     commands.add_row(f"{cmd} setup list", "List setup catalog items without connecting to a workspace.")
+    commands.add_row(f"{cmd} setup --local backup=bk", "Install BK and its user timer locally, without SSH keys.")
     commands.add_row(f"{cmd} setup status VMID|NAME", "Inspect installed/configured workspace setup state without applying changes.")
     commands.add_row(
         f"{cmd} repo VMID|NAME [OWNER/REPO]",
@@ -101,6 +102,7 @@ def show_help(cfg_path: Path) -> None:
         f"{cmd} setup status example-workspace\n"
         f"{cmd} setup example-workspace\n"
         f"{cmd} setup example-workspace backup=bk\n"
+        f"{cmd} setup --local backup=bk\n"
         f"{cmd} repo example-workspace\n"
         f"{cmd} destroy 200\n"
         f"{cmd} destroy 200 --json\n"
@@ -161,6 +163,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     setup = sub.add_parser("setup", description="Prepare explicit Files, Environment, Applications, Backup and Repositories selections.")
     setup.add_argument("target", nargs="?", help="VMID, exact workspace name, list, or status")
+    setup.add_argument("--local", action="store_true", help="Apply Backup setup to the current local user without SSH")
     setup.add_argument("selectors", nargs="*", help="files/f=ID,ID env/e=ID app/a=ID repo/r=OWNER/REPO backup/b=ID; 0/all selects a category")
     setup.add_argument("--json", action="store_true")
     setup.add_argument("-y", "--yes", action="store_true")

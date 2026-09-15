@@ -428,10 +428,11 @@ class SetupApp(App):
             yield CompactAction("Esc", "Cancel", id="cancel")
 
     def target_label(self, progress=""):
-        parts = [f"Workspace: {self.target['name']} (VM {self.target['vmid']})"]
+        parts = [self.target_description()]
         if self.target.get("ip"):
             parts.append(str(self.target["ip"]))
-        parts.append(f"SSH: {self.ssh_status}")
+        if not self.target.get("local"):
+            parts.append(f"SSH: {self.ssh_status}")
         if self.workspace_state.get("checked_at"):
             parts.append(f"State: {self.workspace_state['checked_at']}")
         if self.catalog.snapshot_id:
@@ -445,6 +446,19 @@ class SetupApp(App):
         if progress:
             parts.append(progress)
         return "    ".join(parts)
+
+    def target_description(self):
+        if self.target.get("local"):
+            return f"Local: {self.target['name']} ({self.target['home']})"
+        return f"Workspace: {self.target['name']} (VM {self.target['vmid']})"
+
+    def backup_details(self):
+        if self.target.get("local"):
+            return ["Install ~/.local/bin/bk and the backup.service / backup.timer user units.",
+                    "Enable the nightly user timer. No SSH keys or authorized_keys changes.",
+                    "Run bk edit to create ~/backup/backup.yaml and select sources.",
+                    "Existing backup configuration and data remain unchanged."]
+        return _backup_retrieval_details(self.target["vmid"])
 
     def on_mount(self):
         self.watch(
@@ -899,8 +913,8 @@ class SetupApp(App):
                 "Click an arrow or use Left/Right to collapse/expand.",
                 "0 selects the branch; a filter scopes bulk actions to visible matches.",
                 "Tab / Shift+Tab moves focus. PageUp/PageDown or the mouse wheel scrolls details.",
-                "F5 refreshes guest state through the existing SSH session.",
-                "Ctrl+R refreshes the catalog and guest state.",
+                "F5 refreshes local state." if self.target.get("local") else "F5 refreshes guest state through the existing SSH session.",
+                "Ctrl+R refreshes the catalog and installation state.",
                 "Enter reviews selected actions; confirmation is required before writes.",
             ]
             lines += ["", f"State registry: {self.workspace_state.get('state_path')}"]
@@ -945,7 +959,7 @@ class SetupApp(App):
                 f"Configuration: selected {selected}/{total} managed options" if total else "Configuration: no managed options",
             ]
         if isinstance(p, BackupParams):
-            lines += ["", *_backup_retrieval_details(self.target["vmid"])]
+            lines += ["", *self.backup_details()]
         if live.get("changed_since_apply"):
             lines += ["Changed since last apply:", *["~/" + path for path in live["changed_since_apply"]]]
             if live.get("will_overwrite"):
@@ -1129,7 +1143,7 @@ class SetupApp(App):
             return
         self.pending_plan = plan
         lines = [
-            f"Apply to {self.target['name']} (VM {self.target['vmid']})?",
+            f"Apply to {self.target_description()}?",
             "All selected actions will be preflighted before writes. Existing declared configuration is snapshotted before overwrite.",
             "",
         ]
@@ -1143,7 +1157,8 @@ class SetupApp(App):
                     "unavailable": "Blocked: configuration path is unavailable",
                 }.get(live.get("state"), "Inspect and patch declared value")
             elif isinstance(entry.params, BackupParams):
-                action = "Reconcile BK assets, user timer and restricted SSH retrieval keys"
+                action = ("Reconcile local BK assets and user timer" if self.target.get("local")
+                          else "Reconcile BK assets, user timer and restricted SSH retrieval keys")
             else:
                 action = (
                     "Back up modified shell files; overwrite configuration"
@@ -1164,7 +1179,7 @@ class SetupApp(App):
                 "Requires selection: " + (", ".join(entry.depends_on) or "none"),
             ]
             if isinstance(entry.params, BackupParams):
-                lines += _backup_retrieval_details(self.target["vmid"])
+                lines += self.backup_details()
             if isinstance(entry.params, StructuredParams):
                 lines += [
                     "Desired key: " + ".".join(entry.params.key),
@@ -1191,7 +1206,7 @@ class SetupApp(App):
             self.cancel_requested.clear()
             self.execution_screen = Execution()
             self.execution_screen.add_activity(
-                None, f"Start setup for {self.target['name']} (VM {self.target['vmid']})"
+                None, f"Start setup for {self.target_description()}"
             )
             self.push_screen(self.execution_screen, self.execution_answer)
             self.execute()

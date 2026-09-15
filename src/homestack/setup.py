@@ -45,9 +45,10 @@ class Plan:
             elif isinstance(p, BackupParams):
                 extra = {
                     "destinations": ["~/" + path for path in backup.managed_paths()],
-                    "restricted_authorized_keys": "~/.ssh/authorized_keys",
                     "timer": "backup.timer",
                 }
+                if not self.target.get("local"):
+                    extra["restricted_authorized_keys"] = "~/.ssh/authorized_keys"
             elif isinstance(p, ApplicationParams):
                 extra = {"interpreter": p.interpreter, "interaction": p.interaction,
                          "prerequisites": p.prerequisites, "bin_dirs": p.bin_dirs,
@@ -316,7 +317,7 @@ def record_entry_state(ws, cfg: Config, plan: Plan, entry: Entry, state: dict, *
     elif isinstance(entry.params, EnvironmentParams):
         paths = tuple(state.get("paths", ()))
     elif isinstance(entry.params, BackupParams):
-        paths = backup.managed_state_paths()
+        paths = backup.managed_paths() if plan.target.get("local") else backup.managed_state_paths()
     values = {
         "vmid": plan.target["vmid"],
         "name": plan.target["name"],
@@ -395,9 +396,11 @@ def application_units(entries):
 
 
 def build_plan(cfg: Config, target: dict, entries: tuple[Entry, ...], *, catalog_id: str | None = None, unattended: bool = False, include_configs: bool = True) -> Plan:
+    if target.get("local") and any(not isinstance(entry.params, BackupParams) for entry in entries):
+        raise AppError("Local Setup currently supports only the Backup category")
     if include_configs:
         entries = expand_config_entries(entries)
-    if not entries or not target.get("vmid") or not target.get("name"):
+    if not entries or (not target.get("local") and not target.get("vmid")) or not target.get("name"):
         raise AppError("An explicit resolved workspace and at least one action are required")
     if cfg.user_uid <= 0 or cfg.user_gid <= 0 or cfg.user_name == "root":
         raise AppError("Setup requires an unprivileged configured workspace user")
@@ -459,6 +462,14 @@ def command_environment(cfg: Config, command: str, *, interpreter: str = "bash",
 
 
 def guest(ws, cfg: Config, operation: str, **values) -> dict:
+    if getattr(ws, "local", False) is True:
+        from . import setup_guest
+        try:
+            if operation == "identity":
+                return ws.verify_identity()
+            return setup_guest.run({"home": str(ws.home), "operation": operation, **values})
+        except (setup_guest.GuestError, OSError) as exc:
+            raise AppError(str(exc)) from exc
     source = Path(__file__).with_name("setup_guest.py").read_text()
     payload = json.dumps({"home": f"/home/{cfg.user_name}", "operation": operation, **values})
     # Stream the program and payload so remote configuration never enters
@@ -477,6 +488,10 @@ def guest(ws, cfg: Config, operation: str, **values) -> dict:
 
 
 def require_tool(ws, cfg: Config, tool: str, bins: tuple[str, ...] = ()) -> None:
+    if getattr(ws, "local", False) is True:
+        if ws.command("command -v " + shlex.quote(tool) + " >/dev/null").returncode:
+            raise AppError(f"Missing local executable {tool}; install system prerequisites separately")
+        return
     result = ws.run(command_environment(cfg, "command -v " + shlex.quote(tool) + " >/dev/null", interpreter="sh", bins=bins, pipefail=False), check=False)
     if result.returncode == 255:
         raise AppError("Workspace SSH transport failed during prerequisite inspection")
@@ -683,7 +698,11 @@ def execute_plan(
     progress=lambda item, state: None,
     activity=lambda identity, message: None,
 ) -> dict:
-    factory = connection_factory or WorkspaceSSH.configured
+    if plan.target.get("local"):
+        from .setup_local import LocalSetup
+        factory = connection_factory or LocalSetup
+    else:
+        factory = connection_factory or WorkspaceSSH.configured
     results = [{"id": e.id, "label": e.label, "group": e.group, "status": "not-run", "detail": ""} for e in plan.entries]
     current = None
     preflight_complete = False
@@ -693,12 +712,12 @@ def execute_plan(
         by_id = {result["id"]: result for result in results}
         results = [by_id[entry.id] for entry in plan.entries]
         with ExitStack() as stack:
-            activity(None, "Verify workspace connection")
+            activity(None, "Verify local identity" if plan.target.get("local") else "Verify workspace connection")
             ws = workspace or terminal(lambda: stack.enter_context(factory(cfg, plan.target)))
             require_tool(ws, cfg, "python3")
             guest(ws, cfg, "identity", user=cfg.user_name, uid=cfg.user_uid, gid=cfg.user_gid,
                   name=plan.target["name"], vmid=plan.target["vmid"])
-            activity(None, "Workspace identity verified")
+            activity(None, "Local identity verified" if plan.target.get("local") else "Workspace identity verified")
             states = {}
             config_groups = {}
             for entry in plan.entries:

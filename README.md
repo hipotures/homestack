@@ -327,6 +327,16 @@ Guest `python3` and `findmnt` support identity/path/atomic-write verification. F
 
 ### BK workspace backup
 
+To install BK for the current local user instead of a workspace, use the same Setup category:
+
+```bash
+uv run homestack setup --local backup=bk
+```
+
+Local Setup installs only `~/.local/bin/bk` and the `backup.service` / `backup.timer` units under `~/.config/systemd/user/`, then enables the nightly user timer. It uses the existing Setup preflight, operation snapshots and state registry. It does not connect to PVE or SSH, generate retrieval keys, or modify `authorized_keys`. Run `bk edit` to create `~/backup/backup.yaml` and select sources; the installer does not create the backup directory or rewrite existing backup data. Enabling the persistent timer may trigger a missed backup for already-configured sources. System Python must already provide Rich, SQLite and curses; `file`, `git` and a working user systemd manager are also required. No packages are installed automatically.
+
+Use `homestack setup --local` for the interactive Backup selector, `homestack setup --local backup=bk --dry-run` to preview the plan, or `homestack setup --local status` to inspect the installation. `--yes` and `--json` follow normal Setup behavior. Local Setup currently supports the Backup category only.
+
 Select BK with `homestack setup WORKSPACE backup=bk` or `homestack setup WORKSPACE b=bk`. HomeStack installs `~/.local/bin/bk`, `~/.config/systemd/user/backup.service`, and `~/.config/systemd/user/backup.timer`, creates `~/backup/` when needed, and enables the user timer. These paths live in persistent home and therefore survive `homestack refresh`.
 
 HomeStack manages the executable, two unit files, and restricted SSH retrieval credentials. It never creates or rewrites `~/backup/backup.yaml` and never manages archives, logs, status, locks, or staging data under `~/backup/`. Run `bk edit` inside the workspace to choose sources. Run `bk run` for a manual backup and `bk status` to inspect the latest attempt and retained backups. An installation with no `backup.yaml`, archive, or status file is valid; the timer's unconfigured run is a successful no-op.

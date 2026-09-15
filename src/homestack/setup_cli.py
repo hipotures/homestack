@@ -49,7 +49,8 @@ def show_catalog(cfg, catalog):
 
 
 def show_plan(console, plan):
-    console.print(f"Setup: {plan.target['name']} (VM {plan.target['vmid']}) — guest state unknown", markup=False)
+    label = "local" if plan.target.get("local") else f"VM {plan.target['vmid']}"
+    console.print(f"Setup: {plan.target['name']} ({label}) — installation state unknown", markup=False)
     table = Table()
     for heading in ("Group", "ID", "Action", "Paths / prerequisites", "Desired", "Dependencies"):
         table.add_column(heading)
@@ -85,7 +86,8 @@ def _timestamp_text(item: dict, key: str) -> str:
 
 def show_workspace_setup_status(cfg, target, state):
     console = Console()
-    console.print(f"Setup status: {target['name']} (VM {target['vmid']}) {target.get('ip', '')}", markup=False)
+    label = "local" if target.get("local") else f"VM {target['vmid']}"
+    console.print(f"Setup status: {target['name']} ({label}) {target.get('ip', '')}", markup=False)
     console.print(f"Checked: {state['checked_at']}    Registry: {state['state_path']} ({'present' if state['registry_present'] else 'not created'})", markup=False)
     table = Table()
     for heading in ("Group", "Item", "State", "Installed", "First managed", "Last applied", "Created", "Modified"):
@@ -130,16 +132,29 @@ def run_setup(args, cfg, *, json_mode: bool, assume_yes: bool) -> int:
     emit = lambda data: print(json.dumps(data, indent=2))
     tokens = getattr(args, "selectors", [])
     target_arg = args.target
+    local = bool(getattr(args, "local", False))
+    catalog_loader = load_catalog
+    connection = WorkspaceSSH.configured
+    if local:
+        from .setup_local import LocalSetup, local_catalog, local_configuration, local_target
+        cfg = local_configuration(cfg)
+        catalog_loader, connection = local_catalog, LocalSetup
+        target = local_target()
+        if target_arg and "=" in target_arg:
+            tokens = [target_arg, *tokens]
+            target_arg = None
+        elif target_arg not in (None, "list", "status"):
+            raise AppError("--local does not accept a workspace target; use setup --local backup=bk")
     if target_arg == "status":
-        if len(tokens) != 1 or assume_yes or args.dry_run or args.non_interactive or args.catalog:
-            raise AppError("Usage: homestack setup status VMID|NAME [--json]")
-        status_target = tokens[0]
-        catalog = load_catalog(cfg, repositories=True)
-        with open_transport(cfg) as session:
-            target = resolve_target(session, cfg, status_target)
-        if not json_mode:
+        if len(tokens) != (0 if local else 1) or assume_yes or args.dry_run or args.non_interactive or args.catalog:
+            raise AppError("Usage: homestack setup status VMID|NAME [--json] or setup --local status [--json]")
+        catalog = catalog_loader(cfg, repositories=True)
+        if not local:
+            with open_transport(cfg) as session:
+                target = resolve_target(session, cfg, tokens[0])
+        if not json_mode and not local:
             console.print("SSH: authenticate once to inspect workspace setup state; the connection closes after status.")
-        with WorkspaceSSH.configured(cfg, target) as workspace:
+        with connection(cfg, target) as workspace:
             state = inspect_workspace_state(workspace, cfg, target, catalog.entries)
         result = {"ok": True, "command": "setup status", "target": target, **state}
         if json_mode:
@@ -150,7 +165,7 @@ def run_setup(args, cfg, *, json_mode: bool, assume_yes: bool) -> int:
     if target_arg == "list":
         if tokens or assume_yes or args.dry_run or args.non_interactive or args.catalog:
             raise AppError("setup list is targetless discovery; execution selectors/options are not accepted")
-        catalog = load_catalog(cfg, repositories=True)
+        catalog = catalog_loader(cfg, repositories=True)
         save_snapshot(cfg, catalog)
         if json_mode:
             emit({"ok": True, "command": "setup list", "catalog": catalog.snapshot_id,
@@ -158,7 +173,7 @@ def run_setup(args, cfg, *, json_mode: bool, assume_yes: bool) -> int:
         else:
             show_catalog(cfg, catalog)
         return 0
-    if not target_arg:
+    if not target_arg and not local:
         raise AppError("An explicit VMID or exact workspace name is required; use setup list for discovery")
     if not tokens and args.catalog:
         raise AppError("--catalog requires explicit selectors; use setup list to inspect a catalog")
@@ -171,16 +186,18 @@ def run_setup(args, cfg, *, json_mode: bool, assume_yes: bool) -> int:
             raise AppError("No actions selected. Run setup list, then specify env=bash, app=codex, backup=bk or another selector")
         entries, catalog_id = (), None
     # Local selection validation always precedes even read-only target resolution.
-    with open_transport(cfg) as session:
-        target = resolve_target(session, cfg, target_arg)
+    if not local:
+        with open_transport(cfg) as session:
+            target = resolve_target(session, cfg, target_arg)
     if not entries:
         from .setup_tui import SetupApp
-        catalog = load_catalog(cfg, repositories=True)
+        catalog = catalog_loader(cfg, repositories=True)
         save_snapshot(cfg, catalog)
-        console.print("SSH: authenticate once; this session remains open until setup exits.")
-        with WorkspaceSSH.configured(cfg, target) as workspace:
+        if not local:
+            console.print("SSH: authenticate once; this session remains open until setup exits.")
+        with connection(cfg, target) as workspace:
             state = inspect_workspace_state(workspace, cfg, target, catalog.entries)
-            result = SetupApp(cfg, target, catalog=catalog, workspace=workspace, state=state).run()
+            result = SetupApp(cfg, target, catalog=catalog, loader=catalog_loader, workspace=workspace, state=state).run()
         return 0 if result is None or result.get("ok") else 1
     plan = build_plan(cfg, target, entries, catalog_id=catalog_id, unattended=unattended)
     if args.dry_run:
@@ -189,7 +206,7 @@ def run_setup(args, cfg, *, json_mode: bool, assume_yes: bool) -> int:
             emit(result)
         else:
             show_plan(console, plan)
-            console.print("Dry run: no guest SSH or remote changes.")
+            console.print("Dry run: no local changes." if local else "Dry run: no guest SSH or remote changes.")
         return 0
     if not assume_yes:
         if json_mode or not sys.stdin.isatty() or args.non_interactive:
@@ -202,7 +219,8 @@ def run_setup(args, cfg, *, json_mode: bool, assume_yes: bool) -> int:
             return 0
     if assume_yes and not json_mode:
         show_plan(console, plan)
-    console.print("SSH: authenticate with the configured workspace identity; hardware authentication may require a touch.")
+    if not local:
+        console.print("SSH: authenticate with the configured workspace identity; hardware authentication may require a touch.")
     result = execute_plan(cfg, plan, progress=lambda identity, state: console.print(f"{identity}: {state}", markup=False))
     if json_mode:
         emit(result)

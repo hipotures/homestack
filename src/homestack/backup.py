@@ -724,6 +724,8 @@ def _guest_authorized_keys(
 def _command(ws, cfg, command: str):
     from .setup import command_environment
 
+    if getattr(ws, "local", False) is True:
+        return ws.command(command)
     return ws.run(
         command_environment(cfg, command, interpreter="sh", pipefail=False),
         check=False,
@@ -731,6 +733,8 @@ def _command(ws, cfg, command: str):
 
 
 def _systemctl(ws, cfg, arguments: str):
+    if getattr(ws, "local", False) is True:
+        return ws.command("systemctl --user " + arguments)
     return _command(
         ws,
         cfg,
@@ -741,17 +745,20 @@ def _systemctl(ws, cfg, arguments: str):
 def _require_runtime(ws, cfg) -> None:
     from .setup import require_tool
 
+    preparation = ("install local system prerequisites separately"
+                   if getattr(ws, "local", False) is True
+                   else "prepare Gold and refresh separately")
     for tool in ("python3", "file", "git", "systemctl"):
         require_tool(ws, cfg, tool)
     modules = _command(ws, cfg, "python3 -c 'import curses, rich, sqlite3'")
     if modules.returncode:
         raise AppError(
-            "BK requires Python modules curses, rich and sqlite3; prepare Gold and refresh separately"
+            "BK requires Python modules curses, rich and sqlite3; " + preparation
         )
     user_systemd = _systemctl(ws, cfg, "show-environment")
     if user_systemd.returncode:
         raise AppError(
-            "The workspace user systemd manager is unavailable; prepare the guest session separately"
+            "The user systemd manager is unavailable; prepare the user session separately"
         )
 
 
@@ -765,14 +772,16 @@ def inspect(ws, cfg, vmid: int, *, check_requirements: bool = True) -> dict:
     """Inspect managed BK assets and the user timer without reading BK user data."""
     from .setup import guest
 
+    local = getattr(ws, "local", False) is True
+    directories = tuple(path for path in MANAGED_DIRECTORIES if not local or path != "backup")
     if check_requirements:
         _require_runtime(ws, cfg)
-        if shutil.which("ssh-keygen") is None:
+        if not local and shutil.which("ssh-keygen") is None:
             raise AppError("BK retrieval requires desktop ssh-keygen")
-        if _command(ws, cfg, "test -x /usr/bin/cat").returncode:
+        if not local and _command(ws, cfg, "test -x /usr/bin/cat").returncode:
             raise AppError("BK retrieval requires guest /usr/bin/cat; prepare Gold separately")
-    retrieval = inspect_retrieval_keys(vmid)
-    authorization = _guest_authorized_keys(
+    retrieval = {"ready": True} if local else inspect_retrieval_keys(vmid)
+    authorization = {"ready": True} if local else _guest_authorized_keys(
         ws, cfg, vmid, retrieval["public_keys"], apply=False,
     )
     guest(
@@ -781,7 +790,7 @@ def inspect(ws, cfg, vmid: int, *, check_requirements: bool = True) -> dict:
         "paths",
         paths=[
             {"relative": path, "directory": True}
-            for path in MANAGED_DIRECTORIES
+            for path in directories
         ],
     )
     actual = guest(ws, cfg, "managed-files-inspect", paths=list(managed_paths()))
@@ -818,7 +827,7 @@ def inspect(ws, cfg, vmid: int, *, check_requirements: bool = True) -> dict:
         "exists": any_installed,
         "will_overwrite": bool(snapshot_paths),
         "files": files,
-        "managed_paths": list(managed_state_paths()),
+        "managed_paths": list(managed_paths() if local else managed_state_paths()),
         "changed_paths": changed,
         "snapshot_paths": snapshot_paths,
         "timer_enabled": timer_enabled,
@@ -837,15 +846,20 @@ def apply(ws, cfg, vmid: int, state: dict, *, activity=lambda message: None) -> 
     from .setup import guest
 
     if state.get("ready"):
-        return "already-ready", "BK assets, user timer and restricted retrieval keys already match"
+        detail = "BK assets and user timer already match"
+        if getattr(ws, "local", False) is not True:
+            detail += "; restricted retrieval keys configured"
+        return "already-ready", detail
 
-    activity("Reconcile desktop BK retrieval keys")
-    retrieval = reconcile_retrieval_keys(vmid)
-    activity("Install restricted BK public keys")
-    _guest_authorized_keys(
-        ws, cfg, vmid, retrieval["public_keys"], apply=True,
-        expected_sha256=state["authorization"].get("sha256"),
-    )
+    local = getattr(ws, "local", False) is True
+    if not local:
+        activity("Reconcile desktop BK retrieval keys")
+        retrieval = reconcile_retrieval_keys(vmid)
+        activity("Install restricted BK public keys")
+        _guest_authorized_keys(
+            ws, cfg, vmid, retrieval["public_keys"], apply=True,
+            expected_sha256=state["authorization"].get("sha256"),
+        )
 
     contents = load_assets()
     by_path = {item["path"]: item for item in state.get("files", [])}
@@ -870,7 +884,7 @@ def apply(ws, cfg, vmid: int, state: dict, *, activity=lambda message: None) -> 
         ws,
         cfg,
         "managed-files-install",
-        directories=list(MANAGED_DIRECTORIES),
+        directories=[path for path in MANAGED_DIRECTORIES if not local or path != "backup"],
         files=files,
     )
     unit_paths = {
@@ -893,4 +907,5 @@ def apply(ws, cfg, vmid: int, state: dict, *, activity=lambda message: None) -> 
     if not verified["ready"]:
         raise AppError("BK installation verification failed")
     action = "installed" if state.get("state") == "not installed" else "updated"
-    return "succeeded", f"BK {action}; backup.timer is enabled and active; restricted retrieval keys configured"
+    detail = f"BK {action}; backup.timer is enabled and active"
+    return "succeeded", detail if local else detail + "; restricted retrieval keys configured"
