@@ -295,7 +295,9 @@ class BackupCliTests(unittest.TestCase):
         duplicate = self.run_bk(self.home, "add", cwd=working, input_text="1\n")
         self.assertEqual(duplicate.returncode, 0, duplicate.stderr)
         self.assertIn("already", duplicate.stdout.lower())
+        self.assertIn("already configured", duplicate.stdout.lower())
         self.assertEqual(self.config_path(self.home).read_bytes(), before)
+        self.assertEqual(self.config_sources(self.config_path(self.home)).count(str(selected.resolve())), 1)
         self.assertIn(selected.name, first.stdout)
 
     def test_delete_keeps_self_entry_and_aliases_run_and_status_work(self) -> None:
@@ -1025,6 +1027,21 @@ class SelectorTests(unittest.TestCase):
         self.assertFalse(state.edit_selection_text("4"))
         self.assertEqual(state.selected_indices, set())
         self.assertIn("non-selectable", state.error or "")
+
+    def test_already_configured_add_rows_are_visible_and_not_selectable(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="bk-selector-existing-") as temporary:
+            home = Path(temporary)
+            paths = self.module["Paths"].from_home(home)
+            configured = home / "configured"
+            configured.touch()
+            items = self.module["add_selector_items"](paths, [configured], {configured})
+
+        self.assertEqual(items[0].state, "already configured")
+        self.assertFalse(items[0].selectable)
+        state = self.module["SelectorState"](items)
+        self.assertFalse(state.toggle(1))
+        self.assertFalse(state.edit_selection_text("1"))
+        self.assertEqual(state.selected_indices, set())
 
     def test_mouse_row_toggle_updates_selection_and_input(self) -> None:
         state = self.state()

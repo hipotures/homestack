@@ -670,21 +670,14 @@ def immediate_children(directory: Path) -> list[Path]:
     return sorted(children, key=lambda path: path.name)
 
 
-def print_add_candidates(paths: Paths, children: list[Path]) -> None:
+def print_add_candidates(children: list[Path], items: list[SelectorItem]) -> None:
     table = Table(title=f"Immediate children of {Path.cwd()}", show_header=True, header_style="bold")
     table.add_column("#", justify="right")
     table.add_column("Name")
     table.add_column("Kind")
     table.add_column("State")
-    for index, child in enumerate(children, start=1):
-        exists, kind = item_kind(child)
-        if normalize_path(child) == normalize_path(paths.config):
-            state = "protected self-entry"
-        elif path_is_runtime(child, paths):
-            state = "BK-managed; not selectable"
-        else:
-            state = "present" if exists else "missing"
-        table.add_row(str(index), child.name, kind, state)
+    for child, item in zip(children, items, strict=True):
+        table.add_row(str(item.index), child.name, item.kind, item.state)
     console.print(table)
 
 
@@ -697,7 +690,11 @@ def print_delete_candidates(removable: list[Path]) -> None:
     console.print(table)
 
 
-def add_selector_items(paths: Paths, children: list[Path]) -> list[SelectorItem]:
+def add_selector_items(
+    paths: Paths,
+    children: list[Path],
+    configured_sources: set[Path],
+) -> list[SelectorItem]:
     """Build compact add rows without changing the immediate-child semantics."""
 
     items: list[SelectorItem] = []
@@ -711,6 +708,9 @@ def add_selector_items(paths: Paths, children: list[Path]) -> list[SelectorItem]
         elif path_is_runtime(child, paths):
             selectable = False
             state = "BK-managed; not selectable"
+        elif candidate in configured_sources:
+            selectable = False
+            state = "already configured"
         else:
             selectable = True
             state = "present" if exists else "missing"
@@ -1183,17 +1183,27 @@ def run_curses_selector(
         terminal.close()
 
 
-def parse_selector_input(raw: str, items: list[SelectorItem]) -> list[int]:
+def parse_selector_input(
+    raw: str,
+    items: list[SelectorItem],
+    *,
+    ignored_states: set[str] | None = None,
+) -> list[int]:
     """Parse fallback input while rejecting protected/non-selectable rows."""
 
     selected = parse_selection(raw, len(items))
-    unavailable = [index for index in selected if not items[index - 1].selectable]
+    ignored_states = ignored_states or set()
+    unavailable = [
+        index
+        for index in selected
+        if not items[index - 1].selectable and items[index - 1].state not in ignored_states
+    ]
     if unavailable:
         raise BKError(
             "selection contains non-selectable number(s): "
             + ", ".join(str(index) for index in unavailable)
         )
-    return selected
+    return [index for index in selected if items[index - 1].selectable]
 
 
 def prompt_selector(
@@ -1213,7 +1223,19 @@ def prompt_selector(
     except (EOFError, KeyboardInterrupt):
         return SelectorResult([], cancelled=True)
     try:
-        return SelectorResult(parse_selector_input(raw, items))
+        requested = parse_selection(raw, len(items))
+        if operation == "add":
+            for index in requested:
+                item = items[index - 1]
+                if item.state == "already configured":
+                    console.print(f"Already configured: {item.label}")
+        return SelectorResult(
+            parse_selector_input(
+                raw,
+                items,
+                ignored_states={"already configured"} if operation == "add" else None,
+            )
+        )
     except BKError:
         raise
 
@@ -1250,12 +1272,14 @@ def add_command(paths: Paths) -> int:
     config = read_config(paths)
     children = immediate_children(Path.cwd())
     if children:
+        configured_sources = set(config.sources) if config is not None else set()
+        items = add_selector_items(paths, children, configured_sources)
         try:
             selection = select_entries(
-                add_selector_items(paths, children),
+                items,
                 operation="add",
                 context=Path.cwd(),
-                fallback_printer=lambda: print_add_candidates(paths, children),
+                fallback_printer=lambda: print_add_candidates(children, items),
             )
         except BKError as exc:
             error_console.print(str(exc))
