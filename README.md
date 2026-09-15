@@ -329,9 +329,23 @@ Guest `python3` and `findmnt` support identity/path/atomic-write verification. F
 
 Select BK with `homestack setup WORKSPACE backup=bk` or `homestack setup WORKSPACE b=bk`. HomeStack installs `~/.local/bin/bk`, `~/.config/systemd/user/backup.service`, and `~/.config/systemd/user/backup.timer`, creates `~/backup/` when needed, and enables the user timer. These paths live in persistent home and therefore survive `homestack refresh`.
 
-HomeStack owns only the executable and two unit files. It never creates or rewrites `~/backup/backup.yaml` and never manages archives, logs, status, locks, or staging data under `~/backup/`. Run `bk edit` inside the workspace to choose sources. Run `bk run` for a manual backup and `bk status` to inspect the latest attempt and retained backups. An installation with no `backup.yaml`, archive, or status file is valid; the timer's unconfigured run is a successful no-op.
+HomeStack manages the executable, two unit files, and restricted SSH retrieval credentials. It never creates or rewrites `~/backup/backup.yaml` and never manages archives, logs, status, locks, or staging data under `~/backup/`. Run `bk edit` inside the workspace to choose sources. Run `bk run` for a manual backup and `bk status` to inspect the latest attempt and retained backups. An installation with no `backup.yaml`, archive, or status file is valid; the timer's unconfigured run is a successful no-op.
 
 The user timer runs nightly at 03:15. `Persistent=true` catches up a missed activation when the user systemd manager next starts. It does not keep the timer running while that manager is stopped, and HomeStack does not enable lingering.
+
+Backup setup requires desktop `ssh-keygen` and guest `/usr/bin/cat`. It creates two passphrase-free ED25519 pairs on the trusted desktop: `~/.ssh/homestack/backup/vm<VMID>-bk-archive` and `~/.ssh/homestack/backup/vm<VMID>-bk-status`, each with its `.pub` file. Private keys never leave the desktop. Through the existing hardware-authenticated Setup connection, HomeStack installs only two restricted public-key entries in the workspace user's `~/.ssh/authorized_keys`, preserving unrelated keys and comments. Each entry forces `/usr/bin/cat --` on exactly one file: `/home/<USER>/backup/backup.tgz` or `/home/<USER>/backup/status.json`. These identities cannot open a shell, select a command, allocate a PTY, or forward connections.
+
+For example, retrieve the status of VM 200 from the desktop using its dedicated identity (replace the user and address):
+
+```bash
+ssh -T -F /dev/null -o BatchMode=yes -o IdentitiesOnly=yes \
+  -o IdentityAgent=none -o ControlMaster=no -o ControlPath=none \
+  -i ~/.ssh/homestack/backup/vm200-bk-status USER@WORKSPACE_IP x
+```
+
+The server ignores `x` and returns only the fixed status file. Use `vm200-bk-archive` to stream the archive instead. Normal SSH host-key verification remains enabled. Missing output files are valid before the first backup; retrieval then fails with `cat`'s nonzero exit code, without invalidating Setup readiness.
+
+Repeated Setup preserves valid key pairs. A missing `.pub` is derived from its private key; an orphaned public key is replaced with a newly generated pair. A mismatched existing pair blocks Setup rather than rotating credentials. Refresh, migration, and rename preserve the VMID-based keys. Successful workspace destruction removes only that VMID's four managed key files, leaving the parent directory and other workspaces' keys intact.
 
 ### Workspace setup state and snapshots
 

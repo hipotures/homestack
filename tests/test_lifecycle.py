@@ -190,6 +190,13 @@ class MigrationProgressTests(unittest.TestCase):
 
 class RefreshPowerStateTests(unittest.TestCase):
 
+    def setUp(self):
+        for target in ('homestack.lifecycle.cleanup_retrieval_keys',
+                       'homestack.backup.reconcile_retrieval_keys'):
+            guard = patch(target, side_effect=AssertionError('Refresh must not mutate BK keys'))
+            guard.start()
+            self.addCleanup(guard.stop)
+
     @staticmethod
     def _plan(status: str) -> dict[str, object]:
         return {'command': 'refresh', 'vmid': 200, 'name': 'test1', 'node': 'example-node-1', 'status': status, 'ip': '192.0.2.200', 'cidr': 24, 'gateway': '192.0.2.1', 'gold_vmid': 101, 'root_storage': 'example-storage-a', 'root_disk': 'scsi0', 'root_disk_gb': 16.0, 'gold_root_disk_config': 'example-storage-a:vm-101-disk-0,size=16G', 'gold_root_volume': 'example-storage-a:vm-101-disk-0', 'home_disk': 'scsi1', 'home_storage': 'example-storage-a', 'home_label': 'HS_HOME_200', 'home_volume': 'example-storage-a:vm-200-hs-home-user'}
@@ -462,6 +469,13 @@ class RefreshPowerStateTests(unittest.TestCase):
 
 class MigrationPowerStateTests(unittest.TestCase):
 
+    def setUp(self):
+        for target in ('homestack.lifecycle.cleanup_retrieval_keys',
+                       'homestack.backup.reconcile_retrieval_keys'):
+            guard = patch(target, side_effect=AssertionError('Migration must not mutate BK keys'))
+            guard.start()
+            self.addCleanup(guard.stop)
+
     def test_stopped_workspace_stays_stopped_after_migration(self) -> None:
         plan = {'vmid': 200, 'name': 'test1', 'source_node': 'example-node-3', 'target_node': 'example-node-2', 'target_storage': 'example-storage-b', 'status': 'stopped', 'home_label': 'HS_HOME_200', 'volumes': []}
         commands: list[str] = []
@@ -492,6 +506,19 @@ class MigrationPowerStateTests(unittest.TestCase):
 
 class DestroyPlanPresentationTests(unittest.TestCase):
 
+    def test_destroy_does_not_remove_backup_keys_when_vm_still_exists(self) -> None:
+        plan = {'vmid': 210, 'name': 'test210', 'node': 'example-node-2',
+                'ip': '192.0.2.210', 'home_label': 'HS_HOME_210'}
+        with patch.object(lifecycle, 'shutdown_vm_on_node'), patch.object(
+            lifecycle, 'resolve_existing_workspace',
+            return_value={'home_label': 'HS_HOME_210'},
+        ), patch.object(lifecycle, 'node_run'), patch.object(
+            lifecycle, 'cluster_vm_resource', return_value={'vmid': 210},
+        ), patch.object(lifecycle, 'cleanup_retrieval_keys') as cleanup:
+            with self.assertRaisesRegex(models.AppError, 'still exists'):
+                lifecycle.destroy_workspace(object(), test_config(), plan)
+        cleanup.assert_not_called()
+
     def test_gib_value_is_compact(self) -> None:
         self.assertEqual(ui.gib_value(16.0), '16 GiB')
         self.assertEqual(ui.gib_value(20.5), '20.5 GiB')
@@ -519,6 +546,11 @@ class DestroyPlanPresentationTests(unittest.TestCase):
             events.append('known hosts')
             return ['192.0.2.210']
 
+        def remove_backup_keys(vmid: int):
+            self.assertEqual(vmid, 210)
+            events.append('backup keys')
+            return [Path('/tmp/vm210-bk-archive')]
+
         with patch.object(lifecycle, 'shutdown_vm_on_node'), patch.object(
             lifecycle,
             'resolve_existing_workspace',
@@ -529,10 +561,13 @@ class DestroyPlanPresentationTests(unittest.TestCase):
             lifecycle, 'remove_local_ssh_config', side_effect=remove_config
         ), patch.object(
             lifecycle, 'forget_local_ssh_host', side_effect=remove_known_hosts
+        ), patch.object(
+            lifecycle, 'cleanup_retrieval_keys', side_effect=remove_backup_keys
         ):
             result = lifecycle.destroy_workspace(object(), test_config(), plan)
 
-        self.assertEqual(events, ['vm absent', 'ssh config', 'known hosts'])
+        self.assertEqual(events, ['vm absent', 'backup keys', 'ssh config', 'known hosts'])
+        self.assertEqual(result['backup_keys_removed'], ['/tmp/vm210-bk-archive'])
         self.assertEqual(result['ssh_config_removed'], ['/tmp/vm210-test210.conf'])
         self.assertEqual(result['ssh_known_hosts_removed'], ['192.0.2.210'])
 
@@ -554,7 +589,7 @@ class DestroyPlanPresentationTests(unittest.TestCase):
             lifecycle,
             'remove_local_ssh_config',
             side_effect=models.AppError('permission denied'),
-        ):
+        ), patch.object(lifecycle, 'cleanup_retrieval_keys', return_value=[]):
             with self.assertRaisesRegex(
                 models.AppError,
                 'was destroyed successfully, but local SSH cleanup failed: permission denied',

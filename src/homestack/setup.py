@@ -45,6 +45,7 @@ class Plan:
             elif isinstance(p, BackupParams):
                 extra = {
                     "destinations": ["~/" + path for path in backup.managed_paths()],
+                    "restricted_authorized_keys": "~/.ssh/authorized_keys",
                     "timer": "backup.timer",
                 }
             elif isinstance(p, ApplicationParams):
@@ -267,7 +268,7 @@ def inspect_workspace_state(ws, cfg: Config, target: dict, entries: tuple[Entry,
                 if p.backup_paths:
                     item["backup_paths"] = list(p.backup_paths)
             elif isinstance(p, BackupParams):
-                item.update(backup.inspect(ws, cfg))
+                item.update(backup.inspect(ws, cfg, target["vmid"]))
             elif isinstance(p, RepositoryParams):
                 live = repo_states.get(p.repository, {}) if isinstance(repo_states, dict) else {}
                 item.update({k: live.get(k) for k in ("state", "ready", "exists", "detail", "remote", "key_pair") if k in live})
@@ -315,7 +316,7 @@ def record_entry_state(ws, cfg: Config, plan: Plan, entry: Entry, state: dict, *
     elif isinstance(entry.params, EnvironmentParams):
         paths = tuple(state.get("paths", ()))
     elif isinstance(entry.params, BackupParams):
-        paths = backup.managed_paths()
+        paths = backup.managed_state_paths()
     values = {
         "vmid": plan.target["vmid"],
         "name": plan.target["name"],
@@ -369,7 +370,7 @@ def write_paths(cfg: Config, entry: Entry) -> tuple[str, ...]:
         return {"bash": (".bashrc", ".profile", ".bash_profile", ".bash_login"), "zsh": (".zshenv", ".zshrc"),
                 "fish": (".config/fish/conf.d/homestack.fish",), "nu": (".config/nushell/env.nu", ".config/nushell/config.nu")}[p.profile]
     if isinstance(p, BackupParams):
-        return backup.managed_paths()
+        return backup.managed_state_paths()
     if isinstance(p, RepositoryParams):
         return tuple(path.removeprefix(f"/home/{cfg.user_name}/") for path in repo.repository_paths(cfg, p.repository))
     return ()
@@ -577,7 +578,7 @@ def preflight_entry(ws, cfg: Config, plan: Plan, entry: Entry) -> dict:
                 raise AppError(f"{entry.id}: prerequisite check {index} failed; inspect the recipe requirements and prepare Gold separately")
         return {"installed": installed, "ready": installed}
     if isinstance(p, BackupParams):
-        return backup.preflight(ws, cfg)
+        return backup.preflight(ws, cfg, plan.target["vmid"])
     if isinstance(p, RepositoryParams):
         metadata = repo._github_json([f"repos/{p.repository}"], dict)
         if metadata.get("full_name", "").casefold() != p.repository.casefold() or not metadata.get("permissions", {}).get("admin") or metadata.get("archived") or metadata.get("disabled"):
@@ -651,7 +652,8 @@ def apply_entry(
         return "succeeded", ((f"Application {action}; installation check passed; onboarding remains separate") if p.check else f"Application {action}; command exited successfully; no installation check is configured")
     if isinstance(p, BackupParams):
         return backup.apply(
-            ws, cfg, state, activity=lambda message: activity(entry.id, message)
+            ws, cfg, plan.target["vmid"], state,
+            activity=lambda message: activity(entry.id, message)
         )
     if isinstance(p, RepositoryParams):
         activity(entry.id, "Configure repository")

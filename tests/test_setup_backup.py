@@ -64,6 +64,9 @@ class MemoryGuest:
         self.calls.append((operation, values))
         if operation == "paths":
             return {"ok": True}
+        if operation == "backup-authorized-keys":
+            return {"ok": True, "ready": True, "changed": False,
+                    "exists": True, "sha256": "authorized-keys-digest"}
         if operation == "managed-files-inspect":
             items = []
             for path in values["paths"]:
@@ -102,6 +105,20 @@ def desired_memory_files():
 
 
 class BackupDefinitionTests(unittest.TestCase):
+    def test_authorized_keys_cannot_be_replaced_by_another_selected_handler(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(
+            Path, "home", return_value=Path(directory)
+        ):
+            ssh = Path(directory) / ".ssh"
+            ssh.mkdir()
+            (ssh / "authorized_keys").write_text("# Desktop keys\n")
+            entry = setup_config.Entry(
+                "login-keys", "files", "file", "Login keys", "User SSH keys",
+                setup_config.FileParams("~/.ssh/authorized_keys"),
+            )
+            with self.assertRaisesRegex(AppError, "Overlapping selected writes"):
+                setup.build_plan(test_config(), TARGET, (entry, bk_entry()))
+
     def test_group_item_selectors_catalog_and_plan_are_first_class(self):
         cfg = test_config()
         self.assertEqual(cfg.setup.groups[-2].id, "backup")
@@ -301,19 +318,27 @@ class BackupResourceAndGuestTests(unittest.TestCase):
 
 
 class BackupHandlerTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        home = patch.object(Path, "home", return_value=Path(temporary.name))
+        home.start()
+        self.addCleanup(home.stop)
+        backup.reconcile_retrieval_keys(200)
+
     def test_inspection_distinguishes_missing_current_drift_and_disabled_timer(self):
         cfg = test_config()
         workspace = FakeWorkspace(timer_enabled=False, timer_active=False)
         memory = MemoryGuest()
         with patch.object(setup, "guest", side_effect=memory):
-            missing = backup.inspect(workspace, cfg)
+            missing = backup.inspect(workspace, cfg, 200)
         self.assertEqual(missing["state"], "not installed")
         self.assertFalse(missing["ready"])
 
         workspace = FakeWorkspace()
         memory = MemoryGuest(desired_memory_files())
         with patch.object(setup, "guest", side_effect=memory):
-            current = backup.inspect(workspace, cfg)
+            current = backup.inspect(workspace, cfg, 200)
         self.assertEqual(current["state"], "configured")
         self.assertTrue(current["ready"])
 
@@ -325,7 +350,7 @@ class BackupHandlerTests(unittest.TestCase):
         )
         memory = MemoryGuest(files)
         with patch.object(setup, "guest", side_effect=memory):
-            drifted = backup.inspect(workspace, cfg)
+            drifted = backup.inspect(workspace, cfg, 200)
         self.assertEqual(drifted["state"], "needs update")
         self.assertEqual(
             set(drifted["snapshot_paths"]),
@@ -335,7 +360,7 @@ class BackupHandlerTests(unittest.TestCase):
         workspace.timer_enabled = False
         memory = MemoryGuest(desired_memory_files())
         with patch.object(setup, "guest", side_effect=memory):
-            disabled = backup.inspect(workspace, cfg)
+            disabled = backup.inspect(workspace, cfg, 200)
         self.assertEqual(disabled["state"], "needs update")
         self.assertFalse(disabled["will_overwrite"])
 
@@ -344,7 +369,7 @@ class BackupHandlerTests(unittest.TestCase):
                 files = desired_memory_files()
                 files[relative] = (b"outdated", files[relative][1])
                 with patch.object(setup, "guest", side_effect=MemoryGuest(files)):
-                    drifted = backup.inspect(FakeWorkspace(), cfg)
+                    drifted = backup.inspect(FakeWorkspace(), cfg, 200)
                 self.assertEqual(drifted["state"], "needs update")
                 self.assertIn(relative, drifted["changed_paths"])
 
@@ -354,7 +379,7 @@ class BackupHandlerTests(unittest.TestCase):
         checked = []
         with patch.object(setup, "require_tool", side_effect=lambda _ws, _cfg, tool: checked.append(tool)), \
              patch.object(setup, "guest", side_effect=MemoryGuest()):
-            backup.preflight(workspace, cfg)
+            backup.preflight(workspace, cfg, 200)
         self.assertEqual(checked, ["python3", "file", "git", "systemctl"])
         self.assertTrue(any("import curses, rich, sqlite3" in command for command in workspace.commands))
         self.assertTrue(any("systemctl --user show-environment" in command for command in workspace.commands))
@@ -367,21 +392,21 @@ class BackupHandlerTests(unittest.TestCase):
 
         with patch.object(setup, "require_tool"):
             with self.assertRaisesRegex(AppError, "curses, rich and sqlite3"):
-                backup.preflight(MissingRich(), cfg)
+                backup.preflight(MissingRich(), cfg, 200)
 
     def test_apply_installs_enables_verifies_and_is_idempotent(self):
         cfg = test_config()
         workspace = FakeWorkspace(timer_enabled=False, timer_active=False)
         memory = MemoryGuest()
         with patch.object(setup, "guest", side_effect=memory):
-            state = backup.inspect(workspace, cfg)
-            status, detail = backup.apply(workspace, cfg, state)
-            current = backup.inspect(workspace, cfg)
+            state = backup.inspect(workspace, cfg, 200)
+            status, detail = backup.apply(workspace, cfg, 200, state)
+            current = backup.inspect(workspace, cfg, 200)
             install_calls = len(
                 [operation for operation, _values in memory.calls if operation == "managed-files-install"]
             )
             command_count = len(workspace.commands)
-            repeat_status, _ = backup.apply(workspace, cfg, current)
+            repeat_status, _ = backup.apply(workspace, cfg, 200, current)
         self.assertEqual(status, "succeeded")
         self.assertIn("installed", detail)
         self.assertEqual(repeat_status, "already-ready")
@@ -401,8 +426,8 @@ class BackupHandlerTests(unittest.TestCase):
         memory = MemoryGuest(files)
         workspace = FakeWorkspace()
         with patch.object(setup, "guest", side_effect=memory):
-            state = backup.inspect(workspace, cfg)
-            backup.apply(workspace, cfg, state)
+            state = backup.inspect(workspace, cfg, 200)
+            backup.apply(workspace, cfg, 200, state)
         install = next(
             values
             for operation, values in memory.calls
@@ -471,7 +496,7 @@ class BackupHandlerTests(unittest.TestCase):
         self.assertEqual(snapshot["paths"], [".local/bin/bk"])
         record = next(values for operation, values in calls if operation == "state-record")
         self.assertEqual(record["handler"], "backup")
-        self.assertEqual(record["paths"], list(backup.managed_paths()))
+        self.assertEqual(record["paths"], list(backup.managed_state_paths()))
         self.assertNotIn("backup/backup.yaml", json.dumps(calls))
 
     def test_invalid_backup_directory_blocks_the_whole_plan_before_mutation(self):

@@ -227,7 +227,8 @@ def _assert_pinned_leaf(target: _PinnedFile, label: str) -> None:
         raise GuestError(f"{label} ownership conflict")
 
 
-def _atomic_bytes_pinned(target: _PinnedFile, payload: bytes, *, mode: int) -> None:
+def _atomic_bytes_pinned(target: _PinnedFile, payload: bytes, *, mode: int,
+                         before_replace=None) -> None:
     if target.parent_fd is None:
         raise GuestError("Structured configuration parent is missing")
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
@@ -253,6 +254,8 @@ def _atomic_bytes_pinned(target: _PinnedFile, payload: bytes, *, mode: int) -> N
             handle.flush()
             os.fsync(handle.fileno())
         _assert_pinned_leaf(target, "Structured configuration")
+        if before_replace is not None:
+            before_replace()
         os.replace(temporary, target.leaf, src_dir_fd=target.parent_fd, dst_dir_fd=target.parent_fd)
         temporary = None
         os.fsync(target.parent_fd)
@@ -268,6 +271,473 @@ def _atomic_bytes_pinned(target: _PinnedFile, payload: bytes, *, mode: int) -> N
                 pass
             except OSError:
                 pass
+
+
+_BACKUP_KEY_LABELS = ("archive", "status")
+_BACKUP_KEY_PATHS = {
+    "archive": "backup/backup.tgz",
+    "status": "backup/status.json",
+}
+
+
+def _validate_backup_vmid(value: object) -> int:
+    if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+        raise GuestError("Backup VMID must be a positive integer")
+    return value
+
+
+def _backup_home_literal(home: Path) -> str:
+    """Return a home path safe to interpolate into an unescaped SSH command.
+
+    The forced command is deliberately a literal, rather than a shell-quoted
+    value.  Restricting every component to a small portable set prevents
+    whitespace, quoting, and shell expansion syntax from changing its meaning
+    when sshd invokes the command through the user's shell.
+    """
+
+    literal = os.fspath(home)
+    if not isinstance(literal, str) or not literal.startswith("/"):
+        raise GuestError("Persistent home is not safe for a backup SSH command")
+    if literal == "/" or literal != os.path.normpath(literal):
+        raise GuestError("Persistent home is not safe for a backup SSH command")
+    components = literal.split("/")[1:]
+    if not components or any(
+        not component
+        or component in {".", ".."}
+        or any(character not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-" for character in component)
+        for component in components
+    ):
+        raise GuestError("Persistent home is not safe for a backup SSH command")
+    return literal
+
+
+def _decode_backup_key_blob(blob: object, label: str) -> str:
+    if not isinstance(blob, str) or not blob or len(blob) > 8192:
+        raise GuestError(f"Backup {label} public key is invalid")
+    if any(character not in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=" for character in blob):
+        raise GuestError(f"Backup {label} public key is invalid")
+    if len(blob) % 4 == 1:
+        raise GuestError(f"Backup {label} public key is invalid")
+    try:
+        # OpenSSH accepts unpadded base64 in public-key files.  Decode with
+        # validation enabled after supplying only the omitted padding.
+        base64.b64decode(blob + "=" * ((4 - len(blob) % 4) % 4), validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise GuestError(f"Backup {label} public key is invalid") from exc
+    return blob
+
+
+def _validate_backup_public_key(value: object, label: str) -> str:
+    if not isinstance(value, str):
+        raise GuestError(f"Backup {label} public key is invalid")
+    line = value.strip()
+    if not line or any(ord(character) < 0x20 or ord(character) == 0x7F for character in line):
+        raise GuestError(f"Backup {label} public key is invalid")
+    fields = line.split()
+    if len(fields) < 2 or fields[0] != "ssh-ed25519":
+        raise GuestError(f"Backup {label} public key is invalid")
+    blob = _decode_backup_key_blob(fields[1], label)
+    # The supplied comment is intentionally ignored.  ssh-keygen commonly
+    # appends a host-specific comment; this operation always writes its own
+    # stable label and never copies that comment into the authorized_keys
+    # options or payload.
+    return blob
+
+
+def _validate_backup_keys(value: object, *, require: bool) -> dict[str, str]:
+    if not isinstance(value, dict):
+        raise GuestError("Backup public keys must be a mapping")
+    if not value:
+        if require:
+            raise GuestError("Both backup public keys are required when applying")
+        return {}
+    if set(value) != set(_BACKUP_KEY_LABELS):
+        raise GuestError("Backup public keys must contain archive and status")
+    return {
+        label: _validate_backup_public_key(value[label], label)
+        for label in _BACKUP_KEY_LABELS
+    }
+
+
+def _backup_expected_digest(value: object) -> str | None:
+    return _validate_expected_digest(value, allow_none=True)
+
+
+def _backup_canonical_lines(home: str, vmid: int, keys: dict[str, str]) -> dict[str, bytes]:
+    comments = {
+        "archive": f"homestack-bk-archive-vm{vmid}",
+        "status": f"homestack-bk-status-vm{vmid}",
+    }
+    lines: dict[str, bytes] = {}
+    for label in _BACKUP_KEY_LABELS:
+        command = f'/usr/bin/cat -- {home}/{_BACKUP_KEY_PATHS[label]}'
+        lines[label] = (
+            f'restrict,command="{command}" ssh-ed25519 '
+            f'{keys[label]} {comments[label]}'
+        ).encode("ascii")
+    return lines
+
+
+def _backup_line_body(line: bytes) -> bytes:
+    if line.endswith(b"\r\n"):
+        return line[:-2]
+    if line.endswith(b"\n") or line.endswith(b"\r"):
+        return line[:-1]
+    return line
+
+
+def _backup_next_field(line: bytes, offset: int) -> tuple[bytes, int] | None:
+    length = len(line)
+    while offset < length and line[offset] in b" \t":
+        offset += 1
+    if offset == length:
+        return None
+    start = offset
+    quote: int | None = None
+    escaped = False
+    while offset < length:
+        character = line[offset]
+        if quote is not None:
+            if escaped:
+                escaped = False
+            elif character == ord("\\"):
+                escaped = True
+            elif character == quote:
+                quote = None
+        else:
+            if character in b" \t":
+                break
+            if character in (ord('"'), ord("'")):
+                quote = character
+            elif character == ord("\\"):
+                escaped = True
+        offset += 1
+    if quote is not None or escaped:
+        return None
+    return line[start:offset], offset
+
+
+def _backup_actual_entry(line: bytes) -> tuple[bytes, bytes, bytes] | None:
+    """Parse enough authorized_keys syntax to identify a managed entry.
+
+    Return ``(options, blob, comment)`` for an actual ed25519 entry.  The
+    options field is empty for an entry without options.  Malformed or
+    unrelated lines return ``None`` so their original bytes remain untouched.
+    """
+
+    body = _backup_line_body(line)
+    if not body.strip(b" \t") or body.lstrip(b" \t").startswith(b"#"):
+        return None
+    first = _backup_next_field(body, 0)
+    if first is None:
+        return None
+    first_field, cursor = first
+    options = b""
+    if first_field.startswith((b"ssh-", b"ecdsa-", b"sk-")):
+        key_type = first_field
+    else:
+        options = first_field
+        second = _backup_next_field(body, cursor)
+        if second is None:
+            return None
+        key_type, cursor = second
+        if not key_type.startswith((b"ssh-", b"ecdsa-", b"sk-")):
+            return None
+    key = _backup_next_field(body, cursor)
+    if key is None:
+        return None
+    blob, cursor = key
+    try:
+        blob_text = blob.decode("ascii")
+        _decode_backup_key_blob(blob_text, "authorized_keys")
+    except (UnicodeDecodeError, GuestError):
+        return None
+    while cursor < len(body) and body[cursor] in b" \t":
+        cursor += 1
+    return options, blob, body[cursor:]
+
+
+def _backup_managed_comment(vmid: int, label: str) -> bytes:
+    return f"homestack-bk-{label}-vm{vmid}".encode("ascii")
+
+
+def _backup_canonical_content(content: bytes | None, lines: dict[str, bytes], vmid: int) -> tuple[bytes, list[tuple[bytes, bytes, bytes]]]:
+    """Remove this VM's entries and append one canonical archive/status pair."""
+
+    unrelated: list[bytes] = []
+    managed: list[tuple[bytes, bytes, bytes]] = []
+    if content:
+        for raw_line in content.splitlines(keepends=True):
+            parsed = _backup_actual_entry(raw_line)
+            if parsed is None:
+                unrelated.append(raw_line)
+                continue
+            options, blob, comment = parsed
+            if comment in {
+                _backup_managed_comment(vmid, "archive"),
+                _backup_managed_comment(vmid, "status"),
+            }:
+                managed.append(parsed)
+            else:
+                unrelated.append(raw_line)
+    prefix = b"".join(unrelated)
+    canonical = lines["archive"] + b"\n" + lines["status"] + b"\n"
+    if prefix and not prefix.endswith((b"\n", b"\r")):
+        prefix += b"\n"
+    return prefix + canonical, managed
+
+
+def _backup_ready(content: bytes | None, *, ssh_mode: int | None, file_mode: int | None,
+                  lines: dict[str, bytes], vmid: int,
+                  expected_blobs: dict[str, str] | None = None) -> bool:
+    if content is None or ssh_mode is None or file_mode is None:
+        return False
+    if ssh_mode & 0o077 or file_mode & 0o077:
+        return False
+    expected_by_comment = {
+        _backup_managed_comment(vmid, "archive"): ("archive", lines["archive"]),
+        _backup_managed_comment(vmid, "status"): ("status", lines["status"]),
+    }
+    found: list[bytes] = []
+    for raw_line in content.splitlines(keepends=True):
+        parsed = _backup_actual_entry(raw_line)
+        if parsed is None:
+            continue
+        options, blob, comment = parsed
+        if comment not in expected_by_comment:
+            continue
+        label, expected = expected_by_comment[comment]
+        if expected_blobs is not None and _backup_line_body(raw_line) != expected:
+            return False
+        # Empty lines mapping means the caller intentionally requested a
+        # structural inspection.  In that mode validate the key blob and the
+        # exact command/comment, but do not require a local key value.
+        expected_parsed = _backup_actual_entry(expected + b"\n")
+        if expected_parsed is None:
+            return False
+        expected_options, expected_blob, expected_comment = expected_parsed
+        if expected_comment != comment:
+            return False
+        if options != expected_options:
+            return False
+        if expected_blobs is not None:
+            if blob != expected_blobs[label].encode("ascii"):
+                return False
+        found.append(comment)
+    return sorted(found) == sorted([
+        _backup_managed_comment(vmid, "archive"),
+        _backup_managed_comment(vmid, "status"),
+    ])
+
+
+def _backup_stat_matches(left: os.stat_result, right: os.stat_result) -> bool:
+    return left.st_dev == right.st_dev and left.st_ino == right.st_ino
+
+
+def _assert_backup_parent(home: Path, home_fd: int, ssh_fd: int, target: _PinnedFile) -> None:
+    """Ensure the names still resolve to the pinned descriptors.
+
+    A pinned descriptor prevents writes from following a replacement symlink,
+    but by itself it could write into a directory that has since been detached
+    from ``home/.ssh``.  Rechecking the names immediately before publication
+    makes that substitution fail closed.
+    """
+
+    try:
+        named_home = os.stat(home, follow_symlinks=False)
+        pinned_home = os.fstat(home_fd)
+    except OSError as exc:
+        raise GuestError("Backup SSH parent could not be revalidated") from exc
+    if not stat.S_ISDIR(named_home.st_mode) or not _backup_stat_matches(named_home, pinned_home):
+        raise GuestError("Backup SSH parent changed during preparation")
+    try:
+        named_ssh = os.stat(".ssh", dir_fd=home_fd, follow_symlinks=False)
+        pinned_ssh = os.fstat(ssh_fd)
+        target_parent = os.fstat(target.parent_fd) if target.parent_fd is not None else None
+    except OSError as exc:
+        raise GuestError("Backup SSH directory changed during preparation") from exc
+    if (
+        not stat.S_ISDIR(named_ssh.st_mode)
+        or not _backup_stat_matches(named_ssh, pinned_ssh)
+        or target_parent is None
+        or not _backup_stat_matches(target_parent, pinned_ssh)
+    ):
+        raise GuestError("Backup SSH directory changed during preparation")
+    if named_ssh.st_uid != os.getuid() or named_ssh.st_gid != os.getgid():
+        raise GuestError("Backup SSH directory ownership conflict")
+    _assert_pinned_leaf(target, "Backup authorized_keys")
+
+
+def backup_authorized_keys(home: Path, vmid_value: object, keys_value: object,
+                           apply_value: object, expected_value: object) -> dict:
+    vmid = _validate_backup_vmid(vmid_value)
+    literal_home = _backup_home_literal(home)
+    if not isinstance(apply_value, bool):
+        raise GuestError("Backup authorized_keys apply flag is invalid")
+    keys = _validate_backup_keys(keys_value, require=apply_value)
+    expected = _backup_expected_digest(expected_value)
+
+    # For a read-only inspection, empty keys request structural readiness.  A
+    # write always has both key payloads, so these placeholders are never used
+    # to construct an applied file.
+    structural_keys = keys or {"archive": "BLOB", "status": "BLOB"}
+    lines = _backup_canonical_lines(literal_home, vmid, structural_keys)
+
+    home_fd = _open_home_fd(home)
+    ssh_fd: int | None = None
+    target: _PinnedFile | None = None
+    try:
+        ssh_fd = _open_directory_chain(
+            home_fd,
+            [".ssh"],
+            create=False,
+            label="Backup SSH directory",
+        )
+        current: bytes | None
+        current_digest: str | None
+        current_file_mode: int | None
+        if ssh_fd is None:
+            current, current_digest, current_file_mode = None, None, None
+            ssh_mode = None
+        else:
+            target = _PinnedFile(os.dup(ssh_fd), "authorized_keys")
+            current, current_digest, current_file_mode = _read_pinned_file(
+                target, "Backup authorized_keys"
+            )
+            ssh_mode = stat.S_IMODE(os.fstat(ssh_fd).st_mode)
+
+        ready = bool(keys) and _backup_ready(
+            current,
+            ssh_mode=ssh_mode,
+            file_mode=current_file_mode,
+            lines=lines,
+            vmid=vmid,
+            expected_blobs=keys or None,
+        )
+        if not apply_value:
+            return {
+                "ok": True,
+                "exists": current is not None,
+                "sha256": current_digest,
+                "ready": ready,
+                "changed": False,
+            }
+        if current_digest != expected:
+            raise GuestError("Backup authorized_keys CAS conflict: file changed since inspection")
+        if ready:
+            return {"ok": True, "exists": True, "sha256": current_digest,
+                    "ready": True, "changed": False}
+        if ssh_fd is None:
+            # Only create .ssh after validating a missing-file CAS.  Thus a
+            # failed apply does not leave an empty directory behind.
+            ssh_fd = _open_directory_chain(
+                home_fd,
+                [".ssh"],
+                create=True,
+                label="Backup SSH directory",
+            )
+            if ssh_fd is None:
+                raise GuestError("Backup SSH directory could not be created")
+            ssh_mode = 0o700
+            target = _PinnedFile(os.dup(ssh_fd), "authorized_keys")
+            current, current_digest, current_file_mode = _read_pinned_file(
+                target, "Backup authorized_keys"
+            )
+            if current_digest != expected:
+                raise GuestError("Backup authorized_keys CAS conflict: file appeared during preparation")
+
+        # Re-read from the pinned parent before constructing the replacement,
+        # matching the existing structured-write CAS behavior.
+        if target is None or ssh_fd is None:
+            raise GuestError("Backup authorized_keys parent is missing")
+        latest, latest_digest, latest_mode = _read_pinned_file(
+            target, "Backup authorized_keys"
+        )
+        if latest_digest != expected:
+            raise GuestError("Backup authorized_keys CAS conflict: file changed during preparation")
+        current, current_digest, current_file_mode = latest, latest_digest, latest_mode
+
+        desired_lines = _backup_canonical_lines(literal_home, vmid, keys)
+        candidate, _managed = _backup_canonical_content(current, desired_lines, vmid)
+        current_ssh_mode = stat.S_IMODE(os.fstat(ssh_fd).st_mode)
+        desired_ssh_mode = current_ssh_mode & 0o700 if current_ssh_mode & 0o077 else current_ssh_mode
+        if desired_ssh_mode == 0:
+            # This is still a safer mode than 0700, but cannot support the
+            # requested write.  Let the chmod/open operation report the
+            # permission failure rather than loosening it.
+            desired_ssh_mode = current_ssh_mode
+        desired_file_mode = (
+            current_file_mode & 0o700
+            if current_file_mode is not None and current_file_mode & 0o077
+            else current_file_mode
+        )
+        if desired_file_mode is None:
+            desired_file_mode = 0o600
+        needs_content = current != candidate
+        needs_dir_mode = desired_ssh_mode != current_ssh_mode
+        needs_file_mode = current_file_mode != desired_file_mode
+        changed = needs_content or needs_dir_mode or needs_file_mode
+        if not changed:
+            return {
+                "ok": True,
+                "exists": current is not None,
+                "sha256": current_digest,
+                "ready": _backup_ready(
+                    current,
+                    ssh_mode=current_ssh_mode,
+                    file_mode=current_file_mode,
+                    lines=desired_lines,
+                    vmid=vmid,
+                    expected_blobs=keys,
+                ),
+                "changed": False,
+            }
+
+        if needs_dir_mode:
+            _assert_backup_parent(home, home_fd, ssh_fd, target)
+            try:
+                os.fchmod(ssh_fd, desired_ssh_mode)
+                os.fsync(ssh_fd)
+            except OSError as exc:
+                raise GuestError("Backup SSH directory permissions could not be tightened") from exc
+
+        if needs_content or needs_file_mode:
+            def before_replace() -> None:
+                _assert_backup_parent(home, home_fd, ssh_fd, target)
+                latest_content, latest_digest, _ = _read_pinned_file(
+                    target, "Backup authorized_keys"
+                )
+                if latest_digest != expected:
+                    raise GuestError("Backup authorized_keys CAS conflict: file changed before replacement")
+                if expected is None and latest_content is not None:
+                    raise GuestError("Backup authorized_keys CAS conflict: file appeared before replacement")
+
+            _atomic_bytes_pinned(
+                target,
+                candidate,
+                mode=desired_file_mode,
+                before_replace=before_replace,
+            )
+        return {
+            "ok": True,
+            "exists": True,
+            "sha256": hashlib.sha256(candidate).hexdigest(),
+            "ready": _backup_ready(
+                candidate,
+                ssh_mode=desired_ssh_mode,
+                file_mode=desired_file_mode,
+                lines=desired_lines,
+                vmid=vmid,
+                expected_blobs=keys,
+            ),
+            "changed": True,
+        }
+    finally:
+        if target is not None:
+            target.close()
+        if ssh_fd is not None:
+            os.close(ssh_fd)
+        os.close(home_fd)
 
 
 def _unlink_pinned_file(target: _PinnedFile) -> None:
@@ -859,6 +1329,14 @@ def run(data: dict) -> dict:
     if op == "managed-files-install":
         return install_managed_files(
             home, data.get("directories"), data.get("files")
+        )
+    if op == "backup-authorized-keys":
+        return backup_authorized_keys(
+            home,
+            data.get("vmid"),
+            data.get("keys"),
+            data.get("apply", False),
+            data.get("expected_sha256"),
         )
     if op == "snapshot":
         return {"ok": True, **create_snapshot(home, data.get("paths", []), data.get("items", []),

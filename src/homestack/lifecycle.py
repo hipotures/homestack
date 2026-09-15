@@ -11,6 +11,7 @@ import shlex
 import uuid
 from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn, TimeElapsedColumn
 
+from .backup import cleanup_retrieval_keys
 from .cloudinit import cicustom_value, remove_stale_create_snippets, snippet_names, stale_create_snippets, sync_snippets_to_node, write_snippets
 from .config import Config
 from .guest import derive_ip, extract_mac, guest_exec_on_node, guest_out_on_node, parse_disk_size_gb, wait_for_qga_on_node
@@ -671,6 +672,7 @@ def destroy_workspace(
             )
 
     try:
+        backup_keys_removed = cleanup_retrieval_keys(vmid)
         ssh_config_removed = remove_local_ssh_config(vmid)
         ssh_known_hosts_removed = forget_local_ssh_host(str(plan["ip"]))
     except AppError as exc:
@@ -685,6 +687,7 @@ def destroy_workspace(
         "status": "absent",
         "vm_deleted": True,
         "home_deleted": True,
+        "backup_keys_removed": [str(path) for path in backup_keys_removed],
         "ssh_config_removed": [str(path) for path in ssh_config_removed],
         "ssh_known_hosts_removed": ssh_known_hosts_removed,
     }
