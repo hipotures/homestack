@@ -553,7 +553,7 @@ def add_command(paths: Paths) -> int:
         )
     config.sources.extend(additions)
     write_config(paths, config)
-    console.print(f"Added {len(additions)} source(s) to {display_path(paths.config)}.")
+    console.print(f"Added {len(additions)} source(s) to {display_path(paths.config)}")
     for source in additions:
         console.print(f"Added source: {source}")
     return 0

@@ -252,6 +252,8 @@ class BackupCliTests(unittest.TestCase):
             [str(config.resolve()), str(selected.resolve())],
         )
         self.assertIn(str(selected), result.stdout)
+        self.assertIn("~/backup/backup.yaml", result.stdout)
+        self.assertNotIn("~/backup/backup.yaml.", result.stdout)
 
     def test_add_without_a_selection_does_not_create_configuration(self) -> None:
         working = self.home / "empty"
