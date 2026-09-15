@@ -1174,6 +1174,49 @@ class SelectorTests(unittest.TestCase):
         state.toggle_group("elsewhere")
         self.assertEqual(state.selection_text(), "5")
 
+    def test_filter_matches_path_kind_and_state_without_changing_editor_state(self) -> None:
+        state = self.state(selected={5})
+        before_numbers = [item.index for item in state.items]
+        before_expanded = [group.expanded for group in state.groups]
+
+        state.set_filter_text("CONFIG.YAML")
+        self.assertEqual(state.filtered_item_indices(), [3])
+        state.set_filter_text("DIRECTORY")
+        self.assertEqual(state.filtered_item_indices(), [1, 2, 4, 5])
+        state.set_filter_text("BK-MANAGED")
+        self.assertEqual(state.filtered_item_indices(), [4])
+
+        self.assertEqual(state.selected_indices, {5})
+        self.assertEqual([item.index for item in state.items], before_numbers)
+        self.assertEqual([group.expanded for group in state.groups], before_expanded)
+        self.assertIn(("item", 4), state.visible_nodes())
+
+    def test_filter_preserves_collapsed_groups_until_the_user_expands_them(self) -> None:
+        state = self.state(selected={5})
+        self.assertFalse(state.groups[1].expanded)
+        state.set_filter_text("elsewhere")
+        self.assertNotIn(("item", 5), state.visible_nodes())
+        self.assertFalse(state.groups[1].expanded)
+        state.expand_group("elsewhere")
+        self.assertIn(("item", 5), state.visible_nodes())
+        state.clear_filter()
+        self.assertIn(("item", 5), state.visible_nodes())
+        self.assertTrue(state.groups[1].expanded)
+
+    def test_filter_no_matches_are_reported_and_clearing_restores_visibility(self) -> None:
+        state = self.state(selected={2})
+        state.set_filter_text("does-not-exist")
+        self.assertEqual(state.filtered_item_indices(), [])
+        fake_curses = _FakeCurses(width=100, height=16)
+        self.module["_selector_render"](
+            fake_curses.screen, state, Path("/work"), 0, fake_curses
+        )
+        rendered = "\n".join(value for _row, value, _width, _attribute in fake_curses.screen.lines)
+        self.assertIn("No matches for filter: does-not-exist", rendered)
+        state.clear_filter()
+        self.assertIn(("item", 1), state.visible_nodes())
+        self.assertEqual(state.selected_indices, {2})
+
     def test_parent_and_child_entries_remain_independent(self) -> None:
         state = self.state()
         state.set_selection({1, 3})
@@ -1185,16 +1228,64 @@ class SelectorTests(unittest.TestCase):
         state = self.state()
         fake_curses = _FakeCurses()
         scroll = self.module["_selector_mouse_event"](
-            fake_curses.screen, state, 4, fake_curses.BUTTON1_PRESSED, 0, 8, fake_curses
+            fake_curses.screen, state, 1, 6, fake_curses.BUTTON1_PRESSED, 0, 6, fake_curses
         )
         self.assertEqual(scroll, 0)
         self.assertEqual(state.selected_indices, {2})
         self.assertEqual(state.input_buffer, "2")
         self.module["_selector_mouse_event"](
-            fake_curses.screen, state, 2, fake_curses.BUTTON1_PRESSED, 0, 8, fake_curses
+            fake_curses.screen, state, 1, 4, fake_curses.BUTTON1_PRESSED, 0, 6, fake_curses
         )
         self.assertFalse(state.groups[0].expanded)
         self.assertEqual(state.selected_indices, {2})
+
+    def test_mouse_filter_click_activates_filter_and_row_math_uses_framed_layout(self) -> None:
+        state = self.state()
+        fake_curses = _FakeCurses(height=16)
+        list_top, input_row, visible = self.module["_selector_visible_window"](state, 16)
+        self.assertEqual(list_top, 4)
+        self.assertEqual(input_row, 14)
+        self.assertEqual(visible, 10)
+        self.module["_selector_mouse_event"](
+            fake_curses.screen, state, 1, 2, fake_curses.BUTTON1_PRESSED, 0, visible, fake_curses
+        )
+        self.assertTrue(state.filter_active)
+        self.module["_selector_mouse_event"](
+            fake_curses.screen, state, 1, list_top + 1, fake_curses.BUTTON1_PRESSED, 0, visible, fake_curses
+        )
+        self.assertFalse(state.filter_active)
+        self.assertEqual(state.selected_indices, {1})
+
+    def test_mouse_filter_hitbox_matches_the_frame_and_short_layout(self) -> None:
+        state = self.state()
+        normal = _FakeCurses(height=16, width=120)
+        frame_width = self.module["_selector_filter_width"](state, 120)
+        self.module["_selector_mouse_event"](
+            normal.screen,
+            state,
+            frame_width + 1,
+            2,
+            normal.BUTTON1_PRESSED,
+            0,
+            10,
+            normal,
+        )
+        self.assertFalse(state.filter_active)
+
+        short_state = self.state()
+        short = _FakeCurses(height=6, width=80)
+        self.module["_selector_mouse_event"](
+            short.screen,
+            short_state,
+            1,
+            2,
+            short.BUTTON1_PRESSED,
+            0,
+            3,
+            short,
+        )
+        self.assertFalse(short_state.filter_active)
+        self.assertEqual(short_state.selected_indices, {1})
 
     def test_typed_key_sequences_and_space_toggle_remain_synchronized(self) -> None:
         cases = (
@@ -1251,7 +1342,7 @@ class SelectorTests(unittest.TestCase):
             groups=self.groups(),
             selected_indices={1, 5},
         )
-        fake_curses = _FakeCurses(width=80)
+        fake_curses = _FakeCurses(width=80, height=16)
         self.module["_selector_render"](fake_curses.screen, state, Path("/work"), 0, fake_curses)
         rendered = "\n".join(value for _row, value, _width, _attribute in fake_curses.screen.lines)
         self.assertIn("Configured 2", rendered)
@@ -1261,6 +1352,70 @@ class SelectorTests(unittest.TestCase):
         self.assertIn("Selection: 1,5", rendered)
         self.assertIn("Enter Apply", rendered)
         self.assertIn("Esc/Ctrl-Q Cancel", rendered)
+
+    def test_filtered_connectors_mark_the_last_visible_child(self) -> None:
+        state = self.state()
+        state.set_filter_text("directory")
+        fake_curses = _FakeCurses(width=100, height=16)
+        self.module["_selector_render"](
+            fake_curses.screen, state, Path("/work"), 0, fake_curses
+        )
+        rendered = "\n".join(value for _row, value, _width, _attribute in fake_curses.screen.lines)
+        self.assertIn("├── [ ]  1. .agents/", rendered)
+        self.assertIn("└── [ ]  4. backup/", rendered)
+        self.assertNotIn("├── [ ]  3. config.yaml", rendered)
+        self.assertNotIn("│  [", rendered)
+
+    def test_filter_frame_is_compact_and_footer_keys_are_styled_separately(self) -> None:
+        state = self.state(selected={1, 5})
+        fake_curses = _FakeCurses(width=120, height=16)
+        frame_width = self.module["_selector_filter_width"](state, 120)
+        self.assertLess(frame_width, 120)
+        self.module["_selector_render"](
+            fake_curses.screen, state, Path("/work"), 0, fake_curses
+        )
+        frame_rows = [
+            (row, value, width, attribute)
+            for row, value, width, attribute in fake_curses.screen.lines
+            if row in {1, 2, 3}
+        ]
+        self.assertTrue(any(value.startswith("╭") and width == frame_width for _row, value, width, _attribute in frame_rows))
+        self.assertTrue(any(value.startswith("╰") and width == frame_width for _row, value, width, _attribute in frame_rows))
+        self.assertTrue(any(value.startswith("↑↓ Move") and attribute == fake_curses.A_DIM for _row, value, _width, attribute in fake_curses.screen.lines))
+        self.assertTrue(any(value == "↑↓" and attribute == fake_curses.A_BOLD for _row, value, _width, attribute in fake_curses.screen.lines))
+        self.assertTrue(any(value == "Selection:" and attribute == fake_curses.A_BOLD for _row, value, _width, attribute in fake_curses.screen.lines))
+
+    def test_filter_keyboard_editing_and_escape_clear_before_cancel(self) -> None:
+        state = self.state(selected={2})
+        state.activate_filter()
+        state.append_filter("Data")
+        state.backspace_filter()
+        self.assertEqual(state.filter_text, "Dat")
+        state.clear_filter()
+        self.assertEqual(state.filter_text, "")
+        self.assertEqual(state.selected_indices, {2})
+
+        result = self.run_selector([ord("/"), ord("x"), 27, 10], selected=[2])
+        self.assertFalse(result.cancelled)
+        self.assertEqual(result.selected_indices, [2])
+        cancelled = self.run_selector([ord("/"), ord("x"), 27, 27], selected=[2])
+        self.assertTrue(cancelled.cancelled)
+
+    def test_filter_accepts_unicode_terminal_input(self) -> None:
+        fake_curses = _FakeCurses(keys=["/", "Ą", "ć", "\x1b", "\n"])
+        result = self.module["run_edit_selector"](
+            self.items(),
+            self.groups(),
+            {2},
+            context=Path("/work"),
+            curses_module=fake_curses,
+        )
+        self.assertFalse(result.cancelled)
+        self.assertEqual(result.selected_indices, [2])
+        rendered = "\n".join(
+            value for _row, value, _width, _attribute in fake_curses.screen.lines
+        )
+        self.assertIn("Filter (/): Ąć", rendered)
 
     def test_enter_applies_and_cancel_keys_restore_terminal_state(self) -> None:
         applied = self.run_selector([ord("j"), ord(" "), 10])
@@ -1332,6 +1487,9 @@ class _FakeScreen:
             raise key
         return key
 
+    def get_wch(self) -> object:
+        return self.getch()
+
     def keypad(self, enabled: bool) -> None:
         self.keypad_values.append(enabled)
 
@@ -1342,11 +1500,13 @@ class _FakeScreen:
 class _FakeCurses:
     KEY_UP = 1001
     KEY_DOWN = 1002
+    KEY_LEFT = 260
+    KEY_RIGHT = 261
     KEY_HOME = 1003
     KEY_END = 1004
     KEY_PPAGE = 1005
     KEY_NPAGE = 1006
-    KEY_BACKSPACE = 1007
+    KEY_BACKSPACE = 263
     KEY_DC = 1008
     KEY_MOUSE = 1009
     KEY_BTAB = 1010

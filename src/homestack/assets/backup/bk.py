@@ -444,6 +444,8 @@ class SelectorState:
     input_token: str = ""
     input_token_index: int | None = None
     input_token_base_indices: set[int] = field(default_factory=set)
+    filter_text: str = ""
+    filter_active: bool = False
     error: str | None = None
 
     def __post_init__(self) -> None:
@@ -492,6 +494,41 @@ class SelectorState:
     def selectable_indices(self) -> list[int]:
         return [item.index for item in self.items if item.index is not None and item.selectable]
 
+    def item_matches_filter(self, item: SelectorItem) -> bool:
+        """Whether one item matches the case-insensitive source filter."""
+
+        if not self.filter_text:
+            return True
+        searchable = " ".join(
+            value
+            for value in (
+                item.label,
+                str(item.path) if item.path is not None else "",
+                item.kind,
+                item.state,
+            )
+            if value
+        )
+        return self.filter_text.casefold() in searchable.casefold()
+
+    def group_visible_item_indices(self, group: SelectorGroup) -> list[int | None]:
+        """Return the leaves visible in *group* without changing expansion."""
+
+        if not group.expanded:
+            return []
+        items = [item for item in self.items if item.group == group.key]
+        if not self.filter_text:
+            return [item.index for item in items]
+        return [item.index for item in items if self.item_matches_filter(item)]
+
+    def filter_match_count(self) -> int:
+        return sum(self.item_matches_filter(item) for item in self.items)
+
+    def filtered_item_indices(self) -> list[int | None]:
+        """Return all matching leaves, including leaves in collapsed groups."""
+
+        return [item.index for item in self.items if self.item_matches_filter(item)]
+
     def item_for_index(self, index: int | None) -> SelectorItem | None:
         return next((item for item in self.items if item.index == index), None)
 
@@ -512,8 +549,7 @@ class SelectorState:
         nodes: list[tuple[str, str | int | None]] = []
         for group in self.groups:
             nodes.append(("group", group.key))
-            if group.expanded:
-                nodes.extend(("item", index) for index in group.item_indices)
+            nodes.extend(("item", index) for index in self.group_visible_item_indices(group))
         return nodes
 
     def _first_focusable_node(self) -> tuple[str, str | int | None] | None:
@@ -637,6 +673,41 @@ class SelectorState:
         if self.focus_node not in self.visible_nodes():
             self.focus_node = ("group", key)
         return True
+
+    def set_filter_text(self, value: str) -> None:
+        """Set the filter and keep selection, numbering, and expansion intact."""
+
+        self.filter_text = value
+        if self.focus_node not in self.visible_nodes():
+            self.focus_node = self._first_focusable_node()
+
+    def activate_filter(self) -> None:
+        """Move input focus to the persistent filter field."""
+
+        self.input_active = False
+        self.input_editing = False
+        self.input_token = ""
+        self.input_token_index = None
+        self.input_token_base_indices.clear()
+        self.error = None
+        self.filter_active = True
+
+    def deactivate_filter(self) -> None:
+        """Leave the filter field while preserving its current value."""
+
+        self.filter_active = False
+
+    def clear_filter(self) -> None:
+        """Clear the filter without changing the saved group expansion state."""
+
+        self.set_filter_text("")
+
+    def append_filter(self, value: str) -> None:
+        self.set_filter_text(self.filter_text + value)
+
+    def backspace_filter(self) -> None:
+        if self.filter_text:
+            self.set_filter_text(self.filter_text[:-1])
 
     def expand_group(self, key: str, expanded: bool = True) -> bool:
         group = self.group_for_key(key)
@@ -938,6 +1009,43 @@ class SelectorTerminal:
         self.mouse_enabled = False
         self.mouse_previous_mask = 0
         self.cursor_visibility: int | None = None
+        self.key_attribute = int(getattr(curses_module, "A_BOLD", 0))
+        self.description_attribute = int(getattr(curses_module, "A_DIM", 0))
+        self.selection_label_attribute = int(getattr(curses_module, "A_BOLD", 0))
+        self.filter_label_attribute = int(getattr(curses_module, "A_BOLD", 0))
+
+    def _initialize_colors(self) -> None:
+        """Use restrained key colors when the terminal advertises color support."""
+
+        has_colors = getattr(self.curses, "has_colors", None)
+        start_color = getattr(self.curses, "start_color", None)
+        init_pair = getattr(self.curses, "init_pair", None)
+        color_pair = getattr(self.curses, "color_pair", None)
+        if not all(callable(function) for function in (has_colors, start_color, init_pair, color_pair)):
+            return
+        try:
+            if not has_colors():
+                return
+            start_color()
+            use_default_colors = getattr(self.curses, "use_default_colors", None)
+            if callable(use_default_colors):
+                use_default_colors()
+            yellow = int(getattr(self.curses, "COLOR_YELLOW", 3))
+            cyan = int(getattr(self.curses, "COLOR_CYAN", 6))
+            default_background = -1 if callable(use_default_colors) else int(
+                getattr(self.curses, "COLOR_BLACK", 0)
+            )
+            init_pair(1, yellow, default_background)
+            init_pair(2, cyan, default_background)
+            self.key_attribute = int(getattr(self.curses, "A_BOLD", 0)) | int(color_pair(1))
+            self.selection_label_attribute = self.key_attribute
+            self.filter_label_attribute = int(getattr(self.curses, "A_BOLD", 0)) | int(color_pair(2))
+        except Exception:
+            # Some terminals report colors but reject a particular pair or
+            # default background.  Monochrome rendering remains complete.
+            self.key_attribute = int(getattr(self.curses, "A_BOLD", 0))
+            self.selection_label_attribute = self.key_attribute
+            self.filter_label_attribute = self.key_attribute
 
     def start(self) -> Any:
         try:
@@ -950,6 +1058,7 @@ class SelectorTerminal:
             self.raw_enabled = True
             self.screen.keypad(True)
             self.keypad_enabled = True
+            self._initialize_colors()
             # Mark this before the call so cleanup is attempted if the
             # terminal reports an error while enabling mouse events.
             self.mouse_enabled = True
@@ -1008,8 +1117,14 @@ class SelectorTerminal:
 
 def _selector_visible_window(state: SelectorState, height: int) -> tuple[int, int, int]:
     del state
-    list_top = 2
+    # Header: row 0.  The three rows below it are the persistent compact
+    # filter frame (top, input, bottom).  Keeping the frame in the layout
+    # makes mouse coordinates agree with what is rendered.
+    list_top = 4 if height >= 7 else 1
     input_row = max(list_top + 1, height - 2)
+    if input_row >= height:
+        input_row = max(0, height - 2)
+        list_top = max(0, min(list_top, input_row - 1))
     visible = max(1, input_row - list_top)
     return list_top, input_row, visible
 
@@ -1037,10 +1152,15 @@ def _selector_group_text(group: SelectorGroup, state: SelectorState, width: int)
     )[: max(0, width)]
 
 
-def _selector_row_text(item: SelectorItem, selected: bool, width: int) -> str:
+def _selector_row_text(
+    item: SelectorItem,
+    selected: bool,
+    width: int,
+    connector: str = "├── ",
+) -> str:
     marker = "x" if selected else " "
     number = f"{item.index}. " if item.index is not None else ""
-    value = f"│  [{marker}]  {number}{item.label}"
+    value = f"{connector}[{marker}]  {number}{item.label}"
     if item.kind:
         value += f"  {item.kind}"
     if not item.selectable:
@@ -1067,23 +1187,141 @@ def _selector_header(context: Path, state: SelectorState, width: int) -> str:
     return f"{left}   {context_text:<{context_width}}   {count}"
 
 
+def _selector_footer_segments() -> list[tuple[str, str]]:
+    """Return compact footer controls as key/description segments."""
+
+    return [
+        ("↑↓", "key"),
+        (" Move", "description"),
+        ("   ", "space"),
+        ("←→", "key"),
+        (" Expand", "description"),
+        ("   ", "space"),
+        ("/", "key"),
+        (" Filter", "description"),
+        ("   ", "space"),
+        ("Space", "key"),
+        (" Toggle", "description"),
+        ("   ", "space"),
+        ("Enter", "key"),
+        (" Apply", "description"),
+        ("   ", "space"),
+        ("Esc/Ctrl-Q", "key"),
+        (" Cancel", "description"),
+    ]
+
+
+def _selector_footer_text() -> str:
+    return "".join(value for value, _kind in _selector_footer_segments())
+
+
+def _selector_filter_line(state: SelectorState) -> str:
+    value = state.filter_text
+    return f"Filter (/): {value}" if value else "Filter (/):"
+
+
+def _selector_filter_width(state: SelectorState, terminal_width: int) -> int:
+    """Size the filter frame to its content instead of the full terminal."""
+
+    selection = f"Selection: {state.selection_text()}"
+    desired = max(len(_selector_filter_line(state)), len(selection), len(_selector_footer_text())) + 2
+    return max(1, min(max(1, terminal_width - 1), desired))
+
+
+def _selector_add_segments(
+    screen: Any,
+    row: int,
+    segments: list[tuple[str, int]],
+    width: int,
+    base_attribute: int = 0,
+) -> None:
+    """Draw a line once, then overlay styled key segments."""
+
+    if width <= 0:
+        return
+    plain = "".join(value for value, _attribute in segments)
+    _selector_addnstr(screen, row, 0, plain, width, base_attribute)
+    column = 0
+    for value, attribute in segments:
+        if column >= width:
+            break
+        if attribute != base_attribute:
+            _selector_addnstr(screen, row, column, value, width - column, attribute)
+        column += len(value)
+
+
+def _selector_render_filter(
+    screen: Any,
+    state: SelectorState,
+    width: int,
+    height: int,
+    curses_module: Any,
+    terminal: SelectorTerminal | None,
+) -> tuple[int, int]:
+    """Render and return the filter frame width and input row."""
+
+    frame_width = _selector_filter_width(state, width)
+    top_row, body_row, bottom_row = 1, 2, 3
+    if height < 7:
+        return frame_width, max(0, height - 1)
+    dim = int(getattr(terminal, "description_attribute", getattr(curses_module, "A_DIM", 0)))
+    label_attribute = int(
+        getattr(terminal, "filter_label_attribute", getattr(curses_module, "A_BOLD", 0))
+    )
+    if frame_width >= 2:
+        horizontal = "─" * max(0, frame_width - 2)
+        top = f"╭{horizontal}╮"
+        bottom = f"╰{horizontal}╯"
+        _selector_addnstr(screen, top_row, 0, top, frame_width, dim)
+        _selector_addnstr(screen, bottom_row, 0, bottom, frame_width, dim)
+        inner_width = frame_width - 2
+        body = f"│{_selector_filter_line(state):<{inner_width}}│"
+        body_attribute = label_attribute if state.filter_active else dim
+        _selector_addnstr(screen, body_row, 0, body, frame_width, body_attribute)
+    else:
+        _selector_addnstr(screen, body_row, 0, _selector_filter_line(state), frame_width, label_attribute)
+    return frame_width, body_row
+
+
+def _selector_control_attributes(
+    curses_module: Any,
+    terminal: SelectorTerminal | None,
+) -> tuple[int, int]:
+    key_attribute = int(
+        getattr(terminal, "key_attribute", getattr(curses_module, "A_BOLD", 0))
+    )
+    description_attribute = int(
+        getattr(terminal, "description_attribute", getattr(curses_module, "A_DIM", 0))
+    )
+    return key_attribute, description_attribute
+
+
 def _selector_render(
     screen: Any,
     state: SelectorState,
     context: Path,
     scroll: int,
     curses_module: Any,
+    terminal: SelectorTerminal | None = None,
 ) -> int:
     height, width = screen.getmaxyx()
     screen.erase()
     list_top, input_row, visible = _selector_visible_window(state, height)
     scroll = _selector_keep_focus_visible(state, scroll, visible)
     header = _selector_header(context, state, width)
-    _selector_addnstr(screen, 0, 0, header, max(0, width - 1), getattr(curses_module, "A_BOLD", 0))
+    header_attribute = int(getattr(curses_module, "A_BOLD", 0))
+    _selector_addnstr(screen, 0, 0, header, max(0, width - 1), header_attribute)
+    filter_width, filter_row = _selector_render_filter(screen, state, width, height, curses_module, terminal)
 
     nodes = state.visible_nodes()
+    group_item_indices = {
+        group.key: state.group_visible_item_indices(group)
+        for group in state.groups
+    }
     for row_offset, node in enumerate(nodes[scroll : scroll + visible]):
         row = list_top + row_offset
+        if row >= height:
+            break
         focused = node == state.focus_node
         if node[0] == "group":
             group = state.group_for_key(str(node[1]))
@@ -1099,24 +1337,49 @@ def _selector_render(
             if item is None:
                 continue
             checked = item.index in state.selected_indices or item.state == "protected self-entry"
-            text = _selector_row_text(item, checked, width - 1)
+            visible_items = group_item_indices.get(item.group, [])
+            connector = "└── " if item.index == (visible_items[-1] if visible_items else None) else "├── "
+            text = _selector_row_text(item, checked, width - 1, connector)
             attribute = getattr(curses_module, "A_REVERSE", 0) if focused else 0
             if not item.selectable:
                 attribute |= getattr(curses_module, "A_DIM", 0)
         _selector_addnstr(screen, row, 0, text, max(0, width - 1), attribute)
 
+    if state.filter_text and state.filter_match_count() == 0:
+        message_row = min(max(list_top, input_row - 1), list_top + len(nodes))
+        _selector_addnstr(
+            screen,
+            message_row,
+            0,
+            f"No matches for filter: {state.filter_text}",
+            max(0, width - 1),
+            getattr(curses_module, "A_DIM", 0),
+        )
+
     selector_text = state.selection_text()
     if state.error:
         selector_text = f"{selector_text}  ({state.error})"
-    _selector_addnstr(screen, input_row, 0, f"Selection: {selector_text}", max(0, width - 1), 0)
+    key_attribute, description_attribute = _selector_control_attributes(curses_module, terminal)
+    selection_label_attribute = int(
+        getattr(terminal, "selection_label_attribute", key_attribute)
+    )
+    selection_text = f"Selection: {selector_text}"
+    _selector_addnstr(screen, input_row, 0, selection_text, max(0, width - 1), description_attribute)
+    _selector_addnstr(screen, input_row, 0, "Selection:", max(0, width - 1), selection_label_attribute)
     help_row = min(max(0, height - 1), input_row + 1)
-    help_text = "↑↓ Move   ←→ Expand   Space Toggle   Enter Apply   Esc/Ctrl-Q Cancel"
-    if width > len(help_text) + len("   Click Toggle") + 1:
-        help_text = help_text.replace("   Enter Apply", "   Click Toggle   Enter Apply")
-    _selector_addnstr(screen, help_row, 0, help_text, max(0, width - 1), getattr(curses_module, "A_DIM", 0))
+    footer = [
+        (value, key_attribute if kind == "key" else description_attribute)
+        for value, kind in _selector_footer_segments()
+    ]
+    _selector_add_segments(screen, help_row, footer, max(0, width - 1), description_attribute)
     try:
         self_curs_set = getattr(curses_module, "curs_set", None)
-        if state.input_active:
+        if state.filter_active:
+            prefix = "│Filter (/):"
+            screen.move(filter_row, min(max(1, filter_width - 1), len(prefix) + len(state.filter_text) + 1))
+            if self_curs_set is not None:
+                self_curs_set(1)
+        elif state.input_active:
             screen.move(input_row, min(max(0, width - 1), len("Selection: ") + state.input_cursor))
             if self_curs_set is not None:
                 self_curs_set(1)
@@ -1192,6 +1455,7 @@ def _selector_backspace(state: SelectorState) -> None:
 def _selector_focus_list(state: SelectorState) -> None:
     """Finish numeric composition so list navigation and Space work together."""
 
+    state.deactivate_filter()
     state.input_active = False
     state.input_editing = False
     state.input_token = ""
@@ -1205,6 +1469,7 @@ def _selector_focus_list(state: SelectorState) -> None:
 def _selector_mouse_event(
     screen: Any,
     state: SelectorState,
+    x: int,
     y: int,
     bstate: int,
     scroll: int,
@@ -1224,7 +1489,12 @@ def _selector_mouse_event(
     left_event |= int(getattr(curses_module, "BUTTON1_PRESSED", 0))
     if not bstate & left_event:
         return scroll
+    filter_width = _selector_filter_width(state, screen.getmaxyx()[1])
+    if list_top == 4 and 0 <= x < filter_width and 1 <= y <= 3:
+        state.activate_filter()
+        return scroll
     if list_top <= y < list_top + visible:
+        state.deactivate_filter()
         position = scroll + y - list_top
         nodes = state.visible_nodes()
         if 0 <= position < len(nodes):
@@ -1238,6 +1508,7 @@ def _selector_mouse_event(
                 if item is not None and item.selectable:
                     state.toggle(index)
     elif y == input_row:
+        state.deactivate_filter()
         state.input_active = True
         state.input_editing = False
         state.input_token = ""
@@ -1269,15 +1540,19 @@ def run_edit_selector(
             height, _ = screen.getmaxyx()
             _list_top, _input_row, visible = _selector_visible_window(state, height)
             scroll = _selector_keep_focus_visible(state, scroll, visible)
-            scroll = _selector_render(screen, state, context, scroll, curses_module)
-            key = screen.getch()
-            if key in (27, 17, 3):  # Escape, Ctrl-Q, Ctrl-C
+            scroll = _selector_render(screen, state, context, scroll, curses_module, terminal)
+            get_wch = getattr(screen, "get_wch", None)
+            key = get_wch() if callable(get_wch) else screen.getch()
+            key_character = key if isinstance(key, str) and len(key) == 1 else None
+            key_code = ord(key_character) if key_character is not None else key
+            if key_code == 27 and (state.filter_active or state.filter_text):
+                state.clear_filter()
+                state.deactivate_filter()
+                continue
+            if key_code in (27, 17, 3):  # Escape, Ctrl-Q, Ctrl-C
                 return SelectorResult([], cancelled=True)
-            if key in (
-                _selector_key(curses_module, "KEY_ENTER", 10),
-                10,
-                13,
-            ):
+            key_enter = _selector_key(curses_module, "KEY_ENTER", 10)
+            if key_code in (10, 13) or (key_character is None and key == key_enter):
                 if state.error:
                     continue
                 return SelectorResult(
@@ -1296,18 +1571,77 @@ def run_edit_selector(
             key_delete = _selector_key(curses_module, "KEY_DC", 330)
             key_mouse = _selector_key(curses_module, "KEY_MOUSE", -111)
 
-            if key == key_mouse:
+            if key_character is None and key == key_mouse:
                 try:
-                    _mouse_id, _mouse_x, mouse_y, _mouse_z, mouse_state = curses_module.getmouse()
+                    _mouse_id, mouse_x, mouse_y, _mouse_z, mouse_state = curses_module.getmouse()
                 except Exception:
                     continue
-                scroll = _selector_mouse_event(screen, state, mouse_y, mouse_state, scroll, visible, curses_module)
+                scroll = _selector_mouse_event(
+                    screen,
+                    state,
+                    mouse_x,
+                    mouse_y,
+                    mouse_state,
+                    scroll,
+                    visible,
+                    curses_module,
+                )
                 continue
-            if key in (key_up, ord("k")):
+            if key_code == ord("/") and not state.filter_active:
+                state.activate_filter()
+                if state.filter_active:
+                    continue
+            if state.filter_active:
+                key_backspace = _selector_key(curses_module, "KEY_BACKSPACE", 263)
+                key_delete = _selector_key(curses_module, "KEY_DC", 330)
+                if key == key_up:
+                    _selector_focus_list(state)
+                    state.move_focus(-1)
+                elif key == key_down:
+                    _selector_focus_list(state)
+                    state.move_focus(1)
+                elif key == key_left:
+                    _selector_focus_list(state)
+                    state.horizontal(-1)
+                elif key == key_right:
+                    _selector_focus_list(state)
+                    state.horizontal(1)
+                elif key == key_home:
+                    _selector_focus_list(state)
+                    state.focus_home()
+                elif key == key_end:
+                    _selector_focus_list(state)
+                    state.focus_end()
+                elif key == key_page_up:
+                    _selector_focus_list(state)
+                    state.move_focus(-visible)
+                elif key == key_page_down:
+                    _selector_focus_list(state)
+                    state.move_focus(visible)
+                elif key_code == 9:
+                    state.deactivate_filter()
+                    state.input_active = True
+                    state.input_editing = False
+                    state.input_token = ""
+                    state.input_token_index = None
+                    state.input_token_base_indices.clear()
+                    state.input_cursor = len(state.input_buffer)
+                elif (
+                    key_character is None and key in (key_backspace, key_delete)
+                ) or key_code in (8, 127):
+                    state.backspace_filter()
+                elif key_code == 21:  # Ctrl-U clears the persistent filter.
+                    state.clear_filter()
+                elif key_character is not None and key_character.isprintable():
+                    state.append_filter(key_character)
+                elif isinstance(key_code, int) and 32 <= key_code <= 126:
+                    state.append_filter(chr(key_code))
+                continue
+            if key == key_up or key_code == ord("k"):
                 _selector_focus_list(state)
                 state.move_focus(-1)
                 continue
-            if key in (key_down, ord("j")):
+            if key == key_down or key_code == ord("j"):
                 _selector_focus_list(state)
                 state.move_focus(1)
                 continue
@@ -1335,11 +1669,12 @@ def run_edit_selector(
                 _selector_focus_list(state)
                 state.move_focus(visible)
                 continue
-            if key == 9:
+            if key_code == 9:
                 if state.input_active:
                     _selector_focus_list(state)
                 else:
                     state.input_active = True
+                    state.deactivate_filter()
                     state.input_editing = False
                     state.input_token = ""
                     state.input_token_index = None
@@ -1348,9 +1683,11 @@ def run_edit_selector(
                 continue
 
             if state.input_active:
-                if key in (key_backspace, key_delete, 8, 127):
+                if (
+                    key_character is None and key in (key_backspace, key_delete)
+                ) or key_code in (8, 127):
                     _selector_backspace(state)
-                elif key == 21:  # Ctrl-U clears the numeric editor.
+                elif key_code == 21:  # Ctrl-U clears the numeric editor.
                     state.selected_indices.clear()
                     state.input_buffer = ""
                     state.input_cursor = 0
@@ -1358,17 +1695,19 @@ def run_edit_selector(
                     state.input_token_index = None
                     state.input_token_base_indices.clear()
                     state.error = None
-                elif isinstance(key, int) and (key in (ord(","), ord(" ")) or 48 <= key <= 57):
-                    _selector_insert_input(state, chr(key))
+                elif isinstance(key_code, int) and (
+                    key_code in (ord(","), ord(" ")) or 48 <= key_code <= 57
+                ):
+                    _selector_insert_input(state, chr(key_code))
                 continue
 
-            if key == ord(" "):
+            if key_code == ord(" "):
                 state.toggle()
-            elif isinstance(key, int) and 48 <= key <= 57:
+            elif isinstance(key_code, int) and 48 <= key_code <= 57:
                 state.input_active = True
                 state.input_editing = False
-                _selector_insert_input(state, chr(key))
-            elif key == ord(","):
+                _selector_insert_input(state, chr(key_code))
+            elif key_code == ord(","):
                 state.input_active = True
                 state.input_editing = False
                 _selector_insert_input(state, ",")
