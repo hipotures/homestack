@@ -624,6 +624,83 @@ class BackupCliTests(unittest.TestCase):
         self.assertEqual(reported, sorted(reported))
         self.assertEqual(destination.read_bytes(), source.read_bytes())
 
+    def test_ordinary_file_replacement_and_retry_policy(self) -> None:
+        for scenario in ("before", "after", "mutate", "recursive", "explicit", "missing", "sqlite"):
+            with self.subTest(scenario=scenario), tempfile.TemporaryDirectory() as temporary:
+                base = Path(temporary)
+                source = base / "source"
+                source.mkdir()
+                path = source / "session.json"
+                original = b"a" * (1024 * 1024 + 1)
+                path.write_bytes(original)
+                module = runpy.run_path(str(BK))
+                explicit = scenario == "explicit"
+                config = module["Config"](1, 7, [path if explicit else source], False)
+                plan = module["build_snapshot_plan"](config)
+                if scenario in {"before", "sqlite"}:
+                    replacement = base / "replacement"
+                    if scenario == "sqlite":
+                        with sqlite3.connect(replacement) as connection:
+                            connection.execute("CREATE TABLE sample (value)")
+                            connection.execute("INSERT INTO sample VALUES (42)")
+                    else:
+                        replacement.write_bytes(b"new version")
+                    replacement.replace(path)
+                if scenario == "missing":
+                    path.unlink()
+                run = base / "run"
+                run.mkdir()
+                progress = RecordingProgress()
+                progress.stage("staging", total=plan.input_bytes)
+                advance = progress.advance
+                mutations = 0
+
+                def update(amount: int) -> None:
+                    nonlocal mutations
+                    advance(amount)
+                    if amount <= 0:
+                        return
+                    if scenario == "after" and mutations == 0:
+                        replacement = base / "replacement"
+                        replacement.write_bytes(b"new pathname")
+                        replacement.replace(path)
+                        mutations += 1
+                    elif scenario in {"mutate", "recursive", "explicit"} and (
+                        mutations == 0 or scenario != "mutate"
+                    ):
+                        metadata = path.stat()
+                        with path.open("r+b") as stream:
+                            stream.write(b"b")
+                        os.utime(path, ns=(metadata.st_atime_ns, metadata.st_mtime_ns + 1000000))
+                        mutations += 1
+
+                progress.advance = update
+                logs: list[str] = []
+                with patch.object(module["time"], "sleep"):
+                    if explicit:
+                        with self.assertRaisesRegex(module["BKError"], "after 5 attempts"):
+                            module["materialize_plan"](plan, run, logs, progress)
+                        continue
+                    payload, _ = module["materialize_plan"](plan, run, logs, progress)
+                staged = payload / "0001" / "source" / path.name
+                if scenario in {"recursive", "missing"}:
+                    self.assertFalse(staged.exists())
+                    self.assertTrue(any("Skipped unstable file after 5 attempts" in line for line in logs))
+                elif scenario == "sqlite":
+                    with sqlite3.connect(staged) as connection:
+                        self.assertEqual(connection.execute("SELECT value FROM sample").fetchone(), (42,))
+                        self.assertEqual(connection.execute("PRAGMA integrity_check").fetchone(), ("ok",))
+                    self.assertTrue(any("Classified SQLite" in line for line in logs))
+                else:
+                    expected = b"new version" if scenario == "before" else original
+                    if scenario == "mutate":
+                        expected = b"b" + original[1:]
+                    self.assertEqual(staged.read_bytes(), expected)
+                self.assertEqual(progress.current["completed"], plan.input_bytes)
+                self.assertTrue(all(0 <= value <= plan.input_bytes for value in progress.current["values"]))
+                if scenario == "mutate":
+                    self.assertTrue(any(value < 0 for value in progress.current["advances"]))
+
     def test_overlapping_sources_are_allowed_and_independently_archived(self) -> None:
         dev = self.home / "DEV"
         parent = dev / "foo"

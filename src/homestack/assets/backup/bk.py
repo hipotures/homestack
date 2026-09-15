@@ -2059,12 +2059,14 @@ def edit_command(paths: Paths) -> int:
     return 0
 
 
-def classify_regular_file(path: Path) -> ClassResult:
+def classify_regular_file(path: Path, descriptor: int | None = None) -> ClassResult:
     """Classify one regular file through the required system ``file`` command."""
 
     try:
         completed = subprocess.run(
-            ["file", "--brief", "--", str(path)],
+            (["file", "--brief", "--", str(path)] if descriptor is None else
+             ["file", "--brief", "--dereference", "--", f"/proc/self/fd/{descriptor}"]),
+            pass_fds=() if descriptor is None else (descriptor,),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -2374,16 +2376,68 @@ def copy_regular_file(
     source: Path,
     destination: Path,
     report_bytes: Callable[[int], None] | None = None,
-) -> None:
+    entry: PlanEntry | None = None,
+    log_lines: list[str] | None = None,
+) -> bool:
+    """Copy a stable opened version; return whether SQLite dispatch was required."""
+    for attempt in range(1, 6):
+        try:
+            return _copy_regular_attempt(source, destination, report_bytes, entry, log_lines)
+        except (FileNotFoundError, _RetryableFileSnapshot) as exc:
+            destination.unlink(missing_ok=True)
+            if report_bytes is not None:
+                report_bytes(0)
+            if attempt == 5:
+                raise _RetryableFileSnapshot(f"Unstable file after 5 attempts: {source}") from exc
+            time.sleep(0.05 * attempt)
+    return False  # pragma: no cover
+
+
+class _RetryableFileSnapshot(BKError):
+    """An ordinary file disappeared or changed while being read."""
+
+
+def _copy_regular_attempt(
+    source: Path,
+    destination: Path,
+    report_bytes: Callable[[int], None] | None,
+    entry: PlanEntry | None,
+    log_lines: list[str] | None,
+) -> bool:
     try:
         copied = 0
-        with source.open("rb") as source_stream, destination.open("wb") as destination_stream:
-            while chunk := source_stream.read(1024 * 1024):
-                destination_stream.write(chunk)
-                copied += len(chunk)
-                if report_bytes is not None:
-                    report_bytes(copied)
-        shutil.copystat(source, destination, follow_symlinks=False)
+        descriptor = os.open(source, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(descriptor, "rb") as source_stream:
+            before = os.fstat(source_stream.fileno())
+            if not stat.S_ISREG(before.st_mode):
+                raise BKError(f"source is no longer a regular file: {source}")
+            if entry is not None and (
+                before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns
+            ) != (entry.device, entry.inode, entry.size, entry.modified_ns):
+                classification = classify_regular_file(source, source_stream.fileno())
+                if classification.handler == "sqlite":
+                    current = os.lstat(source)
+                    if (current.st_dev, current.st_ino) != (before.st_dev, before.st_ino):
+                        raise _RetryableFileSnapshot(str(source))
+                    details = log_lines if log_lines is not None else []
+                    details.append(f"Classified SQLite: {source}: {classification.output}")
+                    copy_sqlite_file(source, destination, details, entry.size, report_bytes)
+                    return True
+            with destination.open("wb") as destination_stream:
+                while chunk := source_stream.read(1024 * 1024):
+                    destination_stream.write(chunk)
+                    copied += len(chunk)
+                    if report_bytes is not None:
+                        report_bytes(copied)
+            after = os.fstat(source_stream.fileno())
+            # Unlink/rename can change ctime without changing the opened contents.
+            if (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
+                raise _RetryableFileSnapshot(str(source))
+            os.chmod(destination, stat.S_IMODE(before.st_mode))
+            os.utime(destination, ns=(before.st_atime_ns, before.st_mtime_ns))
+        return False
+    except FileNotFoundError:
+        raise
     except OSError as exc:
         raise BKError(f"cannot stage file {source}: {exc}") from exc
 
@@ -2602,7 +2656,9 @@ def materialize_plan(
         for entry in source_plan.entries:
             if entry.skip_sidecar:
                 continue
-            validate_plan_entry(entry)
+            ordinary = entry.is_regular and entry.classification and entry.classification.handler == "copy"
+            if not ordinary:
+                validate_plan_entry(entry)
             destination = entry_destination(payload, entry, source_plan.source)
             if entry.kind == "directory":
                 try:
@@ -2635,7 +2691,26 @@ def materialize_plan(
                         report_entry_bytes,
                     )
                 else:
-                    copy_regular_file(entry.source_path, destination, report_entry_bytes)
+                    try:
+                        became_sqlite = copy_regular_file(
+                            entry.source_path, destination, report_entry_bytes, entry, log_lines
+                        )
+                    except _RetryableFileSnapshot:
+                        if entry.source_path == source_plan.source:
+                            raise
+                        log_lines.append(f"WARNING: Skipped unstable file after 5 attempts: {entry.source_path}")
+                        became_sqlite = False
+                    if became_sqlite:
+                        sidecar_paths = {
+                            entry.source_path.with_name(entry.source_path.name + suffix)
+                            for suffix in SQLITE_SIDECAR_SUFFIXES
+                        }
+                        for sidecar in source_plan.entries:
+                            if sidecar.kind in {"file", "symlink"} and sidecar.source_path in sidecar_paths and not (
+                                sidecar.classification and sidecar.classification.handler == "sqlite"
+                            ):
+                                sidecar.skip_sidecar = True
+                                entry_destination(payload, sidecar, source_plan.source).unlink(missing_ok=True)
                 report_entry_bytes(entry.size)
             else:  # pragma: no cover - plan construction rejects this
                 raise BKError(f"unsupported staged entry kind {entry.kind}: {entry.source_path}")
