@@ -159,7 +159,7 @@ def build_parser() -> argparse.ArgumentParser:
     migrate.add_argument("-y", "--yes", action="store_true")
     migrate.add_argument("-h", "--help", action="store_true", dest="sub_help")
 
-    setup = sub.add_parser("setup", description="Prepare explicit Files, Environment, Applications, Repositories and Backup selections.")
+    setup = sub.add_parser("setup", description="Prepare explicit Files, Environment, Applications, Backup and Repositories selections.")
     setup.add_argument("target", nargs="?", help="VMID, exact workspace name, list, or status")
     setup.add_argument("selectors", nargs="*", help="files/f=ID,ID env/e=ID app/a=ID repo/r=OWNER/REPO backup/b=ID; 0/all selects a category")
     setup.add_argument("--json", action="store_true")

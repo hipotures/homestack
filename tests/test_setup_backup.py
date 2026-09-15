@@ -104,8 +104,9 @@ def desired_memory_files():
 class BackupDefinitionTests(unittest.TestCase):
     def test_group_item_selectors_catalog_and_plan_are_first_class(self):
         cfg = test_config()
-        self.assertEqual(cfg.setup.groups[-1].id, "backup")
-        self.assertEqual(cfg.setup.groups[-1].label, "Backup")
+        self.assertEqual(cfg.setup.groups[-2].id, "backup")
+        self.assertEqual(cfg.setup.groups[-2].label, "Backup")
+        self.assertEqual(cfg.setup.groups[-1].id, "repo")
         entry = bk_entry()
         self.assertEqual(entry.group, "backup")
         self.assertEqual(entry.handler, "backup")

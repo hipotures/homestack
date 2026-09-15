@@ -109,8 +109,8 @@ DEFAULT_GROUPS = (
     Group("files", "Files", "Desktop files copied into persistent home; no deletes."),
     Group("env", "Environment", "User shell profiles; login shell stays unchanged."),
     Group("app", "Applications", "Explicit user-space installers; onboarding is separate."),
-    Group("repo", "Repositories", "GitHub checkouts with workspace-local deploy keys."),
     Group("backup", "Backup", "Persistent-home BK backup tool and nightly user timer."),
+    Group("repo", "Repositories", "GitHub checkouts with workspace-local deploy keys."),
 )
 CODEX_RECIPE = "curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh"
 # Download separately so installer stdin remains the real terminal when required.

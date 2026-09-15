@@ -77,14 +77,14 @@ label = "Applications"
 description = "Explicit user-space installers; onboarding is separate."
 
 [[setup.groups]]
-id = "repo"
-label = "Repositories"
-description = "GitHub checkouts with workspace-local deploy keys."
-
-[[setup.groups]]
 id = "backup"
 label = "Backup"
 description = "Persistent-home BK backup tool and nightly user timer."
+
+[[setup.groups]]
+id = "repo"
+label = "Repositories"
+description = "GitHub checkouts with workspace-local deploy keys."
 
 [[setup.items]]
 id = "bk"
