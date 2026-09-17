@@ -10,7 +10,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from .models import AppError, integer_value
+from .models import AppError, GOLD_TAG, WORKSPACE_TAG, integer_value
 from .status import free_percent
 
 console = Console()
@@ -760,6 +760,9 @@ def show_status_result(result: dict[str, Any]) -> None:
             ("User login", ui_value(result.get("ssh", {}).get("user"))),
         ],
     ]
+    additional_tags = sorted(set(result.get("tags", [])) - {WORKSPACE_TAG, GOLD_TAG})
+    if additional_tags:
+        sections[0].insert(3, ("Additional tags", escape(", ".join(additional_tags))))
     if result.get("role_warning"):
         sections.insert(1, [("Warning", f"[yellow]{escape(str(result['role_warning']))}[/yellow]")])
 

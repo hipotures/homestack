@@ -19,6 +19,7 @@ from .proxmox import parse_home_size
 from .status import global_status, transport_status, workspace_status
 from .transports import open_transport
 from .ui import console, show_create_plan, show_destroy_plan, show_destroy_result, show_error, show_global_status, show_migrate_plan, show_refresh_plan, show_repository_menu, show_repository_status, show_status_result, show_transport_result
+from .ui import show_kv_panel
 
 def emit_json(obj: dict[str, Any]) -> None:
     print(json.dumps(obj, ensure_ascii=False, indent=2, sort_keys=True))
@@ -45,6 +46,10 @@ def show_help(cfg_path: Path) -> None:
     commands.add_row(
         f"{cmd} refresh VMID|NAME",
         "Replace only the VM root with a fresh full clone from Gold; preserve persistent home.",
+    )
+    commands.add_row(
+        f"{cmd} resize VMID|NAME --root-size SIZE | --home-size SIZE",
+        "Grow a running workspace disk and its ext4 filesystem to the specified total size.",
     )
     commands.add_row(
         f"{cmd} destroy VMID|NAME",
@@ -78,13 +83,14 @@ def show_help(cfg_path: Path) -> None:
     options = Table(title="Options", show_header=True)
     options.add_column("Option")
     options.add_column("Description")
-    options.add_row("--home-size SIZE", "Override the configured persistent home disk size for create.")
+    options.add_row("--home-size SIZE", "Persistent home size for create, or total target home size for resize.")
+    options.add_row("--root-size SIZE", "Total target root disk size for resize.")
     options.add_row("--node NODE", "Create on this cluster node; defaults to the configured Gold node.")
     options.add_row(
         "--storage STORAGE",
         "Create root and persistent home on an allowed target-node storage instead of its layout default.",
     )
-    options.add_row("-y, --yes", "Accept the plan for setup, create, refresh, migrate or destroy.")
+    options.add_row("-y, --yes", "Accept the plan for setup, create, refresh, resize, migrate or destroy.")
     options.add_row(
         "--json",
         "Return JSON. Commands requiring confirmation return the resolved plan without --yes.",
@@ -99,6 +105,8 @@ def show_help(cfg_path: Path) -> None:
         f"{cmd} create 200 example-workspace --storage example-storage\n"
         f"{cmd} create 200 example-workspace --node pve-example-2 --home-size 500G\n"
         f"{cmd} refresh 200\n"
+        f"{cmd} resize 200 --root-size 32G\n"
+        f"{cmd} resize 200 --home-size 500G\n"
         f"{cmd} migrate 200 pve-example-2 --target-storage example-storage\n"
         f"{cmd} setup list\n"
         f"{cmd} setup status example-workspace\n"
@@ -149,6 +157,15 @@ def build_parser() -> argparse.ArgumentParser:
     refresh.add_argument("--json", action="store_true")
     refresh.add_argument("-y", "--yes", action="store_true")
     refresh.add_argument("-h", "--help", action="store_true", dest="sub_help")
+
+    resize = sub.add_parser("resize", add_help=False)
+    resize.add_argument("target")
+    sizes = resize.add_mutually_exclusive_group(required=True)
+    sizes.add_argument("--root-size")
+    sizes.add_argument("--home-size")
+    resize.add_argument("--json", action="store_true")
+    resize.add_argument("-y", "--yes", action="store_true")
+    resize.add_argument("-h", "--help", action="store_true", dest="sub_help")
 
     destroy = sub.add_parser("destroy", add_help=False)
     destroy.add_argument("target")
@@ -309,6 +326,45 @@ def main() -> int:
                 result = refresh_workspace(session, cfg, plan, json_mode=json_mode)
                 if json_mode:
                     emit_json(result)
+                return 0
+
+            if args.command == "resize":
+                from .resize import build_resize_plan, resize_workspace
+
+                vmid = resolve_workspace_target(session, cfg, args.target)
+                plan = build_resize_plan(
+                    session, cfg, vmid,
+                    root_size=args.root_size, home_size=args.home_size,
+                )
+                assume_yes = bool(args.global_yes or getattr(args, "yes", False))
+                if not assume_yes:
+                    if json_mode:
+                        emit_json({
+                            "ok": False,
+                            "confirmation_required": True,
+                            "message": "No changes made. Re-run with --yes to resize this disk.",
+                            "plan": plan,
+                        })
+                        return 3
+                    show_kv_panel("RESIZE PLAN — NO CHANGES MADE YET", [[
+                        ("VMID", str(plan["vmid"])),
+                        ("Name", plan["name"]),
+                        ("Node", plan["node"]),
+                        ("Disk", plan["disk"]),
+                        ("Current size", f'{plan["current_size_gib"]:g}G'),
+                        ("Target size", plan["size"]),
+                        ("Filesystem", "Grow ext4 online"),
+                    ]])
+                    if not sys.stdin.isatty():
+                        raise AppError("Interactive confirmation requires a TTY; use --yes for automation")
+                    if not Confirm.ask("Resize this workspace disk?", default=False):
+                        console.print("[bold]Cancelled. No changes were made.[/bold]")
+                        return 0
+                result = resize_workspace(session, cfg, plan)
+                if json_mode:
+                    emit_json(result)
+                else:
+                    console.print(f'VM {vmid}: {plan["disk"]} resized to {plan["size"]}; ext4 filesystem expanded.')
                 return 0
 
             if args.command == "destroy":

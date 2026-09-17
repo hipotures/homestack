@@ -91,6 +91,8 @@ uv run homestack create 200 example-workspace --home-size 20G
 uv run homestack create 200 example-workspace --storage example-storage
 uv run homestack create 200 example-workspace --node pve-example-2 --storage example-storage --home-size 500G
 uv run homestack refresh 200
+uv run homestack resize 200 --root-size 32G
+uv run homestack resize 200 --home-size 500G
 uv run homestack migrate 200 pve-example-2 --target-storage example-storage
 uv run homestack repo example-workspace
 uv run homestack repo example-workspace owner/repository
@@ -99,7 +101,9 @@ uv run homestack status
 uv run homestack status 200
 ```
 
-Lifecycle targets may be a numeric VMID or exact workspace name. `create`, `refresh`, `migrate`, and `destroy` resolve and display a plan before confirmation. Use `--yes` to accept a plan and `--json` for machine-readable plans/results.
+Lifecycle targets may be a numeric VMID or exact workspace name. `create`, `refresh`, `resize`, `migrate`, and `destroy` resolve and display a plan before confirmation. Use `--yes` to accept a plan and `--json` for machine-readable plans/results.
+
+`resize` accepts one disk per invocation: `--root-size` or `--home-size`, specified as an absolute total size such as `32G` or `1T`. It enlarges the Proxmox disk and the mounted ext4 filesystem online, including its partition when present. The VM must be running with a working QEMU Guest Agent and the required guest tools (`python3`, `resize2fs`, plus `growpart` for a partition). It supports the standard two-disk root/home layout; a selected partition must be last on its disk. Shrinking and LVM/encrypted layouts are not supported. Repeating the same target size completes filesystem growth if a previous attempt stopped after enlarging the virtual disk. `homestack-lock` blocks only `refresh` and does not prevent `resize`. A later refresh replaces root with the Gold disk again; use the lock to protect customized roots.
 
 `create --node NODE` selects the workspace's destination. Omitting `--node`, or selecting the configured Gold node, uses the existing local full clone. `[node].name` continues to identify the Gold node; `[control].node` remains the SSH entry point. `--storage` selects an allowed storage on the destination for both root and home. Without it, HomeStack selects the first storage in that node's configured `storage_layouts` list.
 
