@@ -26,6 +26,7 @@ from .status import occupancy_level, resolve_existing_workspace, vm_volume_inven
 from .transports.base import Transport
 from .ui import console, human_bytes, show_create_result, show_kv_panel, show_refresh_result, ui_vm_status
 from .workspace_ssh import forget_local_ssh_host, get_workspace_authorized_keys, parse_authorized_key_records, remove_local_ssh_config, write_local_ssh_config
+from .proxmox import require_refresh_unlocked
 
 CLONE_TRANSFER_RE = re.compile(
     r"transferred\s+([0-9.]+)\s+([KMGT]?i?B)\s+of\s+"
@@ -1456,6 +1457,7 @@ def build_refresh_plan(session: Transport, cfg: Config, vmid: int) -> dict[str, 
     node = str(resource.get("node") or "")
     if not node:
         raise AppError(f"VM {vmid} has no node in cluster inventory")
+    require_refresh_unlocked(vmid, qm_config_on_node(session, cfg, node, vmid))
     journal = _read_refresh_journal(session, cfg, node, vmid)
     if journal is not None:
         if str(journal.get("node") or "") != node:
@@ -1533,6 +1535,10 @@ def refresh_workspace(
     json_mode: bool,
 ) -> dict[str, Any]:
     if plan.get("mode") == "recover":
+        require_refresh_unlocked(
+            int(plan["vmid"]),
+            qm_config_on_node(session, cfg, str(plan["node"]), int(plan["vmid"])),
+        )
         recovery = _recover_refresh(session, cfg, dict(plan["journal"]))
         result = {"ok": True, **plan, **recovery, "status": "recovered"}
         if not json_mode:
@@ -1577,6 +1583,7 @@ def refresh_workspace(
                 progress.update(overall, advance=1)
 
         current = resolve_existing_workspace(session, cfg, vmid, require_network=True)
+        require_refresh_unlocked(vmid, current["vm_config"])
         if str(current["status"]) != initial_status:
             raise AppError("Workspace power state changed after refresh confirmation")
         if current["home_volume"] != plan["home_volume"]:
@@ -1630,6 +1637,7 @@ def refresh_workspace(
         )
         vm_cfg = qm_config_on_node(session, cfg, node, vmid)
         _assert_refresh_home(cfg, vmid, vm_cfg, journal)
+        require_refresh_unlocked(vmid, vm_cfg)
         new_volume = _unused_refs(vm_cfg).get(unused_key, "")
         if not new_volume or new_volume in {journal["old_root_volume"], journal["home_volume"]}:
             raise AppError("Imported root did not produce a distinct unused volume")
@@ -1645,6 +1653,7 @@ def refresh_workspace(
 
         step("Switch root disks")
         vm_cfg = qm_config_on_node(session, cfg, node, vmid)
+        require_refresh_unlocked(vmid, vm_cfg)
         _assert_refresh_home(cfg, vmid, vm_cfg, journal)
         if str(vm_cfg[cfg.root_disk]).split(",", 1)[0] != journal["old_root_volume"]:
             raise AppError("Root identity changed before refresh switch")

@@ -191,6 +191,7 @@ The installer never starts Gold just to inspect it. A stopped Gold can therefore
 
 - Gold is the configured `gold_vmid` and must have the exact `homestack-gold` tag.
 - Workspaces have the exact `homestack-ws` role tag.
+- Add the optional `homestack-lock` tag alongside `homestack-ws` in Proxmox to block `refresh`. Remove it from the VM to allow root replacement again; `--yes` does not bypass the lock. The tag is checked during planning, before execution, and again before switching roots. Explicit refresh recovery is also blocked while tagged; automatic rollback of an already-started failed refresh remains allowed to restore the original root. Other workspace operations are unaffected.
 - `scsi0` is the disposable root; `scsi1` is persistent home. The configured root and home slots must always be different.
 - Persistent home is ext4 with label `HS_HOME_<VMID>`.
 - Persistent-home volumes are named `vm-<VMID>-hs-home-<USER>`. A newly created root is named `vm-<VMID>-hs-root-default`; a refreshed root may retain the collision-free name allocated by Proxmox during staging.

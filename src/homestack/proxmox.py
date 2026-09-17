@@ -7,7 +7,7 @@ import re
 import shlex
 
 from .config import Config
-from .models import AppError, GOLD_TAG, HOME_LABEL_PREFIX, RemoteResult, WORKSPACE_TAG, integer_value
+from .models import AppError, GOLD_TAG, HOME_LABEL_PREFIX, REFRESH_LOCK_TAG, RemoteResult, WORKSPACE_TAG, integer_value
 from .transports.base import Transport
 
 HOMESTACK_VOLUME_RE = re.compile(
@@ -55,15 +55,24 @@ def require_gold_tag(vmid: int, vm_cfg: dict[str, str]) -> None:
         )
 
 
+def require_refresh_unlocked(vmid: int, vm_cfg: dict[str, str]) -> None:
+    if has_tag(vm_cfg.get("tags"), REFRESH_LOCK_TAG):
+        raise AppError(
+            f"Refresh of VM {vmid} is blocked by tag {REFRESH_LOCK_TAG!r}. "
+            "Remove this tag from the VM in Proxmox before refreshing."
+        )
+
+
 def verify_workspace_role_tags(vmid: int, vm_cfg: dict[str, str]) -> None:
     tags = parse_tags(vm_cfg.get("tags"))
     if WORKSPACE_TAG not in tags:
         raise AppError(f"VM {vmid} tag verification failed: {WORKSPACE_TAG!r} is missing")
     if GOLD_TAG in tags:
         raise AppError(f"VM {vmid} tag verification failed: inherited {GOLD_TAG!r}")
-    if tags != frozenset({WORKSPACE_TAG}):
+    if tags - {WORKSPACE_TAG, REFRESH_LOCK_TAG}:
         raise AppError(
-            f"VM {vmid} tag verification failed: expected exactly {WORKSPACE_TAG!r}, "
+            f"VM {vmid} tag verification failed: expected {WORKSPACE_TAG!r} "
+            f"with optional {REFRESH_LOCK_TAG!r}, "
             f"got {sorted(tags)!r}"
         )
 

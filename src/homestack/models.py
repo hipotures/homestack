@@ -21,6 +21,8 @@ GOLD_TAG = "homestack-gold"
 
 WORKSPACE_TAG = "homestack-ws"
 
+REFRESH_LOCK_TAG = "homestack-lock"
+
 
 HOME_LABEL_PREFIX = "HS_HOME_"
 

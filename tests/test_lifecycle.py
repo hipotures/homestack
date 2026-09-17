@@ -435,6 +435,8 @@ class RefreshPowerStateTests(unittest.TestCase):
             'cluster_vm_resource',
             return_value={'node': 'example-node-1', 'status': 'stopped'},
         ), patch.object(
+            lifecycle, 'qm_config_on_node', return_value={'tags': 'homestack-ws'}
+        ), patch.object(
             lifecycle, '_read_refresh_journal', return_value=journal
         ), patch.object(
             lifecycle, 'resolve_existing_workspace'
