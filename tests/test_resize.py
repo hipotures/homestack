@@ -6,6 +6,16 @@ from homestack.models import AppError
 from support import test_config
 
 
+class ResizeInspectionErrorTests(unittest.TestCase):
+    def test_guest_failure_reports_reason_without_script(self):
+        response = {'exited': 1, 'exitcode': 1, 'err-data': 'Cannot identify mounted block device: /dev/root (8:1)'}
+        with patch.object(resize, 'guest_exec_on_node', return_value=response) as execute:
+            with self.assertRaises(AppError) as raised:
+                resize._inspect_guest(object(), test_config(), 'pve3', 207, 'root', 'HS_HOME_207')
+        self.assertEqual(str(raised.exception), 'Cannot inspect root disk in VM 207: Cannot identify mounted block device: /dev/root (8:1)')
+        self.assertFalse(execute.call_args.kwargs['check'])
+
+
 class ResizeTests(unittest.TestCase):
     def setUp(self):
         self.cfg = test_config()

@@ -7,7 +7,7 @@ import shlex
 from typing import Any
 
 from .config import Config
-from .guest import guest_out_on_node, parse_disk_size_gb
+from .guest import guest_exec_on_node, guest_out_on_node, parse_disk_size_gb
 from .models import AppError, GOLD_TAG
 from .proxmox import has_tag, node_run, parse_home_size, qm_config_on_node
 from .status import resolve_existing_workspace
@@ -24,14 +24,15 @@ def require(ok, message):
         sys.exit(message)
 for tool in ('findmnt', 'lsblk', 'blkid', 'resize2fs', 'blockdev'):
     require(shutil.which(tool), 'Missing guest tool: ' + tool)
-fs = json.loads(run('findmnt', '--json', '--mountpoint', mount, '-o', 'SOURCE,FSTYPE,TARGET,OPTIONS'))['filesystems'][0]
+fs = json.loads(run('findmnt', '--json', '--mountpoint', mount, '-o', 'SOURCE,FSTYPE,TARGET,OPTIONS,MAJ:MIN'))['filesystems'][0]
 require(fs['target'] == mount and fs['fstype'] == 'ext4', 'Resize requires an exact ext4 mount: ' + mount)
 require('rw' in fs['options'].split(','), 'Filesystem is read-only')
-device = os.path.realpath(fs['source'])
-rows = json.loads(run('lsblk', '--json', '--bytes', '--paths', '--list', '-o', 'NAME,TYPE,PKNAME,SERIAL,SIZE'))['blockdevices']
+rows = json.loads(run('lsblk', '--json', '--bytes', '--paths', '--list', '-o', 'NAME,TYPE,PKNAME,SERIAL,SIZE,MAJ:MIN'))['blockdevices']
 by_name = {r['name']: r for r in rows}
-require(device in by_name, 'Mounted source is not a supported block device')
-entry = by_name[device]
+matches = [r for r in rows if r['maj:min'] == fs['maj:min']]
+require(len(matches) == 1, 'Cannot identify mounted block device: ' + fs['source'] + ' (' + fs['maj:min'] + ')')
+entry = matches[0]
+device = entry['name']
 require(entry['type'] in ('disk', 'part'), 'LVM and encrypted layouts are not supported')
 parent = entry['pkname'] if entry['type'] == 'part' else device
 require(parent in by_name and by_name[parent]['type'] == 'disk', 'Unsupported partition parent')
@@ -59,8 +60,12 @@ print(json.dumps(dict(device=device, parent=parent, partition=partition, size_by
 def _inspect_guest(session: Transport, cfg: Config, node: str, vmid: int, role: str, label: str) -> dict[str, Any]:
     mount = '/' if role == 'root' else f'/home/{cfg.user_name}'
     command = shlex.join(['python3', '-c', _INSPECT, mount, role, label])
+    response = guest_exec_on_node(session, cfg, node, vmid, command, check=False)
+    if not response.get('exited') or response.get('exitcode') != 0:
+        detail = str(response.get('err-data') or response.get('out-data') or 'Guest inspection failed').strip()
+        raise AppError(f'Cannot inspect {role} disk in VM {vmid}: {detail}')
     try:
-        return json.loads(guest_out_on_node(session, cfg, node, vmid, command))
+        return json.loads(response.get('out-data', ''))
     except (ValueError, TypeError) as exc:
         raise AppError('Invalid guest disk inspection response') from exc
 
