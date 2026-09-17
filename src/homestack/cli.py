@@ -79,9 +79,10 @@ def show_help(cfg_path: Path) -> None:
     options.add_column("Option")
     options.add_column("Description")
     options.add_row("--home-size SIZE", "Override the configured persistent home disk size for create.")
+    options.add_row("--node NODE", "Create on this cluster node; defaults to the configured Gold node.")
     options.add_row(
         "--storage STORAGE",
-        "Create root and persistent home on an allowed storage instead of the layout default.",
+        "Create root and persistent home on an allowed target-node storage instead of its layout default.",
     )
     options.add_row("-y, --yes", "Accept the plan for setup, create, refresh, migrate or destroy.")
     options.add_row(
@@ -96,6 +97,7 @@ def show_help(cfg_path: Path) -> None:
         f"{cmd} transport\n"
         f"{cmd} create 200 example-workspace\n"
         f"{cmd} create 200 example-workspace --storage example-storage\n"
+        f"{cmd} create 200 example-workspace --node pve-example-2 --home-size 500G\n"
         f"{cmd} refresh 200\n"
         f"{cmd} migrate 200 pve-example-2 --target-storage example-storage\n"
         f"{cmd} setup list\n"
@@ -137,6 +139,7 @@ def build_parser() -> argparse.ArgumentParser:
     create.add_argument("name")
     create.add_argument("--home-size")
     create.add_argument("--storage")
+    create.add_argument("--node")
     create.add_argument("--json", action="store_true")
     create.add_argument("-y", "--yes", action="store_true")
     create.add_argument("-h", "--help", action="store_true", dest="sub_help")
@@ -241,6 +244,7 @@ def main() -> int:
                     args.name,
                     home_size,
                     storage=args.storage,
+                    node=args.node,
                 )
                 assume_yes = bool(args.global_yes or getattr(args, "yes", False))
                 if not assume_yes:

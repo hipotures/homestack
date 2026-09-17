@@ -23,6 +23,8 @@ class CreateWorkspaceCompletionTests(unittest.TestCase):
             'vmid': 200,
             'name': 'test1',
             'node': 'example-node-1',
+            'source_node': 'example-node-1',
+            'transfer_method': 'clone',
             'ip': '192.0.2.200',
             'home_label': 'HS_HOME_200',
             'home_size_gib': 20,

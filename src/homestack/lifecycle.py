@@ -14,6 +14,11 @@ from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn
 from .backup import cleanup_retrieval_keys
 from .cloudinit import cicustom_value, remove_stale_create_snippets, snippet_names, stale_create_snippets, sync_snippets_to_node, write_snippets
 from .config import Config
+from .create_transfer import (
+    capture_gold_metadata,
+    stream_gold_restore,
+    validate_cross_node_create,
+)
 from .guest import derive_ip, extract_mac, guest_exec_on_node, guest_out_on_node, parse_disk_size_gb, wait_for_qga_on_node
 from .models import AppError, WORKSPACE_TAG, integer_value, validate_name
 from .proxmox import allocate_named_raw_volume, boot_order_contains_disk, check_remote_requirements, cluster_nodes, cluster_vm_resource, disk_option, has_tag, home_label, home_volume_name, node_run, node_shell_command, parse_home_size, qm_config_on_node, qm_exists_on_node, qm_status_on_node, rename_attached_disk_volume, require_gold_tag, resolve_homestack_storage, root_volume_name, set_workspace_role_tags, shutdown_vm_on_node, storage_capacity, verify_workspace_role_tags
@@ -183,10 +188,16 @@ def build_create_plan(
     name: str,
     home_size: str,
     storage: str | None = None,
+    node: str | None = None,
 ) -> dict[str, Any]:
     validate_name(name)
     ip = derive_ip(cfg, vmid)
-    check_remote_requirements(session, cfg, cfg.node)
+    target_node = cfg.node if node is None else str(node).strip()
+    if not target_node:
+        raise AppError("Create target node cannot be empty")
+    transfer_method = "clone" if target_node == cfg.node else "stream"
+    if transfer_method == "clone":
+        check_remote_requirements(session, cfg, cfg.node)
 
     gold_resource = cluster_vm_resource(session, cfg.gold_vmid)
     if gold_resource is None:
@@ -206,19 +217,35 @@ def build_create_plan(
         raise AppError(f"Gold VM {cfg.gold_vmid} has no {cfg.root_disk} disk")
     disk_size_gb = parse_disk_size_gb(disk_cfg)
 
-    selected_storage = resolve_homestack_storage(cfg, cfg.node, storage)
+    transfer_metadata: dict[str, Any] = {}
+    if transfer_method == "stream":
+        transfer_metadata = validate_cross_node_create(
+            session,
+            cfg,
+            source_node=cfg.node,
+            target_node=target_node,
+            gold_vmid=cfg.gold_vmid,
+            gold_cfg=gold_cfg,
+            root_disk=cfg.root_disk,
+            requested_storage=storage,
+        )
+        selected_storage = str(transfer_metadata["target_storage"])
+    else:
+        selected_storage = resolve_homestack_storage(cfg, cfg.node, storage)
     normalized_home_size, home_size_gib = parse_home_size(home_size)
     label = home_label(vmid)
 
     authorized_keys, key_source = get_workspace_authorized_keys(session, cfg)
     key_records = parse_authorized_key_records(authorized_keys)
-    stale_snippets = stale_create_snippets(session, cfg, cfg.node, name)
+    stale_snippets = stale_create_snippets(session, cfg, target_node, name)
 
-    return {
+    plan = {
         "command": "create",
         "vmid": vmid,
         "name": name,
-        "node": cfg.node,
+        "node": target_node,
+        "source_node": cfg.node,
+        "transfer_method": transfer_method,
         "ip": ip,
         "cidr": cfg.network_cidr,
         "gateway": cfg.gateway,
@@ -245,6 +272,253 @@ def build_create_plan(
         "transport": cfg.transport_type,
         "config": str(cfg.path),
     }
+    if transfer_metadata:
+        plan["source_metadata"] = transfer_metadata["source_metadata"]
+    return plan
+
+
+def _volume_belongs_to_vm(volume: str, vmid: int) -> bool:
+    tail = volume.split(":", 1)[-1].rsplit("/", 1)[-1]
+    return bool(
+        re.search(rf"(?:^|/)({re.escape(str(vmid))})/", volume)
+        or re.search(rf"(?:^|-)vm-{re.escape(str(vmid))}(?:-|$)", tail)
+    )
+
+
+def _restored_volume_storage(value: str) -> str | None:
+    volume = str(value).split(",", 1)[0].strip()
+    if ":" not in volume:
+        return None
+    return volume.split(":", 1)[0]
+
+
+def _disk_option_values(value: str) -> tuple[tuple[str, str], ...]:
+    if "," not in str(value):
+        return ()
+    options: dict[str, str] = {}
+    for item in str(value).split(",", 1)[1].split(","):
+        if "=" not in item:
+            continue
+        key, option_value = item.split("=", 1)
+        if key == "format":
+            continue
+        options[key] = option_value
+    return tuple(sorted(options.items()))
+
+
+def _revalidate_stream_source(
+    session: Transport,
+    cfg: Config,
+    plan: dict[str, Any],
+) -> None:
+    source_node = str(plan["source_node"])
+    gold_cfg = qm_config_on_node(session, cfg, source_node, cfg.gold_vmid)
+    require_gold_tag(cfg.gold_vmid, gold_cfg)
+    metadata = capture_gold_metadata(cfg.gold_vmid, gold_cfg, cfg.root_disk)
+    if metadata != plan.get("source_metadata"):
+        raise AppError(
+            "Gold VM source configuration changed after create confirmation; "
+            "re-run create and review the new plan"
+        )
+
+
+def _verify_streamed_restore(
+    session: Transport,
+    cfg: Config,
+    plan: dict[str, Any],
+) -> dict[str, str]:
+    vmid = int(plan["vmid"])
+    node = str(plan["node"])
+    name = str(plan["name"])
+    expected_storage = str(plan["root_storage"])
+    status = qm_status_on_node(session, cfg, node, vmid)
+    if status != "stopped":
+        raise AppError(
+            f"Streamed Gold restore created VM {vmid} on {node!r} with status "
+            f"{status!r}; expected stopped"
+        )
+
+    vm_cfg = qm_config_on_node(session, cfg, node, vmid)
+    root_config = str(vm_cfg.get(cfg.root_disk) or "")
+    if not root_config:
+        raise AppError(
+            f"Streamed Gold restore created VM {vmid} without {cfg.root_disk}"
+        )
+    if _restored_volume_storage(root_config) != expected_storage:
+        raise AppError(
+            f"Streamed Gold restore root disk is not on target storage "
+            f"{expected_storage!r}: {root_config}"
+        )
+
+    metadata = plan.get("source_metadata")
+    if not isinstance(metadata, dict):
+        raise AppError("Streamed Gold restore plan is missing source metadata")
+    cloudinit_slots = metadata.get("cloudinit_slots")
+    if not isinstance(cloudinit_slots, list) or not cloudinit_slots:
+        raise AppError("Streamed Gold restore plan has no Cloud-Init metadata")
+    for slot in cloudinit_slots:
+        cloudinit_config = str(vm_cfg.get(str(slot)) or "")
+        if "cloudinit" not in cloudinit_config or disk_option(
+            cloudinit_config, "media"
+        ) != "cdrom":
+            raise AppError(
+                f"Streamed Gold restore VM {vmid} is missing Cloud-Init drive {slot}"
+            )
+
+    source_volumes = {
+        str(item.get("volume"))
+        for item in metadata.get("volumes", [])
+        if isinstance(item, dict) and item.get("volume")
+    }
+    source_records = [
+        item
+        for item in metadata.get("volumes", [])
+        if isinstance(item, dict) and item.get("slot")
+    ]
+    expected_slots = {str(item["slot"]) for item in source_records}
+    disk_slot_re = re.compile(
+        r"(?:ide|sata|scsi|virtio)[0-9]+|efidisk[0-9]+|tpmstate[0-9]+"
+    )
+    actual_slots = {
+        slot
+        for slot, value in vm_cfg.items()
+        if disk_slot_re.fullmatch(slot)
+        and str(value).split(",", 1)[0].strip()
+        not in {"", "none"}
+    }
+    if actual_slots != expected_slots:
+        missing = sorted(expected_slots - actual_slots)
+        extra = sorted(actual_slots - expected_slots)
+        details: list[str] = []
+        if missing:
+            details.append("missing " + ", ".join(missing))
+        if extra:
+            details.append("unexpected " + ", ".join(extra))
+        raise AppError(
+            f"Streamed Gold restore VM {vmid} attached disk slots changed: "
+            + "; ".join(details)
+        )
+    for slot, value in vm_cfg.items():
+        if disk_slot_re.fullmatch(slot) is None:
+            continue
+        volume = str(value).split(",", 1)[0].strip()
+        if not volume or volume == "none":
+            continue
+        if volume in source_volumes:
+            raise AppError(
+                f"Streamed Gold restore VM {vmid} still references source volume {volume!r}"
+            )
+        storage = _restored_volume_storage(str(value))
+        if storage != expected_storage:
+            raise AppError(
+                f"Streamed Gold restore VM {vmid} volume {volume!r} is on "
+                f"{storage!r}, expected target storage {expected_storage!r}"
+            )
+        if not _volume_belongs_to_vm(volume, vmid):
+            raise AppError(
+                f"Streamed Gold restore VM {vmid} volume {volume!r} does not "
+                "have target VM ownership"
+            )
+
+    expected_root_options = _disk_option_values(str(metadata.get("root_config") or ""))
+    actual_root_options = _disk_option_values(root_config)
+    if expected_root_options != actual_root_options:
+        raise AppError(
+            f"Streamed Gold restore VM {vmid} root disk options changed: "
+            f"expected {expected_root_options!r}, got {actual_root_options!r}"
+        )
+    expected_bridges = metadata.get("bridges")
+    if not isinstance(expected_bridges, dict):
+        raise AppError("Streamed Gold restore plan has no Gold network metadata")
+    net_slot_re = re.compile(r"net[0-9]+")
+    actual_bridges: dict[str, str] = {}
+    for slot, value in vm_cfg.items():
+        if not net_slot_re.fullmatch(slot) or not str(value).strip():
+            continue
+        bridge = disk_option(str(value), "bridge")
+        if not bridge:
+            raise AppError(f"Streamed Gold restore VM {vmid} NIC {slot} has no bridge")
+        actual_bridges[slot] = bridge
+    if actual_bridges != {str(key): str(value) for key, value in expected_bridges.items()}:
+        raise AppError(
+            f"Streamed Gold restore VM {vmid} network bridges changed: "
+            f"expected {expected_bridges!r}, got {actual_bridges!r}"
+        )
+
+    if str(vm_cfg.get("name") or "") != name:
+        raise AppError(
+            f"Streamed Gold restore VM {vmid} has name {vm_cfg.get('name')!r}, "
+            f"expected {name!r}"
+        )
+    if str(vm_cfg.get("template") or "0") not in {"0", "false", "no"}:
+        raise AppError(f"Streamed Gold restore VM {vmid} is still marked as a template")
+    if not boot_order_contains_disk(str(vm_cfg.get("boot") or ""), cfg.root_disk):
+        raise AppError(
+            f"Streamed Gold restore VM {vmid} boot order does not include {cfg.root_disk}"
+        )
+    return vm_cfg
+
+
+def _describe_restore_residual(
+    session: Transport,
+    cfg: Config,
+    node: str,
+    vmid: int,
+    *,
+    storage: str | None = None,
+) -> str:
+    details: list[str] = []
+    try:
+        resource = cluster_vm_resource(session, vmid)
+    except Exception as exc:
+        resource = None
+        details.append(f"cluster inventory unavailable: {exc}")
+    if resource is None:
+        details.append("cluster inventory reports no target VM")
+    else:
+        details.append(
+            f"VM {vmid} remains on {resource.get('node') or 'unknown node'} "
+            f"({resource.get('status') or 'unknown status'})"
+        )
+    try:
+        vm_cfg = qm_config_on_node(session, cfg, node, vmid)
+    except Exception as exc:
+        details.append(f"target configuration unavailable: {exc}")
+    else:
+        volumes: list[str] = []
+        for key, value in vm_cfg.items():
+            if not re.fullmatch(
+                r"(?:ide|sata|scsi|virtio)[0-9]+|efidisk[0-9]+|tpmstate[0-9]+",
+                key,
+            ):
+                continue
+            volume = str(value).split(",", 1)[0].strip()
+            if volume and volume != "none":
+                volumes.append(volume)
+        if volumes:
+            details.append("target volumes: " + ", ".join(sorted(volumes)))
+    if storage:
+        try:
+            entries = session.run_json_value(
+                "pvesh get "
+                f"/nodes/{shlex.quote(node)}/storage/{shlex.quote(storage)}/content "
+                "--content images --output-format json",
+                timeout=30,
+            )
+            residual_volumes = sorted(
+                str(item.get("volid"))
+                for item in entries
+                if isinstance(item, dict)
+                and item.get("volid")
+                and _volume_belongs_to_vm(str(item["volid"]), vmid)
+            ) if isinstance(entries, list) else []
+            if residual_volumes:
+                details.append(
+                    "target storage residual volumes: " + ", ".join(residual_volumes)
+                )
+        except Exception as exc:
+            details.append(f"target storage inventory unavailable: {exc}")
+    return "; ".join(details)
 
 
 def create_workspace(
@@ -260,10 +534,16 @@ def create_workspace(
     ip = str(plan["ip"])
     home_fs_label = str(plan["home_label"])
     home_size_gib = int(plan["home_size_gib"])
+    source_node = str(plan["source_node"])
+    transfer_method = str(plan["transfer_method"])
 
     created_vm = False
+    owned_vm = False
     created_snippets: list[Path] = []
     boot_started = False
+
+    if transfer_method == "stream":
+        _revalidate_stream_source(session, cfg, plan)
 
     progress: Progress | None = None
     overall = None
@@ -301,17 +581,57 @@ def create_workspace(
         expected_key_records = parse_authorized_key_records(authorized_keys)
         finish_step()
 
-        start_step("Full clone")
-        clone_full(
-            session,
-            cfg,
-            node,
-            vmid,
-            name,
-            str(plan["root_storage"]),
-            progress=progress,
-        )
-        created_vm = True
+        if transfer_method == "clone":
+            start_step("Full clone")
+            clone_full(
+                session,
+                cfg,
+                node,
+                vmid,
+                name,
+                str(plan["root_storage"]),
+                progress=progress,
+            )
+            created_vm = True
+            owned_vm = True
+        elif transfer_method == "stream":
+            start_step("Stream Gold archive to target")
+            _revalidate_stream_source(session, cfg, plan)
+            if cluster_vm_resource(session, vmid) is not None:
+                raise AppError(
+                    f"VMID {vmid} is no longer available on target node {node!r}; "
+                    "no restore was attempted"
+                )
+            try:
+                stream_gold_restore(
+                    session,
+                    cfg,
+                    source_node=source_node,
+                    target_node=node,
+                    vmid=vmid,
+                    name=name,
+                    target_storage=str(plan["root_storage"]),
+                    timeout=7200,
+                )
+            except Exception as exc:
+                residual = _describe_restore_residual(
+                    session,
+                    cfg,
+                    node,
+                    vmid,
+                    storage=str(plan["root_storage"]),
+                )
+                raise AppError(
+                    f"{exc}. No target cleanup was attempted because restore ownership "
+                    f"is uncertain. Residual inspection: {residual}"
+                ) from exc
+            # The native restore returned successfully; ownership is still gated by
+            # the target configuration checks below before cleanup may destroy it.
+            created_vm = True
+            _verify_streamed_restore(session, cfg, plan)
+            owned_vm = True
+        else:
+            raise AppError(f"Unsupported create transfer method {transfer_method!r}")
         rename_attached_disk_volume(
             session,
             cfg,
@@ -574,15 +894,59 @@ def create_workspace(
             show_create_result(result)
         return result
 
-    except Exception:
+    except Exception as exc:
         if progress is not None:
             progress.stop()
 
+        cleanup_errors: list[str] = []
         if not boot_started:
-            if created_vm and qm_exists_on_node(session, cfg, node, vmid):
-                node_run(session, cfg, node, f"qm destroy {vmid} --purge 1", check=False, timeout=600)
+            if created_vm and owned_vm:
+                try:
+                    if qm_exists_on_node(session, cfg, node, vmid):
+                        result = node_run(
+                            session,
+                            cfg,
+                            node,
+                            f"qm destroy {vmid} --purge 1",
+                            check=False,
+                            timeout=600,
+                        )
+                        if result.returncode != 0:
+                            cleanup_errors.append(
+                                f"VM cleanup failed: {result.output.strip() or result.returncode}"
+                            )
+                except Exception as cleanup_exc:
+                    cleanup_errors.append(f"VM cleanup failed: {cleanup_exc}")
+            elif created_vm and not owned_vm:
+                cleanup_errors.append(
+                    "VM cleanup skipped because restored resource ownership was not proven; "
+                    "residual inspection: "
+                    + _describe_restore_residual(
+                        session,
+                        cfg,
+                        node,
+                        vmid,
+                        storage=str(plan["root_storage"]),
+                    )
+                )
             for path in created_snippets:
-                node_run(session, cfg, node, f"rm -f {shlex.quote(str(path))}", check=False)
+                try:
+                    result = node_run(
+                        session,
+                        cfg,
+                        node,
+                        f"rm -f {shlex.quote(str(path))}",
+                        check=False,
+                    )
+                    if result.returncode != 0:
+                        cleanup_errors.append(
+                            f"Snippet cleanup failed for {path}: "
+                            f"{result.output.strip() or result.returncode}"
+                        )
+                except Exception as cleanup_exc:
+                    cleanup_errors.append(f"Snippet cleanup failed for {path}: {cleanup_exc}")
+        if cleanup_errors:
+            raise AppError(f"{exc}. Cleanup report: {'; '.join(cleanup_errors)}") from exc
         raise
 
 

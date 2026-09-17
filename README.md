@@ -89,6 +89,7 @@ uv run homestack transport
 uv run homestack create 200 example-workspace
 uv run homestack create 200 example-workspace --home-size 20G
 uv run homestack create 200 example-workspace --storage example-storage
+uv run homestack create 200 example-workspace --node pve-example-2 --storage example-storage --home-size 500G
 uv run homestack refresh 200
 uv run homestack migrate 200 pve-example-2 --target-storage example-storage
 uv run homestack repo example-workspace
@@ -99,6 +100,12 @@ uv run homestack status 200
 ```
 
 Lifecycle targets may be a numeric VMID or exact workspace name. `create`, `refresh`, `migrate`, and `destroy` resolve and display a plan before confirmation. Use `--yes` to accept a plan and `--json` for machine-readable plans/results.
+
+`create --node NODE` selects the workspace's destination. Omitting `--node`, or selecting the configured Gold node, uses the existing local full clone. `[node].name` continues to identify the Gold node; `[control].node` remains the SSH entry point. `--storage` selects an allowed storage on the destination for both root and home. Without it, HomeStack selects the first storage in that node's configured `storage_layouts` list.
+
+For another node, HomeStack streams an uncompressed Gold backup through the control node's existing SSH connections into Proxmox's native restore operation (`qm create --archive -`) on the destination. This uses the same restore engine as `qmrestore`, with configuration overrides to create a writable VM even when Gold is a template. It does not save a backup archive or allocate a temporary root copy on the source. The persistent home disk is allocated only on the destination, after the restore succeeds, so a 500G home does not require 500G on the Gold node. Snapshot backup mode preserves Gold's running/stopped state; backup fleecing is disabled to avoid a source-side disk cache. The destination remains stopped until HomeStack has configured its identity, home, and Cloud-Init. The plan and JSON result identify both the source and destination nodes.
+
+Cross-node creation requires `vzdump` on the Gold node and Bash on the control node, as well as the usual Proxmox tools. The destination must have the configured image and snippet storage and the network bridges used by Gold. Required disks must be included in Gold backups. `refresh` still requires the workspace to be on the configured Gold node; this option does not add cross-node refresh.
 
 ## Preparing a Gold VM
 

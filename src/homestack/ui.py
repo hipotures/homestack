@@ -120,8 +120,9 @@ def show_create_plan(plan: dict[str, Any]) -> None:
             ("VMID", str(plan["vmid"])),
             ("Name", str(plan["name"])),
             ("Node", str(plan["node"])),
-            ("Source", f'Gold VM {plan["gold_vmid"]}'),
+            ("Source", f'Gold VM {plan["gold_vmid"]} on {plan["source_node"]}'),
             ("Clone", "FULL [dim]independent RW root[/dim]"),
+            ("Transfer", "Stream to target; no source disk copy" if plan["transfer_method"] == "stream" else "Local clone"),
         ],
         [
             ("IP", f'{plan["ip"]}/{plan["cidr"]}'),
@@ -176,9 +177,9 @@ def show_create_result(result: dict[str, Any]) -> None:
         else:
             key_lines.append(escape(str(item)))
     sections = [
-        [("VMID", str(result["vmid"])), ("Name", str(result["name"])), ("Status", ui_vm_status(result.get("status")))],
+        [("VMID", str(result["vmid"])), ("Name", str(result["name"])), ("Node", str(result["node"])), ("Status", ui_vm_status(result.get("status")))],
         [("IP", f'{result["ip"]}/{result["cidr"]}'), ("MAC", str(result["mac"]))],
-        [("Clone", f'FULL [dim]from Gold {result["gold_vmid"]}[/dim]'), ("Root", f'{disk} on {result["root_storage"]}')],
+        [("Clone", f'FULL [dim]from Gold {result["gold_vmid"]} on {result["source_node"]}[/dim]'), ("Root", f'{disk} on {result["root_storage"]}')],
         [
             ("Persistent home", f'{result["home_disk"]} on {result["home_storage"]}'),
             ("Home size", str(result["home_size"])),

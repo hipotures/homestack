@@ -112,6 +112,7 @@ class LocalSSHConfigTests(unittest.TestCase):
 
     def test_create_failure_does_not_generate_ssh_config(self) -> None:
         plan = {'vmid': 200, 'name': 'test1', 'node': 'example-node-1', 'ip': '192.0.2.200', 'home_label': 'HS_HOME_200', 'home_size_gib': 20, 'root_storage': 'example-storage-a', 'stale_snippets': []}
+        plan.update(source_node='example-node-1', transfer_method='clone')
         with patch.object(lifecycle, 'get_workspace_authorized_keys', return_value=('ssh-ed25519 AAAATEST test\n', 'test')), patch.object(lifecycle, 'clone_full', side_effect=models.AppError('clone failed')), patch.object(lifecycle, 'write_local_ssh_config') as write_config:
             with self.assertRaisesRegex(models.AppError, 'clone failed'):
                 lifecycle.create_workspace(FakeSession(), test_config(), plan, json_mode=True)
