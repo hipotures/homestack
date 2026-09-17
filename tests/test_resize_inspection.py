@@ -62,8 +62,8 @@ class GuestInspectionTests(unittest.TestCase):
         with self.assertRaisesRegex(SystemExit, 'Cannot identify mounted block device'):
             self.inspect(maj_min='8:99')
 
-    def test_unsupported_filesystem_and_lvm_are_rejected(self):
+    def test_unsupported_filesystem_and_unresolved_lvm_are_rejected(self):
         with self.assertRaisesRegex(SystemExit, 'ext4'):
             self.inspect(filesystem='xfs')
-        with self.assertRaisesRegex(SystemExit, 'LVM'):
+        with self.assertRaisesRegex(SystemExit, 'Cannot identify parent'):
             self.inspect(root_type='lvm')

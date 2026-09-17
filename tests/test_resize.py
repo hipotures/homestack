@@ -25,7 +25,8 @@ class ResizeTests(unittest.TestCase):
             self.cfg.home_disk: 'local-lvm:home,size=500G,serial=HS_HOME_207',
         }
         self.info = dict(vm_config=self.vm, status='running', node='pve3', name='gpu', home_label='HS_HOME_207')
-        self.guest = dict(device='/dev/sda1', parent='/dev/sda', partition=1, size_bytes=16 * 1024**3)
+        self.guest = dict(device='/dev/sda1', parent='/dev/sda', partition=1, size_bytes=16 * 1024**3,
+                          filesystem='ext4', mount='/', btrfs_devid=None)
         self.resolve = self.enterContext(patch.object(resize, 'resolve_existing_workspace', return_value=self.info))
         self.inspect = self.enterContext(patch.object(resize, '_inspect_guest', return_value=self.guest))
         self.run = self.enterContext(patch.object(resize, 'node_run'))
@@ -64,6 +65,13 @@ class ResizeTests(unittest.TestCase):
         resize.resize_workspace(object(), self.cfg, plan)
         self.assertIn(f'qm disk resize 207 {self.cfg.home_disk} 1T', self.run.call_args.args[3])
         self.assertNotIn('growpart', self.execute_guest.call_args.args[4])
+
+    def test_btrfs_grows_the_inspected_device_id(self):
+        self.guest.update(filesystem='btrfs', btrfs_devid=3)
+        resize.resize_workspace(object(), self.cfg, self.plan())
+        script = self.execute_guest.call_args.args[4]
+        self.assertIn('btrfs filesystem resize 3:max /', script)
+        self.assertNotIn('resize2fs', script)
 
     def test_revalidation_rejects_volume_or_size_drift(self):
         for value in ('local-lvm:other,size=16G', 'local-lvm:root,size=64G'):

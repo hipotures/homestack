@@ -49,7 +49,7 @@ def show_help(cfg_path: Path) -> None:
     )
     commands.add_row(
         f"{cmd} resize VMID|NAME --root-size SIZE | --home-size SIZE",
-        "Grow a running workspace disk and its ext4 filesystem to the specified total size.",
+        "Grow a running workspace disk and its ext4/Btrfs filesystem to the specified total size.",
     )
     commands.add_row(
         f"{cmd} destroy VMID|NAME",
@@ -353,18 +353,20 @@ def main() -> int:
                         ("Disk", plan["disk"]),
                         ("Current size", f'{plan["current_size_gib"]:g}G'),
                         ("Target size", plan["size"]),
-                        ("Filesystem", "Grow ext4 online"),
+                        ("Filesystem", f'Grow {plan["guest"]["filesystem"]} online'),
+                        ("Encryption", (plan["guest"].get("crypt") or {}).get("auth", "none")),
+                        ("LVM", "Grow dedicated logical volume" if plan["guest"].get("lvm") else "none"),
                     ]])
                     if not sys.stdin.isatty():
                         raise AppError("Interactive confirmation requires a TTY; use --yes for automation")
                     if not Confirm.ask("Resize this workspace disk?", default=False):
                         console.print("[bold]Cancelled. No changes were made.[/bold]")
                         return 0
-                result = resize_workspace(session, cfg, plan)
+                result = resize_workspace(session, cfg, plan, interactive=not json_mode and sys.stdin.isatty())
                 if json_mode:
                     emit_json(result)
                 else:
-                    console.print(f'VM {vmid}: {plan["disk"]} resized to {plan["size"]}; ext4 filesystem expanded.')
+                    console.print(f'VM {vmid}: {plan["disk"]} resized to {plan["size"]}; filesystem expanded.')
                 return 0
 
             if args.command == "destroy":

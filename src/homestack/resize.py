@@ -7,54 +7,14 @@ import shlex
 from typing import Any
 
 from .config import Config
-from .guest import guest_exec_on_node, guest_out_on_node, parse_disk_size_gb
+from .guest import guest_exec_on_node, guest_out_on_node, parse_disk_size_gb, parse_ipconfig0
 from .models import AppError, GOLD_TAG
 from .proxmox import has_tag, node_run, parse_home_size, qm_config_on_node
 from .status import resolve_existing_workspace
 from .transports.base import Transport
+from .resize_auth import crypt_resize_access
 
-# Run read-only inspection in the guest; use serial identity instead of device order.
-_INSPECT = r'''
-import json, os, shutil, subprocess, sys
-mount, role, label = sys.argv[1:]
-def run(*args):
-    return subprocess.check_output(args, text=True).strip()
-def require(ok, message):
-    if not ok:
-        sys.exit(message)
-for tool in ('findmnt', 'lsblk', 'blkid', 'resize2fs', 'blockdev'):
-    require(shutil.which(tool), 'Missing guest tool: ' + tool)
-fs = json.loads(run('findmnt', '--json', '--mountpoint', mount, '-o', 'SOURCE,FSTYPE,TARGET,OPTIONS,MAJ:MIN'))['filesystems'][0]
-require(fs['target'] == mount and fs['fstype'] == 'ext4', 'Resize requires an exact ext4 mount: ' + mount)
-require('rw' in fs['options'].split(','), 'Filesystem is read-only')
-rows = json.loads(run('lsblk', '--json', '--bytes', '--paths', '--list', '-o', 'NAME,TYPE,PKNAME,SERIAL,SIZE,MAJ:MIN'))['blockdevices']
-by_name = {r['name']: r for r in rows}
-matches = [r for r in rows if r['maj:min'] == fs['maj:min']]
-require(len(matches) == 1, 'Cannot identify mounted block device: ' + fs['source'] + ' (' + fs['maj:min'] + ')')
-entry = matches[0]
-device = entry['name']
-require(entry['type'] in ('disk', 'part'), 'LVM and encrypted layouts are not supported')
-parent = entry['pkname'] if entry['type'] == 'part' else device
-require(parent in by_name and by_name[parent]['type'] == 'disk', 'Unsupported partition parent')
-disks = [r for r in rows if r['type'] == 'disk' and not os.path.basename(r['name']).startswith('zram')]
-require(len(disks) == 2, 'Resize requires exactly the root and home data disks')
-homes = [r for r in disks if (r.get('serial') or '').strip() == label]
-require(len(homes) == 1, 'Cannot identify the persistent home disk by serial')
-expected = homes[0]['name'] if role == 'home' else next(r['name'] for r in disks if r['name'] != homes[0]['name'])
-require(parent == expected, 'Mounted filesystem does not match the selected workspace disk')
-if role == 'home':
-    require(run('blkid', '-s', 'LABEL', '-o', 'value', device) == label, 'Persistent home label mismatch')
-partition = None
-if entry['type'] == 'part':
-    require(shutil.which('growpart'), 'Missing guest tool: growpart')
-    def sysvalue(name, field):
-        with open('/sys/class/block/' + os.path.basename(name) + '/' + field) as f:
-            return int(f.read())
-    partition = sysvalue(device, 'partition')
-    start = sysvalue(device, 'start')
-    require(not any(r['type'] == 'part' and r['pkname'] == parent and sysvalue(r['name'], 'start') > start for r in rows), 'Selected partition is not the last partition on disk')
-print(json.dumps(dict(device=device, parent=parent, partition=partition, size_bytes=int(by_name[parent]['size']))))
-'''
+from .resize_guest import INSPECT as _INSPECT
 
 
 def _inspect_guest(session: Transport, cfg: Config, node: str, vmid: int, role: str, label: str) -> dict[str, Any]:
@@ -103,10 +63,12 @@ def build_resize_plan(
     return dict(vmid=vmid, name=info['name'], node=info['node'], role=role, disk=disk,
                 volume=vm_cfg[disk].split(',', 1)[0], current_size_gib=current,
                 size=size, target_size_gib=target_gib, guest=guest,
-                digest=vm_cfg.get('digest', ''))
+                digest=vm_cfg.get('digest', ''),
+                ip=parse_ipconfig0(vm_cfg.get('ipconfig0', ''))['ip']
+                if (guest.get('crypt') or {}).get('auth') == 'passphrase' else None)
 
 
-def resize_workspace(session: Transport, cfg: Config, plan: dict[str, Any]) -> dict[str, Any]:
+def resize_workspace(session: Transport, cfg: Config, plan: dict[str, Any], *, interactive: bool = False) -> dict[str, Any]:
     vmid, node, disk = plan['vmid'], plan['node'], plan['disk']
     current = build_resize_plan(session, cfg, vmid, **{f'{plan["role"]}_size': plan['size']})
     for key in ('node', 'disk', 'volume', 'current_size_gib', 'guest'):
@@ -114,6 +76,12 @@ def resize_workspace(session: Transport, cfg: Config, plan: dict[str, Any]) -> d
             raise AppError(f'Workspace {key} changed after resize confirmation; generate a new plan')
     if not current['digest']:
         raise AppError('Missing Proxmox configuration digest; cannot safely resize')
+    with crypt_resize_access(session, cfg, current, interactive=interactive) as grow_crypt:
+        return _execute_resize(session, cfg, plan, current, grow_crypt)
+
+
+def _execute_resize(session, cfg, plan, current, grow_crypt):
+    vmid, node, disk = plan['vmid'], plan['node'], plan['disk']
     if current['target_size_gib'] > current['current_size_gib']:
         node_run(session, cfg, node, shlex.join([
             'qm', 'disk', 'resize', str(vmid), disk, plan['size'], '--digest', current['digest'],
@@ -137,12 +105,31 @@ else
     case "$code:$output" in 1:NOCHANGE:*) ;; *) printf '%s\\n' "$output" >&2; exit "$code" ;; esac
 fi
 '''
-    script += f'resize2fs {device}\n'
+    filesystem_script = ''
+    lvm = guest.get('lvm')
+    if lvm:
+        pv, lv, vg = (shlex.quote(lvm[key]) for key in ('pv_path', 'lv_path', 'vg_name'))
+        filesystem_script += (
+            f'pvresize {pv}\n'
+            f'free=$(vgs --noheadings -o vg_free_count {vg})\n'
+            f'if [ \"$free\" -gt 0 ]; then lvextend --extents +100%FREE {lv}; fi\n'
+        )
+    if guest['filesystem'] == 'btrfs':
+        filesystem_script += shlex.join([
+            'btrfs', 'filesystem', 'resize', f'{int(guest["btrfs_devid"])}:max', guest['mount'],
+        ]) + '\n'
+    else:
+        filesystem_script += f'resize2fs {device}\n'
     try:
         final = qm_config_on_node(session, cfg, node, vmid)
         if final.get(disk, '').split(',', 1)[0] != plan['volume'] or parse_disk_size_gb(final.get(disk, '')) != current['target_size_gib']:
             raise AppError('Proxmox disk size or identity verification failed')
-        guest_out_on_node(session, cfg, node, vmid, script)
+        if grow_crypt:
+            guest_out_on_node(session, cfg, node, vmid, script)
+            grow_crypt()
+            guest_out_on_node(session, cfg, node, vmid, 'set -eu\n' + filesystem_script)
+        else:
+            guest_out_on_node(session, cfg, node, vmid, script + filesystem_script)
     except AppError as exc:
         raise AppError(
             f'Disk growth may already be applied; filesystem growth is incomplete. '
