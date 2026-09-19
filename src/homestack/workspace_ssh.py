@@ -50,7 +50,7 @@ def write_local_ssh_config(cfg: Config, vmid: int, name: str, ip: str) -> Path:
     target = directory / f"vm{vmid}-{name}.conf"
     ssh_cfg = cfg.workspace_ssh
     lines = [
-        f"Host {name}",
+        f"Host {name} vm{vmid}",
         f"    HostName {ip}",
         f"    User {ssh_cfg.user}",
         *(f"    IdentityFile {path}" for path in ssh_cfg.identity_files),

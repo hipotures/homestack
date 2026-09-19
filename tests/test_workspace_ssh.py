@@ -21,7 +21,7 @@ class LocalSSHConfigTests(unittest.TestCase):
                 with patch.object(Path, 'home', return_value=home):
                     path = workspace_ssh.write_local_ssh_config(test_config(), vmid, name, ip)
                 self.assertEqual(path, home / '.ssh/config.d/homestack' / f'vm{vmid}-{name}.conf')
-                self.assertEqual(path.read_text(encoding='utf-8'), f'Host {name}\n    HostName {ip}\n    User user\n    IdentityFile ~/.ssh/example-hardware-key\n    IdentitiesOnly yes\n    LogLevel FATAL\n')
+                self.assertEqual(path.read_text(encoding='utf-8'), f'Host {name} vm{vmid}\n    HostName {ip}\n    User user\n    IdentityFile ~/.ssh/example-hardware-key\n    IdentitiesOnly yes\n    LogLevel FATAL\n')
                 self.assertEqual(path.stat().st_mode & 511, 384)
 
     def test_uses_workspace_ssh_config_instead_of_hardcoded_keys(self) -> None:
@@ -42,7 +42,7 @@ class LocalSSHConfigTests(unittest.TestCase):
                 )
             self.assertEqual(
                 path.read_text(encoding='utf-8'),
-                'Host custom\n'
+                'Host custom vm202\n'
                 '    HostName 192.0.2.202\n'
                 '    User user\n'
                 '    IdentityFile ~/.ssh/custom-key-a\n'
