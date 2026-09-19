@@ -138,6 +138,11 @@ class CreateWorkspaceCompletionTests(unittest.TestCase):
         result, _session = self.run_verified_create()
         self.assertNotIn('sync_command', result)
 
+    def test_create_result_uses_local_ssh_alias(self) -> None:
+        result, _session = self.run_verified_create()
+        self.assertEqual(result['ssh']['root'], 'ssh root@test1')
+        self.assertEqual(result['ssh']['user'], 'ssh test1')
+
 class WorkspaceTargetTests(unittest.TestCase):
 
     def test_numeric_target_is_vmid(self) -> None:

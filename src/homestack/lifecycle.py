@@ -884,8 +884,8 @@ def create_workspace(
             "ssh_known_hosts_removed": ssh_known_hosts_removed,
             "ssh_config_path": str(ssh_config_path),
             "ssh": {
-                "root": f"ssh root@{ip}",
-                "user": f"ssh {cfg.user_name}@{ip}",
+                "root": f"ssh root@{name}",
+                "user": f"ssh {name}",
             },
         }
 
