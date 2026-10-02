@@ -1,6 +1,7 @@
 """Plain CLI adapter; catalog listing is dispatched without remote transport."""
 from __future__ import annotations
 
+from contextlib import ExitStack, nullcontext
 import json
 import sys
 from rich.console import Console
@@ -178,6 +179,7 @@ def run_setup(args, cfg, *, json_mode: bool, assume_yes: bool) -> int:
     if not tokens and args.catalog:
         raise AppError("--catalog requires explicit selectors; use setup list to inspect a catalog")
     unattended = bool(json_mode or getattr(args, "non_interactive", False) or not sys.stdin.isatty())
+    interactive_tui = not local and not tokens and not unattended
     if tokens:
         parse_assignments(tokens, cfg)
         entries, catalog_id = select_entries(cfg, tokens, catalog_id=args.catalog)
@@ -187,16 +189,21 @@ def run_setup(args, cfg, *, json_mode: bool, assume_yes: bool) -> int:
         entries, catalog_id = (), None
     # Local selection validation always precedes even read-only target resolution.
     if not local:
-        with open_transport(cfg) as session:
-            target = resolve_target(session, cfg, target_arg)
+        with console.status("Resolving workspace…") if interactive_tui else nullcontext():
+            with open_transport(cfg) as session:
+                target = resolve_target(session, cfg, target_arg)
     if not entries:
         from .setup_tui import SetupApp
-        catalog = catalog_loader(cfg, repositories=True)
-        save_snapshot(cfg, catalog)
+        with console.status("Loading setup catalog…") if interactive_tui else nullcontext():
+            catalog = catalog_loader(cfg, repositories=True)
+            save_snapshot(cfg, catalog)
         if not local:
-            console.print("SSH: authenticate once; this session remains open until setup exits.")
-        with connection(cfg, target) as workspace:
-            state = inspect_workspace_state(workspace, cfg, target, catalog.entries)
+            console.print("SSH: authenticate once; this session remains open until setup exits. Touch your security key if prompted.")
+        with ExitStack() as stack:
+            with console.status("Connecting/authenticating SSH (touch security key if prompted)…") if interactive_tui else nullcontext():
+                workspace = stack.enter_context(connection(cfg, target))
+            with console.status("SSH connected; inspecting workspace…") if interactive_tui else nullcontext():
+                state = inspect_workspace_state(workspace, cfg, target, catalog.entries)
             result = SetupApp(cfg, target, catalog=catalog, loader=catalog_loader, workspace=workspace, state=state).run()
         return 0 if result is None or result.get("ok") else 1
     plan = build_plan(cfg, target, entries, catalog_id=catalog_id, unattended=unattended)
