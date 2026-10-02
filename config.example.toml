@@ -206,6 +206,42 @@ requires_absent = []
 backup_paths = []
 
 [[setup.items]]
+id = "pi"
+group = "app"
+handler = "application"
+label = "Pi"
+description = "Install Pi. Provider configuration remains separate."
+depends_on = []
+command = "curl -fsSL https://pi.dev/install.sh | sh"
+interpreter = "bash"
+interaction = "interactive"
+prerequisites = ["curl", "tar"]
+check = "pi --version"
+prerequisite_checks = []
+non_interactive = ""
+bin_dirs = ["~/.local/bin"]
+requires_absent = []
+backup_paths = []
+
+[[setup.items]]
+id = "opencode-v2"
+group = "app"
+handler = "application"
+label = "OpenCode v2"
+description = "Install OpenCode v2. Provider configuration remains separate."
+depends_on = []
+command = "curl -fsSL https://opencode.ai/v2/install | bash"
+interpreter = "bash"
+interaction = "non-interactive"
+prerequisites = ["curl", "tar"]
+check = "opencode --version"
+prerequisite_checks = []
+non_interactive = ""
+bin_dirs = ["~/.opencode/bin", "~/.local/bin"]
+requires_absent = []
+backup_paths = []
+
+[[setup.items]]
 id = "hermes"
 group = "app"
 handler = "application"
