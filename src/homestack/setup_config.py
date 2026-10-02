@@ -212,10 +212,10 @@ def defaults() -> tuple[Entry, ...]:
         Entry("opencode", "app", "application", "OpenCode", "Install OpenCode. Provider configuration remains separate.",
               ApplicationParams("curl -fsSL https://opencode.ai/install | bash", interaction="non-interactive",
                                 prerequisites=("curl", "tar"), check="opencode --version", bin_dirs=("~/.opencode/bin", "~/.local/bin"))),
-        Entry("pi", "app", "application", "Pi", "Install Pi. Provider configuration remains separate.",
-              ApplicationParams("curl -fsSL https://pi.dev/install.sh | sh",
+        Entry("pi", "app", "application", "Pi", "",
+              ApplicationParams("curl -fsSL https://pi.dev/install.sh | sh", interaction="non-interactive",
                                 prerequisites=("curl", "tar"), check="pi --version")),
-        Entry("opencode-v2", "app", "application", "OpenCode v2", "Install OpenCode v2. Provider configuration remains separate.",
+        Entry("opencode-v2", "app", "application", "OpenCode v2", "",
               ApplicationParams("curl -fsSL https://opencode.ai/v2/install | bash", interaction="non-interactive",
                                 prerequisites=("curl", "tar"), check="opencode --version", bin_dirs=("~/.opencode/bin", "~/.local/bin"))),
         Entry("hermes", "app", "application", "Hermes Agent",
@@ -390,7 +390,7 @@ def parse_setup(raw: Any) -> SetupConfig:
         if not isinstance(handler, str) or not isinstance(data.get("group"), str) or handler not in types or data.get("group") not in groups:
             raise AppError("Setup item has an unknown handler or group")
         for key in ("label", "description"):
-            if not isinstance(data.get(key), str) or not data[key].strip():
+            if not isinstance(data.get(key), str) or (key == "label" and not data[key].strip()):
                 raise AppError(f"Setup item {data['id']} needs {key}")
         cls = types[handler]
         params = {k: v for k, v in data.items() if k not in common}
