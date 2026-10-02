@@ -206,23 +206,6 @@ requires_absent = []
 backup_paths = []
 
 [[setup.items]]
-id = "pi"
-group = "app"
-handler = "application"
-label = "Pi"
-depends_on = []
-command = "curl -fsSL https://pi.dev/install.sh | sh"
-interpreter = "bash"
-interaction = "non-interactive"
-prerequisites = ["curl", "tar"]
-check = "pi --version"
-prerequisite_checks = []
-non_interactive = ""
-bin_dirs = ["~/.local/bin"]
-requires_absent = []
-backup_paths = []
-
-[[setup.items]]
 id = "opencode-v2"
 group = "app"
 handler = "application"
@@ -236,6 +219,23 @@ check = "opencode --version"
 prerequisite_checks = []
 non_interactive = ""
 bin_dirs = ["~/.opencode/bin", "~/.local/bin"]
+requires_absent = []
+backup_paths = []
+
+[[setup.items]]
+id = "pi"
+group = "app"
+handler = "application"
+label = "Pi"
+depends_on = []
+command = "curl -fsSL https://pi.dev/install.sh | sh"
+interpreter = "bash"
+interaction = "non-interactive"
+prerequisites = ["curl", "tar"]
+check = "pi --version"
+prerequisite_checks = []
+non_interactive = ""
+bin_dirs = ["~/.local/bin"]
 requires_absent = []
 backup_paths = []
 
