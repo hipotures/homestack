@@ -118,6 +118,11 @@ DEFAULT_GROUPS = (
     Group("repo", "Repositories", "GitHub checkouts with workspace-local deploy keys."),
 )
 CODEX_RECIPE = "curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh"
+RUST_RECIPE = '''installer=$(mktemp)
+trap 'rm -f -- "$installer"' EXIT
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs -o "$installer"
+sh "$installer" -y --profile minimal
+. "$HOME/.cargo/env"'''
 # Download separately so installer stdin remains the real terminal when required.
 HERMES_RECIPE = '''installer=$(mktemp)
 trap 'rm -f -- "$installer"' EXIT
@@ -235,6 +240,10 @@ def defaults() -> tuple[Entry, ...]:
                                 ),
                                 check="hermes --version", bin_dirs=("~/.local/bin", "~/.hermes/bin", "~/.hermes/node/bin"),
                                 requires_absent=("~/.hermes/hermes-agent",))),
+        Entry("rust", "app", "application", "Rust (rustup)",
+              "Install the Rust toolchain with the minimal rustup profile, including rustc and Cargo.",
+              ApplicationParams(RUST_RECIPE, interaction="non-interactive", prerequisites=("curl", "sh"),
+                                check="rustup --version && rustc --version && cargo --version", bin_dirs=("~/.cargo/bin",))),
         Entry("bk", "backup", "backup", "BK",
               "Install the persistent-home BK backup tool and nightly user timer.",
               BackupParams()),

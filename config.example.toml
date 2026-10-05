@@ -264,3 +264,26 @@ non_interactive = ""
 bin_dirs = ["~/.local/bin", "~/.hermes/bin", "~/.hermes/node/bin"]
 requires_absent = ["~/.hermes/hermes-agent"]
 backup_paths = []
+
+[[setup.items]]
+id = "rust"
+group = "app"
+handler = "application"
+label = "Rust (rustup)"
+description = "Install the Rust toolchain with the minimal rustup profile, including rustc and Cargo."
+depends_on = []
+command = '''
+installer=$(mktemp)
+trap 'rm -f -- "$installer"' EXIT
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs -o "$installer"
+sh "$installer" -y --profile minimal
+. "$HOME/.cargo/env"'''
+interpreter = "bash"
+interaction = "non-interactive"
+prerequisites = ["curl", "sh"]
+check = "rustup --version && rustc --version && cargo --version"
+prerequisite_checks = []
+non_interactive = ""
+bin_dirs = ["~/.cargo/bin"]
+requires_absent = []
+backup_paths = []
