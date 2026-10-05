@@ -76,6 +76,11 @@ class BackupParams:
 
 
 @dataclass(frozen=True)
+class HerdrParams:
+    pass
+
+
+@dataclass(frozen=True)
 class StructuredParams:
     """Internal setup entry parameters for one managed config leaf."""
 
@@ -92,7 +97,7 @@ class Entry:
     handler: str
     label: str
     description: str
-    params: FileParams | EnvironmentParams | ApplicationParams | RepositoryParams | BackupParams | StructuredParams
+    params: FileParams | EnvironmentParams | ApplicationParams | RepositoryParams | BackupParams | HerdrParams | StructuredParams
     depends_on: tuple[str, ...] = ()
 
     def definition(self) -> dict[str, Any]:
@@ -209,6 +214,9 @@ def defaults() -> tuple[Entry, ...]:
     items.extend([
         Entry("codex", "app", "application", "Codex", "Install Codex CLI. Sign-in remains separate.",
               ApplicationParams(CODEX_RECIPE, interaction="non-interactive", prerequisites=("curl", "tar"), check="codex --version")),
+        Entry("herdr", "app", "herdr", "Herdr",
+              "Install Herdr, enable its user service with updates before start, and connect the desktop using the VM name. Existing servers are left running. Desktop SSH may require another security-key touch.",
+              HerdrParams()),
         Entry("opencode", "app", "application", "OpenCode", "Install OpenCode. Provider configuration remains separate.",
               ApplicationParams("curl -fsSL https://opencode.ai/install | bash", interaction="non-interactive",
                                 prerequisites=("curl", "tar"), check="opencode --version", bin_dirs=("~/.opencode/bin", "~/.local/bin"))),
@@ -383,7 +391,7 @@ def parse_setup(raw: Any) -> SetupConfig:
         base.update(data)
         entries[item_id] = base
     parsed = []
-    types = {"file": FileParams, "environment": EnvironmentParams, "application": ApplicationParams, "repository": RepositoryParams, "backup": BackupParams}
+    types = {"file": FileParams, "environment": EnvironmentParams, "application": ApplicationParams, "repository": RepositoryParams, "backup": BackupParams, "herdr": HerdrParams}
     common = {"id", "group", "handler", "label", "description", "depends_on"}
     for data in entries.values():
         handler = data.get("handler")

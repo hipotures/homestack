@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 import re
+import os
+import signal
+import subprocess
 import threading
 from datetime import datetime, timezone
 import json
@@ -19,11 +22,13 @@ from textual.widgets import Input, Static, Tree
 from textual.worker import get_current_worker
 
 from .models import AppError
+from .setup_herdr import AUTH_NOTICE
 from .setup import build_plan, execute_plan, inspect_workspace_state, write_paths
 from .setup_catalog import Catalog, load_catalog, save_snapshot
 from .setup_config import (
     ApplicationParams,
     BackupParams,
+    HerdrParams,
     ConfigFile,
     EnvironmentParams,
     FileParams,
@@ -244,6 +249,10 @@ class Execution(ModalScreen[bool]):
         "#execution-box { width: 90%; height: 85%; border: solid $accent; "
         "background: $surface; padding: 1 2; overflow-x: hidden; } "
         "#execution-title { height: auto; } "
+        "#execution-progress { height: auto; min-height: 1; margin-bottom: 1; } "
+        "#execution-progress.auth-wait { border: round #d29922; padding: 0 1; } "
+        "#execution-spinner { width: 3; height: 1; } "
+        "#execution-step { width: 1fr; height: auto; } "
         "#execution-log { height: 1fr; overflow-x: hidden; } "
         "#execution-content { width: 1fr; height: auto; } "
         "#execution-actions { display: none; height: 1; align-horizontal: center; } "
@@ -254,10 +263,16 @@ class Execution(ModalScreen[bool]):
         super().__init__()
         self.lines: list[str] = []
         self.finished = False
+        self.auth_wait = False
+        self._progress_timer = None
+        self._progress_frame = 0
 
     def compose(self) -> ComposeResult:
         with Container(id="execution-box"):
             yield Static("Setup running", id="execution-title", markup=False)
+            with Horizontal(id="execution-progress"):
+                yield Static("⠋", id="execution-spinner", markup=False)
+                yield Static("Preparing setup…", id="execution-step", markup=False)
             with VerticalScroll(id="execution-log"):
                 yield Static("", id="execution-content", markup=False)
             with Horizontal(id="execution-actions"):
@@ -267,6 +282,10 @@ class Execution(ModalScreen[bool]):
         action = self.query_one("#ok", CompactAction)
         action.disabled = not self.finished
         self.query_one("#execution-actions").display = self.finished
+        self.query_one("#execution-progress").display = not self.finished
+        if not self.finished:
+            self._progress_timer = self.set_interval(0.12, self.advance_progress)
+            self.update_step()
         self.query_one("#execution-title", Static).update(
             "Setup finished" if self.finished else "Setup running"
         )
@@ -275,6 +294,35 @@ class Execution(ModalScreen[bool]):
         )
         if self.finished:
             action.focus()
+
+    def stop_progress(self):
+        if self._progress_timer is not None:
+            self._progress_timer.stop()
+            self._progress_timer = None
+
+    def on_unmount(self):
+        self.stop_progress()
+
+    def update_step(self):
+        self.query_one("#execution-progress").set_class(self.auth_wait, "auth-wait")
+        if self.auth_wait:
+            bright = self._progress_frame % 16 < 8
+            text = Text()
+            text.append("YubiKey · SSH authentication", style="bold #ffd166" if bright else "bold #d29922")
+            text.append("\nTouch your YubiKey/security key if it flashes.", style="bold #e6edf3")
+            text.append("\nConnecting desktop Herdr…", style="#8b949e")
+        else:
+            text = Text(self.lines[-1] if self.lines else "Preparing setup…")
+        self.query_one("#execution-step", Static).update(text)
+
+    def advance_progress(self):
+        self._progress_frame += 1
+        self.query_one("#execution-spinner", Static).update(
+            Text("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"[self._progress_frame % 10],
+                 style="#ffd166" if self.auth_wait else "")
+        )
+        if self.auth_wait:
+            self.update_step()
 
     def on_resize(self, event: events.Resize):
         self.set_class(event.size.width < 50, "narrow")
@@ -301,10 +349,14 @@ class Execution(ModalScreen[bool]):
         line = self._clean_line(identity, message)
         if line:
             self.lines.append(line)
+            self.auth_wait = identity == "herdr" and message == AUTH_NOTICE
+            if self.is_mounted and not self.finished:
+                self.update_step()
             self._update_content()
 
     def show_result(self, result):
         self.finished = True
+        self.stop_progress()
         status = "Setup finished" if result.get("ok") else "Setup stopped"
         self.lines += ["", status]
         if result.get("snapshot", {}).get("created"):
@@ -314,6 +366,7 @@ class Execution(ModalScreen[bool]):
             for item in result.get("results", [])
         ]
         if self.is_mounted:
+            self.query_one("#execution-progress").display = False
             self.query_one("#execution-title", Static).update(status)
             self.query_one("#execution-actions").display = True
             action = self.query_one("#ok", CompactAction)
@@ -1027,6 +1080,15 @@ class SetupApp(App):
                 lines += ["Structured configuration files:"]
                 for config in p.config_files:
                     lines += [f"{config.path} ({config.format})"]
+        elif isinstance(p, HerdrParams):
+            lines += [
+                "User service: herdr.service",
+                "Updates before every service start, including automatic restarts.",
+                "Linger starts the service at VM boot without a user login.",
+                "Existing servers are left running; an unmanaged server is replaced only after VM reboot.",
+                "Desktop label: " + self.target["name"],
+                "Desktop registration opens separate SSH authentication; touch your YubiKey/security key if prompted.",
+            ]
         elif isinstance(p, RepositoryParams):
             owner, name = p.repository.split("/", 1)
             lines += [
@@ -1161,6 +1223,8 @@ class SetupApp(App):
             elif isinstance(entry.params, BackupParams):
                 action = ("Reconcile local BK assets and user timer" if self.target.get("local")
                           else "Reconcile BK assets, user timer and restricted SSH retrieval keys")
+            elif isinstance(entry.params, HerdrParams):
+                action = "Install if missing; enable user service and linger; preserve running sessions; register desktop profile"
             else:
                 action = (
                     "Back up modified shell files; overwrite configuration"
@@ -1234,6 +1298,39 @@ class SetupApp(App):
             raise error
         return result
 
+    def desktop_command(self, command):
+        """Keep the execution modal responsive while a desktop command waits."""
+        if self.cancel_requested.is_set():
+            raise AppError("Cancelled before desktop Herdr registration")
+        # No controlling terminal: Herdr cannot request hidden approval or SSH
+        # input underneath Textual. Hardware-key touch still works with ssh-agent.
+        with subprocess.Popen(command, stdin=subprocess.DEVNULL,
+                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                              text=True, errors="replace", start_new_session=True) as process:
+            try:
+                while True:
+                    if self.cancel_requested.is_set():
+                        raise AppError("Desktop Herdr registration cancelled; guest service remains configured")
+                    try:
+                        output, _ = process.communicate(timeout=0.1)
+                        return subprocess.CompletedProcess(command, process.returncode, output, "")
+                    except subprocess.TimeoutExpired:
+                        continue
+            finally:
+                if process.poll() is None:
+                    try:
+                        os.killpg(process.pid, signal.SIGTERM)
+                    except ProcessLookupError:
+                        pass
+                    try:
+                        process.communicate(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        try:
+                            os.killpg(process.pid, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+                        process.communicate()
+
     @work(thread=True, exclusive=True, group="execution")
     def execute(self):
         def progress(identity, state):
@@ -1244,7 +1341,8 @@ class SetupApp(App):
         def activity(identity, message):
             self.call_from_thread(self.append_activity, identity, message)
 
-        kwargs = {"terminal": self.terminal, "progress": progress, "activity": activity}
+        kwargs = {"terminal": self.terminal, "desktop": self.desktop_command,
+                  "progress": progress, "activity": activity}
         if self.workspace is not None:
             kwargs["workspace"] = self.workspace
         try:

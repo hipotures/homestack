@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import replace
 from pathlib import Path
 import tempfile
+import os
+import sys
 import unittest
 from unittest.mock import patch
 
@@ -10,8 +12,94 @@ from textual.widgets import Input, Static
 from homestack import setup_catalog as catalog, setup_config as definitions
 from homestack.setup_tui import CompactAction, Execution, SetupApp, SetupTree, Review
 from support import test_config
+from homestack import setup, setup_herdr
 
 TARGET = {'name': 'workspace', 'vmid': 200, 'ip': '192.0.2.200'}
+
+
+class DesktopConnectionTests(unittest.IsolatedAsyncioTestCase):
+    async def check_connection_modal(self, *, cancel):
+        with tempfile.TemporaryDirectory() as directory:
+            ready = Path(directory) / "ready"
+            release = Path(directory) / "release"
+            cfg = test_config()
+            target = dict(TARGET, user="user")
+            entry = next(e for e in cfg.setup.items if e.id == "herdr")
+            child = '''import os, sys, time
+from pathlib import Path
+assert not sys.stdin.isatty()
+assert os.getsid(0) == os.getpid()
+Path(sys.argv[1]).write_text(str(os.getpid()))
+while not Path(sys.argv[2]).exists():
+    time.sleep(0.02)
+print("registered")
+'''
+
+            def execute(cfg, plan, *, desktop, activity, **kwargs):
+                activity("herdr", setup_herdr.AUTH_NOTICE)
+                result = desktop([sys.executable, "-c", child, str(ready), str(release)])
+                self.assertEqual(result.stdout.strip(), "registered")
+                return {"ok": True, "results": [{"id": "herdr", "label": "Herdr", "status": "succeeded", "detail": "Desktop connected"}], "snapshot": {"created": False}}
+
+            app = SetupApp(cfg, target, executor=execute)
+            app.save_displayed_catalog = lambda catalog: None
+            app.action_refresh_catalog = lambda: None
+            with patch.object(app, "suspend") as suspend:
+                async with app.run_test(size=(100, 30)) as pilot:
+                    app.selected = {"herdr"}
+                    app.pending_plan = setup.build_plan(cfg, target, (entry,))
+                    app.review_answer(True)
+                    for _ in range(30):
+                        await pilot.pause(0.02)
+                        if ready.exists():
+                            break
+                    try:
+                        self.assertTrue(ready.exists())
+                        self.assertIsInstance(app.screen, Execution)
+                        self.assertFalse(app.screen.finished)
+                        self.assertTrue(app.screen.query_one("#execution-progress").display)
+                        self.assertTrue(app.screen.query_one("#execution-spinner").display)
+                        self.assertTrue(app.screen.query_one("#execution-progress").has_class("auth-wait"))
+                        prompt = app.screen.query_one("#execution-step", Static)
+                        self.assertIn("Touch your YubiKey/security key if it flashes.", prompt.render().plain)
+                        self.assertGreater(prompt.region.y, app.screen.query_one("#execution-title").region.y)
+                        self.assertLess(prompt.region.y, app.screen.query_one("#execution-log").region.y)
+                        app.screen._progress_timer.pause()
+                        app.screen._progress_frame = 0
+                        app.screen.update_step()
+                        initial_style = prompt.render().spans[0].style
+                        for _ in range(8):
+                            app.screen.advance_progress()
+                        self.assertNotEqual(initial_style, prompt.render().spans[0].style)
+                        app.screen._progress_timer.resume()
+                        suspend.assert_not_called()
+                        if cancel:
+                            await pilot.press("escape")
+                        else:
+                            release.touch()
+                        await app.workers.wait_for_complete()
+                        await pilot.pause()
+                        self.assertTrue(app.screen.finished)
+                        self.assertFalse(app.screen.query_one("#execution-progress").display)
+                        self.assertIsNone(app.screen._progress_timer)
+                        self.assertEqual(app.result["ok"], not cancel)
+                        if cancel:
+                            self.assertIn("guest service remains configured", app.result["results"][0]["detail"])
+                        with self.assertRaises(ProcessLookupError):
+                            os.kill(int(ready.read_text()), 0)
+                        suspend.assert_not_called()
+                        await pilot.press("enter")
+                        await pilot.pause()
+                    finally:
+                        release.touch()
+                        app.cancel_requested.set()
+                        await app.workers.wait_for_complete()
+
+    async def test_desktop_authentication_keeps_modal_visible_until_success(self):
+        await self.check_connection_modal(cancel=False)
+
+    async def test_escape_cancels_local_registration_without_suspending_tui(self):
+        await self.check_connection_modal(cancel=True)
 
 
 def config_with_file(path: str):

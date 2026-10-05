@@ -1192,7 +1192,7 @@ def record_item(home: Path, data: dict) -> dict:
     paths = list(dict.fromkeys(data.get("paths", [])))
     if paths:
         current["files"] = [path_metadata(home, relative) for relative in paths]
-    if data["handler"] == "application":
+    if data["handler"] in {"application", "herdr"}:
         if previous.get("installed_at"):
             current["installed_at"] = previous["installed_at"]
         elif data.get("installed"):

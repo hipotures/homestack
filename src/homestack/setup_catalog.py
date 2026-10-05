@@ -18,6 +18,7 @@ from .repo import _github_json
 from .setup_config import (
     ApplicationParams,
     BackupParams,
+    HerdrParams,
     Entry,
     EnvironmentParams,
     FileParams,
@@ -66,6 +67,8 @@ class Catalog:
                 elif isinstance(entry.params, BackupParams):
                     from .backup import managed_paths
                     location = ", ".join("~/" + path for path in managed_paths())
+                elif isinstance(entry.params, HerdrParams):
+                    location = "~/.local/bin/herdr, ~/.config/systemd/user/herdr.service; desktop profile"
                 row = {"index": i, "id": entry.id, "group": group.id, "label": entry.label,
                        "path_or_repository": location,
                        "availability": self.availability.get(entry.id, "unknown"), "guest_state": "unknown",

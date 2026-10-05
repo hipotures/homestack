@@ -143,6 +143,10 @@ runcmd:
           chown {cfg.user_uid}:{cfg.user_gid} "$home_path/.ssh/authorized_keys"
           chmod 600 "$home_path/.ssh/authorized_keys"
       fi
+
+      if [ -f "$home_path/.config/systemd/user/herdr.service" ]; then
+          loginctl enable-linger {shlex.quote(cfg.user_name)}
+      fi
 """
 
     network_cidr = cfg.network_cidr if cidr is None else cidr

@@ -18,11 +18,11 @@ from .config import Config
 from .guest import derive_ip
 from .lifecycle import resolve_workspace_target
 from .models import AppError
-from . import backup, repo
-from .setup_config import ApplicationParams, BackupParams, Entry, FileParams, EnvironmentParams, RepositoryParams, StructuredParams, config_entries
+from . import backup, repo, setup_herdr
+from .setup_config import ApplicationParams, BackupParams, HerdrParams, Entry, FileParams, EnvironmentParams, RepositoryParams, StructuredParams, config_entries
 from .workspace_ssh import WorkspaceSSH
 
-ORDER = {"environment": 0, "file": 1, "application": 2, "structured": 3, "repository": 4, "backup": 5}
+ORDER = {"environment": 0, "file": 1, "application": 2, "herdr": 2, "structured": 3, "repository": 4, "backup": 5}
 
 
 @dataclass(frozen=True)
@@ -50,6 +50,12 @@ class Plan:
                 }
                 if not self.target.get("local"):
                     extra["restricted_authorized_keys"] = "~/.ssh/authorized_keys"
+            elif isinstance(p, HerdrParams):
+                extra = {"destinations": ["~/" + setup_herdr.UNIT_PATH],
+                         "service": "herdr.service", "update": "before every service start",
+                         "desktop_label": self.target["name"],
+                         "desktop_ssh_target": f"{self.target['user']}@{self.target['name']}",
+                         "security_key_touch": "Desktop registration may require separate SSH authentication"}
             elif isinstance(p, ApplicationParams):
                 extra = {"interpreter": p.interpreter, "interaction": p.interaction,
                          "prerequisites": p.prerequisites, "bin_dirs": p.bin_dirs,
@@ -271,6 +277,8 @@ def inspect_workspace_state(ws, cfg: Config, target: dict, entries: tuple[Entry,
                     item["backup_paths"] = list(p.backup_paths)
             elif isinstance(p, BackupParams):
                 item.update(backup.inspect(ws, cfg, target["vmid"]))
+            elif isinstance(p, HerdrParams):
+                item.update(setup_herdr.inspect(ws, cfg, target))
             elif isinstance(p, RepositoryParams):
                 live = repo_states.get(p.repository, {}) if isinstance(repo_states, dict) else {}
                 item.update({k: live.get(k) for k in ("state", "ready", "exists", "detail", "remote", "key_pair") if k in live})
@@ -300,7 +308,7 @@ def backup_paths_for_entry(cfg: Config, entry: Entry, state: dict) -> tuple[str,
         return tuple(state.get("changed", ()))
     if isinstance(p, ApplicationParams):
         return tuple(path[2:].rstrip("/") for path in p.backup_paths)
-    if isinstance(p, BackupParams):
+    if isinstance(p, (BackupParams, HerdrParams)):
         return tuple(state.get("snapshot_paths", ()))
     if isinstance(p, RepositoryParams):
         repository = state.get("repository", {})
@@ -319,6 +327,8 @@ def record_entry_state(ws, cfg: Config, plan: Plan, entry: Entry, state: dict, *
         paths = tuple(state.get("paths", ()))
     elif isinstance(entry.params, BackupParams):
         paths = backup.managed_paths() if plan.target.get("local") else backup.managed_state_paths()
+    elif isinstance(entry.params, HerdrParams):
+        paths = (setup_herdr.UNIT_PATH,)
     values = {
         "vmid": plan.target["vmid"],
         "name": plan.target["name"],
@@ -327,7 +337,7 @@ def record_entry_state(ws, cfg: Config, plan: Plan, entry: Entry, state: dict, *
         "paths": list(paths),
         "snapshot": snapshot_id,
     }
-    if isinstance(entry.params, ApplicationParams):
+    if isinstance(entry.params, (ApplicationParams, HerdrParams)):
         values["installed"] = not bool(state.get("installed"))
     if isinstance(entry.params, RepositoryParams):
         values["repository"] = entry.params.repository
@@ -373,6 +383,8 @@ def write_paths(cfg: Config, entry: Entry) -> tuple[str, ...]:
                 "fish": (".config/fish/conf.d/homestack.fish",), "nu": (".config/nushell/env.nu", ".config/nushell/config.nu")}[p.profile]
     if isinstance(p, BackupParams):
         return (*backup.managed_state_paths(), ".config/bk/backup.yaml")
+    if isinstance(p, HerdrParams):
+        return (setup_herdr.UNIT_PATH,)
     if isinstance(p, RepositoryParams):
         return tuple(path.removeprefix(f"/home/{cfg.user_name}/") for path in repo.repository_paths(cfg, p.repository))
     return ()
@@ -595,6 +607,8 @@ def preflight_entry(ws, cfg: Config, plan: Plan, entry: Entry) -> dict:
         return {"installed": installed, "ready": installed}
     if isinstance(p, BackupParams):
         return backup.preflight(ws, cfg, plan.target["vmid"])
+    if isinstance(p, HerdrParams):
+        return setup_herdr.preflight(ws, cfg, plan.target, unattended=plan.unattended)
     if isinstance(p, RepositoryParams):
         metadata = repo._github_json([f"repos/{p.repository}"], dict)
         if metadata.get("full_name", "").casefold() != p.repository.casefold() or not metadata.get("permissions", {}).get("admin") or metadata.get("archived") or metadata.get("disabled"):
@@ -621,6 +635,7 @@ def apply_entry(
     state: dict,
     terminal: Callable,
     *,
+    desktop=setup_herdr.register_desktop,
     progress=lambda identity, state: None,
     activity=lambda identity, message: None,
 ):
@@ -671,6 +686,9 @@ def apply_entry(
             ws, cfg, plan.target["vmid"], state,
             activity=lambda message: activity(entry.id, message)
         )
+    if isinstance(p, HerdrParams):
+        return setup_herdr.apply(ws, cfg, plan.target, state, desktop=desktop,
+                                 activity=lambda message: activity(entry.id, message), unattended=plan.unattended)
     if isinstance(p, RepositoryParams):
         activity(entry.id, "Configure repository")
         state = repo.setup_repository(
@@ -696,6 +714,7 @@ def execute_plan(
     connection_factory=None,
     workspace=None,
     terminal=lambda operation: operation(),
+    desktop=setup_herdr.register_desktop,
     progress=lambda item, state: None,
     activity=lambda identity, message: None,
 ) -> dict:
@@ -793,7 +812,7 @@ def execute_plan(
                             detail = "Managed value already matches" if leaf == "matching" else "Managed value patched"
                         else:
                             status, detail = apply_entry(ws, cfg, plan, entry, states[entry.id], terminal,
-                                                         progress=progress, activity=activity)
+                                                         desktop=desktop, progress=progress, activity=activity)
                         current.update(status=status, detail=detail)
 
                     application = applications.get(owner)

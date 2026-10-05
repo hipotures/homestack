@@ -188,6 +188,14 @@ path = ["checks", "config.load", "status"]
 accepted = ["ok", "warning"]
 
 [[setup.items]]
+id = "herdr"
+group = "app"
+handler = "herdr"
+label = "Herdr"
+description = "Install Herdr, enable its user service with updates before start, and connect the desktop using the VM name. Existing servers are left running. Desktop SSH may require another security-key touch."
+depends_on = []
+
+[[setup.items]]
 id = "opencode"
 group = "app"
 handler = "application"
