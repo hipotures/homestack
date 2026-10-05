@@ -80,7 +80,12 @@ def resolve_target(session, cfg: Config, target: str) -> dict:
     info = repo.repository_workspace_info(session, cfg, vmid)
     if info["status"] != "running":
         raise AppError("Setup requires a running workspace; lifecycle operations must be performed separately")
-    return {**info, "ip": derive_ip(cfg, vmid), "user": cfg.user_name, "home": f"/home/{cfg.user_name}"}
+    return {
+        **info,
+        "ip": derive_ip(cfg, vmid),
+        "user": cfg.user_name,
+        "home": f"/home/{cfg.user_name}",
+    }
 
 
 def _digest_local_path(path: Path) -> tuple[str, int]:
@@ -159,7 +164,7 @@ def inspect_workspace_state(ws, cfg: Config, target: dict, entries: tuple[Entry,
     entries = expand_config_entries(entries)
     require_tool(ws, cfg, "python3")
     guest(ws, cfg, "identity", user=cfg.user_name, uid=cfg.user_uid, gid=cfg.user_gid,
-          name=target["name"], vmid=target["vmid"])
+          name=target["name"], vmid=target["vmid"], alien=target.get("alien", False))
     state_doc = guest(ws, cfg, "state-read", vmid=target["vmid"], name=target["name"])
     registry = state_doc.get("registry") or {}
     registered = registry.get("items", {}) if isinstance(registry, dict) else {}
@@ -336,6 +341,7 @@ def record_entry_state(ws, cfg: Config, plan: Plan, entry: Entry, state: dict, *
         "handler": entry.handler,
         "paths": list(paths),
         "snapshot": snapshot_id,
+        "alien": plan.target.get("alien", False),
     }
     if isinstance(entry.params, (ApplicationParams, HerdrParams)):
         values["installed"] = not bool(state.get("installed"))
@@ -509,7 +515,7 @@ def require_tool(ws, cfg: Config, tool: str, bins: tuple[str, ...] = ()) -> None
     if result.returncode == 255:
         raise AppError("Workspace SSH transport failed during prerequisite inspection")
     if result.returncode:
-        raise AppError(f"Missing workspace executable {tool}; prepare Gold and refresh separately")
+        raise AppError(f"Missing workspace executable {tool}; install system prerequisites on the target VM separately")
 
 
 def all_bins(cfg: Config) -> list[str]:
@@ -736,7 +742,7 @@ def execute_plan(
             ws = workspace or terminal(lambda: stack.enter_context(factory(cfg, plan.target)))
             require_tool(ws, cfg, "python3")
             guest(ws, cfg, "identity", user=cfg.user_name, uid=cfg.user_uid, gid=cfg.user_gid,
-                  name=plan.target["name"], vmid=plan.target["vmid"])
+                  name=plan.target["name"], vmid=plan.target["vmid"], alien=plan.target.get("alien", False))
             activity(None, "Local identity verified" if plan.target.get("local") else "Workspace identity verified")
             states = {}
             config_groups = {}

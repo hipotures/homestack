@@ -492,7 +492,7 @@ class MigrationPowerStateTests(unittest.TestCase):
         def fake_node_run(_session: object, _cfg: object, _node: str, command: str, **_: object):
             commands.append(command)
             return models.RemoteResult(0, '')
-        with patch.object(lifecycle, 'sync_snippets_to_node', return_value=[]), patch.object(lifecycle, 'node_run', side_effect=fake_node_run), patch.object(lifecycle, 'cluster_vm_resource', return_value={'node': 'example-node-2', 'status': 'stopped'}), patch.object(lifecycle, 'qm_config_on_node', return_value={'scsi1': 'example-storage-b:vm-200-hs-home-user,serial=HS_HOME_200,size=20G', 'virtiofs0': 'user-managed-mapping'}), patch.object(lifecycle, 'qm_status_on_node', return_value='stopped'), patch.object(lifecycle, 'shutdown_vm_on_node') as shutdown:
+        with patch.object(lifecycle, 'sync_snippets_to_node', return_value=[]), patch.object(lifecycle, 'node_run', side_effect=fake_node_run), patch.object(lifecycle, 'cluster_vm_resource', return_value={'node': 'example-node-2', 'status': 'stopped'}), patch.object(lifecycle, 'qm_config_on_node', return_value={'tags': 'homestack-ws', 'scsi1': 'example-storage-b:vm-200-hs-home-user,serial=HS_HOME_200,size=20G', 'virtiofs0': 'user-managed-mapping'}), patch.object(lifecycle, 'qm_status_on_node', return_value='stopped'), patch.object(lifecycle, 'shutdown_vm_on_node') as shutdown:
             result = lifecycle.migrate_workspace(object(), test_config(), plan, json_mode=True)
         shutdown.assert_not_called()
         self.assertFalse(any((command == 'qm start 200' for command in commands)))
@@ -506,7 +506,7 @@ class MigrationPowerStateTests(unittest.TestCase):
         def fake_node_run(_session: object, _cfg: object, _node: str, command: str, **_: object):
             commands.append(command)
             return models.RemoteResult(0, '')
-        with patch.object(lifecycle, 'sync_snippets_to_node', return_value=[]), patch.object(lifecycle, 'node_run', side_effect=fake_node_run), patch.object(lifecycle, 'cluster_vm_resource', return_value={'node': 'example-node-2', 'status': 'running'}), patch.object(lifecycle, 'qm_config_on_node', return_value={'scsi1': 'example-storage-b:vm-200-hs-home-user,serial=HS_HOME_200,size=20G'}), patch.object(lifecycle, 'qm_status_on_node', return_value='running'), patch.object(lifecycle, 'shutdown_vm_on_node') as shutdown, patch.object(lifecycle, 'wait_for_qga_on_node'), patch.object(lifecycle, 'guest_out_on_node', side_effect=['/dev/sdb ext4 /home/user', 'HS_HOME_200']):
+        with patch.object(lifecycle, 'sync_snippets_to_node', return_value=[]), patch.object(lifecycle, 'node_run', side_effect=fake_node_run), patch.object(lifecycle, 'cluster_vm_resource', return_value={'node': 'example-node-2', 'status': 'running'}), patch.object(lifecycle, 'qm_config_on_node', return_value={'tags': 'homestack-ws', 'scsi1': 'example-storage-b:vm-200-hs-home-user,serial=HS_HOME_200,size=20G'}), patch.object(lifecycle, 'qm_status_on_node', return_value='running'), patch.object(lifecycle, 'shutdown_vm_on_node') as shutdown, patch.object(lifecycle, 'wait_for_qga_on_node'), patch.object(lifecycle, 'guest_out_on_node', side_effect=['/dev/sdb ext4 /home/user', 'HS_HOME_200']):
             result = lifecycle.migrate_workspace(object(), test_config(), plan, json_mode=True)
         shutdown.assert_called_once()
         self.assertIn('qm start 200', commands)

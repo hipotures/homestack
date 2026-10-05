@@ -747,7 +747,7 @@ def _require_runtime(ws, cfg) -> None:
 
     preparation = ("install local system prerequisites separately"
                    if getattr(ws, "local", False) is True
-                   else "prepare Gold and refresh separately")
+                   else "install system prerequisites on the target VM separately")
     for tool in ("python3", "file", "git", "systemctl"):
         require_tool(ws, cfg, tool)
     modules = _command(ws, cfg, "python3 -c 'import curses, rich, sqlite3'")
@@ -779,7 +779,7 @@ def inspect(ws, cfg, vmid: int, *, check_requirements: bool = True) -> dict:
         if not local and shutil.which("ssh-keygen") is None:
             raise AppError("BK retrieval requires desktop ssh-keygen")
         if not local and _command(ws, cfg, "test -x /usr/bin/cat").returncode:
-            raise AppError("BK retrieval requires guest /usr/bin/cat; prepare Gold separately")
+            raise AppError("BK retrieval requires guest /usr/bin/cat; install system prerequisites on the target VM separately")
     retrieval = {"ready": True} if local else inspect_retrieval_keys(vmid)
     authorization = {"ready": True} if local else _guest_authorized_keys(
         ws, cfg, vmid, retrieval["public_keys"], apply=False,

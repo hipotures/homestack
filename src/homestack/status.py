@@ -8,7 +8,7 @@ import shlex
 
 from .config import Config
 from .guest import derive_ip, guest_out_on_node, parse_disk_size_gb, parse_ipconfig0, workspace_home_usage
-from .models import AppError, GOLD_TAG, WORKSPACE_TAG, integer_value, validate_name
+from .models import ALIEN_WORKSPACE_TAG, AppError, GOLD_TAG, WORKSPACE_TAG, integer_value, validate_name
 from .proxmox import attached_disk_volumes, cluster_node_statuses, cluster_vm_resource, disk_option, disk_storage, has_tag, home_label, homestack_storage_ids_for_node, homestack_storage_layout_name, node_run, orphaned_homestack_volumes, parse_tags, qm_config_on_node, qm_status_on_node, require_workspace_tag, storage_capacity
 from .transports.base import Transport
 
@@ -126,6 +126,7 @@ def homestack_status_resources(
         for item in resources
         if int(item["vmid"]) == cfg.gold_vmid
         or has_tag(item.get("tags"), WORKSPACE_TAG)
+        or has_tag(item.get("tags"), ALIEN_WORKSPACE_TAG)
     ]
 
 
@@ -187,10 +188,14 @@ def global_status(
         gold_node = str(gold_resource.get("node") or cfg.node)
         gold_cfg = vm_configs[cfg.gold_vmid]
         gold_tags = parse_tags(gold_cfg.get("tags") or gold_resource.get("tags"))
-        role_tag_ok = GOLD_TAG in gold_tags
+        role_tag_ok = GOLD_TAG in gold_tags and ALIEN_WORKSPACE_TAG not in gold_tags
         warning = None
         if not role_tag_ok:
-            warning = f"Configured Gold VM {cfg.gold_vmid} is missing required tag {GOLD_TAG!r}."
+            warning = (
+                f"Configured Gold VM {cfg.gold_vmid} has forbidden tag {ALIEN_WORKSPACE_TAG!r}."
+                if ALIEN_WORKSPACE_TAG in gold_tags else
+                f"Configured Gold VM {cfg.gold_vmid} is missing required tag {GOLD_TAG!r}."
+            )
             warnings.append(warning)
         gold = {
             "vmid": cfg.gold_vmid,
@@ -231,12 +236,15 @@ def global_status(
         node_info = node_status_by_name.get(node)
         node_online = bool(node_info and node_info.get("online"))
         tags = parse_tags(vm_cfg.get("tags") or item.get("tags"))
+        alien = ALIEN_WORKSPACE_TAG in tags
         warning_parts: list[str] = []
         if GOLD_TAG in tags:
             warning_parts.append(f"forbidden tag {GOLD_TAG!r}")
+        if alien and WORKSPACE_TAG in tags:
+            warning_parts.append("conflicting workspace role tags")
         home_cfg = vm_cfg.get(cfg.home_disk, "")
         home: dict[str, Any] | None = None
-        if not node_online:
+        if alien or not node_online:
             home = None
         elif not home_cfg:
             warning_parts.append(f"missing {cfg.home_disk}")
@@ -270,7 +278,7 @@ def global_status(
         workspaces.append(
             {
                 "vmid": vmid,
-                "role": "WS",
+                "role": "ALIEN" if alien else "WS",
                 "name": item.get("name") or vm_cfg.get("name") or None,
                 "status": item.get("status") or "unknown",
                 "node": node,
@@ -280,7 +288,7 @@ def global_status(
                 "ip": expected_ip(cfg, vmid),
                 "root_storage": disk_storage(vm_cfg.get(cfg.root_disk)),
                 "home": home,
-                "role_tag_ok": GOLD_TAG not in tags,
+                "role_tag_ok": GOLD_TAG not in tags and not (alien and WORKSPACE_TAG in tags),
                 "warning": warning,
             }
         )
@@ -331,7 +339,8 @@ def global_status(
         storage_capacity(cfg.root_storage, {}),
     )
 
-    all_usage_known = known_usage_count == len(workspaces) and len(workspaces) > 0
+    managed_home_count = sum(item["role"] == "WS" for item in workspaces)
+    all_usage_known = known_usage_count == managed_home_count and managed_home_count > 0
     free_percent = (
         100.0 * known_free_bytes / total_home_bytes
         if all_usage_known and total_home_bytes
@@ -389,6 +398,7 @@ def vm_volume_inventory(vm_cfg: dict[str, str], cfg: Config) -> list[dict[str, A
     }
 
     entries: list[dict[str, Any]] = []
+    managed_layout = not has_tag(vm_cfg.get("tags"), ALIEN_WORKSPACE_TAG)
     for slot, raw_value in vm_cfg.items():
         match = slot_re.fullmatch(slot)
         if match is None:
@@ -399,9 +409,9 @@ def vm_volume_inventory(vm_cfg: dict[str, str], cfg: Config) -> list[dict[str, A
         if not volume or volume == "none" or ":" not in volume:
             continue
 
-        if slot == cfg.root_disk:
+        if managed_layout and slot == cfg.root_disk:
             role = "root"
-        elif slot == cfg.home_disk:
+        elif managed_layout and slot == cfg.home_disk:
             role = "home"
         elif match.group("prefix") == "unused":
             role = "unused"
@@ -515,8 +525,16 @@ def workspace_status(session: Transport, cfg: Config, vmid: int) -> dict[str, An
     tags = parse_tags(vm_cfg.get("tags"))
     if vmid == cfg.gold_vmid:
         role = "GOLD"
-        role_tag_ok = GOLD_TAG in tags
-        role_warning = None if role_tag_ok else f"Configured Gold VM is missing required tag {GOLD_TAG!r}."
+        role_tag_ok = GOLD_TAG in tags and ALIEN_WORKSPACE_TAG not in tags
+        role_warning = None if role_tag_ok else (
+            f"Configured Gold VM has forbidden tag {ALIEN_WORKSPACE_TAG!r}."
+            if ALIEN_WORKSPACE_TAG in tags else
+            f"Configured Gold VM is missing required tag {GOLD_TAG!r}."
+        )
+    elif ALIEN_WORKSPACE_TAG in tags:
+        role = "ALIEN"
+        role_tag_ok = not tags.intersection({GOLD_TAG, WORKSPACE_TAG})
+        role_warning = None if role_tag_ok else "Alien workspace has conflicting role tags."
     elif WORKSPACE_TAG in tags:
         role = "WS"
         role_tag_ok = GOLD_TAG not in tags
@@ -528,7 +546,7 @@ def workspace_status(session: Transport, cfg: Config, vmid: int) -> dict[str, An
 
     ip = derive_ip(cfg, vmid) if 2 <= vmid <= 254 else None
     status = str(resource.get("status") or qm_status_on_node(session, cfg, node, vmid))
-    home_cfg = vm_cfg.get(cfg.home_disk, "")
+    home_cfg = vm_cfg.get(cfg.home_disk, "") if role != "ALIEN" else ""
     expected_home_label = home_label(vmid) if role == "WS" else None
     home_serial = disk_option(home_cfg, "serial") if home_cfg else None
     home_storage = disk_storage(home_cfg) if home_cfg else None
@@ -604,10 +622,10 @@ def workspace_status(session: Transport, cfg: Config, vmid: int) -> dict[str, An
         "home_size_gb": home_size_gb,
         "home_label": expected_home_label,
         "home_serial": home_serial,
-        "home_identity_ok": bool(expected_home_label and home_serial == expected_home_label),
+        "home_identity_ok": None if role == "ALIEN" else bool(expected_home_label and home_serial == expected_home_label),
         "home_mount": home_mount,
         "mounted_home_label": mounted_home_label,
-        "home_mount_ok": bool(
+        "home_mount_ok": None if role == "ALIEN" else bool(
             expected_home_label
             and mounted_home_label == expected_home_label
             and home_mount

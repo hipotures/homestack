@@ -349,7 +349,7 @@ class SnippetMigrationTests(unittest.TestCase):
 
     def test_snippet_failure_happens_before_workspace_shutdown(self) -> None:
         plan = {'vmid': 200, 'name': 'test1', 'source_node': 'example-node-3', 'target_node': 'example-node-2', 'target_storage': 'example-storage-b', 'status': 'running', 'home_label': 'HS_HOME_200', 'volumes': []}
-        with patch.object(lifecycle, 'sync_snippets_to_node', side_effect=models.AppError('snippet copy failed')), patch.object(lifecycle, 'shutdown_vm_on_node') as shutdown:
+        with patch.object(lifecycle, 'qm_config_on_node', return_value={'tags': 'homestack-ws'}), patch.object(lifecycle, 'sync_snippets_to_node', side_effect=models.AppError('snippet copy failed')), patch.object(lifecycle, 'shutdown_vm_on_node') as shutdown:
             with self.assertRaisesRegex(models.AppError, 'snippet copy failed'):
                 lifecycle.migrate_workspace(object(), test_config(), plan, json_mode=True)
         shutdown.assert_not_called()

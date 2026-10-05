@@ -22,12 +22,13 @@ from rich.progress import (
 
 from .config import Config, validate_repository_spec
 from .lifecycle import resolve_workspace_target
-from .models import AppError, validate_name
+from .models import ALIEN_WORKSPACE_TAG, AppError, validate_name
 from .proxmox import (
     cluster_vm_resource,
+    has_tag,
     qm_config_on_node,
     qm_status_on_node,
-    require_workspace_tag,
+    require_setup_workspace_tag,
 )
 from .transports.base import Transport, run_local
 from .ui import console
@@ -898,7 +899,7 @@ def rotate_repository_key(
 
 def repository_workspace_info(
     session: Transport, cfg: Config, vmid: int
-) -> dict[str, str | int]:
+) -> dict[str, str | int | bool]:
     """Resolve only the workspace identity needed for repository operations."""
     if vmid == cfg.gold_vmid:
         raise AppError(f"Refusing repository operation on Gold VM {cfg.gold_vmid}")
@@ -911,7 +912,7 @@ def repository_workspace_info(
         raise AppError(f"VM {vmid} has no node in cluster inventory")
 
     vm_cfg = qm_config_on_node(session, cfg, node, vmid)
-    require_workspace_tag(vmid, vm_cfg)
+    require_setup_workspace_tag(vmid, vm_cfg)
     name = str(vm_cfg.get("name") or "").strip()
     if not name:
         raise AppError(f"VM {vmid} has no name")
@@ -925,6 +926,7 @@ def repository_workspace_info(
         "name": name,
         "node": node,
         "status": status,
+        "alien": has_tag(vm_cfg.get("tags"), ALIEN_WORKSPACE_TAG),
     }
 
 

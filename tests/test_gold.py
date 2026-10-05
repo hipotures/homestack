@@ -60,6 +60,15 @@ class GoldReadinessTests(unittest.TestCase):
             )
         )
 
+    def test_alien_role_cannot_be_used_as_gold(self) -> None:
+        vm_cfg = {**self._vm_cfg(), "tags": "homestack-gold;homestack-alien"}
+        with patch.object(gold, "qm_config_on_node", return_value=vm_cfg), patch.object(
+            gold, "qm_status_on_node", return_value="stopped"
+        ):
+            result = gold.check_gold_readiness(object(), test_config(), "example-node-1", 101)
+        self.assertFalse(result.ok)
+        self.assertTrue(any(check.name == "Role tag" and check.status == "fail" for check in result.checks))
+
     def test_running_gold_checks_guest_contract(self) -> None:
         cfg = test_config()
 

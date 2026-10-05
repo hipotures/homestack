@@ -7,7 +7,7 @@ import re
 import shlex
 
 from .config import Config
-from .models import AppError, GOLD_TAG, HOME_LABEL_PREFIX, REFRESH_LOCK_TAG, RemoteResult, WORKSPACE_TAG, integer_value
+from .models import ALIEN_WORKSPACE_TAG, AppError, GOLD_TAG, HOME_LABEL_PREFIX, REFRESH_LOCK_TAG, RemoteResult, WORKSPACE_TAG, integer_value
 from .transports.base import Transport
 
 HOMESTACK_VOLUME_RE = re.compile(
@@ -42,13 +42,44 @@ def has_tag(value: Any, tag: str) -> bool:
 
 
 def require_workspace_tag(vmid: int, vm_cfg: dict[str, str]) -> None:
+    if has_tag(vm_cfg.get("tags"), ALIEN_WORKSPACE_TAG):
+        raise AppError(
+            f"VM {vmid} has forbidden workspace role tag {ALIEN_WORKSPACE_TAG!r}; "
+            f"lifecycle operations require native {WORKSPACE_TAG!r}."
+        )
     if not has_tag(vm_cfg.get("tags"), WORKSPACE_TAG):
         raise AppError(
             f"VM {vmid} is not a HomeStack workspace: required tag {WORKSPACE_TAG!r} is missing."
         )
 
 
+def require_setup_workspace_tag(vmid: int, vm_cfg: dict[str, str]) -> None:
+    tags = parse_tags(vm_cfg.get("tags"))
+    if GOLD_TAG in tags:
+        raise AppError(
+            f"Refusing Setup on Gold VM {vmid}: forbidden tag {GOLD_TAG!r}."
+        )
+    if str(vm_cfg.get("template") or "0") == "1":
+        raise AppError(f"Refusing Setup on template VM {vmid}.")
+    roles = tags.intersection({WORKSPACE_TAG, ALIEN_WORKSPACE_TAG})
+    if len(roles) > 1:
+        raise AppError(
+            f"VM {vmid} has conflicting workspace role tags: "
+            f"{WORKSPACE_TAG!r} and {ALIEN_WORKSPACE_TAG!r}."
+        )
+    if not roles:
+        raise AppError(
+            f"VM {vmid} is not a HomeStack workspace: required tag "
+            f"{WORKSPACE_TAG!r} or {ALIEN_WORKSPACE_TAG!r} is missing."
+        )
+
+
 def require_gold_tag(vmid: int, vm_cfg: dict[str, str]) -> None:
+    if has_tag(vm_cfg.get("tags"), ALIEN_WORKSPACE_TAG):
+        raise AppError(
+            f"Configured Gold VM {vmid} has forbidden workspace role tag "
+            f"{ALIEN_WORKSPACE_TAG!r}."
+        )
     if not has_tag(vm_cfg.get("tags"), GOLD_TAG):
         raise AppError(
             f"Configured Gold VM {vmid} is missing required tag {GOLD_TAG!r}."
@@ -56,6 +87,11 @@ def require_gold_tag(vmid: int, vm_cfg: dict[str, str]) -> None:
 
 
 def require_refresh_unlocked(vmid: int, vm_cfg: dict[str, str]) -> None:
+    if has_tag(vm_cfg.get("tags"), ALIEN_WORKSPACE_TAG):
+        raise AppError(
+            f"Refresh of VM {vmid} is blocked for alien workspace role tag "
+            f"{ALIEN_WORKSPACE_TAG!r}."
+        )
     if has_tag(vm_cfg.get("tags"), REFRESH_LOCK_TAG):
         raise AppError(
             f"Refresh of VM {vmid} is blocked by tag {REFRESH_LOCK_TAG!r}. "

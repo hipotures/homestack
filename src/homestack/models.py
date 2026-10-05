@@ -21,6 +21,8 @@ GOLD_TAG = "homestack-gold"
 
 WORKSPACE_TAG = "homestack-ws"
 
+ALIEN_WORKSPACE_TAG = "homestack-alien"
+
 REFRESH_LOCK_TAG = "homestack-lock"
 
 

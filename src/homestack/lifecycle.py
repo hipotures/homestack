@@ -20,8 +20,8 @@ from .create_transfer import (
     validate_cross_node_create,
 )
 from .guest import derive_ip, extract_mac, guest_exec_on_node, guest_out_on_node, parse_disk_size_gb, wait_for_qga_on_node
-from .models import AppError, WORKSPACE_TAG, integer_value, validate_name
-from .proxmox import allocate_named_raw_volume, boot_order_contains_disk, check_remote_requirements, cluster_nodes, cluster_vm_resource, disk_option, has_tag, home_label, home_volume_name, node_run, node_shell_command, parse_home_size, qm_config_on_node, qm_exists_on_node, qm_status_on_node, rename_attached_disk_volume, require_gold_tag, resolve_homestack_storage, root_volume_name, set_workspace_role_tags, shutdown_vm_on_node, storage_capacity, verify_workspace_role_tags
+from .models import ALIEN_WORKSPACE_TAG, AppError, WORKSPACE_TAG, integer_value, validate_name
+from .proxmox import allocate_named_raw_volume, boot_order_contains_disk, check_remote_requirements, cluster_nodes, cluster_vm_resource, disk_option, has_tag, home_label, home_volume_name, node_run, node_shell_command, parse_home_size, qm_config_on_node, qm_exists_on_node, qm_status_on_node, rename_attached_disk_volume, require_gold_tag, require_workspace_tag, resolve_homestack_storage, root_volume_name, set_workspace_role_tags, shutdown_vm_on_node, storage_capacity, verify_workspace_role_tags
 from .status import occupancy_level, resolve_existing_workspace, vm_volume_inventory
 from .transports.base import Transport
 from .ui import console, human_bytes, show_create_result, show_kv_panel, show_refresh_result, ui_vm_status
@@ -78,7 +78,9 @@ def resolve_workspace_target(session: Transport, cfg: Config, target: str | int)
         if vmid is None or not node:
             continue
         vm_cfg = qm_config_on_node(session, cfg, node, vmid)
-        if has_tag(vm_cfg.get("tags"), WORKSPACE_TAG):
+        if has_tag(vm_cfg.get("tags"), WORKSPACE_TAG) or has_tag(
+            vm_cfg.get("tags"), ALIEN_WORKSPACE_TAG
+        ):
             matches.append(vmid)
         else:
             non_workspace_matches.append(vmid)
@@ -1015,6 +1017,7 @@ def destroy_workspace(
     node = str(plan["node"])
     name = str(plan["name"])
 
+    resolve_existing_workspace(session, cfg, vmid, require_network=False)
     shutdown_vm_on_node(session, cfg, node, vmid)
     current = resolve_existing_workspace(session, cfg, vmid, require_network=False)
     if current["home_label"] != plan["home_label"]:
@@ -1922,6 +1925,10 @@ def migrate_workspace(
     was_running = str(plan.get("status")) == "running"
     desired_status = "running" if was_running else "stopped"
     source_was_stopped = False
+
+    require_workspace_tag(
+        vmid, qm_config_on_node(session, cfg, source_node, vmid)
+    )
 
     progress: Progress | None = None
     overall = None

@@ -10,7 +10,7 @@ from urllib.parse import unquote
 
 from .config import Config
 from .guest import extract_mac, guest_out_on_node, qga_ping_command
-from .models import AppError, GOLD_TAG, WORKSPACE_TAG
+from .models import ALIEN_WORKSPACE_TAG, AppError, GOLD_TAG, WORKSPACE_TAG
 from .proxmox import (
     boot_order_contains_disk,
     disk_option,
@@ -162,8 +162,10 @@ def check_gold_readiness(
 
     tags_ok = has_tag(vm_cfg.get("tags"), GOLD_TAG) and not has_tag(
         vm_cfg.get("tags"), WORKSPACE_TAG
+    ) and not has_tag(
+        vm_cfg.get("tags"), ALIEN_WORKSPACE_TAG
     )
-    add("PVE", "Role tag", tags_ok, f"requires {GOLD_TAG} and not {WORKSPACE_TAG}")
+    add("PVE", "Role tag", tags_ok, f"requires {GOLD_TAG} without {WORKSPACE_TAG} or {ALIEN_WORKSPACE_TAG}")
 
     root_ok = bool(vm_cfg.get(cfg.root_disk))
     add("PVE", "Disposable root", root_ok, cfg.root_disk)

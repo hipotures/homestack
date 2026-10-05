@@ -1169,15 +1169,18 @@ def record_item(home: Path, data: dict) -> dict:
         "items": {},
     }
     now = iso_now()
-    registry["workspace"] = {
+    workspace = {
         "vmid": vmid,
         "name": name,
         "home": str(home),
-        "home_label": f"HS_HOME_{vmid}",
     }
     if vmid == 0:
-        registry["workspace"].pop("home_label")
-        registry["workspace"]["kind"] = "local"
+        workspace["kind"] = "local"
+    elif data.get("alien") is True:
+        workspace["kind"] = "alien"
+    else:
+        workspace["home_label"] = f"HS_HOME_{vmid}"
+    registry["workspace"] = workspace
     items = registry.setdefault("items", {})
     previous = items.get(data["id"], {}) if isinstance(items.get(data["id"]), dict) else {}
     current = {
@@ -1255,9 +1258,12 @@ def verify_identity(data: dict) -> None:
         raise GuestError("Workspace hostname mismatch; refusing writes")
     if home.is_symlink() or not home.is_dir() or home.stat().st_uid != data["uid"] or home.stat().st_gid != data["gid"]:
         raise GuestError("Persistent home ownership/type mismatch")
-    mount = subprocess.run(["findmnt", "-rn", "-T", str(home), "-o", "TARGET,FSTYPE,LABEL"], capture_output=True, text=True, check=True).stdout.split()
-    if mount != [str(home), "ext4", f"HS_HOME_{data['vmid']}"]:
-        raise GuestError("Persistent home mount/label mismatch; refusing writes")
+    if not os.access(home, os.W_OK | os.X_OK):
+        raise GuestError("Persistent home is not writable")
+    if data.get("alien") is not True:
+        mount = subprocess.run(["findmnt", "-rn", "-T", str(home), "-o", "TARGET,FSTYPE,LABEL"], capture_output=True, text=True, check=True).stdout.split()
+        if mount != [str(home), "ext4", f"HS_HOME_{data['vmid']}"]:
+            raise GuestError("Persistent home mount/label mismatch; refusing writes")
 
 
 def posix_paths(bin_dirs: list[str]) -> str:
