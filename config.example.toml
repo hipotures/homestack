@@ -188,6 +188,24 @@ path = ["checks", "config.load", "status"]
 accepted = ["ok", "warning"]
 
 [[setup.items]]
+id = "claude"
+group = "app"
+handler = "application"
+label = "Claude Code"
+description = "Install Claude Code CLI. Sign-in remains separate."
+depends_on = []
+command = "curl -fsSL https://claude.ai/install.sh | bash"
+interpreter = "bash"
+interaction = "non-interactive"
+prerequisites = ["curl"]
+check = "claude --version"
+prerequisite_checks = []
+non_interactive = ""
+bin_dirs = ["~/.local/bin"]
+requires_absent = []
+backup_paths = []
+
+[[setup.items]]
 id = "herdr"
 group = "app"
 handler = "herdr"

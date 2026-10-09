@@ -118,6 +118,7 @@ DEFAULT_GROUPS = (
     Group("repo", "Repositories", "GitHub checkouts with workspace-local deploy keys."),
 )
 CODEX_RECIPE = "curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh"
+CLAUDE_RECIPE = "curl -fsSL https://claude.ai/install.sh | bash"
 RUST_RECIPE = '''installer=$(mktemp)
 trap 'rm -f -- "$installer"' EXIT
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs -o "$installer"
@@ -219,6 +220,8 @@ def defaults() -> tuple[Entry, ...]:
     items.extend([
         Entry("codex", "app", "application", "Codex", "Install Codex CLI. Sign-in remains separate.",
               ApplicationParams(CODEX_RECIPE, interaction="non-interactive", prerequisites=("curl", "tar"), check="codex --version")),
+        Entry("claude", "app", "application", "Claude Code", "Install Claude Code CLI. Sign-in remains separate.",
+              ApplicationParams(CLAUDE_RECIPE, interaction="non-interactive", prerequisites=("curl",), check="claude --version")),
         Entry("herdr", "app", "herdr", "Herdr",
               "Install Herdr, enable its user service with updates before start, and connect the desktop using the VM name. Existing servers are left running. Desktop SSH may require another security-key touch.",
               HerdrParams()),

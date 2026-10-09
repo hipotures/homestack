@@ -53,13 +53,13 @@ class HerdrSetupTests(unittest.TestCase):
         return herdr.apply(self.ws, self.cfg, TARGET, self.state,
                            activity=self.activity)
 
-    def test_default_and_example_catalog_put_herdr_second(self):
+    def test_default_and_example_catalog_put_herdr_after_claude(self):
         for cfg in (self.cfg.setup, setup_config.parse_setup({}), example_setup()):
-            self.assertEqual([e.id for e in cfg.items if e.group == "app"][:2], ["codex", "herdr"])
+            self.assertEqual([e.id for e in cfg.items if e.group == "app"][:3], ["codex", "claude", "herdr"])
         restored = setup_config.parse_setup(tomllib.loads(setup_config.setup_to_toml(self.cfg.setup))["setup"])
         self.assertEqual(restored, self.cfg.setup)
         row = next(r for r in setup_catalog.load_catalog(self.cfg).rows(self.cfg) if r["id"] == "herdr")
-        self.assertEqual(row["index"], 2)
+        self.assertEqual(row["index"], 3)
         self.assertEqual(row["selector"], "app=herdr")
 
     def test_plan_owns_service_path_and_rejects_overlap(self):

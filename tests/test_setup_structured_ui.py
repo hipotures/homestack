@@ -117,7 +117,7 @@ class StructuredTUITests(unittest.IsolatedAsyncioTestCase):
     async def test_hierarchical_counters_use_visible_semantic_levels(self):
         app = SetupApp(example_config(), TARGET)
         async with app.run_test(size=(120, 40)):
-            self.assertIn("Applications  0/7", app.nodes["app"].label.plain)
+            self.assertIn("Applications  0/8", app.nodes["app"].label.plain)
             self.assertIn("0/8", app.nodes["codex"].label.plain)
             self.assertNotRegex(app.nodes["opencode"].label.plain, r"\d+/\d+")
             self.assertNotRegex(app.nodes["hermes"].label.plain, r"\d+/\d+")
@@ -125,11 +125,11 @@ class StructuredTUITests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(app.nodes["codex:config"].is_expanded)
 
             app.toggle_node(app.nodes[self.default_leaf_id(("approvals_reviewer",))])
-            self.assertIn("Applications  1/7", app.nodes["app"].label.plain)
+            self.assertIn("Applications  1/8", app.nodes["app"].label.plain)
             self.assertIn("Codex  1/8", app.nodes["codex"].label.plain)
 
             app.toggle_node(app.nodes["opencode"])
-            self.assertIn("Applications  2/7", app.nodes["app"].label.plain)
+            self.assertIn("Applications  2/8", app.nodes["app"].label.plain)
 
     async def test_config_file_and_section_counters_count_only_leaf_descendants(self):
         app = SetupApp(example_config(), TARGET)
@@ -192,7 +192,7 @@ class StructuredTUITests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(app.selected, {"codex"})
             self.assertEqual(app.checkbox("codex"), "[-]")
             self.assertIn("Codex  0/8", app.nodes["codex"].label.plain)
-            self.assertIn("Applications  1/7", app.nodes["app"].label.plain)
+            self.assertIn("Applications  1/8", app.nodes["app"].label.plain)
 
     async def test_application_group_tri_state_tracks_involved_visible_applications(self):
         app = SetupApp(example_config(), TARGET)
@@ -201,24 +201,25 @@ class StructuredTUITests(unittest.IsolatedAsyncioTestCase):
 
             app.toggle_node(app.nodes[self.default_leaf_id(("approvals_reviewer",))])
             self.assertEqual(app.checkbox("app"), "[-]")
-            self.assertIn("Applications  1/7", app.nodes["app"].label.plain)
+            self.assertIn("Applications  1/8", app.nodes["app"].label.plain)
 
             app.toggle_node(app.nodes["codex"])
             app.toggle_node(app.nodes["opencode"])
             self.assertEqual(app.checkbox("app"), "[-]")
-            self.assertIn("Applications  2/7", app.nodes["app"].label.plain)
+            self.assertIn("Applications  2/8", app.nodes["app"].label.plain)
 
             app.toggle_node(app.nodes["herdr"])
             app.toggle_node(app.nodes["hermes"])
             app.toggle_node(app.nodes["pi"])
             app.toggle_node(app.nodes["opencode-v2"])
             app.toggle_node(app.nodes["rust"])
+            app.toggle_node(app.nodes["claude"])
             self.assertEqual(app.checkbox("app"), "[x]")
-            self.assertIn("Applications  7/7", app.nodes["app"].label.plain)
+            self.assertIn("Applications  8/8", app.nodes["app"].label.plain)
 
             app.toggle_node(app.nodes[self.default_leaf_id(("approvals_reviewer",))])
             self.assertEqual(app.checkbox("app"), "[-]")
-            self.assertIn("Applications  7/7", app.nodes["app"].label.plain)
+            self.assertIn("Applications  8/8", app.nodes["app"].label.plain)
 
     async def test_application_and_config_details_distinguish_state_and_counts(self):
         cfg = example_config()
@@ -255,12 +256,12 @@ class StructuredTUITests(unittest.IsolatedAsyncioTestCase):
             app.query_one("#filter").value = "approvals_reviewer"
             await pilot.pause()
 
-            self.assertIn("Applications  1/7", app.nodes["app"].label.plain)
+            self.assertIn("Applications  1/8", app.nodes["app"].label.plain)
             self.assertIn("Codex  8/8", app.nodes["codex"].label.plain)
             self.assertIn("~/.codex/config.toml  8/8", app.nodes["codex:config"].label.plain)
 
             app.toggle_node(app.nodes["codex:config"])
-            self.assertIn("Applications  1/7", app.nodes["app"].label.plain)
+            self.assertIn("Applications  1/8", app.nodes["app"].label.plain)
             self.assertIn("Codex  7/8", app.nodes["codex"].label.plain)
             self.assertIn("~/.codex/config.toml  7/8", app.nodes["codex:config"].label.plain)
             self.assertIn(self.default_leaf_id(("tui", "status_line")), app.selected)
