@@ -578,6 +578,18 @@ class SetupApp(App):
         return value
 
     @staticmethod
+    def _value_lines(desired, live):
+        state = live.get("state")
+        if "current" in live:
+            current = json.dumps(SetupApp._config_value(live["current"]), ensure_ascii=False, indent=2)
+        else:
+            current = {"missing": "(not set)", "unavailable": "(unavailable)"}.get(state, "(unknown; refresh with F5)")
+        desired = json.dumps(SetupApp._config_value(desired), ensure_ascii=False, indent=2)
+        if state == "matching":
+            return ["Workspace value (matches desired):", current]
+        return ["Workspace value:", current, "Desired value:", desired]
+
+    @staticmethod
     def _compact_value(value, limit=96):
         rendered = json.dumps(SetupApp._config_value(value), ensure_ascii=False, separators=(",", ":"))
         return rendered if len(rendered) <= limit else rendered[: max(0, limit - 1)] + "…"
@@ -937,14 +949,15 @@ class SetupApp(App):
                 f"Configuration: selected {selected}/{total} managed options",
                 "Workspace state: " + (", ".join(f"{count} {state}" for state, count in sorted(states.items())) or "unknown"),
                 "",
-                "Managed desired values:",
+                "Managed values (workspace -> desired):",
             ]
             if not leaves:
                 lines.append("none declared")
             else:
                 for leaf in leaves:
-                    desired = json.dumps(self._config_value(leaf.params.value), ensure_ascii=False, indent=2)
-                    lines += [".".join(leaf.params.key), desired]
+                    live = self.state_item(leaf.id)
+                    lines += ["", f"{'.'.join(leaf.params.key)}  [{live.get('state', 'unknown')}]",
+                              *self._value_lines(leaf.params.value, live)]
             lines += ["", "ID: " + identity]
             return "\n".join(lines)
         if not entry:
@@ -1123,8 +1136,8 @@ class SetupApp(App):
                 "Configuration file: " + p.config.path,
                 "Format: " + p.config.format,
                 "Key path: " + ".".join(p.key),
-                "Desired value:",
-                json.dumps(self._config_value(p.value), ensure_ascii=False, indent=2),
+                "",
+                *self._value_lines(p.value, live),
             ]
 
         if entry.depends_on:

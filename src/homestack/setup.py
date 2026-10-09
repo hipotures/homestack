@@ -224,6 +224,8 @@ def inspect_workspace_state(ws, cfg: Config, target: dict, entries: tuple[Entry,
                 if isinstance(document, AppError):
                     raise document
                 leaf_state = document["leaves"][entry.id]
+                if entry.id in document["current"]:
+                    item["current"] = document["current"][entry.id]
                 item.update(state=leaf_state, ready=leaf_state == "matching",
                             exists=document["sha256"] is not None,
                             will_overwrite=document["sha256"] is not None and leaf_state != "matching")
@@ -524,7 +526,7 @@ def all_bins(cfg: Config) -> list[str]:
 
 def inspect_config_file(ws, cfg: Config, entries: tuple[Entry, ...], *, inspection: bool = False) -> dict:
     """Keep remote bytes private to the operation, never in public plans or state."""
-    from .setup_documents import inspect_document, merge_document
+    from .setup_documents import inspect_document_values, merge_document
     config = entries[0].params.config
     remote = guest(ws, cfg, "structured-read", relative=config.path[2:])
     try:
@@ -532,13 +534,18 @@ def inspect_config_file(ws, cfg: Config, entries: tuple[Entry, ...], *, inspecti
     except (ValueError, UnicodeError) as exc:
         raise AppError(f"Configuration cannot be decoded: {config.path}") from exc
     leaves = [(e.params.key, e.params.value) for e in entries]
+    current = {}
     if inspection:
-        candidate, statuses = None, inspect_document(config.format, original, leaves)
+        inspected = inspect_document_values(config.format, original, leaves)
+        candidate, statuses = None, [state for state, _ in inspected]
+        # Values at declared key paths only; unrelated document keys stay private.
+        current = {e.id: value for e, (state, value) in zip(entries, inspected) if state in {"matching", "different"}}
     else:
         candidate, statuses = merge_document(config.format, original, leaves)
     return {"candidate": candidate, "sha256": remote.get("sha256"),
             "changed": any(value != "matching" for value in statuses),
-            "leaves": dict(zip((e.id for e in entries), statuses))}
+            "leaves": dict(zip((e.id for e in entries), statuses)),
+            "current": current}
 
 
 def validate_application_config(ws, cfg: Config, application: Entry) -> None:

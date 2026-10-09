@@ -338,6 +338,19 @@ def inspect_document(
     parent is reported as ``unavailable`` for only the affected leaf, so live
     inspection can still show matching/missing/different siblings.
     """
+    return [state for state, _ in inspect_document_values(format, text, leaves)]
+
+
+def inspect_document_values(
+    format: str,
+    text: str | None,
+    leaves: list[tuple[tuple[str, ...], Any]],
+) -> list[tuple[str, Any]]:
+    """Like inspect_document, also returning each declared leaf's live value.
+
+    Only values at declared key paths are returned, never unrelated keys.  The
+    value is ``None`` unless the leaf exists (matching or different).
+    """
     if not isinstance(format, str):
         raise AppError("Structured configuration format must be TOML, JSON or YAML")
     format = format.lower()
@@ -355,18 +368,19 @@ def inspect_document(
         normalized.append((path, value))
     document = _parse_document(format, text)
     if not isinstance(document, Mapping):
-        return ["unavailable"] * len(normalized)
-    result: list[str] = []
+        return [("unavailable", None)] * len(normalized)
+    result: list[tuple[str, Any]] = []
     for path, desired in normalized:
         try:
             parent, key, exists = _lookup(document, path)
         except AppError:
-            result.append("unavailable")
+            result.append(("unavailable", None))
             continue
         if not exists:
-            result.append("missing")
+            result.append(("missing", None))
         else:
-            result.append("matching" if _same_value(parent[key], desired) else "different")
+            current = parent[key]
+            result.append(("matching" if _same_value(current, desired) else "different", _plain_value(current)))
     return result
 
 

@@ -205,6 +205,9 @@ class StructuredExecutionTests(unittest.TestCase):
         self.assertEqual(by_key[("approval_policy",)]["state"], "matching")
         self.assertEqual(by_key[("sandbox_mode",)]["state"], "different")
         self.assertEqual(by_key[("approvals_reviewer",)]["state"], "missing")
+        self.assertEqual(by_key[("approval_policy",)]["current"], "never")
+        self.assertEqual(by_key[("sandbox_mode",)]["current"], "other")
+        self.assertNotIn("current", by_key[("approvals_reviewer",)])
         self.assertEqual(self.events.count("structured-read"), 1)
         self.assertNotIn("SECRET", json.dumps(state))
 

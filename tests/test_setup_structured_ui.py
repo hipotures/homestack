@@ -249,6 +249,28 @@ class StructuredTUITests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("Configuration: selected 1/2 managed options", section_details)
             self.assertIn("Workspace state: 2 matching", section_details)
 
+    async def test_details_show_workspace_value_beside_desired_value(self):
+        cfg = example_config()
+        policy = self.default_leaf_id(("approval_policy",))
+        sandbox = self.default_leaf_id(("sandbox_mode",))
+        reviewer = self.default_leaf_id(("approvals_reviewer",))
+        app = SetupApp(cfg, TARGET, state={"items": {
+            policy: {"state": "matching", "current": "never"},
+            sandbox: {"state": "different", "current": "workspace-write"},
+            reviewer: {"state": "missing"},
+        }})
+        async with app.run_test(size=(120, 40)):
+            sandbox_details = app.details(sandbox)
+            self.assertIn('Workspace value:\n"workspace-write"', sandbox_details)
+            self.assertIn('Desired value:\n"danger-full-access"', sandbox_details)
+            self.assertIn('Workspace value (matches desired):\n"never"', app.details(policy))
+            self.assertIn("Workspace value:\n(not set)", app.details(reviewer))
+
+            file_details = app.details("codex:config")
+            self.assertIn("sandbox_mode  [different]", file_details)
+            self.assertIn('"workspace-write"', file_details)
+            self.assertIn('"danger-full-access"', file_details)
+
     async def test_filtered_bulk_selection_preserves_hidden_selected_counts(self):
         app = SetupApp(example_config(), TARGET)
         async with app.run_test(size=(120, 40)) as pilot:
