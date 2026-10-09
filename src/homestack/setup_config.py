@@ -25,6 +25,13 @@ class FileParams:
 
 
 @dataclass(frozen=True)
+class AppFileParams(FileParams):
+    """Internal setup entry parameters for one application-owned file copy."""
+
+    application: str = ""
+
+
+@dataclass(frozen=True)
 class EnvironmentParams:
     profile: str
 
@@ -61,6 +68,7 @@ class ApplicationParams:
     bin_dirs: tuple[str, ...] = ("~/.local/bin",)
     requires_absent: tuple[str, ...] = ()
     backup_paths: tuple[str, ...] = ()
+    files: tuple[str, ...] = ()
     config_files: tuple[ConfigFile, ...] = ()
     validation: ConfigValidation | None = None
 
@@ -189,6 +197,27 @@ def config_entry_key(identifier: str) -> tuple[str, str, tuple[str, ...]]:
     except (UnicodeDecodeError, ValueError) as exc:
         raise AppError("Invalid structured configuration selector") from exc
     return parts[0], parts[1], key
+
+
+def app_file_entry_id(application: str, path: str) -> str:
+    """Return the stable ID used for a generated application file copy."""
+    return f"{application}:file:{_selector_escape(path)}"
+
+
+def app_file_entries(entry: Entry) -> tuple[Entry, ...]:
+    """Expand an application into one internal file-copy entry per declared file."""
+    if not isinstance(entry.params, ApplicationParams):
+        return ()
+    return tuple(
+        Entry(app_file_entry_id(entry.id, path), entry.group, "file", path,
+              f"Copy {path} from the trusted desktop.", AppFileParams(path, entry.id))
+        for path in entry.params.files
+    )
+
+
+def application_children(entry: Entry) -> tuple[Entry, ...]:
+    """All generated child entries of an application: managed values, then file copies."""
+    return config_entries(entry) + app_file_entries(entry)
 
 
 def config_entries(entry: Entry) -> tuple[Entry, ...]:
@@ -417,7 +446,7 @@ def parse_setup(raw: Any) -> SetupConfig:
         if set(params) - set(cls.__dataclass_fields__):
             raise AppError(f"Unknown parameters for setup item {data['id']}")
         try:
-            for key in ("prerequisites", "bin_dirs", "requires_absent", "prerequisite_checks", "backup_paths"):
+            for key in ("prerequisites", "bin_dirs", "requires_absent", "prerequisite_checks", "backup_paths", "files"):
                 if key in params:
                     params[key] = _strings(params[key], key)
             if handler == "application":
@@ -450,6 +479,10 @@ def parse_setup(raw: Any) -> SetupConfig:
                 raise AppError("Application bin_dirs must not contain PATH separators")
             for path in (*p.bin_dirs, *p.requires_absent, *p.backup_paths):
                 validate_home_path_spec(path)
+            for path in p.files:
+                validate_home_path_spec(path)
+            if len({path.rstrip("/") for path in p.files}) != len(p.files):
+                raise AppError(f"Application {data['id']} declares a file twice")
         parsed.append(Entry(data["id"], data["group"], handler, data["label"], data["description"], p,
                             _strings(data.get("depends_on", ()), "depends_on")))
     return SetupConfig(tuple(groups.values()), tuple(parsed))

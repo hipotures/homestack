@@ -19,7 +19,7 @@ from .guest import derive_ip
 from .lifecycle import resolve_workspace_target
 from .models import AppError
 from . import backup, repo, setup_herdr
-from .setup_config import ApplicationParams, BackupParams, HerdrParams, Entry, FileParams, EnvironmentParams, RepositoryParams, StructuredParams, config_entries
+from .setup_config import ApplicationParams, BackupParams, HerdrParams, Entry, FileParams, EnvironmentParams, RepositoryParams, StructuredParams, application_children
 from .workspace_ssh import WorkspaceSSH
 
 ORDER = {"environment": 0, "file": 1, "application": 2, "herdr": 2, "structured": 3, "repository": 4, "backup": 5}
@@ -403,16 +403,20 @@ def expand_config_entries(entries: tuple[Entry, ...]) -> tuple[Entry, ...]:
     for entry in entries:
         expanded[entry.id] = entry
         if isinstance(entry.params, ApplicationParams):
-            expanded.update((leaf.id, leaf) for leaf in config_entries(entry))
+            expanded.update((leaf.id, leaf) for leaf in application_children(entry))
     return tuple(expanded.values())
 
 
+def owner_of(entry: Entry) -> str:
+    """Return the owning application of a generated child entry, else the entry itself."""
+    return getattr(entry.params, "application", "") or entry.id
+
+
 def application_units(entries):
-    """Keep each application's installer and patches together in plan order."""
+    """Keep each application's installer, patches and file copies together in plan order."""
     units = {}
     for entry in entries:
-        owner = entry.params.application if isinstance(entry.params, StructuredParams) else entry.id
-        units.setdefault(owner, []).append(entry)
+        units.setdefault(owner_of(entry), []).append(entry)
     return units
 
 
@@ -436,8 +440,8 @@ def build_plan(cfg: Config, target: dict, entries: tuple[Entry, ...], *, catalog
         if entry.id in visiting:
             raise AppError("Selected setup dependencies form a cycle")
         visiting.add(entry.id)
-        if isinstance(entry.params, StructuredParams) and entry.params.application in selected:
-            visit(selected[entry.params.application])
+        if owner_of(entry) != entry.id and owner_of(entry) in selected:
+            visit(selected[owner_of(entry)])
         for dependency in entry.depends_on:
             if dependency not in selected:
                 raise AppError(f"{entry.id} requires explicit selection of {dependency}; no actions were added")

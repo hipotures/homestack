@@ -34,7 +34,9 @@ from .setup_config import (
     FileParams,
     RepositoryParams,
     StructuredParams,
-    config_entries,
+    AppFileParams,
+    app_file_entries,
+    application_children,
     config_entry_id,
     defaults,
 )
@@ -599,7 +601,7 @@ class SetupApp(App):
         for entry in self.catalog.entries:
             entries[entry.id] = entry
             if isinstance(entry.params, ApplicationParams):
-                for leaf in config_entries(entry):
+                for leaf in application_children(entry):
                     entries[leaf.id] = leaf
         self.selection_entries = entries
 
@@ -637,7 +639,7 @@ class SetupApp(App):
             return True
         entry = self.selection_entries.get(identity)
         if entry is not None and isinstance(entry.params, ApplicationParams):
-            return any(self._identity_visible(leaf.id) for leaf in config_entries(entry))
+            return any(self._identity_visible(leaf.id) for leaf in application_children(entry))
         meta = self.config_nodes.get(identity)
         if meta:
             application = self.selection_entries.get(meta["application"])
@@ -656,7 +658,7 @@ class SetupApp(App):
         elif identity in self.selection_entries:
             entry = self.selection_entries[identity]
             if isinstance(entry.params, ApplicationParams):
-                ids = [entry.id, *(leaf.id for leaf in config_entries(entry))]
+                ids = [entry.id, *(leaf.id for leaf in application_children(entry))]
             elif isinstance(entry.params, StructuredParams):
                 ids = [entry.id]
             else:
@@ -703,13 +705,13 @@ class SetupApp(App):
         return "[x]" if entries and count == len(entries) else "[-]" if count else "[ ]"
 
     def config_selection_count(self, identity):
-        """Count declared options independently of the install/update action.
+        """Count declared options and file copies independently of the install/update action.
 
         Like existing selection state, totals survive filtering and collapsing;
         only bulk toggles are scoped to filter matches.
         """
         leaves = [item_id for item_id in self._descendant_ids(identity)
-                  if isinstance(self.selection_entries[item_id].params, StructuredParams)]
+                  if isinstance(self.selection_entries[item_id].params, (StructuredParams, AppFileParams))]
         return sum(item_id in self.selected for item_id in leaves), len(leaves)
 
     def state_item(self, identity):
@@ -758,6 +760,15 @@ class SetupApp(App):
         if live.get("state") in {"unavailable", "parse error", "structural conflict"}:
             text.append(" — " + str(live["state"]), style="dim")
         elif entry.id in self.action_states:
+            text.append(" — " + self.action_states[entry.id], style="dim")
+        return text
+
+    def file_leaf_text(self, entry):
+        text = Text(f"{self.checkbox(entry.id)} ")
+        text.append(entry.params.path, style=self.entry_style(entry))
+        if not self.available(entry):
+            text.append(" — " + self.catalog.availability.get(entry.id, "unknown"), style="dim")
+        if entry.id in self.action_states:
             text.append(" — " + self.action_states[entry.id], style="dim")
         return text
 
@@ -845,7 +856,7 @@ class SetupApp(App):
                 suffix = "" if self.available(entry) else f" — {availability}"
                 if entry.id in self.action_states:
                     suffix += " — " + self.action_states[entry.id]
-                if isinstance(entry.params, ApplicationParams) and entry.params.config_files:
+                if isinstance(entry.params, ApplicationParams) and (entry.params.config_files or entry.params.files):
                     app_node = node.add(
                         self.entry_text(entry, index, interaction, suffix),
                         data=entry.id,
@@ -854,6 +865,10 @@ class SetupApp(App):
                     self.nodes[entry.id] = app_node
                     for config in entry.params.config_files:
                         self.config_branch(entry, config, parent=app_node, expanded=expanded)
+                    for leaf in app_file_entries(entry):
+                        if self.filter_text and not self._identity_visible(leaf.id) and not self._identity_visible(entry.id):
+                            continue
+                        self.nodes[leaf.id] = app_node.add_leaf(self.file_leaf_text(leaf), data=leaf.id)
                 else:
                     self.nodes[entry.id] = node.add_leaf(
                         self.entry_text(entry, index, interaction, suffix), data=entry.id
@@ -1093,6 +1108,8 @@ class SetupApp(App):
                 lines += ["Structured configuration files:"]
                 for config in p.config_files:
                     lines += [f"{config.path} ({config.format})"]
+            if p.files:
+                lines += ["Desktop file copies:", *p.files]
         elif isinstance(p, HerdrParams):
             lines += [
                 "User service: herdr.service",
@@ -1120,6 +1137,8 @@ class SetupApp(App):
                 ]
             lines += ["", "Repository: " + p.repository]
         elif isinstance(p, FileParams):
+            if isinstance(p, AppFileParams):
+                lines += ["Application: " + p.application, ""]
             lines += [
                 "Source (desktop):",
                 p.path,

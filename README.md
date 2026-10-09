@@ -221,6 +221,8 @@ Setup Files are explicit `setup` selections and never run as part of create, ref
 
 Applications may also own structured configuration files. Add `config_files` to an application entry with a `path`, `format` (`toml`, `json`, or `yaml`), and nested `values` tables. HomeStack patches only the declared scalar and array leaves, preserving unrelated keys, sections, comments, and ordering where the parser supports it. A changed array is replaced as one value. Missing keys are added and existing declared keys are updated; there is no deletion, unset, null-as-delete, or stale-key cleanup. Selecting an application selects all of its config files and leaves, while a file or nested section can be selected as a group and individual leaves can be toggled. The tree shows only declared values.
 
+Applications may also own desktop file copies. Add `files = ["~/.claude/.credentials.json", "~/.claude/statusline.sh"]` to an application entry; each path appears under the application in the tree and is copied with the same rules as Files entries (no deletes, user-only permissions, the executable bit is kept when the source has it). Selecting the application selects its file copies too, so declare an authentication file there only when every selection of that application should copy it. A single copy can be selected with its stable ID, for example `app=claude:file:~/.claude/statusline.sh`. Use the Files group for files that belong to no application.
+
 HomeStack parses every source document and reparses the merged candidate before writing. Malformed documents and scalar/array parents where a map is required block preflight. Nested `values` tables define path segments; a quoted key such as `"foo.bar"` stays one literal key. Parsing runs on the desktop; fresh guests need no TOML/YAML packages. Whole-file Files actions remain available, but selecting one together with a structured patch at an overlapping path is rejected.
 
 An application may declare `[setup.items.validation]`: `type = "exit-code"` requires exit 0; `type = "json-path"` reads the JSON report at the literal `path` and accepts values listed in `accepted`. The validator runs once after all selected files are patched, when the application was installed/updated or configuration actually changed. Config-only no-ops and status inspection do not run it. Applications without a validator still receive document validation; omitting `validation` or setting it to `false` means no external validator. On validation failure, only that application's structured files changed by this operation are restored from the snapshot, before any successful state is recorded. An update-only compatibility failure is reported without automatic repair.
@@ -331,7 +333,7 @@ label = "Codex CLI"
 
 # A custom application requires group, handler, label, description and command.
 # Optional: interpreter, interaction, prerequisites, prerequisite_checks, check,
-# non_interactive, bin_dirs, requires_absent, backup_paths, depends_on.
+# non_interactive, bin_dirs, requires_absent, backup_paths, files, depends_on.
 ```
 
 `depends_on = ["ID"]` requires those actions to be explicitly selected and displays their order; it never silently selects credentials or applications. Cycles and missing dependencies block the plan.

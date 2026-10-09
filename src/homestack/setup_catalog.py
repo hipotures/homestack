@@ -24,6 +24,7 @@ from .setup_config import (
     FileParams,
     RepositoryParams,
     StructuredParams,
+    app_file_entries,
     config_entries,
     config_entry_key,
 )
@@ -76,6 +77,9 @@ class Catalog:
                        **(self.timestamps or {}).get(entry.id, {})}
                 if isinstance(entry.params, ApplicationParams):
                     row["config_files"] = config_files
+                    row["files"] = [{"path": leaf.params.path, "selector": leaf.id,
+                                     "availability": self.availability.get(leaf.id, "unknown")}
+                                    for leaf in app_file_entries(entry)]
                 rows.append(row)
         return rows
 
@@ -136,12 +140,14 @@ def discover_repositories(cfg: Config) -> tuple[dict, list[dict]]:
 def load_catalog(cfg: Config, *, repositories: bool = False) -> Catalog:
     entries = list(cfg.setup.items)
     availability = {}
+    from .setup_files import file_plan_item
     for entry in entries:
         if isinstance(entry.params, FileParams):
-            from .setup_files import file_plan_item
             availability[entry.id] = file_plan_item(cfg, entry.params.path)["status"]
         else:
             availability[entry.id] = "guest state unknown"
+        for leaf in app_file_entries(entry):
+            availability[leaf.id] = file_plan_item(cfg, leaf.params.path)["status"]
     catalog = Catalog(tuple(entries), availability, timestamps={})
     if repositories:
         try:
@@ -289,6 +295,11 @@ def select_entries(cfg: Config, tokens: list[str], *, catalog_id: str | None = N
                 # so numeric application indexes remain stable.  Accept their
                 # stable IDs in the same app selector namespace for granular
                 # non-interactive selection.
+                if value not in entries and ":" in value:
+                    application = entries.get(value.split(":", 1)[0])
+                    leaf = next((item for item in app_file_entries(application) if item.id == value), None) if application else None
+                    if leaf is not None and application.group == group:
+                        entries[leaf.id] = leaf
                 if value not in entries and ":" in value:
                     try:
                         application_id, config_id, key = config_entry_key(value)

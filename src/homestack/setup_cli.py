@@ -46,6 +46,11 @@ def show_catalog(cfg, catalog):
                 "  Desired values: " + json.dumps(config.get("values", {}), ensure_ascii=False),
                 markup=False,
             )
+        for file in row.get("files", ()):
+            console.print(
+                f"{row['id']}: {file['path']} (desktop copy, {file['availability']})  Selector: {row['group']}={file['selector']}",
+                markup=False,
+            )
     console.print("Guest installation state is unknown. Numeric selectors reuse this snapshot; use stable IDs in long-lived scripts.")
 
 

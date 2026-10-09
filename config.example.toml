@@ -147,6 +147,7 @@ non_interactive = ""
 bin_dirs = ["~/.local/bin"]
 requires_absent = []
 backup_paths = []
+files = []
 
 # Optional runtime configuration: these values and the validator below are not
 # built into HomeStack. Declare them under Codex in your own HomeStack config.
@@ -204,6 +205,7 @@ non_interactive = ""
 bin_dirs = ["~/.local/bin"]
 requires_absent = []
 backup_paths = []
+files = []
 
 [[setup.items]]
 id = "herdr"
@@ -230,6 +232,7 @@ non_interactive = ""
 bin_dirs = ["~/.opencode/bin", "~/.local/bin"]
 requires_absent = []
 backup_paths = []
+files = []
 
 [[setup.items]]
 id = "opencode-v2"
@@ -247,6 +250,7 @@ non_interactive = ""
 bin_dirs = ["~/.opencode/bin", "~/.local/bin"]
 requires_absent = []
 backup_paths = []
+files = []
 
 [[setup.items]]
 id = "pi"
@@ -264,6 +268,7 @@ non_interactive = ""
 bin_dirs = ["~/.local/bin"]
 requires_absent = []
 backup_paths = []
+files = []
 
 [[setup.items]]
 id = "hermes"
@@ -282,6 +287,7 @@ non_interactive = ""
 bin_dirs = ["~/.local/bin", "~/.hermes/bin", "~/.hermes/node/bin"]
 requires_absent = ["~/.hermes/hermes-agent"]
 backup_paths = []
+files = []
 
 [[setup.items]]
 id = "rust"
@@ -305,3 +311,4 @@ non_interactive = ""
 bin_dirs = ["~/.cargo/bin"]
 requires_absent = []
 backup_paths = []
+files = []
