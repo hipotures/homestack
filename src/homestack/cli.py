@@ -359,6 +359,9 @@ def main() -> int:
                     ]])
                     if not sys.stdin.isatty():
                         raise AppError("Interactive confirmation requires a TTY; use --yes for automation")
+                    if plan["target_size_gib"] == plan["current_size_gib"]:
+                        console.print(f'Disk is already {plan["size"]}: {plan["size"]} -> {plan["size"]} changes nothing.')
+                        return 0
                     if not Confirm.ask("Resize this workspace disk?", default=False):
                         console.print("[bold]Cancelled. No changes were made.[/bold]")
                         return 0
