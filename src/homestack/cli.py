@@ -52,8 +52,8 @@ def show_help(cfg_path: Path) -> None:
         "Grow a running workspace disk and its ext4/Btrfs filesystem to the specified total size.",
     )
     commands.add_row(
-        f"{cmd} addkey VMID|NAME --key FILE.pub",
-        "Add one SSH public key to root and the workspace user through Proxmox Cloud-Init; restarts a running VM and removes its old host key locally.",
+        f"{cmd} addkey VMID|NAME [--key FILE.pub]",
+        "Add one SSH public key (or, without --key, apply the keys already in sshkeys) to root and the workspace user through Proxmox Cloud-Init; restarts a running VM and removes its old host key locally.",
     )
     commands.add_row(
         f"{cmd} destroy VMID|NAME",
@@ -176,7 +176,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     addkey = sub.add_parser("addkey", add_help=False)
     addkey.add_argument("target")
-    addkey.add_argument("--key", required=True, type=Path)
+    addkey.add_argument("--key", type=Path, help="Public key to add; omit to apply the keys already in sshkeys")
     addkey.add_argument("--restart", action="store_true", help="Restart a running VM without asking")
     addkey.add_argument("--json", action="store_true")
     addkey.add_argument("-y", "--yes", action="store_true")
@@ -408,7 +408,7 @@ def main() -> int:
                         ("Node", plan["node"]),
                         ("State", plan["status"]),
                         ("Address", plan["ip"]),
-                        ("Key", f'{plan["key"]["comment"]} ({plan["key"]["type"]})'),
+                        ("Key", f'{plan["key"]["comment"]} ({plan["key"]["type"]})' if plan["key"] else f'existing keys: {plan["label"]}'),
                     ]])
                     for number, step in enumerate(plan["steps"], 1):
                         console.print(f"  {number}. {step}", markup=False)
@@ -432,7 +432,7 @@ def main() -> int:
                     emit_json(result)
                 else:
                     console.print(
-                        f'VM {vmid} ({plan["name"]}): key {result["key"]} added'
+                        f'VM {vmid} ({plan["name"]}): keys ready: {result["key"]}'
                         + ("; restarted and verified in root and user authorized_keys." if result["verified"]
                            else "; VM NOT restarted, the key applies after the next restart." if result["pending_restart"]
                            else "; applies on the next start."),

@@ -162,9 +162,10 @@ def sync_local_ssh(cfg: Config, plan: dict[str, Any]) -> dict[str, Any]:
     return {"identity_files_changed": changed, "ssh_config": str(path)}
 
 
-def build_addkey_plan(session: Transport, cfg: Config, vmid: int, key_path: Path) -> dict[str, Any]:
-    key = read_public_key(key_path)
-    _private, private_shown = private_key_for(key_path)
+def build_addkey_plan(session: Transport, cfg: Config, vmid: int, key_path: Path | None = None) -> dict[str, Any]:
+    """Plan to add ``key_path``, or, without it, to apply the keys already in the VM's Proxmox sshkeys."""
+    key = read_public_key(key_path) if key_path else None
+    private_shown = private_key_for(key_path)[1] if key_path else None
     info = resolve_existing_workspace(session, cfg, vmid, require_network=True)
     name, node, vm_cfg = info["name"], info["node"], info["vm_config"]
     names = snippet_names(name)
@@ -175,7 +176,14 @@ def build_addkey_plan(session: Transport, cfg: Config, vmid: int, key_path: Path
             raise AppError(
                 f"VM {vmid} does not use the HomeStack {kind} snippet {names[kind]}; refusing to add a key"
             )
-    keys, present = merge_sshkeys(vm_cfg.get("sshkeys", ""), key)
+    if key:
+        keys, present = merge_sshkeys(vm_cfg.get("sshkeys", ""), key)
+    else:
+        keys = [line.strip() for line in unquote(vm_cfg.get("sshkeys", "")).splitlines() if line.strip()]
+        present = True
+        if not keys:
+            raise AppError(f"VM {vmid} has no keys in its Proxmox sshkeys; give one with --key")
+    label = key["comment"] if key else ", ".join(line.split()[-1] for line in keys)
     return {
         "command": "addkey",
         "vmid": vmid,
@@ -185,13 +193,15 @@ def build_addkey_plan(session: Transport, cfg: Config, vmid: int, key_path: Path
         "ip": info["ip"],
         "user": cfg.user_name,
         "key": {"comment": key["comment"], "type": key["type"], "path": key["path"],
-                "line": key["line"], "blob": key["blob"]},
+                "line": key["line"], "blob": key["blob"]} if key else None,
+        "label": label,
         "private_key": private_shown,
         "key_already_in_sshkeys": present,
         "keys": keys,
         "snippets": {kind: str(path) for kind, path in paths.items()},
         "steps": [
-            "Add the key to the Proxmox sshkeys of the VM" + (" (already there)" if present else ""),
+            ("Add the key to the Proxmox sshkeys of the VM" + (" (already there)" if present else "")) if key
+            else f"Keep the Proxmox sshkeys as they are: {label}",
             "Set allow_format=0 in the vendor snippet so the rerun cannot rewrite authorized_keys or home",
             "Replace the ensure-keys step: append missing keys to root and "
             f"{cfg.user_name} authorized_keys; nothing is removed",
@@ -200,9 +210,10 @@ def build_addkey_plan(session: Transport, cfg: Config, vmid: int, key_path: Path
             if info["status"] == "running"
             else "qm cloudinit update (the VM is stopped and stays stopped)",
             "Only after a restart: remove the old SSH host key for the VM address from the local known_hosts",
-            f"Only after a restart: check that the key is in root and {cfg.user_name} authorized_keys",
-            f"Add {private_shown} to identity_files in the HomeStack config",
-            "Rewrite the local ssh config of this VM; YubiKey first, Trezor when no YubiKey is connected",
+            f"Only after a restart: check that every key is in root and {cfg.user_name} authorized_keys",
+            *([f"Add {private_shown} to identity_files in the HomeStack config",
+               "Rewrite the local ssh config of this VM; YubiKey first, Trezor when no YubiKey is connected"]
+              if key else []),
         ],
     }
 
@@ -226,7 +237,6 @@ def add_key(session: Transport, cfg: Config, plan: dict[str, Any],
     """Prepare the key; restart a running VM only if ``restart`` is true (or answers yes)."""
     vmid, name, node, user = plan["vmid"], plan["name"], plan["node"], plan["user"]
     vendor_path, meta_path = plan["snippets"]["vendor"], plan["snippets"]["meta"]
-    key = plan["key"]
     old_vendor = _read_remote(session, cfg, node, vendor_path)
     old_meta = _read_remote(session, cfg, node, meta_path)
     vendor = update_vendor(old_vendor, plan["keys"], user)
@@ -263,27 +273,36 @@ def add_key(session: Transport, cfg: Config, plan: dict[str, Any],
     removed = forget_local_ssh_host(plan["ip"]) if restarted else []
     verified = False
     if restarted:
-        text = guest_out_on_node(
-            session, cfg, node, vmid,
-            f"grep -cF {shlex.quote(key['blob'])} /root/.ssh/authorized_keys /home/{user}/.ssh/authorized_keys || true",
+        comments = {line.split()[1]: line.split()[-1] for line in plan["keys"]}
+        files = f"/root/.ssh/authorized_keys /home/{user}/.ssh/authorized_keys"
+        check = (
+            "missing=0; for f in " + files + "; do for b in " + " ".join(shlex.quote(b) for b in comments)
+            + '; do grep -qF "$b" "$f" 2>/dev/null || { echo "MISSING $f $b"; missing=1; }; done; done; '
+            '[ "$missing" = 0 ] && echo CHECKED || true'
         )
-        counts = re.findall(r":(\d+)\s*$", text, re.MULTILINE)
-        verified = len(counts) == 2 and all(int(count) >= 1 for count in counts)
+        text = guest_out_on_node(session, cfg, node, vmid, check)
+        verified = "CHECKED" in text and "MISSING" not in text
         if not verified:
-            raise AppError(f"Key {key['comment']} is not in both authorized_keys files of VM {vmid}: {text.strip()[:200]}")
+            lost = [f"{comments.get(line.split()[2], '?')} in {line.split()[1]}"
+                    for line in text.splitlines() if line.startswith("MISSING ") and len(line.split()) == 3]
+            raise AppError(
+                f"Not all keys are in root and {user} authorized_keys of VM {vmid}: "
+                + ("; ".join(lost) or text.strip()[:200])
+            )
     result = {
         "ok": True,
         "command": "addkey",
         "vmid": vmid,
         "name": name,
-        "key": key["comment"],
+        "key": plan["label"],
         "restarted": restarted,
         "pending_restart": was_running and not restarted,
         "known_hosts_removed": removed,
         "verified": verified,
     }
-    try:
-        result["local"] = sync_local_ssh(cfg, plan)
-    except (AppError, OSError, ValueError) as exc:
-        result["local_error"] = str(exc)
+    if plan["private_key"]:
+        try:
+            result["local"] = sync_local_ssh(cfg, plan)
+        except (AppError, OSError, ValueError) as exc:
+            result["local_error"] = str(exc)
     return result

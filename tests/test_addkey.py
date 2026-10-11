@@ -155,7 +155,7 @@ class FlowTests(unittest.TestCase):
                 self.assertRaisesRegex(AppError, "does not use the HomeStack vendor snippet"):
             addkey.build_addkey_plan(object(), self.cfg, 206, self.key)
 
-    def _execute(self, plan, *, cloud_init="status: done", counts="/root/.ssh/authorized_keys:1\n/home/user/.ssh/authorized_keys:1",
+    def _execute(self, plan, *, cloud_init="status: done", counts="CHECKED",
                  fail_on=None, restart=True):
         events = []
         written = {}
@@ -201,7 +201,7 @@ class FlowTests(unittest.TestCase):
                                   "local": {"ssh_config": "x", "identity_files_changed": True}})
         order = [next(i for i, e in enumerate(events) if marker in e)
                  for marker in ("qm set 206 --sshkeys", "write homestack-cpu-vendor.yaml", "write homestack-cpu-meta.yaml",
-                                "qm cloudinit update 206", "shutdown", "qm start 206", "qga", "guest timeout", "guest grep")]
+                                "qm cloudinit update 206", "shutdown", "qm start 206", "qga", "guest timeout", "guest missing=0;")]
         self.assertEqual(order, sorted(order))
         self.assertIn("allow_format=0", written["homestack-cpu-vendor.yaml"][-1])
         self.assertNotIn("old-key-line", written["homestack-cpu-vendor.yaml"][-1])
@@ -253,8 +253,35 @@ class FlowTests(unittest.TestCase):
     def test_cloud_init_error_and_missing_key_are_reported(self):
         _result, error, *_ = self._execute(self.plan(), cloud_init="status: error")
         self.assertRegex(error, "did not report 'done'")
-        _result, error, *_ = self._execute(self.plan(), counts="/root/.ssh/authorized_keys:1\n/home/user/.ssh/authorized_keys:0")
-        self.assertRegex(error, "not in both authorized_keys")
+        _result, error, *_ = self._execute(
+            self.plan(), counts=f"MISSING /home/user/.ssh/authorized_keys {TREZOR.split()[1]}")
+        self.assertRegex(error, "Not all keys are in root and user authorized_keys of VM 206: trezor-vm in /home/user")
+
+    def test_without_a_key_the_existing_sshkeys_are_applied(self):
+        data = info()
+        data["vm_config"]["sshkeys"] = quote(YUBIKEY + "\n" + TREZOR + "\n", safe="")
+        with mock.patch.object(addkey, "resolve_existing_workspace", return_value=data):
+            plan = addkey.build_addkey_plan(object(), self.cfg, 206)
+        self.assertIsNone(plan["key"])
+        self.assertIsNone(plan["private_key"])
+        self.assertEqual((plan["label"], plan["keys"]), ("yubikey1, trezor-vm", [YUBIKEY, TREZOR]))
+        self.assertEqual(len(plan["steps"]), 7)
+        self.assertIn("Keep the Proxmox sshkeys as they are", plan["steps"][0])
+        result, error, events, written, _forget = self._execute(plan)
+        self.assertIsNone(error)
+        self.assertFalse([event for event in events if "--sshkeys" in event])
+        self.assertNotIn("local", result)
+        self.assertEqual(result["key"], "yubikey1, trezor-vm")
+        self.assertIn(TREZOR.split()[1], written["homestack-cpu-vendor.yaml"][-1])
+        checks = [event for event in events if event.startswith("guest")]
+        self.assertTrue(checks)
+
+    def test_without_a_key_and_without_sshkeys_is_refused(self):
+        data = info()
+        data["vm_config"]["sshkeys"] = ""
+        with mock.patch.object(addkey, "resolve_existing_workspace", return_value=data), \
+                self.assertRaisesRegex(AppError, "no keys in its Proxmox sshkeys"):
+            addkey.build_addkey_plan(object(), self.cfg, 206)
 
     def test_key_already_in_sshkeys_skips_qm_set(self):
         data = info()
