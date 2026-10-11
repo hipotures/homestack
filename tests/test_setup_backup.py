@@ -56,14 +56,19 @@ class FakeWorkspace:
 
 
 class MemoryGuest:
-    def __init__(self, files=None):
+    def __init__(self, files=None, configuration=True):
         self.files = dict(files or {})
+        self.configuration = configuration
         self.calls = []
 
     def __call__(self, _ws, _cfg, operation, **values):
         self.calls.append((operation, values))
         if operation == "paths":
             return {"ok": True}
+        if operation == "backup-config":
+            created = bool(values.get("create")) and not self.configuration
+            self.configuration = self.configuration or bool(values.get("create"))
+            return {"ok": True, "exists": self.configuration, "created": created}
         if operation == "backup-authorized-keys":
             return {"ok": True, "ready": True, "changed": False,
                     "exists": True, "sha256": "authorized-keys-digest"}

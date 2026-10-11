@@ -295,6 +295,8 @@ class Execution(ModalScreen[bool]):
         self.query_one("#execution-content", Static).update(
             Text("\n".join(self.lines), overflow="fold", no_wrap=False)
         )
+        # Wrapped lines grow the log after the first refresh; an anchored log stays at the bottom.
+        self.query_one("#execution-log", VerticalScroll).anchor()
         if self.finished:
             action.focus()
 

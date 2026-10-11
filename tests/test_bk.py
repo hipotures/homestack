@@ -399,7 +399,12 @@ class BackupCliTests(unittest.TestCase):
         result = self.run_edit(self.home, working, [], cancelled=True)
 
         self.assertEqual(result, 1)
-        self.assertEqual(config.read_bytes(), before)
+        # Reading a valid configuration adds missing scalar options, so a cancelled edit leaves
+        # the file as it was plus the default destination and nothing else.
+        destination = f"destination: {json.dumps(str(self.backup_dir(self.home)))}\n"
+        after = config.read_text(encoding="utf-8")
+        self.assertIn(destination, after)
+        self.assertEqual(after.replace(destination, "", 1), before.decode("utf-8"))
 
     def test_edit_preserves_order_and_applies_additions_and_removals(self) -> None:
         working = self.home / "work"
@@ -1001,8 +1006,10 @@ class BackupCliTests(unittest.TestCase):
             self.assertTrue(classifier_log.exists(), "the first run did not reach classification")
             config.write_text("version: 2\nretention: 7\nsources:\n", encoding="utf-8")
             second = self.run_bk(self.home, "run", extra_env=classifier_env)
-            self.assertEqual(second.returncode, 75, second.stdout + second.stderr)
-            self.assertIn("running", (second.stdout + second.stderr).lower())
+            # The whole configuration must parse before BK trusts a destination, so a malformed
+            # file is rejected before the lock is tried and nothing is recorded.
+            self.assertEqual(second.returncode, 1, second.stdout + second.stderr)
+            self.assertIn("unsupported", (second.stdout + second.stderr).lower())
             self.assertFalse((self.backup_dir(self.home) / "last-failed.log").exists())
             self.assertFalse((self.backup_dir(self.home) / "status.json").exists())
             config.write_text(valid_config, encoding="utf-8")
@@ -1608,9 +1615,11 @@ class BackupCliTests(unittest.TestCase):
             "missing sources": (
                 "version: 1\nretention: 7\nrespect_gitignore: true\nsources: []\n"
             ),
-            "source contains runtime": (
+            # A source that contains the destination is allowed (BK skips the destination while
+            # walking); a source inside the destination is not.
+            "source inside runtime": (
                 "version: 1\nretention: 7\nrespect_gitignore: true\nsources:\n"
-                f"  - {self_source}\n  - {json.dumps(str(self.home))}\n"
+                f"  - {self_source}\n  - {json.dumps(str(self.backup_dir(self.home) / 'data'))}\n"
             ),
         }
         for label, content in cases.items():
@@ -1627,12 +1636,10 @@ class BackupCliTests(unittest.TestCase):
                 self.assertRegex(diagnostic, r"config|invalid|malformed|unsupported|source|retention")
                 self.assertEqual(config.read_bytes(), before)
                 self.assertFalse(self.archive_files(self.home))
-                status_path = backup / "status.json"
+                # A configuration that does not parse names no trusted destination, so the failure
+                # is reported but not recorded in the default runtime.
+                self.assertFalse((backup / "status.json").exists())
                 self.assertFalse((backup / "last-failed.log").exists())
-                recorded = json.loads(status_path.read_text(encoding="utf-8"))
-                self.assertEqual(recorded["status"], "failed")
-                self.assertIsNone(recorded["failed_log_path"])
-                self.assertTrue(recorded["error"])
 
     def test_source_files_and_directories_are_not_modified_by_snapshot(self) -> None:
         source = self.home / "source"
