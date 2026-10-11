@@ -517,6 +517,7 @@ def _config_from_install_draft(path: Path, data: dict[str, Any]) -> Config:
                 identity_files=tuple(str(item) for item in ssh["identity_files"]),
                 identities_only=bool(ssh["identities_only"]),
                 log_level=str(ssh["log_level"]),
+                fido_devices=cfg.workspace_ssh.fido_devices,
             ),
         )
 

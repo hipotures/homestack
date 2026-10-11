@@ -50,13 +50,18 @@ class TouchWatchTests(unittest.TestCase):
         watch.finish(False)
         self.assertEqual(rec.events, ["fail"])
 
-    def test_repeats_stop_at_timeout_and_finish_is_idempotent(self):
+    def test_repeats_continue_until_safety_cap_and_finish_is_idempotent(self):
         rec = Recorder()
         watch = touch.TouchWatch("key", sounds(repeat_seconds=0.03, initial_delay=0.01),
                                  player=rec, timeout=0.1).start()
         time.sleep(0.3)
         waits = rec.events.count("wait")
         self.assertTrue(1 <= waits <= 4, waits)
+        rec2 = Recorder()
+        long = touch.TouchWatch("key", sounds(repeat_seconds=0.03, initial_delay=0.01), player=rec2).start()
+        time.sleep(0.2)
+        long.finish(True)
+        self.assertGreaterEqual(rec2.events.count("wait"), 4, "keeps repeating past the old 30 s window")
         watch.finish(False)
         watch.finish(True)
         self.assertEqual(rec.events.count("fail"), 1)
@@ -125,6 +130,9 @@ class ClassifyTests(unittest.TestCase):
         self.assertEqual(c(255, 0.4, 'sign_and_send_pubkey: signing failed for ED25519-SK "k": device not found'), touch.ABSENT)
         self.assertEqual(c(255, 29.4, 'signing failed for ED25519-SK "k": invalid format\nPermission denied (publickey).'), touch.NOT_CONFIRMED)
         self.assertEqual(c(255, 0.6, "Permission denied (publickey)."), touch.DENIED)
+        mixed = 'signing failed for ED25519-SK "a": device not found\nsigning failed for ED25519-SK "b": invalid format'
+        self.assertEqual(c(255, 35.8, mixed), touch.NOT_CONFIRMED)
+        self.assertEqual(c(255, 0.5, mixed), touch.ABSENT)
         self.assertEqual(c(255, 1.0, "Connection refused"), touch.FAILED)
         for kind in (touch.ABSENT, touch.NOT_CONFIRMED, touch.DENIED, touch.FAILED):
             self.assertTrue(touch.MESSAGES[kind])

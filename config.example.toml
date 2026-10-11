@@ -44,6 +44,11 @@ identity_files = [
 ]
 identities_only = true
 log_level = "FATAL"
+# Optional: choose which kind of FIDO security key ssh may see, first connected kind wins.
+# OpenSSH asks every attached key in USB order, so a locked second key (for example a Trezor)
+# can ask for a PIN before the key that owns the login. Needs bubblewrap (bwrap) and fido2-token.
+# Names: yubikey, trezor, or a USB id such as "1050" or "1050:0407". The default is to show ssh every key.
+# fido_devices = ["yubikey", "trezor"]
 
 [repo]
 owner = "example-owner"

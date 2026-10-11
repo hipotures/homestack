@@ -9,12 +9,14 @@ import re
 import shlex
 import shutil
 import tempfile
+import time
 
+from . import fido
 from .config import Config
 from .guest import guest_exec_on_node
 from .models import AppError
 from .proxmox import cluster_vm_resource, node_run, qm_config_on_node, qm_status_on_node
-from .touch import Sounds, touch_wait
+from .touch import MESSAGES, FAILED, Sounds, classify_ssh_failure, touch_wait
 from .transports.base import Transport, run_local
 
 def forget_local_ssh_host(host: str) -> list[str]:
@@ -215,8 +217,10 @@ class WorkspaceSSH:
     options is constructor injection for service tests, never a CLI auth switch.
     """
 
-    def __init__(self, target: str, vmid: int, *, options: tuple[str, ...] = (), sounds: Sounds | None = None) -> None:
+    def __init__(self, target: str, vmid: int, *, options: tuple[str, ...] = (), sounds: Sounds | None = None,
+                 fido_devices: tuple[str, ...] = ()) -> None:
         self.alias = target
+        self.fido_devices = tuple(fido_devices)
         # No cues unless configured: tests and library callers stay silent.
         self.sounds = sounds or Sounds(enabled=False)
         self.options = list(options)
@@ -230,7 +234,8 @@ class WorkspaceSSH:
                    "-o", f"LogLevel={cfg.workspace_ssh.log_level}"]
         for identity in cfg.workspace_ssh.identity_files:
             options += ["-i", str(Path(identity).expanduser())]
-        return cls(f"{cfg.user_name}@{target['ip']}", int(target['vmid']), options=tuple(options), sounds=cfg.sounds)
+        return cls(f"{cfg.user_name}@{target['ip']}", int(target['vmid']), options=tuple(options), sounds=cfg.sounds,
+                   fido_devices=cfg.workspace_ssh.fido_devices)
 
     @property
     def child_options(self) -> list[str]:
@@ -247,21 +252,46 @@ class WorkspaceSSH:
         self.control = str(Path(self.directory.name) / "master")
         try:
             # stderr remains attached for hardware user presence; stdout is never polluted.
-            with touch_wait(self.alias, self.sounds) as watch:
-                result = subprocess.run(["ssh", *self.options, "-M", "-S", self.control,
+            prefix = self._sandbox_prefix()
+            started = time.monotonic()
+            # stderr goes to a file, not a pipe: the detached master keeps the descriptor open
+            # and a pipe would never reach EOF. Prompts for a PIN use the terminal directly.
+            with tempfile.TemporaryFile("w+", encoding="utf-8", errors="replace") as errors, \
+                    touch_wait(self.alias, self.sounds) as watch:
+                result = subprocess.run([*prefix, "ssh", *self.options, "-M", "-S", self.control,
                                          "-o", "ControlPersist=yes", "-o", "StrictHostKeyChecking=accept-new",
                                          "-o", "PasswordAuthentication=no", "-o", "KbdInteractiveAuthentication=no",
-                                         "-fN", self.alias], stdout=subprocess.DEVNULL)
+                                         "-fN", self.alias], stdout=subprocess.DEVNULL, stderr=errors)
                 if result.returncode:
                     watch.finish(False)
+                errors.seek(0)
+                detail = errors.read()
             self.opened = result.returncode == 0
             if not self.opened:
-                raise AppError("Could not establish workspace SSH master")
+                raise AppError(self._master_failure(detail, time.monotonic() - started))
             self.require_master()
             return self
         except BaseException:
             self.__exit__()
             raise
+
+    def _sandbox_prefix(self) -> list[str]:
+        """Show ssh only the preferred kind of security key, when fido_devices is set."""
+        if not self.fido_devices:
+            return []
+        _, devices = fido.select(self.fido_devices, fido.list_devices())
+        return fido.sandbox_prefix(devices)
+
+    @staticmethod
+    def _master_failure(stderr: str, elapsed: float) -> str:
+        """A short message for a failed master; raw ssh output is not shown."""
+        kind = classify_ssh_failure(255, elapsed, stderr)
+        message = MESSAGES[kind]
+        if kind == FAILED:
+            lines = [line.strip() for line in stderr.splitlines() if line.strip()]
+            if lines:
+                message += " " + lines[-1][:200]
+        return message
 
     def require_master(self) -> None:
         if not self.opened or run_local(["ssh", *self.child_options, "-O", "check", self.alias], check=False).returncode:

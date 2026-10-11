@@ -14,6 +14,7 @@ import tomllib
 
 from .models import AppError
 from .setup_config import SetupConfig, parse_setup, setup_to_toml
+from .fido import validate_entry as validate_fido_entry
 from .touch import DEFAULT_FILES, Sounds
 
 
@@ -23,6 +24,7 @@ class WorkspaceSSHConfig:
     identity_files: tuple[str, ...]
     identities_only: bool
     log_level: str
+    fido_devices: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -340,11 +342,17 @@ def load_config(path: Path) -> Config:
             + ", ".join(sorted(valid_log_levels))
         )
 
+    raw_fido_devices = workspace_ssh_data.get("fido_devices", [])
+    if not isinstance(raw_fido_devices, list):
+        raise AppError("[workspace_ssh] fido_devices must be an array of strings")
+    fido_devices = tuple(dict.fromkeys(validate_fido_entry(item) for item in raw_fido_devices))
+
     workspace_ssh = WorkspaceSSHConfig(
         user=ssh_user,
         identity_files=tuple(identity_files_list),
         identities_only=identities_only,
         log_level=log_level,
+        fido_devices=fido_devices,
     )
 
     node_match = re.search(r"([1-9][0-9]*)$", node)
@@ -506,6 +514,7 @@ def config_to_toml(cfg: Config) -> str:
             f"identity_files = {_toml_array(cfg.workspace_ssh.identity_files)}",
             f"identities_only = {str(cfg.workspace_ssh.identities_only).lower()}",
             f"log_level = {_toml_string(cfg.workspace_ssh.log_level)}",
+            *([f"fido_devices = {_toml_array(cfg.workspace_ssh.fido_devices)}"] if cfg.workspace_ssh.fido_devices else []),
             "",
             "[repo]",
             f"owner = {_toml_string(cfg.repo_owner or '')}",

@@ -11,11 +11,13 @@ import threading
 from typing import Callable, Iterator
 
 # ssh gives up on an unconfirmed key touch after about 30 seconds (measured on a
-# YubiKey), so the cue repeats at 8, 16 and 24 seconds and the failure cue
-# follows when the attempt ends.
+# YubiKey) and then tries the next key, so one attempt can run for several
+# windows. The cue repeats every 8 seconds until the attempt ends and the failure
+# cue follows if it ends unconfirmed.
 REPEAT_SECONDS = 8.0
 TIMEOUT_SECONDS = 30.0
 INITIAL_DELAY_SECONDS = 1.0
+MAX_WAIT_SECONDS = 300.0
 
 SOUND_DIR = Path("/usr/share/sounds/freedesktop/stereo")
 DEFAULT_FILES = {"wait": "window-attention.oga", "ok": "complete.oga", "fail": "dialog-error.oga"}
@@ -86,14 +88,14 @@ class TouchWatch:
     """Cue schedule for one wait on a security key.
 
     The attention cue starts after ``initial_delay`` (a connection that needs no
-    touch stays silent), repeats every ``repeat_seconds`` up to ``TIMEOUT_SECONDS``,
-    and ``finish`` ends it with a success cue (only if the user was alerted) or a
-    failure cue.
+    touch stays silent), repeats every ``repeat_seconds`` until the attempt ends
+    (or ``MAX_WAIT_SECONDS``), and ``finish`` ends it with a success cue (only if
+    the user was alerted) or a failure cue.
     """
 
     def __init__(self, label: str, sounds: Sounds | None = None, *,
                  player: Callable[[Sounds, str], None] | None = None,
-                 timeout: float = TIMEOUT_SECONDS) -> None:
+                 timeout: float = MAX_WAIT_SECONDS) -> None:
         self.label = label
         self.sounds = sounds or Sounds()
         # Resolved per call so tests (and callers) can replace touch.play.
@@ -173,12 +175,14 @@ def classify_ssh_failure(returncode: int, elapsed: float, stderr: str) -> str:
 
     A missing device fails at once with "device not found"; an unconfirmed touch
     runs to ssh's own timeout (about 30 s) and then reports a signing failure.
+    With several keys one may be absent while another timed out, so an unconfirmed
+    touch takes precedence.
     """
     text = (stderr or "").lower()
-    if "device not found" in text:
-        return ABSENT
     if "signing failed" in text and elapsed >= TIMEOUT_SECONDS - 5:
         return NOT_CONFIRMED
+    if "device not found" in text:
+        return ABSENT
     if "permission denied" in text:
         return DENIED
     return FAILED

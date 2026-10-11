@@ -8,11 +8,34 @@ from rich.console import Console
 from rich.prompt import Confirm
 from rich.table import Table
 
+from . import fido
 from .models import AppError
 from .setup import build_plan, execute_plan, inspect_workspace_state, resolve_target
 from .setup_catalog import load_catalog, parse_assignments, save_snapshot, select_entries
 from .transports import open_transport
 from .workspace_ssh import WorkspaceSSH
+
+
+def key_label(cfg) -> str:
+    """Name the kind of security key that will be asked, for prompts."""
+    preference = cfg.workspace_ssh.fido_devices
+    if not preference:
+        return "security key"
+    try:
+        entry, _ = fido.select(preference, fido.list_devices())
+    except AppError:
+        return "security key"
+    return fido.label(entry)
+
+
+def key_advice(cfg) -> str | None:
+    """A hint about extra attached keys when no fido_devices preference is configured."""
+    if cfg.workspace_ssh.fido_devices:
+        return None
+    try:
+        return fido.advice(fido.list_devices())
+    except AppError:
+        return None
 
 
 def show_catalog(cfg, catalog):
@@ -202,10 +225,13 @@ def run_setup(args, cfg, *, json_mode: bool, assume_yes: bool) -> int:
         with console.status("Loading setup catalog…") if interactive_tui else nullcontext():
             catalog = catalog_loader(cfg, repositories=True)
             save_snapshot(cfg, catalog)
+        key = key_label(cfg) if not local else "security key"
         if not local:
-            console.print("SSH: authenticate once; this session remains open until setup exits. Touch your security key if prompted.")
+            console.print(f"SSH: authenticate once; this session remains open until setup exits. Touch your {key} if prompted.")
+            if (tip := key_advice(cfg)):
+                console.print(tip, markup=False)
         with ExitStack() as stack:
-            with console.status("Connecting/authenticating SSH (touch security key if prompted)…") if interactive_tui else nullcontext():
+            with console.status(f"Connecting/authenticating SSH (touch your {key} if prompted)…") if interactive_tui else nullcontext():
                 workspace = stack.enter_context(connection(cfg, target))
             with console.status("SSH connected; inspecting workspace…") if interactive_tui else nullcontext():
                 state = inspect_workspace_state(workspace, cfg, target, catalog.entries)
@@ -232,7 +258,9 @@ def run_setup(args, cfg, *, json_mode: bool, assume_yes: bool) -> int:
     if assume_yes and not json_mode:
         show_plan(console, plan)
     if not local:
-        console.print("SSH: authenticate with the configured workspace identity; hardware authentication may require a touch.")
+        console.print(f"SSH: authenticate with the configured workspace identity; touch your {key_label(cfg)} if prompted.")
+        if (tip := key_advice(cfg)):
+            console.print(tip, markup=False)
     result = execute_plan(cfg, plan, progress=lambda identity, state: console.print(f"{identity}: {state}", markup=False))
     if json_mode:
         emit(result)
