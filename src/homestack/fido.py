@@ -107,6 +107,28 @@ def missing_key_message(entry: str, identity_files: list[str], name: str, addres
     )
 
 
+def filter_identity_options(entry: str, options: list[str]) -> list[str]:
+    """Drop ``-i <file>`` pairs whose file names another kind of key than the connected one.
+
+    A device is asked about every key handle ssh tries, so keys of the other kind would only
+    make it prompt. Files that name no kind at all are kept.
+    """
+    if entry not in NAMES:
+        return list(options)
+    kept: list[str] = []
+    index = 0
+    while index < len(options):
+        if options[index] == "-i" and index + 1 < len(options):
+            lowered = options[index + 1].lower()
+            if not any(kind != entry and kind in lowered for kind in NAMES):
+                kept += options[index:index + 2]
+            index += 2
+        else:
+            kept.append(options[index])
+            index += 1
+    return kept
+
+
 def sandbox_prefix(devices: list[Device]) -> list[str]:
     """argv prefix that runs a command with only ``devices`` visible below /dev."""
     bwrap = shutil.which("bwrap")

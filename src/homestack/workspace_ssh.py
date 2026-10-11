@@ -223,6 +223,7 @@ class WorkspaceSSH:
         # What the user calls the host, and its address for information; ssh itself uses the alias.
         self.name = name or target
         self.address = address
+        self.fido_kind: str | None = None
         self.fido_devices = tuple(fido_devices)
         # No cues unless configured: tests and library callers stay silent.
         self.sounds = sounds or Sounds(enabled=False)
@@ -269,7 +270,8 @@ class WorkspaceSSH:
             # and a pipe would never reach EOF. Prompts for a PIN use the terminal directly.
             with tempfile.TemporaryFile("w+", encoding="utf-8", errors="replace") as errors, \
                     touch_wait(self.name, self.sounds) as watch:
-                result = subprocess.run([*prefix, "ssh", *config_args, *self.options, *agent_args, "-M", "-S", self.control,
+                master_options = fido.filter_identity_options(self.fido_kind, self.options) if self.fido_kind else self.options
+                result = subprocess.run([*prefix, "ssh", *config_args, *master_options, *agent_args, "-M", "-S", self.control,
                                          "-o", "ControlPersist=yes", "-o", "StrictHostKeyChecking=accept-new",
                                          "-o", "PasswordAuthentication=no", "-o", "KbdInteractiveAuthentication=no",
                                          "-fN", self.alias], stdout=subprocess.DEVNULL, stderr=errors)
@@ -291,6 +293,7 @@ class WorkspaceSSH:
         if not self.fido_devices:
             return []
         entry, devices = fido.select(self.fido_devices, fido.list_devices())
+        self.fido_kind = entry
         # A key the host does not know would make the device ask for every handle ssh tries.
         listing = run_local(["ssh", *self.options, "-G", self.alias], check=False)
         identity_files = [line.split(None, 1)[1] for line in (listing.stdout or "").splitlines()

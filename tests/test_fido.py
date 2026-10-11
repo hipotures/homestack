@@ -204,6 +204,33 @@ class MasterTests(unittest.TestCase):
             "Connect a YubiKey or add a Trezor key to the host."])
         self.assertNotIn("user@", str(caught.exception))
 
+    def test_master_offers_only_the_keys_of_the_connected_kind(self):
+        options = ("-o", "IdentitiesOnly=yes",
+                   "-i", "/k/id_ed25519_sk_yubikey1", "-i", "/k/id_ecdsa_sk_trezor_pve", "-i", "/k/id_work")
+        listing = "".join(f"identityfile {path}\n" for path in options[3::2])
+        for present, wanted, dropped in (
+                ("1209", "/k/id_ecdsa_sk_trezor_pve", "yubikey1"), ("1050", "/k/id_ed25519_sk_yubikey1", "trezor")):
+            devices = [d for d in fido.parse_listing(LISTING) if d.vendor == present]
+            ws = workspace_ssh.WorkspaceSSH("user@192.0.2.7", 1, options=options, fido_devices=("yubikey", "trezor"))
+            with mock.patch.object(fido, "list_devices", return_value=devices), \
+                    mock.patch.object(fido.shutil, "which", return_value="/usr/bin/bwrap"), \
+                    mock.patch.object(workspace_ssh, "run_local",
+                                      return_value=subprocess.CompletedProcess([], 0, stdout=listing)):
+                calls, error = self._enter(ws, returncode=0)
+                ws.opened = False
+                ws.directory.cleanup()
+            self.assertIsNone(error)
+            argv = calls[0]
+            self.assertIn(wanted, argv)
+            self.assertIn("/k/id_work", argv)
+            self.assertFalse([part for part in argv if dropped in part])
+
+    def test_identity_filter_keeps_other_options_and_unknown_kinds(self):
+        options = ["-o", "LogLevel=ERROR", "-i", "/k/trezor", "-i", "/k/yubikey1", "-i", "/k/other", "-i"]
+        self.assertEqual(fido.filter_identity_options("trezor", options),
+                         ["-o", "LogLevel=ERROR", "-i", "/k/trezor", "-i", "/k/other", "-i"])
+        self.assertEqual(fido.filter_identity_options("1050:0407", options), options)
+
     def test_host_key_check_passes_when_the_kind_is_listed_or_names_are_unknown(self):
         listed = ["~/.ssh/id_ed25519_sk_yubikey1", "~/.ssh/id_ecdsa_sk_trezor_pve"]
         self.assertIsNone(fido.missing_key_message("trezor", listed, "pve1"))
