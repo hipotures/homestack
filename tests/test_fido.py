@@ -131,6 +131,29 @@ class MasterTests(unittest.TestCase):
         self.assertNotIn("/dev/hidraw9", argv)
         self.assertIn("ssh", argv)
         self.assertLess(argv.index("--dev-bind"), argv.index("ssh"))
+        # the system-wide ssh config is unreadable in the sandbox (root files look like "nobody")
+        self.assertEqual(argv[argv.index("ssh") + 1], "-F")
+
+    def test_sandboxed_master_reads_the_users_config_or_none(self):
+        devices = fido.parse_listing(LISTING)
+        with tempfile.TemporaryDirectory() as home:
+            (Path(home) / ".ssh").mkdir()
+            (Path(home) / ".ssh" / "config").write_text("Host x\n")
+            with mock.patch.object(workspace_ssh.Path, "home", return_value=Path(home)):
+                self.assertEqual(workspace_ssh.WorkspaceSSH._user_ssh_config(), str(Path(home) / ".ssh" / "config"))
+            (Path(home) / ".ssh" / "config").unlink()
+            with mock.patch.object(workspace_ssh.Path, "home", return_value=Path(home)):
+                self.assertEqual(workspace_ssh.WorkspaceSSH._user_ssh_config(), "/dev/null")
+        # an explicit -F in the options is never overridden
+        ws = workspace_ssh.WorkspaceSSH("user@192.0.2.1", 1, options=("-F", "/tmp/own"), fido_devices=("yubikey",))
+        with mock.patch.object(fido, "list_devices", return_value=devices), \
+                mock.patch.object(fido.shutil, "which", return_value="/usr/bin/bwrap"), \
+                mock.patch.object(workspace_ssh, "run_local", return_value=subprocess.CompletedProcess([], 0)):
+            calls, error = self._enter(ws, returncode=0)
+            ws.opened = False
+            ws.directory.cleanup()
+        self.assertEqual(calls[0].count("-F"), 1)
+        self.assertIn("/tmp/own", calls[0])
 
     def test_no_connected_key_stops_before_ssh_with_a_plain_message(self):
         ws = workspace_ssh.WorkspaceSSH("user@192.0.2.1", 1, fido_devices=("yubikey",))
