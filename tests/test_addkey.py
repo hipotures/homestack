@@ -66,7 +66,7 @@ class VendorTests(unittest.TestCase):
         script = "".join(line[6:] for line in step.splitlines(keepends=True)[1:])
         check = subprocess.run(["bash", "-n"], input=script, text=True, capture_output=True)
         self.assertEqual(check.returncode, 0, check.stderr)
-        self.assertIn("/root/.ssh/authorized_keys /home/user/.ssh/authorized_keys", script)
+        self.assertIn("for dir in /root /home/user; do", script)
         self.assertNotIn("rm ", script)
         self.assertNotIn(" > \"$f\"", script)
 
@@ -74,16 +74,32 @@ class VendorTests(unittest.TestCase):
         step = addkey.ensure_keys_item([YUBIKEY, TREZOR], "user")
         script = "".join(line[6:] for line in step.splitlines(keepends=True)[1:])
         with tempfile.TemporaryDirectory() as directory:
-            ssh = Path(directory) / "ssh"
-            ssh.mkdir()
-            target = ssh / "authorized_keys"
+            home = Path(directory) / "home"
+            (home / ".ssh").mkdir(parents=True)
+            target = home / ".ssh" / "authorized_keys"
             target.write_text("other-key AAAA other\n" + YUBIKEY, encoding="utf-8")  # no trailing newline
-            patched = script.replace("/root/.ssh/authorized_keys /home/user/.ssh/authorized_keys", str(target))
+            patched = script.replace("for dir in /root /home/user; do", f"for dir in {home}; do")
             for _ in range(2):
                 run = subprocess.run(["bash", "-c", patched], text=True, capture_output=True)
                 self.assertEqual(run.returncode, 0, run.stderr)
             lines = target.read_text(encoding="utf-8").splitlines()
             self.assertEqual(lines, ["other-key AAAA other", YUBIKEY, TREZOR])
+
+    def test_ensure_step_creates_a_missing_file_and_directory_with_private_modes(self):
+        step = addkey.ensure_keys_item([YUBIKEY, TREZOR], "user")
+        script = "".join(line[6:] for line in step.splitlines(keepends=True)[1:])
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory) / "home"
+            home.mkdir()
+            patched = script.replace("for dir in /root /home/user; do", f"for dir in {home} {Path(directory) / 'absent'}; do")
+            for _ in range(2):
+                run = subprocess.run(["bash", "-c", patched], text=True, capture_output=True)
+                self.assertEqual(run.returncode, 0, run.stderr)
+            target = home / ".ssh" / "authorized_keys"
+            self.assertEqual(target.read_text(encoding="utf-8").splitlines(), [YUBIKEY, TREZOR])
+            self.assertEqual(target.stat().st_mode & 0o777, 0o600)
+            self.assertEqual((home / ".ssh").stat().st_mode & 0o777, 0o700)
+            self.assertFalse((Path(directory) / "absent").exists())
 
     def test_vendor_rewrite_stops_home_rewrite_and_keeps_one_ensure_step(self):
         result = addkey.update_vendor(VENDOR, [YUBIKEY, TREZOR], "user")
@@ -140,7 +156,7 @@ class FlowTests(unittest.TestCase):
             addkey.build_addkey_plan(object(), self.cfg, 206, self.key)
 
     def _execute(self, plan, *, cloud_init="status: done", counts="/root/.ssh/authorized_keys:1\n/home/user/.ssh/authorized_keys:1",
-                 fail_on=None):
+                 fail_on=None, restart=True):
         events = []
         written = {}
 
@@ -170,7 +186,8 @@ class FlowTests(unittest.TestCase):
                 mock.patch.object(addkey, "sync_local_ssh", return_value={"ssh_config": "x", "identity_files_changed": True}), \
                 mock.patch.object(addkey, "forget_local_ssh_host", return_value=["192.0.2.206"]) as forget:
             try:
-                result, error = addkey.add_key(object(), self.cfg, plan), None
+                asked = restart(events) if callable(restart) else restart
+                result, error = addkey.add_key(object(), self.cfg, plan, asked), None
             except AppError as exc:
                 result, error = None, str(exc)
         return result, error, events, written, forget
@@ -179,7 +196,8 @@ class FlowTests(unittest.TestCase):
         result, error, events, written, forget = self._execute(self.plan())
         self.assertIsNone(error)
         self.assertEqual(result, {"ok": True, "command": "addkey", "vmid": 206, "name": "cpu", "key": "trezor-vm",
-                                  "restarted": True, "known_hosts_removed": ["192.0.2.206"], "verified": True,
+                                  "restarted": True, "pending_restart": False,
+                                  "known_hosts_removed": ["192.0.2.206"], "verified": True,
                                   "local": {"ssh_config": "x", "identity_files_changed": True}})
         order = [next(i for i, e in enumerate(events) if marker in e)
                  for marker in ("qm set 206 --sshkeys", "write homestack-cpu-vendor.yaml", "write homestack-cpu-meta.yaml",
@@ -190,6 +208,32 @@ class FlowTests(unittest.TestCase):
         self.assertNotEqual(written["homestack-cpu-meta.yaml"][-1], "instance-id: cpu-206-old\nlocal-hostname: cpu\n")
         self.assertRegex(written["homestack-cpu-meta.yaml"][-1], r"^instance-id: cpu-206-[0-9a-f]{12}\nlocal-hostname: cpu\n$")
         forget.assert_called_once_with("192.0.2.206")
+
+    def test_running_vm_is_not_restarted_unless_asked(self):
+        result, error, events, _written, forget = self._execute(self.plan(), restart=False)
+        self.assertIsNone(error)
+        self.assertEqual((result["restarted"], result["pending_restart"], result["verified"]), (False, True, False))
+        self.assertTrue([event for event in events if event.startswith("qm cloudinit update")])
+        self.assertNotIn("shutdown", events)
+        self.assertFalse([event for event in events if event.startswith("qm start") or event.startswith("guest")])
+        forget.assert_not_called()
+
+    def test_restart_question_comes_last_and_a_no_leaves_the_vm_running(self):
+        for answer in (True, False):
+            def ask(events, answer=answer):
+                def question():
+                    events.append("ASK")
+                    return answer
+                return question
+
+            _result, error, events, _written, _forget = self._execute(self.plan(), restart=ask)
+            self.assertIsNone(error)
+            self.assertEqual(events.count("ASK"), 1)
+            self.assertLess(next(i for i, e in enumerate(events) if e.startswith("qm cloudinit update")),
+                            events.index("ASK"))
+            self.assertEqual("shutdown" in events, answer)
+            if answer:
+                self.assertLess(events.index("ASK"), events.index("shutdown"))
 
     def test_stopped_vm_is_not_started_and_known_hosts_stay(self):
         result, error, events, _written, forget = self._execute(self.plan(status="stopped"))

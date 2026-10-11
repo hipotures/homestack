@@ -16,7 +16,7 @@ import tomllib
 import uuid
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import unquote
 
 from .cloudinit import remote_write_text, snippet_names
@@ -68,8 +68,13 @@ def ensure_keys_item(keys: list[str], user_name: str) -> str:
         *keys,
         KEYS_HEREDOC,
         ")",
-        f"for f in /root/.ssh/authorized_keys /home/{user_name}/.ssh/authorized_keys; do",
-        '    [ -f "$f" ] || continue',
+        f"for dir in /root /home/{user_name}; do",
+        '    [ -d "$dir" ] || continue',
+        '    owner=$(stat -c %U "$dir")',
+        '    group=$(stat -c %G "$dir")',
+        '    f="$dir/.ssh/authorized_keys"',
+        '    install -d -m 700 -o "$owner" -g "$group" "$dir/.ssh"',
+        '    [ -f "$f" ] || install -m 600 -o "$owner" -g "$group" /dev/null "$f"',
         '    [ -z "$(tail -c1 "$f")" ] || echo >> "$f"',
         "    printf '%s\\n' \"$keys\" | while IFS= read -r key; do",
         '        [ -n "$key" ] || continue',
@@ -191,10 +196,11 @@ def build_addkey_plan(session: Transport, cfg: Config, vmid: int, key_path: Path
             "Replace the ensure-keys step: append missing keys to root and "
             f"{cfg.user_name} authorized_keys; nothing is removed",
             "Write a new instance-id so Cloud-Init runs once on the next start",
-            "qm cloudinit update, then shut down and start the VM" if info["status"] == "running"
+            "qm cloudinit update. The VM is NOT restarted here; you are asked about the restart at the end"
+            if info["status"] == "running"
             else "qm cloudinit update (the VM is stopped and stays stopped)",
-            "Remove the old SSH host key for the VM address from the local known_hosts",
-            f"Check that the key is in root and {cfg.user_name} authorized_keys",
+            "Only after a restart: remove the old SSH host key for the VM address from the local known_hosts",
+            f"Only after a restart: check that the key is in root and {cfg.user_name} authorized_keys",
             f"Add {private_shown} to identity_files in the HomeStack config",
             "Rewrite the local ssh config of this VM; YubiKey first, Trezor when no YubiKey is connected",
         ],
@@ -215,7 +221,9 @@ def _set_sshkeys(session: Transport, cfg: Config, node: str, vmid: int, keys: li
     )
 
 
-def add_key(session: Transport, cfg: Config, plan: dict[str, Any]) -> dict[str, Any]:
+def add_key(session: Transport, cfg: Config, plan: dict[str, Any],
+            restart: Callable[[], bool] | bool = False) -> dict[str, Any]:
+    """Prepare the key; restart a running VM only if ``restart`` is true (or answers yes)."""
     vmid, name, node, user = plan["vmid"], plan["name"], plan["node"], plan["user"]
     vendor_path, meta_path = plan["snippets"]["vendor"], plan["snippets"]["meta"]
     key = plan["key"]
@@ -240,7 +248,8 @@ def add_key(session: Transport, cfg: Config, plan: dict[str, Any]) -> dict[str, 
             remote_write_text(session, cfg, node, Path(meta_path), old_meta, 0o644)
         raise
     was_running = plan["status"] == "running"
-    if was_running:
+    restarted = was_running and (restart() if callable(restart) else bool(restart))
+    if restarted:
         shutdown_vm_on_node(session, cfg, node, vmid)
         node_run(session, cfg, node, f"qm start {vmid}", timeout=300)
         wait_for_qga_on_node(session, cfg, node, vmid)
@@ -251,9 +260,9 @@ def add_key(session: Transport, cfg: Config, plan: dict[str, Any]) -> dict[str, 
             raise AppError(
                 f"Cloud-Init on VM {vmid} did not report 'done' after the restart: {text.strip()[:200]}"
             )
-    removed = forget_local_ssh_host(plan["ip"]) if was_running else []
+    removed = forget_local_ssh_host(plan["ip"]) if restarted else []
     verified = False
-    if was_running:
+    if restarted:
         text = guest_out_on_node(
             session, cfg, node, vmid,
             f"grep -cF {shlex.quote(key['blob'])} /root/.ssh/authorized_keys /home/{user}/.ssh/authorized_keys || true",
@@ -268,7 +277,8 @@ def add_key(session: Transport, cfg: Config, plan: dict[str, Any]) -> dict[str, 
         "vmid": vmid,
         "name": name,
         "key": key["comment"],
-        "restarted": was_running,
+        "restarted": restarted,
+        "pending_restart": was_running and not restarted,
         "known_hosts_removed": removed,
         "verified": verified,
     }

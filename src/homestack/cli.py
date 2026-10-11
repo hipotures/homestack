@@ -90,6 +90,7 @@ def show_help(cfg_path: Path) -> None:
     options.add_row("--home-size SIZE", "Persistent home size for create, or total target home size for resize.")
     options.add_row("--root-size SIZE", "Total target root disk size for resize.")
     options.add_row("--key FILE", "Public key file (one key with a comment) to add with addkey.")
+    options.add_row("--restart", "With addkey: restart a running VM without asking. Without it a running VM is never restarted by -y.")
     options.add_row("--node NODE", "Create on this cluster node; defaults to the configured Gold node.")
     options.add_row(
         "--storage STORAGE",
@@ -176,6 +177,7 @@ def build_parser() -> argparse.ArgumentParser:
     addkey = sub.add_parser("addkey", add_help=False)
     addkey.add_argument("target")
     addkey.add_argument("--key", required=True, type=Path)
+    addkey.add_argument("--restart", action="store_true", help="Restart a running VM without asking")
     addkey.add_argument("--json", action="store_true")
     addkey.add_argument("-y", "--yes", action="store_true")
     addkey.add_argument("-h", "--help", action="store_true", dest="sub_help")
@@ -412,18 +414,27 @@ def main() -> int:
                         console.print(f"  {number}. {step}", markup=False)
                     if not sys.stdin.isatty():
                         raise AppError("Interactive confirmation requires a TTY; use --yes for automation")
-                    question = ("Add this key and restart the workspace?" if plan["status"] == "running"
-                                else "Add this key to the workspace?")
-                    if not Confirm.ask(question, default=False):
+                    if not Confirm.ask("Prepare this key? The VM is not restarted without a separate question.",
+                                       default=False):
                         console.print("[bold]Cancelled. No changes were made.[/bold]")
                         return 0
-                result = add_key(session, cfg, plan)
+
+                def ask_restart() -> bool:
+                    if not sys.stdin.isatty() or json_mode:
+                        return False
+                    console.print(
+                        f'The key is prepared. It applies after VM {plan["vmid"]} ({plan["name"]}) restarts; '
+                        "everything running on it will stop.", markup=False)
+                    return Confirm.ask(f'Restart {plan["name"]} now?', default=False)
+
+                result = add_key(session, cfg, plan, True if args.restart else ask_restart)
                 if json_mode:
                     emit_json(result)
                 else:
                     console.print(
                         f'VM {vmid} ({plan["name"]}): key {result["key"]} added'
                         + ("; restarted and verified in root and user authorized_keys." if result["verified"]
+                           else "; VM NOT restarted, the key applies after the next restart." if result["pending_restart"]
                            else "; applies on the next start."),
                         markup=False,
                     )
