@@ -8,21 +8,25 @@ snippet that appends it to root's and the workspace user's ``authorized_keys``. 
 
 from __future__ import annotations
 
+import os
 import re
 import shlex
+import tempfile
+import tomllib
 import uuid
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 from urllib.parse import unquote
 
 from .cloudinit import remote_write_text, snippet_names
-from .config import Config
+from .config import Config, _toml_array
 from .guest import guest_out_on_node, wait_for_qga_on_node
 from .models import AppError
 from .proxmox import node_run, shutdown_vm_on_node
 from .status import resolve_existing_workspace
 from .transports.base import Transport
-from .workspace_ssh import forget_local_ssh_host, parse_authorized_key_records
+from .workspace_ssh import forget_local_ssh_host, parse_authorized_key_records, write_local_ssh_config
 
 KEYS_HEREDOC = "HS_KEYS"
 ENSURE_MARKER = "# HomeStack ensure-keys"
@@ -100,8 +104,62 @@ def new_meta(name: str, vmid: int) -> str:
     return f"instance-id: {name}-{vmid}-{uuid.uuid4().hex[:12]}\nlocal-hostname: {name}\n"
 
 
+_IDENTITY_LINE = re.compile(r"^identity_files\s*=\s*\[(?P<body>[^\]\n]*)\][ \t]*$", re.MULTILINE)
+
+
+def private_key_for(public: Path) -> tuple[Path, str]:
+    """The private key file next to a ``.pub`` file, and how to write it in configs (``~/`` form)."""
+    pub = Path(public).expanduser()
+    private = pub.with_suffix("") if pub.suffix == ".pub" else pub
+    if private == pub or not private.is_file():
+        raise AppError(f"The private key file {private} next to {public} was not found")
+    try:
+        shown = "~/" + private.resolve().relative_to(Path.home().resolve()).as_posix()
+    except ValueError:
+        shown = str(private)
+    return private, shown
+
+
+def register_identity(config_path: Path, identity: str) -> bool:
+    """Append ``identity`` to the one-line ``identity_files`` array of ``[workspace_ssh]``."""
+    text = config_path.read_text(encoding="utf-8")
+    section = re.search(r"^\[workspace_ssh\][ \t]*$", text, re.MULTILINE)
+    match = _IDENTITY_LINE.search(text, section.end()) if section else None
+    following = re.search(r"^\[", text[section.end():], re.MULTILINE) if section else None
+    if match is None or (following and match.start() > section.end() + following.start()):
+        raise AppError("identity_files in [workspace_ssh] is not a one-line array; add the key to it by hand")
+    existing = tomllib.loads("x = [" + match.group("body") + "]")["x"]
+    if str(Path(identity).expanduser()) in {str(Path(item).expanduser()) for item in existing}:
+        return False
+    line = "identity_files = " + _toml_array((*existing, identity))
+    new_text = text[:match.start()] + line + text[match.end():]
+    mode = config_path.stat().st_mode & 0o777
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=config_path.parent,
+                                     prefix=f".{config_path.name}.", delete=False) as handle:
+        temporary = Path(handle.name)
+        os.fchmod(handle.fileno(), mode)
+        handle.write(new_text)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(temporary, config_path)
+    return True
+
+
+def sync_local_ssh(cfg: Config, plan: dict[str, Any]) -> dict[str, Any]:
+    """Make the new key usable locally: HomeStack config and this VM's ssh config."""
+    identity = plan["private_key"]
+    changed = register_identity(cfg.path, identity)
+    files = tuple(cfg.workspace_ssh.identity_files)
+    if str(Path(identity).expanduser()) not in {str(Path(item).expanduser()) for item in files}:
+        files += (identity,)
+    updated = replace(cfg, workspace_ssh=replace(cfg.workspace_ssh, identity_files=files))
+    path = write_local_ssh_config(updated, plan["vmid"], plan["name"], plan["ip"])
+    return {"identity_files_changed": changed, "ssh_config": str(path)}
+
+
 def build_addkey_plan(session: Transport, cfg: Config, vmid: int, key_path: Path) -> dict[str, Any]:
     key = read_public_key(key_path)
+    _private, private_shown = private_key_for(key_path)
     info = resolve_existing_workspace(session, cfg, vmid, require_network=True)
     name, node, vm_cfg = info["name"], info["node"], info["vm_config"]
     names = snippet_names(name)
@@ -123,6 +181,7 @@ def build_addkey_plan(session: Transport, cfg: Config, vmid: int, key_path: Path
         "user": cfg.user_name,
         "key": {"comment": key["comment"], "type": key["type"], "path": key["path"],
                 "line": key["line"], "blob": key["blob"]},
+        "private_key": private_shown,
         "key_already_in_sshkeys": present,
         "keys": keys,
         "snippets": {kind: str(path) for kind, path in paths.items()},
@@ -136,6 +195,8 @@ def build_addkey_plan(session: Transport, cfg: Config, vmid: int, key_path: Path
             else "qm cloudinit update (the VM is stopped and stays stopped)",
             "Remove the old SSH host key for the VM address from the local known_hosts",
             f"Check that the key is in root and {cfg.user_name} authorized_keys",
+            f"Add {private_shown} to identity_files in the HomeStack config",
+            "Rewrite the local ssh config of this VM; YubiKey first, Trezor when no YubiKey is connected",
         ],
     }
 
@@ -201,7 +262,7 @@ def add_key(session: Transport, cfg: Config, plan: dict[str, Any]) -> dict[str, 
         verified = len(counts) == 2 and all(int(count) >= 1 for count in counts)
         if not verified:
             raise AppError(f"Key {key['comment']} is not in both authorized_keys files of VM {vmid}: {text.strip()[:200]}")
-    return {
+    result = {
         "ok": True,
         "command": "addkey",
         "vmid": vmid,
@@ -211,3 +272,8 @@ def add_key(session: Transport, cfg: Config, plan: dict[str, Any]) -> dict[str, 
         "known_hosts_removed": removed,
         "verified": verified,
     }
+    try:
+        result["local"] = sync_local_ssh(cfg, plan)
+    except (AppError, OSError, ValueError) as exc:
+        result["local_error"] = str(exc)
+    return result

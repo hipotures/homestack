@@ -48,18 +48,43 @@ def forget_local_ssh_host(host: str) -> list[str]:
     return removed
 
 
+def local_ssh_lines(cfg: Config, vmid: int, name: str, ip: str) -> list[str]:
+    """Lines of a workspace's local ssh config.
+
+    With keys of one kind (or unnamed ones) every IdentityFile is listed. With keys of several
+    security-key kinds, ssh would try the handles of a kind that is not connected and the
+    connected device would ask once per handle, so the files are chosen by which kind is
+    connected, in the order of ``fido_devices``.
+    """
+    ssh_cfg = cfg.workspace_ssh
+    files = list(ssh_cfg.identity_files)
+    kinds = [kind for kind in dict.fromkeys(fido.kind_of(path) for path in files) if kind]
+    head = [f"Host {name} vm{vmid}", f"    HostName {ip}", f"    User {ssh_cfg.user}"]
+    tail = [
+        f"    IdentitiesOnly {'yes' if ssh_cfg.identities_only else 'no'}",
+        f"    LogLevel {ssh_cfg.log_level}",
+    ]
+    if len(kinds) < 2:
+        return [*head, *(f"    IdentityFile {path}" for path in files), *tail]
+    order = [kind for kind in ssh_cfg.fido_devices if kind in kinds]
+    order += [kind for kind in fido.NAMES if kind in kinds and kind not in order]
+    lines = [*head, *(f"    IdentityFile {path}" for path in files if not fido.kind_of(path)), *tail]
+    lines += ["", "# Keys offered depend on the connected security key; preference: " + ", ".join(order)]
+    earlier: list[str] = []
+    for kind in order:
+        vendors = "|".join(f"vendor=0x{vendor}" for entry in (earlier or [kind]) for vendor in fido.NAMES[entry])
+        test = f"fido2-token -L 2>/dev/null | grep -qE '{vendors}'"
+        lines.append(f'Match originalhost {name},vm{vmid} exec "{"! " if earlier else ""}{test}"')
+        lines += [f"    IdentityFile {path}" for path in files if fido.kind_of(path) == kind]
+        earlier.append(kind)
+    return lines
+
+
 def write_local_ssh_config(cfg: Config, vmid: int, name: str, ip: str) -> Path:
     directory = Path.home() / ".ssh" / "config.d" / "homestack"
     target = directory / f"vm{vmid}-{name}.conf"
     ssh_cfg = cfg.workspace_ssh
-    lines = [
-        f"Host {name} vm{vmid}",
-        f"    HostName {ip}",
-        f"    User {ssh_cfg.user}",
-        *(f"    IdentityFile {path}" for path in ssh_cfg.identity_files),
-        f"    IdentitiesOnly {'yes' if ssh_cfg.identities_only else 'no'}",
-        f"    LogLevel {ssh_cfg.log_level}",
-    ]
+    lines = local_ssh_lines(cfg, vmid, name, ip)
     content = "\n".join(lines) + "\n"
     temporary: Path | None = None
     try:

@@ -1,12 +1,13 @@
 import subprocess
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 from urllib.parse import quote
 
-from homestack import addkey
+from homestack import addkey, config, workspace_ssh
 from homestack.models import AppError
 from support import test_config
 
@@ -115,6 +116,7 @@ class FlowTests(unittest.TestCase):
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
         self.key = key_file(self.directory.name, TREZOR)
+        Path(self.directory.name, "key").write_text("private\n", encoding="utf-8")
 
     def plan(self, **overrides):
         data = info(**overrides)
@@ -126,7 +128,7 @@ class FlowTests(unittest.TestCase):
         self.assertEqual((plan["name"], plan["ip"], plan["key"]["comment"]), ("cpu", "192.0.2.206", "trezor-vm"))
         self.assertEqual(plan["keys"], [YUBIKEY, TREZOR])
         self.assertFalse(plan["key_already_in_sshkeys"])
-        self.assertEqual(len(plan["steps"]), 7)
+        self.assertEqual(len(plan["steps"]), 9)
         self.assertIn("allow_format=0", " ".join(plan["steps"]))
         self.assertIn("stays stopped", " ".join(self.plan(status="stopped")["steps"]))
 
@@ -165,6 +167,7 @@ class FlowTests(unittest.TestCase):
                 mock.patch.object(addkey, "shutdown_vm_on_node", lambda *a, **k: events.append("shutdown")), \
                 mock.patch.object(addkey, "wait_for_qga_on_node", lambda *a, **k: events.append("qga")), \
                 mock.patch.object(addkey, "guest_out_on_node", guest_out), \
+                mock.patch.object(addkey, "sync_local_ssh", return_value={"ssh_config": "x", "identity_files_changed": True}), \
                 mock.patch.object(addkey, "forget_local_ssh_host", return_value=["192.0.2.206"]) as forget:
             try:
                 result, error = addkey.add_key(object(), self.cfg, plan), None
@@ -176,7 +179,8 @@ class FlowTests(unittest.TestCase):
         result, error, events, written, forget = self._execute(self.plan())
         self.assertIsNone(error)
         self.assertEqual(result, {"ok": True, "command": "addkey", "vmid": 206, "name": "cpu", "key": "trezor-vm",
-                                  "restarted": True, "known_hosts_removed": ["192.0.2.206"], "verified": True})
+                                  "restarted": True, "known_hosts_removed": ["192.0.2.206"], "verified": True,
+                                  "local": {"ssh_config": "x", "identity_files_changed": True}})
         order = [next(i for i, e in enumerate(events) if marker in e)
                  for marker in ("qm set 206 --sshkeys", "write homestack-cpu-vendor.yaml", "write homestack-cpu-meta.yaml",
                                 "qm cloudinit update 206", "shutdown", "qm start 206", "qga", "guest timeout", "guest grep")]
@@ -217,6 +221,91 @@ class FlowTests(unittest.TestCase):
         _result, error, events, _written, _forget = self._execute(plan)
         self.assertIsNone(error)
         self.assertFalse([event for event in events if "--sshkeys" in event])
+
+
+class LocalTests(unittest.TestCase):
+    def cfg(self, path, files=("~/.ssh/id_ed25519_sk_yubikey1",)):
+        base = test_config()
+        return replace(base, path=Path(path), workspace_ssh=config.WorkspaceSSHConfig(
+            "user", tuple(files), True, "FATAL", ("yubikey", "trezor")))
+
+    def test_private_key_must_exist_next_to_the_public_one(self):
+        with tempfile.TemporaryDirectory() as directory:
+            pub = key_file(directory, TREZOR, "id_x.pub")
+            with self.assertRaisesRegex(AppError, "was not found"):
+                addkey.private_key_for(pub)
+            (Path(directory) / "id_x").write_text("k", encoding="utf-8")
+            self.assertEqual(addkey.private_key_for(pub)[0], Path(directory) / "id_x")
+
+    def test_identity_is_appended_once_and_the_rest_of_the_config_is_untouched(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.toml"
+            text = ('# my notes\n[node]\nname = "n"\n\n[workspace_ssh]\nuser = "user"\n'
+                    'identity_files = ["~/.ssh/a", "~/.ssh/b"]\nlog_level = "FATAL"\n\n[repo]\nowner = "o"\n')
+            path.write_text(text, encoding="utf-8")
+            path.chmod(0o644)
+            self.assertTrue(addkey.register_identity(path, "~/.ssh/c"))
+            self.assertEqual(path.read_text(encoding="utf-8"),
+                             text.replace('["~/.ssh/a", "~/.ssh/b"]', '["~/.ssh/a", "~/.ssh/b", "~/.ssh/c"]'))
+            self.assertEqual(path.stat().st_mode & 0o777, 0o644)
+            self.assertFalse(addkey.register_identity(path, "~/.ssh/c"))
+            self.assertFalse(addkey.register_identity(path, "~/.ssh/a"))
+
+    def test_identity_in_another_section_or_multiline_array_is_not_touched(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.toml"
+            for text in ('[workspace_ssh]\nuser = "u"\n[other]\nidentity_files = ["x"]\n',
+                         '[workspace_ssh]\nidentity_files = [\n  "x",\n]\n', '[node]\nname = "n"\n'):
+                path.write_text(text, encoding="utf-8")
+                with self.assertRaisesRegex(AppError, "one-line array"):
+                    addkey.register_identity(path, "~/.ssh/c")
+                self.assertEqual(path.read_text(encoding="utf-8"), text)
+
+    def test_ssh_config_lists_plain_keys_unchanged_and_picks_by_connected_key_otherwise(self):
+        plain = workspace_ssh.local_ssh_lines(self.cfg("/x", ("~/.ssh/k1", "~/.ssh/k2")), 5, "n", "192.0.2.5")
+        self.assertEqual(plain, ["Host n vm5", "    HostName 192.0.2.5", "    User user", "    IdentityFile ~/.ssh/k1",
+                                 "    IdentityFile ~/.ssh/k2", "    IdentitiesOnly yes", "    LogLevel FATAL"])
+        mixed = workspace_ssh.local_ssh_lines(self.cfg("/x", (
+            "~/.ssh/id_ed25519_sk_yubikey1", "~/.ssh/id_ed25519_sk_yubikey2", "~/.ssh/id_ecdsa_sk_trezor_vm")),
+            200, "test1", "192.0.2.200")
+        text = "\n".join(mixed)
+        self.assertIn('Match originalhost test1,vm200 exec "fido2-token -L 2>/dev/null | grep -qE \'vendor=0x1050\'"', text)
+        self.assertIn('Match originalhost test1,vm200 exec "! fido2-token -L 2>/dev/null | grep -qE \'vendor=0x1050\'"', text)
+        self.assertLess(text.index("yubikey1"), text.index("id_ecdsa_sk_trezor_vm"))
+        self.assertEqual(text.count("IdentityFile"), 3)
+
+    def test_sync_updates_the_config_and_writes_this_vms_ssh_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            (home / ".config").mkdir()
+            path = home / ".config" / "config.toml"
+            path.write_text('[workspace_ssh]\nidentity_files = ["~/.ssh/id_ed25519_sk_yubikey1"]\n', encoding="utf-8")
+            plan = {"private_key": "~/.ssh/id_ecdsa_sk_trezor_vm", "vmid": 206, "name": "cpu", "ip": "192.0.2.206"}
+            with mock.patch.object(workspace_ssh.Path, "home", return_value=home):
+                result = addkey.sync_local_ssh(self.cfg(path), plan)
+            self.assertTrue(result["identity_files_changed"])
+            self.assertIn("id_ecdsa_sk_trezor_vm", path.read_text(encoding="utf-8"))
+            written = (home / ".ssh/config.d/homestack/vm206-cpu.conf").read_text(encoding="utf-8")
+            self.assertIn("IdentityFile ~/.ssh/id_ecdsa_sk_trezor_vm", written)
+            self.assertIn("Match originalhost cpu,vm206", written)
+
+    def test_local_failure_is_reported_without_failing_the_key_addition(self):
+        flow = FlowTests("test_running_vm_gets_the_key_restarts_and_is_verified")
+        flow.setUp()
+        self.addCleanup(flow.directory.cleanup)
+        plan = flow.plan()
+        with mock.patch.object(addkey, "node_run", lambda *a, **k: SimpleNamespace(output=VENDOR)), \
+                mock.patch.object(addkey, "remote_write_text", lambda *a, **k: None), \
+                mock.patch.object(addkey, "shutdown_vm_on_node", lambda *a, **k: None), \
+                mock.patch.object(addkey, "wait_for_qga_on_node", lambda *a, **k: None), \
+                mock.patch.object(addkey, "guest_out_on_node", lambda _s, _c, _n, _v, command, **k: "status: done"
+                                  if "cloud-init" in command else "a:1\nb:1"), \
+                mock.patch.object(addkey, "forget_local_ssh_host", return_value=[]), \
+                mock.patch.object(addkey, "sync_local_ssh", side_effect=AppError("not a one-line array")):
+            result = addkey.add_key(object(), flow.cfg, plan)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["local_error"], "not a one-line array")
+        self.assertNotIn("local", result)
 
 
 if __name__ == "__main__":

@@ -427,6 +427,10 @@ def main() -> int:
                            else "; applies on the next start."),
                         markup=False,
                     )
+                    if result.get("local"):
+                        console.print(f'Local ssh config updated: {result["local"]["ssh_config"]}', markup=False)
+                    if result.get("local_error"):
+                        console.print(f'WARNING: local ssh config not updated: {result["local_error"]}', markup=False, style="bold red")
                 return 0
 
             if args.command == "destroy":

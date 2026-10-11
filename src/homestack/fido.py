@@ -107,6 +107,12 @@ def missing_key_message(entry: str, identity_files: list[str], name: str, addres
     )
 
 
+def kind_of(path: str) -> str | None:
+    """The kind of security key an identity file is named after, if any."""
+    lowered = path.lower()
+    return next((kind for kind in NAMES if kind in lowered), None)
+
+
 def filter_identity_options(entry: str, options: list[str]) -> list[str]:
     """Drop ``-i <file>`` pairs whose file names another kind of key than the connected one.
 
