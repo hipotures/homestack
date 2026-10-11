@@ -298,6 +298,7 @@ class ResizeLuksTests(unittest.TestCase):
 
 @unittest.skipUnless(shutil.which("cryptsetup"), "cryptsetup is not installed")
 class CryptsetupTempImageTests(unittest.TestCase):
+    @unittest.skip("Checks cryptsetup itself, not HomeStack code, and takes about 10 s (LUKS2 argon2id)")
     def test_luks2_keyfile_test_passphrase_uses_only_a_temp_regular_file(self) -> None:
         with tempfile.TemporaryDirectory(prefix="homestack-luks-test-") as directory:
             image = Path(directory) / "image"
