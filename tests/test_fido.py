@@ -134,6 +134,28 @@ class MasterTests(unittest.TestCase):
         # the system-wide ssh config is unreadable in the sandbox (root files look like "nobody")
         self.assertEqual(argv[argv.index("ssh") + 1], "-F")
 
+    def test_sandboxed_master_does_not_hand_signing_to_an_agent(self):
+        devices = fido.parse_listing(LISTING)
+        for options, expected in (((), 1), (("-o", "IdentityAgent=/tmp/own.sock"), 0)):
+            ws = workspace_ssh.WorkspaceSSH("user@192.0.2.1", 1, options=options, fido_devices=("yubikey",))
+            with mock.patch.object(fido, "list_devices", return_value=devices), \
+                    mock.patch.object(fido.shutil, "which", return_value="/usr/bin/bwrap"), \
+                    mock.patch.object(workspace_ssh, "run_local", return_value=subprocess.CompletedProcess([], 0)):
+                calls, error = self._enter(ws, returncode=0)
+                ws.opened = False
+                ws.directory.cleanup()
+            self.assertIsNone(error)
+            self.assertEqual(calls[0].count("IdentityAgent=none"), expected)
+
+    def test_unsandboxed_master_keeps_the_agent(self):
+        ws = workspace_ssh.WorkspaceSSH("user@192.0.2.1", 1)
+        with mock.patch.object(workspace_ssh, "run_local", return_value=subprocess.CompletedProcess([], 0)):
+            calls, error = self._enter(ws, returncode=0)
+            ws.opened = False
+            ws.directory.cleanup()
+        self.assertIsNone(error)
+        self.assertNotIn("IdentityAgent=none", calls[0])
+
     def test_sandboxed_master_reads_the_users_config_or_none(self):
         devices = fido.parse_listing(LISTING)
         with tempfile.TemporaryDirectory() as home:

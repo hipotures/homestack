@@ -256,12 +256,16 @@ class WorkspaceSSH:
             # Inside the sandbox root-owned files look like they belong to "nobody", which ssh
             # rejects for the system-wide config; read only the user's own config there.
             config_args = [] if not prefix or "-F" in self.options else ["-F", self._user_ssh_config()]
+            # An ssh-agent signs outside the sandbox and would ask every attached key (a Trezor
+            # first), so ssh signs by itself unless an agent was chosen explicitly.
+            agent_args = ["-o", "IdentityAgent=none"] if prefix and not any(
+                str(option).lower().startswith("identityagent") for option in self.options) else []
             started = time.monotonic()
             # stderr goes to a file, not a pipe: the detached master keeps the descriptor open
             # and a pipe would never reach EOF. Prompts for a PIN use the terminal directly.
             with tempfile.TemporaryFile("w+", encoding="utf-8", errors="replace") as errors, \
                     touch_wait(self.alias, self.sounds) as watch:
-                result = subprocess.run([*prefix, "ssh", *config_args, *self.options, "-M", "-S", self.control,
+                result = subprocess.run([*prefix, "ssh", *config_args, *self.options, *agent_args, "-M", "-S", self.control,
                                          "-o", "ControlPersist=yes", "-o", "StrictHostKeyChecking=accept-new",
                                          "-o", "PasswordAuthentication=no", "-o", "KbdInteractiveAuthentication=no",
                                          "-fN", self.alias], stdout=subprocess.DEVNULL, stderr=errors)
