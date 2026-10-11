@@ -77,6 +77,11 @@ label = "Applications"
 description = "Explicit user-space installers; onboarding is separate."
 
 [[setup.groups]]
+id = "cred"
+label = "Credentials"
+description = "Authentication files and keys copied from the trusted desktop."
+
+[[setup.groups]]
 id = "backup"
 label = "Backup"
 description = "Persistent-home BK backup tool and nightly user timer."

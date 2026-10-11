@@ -215,7 +215,8 @@ class CatalogTests(unittest.TestCase):
 
     def test_alias_sets_conflicts_all_and_invalid_inputs(self):
         self.assertEqual(catalog.parse_assignments(['f=0', 'e=bash,bash', 'env=bash'], self.cfg), {'files': ('all',), 'env': ('bash',)})
-        for tokens in (['cred=0'], ['env=0,bash'], ['env=all,1'], ['env='], ['env=,bash'], ['env=bash', 'e=zsh'], ['env'], ['app=x=y']):
+        self.assertEqual(catalog.parse_assignments(['c=0'], self.cfg), {'cred': ('all',)})
+        for tokens in (['x=0'], ['env=0,bash'], ['env=all,1'], ['env='], ['env=,bash'], ['env=bash', 'e=zsh'], ['env'], ['app=x=y']):
             with self.subTest(tokens=tokens), self.assertRaises(AppError):
                 catalog.select_entries(self.cfg, tokens)
         for value in ('-1', '1.2', 'missing'):
@@ -709,7 +710,9 @@ class AdditionalSafetyTests(unittest.TestCase):
         connection.assert_not_called()
 
     def test_reserved_ids_and_typed_arrays_fail_as_application_errors(self):
-        for raw in ({'groups': [{'id': 'bash', 'label': 'Other'}]}, {'items': [{'id': 'codex', 'interaction': []}]},
+        for raw in ({'groups': [{'id': 'bash', 'label': 'Other'}]}, {'groups': [{'id': 'c', 'label': 'Other'}]},
+                    {'items': [{'id': 'cred', 'handler': 'backup', 'group': 'backup', 'label': 'X', 'description': ''}]},
+                    {'items': [{'id': 'codex', 'interaction': []}]},
                     {'items': [{'id': 'bash', 'profile': []}]}, {'items': [{'id': 'codex', 'bin_dirs': ['~/a:/etc']}]},
                     {'items': [{'id': 'codex', 'prerequisite_checks': ['a\0b']}]}):
             with self.subTest(raw=raw), self.assertRaises(AppError):

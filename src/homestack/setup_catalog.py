@@ -29,7 +29,7 @@ from .setup_config import (
     config_entry_key,
 )
 
-ALIASES = {"f": "files", "e": "env", "a": "app", "r": "repo", "b": "backup"}
+ALIASES = {"f": "files", "e": "env", "a": "app", "c": "cred", "r": "repo", "b": "backup"}
 
 
 @dataclass
@@ -238,7 +238,7 @@ def parse_assignments(tokens: list[str], cfg: Config) -> dict[str, tuple[str, ..
     assignments = {}
     for token in tokens:
         if token.count("=") != 1:
-            raise AppError("Selectors must use group=item,item (files/f, env/e, app/a, repo/r, backup/b)")
+            raise AppError("Selectors must use group=item,item (files/f, env/e, app/a, cred/c, repo/r, backup/b)")
         key, value = token.split("=")
         key = ALIASES.get(key, key)
         if key not in groups:

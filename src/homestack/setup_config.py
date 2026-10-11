@@ -122,6 +122,7 @@ DEFAULT_GROUPS = (
     Group("files", "Files", "Desktop files copied into persistent home; no deletes."),
     Group("env", "Environment", "User shell profiles; login shell stays unchanged."),
     Group("app", "Applications", "Explicit user-space installers; onboarding is separate."),
+    Group("cred", "Credentials", "Authentication files and keys copied from the trusted desktop."),
     Group("backup", "Backup", "Persistent-home BK backup tool and nightly user timer."),
     Group("repo", "Repositories", "GitHub checkouts with workspace-local deploy keys."),
 )
@@ -402,7 +403,7 @@ def parse_setup(raw: Any) -> SetupConfig:
         if not isinstance(data, dict) or set(data) - {"id", "label", "description"}:
             raise AppError("Invalid setup group definition")
         group_id = data.get("id", "")
-        if not isinstance(group_id, str) or not re.fullmatch(r"[a-z][a-z0-9_-]*", group_id) or group_id in seen or group_id in {"root", "f", "e", "a", "r", "b", *(e.id for e in defaults())}:
+        if not isinstance(group_id, str) or not re.fullmatch(r"[a-z][a-z0-9_-]*", group_id) or group_id in seen or group_id in {"root", "f", "e", "a", "c", "r", "b", *(e.id for e in defaults())}:
             raise AppError("Invalid or duplicate setup group ID")
         seen.add(group_id)
         base = asdict(groups[group_id]) if group_id in groups else {}

@@ -121,6 +121,7 @@ class BackupDefinitionTests(unittest.TestCase):
 
     def test_group_item_selectors_catalog_and_plan_are_first_class(self):
         cfg = test_config()
+        self.assertEqual([group.id for group in cfg.setup.groups], ["files", "env", "app", "cred", "backup", "repo"])
         self.assertEqual(cfg.setup.groups[-2].id, "backup")
         self.assertEqual(cfg.setup.groups[-2].label, "Backup")
         self.assertEqual(cfg.setup.groups[-1].id, "repo")
