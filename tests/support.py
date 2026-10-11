@@ -4,7 +4,7 @@ from dataclasses import replace
 from pathlib import Path
 import tempfile
 
-from homestack import config, models
+from homestack import config, models, touch
 
 
 EXAMPLE_CONFIG_PATH = Path(__file__).resolve().parents[1] / "config.example.toml"
@@ -47,6 +47,7 @@ def test_config() -> config.Config:
         herdr_debug=True,
         storage_display_unit="GiB",
         storage_display_decimals=0,
+        sounds=touch.Sounds(enabled=False),
     )
 
 

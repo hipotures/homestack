@@ -50,6 +50,18 @@ owner = "example-owner"
 checkout_root = "~/DEV"
 sort = "recent"
 
+# Optional audible cues while HomeStack waits for a hardware-key touch. Everything
+# here is the default; uncomment to change it. A cue is skipped for a connection
+# that needs no touch. It repeats every repeat_seconds (8, 16, 24 s) while waiting
+# and the "fail" cue plays when the attempt ends unconfirmed (ssh gives up at ~30 s).
+# [sounds]
+# enabled = true
+# player = ["pw-play"]   # default: first of pw-play, paplay, canberra-gtk-play; else the terminal bell
+# wait = "window-attention.oga"   # a name in /usr/share/sounds/freedesktop/stereo or a path
+# ok = "complete.oga"
+# fail = "dialog-error.oga"
+# repeat_seconds = 8
+
 [transport]
 type = "herdr"
 

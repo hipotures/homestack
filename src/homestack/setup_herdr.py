@@ -11,6 +11,7 @@ import subprocess
 import sys
 
 from .models import AppError
+from .touch import Sounds, touch_wait
 from .transports.base import run_local
 
 UNIT_PATH = ".config/systemd/user/herdr.service"
@@ -18,11 +19,15 @@ INSTALL_COMMAND = "curl -fsSL https://herdr.dev/install.sh | sh"
 AUTH_NOTICE = "Connecting desktop Herdr through separate SSH authentication. Touch your YubiKey/security key if prompted."
 
 
-def register_desktop(command):
+def register_desktop(command, sounds: Sounds | None = None):
     """Expose the terminal when Herdr setup is invoked from the plain CLI."""
     print(AUTH_NOTICE, file=sys.stderr, flush=True)
     print(shlex.join(command), file=sys.stderr, flush=True)
-    return subprocess.run(command, text=True)
+    with touch_wait("herdr", sounds or Sounds(enabled=False)) as watch:
+        result = subprocess.run(command, text=True)
+        if getattr(result, "returncode", 0):
+            watch.finish(False)
+    return result
 
 
 def unit_content() -> bytes:

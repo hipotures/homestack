@@ -5,6 +5,7 @@ from contextlib import ExitStack
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import base64
+import functools
 import hashlib
 import json
 import os
@@ -735,6 +736,8 @@ def execute_plan(
     progress=lambda item, state: None,
     activity=lambda identity, message: None,
 ) -> dict:
+    if desktop is setup_herdr.register_desktop:
+        desktop = functools.partial(setup_herdr.register_desktop, sounds=cfg.sounds)
     if plan.target.get("local"):
         from .setup_local import LocalSetup
         factory = connection_factory or LocalSetup

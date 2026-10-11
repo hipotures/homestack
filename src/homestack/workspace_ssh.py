@@ -14,6 +14,7 @@ from .config import Config
 from .guest import guest_exec_on_node
 from .models import AppError
 from .proxmox import cluster_vm_resource, node_run, qm_config_on_node, qm_status_on_node
+from .touch import Sounds, touch_wait
 from .transports.base import Transport, run_local
 
 def forget_local_ssh_host(host: str) -> list[str]:
@@ -214,8 +215,10 @@ class WorkspaceSSH:
     options is constructor injection for service tests, never a CLI auth switch.
     """
 
-    def __init__(self, target: str, vmid: int, *, options: tuple[str, ...] = ()) -> None:
+    def __init__(self, target: str, vmid: int, *, options: tuple[str, ...] = (), sounds: Sounds | None = None) -> None:
         self.alias = target
+        # No cues unless configured: tests and library callers stay silent.
+        self.sounds = sounds or Sounds(enabled=False)
         self.options = list(options)
         self.directory: tempfile.TemporaryDirectory | None = None
         self.control = ""
@@ -227,7 +230,7 @@ class WorkspaceSSH:
                    "-o", f"LogLevel={cfg.workspace_ssh.log_level}"]
         for identity in cfg.workspace_ssh.identity_files:
             options += ["-i", str(Path(identity).expanduser())]
-        return cls(f"{cfg.user_name}@{target['ip']}", int(target['vmid']), options=tuple(options))
+        return cls(f"{cfg.user_name}@{target['ip']}", int(target['vmid']), options=tuple(options), sounds=cfg.sounds)
 
     @property
     def child_options(self) -> list[str]:
@@ -244,10 +247,13 @@ class WorkspaceSSH:
         self.control = str(Path(self.directory.name) / "master")
         try:
             # stderr remains attached for hardware user presence; stdout is never polluted.
-            result = subprocess.run(["ssh", *self.options, "-M", "-S", self.control,
-                                     "-o", "ControlPersist=yes", "-o", "StrictHostKeyChecking=accept-new",
-                                     "-o", "PasswordAuthentication=no", "-o", "KbdInteractiveAuthentication=no",
-                                     "-fN", self.alias], stdout=subprocess.DEVNULL)
+            with touch_wait(self.alias, self.sounds) as watch:
+                result = subprocess.run(["ssh", *self.options, "-M", "-S", self.control,
+                                         "-o", "ControlPersist=yes", "-o", "StrictHostKeyChecking=accept-new",
+                                         "-o", "PasswordAuthentication=no", "-o", "KbdInteractiveAuthentication=no",
+                                         "-fN", self.alias], stdout=subprocess.DEVNULL)
+                if result.returncode:
+                    watch.finish(False)
             self.opened = result.returncode == 0
             if not self.opened:
                 raise AppError("Could not establish workspace SSH master")

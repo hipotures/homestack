@@ -25,6 +25,7 @@ from .models import AppError
 from .setup_herdr import AUTH_NOTICE
 from .setup import build_plan, execute_plan, inspect_workspace_state, write_paths
 from .setup_catalog import Catalog, load_catalog, save_snapshot
+from .touch import touch_wait
 from .setup_config import (
     ApplicationParams,
     BackupParams,
@@ -1336,15 +1337,18 @@ class SetupApp(App):
             raise AppError("Cancelled before desktop Herdr registration")
         # No controlling terminal: Herdr cannot request hidden approval or SSH
         # input underneath Textual. Hardware-key touch still works with ssh-agent.
-        with subprocess.Popen(command, stdin=subprocess.DEVNULL,
-                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                              text=True, errors="replace", start_new_session=True) as process:
+        with touch_wait("herdr", self.cfg.sounds) as watch, subprocess.Popen(
+                command, stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                text=True, errors="replace", start_new_session=True) as process:
             try:
                 while True:
                     if self.cancel_requested.is_set():
                         raise AppError("Desktop Herdr registration cancelled; guest service remains configured")
                     try:
                         output, _ = process.communicate(timeout=0.1)
+                        if process.returncode:
+                            watch.finish(False)
                         return subprocess.CompletedProcess(command, process.returncode, output, "")
                     except subprocess.TimeoutExpired:
                         continue

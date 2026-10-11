@@ -52,6 +52,8 @@ Only the neutral example belongs in this repository. A real `config.toml` and pr
 
 Configure the generated workspace SSH entry in `[workspace_ssh]`: `user` must match `[user] name`, `identity_files` lists the desktop's hardware-backed private-key paths, `identities_only` controls OpenSSH's `IdentitiesOnly`, and `log_level` selects a supported OpenSSH log level. HomeStack writes these configured values without hardcoded key paths and does not add password or implicit key fallback authentication.
 
+While HomeStack waits for a hardware-key touch (the workspace SSH connection and Herdr desktop registration), it plays a cue after one second, repeats it every 8 seconds, then plays a failure cue if the attempt ends unconfirmed (OpenSSH gives up after about 30 seconds) and a success cue when the touch is confirmed. A connection that needs no touch stays silent. Configure or disable the cues in the optional `[sounds]` table (`enabled`, `player`, `wait`, `ok`, `fail`, `repeat_seconds`; see `config.example.toml`). Without a sound player HomeStack rings the terminal bell. Touches that happen inside the Herdr pane to the Proxmox node cannot be detected by HomeStack and stay silent.
+
 The selected remote backend is explicit:
 
 ```toml

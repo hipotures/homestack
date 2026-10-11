@@ -14,6 +14,7 @@ import tomllib
 
 from .models import AppError
 from .setup_config import SetupConfig, parse_setup, setup_to_toml
+from .touch import DEFAULT_FILES, Sounds
 
 
 @dataclass(frozen=True)
@@ -56,6 +57,7 @@ class Config:
     repo_checkout_root: str = "~/DEV"
     repo_sort: str = "recent"
     setup: SetupConfig = field(default_factory=SetupConfig)
+    sounds: Sounds = field(default_factory=Sounds)
 
 
 def default_config_path() -> Path:
@@ -273,6 +275,7 @@ def load_config(path: Path) -> Config:
     if not isinstance(repo_sort, str) or repo_sort not in {"recent", "created", "name"}:
         raise AppError("[repo] sort must be recent, created or name")
     setup = parse_setup(data.get("setup", {}))
+    sounds = _parse_sounds(data.get("sounds"))
 
     workspace_ssh_data = data.get("workspace_ssh")
     if not isinstance(workspace_ssh_data, dict):
@@ -398,7 +401,50 @@ def load_config(path: Path) -> Config:
         repo_checkout_root=repo_checkout_root,
         repo_sort=repo_sort,
         setup=setup,
+        sounds=sounds,
     )
+
+
+def _parse_sounds(raw: Any) -> Sounds:
+    """Optional [sounds] table: cues played while HomeStack waits for a security key."""
+    if raw is None:
+        return Sounds()
+    if not isinstance(raw, dict):
+        raise AppError("[sounds] must be a TOML table")
+    unknown = set(raw) - {"enabled", "player", "wait", "ok", "fail", "repeat_seconds"}
+    if unknown:
+        raise AppError("[sounds] has unknown keys: " + ", ".join(sorted(unknown)))
+    enabled = raw.get("enabled", True)
+    if not isinstance(enabled, bool):
+        raise AppError("[sounds] enabled must be true or false")
+    player = raw.get("player", ())
+    if isinstance(player, str):
+        player = (player,)
+    if (not isinstance(player, (list, tuple)) or any(not isinstance(item, str) or not item.strip() or "\0" in item for item in player)):
+        raise AppError("[sounds] player must be a command string or an array of strings")
+    files = dict(DEFAULT_FILES)
+    for event in ("wait", "ok", "fail"):
+        if event in raw:
+            value = raw[event]
+            if not isinstance(value, str) or "\0" in value:
+                raise AppError(f"[sounds] {event} must be a sound file name or path")
+            files[event] = value
+    repeat = raw.get("repeat_seconds", Sounds().repeat_seconds)
+    if isinstance(repeat, bool) or not isinstance(repeat, (int, float)) or not 1 <= repeat <= 30:
+        raise AppError("[sounds] repeat_seconds must be a number between 1 and 30")
+    return Sounds(enabled=enabled, player=tuple(player), files=files, repeat_seconds=float(repeat))
+
+
+def _sounds_toml(sounds: Sounds) -> list[str]:
+    if sounds == Sounds():
+        return []
+    lines = ["[sounds]", f"enabled = {str(sounds.enabled).lower()}"]
+    if sounds.player:
+        lines.append(f"player = {_toml_array(sounds.player)}")
+    for event in ("wait", "ok", "fail"):
+        lines.append(f"{event} = {_toml_string(sounds.files.get(event, DEFAULT_FILES[event]))}")
+    lines += [f"repeat_seconds = {sounds.repeat_seconds}", ""]
+    return lines
 
 
 def _toml_string(value: str) -> str:
@@ -466,6 +512,7 @@ def config_to_toml(cfg: Config) -> str:
             f"checkout_root = {_toml_string(cfg.repo_checkout_root)}",
             f"sort = {_toml_string(cfg.repo_sort)}",
             "",
+            *_sounds_toml(cfg.sounds),
             "[transport]",
             f"type = {_toml_string(cfg.transport_type)}",
             "",
