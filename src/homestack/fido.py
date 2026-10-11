@@ -87,19 +87,22 @@ def select(preference: tuple[str, ...], devices: list[Device]) -> tuple[str, lis
     )
 
 
-def missing_key_message(entry: str, identity_files: list[str], alias: str) -> str | None:
+def missing_key_message(entry: str, identity_files: list[str], name: str, address: str | None = None) -> str | None:
     """Explain why the chosen kind of key cannot log in, from the host's IdentityFile names.
 
-    Returns None when the host lists a key for that kind, or names no kind at all.
+    Returns None when the host lists a key for that kind, or names no kind at all. The text is
+    three short lines so a terminal panel does not wrap it in the middle of a sentence.
     """
     if entry not in NAMES:
         return None
-    named = {name for path in identity_files for name in NAMES if name in path.lower()}
+    named = {kind for path in identity_files for kind in NAMES if kind in path.lower()}
     if not named or entry in named:
         return None
-    others = " or ".join(label(name) for name in sorted(named))
+    others = " or ".join(label(kind) for kind in sorted(named))
+    who = f"{name} ({address})" if address else name
     return (
-        f"{alias} has no {label(entry)} key configured; only {others} keys are set up there. "
+        f"{who} has no {label(entry)} key configured.\n"
+        f"Only {others} keys are set up there.\n"
         f"Connect a {others} or add a {label(entry)} key to the host."
     )
 

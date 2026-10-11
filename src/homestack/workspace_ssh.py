@@ -218,8 +218,11 @@ class WorkspaceSSH:
     """
 
     def __init__(self, target: str, vmid: int, *, options: tuple[str, ...] = (), sounds: Sounds | None = None,
-                 fido_devices: tuple[str, ...] = ()) -> None:
+                 fido_devices: tuple[str, ...] = (), name: str | None = None, address: str | None = None) -> None:
         self.alias = target
+        # What the user calls the host, and its address for information; ssh itself uses the alias.
+        self.name = name or target
+        self.address = address
         self.fido_devices = tuple(fido_devices)
         # No cues unless configured: tests and library callers stay silent.
         self.sounds = sounds or Sounds(enabled=False)
@@ -235,7 +238,8 @@ class WorkspaceSSH:
         for identity in cfg.workspace_ssh.identity_files:
             options += ["-i", str(Path(identity).expanduser())]
         return cls(f"{cfg.user_name}@{target['ip']}", int(target['vmid']), options=tuple(options), sounds=cfg.sounds,
-                   fido_devices=cfg.workspace_ssh.fido_devices)
+                   fido_devices=cfg.workspace_ssh.fido_devices,
+                   name=str(target.get('name') or '') or None, address=str(target['ip']))
 
     @property
     def child_options(self) -> list[str]:
@@ -264,7 +268,7 @@ class WorkspaceSSH:
             # stderr goes to a file, not a pipe: the detached master keeps the descriptor open
             # and a pipe would never reach EOF. Prompts for a PIN use the terminal directly.
             with tempfile.TemporaryFile("w+", encoding="utf-8", errors="replace") as errors, \
-                    touch_wait(self.alias, self.sounds) as watch:
+                    touch_wait(self.name, self.sounds) as watch:
                 result = subprocess.run([*prefix, "ssh", *config_args, *self.options, *agent_args, "-M", "-S", self.control,
                                          "-o", "ControlPersist=yes", "-o", "StrictHostKeyChecking=accept-new",
                                          "-o", "PasswordAuthentication=no", "-o", "KbdInteractiveAuthentication=no",
@@ -291,7 +295,7 @@ class WorkspaceSSH:
         listing = run_local(["ssh", *self.options, "-G", self.alias], check=False)
         identity_files = [line.split(None, 1)[1] for line in (listing.stdout or "").splitlines()
                           if line.lower().startswith("identityfile ")]
-        problem = fido.missing_key_message(entry, identity_files, self.alias)
+        problem = fido.missing_key_message(entry, identity_files, self.name, self.address)
         if problem:
             raise AppError(problem)
         return fido.sandbox_prefix(devices)

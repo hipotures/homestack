@@ -188,14 +188,21 @@ class MasterTests(unittest.TestCase):
         trezor_only = [d for d in fido.parse_listing(LISTING) if d.vendor == "1209"]
         listing = "host gpu\nidentitiesonly yes\n" + "".join(
             f"identityfile ~/.ssh/id_ed25519_sk_yubikey{n}\n" for n in (1, 2, 3))
-        ws = workspace_ssh.WorkspaceSSH("gpu", 1, fido_devices=("yubikey", "trezor"))
+        ws = workspace_ssh.WorkspaceSSH("user@192.0.2.7", 1, fido_devices=("yubikey", "trezor"),
+                                        name="gpu", address="192.0.2.7")
         with mock.patch.object(fido, "list_devices", return_value=trezor_only), \
                 mock.patch.object(workspace_ssh, "run_local",
                                   return_value=subprocess.CompletedProcess([], 0, stdout=listing)), \
                 mock.patch("subprocess.run") as run:
-            with self.assertRaisesRegex(AppError, r"gpu has no Trezor key configured; only YubiKey keys"):
+            with self.assertRaises(AppError) as caught:
                 ws.__enter__()
         run.assert_not_called()
+        # the host is named the way the user knows it, with the address only as information
+        self.assertEqual(str(caught.exception).splitlines(), [
+            "gpu (192.0.2.7) has no Trezor key configured.",
+            "Only YubiKey keys are set up there.",
+            "Connect a YubiKey or add a Trezor key to the host."])
+        self.assertNotIn("user@", str(caught.exception))
 
     def test_host_key_check_passes_when_the_kind_is_listed_or_names_are_unknown(self):
         listed = ["~/.ssh/id_ed25519_sk_yubikey1", "~/.ssh/id_ecdsa_sk_trezor_pve"]
