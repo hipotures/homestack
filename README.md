@@ -95,6 +95,7 @@ uv run homestack create 200 example-workspace --node pve-example-2 --storage exa
 uv run homestack refresh 200
 uv run homestack resize 200 --root-size 32G
 uv run homestack resize 200 --home-size 500G
+uv run homestack addkey 200 --key ~/.ssh/id_ecdsa_sk_trezor_vm.pub
 uv run homestack migrate 200 pve-example-2 --target-storage example-storage
 uv run homestack repo example-workspace
 uv run homestack repo example-workspace owner/repository
@@ -110,6 +111,8 @@ Lifecycle targets may be a numeric VMID or exact workspace name. `create`, `refr
 The VM must be running with a working QEMU Guest Agent, `python3` and the filesystem tool (`resize2fs` or `btrfs`). Layer-specific tools (`growpart`, `cryptsetup`, and LVM utilities) are checked before execution. For LUKS, HomeStack reads the matching `/etc/crypttab` entry. A configured regular key file is validated and used entirely inside the guest. If no key file is configured, interactive execution prompts for a passphrase without echo and sends it through root SSH stdin, never through command arguments or QGA logs. This mode requires root SSH access and verifies the SSH guest boot ID against QGA before accepting the passphrase. `--json` or execution without a terminal stops before disk growth when a passphrase is required. A missing or invalid configured key file is reported, rather than silently switching authentication methods.
 
 Repeating the same target size completes interrupted growth, including LUKS/LVM/filesystem stages, without further enlarging the virtual disk. `homestack-lock` blocks only `refresh` and does not prevent `resize`. A later refresh replaces root with the Gold disk again; use the lock to protect customized roots.
+
+`addkey` adds one SSH public key (a `.pub` file with exactly one key and a comment) to a workspace through Proxmox Cloud-Init, without touching the root disk or the persistent home. It shows its plan first. It adds the key to the VM's Proxmox `sshkeys`; sets `allow_format=0` in the HomeStack vendor snippet so the rerun cannot rewrite `authorized_keys` or the home permissions; replaces one `ensure-keys` step that appends missing keys to root's and the workspace user's `authorized_keys` (nothing is ever removed); writes a new `instance-id` so Cloud-Init runs once more; runs `qm cloudinit update`; and, for a running VM, shuts it down and starts it, waits for Cloud-Init to report `done`, removes the old host key for the VM address from the local `known_hosts` (a new instance generates new SSH host keys), and checks that the key is in both `authorized_keys` files. A stopped VM stays stopped and applies the key on its next start. If a step fails before the restart, the vendor and meta snippets are put back. Removing or replacing keys is not part of `addkey`.
 
 `create --node NODE` selects the workspace's destination. Omitting `--node`, or selecting the configured Gold node, uses the existing local full clone. `[node].name` continues to identify the Gold node; `[control].node` remains the SSH entry point. `--storage` selects an allowed storage on the destination for both root and home. Without it, HomeStack selects the first storage in that node's configured `storage_layouts` list.
 

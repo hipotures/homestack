@@ -52,6 +52,10 @@ def show_help(cfg_path: Path) -> None:
         "Grow a running workspace disk and its ext4/Btrfs filesystem to the specified total size.",
     )
     commands.add_row(
+        f"{cmd} addkey VMID|NAME --key FILE.pub",
+        "Add one SSH public key to root and the workspace user through Proxmox Cloud-Init; restarts a running VM and removes its old host key locally.",
+    )
+    commands.add_row(
         f"{cmd} destroy VMID|NAME",
         "Permanently delete the VM, snippets and persistent home disk.",
     )
@@ -85,12 +89,13 @@ def show_help(cfg_path: Path) -> None:
     options.add_column("Description")
     options.add_row("--home-size SIZE", "Persistent home size for create, or total target home size for resize.")
     options.add_row("--root-size SIZE", "Total target root disk size for resize.")
+    options.add_row("--key FILE", "Public key file (one key with a comment) to add with addkey.")
     options.add_row("--node NODE", "Create on this cluster node; defaults to the configured Gold node.")
     options.add_row(
         "--storage STORAGE",
         "Create root and persistent home on an allowed target-node storage instead of its layout default.",
     )
-    options.add_row("-y, --yes", "Accept the plan for setup, create, refresh, resize, migrate or destroy.")
+    options.add_row("-y, --yes", "Accept the plan for setup, create, refresh, resize, addkey, migrate or destroy.")
     options.add_row(
         "--json",
         "Return JSON. Commands requiring confirmation return the resolved plan without --yes.",
@@ -107,6 +112,7 @@ def show_help(cfg_path: Path) -> None:
         f"{cmd} refresh 200\n"
         f"{cmd} resize 200 --root-size 32G\n"
         f"{cmd} resize 200 --home-size 500G\n"
+        f"{cmd} addkey example-workspace --key ~/.ssh/id_ecdsa_sk_trezor_vm.pub\n"
         f"{cmd} migrate 200 pve-example-2 --target-storage example-storage\n"
         f"{cmd} setup list\n"
         f"{cmd} setup status example-workspace\n"
@@ -166,6 +172,13 @@ def build_parser() -> argparse.ArgumentParser:
     resize.add_argument("--json", action="store_true")
     resize.add_argument("-y", "--yes", action="store_true")
     resize.add_argument("-h", "--help", action="store_true", dest="sub_help")
+
+    addkey = sub.add_parser("addkey", add_help=False)
+    addkey.add_argument("target")
+    addkey.add_argument("--key", required=True, type=Path)
+    addkey.add_argument("--json", action="store_true")
+    addkey.add_argument("-y", "--yes", action="store_true")
+    addkey.add_argument("-h", "--help", action="store_true", dest="sub_help")
 
     destroy = sub.add_parser("destroy", add_help=False)
     destroy.add_argument("target")
@@ -370,6 +383,50 @@ def main() -> int:
                     emit_json(result)
                 else:
                     console.print(f'VM {vmid}: {plan["disk"]} resized to {plan["size"]}; filesystem expanded.')
+                return 0
+
+            if args.command == "addkey":
+                from .addkey import add_key, build_addkey_plan
+
+                vmid = resolve_workspace_target(session, cfg, args.target)
+                plan = build_addkey_plan(session, cfg, vmid, args.key)
+                assume_yes = bool(args.global_yes or getattr(args, "yes", False))
+                if not assume_yes:
+                    if json_mode:
+                        emit_json({
+                            "ok": False,
+                            "confirmation_required": True,
+                            "message": "No changes made. Re-run with --yes to add this key.",
+                            "plan": plan,
+                        })
+                        return 3
+                    show_kv_panel("ADD KEY PLAN — NO CHANGES MADE YET", [[
+                        ("VMID", str(plan["vmid"])),
+                        ("Name", plan["name"]),
+                        ("Node", plan["node"]),
+                        ("State", plan["status"]),
+                        ("Address", plan["ip"]),
+                        ("Key", f'{plan["key"]["comment"]} ({plan["key"]["type"]})'),
+                    ]])
+                    for number, step in enumerate(plan["steps"], 1):
+                        console.print(f"  {number}. {step}", markup=False)
+                    if not sys.stdin.isatty():
+                        raise AppError("Interactive confirmation requires a TTY; use --yes for automation")
+                    question = ("Add this key and restart the workspace?" if plan["status"] == "running"
+                                else "Add this key to the workspace?")
+                    if not Confirm.ask(question, default=False):
+                        console.print("[bold]Cancelled. No changes were made.[/bold]")
+                        return 0
+                result = add_key(session, cfg, plan)
+                if json_mode:
+                    emit_json(result)
+                else:
+                    console.print(
+                        f'VM {vmid} ({plan["name"]}): key {result["key"]} added'
+                        + ("; restarted and verified in root and user authorized_keys." if result["verified"]
+                           else "; applies on the next start."),
+                        markup=False,
+                    )
                 return 0
 
             if args.command == "destroy":
