@@ -718,6 +718,18 @@ class AdditionalSafetyTests(unittest.TestCase):
             with self.subTest(raw=raw), self.assertRaises(AppError):
                 definitions.parse_setup(raw)
 
+    def test_credentials_are_planned_after_everything_else(self):
+        cfg = test_config()
+        with tempfile.TemporaryDirectory() as tmp, patch.object(Path, 'home', return_value=Path(tmp)):
+            (Path(tmp) / 'fixture').write_text('Synthetic fixture')
+            (Path(tmp) / 'secret').write_text('Synthetic credential')
+            file = definitions.Entry('fixture', 'files', 'file', 'Fixture', 'Synthetic file', definitions.FileParams('~/fixture'))
+            credential = definitions.Entry('secret', 'cred', 'file', 'Secret', 'Synthetic credential', definitions.FileParams('~/secret'))
+            application = replace(entry('codex'), params=definitions.ApplicationParams('printf done', interaction='non-interactive'))
+            backup = definitions.Entry('bk', 'backup', 'backup', 'BK', 'Backup tool', definitions.BackupParams())
+            plan = setup.build_plan(cfg, TARGET, (credential, file, application, backup, entry('bash')))
+        self.assertEqual([e.id for e in plan.entries], ['bash', 'fixture', 'codex', 'bk', 'secret'])
+
     def test_same_connection_serves_actual_environment_file_and_application_handlers(self):
         cfg = test_config()
         with tempfile.TemporaryDirectory() as tmp, patch.object(Path, 'home', return_value=Path(tmp)):

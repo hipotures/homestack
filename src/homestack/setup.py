@@ -24,6 +24,12 @@ from .setup_config import ApplicationParams, BackupParams, HerdrParams, Entry, F
 from .workspace_ssh import WorkspaceSSH
 
 ORDER = {"environment": 0, "file": 1, "application": 2, "herdr": 2, "structured": 3, "repository": 4, "backup": 5}
+# Credentials are copied last, after everything they could be needed by is installed.
+CREDENTIALS_GROUP = "cred"
+
+
+def execution_order(entry: Entry) -> int:
+    return max(ORDER.values()) + 1 if entry.group == CREDENTIALS_GROUP else ORDER[entry.handler]
 
 
 @dataclass(frozen=True)
@@ -449,7 +455,7 @@ def build_plan(cfg: Config, target: dict, entries: tuple[Entry, ...], *, catalog
             visit(selected[dependency])
         visiting.remove(entry.id)
         ordered.append(entry)
-    for entry in sorted(entries, key=lambda e: ORDER[e.handler]):
+    for entry in sorted(entries, key=execution_order):
         visit(entry)
     ordered = [entry for unit in application_units(ordered).values() for entry in unit]
     writes = []
