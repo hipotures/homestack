@@ -134,7 +134,7 @@ class BackupCliTests(unittest.TestCase):
 
     @classmethod
     def config_path(cls, home: Path) -> Path:
-        return cls.backup_dir(home) / "backup.yaml"
+        return home / ".config" / "bk" / "backup.yaml"
 
     @classmethod
     def write_config(
@@ -146,8 +146,7 @@ class BackupCliTests(unittest.TestCase):
         version: int = 1,
         respect_gitignore: bool = True,
     ) -> Path:
-        backup = cls.backup_dir(home)
-        backup.mkdir(parents=True, exist_ok=True)
+        cls.backup_dir(home).mkdir(parents=True, exist_ok=True)
         lines = [
             f"version: {version}",
             f"retention: {retention}",
@@ -155,7 +154,8 @@ class BackupCliTests(unittest.TestCase):
             "sources:",
         ]
         lines.extend(f"  - {json.dumps(str(source.resolve()))}" for source in sources)
-        path = backup / "backup.yaml"
+        path = cls.config_path(home)
+        path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("\n".join(lines) + "\n", encoding="utf-8")
         return path
 
@@ -1618,6 +1618,7 @@ class BackupCliTests(unittest.TestCase):
                 backup = self.backup_dir(self.home)
                 backup.mkdir(parents=True, exist_ok=True)
                 config = self.config_path(self.home)
+                config.parent.mkdir(parents=True, exist_ok=True)
                 config.write_text(content, encoding="utf-8")
                 before = config.read_bytes()
                 result = self.run_bk(self.home, "run")
