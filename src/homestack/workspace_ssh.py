@@ -286,7 +286,14 @@ class WorkspaceSSH:
         """Show ssh only the preferred kind of security key, when fido_devices is set."""
         if not self.fido_devices:
             return []
-        _, devices = fido.select(self.fido_devices, fido.list_devices())
+        entry, devices = fido.select(self.fido_devices, fido.list_devices())
+        # A key the host does not know would make the device ask for every handle ssh tries.
+        listing = run_local(["ssh", *self.options, "-G", self.alias], check=False)
+        identity_files = [line.split(None, 1)[1] for line in (listing.stdout or "").splitlines()
+                          if line.lower().startswith("identityfile ")]
+        problem = fido.missing_key_message(entry, identity_files, self.alias)
+        if problem:
+            raise AppError(problem)
         return fido.sandbox_prefix(devices)
 
     @staticmethod

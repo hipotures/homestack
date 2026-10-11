@@ -184,6 +184,28 @@ class MasterTests(unittest.TestCase):
                 ws.__enter__()
         run.assert_not_called()
 
+    def test_connected_key_unknown_to_the_host_stops_before_ssh_asks_the_device(self):
+        trezor_only = [d for d in fido.parse_listing(LISTING) if d.vendor == "1209"]
+        listing = "host gpu\nidentitiesonly yes\n" + "".join(
+            f"identityfile ~/.ssh/id_ed25519_sk_yubikey{n}\n" for n in (1, 2, 3))
+        ws = workspace_ssh.WorkspaceSSH("gpu", 1, fido_devices=("yubikey", "trezor"))
+        with mock.patch.object(fido, "list_devices", return_value=trezor_only), \
+                mock.patch.object(workspace_ssh, "run_local",
+                                  return_value=subprocess.CompletedProcess([], 0, stdout=listing)), \
+                mock.patch("subprocess.run") as run:
+            with self.assertRaisesRegex(AppError, r"gpu has no Trezor key configured; only YubiKey keys"):
+                ws.__enter__()
+        run.assert_not_called()
+
+    def test_host_key_check_passes_when_the_kind_is_listed_or_names_are_unknown(self):
+        listed = ["~/.ssh/id_ed25519_sk_yubikey1", "~/.ssh/id_ecdsa_sk_trezor_pve"]
+        self.assertIsNone(fido.missing_key_message("trezor", listed, "pve1"))
+        self.assertIsNone(fido.missing_key_message("yubikey", listed, "pve1"))
+        self.assertIsNone(fido.missing_key_message("trezor", ["~/.ssh/id_work"], "x"))
+        self.assertIsNone(fido.missing_key_message("trezor", [], "x"))
+        self.assertIsNone(fido.missing_key_message("1050:0407", listed[:1], "x"))
+        self.assertIn("Connect a YubiKey", fido.missing_key_message("trezor", listed[:1], "gpu"))
+
     def test_failures_are_reported_as_short_messages_not_raw_ssh_output(self):
         ws = workspace_ssh.WorkspaceSSH("user@192.0.2.1", 1)
         _, error = self._enter(ws, stderr_text='sign_and_send_pubkey: signing failed for ECDSA-SK "k": device not found\n'

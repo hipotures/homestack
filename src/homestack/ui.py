@@ -21,7 +21,7 @@ GLOBAL_STATUS_NARROW_WIDTH = 80
 
 def show_error(message: str) -> None:
     """Render an application error without interpreting its text as Rich markup."""
-    console.print(Panel(escape(message), title="ERROR"))
+    console.print(Panel(escape(message), title=Text("ERROR", style="bold red")))
 
 
 def ui_value(value: Any, *, placeholder: str = "—") -> str:

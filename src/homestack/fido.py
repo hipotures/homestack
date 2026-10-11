@@ -87,6 +87,23 @@ def select(preference: tuple[str, ...], devices: list[Device]) -> tuple[str, lis
     )
 
 
+def missing_key_message(entry: str, identity_files: list[str], alias: str) -> str | None:
+    """Explain why the chosen kind of key cannot log in, from the host's IdentityFile names.
+
+    Returns None when the host lists a key for that kind, or names no kind at all.
+    """
+    if entry not in NAMES:
+        return None
+    named = {name for path in identity_files for name in NAMES if name in path.lower()}
+    if not named or entry in named:
+        return None
+    others = " or ".join(label(name) for name in sorted(named))
+    return (
+        f"{alias} has no {label(entry)} key configured; only {others} keys are set up there. "
+        f"Connect a {others} or add a {label(entry)} key to the host."
+    )
+
+
 def sandbox_prefix(devices: list[Device]) -> list[str]:
     """argv prefix that runs a command with only ``devices`` visible below /dev."""
     bwrap = shutil.which("bwrap")
