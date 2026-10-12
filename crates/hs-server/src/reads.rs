@@ -41,7 +41,7 @@ fn core_error(error: CoreError, not_found: &'static str) -> ApiError {
             ErrorCode::ValidationFailed,
             "The workspace name matches several VMs; use the VMID.",
         ),
-        CoreError::Unusable(detail) => {
+        CoreError::Unusable(detail) | CoreError::Failed(detail) => {
             tracing::warn!(detail, "unusable Proxmox data");
             ApiError::new(ErrorCode::PveError, "Proxmox returned data HomeStack cannot use.")
         }
@@ -286,8 +286,11 @@ pub async fn networks(
         .map_err(|e| core_error(e, "No such VM."))
 }
 
-/// Gold readiness, Proxmox part. The guest contract needs `exec` and is
-/// reported as skipped.
+/// Gold readiness: the Proxmox part and, when Gold runs, the guest contract
+/// (commands through the guest agent; skipped without
+/// `VM.GuestAgent.Unrestricted` on Gold). The account checks use `[user]` of
+/// the configuration, or the installer's defaults (`user`, 1000:1000) before
+/// one is uploaded. A stopped Gold is not started.
 #[utoipa::path(
     get,
     path = "/v1/gold/readiness",
@@ -309,11 +312,18 @@ pub async fn gold_readiness(
     Query(query): Query<GoldQuery>,
 ) -> Result<Json<GoldReadiness>, ApiError> {
     let (vmid, node, _) = gold_vm(&state, &query).await?;
-    let root_disk = state
-        .config
-        .current()
-        .map_or_else(|| "scsi0".to_owned(), |stored| stored.config.root_disk.clone());
-    read_gold_readiness(state.pve.as_ref(), &root_disk, &node, vmid)
+    let (root_disk, user) = state.config.current().map_or_else(
+        || {
+            let user = hs_model::config::User {
+                name: "user".to_owned(),
+                uid: 1000,
+                gid: 1000,
+            };
+            ("scsi0".to_owned(), user)
+        },
+        |stored| (stored.config.root_disk.clone(), stored.config.user.clone()),
+    );
+    read_gold_readiness(state.pve.as_ref(), &root_disk, &user, &node, vmid)
         .await
         .map(Json)
         .map_err(|e| core_error(e, "No such VM."))

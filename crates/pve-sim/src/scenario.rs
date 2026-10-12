@@ -218,6 +218,9 @@ pub struct VmSpec {
     /// The guest seen through the QEMU guest agent; absent means the agent
     /// does not answer.
     pub guest: Option<GuestSpec>,
+    /// Whether the guest powers off on the ACPI button (`status/shutdown`).
+    #[serde(default = "default_true")]
+    pub acpi: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
@@ -248,9 +251,125 @@ pub struct GuestSpec {
     pub interfaces: Vec<InterfaceSpec>,
     #[serde(default)]
     pub filesystems: Vec<FilesystemSpec>,
-    /// Accounts in `/etc/passwd`.
+    /// Accounts in `/etc/passwd`, in file order: a name alone gets UID and
+    /// GID 0 for `root`, else the next free one from 1000.
     #[serde(default)]
-    pub users: Vec<String>,
+    pub users: Vec<UserEntry>,
+    /// Programs on the `PATH`, found in `/usr/bin`, `/usr/sbin`, `/bin` and
+    /// `/sbin` alike (merged `/usr`).
+    #[serde(default = "default_commands")]
+    pub commands: Vec<String>,
+    /// Further files by absolute path (e.g. `authorized_keys`).
+    #[serde(default)]
+    pub files: BTreeMap<String, String>,
+    /// What `cloud-id` prints; cloud-init has finished (`result.json`
+    /// exists) when it is set.
+    #[serde(default = "default_cloud_id")]
+    pub cloud_id: Option<String>,
+}
+
+/// The programs of a guest that meets the Gold contract (no `sudo`).
+fn default_commands() -> Vec<String> {
+    [
+        "cloud-init",
+        "cloud-id",
+        "sshd",
+        "nmcli",
+        "lsblk",
+        "blkid",
+        "wipefs",
+        "mkfs.ext4",
+        "mount",
+        "mountpoint",
+        "systemctl",
+        "systemd-escape",
+        "install",
+        "rsync",
+        "git",
+        "ssh-keygen",
+    ]
+    .iter()
+    .map(|name| (*name).to_owned())
+    .collect()
+}
+
+#[allow(clippy::unnecessary_wraps, reason = "serde default for an Option field")]
+fn default_cloud_id() -> Option<String> {
+    Some("nocloud".to_owned())
+}
+
+/// An account: a name, or a name with explicit IDs.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+pub enum UserEntry {
+    Name(String),
+    Account { name: String, uid: u32, gid: u32 },
+}
+
+/// One line of `/etc/passwd`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Account {
+    pub name: String,
+    pub uid: u32,
+    pub gid: u32,
+    pub home: String,
+}
+
+impl Account {
+    /// `name:x:uid:gid:gecos:home:shell`
+    #[must_use]
+    pub fn passwd_line(&self) -> String {
+        let (gecos, shell) = match self.uid {
+            0 => ("root", "/bin/bash"),
+            65534 => ("nobody", "/usr/sbin/nologin"),
+            _ => ("", "/bin/bash"),
+        };
+        format!(
+            "{}:x:{}:{}:{gecos}:{}:{shell}",
+            self.name, self.uid, self.gid, self.home
+        )
+    }
+}
+
+impl GuestSpec {
+    /// The accounts of `/etc/passwd` in file order, `nobody` last.
+    #[must_use]
+    pub fn accounts(&self) -> Vec<Account> {
+        let mut next = 1000;
+        let mut accounts: Vec<Account> = self
+            .users
+            .iter()
+            .map(|entry| {
+                let (name, uid, gid) = match entry {
+                    UserEntry::Name(name) if name == "root" => (name.clone(), 0, 0),
+                    UserEntry::Name(name) => {
+                        next += 1;
+                        (name.clone(), next - 1, next - 1)
+                    }
+                    UserEntry::Account { name, uid, gid } => (name.clone(), *uid, *gid),
+                };
+                let home = if uid == 0 {
+                    "/root".to_owned()
+                } else {
+                    format!("/home/{name}")
+                };
+                Account { name, uid, gid, home }
+            })
+            .collect();
+        accounts.push(Account {
+            name: "nobody".to_owned(),
+            uid: 65534,
+            gid: 65534,
+            home: "/nonexistent".to_owned(),
+        });
+        accounts
+    }
+
+    /// Whether a program is on the `PATH`.
+    #[must_use]
+    pub fn has_command(&self, name: &str) -> bool {
+        self.commands.iter().any(|command| command == name)
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]

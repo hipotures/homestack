@@ -171,6 +171,16 @@ impl PveClient {
         self.request(Method::POST, segments, &[], form).await
     }
 
+    /// `PUT` with form parameters; the `data` of the answer as JSON.
+    pub async fn put_value(&self, segments: &[&str], form: &[(&str, &str)]) -> Result<serde_json::Value, PveError> {
+        self.request(Method::PUT, segments, &[], form).await
+    }
+
+    /// `DELETE` with query parameters; the `data` of the answer as JSON.
+    pub async fn delete_value(&self, segments: &[&str], query: &[(&str, &str)]) -> Result<serde_json::Value, PveError> {
+        self.request(Method::DELETE, segments, query, &[]).await
+    }
+
     async fn get_query<T: DeserializeOwned>(&self, segments: &[&str], query: &[(&str, &str)]) -> Result<T, PveError> {
         self.request(Method::GET, segments, query, &[]).await
     }
@@ -201,7 +211,7 @@ impl PveClient {
                 .http
                 .request(method.clone(), url)
                 .header(AUTHORIZATION, self.authorization.clone());
-            if method == Method::POST {
+            if method == Method::POST || method == Method::PUT {
                 request = request.form(form);
             }
             let sent = request.send().await;

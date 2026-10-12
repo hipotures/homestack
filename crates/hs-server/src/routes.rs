@@ -9,7 +9,7 @@ use axum::extract::rejection::BytesRejection;
 use axum::extract::{DefaultBodyLimit, Path, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{get, post};
 use hs_core::capabilities::{evaluate, probe_paths};
 use hs_model::capabilities::Capabilities;
 use hs_model::health::Liveness;
@@ -47,6 +47,18 @@ pub fn v1() -> Router<AppState> {
         .route("/v1/discovery", get(crate::reads::discovery))
         .route("/v1/networks", get(crate::reads::networks))
         .route("/v1/gold/readiness", get(crate::reads::gold_readiness))
+        .route(
+            "/v1/plans",
+            post(crate::jobs::create_plan).layer(DefaultBodyLimit::max(crate::jobs::MAX_REQUEST_BYTES)),
+        )
+        .route("/v1/plans/{id}", get(crate::jobs::get_plan))
+        .route(
+            "/v1/plans/{id}/apply",
+            post(crate::jobs::apply_plan).layer(DefaultBodyLimit::max(crate::jobs::MAX_REQUEST_BYTES)),
+        )
+        .route("/v1/jobs", get(crate::jobs::list_jobs))
+        .route("/v1/jobs/{id}", get(crate::jobs::get_job))
+        .route("/v1/jobs/{id}/events", get(crate::jobs::job_events))
 }
 
 /// The HTTP server answers. Does not contact Proxmox.

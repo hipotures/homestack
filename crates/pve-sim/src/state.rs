@@ -182,6 +182,15 @@ impl Task {
     }
 }
 
+/// A VM config's `digest`: 40 hex digits that change with the content, like
+/// PVE's SHA-1 of the config file.
+#[must_use]
+pub fn config_digest(config: &toml::Table) -> String {
+    use sha2::Digest;
+    let hash = sha2::Sha256::digest(toml::Value::Table(config.clone()).to_string().as_bytes());
+    hash.iter().take(20).map(|byte| format!("{byte:02x}")).collect()
+}
+
 /// Every privilege of PVE 9.2.21: those of the Administrator role
 /// (`GET /access/roles/Administrator`). `*` in a scenario ACL grants them all.
 pub const PRIVILEGES: [&str; 47] = [

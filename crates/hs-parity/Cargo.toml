@@ -18,6 +18,8 @@ toml = "1.1.8"
 
 [dev-dependencies]
 hs-config = { path = "../hs-config" }
+hs-core = { path = "../hs-core" }
+hs-model = { path = "../hs-model" }
 axum = "0.8.9"
 hs-pve = { path = "../hs-pve" }
 hs-server = { path = "../hs-server" }

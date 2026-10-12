@@ -87,3 +87,15 @@ guests and storages may have written a little in between (byte counts within
 /vms, so it sees every VM volume and the orphan scans must agree
 (decisions.md, 2026-10-12).
 """
+
+[[rule]]
+id = "guest-verify"
+python_ops_drop = ["guest_exec{*", "guest_exec_status{*"]
+rust_ops_drop = ["get{*path=/nodes/*/qemu/*/agent/*"]
+reason = """
+Decision 5: the server verifies a guest with the audit-level agent commands
+(`get-host-name`, `network-get-interfaces`, `get-fsinfo`) and `file-read`
+(`/etc/passwd`, the authorized_keys files, the ext4 superblock of the home
+device, `/run/cloud-init/*`, the `sudo` binary) instead of shell commands
+through `exec`. The pings, the reads of the VM and the outcome are compared.
+"""

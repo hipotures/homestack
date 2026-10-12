@@ -23,4 +23,7 @@ pub enum CoreError {
     /// Proxmox answered with data HomeStack cannot use.
     #[error("{0}")]
     Unusable(String),
+    /// A step of an operation failed (Python's `AppError` of that step).
+    #[error("{0}")]
+    Failed(String),
 }

@@ -59,7 +59,11 @@ const fn status(code: ErrorCode) -> StatusCode {
         ErrorCode::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
         ErrorCode::PreconditionRequired => StatusCode::PRECONDITION_REQUIRED,
         ErrorCode::PreconditionFailed => StatusCode::PRECONDITION_FAILED,
-        ErrorCode::ConfigMissing | ErrorCode::ConfigVersionMismatch => StatusCode::CONFLICT,
+        ErrorCode::ConfigMissing
+        | ErrorCode::ConfigVersionMismatch
+        | ErrorCode::PlanChanged
+        | ErrorCode::PlanApplied
+        | ErrorCode::Busy => StatusCode::CONFLICT,
         ErrorCode::PveUnavailable | ErrorCode::PveNodeUnavailable => StatusCode::SERVICE_UNAVAILABLE,
         ErrorCode::PveAuthFailed | ErrorCode::PvePermissionDenied | ErrorCode::PveError => StatusCode::BAD_GATEWAY,
         ErrorCode::Internal => StatusCode::INTERNAL_SERVER_ERROR,
@@ -76,6 +80,18 @@ impl IntoResponse for ApiError {
         }
         response.extensions_mut().insert(self);
         response
+    }
+}
+
+/// The API error code of a Proxmox failure.
+pub const fn pve_error_code(error: &PveError) -> ErrorCode {
+    match error {
+        PveError::Unreachable(_) => ErrorCode::PveUnavailable,
+        PveError::Unauthorized => ErrorCode::PveAuthFailed,
+        PveError::Forbidden { .. } => ErrorCode::PvePermissionDenied,
+        PveError::NodeUnreachable { .. } => ErrorCode::PveNodeUnavailable,
+        PveError::Api { .. } | PveError::Response(_) => ErrorCode::PveError,
+        PveError::Config(_) => ErrorCode::Internal,
     }
 }
 

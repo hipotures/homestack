@@ -7,7 +7,9 @@
 mod auth;
 pub mod config_store;
 mod error;
+mod jobs;
 mod openapi;
+pub mod operations;
 pub mod precondition;
 mod reads;
 mod routes;
@@ -25,6 +27,8 @@ use tower_http::set_header::SetResponseHeaderLayer;
 pub use auth::{ApiToken, ApiTokenError};
 use config_store::{ConfigStore, StoreError};
 pub use openapi::openapi_json;
+pub use operations::AppOptions;
+use operations::OpsState;
 
 /// Everything the server needs to run.
 #[derive(Debug, Clone)]
@@ -52,10 +56,17 @@ struct AppState {
     api_token: Arc<ApiToken>,
     pve_token_id: Arc<str>,
     config: Arc<ConfigStore>,
+    ops: Arc<OpsState>,
 }
 
 /// Build the HTTP application. Loads the stored configuration, if any.
 pub fn app(config: ServerConfig) -> Result<Router, StartError> {
+    app_with(config, AppOptions::default())
+}
+
+/// [`app`] with the operations clients may plan and the settings of the
+/// operation model.
+pub fn app_with(config: ServerConfig, options: AppOptions) -> Result<Router, StartError> {
     let store = ConfigStore::open(config.config_file)?;
     if let Some(current) = store.current() {
         tracing::info!(path = %store.path().display(), config_version = current.version, "configuration loaded");
@@ -67,6 +78,7 @@ pub fn app(config: ServerConfig) -> Result<Router, StartError> {
         pve: Arc::new(PveClient::new(config.pve)?),
         api_token: Arc::new(config.api_token),
         config: Arc::new(store),
+        ops: Arc::new(OpsState::new(options)),
     };
     let v1 = routes::v1().route_layer(middleware::from_fn_with_state(state.clone(), auth::require_bearer));
     Ok(Router::new()

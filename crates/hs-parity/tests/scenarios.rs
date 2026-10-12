@@ -78,7 +78,12 @@ async fn run_python(
         .arg("--record-out")
         .arg(&record);
     match function {
-        Some(name) => command.arg("--config").arg(&config).arg("--").arg(name),
+        Some(name) => command
+            .arg("--config")
+            .arg(&config)
+            .arg("--")
+            .arg(name)
+            .args(args.iter().skip(1)),
         None => command.arg("--").arg("--config").arg(&config).args(args),
     };
     let output = command.output().await?;
@@ -105,17 +110,19 @@ async fn run_python(
 }
 
 async fn run_rust(scenario: &Scenario, sim: &PveSim, request: &str) -> Result<Value, Box<dyn std::error::Error>> {
-    let (method, path) = request.split_once(' ').ok_or("rust request must be `METHOD /path`")?;
     let token = PveToken::parse(&scenario.token(&scenario.homestack.server_token)?)?;
     let mut pve = PveClientConfig::new(vec![sim.base_url().parse()?], token);
     pve.extra_ca_pem = Some(sim.ca_pem().to_owned());
     // The server gets the server part of the scenario's Python configuration.
-    let state = tempfile::tempdir()?;
     let python_config = std::fs::read_to_string(repo_root().join(&scenario.homestack.config))?;
-    std::fs::write(
-        state.path().join("server.toml"),
-        hs_config::split::split(&python_config)?.server_toml,
-    )?;
+    let server_toml = hs_config::split::split(&python_config)?.server_toml;
+    if let Some(function) = request.strip_prefix('@') {
+        let config = hs_model::config::Config::parse(&server_toml)?;
+        return run_rust_function(hs_pve::PveClient::new(pve)?, &config, function).await;
+    }
+    let (method, path) = request.split_once(' ').ok_or("rust request must be `METHOD /path`")?;
+    let state = tempfile::tempdir()?;
+    std::fs::write(state.path().join("server.toml"), server_toml)?;
     let app = hs_server::app(ServerConfig {
         api_token: ApiToken::parse(API_TOKEN)?,
         pve,
@@ -137,6 +144,46 @@ async fn run_rust(scenario: &Scenario, sim: &PveSim, request: &str) -> Result<Va
         return Err(format!("Rust request failed ({status}): {body}").into());
     }
     Ok(body)
+}
+
+/// Server functions that have no route of their own, called in-process the
+/// way the operations of later phases call them:
+///
+/// - `verify-refresh VMID`: `hs_core::verify::verify_refreshed_guest` with
+///   the VM's name, its `prefix.<vmid>` address and its home label, as
+///   `func_driver.py verify-refresh` calls Python's.
+async fn run_rust_function(
+    pve: hs_pve::PveClient,
+    config: &hs_model::config::Config,
+    function: &str,
+) -> Result<Value, Box<dyn std::error::Error>> {
+    let words: Vec<&str> = function.split_whitespace().collect();
+    match words.as_slice() {
+        ["verify-refresh", vmid] => {
+            let vmid: u32 = vmid.parse()?;
+            let resources = hs_core::inventory::cluster_vm_resources(&pve).await?;
+            let node = resources
+                .iter()
+                .find(|r| r.vmid == vmid)
+                .map(|r| r.node.clone())
+                .ok_or("no such VM")?;
+            let vm = hs_core::inventory::vm_config(&pve, &node, vmid).await?;
+            let expected = hs_core::verify::GuestExpectation {
+                name: vm.get("name").cloned().unwrap_or_default(),
+                address: format!("{}.{vmid}/{}", config.network.prefix, config.network.cidr),
+                user: config.user.clone(),
+                home_label: format!("HS_HOME_{vmid}"),
+            };
+            let timeouts = hs_core::verify::VerifyTimeouts::default();
+            Ok(
+                match hs_core::verify::verify_refreshed_guest(&pve, &node, vmid, &expected, &timeouts).await {
+                    Ok(cloud_id) => serde_json::json!({ "ok": true, "cloud_id": cloud_id }),
+                    Err(error) => serde_json::json!({ "ok": false, "error": error.to_string() }),
+                },
+            )
+        }
+        _ => Err(format!("unknown Rust function @{function}").into()),
+    }
 }
 
 fn op_strings(sim: &PveSim) -> Vec<String> {

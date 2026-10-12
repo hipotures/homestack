@@ -32,7 +32,13 @@ fn stopped_gold(config: Value) -> FakePve {
 }
 
 fn readiness(pve: &FakePve) -> hs_model::status::GoldReadiness {
-    match block_on(gold_readiness(pve, &test_config().root_disk, "example-node-1", 101)) {
+    match block_on(gold_readiness(
+        pve,
+        &test_config().root_disk,
+        &test_config().user,
+        "example-node-1",
+        101,
+    )) {
         Ok(readiness) => readiness,
         Err(error) => panic!("{error}"),
     }
@@ -93,25 +99,120 @@ fn agent_and_cloud_init_detection() {
     assert_eq!(cloud_init_slots(&config), ["ide2"]);
 }
 
+const TOOLS: &str = r#"for c in cloud-init sshd nmcli lsblk blkid wipefs mkfs.ext4 mount mountpoint systemctl systemd-escape install; do command -v "$c" >/dev/null 2>&1 || printf "%s\n" "$c"; done"#;
+const RSYNC: &str = "if command -v rsync >/dev/null 2>&1; then echo PRESENT; else echo ABSENT; fi";
+const REPO_TOOLS: &str = r#"for c in git ssh-keygen; do command -v "$c" >/dev/null 2>&1 || printf "%s\n" "$c"; done"#;
+const ACCOUNT: &str = "getent passwd user || true";
+const REGULAR: &str = r#"awk -F: '$3 >= 1000 && $3 < 65534 {print $1 ":" $3 ":" $4}' /etc/passwd"#;
+const SUDO: &str = "if command -v sudo >/dev/null 2>&1; then echo PRESENT; else echo ABSENT; fi";
+const ROOT_KEYS: &str = "test -s /root/.ssh/authorized_keys && echo OK || echo MISSING";
+
+fn out(text: &str) -> Value {
+    json!({"exited": 1, "exitcode": 0, "out-data": text})
+}
+
+/// A running Gold whose guest answers like the `guest_value` of the
+/// Python tests, with `rsync` answering `rsync`.
+fn running_gold(rsync: &str) -> FakePve {
+    FakePve::new()
+        .with("GET /nodes/example-node-1/qemu/101/config", gold_config())
+        .with(
+            "GET /nodes/example-node-1/qemu/101/status/current",
+            json!({"status": "running"}),
+        )
+        .with("POST /nodes/example-node-1/qemu/101/agent/ping", json!({"result": {}}))
+        .with_exec("example-node-1", 101, TOOLS, 1, out(""))
+        .with_exec("example-node-1", 101, RSYNC, 2, out(&format!("{rsync}\n")))
+        .with_exec("example-node-1", 101, REPO_TOOLS, 3, out(""))
+        .with_exec(
+            "example-node-1",
+            101,
+            ACCOUNT,
+            4,
+            out("user:x:1000:1000::/home/user:/bin/bash\n"),
+        )
+        .with_exec("example-node-1", 101, REGULAR, 5, out("user:1000:1000\n"))
+        .with_exec("example-node-1", 101, SUDO, 6, out("ABSENT\n"))
+        .with_exec("example-node-1", 101, ROOT_KEYS, 7, out("OK\n"))
+}
+
+fn optional_failures(result: &hs_model::status::GoldReadiness) -> Vec<&str> {
+    result
+        .checks
+        .iter()
+        .filter(|c| c.requirement == "optional" && c.status == "fail")
+        .map(|c| c.name.as_str())
+        .collect()
+}
+
+/// `GoldReadinessTests::test_running_gold_checks_guest_contract`
 #[test]
-fn running_gold_gets_the_agent_check_and_leaves_guest_contract_to_exec() {
+fn running_gold_checks_guest_contract() {
+    let pve = running_gold("PRESENT");
+    let result = readiness(&pve);
+    assert!(result.ok, "{:?}", result.checks);
+    assert!(result.guest_checked);
+    assert!(optional_failures(&result).is_empty());
+    let names: Vec<(&str, &str)> = result
+        .checks
+        .iter()
+        .skip(9)
+        .map(|c| (c.name.as_str(), c.status.as_str()))
+        .collect();
+    assert_eq!(
+        names,
+        [
+            ("QEMU Guest Agent response", "pass"),
+            ("Required guest tools", "pass"),
+            ("rsync for Setup Files", "pass"),
+            ("git/ssh-keygen for homestack repo", "pass"),
+            ("Workspace account", "pass"),
+            ("Regular user policy", "pass"),
+            ("No sudo", "pass"),
+            ("Root authorized_keys", "pass"),
+            ("Workspace public-key source", "pass"),
+        ]
+    );
+}
+
+/// `GoldReadinessTests::test_missing_rsync_is_optional`
+#[test]
+fn missing_rsync_is_optional() {
+    let pve = running_gold("ABSENT");
+    let result = readiness(&pve);
+    assert!(result.ok);
+    assert_eq!(optional_failures(&result), ["rsync for Setup Files"]);
+}
+
+/// Not in Python (it runs as root): without `VM.GuestAgent.Unrestricted` on
+/// Gold the guest contract is skipped with the reason, not failed.
+#[test]
+fn guest_contract_without_exec_privilege_is_skipped() {
     let pve = FakePve::new()
         .with("GET /nodes/example-node-1/qemu/101/config", gold_config())
         .with(
             "GET /nodes/example-node-1/qemu/101/status/current",
             json!({"status": "running"}),
         )
-        .with("POST /nodes/example-node-1/qemu/101/agent/ping", json!({"result": {}}));
+        .with("POST /nodes/example-node-1/qemu/101/agent/ping", json!({"result": {}}))
+        .failing(
+            &common::exec_key("example-node-1", 101, TOOLS),
+            403,
+            "Permission check failed (/vms/101, VM.GuestAgent.Unrestricted)",
+        );
     let result = readiness(&pve);
-    let agent = result.checks.iter().find(|c| c.name == "QEMU Guest Agent response");
-    assert_eq!(
-        agent.map(|c| (c.status.as_str(), c.detail.as_str())),
-        Some(("pass", "responding"))
-    );
     let tools = result.checks.iter().find(|c| c.name == "Required guest tools");
-    assert_eq!(tools.map(|c| c.status.as_str()), Some("skip"));
-    assert!(result.guest_checked);
+    assert_eq!(
+        tools.map(|c| (c.status.as_str(), c.detail.as_str())),
+        Some((
+            "skip",
+            "needs VM.GuestAgent.Unrestricted on /vms/101 to run commands in Gold"
+        ))
+    );
+    let keys = result.checks.iter().find(|c| c.name == "Workspace public-key source");
+    assert_eq!(keys.map(|c| c.status.as_str()), Some("pass"), "Proxmox sshkeys suffice");
     assert!(result.ok);
+    assert_eq!(pve.calls().len(), 4, "no command after the refused one");
 }
 
 /// `EnvironmentDiscoveryTests::test_discovery_uses_only_read_only_pvesh_queries`

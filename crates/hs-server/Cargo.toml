@@ -10,15 +10,17 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
-axum = "0.8.9"
+axum = { version = "0.8.9", features = ["ws"] }
 hs-core = { version = "0.1.0", path = "../hs-core" }
 hs-model = { version = "0.1.0", path = "../hs-model" }
 hs-pve = { version = "0.1.0", path = "../hs-pve" }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
+sha2 = "0.11.0"
 subtle = "2.6.1"
 thiserror = "2.0.21"
-tokio = { version = "1.53.2", features = ["rt-multi-thread", "macros", "net", "signal", "fs"] }
+time = { version = "0.3.55", features = ["formatting"] }
+tokio = { version = "1.53.2", features = ["rt-multi-thread", "macros", "net", "signal", "fs", "sync", "time"] }
 tower-http = { version = "0.7.1", features = ["set-header", "trace"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt", "json"] }
@@ -27,6 +29,8 @@ utoipa = "6.0.0"
 uuid = { version = "1.28.0", features = ["v4"] }
 
 [dev-dependencies]
+futures-util = "0.3.34"
+tokio-tungstenite = "0.29.0"
 hs-config = { path = "../hs-config" }
 pve-sim = { path = "../pve-sim" }
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "json"] }

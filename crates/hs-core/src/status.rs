@@ -264,7 +264,7 @@ pub async fn workspace_home_usage(
     };
     if status != "running"
         || pve
-            .post(&format!("/nodes/{node}/qemu/{vmid}/agent/ping"))
+            .post(&format!("/nodes/{node}/qemu/{vmid}/agent/ping"), &[])
             .await
             .is_err()
     {
@@ -717,7 +717,10 @@ pub async fn workspace_status(pve: &impl Pve, cfg: &Config, vmid: u32) -> Result
     let mut actual_ip = None;
     let mut home = None;
     if status == "running" {
-        qga = pve.post(&format!("/nodes/{node}/qemu/{vmid}/agent/ping")).await.is_ok();
+        qga = pve
+            .post(&format!("/nodes/{node}/qemu/{vmid}/agent/ping"), &[])
+            .await
+            .is_ok();
         if qga {
             actual_hostname = pve
                 .get(&format!("/nodes/{node}/qemu/{vmid}/agent/get-host-name"), &[])

@@ -6,10 +6,114 @@
 //! recognises the commands HomeStack sends and prints what the real tools
 //! would print for the same guest, so both implementations read one state.
 //! Anything else exits 127, so an unmodelled command is never silent.
+//!
+//! `file-read` reads a small file tree derived from the same description:
+//! `/etc/passwd` from the accounts, the programs on the `PATH`, cloud-init's
+//! files under `/run/cloud-init`, each filesystem's block device (an ext4
+//! superblock with its label) and the scenario's own files.
 
 use serde_json::{Value, json};
 
 use crate::scenario::{FilesystemSpec, GuestSpec};
+
+/// What a path is in the simulated guest.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Node {
+    File(Vec<u8>),
+    Directory,
+    Missing,
+}
+
+/// Directories programs are found in (merged `/usr`).
+const BIN_DIRS: [&str; 4] = ["/usr/bin", "/usr/sbin", "/bin", "/sbin"];
+
+/// The first bytes of a block device holding `fs`: an ext4 superblock at
+/// offset 1024 with magic `0xEF53` (offset 56) and the label (offset 120,
+/// 16 bytes, NUL-padded), as `blkid` reads it.
+fn block_device(fs: &FilesystemSpec) -> Vec<u8> {
+    let mut bytes = vec![0_u8; 4096];
+    if fs.fstype == "ext4" {
+        bytes[1024 + 56] = 0x53;
+        bytes[1024 + 57] = 0xEF;
+        if let Some(label) = &fs.label {
+            for (index, byte) in label.bytes().take(16).enumerate() {
+                bytes[1024 + 120 + index] = byte;
+            }
+        }
+    }
+    bytes
+}
+
+/// `/etc/passwd`
+#[must_use]
+pub fn passwd(guest: &GuestSpec) -> String {
+    guest
+        .accounts()
+        .iter()
+        .map(|account| account.passwd_line() + "\n")
+        .collect()
+}
+
+/// Look a path up in the guest.
+#[must_use]
+pub fn file(guest: &GuestSpec, path: &str) -> Node {
+    if let Some(text) = guest.files.get(path) {
+        return Node::File(text.clone().into_bytes());
+    }
+    let generated = match path {
+        "/etc/passwd" => Some(passwd(guest).into_bytes()),
+        "/run/cloud-init/result.json" => guest.cloud_id.as_ref().map(|_| {
+            b"{\n \"v1\": {\n  \"datasource\": \"DataSourceNoCloud [seed=/dev/sr0]\",\n  \"errors\": []\n }\n}\n"
+                .to_vec()
+        }),
+        "/run/cloud-init/cloud-id" => guest.cloud_id.as_ref().map(|id| format!("{id}\n").into_bytes()),
+        _ => None,
+    };
+    if let Some(bytes) = generated {
+        return Node::File(bytes);
+    }
+    if let Some(device) = path.strip_prefix("/dev/")
+        && let Some(fs) = guest.filesystems.iter().find(|fs| fs.device == device)
+    {
+        return Node::File(block_device(fs));
+    }
+    if let Some((dir, name)) = path.rsplit_once('/')
+        && BIN_DIRS.contains(&dir)
+        && guest.has_command(name)
+    {
+        return Node::File(b"\x7fELF\x02\x01\x01".to_vec());
+    }
+    let is_parent = |known: &str| known.strip_prefix(path).is_some_and(|rest| rest.starts_with('/'));
+    let homes = guest.accounts().into_iter().map(|account| account.home);
+    let directories = [
+        "/",
+        "/etc",
+        "/run",
+        "/run/cloud-init",
+        "/dev",
+        "/usr",
+        "/usr/bin",
+        "/usr/sbin",
+        "/bin",
+        "/sbin",
+    ];
+    if directories.contains(&path)
+        || homes.into_iter().any(|home| home == path || is_parent(&home))
+        || guest.files.keys().any(|known| is_parent(known))
+    {
+        return Node::Directory;
+    }
+    Node::Missing
+}
+
+/// The content of a file, or `None` when it is missing, a directory or
+/// empty (`test -s`).
+fn non_empty(guest: &GuestSpec, path: &str) -> Option<Vec<u8>> {
+    match file(guest, path) {
+        Node::File(bytes) if !bytes.is_empty() => Some(bytes),
+        _ => None,
+    }
+}
 
 /// Outcome of one `exec`, as `exec-status` reports it.
 #[derive(Debug, Clone)]
@@ -177,14 +281,136 @@ pub fn exec(guest: &GuestSpec, shell: &str) -> ExecResult {
         "if getent passwd ",
         " >/dev/null 2>&1; then echo true; else echo false; fi",
     ) {
-        let present = guest.users.iter().any(|name| name == user);
+        let present = guest.accounts().iter().any(|account| account.name == user);
         return ExecResult::line(if present { "true" } else { "false" });
+    }
+    if let Some(result) = exec_checks(guest, shell) {
+        return result;
     }
     ExecResult {
         exitcode: 127,
         out: String::new(),
         err: format!("pve-sim: guest command not modelled: {shell}\n"),
     }
+}
+
+fn failed(exitcode: i32, err: String) -> ExecResult {
+    ExecResult {
+        exitcode,
+        out: String::new(),
+        err,
+    }
+}
+
+/// The commands of the refresh verification and the Gold contract
+/// (`lifecycle._verify_refreshed_guest`, `gold.check_gold_readiness`).
+fn exec_checks(guest: &GuestSpec, shell: &str) -> Option<ExecResult> {
+    const MISSING_LOOP: (&str, &str) = (
+        "for c in ",
+        r#"; do command -v "$c" >/dev/null 2>&1 || printf "%s\n" "$c"; done"#,
+    );
+    if shell == "command -v cloud-init >/dev/null 2>&1 && timeout 180 cloud-init status --wait >/dev/null 2>&1 || true"
+    {
+        return Some(ExecResult::ok(""));
+    }
+    if shell == "command -v cloud-id >/dev/null 2>&1 && cloud-id || true" {
+        let id = guest.cloud_id.as_deref().filter(|_| guest.has_command("cloud-id"));
+        return Some(id.map_or_else(|| ExecResult::ok(""), ExecResult::line));
+    }
+    if let Some(iface) = shell.strip_prefix("ip -4 -o addr show dev ")
+        && !iface.contains(' ')
+    {
+        let Some(interface) = guest.interfaces.iter().find(|i| i.name == iface) else {
+            return Some(failed(1, format!("Device \"{iface}\" does not exist.\n")));
+        };
+        let lines: String = interface
+            .ipv4
+            .iter()
+            .map(|cidr| {
+                format!(
+                    "2: {iface}    inet {cidr} scope global {iface}\\       valid_lft forever preferred_lft forever\n"
+                )
+            })
+            .collect();
+        return Some(ExecResult::ok(lines));
+    }
+    if let Some(path) = shell.strip_prefix("findmnt -n -o SOURCE,FSTYPE,TARGET ")
+        && !path.contains(' ')
+    {
+        return Some(mounted(guest, path).map_or_else(
+            || failed(1, String::new()),
+            |fs| ExecResult::line(&format!("/dev/{} {} {}", fs.device, fs.fstype, fs.mountpoint)),
+        ));
+    }
+    if let Some(path) = between(shell, "findmnt -n -o SOURCE ", " | xargs -r blkid -s LABEL -o value") {
+        return Some(
+            mounted(guest, path)
+                .and_then(|fs| fs.label.as_deref())
+                .map_or_else(|| ExecResult::ok(""), ExecResult::line),
+        );
+    }
+    if let Some(user) = shell.strip_prefix("id ")
+        && !user.contains(' ')
+    {
+        let accounts = guest.accounts();
+        return Some(match accounts.iter().find(|a| a.name == user) {
+            Some(a) => ExecResult::line(&format!(
+                "uid={}({}) gid={}({}) groups={}({})",
+                a.uid, a.name, a.gid, a.name, a.gid, a.name
+            )),
+            None => failed(1, format!("id: '{user}': no such user\n")),
+        });
+    }
+    if let Some(path) = between(shell, "test -s ", " && echo OK || echo MISSING") {
+        return Some(ExecResult::line(if non_empty(guest, path).is_some() {
+            "OK"
+        } else {
+            "MISSING"
+        }));
+    }
+    if shell == r#"awk -F: '$3 >= 1000 && $3 < 65534 {print $1 ":" $3 ":" $4}' /etc/passwd"# {
+        let lines: String = guest
+            .accounts()
+            .iter()
+            .filter(|a| (1000..65534).contains(&a.uid))
+            .map(|a| format!("{}:{}:{}\n", a.name, a.uid, a.gid))
+            .collect();
+        return Some(ExecResult::ok(lines));
+    }
+    if let Some(name) = between(
+        shell,
+        "if command -v ",
+        " >/dev/null 2>&1; then echo PRESENT; else echo ABSENT; fi",
+    ) {
+        return Some(ExecResult::line(if guest.has_command(name) {
+            "PRESENT"
+        } else {
+            "ABSENT"
+        }));
+    }
+    if let Some(words) = between(shell, MISSING_LOOP.0, MISSING_LOOP.1) {
+        let missing: String = words
+            .split(' ')
+            .filter(|name| !guest.has_command(name))
+            .map(|name| format!("{name}\n"))
+            .collect();
+        return Some(ExecResult::ok(missing));
+    }
+    if let Some(user) = between(shell, "getent passwd ", " || true") {
+        let line = guest
+            .accounts()
+            .into_iter()
+            .find(|a| a.name == user)
+            .map(|a| a.passwd_line());
+        return Some(line.map_or_else(|| ExecResult::ok(""), |line| ExecResult::line(&line)));
+    }
+    if let Some(path) = between(shell, "cat ", " 2>/dev/null || true") {
+        return Some(match file(guest, path) {
+            Node::File(bytes) => ExecResult::ok(String::from_utf8_lossy(&bytes).into_owned()),
+            Node::Directory | Node::Missing => ExecResult::ok(""),
+        });
+    }
+    None
 }
 
 fn between<'a>(text: &'a str, prefix: &str, suffix: &str) -> Option<&'a str> {
@@ -225,7 +451,7 @@ pub fn df_percent(used: u64, avail: u64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::scenario::InterfaceSpec;
+    use crate::scenario::{InterfaceSpec, UserEntry};
 
     fn guest() -> GuestSpec {
         GuestSpec {
@@ -257,7 +483,10 @@ mod tests {
                     avail: 20_601_901_056,
                 },
             ],
-            users: vec!["user".to_owned()],
+            users: vec![UserEntry::Name("user".to_owned())],
+            commands: Vec::new(),
+            files: std::collections::BTreeMap::new(),
+            cloud_id: None,
         }
     }
 

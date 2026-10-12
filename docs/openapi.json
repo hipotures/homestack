@@ -363,7 +363,7 @@
         "tags": [
           "status"
         ],
-        "summary": "Gold readiness, Proxmox part. The guest contract needs `exec` and is\nreported as skipped.",
+        "summary": "Gold readiness: the Proxmox part and, when Gold runs, the guest contract\n(commands through the guest agent; skipped without\n`VM.GuestAgent.Unrestricted` on Gold). The account checks use `[user]` of\nthe configuration, or the installer's defaults (`user`, 1000:1000) before\none is uploaded. A stopped Gold is not started.",
         "operationId": "gold_readiness",
         "parameters": [
           {
@@ -453,6 +453,150 @@
           },
           "503": {
             "description": "No Proxmox endpoint is reachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/jobs": {
+      "get": {
+        "tags": [
+          "operations"
+        ],
+        "summary": "Jobs kept by this server instance, newest first.",
+        "operationId": "list_jobs",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Job"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/jobs/{id}": {
+      "get": {
+        "tags": [
+          "operations"
+        ],
+        "summary": "One job.",
+        "operationId": "get_job",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Job ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Job"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such job",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/jobs/{id}/events": {
+      "get": {
+        "tags": [
+          "operations"
+        ],
+        "summary": "WebSocket: a `snapshot` of the job, a `job` message after every change\n(the last one finished), and a `heartbeat` whenever nothing changed for\nfive seconds. The server closes the stream after the final state.\nMessages: `StreamMessage`.",
+        "operationId": "job_events",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Job ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "101": {
+            "description": "WebSocket of `StreamMessage`"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such job",
             "content": {
               "application/json": {
                 "schema": {
@@ -612,6 +756,254 @@
           },
           "409": {
             "description": "No configuration has been uploaded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Proxmox rejected the request or answered unusably",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "No Proxmox endpoint is reachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/plans": {
+      "post": {
+        "tags": [
+          "operations"
+        ],
+        "summary": "Plan an operation. Nothing is changed; the plan can be applied until\n`expires_at`.",
+        "operationId": "create_plan",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlanRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Plan"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "A VM named by the parameters does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unknown operation or invalid parameters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Proxmox rejected the request or answered unusably",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "No Proxmox endpoint is reachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/plans/{id}": {
+      "get": {
+        "tags": [
+          "operations"
+        ],
+        "summary": "A plan made earlier, until it expires.",
+        "operationId": "get_plan",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Plan ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Plan"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such plan, or it expired",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/plans/{id}/apply": {
+      "post": {
+        "tags": [
+          "operations"
+        ],
+        "summary": "Apply a plan: plan again, check that nothing changed, and start a job.\nThe job runs on the server whatever happens to this request.",
+        "operationId": "apply_plan",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Plan ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApplyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "The job was started; follow it at `Location`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Job"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such plan, or it expired",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`plan_changed`, `plan_applied` or `busy`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid request body",
             "content": {
               "application/json": {
                 "schema": {
@@ -1011,6 +1403,20 @@
   },
   "components": {
     "schemas": {
+      "ApplyRequest": {
+        "type": "object",
+        "description": "`POST /v1/plans/{id}/apply`",
+        "required": [
+          "digest"
+        ],
+        "properties": {
+          "digest": {
+            "type": "string",
+            "description": "The `digest` of the plan the client reviewed."
+          }
+        },
+        "additionalProperties": false
+      },
       "Capabilities": {
         "type": "object",
         "description": "Body of `GET /v1/capabilities`.",
@@ -1187,6 +1593,9 @@
           "pve_permission_denied",
           "pve_node_unavailable",
           "pve_error",
+          "plan_changed",
+          "plan_applied",
+          "busy",
           "internal"
         ]
       },
@@ -1413,6 +1822,191 @@
               "null"
             ],
             "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "Job": {
+        "type": "object",
+        "description": "`GET /v1/jobs/{id}`",
+        "required": [
+          "id",
+          "operation",
+          "plan_id",
+          "state",
+          "created_at",
+          "steps",
+          "tasks",
+          "log"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string"
+          },
+          "error": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/JobError"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "finished_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "log": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The last lines of the Proxmox task logs (at most 200)."
+          },
+          "operation": {
+            "type": "string"
+          },
+          "plan_id": {
+            "type": "string"
+          },
+          "progress": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/JobProgress"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "result": {
+            "description": "What the operation returns on success."
+          },
+          "started_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "$ref": "#/components/schemas/JobState"
+          },
+          "steps": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/JobStep"
+            }
+          },
+          "tasks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/JobTask"
+            }
+          }
+        }
+      },
+      "JobError": {
+        "type": "object",
+        "description": "Why a job failed.",
+        "required": [
+          "code",
+          "message"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "`operation_failed`, or an API error code such as\n`pve_permission_denied`."
+          },
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "JobProgress": {
+        "type": "object",
+        "description": "The latest transfer progress of a running task.",
+        "required": [
+          "percent",
+          "detail"
+        ],
+        "properties": {
+          "detail": {
+            "type": "string",
+            "description": "e.g. `5.8 / 16.0 GiB`"
+          },
+          "percent": {
+            "type": "number",
+            "format": "double"
+          }
+        }
+      },
+      "JobState": {
+        "type": "string",
+        "enum": [
+          "queued",
+          "running",
+          "succeeded",
+          "failed"
+        ]
+      },
+      "JobStep": {
+        "type": "object",
+        "description": "A named step of a job, as Python's `start_step` / `finish_step`.",
+        "required": [
+          "name",
+          "state"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/StepState"
+          }
+        }
+      },
+      "JobTask": {
+        "type": "object",
+        "description": "A Proxmox task the job started or waited for.",
+        "required": [
+          "node",
+          "upid",
+          "kind",
+          "status"
+        ],
+        "properties": {
+          "exitstatus": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`OK`, `WARNINGS: N` or the error, once stopped."
+          },
+          "kind": {
+            "type": "string",
+            "description": "Proxmox task type, e.g. `qmstart`."
+          },
+          "node": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/TaskStatus"
+          },
+          "upid": {
+            "type": "string"
+          },
+          "vmid": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
             "minimum": 0
           }
         }
@@ -1704,6 +2298,67 @@
           }
         }
       },
+      "Plan": {
+        "type": "object",
+        "description": "A plan: what an operation would do, computed from the cluster now.",
+        "required": [
+          "id",
+          "operation",
+          "digest",
+          "created_at",
+          "expires_at",
+          "targets",
+          "summary"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string"
+          },
+          "digest": {
+            "type": "string",
+            "description": "SHA-256 (hex) of the operation, its parameters, targets and summary.\nApplying needs it, and the plan made again before execution must\nhave the same one."
+          },
+          "expires_at": {
+            "type": "string",
+            "description": "After this the plan cannot be applied."
+          },
+          "id": {
+            "type": "string"
+          },
+          "operation": {
+            "type": "string"
+          },
+          "summary": {
+            "description": "What will be done, as the operation describes it."
+          },
+          "targets": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            },
+            "description": "VMIDs the operation changes; one job at a time per VM."
+          }
+        }
+      },
+      "PlanRequest": {
+        "type": "object",
+        "description": "`POST /v1/plans`",
+        "required": [
+          "operation"
+        ],
+        "properties": {
+          "operation": {
+            "type": "string",
+            "description": "Name of the operation, e.g. `workspace.create`."
+          },
+          "parameters": {
+            "description": "The operation's parameters; each operation documents its own."
+          }
+        },
+        "additionalProperties": false
+      },
       "Privilege": {
         "type": "object",
         "description": "A Proxmox privilege on an ACL path.",
@@ -1894,6 +2549,74 @@
             "minimum": 0
           }
         }
+      },
+      "StepState": {
+        "type": "string",
+        "enum": [
+          "running",
+          "done",
+          "failed"
+        ]
+      },
+      "StreamMessage": {
+        "type": "object",
+        "description": "One message of `GET /v1/jobs/{id}/events`.",
+        "required": [
+          "schema_version",
+          "type",
+          "server_instance_id",
+          "stream_sequence",
+          "server_time"
+        ],
+        "properties": {
+          "data": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Job",
+                "description": "The job; `null` for heartbeats."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "schema_version": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "server_instance_id": {
+            "type": "string",
+            "description": "Changes when the server restarts; streams are not replayed."
+          },
+          "server_time": {
+            "type": "string"
+          },
+          "stream_sequence": {
+            "type": "integer",
+            "format": "int64",
+            "description": "1, 2, 3, ... per connection.",
+            "minimum": 0
+          },
+          "type": {
+            "$ref": "#/components/schemas/StreamMessageType"
+          }
+        }
+      },
+      "StreamMessageType": {
+        "type": "string",
+        "enum": [
+          "snapshot",
+          "job",
+          "heartbeat"
+        ]
+      },
+      "TaskStatus": {
+        "type": "string",
+        "enum": [
+          "running",
+          "stopped"
+        ]
       },
       "VolumeEntry": {
         "type": "object",

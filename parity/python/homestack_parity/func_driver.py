@@ -9,7 +9,11 @@ NAME is one of:
   by one session on the simulator; prints that session's Proxmox part.
 - `networks`: `discovery.discover_workspace_networks` for the configured
   Gold, as the installer calls it.
-- `gold-readiness`: `gold.check_gold_readiness` for the configured Gold.
+- `gold-readiness [VMID]`: `gold.check_gold_readiness` for the configured
+  Gold, or for VMID.
+- `verify-refresh VMID`: `lifecycle._verify_refreshed_guest` for a running
+  workspace, with the name from its config, its `prefix.<vmid>` address and
+  its home label; prints `ok` and `cloud_id`, or `ok` and the error.
 
 The functions run unchanged on a RecordingTransport around a
 FixtureTransport, like cli_driver. Output is JSON on stdout; the commands
@@ -27,14 +31,16 @@ from pathlib import Path
 from typing import Any, Iterator
 from unittest import mock
 
-from homestack import discovery, gold
+from homestack import discovery, gold, lifecycle
 from homestack.config import load_config
-from homestack.proxmox import cluster_vm_resources
+from homestack.guest import derive_ip
+from homestack.models import AppError
+from homestack.proxmox import cluster_vm_resources, home_label, qm_config_on_node
 
 from .transports import FixtureTransport, HttpsApi, RecordingTransport
 
 
-def run_discovery(session: RecordingTransport, cfg: Any) -> Any:
+def run_discovery(session: RecordingTransport, cfg: Any, *_: str) -> Any:
     candidate = discovery.HerdrCandidate(
         workspace="PVE",
         workspace_id="w1",
@@ -64,14 +70,14 @@ def run_discovery(session: RecordingTransport, cfg: Any) -> Any:
     return {key: entry[key] for key in ("proxmox_version", "nodes", "gold_candidates", "storages")}
 
 
-def _gold_node(session: RecordingTransport, cfg: Any) -> str:
+def _vm_node(session: RecordingTransport, vmid: int) -> str:
     for item in cluster_vm_resources(session):
-        if item["vmid"] == cfg.gold_vmid:
+        if item["vmid"] == vmid:
             return str(item.get("node") or "")
-    raise SystemExit(f"Gold VM {cfg.gold_vmid} does not exist")
+    raise SystemExit(f"VM {vmid} does not exist")
 
 
-def run_networks(session: RecordingTransport, cfg: Any) -> Any:
+def run_networks(session: RecordingTransport, cfg: Any, *_: str) -> Any:
     resources = cluster_vm_resources(session)
     gold_node = next(str(item.get("node") or "") for item in resources if item["vmid"] == cfg.gold_vmid)
     candidates = discovery.discover_workspace_networks(session, cfg, resources, cfg.gold_vmid, gold_node)
@@ -81,9 +87,10 @@ def run_networks(session: RecordingTransport, cfg: Any) -> Any:
     ]
 
 
-def run_gold_readiness(session: RecordingTransport, cfg: Any) -> Any:
-    node = _gold_node(session, cfg)
-    readiness = gold.check_gold_readiness(session, cfg, node, cfg.gold_vmid)
+def run_gold_readiness(session: RecordingTransport, cfg: Any, *args: str) -> Any:
+    vmid = int(args[0]) if args else cfg.gold_vmid
+    node = _vm_node(session, vmid)
+    readiness = gold.check_gold_readiness(session, cfg, node, vmid)
     return {
         "vmid": readiness.vmid,
         "node": readiness.node,
@@ -94,10 +101,24 @@ def run_gold_readiness(session: RecordingTransport, cfg: Any) -> Any:
     }
 
 
+def run_verify_refresh(session: RecordingTransport, cfg: Any, vmid_text: str) -> Any:
+    vmid = int(vmid_text)
+    node = _vm_node(session, vmid)
+    name = qm_config_on_node(session, cfg, node, vmid)["name"]
+    try:
+        cloud_id = lifecycle._verify_refreshed_guest(
+            session, cfg, node, vmid, name, derive_ip(cfg, vmid), cfg.network_cidr, home_label(vmid)
+        )
+    except AppError as exc:
+        return {"ok": False, "error": str(exc)}
+    return {"ok": True, "cloud_id": cloud_id}
+
+
 FUNCTIONS = {
     "discovery": run_discovery,
     "networks": run_networks,
     "gold-readiness": run_gold_readiness,
+    "verify-refresh": run_verify_refresh,
 }
 
 
@@ -109,13 +130,14 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--record-out", type=Path, required=True)
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("name", choices=sorted(FUNCTIONS))
+    parser.add_argument("args", nargs="*")
     args = parser.parse_args([arg for arg in argv if arg != "--"])
 
     cfg = load_config(args.config)
     token = args.token_file.read_text(encoding="utf-8").strip()
     session = RecordingTransport(FixtureTransport(cfg, HttpsApi(args.sim_url, args.ca_file, token), args.sim_url))
     try:
-        result = FUNCTIONS[args.name](session, cfg)
+        result = FUNCTIONS[args.name](session, cfg, *args.args)
     finally:
         record = {"commands": session.commands, "ops": session.ops}
         args.record_out.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")

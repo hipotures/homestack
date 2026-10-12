@@ -397,6 +397,24 @@ pub async fn vm_config(pve: &impl Pve, node: &str, vmid: u32) -> Result<VmConfig
         .collect())
 }
 
+/// `qm set VMID --KEY VALUE ... [--digest D]` through `PUT config`
+/// (synchronous). With `digest`, Proxmox refuses the change when the config
+/// changed since it was read (`lifecycle._digest_args`, mapping T5).
+pub async fn set_vm_config(
+    pve: &impl Pve,
+    node: &str,
+    vmid: u32,
+    values: &[(&str, &str)],
+    digest: Option<&str>,
+) -> Result<(), CoreError> {
+    let mut form = values.to_vec();
+    if let Some(digest) = digest.map(str::trim).filter(|digest| !digest.is_empty()) {
+        form.push(("digest", digest));
+    }
+    pve.put(&format!("/nodes/{node}/qemu/{vmid}/config"), &form).await?;
+    Ok(())
+}
+
 /// `qm_status_on_node`: `absent` when the call fails, `unknown` when the
 /// answer is unusable.
 pub async fn vm_status(pve: &impl Pve, node: &str, vmid: u32) -> String {

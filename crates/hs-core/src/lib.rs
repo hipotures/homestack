@@ -9,8 +9,12 @@ pub mod capabilities;
 pub mod discovery;
 pub mod error;
 pub mod gold;
+pub mod guest;
 pub mod inventory;
+pub mod power;
 pub mod pve;
 pub mod status;
+pub mod tasks;
+pub mod verify;
 
 pub use error::CoreError;

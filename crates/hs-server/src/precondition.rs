@@ -72,6 +72,7 @@ mod tests {
             ))?),
             api_token: Arc::new(ApiToken::parse(&"t".repeat(32))?),
             config: Arc::new(store),
+            ops: Arc::new(crate::operations::OpsState::new(crate::AppOptions::default())),
         };
         let app = Router::new()
             .route(

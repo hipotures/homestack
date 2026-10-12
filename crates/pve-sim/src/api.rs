@@ -9,6 +9,7 @@ use axum::http::{Method, StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
+use base64::Engine;
 use hs_model::NodeName;
 use percent_encoding::percent_decode_str;
 use serde::Deserialize;
@@ -16,8 +17,8 @@ use serde_json::{Value, json};
 
 use crate::guest;
 use crate::ops::Op;
-use crate::scenario::{NodeState, TokenSpec, VmSpec, VmState};
-use crate::state::{ClusterState, PRIVILEGES, has_any_privilege, has_privilege, volume_owner};
+use crate::scenario::{NodeState, TaskSpec, TokenSpec, VmSpec, VmState};
+use crate::state::{ClusterState, PRIVILEGES, config_digest, has_any_privilege, has_privilege, volume_owner};
 
 type Shared = Arc<Mutex<ClusterState>>;
 
@@ -35,8 +36,10 @@ pub fn router(state: Shared) -> Router {
         .route("/nodes/{node}/storage", get(node_storages))
         .route("/nodes/{node}/storage/{storage}/status", get(storage_status))
         .route("/nodes/{node}/storage/{storage}/content", get(storage_content))
-        .route("/nodes/{node}/qemu/{vmid}/config", get(vm_config))
+        .route("/nodes/{node}/qemu/{vmid}/config", get(vm_config).put(vm_config_update))
         .route("/nodes/{node}/qemu/{vmid}/status/current", get(vm_status))
+        .route("/nodes/{node}/qemu/{vmid}/status/{action}", post(vm_power))
+        .route("/nodes/{node}/qemu/{vmid}/agent/file-read", get(agent_file_read))
         .route("/nodes/{node}/qemu/{vmid}/agent/ping", post(agent_ping))
         .route("/nodes/{node}/qemu/{vmid}/agent/exec", post(agent_exec))
         .route("/nodes/{node}/qemu/{vmid}/agent/exec-status", get(agent_exec_status))
@@ -694,7 +697,7 @@ async fn vm_config(
     match reach_vm(&state, token(request_token).as_ref(), &node, &vmid, &["VM.Audit"]) {
         Ok(vm) => {
             let mut config = toml_to_json(&toml::Value::Table(vm.config.clone()));
-            config["digest"] = json!(format!("{:040x}", vm.vmid));
+            config["digest"] = json!(config_digest(&vm.config));
             data(config)
         }
         Err(failure) => failure.into_response(),
@@ -722,6 +725,184 @@ async fn vm_status(
         }
         Err(failure) => failure.into_response(),
     }
+}
+
+/// Keys `PUT config` accepts in the simulator: those guarded by
+/// `VM.Config.Options` in PVE's `check_vm_modify_config_perm`.
+const OPTION_KEYS: [&str; 4] = ["description", "name", "onboot", "tags"];
+
+/// `PUT /nodes/{node}/qemu/{vmid}/config` for option keys, with `delete` and
+/// the optimistic lock on `digest` (PVE's `assert_if_modified`). Other keys
+/// are not modelled yet.
+async fn vm_config_update(
+    State(state): State<Shared>,
+    request_token: Option<axum::Extension<TokenSpec>>,
+    Path((node, vmid)): Path<(String, String)>,
+    body: Bytes,
+) -> Response {
+    let mut state = lock(&state);
+    let form: Vec<(String, String)> = form_urlencoded::parse(&body).into_owned().collect();
+    let keys: Vec<&str> = form
+        .iter()
+        .filter(|(key, _)| key != "digest" && key != "delete")
+        .map(|(key, _)| key.as_str())
+        .chain(
+            form.iter()
+                .filter(|(key, _)| key == "delete")
+                .flat_map(|(_, value)| value.split(',')),
+        )
+        .collect();
+    if let Some(key) = keys.iter().find(|key| !OPTION_KEYS.contains(key)) {
+        return pve_error(501, &format!("pve-sim: config key '{key}' not modelled"));
+    }
+    let vmid_number = match reach_vm(
+        &state,
+        token(request_token).as_ref(),
+        &node,
+        &vmid,
+        &["VM.Config.Options"],
+    ) {
+        Ok(vm) => vm.vmid,
+        Err(failure) => return failure.into_response(),
+    };
+    let Some(vm) = state.vms.get_mut(&vmid_number) else {
+        return pve_error(500, "VM vanished");
+    };
+    if let Some((_, digest)) = form.iter().find(|(key, _)| key == "digest")
+        && *digest != config_digest(&vm.config)
+    {
+        return pve_error(
+            500,
+            "detected modified configuration - file changed by other user? Try again.\n",
+        );
+    }
+    for (key, value) in &form {
+        match key.as_str() {
+            "digest" => {}
+            "delete" => {
+                for key in value.split(',') {
+                    vm.config.remove(key);
+                }
+            }
+            key => {
+                vm.config.insert(key.to_owned(), toml::Value::String(value.clone()));
+            }
+        }
+    }
+    data(Value::Null)
+}
+
+/// `POST .../status/{start,shutdown,stop}`: a task that ends after two
+/// status polls. The VM's state changes when the task is created. Not
+/// observed live: the messages of a failing start or shutdown.
+async fn vm_power(
+    State(state): State<Shared>,
+    request_token: Option<axum::Extension<TokenSpec>>,
+    Path((node, vmid, action)): Path<(String, String, String)>,
+) -> Response {
+    let mut state = lock(&state);
+    let Some(token) = token(request_token) else {
+        return pve_error(401, "");
+    };
+    let kind = match action.as_str() {
+        "start" => "qmstart",
+        "shutdown" => "qmshutdown",
+        "stop" => "qmstop",
+        other => {
+            return pve_error(
+                501,
+                &format!("Method 'POST /nodes/{node}/qemu/{vmid}/status/{other}' not implemented"),
+            );
+        }
+    };
+    let (vmid_number, status, acpi, node_name) = match reach_vm(&state, Some(&token), &node, &vmid, &["VM.PowerMgmt"]) {
+        Ok(vm) => (vm.vmid, vm.status, vm.acpi, vm.node.clone()),
+        Err(failure) => return failure.into_response(),
+    };
+    let (next, error) = match (kind, status) {
+        ("qmstart", VmState::Running) => (status, Some(format!("VM {vmid_number} already running"))),
+        ("qmstart", VmState::Stopped) => (VmState::Running, None),
+        ("qmshutdown" | "qmstop", VmState::Stopped) => (status, Some(format!("VM {vmid_number} not running"))),
+        ("qmshutdown", VmState::Running) if !acpi => (status, Some("VM quit/powerdown failed".to_owned())),
+        _ => (VmState::Stopped, None),
+    };
+    if let Some(vm) = state.vms.get_mut(&vmid_number) {
+        vm.status = next;
+    }
+    let (log, exitstatus) = match error {
+        Some(message) => (vec![message.clone(), format!("TASK ERROR: {message}")], message),
+        None => (vec!["TASK OK".to_owned()], "OK".to_owned()),
+    };
+    let upid = state.add_task(TaskSpec {
+        node: node_name,
+        kind: kind.to_owned(),
+        id: vmid_number.to_string(),
+        user: token.id.clone(),
+        log,
+        polls_until_done: 2,
+        exitstatus,
+    });
+    data(Value::String(upid))
+}
+
+#[derive(Deserialize)]
+struct FileReadQuery {
+    file: String,
+    #[serde(default)]
+    offset: usize,
+    count: Option<usize>,
+    decode: Option<u8>,
+}
+
+/// `GET .../agent/file-read`: PVE 9.2 opens the file, seeks to `offset`,
+/// reads up to `count` bytes (16 MiB by default) and returns them decoded,
+/// or base64 with `decode=0`; `truncated` is set when the end was not
+/// reached. Errors are qemu-ga's, as observed.
+async fn agent_file_read(
+    State(state): State<Shared>,
+    request_token: Option<axum::Extension<TokenSpec>>,
+    Path((node, vmid)): Path<(String, String)>,
+    Query(query): Query<FileReadQuery>,
+) -> Response {
+    const MAX_READ: usize = 16 * 1024 * 1024;
+    let state = lock(&state);
+    let (_, guest) = match reach_guest(
+        &state,
+        token(request_token).as_ref(),
+        &node,
+        &vmid,
+        &["VM.GuestAgent.FileRead", "VM.GuestAgent.Unrestricted"],
+    ) {
+        Ok(found) => found,
+        Err(failure) => return failure.into_response(),
+    };
+    let bytes = match guest::file(guest, &query.file) {
+        guest::Node::File(bytes) => bytes,
+        guest::Node::Directory => return pve_error(500, "Agent error: failed to read file: Is a directory\n"),
+        guest::Node::Missing => {
+            return pve_error(
+                500,
+                &format!(
+                    "Agent error: failed to open file '{}' (mode: 'r'): No such file or directory\n",
+                    query.file
+                ),
+            );
+        }
+    };
+    let count = query.count.unwrap_or(MAX_READ).min(MAX_READ);
+    let start = query.offset.min(bytes.len());
+    let end = start.saturating_add(count).min(bytes.len());
+    let chunk = &bytes[start..end];
+    let content = if query.decode == Some(0) {
+        base64::engine::general_purpose::STANDARD.encode(chunk)
+    } else {
+        String::from_utf8_lossy(chunk).into_owned()
+    };
+    let mut body = json!({ "content": content, "bytes-read": chunk.len() });
+    if end < bytes.len() {
+        body["truncated"] = json!(1);
+    }
+    data(body)
 }
 
 const AGENT_READ: [&str; 2] = ["VM.GuestAgent.Audit", "VM.GuestAgent.Unrestricted"];

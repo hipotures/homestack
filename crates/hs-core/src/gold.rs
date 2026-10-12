@@ -1,13 +1,17 @@
-//! Gold readiness (`gold.check_gold_readiness`), Proxmox part (mapping E1).
+//! Gold readiness (`gold.check_gold_readiness`): the Proxmox part (mapping
+//! E1) and, when Gold runs, the guest contract (E2).
 //!
-//! The checks, their order, names and details are Python's. When Gold runs,
-//! the guest agent is pinged (audit level); the guest contract behind it
-//! (tools, accounts, sudo, key files) needs `exec` and is reported as
-//! skipped until phase 3 (mapping E2).
+//! The checks, their order, names and details are Python's. The guest
+//! contract runs Python's shell commands through `exec`, which needs
+//! `VM.GuestAgent.Unrestricted` on Gold (decisions.md); without it the
+//! contract is reported as skipped. A stopped Gold is never started.
 
+use hs_model::config::User;
 use hs_model::status::{GoldCheck, GoldReadiness};
+use hs_pve::PveError;
 
 use crate::error::CoreError;
+use crate::guest::{GUEST_EXEC_TIMEOUT, guest_out};
 use crate::inventory::{
     ALIEN_WORKSPACE_TAG, GOLD_TAG, VmConfig, WORKSPACE_TAG, disk_option, disk_volume, has_tag, vm_config, vm_status,
 };
@@ -180,12 +184,195 @@ const OPTIONAL_SKIPS: [(&str, &str, &str); 2] = [
     ("guest", "rsync for Setup Files", "optional"),
     ("guest", "git/ssh-keygen for homestack repo", "optional"),
 ];
-const NEEDS_EXEC: &str = "needs guest exec (VM.GuestAgent.Unrestricted); checked from phase 3";
+const REQUIRED_TOOLS: [&str; 12] = [
+    "cloud-init",
+    "sshd",
+    "nmcli",
+    "lsblk",
+    "blkid",
+    "wipefs",
+    "mkfs.ext4",
+    "mount",
+    "mountpoint",
+    "systemctl",
+    "systemd-escape",
+    "install",
+];
+
+/// Python's loop printing the commands `command -v` does not find.
+fn missing_loop(tools: &[&str]) -> String {
+    format!(
+        r#"for c in {}; do command -v "$c" >/dev/null 2>&1 || printf "%s\n" "$c"; done"#,
+        tools.join(" ")
+    )
+}
+
+/// `shlex.quote` for the words HomeStack passes (user names are validated
+/// by the configuration, so they need no quotes unless they contain unsafe
+/// characters).
+fn shell_quote(word: &str) -> String {
+    let safe = !word.is_empty()
+        && word
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"@%+=:,./-_".contains(&b));
+    if safe {
+        word.to_owned()
+    } else {
+        format!("'{}'", word.replace('\'', r#"'"'"'"#))
+    }
+}
+
+/// `guest_out_on_node(..., check=False)`, except that a refused call (no
+/// `VM.GuestAgent.Unrestricted`) ends the guest contract.
+async fn guest_value(pve: &impl Pve, node: &str, vmid: u32, command: &str) -> Result<String, Refused> {
+    match guest_out(pve, node, vmid, command, false, GUEST_EXEC_TIMEOUT).await {
+        Ok(out) => Ok(out),
+        Err(CoreError::Pve(PveError::Forbidden { .. } | PveError::Unauthorized)) => Err(Refused),
+        Err(error) => Ok(error.to_string()),
+    }
+}
+
+/// The token may not run commands in Gold.
+struct Refused;
+
+/// The guest and security checks of a running Gold whose agent answers, in
+/// Python's order.
+async fn guest_contract(
+    pve: &impl Pve,
+    user: &User,
+    node: &str,
+    vmid: u32,
+    keys: (bool, String),
+    checks: &mut Vec<GoldCheck>,
+) -> Result<(), Refused> {
+    let missing_tools = guest_value(pve, node, vmid, &missing_loop(&REQUIRED_TOOLS)).await?;
+    let missing_tools: Vec<&str> = missing_tools.lines().collect();
+    checks.push(verdict(
+        "guest",
+        "Required guest tools",
+        missing_tools.is_empty(),
+        if missing_tools.is_empty() {
+            "all present".to_owned()
+        } else {
+            format!("missing: {}", missing_tools.join(", "))
+        },
+    ));
+    let rsync = guest_value(
+        pve,
+        node,
+        vmid,
+        "if command -v rsync >/dev/null 2>&1; then echo PRESENT; else echo ABSENT; fi",
+    )
+    .await?;
+    checks.push(check(
+        "guest",
+        "rsync for Setup Files",
+        if rsync == "PRESENT" { "pass" } else { "fail" },
+        if rsync == "PRESENT" {
+            "installed"
+        } else {
+            "not installed; Setup Files will be unavailable"
+        },
+        "optional",
+    ));
+    let missing_repo = guest_value(pve, node, vmid, &missing_loop(&["git", "ssh-keygen"])).await?;
+    let missing_repo: Vec<&str> = missing_repo.lines().collect();
+    checks.push(check(
+        "guest",
+        "git/ssh-keygen for homestack repo",
+        if missing_repo.is_empty() { "pass" } else { "fail" },
+        if missing_repo.is_empty() {
+            "all present".to_owned()
+        } else {
+            format!("missing: {}", missing_repo.join(", "))
+        },
+        "optional",
+    ));
+
+    let name = shell_quote(&user.name);
+    let account = guest_value(pve, node, vmid, &format!("getent passwd {name} || true")).await?;
+    let fields: Vec<&str> = account.split(':').collect();
+    let account_ok = fields.len() >= 4
+        && fields[0] == user.name
+        && fields[2] == user.uid.to_string()
+        && fields[3] == user.gid.to_string();
+    checks.push(verdict(
+        "guest",
+        "Workspace account",
+        account_ok,
+        format!("{} ({}:{})", user.name, user.uid, user.gid),
+    ));
+    let regular = guest_value(
+        pve,
+        node,
+        vmid,
+        r#"awk -F: '$3 >= 1000 && $3 < 65534 {print $1 ":" $3 ":" $4}' /etc/passwd"#,
+    )
+    .await?;
+    let regular: Vec<&str> = regular.lines().collect();
+    let expected = format!("{}:{}:{}", user.name, user.uid, user.gid);
+    checks.push(verdict(
+        "security",
+        "Regular user policy",
+        regular == [expected.as_str()],
+        if regular.is_empty() {
+            "none".to_owned()
+        } else {
+            regular.join(", ")
+        },
+    ));
+    let sudo = guest_value(
+        pve,
+        node,
+        vmid,
+        "if command -v sudo >/dev/null 2>&1; then echo PRESENT; else echo ABSENT; fi",
+    )
+    .await?;
+    checks.push(verdict(
+        "security",
+        "No sudo",
+        sudo == "ABSENT",
+        if sudo == "ABSENT" { "not installed" } else { "installed" },
+    ));
+    let root_keys = guest_value(
+        pve,
+        node,
+        vmid,
+        "test -s /root/.ssh/authorized_keys && echo OK || echo MISSING",
+    )
+    .await?;
+    checks.push(verdict(
+        "security",
+        "Root authorized_keys",
+        root_keys == "OK",
+        if root_keys == "OK" { "present" } else { "missing" },
+    ));
+    let (mut keys_ok, mut keys_detail) = keys;
+    if !keys_ok {
+        let text = guest_value(
+            pve,
+            node,
+            vmid,
+            &format!("cat /home/{name}/.ssh/authorized_keys 2>/dev/null || true"),
+        )
+        .await?;
+        match count_authorized_keys(&text) {
+            Ok(count) => {
+                keys_ok = true;
+                keys_detail = format!("{count} public key(s) in /home/{}/.ssh/authorized_keys", user.name);
+            }
+            Err(error) => keys_detail = error,
+        }
+    }
+    checks.push(verdict("security", "Workspace public-key source", keys_ok, keys_detail));
+    Ok(())
+}
 
 /// `check_gold_readiness`
 pub async fn gold_readiness(
     pve: &impl Pve,
     root_disk: &str,
+    user: &User,
     node: &str,
     vmid: u32,
 ) -> Result<GoldReadiness, CoreError> {
@@ -291,7 +478,7 @@ pub async fn gold_readiness(
         return Ok(readiness(vmid, node, power_state, checks));
     }
 
-    match pve.post(&format!("/nodes/{node}/qemu/{vmid}/agent/ping")).await {
+    match pve.post(&format!("/nodes/{node}/qemu/{vmid}/agent/ping"), &[]).await {
         Err(error) => {
             let detail = match &error {
                 hs_pve::PveError::Api { message, .. }
@@ -306,23 +493,30 @@ pub async fn gold_readiness(
         }
         Ok(_) => {
             checks.push(verdict("guest", "QEMU Guest Agent response", true, "responding"));
-            checks.push(check("guest", "Required guest tools", "skip", NEEDS_EXEC, "required"));
-            for (scope, name, requirement) in OPTIONAL_SKIPS {
-                checks.push(check(scope, name, "skip", NEEDS_EXEC, requirement));
-            }
-            for (scope, name, requirement) in GUEST_SKIPS.iter().skip(1).take(4) {
-                checks.push(check(scope, name, "skip", NEEDS_EXEC, requirement));
-            }
-            if keys_ok {
-                checks.push(verdict("security", "Workspace public-key source", true, keys_detail));
+            let mut contract = Vec::new();
+            let keys = (keys_ok, keys_detail.clone());
+            if guest_contract(pve, user, node, vmid, keys, &mut contract).await.is_ok() {
+                checks.extend(contract);
             } else {
-                checks.push(check(
-                    "security",
-                    "Workspace public-key source",
-                    "skip",
-                    NEEDS_EXEC,
-                    "required",
-                ));
+                let detail = format!("needs VM.GuestAgent.Unrestricted on /vms/{vmid} to run commands in Gold");
+                checks.push(check("guest", "Required guest tools", "skip", &detail, "required"));
+                for (scope, name, requirement) in OPTIONAL_SKIPS {
+                    checks.push(check(scope, name, "skip", &detail, requirement));
+                }
+                for (scope, name, requirement) in GUEST_SKIPS.iter().skip(1).take(4) {
+                    checks.push(check(scope, name, "skip", &detail, requirement));
+                }
+                if keys_ok {
+                    checks.push(verdict("security", "Workspace public-key source", true, keys_detail));
+                } else {
+                    checks.push(check(
+                        "security",
+                        "Workspace public-key source",
+                        "skip",
+                        &detail,
+                        "required",
+                    ));
+                }
             }
         }
     }

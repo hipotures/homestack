@@ -1,0 +1,97 @@
+//! Starting and stopping VMs, the way every lifecycle operation does it.
+
+use serde_json::Value;
+
+use crate::error::CoreError;
+use crate::inventory::{py_repr, vm_status};
+use crate::pve::Pve;
+use crate::tasks::{Observer, TaskWait, wait_task};
+
+/// Seconds `qm start` is given (`lifecycle`: `node_run(..., timeout=300)`).
+pub const START_TIMEOUT_SECS: u64 = 300;
+
+/// `shutdown_vm_on_node`'s default `--timeout`.
+pub const SHUTDOWN_TIMEOUT_SECS: u32 = 90;
+
+fn upid(answer: &Value) -> Result<String, CoreError> {
+    answer
+        .as_str()
+        .map(str::to_owned)
+        .ok_or_else(|| CoreError::Unusable(format!("Proxmox did not return a task id: {answer}")))
+}
+
+/// `qm start VMID`: start the VM and wait for its task (`wait.timeout`,
+/// [`START_TIMEOUT_SECS`] in the operations). Python fails with the output
+/// of `qm start`; the server names the task and its exit status.
+pub async fn start_vm(
+    pve: &impl Pve,
+    node: &str,
+    vmid: u32,
+    wait: &TaskWait,
+    observer: &impl Observer,
+) -> Result<(), CoreError> {
+    let answer = pve
+        .post(&format!("/nodes/{node}/qemu/{vmid}/status/start"), &[])
+        .await?;
+    let result = wait_task(pve, &upid(&answer)?, wait, observer).await?;
+    if result.ok() {
+        Ok(())
+    } else {
+        Err(CoreError::Failed(format!(
+            "Proxmox task qmstart for VM {vmid} on {node} failed: {}",
+            result.exitstatus
+        )))
+    }
+}
+
+/// `proxmox.shutdown_vm_on_node`: a stopped VM is left alone, any status
+/// but `running` is refused, the guest gets `timeout_secs` to power off
+/// (`qm shutdown --timeout`; the task is followed for that plus 30 seconds,
+/// polling every `wait.poll`), and anything but `stopped` afterwards is an
+/// error. HomeStack never forces a stop.
+pub async fn shutdown_vm(
+    pve: &impl Pve,
+    node: &str,
+    vmid: u32,
+    timeout_secs: u32,
+    wait: &TaskWait,
+    observer: &impl Observer,
+) -> Result<(), CoreError> {
+    let status = vm_status(pve, node, vmid).await;
+    if status == "stopped" {
+        return Ok(());
+    }
+    if status != "running" {
+        return Err(CoreError::Failed(format!(
+            "VM {vmid} has unexpected status {}; refusing shutdown",
+            py_repr(Some(&status))
+        )));
+    }
+    let timeout = timeout_secs.to_string();
+    let answer = pve
+        .post(
+            &format!("/nodes/{node}/qemu/{vmid}/status/shutdown"),
+            &[("timeout", &timeout)],
+        )
+        .await?;
+    // Python allows `qm shutdown` its timeout plus 30 seconds.
+    let task_wait = TaskWait {
+        poll: wait.poll,
+        timeout: std::time::Duration::from_secs(u64::from(timeout_secs) + 30),
+    };
+    let task_ok = match wait_task(pve, &upid(&answer)?, &task_wait, observer).await {
+        Ok(result) => result.ok(),
+        // A task that outlives its time counts as a failed shutdown; the
+        // status read below says how the VM was left.
+        Err(CoreError::Failed(_)) => false,
+        Err(error) => return Err(error),
+    };
+    let final_status = vm_status(pve, node, vmid).await;
+    if !task_ok || final_status != "stopped" {
+        return Err(CoreError::Failed(format!(
+            "VM {vmid} did not shut down cleanly on {node}. Current status: {final_status}. \
+             HomeStack will not force-stop it automatically."
+        )));
+    }
+    Ok(())
+}

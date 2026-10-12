@@ -47,6 +47,13 @@ pub enum ErrorCode {
     PveNodeUnavailable,
     /// Proxmox returned an error or a response the server could not use.
     PveError,
+    /// The plan was made from a cluster state that has changed since, or
+    /// the request names another digest; make a new plan.
+    PlanChanged,
+    /// The plan has already been applied; make a new plan.
+    PlanApplied,
+    /// Another job is working on one of the plan's VMs.
+    Busy,
     /// An unexpected server-side failure.
     Internal,
 }
@@ -56,7 +63,7 @@ impl ErrorCode {
     #[must_use]
     pub const fn retryable(self) -> bool {
         match self {
-            Self::PveUnavailable | Self::PveNodeUnavailable => true,
+            Self::PveUnavailable | Self::PveNodeUnavailable | Self::Busy => true,
             Self::Unauthorized
             | Self::NotFound
             | Self::MethodNotAllowed
@@ -70,6 +77,8 @@ impl ErrorCode {
             | Self::PveAuthFailed
             | Self::PvePermissionDenied
             | Self::PveError
+            | Self::PlanChanged
+            | Self::PlanApplied
             | Self::Internal => false,
         }
     }

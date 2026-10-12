@@ -7,6 +7,7 @@ pub mod capabilities;
 pub mod config;
 pub mod error;
 pub mod health;
+pub mod jobs;
 pub mod node;
 pub mod pve;
 pub mod server_config;

@@ -1,0 +1,368 @@
+# Phase 3: the guest contract of a running Gold (E2) and the guest
+# verification after create, refresh and migrate (D2).
+#
+# Gold 100 meets the whole contract; Gold 102 breaks most of it. Python runs
+# the Gold commands through `exec`, and so does the server (it has
+# VM.GuestAgent.Unrestricted on Gold only), so their operations must agree.
+#
+# Workspaces 220-229 each break one verification step. Python's refresh
+# verification runs shell commands through `exec`; the server reads the same
+# facts with the audit-level agent commands and `file-read` (decision 5), so
+# only the pings are compared. 226 (no home mount) and 229 (wrong UID) are
+# left out of the comparison: Python fails there with the text of a failing
+# guest command (`findmnt`, `id`) that the server never runs; the Rust tests
+# check their messages (crates/hs-core/tests/verify.rs).
+
+[scenario]
+name = "guest-checks"
+phase = "3"
+description = "Gold guest contract and guest verification"
+
+[homestack]
+config = "python/config.example.toml"
+
+[[parity]]
+python = ["@gold-readiness"]
+rust = "GET /v1/gold/readiness"
+normalize = "same"
+
+[[parity]]
+python = ["@gold-readiness", "102"]
+rust = "GET /v1/gold/readiness?vmid=102"
+normalize = "same"
+
+[[parity]]
+python = ["@verify-refresh", "220"]
+rust = "@verify-refresh 220"
+normalize = "guest-verify"
+expect.body = { ok = true, cloud_id = "nocloud" }
+
+[[parity]]
+python = ["@verify-refresh", "221"]
+rust = "@verify-refresh 221"
+normalize = "guest-verify"
+expect.body = { ok = false, error = "Refresh verification failed: workspace hostname is incorrect" }
+
+[[parity]]
+python = ["@verify-refresh", "222"]
+rust = "@verify-refresh 222"
+normalize = "guest-verify"
+expect.body = { ok = false, error = "Refresh verification failed: persistent user authorized_keys is missing" }
+
+[[parity]]
+python = ["@verify-refresh", "223"]
+rust = "@verify-refresh 223"
+normalize = "guest-verify"
+expect.body = { ok = false, error = "Refresh verification failed: sudo is installed in the workspace" }
+
+[[parity]]
+python = ["@verify-refresh", "224"]
+rust = "@verify-refresh 224"
+normalize = "guest-verify"
+expect.body = { ok = false, error = "Refresh verification failed: unexpected regular user accounts" }
+
+[[parity]]
+python = ["@verify-refresh", "225"]
+rust = "@verify-refresh 225"
+normalize = "guest-verify"
+expect.body = { ok = false, error = "Refresh verification failed: eth0 does not have 192.0.2.225/24" }
+
+[[parity]]
+python = ["@verify-refresh", "227"]
+rust = "@verify-refresh 227"
+normalize = "guest-verify"
+expect.body = { ok = false, error = "Refresh verification failed: home label is 'HS_HOME_999'" }
+
+[[parity]]
+python = ["@verify-refresh", "228"]
+rust = "@verify-refresh 228"
+normalize = "guest-verify"
+expect.body = { ok = false, error = "Refresh verification failed: root authorized_keys is missing" }
+
+[pve]
+version = { release = "9.2", version = "9.2.21", repoid = "4f6e0ac86f9e8c7f" }
+
+[[pve.nodes]]
+name = "pve-example-1"
+pveversion = "pve-manager/9.2.21/4f6e0ac86f9e8c7f"
+kversion = "Linux 7.0.14-20-pve"
+uptime = 591184
+
+# Gold, running, meeting the whole contract. Its public keys are in sshkeys.
+[[pve.vms]]
+vmid = 100
+node = "pve-example-1"
+status = "running"
+[pve.vms.config]
+name = "gold"
+tags = "homestack-gold"
+agent = "1"
+boot = "order=scsi0;ide2;net0"
+ide2 = "example-storage:vm-100-cloudinit,media=cdrom"
+net0 = "virtio=BC:24:11:00:01:00,bridge=vmbr0,firewall=1"
+scsi0 = "example-storage:vm-100-disk-0,iothread=1,size=16G"
+sshkeys = "ssh-ed25519%20AAAAC3NzaC1lZDI1NTE5AAAAITEST%20developer%40desktop%0A"
+[pve.vms.guest]
+hostname = "gold"
+users = ["root", "developer"]
+files = { "/root/.ssh/authorized_keys" = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIROOT root@gold\n" }
+
+# A second Gold breaking most of the contract: tools missing, sudo, a second
+# regular user, no root keys, no sshkeys and an unusable key file.
+[[pve.vms]]
+vmid = 102
+node = "pve-example-1"
+status = "running"
+[pve.vms.config]
+name = "gold2"
+tags = "homestack-gold"
+agent = "1"
+boot = "order=scsi0;ide2;net0"
+ide2 = "example-storage:vm-102-cloudinit,media=cdrom"
+net0 = "virtio=BC:24:11:00:01:02,bridge=vmbr0"
+scsi0 = "example-storage:vm-102-disk-0,size=16G"
+[pve.vms.guest]
+hostname = "gold2"
+users = ["root", "developer", "guest"]
+commands = ["cloud-init", "cloud-id", "sshd", "lsblk", "blkid", "mkfs.ext4", "mount", "mountpoint", "systemctl", "systemd-escape", "install", "ssh-keygen", "sudo"]
+files = { "/home/developer/.ssh/authorized_keys" = "rsa AAAA old-format\n" }
+
+# Workspaces for the verification, one broken step each.
+[[pve.vms]]
+vmid = 220
+node = "pve-example-1"
+status = "running"
+config = { name = "ws220", tags = "homestack-ws" }
+[pve.vms.guest]
+hostname = "ws220"
+users = ["root", "developer"]
+files = { "/root/.ssh/authorized_keys" = "ssh-ed25519 AAAAROOT root\n", "/home/developer/.ssh/authorized_keys" = "ssh-ed25519 AAAAUSER developer@desktop\n" }
+[[pve.vms.guest.interfaces]]
+name = "eth0"
+ipv4 = ["192.0.2.220/24"]
+[[pve.vms.guest.filesystems]]
+mountpoint = "/home/developer"
+type = "ext4"
+device = "sdb"
+slot = "scsi1"
+label = "HS_HOME_220"
+size = 20957446144
+used = 338767872
+avail = 20601901056
+
+# Wrong hostname.
+[[pve.vms]]
+vmid = 221
+node = "pve-example-1"
+status = "running"
+config = { name = "ws221", tags = "homestack-ws" }
+[pve.vms.guest]
+hostname = "ubuntu"
+users = ["root", "developer"]
+files = { "/root/.ssh/authorized_keys" = "ssh-ed25519 AAAAROOT root\n", "/home/developer/.ssh/authorized_keys" = "ssh-ed25519 AAAAUSER developer@desktop\n" }
+[[pve.vms.guest.interfaces]]
+name = "eth0"
+ipv4 = ["192.0.2.221/24"]
+[[pve.vms.guest.filesystems]]
+mountpoint = "/home/developer"
+type = "ext4"
+device = "sdb"
+slot = "scsi1"
+label = "HS_HOME_221"
+size = 20957446144
+used = 338767872
+avail = 20601901056
+
+# No authorized_keys for the user.
+[[pve.vms]]
+vmid = 222
+node = "pve-example-1"
+status = "running"
+config = { name = "ws222", tags = "homestack-ws" }
+[pve.vms.guest]
+hostname = "ws222"
+users = ["root", "developer"]
+files = { "/root/.ssh/authorized_keys" = "ssh-ed25519 AAAAROOT root\n" }
+[[pve.vms.guest.interfaces]]
+name = "eth0"
+ipv4 = ["192.0.2.222/24"]
+[[pve.vms.guest.filesystems]]
+mountpoint = "/home/developer"
+type = "ext4"
+device = "sdb"
+slot = "scsi1"
+label = "HS_HOME_222"
+size = 20957446144
+used = 338767872
+avail = 20601901056
+
+# sudo installed.
+[[pve.vms]]
+vmid = 223
+node = "pve-example-1"
+status = "running"
+config = { name = "ws223", tags = "homestack-ws" }
+[pve.vms.guest]
+hostname = "ws223"
+users = ["root", "developer"]
+commands = ["cloud-init", "cloud-id", "sudo"]
+files = { "/root/.ssh/authorized_keys" = "ssh-ed25519 AAAAROOT root\n", "/home/developer/.ssh/authorized_keys" = "ssh-ed25519 AAAAUSER developer@desktop\n" }
+[[pve.vms.guest.interfaces]]
+name = "eth0"
+ipv4 = ["192.0.2.223/24"]
+[[pve.vms.guest.filesystems]]
+mountpoint = "/home/developer"
+type = "ext4"
+device = "sdb"
+slot = "scsi1"
+label = "HS_HOME_223"
+size = 20957446144
+used = 338767872
+avail = 20601901056
+
+# A second regular user.
+[[pve.vms]]
+vmid = 224
+node = "pve-example-1"
+status = "running"
+config = { name = "ws224", tags = "homestack-ws" }
+[pve.vms.guest]
+hostname = "ws224"
+users = ["root", "developer", "intruder"]
+files = { "/root/.ssh/authorized_keys" = "ssh-ed25519 AAAAROOT root\n", "/home/developer/.ssh/authorized_keys" = "ssh-ed25519 AAAAUSER developer@desktop\n" }
+[[pve.vms.guest.interfaces]]
+name = "eth0"
+ipv4 = ["192.0.2.224/24"]
+[[pve.vms.guest.filesystems]]
+mountpoint = "/home/developer"
+type = "ext4"
+device = "sdb"
+slot = "scsi1"
+label = "HS_HOME_224"
+size = 20957446144
+used = 338767872
+avail = 20601901056
+
+# Wrong address on eth0.
+[[pve.vms]]
+vmid = 225
+node = "pve-example-1"
+status = "running"
+config = { name = "ws225", tags = "homestack-ws" }
+[pve.vms.guest]
+hostname = "ws225"
+users = ["root", "developer"]
+files = { "/root/.ssh/authorized_keys" = "ssh-ed25519 AAAAROOT root\n", "/home/developer/.ssh/authorized_keys" = "ssh-ed25519 AAAAUSER developer@desktop\n" }
+[[pve.vms.guest.interfaces]]
+name = "eth0"
+ipv4 = ["192.0.2.99/24"]
+[[pve.vms.guest.filesystems]]
+mountpoint = "/home/developer"
+type = "ext4"
+device = "sdb"
+slot = "scsi1"
+label = "HS_HOME_225"
+size = 20957446144
+used = 338767872
+avail = 20601901056
+
+# The home is not mounted.
+[[pve.vms]]
+vmid = 226
+node = "pve-example-1"
+status = "running"
+config = { name = "ws226", tags = "homestack-ws" }
+[pve.vms.guest]
+hostname = "ws226"
+users = ["root", "developer"]
+files = { "/root/.ssh/authorized_keys" = "ssh-ed25519 AAAAROOT root\n", "/home/developer/.ssh/authorized_keys" = "ssh-ed25519 AAAAUSER developer@desktop\n" }
+[[pve.vms.guest.interfaces]]
+name = "eth0"
+ipv4 = ["192.0.2.226/24"]
+
+# Another VM's home filesystem.
+[[pve.vms]]
+vmid = 227
+node = "pve-example-1"
+status = "running"
+config = { name = "ws227", tags = "homestack-ws" }
+[pve.vms.guest]
+hostname = "ws227"
+users = ["root", "developer"]
+files = { "/root/.ssh/authorized_keys" = "ssh-ed25519 AAAAROOT root\n", "/home/developer/.ssh/authorized_keys" = "ssh-ed25519 AAAAUSER developer@desktop\n" }
+[[pve.vms.guest.interfaces]]
+name = "eth0"
+ipv4 = ["192.0.2.227/24"]
+[[pve.vms.guest.filesystems]]
+mountpoint = "/home/developer"
+type = "ext4"
+device = "dm-2"
+slot = "scsi1"
+label = "HS_HOME_999"
+size = 20957446144
+used = 338767872
+avail = 20601901056
+
+# No authorized_keys for root.
+[[pve.vms]]
+vmid = 228
+node = "pve-example-1"
+status = "running"
+config = { name = "ws228", tags = "homestack-ws" }
+[pve.vms.guest]
+hostname = "ws228"
+users = ["root", "developer"]
+files = { "/home/developer/.ssh/authorized_keys" = "ssh-ed25519 AAAAUSER developer@desktop\n" }
+[[pve.vms.guest.interfaces]]
+name = "eth0"
+ipv4 = ["192.0.2.228/24"]
+[[pve.vms.guest.filesystems]]
+mountpoint = "/home/developer"
+type = "ext4"
+device = "sdb"
+slot = "scsi1"
+label = "HS_HOME_228"
+size = 20957446144
+used = 338767872
+avail = 20601901056
+
+# The user has another UID.
+[[pve.vms]]
+vmid = 229
+node = "pve-example-1"
+status = "running"
+config = { name = "ws229", tags = "homestack-ws" }
+[pve.vms.guest]
+hostname = "ws229"
+users = ["root", { name = "developer", uid = 1001, gid = 1001 }]
+files = { "/root/.ssh/authorized_keys" = "ssh-ed25519 AAAAROOT root\n", "/home/developer/.ssh/authorized_keys" = "ssh-ed25519 AAAAUSER developer@desktop\n" }
+[[pve.vms.guest.interfaces]]
+name = "eth0"
+ipv4 = ["192.0.2.229/24"]
+[[pve.vms.guest.filesystems]]
+mountpoint = "/home/developer"
+type = "ext4"
+device = "sdb"
+slot = "scsi1"
+label = "HS_HOME_229"
+size = 20957446144
+used = 338767872
+avail = 20601901056
+
+[[pve.tokens]]
+id = "root@pam!parity"
+secret = "00000000-0000-0000-0000-00000000000a"
+acl = { "/" = ["*"] }
+
+# The server's token: as in phase 2, plus file-read on the workspaces
+# (decision 5) and unrestricted guest access on the Gold VMs only.
+[[pve.tokens]]
+id = "homestack@pve!server"
+secret = "00000000-0000-0000-0000-00000000000b"
+acl = { "/" = ["Datastore.Audit", "Mapping.Audit", "Pool.Audit", "SDN.Audit", "Sys.Audit", "VM.Audit", "VM.GuestAgent.Audit", "VM.Config.Disk"], "/vms" = ["VM.GuestAgent.FileRead"], "/vms/100" = ["VM.GuestAgent.Unrestricted"], "/vms/102" = ["VM.GuestAgent.Unrestricted"] }
+
+# The server's token without guest access beyond audit (Rust tests only).
+[[pve.tokens]]
+id = "auditor@pve!server"
+secret = "00000000-0000-0000-0000-00000000000c"
+acl = { "/" = ["Datastore.Audit", "Mapping.Audit", "Pool.Audit", "SDN.Audit", "Sys.Audit", "VM.Audit", "VM.GuestAgent.Audit"] }

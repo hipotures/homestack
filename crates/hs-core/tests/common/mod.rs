@@ -4,7 +4,7 @@
 
 #![allow(dead_code)]
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::sync::Mutex;
 
 use hs_core::pve::Pve;
@@ -12,8 +12,20 @@ use hs_model::config::Config;
 use hs_pve::PveError;
 use serde_json::Value;
 
+/// What the fake answers to one request.
+#[derive(Clone)]
+enum Answer {
+    Data(Value),
+    Api(u16, String),
+    /// The request never reached Proxmox (a transport failure).
+    Transport(String),
+    /// No answer ever arrives.
+    Hang,
+}
+
 pub struct FakePve {
-    responses: BTreeMap<String, Result<Value, (u16, String)>>,
+    /// Answers per request, used in order; the last one repeats.
+    responses: Mutex<BTreeMap<String, VecDeque<Answer>>>,
     calls: Mutex<Vec<String>>,
 }
 
@@ -28,43 +40,100 @@ pub fn key(method: &str, path: &str, query: &[(&str, &str)]) -> String {
     }
 }
 
+/// `POST /path` or `POST /path?key=value&...` (form fields in the order sent).
+pub fn form_key(method: &str, path: &str, form: &[(&str, &str)]) -> String {
+    let form: Vec<String> = form.iter().map(|(k, v)| format!("{k}={v}")).collect();
+    if form.is_empty() {
+        format!("{method} {path}")
+    } else {
+        format!("{method} {path}?{}", form.join("&"))
+    }
+}
+
+/// The request key of `agent/exec` running `/bin/sh -lc COMMAND`.
+pub fn exec_key(node: &str, vmid: u32, command: &str) -> String {
+    format!("POST /nodes/{node}/qemu/{vmid}/agent/exec?command=/bin/sh&command=-lc&command={command}")
+}
+
 impl FakePve {
     pub fn new() -> Self {
         Self {
-            responses: BTreeMap::new(),
+            responses: Mutex::new(BTreeMap::new()),
             calls: Mutex::new(Vec::new()),
         }
     }
 
-    /// Answer `request` (`GET /path?query`) with `data`.
-    #[must_use]
-    pub fn with(mut self, request: &str, data: Value) -> Self {
-        self.responses.insert(request.to_owned(), Ok(data));
+    fn push(self, request: &str, answer: Answer) -> Self {
+        if let Ok(mut responses) = self.responses.lock() {
+            responses.entry(request.to_owned()).or_default().push_back(answer);
+        }
         self
+    }
+
+    /// Answer `request` (`GET /path?query`) with `data`. Several answers to
+    /// one request are given in order; the last one repeats.
+    #[must_use]
+    pub fn with(self, request: &str, data: Value) -> Self {
+        self.push(request, Answer::Data(data))
     }
 
     /// Fail `request` with an HTTP status and message.
     #[must_use]
-    pub fn failing(mut self, request: &str, status: u16, message: &str) -> Self {
-        self.responses
-            .insert(request.to_owned(), Err((status, message.to_owned())));
-        self
+    pub fn failing(self, request: &str, status: u16, message: &str) -> Self {
+        self.push(request, Answer::Api(status, message.to_owned()))
+    }
+
+    /// Fail `request` before it reaches Proxmox.
+    #[must_use]
+    pub fn unreachable(self, request: &str, detail: &str) -> Self {
+        self.push(request, Answer::Transport(detail.to_owned()))
+    }
+
+    /// Never answer `request`.
+    #[must_use]
+    pub fn hanging(self, request: &str) -> Self {
+        self.push(request, Answer::Hang)
+    }
+
+    /// `exec` of `command` gets `pid`; its `exec-status` answers `status`.
+    #[must_use]
+    pub fn with_exec(self, node: &str, vmid: u32, command: &str, pid: u32, status: Value) -> Self {
+        self.with(&exec_key(node, vmid, command), serde_json::json!({ "pid": pid }))
+            .with(
+                &key(
+                    "GET",
+                    &format!("/nodes/{node}/qemu/{vmid}/agent/exec-status"),
+                    &[("pid", &pid.to_string())],
+                ),
+                status,
+            )
     }
 
     pub fn calls(&self) -> Vec<String> {
         self.calls.lock().map(|calls| calls.clone()).unwrap_or_default()
     }
 
-    fn answer(&self, request: String) -> Result<Value, PveError> {
+    async fn answer(&self, request: String) -> Result<Value, PveError> {
         if let Ok(mut calls) = self.calls.lock() {
             calls.push(request.clone());
         }
-        match self.responses.get(&request) {
-            Some(Ok(data)) => Ok(data.clone()),
-            Some(Err((status, message))) => Err(PveError::Api {
-                status: *status,
-                message: message.clone(),
-            }),
+        let answer = self.responses.lock().ok().and_then(|mut responses| {
+            let queue = responses.get_mut(&request)?;
+            if queue.len() > 1 {
+                queue.pop_front()
+            } else {
+                queue.front().cloned()
+            }
+        });
+        match answer {
+            Some(Answer::Data(data)) => Ok(data),
+            // As `PveClient` maps the HTTP status.
+            Some(Answer::Api(401, _)) => Err(PveError::Unauthorized),
+            Some(Answer::Api(403, message)) => Err(PveError::Forbidden { message }),
+            Some(Answer::Api(595, message)) => Err(PveError::NodeUnreachable { message }),
+            Some(Answer::Api(status, message)) => Err(PveError::Api { status, message }),
+            Some(Answer::Transport(detail)) => Err(PveError::Response(detail)),
+            Some(Answer::Hang) => std::future::pending().await,
             None => panic!("unexpected request: {request}"),
         }
     }
@@ -72,11 +141,19 @@ impl FakePve {
 
 impl Pve for FakePve {
     async fn get(&self, path: &str, query: &[(&str, &str)]) -> Result<Value, PveError> {
-        self.answer(key("GET", path, query))
+        self.answer(key("GET", path, query)).await
     }
 
-    async fn post(&self, path: &str) -> Result<Value, PveError> {
-        self.answer(key("POST", path, &[]))
+    async fn post(&self, path: &str, form: &[(&str, &str)]) -> Result<Value, PveError> {
+        self.answer(form_key("POST", path, form)).await
+    }
+
+    async fn put(&self, path: &str, form: &[(&str, &str)]) -> Result<Value, PveError> {
+        self.answer(form_key("PUT", path, form)).await
+    }
+
+    async fn delete(&self, path: &str, query: &[(&str, &str)]) -> Result<Value, PveError> {
+        self.answer(key("DELETE", path, query)).await
     }
 }
 
