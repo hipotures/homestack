@@ -84,6 +84,17 @@ pveum acl modify / --tokens 'homestack@pve!server' --roles PVEAuditor
 `SDN.Audit`, `Sys.Audit`, `VM.Audit` and `VM.GuestAgent.Audit`. The token's
 secret is shown once; write it straight to a file.
 
+The detached-volume scan also needs `VM.Config.Disk` on `/vms` (Proxmox lists
+a VM volume only to who may change that VM's disks). Give it together with
+`PVEAuditor` on `/vms`: a role on a more specific path replaces what the
+user inherits from `/`, and a privilege-separated token gets the
+intersection with its user.
+
+```
+pveum role add HomeStackServerDisks --privs VM.Config.Disk
+pveum acl modify /vms --users homestack@pve --tokens 'homestack@pve!server' --roles PVEAuditor,HomeStackServerDisks
+```
+
 ## Docker
 
 ```

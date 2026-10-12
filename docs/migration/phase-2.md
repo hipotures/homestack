@@ -176,10 +176,9 @@ pings are compared). A deliberately weakened rule makes the comparison fail
 
 ## 7. Open questions for the next phases
 
-1. Should the server token get `VM.Config.Disk` on `/vms` (a write
-   privilege) so the orphan scan sees every volume, or should orphan
-   scanning stay with a separate, narrower mechanism? Until then a read-only
-   token reports the scan as incomplete.
+1. Answered after the tag: the owner gave the server token `VM.Config.Disk`
+   on `/vms` (decisions.md). The live comparison now also requires the orphan
+   scans to agree.
 2. Decision 5 (guest verification without `Unrestricted`) is needed before
    phase 4; this phase shows that usage and the home mount can be read at
    audit level, but the filesystem label and accounts cannot.
