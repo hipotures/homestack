@@ -221,9 +221,11 @@ Ports and their Rust tests are in `parity/manifest.toml`. Port notes:
 1. Do you accept the stricter validation (section 6, items 1–3) for the
    Python CLI too, i.e. should the Python bugs in section 1 be fixed there, or
    stay until Python is removed?
-2. Phase 3 needs the pool `homestack-test`, VMIDs 240–249 and a pool-limited
-   token; none exist yet. Capabilities will then check `/pool/<name>` in
-   addition to `/vms`; `server.toml` needs a pool key for that (not added yet).
+2. Phase 3's test pool and pool-limited token now exist (see
+   [decisions.md](decisions.md), probe results). Capabilities will then check
+   `/pool/<name>` in addition to `/vms`; `server.toml` needs a pool key for
+   that (not added yet). The owner chose not to fix the Python bugs of
+   section 1; they stay until Python is removed.
 3. `client.toml` has no server address or client token yet; phase 12 adds
    them when the Python client talks to the server.
 4. The cross-check `[workspace_ssh] user` = `[user] name` now spans two files;
