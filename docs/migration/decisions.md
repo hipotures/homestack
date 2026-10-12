@@ -10,7 +10,7 @@ an agent stops when a phase needs one that is still open
 | # | Question | Options | Needed by | Status |
 |---|---|---|---|---|
 | 1 | Cloud-Init snippets | 7.1 A native Cloud-Init + static vendor snippet, B shared snippet storage, C SSH helper | phase 4 | open |
-| 2 | Keep the Proxmox name of the root volume (no rename) | 7.2 A yes, B rename through the helper | phase 4 | open |
+| 2 | Keep the Proxmox name of the root volume (no rename) | 7.2 A yes, B rename through the helper | phase 4 | **decided 2026-10-12: A** (the owner left it to the agent). Roots keep the name Proxmox gives them (`vm-<id>-disk-N`); homes keep `vm-<id>-hs-home-<user>`, which the API accepts at allocation. The detached-volume scan recognises roots by a VMID that no longer exists. No node access is needed for it |
 | 3 | `create` on another node | 7.3 A clone + migrate, B backup storage (PBS), C Gold replica per node, D helper stream | phase 10 | open |
 | 4 | Where the `refresh` journal lives | 7.4 A shared storage, B VM `description`, C helper | phase 4 | open |
 | 5 | Guest verification without `VM.GuestAgent.Unrestricted` (`Audit` + `FileRead`) | yes / no | phase 3 | **decided 2026-10-12: yes.** D2 uses the `get-*` agent commands and `file-read`; `exec` (`VM.GuestAgent.Unrestricted`) stays only for `resize` and the Gold guest contract (E2) |
