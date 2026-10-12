@@ -33,7 +33,10 @@ functions need.
 For `get`, every query parameter (every `pvesh` option except
 `--output-format`) becomes a parameter, e.g.
 `pvesh get /cluster/resources --type vm --output-format json` is
-`get{path=/cluster/resources,type=vm}`.
+`get{path=/cluster/resources,type=vm}`. A query parameter called `path` is
+written `query_path`, so `GET /access/permissions?path=/vms` is
+`get{path=/access/permissions,query_path=/vms}`. Python never makes that call
+(it runs as `root@pam`); the server's capability probe does (phase 1).
 
 ## How pvesh failures are reproduced
 

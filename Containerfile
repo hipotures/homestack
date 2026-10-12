@@ -19,11 +19,15 @@ RUN cargo build --release --locked --target x86_64-unknown-linux-musl -p hs-serv
 # The build stage targets musl and links statically, so the runtime needs
 # nothing but CA certificates.
 FROM docker.io/library/alpine:3.24.2
-RUN apk add --no-cache ca-certificates
+# /var/lib/homestack holds the uploaded server.toml; mount a volume there.
+RUN apk add --no-cache ca-certificates \
+    && install -d -m 0700 -o 65534 -g 65534 /var/lib/homestack
 COPY --from=build /src/target/x86_64-unknown-linux-musl/release/homestack-server /usr/local/bin/homestack-server
-# Run with --user matching the owner of the mounted secret files.
+# Run with --user matching the owner of the mounted secret files and of
+# /var/lib/homestack (65534 in a fresh named volume).
 USER 65534:65534
 ENV HOMESTACK_LISTEN=0.0.0.0:8080 \
-    HOMESTACK_LOG_FORMAT=json
+    HOMESTACK_LOG_FORMAT=json \
+    HOMESTACK_CONFIG_FILE=/var/lib/homestack/server.toml
 EXPOSE 8080
 ENTRYPOINT ["/usr/local/bin/homestack-server"]

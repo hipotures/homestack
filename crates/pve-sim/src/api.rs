@@ -15,7 +15,7 @@ use serde_json::{Value, json};
 
 use crate::ops::Op;
 use crate::scenario::{NodeState, TokenSpec};
-use crate::state::{ClusterState, has_privilege};
+use crate::state::{ClusterState, PRIVILEGES, has_privilege};
 
 type Shared = Arc<Mutex<ClusterState>>;
 
@@ -25,6 +25,7 @@ pub fn router(state: Shared) -> Router {
     let api = Router::new()
         .route("/version", get(version))
         .route("/nodes", get(nodes))
+        .route("/access/permissions", get(permissions))
         .route("/nodes/{node}/status", get(node_status))
         .route("/nodes/{node}/tasks/{upid}/status", get(task_status))
         .route("/nodes/{node}/tasks/{upid}/log", get(task_log))
@@ -115,6 +116,36 @@ async fn version(State(state): State<Shared>) -> Response {
         "version": state.version.version,
         "repoid": state.version.repoid,
     }))
+}
+
+#[derive(Deserialize)]
+struct PermissionsQuery {
+    path: Option<String>,
+}
+
+/// The token's effective privileges: on `path`, or on every path of its ACL.
+/// Any token may read its own; PVE answers for paths that do not exist.
+async fn permissions(
+    request_token: Option<axum::Extension<TokenSpec>>,
+    Query(query): Query<PermissionsQuery>,
+) -> Response {
+    let Some(token) = token(request_token) else {
+        return pve_error(401, "");
+    };
+    let paths: Vec<String> = match query.path {
+        Some(path) => vec![path],
+        None => token.acl.keys().cloned().collect(),
+    };
+    let mut body = serde_json::Map::new();
+    for path in paths {
+        let privileges: serde_json::Map<String, Value> = PRIVILEGES
+            .iter()
+            .filter(|privilege| has_privilege(&token, &path, privilege))
+            .map(|privilege| ((*privilege).to_owned(), json!(1)))
+            .collect();
+        body.insert(path, Value::Object(privileges));
+    }
+    data(Value::Object(body))
 }
 
 async fn nodes(State(state): State<Shared>) -> Response {

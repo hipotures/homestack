@@ -249,3 +249,58 @@ fn scenario_typos_are_rejected() {
     );
     assert!(typo.is_err());
 }
+
+/// Shapes observed on PVE 9.2: `{"data":{"<path>":{"<privilege>":1,...}}}`,
+/// computed for any path, existing or not. With `path` only that path is
+/// returned; without it, every path with an ACL entry.
+#[tokio::test]
+async fn permissions_are_the_effective_privileges_on_a_path() -> TestResult {
+    let sim = PveSim::start(spec()?).await?;
+    let (status, body) = get(&sim, Some(AUDIT_ONLY_VMS), "/access/permissions?path=/vms/100").await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        serde_json::from_str::<Value>(&body)?,
+        json!({"data": {"/vms/100": {"VM.Audit": 1}}})
+    );
+
+    let (_, body) = get(&sim, Some(AUDIT_ONLY_VMS), "/access/permissions?path=/nodes").await?;
+    assert_eq!(serde_json::from_str::<Value>(&body)?, json!({"data": {"/nodes": {}}}));
+
+    let (_, body) = get(&sim, Some(AUDIT_ONLY_VMS), "/access/permissions").await?;
+    assert_eq!(
+        serde_json::from_str::<Value>(&body)?,
+        json!({"data": {"/vms": {"VM.Audit": 1}}})
+    );
+
+    let ops: Vec<String> = sim.ops().iter().map(ToString::to_string).collect();
+    assert_eq!(
+        ops,
+        [
+            "get{path=/access/permissions,query_path=/vms/100}",
+            "get{path=/access/permissions,query_path=/nodes}",
+            "get{path=/access/permissions}",
+        ]
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn the_all_privileges_wildcard_lists_every_privilege() -> TestResult {
+    let mut spec = spec()?;
+    spec.tokens[0].acl = [("/".to_owned(), vec!["*".to_owned()])].into_iter().collect();
+    let sim = PveSim::start(spec).await?;
+    let (_, body) = get(&sim, Some(TOKEN), "/access/permissions?path=/storage/local").await?;
+    let body: Value = serde_json::from_str(&body)?;
+    let privileges = body["data"]["/storage/local"].as_object().ok_or("no privileges")?;
+    // The privileges of the Administrator role on PVE 9.2.21.
+    assert_eq!(privileges.len(), 47);
+    for name in [
+        "Datastore.AllocateSpace",
+        "VM.GuestAgent.Unrestricted",
+        "Sys.Modify",
+        "VM.Snapshot.Rollback",
+    ] {
+        assert_eq!(privileges.get(name), Some(&json!(1)), "{name}");
+    }
+    Ok(())
+}

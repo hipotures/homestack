@@ -16,10 +16,21 @@ pub struct Op {
 }
 
 impl Op {
-    /// A read: `get{path=...}` plus any query parameters.
+    /// A read: `get{path=...}` plus any query parameters. A query parameter
+    /// called `path` is written `query_path`, so it cannot replace the API
+    /// path.
     #[must_use]
     pub fn get(path: &str, query: impl IntoIterator<Item = (String, String)>) -> Self {
-        let mut params: BTreeMap<String, String> = query.into_iter().collect();
+        let mut params: BTreeMap<String, String> = query
+            .into_iter()
+            .map(|(key, value)| {
+                if key == "path" {
+                    ("query_path".to_owned(), value)
+                } else {
+                    (key, value)
+                }
+            })
+            .collect();
         params.insert("path".to_owned(), path.to_owned());
         Self {
             name: "get".to_owned(),

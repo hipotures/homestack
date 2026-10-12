@@ -1,6 +1,8 @@
 //! Startup settings from environment variables.
 //!
-//! Phase 1 of the migration replaces most of these with `server.toml`.
+//! These say how this instance runs and reaches Proxmox. What HomeStack
+//! does is in `server.toml`, uploaded through `PUT /v1/config` and kept in
+//! `HOMESTACK_CONFIG_FILE`.
 //!
 //! | Variable | Meaning |
 //! |---|---|
@@ -9,6 +11,7 @@
 //! | `HOMESTACK_PVE_ENDPOINTS` | Comma-separated Proxmox API origins, tried in order (required) |
 //! | `HOMESTACK_PVE_TOKEN_FILE` | File with `USER@REALM!TOKENID=SECRET` (required) |
 //! | `HOMESTACK_PVE_CA_FILE` | Extra PEM CA trusted for Proxmox, besides the system roots |
+//! | `HOMESTACK_CONFIG_FILE` | Stored `server.toml`, default `/var/lib/homestack/server.toml` |
 //! | `HOMESTACK_LOG` | Log filter, default `info` |
 //! | `HOMESTACK_LOG_FORMAT` | `text` (default) or `json` |
 
@@ -19,6 +22,9 @@ use hs_pve::{PveClientConfig, PveToken};
 use url::Url;
 
 use crate::{ApiToken, ServerConfig};
+
+/// Where `server.toml` is kept unless `HOMESTACK_CONFIG_FILE` says otherwise.
+pub const DEFAULT_CONFIG_FILE: &str = "/var/lib/homestack/server.toml";
 
 pub struct Settings {
     pub listen: SocketAddr,
@@ -65,7 +71,13 @@ pub fn from_env(var: impl Fn(&str) -> Option<String>) -> Result<Settings, String
     }
     Ok(Settings {
         listen,
-        server: ServerConfig { api_token, pve },
+        server: ServerConfig {
+            api_token,
+            pve,
+            config_file: var("HOMESTACK_CONFIG_FILE")
+                .filter(|v| !v.trim().is_empty())
+                .map_or_else(|| PathBuf::from(DEFAULT_CONFIG_FILE), PathBuf::from),
+        },
     })
 }
 

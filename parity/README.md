@@ -12,6 +12,7 @@ runs through [scripts/check.sh](../scripts/check.sh). This directory and
 | `ops.md` | The operation vocabulary shared by both sides |
 | `normalize.toml` | Allowed output differences, each with a reason |
 | `../scenarios/*.toml` | Simulated cluster states and requests (L2, L3) |
+| `config-corpus.toml` | Valid and invalid configurations both implementations must judge alike (L3) |
 | `python/homestack_parity/` | Test-only Python tools; HomeStack itself never imports them |
 
 ## Test manifest
@@ -84,6 +85,19 @@ checks that
 
 `HOMESTACK_PHASE=N` limits the run to one phase (`check.sh --phase N` sets it).
 
+## Configuration corpus
+
+`config-corpus.toml` lists edits of `python/config.example.toml` (`set`,
+`remove`, `append`, or a whole `text`) and the expected verdict: `accepted`
+or the field the error is about (`repo.owner`,
+`storage_layouts.homestack-storage-1`, ...).
+`crates/hs-parity/tests/config_corpus.rs` writes every case to a file, runs
+them all through Python's `config.load_config`
+(`python -m homestack_parity.config_check`, which maps each `AppError`
+message to its field) and through Rust's `hs_config::legacy::read`, and
+fails on any disagreement. A case where Python legitimately differs says so
+with `python = "<verdict>"` and a `reason`.
+
 ## Python tools
 
 - `FixtureTransport` implements HomeStack's `Transport` protocol by sending
@@ -95,6 +109,8 @@ checks that
   operations.
 - `cli_driver` runs `homestack.cli.main()` unchanged, with `open_transport`
   replaced to yield the two transports above.
+- `config_check` prints Python's verdict on configuration files for the
+  corpus.
 
 Run `pve-sim` by hand with
 `cargo run -p pve-sim -- --scenario scenarios/<file>.toml --ca-out /tmp/ca.pem`.
@@ -106,3 +122,6 @@ Run `pve-sim` by hand with
   recorded, so this follows PVE's proxy code rather than an observation.
 - Task endpoints require `Sys.Audit` on the node; PVE also lets users read
   their own tasks.
+- `/access/permissions` without `path` lists the paths of the token's ACL.
+  PVE also lists paths derived from them (`/access/groups`, `/mapping/pci`,
+  ...); HomeStack only queries single paths.

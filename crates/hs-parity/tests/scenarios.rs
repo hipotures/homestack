@@ -107,9 +107,11 @@ async fn run_rust(scenario: &Scenario, sim: &PveSim, request: &str) -> Result<Va
     let token = PveToken::parse(&scenario.token(&scenario.homestack.server_token)?)?;
     let mut pve = PveClientConfig::new(vec![sim.base_url().parse()?], token);
     pve.extra_ca_pem = Some(sim.ca_pem().to_owned());
+    let state = tempfile::tempdir()?;
     let app = hs_server::app(ServerConfig {
         api_token: ApiToken::parse(API_TOKEN)?,
         pve,
+        config_file: state.path().join("server.toml"),
     })?;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let addr = listener.local_addr()?;

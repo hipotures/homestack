@@ -10,3 +10,4 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+hs-model = { version = "0.1.0", path = "../hs-model" }

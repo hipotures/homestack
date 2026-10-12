@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
-# Phase 0 live gate: the server image answers GET /v1/pve/version from the
-# real cluster, with certificate verification and failover past a dead first
-# endpoint. Read-only. Needs:
+# Live gates of the server image against the real cluster:
+#
+# - phase 0: GET /v1/pve/version with certificate verification and failover
+#   past a dead first endpoint,
+# - phase 1: an uploaded configuration survives replacing the container (same
+#   volume), and GET /v1/capabilities answers from the token's privileges.
+#
+# Proxmox is only read. Needs:
 #
 #   HOMESTACK_LIVE_TOKEN_FILE      PVE token file (USER@REALM!TOKENID=SECRET)
 #   HOMESTACK_LIVE_PVE_ENDPOINTS   comma-separated https origins (certificate names)
@@ -40,8 +45,10 @@ fi
 
 work=$(mktemp -d)
 name=homestack-check-$$
+volume=homestack-check-$$
 cleanup() {
     docker_ rm -f "$name" >/dev/null 2>&1 || true
+    docker_ volume rm -f "$volume" >/dev/null 2>&1 || true
     rm -rf "$work"
 }
 trap cleanup EXIT
@@ -66,32 +73,114 @@ done
 
 # A dead endpoint first: nothing listens on port 1 inside the container.
 endpoints="https://localhost:1,$HOMESTACK_LIVE_PVE_ENDPOINTS"
-docker_ run -d --name "$name" --user 65534:65534 -p "127.0.0.1:$port:8080" "${hosts[@]}" \
-    -v "$work/api-token:/run/secrets/api-token:ro" \
-    -v "$work/pve-token:/run/secrets/pve-token:ro" \
-    -e HOMESTACK_API_TOKEN_FILE=/run/secrets/api-token \
-    -e HOMESTACK_PVE_TOKEN_FILE=/run/secrets/pve-token \
-    -e HOMESTACK_PVE_ENDPOINTS="$endpoints" \
-    "$image" >/dev/null
+docker_ volume create "$volume" >/dev/null
+start() {
+    docker_ run -d --name "$name" --user 65534:65534 -p "127.0.0.1:$port:8080" "${hosts[@]}" \
+        -v "$work/api-token:/run/secrets/api-token:ro" \
+        -v "$work/pve-token:/run/secrets/pve-token:ro" \
+        -v "$volume:/var/lib/homestack" \
+        -e HOMESTACK_API_TOKEN_FILE=/run/secrets/api-token \
+        -e HOMESTACK_PVE_TOKEN_FILE=/run/secrets/pve-token \
+        -e HOMESTACK_PVE_ENDPOINTS="$endpoints" \
+        "$image" >/dev/null
+    for _ in $(seq 50); do
+        curl -fsS "http://127.0.0.1:$port/health/live" >/dev/null 2>&1 && return 0
+        sleep 0.2
+    done
+    echo "live-container: the server did not come up" >&2
+    docker_ logs "$name" >&2 || true
+    exit 1
+}
+fail() {
+    echo "live-container: $*" >&2
+    docker_ logs "$name" >&2 || true
+    exit 1
+}
+# api METHOD PATH OUTPUT [curl arguments...]: prints the HTTP status.
+api() {
+    local method=$1 path=$2 output=$3
+    shift 3
+    printf 'header = "Authorization: Bearer %s"\n' "$(cat "$work/api-token")" |
+        curl -sS -K - -X "$method" -o "$output" -w '%{http_code}' "$@" "http://127.0.0.1:$port$path"
+}
 
-for _ in $(seq 50); do
-    curl -fsS "http://127.0.0.1:$port/health/live" >/dev/null 2>&1 && break
-    sleep 0.2
-done
+start
 curl -fsS "http://127.0.0.1:$port/health/live"
 echo
 
-status=$(printf 'header = "Authorization: Bearer %s"\n' "$(cat "$work/api-token")" |
-    curl -sS -K - -o "$work/version.json" -w '%{http_code}' "http://127.0.0.1:$port/v1/pve/version")
+# Phase 0
+status=$(api GET /v1/pve/version "$work/version.json")
 cat "$work/version.json"
 echo
-if [[ $status != 200 ]]; then
-    echo "live-container: GET /v1/pve/version returned $status" >&2
-    docker_ logs "$name" >&2 || true
-    exit 1
-fi
-if ! docker_ logs "$name" 2>&1 | grep -q '"endpoint":"https://localhost:1"'; then
-    echo "live-container: the dead first endpoint was not tried" >&2
-    exit 1
-fi
-echo "live-container: OK (image $image, dead first endpoint skipped)"
+[[ $status == 200 ]] || fail "GET /v1/pve/version returned $status"
+docker_ logs "$name" 2>&1 | grep -q '"endpoint":"https://localhost:1"' ||
+    fail "the dead first endpoint was not tried"
+echo "live-container: version OK (dead first endpoint skipped)"
+
+# Phase 1: a configuration for the first endpoint's node, e.g. pve1 with
+# homestack-storage-1. Only ACL paths depend on it.
+host=$(python3 -I -c 'import sys, urllib.parse; print(urllib.parse.urlsplit(sys.argv[1].strip()).hostname)' "${urls[0]}")
+node=${host%%.*}
+number=$(sed -E 's/^[^0-9]*0*//' <<<"$node")
+[[ $number =~ ^[1-9][0-9]*$ ]] || fail "cannot derive a layout number from node $node"
+cat > "$work/server.toml" <<TOML
+version = 1
+
+[node]
+name = "$node"
+gold_vmid = 100
+
+[storage_layouts]
+homestack-storage-$number = ["local"]
+
+[root]
+disk = "scsi0"
+
+[home]
+disk = "scsi1"
+default_size = "20G"
+
+[network]
+prefix = "192.0.2"
+cidr = 24
+gateway = "192.0.2.1"
+dns = ["192.0.2.53"]
+
+[cloud_init]
+snippet_storage = "local"
+snippet_dir = "/var/lib/vz/snippets"
+
+[user]
+name = "user"
+uid = 1000
+gid = 1000
+TOML
+status=$(api PUT /v1/config "$work/put.json" -H 'If-None-Match: *' -H 'Content-Type: application/toml' \
+    --data-binary "@$work/server.toml")
+[[ $status == 200 ]] || fail "PUT /v1/config returned $status: $(cat "$work/put.json")"
+uploaded=$(python3 -I -c 'import json, sys; print(json.load(open(sys.argv[1]))["config_version"])' "$work/put.json")
+
+# Replace the container; the volume stays.
+docker_ rm -f "$name" >/dev/null
+start
+status=$(api GET /v1/config/version "$work/version-after.json")
+[[ $status == 200 ]] || fail "GET /v1/config/version returned $status"
+after=$(python3 -I -c 'import json, sys; print(json.load(open(sys.argv[1]))["config_version"])' "$work/version-after.json")
+[[ $after == "$uploaded" ]] || fail "configuration version $after after the restart, uploaded $uploaded"
+status=$(api GET /v1/config "$work/server-after.toml")
+[[ $status == 200 ]] && cmp -s "$work/server.toml" "$work/server-after.toml" ||
+    fail "GET /v1/config after the restart differs from the upload"
+echo "live-container: configuration $uploaded survived replacing the container"
+
+status=$(api GET /v1/capabilities "$work/capabilities.json")
+[[ $status == 200 ]] || fail "GET /v1/capabilities returned $status: $(cat "$work/capabilities.json")"
+python3 -I - "$work/capabilities.json" <<'PY' || fail "unexpected capabilities"
+import json, sys
+body = json.load(open(sys.argv[1]))
+ops = {op["operation"]: op for op in body["operations"]}
+for op in ops.values():
+    assert op["available"] == (not op["missing"]), op
+    print(f'  {op["operation"]}: {"available" if op["available"] else str(len(op["missing"])) + " missing"}')
+assert ops["read"]["available"], "the token cannot even read"
+PY
+echo "live-container: OK (image $image)"

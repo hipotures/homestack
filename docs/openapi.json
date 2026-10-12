@@ -30,6 +30,279 @@
         }
       }
     },
+    "/v1/capabilities": {
+      "get": {
+        "tags": [
+          "config"
+        ],
+        "summary": "What the server's Proxmox token can do with the stored configuration.",
+        "description": "Asks Proxmox (`GET /access/permissions`) for the token's privileges on\nevery ACL path the operations need, then lists per operation what is\nrequired and what is missing.",
+        "operationId": "capabilities",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Capabilities"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "No configuration has been uploaded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Proxmox rejected the request or answered unusably",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "No Proxmox endpoint is reachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/config": {
+      "get": {
+        "tags": [
+          "config"
+        ],
+        "summary": "The stored `server.toml`, as uploaded.",
+        "operationId": "config_get",
+        "responses": {
+          "200": {
+            "headers": {
+              "etag": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Quoted configuration version"
+              }
+            },
+            "content": {
+              "application/toml": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No configuration has been uploaded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "config"
+        ],
+        "summary": "Replace the configuration.",
+        "description": "The body is `server.toml`. Send `If-None-Match: *` for the first upload\nand `If-Match: \"<config_version>\"` (or `*`) afterwards. The text is\nvalidated like Python's `config.load_config` and stored atomically; the\nprevious file is kept as a backup. Uploading the stored text again\nchanges nothing.",
+        "operationId": "config_put",
+        "parameters": [
+          {
+            "name": "if-match",
+            "in": "header",
+            "description": "Quoted current version, or `*`",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "if-none-match",
+            "in": "header",
+            "description": "`*` for the first upload",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "server.toml",
+          "content": {
+            "application/toml": {
+              "schema": {
+                "type": "string"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "headers": {
+              "etag": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Quoted new version"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigUpdated"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "The stored version is not the one in If-Match, or a configuration exists despite If-None-Match",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Larger than 256 KiB",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid configuration; `error.field` names the problem",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "428": {
+            "description": "Neither If-Match nor If-None-Match: * was sent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/config/version": {
+      "get": {
+        "tags": [
+          "config"
+        ],
+        "summary": "Version of the stored configuration, to compare instances.",
+        "operationId": "config_version",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigVersion"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/v1/pve/nodes/{node}/status": {
       "get": {
         "tags": [
@@ -164,6 +437,65 @@
   },
   "components": {
     "schemas": {
+      "Capabilities": {
+        "type": "object",
+        "description": "Body of `GET /v1/capabilities`.",
+        "required": [
+          "token_id",
+          "config_version",
+          "operations"
+        ],
+        "properties": {
+          "config_version": {
+            "type": "string",
+            "description": "Configuration the ACL paths were derived from."
+          },
+          "operations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OperationCapability"
+            }
+          },
+          "token_id": {
+            "type": "string",
+            "description": "The server's Proxmox token, `USER@REALM!TOKENID` (never the secret)."
+          }
+        },
+        "additionalProperties": false
+      },
+      "ConfigUpdated": {
+        "type": "object",
+        "description": "Body of a successful `PUT /v1/config`.",
+        "required": [
+          "config_version",
+          "changed"
+        ],
+        "properties": {
+          "changed": {
+            "type": "boolean",
+            "description": "`false` when the text was already stored; nothing was written then."
+          },
+          "config_version": {
+            "type": "string",
+            "description": "SHA-256 of the stored text, also sent as the `ETag`."
+          }
+        },
+        "additionalProperties": false
+      },
+      "ConfigVersion": {
+        "type": "object",
+        "description": "Body of `GET /v1/config/version`.",
+        "properties": {
+          "config_version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "SHA-256 of the stored `server.toml`, lowercase hex; `null` before the\nfirst upload."
+          }
+        },
+        "additionalProperties": false
+      },
       "ErrorBody": {
         "type": "object",
         "description": "Body of every error response.",
@@ -191,6 +523,12 @@
           "not_found",
           "method_not_allowed",
           "validation_failed",
+          "payload_too_large",
+          "precondition_required",
+          "precondition_failed",
+          "config_invalid",
+          "config_missing",
+          "config_version_mismatch",
           "pve_unavailable",
           "pve_auth_failed",
           "pve_permission_denied",
@@ -211,6 +549,13 @@
         "properties": {
           "code": {
             "$ref": "#/components/schemas/ErrorCode"
+          },
+          "field": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The configuration field a `config_invalid` error is about, e.g.\n`repo.owner`."
           },
           "message": {
             "type": "string"
@@ -271,6 +616,74 @@
             "minimum": 0
           }
         }
+      },
+      "Operation": {
+        "type": "string",
+        "description": "A HomeStack operation whose Proxmox privileges the server checks.",
+        "enum": [
+          "read",
+          "guest_read",
+          "gold_readiness",
+          "create",
+          "refresh",
+          "resize",
+          "migrate",
+          "destroy",
+          "addkey"
+        ]
+      },
+      "OperationCapability": {
+        "type": "object",
+        "description": "Whether the token can perform one operation.",
+        "required": [
+          "operation",
+          "available",
+          "required",
+          "missing"
+        ],
+        "properties": {
+          "available": {
+            "type": "boolean",
+            "description": "`missing` is empty."
+          },
+          "missing": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Privilege"
+            },
+            "description": "The required privileges the token does not have."
+          },
+          "operation": {
+            "$ref": "#/components/schemas/Operation"
+          },
+          "required": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Privilege"
+            },
+            "description": "Every privilege the operation needs, sorted by path and name."
+          }
+        },
+        "additionalProperties": false
+      },
+      "Privilege": {
+        "type": "object",
+        "description": "A Proxmox privilege on an ACL path.",
+        "required": [
+          "path",
+          "privilege"
+        ],
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "ACL path, e.g. `/vms` or `/storage/local`."
+          },
+          "privilege": {
+            "type": "string",
+            "description": "Privilege name, e.g. `VM.Allocate`."
+          }
+        },
+        "additionalProperties": false
       },
       "PveVersion": {
         "type": "object",

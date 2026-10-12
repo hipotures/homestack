@@ -17,6 +17,7 @@ thiserror = "2.0.21"
 toml = "1.1.8"
 
 [dev-dependencies]
+hs-config = { path = "../hs-config" }
 axum = "0.8.9"
 hs-pve = { path = "../hs-pve" }
 hs-server = { path = "../hs-server" }

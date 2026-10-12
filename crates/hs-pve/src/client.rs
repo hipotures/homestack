@@ -1,5 +1,6 @@
 //! HTTP client with endpoint failover.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
@@ -143,19 +144,38 @@ impl PveClient {
         })
     }
 
+    /// `GET /access/permissions?path=...`: the privileges the token holds
+    /// on one ACL path, with inheritance already applied by Proxmox. Works
+    /// for any path, existing or not.
+    pub async fn permissions(&self, path: &str) -> Result<BTreeSet<String>, PveError> {
+        let mut by_path: BTreeMap<String, BTreeMap<String, serde_json::Value>> =
+            self.get_query(&["access", "permissions"], &[("path", path)]).await?;
+        Ok(by_path
+            .remove(path)
+            .map(|privileges| privileges.into_keys().collect())
+            .unwrap_or_default())
+    }
+
+    async fn get<T: DeserializeOwned>(&self, segments: &[&str]) -> Result<T, PveError> {
+        self.get_query(segments, &[]).await
+    }
+
     /// GET an API path given as segments below `/api2/json`.
     ///
     /// Endpoints are tried starting with the one that answered last. Only a
     /// failure to connect (including TLS verification) moves on to the next
     /// endpoint: the request has not been sent then, so trying elsewhere is
     /// safe for any method. Once a request is sent, its outcome is final.
-    async fn get<T: DeserializeOwned>(&self, segments: &[&str]) -> Result<T, PveError> {
+    async fn get_query<T: DeserializeOwned>(&self, segments: &[&str], query: &[(&str, &str)]) -> Result<T, PveError> {
         let start = self.preferred.load(Ordering::Relaxed);
         let mut failures = Vec::new();
         for offset in 0..self.endpoints.len() {
             let index = (start + offset) % self.endpoints.len();
             let endpoint = &self.endpoints[index];
-            let url = api_url(endpoint, segments)?;
+            let mut url = api_url(endpoint, segments)?;
+            if !query.is_empty() {
+                url.query_pairs_mut().extend_pairs(query);
+            }
             let sent = self
                 .http
                 .get(url)

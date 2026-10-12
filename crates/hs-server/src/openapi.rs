@@ -7,7 +7,15 @@ use utoipa::{Modify, OpenApi};
 #[derive(OpenApi)]
 #[openapi(
     info(title = "HomeStack server API", description = "Proxmox workspace lifecycle service."),
-    paths(crate::routes::live, crate::routes::pve_version, crate::routes::pve_node_status),
+    paths(
+        crate::routes::live,
+        crate::routes::pve_version,
+        crate::routes::pve_node_status,
+        crate::routes::config_get,
+        crate::routes::config_put,
+        crate::routes::config_version,
+        crate::routes::capabilities,
+    ),
     components(schemas(
         hs_model::ErrorBody,
         hs_model::ErrorDetail,
@@ -16,6 +24,12 @@ use utoipa::{Modify, OpenApi};
         hs_model::health::LivenessStatus,
         hs_model::pve::PveVersion,
         hs_model::pve::NodeStatus,
+        hs_model::server_config::ConfigVersion,
+        hs_model::server_config::ConfigUpdated,
+        hs_model::capabilities::Capabilities,
+        hs_model::capabilities::OperationCapability,
+        hs_model::capabilities::Operation,
+        hs_model::capabilities::Privilege,
     )),
     modifiers(&BearerAuth),
 )]

@@ -224,3 +224,38 @@ async fn maps_pve_error_statuses() -> TestResult {
     ));
     Ok(())
 }
+
+#[tokio::test]
+async fn reads_the_effective_privileges_on_a_path() -> TestResult {
+    let sim = PveSim::start(spec("")?).await?;
+    let client = PveClient::new(config(&[sim.base_url()], TOKEN, sim.ca_pem())?)?;
+    let privileges = client.permissions("/nodes/node-a").await?;
+    assert_eq!(privileges.into_iter().collect::<Vec<_>>(), ["Sys.Audit"]);
+    // An ACL entry on `/` covers every path below it, as on PVE.
+    assert_eq!(
+        client.permissions("/vms/100").await?.into_iter().collect::<Vec<_>>(),
+        ["Sys.Audit"]
+    );
+
+    let weak = PveClient::new(config(
+        &[sim.base_url()],
+        "weak@pve!t=22222222-2222-3333-4444-555555555555",
+        sim.ca_pem(),
+    )?)?;
+    assert!(weak.permissions("/nodes").await?.is_empty());
+    assert_eq!(
+        weak.permissions("/vms/100").await?.into_iter().collect::<Vec<_>>(),
+        ["VM.Audit"]
+    );
+    let ops: Vec<String> = sim.ops().iter().map(ToString::to_string).collect();
+    assert_eq!(
+        ops,
+        [
+            "get{path=/access/permissions,query_path=/nodes/node-a}",
+            "get{path=/access/permissions,query_path=/vms/100}",
+            "get{path=/access/permissions,query_path=/nodes}",
+            "get{path=/access/permissions,query_path=/vms/100}",
+        ]
+    );
+    Ok(())
+}

@@ -29,6 +29,7 @@ uuid = { version = "1.28.0", features = ["v4"] }
 [dev-dependencies]
 pve-sim = { path = "../pve-sim" }
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "json"] }
+tempfile = "3.27.0"
 tokio = { version = "1.53.2", features = ["rt-multi-thread", "macros", "net"] }
 toml = "1.1.8"
 

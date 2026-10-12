@@ -2,7 +2,7 @@
 # Every check of the Rust migration (docs/migration/PLAN.md, section 2).
 #
 #   scripts/check.sh            L1-L3, no cluster
-#   scripts/check.sh --live     also L4 against the real cluster (read-only in phase 0)
+#   scripts/check.sh --live     also L4 against the real cluster (read-only so far)
 #   scripts/check.sh --phase N  only the tests and scenarios of phase N
 #
 # --live needs HOMESTACK_LIVE_TOKEN_FILE and HOMESTACK_LIVE_PVE_ENDPOINTS
@@ -43,8 +43,8 @@ if [[ -n $phase ]]; then
     else
         step "no Rust tests port phase $phase yet"
     fi
-    step "parity scenarios of phase $phase"
-    cargo test -p hs-parity --locked --test scenarios
+    step "parity scenarios and configuration corpus of phase $phase"
+    cargo test -p hs-parity --locked --test scenarios --test config_corpus
     exit 0
 fi
 

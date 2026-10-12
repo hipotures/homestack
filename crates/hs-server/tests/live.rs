@@ -40,9 +40,11 @@ fn live_endpoints() -> Result<Vec<Url>, Box<dyn std::error::Error>> {
 }
 
 async fn serve(endpoints: Vec<Url>) -> Result<String, Box<dyn std::error::Error>> {
+    // Read-only routes: the configuration file is never written.
     let app = hs_server::app(ServerConfig {
         api_token: ApiToken::parse(API_TOKEN)?,
         pve: PveClientConfig::new(endpoints, live_token()?),
+        config_file: std::env::temp_dir().join("homestack-live-unused/server.toml"),
     })?;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let addr = listener.local_addr()?;
@@ -149,5 +151,91 @@ async fn live_certificate_for_another_name_is_refused() -> TestResult {
     let base = serve(with_fallback).await?;
     let (status, body) = get(&base, "/v1/pve/version").await?;
     assert_eq!(status, StatusCode::OK, "{body}");
+    Ok(())
+}
+
+/// A `server.toml` for the live cluster: its first online node with a
+/// numeric suffix, `local` as the only storage. Only ACL paths depend on it,
+/// and Proxmox answers permission queries for any path.
+async fn live_server_toml(endpoints: &[Url]) -> Result<String, Box<dyn std::error::Error>> {
+    let nodes = PveClient::new(PveClientConfig::new(endpoints.to_vec(), live_token()?))?
+        .nodes()
+        .await?;
+    let (node, number) = nodes
+        .iter()
+        .filter(|node| node.online())
+        .find_map(|node| {
+            let digits = node.node.trim_start_matches(|c: char| !c.is_ascii_digit());
+            let number = digits.trim_start_matches('0');
+            (!number.is_empty() && number.bytes().all(|b| b.is_ascii_digit()))
+                .then(|| (node.node.clone(), number.to_owned()))
+        })
+        .ok_or("no online node with a numeric suffix")?;
+    Ok(format!(
+        "version = 1\n[node]\nname = \"{node}\"\ngold_vmid = 100\n[storage_layouts]\nhomestack-storage-{number} = [\"local\"]\n\
+         [root]\ndisk = \"scsi0\"\n[home]\ndisk = \"scsi1\"\ndefault_size = \"20G\"\n\
+         [network]\nprefix = \"192.0.2\"\ncidr = 24\ngateway = \"192.0.2.1\"\ndns = [\"192.0.2.53\"]\n\
+         [cloud_init]\nsnippet_storage = \"local\"\nsnippet_dir = \"/var/lib/vz/snippets\"\n\
+         [user]\nname = \"user\"\nuid = 1000\ngid = 1000\n"
+    ))
+}
+
+/// Phase 1 gate: `GET /v1/capabilities` agrees with what Proxmox says the
+/// token holds. Writes only to a temporary configuration file.
+#[tokio::test]
+#[ignore = "live cluster: run through scripts/check.sh --live"]
+async fn live_capabilities_match_the_token_privileges() -> TestResult {
+    let endpoints = live_endpoints()?;
+    let state = tempfile::tempdir()?;
+    let app = hs_server::app(ServerConfig {
+        api_token: ApiToken::parse(API_TOKEN)?,
+        pve: PveClientConfig::new(endpoints.clone(), live_token()?),
+        config_file: state.path().join("server.toml"),
+    })?;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let base = format!("http://{}", listener.local_addr()?);
+    tokio::spawn(async move { axum::serve(listener, app).await });
+
+    let upload = reqwest::Client::new()
+        .put(format!("{base}/v1/config"))
+        .bearer_auth(API_TOKEN)
+        .header("if-none-match", "*")
+        .body(live_server_toml(&endpoints).await?)
+        .send()
+        .await?;
+    assert_eq!(upload.status(), StatusCode::OK, "{}", upload.text().await?);
+
+    let (status, body) = get(&base, "/v1/capabilities").await?;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let token = live_token()?;
+    assert_eq!(body["token_id"], token.id());
+    let direct = PveClient::new(PveClientConfig::new(endpoints, token))?;
+    let operations = body["operations"].as_array().ok_or("no operations")?;
+    assert_eq!(operations.len(), 9);
+    for operation in operations {
+        let mut expected_missing = Vec::new();
+        for required in operation["required"].as_array().ok_or("no required list")? {
+            let path = required["path"].as_str().ok_or("path")?;
+            let privilege = required["privilege"].as_str().ok_or("privilege")?;
+            if !direct.permissions(path).await?.contains(privilege) {
+                expected_missing.push(required.clone());
+            }
+        }
+        assert_eq!(
+            operation["missing"],
+            Value::Array(expected_missing.clone()),
+            "{operation}"
+        );
+        assert_eq!(operation["available"], expected_missing.is_empty(), "{operation}");
+        eprintln!(
+            "{}: {}",
+            operation["operation"],
+            if expected_missing.is_empty() {
+                "available".to_owned()
+            } else {
+                format!("{} missing", expected_missing.len())
+            }
+        );
+    }
     Ok(())
 }

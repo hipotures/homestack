@@ -4,6 +4,7 @@
 //! the right status and a marker; [`request_context`] then writes the final
 //! error document, which needs the request ID.
 
+use std::borrow::Cow;
 use std::time::Instant;
 
 use axum::body::Body;
@@ -11,18 +12,41 @@ use axum::extract::{MatchedPath, Request};
 use axum::http::{HeaderValue, StatusCode, header};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
+use hs_model::config::ConfigError;
 use hs_model::{ErrorBody, ErrorCode};
 use hs_pve::PveError;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct ApiError {
     code: ErrorCode,
-    message: &'static str,
+    message: Cow<'static, str>,
+    field: Option<String>,
 }
 
 impl ApiError {
     pub const fn new(code: ErrorCode, message: &'static str) -> Self {
-        Self { code, message }
+        Self {
+            code,
+            message: Cow::Borrowed(message),
+            field: None,
+        }
+    }
+
+    /// `config_invalid` naming the field. The message of a [`ConfigError`]
+    /// never contains values from the document.
+    pub fn config_invalid(error: ConfigError) -> Self {
+        Self {
+            code: ErrorCode::ConfigInvalid,
+            message: Cow::Owned(error.message),
+            field: Some(error.field),
+        }
+    }
+
+    pub const fn config_missing() -> Self {
+        Self::new(
+            ErrorCode::ConfigMissing,
+            "The server has no configuration yet; upload one with PUT /v1/config.",
+        )
     }
 }
 
@@ -31,7 +55,11 @@ const fn status(code: ErrorCode) -> StatusCode {
         ErrorCode::Unauthorized => StatusCode::UNAUTHORIZED,
         ErrorCode::NotFound => StatusCode::NOT_FOUND,
         ErrorCode::MethodNotAllowed => StatusCode::METHOD_NOT_ALLOWED,
-        ErrorCode::ValidationFailed => StatusCode::UNPROCESSABLE_ENTITY,
+        ErrorCode::ValidationFailed | ErrorCode::ConfigInvalid => StatusCode::UNPROCESSABLE_ENTITY,
+        ErrorCode::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
+        ErrorCode::PreconditionRequired => StatusCode::PRECONDITION_REQUIRED,
+        ErrorCode::PreconditionFailed => StatusCode::PRECONDITION_FAILED,
+        ErrorCode::ConfigMissing | ErrorCode::ConfigVersionMismatch => StatusCode::CONFLICT,
         ErrorCode::PveUnavailable | ErrorCode::PveNodeUnavailable => StatusCode::SERVICE_UNAVAILABLE,
         ErrorCode::PveAuthFailed | ErrorCode::PvePermissionDenied | ErrorCode::PveError => StatusCode::BAD_GATEWAY,
         ErrorCode::Internal => StatusCode::INTERNAL_SERVER_ERROR,
@@ -102,7 +130,7 @@ pub async fn request_context(request: Request, next: Next) -> Response {
 
     let mut response = next.run(request).await;
     if let Some(error) = response.extensions_mut().remove::<ApiError>() {
-        let body = ErrorBody::new(error.code, error.message, request_id.clone());
+        let body = ErrorBody::new(error.code, error.message, request_id.clone()).with_field(error.field);
         match serde_json::to_vec(&body) {
             Ok(json) => {
                 *response.body_mut() = Body::from(json);

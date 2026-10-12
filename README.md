@@ -31,7 +31,7 @@ scripts/check.sh            # without a cluster
 scripts/check.sh --live     # also against the real cluster, read-only
 ```
 
-Running the server: [docs/migration/deploy.md](docs/migration/deploy.md). API contract: [docs/openapi.json](docs/openapi.json).
+Running and configuring the server (`server.toml`, made from an existing `config.toml` with `cargo run -p hs-config -- split`): [docs/migration/deploy.md](docs/migration/deploy.md). API contract: [docs/openapi.json](docs/openapi.json).
 
 ## Configuration
 

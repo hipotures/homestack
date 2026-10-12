@@ -1,0 +1,395 @@
+# Valid and invalid HomeStack configurations (L3, phase 1).
+#
+# Every case edits the base file: `set` replaces values (dotted paths),
+# `remove` deletes them, `append` adds raw text at the end and `text` replaces
+# the whole document. crates/hs-parity/tests/config_corpus.rs runs each case
+# through Python's config.load_config (parity/python/homestack_parity/config_check.py)
+# and Rust's hs-config legacy reader.
+#
+# `expect` is the Rust verdict: "accepted" or the field the error is about.
+# Python must give the same verdict unless the case says `python = ...` and
+# gives the `reason` for the difference (docs/migration/phase-1.md).
+
+phase = "1"
+base = "python/config.example.toml"
+
+[[case]]
+name = "the example"
+expect = "accepted"
+
+[[case]]
+name = "an unknown section is ignored"
+append = "\n[runtime]\nroot = \"/root/.homestack\"\n"
+expect = "accepted"
+
+[[case]]
+name = "control and display are optional"
+remove = ["control", "display"]
+expect = "accepted"
+
+[[case]]
+name = "sounds and fido devices"
+set = { "sounds" = { enabled = false, player = "pw-play", repeat_seconds = 4.5 }, "workspace_ssh.fido_devices" = ["YubiKey", "1050:0407", "yubikey"] }
+expect = "accepted"
+
+[[case]]
+name = "storage IDs and the log level are normalized"
+set = { "storage_layouts.homestack-storage-1" = [" example-storage "], "workspace_ssh.log_level" = "fatal" }
+expect = "accepted"
+
+[[case]]
+name = "an empty owner means none"
+set = { "repo.owner" = "" }
+expect = "accepted"
+
+[[case]]
+name = "unsupported version"
+set = { "version" = 2 }
+expect = "version"
+
+[[case]]
+name = "install draft"
+text = "version = 1\ninstall_draft = true\n\n[install]\ncompleted = [\"transport\"]\n"
+expect = "install_draft"
+
+[[case]]
+name = "obsolete sync section"
+append = "\n[sync]\npaths = [\"~/obsolete\"]\n"
+expect = "sync"
+
+[[case]]
+name = "invalid TOML"
+append = "\n[node\n"
+expect = "toml"
+
+[[case]]
+name = "no DNS servers"
+set = { "network.dns" = [] }
+expect = "network.dns"
+
+[[case]]
+name = "DNS missing"
+remove = ["network.dns"]
+expect = "network.dns"
+
+[[case]]
+name = "node name missing"
+remove = ["node.name"]
+expect = "node.name"
+
+[[case]]
+name = "node name without a number"
+set = { "node.name" = "pve-example" }
+expect = "node.name"
+
+[[case]]
+name = "no layout for the node"
+set = { "node.name" = "pve-example-3" }
+expect = "storage_layouts"
+
+[[case]]
+name = "storage layouts not a table"
+set = { "storage_layouts" = 5 }
+expect = "storage_layouts"
+
+[[case]]
+name = "invalid layout name"
+set = { "storage_layouts.homestack-two" = ["example-storage"] }
+expect = "storage_layouts"
+
+[[case]]
+name = "empty layout"
+set = { "storage_layouts.homestack-storage-1" = [] }
+expect = "storage_layouts.homestack-storage-1"
+
+[[case]]
+name = "duplicate storage after trimming"
+set = { "storage_layouts.homestack-storage-1" = ["a", " a "] }
+expect = "storage_layouts.homestack-storage-1"
+
+[[case]]
+name = "blank storage ID"
+set = { "storage_layouts.homestack-storage-1" = [" "] }
+expect = "storage_layouts.homestack-storage-1"
+
+[[case]]
+name = "control not a table"
+set = { "control" = "pve" }
+expect = "control"
+
+[[case]]
+name = "unsupported transport"
+set = { "transport.type" = "ssh" }
+expect = "transport.type"
+
+[[case]]
+name = "transport type missing"
+remove = ["transport.type"]
+expect = "transport.type"
+
+[[case]]
+name = "Herdr workspace missing"
+remove = ["transport.herdr.workspace"]
+expect = "transport.herdr.workspace"
+
+[[case]]
+name = "Herdr debug not a boolean"
+set = { "transport.herdr.debug" = "yes" }
+expect = "transport.herdr.debug"
+
+[[case]]
+name = "unknown storage unit"
+set = { "display.storage_unit" = "GB" }
+expect = "display.storage_unit"
+
+[[case]]
+name = "too many decimals"
+set = { "display.storage_decimals" = 5 }
+expect = "display.storage_decimals"
+
+[[case]]
+name = "owner is a URL"
+set = { "repo.owner" = "https://github.com/example-owner" }
+expect = "repo.owner"
+
+[[case]]
+name = "owner is a number"
+set = { "repo.owner" = 5 }
+expect = "repo.owner"
+
+[[case]]
+name = "checkout root outside home"
+set = { "repo.checkout_root" = "/tmp/DEV" }
+expect = "repo.checkout_root"
+
+[[case]]
+name = "checkout root traversal"
+set = { "repo.checkout_root" = "~/DEV/../other" }
+expect = "repo.checkout_root"
+
+[[case]]
+name = "unknown repository sort"
+set = { "repo.sort" = "size" }
+expect = "repo.sort"
+
+[[case]]
+name = "unknown sounds key"
+set = { "sounds" = { volume = 3 } }
+expect = "sounds"
+
+[[case]]
+name = "sounds repeat too long"
+set = { "sounds" = { repeat_seconds = 31 } }
+expect = "sounds.repeat_seconds"
+
+[[case]]
+name = "sounds enabled not a boolean"
+set = { "sounds" = { enabled = "yes" } }
+expect = "sounds.enabled"
+
+[[case]]
+name = "workspace SSH missing"
+remove = ["workspace_ssh"]
+expect = "workspace_ssh"
+
+[[case]]
+name = "workspace SSH user empty"
+set = { "workspace_ssh.user" = "" }
+expect = "workspace_ssh.user"
+
+[[case]]
+name = "workspace SSH user differs from the user"
+set = { "workspace_ssh.user" = "operator" }
+expect = "workspace_ssh.user"
+
+[[case]]
+name = "no identity files"
+set = { "workspace_ssh.identity_files" = [] }
+expect = "workspace_ssh.identity_files"
+
+[[case]]
+name = "identity file with a space"
+set = { "workspace_ssh.identity_files" = ["~/.ssh/example key"] }
+expect = "workspace_ssh.identity_files"
+
+[[case]]
+name = "duplicate identity file"
+set = { "workspace_ssh.identity_files" = ["~/.ssh/k", " ~/.ssh/k"] }
+expect = "workspace_ssh.identity_files"
+
+[[case]]
+name = "identities_only not a boolean"
+set = { "workspace_ssh.identities_only" = "yes" }
+expect = "workspace_ssh.identities_only"
+
+[[case]]
+name = "unknown SSH log level"
+set = { "workspace_ssh.log_level" = "TRACE" }
+expect = "workspace_ssh.log_level"
+
+[[case]]
+name = "unknown FIDO device"
+set = { "workspace_ssh.fido_devices" = ["nitrokey"] }
+expect = "workspace_ssh.fido_devices"
+
+[[case]]
+name = "FIDO devices not an array"
+set = { "workspace_ssh.fido_devices" = "yubikey" }
+expect = "workspace_ssh.fido_devices"
+
+[[case]]
+name = "user name missing"
+remove = ["user.name"]
+expect = "user.name"
+
+[[case]]
+name = "user name blank"
+set = { "user.name" = " " }
+expect = "user.name"
+
+[[case]]
+name = "root and home share a slot"
+set = { "home.disk" = "scsi0" }
+expect = "root.disk"
+
+[[case]]
+name = "root disk blank"
+set = { "root.disk" = " " }
+expect = "root.disk"
+
+[[case]]
+name = "home disk blank"
+set = { "home.disk" = "" }
+expect = "root.disk"
+
+[[case]]
+name = "Gold VMID missing"
+remove = ["node.gold_vmid"]
+expect = "node.gold_vmid"
+
+[[case]]
+name = "default home size missing"
+remove = ["home.default_size"]
+expect = "home.default_size"
+
+[[case]]
+name = "network prefix missing"
+remove = ["network.prefix"]
+expect = "network.prefix"
+
+[[case]]
+name = "CIDR missing"
+remove = ["network.cidr"]
+expect = "network.cidr"
+
+[[case]]
+name = "gateway missing"
+remove = ["network.gateway"]
+expect = "network.gateway"
+
+[[case]]
+name = "snippet storage missing"
+remove = ["cloud_init.snippet_storage"]
+expect = "cloud_init.snippet_storage"
+
+[[case]]
+name = "snippet directory missing"
+remove = ["cloud_init.snippet_dir"]
+expect = "cloud_init.snippet_dir"
+
+[[case]]
+name = "UID missing"
+remove = ["user.uid"]
+expect = "user.uid"
+
+[[case]]
+name = "GID missing"
+remove = ["user.gid"]
+expect = "user.gid"
+
+# Python coerces types with int() and str(); Rust requires the TOML types that
+# Python's own config_to_toml writes. Reported in docs/migration/phase-1.md.
+
+[[case]]
+name = "Gold VMID as a string"
+set = { "node.gold_vmid" = "100" }
+expect = "node.gold_vmid"
+python = "accepted"
+reason = "int(\"100\") is 100 in Python"
+
+[[case]]
+name = "Gold VMID as a float"
+set = { "node.gold_vmid" = 100.9 }
+expect = "node.gold_vmid"
+python = "accepted"
+reason = "int(100.9) silently truncates to 100 in Python"
+
+[[case]]
+name = "Gold VMID not a number"
+set = { "node.gold_vmid" = "abc" }
+expect = "node.gold_vmid"
+python = "crash:ValueError"
+reason = "load_config lets int() raise ValueError instead of AppError"
+
+[[case]]
+name = "negative Gold VMID"
+set = { "node.gold_vmid" = -5 }
+expect = "node.gold_vmid"
+python = "accepted"
+reason = "Python does not check the range; Proxmox VMIDs are 100-999999999"
+
+[[case]]
+name = "DNS as a string"
+set = { "network.dns" = "192.0.2.53" }
+expect = "network.dns"
+python = "accepted"
+reason = "tuple(str(x) for x in ...) splits the string into one-character servers"
+
+[[case]]
+name = "node name as a number"
+set = { "node.name" = 1 }
+expect = "node.name"
+python = "accepted"
+reason = "str(1) is '1', which has a numeric suffix"
+
+[[case]]
+name = "node name with spaces"
+set = { "node.name" = "pve example 1" }
+expect = "node.name"
+python = "accepted"
+reason = "Python only checks the numeric suffix; the name becomes a Proxmox API path segment, so Rust requires a DNS label"
+
+[[case]]
+name = "node section not a table"
+set = { "node" = 5 }
+expect = "node"
+python = "crash:TypeError"
+reason = "_need indexes the integer and raises TypeError instead of AppError"
+
+[[case]]
+name = "version as a float"
+set = { "version" = 1.0 }
+expect = "version"
+python = "accepted"
+reason = "1.0 == 1 in Python"
+
+[[case]]
+name = "CIDR out of range"
+set = { "network.cidr" = 99 }
+expect = "network.cidr"
+python = "accepted"
+reason = "Python does not check the range; an IPv4 prefix length is 0-32"
+
+[[case]]
+name = "decimals as a string"
+set = { "display.storage_decimals" = "2" }
+expect = "display.storage_decimals"
+python = "accepted"
+reason = "int(\"2\") is 2 in Python"
+
+[[case]]
+name = "UID as a boolean"
+set = { "user.uid" = true }
+expect = "user.uid"
+python = "accepted"
+reason = "int(True) is 1 in Python"

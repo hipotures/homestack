@@ -9,7 +9,8 @@
 > repository root (`Cargo.toml`, `crates/`, `Containerfile`), the Python
 > application to `python/`, the parity tools to `parity/` and the scenarios to
 > `scenarios/`, because Rust is the lasting project and Python is removed in
-> phase 15. Paths below use the new layout.
+> phase 15. Paths below use the new layout. The image later moved from Debian
+> to Alpine with a static musl binary (`3c0e7be`).
 
 ## 1. Python behaviour this phase depends on
 

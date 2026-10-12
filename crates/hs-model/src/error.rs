@@ -22,6 +22,21 @@ pub enum ErrorCode {
     MethodNotAllowed,
     /// A path or query parameter failed validation.
     ValidationFailed,
+    /// The request body is larger than the server accepts.
+    PayloadTooLarge,
+    /// The request needs a precondition header (`If-Match`,
+    /// `If-None-Match` or `HomeStack-Config-Version`) it did not send.
+    PreconditionRequired,
+    /// `If-Match` or `If-None-Match` does not hold for the stored
+    /// configuration.
+    PreconditionFailed,
+    /// The uploaded configuration is invalid; `field` says where.
+    ConfigInvalid,
+    /// The server has no configuration yet.
+    ConfigMissing,
+    /// The request expects another configuration version than the server
+    /// has (`HomeStack-Config-Version`).
+    ConfigVersionMismatch,
     /// No configured Proxmox API endpoint could be reached.
     PveUnavailable,
     /// Proxmox rejected the server's API token.
@@ -46,6 +61,12 @@ impl ErrorCode {
             | Self::NotFound
             | Self::MethodNotAllowed
             | Self::ValidationFailed
+            | Self::PayloadTooLarge
+            | Self::PreconditionRequired
+            | Self::PreconditionFailed
+            | Self::ConfigInvalid
+            | Self::ConfigMissing
+            | Self::ConfigVersionMismatch
             | Self::PveAuthFailed
             | Self::PvePermissionDenied
             | Self::PveError
@@ -70,6 +91,10 @@ pub struct ErrorDetail {
     pub message: String,
     pub retryable: bool,
     pub request_id: String,
+    /// The configuration field a `config_invalid` error is about, e.g.
+    /// `repo.owner`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub field: Option<String>,
 }
 
 impl ErrorBody {
@@ -82,8 +107,16 @@ impl ErrorBody {
                 message: message.into(),
                 retryable: code.retryable(),
                 request_id: request_id.into(),
+                field: None,
             },
         }
+    }
+
+    /// Name the configuration field the error is about.
+    #[must_use]
+    pub fn with_field(mut self, field: Option<String>) -> Self {
+        self.error.field = field;
+        self
     }
 }
 

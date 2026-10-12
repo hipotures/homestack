@@ -26,3 +26,4 @@ an agent stops when a phase needs one that is still open
 | 2026-10-12 | PVE version | 9.2.21 (`repoid 4f6e0ac86f9e8c7f`) on all three nodes |
 | 2026-10-12 | Pools | none exist yet (neither `homestack` nor `homestack-test`) |
 | 2026-10-12 | `import-from` variants (phase 6) | not run yet |
+| 2026-10-12 | `GET /access/permissions?path=P` (phase 1) | answers for any path, existing or not, with the privileges inherited from parents (e.g. `/` → `/vms`), as `{"data":{"P":{"Priv":1,...}}}`. A privilege-separated token may query its own permissions with no extra privilege. The Administrator role has 47 privileges on PVE 9.2.21 |
