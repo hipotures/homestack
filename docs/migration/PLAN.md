@@ -213,11 +213,23 @@ Bez nich agent nie zaczyna fazy 4.
 
 **Bramka:** `--live`: VM testowa z poola uruchamia się z wygenerowaną konfiguracją i ma właściwy hostname, IP i zamontowany home (ten test można zrobić dopiero razem z fazą 5, jeśli wariant wymaga `create`; wtedy przesuwa się do bramki fazy 5).
 
+### Bramka przed fazą 5: pool `homestack` i token produkcyjny
+
+Od fazy 5 serwer zmienia stan klastra. Token HomeStacka nie może wtedy pozwalać na zmianę ani usunięcie VM spoza HomeStacka (np. desktopu). Tagi `homestack-*` są tylko umową, a nie zabezpieczeniem: granicę wyznaczają ACL Proxmoxa na poolu.
+
+- **Pool `homestack`** (zakłada go właściciel albo agent za jego zgodą, jak pool testowy). Trafiają do niego nowe workspace’y: testowe dalej w `homestack-test`, pierwsze produkcyjne w `homestack`. Gold według decyzji 9.
+- **Istniejące workspace’y (dziś 200–210) zostają na razie poza poolem.** Właściciel przeniesie je później sam. Do tego czasu serwer tylko je czyta, a zmiany robi Python.
+- **Uprawnienia tokenu serwera do zmian tylko na `/pool/homestack`** (rola `HomeStack` z sekcji 5 dokumentu mapowania), plus storage HomeStacka, bridge (`SDN.Use`) i Gold (`VM.Clone`). Żadnych uprawnień do zmian na `/`, `/vms` ani na pojedynczych VM spoza poola. `VM.Config.Disk` na `/vms` (dodane po fazie 2 dla skanu osieroconych wolumenów) zostaje zawężone według decyzji 10. Do sprawdzania przynależności do poola token potrzebuje `Pool.Audit` na `/pool/homestack` (bez tego `cluster/resources` nie pokazuje pola `pool`, sprawdzone w fazie 3).
+- **Serwer pilnuje tego także sam, nie tylko przez ACL:** `create` klonuje z `pool=homestack`. `destroy`, `refresh`, `resize`, `migrate` i `addkey` odmawiają przed planem dla VM spoza poola, nawet jeśli tag się zgadza. Odmowa ma własny kod błędu.
+- **Test na żywym klastrze (bramka):** tokenem produkcyjnym próba zmiany i usunięcia VM spoza poola (VM testowa poza oboma poolami, z tagiem `homestack-ws`) kończy się `403` od Proxmoxa i odmową serwera. `GET /access/permissions` tokenu nie pokazuje `VM.Allocate`, `VM.Config.*` ani `VM.PowerMgmt` poza poolami HomeStacka.
+
+Bez poola, zawężonego tokenu i zapisanych decyzji 9 i 10 agent nie zaczyna fazy 5.
+
 ### Faza 5: `create` i `destroy`
 
 **Zakres:** B1, B7 (część serwerowa); zdarzenia `workspace.created` i `workspace.destroyed`.
 
-- Pełny przepływ `create` na nodzie Gold z planem, weryfikacją i sprzątaniem przy błędzie (VM niszczona tylko przed startem, jak w Pythonie).
+- Pełny przepływ `create` na nodzie Gold z planem, weryfikacją i sprzątaniem przy błędzie (VM niszczona tylko przed startem, jak w Pythonie). Nowa VM od razu w poolu (`pool=homestack`, w testach `homestack-test`).
 - `destroy` z ponowną weryfikacją tożsamości home i sprzątaniem snippetów.
 - Odpowiedzi zawierają dane potrzebne klientowi do efektów lokalnych (VMID, nazwa, IP, użytkownik, „klucz hosta zmieniony”).
 

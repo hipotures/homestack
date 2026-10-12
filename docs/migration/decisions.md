@@ -17,7 +17,8 @@ an agent stops when a phase needs one that is still open
 | 6 | LUKS passphrase for `resize` | stays in the client / sent to the server for `input-data` | phase 7 | open |
 | 7 | Setup and repo stay in the client in the first stage (7.5 A) | yes / no | phase 14 | open |
 | 8 | Client authentication to the server | bearer token / plus hardware-key signature for destructive operations | not set by the plan | open |
-| 9 | Gold in its own pool with narrower privileges | yes / no | not set by the plan | open |
+| 9 | Gold in its own pool with narrower privileges | yes / no | before phase 5 | open |
+| 10 | Detached-volume scan once write privileges are limited to pool `homestack` (PLAN.md, gate before phase 5) | A keep `VM.Config.Disk` on `/vms` (cannot delete a VM, but can detach and delete the disks of every VM, the desktop included); B `Datastore.Allocate` on the HomeStack storages (complete scan, but may delete any volume on them); C `VM.Config.Disk` only on the pool: volumes of deleted VMs are not listed, the scan is reported incomplete | before phase 5 | open |
 
 ## Probe results
 
