@@ -4,12 +4,21 @@ use std::collections::{BTreeMap, HashMap};
 
 use hs_model::NodeName;
 
+use crate::guest::ExecResult;
 use crate::ops::Op;
-use crate::scenario::{ClusterSpec, FaultSpec, NodeSpec, TaskSpec, TokenSpec, VersionSpec};
+use crate::scenario::{
+    ClusterSpec, FaultSpec, NodeSpec, StorageSpec, TaskSpec, TokenSpec, VersionSpec, VmSpec, VolumeSpec,
+};
 
 pub struct ClusterState {
     pub version: VersionSpec,
     pub nodes: BTreeMap<NodeName, NodeSpec>,
+    pub storages: Vec<StorageSpec>,
+    pub volumes: Vec<VolumeSpec>,
+    pub vms: BTreeMap<u32, VmSpec>,
+    /// `exec` results by (VMID, PID).
+    pub exec: HashMap<(u32, u32), ExecResult>,
+    next_pid: u32,
     tokens: Vec<TokenSpec>,
     tasks: Vec<Task>,
     faults: Vec<(Op, FaultSpec)>,
@@ -46,9 +55,38 @@ impl ClusterState {
             }
             faults.push((op, fault));
         }
+        let known_storage = |id: &str| spec.storages.iter().any(|storage| storage.storage == id);
+        for node in nodes.values() {
+            if let Some(storage) = node.storages.iter().find(|s| !known_storage(&s.storage)) {
+                return Err(format!(
+                    "node {}: storage {} has no [[storages]] definition",
+                    node.name, storage.storage
+                ));
+            }
+        }
+        for volume in &spec.volumes {
+            if !nodes.contains_key(&volume.node) || !known_storage(&volume.storage) {
+                return Err(format!("volume {}: unknown node or storage", volume.volid));
+            }
+        }
+        let mut vms = BTreeMap::new();
+        for vm in spec.vms {
+            if !nodes.contains_key(&vm.node) {
+                return Err(format!("VM {} is on unknown node {}", vm.vmid, vm.node));
+            }
+            let vmid = vm.vmid;
+            if vms.insert(vmid, vm).is_some() {
+                return Err(format!("VM {vmid} is defined twice"));
+            }
+        }
         let mut state = Self {
             version: spec.version,
             nodes,
+            storages: spec.storages,
+            volumes: spec.volumes,
+            vms,
+            exec: HashMap::new(),
+            next_pid: 3000,
             tokens: spec.tokens,
             tasks: Vec::new(),
             faults,
@@ -110,6 +148,14 @@ impl ClusterState {
         self.tasks
             .iter_mut()
             .find(|task| task.upid == upid && task.spec.node == *node)
+    }
+
+    /// Store an `exec` result and return its PID.
+    pub fn add_exec(&mut self, vmid: u32, result: ExecResult) -> u32 {
+        let pid = self.next_pid;
+        self.next_pid = self.next_pid.saturating_add(1);
+        self.exec.insert((vmid, pid), result);
+        pid
     }
 
     pub fn task_upids(&self) -> Vec<String> {
@@ -187,6 +233,22 @@ pub const PRIVILEGES: [&str; 47] = [
     "VM.Snapshot",
     "VM.Snapshot.Rollback",
 ];
+
+/// Whether `token` holds any of `privileges` on `path`.
+pub fn has_any_privilege(token: &TokenSpec, path: &str, privileges: &[&str]) -> bool {
+    privileges.iter().any(|privilege| has_privilege(token, path, privilege))
+}
+
+/// The VMID owning a volume, from its name (`vm-<vmid>-...` or
+/// `<vmid>/vm-<vmid>-...`), as Proxmox's `parse_volname` derives it.
+#[must_use]
+pub fn volume_owner(volid: &str) -> Option<u32> {
+    let name = volid.split_once(':')?.1;
+    let base = name.rsplit('/').next()?;
+    let digits = base.strip_prefix("vm-").or_else(|| base.strip_prefix("base-"))?;
+    let end = digits.find('-')?;
+    digits[..end].parse().ok()
+}
 
 /// Whether `token` holds `privilege` on `path`, directly or inherited from a
 /// parent path. `*` grants everything, like `root@pam`.

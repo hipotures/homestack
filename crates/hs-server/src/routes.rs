@@ -40,6 +40,13 @@ pub fn v1() -> Router<AppState> {
         )
         .route("/v1/config/version", get(config_version))
         .route("/v1/capabilities", get(capabilities))
+        .route("/v1/status", get(crate::reads::status))
+        .route("/v1/workspaces/{target}", get(crate::reads::workspace))
+        .route("/v1/storage", get(crate::reads::storage))
+        .route("/v1/orphans", get(crate::reads::orphans))
+        .route("/v1/discovery", get(crate::reads::discovery))
+        .route("/v1/networks", get(crate::reads::networks))
+        .route("/v1/gold/readiness", get(crate::reads::gold_readiness))
 }
 
 /// The HTTP server answers. Does not contact Proxmox.

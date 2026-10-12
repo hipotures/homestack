@@ -211,7 +211,7 @@ async fn live_capabilities_match_the_token_privileges() -> TestResult {
     assert_eq!(body["token_id"], token.id());
     let direct = PveClient::new(PveClientConfig::new(endpoints, token))?;
     let operations = body["operations"].as_array().ok_or("no operations")?;
-    assert_eq!(operations.len(), 9);
+    assert_eq!(operations.len(), 10);
     for operation in operations {
         let mut expected_missing = Vec::new();
         for required in operation["required"].as_array().ok_or("no required list")? {

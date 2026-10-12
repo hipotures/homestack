@@ -3,7 +3,9 @@
 //! An operation is a name and sorted `key=value` parameters, written as
 //! `name{k1=v1,k2=v2}`. The Python harness produces the same text from shell
 //! commands, so both implementations can be compared call by call. The full
-//! vocabulary is documented in `parity/ops.md`.
+//! vocabulary is documented in `parity/ops.md`. Values are written with
+//! `%`, `,`, `=`, `{` and `}` percent-encoded, so a shell command fits in one
+//! parameter.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -46,10 +48,48 @@ impl fmt::Display for Op {
             if index > 0 {
                 f.write_str(",")?;
             }
-            write!(f, "{key}={value}")?;
+            write!(f, "{key}={}", escape(value))?;
         }
         f.write_str("}")
     }
+}
+
+impl Op {
+    /// An operation with the given parameters.
+    #[must_use]
+    pub fn new<'a>(name: &str, params: impl IntoIterator<Item = (&'a str, String)>) -> Self {
+        Self {
+            name: name.to_owned(),
+            params: params.into_iter().map(|(k, v)| (k.to_owned(), v)).collect(),
+        }
+    }
+}
+
+const ESCAPED: [(char, &str); 5] = [('%', "%25"), (',', "%2C"), ('=', "%3D"), ('{', "%7B"), ('}', "%7D")];
+
+fn escape(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for c in value.chars() {
+        match ESCAPED.iter().find(|(raw, _)| *raw == c) {
+            Some((_, code)) => out.push_str(code),
+            None => out.push(c),
+        }
+    }
+    out
+}
+
+fn unescape(value: &str) -> Option<String> {
+    let mut out = String::with_capacity(value.len());
+    let mut rest = value;
+    while let Some(index) = rest.find('%') {
+        out.push_str(&rest[..index]);
+        let code = rest.get(index..index + 3)?;
+        let (raw, _) = ESCAPED.iter().find(|(_, known)| known.eq_ignore_ascii_case(code))?;
+        out.push(*raw);
+        rest = &rest[index + 3..];
+    }
+    out.push_str(rest);
+    Some(out)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -69,7 +109,10 @@ impl FromStr for Op {
         let mut params = BTreeMap::new();
         for pair in body.split(',').filter(|pair| !pair.is_empty()) {
             let (key, value) = pair.split_once('=').ok_or_else(error)?;
-            if params.insert(key.to_owned(), value.to_owned()).is_some() {
+            if params
+                .insert(key.to_owned(), unescape(value).ok_or_else(error)?)
+                .is_some()
+            {
                 return Err(error());
             }
         }
@@ -89,6 +132,24 @@ mod tests {
         let op = Op::get("/cluster/resources", [("type".to_owned(), "vm".to_owned())]);
         assert_eq!(op.to_string(), "get{path=/cluster/resources,type=vm}");
         assert_eq!(op.to_string().parse::<Op>()?, op);
+        Ok(())
+    }
+
+    #[test]
+    fn values_with_separators_round_trip() -> Result<(), OpParseError> {
+        let op = Op::new(
+            "guest_exec",
+            [
+                ("cmd", "awk '{print $4}' | a=b,c %".to_owned()),
+                ("vmid", "200".to_owned()),
+            ],
+        );
+        assert_eq!(
+            op.to_string(),
+            "guest_exec{cmd=awk '%7Bprint $4%7D' | a%3Db%2Cc %25,vmid=200}"
+        );
+        assert_eq!(op.to_string().parse::<Op>()?, op);
+        assert!("get{path=%zz}".parse::<Op>().is_err());
         Ok(())
     }
 

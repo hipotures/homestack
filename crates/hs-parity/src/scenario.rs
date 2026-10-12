@@ -12,7 +12,7 @@ use serde::Deserialize;
 pub struct Scenario {
     pub meta: Meta,
     pub homestack: HomeStack,
-    pub parity: Option<Parity>,
+    pub parity: Vec<Parity>,
     pub pve: ClusterSpec,
 }
 
@@ -49,7 +49,8 @@ fn default_server_token() -> String {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Parity {
-    /// `homestack` arguments (without `--config`).
+    /// `homestack` arguments (without `--config`), or `["@NAME"]` for a
+    /// function of `parity/python/homestack_parity/func_driver.py`.
     pub python: Vec<String>,
     /// Server request as `METHOD /path`.
     pub rust: String,
@@ -74,7 +75,8 @@ pub struct Expect {
 struct Document {
     scenario: Meta,
     homestack: HomeStack,
-    parity: Option<Parity>,
+    #[serde(default)]
+    parity: Vec<Parity>,
     #[allow(dead_code, reason = "parsed by pve-sim from the same text")]
     pve: toml::Value,
 }

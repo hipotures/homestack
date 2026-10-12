@@ -17,6 +17,11 @@
 //! - `SDN.Use` on the Gold bridge is not listed: the bridge comes from Gold's
 //!   `net0`, not from the configuration, so it is checked when a `create`
 //!   plan is made (phase 5).
+//! - Detached volumes (`orphan_scan`) need `VM.Config.Disk` on `/vms`: Proxmox
+//!   lists a VM volume only to who may change that VM's disks
+//!   (`PVE::Storage::check_volume_access`), and a detached volume's VM may
+//!   not exist any more, so only `/vms` covers it. `Datastore.Allocate` on
+//!   each storage would do too; the table names the narrower one.
 //! - Every operation reads the cluster first: `Sys.Audit` on `/nodes`, and
 //!   all but the Gold check `VM.Audit` on `/vms`.
 
@@ -48,6 +53,13 @@ const fn needs(operation: Operation) -> Needs {
     match operation {
         Operation::Read => Needs {
             vms: &["VM.Audit"],
+            gold: NONE,
+            audit_storages: true,
+            allocate: Storages::None,
+            snippets: false,
+        },
+        Operation::OrphanScan => Needs {
+            vms: &["VM.Audit", "VM.Config.Disk"],
             gold: NONE,
             audit_storages: true,
             allocate: Storages::None,

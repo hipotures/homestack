@@ -63,6 +63,7 @@ async fn a_read_only_token_can_read_but_not_change_anything() -> TestResult {
         ids,
         [
             "read",
+            "orphan_scan",
             "guest_read",
             "gold_readiness",
             "create",
@@ -77,6 +78,11 @@ async fn a_read_only_token_can_read_but_not_change_anything() -> TestResult {
         assert_eq!(operation(&body, id)["available"], true, "{id}: {body}");
         assert_eq!(operation(&body, id)["missing"], json!([]), "{id}");
     }
+    assert_eq!(
+        operation(&body, "orphan_scan")["missing"],
+        json!([privilege("/vms", "VM.Config.Disk")]),
+        "a read-only token cannot list VM volumes"
+    );
     let read = &operation(&body, "read")["required"];
     for storage in ["fast", "bulk", "other"] {
         assert!(

@@ -9,6 +9,10 @@ use utoipa::ToSchema;
 pub enum Operation {
     /// Cluster, workspace and storage reads (`status`, `discover`, ...).
     Read,
+    /// Listing VM volumes to find detached HomeStack volumes. Proxmox shows
+    /// a VM volume only with `VM.Config.Disk` on its VM (or
+    /// `Datastore.Allocate` on the storage).
+    OrphanScan,
     /// Guest agent reads at audit level (`ping`, `get-fsinfo`, ...).
     GuestRead,
     /// Proxmox-side Gold checks.
@@ -23,8 +27,9 @@ pub enum Operation {
 
 impl Operation {
     /// Every operation, in the order the API lists them.
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 10] = [
         Self::Read,
+        Self::OrphanScan,
         Self::GuestRead,
         Self::GoldReadiness,
         Self::Create,

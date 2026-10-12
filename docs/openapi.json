@@ -303,6 +303,351 @@
         ]
       }
     },
+    "/v1/discovery": {
+      "get": {
+        "tags": [
+          "status"
+        ],
+        "summary": "Nodes, Gold candidates and storage definitions; needs no configuration.",
+        "operationId": "discovery",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Discovery"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Proxmox rejected the request or answered unusably",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "No Proxmox endpoint is reachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/gold/readiness": {
+      "get": {
+        "tags": [
+          "status"
+        ],
+        "summary": "Gold readiness, Proxmox part. The guest contract needs `exec` and is\nreported as skipped.",
+        "operationId": "gold_readiness",
+        "parameters": [
+          {
+            "name": "gold",
+            "in": "path",
+            "description": "Gold VMID; defaults to `[node] gold_vmid` of the configuration.",
+            "required": true,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "vmid",
+            "in": "path",
+            "description": "Same as `gold`.",
+            "required": true,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoldReadiness"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such VM",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "No VMID given and no configuration uploaded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid VMID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Proxmox rejected the request or answered unusably",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "No Proxmox endpoint is reachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/networks": {
+      "get": {
+        "tags": [
+          "status"
+        ],
+        "summary": "Network profiles a workspace could use, for the Gold VM's bridge.",
+        "operationId": "networks",
+        "parameters": [
+          {
+            "name": "gold",
+            "in": "path",
+            "description": "Gold VMID; defaults to `[node] gold_vmid` of the configuration.",
+            "required": true,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "vmid",
+            "in": "path",
+            "description": "Same as `gold`.",
+            "required": true,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/NetworkCandidate"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such Gold VM",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "No Gold given and no configuration uploaded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid VMID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Proxmox rejected the request or answered unusably",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "No Proxmox endpoint is reachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/orphans": {
+      "get": {
+        "tags": [
+          "status"
+        ],
+        "summary": "HomeStack volumes no VM uses.",
+        "operationId": "orphans",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Orphans"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "No configuration has been uploaded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Proxmox rejected the request or answered unusably",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "No Proxmox endpoint is reachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/v1/pve/nodes/{node}/status": {
       "get": {
         "tags": [
@@ -433,6 +778,235 @@
           }
         ]
       }
+    },
+    "/v1/status": {
+      "get": {
+        "tags": [
+          "status"
+        ],
+        "summary": "Global status, as `homestack status --json`.",
+        "operationId": "status",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GlobalStatus"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "No configuration has been uploaded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Proxmox rejected the request or answered unusably",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "No Proxmox endpoint is reachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/storage": {
+      "get": {
+        "tags": [
+          "status"
+        ],
+        "summary": "Capacity of every storage of every node's `homestack-storage-<N>` layout.",
+        "operationId": "storage",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/LayoutCapacity"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "No configuration has been uploaded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Proxmox rejected the request or answered unusably",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "No Proxmox endpoint is reachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/workspaces/{target}": {
+      "get": {
+        "tags": [
+          "status"
+        ],
+        "summary": "One VM by VMID or workspace name, as `homestack status TARGET --json`.",
+        "operationId": "workspace",
+        "parameters": [
+          {
+            "name": "target",
+            "in": "path",
+            "description": "VMID, or the name of a VM tagged homestack-ws or homestack-alien",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceStatus"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such VM or workspace",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "No configuration has been uploaded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid or ambiguous target",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Proxmox rejected the request or answered unusably",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "No Proxmox endpoint is reachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -462,6 +1036,49 @@
           }
         },
         "additionalProperties": false
+      },
+      "Capacity": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "available_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "name": {
+            "type": "string"
+          },
+          "percent": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Used share of the total."
+          },
+          "total_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "used_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          }
+        }
       },
       "ConfigUpdated": {
         "type": "object",
@@ -495,6 +1112,42 @@
           }
         },
         "additionalProperties": false
+      },
+      "Discovery": {
+        "type": "object",
+        "description": "`GET /v1/discovery`: the Proxmox part of `homestack discover`.",
+        "required": [
+          "proxmox_version",
+          "nodes",
+          "gold_candidates",
+          "storages"
+        ],
+        "properties": {
+          "gold_candidates": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            },
+            "description": "VMs tagged `homestack-gold`: `vmid`, `name`, `node`, `status`, `tags`\nwhere Proxmox reports them."
+          },
+          "nodes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NodeState"
+            }
+          },
+          "proxmox_version": {
+            "type": "object",
+            "description": "`GET /version` as Proxmox returns it."
+          },
+          "storages": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            },
+            "description": "Storage definitions: `storage`, `type`, `content`, `nodes`, `shared`\nwhere defined."
+          }
+        }
       },
       "ErrorBody": {
         "type": "object",
@@ -569,6 +1222,265 @@
         },
         "additionalProperties": false
       },
+      "GlobalStatus": {
+        "type": "object",
+        "description": "`GET /v1/status`",
+        "required": [
+          "workspaces",
+          "summary",
+          "warnings"
+        ],
+        "properties": {
+          "gold": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/StatusEntry",
+                "description": "The configured Gold VM; `null` when it does not exist (see `warnings`)."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "summary": {
+            "$ref": "#/components/schemas/StatusSummary"
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "workspaces": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatusEntry"
+            },
+            "description": "Workspaces (`homestack-ws`) and alien VMs (`homestack-alien`), by VMID."
+          }
+        }
+      },
+      "GoldCheck": {
+        "type": "object",
+        "required": [
+          "scope",
+          "name",
+          "status",
+          "detail",
+          "requirement"
+        ],
+        "properties": {
+          "detail": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "requirement": {
+            "type": "string",
+            "description": "`required` or `optional`."
+          },
+          "scope": {
+            "type": "string",
+            "description": "`PVE`, `guest` or `security`."
+          },
+          "status": {
+            "type": "string",
+            "description": "`pass`, `fail` or `skip`."
+          }
+        }
+      },
+      "GoldReadiness": {
+        "type": "object",
+        "description": "`GET /v1/gold/readiness`",
+        "required": [
+          "vmid",
+          "node",
+          "power_state",
+          "ok",
+          "guest_checked",
+          "checks"
+        ],
+        "properties": {
+          "checks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GoldCheck"
+            }
+          },
+          "guest_checked": {
+            "type": "boolean",
+            "description": "Some guest check ran."
+          },
+          "node": {
+            "type": "string"
+          },
+          "ok": {
+            "type": "boolean",
+            "description": "No required check failed."
+          },
+          "power_state": {
+            "type": "string"
+          },
+          "vmid": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
+      "HomeUsage": {
+        "type": "object",
+        "description": "A workspace home. Without guest data only `size_bytes` (from the VM\nconfig) is known.",
+        "properties": {
+          "free_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "free_percent": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "size_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "used_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "HomesSummary": {
+        "type": "object",
+        "required": [
+          "quota_bytes",
+          "missing_count"
+        ],
+        "properties": {
+          "free_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "free_percent": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "missing_count": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "physical_available_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Always `null`; kept for the CLI's output shape.",
+            "minimum": 0
+          },
+          "quota_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "used_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "LayoutCapacity": {
+        "type": "object",
+        "description": "One storage of one `homestack-storage-<N>` layout.",
+        "required": [
+          "layout",
+          "node",
+          "storage",
+          "node_status",
+          "ok",
+          "name"
+        ],
+        "properties": {
+          "available_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "layout": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "node": {
+            "type": "string"
+          },
+          "node_status": {
+            "type": "string"
+          },
+          "ok": {
+            "type": "boolean",
+            "description": "Whether the capacity could be read."
+          },
+          "percent": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "storage": {
+            "type": "string"
+          },
+          "total_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "used_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
       "Liveness": {
         "type": "object",
         "description": "Body of `GET /health/live`. It only says the HTTP server answers; it does\nnot check Proxmox.",
@@ -586,6 +1498,62 @@
         "enum": [
           "ok"
         ]
+      },
+      "NetworkCandidate": {
+        "type": "object",
+        "description": "One network profile a workspace could use (`GET /v1/networks`).",
+        "required": [
+          "cidr",
+          "dns_servers",
+          "source"
+        ],
+        "properties": {
+          "bridge": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "cidr": {
+            "type": "string"
+          },
+          "dns_servers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "gateway": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source": {
+            "type": "string",
+            "description": "Where it was found, e.g. `HomeStack workspace VM 200`."
+          }
+        }
+      },
+      "NodeState": {
+        "type": "object",
+        "description": "A cluster node and whether Proxmox reports it online.",
+        "required": [
+          "node",
+          "status",
+          "online"
+        ],
+        "properties": {
+          "node": {
+            "type": "string"
+          },
+          "online": {
+            "type": "boolean"
+          },
+          "status": {
+            "type": "string"
+          }
+        }
       },
       "NodeStatus": {
         "type": "object",
@@ -622,6 +1590,7 @@
         "description": "A HomeStack operation whose Proxmox privileges the server checks.",
         "enum": [
           "read",
+          "orphan_scan",
           "guest_read",
           "gold_readiness",
           "create",
@@ -666,6 +1635,75 @@
         },
         "additionalProperties": false
       },
+      "OrphanVolume": {
+        "type": "object",
+        "description": "A HomeStack volume (`vm-<vmid>-hs-(root|home)-<name>`) no VM uses.",
+        "required": [
+          "volid",
+          "vmid",
+          "role",
+          "name",
+          "storage",
+          "node"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "node": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string",
+            "description": "`root` or `home`."
+          },
+          "size_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "storage": {
+            "type": "string"
+          },
+          "vmid": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "volid": {
+            "type": "string"
+          }
+        }
+      },
+      "Orphans": {
+        "type": "object",
+        "description": "`GET /v1/orphans`",
+        "required": [
+          "volumes",
+          "complete",
+          "warnings"
+        ],
+        "properties": {
+          "complete": {
+            "type": "boolean"
+          },
+          "volumes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OrphanVolume"
+            }
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
       "Privilege": {
         "type": "object",
         "description": "A Proxmox privilege on an ACL path.",
@@ -705,6 +1743,334 @@
           "version": {
             "type": "string",
             "description": "Full `pve-manager` version, e.g. `9.2.21`."
+          }
+        }
+      },
+      "SshCommands": {
+        "type": "object",
+        "properties": {
+          "root": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "user": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "StatusEntry": {
+        "type": "object",
+        "description": "One VM in the global status.",
+        "required": [
+          "vmid",
+          "role",
+          "status",
+          "node",
+          "node_status",
+          "role_tag_ok"
+        ],
+        "properties": {
+          "home": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/HomeUsage",
+                "description": "Home usage; `null` for Gold, alien VMs, a missing home or an offline node."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "ip": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`network.prefix.<vmid>` for VMIDs 2–254."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "node": {
+            "type": "string"
+          },
+          "node_status": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string",
+            "description": "`GOLD`, `WS` or `ALIEN`."
+          },
+          "role_tag_ok": {
+            "type": "boolean"
+          },
+          "root_storage": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "description": "Proxmox status (`running`, `stopped`, `unknown` on an offline node)."
+          },
+          "vmid": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "warning": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "StatusSummary": {
+        "type": "object",
+        "required": [
+          "workspace_count",
+          "running",
+          "stopped",
+          "root_storage",
+          "storage_layouts",
+          "nodes",
+          "homes",
+          "orphaned_volumes",
+          "orphan_scan_complete"
+        ],
+        "properties": {
+          "homes": {
+            "$ref": "#/components/schemas/HomesSummary"
+          },
+          "nodes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NodeState"
+            }
+          },
+          "orphan_scan_complete": {
+            "type": "boolean",
+            "description": "`false` when a node or storage that holds HomeStack volumes could not\nbe scanned."
+          },
+          "orphaned_volumes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OrphanVolume"
+            }
+          },
+          "root_storage": {
+            "$ref": "#/components/schemas/Capacity",
+            "description": "Capacity of the configured node's default storage."
+          },
+          "running": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "stopped": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "storage_layouts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LayoutCapacity"
+            }
+          },
+          "workspace_count": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "VolumeEntry": {
+        "type": "object",
+        "required": [
+          "slot",
+          "role",
+          "volume"
+        ],
+        "properties": {
+          "role": {
+            "type": "string",
+            "description": "`root`, `home`, `unused`, `efi`, `tpm`, `cloud-init` or `disk`."
+          },
+          "size": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "slot": {
+            "type": "string"
+          },
+          "storage": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "volume": {
+            "type": "string"
+          }
+        }
+      },
+      "WorkspaceStatus": {
+        "type": "object",
+        "description": "`GET /v1/workspaces/{target}`",
+        "required": [
+          "vmid",
+          "tags",
+          "role_tag_ok",
+          "status",
+          "node",
+          "qga",
+          "volumes",
+          "ssh"
+        ],
+        "properties": {
+          "actual_hostname": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "From the guest agent, when the VM runs and the agent answers."
+          },
+          "actual_ip": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`address/prefix` of the first IPv4 address on `eth0`."
+          },
+          "configured_ip": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "home_disk": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "home_identity_ok": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "home_label": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`HS_HOME_<vmid>` for workspaces."
+          },
+          "home_mount": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`<device> <type> <mountpoint>` of the filesystem at `/home/<user>`."
+          },
+          "home_mount_ok": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "The home filesystem is ext4 on the VM's home disk."
+          },
+          "home_serial": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`serial=` of the home disk in the VM config."
+          },
+          "home_size_gb": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "home_storage": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "node": {
+            "type": "string"
+          },
+          "qga": {
+            "type": "boolean",
+            "description": "Whether the guest agent answered."
+          },
+          "role": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`GOLD`, `WS`, `ALIEN`, or `null` without a role tag."
+          },
+          "role_tag_ok": {
+            "type": "boolean"
+          },
+          "role_warning": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "root_storage": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ssh": {
+            "$ref": "#/components/schemas/SshCommands"
+          },
+          "status": {
+            "type": "string"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "vmid": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "volumes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/VolumeEntry"
+            }
           }
         }
       }

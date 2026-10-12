@@ -13,7 +13,7 @@ description = "Node version, kernel and uptime of the configured node"
 # Relative to the repository root.
 config = "python/config.example.toml"
 
-[parity]
+[[parity]]
 python = ["transport", "--json"]
 rust = "GET /v1/pve/nodes/pve-example-1/status"
 normalize = "transport-node-status"

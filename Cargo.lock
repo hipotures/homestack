@@ -528,6 +528,10 @@ name = "hs-core"
 version = "0.1.0"
 dependencies = [
  "hs-model",
+ "hs-pve",
+ "serde_json",
+ "thiserror",
+ "tokio",
 ]
 
 [[package]]
@@ -581,6 +585,7 @@ name = "hs-server"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "hs-config",
  "hs-core",
  "hs-model",
  "hs-pve",
@@ -1295,6 +1300,7 @@ dependencies = [
  "rustls-platform-verifier",
  "serde",
  "serde_json",
+ "serde_urlencoded",
  "sync_wrapper",
  "tokio",
  "tokio-rustls",

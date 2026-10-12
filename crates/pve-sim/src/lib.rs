@@ -9,6 +9,7 @@
 //! that could not be observed live is marked as such where it is modelled.
 
 mod api;
+mod guest;
 pub mod ops;
 pub mod scenario;
 mod state;

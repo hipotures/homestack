@@ -26,8 +26,14 @@ PVESH_API_ERROR = 255
 PVESH_NO_HANDLER = 1
 
 
+# `qm` exits with 255 when the API call behind it fails.
+QM_API_ERROR = 255
+
+
 class Api(Protocol):
     def get(self, path: str, query: dict[str, str]) -> tuple[int, Any]: ...
+
+    def post(self, path: str, body: dict[str, Any]) -> tuple[int, Any]: ...
 
 
 class HttpsApi:
@@ -42,12 +48,29 @@ class HttpsApi:
         url = self.base_url + "/api2/json" + urllib.parse.quote(path)
         if query:
             url += "?" + urllib.parse.urlencode(sorted(query.items()))
-        request = urllib.request.Request(url, headers={"Authorization": f"PVEAPIToken={self.token}"})
+        return self._send(urllib.request.Request(url, headers={"Authorization": f"PVEAPIToken={self.token}"}))
+
+    def post(self, path: str, body: dict[str, Any]) -> tuple[int, Any]:
+        url = self.base_url + "/api2/json" + urllib.parse.quote(path)
+        request = urllib.request.Request(
+            url,
+            data=json.dumps(body).encode("utf-8"),
+            method="POST",
+            headers={"Authorization": f"PVEAPIToken={self.token}", "Content-Type": "application/json"},
+        )
+        return self._send(request)
+
+    def _send(self, request: urllib.request.Request) -> tuple[int, Any]:
         try:
             with urllib.request.urlopen(request, context=self.context, timeout=30) as response:
                 return response.status, _json_or_none(response.read())
         except urllib.error.HTTPError as error:
             return error.code, _json_or_none(error.read())
+
+
+def _message(body: Any, status: int) -> str:
+    message = body.get("message") if isinstance(body, dict) else None
+    return str(message or status).rstrip("\n")
 
 
 def _json_or_none(body: bytes) -> Any:
@@ -67,6 +90,41 @@ class FixtureTransport:
 
     def run(self, command: str, *, check: bool = True, timeout: int = 120, output_lines: int = 4000) -> RemoteResult:
         call = ops.translate(command)
+        if isinstance(call, ops.GuestPing):
+            result = self._guest_ping(call)
+        elif isinstance(call, ops.GuestExec):
+            result = self._guest_exec(call)
+        else:
+            result = self._pvesh_get(call)
+        if check and result.returncode != 0:
+            node = getattr(self.cfg, "control_node", "fixture")
+            detail = f"\n{result.output}" if result.output else ""
+            raise AppError(f"Remote command failed ({result.returncode}) on {node}: {command}{detail}")
+        return result
+
+    def _node(self, call: ops.Command) -> str:
+        return call.node or str(getattr(self.cfg, "control_node", ""))
+
+    def _guest_ping(self, call: ops.GuestPing) -> RemoteResult:
+        status, body = self.api.post(f"/nodes/{self._node(call)}/qemu/{call.vmid}/agent/ping", {})
+        if 200 <= status < 300:
+            return RemoteResult(0, "")
+        return RemoteResult(QM_API_ERROR, _message(body, status))
+
+    def _guest_exec(self, call: ops.GuestExec) -> RemoteResult:
+        """`qm guest exec` waits for the command and prints the final
+        exec-status object as JSON."""
+        base = f"/nodes/{self._node(call)}/qemu/{call.vmid}/agent"
+        status, body = self.api.post(f"{base}/exec", {"command": ["/bin/sh", "-lc", call.shell]})
+        if not 200 <= status < 300:
+            return RemoteResult(QM_API_ERROR, _message(body, status))
+        pid = body["data"]["pid"]
+        status, body = self.api.get(f"{base}/exec-status", {"pid": str(pid)})
+        if not 200 <= status < 300:
+            return RemoteResult(QM_API_ERROR, _message(body, status))
+        return RemoteResult(0, json.dumps(body["data"], sort_keys=True))
+
+    def _pvesh_get(self, call: ops.ApiCall) -> RemoteResult:
         status, body = self.api.get(call.path, call.query)
         if 200 <= status < 300:
             data = body.get("data") if isinstance(body, dict) else None
@@ -74,12 +132,7 @@ class FixtureTransport:
         elif status == 501:
             result = RemoteResult(PVESH_NO_HANDLER, f"No '{call.method}' handler defined for '{call.path}'")
         else:
-            message = body.get("message") if isinstance(body, dict) else None
-            result = RemoteResult(PVESH_API_ERROR, str(message or status).rstrip("\n"))
-        if check and result.returncode != 0:
-            node = getattr(self.cfg, "control_node", "fixture")
-            detail = f"\n{result.output}" if result.output else ""
-            raise AppError(f"Remote command failed ({result.returncode}) on {node}: {command}{detail}")
+            result = RemoteResult(PVESH_API_ERROR, _message(body, status))
         return result
 
     def run_with_progress(
@@ -135,7 +188,7 @@ class RecordingTransport:
 
     def _record(self, command: str) -> None:
         self.commands.append(command)
-        self.ops.append(ops.translate(command).op)
+        self.ops.extend(ops.translate(command).ops)
 
     def run(self, command: str, **kwargs: Any) -> RemoteResult:
         self._record(command)

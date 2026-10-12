@@ -7,7 +7,7 @@ use std::time::Duration;
 use hs_model::NodeName;
 use hs_model::pve::{NodeStatus, PveVersion};
 use reqwest::header::{AUTHORIZATION, HeaderValue};
-use reqwest::{Certificate, StatusCode};
+use reqwest::{Certificate, Method, StatusCode};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use url::Url;
@@ -160,13 +160,34 @@ impl PveClient {
         self.get_query(segments, &[]).await
     }
 
-    /// GET an API path given as segments below `/api2/json`.
+    /// `GET` an API path given as segments below `/api2/json`; the `data`
+    /// of the answer as JSON.
+    pub async fn get_value(&self, segments: &[&str], query: &[(&str, &str)]) -> Result<serde_json::Value, PveError> {
+        self.get_query(segments, query).await
+    }
+
+    /// `POST` with form parameters; the `data` of the answer as JSON.
+    pub async fn post_value(&self, segments: &[&str], form: &[(&str, &str)]) -> Result<serde_json::Value, PveError> {
+        self.request(Method::POST, segments, &[], form).await
+    }
+
+    async fn get_query<T: DeserializeOwned>(&self, segments: &[&str], query: &[(&str, &str)]) -> Result<T, PveError> {
+        self.request(Method::GET, segments, query, &[]).await
+    }
+
+    /// Call an API path given as segments below `/api2/json`.
     ///
     /// Endpoints are tried starting with the one that answered last. Only a
     /// failure to connect (including TLS verification) moves on to the next
     /// endpoint: the request has not been sent then, so trying elsewhere is
     /// safe for any method. Once a request is sent, its outcome is final.
-    async fn get_query<T: DeserializeOwned>(&self, segments: &[&str], query: &[(&str, &str)]) -> Result<T, PveError> {
+    async fn request<T: DeserializeOwned>(
+        &self,
+        method: Method,
+        segments: &[&str],
+        query: &[(&str, &str)],
+        form: &[(&str, &str)],
+    ) -> Result<T, PveError> {
         let start = self.preferred.load(Ordering::Relaxed);
         let mut failures = Vec::new();
         for offset in 0..self.endpoints.len() {
@@ -176,12 +197,14 @@ impl PveClient {
             if !query.is_empty() {
                 url.query_pairs_mut().extend_pairs(query);
             }
-            let sent = self
+            let mut request = self
                 .http
-                .get(url)
-                .header(AUTHORIZATION, self.authorization.clone())
-                .send()
-                .await;
+                .request(method.clone(), url)
+                .header(AUTHORIZATION, self.authorization.clone());
+            if method == Method::POST {
+                request = request.form(form);
+            }
+            let sent = request.send().await;
             match sent {
                 Ok(response) => {
                     self.preferred.store(index, Ordering::Relaxed);

@@ -9,6 +9,7 @@ pub mod config_store;
 mod error;
 mod openapi;
 pub mod precondition;
+mod reads;
 mod routes;
 pub mod settings;
 

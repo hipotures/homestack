@@ -1,8 +1,16 @@
 //! HomeStack operations: plans, state machines and verification.
 //!
-//! The logic is written against a Proxmox abstraction so it runs the same on
-//! the real client and on the simulator. Phase 1 adds the privileges each
-//! operation needs ([`capabilities`]); the operations themselves arrive from
-//! phase 2 of `docs/migration/PLAN.md`.
+//! The logic is written against [`pve::Pve`], so it runs the same on the real
+//! client and on test doubles. Each function ports a Python function and
+//! names it; behaviour and messages follow Python unless
+//! `docs/migration/phase-N.md` records a difference.
 
 pub mod capabilities;
+pub mod discovery;
+pub mod error;
+pub mod gold;
+pub mod inventory;
+pub mod pve;
+pub mod status;
+
+pub use error::CoreError;

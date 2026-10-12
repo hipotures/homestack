@@ -11,3 +11,9 @@ workspace = true
 
 [dependencies]
 hs-model = { version = "0.1.0", path = "../hs-model" }
+hs-pve = { version = "0.1.0", path = "../hs-pve" }
+serde_json = "1.0.154"
+thiserror = "2.0.21"
+
+[dev-dependencies]
+tokio = { version = "1.53.2", features = ["rt", "macros"] }

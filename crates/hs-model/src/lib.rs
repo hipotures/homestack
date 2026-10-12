@@ -10,6 +10,7 @@ pub mod health;
 pub mod node;
 pub mod pve;
 pub mod server_config;
+pub mod status;
 
 pub use error::{ErrorBody, ErrorCode, ErrorDetail, SCHEMA_VERSION};
 pub use node::{NodeName, NodeNameError};

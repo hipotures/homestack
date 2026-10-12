@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shlex
 import unittest
 
 from homestack_parity import ops
@@ -36,7 +37,12 @@ class PveshTranslationTests(unittest.TestCase):
         routed = ops.translate(
             "ssh -o BatchMode=yes root@pve-example-2 'pvesh get /nodes/pve-example-2/status --output-format json'"
         )
-        self.assertEqual(routed, local)
+        self.assertEqual(routed.ops, local.ops)
+        self.assertEqual((local.node, routed.node), (None, "pve-example-2"))
+
+    def test_a_path_query_parameter_does_not_replace_the_api_path(self) -> None:
+        call = ops.translate("pvesh get /access/permissions --path /vms --output-format json")
+        self.assertEqual(call.op, "get{path=/access/permissions,query_path=/vms}")
 
     def test_reads_must_ask_for_json(self) -> None:
         with self.assertRaises(ops.UnsupportedCommand):
@@ -46,6 +52,30 @@ class PveshTranslationTests(unittest.TestCase):
         for command in ["qm status 200", "pvesh set /nodes/x/config --foo 1 --output-format json", "rm -f /x", ""]:
             with self.subTest(command=command), self.assertRaises(ops.UnsupportedCommand):
                 ops.translate(command)
+
+
+class GuestTranslationTests(unittest.TestCase):
+    def test_ping_with_or_without_timeout(self) -> None:
+        for command in ["qm guest cmd 200 ping", "timeout -k 2s 5s qm guest cmd 200 ping"]:
+            with self.subTest(command=command):
+                call = ops.translate(command)
+                self.assertEqual(call, ops.GuestPing(200))
+                self.assertEqual(call.ops, ["guest_ping{vmid=200}"])
+
+    def test_exec_is_one_command_and_two_operations(self) -> None:
+        shell = "ip -4 -o addr show dev eth0 2>/dev/null | awk '{print $4}' | head -n1"
+        call = ops.translate(
+            "ssh -o BatchMode=yes root@pve-example-2 "
+            + shlex.quote(f"qm guest exec 200 -- /bin/sh -lc {shlex.quote(shell)}")
+        )
+        self.assertEqual(call, ops.GuestExec(200, shell, "pve-example-2"))
+        self.assertEqual(
+            call.ops,
+            [
+                "guest_exec{cmd=ip -4 -o addr show dev eth0 2>/dev/null | awk '%7Bprint $4%7D' | head -n1,vmid=200}",
+                "guest_exec_status{vmid=200}",
+            ],
+        )
 
 
 if __name__ == "__main__":

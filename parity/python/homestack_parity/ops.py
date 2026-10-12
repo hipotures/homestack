@@ -19,21 +19,68 @@ class UnsupportedCommand(Exception):
 
 @dataclass(frozen=True)
 class ApiCall:
+    """`pvesh get PATH`."""
+
     method: str
     path: str
     query: dict[str, str] = field(default_factory=dict)
+    node: str | None = None
 
     @property
     def op(self) -> str:
-        return format_op(self.method, {**self.query, "path": self.path})
+        params = {("query_path" if key == "path" else key): value for key, value in self.query.items()}
+        return format_op(self.method, {**params, "path": self.path})
+
+    @property
+    def ops(self) -> list[str]:
+        return [self.op]
+
+
+@dataclass(frozen=True)
+class GuestPing:
+    """`qm guest cmd VMID ping`: `POST .../agent/ping`."""
+
+    vmid: int
+    node: str | None = None
+
+    @property
+    def ops(self) -> list[str]:
+        return [format_op("guest_ping", {"vmid": str(self.vmid)})]
+
+
+@dataclass(frozen=True)
+class GuestExec:
+    """`qm guest exec VMID -- /bin/sh -lc CMD`: `POST .../agent/exec`, then
+    `GET .../agent/exec-status` until the command has finished."""
+
+    vmid: int
+    shell: str
+    node: str | None = None
+
+    @property
+    def ops(self) -> list[str]:
+        return [
+            format_op("guest_exec", {"cmd": self.shell, "vmid": str(self.vmid)}),
+            format_op("guest_exec_status", {"vmid": str(self.vmid)}),
+        ]
+
+
+Command = ApiCall | GuestPing | GuestExec
+
+_ESCAPES = {"%": "%25", ",": "%2C", "=": "%3D", "{": "%7B", "}": "%7D"}
+
+
+def _escape(value: str) -> str:
+    return "".join(_ESCAPES.get(char, char) for char in value)
 
 
 def format_op(name: str, params: dict[str, str]) -> str:
-    return name + "{" + ",".join(f"{key}={params[key]}" for key in sorted(params)) + "}"
+    return name + "{" + ",".join(f"{key}={_escape(params[key])}" for key in sorted(params)) + "}"
 
 
-def translate(command: str) -> ApiCall:
-    """The API call a shell command amounts to."""
+def translate(command: str, node: str | None = None) -> Command:
+    """The API call a shell command amounts to, and the node it runs on
+    (`None`: the control node)."""
     try:
         words = shlex.split(command)
     except ValueError as exc:
@@ -42,10 +89,19 @@ def translate(command: str) -> ApiCall:
     # proxmox.node_shell_command routes to other nodes through ssh; the API
     # proxies /nodes/{node}/... itself, so the operation is the same.
     if len(words) == 5 and words[:3] == ["ssh", "-o", "BatchMode=yes"] and words[3].startswith("root@"):
-        return translate(words[4])
+        return translate(words[4], words[3].removeprefix("root@"))
+
+    # guest.qga_ping_command: `timeout -k 2s 5s qm guest cmd VMID ping`.
+    if len(words) >= 4 and words[0] == "timeout" and words[1] == "-k":
+        words = words[4:]
 
     if len(words) >= 3 and words[:2] == ["pvesh", "get"] and words[2].startswith("/"):
-        return _pvesh_get(command, words[2], words[3:])
+        call = _pvesh_get(command, words[2], words[3:])
+        return ApiCall(call.method, call.path, call.query, node)
+    if len(words) == 5 and words[:3] == ["qm", "guest", "cmd"] and words[4] == "ping" and words[3].isdigit():
+        return GuestPing(int(words[3]), node)
+    if len(words) == 8 and words[:3] == ["qm", "guest", "exec"] and words[3].isdigit() and words[4:7] == ["--", "/bin/sh", "-lc"]:
+        return GuestExec(int(words[3]), words[7], node)
     raise UnsupportedCommand(command)
 
 

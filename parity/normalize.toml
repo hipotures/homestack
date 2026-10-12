@@ -12,3 +12,64 @@ session. The server reads the same `/nodes/{node}/status` and returns
 Proxmox's own key names; the Herdr session has no server counterpart
 (mapping T1, A4).
 """
+
+[[rule]]
+id = "same"
+reason = "No difference: the server returns what the Python function returns."
+
+[[rule]]
+id = "status-global"
+python_drop = ["ok", "command", "scope", "config", "execution", "summary.storage_unit", "summary.storage_decimals"]
+python_ops_drop = ["guest_exec{*", "guest_exec_status{*"]
+rust_ops_drop = ["get{path=/nodes/*/qemu/*/agent/*", "get{path=/access/permissions,*"]
+reason = """
+`ok`, `command` and `scope` describe the CLI result, `config` and
+`execution` the desktop's config file and Herdr session; the HTTP status and
+the route say the same on the server. Storage display settings belong to
+`client.toml` (phase 1). Home usage: Python runs `findmnt | blkid` and `df`
+through `exec`; the server reads `get-fsinfo` (mapping D3, VM.GuestAgent.Audit
+only), which gives the same numbers (phase-2.md). Guest pings are compared.
+The server also asks `/access/permissions` whether its token may list VM
+volumes at all (Python runs as root); a gap shows as an incomplete orphan
+scan instead of an empty one.
+"""
+
+[[rule]]
+id = "status-workspace"
+python_drop = ["ok", "command", "config", "execution", "mounted_home_label", "ubuntu_user_present"]
+python_ops_drop = ["guest_exec{*", "guest_exec_status{*"]
+rust_ops_drop = ["get{path=/nodes/*/qemu/*/agent/*"]
+reason = """
+As status-global. The guest is read with `get-host-name`,
+`network-get-interfaces` and `get-fsinfo` instead of `exec` (mapping A2).
+`get-fsinfo` has no filesystem label: the server proves the home mount by the
+QEMU drive of the home slot instead, so `mounted_home_label` is gone and
+`home_mount_ok` keeps its meaning. Whether an `ubuntu` account exists needs
+`exec` (VM.GuestAgent.Unrestricted) and moves to the Gold guest checks
+(phase 3, mapping E2).
+"""
+
+[[rule]]
+id = "storage-from-status"
+python_select = "summary.storage_layouts"
+python_ops_drop = ["*"]
+rust_ops_drop = ["*"]
+reason = """
+Python has no command for storage capacity alone (mapping A7); it is part of
+`status --json`. The server's GET /v1/storage returns the same list. The
+operations are not comparable: Python's are the whole global status.
+"""
+
+[[rule]]
+id = "orphans-from-status"
+python_pick = { volumes = "summary.orphaned_volumes", complete = "summary.orphan_scan_complete" }
+rust_drop = ["warnings"]
+python_ops_drop = ["*"]
+rust_ops_drop = ["*"]
+reason = """
+Python has no command for detached volumes alone (mapping A8); they are part
+of `status --json`, whose warnings mix every check. The server's GET
+/v1/orphans returns the volumes, whether the scan was complete and its own
+warnings. The operations are not comparable: Python's are the whole global
+status.
+"""

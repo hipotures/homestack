@@ -1,0 +1,347 @@
+# Phase 2: every read through both implementations on one cluster.
+#
+# pve-example-1 holds Gold (stopped) and the workspaces; pve-example-2 is
+# offline. The cases the plan names are all here: a node offline (VM 204 and
+# homestack-storage-2), a workspace without home (203), a wrong home serial
+# (205), detached HomeStack volumes (209, 210), a homestack-alien VM (206),
+# plus a guest agent that does not answer (202) and an unmanaged VM (207).
+#
+# Python reads guests with `exec` (findmnt, blkid, df, ...); the server uses
+# the audit-level agent commands. Both read the same guest description, and
+# the normalization rules drop only the guest calls themselves.
+
+[scenario]
+name = "status-cluster"
+phase = "2"
+description = "Global and per-VM status, storage, orphans, discovery, networks and Gold readiness"
+
+[homestack]
+config = "python/config.example.toml"
+
+[[parity]]
+python = ["status", "--json"]
+rust = "GET /v1/status"
+normalize = "status-global"
+
+[[parity]]
+python = ["status", "200", "--json"]
+rust = "GET /v1/workspaces/200"
+normalize = "status-workspace"
+
+[[parity]]
+python = ["status", "test1", "--json"]
+rust = "GET /v1/workspaces/test1"
+normalize = "status-workspace"
+
+[[parity]]
+python = ["status", "201", "--json"]
+rust = "GET /v1/workspaces/201"
+normalize = "status-workspace"
+
+[[parity]]
+python = ["status", "202", "--json"]
+rust = "GET /v1/workspaces/202"
+normalize = "status-workspace"
+
+[[parity]]
+python = ["status", "205", "--json"]
+rust = "GET /v1/workspaces/205"
+normalize = "status-workspace"
+
+[[parity]]
+python = ["status", "alien1", "--json"]
+rust = "GET /v1/workspaces/alien1"
+normalize = "status-workspace"
+
+[[parity]]
+python = ["status", "--json"]
+rust = "GET /v1/storage"
+normalize = "storage-from-status"
+
+[[parity]]
+python = ["status", "--json"]
+rust = "GET /v1/orphans"
+normalize = "orphans-from-status"
+
+[[parity]]
+python = ["@discovery"]
+rust = "GET /v1/discovery"
+normalize = "same"
+
+[[parity]]
+python = ["@networks"]
+rust = "GET /v1/networks"
+normalize = "same"
+
+[[parity]]
+python = ["@gold-readiness"]
+rust = "GET /v1/gold/readiness"
+normalize = "same"
+
+[pve]
+version = { release = "9.2", version = "9.2.21", repoid = "4f6e0ac86f9e8c7f" }
+
+[[pve.nodes]]
+name = "pve-example-1"
+pveversion = "pve-manager/9.2.21/4f6e0ac86f9e8c7f"
+kversion = "Linux 7.0.14-20-pve"
+uptime = 591184
+dns = { dns1 = "192.0.2.53", search = "example.invalid" }
+[[pve.nodes.storages]]
+storage = "example-storage"
+total = 1883334770688
+used = 568013766839
+avail = 1315321003849
+[[pve.nodes.storages]]
+storage = "local"
+total = 100861726720
+used = 11656335360
+avail = 89205391360
+[[pve.nodes.network]]
+iface = "nic1"
+type = "eth"
+method = "manual"
+[[pve.nodes.network]]
+iface = "vmbr0"
+type = "bridge"
+method = "static"
+address = "192.0.2.11"
+netmask = "255.255.255.0"
+cidr = "192.0.2.11/24"
+gateway = "192.0.2.1"
+bridge_ports = "nic1"
+
+[[pve.nodes]]
+name = "pve-example-2"
+status = "offline"
+pveversion = "pve-manager/9.2.21/4f6e0ac86f9e8c7f"
+kversion = "Linux 7.0.14-20-pve"
+uptime = 0
+[[pve.nodes.storages]]
+storage = "example-storage"
+total = 1000
+used = 100
+avail = 900
+
+[[pve.storages]]
+storage = "example-storage"
+type = "lvmthin"
+content = "images,rootdir"
+
+[[pve.storages]]
+storage = "local"
+type = "dir"
+content = "iso,vztmpl,backup,snippets"
+
+# Volumes on pve-example-1. vm-209 and vm-210 belong to no VM.
+[[pve.volumes]]
+node = "pve-example-1"
+storage = "example-storage"
+volid = "example-storage:vm-100-disk-0"
+size = 17179869184
+[[pve.volumes]]
+node = "pve-example-1"
+storage = "example-storage"
+volid = "example-storage:vm-200-hs-root-default"
+size = 17179869184
+[[pve.volumes]]
+node = "pve-example-1"
+storage = "example-storage"
+volid = "example-storage:vm-200-hs-home-developer"
+size = 21474836480
+[[pve.volumes]]
+node = "pve-example-1"
+storage = "example-storage"
+volid = "example-storage:vm-200-disk-9"
+size = 1073741824
+[[pve.volumes]]
+node = "pve-example-1"
+storage = "example-storage"
+volid = "example-storage:vm-201-hs-root-default"
+size = 17179869184
+[[pve.volumes]]
+node = "pve-example-1"
+storage = "example-storage"
+volid = "example-storage:vm-201-hs-home-developer"
+size = 21474836480
+[[pve.volumes]]
+node = "pve-example-1"
+storage = "example-storage"
+volid = "example-storage:vm-209-hs-home-developer"
+size = 21474836480
+[[pve.volumes]]
+node = "pve-example-1"
+storage = "example-storage"
+volid = "example-storage:vm-210-hs-root-default"
+size = 17179869184
+
+# Gold, stopped, with public keys in sshkeys.
+[[pve.vms]]
+vmid = 100
+node = "pve-example-1"
+status = "stopped"
+[pve.vms.config]
+name = "gold"
+tags = "homestack-gold"
+agent = "1"
+boot = "order=scsi0;ide2;net0"
+ide2 = "example-storage:vm-100-cloudinit,media=cdrom"
+net0 = "virtio=BC:24:11:00:01:00,bridge=vmbr0,firewall=1"
+scsi0 = "example-storage:vm-100-disk-0,iothread=1,size=16G"
+sshkeys = "ssh-ed25519%20AAAAC3NzaC1lZDI1NTE5AAAAITEST%20developer%40desktop%0A"
+memory = 4096
+
+# A healthy running workspace.
+[[pve.vms]]
+vmid = 200
+node = "pve-example-1"
+status = "running"
+[pve.vms.config]
+name = "test1"
+tags = "homestack-ws"
+ide0 = "example-storage:vm-200-cloudinit,media=cdrom,size=4M"
+ide2 = "none,media=cdrom"
+ipconfig0 = "ip=192.0.2.200/24,gw=192.0.2.1"
+net0 = "virtio=BC:24:11:56:A9:E8,bridge=vmbr0,firewall=1"
+scsi0 = "example-storage:vm-200-hs-root-default,iothread=1,size=16G"
+scsi1 = "example-storage:vm-200-hs-home-developer,discard=on,iothread=1,serial=HS_HOME_200,size=20G,ssd=1"
+unused0 = "example-storage:vm-200-disk-9"
+memory = 4096
+[pve.vms.guest]
+hostname = "test1"
+users = ["root", "developer"]
+[[pve.vms.guest.interfaces]]
+name = "eth0"
+mac = "bc:24:11:56:a9:e8"
+ipv4 = ["192.0.2.200/24"]
+[[pve.vms.guest.filesystems]]
+mountpoint = "/"
+type = "ext4"
+device = "dm-1"
+slot = "scsi0"
+size = 10464022528
+used = 3457495040
+avail = 6452879360
+[[pve.vms.guest.filesystems]]
+mountpoint = "/home/developer"
+type = "ext4"
+device = "sdb"
+slot = "scsi1"
+label = "HS_HOME_200"
+size = 20957446144
+used = 338767872
+avail = 20601901056
+
+# Stopped: the home size comes from the config only.
+[[pve.vms]]
+vmid = 201
+node = "pve-example-1"
+status = "stopped"
+[pve.vms.config]
+name = "test2"
+tags = "backup;homestack-ws"
+scsi0 = "example-storage:vm-201-hs-root-default,size=16G"
+scsi1 = "example-storage:vm-201-hs-home-developer,serial=HS_HOME_201,size=20G"
+
+# Running, but the guest agent does not answer.
+[[pve.vms]]
+vmid = 202
+node = "pve-example-1"
+status = "running"
+[pve.vms.config]
+name = "noagent"
+tags = "homestack-ws"
+scsi0 = "example-storage:vm-202-hs-root-default,size=16G"
+scsi1 = "example-storage:vm-202-hs-home-developer,serial=HS_HOME_202,size=30G"
+
+# No home disk.
+[[pve.vms]]
+vmid = 203
+node = "pve-example-1"
+status = "stopped"
+[pve.vms.config]
+name = "nohome"
+tags = "homestack-ws"
+scsi0 = "example-storage:vm-203-hs-root-default,size=16G"
+
+# On the offline node.
+[[pve.vms]]
+vmid = 204
+node = "pve-example-2"
+status = "running"
+[pve.vms.config]
+name = "away"
+tags = "homestack-ws"
+scsi0 = "example-storage:vm-204-hs-root-default,size=16G"
+scsi1 = "example-storage:vm-204-hs-home-developer,serial=HS_HOME_204,size=20G"
+
+# The home disk carries another VM's serial; the filesystem is its own.
+[[pve.vms]]
+vmid = 205
+node = "pve-example-1"
+status = "running"
+[pve.vms.config]
+name = "serial"
+tags = "homestack-ws"
+scsi0 = "example-storage:vm-205-hs-root-default,size=16G"
+scsi1 = "example-storage:vm-205-hs-home-developer,serial=HS_HOME_299,size=20G"
+[pve.vms.guest]
+hostname = "serial"
+users = ["root", "developer", "ubuntu"]
+[[pve.vms.guest.interfaces]]
+name = "eth0"
+ipv4 = ["192.0.2.205/24"]
+[[pve.vms.guest.filesystems]]
+mountpoint = "/home/developer"
+type = "ext4"
+device = "sdb"
+slot = "scsi1"
+label = "HS_HOME_205"
+size = 21024600064
+used = 11097509888
+avail = 9910312960
+
+# Created outside HomeStack and adopted for setup only.
+[[pve.vms]]
+vmid = 206
+node = "pve-example-1"
+status = "running"
+[pve.vms.config]
+name = "alien1"
+tags = "homestack-alien"
+scsi0 = "example-storage:vm-206-disk-0,size=32G"
+scsi1 = "example-storage:vm-206-disk-1,size=100G"
+[pve.vms.guest]
+hostname = "alien1"
+users = ["root", "developer"]
+[[pve.vms.guest.interfaces]]
+name = "eth0"
+ipv4 = ["192.0.2.206/24"]
+[[pve.vms.guest.filesystems]]
+mountpoint = "/"
+type = "ext4"
+device = "sda1"
+slot = "scsi0"
+size = 33000000000
+used = 9000000000
+avail = 22000000000
+
+# Not HomeStack's.
+[[pve.vms]]
+vmid = 207
+node = "pve-example-1"
+status = "running"
+config = { name = "desktop" }
+
+# Python runs as root on a node today.
+[[pve.tokens]]
+id = "root@pam!parity"
+secret = "00000000-0000-0000-0000-00000000000a"
+acl = { "/" = ["*"] }
+
+# The server's token: PVEAuditor plus VM.Config.Disk, which Proxmox requires
+# to list VM volumes (the orphan scan); see docs/migration/phase-2.md.
+[[pve.tokens]]
+id = "homestack@pve!server"
+secret = "00000000-0000-0000-0000-00000000000b"
+acl = { "/" = ["Datastore.Audit", "Mapping.Audit", "Pool.Audit", "SDN.Audit", "Sys.Audit", "VM.Audit", "VM.GuestAgent.Audit", "VM.Config.Disk"] }
