@@ -1,0 +1,306 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "HomeStack server API",
+    "description": "Proxmox workspace lifecycle service.",
+    "license": {
+      "name": "CC0-1.0",
+      "identifier": "CC0-1.0"
+    },
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/health/live": {
+      "get": {
+        "tags": [
+          "health"
+        ],
+        "summary": "The HTTP server answers. Does not contact Proxmox.",
+        "operationId": "live",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Liveness"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/pve/nodes/{node}/status": {
+      "get": {
+        "tags": [
+          "pve"
+        ],
+        "summary": "Version, kernel and uptime of one node, from `GET /nodes/{node}/status`.",
+        "operationId": "pve_node_status",
+        "parameters": [
+          {
+            "name": "node",
+            "in": "path",
+            "description": "Proxmox node name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NodeStatus"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid node name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Proxmox rejected the request or answered unusably",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "No Proxmox endpoint is reachable, or the node is not",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/pve/version": {
+      "get": {
+        "tags": [
+          "pve"
+        ],
+        "summary": "Proxmox VE version, from `GET /version` on the first reachable endpoint.",
+        "operationId": "pve_version",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PveVersion"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Proxmox rejected the request or answered unusably",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "No Proxmox endpoint is reachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ErrorBody": {
+        "type": "object",
+        "description": "Body of every error response.",
+        "required": [
+          "schema_version",
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/ErrorDetail"
+          },
+          "schema_version": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
+      "ErrorCode": {
+        "type": "string",
+        "description": "Stable error codes of the HomeStack API.",
+        "enum": [
+          "unauthorized",
+          "not_found",
+          "method_not_allowed",
+          "validation_failed",
+          "pve_unavailable",
+          "pve_auth_failed",
+          "pve_permission_denied",
+          "pve_node_unavailable",
+          "pve_error",
+          "internal"
+        ]
+      },
+      "ErrorDetail": {
+        "type": "object",
+        "description": "The error itself.",
+        "required": [
+          "code",
+          "message",
+          "retryable",
+          "request_id"
+        ],
+        "properties": {
+          "code": {
+            "$ref": "#/components/schemas/ErrorCode"
+          },
+          "message": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "retryable": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "Liveness": {
+        "type": "object",
+        "description": "Body of `GET /health/live`. It only says the HTTP server answers; it does\nnot check Proxmox.",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "$ref": "#/components/schemas/LivenessStatus"
+          }
+        }
+      },
+      "LivenessStatus": {
+        "type": "string",
+        "enum": [
+          "ok"
+        ]
+      },
+      "NodeStatus": {
+        "type": "object",
+        "description": "The part of `GET /nodes/{node}/status` HomeStack reports.",
+        "required": [
+          "node",
+          "pveversion",
+          "kversion",
+          "uptime"
+        ],
+        "properties": {
+          "kversion": {
+            "type": "string",
+            "description": "Running kernel description."
+          },
+          "node": {
+            "type": "string",
+            "description": "Node the status belongs to."
+          },
+          "pveversion": {
+            "type": "string",
+            "description": "`pve-manager` package version string, e.g. `pve-manager/9.2.21/4f6e0ac8`."
+          },
+          "uptime": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Node uptime in seconds.",
+            "minimum": 0
+          }
+        }
+      },
+      "PveVersion": {
+        "type": "object",
+        "description": "Proxmox VE version, as returned by `GET /version`.",
+        "required": [
+          "release",
+          "version",
+          "repoid"
+        ],
+        "properties": {
+          "release": {
+            "type": "string",
+            "description": "Major and minor release, e.g. `9.2`."
+          },
+          "repoid": {
+            "type": "string",
+            "description": "Source revision of `pve-manager`."
+          },
+          "version": {
+            "type": "string",
+            "description": "Full `pve-manager` version, e.g. `9.2.21`."
+          }
+        }
+      }
+    },
+    "securitySchemes": {
+      "bearer": {
+        "type": "http",
+        "scheme": "bearer"
+      }
+    }
+  }
+}
