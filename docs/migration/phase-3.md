@@ -126,3 +126,146 @@ accounts, keys, done).
   110.0.0.20/24`. Expected addresses are full `prefix.<vmid>` addresses, so
   this cannot happen with a valid configuration; the server compares whole
   addresses (section 6).
+
+## 2. What was built
+
+| Part | Where |
+|---|---|
+| Guest agent: `exec` + `exec-status` with Python's checks and deadlines, bounded ping, waiting for the agent, `file-read`, the ext4 label from the superblock, `command -v` through `file-read` | `crates/hs-core/src/guest.rs` |
+| Proxmox tasks: UPID, status and log polling, every log line once, transfer progress (`CLONE_TRANSFER_RE`) | `crates/hs-core/src/tasks.rs` |
+| `qm start` and `shutdown_vm_on_node` | `crates/hs-core/src/power.rs` |
+| `set_vm_config` with `digest` (T5) | `crates/hs-core/src/inventory.rs` |
+| Guest verification D2 at `Audit` + `FileRead`, with the create and refresh messages | `crates/hs-core/src/verify.rs` |
+| Gold guest contract E2 through `exec` | `crates/hs-core/src/gold.rs` |
+| Plans, jobs, events (DTOs) and the error codes `plan_changed`, `plan_applied`, `busy` | `crates/hs-model/src/jobs.rs`, `error.rs` |
+| Operation registry, plan store, apply with a second plan, jobs on their own task, one job per VM | `crates/hs-server/src/operations.rs` |
+| Routes `POST /v1/plans`, `GET /v1/plans/{id}`, `POST /v1/plans/{id}/apply`, `GET /v1/jobs`, `GET /v1/jobs/{id}`, WebSocket `GET /v1/jobs/{id}/events` | `crates/hs-server/src/jobs.rs` |
+| Simulator: `status/start`, `status/shutdown`, `status/stop` as tasks (a guest may ignore ACPI), `agent/file-read`, `PUT config` with `digest`, guest accounts, programs and files, the commands of the Gold contract and of the refresh check, PVE's empty-log line | `crates/pve-sim` |
+| Python harness: `func_driver` `gold-readiness VMID`, `verify-refresh VMID`; `live_driver` | `parity/python/homestack_parity` |
+| Parity runner: server functions without a route (`rust = "@verify-refresh 220"`) | `crates/hs-parity/tests/scenarios.rs` |
+| Live: `scripts/live-compare-gold.sh`, `crates/hs-server/tests/live_jobs.rs` (both in `check.sh --live`) | |
+
+**The operation model.** `POST /v1/plans` takes an operation name and its
+parameters and returns a plan with an ID, a digest (SHA-256 of the
+operation, parameters, target VMIDs and summary) and an expiry (15 min).
+`POST /v1/plans/{id}/apply` with the digest the client reviewed plans again
+and starts the job only when the new digest is the same (`409
+plan_changed` otherwise, `plan_applied` for a second apply, `busy` while
+another job works on one of the VMs). The job answers `202` with
+`Location: /v1/jobs/{id}`; it runs on its own task, so a client may
+disconnect. A job has named steps (Python's `start_step`/`finish_step`),
+the Proxmox tasks it waited for (UPID, type, VMID, status, exit status),
+the latest transfer progress, the last 200 log lines, and a result or an
+error. The WebSocket sends a `snapshot`, then the whole job after each
+change and a `heartbeat` after five quiet seconds, each with
+`schema_version`, `server_instance_id`, `stream_sequence` and
+`server_time` (as mypowers), and closes after the final state. No
+operation is registered yet; the tests register their own.
+
+## 3. Tests
+
+Written first and shown failing: `hs_core::{guest, tasks, power, verify}`,
+`hs_model::jobs`, `hs_server::operations` and the new `Pve` trait did not
+exist, so the test crates did not compile.
+
+| | Count |
+|---|---|
+| Python tests of phase 3 | 10 |
+| ported | 7: `QgaWaitTests` ×4, `ProgressTests` ×1, `GoldReadinessTests` ×2 |
+| moved | 3 `GuestIdentityTests` (`test_alien_workspace.py`) to phase 14a: they test `setup_guest.verify_identity`, which runs inside the guest over SSH (mapping G, setup), not through the guest agent |
+| excluded | 0 |
+| new Rust tests | guest agent 4, Gold 1 (replacing phase 2's test of a running Gold), D2 4, tasks and power 6, plans and jobs 5, live 1 |
+| Rust tests in the workspace | 175, plus 6 live (`cargo test -- --list`: 181) |
+| Python harness tests | 18 (unchanged) |
+
+The ports keep using `FakePve`, which now also answers in sequence, fails
+before reaching Proxmox, never answers (for the bounded ping) and maps
+HTTP statuses as the client does. Time is paused in the guest tests, as the
+Python tests patch `time.sleep`.
+
+## 4. Parity with Python
+
+`scenarios/guest-checks.toml`: 10 comparisons, all equal.
+
+- Gold readiness of a running Gold that meets the contract, and of one that
+  breaks most of it (tools missing, `sudo`, a second regular user, no root
+  keys, no `sshkeys`, an unusable key file). The operations are identical:
+  both run the same commands through `exec`.
+- The refresh verification (`_verify_refreshed_guest`) for a healthy guest
+  and for a wrong hostname, a missing user `authorized_keys`, `sudo`, an
+  extra regular user, a wrong address, another VM's home label and a missing
+  root `authorized_keys`. Rule `guest-verify`: the guest reads differ by
+  decision 5, the pings and VM reads are compared.
+- Two cases are not compared, because Python fails there with a guest
+  command's error that the server never runs (section 6): no home mount and
+  another UID. `crates/hs-core/tests/verify.rs` checks their messages.
+- The first run showed the comparison catches a difference (the server's
+  `file-read` calls before the rule dropped them).
+
+## 5. Live cluster
+
+`scripts/check.sh --live`, all passed:
+
+- `live-compare-gold.sh`: Python's `check_gold_readiness` (the installer's
+  call, through Herdr) and `GET /v1/gold/readiness` on Gold 101 (running):
+  equal, all 18 checks run, the guest contract included.
+- `live_jobs.rs` in pool `homestack-test` with the test token: VM 240
+  (`hst-task`, no disk, no network) created; a `test.start` job followed
+  through the WebSocket from its `qmstart` UPID to `OK`; a `test.shutdown`
+  job failing as Python does (`VM 240 did not shut down cleanly on pve2.
+  Current status: running. HomeStack will not force-stop it
+  automatically.`, task `VM quit/powerdown failed - got timeout`); the VM
+  stopped and destroyed afterwards. The test refuses VMIDs outside
+  240–249, a VMID in use, and any VM without its name and marker.
+- The live run found a bug the simulator did not have: Proxmox answers an
+  empty task log with a made-up line `no content`, which the first version
+  counted as line 1 and so lost the task's real first line. Fixed, modelled
+  in the simulator and tested (decisions.md, probe results).
+- The gates of phases 0–2 passed in the same run.
+
+## 6. Decisions taken in this phase and differences from Python
+
+1. **Decision 5 applied to D2.** The checks, their order and the refresh
+   and create messages are Python's; the data comes from `get-host-name`,
+   `network-get-interfaces`, `get-fsinfo` and `file-read` (`/etc/passwd`,
+   the `authorized_keys` files, the home device's ext4 superblock,
+   `/run/cloud-init/result.json` and `cloud-id`, a `sudo` file on the
+   `PATH`). Differences that follow:
+   - addresses are compared whole, not as a substring (section 1); the
+     create message lists `eth0`'s addresses instead of `ip addr` output;
+   - a missing home mount or user fails with the check's message (`... is not
+     ext4`, `unexpected user identity: <passwd line>`) instead of the failing
+     `findmnt` / `id` command;
+   - `unexpected user identity` shows the `/etc/passwd` line, not `id`
+     output;
+   - `sudo` counts when a file of that name is readable in a `PATH`
+     directory (`command -v` also needs it to be executable);
+   - when cloud-init is installed, the server waits for `result.json`
+     (`cloud-init status --wait` waits for the same).
+   `create` compares the key identities in `authorized_keys` (step 8a) in
+   phase 5; the verification returns the file for it. `migrate`'s two checks
+   (phase 8) use the same reads.
+2. **Gold guest contract (E2)** runs Python's commands through `exec`, so
+   the results are the same. Without `VM.GuestAgent.Unrestricted` on Gold the
+   contract is `skip` with the reason (Python runs as root). A refused
+   `exec` is an error even without `check`.
+3. **`/v1/gold/readiness`** uses `[user]` of the configuration, or the
+   installer's defaults (`user`, 1000:1000) before one is uploaded.
+4. **Task failures** name the task and its exit status (`Proxmox task
+   qmstart for VM 240 on pve2 failed: VM 240 already running`) where Python
+   shows `qm`'s output. A shutdown task is followed for its timeout plus 30
+   seconds, like Python's `qm shutdown` call.
+5. **A failed `exec` without `check`** becomes exit code 1 with the error as
+   output (Python: `qm`'s exit code and output).
+6. **Plans and jobs** live in one server instance's memory (phase 11 decides
+   how several instances share them).
+
+## 7. Open questions for the next phases
+
+1. The gate before phase 4 still needs decisions 1 (snippets), 2 (root
+   name) and 4 (refresh journal); decision 5 is taken.
+2. Phase 5 registers the first real operations and adds the create-only key
+   comparison (D2 step 8a) and the `create` verification messages to the
+   parity scenarios.
+3. The workspace token needs `VM.GuestAgent.FileRead` on the HomeStack
+   pool for D2 (mapping 5); today's server token has it on Gold only.

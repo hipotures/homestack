@@ -374,8 +374,13 @@ async fn task_log(
     let Some(task) = state.task_mut(&name, &upid) else {
         return pve_error(500, "no such task\n");
     };
-    let lines: Vec<Value> = task
-        .visible_log()
+    let visible = task.visible_log();
+    if visible.is_empty() {
+        // PVE's `dump_logfile` answers an empty log with a made-up line
+        // (observed on PVE 9.2 while a task had not written yet).
+        return data(json!([{ "n": 1, "t": "no content" }]));
+    }
+    let lines: Vec<Value> = visible
         .iter()
         .enumerate()
         .skip(query.start)

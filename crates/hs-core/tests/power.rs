@@ -164,6 +164,17 @@ async fn start_runs_a_stopped_vm_and_reports_the_task() -> TestResult {
         matches!(events.first(), Some(JobEvent::TaskStarted { kind, vmid: Some(240), .. }) if kind == "qmstart"),
         "{events:?}"
     );
+    // The log is empty while the task runs: Proxmox's "no content" line is
+    // not part of it, and the real line is not lost.
+    let log: Vec<&String> = events
+        .iter()
+        .filter_map(|e| match e {
+            JobEvent::TaskLog { lines, .. } => Some(lines),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    assert_eq!(log, ["TASK OK"]);
 
     let error = start_vm(&pve, NODE, 240, &quick(), &recorder)
         .await

@@ -79,6 +79,16 @@ pub fn upid_node(upid: &str) -> Option<String> {
 /// Lines read per log request.
 const LOG_PAGE: usize = 500;
 
+/// Proxmox answers an empty task log (a task that has not written yet) with
+/// one made-up line, `{"n": 1, "t": "no content"}` (`PVE::Tools::dump_logfile`,
+/// "ExtJS store.guaranteeRange() does not like empty array"; observed on
+/// PVE 9.2). It is not part of the log.
+fn placeholder(entries: &[Value]) -> bool {
+    matches!(entries, [only]
+        if only.get("n").and_then(Value::as_u64) == Some(1)
+            && only.get("t").and_then(Value::as_str) == Some("no content"))
+}
+
 /// Follow a task from its UPID to its end. Every log line is reported once
 /// (`TaskLog`), transfer lines also as `Progress`; `TaskStarted` comes first
 /// and `TaskFinished` last. A task that has not ended within the timeout is
@@ -111,26 +121,32 @@ pub async fn wait_task(
                     &[("start", &start), ("limit", &limit)],
                 )
                 .await?;
-            let lines: Vec<String> = log
-                .as_array()
-                .map(|lines| {
-                    lines
-                        .iter()
-                        .filter_map(|line| line.get("t").and_then(Value::as_str).map(str::to_owned))
-                        .collect()
-                })
-                .unwrap_or_default();
+            let entries = log.as_array().cloned().unwrap_or_default();
+            if placeholder(&entries) {
+                break;
+            }
+            // Lines are numbered from 1; keep only those not seen yet.
+            let mut lines = Vec::new();
+            for entry in &entries {
+                let number = entry.get("n").and_then(Value::as_u64).unwrap_or(0);
+                let number = usize::try_from(number).unwrap_or(usize::MAX);
+                if number > seen
+                    && let Some(text) = entry.get("t").and_then(Value::as_str)
+                {
+                    lines.push(text.to_owned());
+                    seen = number;
+                }
+            }
             if lines.is_empty() {
                 break;
             }
-            seen += lines.len();
             if let Some(progress) = tracker.update(&lines.join("\n")) {
                 observer.event(JobEvent::Progress {
                     percent: progress.percent,
                     detail: progress.detail,
                 });
             }
-            let full_page = lines.len() == LOG_PAGE;
+            let full_page = entries.len() == LOG_PAGE;
             observer.event(JobEvent::TaskLog {
                 upid: upid.to_owned(),
                 lines,

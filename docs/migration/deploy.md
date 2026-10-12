@@ -166,10 +166,17 @@ phase 11.
 | `GET /v1/orphans` | bearer | detached HomeStack volumes, and whether the scan was complete |
 | `GET /v1/discovery` | bearer | nodes, Gold candidates, storage definitions (no configuration needed) |
 | `GET /v1/networks?gold=VMID` | bearer | network profiles for the Gold bridge |
-| `GET /v1/gold/readiness?vmid=VMID` | bearer | Gold checks, Proxmox part |
+| `GET /v1/gold/readiness?vmid=VMID` | bearer | Gold checks: Proxmox part and, when Gold runs, the guest contract |
+| `POST /v1/plans` | bearer | plan an operation (`{"operation", "parameters"}`); nothing changes |
+| `GET /v1/plans/{id}` | bearer | a plan until it expires (15 minutes) |
+| `POST /v1/plans/{id}/apply` | bearer | `{"digest"}`: plan again, compare, start a job (`202`, `Location`) |
+| `GET /v1/jobs`, `GET /v1/jobs/{id}` | bearer | jobs of this instance (steps, Proxmox tasks, log, result or error) |
+| `GET /v1/jobs/{id}/events` | bearer | WebSocket: `snapshot`, `job` after each change, `heartbeat` at least every 5 s |
 
 The status routes read guests with the audit-level agent commands
-(`VM.GuestAgent.Audit`). Listing VM volumes, which the detached-volume scan
+(`VM.GuestAgent.Audit`); the guest verification of later operations adds
+`file-read` (`VM.GuestAgent.FileRead`, decision 5), and only the Gold guest
+contract runs commands (`VM.GuestAgent.Unrestricted` on Gold). Listing VM volumes, which the detached-volume scan
 needs, takes `VM.Config.Disk` on `/vms` (or `Datastore.Allocate` on each
 storage): a read-only token gets an orphan scan marked incomplete, with a
 warning saying so.
@@ -184,7 +191,7 @@ The contract is [docs/openapi.json](../openapi.json). Errors:
 |---|---|
 | 401 | `unauthorized` |
 | 404, 405 | `not_found`, `method_not_allowed` |
-| 409 | `config_missing`, `config_version_mismatch` |
+| 409 | `config_missing`, `config_version_mismatch`, `plan_changed`, `plan_applied`, `busy` (retryable) |
 | 412, 428 | `precondition_failed`, `precondition_required` |
 | 413 | `payload_too_large` |
 | 422 | `validation_failed`, `config_invalid` (with `error.field`, e.g. `repo.owner`) |
@@ -194,3 +201,8 @@ The contract is [docs/openapi.json](../openapi.json). Errors:
 
 Every response carries `x-request-id` (also in the error body) and
 `Cache-Control: no-store`.
+
+No operation can be planned yet: the model is in place (phase 3) and the
+operations arrive from phase 5. Plans and jobs are kept in memory and lost
+on restart; a job runs on the server, independent of the request or stream
+that follows it, and one job at a time works on a VM.

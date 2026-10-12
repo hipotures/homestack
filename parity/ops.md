@@ -33,6 +33,7 @@ functions need.
 | `guest_ping{vmid=V}` | `POST /nodes/N/qemu/V/agent/ping` | `qm guest cmd V ping` (also behind `timeout -k 2s 5s`) | phase 2 |
 | `guest_exec{cmd=C,vmid=V}` | `POST /nodes/N/qemu/V/agent/exec` with `command=["/bin/sh","-lc",C]` | `qm guest exec V -- /bin/sh -lc C` | phase 2 |
 | `guest_exec_status{vmid=V}` | `GET /nodes/N/qemu/V/agent/exec-status?pid=...` | the same `qm guest exec`, which waits for the command | phase 2 |
+| `get{path=/nodes/N/qemu/V/agent/file-read,file=F,offset=O,count=C,decode=0}` | `GET .../agent/file-read` | none: the server's guest verification (decision 5) | phase 3 |
 
 The node is not part of the guest operations: `qm` runs on the control node
 or, through `ssh root@<node>`, on the VM's node, which the translator passes
