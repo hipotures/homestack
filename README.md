@@ -19,6 +19,19 @@ uv run python -m homestack --help
 
 The desktop also needs `herdr` and `ssh`. File transfers additionally require `rsync`. GitHub repository provisioning additionally requires an authenticated `gh` CLI on the trusted desktop. Proxmox nodes need `qm`, `pvesh`, `pvesm`, `perl`, `base64`, `ssh`, and `scp`.
 
+## Rust server (migration in progress)
+
+HomeStack is being moved to a Rust service that talks to the Proxmox REST API with an API token, followed by a Rust client. The Python application stays the reference behaviour until the migration ends. The plan, the Proxmox API mapping, decisions and phase reports are in [docs/migration](docs/migration/PLAN.md); the code is in `rust/`.
+
+Run every check (Rust 1.99 and uv required):
+
+```bash
+scripts/check.sh            # without a cluster
+scripts/check.sh --live     # also against the real cluster, read-only
+```
+
+Running the server: [docs/migration/deploy.md](docs/migration/deploy.md). API contract: [docs/openapi.json](docs/openapi.json).
+
 ## Configuration
 
 Inspect the local Herdr/Proxmox environment without reading a HomeStack config or changing Proxmox resources:

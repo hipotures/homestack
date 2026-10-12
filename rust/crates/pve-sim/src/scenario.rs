@@ -79,7 +79,8 @@ impl NodeState {
 ///
 /// The ACL is what the token can actually do, i.e. already the intersection
 /// of user and token privileges for a privilege-separated token. A privilege
-/// granted on a path also applies below it (`propagate=1`).
+/// granted on a path also applies below it (`propagate=1`). The privilege
+/// `*` stands for all of them, which models `root@pam`.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TokenSpec {

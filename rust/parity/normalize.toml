@@ -1,0 +1,14 @@
+# Allowed differences between Python and Rust output, by rule ID. Scenarios
+# name the rule they use. Any difference not covered here is a failure.
+
+[[rule]]
+id = "transport-node-status"
+python_select = "pve"
+python_rename = { version = "pveversion", kernel = "kversion" }
+reason = """
+Phase 0 dry run. Python's `transport --json` reports the node status under
+`pve` with renamed keys, next to a `transport` block describing the Herdr
+session. The server reads the same `/nodes/{node}/status` and returns
+Proxmox's own key names; the Herdr session has no server counterpart
+(mapping T1, A4).
+"""

@@ -52,16 +52,10 @@ impl IntoResponse for ApiError {
 }
 
 impl From<PveError> for ApiError {
-    /// Details stay in the server log; clients get a fixed message.
+    /// Details stay in the server log (the client already logged each failed
+    /// endpoint); clients get a fixed message.
     fn from(error: PveError) -> Self {
-        match &error {
-            PveError::Unreachable(failures) => {
-                for failure in failures {
-                    tracing::warn!(endpoint = %failure.endpoint, detail = %failure.detail, "Proxmox endpoint failed");
-                }
-            }
-            other => tracing::warn!(error = %other, "Proxmox request failed"),
-        }
+        tracing::warn!(%error, "Proxmox request failed");
         match error {
             PveError::Unreachable(_) => Self::new(ErrorCode::PveUnavailable, "No Proxmox API endpoint is reachable."),
             PveError::Unauthorized => Self::new(ErrorCode::PveAuthFailed, "Proxmox rejected the server's API token."),

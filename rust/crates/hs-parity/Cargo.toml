@@ -10,7 +10,16 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+pve-sim = { version = "0.1.0", path = "../pve-sim" }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 thiserror = "2.0.21"
 toml = "1.1.8"
+
+[dev-dependencies]
+axum = "0.8.9"
+hs-pve = { path = "../hs-pve" }
+hs-server = { path = "../hs-server" }
+reqwest = { version = "0.13.5", default-features = false, features = ["json"] }
+tempfile = "3.27.0"
+tokio = { version = "1.53.2", features = ["rt-multi-thread", "macros", "net", "process"] }

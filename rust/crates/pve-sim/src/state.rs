@@ -137,10 +137,10 @@ impl Task {
 }
 
 /// Whether `token` holds `privilege` on `path`, directly or inherited from a
-/// parent path.
+/// parent path. `*` grants everything, like `root@pam`.
 pub fn has_privilege(token: &TokenSpec, path: &str, privilege: &str) -> bool {
     token.acl.iter().any(|(acl_path, privileges)| {
-        path_covers(acl_path, path) && privileges.iter().any(|granted| granted == privilege)
+        path_covers(acl_path, path) && privileges.iter().any(|granted| granted == privilege || granted == "*")
     })
 }
 
@@ -174,5 +174,8 @@ mod tests {
         assert!(has_privilege(&nodes, "/nodes/a", "Sys.Audit"));
         assert!(!has_privilege(&nodes, "/nodes/ab", "Sys.Audit"));
         assert!(!has_privilege(&nodes, "/nodes", "Sys.Audit"));
+
+        let root = token(&[("/", &["*"])]);
+        assert!(has_privilege(&root, "/nodes/a", "Sys.Modify"));
     }
 }
