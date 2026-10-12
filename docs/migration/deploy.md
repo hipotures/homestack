@@ -57,13 +57,23 @@ curl -H "Authorization: Bearer $(cat api-token)" http://127.0.0.1:8080/v1/pve/ve
 
 ## LXC
 
-Build the binary (`cargo build --release -p hs-server`) or copy it out of the
-image, install it as `/usr/local/bin/homestack-server` in a Debian 13
-container with `ca-certificates`, and run it as an unprivileged user with the
-variables above, e.g. from a systemd unit with `EnvironmentFile=` and the
-secrets in `/etc/homestack/` (mode `0600`). The server speaks plain HTTP;
-put TLS in front of it (Caddy, as in mypowers) before exposing it beyond
-loopback. That setup is phase 11.
+The target is an Alpine 3.24 LXC. The image builds a static musl binary
+(`x86_64-unknown-linux-musl`, `crt-static`), so it needs no runtime libraries
+and also runs on other distributions. Copy it out of the image:
+
+```
+docker create --name hs-bin homestack-server
+docker cp hs-bin:/usr/local/bin/homestack-server .
+docker rm hs-bin
+```
+
+Install it as `/usr/local/bin/homestack-server` in the container, add
+`ca-certificates` (`apk add ca-certificates`), and run it as an unprivileged
+user with the variables above under OpenRC (`supervise-daemon`, as in
+mypowers `deploy/openrc`), with the secrets in `/etc/homestack/` (mode
+`0600`). The server speaks plain HTTP; put TLS in front of it (Caddy, as in
+mypowers) before exposing it beyond loopback. The service files are part of
+phase 11.
 
 ## Endpoints
 
