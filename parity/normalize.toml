@@ -73,3 +73,21 @@ of `status --json`, whose warnings mix every check. The server's GET
 warnings. The operations are not comparable: Python's are the whole global
 status.
 """
+
+[[rule]]
+id = "status-global-live"
+extends = "status-global"
+python_drop = ["summary.orphan_scan_complete"]
+rust_drop = ["summary.orphan_scan_complete"]
+rust_drop_items = { warnings = "HomeStack orphan scan incomplete: The server's Proxmox token cannot list VM volumes on *" }
+relative_tolerance = { "workspaces.*.home.used_bytes" = 0.05, "workspaces.*.home.free_bytes" = 0.05, "summary.homes.used_bytes" = 0.05, "summary.homes.free_bytes" = 0.05, "summary.storage_layouts.*.used_bytes" = 0.05, "summary.storage_layouts.*.available_bytes" = 0.05, "summary.root_storage.used_bytes" = 0.05, "summary.root_storage.available_bytes" = 0.05 }
+absolute_tolerance = { "workspaces.*.home.free_percent" = 1.0, "summary.homes.free_percent" = 1.0, "summary.storage_layouts.*.percent" = 1.0, "summary.root_storage.percent" = 1.0 }
+reason = """
+scripts/live-compare-status.sh on the real cluster. As status-global, plus:
+the two implementations read a running cluster a few seconds apart, so
+guests and storages may have written a little in between (byte counts within
+5 %, percentages within 1 point). The server's token there is read-only
+(PVEAuditor) and Proxmox hides VM volumes from it, so the server reports
+its orphan scan as incomplete and says why, where Python, running as root,
+completes it; the detached-volume lists are still compared.
+"""

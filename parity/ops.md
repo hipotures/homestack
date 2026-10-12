@@ -9,7 +9,8 @@ name{key1=value1,key2=value2}
 
 - `name` is lower case with underscores.
 - Parameters are sorted by key and written as `key=value`, separated by commas,
-  without spaces or quoting.
+  without quoting. In values, `%`, `,`, `=`, `{` and `}` are written `%25`,
+  `%2C`, `%3D`, `%7B` and `%7D`, so a shell command fits in one parameter.
 - The same text is produced by `pve-sim` (`crates/pve-sim/src/ops.rs`)
   for every authenticated API call it serves, and by the Python translator
   (`parity/python/homestack_parity/ops.py`) for every shell command
@@ -29,6 +30,16 @@ functions need.
 | Operation | API call | Python command | Since |
 |---|---|---|---|
 | `get{path=P,...}` | `GET /api2/json/P?...` | `pvesh get P [--key value]... --output-format json` | phase 0 |
+| `guest_ping{vmid=V}` | `POST /nodes/N/qemu/V/agent/ping` | `qm guest cmd V ping` (also behind `timeout -k 2s 5s`) | phase 2 |
+| `guest_exec{cmd=C,vmid=V}` | `POST /nodes/N/qemu/V/agent/exec` with `command=["/bin/sh","-lc",C]` | `qm guest exec V -- /bin/sh -lc C` | phase 2 |
+| `guest_exec_status{vmid=V}` | `GET /nodes/N/qemu/V/agent/exec-status?pid=...` | the same `qm guest exec`, which waits for the command | phase 2 |
+
+The node is not part of the guest operations: `qm` runs on the control node
+or, through `ssh root@<node>`, on the VM's node, which the translator passes
+to the simulator call. One `qm guest exec` is two operations because Proxmox
+answers `exec` with a PID and `qm` then polls `exec-status`; the PID is left
+out because it differs between runs. Other `POST` calls are recorded as
+`post{path=P}` until a phase gives them a name.
 
 For `get`, every query parameter (every `pvesh` option except
 `--output-format`) becomes a parameter, e.g.

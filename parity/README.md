@@ -54,8 +54,8 @@ config = "python/config.example.toml"    # Python config, relative to the reposi
 # python_token = "root@pam!parity"       # defaults; both must exist in [pve]
 # server_token = "homestack@pve!server"
 
-[parity]
-python = ["transport", "--json"]          # homestack arguments
+[[parity]]                                # one or more comparisons
+python = ["transport", "--json"]          # homestack arguments, or ["@NAME"] (func_driver)
 rust = "GET /v1/pve/nodes/pve-example-1/status"
 normalize = "transport-node-status"       # rule in normalize.toml
 
@@ -74,14 +74,41 @@ version = { release = "9.2", version = "9.2.21", repoid = "..." }
 Unknown keys are errors. The ACL of a token is its effective privileges: for a
 privilege-separated token, already the intersection with its user.
 
+From phase 2 `[pve]` also holds `[[pve.storages]]` (definitions),
+`[[pve.volumes]]`, `[[pve.vms]]` with a `config` table and an optional
+`guest` (hostname, interfaces, filesystems with their slot, label and
+`statvfs` sizes, users), and per node `storages`, `network` and `dns`; see
+`crates/pve-sim/src/scenario.rs`. Privileges follow the PVE API
+documentation; VM volumes are listed only with `VM.Config.Disk` on the VM
+(or `Datastore.Allocate` on the storage), as Proxmox does. The guest
+answers both the audit-level agent commands the server uses and the
+`exec` commands Python sends, from the same description
+(`crates/pve-sim/src/guest.rs`).
+
+The server in the run gets the server part of `[homestack] config`
+(`hs-config split`) as its uploaded configuration.
+
 `crates/hs-parity/tests/scenarios.rs` starts `pve-sim` with the scenario, runs
 the real Python CLI on `FixtureTransport` and the Rust server in-process, and
 checks that
 
 1. the Python command translation matches what the simulator saw,
-2. both issued the same operations,
+2. both issued the same operations, apart from those the rule drops,
 3. the outputs are equal after the normalization rule,
 4. both match `[parity.expect]`.
+
+## Normalization rules
+
+A rule in `normalize.toml` names every allowed difference and why:
+`python_select` or `python_pick` (which part of the Python output to
+compare), `python_drop` and `rust_drop` (dotted paths, `*` for every list
+element), `python_rename`, `python_ops_drop` and `rust_ops_drop` (operation
+patterns, `*` for any text), `rust_drop_items` (string list items by
+pattern), `relative_tolerance` and `absolute_tolerance` (numbers a live
+cluster changes between two reads), and `extends` (add to another rule).
+`hs-parity compare RULES RULE PYTHON_JSON RUST_JSON` applies one rule to two
+saved outputs; `scripts/live-compare-status.sh` uses it on the real
+cluster.
 
 `HOMESTACK_PHASE=N` limits the run to one phase (`check.sh --phase N` sets it).
 
@@ -111,6 +138,9 @@ with `python = "<verdict>"` and a `reason`.
   replaced to yield the two transports above.
 - `config_check` prints Python's verdict on configuration files for the
   corpus.
+- `func_driver` runs Python read functions that have no `--json` command
+  (`discovery`, `networks`, `gold-readiness`) on the same transports; a
+  scenario names them as `python = ["@NAME"]`.
 
 Run `pve-sim` by hand with
 `cargo run -p pve-sim -- --scenario scenarios/<file>.toml --ca-out /tmp/ca.pem`.

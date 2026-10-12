@@ -3,7 +3,11 @@
 //! ```text
 //! hs-parity manifest-check MANIFEST PYTHON_IDS RUST_TEST_LIST
 //! hs-parity manifest-phase MANIFEST PHASE
+//! hs-parity compare RULES RULE PYTHON_JSON RUST_JSON
 //! ```
+//!
+//! `compare` applies one rule of `parity/normalize.toml` to two outputs and
+//! fails, listing where they differ, unless they agree.
 //!
 //! `PYTHON_IDS` is the output of `python -m homestack_parity.list_tests`,
 //! `RUST_TEST_LIST` the output of `cargo test -- --list --format terse`.
@@ -11,6 +15,7 @@
 use std::process::ExitCode;
 
 use hs_parity::manifest::{Manifest, Status, parse_rust_test_list};
+use hs_parity::normalize::{Rules, differences};
 
 fn read(path: &str) -> Result<String, String> {
     std::fs::read_to_string(path).map_err(|error| format!("{path}: {error}"))
@@ -54,8 +59,29 @@ fn run(args: &[String]) -> Result<ExitCode, String> {
             }
             Ok(ExitCode::SUCCESS)
         }
+        [command, rules_path, rule, python, rust] if command == "compare" => {
+            let rules: Rules = toml::from_str(&read(rules_path)?).map_err(|error| format!("{rules_path}: {error}"))?;
+            rules.validate().map_err(|error| error.to_string())?;
+            let rule = rules.get(rule).map_err(|error| error.to_string())?;
+            let json = |path: &str| -> Result<serde_json::Value, String> {
+                serde_json::from_str(&read(path)?).map_err(|error| format!("{path}: {error}"))
+            };
+            let python = rule.python(&json(python)?).map_err(|error| error.to_string())?;
+            let mut rust = rule.rust(&json(rust)?);
+            rule.reconcile(&python, &mut rust);
+            let found = differences(&python, &rust, 20);
+            for difference in &found {
+                eprintln!("  {difference}");
+            }
+            Ok(if found.is_empty() {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::FAILURE
+            })
+        }
         _ => Err(
-            "usage: hs-parity manifest-check MANIFEST PYTHON_IDS RUST_TEST_LIST | manifest-phase MANIFEST PHASE"
+            "usage: hs-parity manifest-check MANIFEST PYTHON_IDS RUST_TEST_LIST | manifest-phase MANIFEST PHASE | \
+             compare RULES RULE PYTHON_JSON RUST_JSON"
                 .to_owned(),
         ),
     }

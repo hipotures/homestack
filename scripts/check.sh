@@ -6,7 +6,9 @@
 #   scripts/check.sh --phase N  only the tests and scenarios of phase N
 #
 # --live needs HOMESTACK_LIVE_TOKEN_FILE and HOMESTACK_LIVE_PVE_ENDPOINTS
-# (see crates/hs-server/tests/live.rs) and docker for the image check.
+# (see crates/hs-server/tests/live.rs), docker for the image check, and the
+# Python CLI's own config and transport for the status comparison
+# (scripts/live-compare-status.sh).
 set -euo pipefail
 
 usage() {
@@ -77,6 +79,8 @@ if ((live)); then
     cargo test -p hs-server --locked --test live -- --ignored --test-threads=1
     step "live cluster (L4): server image"
     "$root/scripts/live-container.sh"
+    step "live cluster (L4): Python status against the server"
+    "$root/scripts/live-compare-status.sh"
 fi
 
 step "all checks passed$( ((live)) && echo ' (including live)')"

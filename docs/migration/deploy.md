@@ -137,6 +137,19 @@ phase 11.
 | `PUT /v1/config` | bearer | replace it (`If-Match` / `If-None-Match: *`) |
 | `GET /v1/config/version` | bearer | `{"config_version": "<sha256>" \| null}` |
 | `GET /v1/capabilities` | bearer | operations the Proxmox token allows, with missing privileges |
+| `GET /v1/status` | bearer | global status, as `homestack status --json` |
+| `GET /v1/workspaces/{vmid\|name}` | bearer | one VM, as `homestack status TARGET --json` |
+| `GET /v1/storage` | bearer | capacity of every layout storage |
+| `GET /v1/orphans` | bearer | detached HomeStack volumes, and whether the scan was complete |
+| `GET /v1/discovery` | bearer | nodes, Gold candidates, storage definitions (no configuration needed) |
+| `GET /v1/networks?gold=VMID` | bearer | network profiles for the Gold bridge |
+| `GET /v1/gold/readiness?vmid=VMID` | bearer | Gold checks, Proxmox part |
+
+The status routes read guests with the audit-level agent commands
+(`VM.GuestAgent.Audit`). Listing VM volumes, which the detached-volume scan
+needs, takes `VM.Config.Disk` on `/vms` (or `Datastore.Allocate` on each
+storage): a read-only token gets an orphan scan marked incomplete, with a
+warning saying so.
 
 The contract is [docs/openapi.json](../openapi.json). Errors:
 
