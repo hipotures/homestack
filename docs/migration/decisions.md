@@ -5,7 +5,7 @@ of probes on the live cluster. Only the project owner records a decision here;
 an agent stops when a phase needs one that is still open
 ([PLAN.md](PLAN.md), 1.1 and the gate before phase 4).
 
-## Open decisions
+## Decisions
 
 | # | Question | Options | Needed by | Status |
 |---|---|---|---|---|
@@ -13,7 +13,7 @@ an agent stops when a phase needs one that is still open
 | 2 | Keep the Proxmox name of the root volume (no rename) | 7.2 A yes, B rename through the helper | phase 4 | open |
 | 3 | `create` on another node | 7.3 A clone + migrate, B backup storage (PBS), C Gold replica per node, D helper stream | phase 10 | open |
 | 4 | Where the `refresh` journal lives | 7.4 A shared storage, B VM `description`, C helper | phase 4 | open |
-| 5 | Guest verification without `VM.GuestAgent.Unrestricted` (`Audit` + `FileRead`) | yes / no | phase 4 | open |
+| 5 | Guest verification without `VM.GuestAgent.Unrestricted` (`Audit` + `FileRead`) | yes / no | phase 3 | **decided 2026-10-12: yes.** D2 uses the `get-*` agent commands and `file-read`; `exec` (`VM.GuestAgent.Unrestricted`) stays only for `resize` and the Gold guest contract (E2) |
 | 6 | LUKS passphrase for `resize` | stays in the client / sent to the server for `input-data` | phase 7 | open |
 | 7 | Setup and repo stay in the client in the first stage (7.5 A) | yes / no | phase 14 | open |
 | 8 | Client authentication to the server | bearer token / plus hardware-key signature for destructive operations | not set by the plan | open |
@@ -34,3 +34,4 @@ an agent stops when a phase needs one that is still open
 | 2026-10-12 | ACL inheritance | a role for a user on a specific path replaces what the user inherits from `/` there, and a privilege-separated token gets the intersection with its user: giving `homestack@pve` only the test roles took `PVEAuditor` away from `homestack@pve!server` on those paths until `PVEAuditor` was added for the user on each of them |
 | 2026-10-12 | `import-from` variants (phase 6) | not run yet |
 | 2026-10-12 | `GET /access/permissions?path=P` (phase 1) | answers for any path, existing or not, with the privileges inherited from parents (e.g. `/` → `/vms`), as `{"data":{"P":{"Priv":1,...}}}`. A privilege-separated token may query its own permissions with no extra privilege. The Administrator role has 47 privileges on PVE 9.2.21 |
+| 2026-10-12 | Server token may run commands in Gold (owner's decision before phase 3, for E2) | role `HomeStackServerGoldGuest` (`VM.GuestAgent.Unrestricted`, `VM.GuestAgent.FileRead`); `/vms/101`: added for `homestack@pve`; for `homestack@pve!server` `PVEAuditor`, `HomeStackServerDisks` and `HomeStackServerGoldGuest` (a token ACL on `/vms/101` replaces what the token inherits from `/vms`). The server token ran `hostname` through `agent/exec` and read `/etc/hostname` through `agent/file-read` on Gold; `file-read` on VM 200 is refused (`VM.GuestAgent.FileRead|VM.GuestAgent.Unrestricted`). The test token is unchanged (`VM.Audit`, `VM.Clone` on Gold) |

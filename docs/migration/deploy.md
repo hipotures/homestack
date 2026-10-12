@@ -95,6 +95,18 @@ pveum role add HomeStackServerDisks --privs VM.Config.Disk
 pveum acl modify /vms --users homestack@pve --tokens 'homestack@pve!server' --roles PVEAuditor,HomeStackServerDisks
 ```
 
+The Gold guest contract (from phase 3) runs commands in Gold through the
+guest agent, which needs `VM.GuestAgent.Unrestricted` on Gold only (VMID
+101 here). Workspaces are verified with `VM.GuestAgent.Audit` and
+`VM.GuestAgent.FileRead` (decision 5). The token's roles on `/vms/101`
+replace what it inherits from `/vms`, so all three are listed:
+
+```
+pveum role add HomeStackServerGoldGuest --privs VM.GuestAgent.Unrestricted,VM.GuestAgent.FileRead
+pveum acl modify /vms/101 --users homestack@pve --roles HomeStackServerGoldGuest
+pveum acl modify /vms/101 --tokens 'homestack@pve!server' --roles PVEAuditor,HomeStackServerDisks,HomeStackServerGoldGuest
+```
+
 ## Docker
 
 ```
