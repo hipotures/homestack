@@ -41,8 +41,7 @@ secret is shown once; write it straight to a file.
 ## Docker
 
 ```
-cd rust
-docker build -f Containerfile -t homestack-server .
+docker build -f Containerfile -t homestack-server .   # from the repository root
 openssl rand -hex 32 > api-token && chmod 600 api-token
 docker run -d --name homestack --user "$(id -u):$(id -g)" -p 127.0.0.1:8080:8080 \
     -v "$PWD/api-token:/run/secrets/api-token:ro" \

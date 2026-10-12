@@ -4,6 +4,13 @@
 **Branch:** `rust-migration`, tag `rust-phase-0`
 **Base:** `hipotures/homestack` `main` @ `c09636b`
 
+> **Layout changed after the tag.** The phase was built with the Rust
+> workspace in `rust/`. Right after it, the Rust workspace moved to the
+> repository root (`Cargo.toml`, `crates/`, `Containerfile`), the Python
+> application to `python/`, the parity tools to `parity/` and the scenarios to
+> `scenarios/`, because Rust is the lasting project and Python is removed in
+> phase 15. Paths below use the new layout.
+
 ## 1. Python behaviour this phase depends on
 
 Phase 0 ports no HomeStack function. It builds the tools that later phases use
@@ -70,15 +77,15 @@ is the phase 0 parity scenario.
 
 | Part | Content |
 |---|---|
-| `rust/` workspace | `hs-model`, `hs-pve`, `hs-core` (empty, see 6.1), `hs-server`, `pve-sim`, `hs-parity`; edition 2024, Rust 1.99, `unsafe` forbidden, `unwrap`/`expect` denied by clippy |
+| Cargo workspace (repository root) | `hs-model`, `hs-pve`, `hs-core` (empty, see 6.1), `hs-server`, `pve-sim`, `hs-parity`; edition 2024, Rust 1.99, `unsafe` forbidden, `unwrap`/`expect` denied by clippy |
 | `hs-server` | `GET /health/live`, `GET /v1/pve/version`, `GET /v1/pve/nodes/{node}/status`; bearer token from a file; mypowers error document; `x-request-id`; `Cache-Control: no-store`; `tracing` logs (text or JSON) without secrets or raw paths |
 | `hs-pve` | token from a file, TLS against system roots plus optional CA, endpoint list with failover, `GET /version`, `GET /nodes`, `GET /nodes/{node}/status` |
 | `pve-sim` | HTTPS `/api2/json` with `/version`, `/nodes`, `/nodes/{node}/status`, task status and log; scenario loading; token ACL checks; operation log; fault injection |
-| Python test tools | `FixtureTransport`, `RecordingTransport`, the command translator, the CLI driver, the test lister (`rust/parity/python/`) |
-| Formats | scenarios, `manifest.toml`, `normalize.toml`, `ops.md` (`rust/parity/README.md`) |
+| Python test tools | `FixtureTransport`, `RecordingTransport`, the command translator, the CLI driver, the test lister (`parity/python/`) |
+| Formats | scenarios, `manifest.toml`, `normalize.toml`, `ops.md` (`parity/README.md`) |
 | `scripts/check.sh` | fmt, clippy, Rust tests, Python tool tests, the Python suite, manifest check; `--live`, `--phase N` |
 | CI | `.github/workflows/rust-migration.yml` runs `scripts/check.sh` |
-| Image | `rust/Containerfile`, `docs/migration/deploy.md` |
+| Image | `Containerfile`, `docs/migration/deploy.md` |
 | OpenAPI | `docs/openapi.json`, checked by a test |
 
 Tests were written before the code for each crate and shown failing (they did
@@ -105,7 +112,7 @@ passed.
 
 ## 4. Parity with Python
 
-1 scenario (`rust/scenarios/transport-node-status.toml`): passed. Python's
+1 scenario (`scenarios/transport-node-status.toml`): passed. Python's
 `homestack transport --json` on `FixtureTransport` and the Rust server's
 `GET /v1/pve/nodes/pve-example-1/status` issue the same single operation,
 `get{path=/nodes/pve-example-1/status}`, and report the same data after the

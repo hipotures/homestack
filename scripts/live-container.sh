@@ -6,7 +6,7 @@
 #   HOMESTACK_LIVE_TOKEN_FILE      PVE token file (USER@REALM!TOKENID=SECRET)
 #   HOMESTACK_LIVE_PVE_ENDPOINTS   comma-separated https origins (certificate names)
 #
-# Builds rust/Containerfile as homestack-server:check unless
+# Builds Containerfile as homestack-server:check unless
 # HOMESTACK_IMAGE names an existing image. Always removes its container.
 set -euo pipefail
 
@@ -30,7 +30,12 @@ docker_() {
 image=${HOMESTACK_IMAGE:-}
 if [[ -z $image ]]; then
     image=homestack-server:check
-    docker_ build -q -f "$root/rust/Containerfile" -t "$image" "$root/rust" >/dev/null
+    built=0
+    docker_ build -q -f "$root/Containerfile" -t "$image" "$root" >/dev/null && built=1
+    # Without BuildKit the compile stage (about 2 GB) stays behind as untagged
+    # images, also after a failed build.
+    docker_ image prune -f --filter label=org.homestack.stage=build >/dev/null
+    ((built)) || { echo "live-container: image build failed" >&2; exit 1; }
 fi
 
 work=$(mktemp -d)

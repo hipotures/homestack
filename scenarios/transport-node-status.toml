@@ -1,0 +1,51 @@
+# Phase 0 dry run of the parity harness: one read through both implementations.
+#
+# Python runs `homestack transport --json` (mapping A4); Rust serves the same
+# Proxmox read as GET /v1/pve/nodes/{node}/status. Both must issue the same
+# operation and report the same node data after normalization.
+
+[scenario]
+name = "transport-node-status"
+phase = "0"
+description = "Node version, kernel and uptime of the configured node"
+
+[homestack]
+# Relative to the repository root.
+config = "python/config.example.toml"
+
+[parity]
+python = ["transport", "--json"]
+rust = "GET /v1/pve/nodes/pve-example-1/status"
+normalize = "transport-node-status"
+
+[parity.expect]
+ops = ["get{path=/nodes/pve-example-1/status}"]
+body = { node = "pve-example-1", pveversion = "pve-manager/9.2.21/4f6e0ac86f9e8c7f", kversion = "Linux 7.0.14-20-pve #1 SMP PREEMPT_DYNAMIC PMX 7.0.14-20 (2026-09-30T10:00Z) x86_64", uptime = 591184 }
+
+[pve]
+version = { release = "9.2", version = "9.2.21", repoid = "4f6e0ac86f9e8c7f" }
+
+[[pve.nodes]]
+name = "pve-example-1"
+pveversion = "pve-manager/9.2.21/4f6e0ac86f9e8c7f"
+kversion = "Linux 7.0.14-20-pve #1 SMP PREEMPT_DYNAMIC PMX 7.0.14-20 (2026-09-30T10:00Z) x86_64"
+uptime = 591184
+
+[[pve.nodes]]
+name = "pve-example-2"
+status = "offline"
+pveversion = "pve-manager/9.2.21/4f6e0ac86f9e8c7f"
+kversion = "Linux 7.0.14-20-pve #1 SMP PREEMPT_DYNAMIC PMX 7.0.14-20 (2026-09-30T10:00Z) x86_64"
+uptime = 0
+
+# Python runs pvesh as root on a node today, so its token can do anything.
+[[pve.tokens]]
+id = "root@pam!parity"
+secret = "00000000-0000-0000-0000-00000000000a"
+acl = { "/" = ["*"] }
+
+# The server's token, as created for the real cluster: PVEAuditor on /.
+[[pve.tokens]]
+id = "homestack@pve!server"
+secret = "00000000-0000-0000-0000-00000000000b"
+acl = { "/" = ["Datastore.Audit", "Mapping.Audit", "Pool.Audit", "SDN.Audit", "Sys.Audit", "VM.Audit", "VM.GuestAgent.Audit"] }

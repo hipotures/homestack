@@ -3,7 +3,7 @@
 **Data:** 2026-10-12
 **Podstawa:** `docs/migration/api-mapping.md` (ID funkcji A1–I2, warianty 7.x i decyzje z sekcji 10) oraz `hipotures/homestack` `main` @ `c09636b`.
 **Cel:** serwer usług w Rust, który rozmawia z Proxmoxem przez REST API, a potem klient w Rust. Python zostaje wzorcem zachowania do samego końca.
-**Miejsce w repo:** ten plik jako `docs/migration/PLAN.md`, kod w `rust/` w repo `homestack`.
+**Miejsce w repo:** ten plik jako `docs/migration/PLAN.md`. Workspace Rust jest w korzeniu repo `homestack` (`Cargo.toml`, `crates/`); Python przeniesiony do `python/` i usuwany w fazie 15.
 
 ---
 
@@ -65,7 +65,7 @@ CI (GitHub Actions) uruchamia L1–L3 przy każdym pushu. L4 nigdy nie działa w
 
 ### 2.1 L1: testy przeniesione 1:1
 
-- Python ma 594 testy w `tests/`. Plik `rust/parity/manifest.toml` wymienia każdy z nich (`tests/test_lifecycle.py::Klasa::test_x`) i przypisuje mu test w Rust, status (`todo`, `ported`, `excluded`) oraz fazę.
+- Python ma 594 testy w `python/tests/`. Plik `parity/manifest.toml` wymienia każdy z nich (`tests/test_lifecycle.py::Klasa::test_x`) i przypisuje mu test w Rust, status (`todo`, `ported`, `excluded`) oraz fazę.
 - Skrypt w `check.sh` sprawdza, że manifest obejmuje wszystkie testy Pythona i że każdy wpis `ported` wskazuje istniejący, zaliczony test Rust.
 - `excluded` wymaga powodu, np. „dotyczy TUI”, „dotyczy Herdr, transport znika”.
 - Testy Pythona sprawdzają dziś listę poleceń shella (`FakeSession.commands`). W Rust te same asercje dotyczą listy wywołań API w symulatorze, po przetłumaczeniu na wspólny słownik operacji (2.3).
@@ -75,7 +75,7 @@ CI (GitHub Actions) uruchamia L1–L3 przy każdym pushu. L4 nigdy nie działa w
 Lokalny serwer HTTPS udający API Proxmoxa, ze stanem w pamięci:
 
 - **Model:** node’y (online/offline), VM z configiem i `digest`, storage z wolumenami i typami treści, pule, tagi, zadania z UPID i logiem, odpowiedzi guest agenta (skryptowane per VM).
-- **Ładowanie stanu ze scenariusza** (`rust/scenarios/*.toml`): stan początkowy klastra, config HomeStacka, żądanie, oczekiwany wynik.
+- **Ładowanie stanu ze scenariusza** (`scenarios/*.toml`): stan początkowy klastra, config HomeStacka, żądanie, oczekiwany wynik.
 - **Wstrzykiwanie błędów:** błąd przy N-tym wywołaniu, przerwanie zadania w połowie, „zgubione potwierdzenie” (zmiana wykonana, odpowiedź nie dociera), node przechodzący w offline.
 - **Dziennik wywołań** w postaci wspólnego słownika operacji (2.3).
 - **Linie postępu w logach zadań** skopiowane z formatów, które Python dziś parsuje (`CLONE_TRANSFER_RE`, `MIGRATION_*_RE`).
@@ -85,13 +85,13 @@ Lokalny serwer HTTPS udający API Proxmoxa, ze stanem w pamięci:
 
 Python jest wyrocznią. Dla tego samego scenariusza obie implementacje muszą dać to samo.
 
-- **Słownik operacji:** wspólny, kanoniczny opis operacji na Proxmoxie, np. `clone{src=100,dst=200,full=true,storage=s}`, `set_config{vmid=200,keys=[scsi1]}`, `guest_exec{vmid=200,cmd="hostname"}`. Plik `rust/parity/ops.md`.
+- **Słownik operacji:** wspólny, kanoniczny opis operacji na Proxmoxie, np. `clone{src=100,dst=200,full=true,storage=s}`, `set_config{vmid=200,keys=[scsi1]}`, `guest_exec{vmid=200,cmd="hostname"}`. Plik `parity/ops.md`.
 - **Po stronie Pythona (tylko narzędzia testowe, dodawane w fazie 0):**
   - `FixtureTransport`: odpowiada na `pvesh get …` ze stanu scenariusza, więc `homestack … --json` działa bez klastra,
   - `RecordingTransport`: zapisuje wykonane polecenia,
   - tłumacz poleceń `qm`/`pvesm`/`pvesh`/`vzdump`/`perl` na słownik operacji.
 - **Porównania:**
-  - **plany i odczyty:** JSON z `homestack <komenda> --json` (Python na `FixtureTransport`) kontra odpowiedź serwera Rust (na `pve-sim`) po normalizacji (mapa zmienionych nazw pól w `rust/parity/normalize.toml`),
+  - **plany i odczyty:** JSON z `homestack <komenda> --json` (Python na `FixtureTransport`) kontra odpowiedź serwera Rust (na `pve-sim`) po normalizacji (mapa zmienionych nazw pól w `parity/normalize.toml`),
   - **operacje zmieniające stan:** sekwencja operacji z Pythona kontra sekwencja z `pve-sim`, w tej samej kolejności tam, gdzie kolejność ma znaczenie,
   - **pliki generowane:** snippety Cloud-Init i inne artefakty porównywane bajt w bajt (dopóki decyzja nie zmienia ich treści).
 - **Świadome różnice** (np. `get-fsinfo` zamiast `exec df`) są zapisane w `normalize.toml` z odwołaniem do decyzji. Bez wpisu każda różnica to błąd.
@@ -107,7 +107,7 @@ Python jest wyrocznią. Dla tego samego scenariusza obie implementacje muszą da
 
 ## 3. Struktura w Rust
 
-Workspace `rust/` (propozycja do potwierdzenia w fazie 0):
+Workspace Cargo w korzeniu repo, crate’y w `crates/` (potwierdzone w fazie 0, zob. `phase-0.md`):
 
 | Crate | Zawartość |
 |---|---|
@@ -327,8 +327,8 @@ Bez nich agent nie zaczyna fazy 4.
 | `docs/migration/api-mapping.md` | mapowanie funkcji HomeStacka na API Proxmoxa (dokument mapowania) |
 | `docs/migration/decisions.md` | decyzje z sekcji 10 dokumentu mapowania i wyniki prób (np. `import-from`) |
 | `docs/migration/phase-N.md` | analiza zachowań, raport fazy |
-| `rust/parity/manifest.toml` | mapa 594 testów Pythona na testy Rust |
-| `rust/parity/ops.md` | słownik operacji |
-| `rust/parity/normalize.toml` | dozwolone różnice z uzasadnieniem |
-| `rust/scenarios/` | scenariusze dla `pve-sim` i testów zgodności |
+| `parity/manifest.toml` | mapa 594 testów Pythona na testy Rust |
+| `parity/ops.md` | słownik operacji |
+| `parity/normalize.toml` | dozwolone różnice z uzasadnieniem |
+| `scenarios/` | scenariusze dla `pve-sim` i testów zgodności |
 | `docs/openapi.json` | kontrakt API serwera |

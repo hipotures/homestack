@@ -4,9 +4,10 @@ HomeStack is an installable Python application for managing disposable Proxmox V
 
 ## Installation
 
-HomeStack requires Python 3.12 or newer and [uv](https://docs.astral.sh/uv/). Install the locked environment from the repository root:
+HomeStack requires Python 3.12 or newer and [uv](https://docs.astral.sh/uv/). The Python application lives in `python/`; install the locked environment there:
 
 ```bash
+cd python
 uv sync
 ```
 
@@ -21,7 +22,7 @@ The desktop also needs `herdr` and `ssh`. File transfers additionally require `r
 
 ## Rust server (migration in progress)
 
-HomeStack is being moved to a Rust service that talks to the Proxmox REST API with an API token, followed by a Rust client. The Python application stays the reference behaviour until the migration ends. The plan, the Proxmox API mapping, decisions and phase reports are in [docs/migration](docs/migration/PLAN.md); the code is in `rust/`.
+HomeStack is being moved to a Rust service that talks to the Proxmox REST API with an API token, followed by a Rust client. The Python application stays the reference behaviour until the migration ends. The plan, the Proxmox API mapping, decisions and phase reports are in [docs/migration](docs/migration/PLAN.md). The Rust workspace is the repository root (`crates/`); the Python application moved to `python/` and is removed when the migration ends.
 
 Run every check (Rust 1.99 and uv required):
 
@@ -462,7 +463,7 @@ Global status discovers tagged workspaces cluster-wide, checks configured storag
 
 ## Development
 
-The project uses a standard `src/` package layout. Run the complete suite with:
+The Python project in `python/` uses a standard `src/` package layout. Run the complete suite from `python/` with:
 
 ```bash
 uv run python -m unittest discover -s tests -v

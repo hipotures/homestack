@@ -1,0 +1,8 @@
+target/
+.git/
+.venv/
+python/
+parity/
+scenarios/
+docs/
+**/*.rs.bk
