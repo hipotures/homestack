@@ -166,6 +166,45 @@ an agent stops when a phase needs one that is still open
   test and production installation) were removed on 2026-10-13 with the
   owner's approval, so the owner can install from scratch.
 
+
+### Owner's decision of 2026-10-13 (phase 13c, how root is named)
+
+- The user opens the root access and names it: `--ssh USER@HOST`
+  (usually `root@pve1`) or `--herdr NAME`, the name of a Herdr tab or pane
+  that holds a root shell on a Proxmox node. The client searches for the
+  name; none or more than one is an error that says so and changes nothing.
+  It then checks, in this order, that the access is root, that it is
+  Proxmox VE (so that a wrong target is not installed to), and whether the
+  node is a single server or in a cluster (`pvesh get /cluster/status`: only
+  a cluster has a `cluster` entry).
+
+### Agent's choices within phase 13c, step 1 (`install` and `uninstall`)
+
+- The installer is a Rust port of `homestack-pve.sh`, not a wrapper around
+  it: the plan is computed in Rust (`hs-install`) and applied with `pveum`,
+  `pvesh` and `pvesm` over the root access. The script and its tests stay
+  until phase 15 and run in `check.sh`, so the two are compared on the same
+  fake Proxmox.
+- A bare `HOST` after `--ssh` means `root@HOST`. `--identity FILE` adds only
+  that key. The SSH master accepts an unknown host key (`accept-new`), as
+  the workspace master does.
+- Herdr: tabs are matched by label, panes by label; a tab must hold exactly
+  one pane. The pane's last line must end with `#` (a root prompt) before
+  anything is typed, since text typed into another program would be input
+  to it. A pane whose prompt does not end with `#` is refused even if it is
+  root; the message says what the last line was.
+- A token secret passes through the pane (Herdr) once; the pane's screen
+  and scrollback are cleared right after. Over SSH it never touches the
+  node's disk or a terminal.
+- The secret files are `pve-token` (production server token),
+  `pve-token-test` and `pve-token-deploy` in `~/.config/homestack/` (or
+  `--token-dir`), the names the live checks already use. A file that exists
+  is never overwritten. If a file cannot be written after Proxmox made the
+  token, the token is deleted again so the run can be repeated.
+- A cluster without quorum is refused (Proxmox would refuse every change).
+- Uninstall does not remove the desktop's token files (they are the owner's
+  files) and says which exist.
+
 ## Probe results
 
 | Date | Probe | Result |

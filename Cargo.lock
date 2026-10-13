@@ -751,11 +751,13 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "axum-server",
+ "base64 0.23.1",
  "crossterm",
  "hs-client",
  "hs-config",
  "hs-core",
  "hs-deploy",
+ "hs-install",
  "hs-model",
  "hs-pve",
  "hs-server",
@@ -825,6 +827,16 @@ dependencies = [
  "toml",
  "url",
  "x509-parser",
+]
+
+[[package]]
+name = "hs-install"
+version = "0.1.0"
+dependencies = [
+ "base64 0.23.1",
+ "serde_json",
+ "sha2",
+ "tempfile",
 ]
 
 [[package]]

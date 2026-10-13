@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Fake PVE tools for deploy/pve/tests/run.sh. One file, linked as pvesh,
-# pveum, pvesm, ssh and openssl; it answers from the cluster state in
+# pveum, pvesm, ssh, openssl, id and hostname; it answers from the cluster state in
 # $HS_FAKE and logs every call that changes it to $HS_FAKE/calls.log.
 #
 # State files (tab-separated, one record per line):
@@ -17,6 +17,8 @@
 #   acl.tsv      path type ugid roleid
 #   pools.tsv    poolid vmids(comma) comment
 #   trusted      certificate names whose TLS verification succeeds
+#   uid          the user id `id -u` answers (default 0)
+#   no-quorum    present when the cluster has no quorum
 # Snippets: the local node's under $HS_FAKE/vz, node N's under
 # $HS_FAKE/nodes/N/vz (ssh rewrites the path).
 set -euo pipefail
@@ -51,7 +53,7 @@ cluster_status() {
     local first=1 name ip online is_local
     printf '['
     if [[ -e $HS_FAKE/cluster ]]; then
-        printf '{"id":"cluster","name":"fake","type":"cluster","quorate":1}'
+        printf '{"id":"cluster","name":"fake","type":"cluster","quorate":%s}' "$([[ -e $HS_FAKE/no-quorum ]] && echo 0 || echo 1)"
         first=0
     fi
     while IFS=$us read -r name ip online is_local; do
@@ -140,6 +142,7 @@ pvesh_main() {
         shift
     done
     case $path in
+        /version) echo '{"version":"9.2.21","release":"9.2","repoid":"fake"}' ;;
         /cluster/status) cluster_status ;;
         /cluster/resources) resources ;;
         /cluster/options) cat "$HS_FAKE/options.json" ;;
@@ -381,7 +384,20 @@ openssl_main() {
     fi
 }
 
+# id and hostname of the install tests of crates/hs-install: the user id
+# from $HS_FAKE/uid (default 0) and the local node's name.
+id_main() {
+    [[ ${1:-} == -u ]] || die "fake id: $*"
+    cat "$HS_FAKE/uid" 2> /dev/null || echo 0
+}
+
+hostname_main() {
+    awk -F'\t' '$4 == 1 { print $1; exit }' "$HS_FAKE/nodes.tsv"
+}
+
 case $tool in
+    id) id_main "$@" ;;
+    hostname) hostname_main ;;
     pvesh) pvesh_main "$@" ;;
     pveum) pveum_main "$@" ;;
     pvesm) pvesm_main "$@" ;;

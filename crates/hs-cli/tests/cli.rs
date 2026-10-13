@@ -718,11 +718,7 @@ async fn environment_discovery_reports_progress_without_changing_read_only_queri
 #[tokio::test]
 async fn python_only_commands_say_where_they_are() -> TestResult {
     let desk = desk(LIFECYCLE, SERVER_TOML).await?;
-    for (argv, phase) in [
-        (vec!["setup", "list"], "14"),
-        (vec!["repo", "x"], "14"),
-        (vec!["install"], "13c"),
-    ] {
+    for (argv, phase) in [(vec!["setup", "list"], "14"), (vec!["repo", "x"], "14")] {
         let run = desk.run(&argv).await;
         assert_eq!(run.code, 1, "{argv:?}");
         let text = run.console.out();

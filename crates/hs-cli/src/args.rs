@@ -3,13 +3,35 @@
 
 use std::path::PathBuf;
 
+/// The options of `install` and `uninstall` (phase 13c): how to reach root
+/// on a node once, and the choices of `homestack-pve.sh`.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct InstallArgs {
+    /// `USER@HOST` of a root SSH login.
+    pub ssh: Option<String>,
+    /// The name of a Herdr tab or pane holding a root shell.
+    pub herdr: Option<String>,
+    /// A key file for the SSH login.
+    pub identity: Option<String>,
+    pub test: bool,
+    pub storages: Vec<String>,
+    pub snippet_storage: Option<String>,
+    pub service_storages: Vec<String>,
+    pub template_storage: Option<String>,
+    pub gold: Option<u32>,
+    /// Uninstall: remove snippets that VMs still name.
+    pub force: bool,
+    pub token_dir: Option<PathBuf>,
+}
+
 /// What was asked.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
     /// No command: the help screen.
     None,
     Discover,
-    Install,
+    Install(InstallArgs),
+    Uninstall(InstallArgs),
     Create {
         vmid: u32,
         name: String,
@@ -56,7 +78,8 @@ impl Command {
         match self {
             Self::None => "help",
             Self::Discover => "discover",
-            Self::Install => "install",
+            Self::Install(_) => "install",
+            Self::Uninstall(_) => "uninstall",
             Self::Create { .. } => "create",
             Self::Refresh { .. } => "refresh",
             Self::Resize { .. } => "resize",
@@ -97,7 +120,7 @@ impl std::fmt::Display for UsageError {
 impl std::error::Error for UsageError {}
 
 const USAGE: &str = "usage: homestack [-h] [--config CONFIG] [--json] [-y] \
-{discover,install,create,refresh,resize,addkey,destroy,migrate,setup,repo,status,transport} ...";
+{discover,install,uninstall,create,refresh,resize,addkey,destroy,migrate,setup,repo,status,transport} ...";
 
 fn usage_of(command: &str) -> String {
     let rest = match command {
@@ -106,6 +129,12 @@ fn usage_of(command: &str) -> String {
         "resize" => "TARGET (--root-size ROOT_SIZE | --home-size HOME_SIZE) [--json] [-y]",
         "addkey" => "TARGET [--key KEY] [--restart] [--json] [-y]",
         "migrate" => "TARGET TARGET_NODE --target-storage TARGET_STORAGE [--json] [-y]",
+        "install" => {
+            "(--ssh USER@HOST | --herdr NAME) [--identity FILE] [--test] --storages IDS --snippet-storage ID --service-storages IDS --template-storage ID [--gold VMID] [--token-dir DIR] [--json] [-y]"
+        }
+        "uninstall" => {
+            "(--ssh USER@HOST | --herdr NAME) [--identity FILE] [--test] [--snippet-storage ID] [--gold VMID] [--force] [--token-dir DIR] [--json] [-y]"
+        }
         "repo" => "TARGET [REPOSITORY] [--json]",
         "status" => "[TARGET] [--json]",
         _ => "[--json]",
@@ -254,22 +283,91 @@ pub fn parse(argv: &[String]) -> Result<Args, UsageError> {
     };
     let rest = &argv[index + 1..];
     let parsed = match name.as_str() {
-        "discover" | "transport" | "install" => {
-            let flags: &[&str] = if name == "install" {
-                &["--help"]
-            } else {
-                &["--json", "--help"]
-            };
-            let words = words(name, rest, &[], flags)?;
+        "discover" | "transport" => {
+            let words = words(name, rest, &[], &["--json", "--help"])?;
             words.positionals(&[], 0)?;
             (
                 words,
-                match name.as_str() {
-                    "discover" => Command::Discover,
-                    "transport" => Command::Transport,
-                    _ => Command::Install,
+                if name == "discover" {
+                    Command::Discover
+                } else {
+                    Command::Transport
                 },
             )
+        }
+        "install" | "uninstall" => {
+            let uninstall = name == "uninstall";
+            let extra: &[&str] = if uninstall { &["--test", "--force"] } else { &["--test"] };
+            let words = words(
+                name,
+                rest,
+                &[
+                    "--ssh",
+                    "--herdr",
+                    "--identity",
+                    "--storages",
+                    "--snippet-storage",
+                    "--service-storages",
+                    "--template-storage",
+                    "--gold",
+                    "--token-dir",
+                ],
+                &common(extra),
+            )?;
+            words.positionals(&[], 0)?;
+            let gold = match words.value("--gold") {
+                None => None,
+                Some(text) => Some(text.parse::<u32>().map_err(|_| {
+                    error(
+                        words.usage.clone(),
+                        format!("argument --gold: invalid int value: '{text}'"),
+                    )
+                })?),
+            };
+            let (ssh, herdr) = (words.value("--ssh"), words.value("--herdr"));
+            match (&ssh, &herdr) {
+                (None, None) => {
+                    return Err(error(
+                        words.usage,
+                        "one of the arguments --ssh --herdr is required (root on a node is reached once, over SSH or through a Herdr pane)",
+                    ));
+                }
+                (Some(_), Some(_)) => {
+                    return Err(error(words.usage, "argument --herdr: not allowed with argument --ssh"));
+                }
+                _ => {}
+            }
+            let list = |name: &str| -> Vec<String> {
+                words
+                    .value(name)
+                    .map(|text| {
+                        text.split(',')
+                            .map(str::trim)
+                            .filter(|item| !item.is_empty())
+                            .map(str::to_owned)
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            };
+            let install = InstallArgs {
+                ssh,
+                herdr,
+                identity: words.value("--identity"),
+                test: words.flag("--test"),
+                storages: list("--storages"),
+                snippet_storage: words.value("--snippet-storage"),
+                service_storages: list("--service-storages"),
+                template_storage: words.value("--template-storage"),
+                gold,
+                force: words.flag("--force"),
+                token_dir: words.value("--token-dir").map(PathBuf::from),
+            };
+            let command = if uninstall {
+                Command::Uninstall(install)
+            } else {
+                Command::Install(install)
+            };
+            (words, command)
         }
         "create" => {
             let words = words(name, rest, &["--home-size", "--storage", "--node"], &COMMON)?;
@@ -384,7 +482,7 @@ pub fn parse(argv: &[String]) -> Result<Args, UsageError> {
             return Err(error(
                 USAGE.to_owned(),
                 format!(
-                    "argument command: invalid choice: '{other}' (choose from discover, install, create, refresh, resize, addkey, destroy, migrate, setup, repo, status, transport)"
+                    "argument command: invalid choice: '{other}' (choose from discover, install, uninstall, create, refresh, resize, addkey, destroy, migrate, setup, repo, status, transport)"
                 ),
             ));
         }

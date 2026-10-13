@@ -16,7 +16,7 @@ use crate::args::{self, Args, Command};
 use crate::config::{self, Loaded};
 use crate::system::{Console, System};
 use crate::view::{self, Color, Style};
-use crate::{AppError, expand_home, identity, local_ssh};
+use crate::{AppError, expand_home, identity, installer, local_ssh};
 
 /// What a run of the command uses from the desktop.
 pub struct Context {
@@ -132,8 +132,12 @@ fn help(config: &Path) -> String {
             "Read-only check of the local tools and keys and of what the server finds in Proxmox.",
         ),
         (
-            "homestack install",
-            "Interactive installer; still in the Python client (phase 13c).",
+            "homestack install (--ssh USER@HOST | --herdr NAME) ...",
+            "Install HomeStack in Proxmox: root on a node once, a plan, then pools, roles, user, tokens, ACL and snippets; token secrets go to this desktop.",
+        ),
+        (
+            "homestack uninstall (--ssh USER@HOST | --herdr NAME) ...",
+            "Remove HomeStack from Proxmox; never a VM, a container or a volume.",
         ),
         (
             "homestack create VMID NAME",
@@ -187,6 +191,10 @@ fn help(config: &Path) -> String {
         ),
         ("--root-size SIZE", "Total target root disk size for resize."),
         (
+            "--ssh USER@HOST, --herdr NAME",
+            "install, uninstall: how to reach root on a Proxmox node once; the Herdr tab or pane holds a root shell.",
+        ),
+        (
             "--key FILE",
             "Public key file (one key with a comment) to add with addkey.",
         ),
@@ -234,7 +242,6 @@ fn help(config: &Path) -> String {
 async fn execute(args: &Args, ctx: &mut Context, running: &Running) -> Result<Code, AppError> {
     let phase = match args.command {
         Command::Setup | Command::Repo { .. } => Some("14"),
-        Command::Install => Some("13c"),
         _ => None,
     };
     if let Some(phase) = phase {
@@ -242,6 +249,11 @@ async fn execute(args: &Args, ctx: &mut Context, running: &Running) -> Result<Co
             "homestack {} is still provided by the Python client (phase {phase} of docs/migration/PLAN.md)",
             args.command.name()
         )));
+    }
+    match &args.command {
+        Command::Install(install) => return installer::run(args, install, hs_install::Command::Install, ctx),
+        Command::Uninstall(install) => return installer::run(args, install, hs_install::Command::Uninstall, ctx),
+        _ => {}
     }
     let path = args
         .config
@@ -309,7 +321,7 @@ async fn execute(args: &Args, ctx: &mut Context, running: &Running) -> Result<Co
             cli.migrate(json!({"vmid": vmid, "target_node": target_node, "target_storage": target_storage}))
                 .await
         }
-        Command::None | Command::Setup | Command::Repo { .. } | Command::Install => Ok(0),
+        Command::None | Command::Setup | Command::Repo { .. } | Command::Install(_) | Command::Uninstall(_) => Ok(0),
     }
 }
 
