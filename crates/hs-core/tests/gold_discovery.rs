@@ -307,6 +307,7 @@ fn workspace_network_discovery_prefers_existing_workspace_on_gold_bridge() {
             name: Some("gold".into()),
             status: None,
             tags: Some("homestack-gold".into()),
+            pool: None,
         },
         hs_core::status::StatusResource {
             vmid: 200,
@@ -314,6 +315,7 @@ fn workspace_network_discovery_prefers_existing_workspace_on_gold_bridge() {
             name: Some("ws".into()),
             status: None,
             tags: Some("homestack-ws".into()),
+            pool: None,
         },
     ];
     let candidates = block_on(workspace_networks(&pve, &resources, 101, "pve2")).unwrap_or_default();

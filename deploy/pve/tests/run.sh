@@ -197,8 +197,12 @@ test_install_single_node() {
     hs_ok install --storages local-lvm --snippet-storage local --yes || return
     expect_out 'single node'
     expect_acl <<'EOF'
-/	token	homestack@pve!server	PVEAuditor
-/	user	homestack@pve	PVEAuditor
+/nodes	token	homestack@pve!server	PVEAuditor
+/nodes	user	homestack@pve	PVEAuditor
+/sdn	token	homestack@pve!server	PVEAuditor
+/sdn	user	homestack@pve	PVEAuditor
+/storage	token	homestack@pve!server	PVEAuditor
+/storage	user	homestack@pve	PVEAuditor
 /pool/homestack	token	homestack@pve!server	HomeStack
 /pool/homestack	user	homestack@pve	HomeStack
 /pool/homestack-gold	token	homestack@pve!server	HomeStackGold
@@ -211,6 +215,8 @@ test_install_single_node() {
 /storage/local-lvm	user	homestack@pve	HomeStackStorage
 EOF
     expect_roles <<< "$ROLES_TARGET"
+    homestack_acl | awk -F'\t' '$1 == "/" || index($1, "/vms") == 1' | grep -q . &&
+        fail "a token or the user can see VMs outside the HomeStack pools"
     expect_pools <<< $'homestack\t\nhomestack-gold\t101'
     grep -qx 'homestack@pve' "$HS_FAKE/users" || fail "user not created"
     grep -q "^homestack@pve${tab}server${tab}1$" "$HS_FAKE/tokens.tsv" || fail "server token not created with privsep"
@@ -258,8 +264,13 @@ test_adopt_today_with_test() {
     hs_ok install --test --storages local-lvm,worker-roots --snippet-storage local --yes || return
     expect_acl <<'EOF'
 /	token	homestack@pve!server	PVEAuditor
-/	token	homestack@pve!test	PVEAuditor
 /	user	homestack@pve	PVEAuditor
+/nodes	token	homestack@pve!test	PVEAuditor
+/nodes	user	homestack@pve	PVEAuditor
+/sdn	token	homestack@pve!test	PVEAuditor
+/sdn	user	homestack@pve	PVEAuditor
+/storage	token	homestack@pve!test	PVEAuditor
+/storage	user	homestack@pve	PVEAuditor
 /pool/homestack-gold	token	homestack@pve!test	HomeStackGold
 /pool/homestack-gold	user	homestack@pve	HomeStackGold
 /pool/homestack-gold	user	homestack@pve	PVEAuditor

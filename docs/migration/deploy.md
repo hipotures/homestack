@@ -102,15 +102,16 @@ token gets:
 
 | Path | Role |
 |---|---|
-| `/` | `PVEAuditor` (reads everything) |
+| `/nodes`, `/storage`, `/sdn` | `PVEAuditor` (nodes, storages, networks; no VM) |
 | `/pool/homestack` (or `homestack-test`) | `HomeStack`: `Pool.Audit`, `VM.Allocate`, `VM.Audit`, `VM.Config.Cloudinit`, `VM.Config.Disk`, `VM.Config.Options`, `VM.GuestAgent.Audit`, `VM.GuestAgent.FileRead`, `VM.GuestAgent.Unrestricted`, `VM.Migrate`, `VM.PowerMgmt` |
 | `/pool/homestack-gold` | `HomeStackGold`: `Pool.Audit`, `VM.Audit`, `VM.Clone`, `VM.GuestAgent.Audit`, `VM.GuestAgent.FileRead`, `VM.GuestAgent.Unrestricted` |
 | `/storage/<id>`, each layout storage and the snippet storage | `HomeStackStorage`: `Datastore.AllocateSpace`, `Datastore.Audit` |
 | `/sdn/zones/<zone>/<bridge>` of Gold's `net0` | `PVESDNUser` |
 
 Proxmox adds the roles of a VM's pool to those of `/vms/<vmid>`, so the
-token may change only the VMs in its pool and clone only Gold; outside them
-it can only read. The user `homestack@pve` gets, on each of these paths, the
+token sees, reads and changes only the VMs of the HomeStack pools; any
+other VM is invisible to it (owner's rule, 2026-10-13), and the server
+refuses it too (`409 outside_pool`). The user `homestack@pve` gets, on each of these paths, the
 union of what its tokens resolve to there (a privilege-separated token gets
 the intersection with its user). No `VM.Config.Disk` on `/vms` (decision
 10 = C): the detached-volume scan lists only the volumes of the pool's VMs

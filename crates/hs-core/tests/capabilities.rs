@@ -52,7 +52,7 @@ fn every_operation_reads_the_cluster_first() {
         let required = requirements(operation, &config, DEFAULT_POOL);
         assert!(has(&required, "/nodes", "Sys.Audit"), "{operation:?}");
         assert!(
-            has(&required, "/vms", "VM.Audit") || operation == Operation::GoldReadiness,
+            has(&required, "/pool/homestack", "VM.Audit") || operation == Operation::GoldReadiness,
             "{operation:?}"
         );
         let unique: BTreeSet<_> = required.iter().map(|p| (&p.path, &p.privilege)).collect();
@@ -152,10 +152,9 @@ fn the_mapping_privileges_are_required() {
             );
         }
     }
-    // Reads cover every workspace, also those made before the pool.
     assert!(has(
         &requirements(Operation::GuestRead, &config, DEFAULT_POOL),
-        "/vms",
+        "/pool/homestack",
         "VM.GuestAgent.Audit"
     ));
     assert!(has(
@@ -180,7 +179,8 @@ fn probe_paths_cover_every_requirement_once() {
 #[test]
 fn evaluation_lists_what_is_missing() {
     let config = config();
-    let granted = |path: &str, privilege: &str| path == "/nodes" || (path == "/vms" && privilege == "VM.Audit");
+    let granted =
+        |path: &str, privilege: &str| path == "/nodes" || (path == "/pool/homestack" && privilege == "VM.Audit");
     let result = evaluate(&config, DEFAULT_POOL, granted);
     let read = match result.iter().find(|op| op.operation == Operation::Read) {
         Some(read) => read,
@@ -196,20 +196,14 @@ fn evaluation_lists_what_is_missing() {
     assert_eq!(all.len(), Operation::ALL.len());
 }
 
-/// The gate before phase 5: changes are allowed only in the pool, so no
-/// operation needs more than reading on `/vms`.
+/// The token sees VMs only through the HomeStack pools (owner, 2026-10-13):
+/// no operation needs anything on `/vms`.
 #[test]
-fn changes_need_nothing_on_vms_beyond_reading() {
+fn nothing_is_needed_on_vms() {
     let config = config();
     for operation in Operation::ALL {
         for privilege in requirements(operation, &config, DEFAULT_POOL) {
-            if privilege.path == "/vms" {
-                assert!(
-                    ["VM.Audit", "VM.GuestAgent.Audit"].contains(&privilege.privilege.as_str()),
-                    "{operation:?} needs {} on /vms",
-                    privilege.privilege
-                );
-            }
+            assert_ne!(privilege.path, "/vms", "{operation:?} needs {}", privilege.privilege);
         }
     }
 }
@@ -220,7 +214,7 @@ fn changes_need_nothing_on_vms_beyond_reading() {
 fn the_orphan_scan_needs_disk_privileges_on_the_pool_only() {
     let required = requirements(Operation::OrphanScan, &config(), DEFAULT_POOL);
     assert!(has(&required, "/pool/homestack", "VM.Config.Disk"));
-    assert!(!has(&required, "/vms", "VM.Config.Disk"));
+    assert!(!required.iter().any(|p| p.path == "/vms"));
 }
 
 /// Without `Pool.Audit` Proxmox does not say which pool a VM is in, and

@@ -226,3 +226,22 @@ async fn refusals_have_their_own_codes() -> TestResult {
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
     Ok(())
 }
+
+/// The server reads only the VMs of its pools: a workspace outside them is
+/// refused even when the token could see it.
+#[tokio::test]
+async fn reads_of_vms_outside_the_pools_are_refused() -> TestResult {
+    let server = start().await?;
+    for path in [
+        "/v1/workspaces/150",
+        "/v1/gold/readiness?vmid=150",
+        "/v1/networks?gold=150",
+    ] {
+        let (status, body) = send(reqwest::Client::new().get(format!("{}{path}", server.base))).await?;
+        assert_eq!(status, StatusCode::CONFLICT, "{path}: {body}");
+        assert_eq!(body["error"]["code"], "outside_pool", "{path}");
+    }
+    let (status, body) = send(reqwest::Client::new().get(format!("{}/v1/workspaces/160", server.base))).await?;
+    assert_ne!(status, StatusCode::CONFLICT, "VM 160 is in the pool: {body}");
+    Ok(())
+}

@@ -654,6 +654,17 @@ pub async fn workspace_status(pve: &impl Pve, cfg: &Config, vmid: u32) -> Result
     let Some(resource) = cluster_vm_resources(pve).await?.into_iter().find(|r| r.vmid == vmid) else {
         return Ok(None);
     };
+    workspace_status_of(pve, cfg, resource).await.map(Some)
+}
+
+/// [`workspace_status`] for a resource already read from
+/// `cluster/resources`.
+pub async fn workspace_status_of(
+    pve: &impl Pve,
+    cfg: &Config,
+    resource: StatusResource,
+) -> Result<WorkspaceStatus, CoreError> {
+    let vmid = resource.vmid;
     let node = resource.node.clone();
     let vm_cfg = vm_config(pve, &node, vmid).await?;
     let name = vm_cfg.get("name").cloned().unwrap_or_default();
@@ -749,7 +760,7 @@ pub async fn workspace_status(pve: &impl Pve, cfg: &Config, vmid: u32) -> Result
     });
     let home_identity_ok =
         (!alien).then(|| expected_label.is_some() && home_serial.is_some() && home_serial == expected_label);
-    Ok(Some(WorkspaceStatus {
+    Ok(WorkspaceStatus {
         vmid,
         name: (!name.is_empty()).then_some(name),
         role: role.map(str::to_owned),
@@ -776,7 +787,7 @@ pub async fn workspace_status(pve: &impl Pve, cfg: &Config, vmid: u32) -> Result
             root: ip.as_ref().map(|ip| format!("ssh root@{ip}")),
             user: ip.as_ref().map(|ip| format!("ssh {}@{ip}", cfg.user.name)),
         },
-    }))
+    })
 }
 
 /// `address/prefix` of the first IPv4 address of `interface`.

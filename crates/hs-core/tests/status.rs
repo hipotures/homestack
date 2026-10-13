@@ -155,6 +155,7 @@ fn global_status_inspects_only_gold_and_tagged_workspaces() {
         name: None,
         status: None,
         tags: Some(tags.into()),
+        pool: None,
     };
     let resources = [
         resource(100, ""),

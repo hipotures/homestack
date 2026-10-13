@@ -31,6 +31,8 @@ pub struct StatusResource {
     pub name: Option<String>,
     pub status: Option<String>,
     pub tags: Option<String>,
+    /// Only with `Pool.Audit` on the pool.
+    pub pool: Option<String>,
 }
 
 /// Python's `str(value)` for JSON scalars.
@@ -375,6 +377,7 @@ pub async fn cluster_vm_resources(pve: &impl Pve) -> Result<Vec<StatusResource>,
             name: text_or_none(map.get("name")),
             status: text_or_none(map.get("status")),
             tags: text_or_none(map.get("tags")),
+            pool: text_or_none(map.get("pool")),
         })
         .collect();
     resources.sort_by_key(|r| r.vmid);

@@ -118,7 +118,8 @@ docker_ logs "$name" 2>&1 | grep -q '"endpoint":"https://localhost:1"' ||
 echo "live-container: version OK (dead first endpoint skipped)"
 
 # Phase 1: a configuration for the first endpoint's node, e.g. pve1 with
-# homestack-storage-1. Only ACL paths depend on it.
+# homestack-storage-1. Only ACL paths depend on it; Gold is the test Gold
+# 248 (hst-gold), so no VM of the owner is named.
 host=$(python3 -I -c 'import sys, urllib.parse; print(urllib.parse.urlsplit(sys.argv[1].strip()).hostname)' "${urls[0]}")
 node=${host%%.*}
 number=$(sed -E 's/^[^0-9]*0*//' <<<"$node")
@@ -128,7 +129,7 @@ version = 1
 
 [node]
 name = "$node"
-gold_vmid = 100
+gold_vmid = 248
 
 [storage_layouts]
 homestack-storage-$number = ["local"]

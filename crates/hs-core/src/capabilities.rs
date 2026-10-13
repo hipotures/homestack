@@ -4,13 +4,13 @@
 //! The table follows the "Uprawnienia" lines of `docs/migration/api-mapping.md`
 //! (sections 4 and 5), with these readings:
 //!
-//! - Workspaces are changed only in the instance's pool (`/pool/<pool>`,
-//!   `homestack` unless `HOMESTACK_PVE_POOL` says otherwise): roles on a pool
-//!   apply to its VMs, and the pool exists before its first VM does. On
-//!   `/vms` an operation needs no more than reading (`VM.Audit`,
-//!   `VM.GuestAgent.Audit`), which covers the workspaces made before the
-//!   pool. Every change also needs `Pool.Audit` on the pool: without it
-//!   Proxmox does not say which pool a VM is in (phase 3).
+//! - Workspaces are read and changed only in the instance's pool
+//!   (`/pool/<pool>`, `homestack` unless `HOMESTACK_PVE_POOL` says
+//!   otherwise): roles on a pool apply to its VMs, and the pool exists
+//!   before its first VM does. Nothing is needed on `/vms`: the token sees
+//!   no VM outside the HomeStack pools (owner, 2026-10-13). Every change
+//!   also needs `Pool.Audit` on the pool: without it Proxmox does not say
+//!   which pool a VM is in (phase 3).
 //! - Gold is `/vms/<gold_vmid>`: Proxmox adds the roles of Gold's pool
 //!   (`homestack-gold`, decision 9) to that path, so asking about it
 //!   covers both.
@@ -26,7 +26,7 @@
 //!   VM's disks (`PVE::Storage::check_volume_access`), so volumes of deleted
 //!   VMs stay hidden and the scan says it is incomplete.
 //! - Every operation reads the cluster first: `Sys.Audit` on `/nodes`, and
-//!   all but the Gold check `VM.Audit` on `/vms`.
+//!   all but the Gold check `VM.Audit` on the pool.
 
 use std::collections::BTreeSet;
 
@@ -53,9 +53,8 @@ enum Storages {
 }
 
 struct Needs {
-    /// On `/vms`: reading only.
-    vms: &'static [&'static str],
-    /// On the instance's pool.
+    /// On the instance's pool (the token sees no VM outside the HomeStack
+    /// pools).
     pool: &'static [&'static str],
     gold: &'static [&'static str],
     audit_storages: bool,
@@ -67,31 +66,27 @@ const fn needs(operation: Operation) -> Needs {
     const NONE: &[&str] = &[];
     match operation {
         Operation::Read => Needs {
-            vms: &["VM.Audit"],
-            pool: NONE,
+            pool: &["VM.Audit"],
             gold: NONE,
             audit_storages: true,
             allocate: Storages::None,
             snippets: false,
         },
         Operation::OrphanScan => Needs {
-            vms: &["VM.Audit"],
-            pool: &["VM.Config.Disk"],
+            pool: &["VM.Audit", "VM.Config.Disk"],
             gold: NONE,
             audit_storages: true,
             allocate: Storages::None,
             snippets: false,
         },
         Operation::GuestRead => Needs {
-            vms: &["VM.Audit", "VM.GuestAgent.Audit"],
-            pool: NONE,
+            pool: &["VM.Audit", "VM.GuestAgent.Audit"],
             gold: NONE,
             audit_storages: false,
             allocate: Storages::None,
             snippets: false,
         },
         Operation::GoldReadiness => Needs {
-            vms: NONE,
             pool: NONE,
             gold: &["VM.Audit"],
             audit_storages: false,
@@ -100,7 +95,6 @@ const fn needs(operation: Operation) -> Needs {
         },
         // B1
         Operation::Create => Needs {
-            vms: &["VM.Audit"],
             pool: &[
                 "Pool.Audit",
                 "VM.Allocate",
@@ -119,7 +113,6 @@ const fn needs(operation: Operation) -> Needs {
         },
         // B3
         Operation::Refresh => Needs {
-            vms: &["VM.Audit"],
             pool: &[
                 "Pool.Audit",
                 "VM.Audit",
@@ -136,7 +129,6 @@ const fn needs(operation: Operation) -> Needs {
         },
         // B5
         Operation::Resize => Needs {
-            vms: &["VM.Audit"],
             pool: &[
                 "Pool.Audit",
                 "VM.Audit",
@@ -151,7 +143,6 @@ const fn needs(operation: Operation) -> Needs {
         },
         // B6
         Operation::Migrate => Needs {
-            vms: &["VM.Audit"],
             pool: &[
                 "Pool.Audit",
                 "VM.Audit",
@@ -167,7 +158,6 @@ const fn needs(operation: Operation) -> Needs {
         },
         // B7 (D3 reads home usage through the guest agent)
         Operation::Destroy => Needs {
-            vms: &["VM.Audit"],
             pool: &[
                 "Pool.Audit",
                 "VM.Allocate",
@@ -182,7 +172,6 @@ const fn needs(operation: Operation) -> Needs {
         },
         // C4
         Operation::Addkey => Needs {
-            vms: &["VM.Audit"],
             pool: &[
                 "Pool.Audit",
                 "VM.Audit",
@@ -212,9 +201,6 @@ pub fn requirements(operation: Operation, config: &Config, pool: &str) -> Vec<Pr
         });
     };
     add("/nodes", "Sys.Audit");
-    for privilege in needs.vms {
-        add("/vms", privilege);
-    }
     let pool = format!("/pool/{pool}");
     for privilege in needs.pool {
         add(&pool, privilege);

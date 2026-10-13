@@ -83,10 +83,15 @@ reason = """
 scripts/live-compare-status.sh on the real cluster. As status-global, plus:
 the two implementations read a running cluster a few seconds apart, so
 guests and storages may have written a little in between (byte counts within
-5 %, percentages within 1 point). The server's token has VM.Config.Disk on
-/vms, so it sees every VM volume and the orphan scans must agree
-(decisions.md, 2026-10-12).
+5 %, percentages within 1 point). Since the production install (phase 5,
+decision 10 = C) the server's token has VM.Config.Disk only on pool
+homestack: it cannot list the volumes of other or deleted VMs, so its scan
+says it is incomplete, with one warning per storage. Those warnings and
+`orphan_scan_complete` are not compared; the volumes found still are.
 """
+python_drop = ["summary.orphan_scan_complete"]
+rust_drop = ["summary.orphan_scan_complete"]
+rust_drop_items = { warnings = "HomeStack orphan scan incomplete: The server's Proxmox token cannot list the volumes of VMs outside pool *" }
 
 [[rule]]
 id = "guest-verify"

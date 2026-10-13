@@ -20,6 +20,25 @@ an agent stops when a phase needs one that is still open
 | 9 | Gold in its own pool with narrower privileges | yes / no | before phase 5 | **decided 2026-10-13: yes.** Gold goes into its own pool `homestack-gold`, where the server token gets only what cloning and the Gold checks need (`VM.Audit`, `VM.Clone`, the guest agent for E2), granted on `/pool/homestack-gold` instead of `/vms/<gold_vmid>`. Gold is not in pool `homestack`, so the server cannot change or delete it |
 | 10 | Detached-volume scan once write privileges are limited to pool `homestack` (PLAN.md, gate before phase 5) | A keep `VM.Config.Disk` on `/vms` (cannot delete a VM, but can detach and delete the disks of every VM, the desktop included); B `Datastore.Allocate` on the HomeStack storages (complete scan, but may delete any volume on them); C `VM.Config.Disk` only on the pool: volumes of deleted VMs are not listed, the scan is reported incomplete | before phase 5 | **decided 2026-10-13: C.** `VM.Config.Disk` only on the HomeStack pools; `VM.Config.Disk` on `/vms` is removed. The scan reports that volumes of deleted VMs cannot be listed |
 
+### Owner's rules of 2026-10-13 (phase 5)
+
+- The HomeStack tokens see no VM outside the HomeStack pools, not even to
+  read it: `PVEAuditor` only on `/nodes`, `/storage`, `/sdn`, VMs only through
+  the pool roles (`homestack-pve.sh`). The server also refuses reads and
+  operations on a VM outside its pools (`outside_pool`). Workspaces made
+  before the pool (200–210) are invisible until the owner moves them into
+  `homestack`.
+- VM 101 is the owner's production Gold and VM 100 the desktop: the agent
+  and the live tests never touch them. VM 101 was taken out of
+  `homestack-gold` again; production `create` needs the owner to put the
+  Gold of their choice there.
+- The live tests use the agent's own test Gold, VM 248 `hst-gold` (Ubuntu
+  24.04 cloud image prepared per README, in `homestack-gold`), and
+  `crates/hs-server/tests/data/live-server.toml`. Python's live status
+  comparison is no longer run (it reads every workspace of the owner).
+- Herdr's root shell on pve2 is allowed only for administration on the node
+  (`homestack-pve.sh`), never to build or test the application.
+
 ## Probe results
 
 | Date | Probe | Result |

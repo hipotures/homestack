@@ -20,6 +20,10 @@
 #   --force            uninstall: remove snippets that VMs still name
 #   --token-dir DIR    where a new token's secret is written (default /root)
 #
+# The tokens read nodes, storages and SDN (PVEAuditor on /nodes, /storage,
+# /sdn) and see VMs only through the roles of the HomeStack pools: a VM in
+# no HomeStack pool is invisible to them.
+#
 # HomeStack owns: the user homestack@pve, its tokens and ACL entries, the
 # roles HomeStack, HomeStackGold and HomeStackStorage, the pools homestack,
 # homestack-test and homestack-gold (Gold's membership in it) and the
@@ -47,7 +51,7 @@ readonly TAB=$'\t'
 readonly US=$'\037'
 
 usage() {
-    sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,34p' "$0" | sed 's/^# \{0,1\}//'
     exit 2
 }
 
@@ -703,7 +707,9 @@ managed_acl() {
 token_target_acl() {
     # token_target_acl TOKENID POOL
     local who=$HS_USER!$1 id
-    printf '/\ttoken\t%s\tPVEAuditor\n' "$who"
+    for id in /nodes /storage /sdn; do
+        printf '%s\ttoken\t%s\tPVEAuditor\n' "$id" "$who"
+    done
     printf '/pool/%s\ttoken\t%s\tHomeStack\n' "$2" "$who"
     printf '/pool/%s\ttoken\t%s\tHomeStackGold\n' "$POOL_GOLD" "$who"
     for id in "${storages[@]}" "$snippet_storage"; do
@@ -720,7 +726,6 @@ user_acl() {
     awk -F'\t' -v u="$HS_USER" '
         { roles[$3 SUBSEP $1] = roles[$3 SUBSEP $1] " " $4; paths[$1] = 1; tokens[$3] = 1 }
         END {
-            out["/" SUBSEP "PVEAuditor"] = 1
             for (p in paths) for (t in tokens) {
                 a = p
                 while (1) {

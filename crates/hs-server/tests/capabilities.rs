@@ -164,7 +164,6 @@ async fn a_read_only_token_can_read_but_not_change_anything() -> TestResult {
             "get{path=/access/permissions,query_path=/storage/fast}",
             "get{path=/access/permissions,query_path=/storage/other}",
             "get{path=/access/permissions,query_path=/storage/snippets}",
-            "get{path=/access/permissions,query_path=/vms}",
             "get{path=/access/permissions,query_path=/vms/100}",
             "get{path=/pools}",
         ]
@@ -244,7 +243,8 @@ async fn a_full_token_can_do_everything() -> TestResult {
 #[tokio::test]
 async fn privileges_on_one_path_do_not_cover_another() -> TestResult {
     let dir = tempfile::tempdir()?;
-    let acl = r#""/nodes" = ["Sys.Audit"], "/vms" = ["VM.Audit"], "/storage/fast" = ["Datastore.Audit"]"#;
+    // VM.Audit on /vms does not count: the server reads VMs through its pool.
+    let acl = r#""/nodes" = ["Sys.Audit"], "/vms" = ["VM.Audit"], "/pool/homestack" = ["VM.Audit"], "/storage/fast" = ["Datastore.Audit"]"#;
     let (_sim, server) = configured(acl, dir.path()).await?;
     let (_, _, body) = server.get("/v1/capabilities", Some(API_TOKEN)).await?;
     let read = operation(&body, "read");

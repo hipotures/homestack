@@ -1,0 +1,35 @@
+# server.toml of the live tests: the test Gold (VM 248 hst-gold, pool
+# homestack-gold), never the owner's Gold or VMs. Workspaces go to the test
+# pool, VMIDs 240-247.
+version = 1
+
+[node]
+name = "pve2"
+gold_vmid = 248
+
+[storage_layouts]
+homestack-storage-1 = ["worker-roots"]
+homestack-storage-2 = ["local-lvm"]
+homestack-storage-3 = ["local-lvm"]
+
+[root]
+disk = "scsi0"
+
+[home]
+disk = "scsi1"
+default_size = "1G"
+
+[network]
+prefix = "192.168.100"
+cidr = 24
+gateway = "192.168.100.1"
+dns = ["192.168.100.1"]
+
+[cloud_init]
+snippet_storage = "local"
+snippet_dir = "/var/lib/vz/snippets"
+
+[user]
+name = "user"
+uid = 1000
+gid = 1000

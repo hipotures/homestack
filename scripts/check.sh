@@ -12,7 +12,9 @@
 # jobs and the Cloud-Init boot in the test pool
 # (crates/hs-server/tests/live_jobs.rs, live_cloudinit.rs), the only live
 # checks that change the cluster; the boot also needs the vendor snippets
-# on Gold's node (docs/migration/deploy.md).
+# on Gold's node (docs/migration/deploy.md). With HOMESTACK_LIVE_OUTSIDE_VMID
+# (a VM in 240-249 tagged homestack-ws and in no pool) it also checks that
+# changes outside the pool are refused (live_pool_guard.rs).
 set -euo pipefail
 
 usage() {
@@ -89,14 +91,19 @@ if ((live)); then
     cargo test -p hs-server --locked --test live -- --ignored --test-threads=1
     step "live cluster (L4): server image"
     "$root/scripts/live-container.sh"
-    step "live cluster (L4): Python status against the server"
-    "$root/scripts/live-compare-status.sh"
+    # live-compare-status.sh is not run: Python's status reads every workspace
+    # of the owner, which the live checks may not touch (2026-10-13), and the
+    # server's token sees only the HomeStack pools.
     step "live cluster (L4): Python Gold readiness against the server"
     "$root/scripts/live-compare-gold.sh"
     step "live cluster (L4): jobs in the test pool"
     cargo test -p hs-server --locked --test live_jobs -- --ignored --nocapture
     step "live cluster (L4): native Cloud-Init boot in the test pool"
     cargo test -p hs-server --locked --test live_cloudinit -- --ignored --nocapture
+    if [[ -n ${HOMESTACK_LIVE_OUTSIDE_VMID:-} ]]; then
+        step "live cluster (L4): changes outside the pool are refused"
+        cargo test -p hs-server --locked --test live_pool_guard -- --ignored --nocapture
+    fi
     step "live cluster (L4): create and destroy in the test pool, twice"
     cargo test -p hs-server --locked --test live_lifecycle -- --ignored --nocapture
 fi

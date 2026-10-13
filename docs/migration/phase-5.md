@@ -195,3 +195,23 @@ install and the owner's answer about Gold.
 - Still open: the gate before the phase (pool `homestack`, narrowed server
   token) needs `homestack-pve.sh install` as root on a node; no tag until
   then.
+
+## 11. Gate before the phase, and the owner's rules (2026-10-13)
+
+- Production install run on pve2 as root (Herdr, administration only):
+  pool `homestack`, the server token on the pool roles; `VM.Config.Disk` on
+  `/vms` and the hand-made roles are gone.
+- Then, on the owner's decision, the tokens lost `PVEAuditor` on `/`: they
+  read `/nodes`, `/storage`, `/sdn` and see VMs only through the HomeStack
+  pools. The server token sees no VM outside them (`cluster/resources`
+  lists only the pools' VMs; `GET /nodes/pve1/qemu/100/config` is `403`).
+- `live_pool_guard.rs` (with a temporary VM 249 outside the pools, removed
+  after): reading, changing, starting and deleting it are `403`, and the
+  server refuses it.
+- The server checks the pool on every read of one VM (`/v1/workspaces`,
+  Gold readiness, networks): `409 outside_pool`. Capabilities need nothing
+  on `/vms`.
+- VM 101 (the owner's production Gold) is out of `homestack-gold` again.
+  The live tests use the test Gold VM 248 and their own configuration;
+  `scripts/check.sh --live` passes (status comparison with Python dropped,
+  see decisions.md).

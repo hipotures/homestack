@@ -345,3 +345,14 @@ acl = { "/" = ["*"] }
 id = "homestack@pve!server"
 secret = "00000000-0000-0000-0000-00000000000b"
 acl = { "/" = ["Datastore.Audit", "Mapping.Audit", "Pool.Audit", "SDN.Audit", "Sys.Audit", "VM.Audit", "VM.GuestAgent.Audit", "VM.Config.Disk"] }
+
+# The server reads only the VMs of its pools (phase 5): Gold in
+# homestack-gold, the workspaces (and the alien one) in homestack; VM 207 is
+# in none.
+[[pve.pools]]
+poolid = "homestack-gold"
+vms = [100]
+
+[[pve.pools]]
+poolid = "homestack"
+vms = [200, 201, 202, 203, 204, 205, 206]

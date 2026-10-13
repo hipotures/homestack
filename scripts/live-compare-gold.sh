@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Phase 3 live gate: Python's `gold.check_gold_readiness` (as the installer
-# runs it) against the server's /v1/gold/readiness for the configured Gold,
+# runs it) against the server's /v1/gold/readiness for the test Gold (VM 248,
+# HOMESTACK_LIVE_TEST_GOLD; never the owner's Gold),
 # at the same time. Read-only: a running Gold is inspected through the guest
 # agent (the server needs VM.GuestAgent.Unrestricted on Gold, decisions.md),
 # a stopped Gold is not started. They must agree (rule `gold-readiness`:
@@ -34,6 +35,12 @@ cleanup() {
 trap cleanup EXIT
 umask 077
 mkdir -p "$work/state"
+# Both sides check the test Gold (VM 248, pool homestack-gold), never the
+# owner's Gold: a copy of the config with that gold_vmid.
+test_gold=${HOMESTACK_LIVE_TEST_GOLD:-248}
+sed -E "s/^gold_vmid *= *[0-9]+/gold_vmid = $test_gold/" "$config" > "$work/config.toml"
+grep -q "^gold_vmid = $test_gold\$" "$work/config.toml" || { echo "live-compare-gold: no gold_vmid in $config" >&2; exit 1; }
+config=$work/config.toml
 "$bin/hs-config" split --config "$config" --server-out "$work/state/server.toml" --client-out "$work/client.toml" >/dev/null
 head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' > "$work/api-token"
 port=$(python3 -I -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')

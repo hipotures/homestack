@@ -14,7 +14,7 @@ use hs_core::discovery::{discovery as read_discovery, workspace_networks};
 use hs_core::gold::gold_readiness as read_gold_readiness;
 use hs_core::inventory::{cluster_node_statuses, cluster_vm_resources, storage_ids_for_node};
 use hs_core::status::{
-    Inventory, global_status, orphaned_volumes, resolve_workspace_target, storage_capacities, workspace_status,
+    Inventory, global_status, orphaned_volumes, resolve_workspace_target, storage_capacities, workspace_status_of,
 };
 use hs_model::ErrorCode;
 use hs_model::config::Config;
@@ -29,6 +29,22 @@ use crate::error::ApiError;
 
 fn configuration(state: &AppState) -> Result<Arc<Stored>, ApiError> {
     state.config.current().ok_or_else(ApiError::config_missing)
+}
+
+/// The server reads and changes only the VMs of its pools (the instance's
+/// and Gold's); the token sees no other VM, and the server checks it too.
+fn require_pools(state: &AppState, vmid: u32, pool: Option<&str>) -> Result<(), ApiError> {
+    let pools = &state.pools;
+    match pool {
+        Some(pool) if pool == pools.workspaces || pool == pools.gold => Ok(()),
+        _ => Err(ApiError::with_message(
+            ErrorCode::OutsidePool,
+            format!(
+                "VM {vmid} is not in pool {} or {}; this server works only with the VMs of its pools.",
+                pools.workspaces, pools.gold
+            ),
+        )),
+    }
 }
 
 /// Fixed messages: `hs-core` errors may repeat names from the request.
@@ -142,11 +158,17 @@ pub async fn workspace(
     let vmid = resolve_workspace_target(pve, &stored.config, &target)
         .await
         .map_err(|e| core_error(e, not_found))?;
-    workspace_status(pve, &stored.config, vmid)
+    let resource = cluster_vm_resources(pve)
         .await
         .map_err(|e| core_error(e, not_found))?
+        .into_iter()
+        .find(|r| r.vmid == vmid)
+        .ok_or(ApiError::new(ErrorCode::NotFound, not_found))?;
+    require_pools(&state, vmid, resource.pool.as_deref())?;
+    workspace_status_of(pve, &stored.config, resource)
+        .await
         .map(Json)
-        .ok_or(ApiError::new(ErrorCode::NotFound, not_found))
+        .map_err(|e| core_error(e, not_found))
 }
 
 /// Capacity of every storage of every node's `homestack-storage-<N>` layout.
@@ -252,12 +274,12 @@ async fn gold_vm(
     let resources = cluster_vm_resources(state.pve.as_ref())
         .await
         .map_err(|e| core_error(e, "No such resource."))?;
-    let node = resources
+    let resource = resources
         .iter()
-        .find(|r| r.vmid == vmid)
-        .map(|r| r.node.clone())
-        .filter(|node| !node.is_empty())
+        .find(|r| r.vmid == vmid && !r.node.is_empty())
         .ok_or(ApiError::new(ErrorCode::NotFound, "No such VM."))?;
+    require_pools(state, vmid, resource.pool.as_deref())?;
+    let node = resource.node.clone();
     Ok((vmid, node, resources))
 }
 

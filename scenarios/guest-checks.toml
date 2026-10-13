@@ -366,3 +366,12 @@ acl = { "/" = ["Datastore.Audit", "Mapping.Audit", "Pool.Audit", "SDN.Audit", "S
 id = "auditor@pve!server"
 secret = "00000000-0000-0000-0000-00000000000c"
 acl = { "/" = ["Datastore.Audit", "Mapping.Audit", "Pool.Audit", "SDN.Audit", "Sys.Audit", "VM.Audit", "VM.GuestAgent.Audit"] }
+
+# The server reads only the VMs of its pools (phase 5).
+[[pve.pools]]
+poolid = "homestack-gold"
+vms = [100, 102]
+
+[[pve.pools]]
+poolid = "homestack"
+vms = [220, 221, 222, 223, 224, 225, 226, 227, 228, 229]

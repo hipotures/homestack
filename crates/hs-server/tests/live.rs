@@ -173,7 +173,7 @@ async fn live_server_toml(endpoints: &[Url]) -> Result<String, Box<dyn std::erro
         })
         .ok_or("no online node with a numeric suffix")?;
     Ok(format!(
-        "version = 1\n[node]\nname = \"{node}\"\ngold_vmid = 100\n[storage_layouts]\nhomestack-storage-{number} = [\"local\"]\n\
+        "version = 1\n[node]\nname = \"{node}\"\ngold_vmid = 248\n[storage_layouts]\nhomestack-storage-{number} = [\"local\"]\n\
          [root]\ndisk = \"scsi0\"\n[home]\ndisk = \"scsi1\"\ndefault_size = \"20G\"\n\
          [network]\nprefix = \"192.0.2\"\ncidr = 24\ngateway = \"192.0.2.1\"\ndns = [\"192.0.2.53\"]\n\
          [cloud_init]\nsnippet_storage = \"local\"\nsnippet_dir = \"/var/lib/vz/snippets\"\n\

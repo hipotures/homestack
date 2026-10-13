@@ -18,9 +18,9 @@
 //!
 //! Ignored by default; `scripts/check.sh --live` runs it with
 //! `HOMESTACK_LIVE_TEST_TOKEN_FILE`, `HOMESTACK_LIVE_PVE_ENDPOINTS`,
-//! optionally `HOMESTACK_LIVE_TEST_VMID` (default 240) and
-//! `HOMESTACK_LIVE_CONFIG` (the Python `config.toml`, default its usual
-//! path), whose server part gives Gold, network, storage and user.
+//! optionally `HOMESTACK_LIVE_TEST_VMID` (default 240); Gold, network,
+//! storage and user come from `tests/data/live-server.toml` (the test Gold
+//! 248, never the owner's VMs).
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -72,14 +72,10 @@ fn client() -> Result<PveClient, Error> {
 }
 
 /// The server part of the owner's Python configuration.
+/// The live tests' own configuration: the test Gold 248, never the
+/// owner's (`tests/data/live-server.toml`).
 fn config() -> Result<Config, Error> {
-    let path = match std::env::var("HOMESTACK_LIVE_CONFIG") {
-        Ok(path) => PathBuf::from(path),
-        Err(_) => hs_config::paths::default_config_path(|name| std::env::var(name).ok())
-            .ok_or("no default config path; set HOMESTACK_LIVE_CONFIG")?,
-    };
-    let split = hs_config::split::split(&std::fs::read_to_string(&path)?)?;
-    Ok(Config::parse(&split.server_toml)?)
+    Ok(Config::parse(include_str!("data/live-server.toml"))?)
 }
 
 fn wait(seconds: u64) -> TaskWait {

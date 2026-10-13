@@ -50,14 +50,10 @@ fn client() -> Result<PveClient, Error> {
     Ok(PveClient::new(PveClientConfig::new(endpoints, token))?)
 }
 
+/// The live tests' own configuration: the test Gold 248, never the
+/// owner's (`tests/data/live-server.toml`).
 fn config() -> Result<Config, Error> {
-    let path = match std::env::var("HOMESTACK_LIVE_CONFIG") {
-        Ok(path) => PathBuf::from(path),
-        Err(_) => hs_config::paths::default_config_path(|name| std::env::var(name).ok())
-            .ok_or("no default config path; set HOMESTACK_LIVE_CONFIG")?,
-    };
-    let split = hs_config::split::split(&std::fs::read_to_string(&path)?)?;
-    Ok(Config::parse(&split.server_toml)?)
+    Ok(Config::parse(include_str!("data/live-server.toml"))?)
 }
 
 /// The server's read-only token, which lists every VM volume.
