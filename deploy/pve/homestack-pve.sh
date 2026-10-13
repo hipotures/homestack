@@ -3,8 +3,10 @@
 # HomeStack needs in Proxmox and the server's API cannot make itself.
 # Run as root on any node; in a cluster it reaches the other nodes itself.
 #
-#   homestack-pve.sh status    [--test] --storages IDS --snippet-storage ID [--gold VMID]
-#   homestack-pve.sh install   [--test] --storages IDS --snippet-storage ID [--gold VMID]
+#   homestack-pve.sh status    [--test] --storages IDS --snippet-storage ID
+#                              --service-storages IDS --template-storage ID [--gold VMID]
+#   homestack-pve.sh install   [--test] --storages IDS --snippet-storage ID
+#                              --service-storages IDS --template-storage ID [--gold VMID]
 #                              [--dry-run] [--yes] [--token-dir DIR]
 #   homestack-pve.sh uninstall [--test] [--snippet-storage ID] [--gold VMID]
 #                              [--dry-run] [--yes] [--force]
@@ -14,6 +16,9 @@
 #                      token server); the shared part is the same
 #   --storages IDS     comma-separated storages of [storage_layouts]
 #   --snippet-storage  [cloud_init] snippet_storage
+#   --service-storages IDS  comma-separated storages for the root disks of
+#                      the server containers (content rootdir)
+#   --template-storage ID  storage for the server image (content vztmpl)
 #   --gold VMID        Gold (default: the only VM tagged homestack-gold)
 #   --dry-run          show the plan, change nothing
 #   --yes              apply the plan without asking
@@ -23,35 +28,44 @@
 # The tokens read nodes, storages and SDN (PVEAuditor on /nodes, /storage,
 # /sdn) and see VMs only through the roles of the HomeStack pools: a VM in
 # no HomeStack pool is invisible to them.
+# The deploy token makes and replaces the server containers through the
+# API: in pool homestack-service only, from an OCI image it pulls into the
+# template storage.
 #
 # HomeStack owns: the user homestack@pve, its tokens and ACL entries, the
-# roles HomeStack, HomeStackGold and HomeStackStorage, the pools homestack,
-# homestack-test and homestack-gold (Gold's membership in it) and the
+# roles HomeStack, HomeStackGold, HomeStackStorage and HomeStackDeploy*,
+# the pools homestack, homestack-test, homestack-gold (Gold's membership in
+# it) and homestack-service (its containers stay on uninstall) and the
 # vendor snippets on every node. Everything else belongs to the cluster's
 # owner and is only checked: PVE version, storages and their content types,
 # Gold and its bridge, tag rules, the nodes' API certificates and names.
-# Uninstall never removes a VM, a volume or Gold.
+# Uninstall never removes a VM, a container, a volume or Gold.
 # docs/migration/phase-4b.md has the details.
 set -euo pipefail
 shopt -s extglob
 
 readonly HS_USER=homestack@pve
 readonly POOL_GOLD=homestack-gold
+readonly POOL_SERVICE=homestack-service DEPLOY_TOKEN=deploy
 readonly MIN_MAJOR=9 MIN_MINOR=2
 declare -Ar ROLE_PRIVS=(
     [HomeStack]='Pool.Audit,VM.Allocate,VM.Audit,VM.Config.Cloudinit,VM.Config.Disk,VM.Config.Options,VM.GuestAgent.Audit,VM.GuestAgent.FileRead,VM.GuestAgent.Unrestricted,VM.Migrate,VM.PowerMgmt'
     [HomeStackGold]='Pool.Audit,VM.Audit,VM.Clone,VM.GuestAgent.Audit,VM.GuestAgent.FileRead,VM.GuestAgent.Unrestricted'
     [HomeStackStorage]='Datastore.AllocateSpace,Datastore.Audit'
+    [HomeStackDeploy]='Pool.Audit,VM.Allocate,VM.Audit,VM.Config.CPU,VM.Config.Disk,VM.Config.Memory,VM.Config.Network,VM.Config.Options,VM.PowerMgmt'
+    [HomeStackDeployNodes]='Sys.AccessNetwork'
+    [HomeStackDeployTemplates]='Datastore.AllocateSpace,Datastore.AllocateTemplate,Datastore.Audit'
 )
 # Roles made by hand before this script (phases 0-4); removed once unused.
 readonly LEGACY_ROLES=(HomeStackServerDisks HomeStackServerGoldGuest HomeStackTest HomeStackTestGold HomeStackTestStorage)
+readonly ROLES=(HomeStack HomeStackGold HomeStackStorage HomeStackDeploy HomeStackDeployNodes HomeStackDeployTemplates)
 readonly SNIPPETS=(homestack-vendor-create.yaml homestack-vendor-keep.yaml)
 readonly TAB=$'\t'
 # Fields are read with IFS=$US: a tab in IFS would merge empty fields.
 readonly US=$'\037'
 
 usage() {
-    sed -n '2,34p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,/^set -euo/{/^#/p}' "$0" | sed 's/^# \{0,1\}//'
     exit 2
 }
 
@@ -72,6 +86,7 @@ case $command in
 esac
 test_part=0 dry_run=0 assume_yes=0 force=0
 gold_arg='' storages_arg='' snippet_storage='' token_dir=/root
+service_storages_arg='' template_storage=''
 while (($#)); do
     case $1 in
         --test) test_part=1 ;;
@@ -81,6 +96,8 @@ while (($#)); do
         --gold) gold_arg=${2:?--gold needs a VMID}; shift ;;
         --storages) storages_arg=${2:?--storages needs storage IDs}; shift ;;
         --snippet-storage) snippet_storage=${2:?--snippet-storage needs a storage ID}; shift ;;
+        --service-storages) service_storages_arg=${2:?--service-storages needs storage IDs}; shift ;;
+        --template-storage) template_storage=${2:?--template-storage needs a storage ID}; shift ;;
         --token-dir) token_dir=${2:?--token-dir needs a directory}; shift ;;
         -h | --help) usage ;;
         *) die "unknown option '$1'" ;;
@@ -93,6 +110,7 @@ else
     readonly PART=production POOL=homestack TOKEN=server
 fi
 IFS=, read -r -a storages <<< "$storages_arg"
+IFS=, read -r -a service_storages <<< "$service_storages_arg"
 
 # --- reading Proxmox -------------------------------------------------------
 
@@ -197,7 +215,7 @@ load_state() {
     local members
     while IFS=$US read -r id; do
         case $id in
-            homestack | homestack-test | "$POOL_GOLD")
+            homestack | homestack-test | "$POOL_GOLD" | "$POOL_SERVICE")
                 members=$(get /pools --poolid "$id" | json members)
                 pool_members[$id]=$members
                 ;;
@@ -260,6 +278,17 @@ check_storages() {
         errors+=("--snippet-storage is required: [cloud_init] snippet_storage")
     else
         check_storage "$snippet_storage" snippets
+    fi
+    if ((${#service_storages[@]} == 0)); then
+        errors+=("--service-storages is required: the storages for the server containers' root disks")
+    fi
+    for id in "${service_storages[@]}"; do
+        check_storage "$id" rootdir
+    done
+    if [[ -z $template_storage ]]; then
+        errors+=("--template-storage is required: the storage for the server image")
+    else
+        check_storage "$template_storage" vztmpl
     fi
     return 0
 }
@@ -754,6 +783,21 @@ token_target_acl() {
     printf '%s\ttoken\t%s\tPVESDNUser\n' "$sdn_path" "$who"
 }
 
+deploy_target_acl() {
+    local who=$HS_USER!$DEPLOY_TOKEN id
+    for id in /nodes /storage /sdn; do
+        printf '%s\ttoken\t%s\tPVEAuditor\n' "$id" "$who"
+    done
+    printf '/nodes\ttoken\t%s\tHomeStackDeployNodes\n' "$who"
+    printf '/pool/%s\ttoken\t%s\tHomeStackDeploy\n' "$POOL_SERVICE" "$who"
+    printf '/storage/%s\ttoken\t%s\tHomeStackDeployTemplates\n' "$template_storage" "$who"
+    for id in "${service_storages[@]}"; do
+        [[ $id == "$template_storage" ]] && continue
+        printf '/storage/%s\ttoken\t%s\tHomeStackStorage\n' "$id" "$who"
+    done
+    printf '%s\ttoken\t%s\tPVESDNUser\n' "$sdn_path" "$who"
+}
+
 # The user's entries for the token entries on stdin: on every path a token
 # has an entry on, the union of what each token resolves to there (its own
 # entry or the nearest parent's), since a token gets the intersection with
@@ -797,6 +841,7 @@ target_acl() {
     })
     if [[ $command != uninstall ]]; then
         tokens+=$'\n'$(token_target_acl "$TOKEN" "$POOL")
+        tokens+=$'\n'$(deploy_target_acl)
     fi
     tokens=$(sed '/^$/d' <<< "$tokens" | sort -u)
     if ((keep_user)); then
@@ -839,18 +884,29 @@ roles_in_use() {
 
 # shellcheck disable=SC2317 # run through the plan (eval)
 create_token() {
-    # create_token TOKENID FILE: the secret goes only to FILE (mode 0600)
+    # create_token TOKENID FILE COMMENT: the secret goes only to FILE (mode 0600)
     local out value
-    out=$(pveum user token add "$HS_USER" "$1" --privsep 1 --comment "HomeStack $PART" --output-format json)
+    out=$(pveum user token add "$HS_USER" "$1" --privsep 1 --comment "$3" --output-format json)
     value=$(json value <<< "$out")
     [[ -n $value ]] || die "pveum returned no secret for $HS_USER!$1"
     (umask 077 && printf '%s!%s=%s\n' "$HS_USER" "$1" "$value" > "$2")
 }
 
+plan_token() {
+    # plan_token TOKENID COMMENT
+    local file=$token_dir/homestack-pve-token-$1
+    if [[ -z ${token_privsep[$1]+set} ]]; then
+        [[ -e $file ]] && die "$file exists; move it away so the new token's secret can be written there"
+        plan "create token $HS_USER!$1 (secret to $file, mode 0600)" create_token "$1" "$file" "$2"
+    elif [[ ${token_privsep[$1]} != 1 ]]; then
+        plan "separate the privileges of token $HS_USER!$1" pveum user token modify "$HS_USER" "$1" --privsep 1
+    fi
+}
+
 plan_install() {
-    local role target used name node file
+    local role target used name node
     ((user_exists)) || plan "create user $HS_USER" pveum user add "$HS_USER" --comment 'HomeStack server'
-    for role in HomeStack HomeStackGold HomeStackStorage; do
+    for role in "${ROLES[@]}"; do
         if [[ -z ${role_privs[$role]+set} ]]; then
             plan "create role $role" pveum role add "$role" --privs "${ROLE_PRIVS[$role]}"
         elif [[ ${role_privs[$role]} != "${ROLE_PRIVS[$role]}" ]]; then
@@ -858,6 +914,7 @@ plan_install() {
         fi
     done
     [[ -n ${pool_members[$POOL_GOLD]+set} ]] || plan "create pool $POOL_GOLD" pveum pool add "$POOL_GOLD" --comment 'HomeStack Gold'
+    [[ -n ${pool_members[$POOL_SERVICE]+set} ]] || plan "create pool $POOL_SERVICE" pveum pool add "$POOL_SERVICE" --comment 'HomeStack server containers'
     if [[ -z ${pool_members[$POOL]+set} ]]; then
         if ((test_part)); then
             plan "create pool $POOL" pveum pool add "$POOL" --comment 'HomeStack tests'
@@ -866,14 +923,9 @@ plan_install() {
         fi
     fi
     [[ ${vm_pool[$gold]} == "$POOL_GOLD" ]] || plan "put Gold $gold in pool $POOL_GOLD" pveum pool modify "$POOL_GOLD" --vms "$gold"
-    file=$token_dir/homestack-pve-token-$TOKEN
-    if [[ -z ${token_privsep[$TOKEN]+set} ]]; then
-        [[ -e $file ]] && die "$file exists; move it away so the new token's secret can be written there"
-        plan "create token $HS_USER!$TOKEN (secret to $file, mode 0600)" create_token "$TOKEN" "$file"
-    elif [[ ${token_privsep[$TOKEN]} != 1 ]]; then
-        plan "separate the privileges of token $HS_USER!$TOKEN" pveum user token modify "$HS_USER" "$TOKEN" --privsep 1
-    fi
-    target=$(target_acl 1 "$TOKEN")
+    plan_token "$TOKEN" "HomeStack $PART"
+    plan_token "$DEPLOY_TOKEN" 'HomeStack deploy'
+    target=$(target_acl 1 "$TOKEN" "$DEPLOY_TOKEN")
     plan_acl "$target"
     used=$(roles_in_use "$target")
     for role in "${LEGACY_ROLES[@]}"; do
@@ -916,8 +968,8 @@ plan_uninstall() {
         scope=(test)
         pools=(homestack-test)
     else
-        scope=(server test)
-        pools=(homestack homestack-test "$POOL_GOLD")
+        scope=(server test "$DEPLOY_TOKEN")
+        pools=(homestack homestack-test "$POOL_GOLD" "$POOL_SERVICE")
     fi
     if ((test_part)); then
         target=$(target_acl 1 "${scope[@]}")
@@ -931,7 +983,7 @@ plan_uninstall() {
     if ((!test_part)); then
         ((user_exists)) && plan "delete user $HS_USER" pveum user delete "$HS_USER"
         used=$(roles_in_use "$target")
-        for role in HomeStack HomeStackGold HomeStackStorage "${LEGACY_ROLES[@]}"; do
+        for role in "${ROLES[@]}" "${LEGACY_ROLES[@]}"; do
             [[ -n ${role_privs[$role]+set} ]] || continue
             if grep -qx "$role" <<< "$used"; then
                 kept+=("role $role: still used by an ACL entry of someone else")

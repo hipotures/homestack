@@ -188,61 +188,78 @@ expect_no_snippets() {
 
 ROLES_TARGET="HomeStack	Pool.Audit,VM.Allocate,VM.Audit,VM.Config.Cloudinit,VM.Config.Disk,VM.Config.Options,VM.GuestAgent.Audit,VM.GuestAgent.FileRead,VM.GuestAgent.Unrestricted,VM.Migrate,VM.PowerMgmt
 HomeStackGold	Pool.Audit,VM.Audit,VM.Clone,VM.GuestAgent.Audit,VM.GuestAgent.FileRead,VM.GuestAgent.Unrestricted
-HomeStackStorage	Datastore.AllocateSpace,Datastore.Audit"
+HomeStackStorage	Datastore.AllocateSpace,Datastore.Audit
+HomeStackDeploy	Pool.Audit,VM.Allocate,VM.Audit,VM.Config.CPU,VM.Config.Disk,VM.Config.Memory,VM.Config.Network,VM.Config.Options,VM.PowerMgmt
+HomeStackDeployNodes	Sys.AccessNetwork
+HomeStackDeployTemplates	Datastore.AllocateSpace,Datastore.AllocateTemplate,Datastore.Audit"
 
 # --- tests ---------------------------------------------------------------
 
 test_install_single_node() {
     setup pve1
-    hs_ok install --storages local-lvm --snippet-storage local --yes || return
+    hs_ok install --storages local-lvm --snippet-storage local --service-storages local-lvm --template-storage local --yes || return
     expect_out 'single node'
     expect_acl <<'EOF'
 /nodes	token	homestack@pve!server	PVEAuditor
+/nodes	token	homestack@pve!deploy	PVEAuditor
+/nodes	token	homestack@pve!deploy	HomeStackDeployNodes
 /nodes	user	homestack@pve	PVEAuditor
+/nodes	user	homestack@pve	HomeStackDeployNodes
 /sdn	token	homestack@pve!server	PVEAuditor
+/sdn	token	homestack@pve!deploy	PVEAuditor
 /sdn	user	homestack@pve	PVEAuditor
 /storage	token	homestack@pve!server	PVEAuditor
+/storage	token	homestack@pve!deploy	PVEAuditor
 /storage	user	homestack@pve	PVEAuditor
 /pool/homestack	token	homestack@pve!server	HomeStack
 /pool/homestack	user	homestack@pve	HomeStack
 /pool/homestack-gold	token	homestack@pve!server	HomeStackGold
 /pool/homestack-gold	user	homestack@pve	HomeStackGold
+/pool/homestack-service	token	homestack@pve!deploy	HomeStackDeploy
+/pool/homestack-service	user	homestack@pve	HomeStackDeploy
 /sdn/zones/localnetwork/vmbr0	token	homestack@pve!server	PVESDNUser
+/sdn/zones/localnetwork/vmbr0	token	homestack@pve!deploy	PVESDNUser
 /sdn/zones/localnetwork/vmbr0	user	homestack@pve	PVESDNUser
 /storage/local	token	homestack@pve!server	HomeStackStorage
+/storage/local	token	homestack@pve!deploy	HomeStackDeployTemplates
 /storage/local	user	homestack@pve	HomeStackStorage
+/storage/local	user	homestack@pve	HomeStackDeployTemplates
 /storage/local-lvm	token	homestack@pve!server	HomeStackStorage
+/storage/local-lvm	token	homestack@pve!deploy	HomeStackStorage
 /storage/local-lvm	user	homestack@pve	HomeStackStorage
 EOF
     expect_roles <<< "$ROLES_TARGET"
     homestack_acl | awk -F'\t' '$1 == "/" || index($1, "/vms") == 1' | grep -q . &&
         fail "a token or the user can see VMs outside the HomeStack pools"
-    expect_pools <<< $'homestack\t\nhomestack-gold\t101'
+    expect_pools <<< $'homestack\t\nhomestack-gold\t101\nhomestack-service\t'
     grep -qx 'homestack@pve' "$HS_FAKE/users" || fail "user not created"
     grep -q "^homestack@pve${tab}server${tab}1$" "$HS_FAKE/tokens.tsv" || fail "server token not created with privsep"
+    grep -q "^homestack@pve${tab}deploy${tab}1$" "$HS_FAKE/tokens.tsv" || fail "deploy token not created with privsep"
     [[ $(cat "$HS_FAKE/homestack-pve-token-server") == 'homestack@pve!server=fake-secret-server' ]] || fail "token file content"
+    [[ $(cat "$HS_FAKE/homestack-pve-token-deploy") == 'homestack@pve!deploy=fake-secret-deploy' ]] || fail "deploy token file content"
     [[ $(stat -c %a "$HS_FAKE/homestack-pve-token-server") == 600 ]] || fail "token file mode is not 600"
+    [[ $(stat -c %a "$HS_FAKE/homestack-pve-token-deploy") == 600 ]] || fail "deploy token file mode is not 600"
     grep -q 'fake-secret' "$HS_FAKE/out" && fail "the secret was printed"
     expect_snippets local
     [[ $(cat "$HS_FAKE/vz/snippets/gold-user.yaml") == owner ]] || fail "owner's snippet changed"
     [[ ! -e $HS_FAKE/ssh.log ]] || fail "ssh used on a single node"
 
     : > "$HS_FAKE/calls.log"
-    hs_ok install --storages local-lvm --snippet-storage local --yes || return
+    hs_ok install --storages local-lvm --snippet-storage local --service-storages local-lvm --template-storage local --yes || return
     [[ $(changes) == 0 ]] || fail "second install changed: $(cat "$HS_FAKE/calls.log")"
     expect_out 'Nothing to change'
-    hs_ok status --storages local-lvm --snippet-storage local || return
+    hs_ok status --storages local-lvm --snippet-storage local --service-storages local-lvm --template-storage local || return
 }
 
 test_install_cluster_and_uninstall() {
     setup pve1 pve2 pve3
-    hs_ok install --storages local-lvm,worker-roots --snippet-storage local --yes || return
+    hs_ok install --storages local-lvm,worker-roots --snippet-storage local --service-storages local-lvm --template-storage local --yes || return
     expect_out 'cluster of 3 nodes'
     expect_snippets local pve2 pve3
     grep -q '/storage/worker-roots' "$HS_FAKE/acl.tsv" || fail "worker-roots has no ACL"
 
     : > "$HS_FAKE/calls.log"
-    hs_ok install --storages local-lvm,worker-roots --snippet-storage local --yes || return
+    hs_ok install --storages local-lvm,worker-roots --snippet-storage local --service-storages local-lvm --template-storage local --yes || return
     [[ $(changes) == 0 ]] || fail "second install changed: $(cat "$HS_FAKE/calls.log")"
     expect_out 'Nothing to change'
 
@@ -261,10 +278,22 @@ test_install_cluster_and_uninstall() {
 
 test_adopt_today_with_test() {
     setup_today
-    hs_ok install --test --storages local-lvm,worker-roots --snippet-storage local --yes || return
+    hs_ok install --test --storages local-lvm,worker-roots --snippet-storage local --service-storages local-lvm --template-storage local --yes || return
     expect_acl <<'EOF'
 /	token	homestack@pve!server	PVEAuditor
 /	user	homestack@pve	PVEAuditor
+/nodes	token	homestack@pve!deploy	PVEAuditor
+/nodes	token	homestack@pve!deploy	HomeStackDeployNodes
+/nodes	user	homestack@pve	HomeStackDeployNodes
+/sdn	token	homestack@pve!deploy	PVEAuditor
+/storage	token	homestack@pve!deploy	PVEAuditor
+/pool/homestack-service	token	homestack@pve!deploy	HomeStackDeploy
+/pool/homestack-service	user	homestack@pve	HomeStackDeploy
+/pool/homestack-service	user	homestack@pve	PVEAuditor
+/sdn/zones/localnetwork/vmbr0	token	homestack@pve!deploy	PVESDNUser
+/storage/local	token	homestack@pve!deploy	HomeStackDeployTemplates
+/storage/local	user	homestack@pve	HomeStackDeployTemplates
+/storage/local-lvm	token	homestack@pve!deploy	HomeStackStorage
 /nodes	token	homestack@pve!test	PVEAuditor
 /nodes	user	homestack@pve	PVEAuditor
 /sdn	token	homestack@pve!test	PVEAuditor
@@ -303,15 +332,15 @@ EOF
     expect_roles <<< "$ROLES_TARGET
 HomeStackServerDisks	VM.Config.Disk
 HomeStackServerGoldGuest	VM.GuestAgent.FileRead,VM.GuestAgent.Unrestricted"
-    expect_pools <<< $'homestack-gold\t101\nhomestack-test\t'
-    grep -q 'token add' "$HS_FAKE/calls.log" && fail "an existing token was recreated"
-    ! compgen -G "$HS_FAKE/homestack-pve-token-*" > /dev/null || fail "a token file was written"
+    expect_pools <<< $'homestack-gold\t101\nhomestack-service\t\nhomestack-test\t'
+    grep -q 'token add homestack@pve server\|token add homestack@pve test' "$HS_FAKE/calls.log" && fail "an existing token was recreated"
+    [[ $(cd "$HS_FAKE" && echo homestack-pve-token-*) == homestack-pve-token-deploy ]] || fail "a token file other than the new deploy token's was written"
     grep -q 'group' "$HS_FAKE/acl.tsv" || fail "the owner's group ACL was removed"
     # pve2 (local) had the snippets already; pve1 and pve3 get them.
     expect_snippets local pve1 pve3
 
     : > "$HS_FAKE/calls.log"
-    hs_ok install --test --storages local-lvm,worker-roots --snippet-storage local --yes || return
+    hs_ok install --test --storages local-lvm,worker-roots --snippet-storage local --service-storages local-lvm --template-storage local --yes || return
     [[ $(changes) == 0 ]] || fail "second install --test changed: $(cat "$HS_FAKE/calls.log")"
 
     local server_before
@@ -321,14 +350,15 @@ HomeStackServerGoldGuest	VM.GuestAgent.FileRead,VM.GuestAgent.Unrestricted"
     homestack_acl | grep -q 'homestack@pve!test' && fail "test token entries left"
     grep -q "${tab}test${tab}" "$HS_FAKE/tokens.tsv" && fail "test token left"
     homestack_acl | grep -q 'homestack-test' && fail "user entries on the test pool left"
-    expect_pools <<< $'homestack-gold\t101'
+    expect_pools <<< $'homestack-gold\t101\nhomestack-service\t'
+    homestack_acl | grep -q 'homestack@pve!deploy' || fail "uninstall --test removed the deploy token's entries"
     expect_snippets local pve1 pve3
     grep -qx 'homestack@pve' "$HS_FAKE/users" || fail "user removed by uninstall --test"
 }
 
 test_pool_with_vms_and_snippets_in_use() {
     setup pve1 pve2
-    hs_ok install --storages local-lvm --snippet-storage local --yes || return
+    hs_ok install --storages local-lvm --snippet-storage local --service-storages local-lvm --template-storage local --yes || return
     printf '240\tpve2\tws\thomestack-ws\tvirtio=BC:24:11:00:00:03,bridge=vmbr0\tvendor=local:snippets/homestack-vendor-keep.yaml\n' \
         >> "$HS_FAKE/vms.tsv"
     sed -i "s/^homestack\t\t/homestack\t240\t/" "$HS_FAKE/pools.tsv"
@@ -350,17 +380,28 @@ test_pool_with_vms_and_snippets_in_use() {
     grep -q "^homestack${tab}240" "$HS_FAKE/pools.tsv" || fail "--force deleted a pool with a VM"
 }
 
+test_service_pool_with_containers() {
+    setup pve1 pve2
+    hs_ok install --storages local-lvm --snippet-storage local --service-storages local-lvm --template-storage local --yes || return
+    sed -i "s/^homestack-service\t\t/homestack-service\t998\t/" "$HS_FAKE/pools.tsv"
+    hs_ok uninstall --snippet-storage local --yes || return
+    expect_out 'homestack-service: 998'
+    grep -q "^homestack-service${tab}998" "$HS_FAKE/pools.tsv" || fail "pool with a server container was deleted"
+    grep -q "${tab}deploy${tab}" "$HS_FAKE/tokens.tsv" && fail "deploy token left"
+    homestack_acl | grep -q . && fail "ACL entries left"
+}
+
 test_unreachable_node() {
     setup pve1 pve2 pve3
     echo pve3 > "$HS_FAKE/offline-ssh"
-    hs_fails install --storages local-lvm --snippet-storage local --yes || return
+    hs_fails install --storages local-lvm --snippet-storage local --service-storages local-lvm --template-storage local --yes || return
     expect_out 'pve3'
     expect_snippets local pve2
     grep -qx 'homestack@pve' "$HS_FAKE/users" || fail "the rest was not done"
 
     : > "$HS_FAKE/offline-ssh"
     : > "$HS_FAKE/calls.log"
-    hs_ok install --storages local-lvm --snippet-storage local --yes || return
+    hs_ok install --storages local-lvm --snippet-storage local --service-storages local-lvm --template-storage local --yes || return
     expect_snippets local pve2 pve3
     [[ $(changes) == 0 ]] || fail "rerun changed Proxmox objects again"
     expect_out 'on pve3'
@@ -370,69 +411,80 @@ test_unreachable_node() {
 test_offline_node_in_cluster() {
     setup pve1 pve2
     sed -i "s/^pve2\t\(.*\)\t1\t0$/pve2\t\1\t0\t0/" "$HS_FAKE/nodes.tsv"
-    hs_fails install --storages local-lvm --snippet-storage local --yes || return
+    hs_fails install --storages local-lvm --snippet-storage local --service-storages local-lvm --template-storage local --yes || return
     expect_out 'pve2 is offline'
 }
 
 test_checks_stop_install() {
     setup pve1
     sed -i 's/iso,vztmpl,backup,snippets/iso,vztmpl,backup/' "$HS_FAKE/storage.json"
-    hs_fails install --storages local-lvm --snippet-storage local --yes || return
+    hs_fails install --storages local-lvm --snippet-storage local --service-storages local-lvm --template-storage local --yes || return
     expect_out "storage local does not allow content type snippets"
     [[ $(changes) == 0 ]] || fail "changed Proxmox before stopping"
 
     setup pve1
-    hs_fails install --storages missing --snippet-storage local --yes || return
+    hs_fails install --storages missing --snippet-storage local --service-storages local-lvm --template-storage local --yes || return
     expect_out "storage missing does not exist"
 
     setup pve1
     sed -i 's/homestack-gold//' "$HS_FAKE/vms.tsv"
-    hs_fails install --storages local-lvm --snippet-storage local --yes || return
+    hs_fails install --storages local-lvm --snippet-storage local --service-storages local-lvm --template-storage local --yes || return
     expect_out 'no VM is tagged homestack-gold'
 
     setup pve1
     printf 'other\t101\tsomeone else\n' > "$HS_FAKE/pools.tsv"
-    hs_fails install --storages local-lvm --snippet-storage local --yes || return
+    hs_fails install --storages local-lvm --snippet-storage local --service-storages local-lvm --template-storage local --yes || return
     expect_out 'Gold 101 is in pool other'
     [[ $(changes) == 0 ]] || fail "changed Proxmox before stopping"
 
     setup pve1
     echo '{"version":"8.4.1","release":"8.4"}' > "$HS_FAKE/version-pve1"
-    hs_fails install --storages local-lvm --snippet-storage local --yes || return
+    hs_fails install --storages local-lvm --snippet-storage local --service-storages local-lvm --template-storage local --yes || return
     expect_out 'pve1 runs PVE 8.4.1'
 
     setup pve1
     echo '{"registered-tags":"homestack-ws;other"}' > "$HS_FAKE/options.json"
-    hs_fails install --storages local-lvm --snippet-storage local --yes || return
+    hs_fails install --storages local-lvm --snippet-storage local --service-storages local-lvm --template-storage local --yes || return
     expect_out 'tag homestack-ws'
 
     setup pve1
-    hs_fails install --snippet-storage local --yes || return
+    hs_fails install --snippet-storage local --service-storages local-lvm --template-storage local --yes || return
     expect_out '--storages'
+
+    setup pve1
+    hs_fails install --storages local-lvm --snippet-storage local --yes || return
+    expect_out '--service-storages is required'
+    expect_out '--template-storage is required'
+
+    setup pve1
+    hs_fails install --storages local-lvm --snippet-storage local --service-storages worker-roots --template-storage local-lvm --yes || return
+    expect_out 'storage worker-roots does not allow content type rootdir'
+    expect_out 'storage local-lvm does not allow content type vztmpl'
+    [[ $(changes) == 0 ]] || fail "changed Proxmox before stopping"
 }
 
 test_warnings_do_not_stop_install() {
     setup pve1
     : > "$HS_FAKE/trusted"
-    hs_ok install --storages local-lvm --snippet-storage local --yes || return
+    hs_ok install --storages local-lvm --snippet-storage local --service-storages local-lvm --template-storage local --yes || return
     expect_out 'warning: pve1: the API certificate does not verify'
     expect_out '/etc/pve/pve-root-ca.pem'
 }
 
 test_dry_run_and_status_change_nothing() {
     setup pve1 pve2
-    hs_ok install --storages local-lvm --snippet-storage local --dry-run || return
+    hs_ok install --storages local-lvm --snippet-storage local --service-storages local-lvm --template-storage local --dry-run || return
     [[ $(changes) == 0 ]] || fail "--dry-run changed Proxmox"
     expect_out 'pveum user add homestack@pve'
     expect_no_snippets local pve2
-    hs_fails status --storages local-lvm --snippet-storage local || return
+    hs_fails status --storages local-lvm --snippet-storage local --service-storages local-lvm --template-storage local || return
     expect_out 'Missing or different'
     [[ $(changes) == 0 ]] || fail "status changed Proxmox"
 }
 
 test_refuses_without_confirmation() {
     setup pve1
-    if PATH=$HS_FAKE/bin:$PATH "$script" install --storages local-lvm --snippet-storage local \
+    if PATH=$HS_FAKE/bin:$PATH "$script" install --storages local-lvm --snippet-storage local --service-storages local-lvm --template-storage local \
         --token-dir "$HS_FAKE" <<< 'n' > "$HS_FAKE/out" 2>&1; then
         fail "install went ahead after 'n'"
     fi
@@ -441,10 +493,10 @@ test_refuses_without_confirmation() {
 
 test_snippet_update() {
     setup pve1 pve2
-    hs_ok install --storages local-lvm --snippet-storage local --yes || return
+    hs_ok install --storages local-lvm --snippet-storage local --service-storages local-lvm --template-storage local --yes || return
     echo 'old version' > "$HS_FAKE/nodes/pve2/vz/snippets/homestack-vendor-keep.yaml"
-    hs status --storages local-lvm --snippet-storage local && fail "status missed an outdated snippet"
-    hs_ok install --storages local-lvm --snippet-storage local --yes || return
+    hs status --storages local-lvm --snippet-storage local --service-storages local-lvm --template-storage local && fail "status missed an outdated snippet"
+    hs_ok install --storages local-lvm --snippet-storage local --service-storages local-lvm --template-storage local --yes || return
     expect_snippets local pve2
 }
 

@@ -81,6 +81,45 @@ an agent stops when a phase needs one that is still open
   ... got timeout"; the owner sees it in the Proxmox UI too). Every call
   refused that way is made again every 5 seconds, for up to 2 minutes.
 
+### Owner's decisions of 2026-10-13 (phase 11)
+
+- **Deployment only through the Proxmox API.** Herdr, SSH to a node or a
+  root shell are never part of deploying or running the Rust server; any
+  user deploys it the same way. The agent's Herdr access only helps
+  checking.
+- **Image:** CI publishes a public OCI image
+  `ghcr.io/hipotures/homestack-server:<version>`. A deploy command, run on
+  the desktop, pulls it on each node (`POST
+  /nodes/{node}/storage/{storage}/oci-registry-pull`), creates or replaces
+  that node's container (`POST /nodes/{node}/lxc`) and starts it.
+- **One instance per node:** CTID 997 on pve1 (`192.168.100.97`, root
+  disk on `local-zfs`), 998 on pve2 (`.98`, `local-lvm`), 999 on pve3
+  (`.99`, `local-lvm`).
+- **TLS:** Caddy in the image, in front of the server. One wildcard
+  certificate `*.hs.efez.net` (instances `api1`–`api3.hs.efez.net`, A
+  records in the local zone `hs.efez.net`) from Let's Encrypt by DNS-01 in
+  the public zone `efez.net` (OVH). The deploy command obtains and renews
+  it on the desktop and sends the certificate and its key to each instance
+  through the server's API; the OVH key stays on the desktop. The OVH key
+  is the one already configured in Proxmox's ACME settings; for phase 11
+  the agent copies it once as root on pve2 into the desktop's
+  `~/.config/homestack/ovh-dns` (mode `0600`), never printing it.
+- **Secrets through the server's API:** the container's environment holds
+  only the SHA-256 of the client token; the deploy command sends the
+  Proxmox token (and the certificate) with write-only `PUT
+  /v1/secrets/{name}` (api-mapping 8.1), kept by the server mode `0600`.
+- **A separate deploy token:** `homestack-pve.sh install` adds pool
+  `homestack-service`, role `HomeStackDeploy` and token
+  `homestack@pve!deploy`, used only by the deploy command (ACL change
+  approved). The owner runs the installer and uninstaller; for phase 11 the
+  agent runs it on pve2 once, as before.
+- **Live gate on test instances:** the three instances run with the test
+  token and pool `homestack-test`; the gate removes the containers after.
+  Production uses the same command with the server token.
+- **Lock between instances** (agent's choice within PLAN.md, 8.3): a lease
+  in the VM's `description` (instance, job, expiry), written with `digest`,
+  as the `refresh` journal of decision 4.
+
 ## Probe results
 
 | Date | Probe | Result |
