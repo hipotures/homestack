@@ -221,13 +221,26 @@ Bez nich agent nie zaczyna fazy 4.
 
 - **Polecenia:** `install`, `uninstall`, `status` (co jest, czego brakuje, co różni się od oczekiwanego). `install` i `uninstall` najpierw pokazują plan zmian i wykonują go po potwierdzeniu (`--yes` bez pytania); `--dry-run` tylko plan.
 - **Rozpoznanie środowiska:** czy to node PVE (`pveversion`, wersja co najmniej 9.2) i czy jest w klastrze (`/etc/pve/corosync.conf`, lista nodów z `/etc/pve/nodes` i `pvecm nodes`). Root noda w klastrze dostaje się do pozostałych nodów bez dodatkowych kluczy (klucze klastra), więc skrypt sam obsługuje cały klaster.
-- **Raz na klaster** (`/etc/pve` jest wspólne): użytkownik `homestack@pve`, role HomeStacka, pool `homestack` (Gold według decyzji 9), token serwera (sekret zapisany raz do pliku `0600` na nodzie, nigdy do logu), ACL zawężone do poola, storage HomeStacka, storage snippetów, bridge (`SDN.Use`) i Gold, `VM.Config.Disk` według decyzji 10, `Pool.Audit`. Opcjonalnie (`--test`) pool `homestack-test` i token testowy z tymi samymi zasadami.
-- **Na każdym nodzie** (bez wspólnego storage snippetów): oba snippety vendor w katalogu storage snippetów, z sumą kontrolną. Nowa wersja snippetów to ten sam `install`. Node niedostępny jest zgłaszany, a ponowne uruchomienie dokańcza pracę.
-- **Sprawdzenia przed zmianą:** storage snippetów ma typ treści `snippets` (jeśli nie, skrypt pyta o dopisanie, nie usuwając innych typów), tagi `homestack-*` nie są zablokowane przez `registered-tags` / `user-tag-access` dla tokenu, Gold istnieje i ma tag `homestack-gold` (skrypt Gold nie zmienia, poza poolem według decyzji 9).
-- **Certyfikaty:** skrypt ich nie wystawia, tylko sprawdza (`status`, ostrzeżenie w `install`): certyfikat API każdego noda (`:8006`) musi być zaufany i wystawiony na nazwę, pod którą serwer łączy się z nodem (dziś Let's Encrypt przez ACME Proxmoxa z wtyczką DNS OVH, odnawiany przez sam Proxmox). Przy certyfikacie samopodpisanym skrypt podaje ścieżkę CA klastra (`/etc/pve/pve-root-ca.pem`) do `HOMESTACK_PVE_CA_FILE`. TLS samego serwera HomeStack (Caddy, ewentualnie ACME) to faza 11.
-- **Idempotencja:** drugie `install` niczego nie zmienia. Skrypt przejmuje to, co założyliśmy ręcznie (użytkownik, role `HomeStackServerDisks`, `HomeStackServerGoldGuest`, `HomeStackTest*`, pool `homestack-test`, token testowy, snippety na pve2), i doprowadza do stanu docelowego, zgłaszając każdą zmianę.
-- **`uninstall`:** usuwa tokeny, ACL, role, użytkownika, snippety ze wszystkich nodów i pusty pool. Nigdy nie usuwa VM, wolumenów ani Gold. Pool z VM-kami zostaje i jest zgłaszany z listą VMID; snippetów używanych jeszcze przez jakąś VM (`cicustom`) nie usuwa bez `--force`.
-- **Gold** dalej przygotowuje właściciel (README, „Preparing a Gold VM”). Ta faza tylko dopisuje do opisu wymagania wariantu A (NetworkManager, `netplan`, `udevadm`, `python3` z PyYAML) i kontrolę gotowości serwera, która je sprawdza.
+- **Granica odpowiedzialności.** HomeStack nie stawia ani nie konfiguruje Proxmoxa. Skrypt zakłada i usuwa tylko obiekty HomeStacka; wszystko inne należy do właściciela klastra i skrypt to wyłącznie sprawdza (`status`, a `install` przerywa przy brakach wymaganych i ostrzega przy zalecanych), nigdy nie zmienia.
+
+**Proxmox (właściciel; skrypt tylko sprawdza):**
+
+- klaster i nody, wersja PVE co najmniej 9.2;
+- storage HomeStacka z konfiguracji i storage snippetów z typem treści `snippets` (skrypt nie dopisuje typów treści);
+- bridge i SDN, z których korzysta Gold;
+- tagi `homestack-*` nie są zablokowane przez `registered-tags` / `user-tag-access` dla tokenu;
+- certyfikat API każdego noda (`:8006`) zaufany i wystawiony na nazwę, pod którą serwer łączy się z nodem (dziś Let's Encrypt przez ACME Proxmoxa z wtyczką DNS OVH, odnawiany przez sam Proxmox); przy samopodpisanym skrypt podaje ścieżkę CA klastra (`/etc/pve/pve-root-ca.pem`) do `HOMESTACK_PVE_CA_FILE`;
+- DNS nazw nodów (dziś lokalne strefy na routerze);
+- Gold: przygotowuje go właściciel (README, „Preparing a Gold VM”); skrypt sprawdza, że istnieje i ma tag `homestack-gold`. Jedyna zmiana dotycząca Gold to jego przynależność do poola, jeśli tak wypadnie decyzja 9. Ta faza dopisuje do opisu Gold wymagania wariantu A (NetworkManager, `netplan`, `udevadm`, `python3` z PyYAML) i kontrolę gotowości serwera, która je sprawdza.
+
+**HomeStack (skrypt zakłada, przejmuje i usuwa):**
+
+- **raz na klaster** (`/etc/pve` jest wspólne): użytkownik `homestack@pve`, role HomeStacka, pool `homestack`, token serwera (sekret zapisany raz do pliku `0600` na nodzie, nigdy do logu), ACL zawężone do poola, storage HomeStacka, storage snippetów, bridge (`SDN.Use`) i Gold, `VM.Config.Disk` według decyzji 10, `Pool.Audit`. Opcjonalnie (`--test`) pool `homestack-test` i token testowy z tymi samymi zasadami;
+- **na każdym nodzie** (bez wspólnego storage snippetów): oba snippety vendor w katalogu storage snippetów, z sumą kontrolną. Nowa wersja snippetów to ten sam `install`. Node niedostępny jest zgłaszany, a ponowne uruchomienie dokańcza pracę;
+- **idempotencja:** drugie `install` niczego nie zmienia. Skrypt przejmuje to, co założyliśmy ręcznie (użytkownik, role `HomeStackServerDisks`, `HomeStackServerGoldGuest`, `HomeStackTest*`, pool `homestack-test`, token testowy, snippety na pve2), i doprowadza do stanu docelowego, zgłaszając każdą zmianę;
+- **`uninstall`:** usuwa tokeny, ACL, role, użytkownika, snippety ze wszystkich nodów i pusty pool. Nigdy nie usuwa VM, wolumenów ani Gold i nie dotyka niczego z listy Proxmoxa. Pool z VM-kami zostaje i jest zgłaszany z listą VMID; snippetów używanych jeszcze przez jakąś VM (`cicustom`) nie usuwa bez `--force`.
+
+TLS samego serwera HomeStack (Caddy, ewentualnie ACME) to faza 11.
 
 **Testy:** `shellcheck`; skrypt na atrapach `pveum`, `pvesh`, `pvecm`, `pvesm`, `ssh` w `PATH`, które zapisują wywołania i odtwarzają stan (instalacja na jednym nodzie i w klastrze trzech nodów, drugi `install` bez zmian, `uninstall` po `install` wraca do stanu zera, pool z VM zostaje, node niedostępny); `GET /v1/capabilities` po stronie serwera mówi, czego z instalacji brakuje.
 
