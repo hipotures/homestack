@@ -368,26 +368,20 @@
         "parameters": [
           {
             "name": "gold",
-            "in": "path",
+            "in": "query",
             "description": "Gold VMID; defaults to `[node] gold_vmid` of the configuration.",
-            "required": true,
+            "required": false,
             "schema": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             }
           },
           {
             "name": "vmid",
-            "in": "path",
+            "in": "query",
             "description": "Same as `gold`.",
-            "required": true,
+            "required": false,
             "schema": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             }
           }
         ],
@@ -623,26 +617,20 @@
         "parameters": [
           {
             "name": "gold",
-            "in": "path",
+            "in": "query",
             "description": "Gold VMID; defaults to `[node] gold_vmid` of the configuration.",
-            "required": true,
+            "required": false,
             "schema": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             }
           },
           {
             "name": "vmid",
-            "in": "path",
+            "in": "query",
             "description": "Same as `gold`.",
-            "required": true,
+            "required": false,
             "schema": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             }
           }
         ],

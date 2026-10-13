@@ -254,6 +254,7 @@ pub async fn discovery(State(state): State<AppState>) -> Result<Json<Discovery>,
 }
 
 #[derive(Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct GoldQuery {
     /// Gold VMID; defaults to `[node] gold_vmid` of the configuration.
     #[serde(default)]
