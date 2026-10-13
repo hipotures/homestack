@@ -213,6 +213,27 @@ Bez nich agent nie zaczyna fazy 4.
 
 **Bramka:** `--live`: VM testowa z poola uruchamia się z wygenerowaną konfiguracją i ma właściwy hostname, IP i zamontowany home (ten test można zrobić dopiero razem z fazą 5, jeśli wariant wymaga `create`; wtedy przesuwa się do bramki fazy 5).
 
+### Faza 4b: instalacja i deinstalacja w klastrze
+
+**Cel:** wszystko, co HomeStack potrzebuje w Proxmoxie, a czego API serwera samo nie założy, robi jeden dedykowany skrypt. Do fazy 4 robiliśmy to ręcznie (`pveum`, `scp`, zob. `deploy.md` i próby w `decisions.md`). Python tego nie potrzebował (działa jako root przez SSH), więc nie ma tu odpowiednika w mapowaniu ani testów Pythona do przeniesienia.
+
+**Skrypt** (`deploy/pve/homestack-pve.sh`, sam Bash i narzędzia PVE, bez zależności): właściciel kopiuje go na dowolny node i uruchamia jako root.
+
+- **Polecenia:** `install`, `uninstall`, `status` (co jest, czego brakuje, co różni się od oczekiwanego). `install` i `uninstall` najpierw pokazują plan zmian i wykonują go po potwierdzeniu (`--yes` bez pytania); `--dry-run` tylko plan.
+- **Rozpoznanie środowiska:** czy to node PVE (`pveversion`, wersja co najmniej 9.2) i czy jest w klastrze (`/etc/pve/corosync.conf`, lista nodów z `/etc/pve/nodes` i `pvecm nodes`). Root noda w klastrze dostaje się do pozostałych nodów bez dodatkowych kluczy (klucze klastra), więc skrypt sam obsługuje cały klaster.
+- **Raz na klaster** (`/etc/pve` jest wspólne): użytkownik `homestack@pve`, role HomeStacka, pool `homestack` (Gold według decyzji 9), token serwera (sekret zapisany raz do pliku `0600` na nodzie, nigdy do logu), ACL zawężone do poola, storage HomeStacka, storage snippetów, bridge (`SDN.Use`) i Gold, `VM.Config.Disk` według decyzji 10, `Pool.Audit`. Opcjonalnie (`--test`) pool `homestack-test` i token testowy z tymi samymi zasadami.
+- **Na każdym nodzie** (bez wspólnego storage snippetów): oba snippety vendor w katalogu storage snippetów, z sumą kontrolną. Nowa wersja snippetów to ten sam `install`. Node niedostępny jest zgłaszany, a ponowne uruchomienie dokańcza pracę.
+- **Sprawdzenia przed zmianą:** storage snippetów ma typ treści `snippets` (jeśli nie, skrypt pyta o dopisanie, nie usuwając innych typów), tagi `homestack-*` nie są zablokowane przez `registered-tags` / `user-tag-access` dla tokenu, Gold istnieje i ma tag `homestack-gold` (skrypt Gold nie zmienia, poza poolem według decyzji 9).
+- **Idempotencja:** drugie `install` niczego nie zmienia. Skrypt przejmuje to, co założyliśmy ręcznie (użytkownik, role `HomeStackServerDisks`, `HomeStackServerGoldGuest`, `HomeStackTest*`, pool `homestack-test`, token testowy, snippety na pve2), i doprowadza do stanu docelowego, zgłaszając każdą zmianę.
+- **`uninstall`:** usuwa tokeny, ACL, role, użytkownika, snippety ze wszystkich nodów i pusty pool. Nigdy nie usuwa VM, wolumenów ani Gold. Pool z VM-kami zostaje i jest zgłaszany z listą VMID; snippetów używanych jeszcze przez jakąś VM (`cicustom`) nie usuwa bez `--force`.
+- **Gold** dalej przygotowuje właściciel (README, „Preparing a Gold VM”). Ta faza tylko dopisuje do opisu wymagania wariantu A (NetworkManager, `netplan`, `udevadm`, `python3` z PyYAML) i kontrolę gotowości serwera, która je sprawdza.
+
+**Testy:** `shellcheck`; skrypt na atrapach `pveum`, `pvesh`, `pvecm`, `pvesm`, `ssh` w `PATH`, które zapisują wywołania i odtwarzają stan (instalacja na jednym nodzie i w klastrze trzech nodów, drugi `install` bez zmian, `uninstall` po `install` wraca do stanu zera, pool z VM zostaje, node niedostępny); `GET /v1/capabilities` po stronie serwera mówi, czego z instalacji brakuje.
+
+**Bramka:** `--live` na klastrze, za zgodą właściciela: `install --test` przejmuje dzisiejszy stan testowy bez zmiany uprawnień poza zaplanowanymi, drugie uruchomienie nic nie zmienia, snippety są na wszystkich trzech nodach z tą samą sumą, test rozruchu z fazy 4 przechodzi na każdym nodzie Gold; `uninstall --test` usuwa część testową i zostawia produkcyjną. Instalacja produkcyjna (`install` bez `--test`) to bramka przed fazą 5.
+
+Wymaga decyzji 9 i 10 (od nich zależą ACL).
+
 ### Bramka przed fazą 5: pool `homestack` i token produkcyjny
 
 Od fazy 5 serwer zmienia stan klastra. Token HomeStacka nie może wtedy pozwalać na zmianę ani usunięcie VM spoza HomeStacka (np. desktopu). Tagi `homestack-*` są tylko umową, a nie zabezpieczeniem: granicę wyznaczają ACL Proxmoxa na poolu.
@@ -222,6 +243,8 @@ Od fazy 5 serwer zmienia stan klastra. Token HomeStacka nie może wtedy pozwala�
 - **Uprawnienia tokenu serwera do zmian tylko na `/pool/homestack`** (rola `HomeStack` z sekcji 5 dokumentu mapowania), plus storage HomeStacka, bridge (`SDN.Use`) i Gold (`VM.Clone`). Żadnych uprawnień do zmian na `/`, `/vms` ani na pojedynczych VM spoza poola. `VM.Config.Disk` na `/vms` (dodane po fazie 2 dla skanu osieroconych wolumenów) zostaje zawężone według decyzji 10. Do sprawdzania przynależności do poola token potrzebuje `Pool.Audit` na `/pool/homestack` (bez tego `cluster/resources` nie pokazuje pola `pool`, sprawdzone w fazie 3).
 - **Serwer pilnuje tego także sam, nie tylko przez ACL:** `create` klonuje z `pool=homestack`. `destroy`, `refresh`, `resize`, `migrate` i `addkey` odmawiają przed planem dla VM spoza poola, nawet jeśli tag się zgadza. Odmowa ma własny kod błędu.
 - **Test na żywym klastrze (bramka):** tokenem produkcyjnym próba zmiany i usunięcia VM spoza poola (VM testowa poza oboma poolami, z tagiem `homestack-ws`) kończy się `403` od Proxmoxa i odmową serwera. `GET /access/permissions` tokenu nie pokazuje `VM.Allocate`, `VM.Config.*` ani `VM.PowerMgmt` poza poolami HomeStacka.
+
+Pool, role, token i ACL zakłada skrypt z fazy 4b (`install` bez `--test`), uruchomiony przez właściciela.
 
 Bez poola, zawężonego tokenu i zapisanych decyzji 9 i 10 agent nie zaczyna fazy 5.
 
