@@ -205,6 +205,17 @@ an agent stops when a phase needs one that is still open
 - Uninstall does not remove the desktop's token files (they are the owner's
   files) and says which exist.
 
+
+### Owner's remarks of 2026-10-13 (Gold, after phase 13c step 1)
+
+- The installer does not install a Gold and has no ISO choice: a Gold is a
+  prepared, finalized machine, and a server must be installed in it first.
+- A suitably prepared LXC container might also serve as Gold, but this is
+  untested and nothing supports it today (the installer refuses a Gold that
+  is not a QEMU VM, and the lifecycle assumes QEMU). It would have to be
+  tested before any decision. An Alpine-based image (for example a Python
+  one) will certainly not work as Gold.
+
 ## Probe results
 
 | Date | Probe | Result |
