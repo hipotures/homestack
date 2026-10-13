@@ -69,63 +69,96 @@ ACL paths the configuration implies (`/nodes`, `/vms`, `/vms/<gold_vmid>`,
 `/storage/<id>`) and lists per operation what is required and what is
 missing. The table is in `crates/hs-core/src/capabilities.rs`.
 
-## Proxmox token
+## Proxmox objects: `deploy/pve/homestack-pve.sh`
 
-Phases 0–2 only read. The token used so far (created on PVE 9.2.21):
-
-```
-pveum user add homestack@pve --comment 'HomeStack server'
-pveum acl modify / --users homestack@pve --roles PVEAuditor
-pveum user token add homestack@pve server --privsep 1 --comment 'HomeStack server, read-only'
-pveum acl modify / --tokens 'homestack@pve!server' --roles PVEAuditor
-```
-
-`PVEAuditor` holds `Datastore.Audit`, `Mapping.Audit`, `Pool.Audit`,
-`SDN.Audit`, `Sys.Audit`, `VM.Audit` and `VM.GuestAgent.Audit`. The token's
-secret is shown once; write it straight to a file.
-
-The detached-volume scan also needs `VM.Config.Disk` on `/vms` (Proxmox lists
-a VM volume only to who may change that VM's disks). Give it together with
-`PVEAuditor` on `/vms`: a role on a more specific path replaces what the
-user inherits from `/`, and a privilege-separated token gets the
-intersection with its user.
+Everything HomeStack needs in Proxmox that the server's API cannot make
+itself comes from one script, run by the cluster's owner as root on any node
+(phase 4b). It reaches the other nodes of a cluster itself (`pvesh get
+/cluster/status`, then `ssh root@<node address>` with the cluster's keys).
 
 ```
-pveum role add HomeStackServerDisks --privs VM.Config.Disk
-pveum acl modify /vms --users homestack@pve --tokens 'homestack@pve!server' --roles PVEAuditor,HomeStackServerDisks
+scp deploy/pve/homestack-pve.sh root@NODE:/root/
+ssh root@NODE /root/homestack-pve.sh status  --storages worker-roots,local-lvm --snippet-storage local
+ssh root@NODE /root/homestack-pve.sh install --storages worker-roots,local-lvm --snippet-storage local --dry-run
+ssh root@NODE /root/homestack-pve.sh install --storages worker-roots,local-lvm --snippet-storage local
 ```
 
-The Gold guest contract (from phase 3) runs commands in Gold through the
-guest agent, which needs `VM.GuestAgent.Unrestricted` on Gold only (VMID
-101 here). Workspaces are verified with `VM.GuestAgent.Audit` and
-`VM.GuestAgent.FileRead` (decision 5). The token's roles on `/vms/101`
-replace what it inherits from `/vms`, so all three are listed:
+`--storages` are the storages of `[storage_layouts]`, `--snippet-storage`
+is `[cloud_init] snippet_storage`. Gold is the one VM tagged
+`homestack-gold`; with several, pass `--gold VMID`. `install` and
+`uninstall` show the plan and ask before changing anything (`--yes` does
+not ask, `--dry-run` only shows). `--test` works on the test part instead of
+the production part. A second `install` changes nothing.
 
-```
-pveum role add HomeStackServerGoldGuest --privs VM.GuestAgent.Unrestricted,VM.GuestAgent.FileRead
-pveum acl modify /vms/101 --users homestack@pve --roles HomeStackServerGoldGuest
-pveum acl modify /vms/101 --tokens 'homestack@pve!server' --roles PVEAuditor,HomeStackServerDisks,HomeStackServerGoldGuest
-```
+| Part | What | `install` | `install --test` | `uninstall` | `uninstall --test` |
+|---|---|---|---|---|---|
+| shared | user `homestack@pve`, roles `HomeStack`, `HomeStackGold`, `HomeStackStorage`, pool `homestack-gold` with Gold, the vendor snippets on every node | yes | yes | removed | kept |
+| production | pool `homestack`, token `homestack@pve!server`, its ACL | yes | untouched | removed | kept |
+| test | pool `homestack-test`, token `homestack@pve!test`, its ACL | untouched | yes | removed | removed |
+
+A new token's secret is written once to `/root/homestack-pve-token-<id>`
+(mode 0600, `--token-dir` changes the directory) and never printed. Each
+token gets:
+
+| Path | Role |
+|---|---|
+| `/` | `PVEAuditor` (reads everything) |
+| `/pool/homestack` (or `homestack-test`) | `HomeStack`: `Pool.Audit`, `VM.Allocate`, `VM.Audit`, `VM.Config.Cloudinit`, `VM.Config.Disk`, `VM.Config.Options`, `VM.GuestAgent.Audit`, `VM.GuestAgent.FileRead`, `VM.GuestAgent.Unrestricted`, `VM.Migrate`, `VM.PowerMgmt` |
+| `/pool/homestack-gold` | `HomeStackGold`: `Pool.Audit`, `VM.Audit`, `VM.Clone`, `VM.GuestAgent.Audit`, `VM.GuestAgent.FileRead`, `VM.GuestAgent.Unrestricted` |
+| `/storage/<id>`, each layout storage and the snippet storage | `HomeStackStorage`: `Datastore.AllocateSpace`, `Datastore.Audit` |
+| `/sdn/zones/<zone>/<bridge>` of Gold's `net0` | `PVESDNUser` |
+
+Proxmox adds the roles of a VM's pool to those of `/vms/<vmid>`, so the
+token may change only the VMs in its pool and clone only Gold; outside them
+it can only read. The user `homestack@pve` gets, on each of these paths, the
+union of what its tokens resolve to there (a privilege-separated token gets
+the intersection with its user). No `VM.Config.Disk` on `/vms` (decision
+10 = C): the detached-volume scan lists only the volumes of the pool's VMs
+and says it is incomplete.
+
+The script only checks what belongs to the cluster's owner and stops
+before any change when something required is missing: PVE 9.2 or later on
+every node, the storages and their content types (`images`, `snippets`),
+Gold (tagged, in no other pool) and its bridge, tag rules that would keep
+the token from setting `homestack-*` tags. It warns when a node's API
+certificate does not verify for `<node>.<domain>` with the system's CAs
+(then give the server `/etc/pve/pve-root-ca.pem` in
+`HOMESTACK_PVE_CA_FILE`) or that name does not resolve. An offline or
+unreachable node is reported and the rest is done; running it again
+finishes the job.
+
+`uninstall` never removes a VM, a volume or Gold (only Gold's membership in
+`homestack-gold`). A pool that still holds VMs is kept and listed; a
+snippet some VM's `cicustom` still names is kept unless `--force`.
+
+The objects made by hand in phases 0–4 (roles `HomeStackServerDisks`,
+`HomeStackServerGoldGuest`, `HomeStackTest*`, the ACL on `/vms` and
+`/vms/101`) are taken over: they disappear once no ACL entry uses them.
+
+The server's instance settings name the pools:
+
+| Variable | Meaning |
+|---|---|
+| `HOMESTACK_PVE_POOL` | pool the instance changes workspaces in, default `homestack` (`homestack-test` for a test instance) |
+| `HOMESTACK_PVE_GOLD_POOL` | Gold's pool, default `homestack-gold` |
+
+`GET /v1/capabilities` checks the privileges on these pools and reports in
+`installation` whether both pools exist and Gold is in its pool; the
+snippets it cannot see (`unknown`), `homestack-pve.sh status` checks them.
 
 ## Cloud-Init vendor snippets
 
 Workspaces made by the server use Proxmox's own Cloud-Init (decision 1 =
 A): Proxmox writes user-data, network-config and meta-data from the VM's
 options (`ciuser=root`, `sshkeys`, `ipconfig0`, `nameserver`,
-`ciupgrade=0`), and `cicustom` names only a vendor snippet. The API cannot
-write files to a node, so the two snippets are installed once on every node
-that runs workspaces, by the owner, as root:
-
-```
-scp deploy/cloud-init/homestack-vendor-*.yaml root@NODE:/var/lib/vz/snippets/
-ssh root@NODE chmod 644 '/var/lib/vz/snippets/homestack-vendor-*.yaml'
-```
-
-The directory is that of `[cloud_init] snippet_storage` (`local` above),
-whose content types must include `snippets`. The files are generated from
-`crates/hs-core/src/cloudinit_vendor.yaml` and a test keeps them equal;
-after a change, copy them again. `homestack-vendor-create.yaml` formats a
-blank new home, `homestack-vendor-keep.yaml` refuses to (refresh, addkey).
+`ciupgrade=0`), and `cicustom` names only a vendor snippet.
+`homestack-pve.sh install` writes both snippets into the snippet storage's
+directory on every node it is enabled on (once for a shared storage) and
+rewrites them only when their checksum differs. They are generated from
+`crates/hs-core/src/cloudinit_vendor.yaml` into `deploy/cloud-init/` and
+embedded in the script (`deploy/pve/embed-snippets.sh`); tests keep all
+three equal. `homestack-vendor-create.yaml` formats a blank new home,
+`homestack-vendor-keep.yaml` refuses to (refresh, addkey).
 
 Setting `cicustom` needs `VM.Config.Cloudinit` on the VM and
 `Datastore.AllocateSpace` on the snippet storage. Checking that a snippet is
@@ -136,7 +169,8 @@ The snippet expects of Gold: exactly one regular account (UID 1000–65533),
 whose home is `/home/<name>`; NetworkManager (it selects NetworkManager as
 netplan's renderer, which Python's network snippet did per workspace), and
 `netplan`, `udevadm`, `python3` with PyYAML (cloud-init's own) besides the
-tools of the Gold guest contract.
+tools of the Gold guest contract. Gold readiness checks them ("Cloud-Init
+vendor snippet tools").
 
 ## Docker
 
@@ -208,9 +242,9 @@ The status routes read guests with the audit-level agent commands
 (`VM.GuestAgent.Audit`); the guest verification of later operations adds
 `file-read` (`VM.GuestAgent.FileRead`, decision 5), and only the Gold guest
 contract runs commands (`VM.GuestAgent.Unrestricted` on Gold). Listing VM volumes, which the detached-volume scan
-needs, takes `VM.Config.Disk` on `/vms` (or `Datastore.Allocate` on each
-storage): a read-only token gets an orphan scan marked incomplete, with a
-warning saying so.
+needs, takes `VM.Config.Disk` on the VMs (or `Datastore.Allocate` on each
+storage): with `VM.Config.Disk` only on the pool (decision 10 = C) the scan
+is marked incomplete, with a warning saying so.
 
 The contract is [docs/openapi.json](../openapi.json). Errors:
 

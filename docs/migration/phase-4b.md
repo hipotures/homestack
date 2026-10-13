@@ -197,3 +197,77 @@ the snippets on all three nodes with the same checksum; `check.sh --live`
 (the boot test now clones Gold from `homestack-gold` with `HomeStack` on the
 test pool); `uninstall --test` leaves the production part; `install --test`
 again, so the test pool is there for later phases.
+
+## 8. What was built
+
+- `deploy/pve/homestack-pve.sh` (`status`, `install`, `uninstall`,
+  `--test`, `--dry-run`, `--yes`, `--force`, `--gold`, `--token-dir`), with
+  both vendor snippets embedded; `deploy/pve/embed-snippets.sh`.
+- Server: `HOMESTACK_PVE_POOL`, `HOMESTACK_PVE_GOLD_POOL`; capabilities on
+  the pool; `installation` in `GET /v1/capabilities`; the orphan-scan gap
+  message names the pool and decision 10; Gold readiness checks
+  "Cloud-Init vendor snippet tools".
+- `pve-sim`: pools (`GET /pools`, `pool` in `cluster/resources` with
+  `Pool.Audit`, pool roles added to `/vms/<vmid>`), the `yaml` import check.
+- Parity: rule `gold-readiness`; `rust_drop_items` takes `FIELD=PATTERN`
+  for object items.
+- `scripts/check.sh` runs shellcheck and the script's tests.
+
+## 9. Tests
+
+- New: 11 script tests on fakes (`deploy/pve/tests/run.sh`), shellcheck;
+  19 Rust tests (capabilities on the pool, installation report, pool
+  settings, embedded snippets, the Gold check, normaliser). 214 Rust tests in
+  all, plus 7 live.
+- Changed: `running_gold_checks_guest_contract` (ported from Python) also
+  expects the new check after Python's ones.
+- Nothing ported from Python: there is nothing to port (section 1).
+- `scripts/check.sh`: all passed.
+
+## 10. Parity with Python
+
+Every scenario agrees. The Gold readiness cases (`guest-checks` #1, #2,
+`status-cluster` #12) and `live-compare-gold.sh` use `gold-readiness`
+instead of `same`.
+
+## 11. Live cluster
+
+Done on 2026-10-13 with the owner's consent:
+
+- `install --test --dry-run`, then `install --test --gold 101` from pve2
+  (a second VM, 111 `gold-backup`, is tagged `homestack-gold` too, so the
+  script asked for `--gold`): 30 changes, exactly those of the adoption test
+  on fakes. The server token's entries did not change.
+- A second `install --test`: "Nothing to change".
+- Both snippets on pve1, pve2 and pve3 with the same checksums as
+  `deploy/cloud-init/` (`0c71bb07…`, `fb337682…`).
+- `scripts/check.sh --live`: all passed. The boot test cloned Gold from
+  `homestack-gold` with the test token's new roles (`HomeStackGold` on the
+  pool, `HomeStack` on `homestack-test`, no `VM.Clone` there) and verified
+  the workspace; jobs, status and Gold comparisons agree.
+
+Not done: `uninstall --test` and the reinstall after it. The owner stopped
+further work on the cluster; uninstall is covered only by the tests on
+fakes. These steps were run through a root shell on pve2 that the owner has
+since forbidden; the remaining ones need the owner to run the script or to
+allow another way.
+
+## 12. Differences from Python
+
+- Gold readiness has one more required check (section 5).
+- Changes need privileges on the instance's pool; workspaces outside it
+  can only be read (gate before phase 5).
+
+## 13. Open questions
+
+- Who runs `homestack-pve.sh` on a node, and how, now that the root shell
+  used here is forbidden: the gate's `uninstall --test` and the production
+  `install` (gate before phase 5) are open.
+- The live checks clone Gold 101 and run commands in it, and read every VM;
+  the owner forbade touching their VMs. How the live gates of later phases
+  test Gold-dependent operations needs the owner's answer.
+- VM 111 `gold-backup` is tagged `homestack-gold`; Gold readiness and the
+  script treat two tagged VMs as ambiguous unless Gold is named.
+- `import-from` of Gold's disk (refresh, phase 6) may need more than
+  `HomeStackGold`.
+- The Python comparisons use Python's configured transport (Herdr).
