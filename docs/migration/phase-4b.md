@@ -246,11 +246,18 @@ Done on 2026-10-13 with the owner's consent:
   pool, `HomeStack` on `homestack-test`, no `VM.Clone` there) and verified
   the workspace; jobs, status and Gold comparisons agree.
 
-Not done: `uninstall --test` and the reinstall after it. The owner stopped
-further work on the cluster; uninstall is covered only by the tests on
-fakes. These steps were run through a root shell on pve2 that the owner has
-since forbidden; the remaining ones need the owner to run the script or to
-allow another way.
+Completed later the same day (root shell on pve2, administration only):
+
+- `uninstall --test`: 12 changes, all of the test part (the test token's
+  ACL and the token, the user's entry on `homestack-test`, the empty pool
+  `homestack-test`). The server token's ACL was compared before and after:
+  unchanged; pools `homestack` and `homestack-gold` (with the test Gold 248)
+  and the `HomeStack*` roles stayed. A second run: "Nothing to change".
+- `install --test --gold 248` again: a new test token (secret written to
+  `/root/homestack-pve-token-test`, moved to the desktop encrypted with a
+  one-off RSA key, never shown in clear); the old secret now gets `401`.
+  A second run: "Nothing to change". `live_lifecycle.rs` passes with the new
+  token.
 
 ## 12. Differences from Python
 
@@ -260,9 +267,6 @@ allow another way.
 
 ## 13. Open questions
 
-- Who runs `homestack-pve.sh` on a node, and how, now that the root shell
-  used here is forbidden: the gate's `uninstall --test` and the production
-  `install` (gate before phase 5) are open.
 - The live checks clone Gold 101 and run commands in it, and read every VM;
   the owner forbade touching their VMs. How the live gates of later phases
   test Gold-dependent operations needs the owner's answer.
