@@ -67,7 +67,7 @@ cargo test --workspace --locked
 
 step "cluster install script (deploy/pve)"
 uvx --from shellcheck-py==0.10.0.1 shellcheck -x deploy/pve/homestack-pve.sh deploy/pve/embed-snippets.sh \
-    deploy/pve/tests/run.sh deploy/pve/tests/fake-pve
+    deploy/pve/tests/run.sh deploy/pve/tests/fake-pve scripts/live-probe-import-from.sh
 deploy/pve/tests/run.sh
 
 step "Python parity tools"
