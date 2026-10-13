@@ -16,6 +16,21 @@ ENV RUSTFLAGS="-C target-feature=+crt-static"
 RUN cargo build --release --locked --target x86_64-unknown-linux-musl -p hs-server --bin homestack-server \
     && ! readelf -l target/x86_64-unknown-linux-musl/release/homestack-server | grep -q INTERP
 
+# The node image (`--target node`), published as
+# ghcr.io/hipotures/homestack-server and run by homestack-deploy as a
+# Proxmox container from this OCI image (phase 11): runit starts the server
+# on 127.0.0.1:8080 and Caddy on :443 in front of it (deploy/lxc).
+FROM docker.io/library/alpine:3.24.2 AS node
+RUN apk add --no-cache ca-certificates caddy runit \
+    && adduser -S -D -H -h /var/lib/homestack -s /sbin/nologin homestack \
+    && install -d -m 0700 -o homestack -g nogroup /var/lib/homestack
+COPY --from=build /src/target/x86_64-unknown-linux-musl/release/homestack-server /usr/local/bin/homestack-server
+COPY deploy/lxc/Caddyfile /etc/caddy/Caddyfile
+COPY deploy/lxc/service /etc/service
+EXPOSE 443
+STOPSIGNAL SIGTERM
+ENTRYPOINT ["runsvdir", "-P", "/etc/service"]
+
 # The build stage targets musl and links statically, so the runtime needs
 # nothing but CA certificates.
 FROM docker.io/library/alpine:3.24.2

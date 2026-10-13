@@ -1,0 +1,14 @@
+# Caddy in front of homestack-server in the node image (Containerfile,
+# target node). The certificate is the one the server keeps: from the
+# container's environment at the first start, later from
+# PUT /v1/secrets/tls, after which the server makes Caddy load it again
+# through the admin API.
+{
+	admin 127.0.0.1:2019
+	auto_https off
+}
+
+:443 {
+	tls /var/lib/homestack/tls/cert.pem /var/lib/homestack/tls/key.pem
+	reverse_proxy 127.0.0.1:8080
+}

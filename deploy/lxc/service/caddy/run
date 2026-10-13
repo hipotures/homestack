@@ -1,0 +1,7 @@
+#!/bin/sh
+# runit service: Caddy, once the server has stored the certificate.
+exec 2>&1
+while [ ! -s /var/lib/homestack/tls/cert.pem ] || [ ! -s /var/lib/homestack/tls/key.pem ]; do
+    sleep 1
+done
+exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
