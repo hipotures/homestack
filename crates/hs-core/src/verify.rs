@@ -334,6 +334,41 @@ pub async fn verify_refreshed_guest(
     }
 }
 
+/// The end of `migrate_workspace` for a VM started on `node`: the agent
+/// within `agent_timeout`, then the home at `/home/<user>` must be ext4 with
+/// the label `home_label`. Python reads `findmnt` and `blkid`; the server
+/// reads `get-fsinfo` and the superblock, and shows the mount as `findmnt`
+/// would print it.
+pub async fn verify_migrated_home(
+    pve: &impl Pve,
+    node: &str,
+    vmid: u32,
+    user: &str,
+    home_label: &str,
+    agent_timeout: Duration,
+) -> Result<(), CoreError> {
+    wait_for_qga(pve, node, vmid, agent_timeout).await?;
+    let home = format!("/home/{user}");
+    let mount = mounted_at(&agent_get(pve, node, vmid, "get-fsinfo").await?, &home);
+    let (mounted, label) = match mount {
+        Some((device, fstype)) => {
+            let label = ext4_label(pve, node, vmid, &format!("/dev/{device}"))
+                .await?
+                .unwrap_or_default();
+            (format!("/dev/{device} {fstype} {home}"), label)
+        }
+        None => (String::new(), String::new()),
+    };
+    if !mounted.contains("ext4") || label != home_label {
+        return Err(CoreError::Failed(format!(
+            "Migration completed but persistent home verification failed on {node}: mount={}, label={}",
+            py_repr(Some(&mounted)),
+            py_repr(Some(&label))
+        )));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

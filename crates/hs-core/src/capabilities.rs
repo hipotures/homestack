@@ -142,13 +142,14 @@ const fn needs(operation: Operation) -> Needs {
             allocate: Storages::All,
             snippets: false,
         },
-        // B6
+        // B6 (no `qm cloudinit update` under decision 1 = A; the home's
+        // label is read from its superblock, phase 8)
         Operation::Migrate => Needs {
             pool: &[
                 "Pool.Audit",
                 "VM.Audit",
-                "VM.Config.Cloudinit",
                 "VM.GuestAgent.Audit",
+                "VM.GuestAgent.FileRead",
                 "VM.Migrate",
                 "VM.PowerMgmt",
             ],

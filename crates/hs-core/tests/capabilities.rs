@@ -133,8 +133,8 @@ fn the_mapping_privileges_are_required() {
             &[
                 "VM.Migrate",
                 "VM.PowerMgmt",
-                "VM.Config.Cloudinit",
                 "VM.GuestAgent.Audit",
+                "VM.GuestAgent.FileRead",
             ],
         ),
         (Operation::Destroy, &["VM.Allocate", "VM.PowerMgmt", "VM.Audit"]),

@@ -49,6 +49,14 @@ an agent stops when a phase needs one that is still open
   the config's `digest`, so a change made by someone else before that write
   is still caught. Python is not changed by the agent.
 
+### Owner's decision of 2026-10-13 (phase 8)
+
+- Python's `migration_volume_key` keeps `.raw`, `.qcow2` and `.vmdk` (its
+  pattern `r"\\.(?:raw|..."` matches a backslash, not a dot), so the
+  migration progress of a disk from a directory storage loses its role and
+  size. The owner: the server strips the extension, as Python meant to;
+  Python is not changed by the agent.
+
 ## Probe results
 
 | Date | Probe | Result |

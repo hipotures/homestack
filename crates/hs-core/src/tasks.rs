@@ -89,6 +89,17 @@ fn placeholder(entries: &[Value]) -> bool {
             && only.get("t").and_then(Value::as_str) == Some("no content"))
 }
 
+/// Turns new lines of a task's log into progress.
+pub trait LogTracker {
+    fn progress(&mut self, output: &str) -> Option<TransferProgress>;
+}
+
+impl LogTracker for TransferTracker {
+    fn progress(&mut self, output: &str) -> Option<TransferProgress> {
+        self.update(output)
+    }
+}
+
 /// Follow a task from its UPID to its end. Every log line is reported once
 /// (`TaskLog`), transfer lines also as `Progress`; `TaskStarted` comes first
 /// and `TaskFinished` last. A task that has not ended within the timeout is
@@ -98,6 +109,17 @@ pub async fn wait_task(
     upid: &str,
     wait: &TaskWait,
     observer: &impl Observer,
+) -> Result<TaskResult, CoreError> {
+    wait_task_tracking(pve, upid, wait, observer, &mut TransferTracker::default()).await
+}
+
+/// [`wait_task`] with the progress read from the log by `tracker`.
+pub async fn wait_task_tracking(
+    pve: &impl Pve,
+    upid: &str,
+    wait: &TaskWait,
+    observer: &impl Observer,
+    tracker: &mut impl LogTracker,
 ) -> Result<TaskResult, CoreError> {
     let fields = upid_fields(upid).ok_or_else(|| CoreError::Unusable(format!("invalid task id {upid:?}")))?;
     let node = fields[1];
@@ -109,7 +131,6 @@ pub async fn wait_task(
     });
     let deadline = Instant::now() + wait.timeout;
     let mut seen = 0_usize;
-    let mut tracker = TransferTracker::default();
     loop {
         let status = pve.get(&format!("/nodes/{node}/tasks/{upid}/status"), &[]).await?;
         loop {
@@ -140,7 +161,7 @@ pub async fn wait_task(
             if lines.is_empty() {
                 break;
             }
-            if let Some(progress) = tracker.update(&lines.join("\n")) {
+            if let Some(progress) = tracker.progress(&lines.join("\n")) {
                 observer.event(JobEvent::Progress {
                     percent: progress.percent,
                     detail: progress.detail,

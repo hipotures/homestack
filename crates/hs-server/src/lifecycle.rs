@@ -1,7 +1,7 @@
 //! `workspace.create`, `workspace.destroy` (phase 5), `workspace.refresh`
-//! (phase 6) and `workspace.resize` (phase 7): the operations of
-//! `hs_core::lifecycle`, `hs_core::refresh` and `hs_core::resize` in the plan
-//! and job model.
+//! (phase 6), `workspace.resize` (phase 7) and `workspace.migrate` (phase 8):
+//! the operations of `hs_core::lifecycle`, `hs_core::refresh`,
+//! `hs_core::resize` and `hs_core::migrate` in the plan and job model.
 //!
 //! `POST /v1/plans` with `{"operation": "workspace.create", "parameters":
 //! {"vmid": 240, "name": "hst-a", "home_size": "20G", "storage": "..."}}`
@@ -23,6 +23,13 @@
 //! `secrets_required` names `luks_passphrase` is applied with
 //! `{"digest": "...", "secrets": {"luks_passphrase": "..."}}` (decision 6).
 //! Event `workspace.resized`.
+//!
+//! `{"operation": "workspace.migrate", "parameters": {"vmid": 240,
+//! "target_node": "pve3", "target_storage": "local-lvm"}}`
+//! (`target_storage` optional: the first storage of the node's layout)
+//! moves the workspace offline with its disks and keeps its power state; a
+//! failure after the shutdown starts it again on the source node. Event
+//! `workspace.migrated`.
 
 use std::sync::Arc;
 
@@ -30,6 +37,7 @@ use hs_core::CoreError;
 use hs_core::lifecycle::{
     CreateRequest, LifecycleTiming, create_workspace, destroy_workspace, plan_create, plan_destroy,
 };
+use hs_core::migrate::{MigrateRequest, migrate_workspace, plan_migrate};
 use hs_core::refresh::{plan_refresh, refresh_workspace};
 use hs_core::resize::{ResizeRequest, plan_resize, resize_workspace};
 use hs_model::jobs::Secret;
@@ -46,6 +54,7 @@ pub fn operations(timing: LifecycleTiming) -> Vec<Arc<dyn Operation>> {
         Arc::new(Destroy { timing }),
         Arc::new(Refresh { timing }),
         Arc::new(Resize { timing }),
+        Arc::new(Migrate { timing }),
     ]
 }
 
@@ -281,6 +290,67 @@ impl Operation for Resize {
             vmid_of(&planned.summary)?;
             let passphrase = ctx.secrets.luks_passphrase.as_ref().map(Secret::expose);
             Ok(resize_workspace(ctx.pve.as_ref(), &planned.summary, passphrase, &self.timing, job).await?)
+        })
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MigrateParameters {
+    vmid: u32,
+    target_node: String,
+    target_storage: Option<String>,
+}
+
+struct Migrate {
+    timing: LifecycleTiming,
+}
+
+impl Operation for Migrate {
+    fn name(&self) -> &'static str {
+        "workspace.migrate"
+    }
+
+    fn plan<'a>(&'a self, ctx: &'a OpContext, parameters: &'a Value) -> BoxFuture<'a, Result<Planned, OpFailure>> {
+        Box::pin(async move {
+            let parameters: MigrateParameters = serde_json::from_value(parameters.clone()).map_err(|_| {
+                OpFailure::invalid("workspace.migrate takes vmid and target_node, and optionally target_storage.")
+            })?;
+            let request = MigrateRequest {
+                vmid: parameters.vmid,
+                target_node: parameters.target_node,
+                target_storage: parameters.target_storage,
+            };
+            let summary = plan_migrate(ctx.pve.as_ref(), config(ctx)?, &ctx.pools.workspaces, &request)
+                .await
+                .map_err(|error| match error {
+                    CoreError::NotFound(_) => OpFailure::not_found("No such VM."),
+                    other => OpFailure::Core(other),
+                })?;
+            Ok(Planned {
+                targets: vec![request.vmid],
+                summary,
+            })
+        })
+    }
+
+    fn execute<'a>(
+        &'a self,
+        ctx: &'a OpContext,
+        planned: &'a Planned,
+        job: &'a JobHandle,
+    ) -> BoxFuture<'a, Result<Value, OpFailure>> {
+        Box::pin(async move {
+            vmid_of(&planned.summary)?;
+            Ok(migrate_workspace(
+                ctx.pve.as_ref(),
+                config(ctx)?,
+                &ctx.pools.workspaces,
+                &planned.summary,
+                &self.timing,
+                job,
+            )
+            .await?)
         })
     }
 }

@@ -45,6 +45,7 @@ pub fn router(state: Shared) -> Router {
         .route("/nodes/{node}/storage/{storage}/content/{volume}", delete(volume_free))
         .route("/nodes/{node}/qemu/{vmid}", delete(vm_destroy))
         .route("/nodes/{node}/qemu/{vmid}/clone", post(vm_clone))
+        .route("/nodes/{node}/qemu/{vmid}/migrate", post(vm_migrate))
         .route(
             "/nodes/{node}/qemu/{vmid}/config",
             get(vm_config).put(vm_config_update).post(vm_config_post),
@@ -1911,6 +1912,215 @@ async fn vm_clone(
         spec.vms.push(newid);
     }
     task(&mut state, &node_name, "qmclone", source, &token.id)
+}
+
+/// `POST /nodes/{node}/qemu/{vmid}/migrate`, offline, with `target`,
+/// `with-local-disks` and `targetstorage` (one storage for every disk):
+/// a `qmigrate` task. Needs `VM.Migrate` on the VM and
+/// `Datastore.AllocateSpace` on the target storage. Refused before the
+/// task: a running VM, the source node as target, an unknown target, a
+/// storage the target does not have or that holds no images. Every disk,
+/// `unusedN` included, moves to the target storage on the target node under
+/// its name; the guest keeps its disks. Not enough free space on the target
+/// storage fails the task and nothing moves; so does an offline target.
+/// Only the refusal of a running VM and the task's log lines follow what
+/// PVE 9.2 shows; the other messages are not observed live.
+async fn vm_migrate(
+    State(state): State<Shared>,
+    request_token: Option<axum::Extension<TokenSpec>>,
+    Path((node, vmid)): Path<(String, String)>,
+    body: Bytes,
+) -> Response {
+    let mut state = lock(&state);
+    let Some(token) = token(request_token) else {
+        return pve_error(401, "");
+    };
+    let form = form(&body);
+    if let Some((key, _)) = form.iter().find(|(key, _)| {
+        !matches!(
+            key.as_str(),
+            "target" | "online" | "force" | "with-local-disks" | "targetstorage" | "bwlimit"
+        )
+    }) {
+        return parameter_error(
+            key,
+            "property is not defined in schema and the schema does not allow additional properties",
+        );
+    }
+    let Some(target) = form_value(&form, "target").map(str::to_owned) else {
+        return parameter_error("target", "property is missing and it is not optional");
+    };
+    let (vmid_number, source, status, config) = match reach_vm(&state, Some(&token), &node, &vmid, &["VM.Migrate"]) {
+        Ok(vm) => (vm.vmid, vm.node.clone(), vm.status, vm.config.clone()),
+        Err(failure) => return failure.into_response(),
+    };
+    if target == source.as_str() {
+        return parameter_error("target", "target is local node.");
+    }
+    let Some(target_name) = NodeName::parse(&target)
+        .ok()
+        .filter(|name| state.nodes.contains_key(name))
+    else {
+        return pve_error(500, &format!("no such cluster node '{target}'\n"));
+    };
+    if status == VmState::Running && form_value(&form, "online") != Some("1") {
+        return pve_error(500, "can't migrate running VM without --online\n");
+    }
+    let user = token.id.clone();
+    let disks: Vec<(String, String)> = config
+        .iter()
+        .filter(|(key, _)| is_disk_key(key))
+        .filter_map(|(key, value)| Some((key.clone(), config_volume(value)?.to_owned())))
+        .filter(|(_, volume)| volume.contains(':') && volume != "none")
+        .collect();
+    let storage = match form_value(&form, "targetstorage") {
+        Some(storage) => {
+            let path = format!("/storage/{storage}");
+            if !state.allows(&token, &path, "Datastore.AllocateSpace") {
+                return forbidden(&path, "Datastore.AllocateSpace");
+            }
+            let on_target = state
+                .nodes
+                .get(&target_name)
+                .and_then(|spec| spec.storages.iter().find(|s| s.storage == storage))
+                .is_some_and(|s| s.enabled);
+            if !on_target {
+                return pve_error(
+                    500,
+                    &format!("storage '{storage}' is not available on node '{target}'\n"),
+                );
+            }
+            let images = state
+                .storages
+                .iter()
+                .find(|s| s.storage == storage)
+                .is_some_and(|s| s.content.split(',').any(|c| c == "images"));
+            if !images {
+                return pve_error(500, &format!("storage '{storage}' does not support vm images\n"));
+            }
+            Some(storage.to_owned())
+        }
+        None => None,
+    };
+    if state
+        .nodes
+        .get(&target_name)
+        .is_some_and(|spec| spec.status == NodeState::Offline)
+    {
+        let message = format!("migration aborted: target node '{target}' is not online");
+        return failed_task(&mut state, &source, "qmigrate", vmid_number, &user, &message);
+    }
+    // Where each disk goes, and its size.
+    let mut moves = Vec::new();
+    for (key, volume) in &disks {
+        let (from_storage, name) = volume.split_once(':').unwrap_or_default();
+        let to_storage = storage.clone().unwrap_or_else(|| from_storage.to_owned());
+        let size = state
+            .volumes
+            .iter()
+            .find(|v| v.node == source && &v.volid == volume)
+            .map_or(0, |v| v.size);
+        moves.push((
+            key.clone(),
+            volume.clone(),
+            format!("{to_storage}:{name}"),
+            to_storage,
+            size,
+        ));
+    }
+    let mut needed: std::collections::BTreeMap<String, u64> = std::collections::BTreeMap::new();
+    for (_, _, _, to_storage, size) in &moves {
+        *needed.entry(to_storage.clone()).or_default() += size;
+    }
+    for (to_storage, size) in &needed {
+        let avail = state
+            .nodes
+            .get(&target_name)
+            .and_then(|spec| spec.storages.iter().find(|s| &s.storage == to_storage))
+            .map_or(0, |s| s.avail);
+        if *size > avail {
+            let volume = moves
+                .iter()
+                .find(|(_, _, _, s, _)| s == to_storage)
+                .map(|(_, volume, ..)| volume.clone())
+                .unwrap_or_default();
+            let message = format!(
+                "migration aborted (duration 00:00:01): storage migration for '{volume}' to storage '{to_storage}' failed - not enough free space"
+            );
+            return failed_task(&mut state, &source, "qmigrate", vmid_number, &user, &message);
+        }
+    }
+    let mut log = vec![format!("starting migration of VM {vmid_number} to node '{target}'")];
+    // The lines of PVE 9.2's offline migration between LVM-thin storages
+    // (phase 8 live gate), with a fixed time.
+    let at = |line: String| format!("2026-10-13 12:50:18 {line}");
+    for (key, volume, ..) in &moves {
+        let generated = volume.contains("cloudinit");
+        log.push(at(match key.strip_prefix("unused") {
+            _ if generated => format!("found generated disk '{volume}' (in current VM config)"),
+            Some(_) => format!("found local disk '{volume}' ({key})"),
+            None => format!("found local disk '{volume}' (attached)"),
+        }));
+    }
+    log.push(at("copying local disk images".to_owned()));
+    for (_, volume, new_volume, _, size) in &moves {
+        let name = new_volume.split_once(':').map_or("", |(_, name)| name);
+        log.push(at(format!("  Logical volume \"{name}\" created.")));
+        log.push(at(format!("  Logical volume pve/{name} changed.")));
+        let half = size / 2;
+        log.push(at(format!("{half} bytes ({}) copied, 1 s, 290 MB/s", human_size(half))));
+        log.push(at("1+0 records in".to_owned()));
+        log.push(at("1+0 records out".to_owned()));
+        log.push(at(format!(
+            "{size} bytes ({}) copied, 2.01 s, 290 MB/s",
+            human_size(*size)
+        )));
+        log.push(at(format!("successfully imported '{new_volume}'")));
+        log.push(at(format!("volume '{volume}' is '{new_volume}' on the target")));
+    }
+    for (_, volume, ..) in &moves {
+        let name = volume.split_once(':').map_or("", |(_, name)| name);
+        log.push(format!("  Logical volume \"{name}\" successfully removed."));
+    }
+    log.push(at("migration finished successfully (duration 00:00:02)".to_owned()));
+    log.push("TASK OK".to_owned());
+    let renamed: std::collections::BTreeMap<String, String> = moves
+        .iter()
+        .map(|(_, old, new, ..)| (old.clone(), new.clone()))
+        .collect();
+    for (_, old, new, to_storage, _) in &moves {
+        if let Some(stored) = state.volumes.iter_mut().find(|v| v.node == source && &v.volid == old) {
+            stored.node = target_name.clone();
+            stored.storage = to_storage.clone();
+            stored.volid = new.clone();
+        }
+    }
+    if let Some(vm) = state.vms.get_mut(&vmid_number) {
+        for (key, old, new, ..) in &moves {
+            if let Some(value) = vm.config.get(key).and_then(toml::Value::as_str) {
+                let updated = format!("{new}{}", &value[old.len()..]);
+                vm.config.insert(key.clone(), toml::Value::String(updated));
+            }
+        }
+        vm.node = target_name;
+        if let Some(root) = vm.booted_root.take() {
+            vm.booted_root = Some(renamed.get(&root).cloned().unwrap_or(root));
+        }
+        vm.guests_by_root = std::mem::take(&mut vm.guests_by_root)
+            .into_iter()
+            .map(|(root, guest)| (renamed.get(&root).cloned().unwrap_or(root), guest))
+            .collect();
+    }
+    let upid = state.add_task(TaskSpec {
+        node: source,
+        kind: "qmigrate".to_owned(),
+        id: vmid_number.to_string(),
+        user,
+        log,
+        polls_until_done: 3,
+        exitstatus: "OK".to_owned(),
+    });
+    data(Value::String(upid))
 }
 
 #[derive(Deserialize)]
