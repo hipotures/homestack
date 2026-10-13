@@ -77,6 +77,9 @@ an agent stops when a phase needs one that is still open
   shutdown. The power state is still read from it, as in Python; the
   server's shutdown returns only once that list also says the VM is
   stopped (up to 30 s).
+- After some starts PVE keeps a VM's lock for 10–25 s ("can't lock file
+  ... got timeout"; the owner sees it in the Proxmox UI too). Every call
+  refused that way is made again every 5 seconds, for up to 2 minutes.
 
 ## Probe results
 

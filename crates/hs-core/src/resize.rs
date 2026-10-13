@@ -367,20 +367,23 @@ async fn grow_disk(
     observer: &impl Observer,
 ) -> Result<(), CoreError> {
     let path = format!("/nodes/{node}/qemu/{vmid}/resize");
-    let answer = pve
-        .put(&path, &[("disk", disk), ("size", size), ("digest", digest)])
-        .await?;
-    if let Some(upid) = answer.as_str() {
-        let wait = crate::tasks::TaskWait {
-            poll: timing.poll,
-            timeout: RESIZE_TIMEOUT,
-        };
-        let result = wait_task(pve, upid, &wait, observer).await?;
-        if !result.ok() {
-            return Err(CoreError::Failed(format!("Disk resize failed: {}", result.exitstatus)));
+    crate::tasks::retry_while_locked(timing.poll, || async {
+        let answer = pve
+            .put(&path, &[("disk", disk), ("size", size), ("digest", digest)])
+            .await?;
+        if let Some(upid) = answer.as_str() {
+            let wait = crate::tasks::TaskWait {
+                poll: timing.poll,
+                timeout: RESIZE_TIMEOUT,
+            };
+            let result = wait_task(pve, upid, &wait, observer).await?;
+            if !result.ok() {
+                return Err(CoreError::Failed(format!("Disk resize failed: {}", result.exitstatus)));
+            }
         }
-    }
-    Ok(())
+        Ok(())
+    })
+    .await
 }
 
 async fn guest_command(pve: &impl Pve, node: &str, vmid: u32, words: &[&str]) -> Result<String, CoreError> {

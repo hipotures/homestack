@@ -234,33 +234,21 @@ async fn gate(pve: &PveClient, cfg: &Config, launch: &Launch, dir: &Path, vmid: 
     }
 
     // The stopped VM gets the key from the snippet at its next start. Right
-    // after a start with a new Cloud-Init instance PVE 9.2 keeps the VM's
-    // config lock for a while ("can't lock file ... got timeout"); the
-    // shutdown is tried again and the time it took is printed.
+    // after a start with a new Cloud-Init instance PVE 9.2 may keep the VM's
+    // lock for a while; `shutdown_vm` tries again, and the time it took is
+    // printed.
     let since = std::time::Instant::now();
-    let mut attempt = 0;
-    loop {
-        attempt += 1;
-        let stopped = shutdown_vm(
-            pve,
-            &node,
-            vmid,
-            90,
-            &TaskWait::up_to(Duration::from_secs(600)),
-            &NoObserver,
-        )
-        .await;
-        match stopped {
-            Ok(()) => break,
-            Err(error) if attempt < 12 => {
-                eprintln!("live addkey: shutdown attempt {attempt} failed: {error}");
-                tokio::time::sleep(Duration::from_secs(5)).await;
-            }
-            Err(error) => return Err(error.into()),
-        }
-    }
+    shutdown_vm(
+        pve,
+        &node,
+        vmid,
+        90,
+        &TaskWait::up_to(Duration::from_secs(600)),
+        &NoObserver,
+    )
+    .await?;
     eprintln!(
-        "live addkey: shut down after {attempt} attempt(s), {} s after the restart's check",
+        "live addkey: shut down {} s after the restart's check",
         since.elapsed().as_secs()
     );
     let second = new_key(dir, "hs-addkey-2")?;

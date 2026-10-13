@@ -249,3 +249,84 @@ async fn config_changes_carry_the_digest_they_were_planned_with() -> TestResult 
     hs_core::inventory::set_vm_config(&pve, NODE, 240, &[("description", "third")], None).await?;
     Ok(())
 }
+
+const LOCKED: &str = "can't lock file '/var/lock/qemu-server/lock-241.conf' - got timeout";
+
+fn locked(op: &str, occurrence: u32, task: Option<&str>) -> pve_sim::scenario::FaultSpec {
+    pve_sim::scenario::FaultSpec {
+        op: op.to_owned(),
+        occurrence,
+        status: 500,
+        message: LOCKED.to_owned(),
+        applied: false,
+        hang: false,
+        task: task.map(str::to_owned),
+    }
+}
+
+fn posts(sim: &PveSim, path: &str) -> usize {
+    sim.ops()
+        .iter()
+        .filter(|op| op.to_string() == format!("post{{path={path}}}"))
+        .count()
+}
+
+/// PVE 9.2 keeps a VM's lock for a while after some starts (phase 9, live;
+/// the Proxmox UI shows the same): the shutdown task fails with "can't lock
+/// file", changes nothing, and is started again until it works.
+#[tokio::test]
+async fn a_shutdown_refused_for_a_taken_lock_is_tried_again() -> TestResult {
+    let (sim, pve) = setup(TEST_TOKEN).await?;
+    let path = format!("/nodes/{NODE}/qemu/241/status/shutdown");
+    for occurrence in [1, 2] {
+        sim.inject_fault(locked(&format!("post{{path={path}}}"), occurrence, Some("qmshutdown")))?;
+    }
+    let recorder = Recorder::default();
+    shutdown_vm(&pve, NODE, 241, 90, &quick(), &recorder).await?;
+    assert_eq!(status(&pve, 241).await, "stopped");
+    assert_eq!(posts(&sim, &path), 3);
+    let failed = recorder
+        .events()
+        .iter()
+        .filter(|event| matches!(event, JobEvent::TaskFinished { exitstatus, .. } if exitstatus == LOCKED))
+        .count();
+    assert_eq!(failed, 2, "the refused tasks stay in the job");
+    Ok(())
+}
+
+/// The same for a start, and for a synchronous config change refused with
+/// the lock's message.
+#[tokio::test]
+async fn a_start_and_a_config_change_refused_for_a_taken_lock_are_tried_again() -> TestResult {
+    let (sim, pve) = setup(TEST_TOKEN).await?;
+    let start = format!("/nodes/{NODE}/qemu/240/status/start");
+    sim.inject_fault(locked(&format!("post{{path={start}}}"), 1, Some("qmstart")))?;
+    start_vm(&pve, NODE, 240, &quick(), &hs_core::tasks::NoObserver).await?;
+    assert_eq!(status(&pve, 240).await, "running");
+    assert_eq!(posts(&sim, &start), 2);
+
+    let config = format!("/nodes/{NODE}/qemu/242/config");
+    sim.inject_fault(locked(&format!("put{{path={config}}}"), 1, None))?;
+    hs_core::inventory::set_vm_config(&pve, NODE, 242, &[("description", "after the lock")], None).await?;
+    let after = hs_core::inventory::vm_config(&pve, NODE, 242).await?;
+    assert_eq!(after.get("description").map(String::as_str), Some("after the lock"));
+    Ok(())
+}
+
+/// Other failures are not tried again.
+#[tokio::test]
+async fn other_failures_are_not_tried_again() -> TestResult {
+    let (sim, pve) = setup(TEST_TOKEN).await?;
+    let start = format!("/nodes/{NODE}/qemu/240/status/start");
+    let mut fault = locked(&format!("post{{path={start}}}"), 1, Some("qmstart"));
+    fault.message = "start failed: QEMU exited with code 1".to_owned();
+    sim.inject_fault(fault)?;
+    let error = start_vm(&pve, NODE, 240, &quick(), &hs_core::tasks::NoObserver)
+        .await
+        .err()
+        .map(|e| e.to_string())
+        .unwrap_or_default();
+    assert!(error.contains("QEMU exited with code 1"), "{error}");
+    assert_eq!(posts(&sim, &start), 1);
+    Ok(())
+}

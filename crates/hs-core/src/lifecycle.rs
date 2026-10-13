@@ -27,7 +27,7 @@ use crate::keys::{parse_authorized_key_records, workspace_authorized_keys};
 use crate::power::{SHUTDOWN_TIMEOUT_SECS, START_TIMEOUT_SECS, shutdown_vm, start_vm};
 use crate::pve::Pve;
 use crate::status::resolve_existing_workspace;
-use crate::tasks::{Observer, TaskWait, wait_task};
+use crate::tasks::{Observer, TaskWait, retry_while_locked, wait_task};
 use crate::verify::{GuestExpectation, VerifyTimeouts, verify_guest};
 
 /// Pauses and limits of the operations.
@@ -232,7 +232,8 @@ fn upid(answer: &Value) -> Result<String, CoreError> {
         .ok_or_else(|| CoreError::Unusable(format!("Proxmox did not return a task id: {answer}")))
 }
 
-/// Start a Proxmox task with `POST` and wait for it to succeed.
+/// Start a Proxmox task with `POST` and wait for it to succeed; a call
+/// refused for a taken lock is tried again ([`retry_while_locked`]).
 pub(crate) async fn post_task(
     pve: &impl Pve,
     path: &str,
@@ -241,16 +242,20 @@ pub(crate) async fn post_task(
     wait: &TaskWait,
     observer: &impl Observer,
 ) -> Result<(), CoreError> {
-    let answer = pve.post(path, form).await?;
-    let result = wait_task(pve, &upid(&answer)?, wait, observer).await?;
-    if result.ok() {
-        Ok(())
-    } else {
-        Err(CoreError::Failed(format!("{what} failed: {}", result.exitstatus)))
-    }
+    retry_while_locked(wait.poll, || async {
+        let answer = pve.post(path, form).await?;
+        let result = wait_task(pve, &upid(&answer)?, wait, observer).await?;
+        if result.ok() {
+            Ok(())
+        } else {
+            Err(CoreError::Failed(format!("{what} failed: {}", result.exitstatus)))
+        }
+    })
+    .await
 }
 
-/// `DELETE` that starts a task, then wait for it.
+/// `DELETE` that starts a task, then wait for it; tried again like
+/// [`post_task`].
 async fn delete_task(
     pve: &impl Pve,
     path: &str,
@@ -259,13 +264,16 @@ async fn delete_task(
     wait: &TaskWait,
     observer: &impl Observer,
 ) -> Result<(), CoreError> {
-    let answer = pve.delete(path, query).await?;
-    let result = wait_task(pve, &upid(&answer)?, wait, observer).await?;
-    if result.ok() {
-        Ok(())
-    } else {
-        Err(CoreError::Failed(format!("{what} failed: {}", result.exitstatus)))
-    }
+    retry_while_locked(wait.poll, || async {
+        let answer = pve.delete(path, query).await?;
+        let result = wait_task(pve, &upid(&answer)?, wait, observer).await?;
+        if result.ok() {
+            Ok(())
+        } else {
+            Err(CoreError::Failed(format!("{what} failed: {}", result.exitstatus)))
+        }
+    })
+    .await
 }
 
 pub(crate) fn step_started(observer: &impl Observer, name: &str) {

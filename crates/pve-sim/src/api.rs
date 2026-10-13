@@ -131,10 +131,33 @@ async fn authenticate_and_record(State(state): State<Shared>, request: Request, 
     let op = operation(&parts.method, &path, query, &body);
     let fault = lock(&state).record(op);
     let mut request = Request::from_parts(parts, Body::from(body));
+    let user = token.id.clone();
     request.extensions_mut().insert(token);
     let Some(fault) = fault else {
         return next.run(request).await;
     };
+    if let Some(kind) = &fault.task {
+        let segments: Vec<&str> = path.split('/').collect();
+        let (node, id) = match segments.as_slice() {
+            ["", "nodes", node, "qemu", vmid, ..] => ((*node).to_owned(), (*vmid).to_owned()),
+            ["", "nodes", node, ..] => ((*node).to_owned(), String::new()),
+            _ => (String::new(), String::new()),
+        };
+        let message = fault.message.trim_end().to_owned();
+        let Ok(node) = NodeName::parse(&node) else {
+            return pve_error(fault.status, &fault.message);
+        };
+        let upid = lock(&state).add_task(TaskSpec {
+            node,
+            kind: kind.clone(),
+            id,
+            user,
+            log: vec![message.clone(), format!("TASK ERROR: {message}")],
+            polls_until_done: 1,
+            exitstatus: message,
+        });
+        return data(Value::String(upid));
+    }
     if fault.applied {
         drop(next.run(request).await);
     }

@@ -163,6 +163,11 @@ pub struct FaultSpec {
     pub applied: bool,
     #[serde(default)]
     pub hang: bool,
+    /// Answer with a task of this kind (`qmshutdown`, ...) that fails with
+    /// `message`, as PVE does when the worker cannot take the VM's lock;
+    /// nothing is applied.
+    #[serde(default)]
+    pub task: Option<String>,
 }
 
 const fn default_fault_status() -> u16 {

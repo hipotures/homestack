@@ -128,6 +128,7 @@ async fn a_killed_refresh_is_recovered_by_the_next_server() -> Result<(), Error>
         message: String::new(),
         applied: false,
         hang: true,
+        task: None,
     })?;
     let hangs = sim.hangs();
     server.apply(&plan, &version).await?;

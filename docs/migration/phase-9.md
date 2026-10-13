@@ -146,7 +146,8 @@ Seen on PVE 9.2:
   three of three runs: `can't lock file '/var/lock/qemu-server/lock-240.conf'
   - got timeout`, with no other task on the node; a second try 5 s later
   worked. In the full `check.sh --live` run that followed, the first try
-  worked. The test tries again; what holds the lock is not known (section 6).
+  worked. The owner sees the same in the Proxmox UI; what holds the lock
+  is not known. The server now tries such calls again (difference 11).
 
 
 ## 5. Deliberate differences from Python
@@ -188,15 +189,16 @@ Seen on PVE 9.2:
     the VM has stopped, `shutdown_vm` (every operation and the live tests)
     waits until `cluster/resources` lists it as stopped too, up to 30 s.
     Python returned once `qm status` said `stopped`.
+11. **A call refused for a taken lock is tried again** (owner,
+    2026-10-13): a task or a call that fails with "can't lock file ... got
+    timeout" changed nothing and is made again every 5 seconds, for up to 2
+    minutes (`tasks::retry_while_locked`): start, shutdown, the config
+    changes, unlink, resize, migrate and destroy. The refused tasks stay in
+    the job. Python failed with the error of `qm`.
 
 ## 6. Open questions
 
 - The client (phase 13) has to say, when `new_instance_at_next_start` is
   true, that the next start changes the VM's SSH host keys, and remove the
   address from `known_hosts` after a restart.
-- Right after a start with a new Cloud-Init instance PVE 9.2 kept the VM's
-  config lock for 10–25 s (section 4). Every operation that shuts a VM down
-  (`refresh`, `resize`, `migrate`, `destroy`) fails then; Python's `qm
-  shutdown` would too. Not handled in the server: whether to wait for the
-  lock is a decision for later; the cause should be found first.
 - Phase 10 (`create` on another node) is next; it needs decision 3 (7.3).

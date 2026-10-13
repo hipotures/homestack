@@ -612,9 +612,8 @@ impl<P: Pve, O: Observer> Vm<'_, P, O> {
         if force {
             form.push(("force", "1"));
         }
-        self.pve
-            .put(&format!("/nodes/{}/qemu/{}/unlink", self.node, self.vmid), &form)
-            .await?;
+        let path = format!("/nodes/{}/qemu/{}/unlink", self.node, self.vmid);
+        crate::tasks::retry_while_locked(self.timing.poll, || async { Ok(self.pve.put(&path, &form).await?) }).await?;
         self.config().await
     }
 

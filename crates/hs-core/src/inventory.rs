@@ -402,7 +402,9 @@ pub async fn vm_config(pve: &impl Pve, node: &str, vmid: u32) -> Result<VmConfig
 
 /// `qm set VMID --KEY VALUE ... [--digest D]` through `PUT config`
 /// (synchronous). With `digest`, Proxmox refuses the change when the config
-/// changed since it was read (`lifecycle._digest_args`, mapping T5).
+/// changed since it was read (`lifecycle._digest_args`, mapping T5). A
+/// change refused for a taken lock is tried again
+/// ([`crate::tasks::retry_while_locked`]).
 pub async fn set_vm_config(
     pve: &impl Pve,
     node: &str,
@@ -414,7 +416,11 @@ pub async fn set_vm_config(
     if let Some(digest) = digest.map(str::trim).filter(|digest| !digest.is_empty()) {
         form.push(("digest", digest));
     }
-    pve.put(&format!("/nodes/{node}/qemu/{vmid}/config"), &form).await?;
+    let path = format!("/nodes/{node}/qemu/{vmid}/config");
+    crate::tasks::retry_while_locked(std::time::Duration::from_secs(1), || async {
+        Ok(pve.put(&path, &form).await?)
+    })
+    .await?;
     Ok(())
 }
 

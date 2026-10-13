@@ -437,7 +437,7 @@ async fn migrate_steps(
 
     let step = "Migrate local disks";
     step_started(observer, step);
-    let migrated = async {
+    let migrated = crate::tasks::retry_while_locked(timing.poll, || async {
         let answer = pve
             .post(
                 &format!("/nodes/{source}/qemu/{vmid}/migrate"),
@@ -465,7 +465,7 @@ async fn migrate_steps(
                 result.exitstatus
             )))
         }
-    }
+    })
     .await;
     step_finished(observer, step, migrated.is_ok());
     migrated?;

@@ -64,6 +64,46 @@ impl TaskResult {
     }
 }
 
+/// Proxmox's error when a VM's config lock stays taken for its 10 seconds:
+/// `can't lock file '/var/lock/qemu-server/lock-<vmid>.conf' - got timeout`.
+/// PVE 9.2 holds it for 10–25 s after some starts, with no task to show
+/// for it (phase 9, live; the Proxmox UI shows the same).
+#[must_use]
+pub fn is_lock_timeout(text: &str) -> bool {
+    text.contains("can't lock file") && text.contains("got timeout")
+}
+
+/// How long a call refused for a taken lock is tried again.
+pub const LOCK_RETRY_LIMIT: Duration = Duration::from_secs(120);
+/// Pause between two tries.
+const LOCK_RETRY_PAUSE: Duration = Duration::from_secs(5);
+
+/// Run `attempt` again while it fails only because the VM's config lock is
+/// taken ([`is_lock_timeout`]): every 5 seconds (every `poll` when that is
+/// under a second: the tests), for up to [`LOCK_RETRY_LIMIT`]. Such a failure
+/// changed nothing, so the same call is made again. Any other outcome is
+/// returned as it is.
+pub async fn retry_while_locked<T, F, Fut>(poll: Duration, mut attempt: F) -> Result<T, CoreError>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<T, CoreError>>,
+{
+    let pause = if poll < Duration::from_secs(1) {
+        poll
+    } else {
+        LOCK_RETRY_PAUSE
+    };
+    let deadline = Instant::now() + LOCK_RETRY_LIMIT;
+    loop {
+        match attempt().await {
+            Err(error) if is_lock_timeout(&error.to_string()) && Instant::now() + pause < deadline => {
+                tokio::time::sleep(pause).await;
+            }
+            outcome => return outcome,
+        }
+    }
+}
+
 /// The fields of `UPID:node:pid:pstart:starttime:type:id:user:`.
 fn upid_fields(upid: &str) -> Option<Vec<&str>> {
     let fields: Vec<&str> = upid.split(':').collect();

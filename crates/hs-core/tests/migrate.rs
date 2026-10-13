@@ -118,6 +118,7 @@ fn fault(op: &str) -> FaultSpec {
         message: format!("injected failure of {op}"),
         applied: false,
         hang: false,
+        task: None,
     }
 }
 
