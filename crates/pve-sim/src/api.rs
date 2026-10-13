@@ -1112,6 +1112,7 @@ async fn vm_power(
     if kind == "qmstart" && error.is_none() {
         boot_clone(&mut state, vmid_number);
         boot_root(&mut state, vmid_number);
+        boot_instance(&mut state, vmid_number);
     }
     let (log, exitstatus) = match error {
         Some(message) => (vec![message.clone(), format!("TASK ERROR: {message}")], message),
@@ -1903,6 +1904,7 @@ async fn vm_clone(
             clone_of: Some(source),
             booted_root: None,
             guests_by_root: std::collections::BTreeMap::new(),
+            booted_instance: None,
             pending_delete: std::collections::BTreeMap::new(),
         },
     );
@@ -2207,6 +2209,9 @@ fn boot_root(state: &mut ClusterState, vmid: u32) {
     if previous == root {
         return;
     }
+    // Another root has no record of the last instance: Cloud-Init runs in
+    // full ([`boot_image`]), and [`boot_instance`] only notes it.
+    vm.booted_instance = None;
     let current = vm.guest.take();
     let home: std::collections::BTreeMap<String, String> = current
         .as_ref()
@@ -2318,7 +2323,9 @@ fn boot_image(
         if let Some(volume) = volume {
             if volume.label.is_none() && create {
                 volume.label = Some(label.clone());
-                guest.files.insert(format!("/home/{user}/.ssh/authorized_keys"), keys);
+                guest
+                    .files
+                    .insert(format!("/home/{user}/.ssh/authorized_keys"), keys.clone());
             }
             if volume.label.as_deref() == Some(label.as_str()) {
                 guest.filesystems.push(FilesystemSpec {
@@ -2338,10 +2345,64 @@ fn boot_image(
     if guest.users.is_empty() {
         guest.users.push(UserEntry::Name("root".to_owned()));
     }
+    ensure_vendor_keys(&mut guest, &keys);
     guest.cloud_id = Some("nocloud".to_owned());
     if let Some(vm) = state.vms.get_mut(&vmid) {
         vm.guest = Some(guest);
     }
+}
+
+/// The homes of the regular accounts that have a filesystem mounted on
+/// them (the vendor snippet's persistent home).
+fn mounted_homes(guest: &crate::scenario::GuestSpec) -> Vec<String> {
+    guest
+        .accounts()
+        .into_iter()
+        .filter(|account| (1000..65534).contains(&account.uid))
+        .map(|account| account.home)
+        .filter(|home| guest.filesystems.iter().any(|fs| &fs.mountpoint == home))
+        .collect()
+}
+
+/// The key step of the vendor snippets: the keys of `sshkeys` that root's
+/// and the mounted home's `authorized_keys` lack are appended.
+fn ensure_vendor_keys(guest: &mut crate::scenario::GuestSpec, keys: &str) {
+    for dir in std::iter::once("/root".to_owned()).chain(mounted_homes(guest)) {
+        crate::guest::append_missing_keys(guest, &dir, keys.lines());
+    }
+}
+
+/// A start whose Cloud-Init instance ([`VmSpec::cloud_init_instance`])
+/// differs from the last one the guest ran: Cloud-Init runs again. Root
+/// gets the keys of `sshkeys` it lacks; with a HomeStack vendor snippet the
+/// `create` one writes `sshkeys` into the mounted home again (its
+/// `allow_format=1` block), and the key step of both appends what root and
+/// the home lack. A first start only notes the instance.
+fn boot_instance(state: &mut ClusterState, vmid: u32) {
+    let Some(vm) = state.vms.get_mut(&vmid) else { return };
+    let current = vm.cloud_init_instance();
+    let Some(previous) = vm.booted_instance.replace(current.clone()) else {
+        return;
+    };
+    if previous == current {
+        return;
+    }
+    let text = |key: &str| vm.config.get(key).and_then(toml::Value::as_str).map(str::to_owned);
+    let keys = text("sshkeys").map(|k| decode_sshkeys(&k)).unwrap_or_default();
+    let cicustom = text("cicustom").unwrap_or_default();
+    let create = cicustom.contains("homestack-vendor-create.yaml");
+    let vendor = create || cicustom.contains("homestack-vendor-keep.yaml");
+    let Some(guest) = vm.guest.as_mut() else { return };
+    crate::guest::append_missing_keys(guest, "/root", keys.lines());
+    if !vendor {
+        return;
+    }
+    if create {
+        for home in mounted_homes(guest) {
+            guest.files.insert(format!("{home}/.ssh/authorized_keys"), keys.clone());
+        }
+    }
+    ensure_vendor_keys(guest, &keys);
 }
 
 /// `POST .../agent/file-write` (`file`, `content`, `encode`, default 1:

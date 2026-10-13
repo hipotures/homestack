@@ -379,10 +379,12 @@ snippet_text() {
 #cloud-config
 # HomeStack vendor data (decision 1 = A). Proxmox generates user-data,
 # network-config and meta-data from the VM config (ciuser=root, sshkeys,
-# ipconfig0, nameserver, ciupgrade=0); this file adds what they lack and
-# mounts the persistent home. The same file serves every workspace: the
-# home disk is the one whose serial is HS_HOME_<vmid>, the account is the
-# image's only regular account. Installed once per node, never edited:
+# ipconfig0, nameserver, ciupgrade=0); this file adds what they lack,
+# mounts the persistent home and appends the keys of sshkeys that root's
+# or the user's authorized_keys lack. The same file serves every
+# workspace: the home disk is the one whose serial is HS_HOME_<vmid>, the
+# account is the image's only regular account. Installed once per node,
+# never edited:
 # homestack-vendor-create.yaml formats a blank new home,
 # homestack-vendor-keep.yaml refuses to.
 users: []
@@ -439,12 +441,10 @@ runcmd:
       fstype="$(blkid -s TYPE -o value "$device" 2>/dev/null || true)"
       fslabel="$(blkid -s LABEL -o value "$device" 2>/dev/null || true)"
 
-      if [ "$allow_format" = "1" ]; then
-          authorized_keys="$(cloud-init query userdata | python3 -c 'import sys, yaml; data = yaml.safe_load(sys.stdin) or {}; sys.stdout.write("".join(key + "\n" for key in data.get("ssh_authorized_keys") or []))')"
-          if [ -z "$authorized_keys" ]; then
-              echo "HomeStack: user-data has no ssh_authorized_keys for the new home" >&2
-              exit 76
-          fi
+      keys="$(cloud-init query userdata | python3 -c 'import sys, yaml; data = yaml.safe_load(sys.stdin) or {}; sys.stdout.write("".join(key + "\n" for key in data.get("ssh_authorized_keys") or []))')"
+      if [ "$allow_format" = "1" ] && [ -z "$keys" ]; then
+          echo "HomeStack: user-data has no ssh_authorized_keys for the new home" >&2
+          exit 76
       fi
 
       if [ "$fstype" = "ext4" ] && [ "$fslabel" = "$expected_label" ]; then
@@ -482,10 +482,28 @@ runcmd:
           chown "$user_uid:$user_gid" "$home_path"
           chmod 700 "$home_path"
           install -d -m 700 -o "$user_uid" -g "$user_gid" "$home_path/.ssh"
-          printf '%s\n' "$authorized_keys" > "$home_path/.ssh/authorized_keys"
+          printf '%s\n' "$keys" > "$home_path/.ssh/authorized_keys"
           chown "$user_uid:$user_gid" "$home_path/.ssh/authorized_keys"
           chmod 600 "$home_path/.ssh/authorized_keys"
       fi
+
+      # HomeStack ensure-keys (addkey): the keys of user-data that root or
+      # the user lack are appended; nothing is removed.
+      for dir in /root "$home_path"; do
+          [ -d "$dir" ] || continue
+          owner=$(stat -c %U "$dir")
+          group=$(stat -c %G "$dir")
+          f="$dir/.ssh/authorized_keys"
+          install -d -m 700 -o "$owner" -g "$group" "$dir/.ssh"
+          [ -f "$f" ] || install -m 600 -o "$owner" -g "$group" /dev/null "$f"
+          [ -z "$(tail -c1 "$f")" ] || echo >> "$f"
+          printf '%s\n' "$keys" | while IFS= read -r key; do
+              [ -n "$key" ] || continue
+              blob=$(printf '%s' "$key" | awk '{print $2}')
+              grep -qF "$blob" "$f" || printf '%s\n' "$key" >> "$f"
+          done
+      done
+      echo 'HomeStack: ensured SSH keys from Cloud-Init'
 
       if [ -f "$home_path/.config/systemd/user/herdr.service" ]; then
           loginctl enable-linger "$user_name"
@@ -497,10 +515,12 @@ HOMESTACK_SNIPPET
 #cloud-config
 # HomeStack vendor data (decision 1 = A). Proxmox generates user-data,
 # network-config and meta-data from the VM config (ciuser=root, sshkeys,
-# ipconfig0, nameserver, ciupgrade=0); this file adds what they lack and
-# mounts the persistent home. The same file serves every workspace: the
-# home disk is the one whose serial is HS_HOME_<vmid>, the account is the
-# image's only regular account. Installed once per node, never edited:
+# ipconfig0, nameserver, ciupgrade=0); this file adds what they lack,
+# mounts the persistent home and appends the keys of sshkeys that root's
+# or the user's authorized_keys lack. The same file serves every
+# workspace: the home disk is the one whose serial is HS_HOME_<vmid>, the
+# account is the image's only regular account. Installed once per node,
+# never edited:
 # homestack-vendor-create.yaml formats a blank new home,
 # homestack-vendor-keep.yaml refuses to.
 users: []
@@ -557,12 +577,10 @@ runcmd:
       fstype="$(blkid -s TYPE -o value "$device" 2>/dev/null || true)"
       fslabel="$(blkid -s LABEL -o value "$device" 2>/dev/null || true)"
 
-      if [ "$allow_format" = "1" ]; then
-          authorized_keys="$(cloud-init query userdata | python3 -c 'import sys, yaml; data = yaml.safe_load(sys.stdin) or {}; sys.stdout.write("".join(key + "\n" for key in data.get("ssh_authorized_keys") or []))')"
-          if [ -z "$authorized_keys" ]; then
-              echo "HomeStack: user-data has no ssh_authorized_keys for the new home" >&2
-              exit 76
-          fi
+      keys="$(cloud-init query userdata | python3 -c 'import sys, yaml; data = yaml.safe_load(sys.stdin) or {}; sys.stdout.write("".join(key + "\n" for key in data.get("ssh_authorized_keys") or []))')"
+      if [ "$allow_format" = "1" ] && [ -z "$keys" ]; then
+          echo "HomeStack: user-data has no ssh_authorized_keys for the new home" >&2
+          exit 76
       fi
 
       if [ "$fstype" = "ext4" ] && [ "$fslabel" = "$expected_label" ]; then
@@ -600,10 +618,28 @@ runcmd:
           chown "$user_uid:$user_gid" "$home_path"
           chmod 700 "$home_path"
           install -d -m 700 -o "$user_uid" -g "$user_gid" "$home_path/.ssh"
-          printf '%s\n' "$authorized_keys" > "$home_path/.ssh/authorized_keys"
+          printf '%s\n' "$keys" > "$home_path/.ssh/authorized_keys"
           chown "$user_uid:$user_gid" "$home_path/.ssh/authorized_keys"
           chmod 600 "$home_path/.ssh/authorized_keys"
       fi
+
+      # HomeStack ensure-keys (addkey): the keys of user-data that root or
+      # the user lack are appended; nothing is removed.
+      for dir in /root "$home_path"; do
+          [ -d "$dir" ] || continue
+          owner=$(stat -c %U "$dir")
+          group=$(stat -c %G "$dir")
+          f="$dir/.ssh/authorized_keys"
+          install -d -m 700 -o "$owner" -g "$group" "$dir/.ssh"
+          [ -f "$f" ] || install -m 600 -o "$owner" -g "$group" /dev/null "$f"
+          [ -z "$(tail -c1 "$f")" ] || echo >> "$f"
+          printf '%s\n' "$keys" | while IFS= read -r key; do
+              [ -n "$key" ] || continue
+              blob=$(printf '%s' "$key" | awk '{print $2}')
+              grep -qF "$blob" "$f" || printf '%s\n' "$key" >> "$f"
+          done
+      done
+      echo 'HomeStack: ensured SSH keys from Cloud-Init'
 
       if [ -f "$home_path/.config/systemd/user/herdr.service" ]; then
           loginctl enable-linger "$user_name"

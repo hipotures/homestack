@@ -236,6 +236,9 @@ pub fn exec(guest: &mut GuestSpec, disks: &crate::blocks::Disks, shell: &str, in
     if let Some(result) = crate::blocks::exec(guest, disks, shell, input) {
         return result;
     }
+    if let Some(result) = ensure_keys(guest, shell) {
+        return result;
+    }
     let guest: &GuestSpec = guest;
     if shell == "hostname" {
         return ExecResult::line(&guest.hostname);
@@ -300,6 +303,43 @@ pub fn exec(guest: &mut GuestSpec, disks: &crate::blocks::Disks, shell: &str, in
         out: String::new(),
         err: format!("pve-sim: guest command not modelled: {shell}\n"),
     }
+}
+
+/// Append to `<dir>/.ssh/authorized_keys` the `keys` whose blob (second
+/// field) it lacks, after a newline when the file does not end with one;
+/// nothing when `dir` is not a directory (the key step of
+/// `hs_core::addkey::ensure_keys_script` and of the vendor snippets).
+pub fn append_missing_keys<'k>(guest: &mut GuestSpec, dir: &str, keys: impl Iterator<Item = &'k str>) {
+    if file(guest, dir) != Node::Directory {
+        return;
+    }
+    let path = format!("{dir}/.ssh/authorized_keys");
+    let mut text = guest.files.get(&path).cloned().unwrap_or_default();
+    if !text.is_empty() && !text.ends_with('\n') {
+        text.push('\n');
+    }
+    for key in keys.map(str::trim).filter(|key| !key.is_empty()) {
+        let blob = key.split_whitespace().nth(1).unwrap_or_default();
+        if !text.contains(blob) {
+            text.push_str(key);
+            text.push('\n');
+        }
+    }
+    guest.files.insert(path, text);
+}
+
+/// `hs_core::addkey::ensure_keys_script`: the keys between the `HS_KEYS`
+/// heredoc markers appended in each directory of its `for dir in` line.
+fn ensure_keys(guest: &mut GuestSpec, shell: &str) -> Option<ExecResult> {
+    let body = shell.strip_prefix("# HomeStack ensure-keys\nset -eu\nkeys=$(cat <<'HS_KEYS'\n")?;
+    let (keys, rest) = body.split_once("\nHS_KEYS\n)\nfor dir in ")?;
+    let (dirs, _) = rest.split_once("; do\n")?;
+    let keys = keys.to_owned();
+    let dirs: Vec<String> = dirs.split_whitespace().map(str::to_owned).collect();
+    for dir in &dirs {
+        append_missing_keys(guest, dir, keys.lines());
+    }
+    Some(ExecResult::line("HomeStack: ensured SSH keys from Cloud-Init"))
 }
 
 fn failed(exitcode: i32, err: String) -> ExecResult {

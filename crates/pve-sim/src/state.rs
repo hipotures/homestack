@@ -73,10 +73,12 @@ impl ClusterState {
             }
         }
         let mut vms = BTreeMap::new();
-        for vm in spec.vms {
+        for mut vm in spec.vms {
             if !nodes.contains_key(&vm.node) {
                 return Err(format!("VM {} is on unknown node {}", vm.vmid, vm.node));
             }
+            // A scenario's guest has booted with the VM's configuration.
+            vm.booted_instance = vm.guest.is_some().then(|| vm.cloud_init_instance());
             let vmid = vm.vmid;
             if vms.insert(vmid, vm).is_some() {
                 return Err(format!("VM {vmid} is defined twice"));

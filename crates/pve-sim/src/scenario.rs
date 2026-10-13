@@ -267,10 +267,40 @@ pub struct VmSpec {
     /// Guests of the roots it booted from before, by root volume.
     #[serde(skip)]
     pub guests_by_root: BTreeMap<String, GuestSpec>,
+    /// The Cloud-Init instance the guest last ran ([`Self::cloud_init_instance`]
+    /// at that start; `api::boot_instance`).
+    #[serde(skip)]
+    pub booted_instance: Option<String>,
     /// Disks whose deletion Proxmox has pending (`true`: with `force`), as a
     /// call cut off between writing and applying it leaves them.
     #[serde(skip)]
     pub pending_delete: BTreeMap<String, bool>,
+}
+
+impl VmSpec {
+    /// What Proxmox hashes into the Cloud-Init instance id (the SHA1 of
+    /// user-data and network-config, decisions.md probe of phase 4): the
+    /// options those files are made of. Vendor data is not part of it.
+    #[must_use]
+    pub fn cloud_init_instance(&self) -> String {
+        [
+            "name",
+            "ciuser",
+            "cipassword",
+            "ciupgrade",
+            "sshkeys",
+            "ipconfig0",
+            "nameserver",
+            "searchdomain",
+            "net0",
+        ]
+        .iter()
+        .map(|key| {
+            let value = self.config.get(*key).map(ToString::to_string).unwrap_or_default();
+            format!("{key}={value}\n")
+        })
+        .collect()
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]

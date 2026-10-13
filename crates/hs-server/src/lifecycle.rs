@@ -1,7 +1,8 @@
 //! `workspace.create`, `workspace.destroy` (phase 5), `workspace.refresh`
-//! (phase 6), `workspace.resize` (phase 7) and `workspace.migrate` (phase 8):
-//! the operations of `hs_core::lifecycle`, `hs_core::refresh`,
-//! `hs_core::resize` and `hs_core::migrate` in the plan and job model.
+//! (phase 6), `workspace.resize` (phase 7), `workspace.migrate` (phase 8) and
+//! `workspace.addkey` (phase 9): the operations of `hs_core::lifecycle`,
+//! `hs_core::refresh`, `hs_core::resize`, `hs_core::migrate` and
+//! `hs_core::addkey` in the plan and job model.
 //!
 //! `POST /v1/plans` with `{"operation": "workspace.create", "parameters":
 //! {"vmid": 240, "name": "hst-a", "home_size": "20G", "storage": "..."}}`
@@ -30,10 +31,20 @@
 //! moves the workspace offline with its disks and keeps its power state; a
 //! failure after the shutdown starts it again on the source node. Event
 //! `workspace.migrated`.
+//!
+//! `{"operation": "workspace.addkey", "parameters": {"vmid": 240, "key":
+//! "ssh-ed25519 AAAA... name", "restart": false}}` (`key` optional: the
+//! keys already in the VM's `sshkeys`; `restart` optional, false) adds the
+//! key to `sshkeys`, switches the VM to the keep vendor snippet and, on a
+//! running VM, appends the keys to root's and the user's `authorized_keys`
+//! through the guest agent. A running VM is restarted only with `"restart":
+//! true`; `pending_restart` in the result says a restart is still needed.
+//! Event `workspace.key_added`.
 
 use std::sync::Arc;
 
 use hs_core::CoreError;
+use hs_core::addkey::{AddkeyRequest, add_key, plan_addkey};
 use hs_core::lifecycle::{
     CreateRequest, LifecycleTiming, create_workspace, destroy_workspace, plan_create, plan_destroy,
 };
@@ -55,6 +66,7 @@ pub fn operations(timing: LifecycleTiming) -> Vec<Arc<dyn Operation>> {
         Arc::new(Refresh { timing }),
         Arc::new(Resize { timing }),
         Arc::new(Migrate { timing }),
+        Arc::new(Addkey { timing }),
     ]
 }
 
@@ -343,6 +355,67 @@ impl Operation for Migrate {
         Box::pin(async move {
             vmid_of(&planned.summary)?;
             Ok(migrate_workspace(
+                ctx.pve.as_ref(),
+                config(ctx)?,
+                &ctx.pools.workspaces,
+                &planned.summary,
+                &self.timing,
+                job,
+            )
+            .await?)
+        })
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AddkeyParameters {
+    vmid: u32,
+    key: Option<String>,
+    #[serde(default)]
+    restart: bool,
+}
+
+struct Addkey {
+    timing: LifecycleTiming,
+}
+
+impl Operation for Addkey {
+    fn name(&self) -> &'static str {
+        "workspace.addkey"
+    }
+
+    fn plan<'a>(&'a self, ctx: &'a OpContext, parameters: &'a Value) -> BoxFuture<'a, Result<Planned, OpFailure>> {
+        Box::pin(async move {
+            let parameters: AddkeyParameters = serde_json::from_value(parameters.clone())
+                .map_err(|_| OpFailure::invalid("workspace.addkey takes vmid, and optionally key and restart."))?;
+            let request = AddkeyRequest {
+                vmid: parameters.vmid,
+                key: parameters.key,
+                restart: parameters.restart,
+            };
+            let summary = plan_addkey(ctx.pve.as_ref(), config(ctx)?, &ctx.pools.workspaces, &request)
+                .await
+                .map_err(|error| match error {
+                    CoreError::NotFound(_) => OpFailure::not_found("No such VM."),
+                    other => OpFailure::Core(other),
+                })?;
+            Ok(Planned {
+                targets: vec![request.vmid],
+                summary,
+            })
+        })
+    }
+
+    fn execute<'a>(
+        &'a self,
+        ctx: &'a OpContext,
+        planned: &'a Planned,
+        job: &'a JobHandle,
+    ) -> BoxFuture<'a, Result<Value, OpFailure>> {
+        Box::pin(async move {
+            vmid_of(&planned.summary)?;
+            Ok(add_key(
                 ctx.pve.as_ref(),
                 config(ctx)?,
                 &ctx.pools.workspaces,

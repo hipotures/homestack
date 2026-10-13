@@ -5,6 +5,7 @@
 //! names it; behaviour and messages follow Python unless
 //! `docs/migration/phase-N.md` records a difference.
 
+pub mod addkey;
 pub mod capabilities;
 pub mod cloudinit;
 pub mod discovery;

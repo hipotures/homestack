@@ -1,9 +1,12 @@
 //! Starting and stopping VMs, the way every lifecycle operation does it.
 
+use std::time::Duration;
+
 use serde_json::Value;
+use tokio::time::Instant;
 
 use crate::error::CoreError;
-use crate::inventory::{py_repr, vm_status};
+use crate::inventory::{cluster_vm_resources, py_repr, vm_status};
 use crate::pve::Pve;
 use crate::tasks::{Observer, TaskWait, wait_task};
 
@@ -93,5 +96,36 @@ pub async fn shutdown_vm(
              HomeStack will not force-stop it automatically."
         )));
     }
-    Ok(())
+    wait_listed_stopped(pve, vmid).await
 }
+
+/// How long `cluster/resources` may still list a stopped VM as running.
+const LISTED_STOPPED_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Wait until `cluster/resources`, which the operations read the power state
+/// from, also lists the VM as stopped: on PVE 9.2 it still said `running` a
+/// few seconds after the shutdown (phase 9, live), and an operation planned
+/// right then took the VM for a running one.
+async fn wait_listed_stopped(pve: &impl Pve, vmid: u32) -> Result<(), CoreError> {
+    let deadline = Instant::now() + LISTED_STOPPED_TIMEOUT;
+    loop {
+        let listed = cluster_vm_resources(pve)
+            .await?
+            .into_iter()
+            .find(|resource| resource.vmid == vmid)
+            .and_then(|resource| resource.status);
+        if listed.as_deref() != Some("running") {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err(CoreError::Failed(format!(
+                "VM {vmid} is stopped, but the cluster still lists it as running after {}s",
+                LISTED_STOPPED_TIMEOUT.as_secs()
+            )));
+        }
+        tokio::time::sleep(LISTED_STOPPED_POLL).await;
+    }
+}
+
+/// Pause between two reads of `cluster/resources`.
+const LISTED_STOPPED_POLL: Duration = Duration::from_secs(1);

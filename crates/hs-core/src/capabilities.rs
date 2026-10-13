@@ -172,20 +172,22 @@ const fn needs(operation: Operation) -> Needs {
             allocate: Storages::None,
             snippets: false,
         },
-        // C4
+        // C4 (the keys go in through `exec` and are checked with
+        // `file-read`; `cicustom` is switched to the keep snippet, phase 9)
         Operation::Addkey => Needs {
             pool: &[
                 "Pool.Audit",
                 "VM.Audit",
                 "VM.Config.Cloudinit",
                 "VM.GuestAgent.Audit",
+                "VM.GuestAgent.FileRead",
                 "VM.GuestAgent.Unrestricted",
                 "VM.PowerMgmt",
             ],
             gold: NONE,
             audit_storages: false,
             allocate: Storages::None,
-            snippets: false,
+            snippets: true,
         },
     }
 }

@@ -57,6 +57,27 @@ an agent stops when a phase needs one that is still open
   size. The owner: the server strips the extension, as Python meant to;
   Python is not changed by the agent.
 
+### Owner's decision of 2026-10-13 (phase 9)
+
+- `addkey` (C4) under decision 1 = A, both ways at once (phase 4, open
+  question 4):
+  - the two static vendor snippets get a key step: on every new Cloud-Init
+    instance they append the keys of user-data that are missing to root's
+    and the user's `authorized_keys`, removing nothing (Python's
+    `ensure-keys`); the owner installs them again on the nodes with
+    `homestack-pve.sh install`;
+  - `addkey` sets `sshkeys` and switches `cicustom` to the keep snippet
+    (Python's `allow_format=0`), so a stopped VM gets the key at its next
+    start;
+  - a running VM also gets the key at once through `agent/exec`, without a
+    restart; a restart happens only when asked for.
+- No ACL change: role `HomeStack` already holds
+  `VM.GuestAgent.Unrestricted`.
+- `cluster/resources` lists a VM as running for a few seconds after its
+  shutdown. The power state is still read from it, as in Python; the
+  server's shutdown returns only once that list also says the VM is
+  stopped (up to 30 s).
+
 ## Probe results
 
 | Date | Probe | Result |

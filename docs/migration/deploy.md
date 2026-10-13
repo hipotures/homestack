@@ -159,7 +159,11 @@ rewrites them only when their checksum differs. They are generated from
 `crates/hs-core/src/cloudinit_vendor.yaml` into `deploy/cloud-init/` and
 embedded in the script (`deploy/pve/embed-snippets.sh`); tests keep all
 three equal. `homestack-vendor-create.yaml` formats a blank new home,
-`homestack-vendor-keep.yaml` refuses to (refresh, addkey).
+`homestack-vendor-keep.yaml` refuses to (refresh, addkey). Both end with a
+key step: on every new Cloud-Init instance the keys of `sshkeys` that
+root's or the user's `authorized_keys` lack are appended (addkey, phase 9).
+After the snippets change, run `install` again on one node: it rewrites
+them on every node.
 
 Setting `cicustom` needs `VM.Config.Cloudinit` on the VM and
 `Datastore.AllocateSpace` on the snippet storage. Checking that a snippet is
