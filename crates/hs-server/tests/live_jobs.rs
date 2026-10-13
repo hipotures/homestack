@@ -178,6 +178,10 @@ async fn serve(node: &str) -> Result<String, Error> {
             api_token: ApiToken::parse(API_TOKEN)?,
             pve: client_config()?,
             config_file: std::env::temp_dir().join("homestack-live-unused/server.toml"),
+            pools: hs_server::Pools {
+                workspaces: POOL.to_owned(),
+                ..hs_server::Pools::default()
+            },
         },
         options,
     )?;

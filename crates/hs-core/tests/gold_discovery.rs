@@ -106,6 +106,9 @@ const ACCOUNT: &str = "getent passwd user || true";
 const REGULAR: &str = r#"awk -F: '$3 >= 1000 && $3 < 65534 {print $1 ":" $3 ":" $4}' /etc/passwd"#;
 const SUDO: &str = "if command -v sudo >/dev/null 2>&1; then echo PRESENT; else echo ABSENT; fi";
 const ROOT_KEYS: &str = "test -s /root/.ssh/authorized_keys && echo OK || echo MISSING";
+// Not in Python: what the vendor snippet needs (decision 1 = A, phase 4b).
+const VENDOR_TOOLS: &str = r#"for c in netplan udevadm NetworkManager python3; do command -v "$c" >/dev/null 2>&1 || printf "%s\n" "$c"; done"#;
+const PYTHON_YAML: &str = "python3 -c 'import yaml' >/dev/null 2>&1 && echo OK || echo MISSING";
 
 fn out(text: &str) -> Value {
     json!({"exited": 1, "exitcode": 0, "out-data": text})
@@ -114,6 +117,10 @@ fn out(text: &str) -> Value {
 /// A running Gold whose guest answers like the `guest_value` of the
 /// Python tests, with `rsync` answering `rsync`.
 fn running_gold(rsync: &str) -> FakePve {
+    running_gold_with(rsync, "", "OK")
+}
+
+fn running_gold_with(rsync: &str, vendor_missing: &str, yaml: &str) -> FakePve {
     FakePve::new()
         .with("GET /nodes/example-node-1/qemu/101/config", gold_config())
         .with(
@@ -134,6 +141,8 @@ fn running_gold(rsync: &str) -> FakePve {
         .with_exec("example-node-1", 101, REGULAR, 5, out("user:1000:1000\n"))
         .with_exec("example-node-1", 101, SUDO, 6, out("ABSENT\n"))
         .with_exec("example-node-1", 101, ROOT_KEYS, 7, out("OK\n"))
+        .with_exec("example-node-1", 101, VENDOR_TOOLS, 8, out(vendor_missing))
+        .with_exec("example-node-1", 101, PYTHON_YAML, 9, out(&format!("{yaml}\n")))
 }
 
 fn optional_failures(result: &hs_model::status::GoldReadiness) -> Vec<&str> {
@@ -145,7 +154,8 @@ fn optional_failures(result: &hs_model::status::GoldReadiness) -> Vec<&str> {
         .collect()
 }
 
-/// `GoldReadinessTests::test_running_gold_checks_guest_contract`
+/// `GoldReadinessTests::test_running_gold_checks_guest_contract`, plus the
+/// vendor snippet's tools after Python's checks (phase 4b).
 #[test]
 fn running_gold_checks_guest_contract() {
     let pve = running_gold("PRESENT");
@@ -171,8 +181,38 @@ fn running_gold_checks_guest_contract() {
             ("No sudo", "pass"),
             ("Root authorized_keys", "pass"),
             ("Workspace public-key source", "pass"),
+            ("Cloud-Init vendor snippet tools", "pass"),
         ]
     );
+}
+
+/// Not in Python: the vendor snippet (decision 1 = A) makes NetworkManager
+/// netplan's renderer, triggers udev and runs cloud-init's Python, so Gold
+/// without them boots a workspace with no network or no home.
+#[test]
+fn gold_without_the_vendor_snippet_tools_is_not_ready() {
+    let result = readiness(&running_gold_with("PRESENT", "netplan\n", "MISSING"));
+    assert!(!result.ok);
+    let check = result
+        .checks
+        .iter()
+        .find(|c| c.name == "Cloud-Init vendor snippet tools");
+    assert_eq!(
+        check.map(|c| (
+            c.scope.as_str(),
+            c.status.as_str(),
+            c.detail.as_str(),
+            c.requirement.as_str()
+        )),
+        Some(("guest", "fail", "missing: netplan, python3-yaml", "required"))
+    );
+
+    let stopped = readiness(&stopped_gold(gold_config()));
+    let check = stopped
+        .checks
+        .iter()
+        .find(|c| c.name == "Cloud-Init vendor snippet tools");
+    assert_eq!(check.map(|c| c.status.as_str()), Some("skip"));
 }
 
 /// `GoldReadinessTests::test_missing_rsync_is_optional`

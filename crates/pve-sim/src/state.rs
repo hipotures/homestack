@@ -7,7 +7,7 @@ use hs_model::NodeName;
 use crate::guest::ExecResult;
 use crate::ops::Op;
 use crate::scenario::{
-    ClusterSpec, FaultSpec, NodeSpec, StorageSpec, TaskSpec, TokenSpec, VersionSpec, VmSpec, VolumeSpec,
+    ClusterSpec, FaultSpec, NodeSpec, PoolSpec, StorageSpec, TaskSpec, TokenSpec, VersionSpec, VmSpec, VolumeSpec,
 };
 
 pub struct ClusterState {
@@ -16,6 +16,7 @@ pub struct ClusterState {
     pub storages: Vec<StorageSpec>,
     pub volumes: Vec<VolumeSpec>,
     pub vms: BTreeMap<u32, VmSpec>,
+    pub pools: Vec<PoolSpec>,
     /// `exec` results by (VMID, PID).
     pub exec: HashMap<(u32, u32), ExecResult>,
     next_pid: u32,
@@ -79,12 +80,22 @@ impl ClusterState {
                 return Err(format!("VM {vmid} is defined twice"));
             }
         }
+        for pool in &spec.pools {
+            if let Some(vmid) = pool.vms.iter().find(|vmid| !vms.contains_key(vmid)) {
+                return Err(format!("pool {}: VM {vmid} does not exist", pool.poolid));
+            }
+            let others = spec.pools.iter().filter(|other| other.poolid != pool.poolid);
+            if let Some(vmid) = others.flat_map(|other| &other.vms).find(|vmid| pool.vms.contains(vmid)) {
+                return Err(format!("VM {vmid} is in two pools"));
+            }
+        }
         let mut state = Self {
             version: spec.version,
             nodes,
             storages: spec.storages,
             volumes: spec.volumes,
             vms,
+            pools: spec.pools,
             exec: HashMap::new(),
             next_pid: 3000,
             tokens: spec.tokens,
@@ -100,6 +111,32 @@ impl ClusterState {
             state.add_task(task);
         }
         Ok(state)
+    }
+
+    /// The pool a VM is in.
+    #[must_use]
+    pub fn pool_of(&self, vmid: u32) -> Option<&str> {
+        self.pools
+            .iter()
+            .find(|pool| pool.vms.contains(&vmid))
+            .map(|pool| pool.poolid.as_str())
+    }
+
+    /// `has_privilege` plus, on `/vms/<vmid>`, the privileges on the VM's
+    /// pool (`PVE::RPCEnvironment::permissions` adds pool roles to a VM's).
+    #[must_use]
+    pub fn allows(&self, token: &TokenSpec, path: &str, privilege: &str) -> bool {
+        has_privilege(token, path, privilege)
+            || path
+                .strip_prefix("/vms/")
+                .and_then(|vmid| vmid.parse().ok())
+                .and_then(|vmid| self.pool_of(vmid))
+                .is_some_and(|pool| has_privilege(token, &format!("/pool/{pool}"), privilege))
+    }
+
+    #[must_use]
+    pub fn allows_any(&self, token: &TokenSpec, path: &str, privileges: &[&str]) -> bool {
+        privileges.iter().any(|privilege| self.allows(token, path, privilege))
     }
 
     /// The token whose `PVEAPIToken=` header value this is.

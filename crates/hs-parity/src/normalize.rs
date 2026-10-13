@@ -42,7 +42,8 @@ pub struct Rule {
     #[serde(default)]
     pub rust_ops_drop: Vec<String>,
     /// Rust list items with no Python counterpart: path of a list → pattern
-    /// (`*` matches any text) of the string items to remove.
+    /// (`*` matches any text) of the string items to remove, or
+    /// `FIELD=PATTERN` for the object items whose string `FIELD` matches.
     #[serde(default)]
     pub rust_drop_items: BTreeMap<String, String>,
     /// Numbers that may differ by this share of the larger one (paths as in
@@ -227,7 +228,16 @@ fn drop_items(value: &mut Value, path: &[&str], pattern: &str) {
     match path.split_first() {
         None => {
             if let Value::Array(items) = value {
-                items.retain(|item| !item.as_str().is_some_and(|text| glob(pattern, text)));
+                let field = pattern.split_once('=');
+                items.retain(|item| {
+                    let text = match (item, field) {
+                        (Value::Object(map), Some((key, _))) => map.get(key).and_then(Value::as_str),
+                        (_, Some(_)) => None,
+                        _ => item.as_str(),
+                    };
+                    let wanted = field.map_or(pattern, |(_, wanted)| wanted);
+                    !text.is_some_and(|text| glob(wanted, text))
+                });
             }
         }
         Some((first, rest)) => match (value, *first) {

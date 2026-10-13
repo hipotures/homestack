@@ -39,6 +39,25 @@ pub struct ServerConfig {
     pub pve: PveClientConfig,
     /// Where the uploaded `server.toml` is kept.
     pub config_file: PathBuf,
+    /// The Proxmox pools of this instance.
+    pub pools: Pools,
+}
+
+/// The pool this instance changes workspaces in and Gold's pool (phase 4b,
+/// decision 9), as `deploy/pve/homestack-pve.sh` makes them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Pools {
+    pub workspaces: String,
+    pub gold: String,
+}
+
+impl Default for Pools {
+    fn default() -> Self {
+        Self {
+            workspaces: hs_core::capabilities::DEFAULT_POOL.to_owned(),
+            gold: hs_core::capabilities::DEFAULT_GOLD_POOL.to_owned(),
+        }
+    }
 }
 
 /// Why the server cannot start.
@@ -55,6 +74,7 @@ struct AppState {
     pve: Arc<PveClient>,
     api_token: Arc<ApiToken>,
     pve_token_id: Arc<str>,
+    pools: Arc<Pools>,
     config: Arc<ConfigStore>,
     ops: Arc<OpsState>,
 }
@@ -75,6 +95,7 @@ pub fn app_with(config: ServerConfig, options: AppOptions) -> Result<Router, Sta
     }
     let state = AppState {
         pve_token_id: Arc::from(config.pve.token.id()),
+        pools: Arc::new(config.pools),
         pve: Arc::new(PveClient::new(config.pve)?),
         api_token: Arc::new(config.api_token),
         config: Arc::new(store),

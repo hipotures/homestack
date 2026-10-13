@@ -45,6 +45,7 @@ async fn serve(endpoints: Vec<Url>) -> Result<String, Box<dyn std::error::Error>
         api_token: ApiToken::parse(API_TOKEN)?,
         pve: PveClientConfig::new(endpoints, live_token()?),
         config_file: std::env::temp_dir().join("homestack-live-unused/server.toml"),
+        pools: hs_server::Pools::default(),
     })?;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let addr = listener.local_addr()?;
@@ -191,6 +192,7 @@ async fn live_capabilities_match_the_token_privileges() -> TestResult {
         api_token: ApiToken::parse(API_TOKEN)?,
         pve: PveClientConfig::new(endpoints.clone(), live_token()?),
         config_file: state.path().join("server.toml"),
+        pools: hs_server::Pools::default(),
     })?;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let base = format!("http://{}", listener.local_addr()?);

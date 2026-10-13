@@ -3,7 +3,8 @@
 # runs it) against the server's /v1/gold/readiness for the configured Gold,
 # at the same time. Read-only: a running Gold is inspected through the guest
 # agent (the server needs VM.GuestAgent.Unrestricted on Gold, decisions.md),
-# a stopped Gold is not started. They must agree exactly (rule `same`).
+# a stopped Gold is not started. They must agree (rule `gold-readiness`:
+# the server also checks the vendor snippet's tools, phase 4b).
 #
 #   HOMESTACK_LIVE_TOKEN_FILE      server's PVE token file (USER@REALM!TOKENID=SECRET)
 #   HOMESTACK_LIVE_PVE_ENDPOINTS   comma-separated https origins
@@ -72,7 +73,7 @@ failed=0
 python_gold > "$work/python-gold.json" & python_pid=$!
 rust /v1/gold/readiness "$work/rust-gold.json"
 wait "$python_pid"
-compare same "$work/python-gold.json" "$work/rust-gold.json" "Gold readiness"
+compare gold-readiness "$work/python-gold.json" "$work/rust-gold.json" "Gold readiness"
 if ((failed)); then
     exit 1
 fi

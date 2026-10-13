@@ -100,6 +100,34 @@ fn reference_files_are_the_rendered_snippets() {
     assert_eq!(HomeFormat::Keep.snippet_file(), "homestack-vendor-keep.yaml");
 }
 
+/// `deploy/pve/homestack-pve.sh` installs the same snippets: its embedded
+/// copies are rewritten by `deploy/pve/embed-snippets.sh`.
+#[test]
+fn install_script_embeds_the_rendered_snippets() {
+    let path = format!("{}/../../deploy/pve/homestack-pve.sh", env!("CARGO_MANIFEST_DIR"));
+    let script = std::fs::read_to_string(&path).unwrap_or_else(|error| panic!("{path}: {error}"));
+    for format in [HomeFormat::Create, HomeFormat::Keep] {
+        let start = format!(
+            "        {})\n            cat <<'HOMESTACK_SNIPPET'\n",
+            format.snippet_file()
+        );
+        let begin = script
+            .find(&start)
+            .unwrap_or_else(|| panic!("{path} embeds no {}", format.snippet_file()))
+            + start.len();
+        let Some(length) = script[begin..].find("\nHOMESTACK_SNIPPET\n") else {
+            panic!("{path}: the heredoc of {} does not end", format.snippet_file());
+        };
+        let end = begin + length + 1;
+        assert_eq!(
+            &script[begin..end],
+            vendor_snippet(format),
+            "{path} embeds an old {}; run deploy/pve/embed-snippets.sh",
+            format.snippet_file()
+        );
+    }
+}
+
 #[test]
 fn cicustom_names_only_the_vendor_snippet() {
     let cfg = test_config();

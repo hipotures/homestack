@@ -140,6 +140,7 @@ async fn start(heartbeat: Duration) -> Result<Running, Error> {
             api_token: ApiToken::parse(API_TOKEN)?,
             pve,
             config_file: dir.path().join("server.toml"),
+            pools: hs_server::Pools::default(),
         },
         options,
     )?;

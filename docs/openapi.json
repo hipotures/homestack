@@ -36,7 +36,7 @@
           "config"
         ],
         "summary": "What the server's Proxmox token can do with the stored configuration.",
-        "description": "Asks Proxmox (`GET /access/permissions`) for the token's privileges on\nevery ACL path the operations need, then lists per operation what is\nrequired and what is missing.",
+        "description": "Asks Proxmox (`GET /access/permissions`) for the token's privileges on\nevery ACL path the operations need, then lists per operation what is\nrequired and what is missing. Changes need privileges on the instance's\npool (`HOMESTACK_PVE_POOL`). `installation` says which of the objects\n`deploy/pve/homestack-pve.sh install` makes the token can see.",
         "operationId": "capabilities",
         "responses": {
           "200": {
@@ -1423,12 +1423,17 @@
         "required": [
           "token_id",
           "config_version",
-          "operations"
+          "operations",
+          "installation"
         ],
         "properties": {
           "config_version": {
             "type": "string",
             "description": "Configuration the ACL paths were derived from."
+          },
+          "installation": {
+            "$ref": "#/components/schemas/Installation",
+            "description": "What `deploy/pve/homestack-pve.sh install` makes, as far as the token\ncan see it."
           },
           "operations": {
             "type": "array",
@@ -1825,6 +1830,74 @@
             "minimum": 0
           }
         }
+      },
+      "Installation": {
+        "type": "object",
+        "description": "The Proxmox objects of a HomeStack installation the server can check.",
+        "required": [
+          "pool",
+          "gold_pool",
+          "complete",
+          "checks"
+        ],
+        "properties": {
+          "checks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InstallationCheck"
+            }
+          },
+          "complete": {
+            "type": "boolean",
+            "description": "No check is `missing` (`unknown` ones are left to the install script)."
+          },
+          "gold_pool": {
+            "type": "string",
+            "description": "Gold's pool (`HOMESTACK_PVE_GOLD_POOL`, decision 9)."
+          },
+          "pool": {
+            "type": "string",
+            "description": "The pool this instance changes workspaces in (`HOMESTACK_PVE_POOL`)."
+          }
+        },
+        "additionalProperties": false
+      },
+      "InstallationCheck": {
+        "type": "object",
+        "required": [
+          "item",
+          "status",
+          "detail"
+        ],
+        "properties": {
+          "detail": {
+            "type": "string"
+          },
+          "item": {
+            "$ref": "#/components/schemas/InstallationItem"
+          },
+          "status": {
+            "$ref": "#/components/schemas/InstallationStatus"
+          }
+        },
+        "additionalProperties": false
+      },
+      "InstallationItem": {
+        "type": "string",
+        "enum": [
+          "pool",
+          "gold_pool",
+          "gold_in_pool",
+          "snippets"
+        ]
+      },
+      "InstallationStatus": {
+        "type": "string",
+        "enum": [
+          "ok",
+          "missing",
+          "unknown"
+        ]
       },
       "Job": {
         "type": "object",

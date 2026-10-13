@@ -1,0 +1,391 @@
+#!/usr/bin/env bash
+# Fake PVE tools for deploy/pve/tests/run.sh. One file, linked as pvesh,
+# pveum, pvesm, ssh and openssl; it answers from the cluster state in
+# $HS_FAKE and logs every call that changes it to $HS_FAKE/calls.log.
+#
+# State files (tab-separated, one record per line):
+#   nodes.tsv    name ip online(0|1) local(0|1)
+#   cluster      present when the nodes form a cluster
+#   offline-ssh  node names whose SSH does not answer
+#   storage.json GET /storage
+#   options.json GET /cluster/options
+#   vnets.json   GET /cluster/sdn/vnets (optional)
+#   vms.tsv      vmid node name tags net0 cicustom
+#   users        user ids
+#   tokens.tsv   userid tokenid privsep
+#   roles.tsv    roleid privs(comma) special(0|1)
+#   acl.tsv      path type ugid roleid
+#   pools.tsv    poolid vmids(comma) comment
+#   trusted      certificate names whose TLS verification succeeds
+# Snippets: the local node's under $HS_FAKE/vz, node N's under
+# $HS_FAKE/nodes/N/vz (ssh rewrites the path).
+set -euo pipefail
+
+: "${HS_FAKE:?HS_FAKE is not set}"
+tool=$(basename "$0")
+log() { printf '%s\n' "$tool $*" >> "$HS_FAKE/calls.log"; }
+die() { printf '%s\n' "$*" >&2; exit 1; }
+tab=$'\t'
+us=$'\037'
+
+# Field N (1-based) of the line of FILE whose field 1 is KEY.
+field() { awk -F'\t' -v k="$2" -v n="$3" '$1 == k { print $n; exit }' "$HS_FAKE/$1"; }
+
+json_str() {
+    local s=$1
+    s=${s//\\/\\\\}
+    s=${s//\"/\\\"}
+    printf '"%s"' "$s"
+}
+
+# --- pvesh -------------------------------------------------------------
+
+node_online() { [[ $(field nodes.tsv "$1" 3) == 1 ]]; }
+
+pool_of() {
+    awk -F'\t' -v v="$1" '{ n = split($2, m, ","); for (i = 1; i <= n; i++) if (m[i] == v) { print $1; exit } }' \
+        "$HS_FAKE/pools.tsv"
+}
+
+cluster_status() {
+    local first=1 name ip online is_local
+    printf '['
+    if [[ -e $HS_FAKE/cluster ]]; then
+        printf '{"id":"cluster","name":"fake","type":"cluster","quorate":1}'
+        first=0
+    fi
+    while IFS=$us read -r name ip online is_local; do
+        ((first)) || printf ','
+        first=0
+        printf '{"id":"node/%s","name":"%s","ip":"%s","online":%s,"local":%s,"type":"node"}' \
+            "$name" "$name" "$ip" "$online" "$is_local"
+    done < <(tr "\t" "\037" < "$HS_FAKE/nodes.tsv")
+    printf ']\n'
+}
+
+resources() {
+    local first=1 vmid node name tags net0 cicustom pool
+    printf '['
+    while IFS=$us read -r vmid node name tags net0 cicustom; do
+        ((first)) || printf ','
+        first=0
+        pool=$(pool_of "$vmid")
+        printf '{"vmid":%s,"node":"%s","name":"%s","type":"qemu","template":0' "$vmid" "$node" "$name"
+        [[ -n $tags ]] && printf ',"tags":"%s"' "$tags"
+        [[ -n $pool ]] && printf ',"pool":"%s"' "$pool"
+        printf '}'
+    done < <(tr "\t" "\037" < "$HS_FAKE/vms.tsv")
+    printf ']\n'
+}
+
+vm_config() {
+    local node=$1 vmid=$2
+    node_online "$node" || die "hostname lookup '$node' failed - no route to host"
+    [[ $(field vms.tsv "$vmid" 2) == "$node" ]] || die "Configuration file 'nodes/$node/qemu-server/$vmid.conf' does not exist"
+    printf '{"name":"%s"' "$(field vms.tsv "$vmid" 3)"
+    local tags net0 cicustom
+    tags=$(field vms.tsv "$vmid" 4)
+    net0=$(field vms.tsv "$vmid" 5)
+    cicustom=$(field vms.tsv "$vmid" 6)
+    [[ -n $tags ]] && printf ',"tags":"%s"' "$tags"
+    [[ -n $net0 ]] && printf ',"net0":"%s"' "$net0"
+    [[ -n $cicustom ]] && printf ',"cicustom":"%s"' "$cicustom"
+    printf '}\n'
+}
+
+pools_json() {
+    local want=${1:-} first=1 poolid vmids comment vmid f2
+    printf '['
+    while IFS=$us read -r poolid vmids comment; do
+        [[ -n $want && $poolid != "$want" ]] && continue
+        ((first)) || printf ','
+        first=0
+        printf '{"poolid":"%s","comment":%s' "$poolid" "$(json_str "$comment")"
+        if [[ -n $want ]]; then
+            printf ',"members":['
+            f2=1
+            for vmid in ${vmids//,/ }; do
+                ((f2)) || printf ','
+                f2=0
+                printf '{"id":"qemu/%s","vmid":%s,"type":"qemu"}' "$vmid" "$vmid"
+            done
+            printf ']'
+        fi
+        printf '}'
+    done < <(tr "\t" "\037" < "$HS_FAKE/pools.tsv")
+    printf ']\n'
+    if [[ -n $want ]] && ! grep -q "^$want$tab" "$HS_FAKE/pools.tsv"; then
+        die "pool '$want' does not exist"
+    fi
+}
+
+certificates() {
+    local node=$1 name
+    node_online "$node" || die "hostname lookup '$node' failed - no route to host"
+    name=$node.example.net
+    printf '[{"filename":"pve-ssl.pem","san":["%s"],"issuer":"/CN=Proxmox Virtual Environment"},' "$node"
+    printf '{"filename":"pveproxy-ssl.pem","san":["%s"],"issuer":"/CN=Fake CA","notafter":2000000000}]\n' "$name"
+}
+
+pvesh_main() {
+    [[ ${1:-} == get ]] || die "fake pvesh: only get is supported: $*"
+    local path=$2
+    shift 2
+    local poolid=
+    while (($#)); do
+        case $1 in
+            --poolid) poolid=$2; shift ;;
+            --output-format | --type) shift ;;
+        esac
+        shift
+    done
+    case $path in
+        /cluster/status) cluster_status ;;
+        /cluster/resources) resources ;;
+        /cluster/options) cat "$HS_FAKE/options.json" ;;
+        /cluster/sdn/vnets) if [[ -f $HS_FAKE/vnets.json ]]; then cat "$HS_FAKE/vnets.json"; else echo '[]'; fi ;;
+        /storage) cat "$HS_FAKE/storage.json" ;;
+        /pools) pools_json "$poolid" ;;
+        /nodes/*/version)
+            local node=${path#/nodes/}
+            node=${node%/version}
+            node_online "$node" || die "hostname lookup '$node' failed - no route to host"
+            if [[ -f $HS_FAKE/version-$node ]]; then cat "$HS_FAKE/version-$node"; else echo '{"version":"9.2.21","release":"9.2"}'; fi
+            ;;
+        /nodes/*/qemu/*/config)
+            local rest=${path#/nodes/}
+            vm_config "${rest%%/*}" "$(cut -d/ -f3 <<< "$rest")"
+            ;;
+        /nodes/*/certificates/info)
+            local node=${path#/nodes/}
+            certificates "${node%%/*}"
+            ;;
+        *) die "fake pvesh: no such path $path" ;;
+    esac
+}
+
+# --- pveum -------------------------------------------------------------
+
+opt() {
+    # opt NAME ARGS...: the value of --NAME in ARGS
+    local name=$1
+    shift
+    while (($#)); do
+        [[ $1 == "--$name" ]] && { printf '%s' "$2"; return; }
+        shift
+    done
+}
+
+acl_list() {
+    local first=1 path type ugid roleid
+    printf '['
+    while IFS=$us read -r path type ugid roleid; do
+        ((first)) || printf ','
+        first=0
+        printf '{"path":"%s","type":"%s","ugid":"%s","roleid":"%s","propagate":1}' "$path" "$type" "$ugid" "$roleid"
+    done < <(tr "\t" "\037" < "$HS_FAKE/acl.tsv")
+    printf ']\n'
+}
+
+acl_change() {
+    local action=$1 path=$2
+    shift 2
+    local roles users tokens role who type
+    roles=$(opt roles "$@")
+    users=$(opt users "$@")
+    tokens=$(opt tokens "$@")
+    for role in ${roles//,/ }; do
+        if [[ $action == modify ]] && ! grep -q "^$role$tab" "$HS_FAKE/roles.tsv"; then
+            die "role '$role' does not exist"
+        fi
+        for type in user token; do
+            local list=$users
+            [[ $type == token ]] && list=$tokens
+            for who in ${list//,/ }; do
+                if [[ $action == modify ]]; then
+                    printf '%s\t%s\t%s\t%s\n' "$path" "$type" "$who" "$role" >> "$HS_FAKE/acl.tsv"
+                else
+                    awk -F'\t' -v p="$path" -v t="$type" -v u="$who" -v r="$role" \
+                        '!($1 == p && $2 == t && $3 == u && $4 == r)' "$HS_FAKE/acl.tsv" > "$HS_FAKE/acl.tmp"
+                    mv "$HS_FAKE/acl.tmp" "$HS_FAKE/acl.tsv"
+                fi
+            done
+        done
+    done
+    sort -u -o "$HS_FAKE/acl.tsv" "$HS_FAKE/acl.tsv"
+}
+
+role_list() {
+    local first=1 roleid privs special
+    printf '['
+    while IFS=$us read -r roleid privs special; do
+        ((first)) || printf ','
+        first=0
+        printf '{"roleid":"%s","privs":"%s","special":%s}' "$roleid" "$privs" "$special"
+    done < <(tr "\t" "\037" < "$HS_FAKE/roles.tsv")
+    printf ']\n'
+}
+
+drop_line() {
+    # drop_line FILE AWK-CONDITION-ON-$1..: keep lines not matching
+    awk -F'\t' "!($2)" "$HS_FAKE/$1" > "$HS_FAKE/$1.tmp"
+    mv "$HS_FAKE/$1.tmp" "$HS_FAKE/$1"
+}
+
+pveum_main() {
+    local cmd="$1 ${2:-}"
+    case $cmd in
+        "acl list") acl_list; return ;;
+        "role list") role_list; return ;;
+        "user list")
+            local first=1 u
+            printf '['
+            while read -r u; do
+                ((first)) || printf ','
+                first=0
+                printf '{"userid":"%s"}' "$u"
+            done < "$HS_FAKE/users"
+            printf ']\n'
+            return
+            ;;
+        "pool list") pools_json ""; return ;;
+    esac
+    if [[ $1 == user && $2 == token && $3 == list ]]; then
+        grep -qx "$4" "$HS_FAKE/users" || die "no such user ('$4')"
+        local first=1 user tokenid privsep
+        printf '['
+        while IFS=$us read -r user tokenid privsep; do
+            [[ $user == "$4" ]] || continue
+            ((first)) || printf ','
+            first=0
+            printf '{"tokenid":"%s","privsep":%s}' "$tokenid" "$privsep"
+        done < <(tr "\t" "\037" < "$HS_FAKE/tokens.tsv")
+        printf ']\n'
+        return
+    fi
+    log "$*"
+    case $cmd in
+        "acl modify") shift 2; acl_change modify "$@" ;;
+        "acl delete") shift 2; acl_change delete "$@" ;;
+        "role add")
+            grep -q "^$3$tab" "$HS_FAKE/roles.tsv" && die "role '$3' already exists"
+            printf '%s\t%s\t0\n' "$3" "$(opt privs "$@")" >> "$HS_FAKE/roles.tsv"
+            ;;
+        "role modify")
+            local privs
+            privs=$(opt privs "$@")
+            awk -F'\t' -v OFS='\t' -v r="$3" -v p="$privs" '$1 == r { $2 = p } 1' "$HS_FAKE/roles.tsv" > "$HS_FAKE/roles.tmp"
+            mv "$HS_FAKE/roles.tmp" "$HS_FAKE/roles.tsv"
+            ;;
+        "role delete")
+            drop_line roles.tsv "\$1 == \"$3\""
+            drop_line acl.tsv "\$4 == \"$3\""
+            ;;
+        "user add")
+            grep -qx "$3" "$HS_FAKE/users" && die "user '$3' already exists"
+            echo "$3" >> "$HS_FAKE/users"
+            ;;
+        "user delete")
+            grep -vx "$3" "$HS_FAKE/users" > "$HS_FAKE/users.tmp" || true
+            mv "$HS_FAKE/users.tmp" "$HS_FAKE/users"
+            drop_line tokens.tsv "\$1 == \"$3\""
+            drop_line acl.tsv "\$3 == \"$3\" || index(\$3, \"$3!\") == 1"
+            ;;
+        "user token")
+            case $3 in
+                add)
+                    printf '%s\t%s\t%s\n' "$4" "$5" "$(opt privsep "$@")" >> "$HS_FAKE/tokens.tsv"
+                    printf '{"full-tokenid":"%s!%s","info":{"privsep":"1"},"value":"fake-secret-%s"}\n' "$4" "$5" "$5"
+                    ;;
+                delete | remove)
+                    drop_line tokens.tsv "\$1 == \"$4\" && \$2 == \"$5\""
+                    drop_line acl.tsv "\$3 == \"$4!$5\""
+                    ;;
+                modify)
+                    awk -F'\t' -v OFS='\t' -v u="$4" -v t="$5" -v p="$(opt privsep "$@")" \
+                        '$1 == u && $2 == t { $3 = p } 1' "$HS_FAKE/tokens.tsv" > "$HS_FAKE/tokens.tmp"
+                    mv "$HS_FAKE/tokens.tmp" "$HS_FAKE/tokens.tsv"
+                    ;;
+                *) die "fake pveum: $*" ;;
+            esac
+            ;;
+        "pool add")
+            grep -q "^$3$tab" "$HS_FAKE/pools.tsv" && die "pool '$3' already exists"
+            printf '%s\t\t%s\n' "$3" "$(opt comment "$@")" >> "$HS_FAKE/pools.tsv"
+            ;;
+        "pool delete")
+            [[ -z $(field pools.tsv "$3" 2) ]] || die "pool '$3' is not empty"
+            drop_line pools.tsv "\$1 == \"$3\""
+            drop_line acl.tsv "\$1 == \"/pool/$3\""
+            ;;
+        "pool modify")
+            local vms del
+            vms=$(opt vms "$@")
+            del=$(opt delete "$@")
+            awk -F'\t' -v OFS='\t' -v p="$3" -v v="$vms" -v d="$del" '
+                $1 == p {
+                    n = split($2, m, ","); out = ""
+                    for (i = 1; i <= n; i++) if (!(d == 1 && m[i] == v) && m[i] != "") out = out (out == "" ? "" : ",") m[i]
+                    if (d != 1) out = out (out == "" ? "" : ",") v
+                    $2 = out
+                } 1' "$HS_FAKE/pools.tsv" > "$HS_FAKE/pools.tmp"
+            mv "$HS_FAKE/pools.tmp" "$HS_FAKE/pools.tsv"
+            ;;
+        *) die "fake pveum: $*" ;;
+    esac
+}
+
+# --- pvesm, ssh, openssl -------------------------------------------------
+
+pvesm_main() {
+    [[ $1 == path ]] || die "fake pvesm: $*"
+    local volume=$2
+    printf '%s/vz/snippets/%s\n' "$HS_FAKE" "${volume#*:snippets/}"
+}
+
+ssh_main() {
+    local target=
+    while (($#)); do
+        case $1 in
+            -o) shift ;;
+            -*) ;;
+            *) target=$1; shift; break ;;
+        esac
+        shift
+    done
+    local ip=${target#root@} node
+    node=$(awk -F'\t' -v ip="$ip" '$2 == ip { print $1 }' "$HS_FAKE/nodes.tsv")
+    [[ -n $node ]] || { echo "ssh: Could not resolve hostname $ip" >&2; exit 255; }
+    if grep -qx "$node" "$HS_FAKE/offline-ssh" 2>/dev/null || [[ $(field nodes.tsv "$node" 3) != 1 ]]; then
+        echo "ssh: connect to host $ip port 22: Connection timed out" >&2
+        exit 255
+    fi
+    local command="$*"
+    printf 'ssh %s\n' "$node" >> "$HS_FAKE/ssh.log"
+    mkdir -p "$HS_FAKE/nodes/$node/vz"
+    # Run it on the node's files and show the paths as the node sees them.
+    bash -c "${command//$HS_FAKE\/vz/$HS_FAKE/nodes/$node/vz}" | sed "s|$HS_FAKE/nodes/$node/vz|$HS_FAKE/vz|g"
+    exit "${PIPESTATUS[0]}"
+}
+
+openssl_main() {
+    [[ $1 == s_client ]] || die "fake openssl: $*"
+    local name
+    name=$(opt verify_hostname "$@")
+    cat > /dev/null
+    if grep -qx "$name" "$HS_FAKE/trusted" 2>/dev/null; then
+        echo "Verification: OK"
+    else
+        echo "Verification error: unable to get local issuer certificate" >&2
+        exit 1
+    fi
+}
+
+case $tool in
+    pvesh) pvesh_main "$@" ;;
+    pveum) pveum_main "$@" ;;
+    pvesm) pvesm_main "$@" ;;
+    ssh) ssh_main "$@" ;;
+    openssl) openssl_main "$@" ;;
+    *) die "fake-pve: unknown tool $tool" ;;
+esac

@@ -31,6 +31,7 @@ pub fn router(state: Shared) -> Router {
         .route("/access/permissions", get(permissions))
         .route("/cluster/resources", get(cluster_resources))
         .route("/storage", get(storage_definitions))
+        .route("/pools", get(pools))
         .route("/nodes/{node}/network", get(node_network))
         .route("/nodes/{node}/dns", get(node_dns))
         .route("/nodes/{node}/storage", get(node_storages))
@@ -191,9 +192,11 @@ struct PermissionsQuery {
 /// The token's effective privileges: on `path`, or on every path of its ACL.
 /// Any token may read its own; PVE answers for paths that do not exist.
 async fn permissions(
+    State(state): State<Shared>,
     request_token: Option<axum::Extension<TokenSpec>>,
     Query(query): Query<PermissionsQuery>,
 ) -> Response {
+    let state = lock(&state);
     let Some(token) = token(request_token) else {
         return pve_error(401, "");
     };
@@ -205,7 +208,7 @@ async fn permissions(
     for path in paths {
         let privileges: serde_json::Map<String, Value> = PRIVILEGES
             .iter()
-            .filter(|privilege| has_privilege(&token, &path, privilege))
+            .filter(|privilege| state.allows(&token, &path, privilege))
             .map(|privilege| ((*privilege).to_owned(), json!(1)))
             .collect();
         body.insert(path, Value::Object(privileges));
@@ -264,7 +267,7 @@ fn reach(
     check: Option<(&str, &[&str])>,
 ) -> Result<NodeName, Failure> {
     if let Some((acl_path, privileges)) = check
-        && !token.is_some_and(|token| has_any_privilege(token, acl_path, privileges))
+        && !token.is_some_and(|token| state.allows_any(token, acl_path, privileges))
     {
         return Err(Failure {
             status: 403,
@@ -412,7 +415,7 @@ async fn cluster_resources(
     let list: Vec<Value> = state
         .vms
         .values()
-        .filter(|vm| has_privilege(&token, &format!("/vms/{}", vm.vmid), "VM.Audit"))
+        .filter(|vm| state.allows(&token, &format!("/vms/{}", vm.vmid), "VM.Audit"))
         .map(|vm| {
             let online = state
                 .nodes
@@ -433,9 +436,55 @@ async fn cluster_resources(
                     item[key] = toml_to_json(value);
                 }
             }
+            // `pool` only with Pool.Audit on it (observed in phase 3).
+            if let Some(pool) = state.pool_of(vm.vmid)
+                && has_privilege(&token, &format!("/pool/{pool}"), "Pool.Audit")
+            {
+                item["pool"] = json!(pool);
+            }
             item
         })
         .collect();
+    data(Value::Array(list))
+}
+
+/// `GET /pools`: the pools with `Pool.Audit` on them; with `poolid`, that
+/// pool and its `members` (PVE 9.2).
+async fn pools(
+    State(state): State<Shared>,
+    request_token: Option<axum::Extension<TokenSpec>>,
+    Query(query): Query<Vec<(String, String)>>,
+) -> Response {
+    let state = lock(&state);
+    let Some(token) = token(request_token) else {
+        return pve_error(401, "");
+    };
+    let wanted = query_value(&query, "poolid");
+    let list: Vec<Value> = state
+        .pools
+        .iter()
+        .filter(|pool| wanted.is_none_or(|id| id == pool.poolid))
+        .filter(|pool| has_privilege(&token, &format!("/pool/{}", pool.poolid), "Pool.Audit"))
+        .map(|pool| {
+            let mut item = json!({"poolid": pool.poolid, "comment": pool.comment});
+            if wanted.is_some() {
+                let members: Vec<Value> = pool
+                    .vms
+                    .iter()
+                    .filter_map(|vmid| state.vms.get(vmid))
+                    .map(|vm| json!({"id": format!("qemu/{}", vm.vmid), "type": "qemu", "vmid": vm.vmid, "node": vm.node}))
+                    .collect();
+                item["members"] = Value::Array(members);
+            }
+            item
+        })
+        .collect();
+    if let Some(id) = wanted
+        && list.is_empty()
+    {
+        // The message seen with `pvesh` on PVE 9.2.21; the status is not observed.
+        return pve_error(500, &format!("pool '{id}' does not exist\n"));
+    }
     data(Value::Array(list))
 }
 
@@ -651,7 +700,7 @@ async fn storage_content(
         .filter_map(|volume| {
             let owner = volume_owner(&volume.volid);
             let visible = allocate
-                || owner.is_some_and(|vmid| audit && has_privilege(&token, &format!("/vms/{vmid}"), "VM.Config.Disk"));
+                || owner.is_some_and(|vmid| audit && state.allows(&token, &format!("/vms/{vmid}"), "VM.Config.Disk"));
             if !visible {
                 return None;
             }

@@ -73,4 +73,50 @@ pub struct Capabilities {
     /// Configuration the ACL paths were derived from.
     pub config_version: String,
     pub operations: Vec<OperationCapability>,
+    /// What `deploy/pve/homestack-pve.sh install` makes, as far as the token
+    /// can see it.
+    pub installation: Installation,
+}
+
+/// The Proxmox objects of a HomeStack installation the server can check.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Installation {
+    /// The pool this instance changes workspaces in (`HOMESTACK_PVE_POOL`).
+    pub pool: String,
+    /// Gold's pool (`HOMESTACK_PVE_GOLD_POOL`, decision 9).
+    pub gold_pool: String,
+    /// No check is `missing` (`unknown` ones are left to the install script).
+    pub complete: bool,
+    pub checks: Vec<InstallationCheck>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct InstallationCheck {
+    pub item: InstallationItem,
+    pub status: InstallationStatus,
+    pub detail: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum InstallationItem {
+    /// The instance's pool exists.
+    Pool,
+    /// Gold's pool exists.
+    GoldPool,
+    /// The configured Gold is in Gold's pool.
+    GoldInPool,
+    /// The vendor snippets are on the nodes.
+    Snippets,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum InstallationStatus {
+    Ok,
+    Missing,
+    /// The token cannot tell.
+    Unknown,
 }

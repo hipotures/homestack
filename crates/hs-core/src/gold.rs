@@ -166,6 +166,18 @@ const REQUIRED_TOOLS: [&str; 12] = [
     "install",
 ];
 
+/// Not in Python: what the vendor snippet needs in Gold (decision 1 = A,
+/// phase 4b). Its `bootcmd` makes NetworkManager netplan's renderer and runs
+/// `netplan generate` and `udevadm trigger`; cloud-init itself is Python and
+/// reads YAML. Checked after Python's guest contract.
+const VENDOR_TOOLS: [&str; 4] = ["netplan", "udevadm", "NetworkManager", "python3"];
+const PYTHON_YAML: &str = "python3 -c 'import yaml' >/dev/null 2>&1 && echo OK || echo MISSING";
+const VENDOR_CHECK: (&str, &str, &str) = ("guest", "Cloud-Init vendor snippet tools", "required");
+
+fn vendor_skip(detail: &str) -> GoldCheck {
+    check(VENDOR_CHECK.0, VENDOR_CHECK.1, "skip", detail, VENDOR_CHECK.2)
+}
+
 /// Python's loop printing the commands `command -v` does not find.
 fn missing_loop(tools: &[&str]) -> String {
     format!(
@@ -332,6 +344,21 @@ async fn guest_contract(
         }
     }
     checks.push(verdict("security", "Workspace public-key source", keys_ok, keys_detail));
+    let vendor = guest_value(pve, node, vmid, &missing_loop(&VENDOR_TOOLS)).await?;
+    let mut missing: Vec<&str> = vendor.lines().collect();
+    if guest_value(pve, node, vmid, PYTHON_YAML).await? != "OK" {
+        missing.push("python3-yaml");
+    }
+    checks.push(verdict(
+        VENDOR_CHECK.0,
+        VENDOR_CHECK.1,
+        missing.is_empty(),
+        if missing.is_empty() {
+            "all present".to_owned()
+        } else {
+            format!("missing: {}", missing.join(", "))
+        },
+    ));
     Ok(())
 }
 
@@ -442,6 +469,7 @@ pub async fn gold_readiness(
         for (scope, name, requirement) in GUEST_SKIPS.iter().take(5).chain(OPTIONAL_SKIPS.iter()) {
             checks.push(check(scope, name, "skip", &detail, requirement));
         }
+        checks.push(vendor_skip(&detail));
         return Ok(readiness(vmid, node, power_state, checks));
     }
 
@@ -457,6 +485,7 @@ pub async fn gold_readiness(
             for (scope, name, requirement) in GUEST_SKIPS.iter().chain(OPTIONAL_SKIPS.iter()) {
                 checks.push(check(scope, name, "skip", "QEMU Guest Agent unavailable", requirement));
             }
+            checks.push(vendor_skip("QEMU Guest Agent unavailable"));
         }
         Ok(_) => {
             checks.push(verdict("guest", "QEMU Guest Agent response", true, "responding"));
@@ -484,6 +513,7 @@ pub async fn gold_readiness(
                         "required",
                     ));
                 }
+                checks.push(vendor_skip(&detail));
             }
         }
     }

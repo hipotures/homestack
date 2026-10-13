@@ -388,6 +388,10 @@ fn exec_checks(guest: &GuestSpec, shell: &str) -> Option<ExecResult> {
             "ABSENT"
         }));
     }
+    if shell == "python3 -c 'import yaml' >/dev/null 2>&1 && echo OK || echo MISSING" {
+        let importable = guest.has_command("python3") && guest.has_command("python3-yaml");
+        return Some(ExecResult::line(if importable { "OK" } else { "MISSING" }));
+    }
     if let Some(words) = between(shell, MISSING_LOOP.0, MISSING_LOOP.1) {
         let missing: String = words
             .split(' ')

@@ -66,6 +66,7 @@ mod tests {
         let token = PveToken::parse("homestack@pve!server=secret")?;
         let state = AppState {
             pve_token_id: Arc::from(token.id()),
+            pools: Arc::new(crate::Pools::default()),
             pve: Arc::new(PveClient::new(PveClientConfig::new(
                 vec!["https://localhost:1".parse()?],
                 token,

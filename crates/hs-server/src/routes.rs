@@ -10,7 +10,7 @@ use axum::extract::{DefaultBodyLimit, Path, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
-use hs_core::capabilities::{evaluate, probe_paths};
+use hs_core::capabilities::{evaluate, installation, probe_paths};
 use hs_model::capabilities::Capabilities;
 use hs_model::health::Liveness;
 use hs_model::pve::{NodeStatus, PveVersion};
@@ -232,7 +232,9 @@ pub async fn config_version(State(state): State<AppState>) -> Json<ConfigVersion
 ///
 /// Asks Proxmox (`GET /access/permissions`) for the token's privileges on
 /// every ACL path the operations need, then lists per operation what is
-/// required and what is missing.
+/// required and what is missing. Changes need privileges on the instance's
+/// pool (`HOMESTACK_PVE_POOL`). `installation` says which of the objects
+/// `deploy/pve/homestack-pve.sh install` makes the token can see.
 #[utoipa::path(
     get,
     path = "/v1/capabilities",
@@ -249,19 +251,22 @@ pub async fn config_version(State(state): State<AppState>) -> Json<ConfigVersion
 pub async fn capabilities(State(state): State<AppState>) -> Result<Json<Capabilities>, ApiError> {
     let current = state.config.current().ok_or_else(ApiError::config_missing)?;
     let mut granted: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    for path in probe_paths(&current.config) {
+    let pools = &state.pools;
+    for path in probe_paths(&current.config, &pools.workspaces) {
         let privileges = state.pve.permissions(&path).await?;
         granted.insert(path, privileges);
     }
-    let operations = evaluate(&current.config, |path, privilege| {
+    let operations = evaluate(&current.config, &pools.workspaces, |path, privilege| {
         granted
             .get(path)
             .is_some_and(|privileges| privileges.contains(privilege))
     });
+    let installation = installation(state.pve.as_ref(), &current.config, &pools.workspaces, &pools.gold).await;
     Ok(Json(Capabilities {
         token_id: state.pve_token_id.to_string(),
         config_version: current.version.clone(),
         operations,
+        installation,
     }))
 }
 

@@ -73,9 +73,10 @@ async fn listing_gaps(state: &AppState, cfg: &Config, nodes: &[NodeState]) -> Re
                 continue;
             }
             gaps.push(format!(
-                "The server's Proxmox token cannot list VM volumes on {storage} ({}): \
-                 it needs VM.Config.Disk on /vms or Datastore.Allocate on /storage/{storage}",
-                node.node
+                "The server's Proxmox token cannot list the volumes of VMs outside pool {}, \
+                 deleted VMs included, on {storage} ({}) (decision 10): a complete scan \
+                 needs VM.Config.Disk on /vms or Datastore.Allocate on /storage/{storage}",
+                state.pools.workspaces, node.node
             ));
         }
     }

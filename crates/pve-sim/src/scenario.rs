@@ -27,6 +27,20 @@ pub struct ClusterSpec {
     pub volumes: Vec<VolumeSpec>,
     #[serde(default)]
     pub vms: Vec<VmSpec>,
+    /// Resource pools (`GET /pools`); a VM's pool adds the roles on
+    /// `/pool/<poolid>` to those on `/vms/<vmid>`.
+    #[serde(default)]
+    pub pools: Vec<PoolSpec>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PoolSpec {
+    pub poolid: String,
+    #[serde(default)]
+    pub comment: String,
+    #[serde(default)]
+    pub vms: Vec<u32>,
 }
 
 /// Body of `GET /version`.
@@ -256,7 +270,8 @@ pub struct GuestSpec {
     #[serde(default)]
     pub users: Vec<UserEntry>,
     /// Programs on the `PATH`, found in `/usr/bin`, `/usr/sbin`, `/bin` and
-    /// `/sbin` alike (merged `/usr`).
+    /// `/sbin` alike (merged `/usr`); `python3-yaml` means `python3` can
+    /// import `yaml`.
     #[serde(default = "default_commands")]
     pub commands: Vec<String>,
     /// Further files by absolute path (e.g. `authorized_keys`).
@@ -268,7 +283,9 @@ pub struct GuestSpec {
     pub cloud_id: Option<String>,
 }
 
-/// The programs of a guest that meets the Gold contract (no `sudo`).
+/// The programs of a guest that meets the Gold contract (no `sudo`), and
+/// what the vendor snippet needs (`python3-yaml` stands for Python's `yaml`
+/// module).
 fn default_commands() -> Vec<String> {
     [
         "cloud-init",
@@ -287,6 +304,11 @@ fn default_commands() -> Vec<String> {
         "rsync",
         "git",
         "ssh-keygen",
+        "netplan",
+        "udevadm",
+        "NetworkManager",
+        "python3",
+        "python3-yaml",
     ]
     .iter()
     .map(|name| (*name).to_owned())

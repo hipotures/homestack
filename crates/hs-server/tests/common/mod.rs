@@ -122,6 +122,7 @@ impl Server {
             api_token: ApiToken::parse(API_TOKEN)?,
             pve,
             config_file: config_file.to_owned(),
+            pools: hs_server::Pools::default(),
         })?;
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
         let addr = listener.local_addr()?;

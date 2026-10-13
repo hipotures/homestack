@@ -112,6 +112,28 @@ fn normalization_selects_renames_and_drops() -> TestResult {
 }
 
 #[test]
+fn list_items_are_dropped_by_text_or_by_field() -> TestResult {
+    let rules: Rules = toml::from_str(
+        r#"
+        [[rule]]
+        id = "r"
+        rust_drop_items = { warnings = "server *", checks = "name=Extra*" }
+        reason = "because"
+        "#,
+    )?;
+    let rule = rules.get("r")?;
+    let rust = json!({
+        "warnings": ["server only", "shared"],
+        "checks": [{"name": "Extra check"}, {"name": "Shared"}, {"other": "Extra"}, "Extra text"],
+    });
+    assert_eq!(
+        rule.rust(&rust),
+        json!({"warnings": ["shared"], "checks": [{"name": "Shared"}, {"other": "Extra"}, "Extra text"]})
+    );
+    Ok(())
+}
+
+#[test]
 fn every_rule_needs_a_reason() {
     let rules = toml::from_str::<Rules>(
         r#"

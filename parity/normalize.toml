@@ -110,3 +110,17 @@ Phase 4, mapping C5: Python reads Gold's authorized_keys files with
 (decision 5, VM.GuestAgent.FileRead). The reads of the cluster and of Gold's
 config and status, the ping and the outcome are compared.
 """
+
+[[rule]]
+id = "gold-readiness"
+python_ops_drop = ["guest_exec_status{*"]
+rust_ops_drop = ["guest_exec_status{*", "guest_exec{cmd=for c in netplan udevadm NetworkManager python3;*", "guest_exec{cmd=python3 -c 'import yaml'*"]
+rust_drop_items = { checks = "name=Cloud-Init vendor snippet tools" }
+reason = """
+Phase 4b: after Python's guest contract the server also checks what the
+vendor snippet needs in Gold (decision 1 = A): `netplan`, `udevadm`,
+`NetworkManager` and `python3` with `yaml`. That check and its two commands
+are the server's own; the rest, `ok` included, is compared. The
+`exec-status` polls only pair each command with its result, and differ in
+number by the two extra commands.
+"""

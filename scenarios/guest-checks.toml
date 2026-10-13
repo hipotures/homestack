@@ -24,12 +24,12 @@ config = "python/config.example.toml"
 [[parity]]
 python = ["@gold-readiness"]
 rust = "GET /v1/gold/readiness"
-normalize = "same"
+normalize = "gold-readiness"
 
 [[parity]]
 python = ["@gold-readiness", "102"]
 rust = "GET /v1/gold/readiness?vmid=102"
-normalize = "same"
+normalize = "gold-readiness"
 
 [[parity]]
 python = ["@verify-refresh", "220"]

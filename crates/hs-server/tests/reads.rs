@@ -86,8 +86,9 @@ async fn a_token_that_cannot_list_vm_volumes_makes_the_orphan_scan_incomplete() 
     assert_eq!(
         body["warnings"],
         json!([
-            "The server's Proxmox token cannot list VM volumes on example-storage (pve-example-1): \
-             it needs VM.Config.Disk on /vms or Datastore.Allocate on /storage/example-storage"
+            "The server's Proxmox token cannot list the volumes of VMs outside pool homestack, \
+             deleted VMs included, on example-storage (pve-example-1) (decision 10): a complete scan \
+             needs VM.Config.Disk on /vms or Datastore.Allocate on /storage/example-storage"
         ])
     );
     let (_, body, _) = get(&server, "/v1/status").await?;

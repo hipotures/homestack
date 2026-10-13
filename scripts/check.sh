@@ -63,6 +63,11 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 step "Rust tests: unit, simulator (L2) and parity scenarios (L3)"
 cargo test --workspace --locked
 
+step "cluster install script (deploy/pve)"
+uvx --from shellcheck-py==0.10.0.1 shellcheck -x deploy/pve/homestack-pve.sh deploy/pve/embed-snippets.sh \
+    deploy/pve/tests/run.sh deploy/pve/tests/fake-pve
+deploy/pve/tests/run.sh
+
 step "Python parity tools"
 uv_ run --quiet python -m unittest discover -s "$root/parity/python/tests" -t "$root/parity/python"
 
