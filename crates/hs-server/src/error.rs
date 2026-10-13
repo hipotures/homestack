@@ -77,7 +77,9 @@ const fn status(code: ErrorCode) -> StatusCode {
         | ErrorCode::Busy
         | ErrorCode::OutsidePool
         | ErrorCode::OperationRefused => StatusCode::CONFLICT,
-        ErrorCode::PveUnavailable | ErrorCode::PveNodeUnavailable => StatusCode::SERVICE_UNAVAILABLE,
+        ErrorCode::PveUnavailable | ErrorCode::PveNodeUnavailable | ErrorCode::PveTokenMissing => {
+            StatusCode::SERVICE_UNAVAILABLE
+        }
         ErrorCode::PveAuthFailed | ErrorCode::PvePermissionDenied | ErrorCode::PveError => StatusCode::BAD_GATEWAY,
         ErrorCode::Internal => StatusCode::INTERNAL_SERVER_ERROR,
     }

@@ -68,9 +68,10 @@ async fn start_with(cluster: &str, server_toml: &str) -> Result<Running, Error> 
     };
     let app = hs_server::app_with(
         ServerConfig {
-            api_token: ApiToken::parse(API_TOKEN)?,
-            pve,
+            api_token: ApiToken::parse(API_TOKEN)?.into(),
+            pve: pve.into(),
             config_file: dir.path().join("server.toml"),
+            instance: hs_server::Instance::default(),
             pools: hs_server::Pools::default(),
         },
         AppOptions {

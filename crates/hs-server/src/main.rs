@@ -38,7 +38,13 @@ async fn main() -> ExitCode {
         .iter()
         .map(|u| u.origin().ascii_serialization())
         .collect();
-    let token_id = settings.server.pve.token.id().to_owned();
+    let token_id = settings
+        .server
+        .pve
+        .token
+        .as_ref()
+        .map_or_else(|| "(sent through the API)".to_owned(), |token| token.id().to_owned());
+    let instance = settings.server.instance.name.clone();
     let app = match hs_server::app(settings.server) {
         Ok(app) => app,
         Err(error) => {
@@ -53,7 +59,7 @@ async fn main() -> ExitCode {
             return ExitCode::from(1);
         }
     };
-    tracing::info!(listen = %settings.listen, ?endpoints, pve_token = token_id, "homestack-server started");
+    tracing::info!(listen = %settings.listen, instance, ?endpoints, pve_token = token_id, "homestack-server started");
     if let Err(error) = axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await

@@ -175,9 +175,10 @@ async fn serve(node: &str) -> Result<String, Error> {
     };
     let app = hs_server::app_with(
         ServerConfig {
-            api_token: ApiToken::parse(API_TOKEN)?,
-            pve: client_config()?,
+            api_token: ApiToken::parse(API_TOKEN)?.into(),
+            pve: client_config()?.into(),
             config_file: std::env::temp_dir().join("homestack-live-unused/server.toml"),
+            instance: hs_server::Instance::default(),
             pools: hs_server::Pools {
                 workspaces: POOL.to_owned(),
                 ..hs_server::Pools::default()

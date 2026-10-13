@@ -62,6 +62,8 @@ struct Needs {
     snippets: bool,
 }
 
+/// Every operation that changes a VM first writes its lease into the VM's
+/// `description` (phase 11): `VM.Config.Options` on the pool.
 const fn needs(operation: Operation) -> Needs {
     const NONE: &[&str] = &[];
     match operation {
@@ -119,6 +121,7 @@ const fn needs(operation: Operation) -> Needs {
                 "VM.Audit",
                 "VM.Config.Cloudinit",
                 "VM.Config.Disk",
+                "VM.Config.Options",
                 "VM.GuestAgent.Audit",
                 "VM.GuestAgent.Unrestricted",
                 "VM.PowerMgmt",
@@ -134,6 +137,7 @@ const fn needs(operation: Operation) -> Needs {
                 "Pool.Audit",
                 "VM.Audit",
                 "VM.Config.Disk",
+                "VM.Config.Options",
                 "VM.GuestAgent.Audit",
                 "VM.GuestAgent.FileRead",
                 "VM.GuestAgent.Unrestricted",
@@ -149,6 +153,7 @@ const fn needs(operation: Operation) -> Needs {
             pool: &[
                 "Pool.Audit",
                 "VM.Audit",
+                "VM.Config.Options",
                 "VM.GuestAgent.Audit",
                 "VM.GuestAgent.FileRead",
                 "VM.Migrate",
@@ -165,6 +170,7 @@ const fn needs(operation: Operation) -> Needs {
                 "Pool.Audit",
                 "VM.Allocate",
                 "VM.Audit",
+                "VM.Config.Options",
                 "VM.GuestAgent.Audit",
                 "VM.PowerMgmt",
             ],
@@ -180,6 +186,7 @@ const fn needs(operation: Operation) -> Needs {
                 "Pool.Audit",
                 "VM.Audit",
                 "VM.Config.Cloudinit",
+                "VM.Config.Options",
                 "VM.GuestAgent.Audit",
                 "VM.GuestAgent.FileRead",
                 "VM.GuestAgent.Unrestricted",

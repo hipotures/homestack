@@ -9,6 +9,6 @@ mod client;
 mod error;
 mod token;
 
-pub use client::{NodeEntry, NodeState, PveClient, PveClientConfig};
+pub use client::{DEFAULT_CONNECT_TIMEOUT, DEFAULT_REQUEST_TIMEOUT, NodeEntry, NodeState, PveClient, PveClientConfig};
 pub use error::{EndpointFailure, PveError};
 pub use token::{PveToken, TokenError};

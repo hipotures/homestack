@@ -59,6 +59,7 @@ pub fn v1() -> Router<AppState> {
         .route("/v1/jobs", get(crate::jobs::list_jobs))
         .route("/v1/jobs/{id}", get(crate::jobs::get_job))
         .route("/v1/jobs/{id}/events", get(crate::jobs::job_events))
+        .merge(crate::secrets::routes())
 }
 
 /// The HTTP server answers. Does not contact Proxmox.
@@ -81,7 +82,7 @@ pub async fn live() -> Json<Liveness> {
     )
 )]
 pub async fn pve_version(State(state): State<AppState>) -> Result<Json<PveVersion>, ApiError> {
-    Ok(Json(state.pve.version().await?))
+    Ok(Json(state.pve()?.version().await?))
 }
 
 /// Version, kernel and uptime of one node, from `GET /nodes/{node}/status`.
@@ -104,7 +105,7 @@ pub async fn pve_node_status(
     Path(node): Path<String>,
 ) -> Result<Json<NodeStatus>, ApiError> {
     let node = NodeName::parse(&node).map_err(|_| ApiError::new(ErrorCode::ValidationFailed, "Invalid node name."))?;
-    Ok(Json(state.pve.node_status(&node).await?))
+    Ok(Json(state.pve()?.node_status(&node).await?))
 }
 
 /// The stored `server.toml`, as uploaded.
@@ -253,7 +254,7 @@ pub async fn capabilities(State(state): State<AppState>) -> Result<Json<Capabili
     let mut granted: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     let pools = &state.pools;
     for path in probe_paths(&current.config, &pools.workspaces) {
-        let privileges = state.pve.permissions(&path).await?;
+        let privileges = state.pve()?.permissions(&path).await?;
         granted.insert(path, privileges);
     }
     let operations = evaluate(&current.config, &pools.workspaces, |path, privilege| {
@@ -261,9 +262,9 @@ pub async fn capabilities(State(state): State<AppState>) -> Result<Json<Capabili
             .get(path)
             .is_some_and(|privileges| privileges.contains(privilege))
     });
-    let installation = installation(state.pve.as_ref(), &current.config, &pools.workspaces, &pools.gold).await;
+    let installation = installation(state.pve()?.as_ref(), &current.config, &pools.workspaces, &pools.gold).await;
     Ok(Json(Capabilities {
-        token_id: state.pve_token_id.to_string(),
+        token_id: state.pve.token_id().unwrap_or_default(),
         config_version: current.version.clone(),
         operations,
         installation,

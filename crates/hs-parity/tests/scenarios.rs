@@ -124,9 +124,10 @@ async fn run_rust(scenario: &Scenario, sim: &PveSim, request: &str) -> Result<Va
     let state = tempfile::tempdir()?;
     std::fs::write(state.path().join("server.toml"), server_toml)?;
     let app = hs_server::app(ServerConfig {
-        api_token: ApiToken::parse(API_TOKEN)?,
-        pve,
+        api_token: ApiToken::parse(API_TOKEN)?.into(),
+        pve: pve.into(),
         config_file: state.path().join("server.toml"),
+        instance: hs_server::Instance::default(),
         pools: hs_server::Pools::default(),
     })?;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;

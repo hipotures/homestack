@@ -21,3 +21,14 @@ pub struct ConfigUpdated {
     /// `false` when the text was already stored; nothing was written then.
     pub changed: bool,
 }
+
+/// Body of `PUT /v1/secrets/tls`: the certificate Caddy serves, PEM.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TlsCertificate {
+    /// The certificate chain, leaf first.
+    pub cert: String,
+    /// Its private key.
+    #[schema(value_type = String)]
+    pub key: crate::jobs::Secret,
+}

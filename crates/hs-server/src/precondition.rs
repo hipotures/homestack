@@ -58,7 +58,7 @@ pub(crate) fn expected_config(headers: &HeaderMap, state: &AppState) -> Result<A
 mod tests {
     use super::*;
     use crate::config_store::{ConfigStore, Precondition};
-    use crate::{ApiToken, PveClient, PveClientConfig};
+    use crate::{ApiToken, PveClientConfig};
     use axum::Router;
     use axum::routing::post;
     use hs_pve::PveToken;
@@ -69,16 +69,17 @@ mod tests {
 
     async fn serve(store: ConfigStore) -> Result<String, Box<dyn std::error::Error>> {
         let token = PveToken::parse("homestack@pve!server=secret")?;
+        let pve = PveClientConfig::new(vec!["https://localhost:1".parse()?], token);
         let state = AppState {
-            pve_token_id: Arc::from(token.id()),
             pools: Arc::new(crate::Pools::default()),
-            pve: Arc::new(PveClient::new(PveClientConfig::new(
-                vec!["https://localhost:1".parse()?],
-                token,
-            ))?),
-            api_token: Arc::new(ApiToken::parse(&"t".repeat(32))?),
+            pve: Arc::new(crate::PveHandle::new(pve.into(), None)?),
+            api_token: Arc::new(ApiToken::parse(&"t".repeat(32))?.into()),
             config: Arc::new(store),
-            ops: Arc::new(crate::operations::OpsState::new(crate::AppOptions::default())),
+            ops: Arc::new(crate::operations::OpsState::new(
+                crate::AppOptions::default(),
+                crate::DEFAULT_INSTANCE.to_owned(),
+            )),
+            instance: Arc::new(crate::Instance::default()),
         };
         let app = Router::new()
             .route(

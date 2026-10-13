@@ -23,13 +23,13 @@ use crate::operations::{ApplyRefusal, OpContext, OpFailure, timestamp};
 /// Largest plan or apply request accepted.
 pub const MAX_REQUEST_BYTES: usize = 64 * 1024;
 
-fn context(state: &AppState) -> OpContext {
-    OpContext {
-        pve: Arc::clone(&state.pve),
+fn context(state: &AppState) -> Result<OpContext, ApiError> {
+    Ok(OpContext {
+        pve: state.pve()?,
         config: state.config.current(),
         pools: Arc::clone(&state.pools),
         secrets: hs_model::jobs::ApplySecrets::default(),
-    }
+    })
 }
 
 /// A JSON body with unknown fields refused; nothing of it is echoed.
@@ -62,6 +62,7 @@ fn plan_error(failure: OpFailure) -> ApiError {
         OpFailure::Core(CoreError::Invalid(message)) => ApiError::with_message(ErrorCode::ValidationFailed, message),
         OpFailure::Core(CoreError::NotFound(message)) => ApiError::with_message(ErrorCode::NotFound, message),
         OpFailure::Core(CoreError::OutsidePool(message)) => ApiError::with_message(ErrorCode::OutsidePool, message),
+        OpFailure::Core(CoreError::Busy(message)) => ApiError::with_message(ErrorCode::Busy, message),
         OpFailure::Core(CoreError::Refused(message) | CoreError::Failed(message)) => {
             ApiError::with_message(ErrorCode::OperationRefused, message)
         }
@@ -107,7 +108,7 @@ pub async fn create_plan(
     let request: PlanRequest = json_body(&headers, &body)?;
     match state
         .ops
-        .plan(&context(&state), &request.operation, request.parameters)
+        .plan(&context(&state)?, &request.operation, request.parameters)
         .await
     {
         None => Err(ApiError::new(ErrorCode::ValidationFailed, "Unknown operation.")),
@@ -172,7 +173,7 @@ pub async fn apply_plan(
     if state.config.current().is_some() {
         crate::precondition::expected_config(&headers, &state)?;
     }
-    let mut ctx = context(&state);
+    let mut ctx = context(&state)?;
     ctx.secrets = request.secrets.unwrap_or_default();
     let job = state
         .ops
@@ -185,7 +186,8 @@ pub async fn apply_plan(
                 "The cluster changed since the plan was made, or the digest differs; make a new plan.",
             ),
             ApplyRefusal::Applied => ApiError::new(ErrorCode::PlanApplied, "The plan was already applied."),
-            ApplyRefusal::Busy => ApiError::new(ErrorCode::Busy, "Another job is working on a VM of this plan."),
+            ApplyRefusal::Busy(None) => ApiError::new(ErrorCode::Busy, "Another job is working on a VM of this plan."),
+            ApplyRefusal::Busy(Some(message)) => ApiError::with_message(ErrorCode::Busy, message),
             ApplyRefusal::Secrets(message) => ApiError::new(ErrorCode::SecretRequired, message),
             ApplyRefusal::Failure(failure) => plan_error(failure),
         })?;

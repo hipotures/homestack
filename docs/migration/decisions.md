@@ -105,9 +105,20 @@ an agent stops when a phase needs one that is still open
   the agent copies it once as root on pve2 into the desktop's
   `~/.config/homestack/ovh-dns` (mode `0600`), never printing it.
 - **Secrets through the server's API:** the container's environment holds
-  only the SHA-256 of the client token; the deploy command sends the
-  Proxmox token (and the certificate) with write-only `PUT
-  /v1/secrets/{name}` (api-mapping 8.1), kept by the server mode `0600`.
+  the SHA-256 of the client token; the deploy command sends the Proxmox
+  token with write-only `PUT /v1/secrets/{name}` (api-mapping 8.1), kept by
+  the server mode `0600`.
+- **The certificate at creation** (owner, after the probe below): the image
+  is public, and the API cannot put a file into a container, so the
+  certificate and its key go into the container's `env` (base64) before
+  its first start; the server stores them in its own files (`0600`) and the
+  deploy command removes them from the container's configuration right
+  after. Only the deploy token and root can read that configuration (pool
+  `homestack-service`). TLS is then the real certificate from the first
+  start, and the tokens follow through the API over it.
+- **Old server images stay** in the template storage: removing one needs
+  `Datastore.Allocate`, which would allow removing anything on that
+  storage. The deploy command lists them; the owner removes them.
 - **A separate deploy token:** `homestack-pve.sh install` adds pool
   `homestack-service`, role `HomeStackDeploy` and token
   `homestack@pve!deploy`, used only by the deploy command (ACL change
@@ -140,3 +151,4 @@ an agent stops when a phase needs one that is still open
 | 2026-10-12 | Task logs (phase 3) | `GET tasks/{upid}/log` answers an empty log (a task that has not written yet) with one made-up line `{"n":1,"t":"no content"}` (`PVE::Tools::dump_logfile`); a log with lines answers `start` past its end with `[]`. A token's task has `user` `homestack@pve`, `tokenid` `test` and the UPID ends in `homestack@pve!test:`. Shutting down a VM without a guest fails after `timeout` with `VM quit/powerdown failed - got timeout` (log `TASK ERROR: ...`) |
 | 2026-10-12 | Test token in its pool (phase 3) | creating a VM with `pool=homestack-test` works with `VM.Allocate` on the pool, but `memory` or `cores` need `VM.Config.Memory` / `VM.Config.CPU`, which the test token does not have (HomeStack clones Gold and sets neither); a bare VM gets 512 MiB and one core. Without `Pool.Audit` the token does not see `pool` in `cluster/resources`. Start, shutdown, stop and `DELETE ?purge=1` of VM 240 worked with the test token |
 | 2026-10-13 | Native Cloud-Init boot test (phase 4 gate, owner's approval to install the vendor snippets on pve2) | Gold 101 cloned by the test token to VM 240 in `homestack-test` with `ciuser=root`, `ciupgrade=0`, `nameserver`, `ipconfig0`, `cicustom=vendor=local:snippets/homestack-vendor-create.yaml` and a 1 GiB `scsi1` with `serial=HS_HOME_240` (setting `cicustom` needed no new privilege). Proxmox's user-data: `hostname`, `manage_etc_hosts`, `fqdn`, `user: root`, `disable_root: False`, `ssh_authorized_keys`, `chpasswd`, no `users:`; meta-data `instance-id` = SHA1 of user-data and network-config (vendor data not included); network-config v1 with no renderer. First boot: hostname and mounted, formatted home with the keys right, but no IPv4: netplan gave `eth0` to the masked `systemd-networkd` (Python's network snippet said `renderer: NetworkManager`). Fixed in the vendor snippet: a `bootcmd` writes `/etc/netplan/90-homestack-renderer.yaml` (`renderer: NetworkManager`), runs `netplan generate` and `udevadm trigger` (netplan's udev rule had left the device `NM_UNMANAGED`) and restarts NetworkManager only if it already runs (`netplan apply` fails restarting the masked networkd). Then: address, default route and DNS (`192.168.100.1 1.1.1.1`, plus `search efez.net` from the node, since no `searchdomain` is set), reachable from the desktop; the same after a reboot; `keep` with a changed `sshkeys` ran again (new instance) and left the home and its `authorized_keys` alone, adding the key to root only; `keep` on a blank disk stopped with `persistent home is blank during refresh; refusing mkfs` and left it blank. Side effects of `user: root`: cloud-init writes `/etc/sudoers.d/90-cloud-init-users` with a rule for root (sudo is not installed) and reports `degraded done` for the deprecated string `user`; root's password was already locked in Gold. VM 240 destroyed, no volumes left |
+| 2026-10-13 | Server containers from an OCI image through the API (phase 11, deploy token `homestack@pve!deploy` after `homestack-pve.sh install --test` on pve2, CT 998) | `POST /nodes/pve2/storage/local/oci-registry-pull` with `reference=docker.io/library/alpine:3.24` is a task (`ociregistrypull`) that writes `local:vztmpl/alpine_3.24.tar` (Datastore.AllocateTemplate on the storage, Sys.AccessNetwork on the node). `POST /nodes/pve2/lxc` with that `ostemplate`, `pool=homestack-service`, `rootfs=local-lvm:1`, `unprivileged=1` and `net0=name=eth0,bridge=vmbr0,ip=192.168.100.98/24,gw=192.168.100.1` logs "Detected OCI archive" and "Auto-Enabling host-managed network", and sets `ostype alpine`, `cmode console`, `lxc.signal.halt SIGTERM`; `entrypoint` and `env` come from the image (the `entrypoint` given at creation was ignored). `PUT config` changes both; `env` is NUL-separated (`%00`). Started, the CT had `192.168.100.98/24` (`GET .../interfaces`) and answered ping from the desktop. Stop and `DELETE ?purge=1&destroy-unreferenced-disks=1` worked; no volume left. Removing the image (`DELETE .../content/local:vztmpl/...`) needs `Datastore.Allocate` on the storage and was refused; root removed it |

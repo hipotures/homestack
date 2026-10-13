@@ -18,6 +18,11 @@ use crate::token::PveToken;
 /// Status Proxmox uses when it cannot proxy a request to another node.
 const PROXY_FAILURE: u16 = 595;
 
+/// Default of [`PveClientConfig::connect_timeout`].
+pub const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+/// Default of [`PveClientConfig::request_timeout`].
+pub const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
 #[derive(Debug, Clone)]
 pub struct PveClientConfig {
     /// API origins, e.g. `https://pve1.example:8006`, tried in order.
@@ -36,8 +41,8 @@ impl PveClientConfig {
             endpoints,
             token,
             extra_ca_pem: None,
-            connect_timeout: Duration::from_secs(5),
-            request_timeout: Duration::from_secs(30),
+            connect_timeout: DEFAULT_CONNECT_TIMEOUT,
+            request_timeout: DEFAULT_REQUEST_TIMEOUT,
         }
     }
 }

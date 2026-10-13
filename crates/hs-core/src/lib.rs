@@ -15,6 +15,7 @@ pub mod gold;
 pub mod guest;
 pub mod inventory;
 pub mod keys;
+pub mod lease;
 pub mod lifecycle;
 pub mod migrate;
 pub mod power;

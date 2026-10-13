@@ -59,7 +59,7 @@ fn core_error(error: CoreError, not_found: &'static str) -> ApiError {
             ErrorCode::ValidationFailed,
             "The workspace name matches several VMs; use the VMID.",
         ),
-        CoreError::Unusable(detail) | CoreError::Failed(detail) => {
+        CoreError::Busy(detail) | CoreError::Unusable(detail) | CoreError::Failed(detail) => {
             tracing::warn!(detail, "unusable Proxmox data");
             ApiError::new(ErrorCode::PveError, "Proxmox returned data HomeStack cannot use.")
         }
@@ -76,7 +76,7 @@ async fn listing_gaps(state: &AppState, cfg: &Config, nodes: &[NodeState]) -> Re
         if let Some(known) = cache.get(&path) {
             return Ok(known.clone());
         }
-        let found = state.pve.permissions(&path).await?;
+        let found = state.pve()?.permissions(&path).await?;
         cache.insert(path, found.clone());
         Ok(found)
     };
@@ -117,7 +117,7 @@ async fn listing_gaps(state: &AppState, cfg: &Config, nodes: &[NodeState]) -> Re
 )]
 pub async fn status(State(state): State<AppState>) -> Result<Json<GlobalStatus>, ApiError> {
     let stored = configuration(&state)?;
-    let mut status = global_status(state.pve.as_ref(), &stored.config)
+    let mut status = global_status(state.pve()?.as_ref(), &stored.config)
         .await
         .map_err(|e| core_error(e, "No such resource."))?;
     let gaps = listing_gaps(&state, &stored.config, &status.summary.nodes).await?;
@@ -153,7 +153,8 @@ pub async fn workspace(
     Path(target): Path<String>,
 ) -> Result<Json<WorkspaceStatus>, ApiError> {
     let stored = configuration(&state)?;
-    let pve = state.pve.as_ref();
+    let pve_client = state.pve()?;
+    let pve = pve_client.as_ref();
     let not_found = "No such workspace.";
     let vmid = resolve_workspace_target(pve, &stored.config, &target)
         .await
@@ -187,7 +188,8 @@ pub async fn workspace(
 )]
 pub async fn storage(State(state): State<AppState>) -> Result<Json<Vec<LayoutCapacity>>, ApiError> {
     let stored = configuration(&state)?;
-    let pve = state.pve.as_ref();
+    let pve_client = state.pve()?;
+    let pve = pve_client.as_ref();
     let nodes = cluster_node_statuses(pve)
         .await
         .map_err(|e| core_error(e, "No such resource."))?;
@@ -214,7 +216,8 @@ pub async fn storage(State(state): State<AppState>) -> Result<Json<Vec<LayoutCap
 )]
 pub async fn orphans(State(state): State<AppState>) -> Result<Json<Orphans>, ApiError> {
     let stored = configuration(&state)?;
-    let pve = state.pve.as_ref();
+    let pve_client = state.pve()?;
+    let pve = pve_client.as_ref();
     let inventory = Inventory::read(pve, &stored.config)
         .await
         .map_err(|e| core_error(e, "No such resource."))?;
@@ -244,7 +247,7 @@ pub async fn orphans(State(state): State<AppState>) -> Result<Json<Orphans>, Api
     )
 )]
 pub async fn discovery(State(state): State<AppState>) -> Result<Json<Discovery>, ApiError> {
-    read_discovery(state.pve.as_ref())
+    read_discovery(state.pve()?.as_ref())
         .await
         .map(Json)
         .map_err(|e| core_error(e, "No such resource."))
@@ -271,7 +274,7 @@ async fn gold_vm(
             .map_err(|_| ApiError::new(ErrorCode::ValidationFailed, "Invalid VMID."))?,
         None => configuration(state)?.config.gold_vmid,
     };
-    let resources = cluster_vm_resources(state.pve.as_ref())
+    let resources = cluster_vm_resources(state.pve()?.as_ref())
         .await
         .map_err(|e| core_error(e, "No such resource."))?;
     let resource = resources
@@ -305,7 +308,7 @@ pub async fn networks(
     Query(query): Query<GoldQuery>,
 ) -> Result<Json<Vec<NetworkCandidate>>, ApiError> {
     let (vmid, node, resources) = gold_vm(&state, &query).await?;
-    workspace_networks(state.pve.as_ref(), &resources, vmid, &node)
+    workspace_networks(state.pve()?.as_ref(), &resources, vmid, &node)
         .await
         .map(Json)
         .map_err(|e| core_error(e, "No such VM."))
@@ -348,7 +351,7 @@ pub async fn gold_readiness(
         },
         |stored| (stored.config.root_disk.clone(), stored.config.user.clone()),
     );
-    read_gold_readiness(state.pve.as_ref(), &root_disk, &user, &node, vmid)
+    read_gold_readiness(state.pve()?.as_ref(), &root_disk, &user, &node, vmid)
         .await
         .map(Json)
         .map_err(|e| core_error(e, "No such VM."))

@@ -14,6 +14,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, SystemTime};
 
 use hs_core::CoreError;
+use hs_core::lease;
 use hs_core::tasks::Observer;
 use hs_model::jobs::{Job, JobError, JobEvent, JobProgress, JobState, JobStep, JobTask, Plan, StepState, TaskStatus};
 use hs_pve::PveClient;
@@ -81,6 +82,7 @@ impl OpFailure {
                 (code, error.to_string())
             }
             Self::Core(error @ CoreError::OutsidePool(_)) => ("outside_pool".to_owned(), error.to_string()),
+            Self::Core(error @ CoreError::Busy(_)) => ("busy".to_owned(), error.to_string()),
             Self::Core(error) => ("operation_failed".to_owned(), error.to_string()),
         };
         JobError { code, message }
@@ -182,7 +184,9 @@ pub enum ApplyRefusal {
     Unknown,
     Changed,
     Applied,
-    Busy,
+    /// Another job holds a VM of the plan: one of this instance (`None`), or
+    /// one of another instance (its lease, described).
+    Busy(Option<String>),
     /// The secrets sent do not match the plan's `secrets_required`.
     Secrets(&'static str),
     Failure(OpFailure),
@@ -198,15 +202,18 @@ struct Inner {
 pub struct OpsState {
     pub options: AppOptions,
     pub instance_id: String,
+    /// `HOMESTACK_INSTANCE`, the holder of this instance's leases.
+    pub instance: String,
     inner: Mutex<Inner>,
 }
 
 impl OpsState {
     #[must_use]
-    pub fn new(options: AppOptions) -> Self {
+    pub fn new(options: AppOptions, instance: String) -> Self {
         Self {
             options,
             instance_id: uuid::Uuid::new_v4().to_string(),
+            instance,
             inner: Mutex::new(Inner {
                 plans: HashMap::new(),
                 jobs: VecDeque::new(),
@@ -220,6 +227,65 @@ impl OpsState {
         let now = Instant::now();
         inner.plans.retain(|_, stored| stored.expires > now);
         inner
+    }
+
+    /// Whether this instance runs a job with this id now.
+    fn running(&self, id: &str) -> bool {
+        self.lock().jobs.iter().any(|job| {
+            let job = job.borrow();
+            job.id == id && !job.state.finished()
+        })
+    }
+
+    fn holder<'a>(
+        &'a self,
+        job: &'a str,
+        operation: &'a str,
+        running: &'a (dyn Fn(&str) -> bool + Sync),
+    ) -> lease::Holder<'a> {
+        lease::Holder {
+            instance: &self.instance,
+            job,
+            operation,
+            now: SystemTime::now(),
+            ttl: lease::LEASE_TTL,
+            running,
+        }
+    }
+
+    /// Refuse when another instance holds a target (`busy`).
+    async fn check_leases(&self, ctx: &OpContext, operation: &str, targets: &[u32]) -> Result<(), OpFailure> {
+        let running = |id: &str| self.running(id);
+        for vmid in targets {
+            lease::check_free(ctx.pve.as_ref(), *vmid, &self.holder("", operation, &running)).await?;
+        }
+        Ok(())
+    }
+
+    /// Write the job's lease on every target, or on none.
+    async fn acquire_leases(
+        &self,
+        ctx: &OpContext,
+        job: &str,
+        operation: &str,
+        targets: &[u32],
+    ) -> Result<(), CoreError> {
+        let running = |id: &str| self.running(id);
+        for (index, vmid) in targets.iter().enumerate() {
+            if let Err(error) = lease::acquire(ctx.pve.as_ref(), *vmid, &self.holder(job, operation, &running)).await {
+                self.release_leases(ctx, job, &targets[..index]).await;
+                return Err(error);
+            }
+        }
+        Ok(())
+    }
+
+    async fn release_leases(&self, ctx: &OpContext, job: &str, targets: &[u32]) {
+        for vmid in targets {
+            if let Err(error) = lease::release(ctx.pve.as_ref(), *vmid, &self.instance, job).await {
+                tracing::warn!(%error, vmid, job, "lease not removed; it expires by itself");
+            }
+        }
     }
 
     fn operation(&self, name: &str) -> Option<Arc<dyn Operation>> {
@@ -237,6 +303,9 @@ impl OpsState {
             Ok(planned) => planned,
             Err(failure) => return Some(Err(failure)),
         };
+        if let Err(failure) = self.check_leases(ctx, name, &planned.targets).await {
+            return Some(Err(failure));
+        }
         let now = SystemTime::now();
         let plan = Plan {
             id: uuid::Uuid::new_v4().to_string(),
@@ -300,7 +369,7 @@ impl OpsState {
                 Arc::clone(&stored.operation),
             );
             if found.0.targets.iter().any(|vmid| inner.busy.contains(vmid)) {
-                return Err(ApplyRefusal::Busy);
+                return Err(ApplyRefusal::Busy(None));
             }
             inner.busy.extend(found.0.targets.iter().copied());
             found
@@ -316,8 +385,19 @@ impl OpsState {
             self.release(&plan.targets);
             return Err(ApplyRefusal::Changed);
         }
+        let job_id = uuid::Uuid::new_v4().to_string();
+        if let Err(error) = self
+            .acquire_leases(&ctx, &job_id, &plan.operation, &planned.targets)
+            .await
+        {
+            self.release(&plan.targets);
+            return Err(match error {
+                CoreError::Busy(message) => ApplyRefusal::Busy(Some(message)),
+                error => ApplyRefusal::Failure(OpFailure::Core(error)),
+            });
+        }
         let job = Job {
-            id: uuid::Uuid::new_v4().to_string(),
+            id: job_id.clone(),
             operation: plan.operation.clone(),
             plan_id: plan.id.clone(),
             state: JobState::Queued,
@@ -357,6 +437,7 @@ impl OpsState {
                 job.started_at = Some(timestamp(SystemTime::now()));
             });
             let outcome = operation.execute(&ctx, &planned, &handle).await;
+            state.release_leases(&ctx, &job_id, &planned.targets).await;
             handle.update(|job| {
                 job.finished_at = Some(timestamp(SystemTime::now()));
                 job.progress = None;

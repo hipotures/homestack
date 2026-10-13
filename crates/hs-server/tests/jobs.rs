@@ -50,7 +50,7 @@ config = { name = "hst-stuck" }
 [[pve.tokens]]
 id = "homestack@pve!test"
 secret = "00000000-0000-0000-0000-00000000000d"
-acl = { "/" = ["Sys.Audit", "VM.Audit", "VM.PowerMgmt"] }
+acl = { "/" = ["Sys.Audit", "VM.Audit", "VM.Config.Options", "VM.PowerMgmt"] }
 "#;
 
 /// Start a VM and shut it down again: `{"vmid": N, "pause_ms": M}`, with
@@ -137,9 +137,10 @@ async fn start(heartbeat: Duration) -> Result<Running, Error> {
     };
     let app = hs_server::app_with(
         ServerConfig {
-            api_token: ApiToken::parse(API_TOKEN)?,
-            pve,
+            api_token: ApiToken::parse(API_TOKEN)?.into(),
+            pve: pve.into(),
             config_file: dir.path().join("server.toml"),
+            instance: hs_server::Instance::default(),
             pools: hs_server::Pools::default(),
         },
         options,

@@ -41,6 +41,9 @@ pub enum ErrorCode {
     PveUnavailable,
     /// Proxmox rejected the server's API token.
     PveAuthFailed,
+    /// The server has no Proxmox token yet; send one with
+    /// `PUT /v1/secrets/pve-token`.
+    PveTokenMissing,
     /// The server's API token lacks a privilege for this request.
     PvePermissionDenied,
     /// Proxmox could not reach the node the request was addressed to.
@@ -85,6 +88,7 @@ impl ErrorCode {
             | Self::ConfigMissing
             | Self::ConfigVersionMismatch
             | Self::PveAuthFailed
+            | Self::PveTokenMissing
             | Self::PvePermissionDenied
             | Self::PveError
             | Self::PlanChanged

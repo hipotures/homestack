@@ -29,4 +29,7 @@ pub enum CoreError {
     /// A step of an operation failed (Python's `AppError` of that step).
     #[error("{0}")]
     Failed(String),
+    /// Another server instance holds the VM (phase 11).
+    #[error("{0}")]
+    Busy(String),
 }

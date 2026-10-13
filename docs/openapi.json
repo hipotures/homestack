@@ -1203,6 +1203,125 @@
         ]
       }
     },
+    "/v1/secrets/pve-token": {
+      "put": {
+        "tags": [
+          "config"
+        ],
+        "summary": "Set the Proxmox token: the body is `USER@REALM!TOKENID=SECRET`. The\nserver uses it at once and at every start. Never readable.",
+        "operationId": "put_pve_token",
+        "requestBody": {
+          "description": "USER@REALM!TOKENID=SECRET",
+          "content": {
+            "text/plain": {
+              "schema": {
+                "type": "string"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Stored and in use"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`operation_refused`: the token comes from HOMESTACK_PVE_TOKEN_FILE, or the instance has no state directory",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Not a Proxmox API token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/secrets/tls": {
+      "put": {
+        "tags": [
+          "config"
+        ],
+        "summary": "Replace the certificate Caddy serves, then make Caddy load it. If Caddy\nrefuses it, the previous one is put back.",
+        "operationId": "put_tls",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TlsCertificate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Stored, and loaded by Caddy"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`operation_refused`: the instance has no state directory",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Not a PEM certificate and key, or Caddy refused them (the previous ones are kept)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/v1/status": {
       "get": {
         "tags": [
@@ -1652,6 +1771,7 @@
           "config_version_mismatch",
           "pve_unavailable",
           "pve_auth_failed",
+          "pve_token_missing",
           "pve_permission_denied",
           "pve_node_unavailable",
           "pve_error",
@@ -2750,6 +2870,25 @@
           "running",
           "stopped"
         ]
+      },
+      "TlsCertificate": {
+        "type": "object",
+        "description": "Body of `PUT /v1/secrets/tls`: the certificate Caddy serves, PEM.",
+        "required": [
+          "cert",
+          "key"
+        ],
+        "properties": {
+          "cert": {
+            "type": "string",
+            "description": "The certificate chain, leaf first."
+          },
+          "key": {
+            "type": "string",
+            "description": "Its private key."
+          }
+        },
+        "additionalProperties": false
       },
       "VolumeEntry": {
         "type": "object",

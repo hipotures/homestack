@@ -42,9 +42,10 @@ fn live_endpoints() -> Result<Vec<Url>, Box<dyn std::error::Error>> {
 async fn serve(endpoints: Vec<Url>) -> Result<String, Box<dyn std::error::Error>> {
     // Read-only routes: the configuration file is never written.
     let app = hs_server::app(ServerConfig {
-        api_token: ApiToken::parse(API_TOKEN)?,
-        pve: PveClientConfig::new(endpoints, live_token()?),
+        api_token: ApiToken::parse(API_TOKEN)?.into(),
+        pve: PveClientConfig::new(endpoints, live_token()?).into(),
         config_file: std::env::temp_dir().join("homestack-live-unused/server.toml"),
+        instance: hs_server::Instance::default(),
         pools: hs_server::Pools::default(),
     })?;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
@@ -189,9 +190,10 @@ async fn live_capabilities_match_the_token_privileges() -> TestResult {
     let endpoints = live_endpoints()?;
     let state = tempfile::tempdir()?;
     let app = hs_server::app(ServerConfig {
-        api_token: ApiToken::parse(API_TOKEN)?,
-        pve: PveClientConfig::new(endpoints.clone(), live_token()?),
+        api_token: ApiToken::parse(API_TOKEN)?.into(),
+        pve: PveClientConfig::new(endpoints.clone(), live_token()?).into(),
         config_file: state.path().join("server.toml"),
+        instance: hs_server::Instance::default(),
         pools: hs_server::Pools::default(),
     })?;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;

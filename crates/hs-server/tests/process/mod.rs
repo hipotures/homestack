@@ -46,6 +46,11 @@ impl ServerProcess {
     /// Start the server with its files in `dir` (the stored `server.toml`
     /// survives a restart there) and wait until it answers.
     pub async fn start(launch: &Launch, dir: &Path) -> Result<Self, Error> {
+        Self::start_with(launch, dir, &[]).await
+    }
+
+    /// [`Self::start`] with more variables; an empty value unsets one.
+    pub async fn start_with(launch: &Launch, dir: &Path, extra: &[(&str, &str)]) -> Result<Self, Error> {
         let api_token = dir.join("api-token");
         std::fs::write(&api_token, API_TOKEN)?;
         let mut command = Command::new(env!("CARGO_BIN_EXE_homestack-server"));
@@ -66,6 +71,13 @@ impl ServerProcess {
             let ca = dir.join("ca.pem");
             std::fs::write(&ca, pem)?;
             command.env("HOMESTACK_PVE_CA_FILE", ca);
+        }
+        for (name, value) in extra {
+            if value.is_empty() {
+                command.env_remove(name);
+            } else {
+                command.env(name, value);
+            }
         }
         let child = command.spawn()?;
         let server = Self {
