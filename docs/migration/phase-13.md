@@ -276,7 +276,9 @@ They are in `lifecycle.py`, `addkey.py` and `workspace_ssh.py`:
 - the CLI end to end against in-process servers on `pve-sim` behind
   HTTPS;
 - parity of `status --json` between the Python CLI and the Rust CLI on the
-  same simulated cluster (scenario `cli-status`).
+  same simulated cluster: four comparisons added to
+  `scenarios/status-cluster.toml` (`rust = "cli ..."`, rules
+  `cli-status-global` and `cli-status-workspace`).
 
 **Gate (`--live`):**
 
@@ -285,3 +287,93 @@ They are in `lifecycle.py`, `addkey.py` and `workspace_ssh.py`:
   `create --yes --json`, `status`, `refresh --yes`, `destroy --yes`;
 - the local SSH files are written to a temporary `HOME`;
 - the exit codes are checked, and the plan without `--yes` must exit 3.
+
+## 4. What was built
+
+- **`crates/hs-cli`, binary `homestack`:**
+  - `args`: the parser;
+  - `config`: `client.toml`, the token and the CA;
+  - `app`: the commands, the confirmations and following the job;
+  - `view`: the panels and tables of `ui.py`;
+  - `local_ssh`: the SSH config, `known_hosts` and the hardware identities
+    (I1);
+  - `identity`: `private_key_for`, `register_identity`, `sync_local_ssh`;
+  - `fido`, `touch` and `master`: I2;
+  - `system`: local commands and the terminal, both replaceable in tests.
+- **`hs-config`:**
+  - `[server]` in `client.toml`: `urls` (https only), `token_file`,
+    `ca_file`;
+  - `split --server-url URL` (repeatable) writes that section.
+- **`hs-client`:**
+  - `Session::apply_with` (the secrets of the apply, decision 6) and
+    `Session::config_version`;
+  - `Client::get_from` (the answer and the instance that gave it).
+- **`pve-sim`:** `tls` is public, so tests can serve the server over HTTPS.
+- **Parity:**
+  - `rust = "cli ARGS"` in scenarios runs the client in-process against the
+    server behind HTTPS;
+  - rules `cli-status-global` and `cli-status-workspace`;
+  - phases `13b` and `13c` added to the manifest's list.
+- **`scripts/check.sh --live`:** the client gate (`live_cli.rs`) runs after
+  the deployment gate.
+
+## 5. Results
+
+**Tests:**
+
+- 71 Python tests ported. Manifest totals: 593 Python tests, 207 ported,
+  309 to do, 77 excluded.
+- `test_herdr_registration_plays_failure_cue_on_nonzero_exit` moved to
+  phase 14e.
+- 29 installer tests (`test_install.py`, `InstallDraftTests`) moved to
+  phase 13c.
+
+**New tests:**
+
+- `cli.rs` (19, all on `pve-sim` behind HTTPS):
+  - every operation asks before any change;
+  - the LUKS passphrase is asked only interactively;
+  - the status of an absent VM keeps its shape;
+  - `http://` is refused;
+  - Python-only commands say where they are;
+  - migrate end to end.
+- `hs-config`: `[server]` takes only HTTPS.
+
+**`scripts/check.sh`:** all passed.
+
+**Parity with Python:** 16 comparisons in `status-cluster.toml`, of them 4
+new for the client (`status`, `status test1`, `status 205`, the absent
+`status 239`), all equal after their rules. A changed target made them
+fail, so they do compare.
+
+**Live (2026-10-13), `scripts/check.sh --live`:** all passed.
+
+- Image `ghcr.io/hipotures/homestack-server:0.1.0-081c65607888`, test
+  instances `api1`–`api3` (CT 997–999).
+- `homestack` ran, in order:
+  1. `status 240` (absent)
+  2. `create 240 hst-cli13 --json` (exit 3)
+  3. `create ... --json --yes` (exit 0; SSH config with `HostName
+     192.168.100.240`, `ssh root@hst-cli13`)
+  4. `status hst-cli13`
+  5. `status`
+  6. `transport`
+  7. `refresh --json` (exit 3)
+  8. `refresh --json --yes` (exit 0)
+  9. `destroy 240 --json --yes` (exit 0; SSH config removed)
+  10. `status 240` (absent)
+- Containers removed after; no CT 997–999 and no VM 240 left.
+
+## 6. Open questions
+
+1. **A missing `~/.ssh/known_hosts` stops `create` after the VM is
+   verified, in Python and here alike.** `ssh-keygen -F` exits 255 ("Cannot
+   stat"), which `forget_local_ssh_host` treats as an error. It looks like
+   a bug in Python; it is reported, not fixed (PLAN.md 1.4). Should a
+   missing file count as "nothing to remove"?
+2. **BK retrieval keys at `destroy`:** listed under `backup_keys_left`, not
+   removed, until BK is ported (phase 14d).
+3. **`install`** is phase 13c (owner's decision). Until then `client.toml`
+   comes from `hs-config split --server-url ...` or is written by hand.
+4. **Phase 13b** (the TUI) is next; it uses `hs-client` and the job events
+   over WebSocket instead of polling.
