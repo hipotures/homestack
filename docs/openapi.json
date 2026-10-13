@@ -839,6 +839,16 @@
               }
             }
           },
+          "409": {
+            "description": "`outside_pool`: the VM is not in the instance's pool; `operation_refused`: the cluster's state does not allow the operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
           "422": {
             "description": "Unknown operation or invalid parameters",
             "content": {
@@ -949,6 +959,18 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "HomeStack-Config-Version",
+            "in": "header",
+            "description": "The configuration version the plan was made with; required once a configuration is stored",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
           }
         ],
         "requestBody": {
@@ -993,7 +1015,7 @@
             }
           },
           "409": {
-            "description": "`plan_changed`, `plan_applied` or `busy`",
+            "description": "`plan_changed`, `plan_applied`, `busy`, `config_version_mismatch`, `outside_pool` or `operation_refused`",
             "content": {
               "application/json": {
                 "schema": {
@@ -1004,6 +1026,16 @@
           },
           "422": {
             "description": "Invalid request body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "428": {
+            "description": "`HomeStack-Config-Version` is missing",
             "content": {
               "application/json": {
                 "schema": {
@@ -1601,6 +1633,8 @@
           "plan_changed",
           "plan_applied",
           "busy",
+          "outside_pool",
+          "operation_refused",
           "internal"
         ]
       },

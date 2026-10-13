@@ -8,6 +8,7 @@ mod auth;
 pub mod config_store;
 mod error;
 mod jobs;
+pub mod lifecycle;
 mod openapi;
 pub mod operations;
 pub mod precondition;

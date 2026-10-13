@@ -27,6 +27,7 @@ fn context(state: &AppState) -> OpContext {
     OpContext {
         pve: Arc::clone(&state.pve),
         config: state.config.current(),
+        pools: Arc::clone(&state.pools),
     }
 }
 
@@ -56,6 +57,13 @@ fn plan_error(failure: OpFailure) -> ApiError {
         OpFailure::Invalid(message) => ApiError::new(ErrorCode::ValidationFailed, message),
         OpFailure::NotFound(message) => ApiError::new(ErrorCode::NotFound, message),
         OpFailure::Core(CoreError::Pve(error)) => error.into(),
+        // The lifecycle operations compose these from validated values.
+        OpFailure::Core(CoreError::Invalid(message)) => ApiError::with_message(ErrorCode::ValidationFailed, message),
+        OpFailure::Core(CoreError::NotFound(message)) => ApiError::with_message(ErrorCode::NotFound, message),
+        OpFailure::Core(CoreError::OutsidePool(message)) => ApiError::with_message(ErrorCode::OutsidePool, message),
+        OpFailure::Core(CoreError::Refused(message) | CoreError::Failed(message)) => {
+            ApiError::with_message(ErrorCode::OperationRefused, message)
+        }
         OpFailure::Core(error) => {
             tracing::warn!(%error, "planning failed");
             ApiError::new(
@@ -84,6 +92,7 @@ fn valid_id(id: &str) -> Result<(), ApiError> {
         (status = 201, body = Plan),
         (status = 401, body = hs_model::ErrorBody, description = "Missing or invalid bearer token"),
         (status = 404, body = hs_model::ErrorBody, description = "A VM named by the parameters does not exist"),
+        (status = 409, body = hs_model::ErrorBody, description = "`outside_pool`: the VM is not in the instance's pool; `operation_refused`: the cluster's state does not allow the operation"),
         (status = 422, body = hs_model::ErrorBody, description = "Unknown operation or invalid parameters"),
         (status = 502, body = hs_model::ErrorBody, description = "Proxmox rejected the request or answered unusably"),
         (status = 503, body = hs_model::ErrorBody, description = "No Proxmox endpoint is reachable"),
@@ -135,13 +144,17 @@ pub async fn get_plan(State(state): State<AppState>, Path(id): Path<String>) -> 
     path = "/v1/plans/{id}/apply",
     tag = "operations",
     security(("bearer" = [])),
-    params(("id" = String, Path, description = "Plan ID")),
+    params(
+        ("id" = String, Path, description = "Plan ID"),
+        ("HomeStack-Config-Version" = Option<String>, Header, description = "The configuration version the plan was made with; required once a configuration is stored"),
+    ),
     request_body = ApplyRequest,
     responses(
         (status = 202, body = Job, description = "The job was started; follow it at `Location`"),
         (status = 401, body = hs_model::ErrorBody, description = "Missing or invalid bearer token"),
         (status = 404, body = hs_model::ErrorBody, description = "No such plan, or it expired"),
-        (status = 409, body = hs_model::ErrorBody, description = "`plan_changed`, `plan_applied` or `busy`"),
+        (status = 409, body = hs_model::ErrorBody, description = "`plan_changed`, `plan_applied`, `busy`, `config_version_mismatch`, `outside_pool` or `operation_refused`"),
+        (status = 428, body = hs_model::ErrorBody, description = "`HomeStack-Config-Version` is missing"),
         (status = 422, body = hs_model::ErrorBody, description = "Invalid request body"),
         (status = 502, body = hs_model::ErrorBody, description = "Proxmox rejected the request or answered unusably"),
         (status = 503, body = hs_model::ErrorBody, description = "No Proxmox endpoint is reachable"),
@@ -155,6 +168,9 @@ pub async fn apply_plan(
 ) -> Result<Response, ApiError> {
     valid_id(&id)?;
     let request: ApplyRequest = json_body(&headers, &body)?;
+    if state.config.current().is_some() {
+        crate::precondition::expected_config(&headers, &state)?;
+    }
     let job = state
         .ops
         .apply(context(&state), &id, &request.digest)

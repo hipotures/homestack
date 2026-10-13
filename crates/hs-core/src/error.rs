@@ -23,6 +23,9 @@ pub enum CoreError {
     /// Proxmox answered with data HomeStack cannot use.
     #[error("{0}")]
     Unusable(String),
+    /// The VM is outside the instance's pool (gate before phase 5).
+    #[error("{0}")]
+    OutsidePool(String),
     /// A step of an operation failed (Python's `AppError` of that step).
     #[error("{0}")]
     Failed(String),

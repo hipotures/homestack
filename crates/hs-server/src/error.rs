@@ -42,6 +42,15 @@ impl ApiError {
         }
     }
 
+    /// An error whose message the server composed from checked values.
+    pub fn with_message(code: ErrorCode, message: String) -> Self {
+        Self {
+            code,
+            message: Cow::Owned(message),
+            field: None,
+        }
+    }
+
     pub const fn config_missing() -> Self {
         Self::new(
             ErrorCode::ConfigMissing,
@@ -63,7 +72,9 @@ const fn status(code: ErrorCode) -> StatusCode {
         | ErrorCode::ConfigVersionMismatch
         | ErrorCode::PlanChanged
         | ErrorCode::PlanApplied
-        | ErrorCode::Busy => StatusCode::CONFLICT,
+        | ErrorCode::Busy
+        | ErrorCode::OutsidePool
+        | ErrorCode::OperationRefused => StatusCode::CONFLICT,
         ErrorCode::PveUnavailable | ErrorCode::PveNodeUnavailable => StatusCode::SERVICE_UNAVAILABLE,
         ErrorCode::PveAuthFailed | ErrorCode::PvePermissionDenied | ErrorCode::PveError => StatusCode::BAD_GATEWAY,
         ErrorCode::Internal => StatusCode::INTERNAL_SERVER_ERROR,

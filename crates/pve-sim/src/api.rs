@@ -8,7 +8,7 @@ use axum::extract::{Path, Query, Request, State};
 use axum::http::{Method, StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post};
 use base64::Engine;
 use hs_model::NodeName;
 use percent_encoding::percent_decode_str;
@@ -17,7 +17,9 @@ use serde_json::{Value, json};
 
 use crate::guest;
 use crate::ops::Op;
-use crate::scenario::{NodeState, TaskSpec, TokenSpec, VmSpec, VmState};
+use crate::scenario::{
+    FilesystemSpec, InterfaceSpec, NodeState, TaskSpec, TokenSpec, UserEntry, VmSpec, VmState, VolumeSpec,
+};
 use crate::state::{ClusterState, PRIVILEGES, config_digest, has_any_privilege, has_privilege, volume_owner};
 
 type Shared = Arc<Mutex<ClusterState>>;
@@ -36,8 +38,17 @@ pub fn router(state: Shared) -> Router {
         .route("/nodes/{node}/dns", get(node_dns))
         .route("/nodes/{node}/storage", get(node_storages))
         .route("/nodes/{node}/storage/{storage}/status", get(storage_status))
-        .route("/nodes/{node}/storage/{storage}/content", get(storage_content))
-        .route("/nodes/{node}/qemu/{vmid}/config", get(vm_config).put(vm_config_update))
+        .route(
+            "/nodes/{node}/storage/{storage}/content",
+            get(storage_content).post(volume_alloc),
+        )
+        .route("/nodes/{node}/storage/{storage}/content/{volume}", delete(volume_free))
+        .route("/nodes/{node}/qemu/{vmid}", delete(vm_destroy))
+        .route("/nodes/{node}/qemu/{vmid}/clone", post(vm_clone))
+        .route(
+            "/nodes/{node}/qemu/{vmid}/config",
+            get(vm_config).put(vm_config_update).post(vm_config_post),
+        )
         .route("/nodes/{node}/qemu/{vmid}/status/current", get(vm_status))
         .route("/nodes/{node}/qemu/{vmid}/status/{action}", post(vm_power))
         .route("/nodes/{node}/qemu/{vmid}/agent/file-read", get(agent_file_read))
@@ -883,6 +894,9 @@ async fn vm_power(
     if let Some(vm) = state.vms.get_mut(&vmid_number) {
         vm.status = next;
     }
+    if kind == "qmstart" && error.is_none() {
+        boot_clone(&mut state, vmid_number);
+    }
     let (log, exitstatus) = match error {
         Some(message) => (vec![message.clone(), format!("TASK ERROR: {message}")], message),
         None => (vec!["TASK OK".to_owned()], "OK".to_owned()),
@@ -1075,5 +1089,528 @@ fn toml_to_json(value: &toml::Value) -> Value {
         toml::Value::Datetime(datetime) => Value::String(datetime.to_string()),
         toml::Value::Array(items) => Value::Array(items.iter().map(toml_to_json).collect()),
         toml::Value::Table(table) => Value::Object(table.iter().map(|(k, v)| (k.clone(), toml_to_json(v))).collect()),
+    }
+}
+
+// --- lifecycle (phase 5) -------------------------------------------------
+
+fn form(body: &Bytes) -> Vec<(String, String)> {
+    form_urlencoded::parse(body).into_owned().collect()
+}
+
+fn form_value<'a>(form: &'a [(String, String)], key: &str) -> Option<&'a str> {
+    form.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str())
+}
+
+fn forbidden(path: &str, privileges: &str) -> Response {
+    pve_error(403, &format!("Permission check failed ({path}, {privileges})\n"))
+}
+
+/// A task that ends after two status polls with `log` and `exitstatus`.
+fn task(state: &mut ClusterState, node: &NodeName, kind: &str, id: u32, user: &str) -> Response {
+    let upid = state.add_task(TaskSpec {
+        node: node.clone(),
+        kind: kind.to_owned(),
+        id: id.to_string(),
+        user: user.to_owned(),
+        log: vec!["TASK OK".to_owned()],
+        polls_until_done: 2,
+        exitstatus: "OK".to_owned(),
+    });
+    data(Value::String(upid))
+}
+
+/// `20G`, `512M`, `1T`, or bytes.
+fn size_bytes(text: &str) -> Option<u64> {
+    let text = text.trim();
+    let (number, unit) = text
+        .find(|c: char| !c.is_ascii_digit())
+        .map_or((text, ""), |at| text.split_at(at));
+    let value: u64 = number.parse().ok()?;
+    let factor: u64 = match unit {
+        "" => 1,
+        "K" => 1 << 10,
+        "M" => 1 << 20,
+        "G" => 1 << 30,
+        "T" => 1 << 40,
+        _ => return None,
+    };
+    value.checked_mul(factor)
+}
+
+fn is_disk_key(key: &str) -> bool {
+    ["scsi", "virtio", "sata", "ide", "efidisk", "tpmstate"]
+        .iter()
+        .any(|prefix| {
+            key.strip_prefix(prefix)
+                .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+        })
+        || key
+            .strip_prefix("unused")
+            .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+}
+
+const CLOUDINIT_KEYS: [&str; 8] = [
+    "ipconfig0",
+    "nameserver",
+    "searchdomain",
+    "ciuser",
+    "cipassword",
+    "ciupgrade",
+    "sshkeys",
+    "cicustom",
+];
+
+/// `POST /nodes/{node}/storage/{storage}/content`: allocate a volume for a
+/// VM (`vmid`, `filename`, `size`, `format`); answers the volid. Checked
+/// as the API schema says: `Datastore.AllocateSpace` on the storage. Not
+/// observed live: the message for an existing name.
+async fn volume_alloc(
+    State(state): State<Shared>,
+    request_token: Option<axum::Extension<TokenSpec>>,
+    Path((node, storage)): Path<(String, String)>,
+    body: Bytes,
+) -> Response {
+    let mut state = lock(&state);
+    let form = form(&body);
+    let acl = format!("/storage/{storage}");
+    let name = match reach(
+        &state,
+        token(request_token).as_ref(),
+        &node,
+        Some((&acl, &["Datastore.AllocateSpace"])),
+    ) {
+        Ok(name) => name,
+        Err(failure) => return failure.into_response(),
+    };
+    let (Some(vmid), Some(filename), Some(size)) = (
+        form_value(&form, "vmid"),
+        form_value(&form, "filename"),
+        form_value(&form, "size").and_then(size_bytes),
+    ) else {
+        return pve_error(400, "Parameter verification failed.\n");
+    };
+    if !filename.starts_with(&format!("vm-{vmid}-")) {
+        return pve_error(500, &format!("illegal name '{filename}' - should be 'vm-{vmid}-*'\n"));
+    }
+    let volid = format!("{storage}:{filename}");
+    if state.volumes.iter().any(|v| v.node == name && v.volid == volid) {
+        return pve_error(500, &format!("volume '{volid}' already exists\n"));
+    }
+    state.volumes.push(VolumeSpec {
+        node: name,
+        storage,
+        volid: volid.clone(),
+        size,
+        format: form_value(&form, "format").unwrap_or("raw").to_owned(),
+        label: None,
+    });
+    data(Value::String(volid))
+}
+
+/// `DELETE /nodes/{node}/storage/{storage}/content/{volume}`: a task.
+/// Needs `Datastore.Allocate` on the storage or `VM.Config.Disk` on the
+/// volume's VM, as for listing it.
+async fn volume_free(
+    State(state): State<Shared>,
+    request_token: Option<axum::Extension<TokenSpec>>,
+    Path((node, storage, volume)): Path<(String, String, String)>,
+) -> Response {
+    let mut state = lock(&state);
+    let Some(token) = token(request_token) else {
+        return pve_error(401, "");
+    };
+    let name = match reach(&state, Some(&token), &node, None) {
+        Ok(name) => name,
+        Err(failure) => return failure.into_response(),
+    };
+    let volid = if volume.contains(':') {
+        volume
+    } else {
+        format!("{storage}:{volume}")
+    };
+    let acl = format!("/storage/{storage}");
+    let allowed = has_privilege(&token, &acl, "Datastore.Allocate")
+        || volume_owner(&volid).is_some_and(|vmid| state.allows(&token, &format!("/vms/{vmid}"), "VM.Config.Disk"));
+    if !allowed {
+        return forbidden(&acl, "Datastore.Allocate");
+    }
+    let before = state.volumes.len();
+    state.volumes.retain(|v| !(v.node == name && v.volid == volid));
+    if state.volumes.len() == before {
+        return pve_error(500, &format!("volume '{volid}' does not exist\n"));
+    }
+    let owner = volume_owner(&volid).unwrap_or(0);
+    task(&mut state, &name, "imgdel", owner, &token.id)
+}
+
+/// `POST /nodes/{node}/qemu/{vmid}/config`: like `PUT`, but any modelled
+/// key, and answered with a task. Each key needs its own privilege, as PVE
+/// checks them: disks `VM.Config.Disk` (and the volume must exist on the
+/// node), Cloud-Init keys `VM.Config.Cloudinit` (`cicustom` also
+/// `Datastore.AllocateSpace` on each snippet storage), options
+/// `VM.Config.Options`.
+async fn vm_config_post(
+    State(state): State<Shared>,
+    request_token: Option<axum::Extension<TokenSpec>>,
+    Path((node, vmid)): Path<(String, String)>,
+    body: Bytes,
+) -> Response {
+    let mut state = lock(&state);
+    let Some(token) = token(request_token) else {
+        return pve_error(401, "");
+    };
+    let form = form(&body);
+    let (vmid_number, node_name) = match reach_vm(&state, Some(&token), &node, &vmid, &["VM.Audit"]) {
+        Ok(vm) => (vm.vmid, vm.node.clone()),
+        Err(failure) => return failure.into_response(),
+    };
+    let acl = format!("/vms/{vmid_number}");
+    for (key, value) in &form {
+        let keys: Vec<&str> = if key == "delete" {
+            value.split(',').collect()
+        } else {
+            vec![key.as_str()]
+        };
+        for key in keys {
+            let privilege = if key == "digest" {
+                continue;
+            } else if is_disk_key(key) {
+                "VM.Config.Disk"
+            } else if CLOUDINIT_KEYS.contains(&key) {
+                "VM.Config.Cloudinit"
+            } else if OPTION_KEYS.contains(&key) {
+                "VM.Config.Options"
+            } else {
+                return pve_error(501, &format!("pve-sim: config key '{key}' not modelled"));
+            };
+            if !state.allows(&token, &acl, privilege) {
+                return forbidden(&acl, privilege);
+            }
+        }
+        if key == "cicustom" {
+            for part in value.split(',') {
+                let storage = part
+                    .split_once('=')
+                    .and_then(|(_, v)| v.split_once(':'))
+                    .map(|(s, _)| s);
+                if let Some(storage) = storage {
+                    let path = format!("/storage/{storage}");
+                    if !has_privilege(&token, &path, "Datastore.AllocateSpace") {
+                        return forbidden(&path, "Datastore.AllocateSpace");
+                    }
+                }
+            }
+        }
+        if is_disk_key(key) {
+            let volume = value.split(',').next().unwrap_or_default();
+            if !state.volumes.iter().any(|v| v.node == node_name && v.volid == volume) {
+                return pve_error(500, &format!("{key}: volume '{volume}' does not exist\n"));
+            }
+        }
+    }
+    let Some(vm) = state.vms.get_mut(&vmid_number) else {
+        return pve_error(500, "VM vanished");
+    };
+    if let Some(digest) = form_value(&form, "digest")
+        && digest != config_digest(&vm.config)
+    {
+        return pve_error(
+            500,
+            "detected modified configuration - file changed by other user? Try again.\n",
+        );
+    }
+    for (key, value) in &form {
+        match key.as_str() {
+            "digest" => {}
+            "delete" => {
+                for key in value.split(',') {
+                    vm.config.remove(key);
+                }
+            }
+            key => {
+                vm.config.insert(key.to_owned(), toml::Value::String(value.clone()));
+            }
+        }
+    }
+    task(&mut state, &node_name, "qmconfig", vmid_number, &token.id)
+}
+
+/// The volume of a disk config value, with the VMID renamed.
+fn cloned_volume(value: &str, source: u32, target: u32, storage: &str) -> Option<(String, String)> {
+    let (volume, options) = value.split_once(',').map_or((value, ""), |(v, o)| (v, o));
+    let (_, name) = volume.split_once(':')?;
+    let name = name.replacen(&format!("vm-{source}-"), &format!("vm-{target}-"), 1);
+    if !name.starts_with(&format!("vm-{target}-")) {
+        return None;
+    }
+    let volid = format!("{storage}:{name}");
+    let value = if options.is_empty() {
+        volid.clone()
+    } else {
+        format!("{volid},{options}")
+    };
+    Some((volid, value))
+}
+
+/// `POST /nodes/{node}/qemu/{vmid}/clone` with `newid`, `name`, `full`,
+/// `storage`, `pool`, `description`: a full clone, made at once and
+/// reported by a `qmclone` task. Needs `VM.Clone` on the source,
+/// `VM.Allocate` on the pool (or `/vms/<newid>` without one) and
+/// `Datastore.AllocateSpace` on the storage. Not observed live: the
+/// messages of the refusals.
+async fn vm_clone(
+    State(state): State<Shared>,
+    request_token: Option<axum::Extension<TokenSpec>>,
+    Path((node, vmid)): Path<(String, String)>,
+    body: Bytes,
+) -> Response {
+    let mut state = lock(&state);
+    let Some(token) = token(request_token) else {
+        return pve_error(401, "");
+    };
+    let form = form(&body);
+    let (source, node_name, source_config) = match reach_vm(&state, Some(&token), &node, &vmid, &["VM.Clone"]) {
+        Ok(vm) => (vm.vmid, vm.node.clone(), vm.config.clone()),
+        Err(failure) => return failure.into_response(),
+    };
+    let Some(newid) = form_value(&form, "newid").and_then(|v| v.parse::<u32>().ok()) else {
+        return pve_error(400, "Parameter verification failed.\n");
+    };
+    let pool = form_value(&form, "pool").map(str::to_owned);
+    let target_acl = pool
+        .as_ref()
+        .map_or_else(|| format!("/vms/{newid}"), |p| format!("/pool/{p}"));
+    if !has_privilege(&token, &target_acl, "VM.Allocate") {
+        return forbidden(&target_acl, "VM.Allocate");
+    }
+    if let Some(pool) = &pool
+        && !state.pools.iter().any(|p| &p.poolid == pool)
+    {
+        return pve_error(500, &format!("pool '{pool}' does not exist\n"));
+    }
+    if state.vms.contains_key(&newid) {
+        return pve_error(
+            500,
+            &format!("unable to create VM {newid}: config file already exists\n"),
+        );
+    }
+    let storage = form_value(&form, "storage").map(str::to_owned);
+    if let Some(storage) = &storage {
+        let path = format!("/storage/{storage}");
+        if !has_privilege(&token, &path, "Datastore.AllocateSpace") {
+            return forbidden(&path, "Datastore.AllocateSpace");
+        }
+    }
+    let mut config = toml::Table::new();
+    let mut volumes = Vec::new();
+    for (key, value) in &source_config {
+        let text = value.as_str().map(str::to_owned).unwrap_or_else(|| value.to_string());
+        if is_disk_key(key) && !key.starts_with("unused") {
+            let disk_storage = text.split(':').next().unwrap_or_default().to_owned();
+            let target_storage = storage.clone().unwrap_or(disk_storage);
+            if let Some((volid, value)) = cloned_volume(&text, source, newid, &target_storage) {
+                let size = text
+                    .split(',')
+                    .find_map(|o| o.strip_prefix("size="))
+                    .and_then(size_bytes)
+                    .unwrap_or(0);
+                let label = state
+                    .volumes
+                    .iter()
+                    .find(|v| v.volid == text.split(',').next().unwrap_or_default())
+                    .and_then(|v| v.label.clone());
+                volumes.push(VolumeSpec {
+                    node: node_name.clone(),
+                    storage: target_storage,
+                    volid,
+                    size,
+                    format: "raw".to_owned(),
+                    label,
+                });
+                config.insert(key.clone(), toml::Value::String(value));
+                continue;
+            }
+        }
+        config.insert(key.clone(), value.clone());
+    }
+    if let Some(name) = form_value(&form, "name") {
+        config.insert("name".to_owned(), toml::Value::String(name.to_owned()));
+    }
+    if let Some(description) = form_value(&form, "description") {
+        config.insert("description".to_owned(), toml::Value::String(description.to_owned()));
+    }
+    state.volumes.extend(volumes);
+    state.vms.insert(
+        newid,
+        VmSpec {
+            vmid: newid,
+            node: node_name.clone(),
+            status: VmState::Stopped,
+            config,
+            guest: None,
+            acpi: true,
+            clone_of: Some(source),
+        },
+    );
+    if let Some(pool) = pool
+        && let Some(spec) = state.pools.iter_mut().find(|p| p.poolid == pool)
+    {
+        spec.vms.push(newid);
+    }
+    task(&mut state, &node_name, "qmclone", source, &token.id)
+}
+
+#[derive(Deserialize)]
+struct DestroyQuery {
+    purge: Option<u8>,
+    #[serde(rename = "destroy-unreferenced-disks")]
+    unreferenced: Option<u8>,
+}
+
+/// `DELETE /nodes/{node}/qemu/{vmid}`: needs `VM.Allocate`; a running VM is
+/// refused. Its disks (attached and `unusedN`) go with it, with
+/// `destroy-unreferenced-disks=1` also every other volume named for it;
+/// `purge=1` takes it out of its pool.
+async fn vm_destroy(
+    State(state): State<Shared>,
+    request_token: Option<axum::Extension<TokenSpec>>,
+    Path((node, vmid)): Path<(String, String)>,
+    Query(query): Query<DestroyQuery>,
+) -> Response {
+    let mut state = lock(&state);
+    let Some(token) = token(request_token) else {
+        return pve_error(401, "");
+    };
+    let (vmid_number, node_name, status, config) = match reach_vm(&state, Some(&token), &node, &vmid, &["VM.Allocate"])
+    {
+        Ok(vm) => (vm.vmid, vm.node.clone(), vm.status, vm.config.clone()),
+        Err(failure) => return failure.into_response(),
+    };
+    if status == VmState::Running {
+        return pve_error(500, &format!("VM {vmid_number} is running - destroy failed\n"));
+    }
+    let disks: Vec<String> = config
+        .iter()
+        .filter(|(key, _)| is_disk_key(key))
+        .filter_map(|(_, value)| value.as_str())
+        .map(|value| value.split(',').next().unwrap_or_default().to_owned())
+        .collect();
+    let unreferenced = query.unreferenced == Some(1);
+    state.volumes.retain(|v| {
+        let attached = v.node == node_name && disks.contains(&v.volid);
+        let owned = unreferenced && volume_owner(&v.volid) == Some(vmid_number);
+        !(attached || owned)
+    });
+    state.vms.remove(&vmid_number);
+    if query.purge == Some(1) {
+        for pool in &mut state.pools {
+            pool.vms.retain(|id| *id != vmid_number);
+        }
+    }
+    task(&mut state, &node_name, "qmdestroy", vmid_number, &token.id)
+}
+
+/// Percent-decoding of Proxmox's `sshkeys`.
+fn decode_sshkeys(value: &str) -> String {
+    percent_decode_str(value).decode_utf8_lossy().into_owned()
+}
+
+/// The first start of a clone with a HomeStack vendor snippet: what the
+/// snippet and Proxmox's Cloud-Init would make of the source's guest
+/// (decision 1 = A). The hostname is the VM name; `eth0` gets the MAC of
+/// `net0` and the address of `ipconfig0`; root gets `sshkeys`. The home is
+/// the disk whose serial is `HS_HOME_<vmid>`: a blank one is formatted with
+/// that label by the `create` snippet (and gets the keys), a labelled one is
+/// mounted; `keep` leaves a blank one unmounted. The account is the
+/// source's only regular one.
+fn boot_clone(state: &mut ClusterState, vmid: u32) {
+    let Some(vm) = state.vms.get(&vmid) else { return };
+    let (Some(source), None) = (vm.clone_of, &vm.guest) else {
+        return;
+    };
+    let text = |key: &str| vm.config.get(key).and_then(toml::Value::as_str).map(str::to_owned);
+    let Some(cicustom) = text("cicustom") else { return };
+    let create = cicustom.contains("homestack-vendor-create.yaml");
+    if !create && !cicustom.contains("homestack-vendor-keep.yaml") {
+        return;
+    }
+    let Some(mut guest) = state.vms.get(&source).and_then(|gold| gold.guest.clone()) else {
+        return;
+    };
+    let name = text("name").unwrap_or_default();
+    let mac = text("net0")
+        .and_then(|net| {
+            net.split(',')
+                .next()
+                .and_then(|m| m.split_once('='))
+                .map(|(_, m)| m.to_ascii_lowercase())
+        })
+        .unwrap_or_default();
+    let address = text("ipconfig0")
+        .and_then(|ip| {
+            ip.split(',')
+                .find_map(|part| part.strip_prefix("ip=").map(str::to_owned))
+        })
+        .unwrap_or_default();
+    let keys = text("sshkeys").map(|k| decode_sshkeys(&k)).unwrap_or_default();
+    let label = format!("HS_HOME_{vmid}");
+    let home = vm
+        .config
+        .iter()
+        .filter(|(key, _)| is_disk_key(key))
+        .find_map(|(key, value)| {
+            let value = value.as_str()?;
+            value
+                .split(',')
+                .any(|o| o == format!("serial={label}"))
+                .then(|| (key.clone(), value.split(',').next().unwrap_or_default().to_owned()))
+        });
+    let node = vm.node.clone();
+    let user = guest
+        .accounts()
+        .into_iter()
+        .find(|a| (1000..65534).contains(&a.uid))
+        .map(|a| a.name);
+
+    guest.hostname = name;
+    guest.interfaces = vec![InterfaceSpec {
+        name: "eth0".to_owned(),
+        mac,
+        ipv4: if address.is_empty() { Vec::new() } else { vec![address] },
+    }];
+    guest.filesystems.retain(|fs| fs.mountpoint == "/");
+    if !keys.is_empty() {
+        guest
+            .files
+            .insert("/root/.ssh/authorized_keys".to_owned(), keys.clone());
+    }
+    if let (Some((slot, volid)), Some(user)) = (home, user) {
+        let volume = state.volumes.iter_mut().find(|v| v.node == node && v.volid == volid);
+        if let Some(volume) = volume {
+            if volume.label.is_none() && create {
+                volume.label = Some(label.clone());
+                guest.files.insert(format!("/home/{user}/.ssh/authorized_keys"), keys);
+            }
+            if volume.label.as_deref() == Some(label.as_str()) {
+                guest.filesystems.push(FilesystemSpec {
+                    mountpoint: format!("/home/{user}"),
+                    fstype: "ext4".to_owned(),
+                    device: "sdb".to_owned(),
+                    slot,
+                    label: Some(label),
+                    size: volume.size,
+                    used: 0,
+                    avail: volume.size,
+                });
+            }
+        }
+    }
+    if guest.users.is_empty() {
+        guest.users.push(UserEntry::Name("root".to_owned()));
+    }
+    guest.cloud_id = Some("nocloud".to_owned());
+    if let Some(vm) = state.vms.get_mut(&vmid) {
+        vm.guest = Some(guest);
     }
 }

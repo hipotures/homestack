@@ -35,7 +35,9 @@ fn configuration(state: &AppState) -> Result<Arc<Stored>, ApiError> {
 fn core_error(error: CoreError, not_found: &'static str) -> ApiError {
     match error {
         CoreError::Pve(error) => error.into(),
-        CoreError::NotFound(_) | CoreError::Refused(_) => ApiError::new(ErrorCode::NotFound, not_found),
+        CoreError::NotFound(_) | CoreError::Refused(_) | CoreError::OutsidePool(_) => {
+            ApiError::new(ErrorCode::NotFound, not_found)
+        }
         CoreError::Invalid(_) => ApiError::new(ErrorCode::ValidationFailed, "Invalid workspace target."),
         CoreError::Ambiguous(_) => ApiError::new(
             ErrorCode::ValidationFailed,

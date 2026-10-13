@@ -1,0 +1,119 @@
+# The cluster of crates/hs-core/tests/lifecycle.rs and
+# crates/hs-server/tests/lifecycle.rs: what deploy/pve/homestack-pve.sh
+# install makes, plus a workspace outside the pool (150) and an alien VM in it (160).
+[pve]
+version = { release = "9.2", version = "9.2.21", repoid = "4f6e0ac86f9e8c7f" }
+
+[[pve.nodes]]
+name = "pve-example-1"
+pveversion = "pve-manager/9.2.21/4f6e0ac86f9e8c7f"
+kversion = "Linux 7.0.14-20-pve"
+uptime = 1
+storages = [
+  { storage = "local-lvm", total = 1000000000000, used = 0, avail = 1000000000000 },
+  { storage = "local", total = 100000000000, used = 0, avail = 100000000000 },
+]
+
+[[pve.storages]]
+storage = "local-lvm"
+type = "lvmthin"
+content = "images,rootdir"
+
+[[pve.storages]]
+storage = "local"
+type = "dir"
+content = "iso,vztmpl,backup,snippets"
+
+[[pve.volumes]]
+node = "pve-example-1"
+storage = "local-lvm"
+volid = "local-lvm:vm-101-disk-0"
+size = 17179869184
+label = "gold-root"
+
+[[pve.volumes]]
+node = "pve-example-1"
+storage = "local-lvm"
+volid = "local-lvm:vm-101-cloudinit"
+size = 4194304
+
+[[pve.volumes]]
+node = "pve-example-1"
+storage = "local-lvm"
+volid = "local-lvm:vm-150-disk-0"
+size = 17179869184
+
+[[pve.volumes]]
+node = "pve-example-1"
+storage = "local-lvm"
+volid = "local-lvm:vm-150-hs-home-developer"
+size = 21474836480
+label = "HS_HOME_150"
+
+[[pve.vms]]
+vmid = 101
+node = "pve-example-1"
+status = "running"
+[pve.vms.config]
+name = "gold"
+tags = "homestack-gold"
+agent = "1"
+boot = "order=scsi0;ide2;net0"
+ide2 = "local-lvm:vm-101-cloudinit,media=cdrom"
+net0 = "virtio=BC:24:11:00:01:01,bridge=vmbr0,firewall=1"
+scsi0 = "local-lvm:vm-101-disk-0,iothread=1,size=16G"
+sshkeys = "ssh-ed25519%20AAAAC3NzaC1lZDI1NTE5AAAAITEST%20developer%40desktop%0A"
+cicustom = "user=local:snippets/gold-user.yaml"
+[pve.vms.guest]
+hostname = "gold"
+users = ["root", "developer"]
+filesystems = [{ mountpoint = "/", type = "ext4", device = "sda", slot = "scsi0", size = 17179869184, used = 4000000000, avail = 13000000000 }]
+files = { "/root/.ssh/authorized_keys" = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIROOT root@gold\n" }
+
+[[pve.vms]]
+vmid = 150
+node = "pve-example-1"
+status = "running"
+[pve.vms.config]
+name = "old-ws"
+tags = "homestack-ws"
+scsi0 = "local-lvm:vm-150-disk-0,size=16G"
+scsi1 = "local-lvm:vm-150-hs-home-developer,serial=HS_HOME_150,size=20G"
+net0 = "virtio=BC:24:11:00:01:50,bridge=vmbr0"
+[pve.vms.guest]
+hostname = "old-ws"
+users = ["root", "developer"]
+filesystems = [{ mountpoint = "/home/developer", type = "ext4", device = "sdb", slot = "scsi1", label = "HS_HOME_150", size = 21474836480, used = 1000000000, avail = 20000000000 }]
+
+[[pve.vms]]
+vmid = 160
+node = "pve-example-1"
+status = "running"
+[pve.vms.config]
+name = "alien-workspace"
+tags = "homestack-alien"
+scsi0 = "local-lvm:vm-160-disk-0,size=16G"
+
+[[pve.pools]]
+poolid = "homestack"
+vms = [160]
+
+[[pve.pools]]
+poolid = "homestack-gold"
+vms = [101]
+
+[[pve.tokens]]
+id = "root@pam!sim"
+secret = "00000000-0000-0000-0000-00000000000a"
+acl = { "/" = ["*"] }
+
+[[pve.tokens]]
+id = "homestack@pve!server"
+secret = "00000000-0000-0000-0000-00000000000b"
+[pve.tokens.acl]
+"/" = ["Sys.Audit", "VM.Audit", "Datastore.Audit", "VM.GuestAgent.Audit", "Pool.Audit", "SDN.Audit"]
+"/pool/homestack" = ["Pool.Audit", "VM.Allocate", "VM.Audit", "VM.Config.Cloudinit", "VM.Config.Disk", "VM.Config.Options", "VM.GuestAgent.Audit", "VM.GuestAgent.FileRead", "VM.GuestAgent.Unrestricted", "VM.Migrate", "VM.PowerMgmt"]
+"/pool/homestack-gold" = ["Pool.Audit", "VM.Audit", "VM.Clone", "VM.GuestAgent.Audit", "VM.GuestAgent.FileRead", "VM.GuestAgent.Unrestricted"]
+"/storage/local-lvm" = ["Datastore.AllocateSpace", "Datastore.Audit"]
+"/storage/local" = ["Datastore.AllocateSpace", "Datastore.Audit"]
+"/sdn/zones/localnetwork/vmbr0" = ["SDN.Audit", "SDN.Use"]

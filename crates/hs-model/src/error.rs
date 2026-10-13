@@ -54,6 +54,12 @@ pub enum ErrorCode {
     PlanApplied,
     /// Another job is working on one of the plan's VMs.
     Busy,
+    /// The VM is not in the instance's pool; the server changes only the
+    /// VMs of its pool.
+    OutsidePool,
+    /// The operation is valid but the cluster's state does not allow it
+    /// (e.g. the VMID is taken, the VM is not a workspace).
+    OperationRefused,
     /// An unexpected server-side failure.
     Internal,
 }
@@ -78,6 +84,8 @@ impl ErrorCode {
             | Self::PvePermissionDenied
             | Self::PveError
             | Self::PlanChanged
+            | Self::OutsidePool
+            | Self::OperationRefused
             | Self::PlanApplied
             | Self::Internal => false,
         }

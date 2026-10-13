@@ -9,6 +9,7 @@
 use std::sync::Arc;
 
 use axum::extract::FromRequestParts;
+use axum::http::HeaderMap;
 use axum::http::request::Parts;
 use hs_model::ErrorCode;
 
@@ -27,26 +28,30 @@ impl FromRequestParts<AppState> for ExpectedConfig {
     type Rejection = ApiError;
 
     async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Self::Rejection> {
-        let current = state.config.current().ok_or_else(ApiError::config_missing)?;
-        let expected = parts
-            .headers
-            .get(CONFIG_VERSION_HEADER)
-            .and_then(|value| value.to_str().ok())
-            .map(str::trim)
-            .ok_or_else(|| {
-                ApiError::new(
-                    ErrorCode::PreconditionRequired,
-                    "State-changing requests must send HomeStack-Config-Version.",
-                )
-            })?;
-        if expected != current.version {
-            return Err(ApiError::new(
-                ErrorCode::ConfigVersionMismatch,
-                "This server has another configuration version than the request expects.",
-            ));
-        }
-        Ok(Self(current))
+        expected_config(&parts.headers, state).map(Self)
     }
+}
+
+/// The stored configuration when `headers` name its version.
+pub(crate) fn expected_config(headers: &HeaderMap, state: &AppState) -> Result<Arc<Stored>, ApiError> {
+    let current = state.config.current().ok_or_else(ApiError::config_missing)?;
+    let expected = headers
+        .get(CONFIG_VERSION_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .ok_or_else(|| {
+            ApiError::new(
+                ErrorCode::PreconditionRequired,
+                "State-changing requests must send HomeStack-Config-Version.",
+            )
+        })?;
+    if expected != current.version {
+        return Err(ApiError::new(
+            ErrorCode::ConfigVersionMismatch,
+            "This server has another configuration version than the request expects.",
+        ));
+    }
+    Ok(current)
 }
 
 #[cfg(test)]

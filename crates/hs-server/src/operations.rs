@@ -32,6 +32,8 @@ pub struct OpContext {
     pub pve: Arc<PveClient>,
     /// The configuration when the plan was made or applied.
     pub config: Option<Arc<Stored>>,
+    /// The instance's pools.
+    pub pools: Arc<crate::Pools>,
 }
 
 /// What an operation would do.
@@ -76,6 +78,7 @@ impl OpFailure {
                     .unwrap_or_else(|| "pve_error".to_owned());
                 (code, error.to_string())
             }
+            Self::Core(error @ CoreError::OutsidePool(_)) => ("outside_pool".to_owned(), error.to_string()),
             Self::Core(error) => ("operation_failed".to_owned(), error.to_string()),
         };
         JobError { code, message }
@@ -110,7 +113,8 @@ pub trait Operation: Send + Sync {
 /// Settings of the operation model.
 #[derive(Clone)]
 pub struct AppOptions {
-    /// Operations clients may plan; none are built in before phase 5.
+    /// Operations clients may plan: `workspace.create` and
+    /// `workspace.destroy` (phase 5) unless replaced.
     pub operations: Vec<Arc<dyn Operation>>,
     /// Longest silence on a job stream.
     pub heartbeat: Duration,
@@ -123,7 +127,7 @@ pub struct AppOptions {
 impl Default for AppOptions {
     fn default() -> Self {
         Self {
-            operations: Vec::new(),
+            operations: crate::lifecycle::operations(hs_core::lifecycle::LifecycleTiming::default()),
             heartbeat: Duration::from_secs(5),
             plan_ttl: Duration::from_secs(15 * 60),
             retained_jobs: 100,

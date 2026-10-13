@@ -211,6 +211,9 @@ pub struct VolumeSpec {
     pub size: u64,
     #[serde(default = "default_format")]
     pub format: String,
+    /// The ext4 label of the filesystem on it; `None` for a blank volume.
+    #[serde(default)]
+    pub label: Option<String>,
 }
 
 fn default_format() -> String {
@@ -235,6 +238,10 @@ pub struct VmSpec {
     /// Whether the guest powers off on the ACPI button (`status/shutdown`).
     #[serde(default = "default_true")]
     pub acpi: bool,
+    /// The VM this one was cloned from: its first start boots that guest
+    /// through native Cloud-Init (`api::boot_clone`).
+    #[serde(skip)]
+    pub clone_of: Option<u32>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]

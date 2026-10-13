@@ -13,6 +13,7 @@ pub mod gold;
 pub mod guest;
 pub mod inventory;
 pub mod keys;
+pub mod lifecycle;
 pub mod power;
 pub mod pve;
 pub mod status;

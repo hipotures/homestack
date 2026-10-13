@@ -256,7 +256,7 @@ The contract is [docs/openapi.json](../openapi.json). Errors:
 |---|---|
 | 401 | `unauthorized` |
 | 404, 405 | `not_found`, `method_not_allowed` |
-| 409 | `config_missing`, `config_version_mismatch`, `plan_changed`, `plan_applied`, `busy` (retryable) |
+| 409 | `config_missing`, `config_version_mismatch`, `plan_changed`, `plan_applied`, `busy` (retryable), `outside_pool`, `operation_refused` |
 | 412, 428 | `precondition_failed`, `precondition_required` |
 | 413 | `payload_too_large` |
 | 422 | `validation_failed`, `config_invalid` (with `error.field`, e.g. `repo.owner`) |
@@ -267,7 +267,14 @@ The contract is [docs/openapi.json](../openapi.json). Errors:
 Every response carries `x-request-id` (also in the error body) and
 `Cache-Control: no-store`.
 
-No operation can be planned yet: the model is in place (phase 3) and the
-operations arrive from phase 5. Plans and jobs are kept in memory and lost
+Operations (phase 5): `workspace.create` with `{"vmid", "name",
+"home_size"?, "storage"?}` clones Gold into the instance's pool, gives it a
+home and native Cloud-Init, starts and verifies it; `workspace.destroy` with
+`{"vmid"}` shuts down and destroys a workspace of the pool. Their job
+result carries the event (`workspace.created`, `workspace.destroyed`) and
+what the client needs locally (VMID, name, IP, user, `host_key_changed`).
+Applying a plan needs `HomeStack-Config-Version` once a configuration is
+stored. A VM outside the pool is refused with `409 outside_pool`, a state
+that does not allow the operation with `409 operation_refused`. Plans and jobs are kept in memory and lost
 on restart; a job runs on the server, independent of the request or stream
 that follows it, and one job at a time works on a VM.
