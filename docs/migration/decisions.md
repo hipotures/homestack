@@ -131,6 +131,13 @@ an agent stops when a phase needs one that is still open
   in the VM's `description` (instance, job, expiry), written with `digest`,
   as the `refresh` journal of decision 4.
 
+### Owner's decision of 2026-10-13 (after phase 11)
+
+- Phase 12 (the Python client through the server) is dropped: the client
+  is written only in Rust, and no Python is written in the migration. A
+  Rust TUI like MyPowers' (`frontends/tui`, ratatui) is added as phase 13b,
+  on the same `hs-client` as the CLI of phase 13.
+
 ## Probe results
 
 | Date | Probe | Result |

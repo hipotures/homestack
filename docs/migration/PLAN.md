@@ -334,23 +334,23 @@ Bez poola, zawężonego tokenu i zapisanych decyzji 9 i 10 agent nie zaczyna faz
 
 **Bramka:** `--live`: trzy instancje, `GET /v1/config/version` zgodne; wyłączenie jednej nie przerywa odczytów z klienta.
 
-### Faza 12: klient Python przez serwer (przejściowo)
+### Faza 12: wyłączona
 
-**Cel:** codzienne używanie serwera, zanim powstanie klient w Rust.
-
-- W Pythonie `transport.type = "server"`: operacje na Proxmoxie idą przez API serwera. Setup, repo i efekty lokalne (I1, I2) zostają w Pythonie i biorą dane workspace z `GET /v1/workspaces/{id}`.
-
-**Testy:** te same komendy CLI dają ten sam JSON bezpośrednio i przez serwer.
-
-**Bramka:** `--live`: pełny cykl `create` → `setup` → `repo` → `refresh` → `destroy` przez serwer na VM testowej.
-
-> Tę fazę można wykonać wcześniej, zaraz po fazie 5, jeśli chcesz szybciej przejść na serwer.
+**Wyłączona 2026-10-13 decyzją właściciela.** Miała być przejściowym klientem Python, który wysyła operacje do serwera. Klient powstaje tylko w Rust (faza 13 CLI, faza 13b TUI), a w migracji nie pisze się kodu Pythona.
 
 ### Faza 13: klient w Rust (CLI)
 
 **Zakres:** komendy operacji na Proxmoxie przez serwer, plany i potwierdzenia, `--json` z tymi samymi kodami wyjścia, efekty lokalne I1 (SSH config, `known_hosts`, `identity_files`) i I2 (FIDO, sygnały dotyku).
 
 **Testy:** zgodność wyjścia `--json` i kodów wyjścia z Pythonem; testy z `test_cli.py`, `test_workspace_ssh.py`, `test_fido.py`, `test_touch.py`.
+
+### Faza 13b: TUI w Rust (jak MyPowers)
+
+**Zakres:** TUI w Rust na wzór `frontends/tui` z MyPowers (ratatui + crossterm), korzystające z tego samego `hs-client` co CLI: lista i stan workspace’ów, plany z potwierdzeniem, śledzenie zadań przez WebSocket (`/v1/jobs/{id}/events`), wybór instancji serwera jak w kliencie (pierwsza osiągalna, zadanie na tej samej). Funkcje TUI z Pythona przeniesione na operacje serwera.
+
+**Testy:** testy TUI z Pythona (dziś `excluded` w manifeście) przejrzane: te, które opisują zachowanie, a nie wygląd Textual, przeniesione; testy stanu i renderowania bez terminala (bufor ratatui), jak w MyPowers.
+
+**Bramka:** `--live`: z TUI plan i wykonanie operacji na VM testowej przez serwer, z postępem zadania.
 
 ### Faza 14: setup, repo i backup w Rust
 
