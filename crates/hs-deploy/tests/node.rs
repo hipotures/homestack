@@ -1,0 +1,160 @@
+//! The container steps of `homestack-deploy` against a stand-in for the
+//! Proxmox API that records every call and answers tasks at once.
+
+use std::sync::Mutex;
+
+use hs_core::pve::Pve;
+use hs_deploy::node::{self, NewContainer};
+use hs_pve::PveError;
+use serde_json::{Value, json};
+
+#[derive(Default)]
+struct FakePve {
+    calls: Mutex<Vec<String>>,
+    images: Vec<String>,
+    containers: Value,
+    env: String,
+    pending_env: bool,
+}
+
+impl FakePve {
+    fn calls(&self) -> Vec<String> {
+        self.calls.lock().map(|calls| calls.clone()).unwrap_or_default()
+    }
+
+    fn record(&self, call: String) {
+        if let Ok(mut calls) = self.calls.lock() {
+            calls.push(call);
+        }
+    }
+}
+
+const UPID: &str = "UPID:pve2:00000001:00000001:00000001:vzcreate:998:homestack@pve!deploy:";
+
+impl Pve for FakePve {
+    async fn get(&self, path: &str, _query: &[(&str, &str)]) -> Result<Value, PveError> {
+        Ok(match path {
+            p if p.ends_with("/content") => {
+                Value::Array(self.images.iter().map(|volid| json!({"volid": volid})).collect())
+            }
+            "/cluster/resources" => self.containers.clone(),
+            p if p.ends_with("/config") => json!({"env": self.env, "digest": "d1"}),
+            p if p.ends_with("/pending") => {
+                if self.pending_env {
+                    json!([{"key": "env", "value": "old", "pending": "new"}])
+                } else {
+                    json!([{"key": "env", "value": "same"}])
+                }
+            }
+            p if p.contains("/tasks/") && p.ends_with("/status") => json!({"status": "stopped", "exitstatus": "OK"}),
+            p if p.contains("/tasks/") && p.ends_with("/log") => json!([]),
+            other => json!({"unexpected": other}),
+        })
+    }
+
+    async fn post(&self, path: &str, form: &[(&str, &str)]) -> Result<Value, PveError> {
+        let keys: Vec<&str> = form.iter().map(|(key, _)| *key).collect();
+        self.record(format!("POST {path} {}", keys.join(",")));
+        Ok(json!(UPID))
+    }
+
+    async fn put(&self, path: &str, form: &[(&str, &str)]) -> Result<Value, PveError> {
+        let text: Vec<String> = form.iter().map(|(key, value)| format!("{key}={value}")).collect();
+        self.record(format!("PUT {path} {}", text.join("&")));
+        Ok(Value::Null)
+    }
+
+    async fn delete(&self, path: &str, query: &[(&str, &str)]) -> Result<Value, PveError> {
+        let keys: Vec<String> = query.iter().map(|(key, value)| format!("{key}={value}")).collect();
+        self.record(format!("DELETE {path} {}", keys.join("&")));
+        Ok(json!(UPID))
+    }
+}
+
+const IMAGE: &str = "ghcr.io/hipotures/homestack-server:0.1.0-0123456789ab";
+
+#[tokio::test]
+async fn the_image_is_pulled_once_per_node() -> Result<(), String> {
+    let quiet = |_: &str| {};
+    let pve = FakePve::default();
+    let volid = node::ensure_image(&pve, "pve2", "local", IMAGE, &quiet).await?;
+    assert_eq!(volid, "local:vztmpl/homestack-server_0.1.0-0123456789ab.tar");
+    assert_eq!(
+        pve.calls(),
+        ["POST /nodes/pve2/storage/local/oci-registry-pull reference"]
+    );
+
+    let pulled = FakePve {
+        images: vec![volid.clone()],
+        ..FakePve::default()
+    };
+    assert_eq!(
+        node::ensure_image(&pulled, "pve2", "local", IMAGE, &quiet).await?,
+        volid
+    );
+    assert!(pulled.calls().is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn an_existing_container_is_stopped_then_destroyed_with_its_volumes() -> Result<(), String> {
+    let quiet = |_: &str| {};
+    let pve = FakePve {
+        containers: json!([
+            {"type": "qemu", "vmid": 998, "node": "pve1", "status": "running"},
+            {"type": "lxc", "vmid": 998, "node": "pve3", "status": "running", "name": "api2"}
+        ]),
+        ..FakePve::default()
+    };
+    let found = node::container(&pve, 998).await?.ok_or("CT 998 not found")?;
+    assert_eq!(found.node, "pve3", "only containers count");
+    node::destroy(&pve, &found, 998, &quiet).await?;
+    assert_eq!(
+        pve.calls(),
+        [
+            "POST /nodes/pve3/lxc/998/status/stop ",
+            "DELETE /nodes/pve3/lxc/998 purge=1&destroy-unreferenced-disks=1"
+        ]
+    );
+    assert_eq!(node::container(&FakePve::default(), 998).await?, None);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_new_container_gets_its_settings_and_environment() -> Result<(), String> {
+    let quiet = |_: &str| {};
+    let pve = FakePve {
+        env: "PATH=/usr/bin:/bin\0HOMESTACK_TLS_KEY_B64=secret".to_owned(),
+        pending_env: true,
+        ..FakePve::default()
+    };
+    let spec = NewContainer {
+        node: "pve2",
+        ctid: 998,
+        hostname: "api2",
+        ostemplate: "local:vztmpl/homestack-server_0.1.0-0123456789ab.tar",
+        pool: "homestack-service",
+        storage: "local-lvm",
+        disk_gib: 2,
+        memory_mib: 256,
+        cores: 1,
+        net0: "name=eth0,bridge=vmbr0,ip=192.0.2.98/24,gw=192.0.2.1".to_owned(),
+        nameserver: None,
+        description: "HomeStack server".to_owned(),
+    };
+    node::create(&pve, &spec, &quiet).await?;
+    node::set_env(&pve, "pve2", 998, &[], &["HOMESTACK_TLS_KEY_B64"]).await?;
+    assert!(node::env_pending(&pve, "pve2", 998).await?);
+    assert_eq!(
+        pve.calls(),
+        [
+            "POST /nodes/pve2/lxc vmid,ostemplate,hostname,pool,rootfs,memory,swap,cores,net0,unprivileged,onboot,description",
+            "PUT /nodes/pve2/lxc/998/config env=PATH=/usr/bin:/bin&digest=d1"
+        ]
+    );
+    assert_eq!(
+        node::env_keys(&pve, "pve2", 998).await?,
+        ["PATH", "HOMESTACK_TLS_KEY_B64"]
+    );
+    Ok(())
+}

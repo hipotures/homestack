@@ -1,0 +1,313 @@
+//! The commands of `homestack-deploy` (`docs/migration/phase-11.md`, 2.3).
+
+use std::net::SocketAddr;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use base64::Engine;
+use hs_client::{Client, ClientConfig, Endpoint};
+use hs_pve::{PveClient, PveClientConfig, PveToken};
+use serde_json::json;
+use sha2::{Digest, Sha256};
+
+use crate::acme;
+use crate::config::{DeployConfig, InstanceSpec};
+use crate::node::{self, NewContainer};
+use crate::ovh::{OvhClient, OvhCredentials};
+
+/// How long a new instance may take to answer over TLS.
+const HEALTH_LIMIT: Duration = Duration::from_secs(180);
+/// Variables that carry the certificate; removed once the server stored it.
+const TLS_VARIABLES: [&str; 2] = ["HOMESTACK_TLS_CERT_B64", "HOMESTACK_TLS_KEY_B64"];
+
+fn read_secret(path: &std::path::Path) -> Result<String, String> {
+    std::fs::read_to_string(path)
+        .map(|text| text.trim().to_owned())
+        .map_err(|e| format!("{}: {}", path.display(), e.kind()))
+}
+
+fn now() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |since| i64::try_from(since.as_secs()).unwrap_or(i64::MAX))
+}
+
+/// The Proxmox client with the deploy token.
+pub fn deploy_client(config: &DeployConfig) -> Result<PveClient, String> {
+    let token = PveToken::from_file(&config.pve.deploy_token_file).map_err(|e| e.to_string())?;
+    if !token.id().ends_with("!deploy") {
+        return Err(format!("{} is not the deploy token; refusing", token.id()));
+    }
+    let mut client = PveClientConfig::new(config.pve.endpoints.clone(), token);
+    if let Some(path) = &config.pve.ca_file {
+        client.extra_ca_pem =
+            Some(std::fs::read_to_string(path).map_err(|e| format!("{}: {}", path.display(), e.kind()))?);
+    }
+    PveClient::new(client).map_err(|e| e.to_string())
+}
+
+/// A client of `instances`, each reached at its address with its name.
+pub fn instances_client(config: &DeployConfig, instances: &[&InstanceSpec], api_token: &str) -> Result<Client, String> {
+    let endpoints = instances
+        .iter()
+        .map(|instance| {
+            Ok(Endpoint {
+                url: config.url(instance)?,
+                address: Some(SocketAddr::from((instance.address, 443))),
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    let mut client = ClientConfig::new(endpoints, api_token.to_owned());
+    if let Some(path) = &config.acme.ca_file {
+        client.extra_ca_pem =
+            Some(std::fs::read_to_string(path).map_err(|e| format!("{}: {}", path.display(), e.kind()))?);
+    }
+    Client::new(client).map_err(|e| e.to_string())
+}
+
+/// The stored certificate, if it covers `*.<domain>` and has not expired.
+fn certificate(config: &DeployConfig) -> Result<acme::Stored, String> {
+    let stored = acme::stored(&config.acme.dir)?.ok_or_else(|| {
+        format!(
+            "no certificate in {}: run `homestack-deploy cert` first",
+            config.acme.dir.display()
+        )
+    })?;
+    if !stored.names.iter().any(|name| *name == format!("*.{}", config.domain)) {
+        return Err(format!(
+            "the stored certificate is for {:?}, not *.{}",
+            stored.names, config.domain
+        ));
+    }
+    if stored.not_after <= now() {
+        return Err("the stored certificate has expired: run `homestack-deploy cert`".to_owned());
+    }
+    Ok(stored)
+}
+
+async fn wait_health(client: &Client, limit: Duration) -> Result<(), String> {
+    let deadline = tokio::time::Instant::now() + limit;
+    loop {
+        match client.get_on(0, "/health/live").await {
+            Ok(_) => return Ok(()),
+            Err(error) if tokio::time::Instant::now() >= deadline => {
+                return Err(format!("no answer over TLS within {} s: {error}", limit.as_secs()));
+            }
+            Err(_) => tokio::time::sleep(Duration::from_secs(2)).await,
+        }
+    }
+}
+
+/// `cert`: obtain or renew `*.<domain>`; with `push`, send it to every
+/// running instance.
+pub async fn cert(config: &DeployConfig, force: bool, push: bool, say: &impl Fn(&str)) -> Result<(), String> {
+    let current = acme::stored(&config.acme.dir)?;
+    let stored = match current {
+        Some(stored) if !force && acme::current(&stored, &config.domain, now()) => {
+            say(&format!(
+                "*.{} is valid for {} more days; nothing to renew",
+                config.domain,
+                (stored.not_after - now()) / 86_400
+            ));
+            stored
+        }
+        _ => {
+            say(&format!("obtaining *.{} from {}", config.domain, config.acme.directory));
+            let ovh = OvhClient::connect(OvhCredentials::from_file(&config.acme.ovh_file)?).await?;
+            let stored = acme::obtain(
+                &config.acme.directory,
+                &config.acme.dir,
+                &config.domain,
+                &ovh,
+                &config.acme.zone,
+                say,
+            )
+            .await?;
+            say(&format!(
+                "certificate for {:?} stored in {}, valid for {} days",
+                stored.names,
+                config.acme.dir.display(),
+                (stored.not_after - now()) / 86_400
+            ));
+            stored
+        }
+    };
+    if push {
+        let api_token = read_secret(&config.server.api_token_file)?;
+        let body = json!({"cert": stored.cert, "key": stored.key});
+        for instance in &config.instances {
+            let client = instances_client(config, &[instance], &api_token)?;
+            match client.put_json_on(0, "/v1/secrets/tls", &body).await {
+                Ok(_) => say(&format!("{}: certificate loaded", instance.name)),
+                Err(error) => say(&format!("{}: not updated: {error}", instance.name)),
+            }
+        }
+    }
+    Ok(())
+}
+
+/// `apply`: (re)create every selected instance, one at a time, and check
+/// that all instances hold the same configuration.
+pub async fn apply(config: &DeployConfig, only: &[String], say: &impl Fn(&str)) -> Result<(), String> {
+    let selected = config.selected(only)?;
+    let stored = certificate(config)?;
+    let pve = deploy_client(config)?;
+    let api_token = read_secret(&config.server.api_token_file)?;
+    let pve_token = read_secret(&config.server.pve_token_file)?;
+    PveToken::parse(&pve_token).map_err(|e| format!("{}: {e}", config.server.pve_token_file.display()))?;
+    let server_toml = std::fs::read_to_string(&config.server.config_file)
+        .map_err(|e| format!("{}: {}", config.server.config_file.display(), e.kind()))?;
+    let hash: String = Sha256::digest(api_token.as_bytes())
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    let b64 = |text: &str| base64::engine::general_purpose::STANDARD.encode(text);
+    let endpoints = config
+        .pve
+        .endpoints
+        .iter()
+        .map(|url| url.as_str().trim_end_matches('/').to_owned())
+        .collect::<Vec<_>>()
+        .join(",");
+
+    for instance in selected {
+        say(&format!(
+            "{}: CT {} on {} ({}, {})",
+            instance.name, instance.ctid, instance.node, instance.address, instance.storage
+        ));
+        let ostemplate = node::ensure_image(&pve, &instance.node, &config.template_storage, &config.image, say).await?;
+        if let Some(found) = node::container(&pve, instance.ctid).await? {
+            node::destroy(&pve, &found, instance.ctid, say).await?;
+        }
+        let spec = NewContainer {
+            node: &instance.node,
+            ctid: instance.ctid,
+            hostname: &instance.name,
+            ostemplate: &ostemplate,
+            pool: &config.pool,
+            storage: &instance.storage,
+            disk_gib: config.disk_gib,
+            memory_mib: config.memory_mib,
+            cores: config.cores,
+            net0: format!(
+                "name=eth0,bridge={},ip={}/{},gw={}",
+                config.bridge, instance.address, config.cidr, config.gateway
+            ),
+            nameserver: config.nameserver.map(|ip| ip.to_string()),
+            description: format!(
+                "HomeStack server {}.{}\nimage {}\nmade by homestack-deploy",
+                instance.name, config.domain, config.image
+            ),
+        };
+        node::create(&pve, &spec, say).await?;
+        let env = [
+            ("HOMESTACK_INSTANCE", instance.name.clone()),
+            ("HOMESTACK_API_TOKEN_SHA256", hash.clone()),
+            ("HOMESTACK_PVE_ENDPOINTS", endpoints.clone()),
+            ("HOMESTACK_PVE_POOL", config.server.pool.clone()),
+            ("HOMESTACK_PVE_GOLD_POOL", config.server.gold_pool.clone()),
+            (TLS_VARIABLES[0], b64(&stored.cert)),
+            (TLS_VARIABLES[1], b64(&stored.key)),
+        ]
+        .map(|(key, value)| (key.to_owned(), value));
+        node::set_env(&pve, &instance.node, instance.ctid, &env, &[]).await?;
+        say("  starting");
+        node::power(&pve, &instance.node, instance.ctid, "start").await?;
+        let client = instances_client(config, &[instance], &api_token)?;
+        wait_health(&client, HEALTH_LIMIT).await?;
+        say("  answers over TLS; removing the certificate from the container's configuration");
+        node::set_env(&pve, &instance.node, instance.ctid, &[], &TLS_VARIABLES).await?;
+        if node::env_pending(&pve, &instance.node, instance.ctid).await? {
+            say("  the change waits for a restart; restarting");
+            node::power(&pve, &instance.node, instance.ctid, "reboot").await?;
+            wait_health(&client, HEALTH_LIMIT).await?;
+        }
+        let keys = node::env_keys(&pve, &instance.node, instance.ctid).await?;
+        if keys.iter().any(|key| TLS_VARIABLES.contains(&key.as_str())) {
+            return Err(format!(
+                "{}: the certificate is still in the container's configuration",
+                instance.name
+            ));
+        }
+        client
+            .put_text_on(0, "/v1/secrets/pve-token", &pve_token, "text/plain")
+            .await
+            .map_err(|e| format!("{}: Proxmox token: {e}", instance.name))?;
+        let version = client
+            .configure_on(0, &server_toml)
+            .await
+            .map_err(|e| format!("{}: server.toml: {e}", instance.name))?;
+        say(&format!("  ready, configuration {}", &version[..12.min(version.len())]));
+    }
+    check_versions(config, &api_token, say).await
+}
+
+/// Every instance holds the same configuration version.
+pub async fn check_versions(config: &DeployConfig, api_token: &str, say: &impl Fn(&str)) -> Result<(), String> {
+    let all: Vec<&InstanceSpec> = config.instances.iter().collect();
+    let client = instances_client(config, &all, api_token)?;
+    let mut versions = std::collections::BTreeSet::new();
+    let mut problems = Vec::new();
+    for (url, version) in client.config_versions().await {
+        match version {
+            Ok(Some(version)) => {
+                say(&format!("{url}: configuration {}", &version[..12.min(version.len())]));
+                versions.insert(version);
+            }
+            Ok(None) => problems.push(format!("{url}: no configuration")),
+            Err(error) => problems.push(format!("{url}: {error}")),
+        }
+    }
+    if !problems.is_empty() {
+        return Err(problems.join("; "));
+    }
+    if versions.len() != 1 {
+        return Err(format!("the instances hold {} configuration versions", versions.len()));
+    }
+    say("all instances hold the same configuration");
+    Ok(())
+}
+
+/// `status`: each instance's container and what it answers.
+pub async fn status(config: &DeployConfig, only: &[String], say: &impl Fn(&str)) -> Result<(), String> {
+    let pve = deploy_client(config)?;
+    let api_token = read_secret(&config.server.api_token_file)?;
+    if let Some(stored) = acme::stored(&config.acme.dir)? {
+        say(&format!(
+            "certificate {:?}: {} days left",
+            stored.names,
+            (stored.not_after - now()) / 86_400
+        ));
+    }
+    for instance in config.selected(only)? {
+        let Some(found) = node::container(&pve, instance.ctid).await? else {
+            say(&format!("{}: CT {} does not exist", instance.name, instance.ctid));
+            continue;
+        };
+        let client = instances_client(config, &[instance], &api_token)?;
+        let version = match client.config_version_on(0).await {
+            Ok(Some(version)) => version[..12.min(version.len())].to_owned(),
+            Ok(None) => "none".to_owned(),
+            Err(error) => format!("unreachable ({error})"),
+        };
+        say(&format!(
+            "{}: CT {} on {} {}, configuration {version}",
+            instance.name, instance.ctid, found.node, found.status
+        ));
+    }
+    Ok(())
+}
+
+/// `remove`: stop and destroy the selected containers.
+pub async fn remove(config: &DeployConfig, only: &[String], say: &impl Fn(&str)) -> Result<(), String> {
+    let pve = deploy_client(config)?;
+    for instance in config.selected(only)? {
+        match node::container(&pve, instance.ctid).await? {
+            Some(found) => {
+                say(&format!("{}: CT {}", instance.name, instance.ctid));
+                node::destroy(&pve, &found, instance.ctid, say).await?;
+            }
+            None => say(&format!("{}: CT {} does not exist", instance.name, instance.ctid)),
+        }
+    }
+    Ok(())
+}
