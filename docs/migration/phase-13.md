@@ -377,3 +377,14 @@ fail, so they do compare.
    comes from `hs-config split --server-url ...` or is written by hand.
 4. **Phase 13b** (the TUI) is next; it uses `hs-client` and the job events
    over WebSocket instead of polling.
+
+## Change after the report (2026-10-13): `known_hosts` per workspace
+
+On the owner's decision (option C, `decisions.md`) the Rust client no longer
+edits the user's `~/.ssh/known_hosts` with `ssh-keygen -F/-R`. The host
+config of a workspace names its own file,
+`~/.ssh/config.d/homestack/known_hosts/vm<VMID>`, with `StrictHostKeyChecking
+accept-new`; `create`, `refresh`, `addkey` after a restart and `destroy`
+remove that file (missing is fine). This also closes the open point of the
+report (a missing `~/.ssh/known_hosts` made `create` fail). The Python
+client is unchanged until it is removed.

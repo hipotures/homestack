@@ -657,8 +657,10 @@ impl<'a> Cli<'a> {
         }
     }
 
-    fn known_hosts(&self, ip: &str) -> Result<Vec<String>, AppError> {
-        local_ssh::forget_local_ssh_host(self.ctx.system.as_ref(), &self.ctx.home, ip)
+    /// Remove the workspace's own `known_hosts` file (the paths removed).
+    fn known_hosts(&self, vmid: u32) -> Result<Vec<String>, AppError> {
+        local_ssh::forget_known_hosts(&self.ctx.home, vmid)
+            .map(|removed| removed.iter().map(|path| path.display().to_string()).collect())
     }
 
     async fn create(&mut self, parameters: Value) -> Result<Code, AppError> {
@@ -676,7 +678,7 @@ impl<'a> Cli<'a> {
         let vmid = vmid_of(&result)?;
         let name = view::text(&result["name"]);
         let ip = view::text(&result["ip"]);
-        let removed = self.known_hosts(&ip)?;
+        let removed = self.known_hosts(vmid)?;
         let ssh = &self.loaded.client.workspace_ssh;
         let path = local_ssh::write_local_ssh_config(&self.ctx.home, ssh, vmid, &name, &ip).map_err(|error| {
             AppError::new(format!(
@@ -724,7 +726,7 @@ impl<'a> Cli<'a> {
         let removed = if result["host_key_changed"] == false {
             Vec::new()
         } else {
-            self.known_hosts(&ip)?
+            self.known_hosts(vmid)?
         };
         let user = &self.loaded.client.workspace_ssh.user;
         merge(
@@ -848,7 +850,7 @@ impl<'a> Cli<'a> {
             }
         }
         let removed = if result["restarted"] == true {
-            self.known_hosts(&ip)?
+            self.known_hosts(vmid)?
         } else {
             Vec::new()
         };
@@ -923,8 +925,7 @@ remove the old one with `ssh-keygen -R ADDRESS` after that start.\n",
         };
         let mut result = self.apply(&session, None).await?;
         let name = view::text(&result["name"]);
-        let ip = view::text(&result["ip"]);
-        let local = self.destroy_locally(vmid, &ip).map_err(|error| {
+        let local = self.destroy_locally(vmid).map_err(|error| {
             AppError::new(format!(
                 "Workspace VM {vmid} ({name}) was destroyed successfully, but local SSH cleanup failed: {error}"
             ))
@@ -942,10 +943,10 @@ remove the old one with `ssh-keygen -R ADDRESS` after that start.\n",
 
     /// The desktop's steps once the VM is verified absent, in Python's
     /// order: BK keys, SSH config, `known_hosts`.
-    fn destroy_locally(&self, vmid: u32, ip: &str) -> Result<Value, AppError> {
+    fn destroy_locally(&self, vmid: u32) -> Result<Value, AppError> {
         let left = backup_keys_left(&self.ctx.home, vmid);
         let removed = local_ssh::remove_local_ssh_config(&self.ctx.home, vmid)?;
-        let forgotten = self.known_hosts(ip)?;
+        let forgotten = self.known_hosts(vmid)?;
         Ok(json!({
             "backup_keys_left": left,
             "ssh_config_removed": removed.iter().map(|path| path.display().to_string()).collect::<Vec<_>>(),

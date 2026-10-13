@@ -7,10 +7,9 @@ mod common;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
-use common::{FakeSystem, TestResult, strings};
+use common::{TestResult, strings};
 use hs_cli::identity;
 use hs_cli::local_ssh;
-use hs_cli::system::Output;
 use hs_config::client::WorkspaceSsh;
 
 fn settings(files: &[&str]) -> WorkspaceSsh {
@@ -44,7 +43,7 @@ fn writes_exact_config_for_vm_200_and_vm_201_with_mode_0600() -> TestResult {
         assert_eq!(
             std::fs::read_to_string(&path)?,
             format!(
-                "Host {name} vm{vmid}\n    HostName {ip}\n    User user\n    IdentityFile ~/.ssh/example-hardware-key\n    IdentitiesOnly yes\n    LogLevel FATAL\n"
+                "Host {name} vm{vmid}\n    HostName {ip}\n    User user\n    IdentityFile ~/.ssh/example-hardware-key\n    IdentitiesOnly yes\n    LogLevel FATAL\n    StrictHostKeyChecking accept-new\n    UserKnownHostsFile ~/.ssh/config.d/homestack/known_hosts/vm{vmid}\n"
             )
         );
         assert_eq!(std::fs::metadata(&path)?.permissions().mode() & 0o777, 0o600);
@@ -66,7 +65,7 @@ fn uses_workspace_ssh_config_instead_of_hardcoded_keys() -> TestResult {
     let path = local_ssh::write_local_ssh_config(home.path(), &custom, 202, "custom", "192.0.2.202")?;
     assert_eq!(
         std::fs::read_to_string(path)?,
-        "Host custom vm202\n    HostName 192.0.2.202\n    User user\n    IdentityFile ~/.ssh/custom-key-a\n    IdentityFile /keys/custom-key-b\n    IdentitiesOnly no\n    LogLevel ERROR\n"
+        "Host custom vm202\n    HostName 192.0.2.202\n    User user\n    IdentityFile ~/.ssh/custom-key-a\n    IdentityFile /keys/custom-key-b\n    IdentitiesOnly no\n    LogLevel ERROR\n    StrictHostKeyChecking accept-new\n    UserKnownHostsFile ~/.ssh/config.d/homestack/known_hosts/vm202\n"
     );
     Ok(())
 }
@@ -129,39 +128,83 @@ fn remove_local_ssh_config_removes_only_matching_vmid() -> TestResult {
     Ok(())
 }
 
-/// Port of `KnownHostsTests::test_forget_local_ssh_host_removes_plain_and_bracketed_entries`.
+/// Replaces `KnownHostsTests` (owner's decision of 2026-10-13, option C): each
+/// workspace has its own `known_hosts` file, named in its host config, so
+/// the user's `~/.ssh/known_hosts` is never touched.
 #[test]
-fn forget_local_ssh_host_removes_plain_and_bracketed_entries() -> TestResult {
+fn forget_known_hosts_removes_only_the_workspaces_own_file() -> TestResult {
     let home = tempfile::tempdir()?;
-    let system = FakeSystem::new().run(|argv| {
-        Ok(if argv.get(1).is_some_and(|a| a == "-F") {
-            Output::stdout("# found\n")
-        } else {
-            Output::default()
-        })
-    });
-    let removed = local_ssh::forget_local_ssh_host(&system, home.path(), "192.0.2.200")?;
-    assert_eq!(removed, ["192.0.2.200", "[192.0.2.200]:22"]);
-    let known = home.path().join(".ssh/known_hosts").display().to_string();
-    let runs = system.runs();
-    for target in ["192.0.2.200", "[192.0.2.200]:22"] {
-        assert!(
-            runs.contains(&strings(&["ssh-keygen", "-f", &known, "-R", target])),
-            "{runs:?}"
-        );
-    }
+    std::fs::create_dir_all(home.path().join(".ssh"))?;
+    let dir = local_ssh::known_hosts_directory(home.path());
+    std::fs::create_dir_all(&dir)?;
+    std::fs::write(dir.join("vm200"), "192.0.2.200 ssh-ed25519 AAAA\n")?;
+    std::fs::write(dir.join("vm201"), "192.0.2.201 ssh-ed25519 AAAA\n")?;
+    std::fs::write(home.path().join(".ssh/known_hosts"), "main\n")?;
+    let removed = local_ssh::forget_known_hosts(home.path(), 200)?;
+    assert_eq!(removed, [dir.join("vm200")]);
+    assert!(!dir.join("vm200").exists());
+    assert!(dir.join("vm201").exists());
+    assert_eq!(std::fs::read_to_string(home.path().join(".ssh/known_hosts"))?, "main\n");
     Ok(())
 }
 
-/// Port of `KnownHostsTests::test_forget_local_ssh_host_is_noop_when_not_found`.
+/// A workspace that was never connected to has no file: nothing to remove,
+/// and no error (owner's decision of 2026-10-13).
 #[test]
-fn forget_local_ssh_host_is_noop_when_not_found() -> TestResult {
+fn forget_known_hosts_without_a_file_or_directory_is_a_noop() -> TestResult {
     let home = tempfile::tempdir()?;
-    let system = FakeSystem::new().run(|_| Ok(Output::failed(1, "")));
-    assert!(local_ssh::forget_local_ssh_host(&system, home.path(), "192.0.2.200")?.is_empty());
-    assert!(!system.runs().iter().any(|argv| argv.iter().any(|a| a == "-R")));
-    let missing = FakeSystem::new().which(|_| None);
-    assert!(local_ssh::forget_local_ssh_host(&missing, home.path(), "192.0.2.200").is_err());
+    assert!(local_ssh::forget_known_hosts(home.path(), 200)?.is_empty());
+    std::fs::create_dir_all(local_ssh::known_hosts_directory(home.path()))?;
+    assert!(local_ssh::forget_known_hosts(home.path(), 200)?.is_empty());
+    Ok(())
+}
+
+#[test]
+fn forget_known_hosts_reports_a_file_it_cannot_remove() -> TestResult {
+    let home = tempfile::tempdir()?;
+    let dir = local_ssh::known_hosts_directory(home.path());
+    std::fs::create_dir_all(dir.join("vm200"))?;
+    std::fs::write(dir.join("vm200/inside"), "x")?;
+    let error = local_ssh::forget_known_hosts(home.path(), 200)
+        .err()
+        .map(|e| e.to_string());
+    assert!(error.is_some_and(|e| e.contains("vm200")));
+    Ok(())
+}
+
+/// The directory the host config names exists after the config is written
+/// (ssh creates the file, not its directory), private to the user.
+#[test]
+fn writing_the_config_makes_the_known_hosts_directory() -> TestResult {
+    let home = tempfile::tempdir()?;
+    local_ssh::write_local_ssh_config(home.path(), &example(), 200, "test1", "192.0.2.200")?;
+    let dir = local_ssh::known_hosts_directory(home.path());
+    assert!(dir.is_dir());
+    assert_eq!(std::fs::metadata(&dir)?.permissions().mode() & 0o777, 0o700);
+    assert_eq!(local_ssh::known_hosts_file(home.path(), 200), dir.join("vm200"));
+    Ok(())
+}
+
+/// The host config really makes ssh use that file and learn the key on the
+/// first connection (`ssh -G` reads the options the way ssh will use them).
+#[test]
+fn ssh_reads_the_known_hosts_options_from_the_host_config() -> TestResult {
+    let home = tempfile::tempdir()?;
+    let path = local_ssh::write_local_ssh_config(home.path(), &example(), 200, "test1", "192.0.2.200")?;
+    let output = std::process::Command::new("ssh")
+        .args(["-F", &path.display().to_string(), "-G", "test1"])
+        .output()?;
+    let text = String::from_utf8_lossy(&output.stdout).to_lowercase();
+    assert!(text.contains("stricthostkeychecking accept-new"), "{text}");
+    let expected = format!(
+        "userknownhostsfile {}",
+        local_ssh::known_hosts_file(home.path(), 200).display()
+    );
+    // ssh prints the tilde expanded for the current user, not for the test's home.
+    assert!(
+        text.contains("known_hosts/vm200") && text.contains("userknownhostsfile"),
+        "{text} (wanted {expected})"
+    );
     Ok(())
 }
 
@@ -237,7 +280,9 @@ fn ssh_config_lists_plain_keys_unchanged_and_picks_by_connected_key_otherwise() 
             "    IdentityFile ~/.ssh/k1",
             "    IdentityFile ~/.ssh/k2",
             "    IdentitiesOnly yes",
-            "    LogLevel FATAL"
+            "    LogLevel FATAL",
+            "    StrictHostKeyChecking accept-new",
+            "    UserKnownHostsFile ~/.ssh/config.d/homestack/known_hosts/vm5"
         ])
     );
     let mixed = local_ssh::local_ssh_lines(

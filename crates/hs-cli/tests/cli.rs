@@ -444,13 +444,19 @@ async fn create_result_uses_local_ssh_alias() -> TestResult {
     assert_eq!(out["ok"], true);
     assert_eq!(out["ssh"]["root"], "ssh root@hst-cli");
     assert_eq!(out["ssh"]["user"], "ssh hst-cli");
-    assert_eq!(
-        out["ssh_known_hosts_removed"],
-        serde_json::json!(["192.0.2.240", "[192.0.2.240]:22"])
-    );
+    // A first connection has not made the workspace's known_hosts file yet.
+    assert_eq!(out["ssh_known_hosts_removed"], serde_json::json!([]));
     let conf = desk.ssh_dir().join("vm240-hst-cli.conf");
     assert_eq!(out["ssh_config_path"], conf.display().to_string());
     assert!(std::fs::read_to_string(&conf)?.contains("HostName 192.0.2.240"));
+    let known = desk.ssh_dir().join("known_hosts/vm240");
+    assert!(
+        known.parent().is_some_and(Path::is_dir),
+        "the directory the config names"
+    );
+    assert!(std::fs::read_to_string(&conf)?.contains("UserKnownHostsFile ~/.ssh/config.d/homestack/known_hosts/vm240"));
+    // ssh makes the file on the first connection.
+    std::fs::write(&known, "192.0.2.240 ssh-ed25519 AAAA\n")?;
 
     let status = desk.run(&["status", "hst-cli", "--json"]).await;
     assert_eq!(status.code, 0);
@@ -469,12 +475,13 @@ async fn create_result_uses_local_ssh_alias() -> TestResult {
     );
     assert_eq!(
         out["ssh_known_hosts_removed"],
-        serde_json::json!(["192.0.2.240", "[192.0.2.240]:22"])
+        serde_json::json!([known.display().to_string()])
     );
+    assert!(!known.exists());
     assert_eq!(out["backup_keys_left"], serde_json::json!([]));
     assert!(!conf.exists());
-    let runs = run.system.runs();
-    assert!(runs.iter().any(|argv| argv.iter().any(|a| a == "-R")), "{runs:?}");
+    // No ssh-keygen: the user's own known_hosts is never touched.
+    assert!(run.system.runs().is_empty(), "{:?}", run.system.runs());
     Ok(())
 }
 
@@ -527,6 +534,8 @@ async fn create_failure_does_not_generate_ssh_config() -> TestResult {
 async fn destroy_reports_local_cleanup_failure_after_verified_deletion() -> TestResult {
     let desk = desk(LIFECYCLE, SERVER_TOML).await?;
     assert_eq!(desk.run(&["create", "240", "hst-cli", "--json", "--yes"]).await.code, 0);
+    let known = desk.ssh_dir().join("known_hosts/vm240");
+    std::fs::write(&known, "192.0.2.240 ssh-ed25519 AAAA\n")?;
 
     desk.sim.inject_fault(toml::from_str(
         "op = \"delete{path=/nodes/pve-example-1/qemu/240}\"\noccurrence = 1\nmessage = \"destroy failed\"\n",
@@ -534,20 +543,13 @@ async fn destroy_reports_local_cleanup_failure_after_verified_deletion() -> Test
     let run = desk.run(&["destroy", "240", "--json", "--yes"]).await;
     assert_eq!(run.code, 1, "{}", run.console.out());
     assert!(desk.ssh_dir().join("vm240-hst-cli.conf").exists());
-    assert!(
-        run.system.runs().is_empty(),
-        "nothing local is touched while the VM exists"
-    );
+    assert!(known.exists(), "nothing local is touched while the VM exists");
 
-    let failing = known_hosts_system().run(|_| Ok(Output::failed(2, "permission denied")));
-    let run = desk
-        .run_with(
-            &["destroy", "240", "--json", "--yes"],
-            Recorded::default(),
-            failing,
-            false,
-        )
-        .await;
+    // A file the desktop cannot remove (a directory in its place).
+    std::fs::remove_file(&known)?;
+    std::fs::create_dir_all(&known)?;
+    std::fs::write(known.join("inside"), "x")?;
+    let run = desk.run(&["destroy", "240", "--json", "--yes"]).await;
     assert_eq!(run.code, 1);
     let error = run.json()["error"].as_str().unwrap_or_default().to_owned();
     assert!(

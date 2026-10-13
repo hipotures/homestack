@@ -7,7 +7,6 @@ use std::path::{Path, PathBuf};
 
 use hs_config::client::WorkspaceSsh;
 
-use crate::system::System;
 use crate::{AppError, fido};
 
 /// `~/.ssh/config.d/homestack`.
@@ -40,6 +39,8 @@ pub fn local_ssh_lines(ssh: &WorkspaceSsh, vmid: u32, name: &str, ip: &str) -> V
     let tail = [
         format!("    IdentitiesOnly {}", if ssh.identities_only { "yes" } else { "no" }),
         format!("    LogLevel {}", ssh.log_level),
+        "    StrictHostKeyChecking accept-new".to_owned(),
+        format!("    UserKnownHostsFile ~/.ssh/config.d/homestack/known_hosts/vm{vmid}"),
     ];
     if kinds.len() < 2 {
         lines.extend(files.iter().map(|path| format!("    IdentityFile {path}")));
@@ -133,6 +134,13 @@ pub fn write_local_ssh_config_with(
         ))
     };
     std::fs::create_dir_all(&directory).map_err(failed)?;
+    // ssh makes the `known_hosts` file the host config names, not its
+    // directory.
+    let known = known_hosts_directory(home);
+    if !known.is_dir() {
+        std::fs::create_dir_all(&known).map_err(failed)?;
+        std::fs::set_permissions(&known, std::fs::Permissions::from_mode(0o700)).map_err(failed)?;
+    }
     let mut temporary = tempfile::Builder::new()
         .prefix(&format!(".vm{vmid}-{name}.conf."))
         .tempfile_in(&directory)
@@ -200,57 +208,40 @@ pub fn remove_local_ssh_config(home: &Path, vmid: u32) -> Result<Vec<PathBuf>, A
     Ok(removed)
 }
 
-/// Remove `host` and `[host]:22` from `~/.ssh/known_hosts` with
-/// `ssh-keygen`; the entries removed.
-pub fn forget_local_ssh_host(system: &dyn System, home: &Path, host: &str) -> Result<Vec<String>, AppError> {
-    if system.which("ssh-keygen").is_none() {
-        return Err(AppError::new("Required local command 'ssh-keygen' was not found"));
+/// `~/.ssh/config.d/homestack/known_hosts`: one file per workspace, named
+/// in its host config (owner's decision of 2026-10-13), so the user's own
+/// `~/.ssh/known_hosts` is never read or changed.
+#[must_use]
+pub fn known_hosts_directory(home: &Path) -> PathBuf {
+    config_directory(home).join("known_hosts")
+}
+
+/// The `known_hosts` file of workspace `vmid`.
+#[must_use]
+pub fn known_hosts_file(home: &Path, vmid: u32) -> PathBuf {
+    known_hosts_directory(home).join(format!("vm{vmid}"))
+}
+
+/// Remove the workspace's own `known_hosts` file, so that the next
+/// connection learns the keys the machine has now. A file that is not there
+/// (the workspace was never connected to) is nothing to remove.
+pub fn forget_known_hosts(home: &Path, vmid: u32) -> Result<Vec<PathBuf>, AppError> {
+    let file = known_hosts_file(home, vmid);
+    match std::fs::remove_file(&file) {
+        Ok(()) => Ok(vec![file]),
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+            ) =>
+        {
+            Ok(Vec::new())
+        }
+        Err(error) => Err(AppError::new(format!(
+            "Could not remove local SSH known_hosts file {}: {error}",
+            file.display()
+        ))),
     }
-    let known_hosts = home.join(".ssh").join("known_hosts").display().to_string();
-    let detail = |output: &crate::system::Output| {
-        let text = if output.stderr.trim().is_empty() {
-            &output.stdout
-        } else {
-            &output.stderr
-        };
-        let text = text.trim();
-        if text.is_empty() {
-            String::new()
-        } else {
-            format!("\n{text}")
-        }
-    };
-    let mut removed = Vec::new();
-    for target in [host.to_owned(), format!("[{host}]:22")] {
-        let keygen = |flag: &str| {
-            ["ssh-keygen", "-f", &known_hosts, flag, &target]
-                .map(str::to_owned)
-                .to_vec()
-        };
-        let found = system
-            .run(&keygen("-F"))
-            .map_err(|error| AppError::new(format!("Could not run ssh-keygen: {error}")))?;
-        if found.code == 1 {
-            continue;
-        }
-        if found.code != 0 {
-            return Err(AppError::new(format!(
-                "Could not inspect local SSH known_hosts entry for {target:?}{}",
-                detail(&found)
-            )));
-        }
-        let result = system
-            .run(&keygen("-R"))
-            .map_err(|error| AppError::new(format!("Could not run ssh-keygen: {error}")))?;
-        if result.code != 0 {
-            return Err(AppError::new(format!(
-                "Could not remove local SSH known_hosts entry for {target:?}{}",
-                detail(&result)
-            )));
-        }
-        removed.push(target);
-    }
-    Ok(removed)
 }
 
 /// Likely OpenSSH FIDO identity stubs in `~/.ssh` (`id_*_sk*`, not

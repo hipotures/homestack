@@ -216,6 +216,26 @@ an agent stops when a phase needs one that is still open
   tested before any decision. An Alpine-based image (for example a Python
   one) will certainly not work as Gold.
 
+
+### Owner's decision of 2026-10-13 (known_hosts of workspaces, option C)
+
+- Each workspace has its own `known_hosts` file,
+  `~/.ssh/config.d/homestack/known_hosts/vm<VMID>`, named in its host config
+  with `UserKnownHostsFile`, together with `StrictHostKeyChecking
+  accept-new`: ssh learns the key at the first connection and then keeps
+  checking it. `create` (which makes the directory, mode 0700), `refresh`
+  (when the host key changed), `addkey` (after a restart) and `destroy`
+  remove that one file, since the machine makes new host keys; a file that
+  is not there is nothing to remove, without an error or a warning.
+- The user's own `~/.ssh/known_hosts` is no longer read or changed (the
+  `ssh-keygen -F/-R` calls of Python are gone), and a missing
+  `~/.ssh/known_hosts` no longer fails `create`. Entries that older versions
+  put there stay; they are the user's to clean up.
+- The JSON key `ssh_known_hosts_removed` now lists the removed files.
+- Open for phase 14: the SSH master of `setup` and `repo` (`master.rs`)
+  connects by `user@ip` without the host config, so it must be given the same
+  `UserKnownHostsFile` of the workspace.
+
 ## Probe results
 
 | Date | Probe | Result |
