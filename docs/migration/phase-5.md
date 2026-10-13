@@ -165,9 +165,13 @@ install and the owner's answer about Gold.
   create/destroy twice, the refusals) and 3 API tests. `scripts/check.sh`:
   all passed.
 - Parity with Python: no new scenario (section 5); the existing ones agree.
-- Live: not run. The gate before this phase is not met (no pool
-  `homestack`, the server token still has `VM.Config.Disk` on `/vms`), and
-  the live test clones Gold 101, which the owner has not yet allowed.
+- Live (2026-10-13, test token, pool `homestack-test`): `live_lifecycle.rs`
+  passed: create, verification and destroy of VM 240 (`hst-cycle1`, then
+  `hst-cycle2`, 1 GiB home), twice; after each destroy no VM 240, no
+  `vm-240-*` volume (read with the server's read-only token) and no pool
+  entry. Now part of `scripts/check.sh --live`. The gate before the phase
+  is still not met: no pool `homestack`, the server token still has
+  `VM.Config.Disk` on `/vms`.
 
 ## 9. Open questions
 

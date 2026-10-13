@@ -97,6 +97,8 @@ if ((live)); then
     cargo test -p hs-server --locked --test live_jobs -- --ignored --nocapture
     step "live cluster (L4): native Cloud-Init boot in the test pool"
     cargo test -p hs-server --locked --test live_cloudinit -- --ignored --nocapture
+    step "live cluster (L4): create and destroy in the test pool, twice"
+    cargo test -p hs-server --locked --test live_lifecycle -- --ignored --nocapture
 fi
 
 step "all checks passed$( ((live)) && echo ' (including live)')"
