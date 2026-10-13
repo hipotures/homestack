@@ -74,6 +74,27 @@ pub async fn ensure_image(
     Ok(volid)
 }
 
+/// Server images in `storage` of `node` other than `current` (a file name).
+pub async fn old_images(pve: &impl Pve, node: &str, storage: &str, current: &str) -> Result<Vec<String>, String> {
+    let content = pve
+        .get(
+            &format!("/nodes/{node}/storage/{storage}/content"),
+            &[("content", "vztmpl")],
+        )
+        .await
+        .map_err(|e| format!("{node} {storage}: {e}"))?;
+    let prefix = format!("{storage}:vztmpl/homestack-server_");
+    let current = format!("{storage}:vztmpl/{current}");
+    Ok(content
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|item| item["volid"].as_str())
+        .filter(|volid| volid.starts_with(&prefix) && *volid != current)
+        .map(str::to_owned)
+        .collect())
+}
+
 /// A container the token sees.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Container {

@@ -158,3 +158,21 @@ async fn a_new_container_gets_its_settings_and_environment() -> Result<(), Strin
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn old_server_images_are_listed_not_others() -> Result<(), String> {
+    let pve = FakePve {
+        images: vec![
+            "local:vztmpl/homestack-server_0.1.0-0123456789ab.tar".to_owned(),
+            "local:vztmpl/homestack-server_0.1.0-aaaaaaaaaaaa.tar".to_owned(),
+            "local:vztmpl/python_3.14-alpine3.24.tar".to_owned(),
+        ],
+        ..FakePve::default()
+    };
+    let current = node::image_file(IMAGE)?;
+    assert_eq!(
+        node::old_images(&pve, "pve2", "local", &current).await?,
+        ["local:vztmpl/homestack-server_0.1.0-aaaaaaaaaaaa.tar"]
+    );
+    Ok(())
+}

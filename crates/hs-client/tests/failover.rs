@@ -110,6 +110,9 @@ async fn reads_go_to_the_first_instance_that_answers() -> Result<(), Error> {
     // A's server stops; Caddy still answers for it.
     a_down.store(true, Ordering::SeqCst);
     assert_eq!(client.get("/v1/status").await?["instance"], "b");
+    // A is back, but B answered last and is asked first.
+    a_down.store(false, Ordering::SeqCst);
+    assert_eq!(client.get("/v1/status").await?["instance"], "b");
     // An instance's own answer is final, even an error.
     let Err(error) = client.get("/v1/workspaces/nope").await else {
         return Err("a 404 must not be retried elsewhere".into());

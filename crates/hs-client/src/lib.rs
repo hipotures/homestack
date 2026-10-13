@@ -1,9 +1,9 @@
 //! Client of the HomeStack server API with several instances (mapping 8.3,
 //! `docs/migration/phase-11.md`).
 //!
-//! - A read goes to the first instance that answers; one that cannot be
-//!   reached, or whose proxy answers `502`–`504` without a HomeStack error
-//!   document, is skipped.
+//! - A read goes to the first instance that answers, starting from the one
+//!   that answered last; one that cannot be reached, or whose proxy answers
+//!   `502`–`504` without a HomeStack error document, is skipped.
 //! - A plan, its apply and its job stay on the instance that made the plan
 //!   ([`Session`]). If that instance stops answering, nothing is sent
 //!   elsewhere: the client reports [`ClientError::Lost`], and the caller
@@ -11,6 +11,7 @@
 //!   request blindly).
 
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use reqwest::Method;
@@ -120,6 +121,9 @@ struct Instance {
 pub struct Client {
     instances: Vec<Instance>,
     token: String,
+    /// The instance that answered last, asked first next time: a stopped
+    /// one costs its timeout once, not on every request.
+    preferred: AtomicUsize,
 }
 
 impl Client {
@@ -154,6 +158,7 @@ impl Client {
         Ok(Self {
             instances,
             token: config.token,
+            preferred: AtomicUsize::new(0),
         })
     }
 
@@ -230,10 +235,18 @@ impl Client {
         headers: &[(&str, &str)],
     ) -> Result<(usize, Value), ClientError> {
         let mut down = Vec::new();
-        for index in 0..self.instances.len() {
+        let count = self.instances.len();
+        let start = self.preferred.load(Ordering::Relaxed) % count;
+        for index in (start..count).chain(0..start) {
             match self.send(index, method.clone(), path, body, headers).await {
-                Reply::Ok(value) => return Ok((index, value)),
-                Reply::Api(error) => return Err(error),
+                Reply::Ok(value) => {
+                    self.preferred.store(index, Ordering::Relaxed);
+                    return Ok((index, value));
+                }
+                Reply::Api(error) => {
+                    self.preferred.store(index, Ordering::Relaxed);
+                    return Err(error);
+                }
                 Reply::Down(reason) => down.push(format!("{}: {reason}", self.instances[index].url)),
             }
         }

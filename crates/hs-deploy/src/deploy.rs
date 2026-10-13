@@ -278,6 +278,20 @@ pub async fn status(config: &DeployConfig, only: &[String], say: &impl Fn(&str))
             (stored.not_after - now()) / 86_400
         ));
     }
+    let current = node::image_file(&config.image)?;
+    let mut nodes: Vec<&str> = config.instances.iter().map(|instance| instance.node.as_str()).collect();
+    nodes.sort_unstable();
+    nodes.dedup();
+    for name in nodes {
+        // The deploy token may not remove them (decisions.md, phase 11).
+        let old = node::old_images(&pve, name, &config.template_storage, &current).await?;
+        if !old.is_empty() {
+            say(&format!(
+                "{name}: old server images (root removes them): {}",
+                old.join(" ")
+            ));
+        }
+    }
     for instance in config.selected(only)? {
         let Some(found) = node::container(&pve, instance.ctid).await? else {
             say(&format!("{}: CT {} does not exist", instance.name, instance.ctid));

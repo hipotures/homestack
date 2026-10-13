@@ -5,7 +5,7 @@
 
 use std::io::Write;
 use std::net::{IpAddr, SocketAddr};
-use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -87,6 +87,7 @@ fn write_private(path: &Path, text: &str) -> Result<(), String> {
     let fail = |e: std::io::Error| format!("{}: {}", path.display(), e.kind());
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(fail)?;
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)).map_err(fail)?;
     }
     let temporary = path.with_extension("tmp");
     let mut file = std::fs::OpenOptions::new()

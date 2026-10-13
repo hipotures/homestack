@@ -17,10 +17,14 @@
 # HOMESTACK_LIVE_OUTSIDE_VMID (a VM in 240-249 tagged homestack-ws and in no
 # pool) it also checks that changes outside the pool are refused
 # (live_pool_guard.rs).
+# The deployment gate (crates/hs-deploy/tests/live_deploy.rs) needs the
+# files of its live-deploy.toml (deploy token, client token, certificate)
+# and the node image of HEAD on ghcr.io (CI publishes it after a push), or
+# HOMESTACK_LIVE_IMAGE.
 set -euo pipefail
 
 usage() {
-    sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,/^set -euo/{/^#/p}' "$0" | sed 's/^# \{0,1\}//'
     exit 2
 }
 
@@ -118,6 +122,10 @@ if ((live)); then
     cargo test -p hs-server --locked --test live_addkey -- --ignored --nocapture
     step "live cluster (L4): create on another node than Gold's in the test pool"
     cargo test -p hs-server --locked --test live_create_node -- --ignored --nocapture
+    # The node image CI published for this commit, unless another is named.
+    image=${HOMESTACK_LIVE_IMAGE:-ghcr.io/hipotures/homestack-server:$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)-$(git rev-parse HEAD | cut -c1-12)}
+    step "live cluster (L4): three instances deployed from $image, one stopped"
+    HOMESTACK_LIVE_IMAGE=$image cargo test -p hs-deploy --locked --test live_deploy -- --ignored --nocapture
 fi
 
 step "all checks passed$( ((live)) && echo ' (including live)')"

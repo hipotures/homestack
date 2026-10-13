@@ -1,19 +1,26 @@
 # Running homestack-server
 
-One instance so far (several from phase 11). Environment variables say how
-the instance runs and reaches Proxmox; what HomeStack does is in
+One instance per Proxmox node, made by `homestack-deploy` through the
+Proxmox API only (see [Deployment](#deployment-homestack-deploy)); a single
+instance also runs in Docker or by hand. Environment variables say how the
+instance runs and reaches Proxmox; what HomeStack does is in
 `server.toml`, uploaded through the API (see [Configuration](#configuration)).
 
 | Variable | Meaning |
 |---|---|
-| `HOMESTACK_LISTEN` | Listen address, default `127.0.0.1:8080` (`0.0.0.0:8080` in the image) |
-| `HOMESTACK_API_TOKEN_FILE` | Client bearer token, at least 32 printable characters (required) |
+| `HOMESTACK_LISTEN` | Listen address, default `127.0.0.1:8080` (`0.0.0.0:8080` in the Docker image) |
+| `HOMESTACK_API_TOKEN_FILE` | Client bearer token, at least 32 printable characters |
+| `HOMESTACK_API_TOKEN_SHA256` | Or the SHA-256 (hex) of that token, so the environment holds no secret; one of the two is required |
 | `HOMESTACK_PVE_ENDPOINTS` | Comma-separated Proxmox API origins, tried in order (required) |
-| `HOMESTACK_PVE_TOKEN_FILE` | `USER@REALM!TOKENID=SECRET` (required) |
+| `HOMESTACK_PVE_TOKEN_FILE` | `USER@REALM!TOKENID=SECRET`; without it the token is sent through `PUT /v1/secrets/pve-token` |
 | `HOMESTACK_PVE_CA_FILE` | Extra PEM CA for Proxmox, in addition to the system roots |
-| `HOMESTACK_CONFIG_FILE` | Stored `server.toml`, default `/var/lib/homestack/server.toml` |
+| `HOMESTACK_STATE_DIR` | State directory, default `/var/lib/homestack`: `server.toml`, `secrets/`, `tls/` |
+| `HOMESTACK_CONFIG_FILE` | Stored `server.toml`, default `server.toml` in the state directory |
+| `HOMESTACK_INSTANCE` | The instance's name (`api1`), written into the leases it takes, default `homestack` |
+| `HOMESTACK_TLS_CERT_B64`, `HOMESTACK_TLS_KEY_B64` | Certificate chain and key (PEM, base64), stored in `tls/` at the first start only |
+| `HOMESTACK_CADDY_ADMIN` | Caddy's admin API, told to load a certificate sent with `PUT /v1/secrets/tls` |
 | `HOMESTACK_LOG` | Log filter, default `info` |
-| `HOMESTACK_LOG_FORMAT` | `text` or `json` (`json` in the image) |
+| `HOMESTACK_LOG_FORMAT` | `text` or `json` (`json` in the images) |
 
 Use the names on the nodes' certificates in `HOMESTACK_PVE_ENDPOINTS`, not IP
 addresses: TLS is verified, and an endpoint whose certificate does not match is
@@ -78,13 +85,15 @@ itself comes from one script, run by the cluster's owner as root on any node
 
 ```
 scp deploy/pve/homestack-pve.sh root@NODE:/root/
-ssh root@NODE /root/homestack-pve.sh status  --storages worker-roots,local-lvm --snippet-storage local
-ssh root@NODE /root/homestack-pve.sh install --storages worker-roots,local-lvm --snippet-storage local --dry-run
-ssh root@NODE /root/homestack-pve.sh install --storages worker-roots,local-lvm --snippet-storage local
+ssh root@NODE /root/homestack-pve.sh status  --storages worker-roots,local-lvm --snippet-storage local --service-storages local-zfs,local-lvm --template-storage local
+ssh root@NODE /root/homestack-pve.sh install --storages worker-roots,local-lvm --snippet-storage local --service-storages local-zfs,local-lvm --template-storage local --dry-run
+ssh root@NODE /root/homestack-pve.sh install --storages worker-roots,local-lvm --snippet-storage local --service-storages local-zfs,local-lvm --template-storage local
 ```
 
 `--storages` are the storages of `[storage_layouts]`, `--snippet-storage`
-is `[cloud_init] snippet_storage`. Gold is the one VM tagged
+is `[cloud_init] snippet_storage`. `--service-storages` hold the root disks of the
+server containers (content `rootdir`) and `--template-storage` their image
+(content `vztmpl`) ([Deployment](#deployment-homestack-deploy)). Gold is the one VM tagged
 `homestack-gold`; with several, pass `--gold VMID`. `install` and
 `uninstall` show the plan and ask before changing anything (`--yes` does
 not ask, `--dry-run` only shows). `--test` works on the test part instead of
@@ -93,6 +102,7 @@ the production part. A second `install` changes nothing.
 | Part | What | `install` | `install --test` | `uninstall` | `uninstall --test` |
 |---|---|---|---|---|---|
 | shared | user `homestack@pve`, roles `HomeStack`, `HomeStackGold`, `HomeStackStorage`, pool `homestack-gold` with Gold, the vendor snippets on every node | yes | yes | removed | kept |
+| deploy | roles `HomeStackDeploy`, `HomeStackDeployNodes`, `HomeStackDeployTemplates`, pool `homestack-service`, token `homestack@pve!deploy`, its ACL | yes | yes | removed (a pool with containers is kept) | kept |
 | production | pool `homestack`, token `homestack@pve!server`, its ACL | yes | untouched | removed | kept |
 | test | pool `homestack-test`, token `homestack@pve!test`, its ACL | untouched | yes | removed | removed |
 
@@ -107,6 +117,22 @@ token gets:
 | `/pool/homestack-gold` | `HomeStackGold`: `Pool.Audit`, `VM.Audit`, `VM.Clone`, `VM.GuestAgent.Audit`, `VM.GuestAgent.FileRead`, `VM.GuestAgent.Unrestricted` |
 | `/storage/<id>`, each layout storage and the snippet storage | `HomeStackStorage`: `Datastore.AllocateSpace`, `Datastore.Audit` |
 | `/sdn/zones/<zone>/<bridge>` of Gold's `net0` | `PVESDNUser` |
+
+The deploy token gets instead:
+
+| Path | Role |
+|---|---|
+| `/nodes` | `PVEAuditor` and `HomeStackDeployNodes`: `Sys.AccessNetwork` (pulling an image) |
+| `/storage`, `/sdn` | `PVEAuditor` |
+| `/pool/homestack-service` | `HomeStackDeploy`: `Pool.Audit`, `VM.Allocate`, `VM.Audit`, `VM.Config.CPU`, `VM.Config.Disk`, `VM.Config.Memory`, `VM.Config.Network`, `VM.Config.Options`, `VM.PowerMgmt` |
+| `/storage/<template storage>` | `HomeStackDeployTemplates`: `Datastore.AllocateSpace`, `Datastore.AllocateTemplate`, `Datastore.Audit` |
+| `/storage/<id>`, each service storage | `HomeStackStorage` |
+| `/sdn/zones/<zone>/<bridge>` of Gold's `net0` | `PVESDNUser` |
+
+It sees and changes only the containers of `homestack-service`. It cannot
+remove an image from the template storage (that needs `Datastore.Allocate`,
+which would allow removing anything there): old images stay until root
+removes them (`pvesm free`); `homestack-deploy status` lists them.
 
 Proxmox adds the roles of a VM's pool to those of `/vms/<vmid>`, so the
 token sees, reads and changes only the VMs of the HomeStack pools; any
@@ -199,25 +225,98 @@ curl -H "Authorization: Bearer $(cat api-token)" http://127.0.0.1:8080/v1/pve/ve
 (owner 65534, mode 0700); with a bind mount, use a directory owned by the
 `--user`. Without a volume the configuration is lost with the container.
 
-## LXC
+## Deployment: `homestack-deploy`
 
-The target is an Alpine 3.24 LXC. The image builds a static musl binary
-(`x86_64-unknown-linux-musl`, `crt-static`), so it needs no runtime libraries
-and also runs on other distributions. Copy it out of the image:
+One instance per Proxmox node, each a container made from the public node
+image `ghcr.io/hipotures/homestack-server:<version>-<commit>` (CI publishes
+it from `Containerfile`, target `node`), only through the Proxmox API with
+the deploy token (owner's decisions of 2026-10-13, phase 11). Nothing runs
+on the nodes as root, no SSH.
+
+In the image, `runsvdir` starts two services (`deploy/lxc`): the server on
+`127.0.0.1:8080` as the user `homestack`, and Caddy on `:443` with the
+certificate the server keeps in `/var/lib/homestack/tls`. The server speaks
+plain HTTP only to Caddy.
+
+What it needs, once:
+
+1. `homestack-pve.sh install` as above (pool `homestack-service`, the deploy
+   token's secret in `/root/homestack-pve-token-deploy`; copy it to the
+   desktop, mode `0600`).
+2. A DNS name per instance in a domain whose public zone is at OVH
+   (`api1.hs.efez.net` → `192.168.100.97`, ...); the names may resolve only
+   locally. The OVH API key of Proxmox's ACME plugin (`OVH_AK`, `OVH_AS`,
+   `OVH_CK`) in a file, mode `0600`.
+3. A client token: `openssl rand -hex 32 > api-token`, mode `0600`.
+4. `deploy.toml` (example: `crates/hs-deploy/tests/data/live-deploy.toml`):
+   the image, `domain`, the network (`bridge`, `cidr`, `gateway`,
+   `nameserver`), `[pve]` endpoints and the deploy token, `[server]` the
+   instances' Proxmox token, pools, `server.toml` and the client token,
+   `[acme]` the OVH key, the zone and a directory for the certificate, and
+   one `[[instances]]` per node (`name`, `node`, `ctid`, `address`,
+   `storage`).
 
 ```
-docker create --name hs-bin homestack-server
-docker cp hs-bin:/usr/local/bin/homestack-server .
-docker rm hs-bin
+cargo run -p hs-deploy -- --config deploy.toml cert      # *.domain from Let's Encrypt (DNS-01 at OVH)
+cargo run -p hs-deploy -- --config deploy.toml apply     # every instance, one at a time
+cargo run -p hs-deploy -- --config deploy.toml status
+cargo run -p hs-deploy -- --config deploy.toml cert --push   # renew (< 30 days left) and load it everywhere
+cargo run -p hs-deploy -- --config deploy.toml remove --yes
 ```
 
-Install it as `/usr/local/bin/homestack-server` in the container, add
-`ca-certificates` (`apk add ca-certificates`), and run it as an unprivileged
-user with the variables above under OpenRC (`supervise-daemon`, as in
-mypowers `deploy/openrc`), with the secrets in `/etc/homestack/` (mode
-`0600`) and `/var/lib/homestack` owned by that user (mode `0700`). The server speaks plain HTTP; put TLS in front of it (Caddy, as in
-mypowers) before exposing it beyond loopback. The service files are part of
-phase 11.
+`cert` keeps the ACME account, the certificate and its key in `[acme] dir`
+(mode `0600`); the OVH key never leaves the desktop. It adds the TXT record
+`_acme-challenge.<domain>` at OVH, waits until OVH's name servers serve it,
+and removes it afterwards.
+
+`apply`, for each instance in turn (the others keep serving):
+
+1. pulls the image into the template storage of the node unless it is
+   there (`POST /nodes/{node}/storage/{storage}/oci-registry-pull`);
+2. stops and destroys the instance's container if it exists;
+3. creates it (`POST /nodes/{node}/lxc`: unprivileged, in
+   `homestack-service`, the static address, `onboot`), and sets its
+   environment: `HOMESTACK_INSTANCE`, `HOMESTACK_API_TOKEN_SHA256`, the
+   Proxmox endpoints and pools, and the certificate
+   (`HOMESTACK_TLS_CERT_B64`, `HOMESTACK_TLS_KEY_B64`);
+4. starts it and waits until it answers over TLS by its name at its
+   address;
+5. removes the certificate from the container's configuration (Proxmox
+   applies a change of a running container's environment at its next
+   start, so the container is restarted) and checks it is gone;
+6. sends the Proxmox token (`PUT /v1/secrets/pve-token`) and `server.toml`
+   (`PUT /v1/config`);
+
+then checks that every instance reports the same `GET /v1/config/version`.
+Only the deploy token and root see a container's configuration while the
+certificate is in it.
+
+A client (`crates/hs-client`) lists every instance. A read goes to the
+first instance that answers, starting from the one that answered last; a
+plan, its apply and its job stay on the instance that made the plan, and
+if that instance stops answering the client says so instead of repeating
+the request elsewhere (mapping 8.3).
+
+### Several instances on one VM
+
+Before a job changes a VM, its instance writes a lease into the VM's
+`description` with the config's `digest`:
+`<!-- homestack-lease: <base64 JSON> -->` (instance, job, operation, times).
+Another instance's lease refuses planning and applying with `409 busy`
+naming the holder; the lease is removed when the job ends. It is not
+renewed while the job runs (a renewal would change the `digest` a step
+writes with) and lasts 2 hours; an instance that restarted takes over its
+own lease of a job it no longer runs. Every operation that changes a VM
+therefore needs `VM.Config.Options` on the pool (role `HomeStack` has it).
+
+## A container by hand
+
+The binary is static (`x86_64-unknown-linux-musl`, `crt-static`) and runs on
+any Linux. Copy it out of an image (`docker create`, `docker cp
+<container>:/usr/local/bin/homestack-server .`), run it as an unprivileged
+user with the variables above, the secrets in files (mode `0600`) and
+`/var/lib/homestack` owned by that user (mode `0700`), and put TLS in front
+of it (`deploy/lxc/Caddyfile`) before exposing it beyond loopback.
 
 ## Endpoints
 
@@ -229,6 +328,8 @@ phase 11.
 | `GET /v1/config` | bearer | the stored `server.toml` (`application/toml`, `ETag`) |
 | `PUT /v1/config` | bearer | replace it (`If-Match` / `If-None-Match: *`) |
 | `GET /v1/config/version` | bearer | `{"config_version": "<sha256>" \| null}` |
+| `PUT /v1/secrets/pve-token` | bearer | the Proxmox token (`text/plain`), used at once and kept in `secrets/`; write-only |
+| `PUT /v1/secrets/tls` | bearer | `{"cert", "key"}` (PEM): Caddy's certificate, loaded at once; write-only |
 | `GET /v1/capabilities` | bearer | operations the Proxmox token allows, with missing privileges |
 | `GET /v1/status` | bearer | global status, as `homestack status --json` |
 | `GET /v1/workspaces/{vmid\|name}` | bearer | one VM, as `homestack status TARGET --json` |
@@ -266,7 +367,7 @@ The contract is [docs/openapi.json](../openapi.json). Errors:
 | 413 | `payload_too_large` |
 | 422 | `validation_failed`, `config_invalid` (with `error.field`, e.g. `repo.owner`) |
 | 502 | `pve_auth_failed`, `pve_permission_denied`, `pve_error` |
-| 503 | `pve_unavailable`, `pve_node_unavailable` (retryable) |
+| 503 | `pve_unavailable`, `pve_node_unavailable` (retryable), `pve_token_missing` |
 | 500 | `internal` |
 
 Every response carries `x-request-id` (also in the error body) and
@@ -282,4 +383,5 @@ Applying a plan needs `HomeStack-Config-Version` once a configuration is
 stored. A VM outside the pool is refused with `409 outside_pool`, a state
 that does not allow the operation with `409 operation_refused`. Plans and jobs are kept in memory and lost
 on restart; a job runs on the server, independent of the request or stream
-that follows it, and one job at a time works on a VM.
+that follows it, and one job at a time works on a VM, across instances too
+(its lease, [Several instances on one VM](#several-instances-on-one-vm)).
