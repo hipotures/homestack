@@ -352,15 +352,19 @@ Bez poola, zawężonego tokenu i zapisanych decyzji 9 i 10 agent nie zaczyna faz
 
 **Bramka:** `--live`: z TUI plan i wykonanie operacji na VM testowej przez serwer, z postępem zadania.
 
-### Faza 13c: instalator w Rust
+### Faza 13c: instalator i deinstalator w Rust
 
-**Dodana 2026-10-13 decyzją właściciela** (wcześniej F1 nie miał fazy, testy czekały w fazie 13).
+**Dodana 2026-10-13 decyzją właściciela** (wcześniej F1 nie miał fazy, testy czekały w fazie 13). **Rozszerzona tego samego dnia:** `homestack install` i `homestack uninstall` w kliencie Rust zastępują ręczne kopiowanie i uruchamianie `deploy/pve/homestack-pve.sh` na nodzie.
 
-**Zakres:** F1, interaktywny `homestack install` w kliencie Rust: wykrywanie przez odczyty serwera (`/v1/discovery`, `/v1/networks`, `/v1/gold/readiness`, `/v1/storage`), wybór Gold, storage, sieci i lokalnych kluczy FIDO, szkic z etapami i wznawianie, zapis `client.toml` i wgranie `server.toml` (`PUT /v1/config`).
+**Zakres:**
+- **Dostęp roota jednorazowo, tylko na czas install/uninstall:** SSH (także kluczem sprzętowym: klient czeka na dotknięcie YubiKey, z sygnałami dźwiękowymi z fazy 13) albo Herdr jako alternatywna ścieżka do konsoli roota. Herdr nie jest używany do niczego innego.
+- **Install:** najpierw plan bez zmian, potem po potwierdzeniu pule, role, użytkownik, tokeny, ACL, snippety na każdym nodzie i Gold w swojej puli (to, co dziś robi `homestack-pve.sh install`). Sekrety tokenów trafiają na desktop (pliki 0600) i nie zostają na nodzie. Dalej wdrożenie serwera (`homestack-deploy`) i config już tylko przez API; po instalacji użytkownik może zabrać dostęp roota.
+- **Uninstall:** usuwa tylko HomeStacka z Proxmoxa: tokeny, użytkownika, role, ACL, snippety nieużywane przez żadną VM i puste pule. Nigdy nie usuwa VM, kontenera ani wolumenu; pula z maszynami zostaje i jest wypisana.
+- **Konfiguracja (F1):** wykrywanie przez odczyty serwera (`/v1/discovery`, `/v1/networks`, `/v1/gold/readiness`, `/v1/storage`), wybór Gold, storage, sieci i lokalnych kluczy FIDO, szkic z etapami i wznawianie, zapis `client.toml` i wgranie `server.toml` (`PUT /v1/config`).
 
-**Testy:** `test_install.py` i `InstallDraftTests` z `test_config.py`.
+**Testy:** `test_install.py`, `InstallDraftTests` z `test_config.py`, testy `deploy/pve/tests/run.sh` (install i uninstall na fake'ach) przeniesione na nową implementację.
 
-**Bramka:** `--live`: instalator na instancjach testowych daje config, z którym `homestack status` działa.
+**Bramka:** `--live`: od czystego klastra `homestack install` przez SSH i przez Herdr, wdrożenie, `homestack status` działa; `homestack uninstall` zostawia klaster bez śladów HomeStacka i bez zmian w cudzych VM.
 
 ### Faza 14: setup, repo i backup w Rust
 

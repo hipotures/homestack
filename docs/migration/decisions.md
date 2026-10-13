@@ -150,6 +150,22 @@ an agent stops when a phase needs one that is still open
   version, capabilities) and `discover` shows the server's `/v1/discovery`
   with the desktop's hardware keys; neither uses Herdr or SSH to a node.
 
+### Owner's decisions of 2026-10-13 (after phase 13)
+
+- No TUI for now (phase 13b waits): the CLI must do until the remaining
+  bugs are known.
+- Phase 13c becomes `homestack install` and `homestack uninstall` in the
+  Rust client. Root on a node is reached once, only for these two
+  commands: over SSH (possibly with a hardware key; the client waits for
+  the touch, with the cues of phase 13) or, as the alternative, through
+  Herdr. Herdr is used for nothing else in the product.
+- Uninstall removes only HomeStack from Proxmox (tokens, user, roles,
+  ACLs, unused snippets, empty pools), never a VM, a container or a
+  volume.
+- The agent's test leftovers (VM 248, the server images on the nodes, the
+  test and production installation) were removed on 2026-10-13 with the
+  owner's approval, so the owner can install from scratch.
+
 ## Probe results
 
 | Date | Probe | Result |
