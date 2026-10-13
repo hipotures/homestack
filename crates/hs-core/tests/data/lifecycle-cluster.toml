@@ -117,3 +117,14 @@ secret = "00000000-0000-0000-0000-00000000000b"
 "/storage/local-lvm" = ["Datastore.AllocateSpace", "Datastore.Audit"]
 "/storage/local" = ["Datastore.AllocateSpace", "Datastore.Audit"]
 "/sdn/zones/localnetwork/vmbr0" = ["SDN.Audit", "SDN.Use"]
+
+# The same token without SDN.Use on Gold's bridge.
+[[pve.tokens]]
+id = "homestack@pve!nosdn"
+secret = "00000000-0000-0000-0000-00000000000e"
+[pve.tokens.acl]
+"/" = ["Sys.Audit", "VM.Audit", "Datastore.Audit", "VM.GuestAgent.Audit", "Pool.Audit", "SDN.Audit"]
+"/pool/homestack" = ["Pool.Audit", "VM.Allocate", "VM.Audit", "VM.Config.Cloudinit", "VM.Config.Disk", "VM.Config.Options", "VM.GuestAgent.Audit", "VM.GuestAgent.FileRead", "VM.GuestAgent.Unrestricted", "VM.Migrate", "VM.PowerMgmt"]
+"/pool/homestack-gold" = ["Pool.Audit", "VM.Audit", "VM.Clone", "VM.GuestAgent.Audit", "VM.GuestAgent.FileRead", "VM.GuestAgent.Unrestricted"]
+"/storage/local-lvm" = ["Datastore.AllocateSpace", "Datastore.Audit"]
+"/storage/local" = ["Datastore.AllocateSpace", "Datastore.Audit"]

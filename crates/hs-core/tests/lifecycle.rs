@@ -258,6 +258,24 @@ async fn create_clones_into_the_pool_and_verifies_the_guest() -> TestResult {
     Ok(())
 }
 
+/// The clone keeps Gold's `net0`, so the token needs `SDN.Use` on its
+/// bridge; the plan says so before anything is made.
+#[tokio::test]
+async fn create_needs_sdn_use_on_golds_bridge() -> TestResult {
+    let (sim, _pve) = cluster("").await?;
+    let pve = client(&sim, "homestack@pve!nosdn=00000000-0000-0000-0000-00000000000e")?;
+    match plan_create(&pve, &config()?, POOL, &request(200, "test1")).await {
+        Err(CoreError::Refused(message)) => {
+            assert!(
+                message.contains("SDN.Use on /sdn/zones/localnetwork/vmbr0"),
+                "{message}"
+            );
+        }
+        other => return Err(format!("expected a refusal, got {other:?}").into()),
+    }
+    Ok(())
+}
+
 #[tokio::test]
 async fn create_refuses_a_used_vmid_a_missing_pool_and_bad_input() -> TestResult {
     let (_sim, pve) = cluster("").await?;

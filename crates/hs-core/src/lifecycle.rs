@@ -195,6 +195,36 @@ async fn require_pool(pve: &impl Pve, vmid: u32, pool: &str) -> Result<(), CoreE
     }
 }
 
+/// The clone keeps Gold's `net0`: the token needs `SDN.Use` on its bridge
+/// (`/sdn/zones/<zone>/<bridge>`, zone `localnetwork` for a plain Linux
+/// bridge, else the zone of the SDN VNet of that name).
+async fn require_bridge_use(pve: &impl Pve, gold: u32, gold_cfg: &VmConfig) -> Result<(), CoreError> {
+    let net0 = gold_cfg.get("net0").map(String::as_str).unwrap_or_default();
+    let bridge =
+        disk_option(net0, "bridge").ok_or_else(|| CoreError::Failed(format!("Gold VM {gold} net0 has no bridge")))?;
+    let zone = match pve.get("/cluster/sdn/vnets", &[]).await {
+        Ok(Value::Array(vnets)) => vnets
+            .iter()
+            .find(|v| v.get("vnet").and_then(Value::as_str) == Some(bridge.as_str()))
+            .and_then(|v| v.get("zone").and_then(Value::as_str))
+            .map(str::to_owned),
+        _ => None,
+    };
+    let path = format!("/sdn/zones/{}/{bridge}", zone.as_deref().unwrap_or("localnetwork"));
+    let granted = pve.get("/access/permissions", &[("path", &path)]).await?;
+    let allowed = granted
+        .get(&path)
+        .and_then(Value::as_object)
+        .is_some_and(|privileges| privileges.contains_key("SDN.Use"));
+    if allowed {
+        Ok(())
+    } else {
+        Err(CoreError::Refused(format!(
+            "The server's Proxmox token lacks SDN.Use on {path}, the bridge of Gold's net0; run deploy/pve/homestack-pve.sh install"
+        )))
+    }
+}
+
 fn upid(answer: &Value) -> Result<String, CoreError> {
     answer
         .as_str()
@@ -320,6 +350,7 @@ pub async fn plan_create(
         .ok_or_else(|| CoreError::Failed(format!("Gold VM {gold} has no {} disk", cfg.root_disk)))?;
     let root_gb = parse_disk_size_gb(root_cfg);
     let storage = resolve_homestack_storage(cfg, node, request.storage.as_deref())?;
+    require_bridge_use(pve, gold, &gold_cfg).await?;
 
     let keys = workspace_authorized_keys(pve, cfg).await?;
     let labels: Vec<String> = parse_authorized_key_records(&keys.keys)?

@@ -248,3 +248,13 @@ fn the_pool_is_the_instances() {
     assert!(!required.iter().any(|p| p.path == "/pool/homestack"));
     assert_eq!(DEFAULT_POOL, "homestack");
 }
+
+/// Decision 5: the guest verification after `create` reads with
+/// `VM.GuestAgent.Audit` and `FileRead`, and runs no command.
+#[test]
+fn create_verifies_the_guest_without_exec() {
+    let required = requirements(Operation::Create, &config(), DEFAULT_POOL);
+    assert!(has(&required, "/pool/homestack", "VM.GuestAgent.FileRead"));
+    assert!(has(&required, "/pool/homestack", "VM.GuestAgent.Audit"));
+    assert!(!has(&required, "/pool/homestack", "VM.GuestAgent.Unrestricted"));
+}

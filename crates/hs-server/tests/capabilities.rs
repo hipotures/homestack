@@ -125,7 +125,7 @@ async fn a_read_only_token_can_read_but_not_change_anything() -> TestResult {
         privilege("/vms/100", "VM.Clone"),
         privilege("/storage/fast", "Datastore.AllocateSpace"),
         privilege("/storage/snippets", "Datastore.AllocateSpace"),
-        privilege("/pool/homestack", "VM.GuestAgent.Unrestricted"),
+        privilege("/pool/homestack", "VM.GuestAgent.FileRead"),
     ] {
         assert!(missing.contains(&expected), "{expected} not in {missing:?}");
     }

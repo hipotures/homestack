@@ -181,5 +181,17 @@ install and the owner's answer about Gold.
   `check.sh --live` also does so today (`live_cloudinit.rs`).
 - `destroy` leaves the node files of workspaces Python made
   (`node_files_left`); `homestack-pve.sh` could remove them.
-- `create` still lists `VM.GuestAgent.Unrestricted` in its capabilities,
-  though the verification uses `Audit` + `FileRead` (decision 5).
+
+## 10. Completed on 2026-10-13 (second pass)
+
+- `plan_create` checks `SDN.Use` on Gold's bridge
+  (`/sdn/zones/<zone>/<bridge>`), as the capabilities table had left for
+  this phase; test `create_needs_sdn_use_on_golds_bridge`.
+- `create` needs `VM.GuestAgent.Audit` + `FileRead` on the pool, not
+  `Unrestricted` (decision 5).
+- `scripts/check.sh --live`: all passed, the Python comparisons of status
+  and Gold included, and `live_lifecycle.rs` (create, verification, destroy
+  twice in `homestack-test`, nothing left).
+- Still open: the gate before the phase (pool `homestack`, narrowed server
+  token) needs `homestack-pve.sh install` as root on a node; no tag until
+  then.

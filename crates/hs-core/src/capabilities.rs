@@ -16,11 +16,11 @@
 //!   covers both.
 //! - `create` and `refresh` allocate on the Gold node's layout; `resize` and
 //!   `migrate` may touch any node, so they need every layout's storages.
-//! - Guest verification after `create`, `refresh` and `migrate` (D2) still
-//!   lists `VM.GuestAgent.Unrestricted`; phase 5 narrows it under decision 5.
+//! - Guest verification (D2) reads with `VM.GuestAgent.Audit` and
+//!   `FileRead` (decision 5): `create` needs no `VM.GuestAgent.Unrestricted`.
+//!   `refresh` keeps it until phase 6 ports its verification.
 //! - `SDN.Use` on the Gold bridge is not listed: the bridge comes from Gold's
-//!   `net0`, not from the configuration, so it is checked when a `create`
-//!   plan is made (phase 5).
+//!   `net0`, not from the configuration, so `plan_create` checks it.
 //! - Detached volumes (`orphan_scan`) need `VM.Config.Disk` on the pool
 //!   (decision 10 = C): Proxmox lists a VM volume only to who may change that
 //!   VM's disks (`PVE::Storage::check_volume_access`), so volumes of deleted
@@ -109,7 +109,7 @@ const fn needs(operation: Operation) -> Needs {
                 "VM.Config.Disk",
                 "VM.Config.Options",
                 "VM.GuestAgent.Audit",
-                "VM.GuestAgent.Unrestricted",
+                "VM.GuestAgent.FileRead",
                 "VM.PowerMgmt",
             ],
             gold: &["VM.Audit", "VM.Clone"],
