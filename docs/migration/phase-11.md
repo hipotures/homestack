@@ -152,7 +152,20 @@ through a client of their DNS names. With CT 997 stopped, `/v1/status`,
 each: before the client remembered the last answering instance), and a
 plan was answered by api2. The three containers were removed.
 
-To be completed with the final `check.sh --live`.
+The final `scripts/check.sh --live` passed on 2026-10-13, every live check
+of phases 2–10 included, with the gate on image `0.1.0-b005d849326e`
+(81 s): the same three instances and configuration versions; with CT 997
+stopped, `/v1/status` took 4.7 s (the stopped instance's connect timeout,
+once), `/v1/storage` 0.6 s and `/v1/config/version` 0 s through api2, which
+also answered the plan; nothing left. Its first run failed in
+`live_jobs.rs` itself: the test recognised its VM by the exact
+`description`, which now also holds the job's lease; it compares the first
+line now.
+
+The A records `api1`–`api3.hs.efez.net`, the certificate and the deploy
+token stay for the owner's production deployment; the images
+`homestack-server_0.1.0-d104adebb140.tar` and `..._b005d849326e.tar` stay in
+`local` on every node (`homestack-deploy status` lists them).
 
 ## 5. Deliberate differences from Python
 

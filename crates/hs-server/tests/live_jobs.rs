@@ -93,13 +93,17 @@ async fn listed(pve: &PveClient, vmid: u32) -> Result<Option<Value>, Error> {
         .cloned())
 }
 
-/// Whether the VM's config carries the test's name and marker.
+/// Whether the VM's config carries the test's name and marker (a job's
+/// lease may follow the marker in the description, phase 11).
 async fn is_test_vm(pve: &PveClient, node: &str, vmid: u32) -> Result<bool, Error> {
     let config = pve
         .get_value(&["nodes", node, "qemu", &vmid.to_string(), "config"], &[])
         .await?;
     Ok(config.get("name").and_then(Value::as_str) == Some(NAME)
-        && config.get("description").and_then(Value::as_str).map(str::trim) == Some(MARKER))
+        && config
+            .get("description")
+            .and_then(Value::as_str)
+            .is_some_and(|text| text.lines().next().map(str::trim) == Some(MARKER)))
 }
 
 /// Refuse anything but the VM this test created.
