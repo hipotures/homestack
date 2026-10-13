@@ -25,6 +25,8 @@ pub struct ClusterState {
     faults: Vec<(Op, FaultSpec)>,
     calls: HashMap<Op, u32>,
     pub ops: Vec<Op>,
+    /// Calls left unanswered by a `hang` fault so far.
+    pub hangs: u32,
 }
 
 pub struct Task {
@@ -103,6 +105,7 @@ impl ClusterState {
             faults,
             calls: HashMap::new(),
             ops: Vec::new(),
+            hangs: 0,
         };
         for task in spec.tasks {
             if !state.nodes.contains_key(&task.node) {
@@ -147,8 +150,20 @@ impl ClusterState {
             .find(|token| token.id == id && token.secret == secret)
     }
 
+    /// Add a fault while running; its `occurrence` counts the calls of its
+    /// operation from now on (1 = the next one).
+    pub fn inject_fault(&mut self, mut fault: FaultSpec) -> Result<(), String> {
+        let op = fault.op.parse::<Op>().map_err(|error| error.to_string())?;
+        if fault.occurrence == 0 {
+            return Err(format!("fault for {op}: occurrence counts from 1"));
+        }
+        fault.occurrence += self.calls.get(&op).copied().unwrap_or(0);
+        self.faults.push((op, fault));
+        Ok(())
+    }
+
     /// Record a call and return the injected failure for it, if any.
-    pub fn record(&mut self, op: Op) -> Option<(u16, String)> {
+    pub fn record(&mut self, op: Op) -> Option<FaultSpec> {
         let count = self.calls.entry(op.clone()).or_insert(0);
         *count += 1;
         let count = *count;
@@ -156,7 +171,7 @@ impl ClusterState {
             .faults
             .iter()
             .find(|(fault_op, fault)| *fault_op == op && fault.occurrence == count)
-            .map(|(_, fault)| (fault.status, fault.message.clone()));
+            .map(|(_, fault)| fault.clone());
         self.ops.push(op);
         fault
     }

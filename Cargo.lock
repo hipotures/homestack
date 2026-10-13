@@ -613,9 +613,11 @@ dependencies = [
  "hs-model",
  "hs-pve",
  "pve-sim",
+ "serde",
  "serde_json",
  "thiserror",
  "tokio",
+ "uuid",
 ]
 
 [[package]]

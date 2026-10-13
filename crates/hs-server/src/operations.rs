@@ -113,8 +113,9 @@ pub trait Operation: Send + Sync {
 /// Settings of the operation model.
 #[derive(Clone)]
 pub struct AppOptions {
-    /// Operations clients may plan: `workspace.create` and
-    /// `workspace.destroy` (phase 5) unless replaced.
+    /// Operations clients may plan: `workspace.create`,
+    /// `workspace.destroy` (phase 5) and `workspace.refresh` (phase 6)
+    /// unless replaced.
     pub operations: Vec<Arc<dyn Operation>>,
     /// Longest silence on a job stream.
     pub heartbeat: Duration,

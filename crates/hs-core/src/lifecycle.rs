@@ -48,7 +48,7 @@ impl Default for LifecycleTiming {
 }
 
 impl LifecycleTiming {
-    const fn wait(&self, seconds: u64) -> TaskWait {
+    pub(crate) const fn wait(&self, seconds: u64) -> TaskWait {
         TaskWait {
             poll: self.poll,
             timeout: Duration::from_secs(seconds),
@@ -132,7 +132,7 @@ fn occupancy_risk(percent: Option<f64>) -> &'static str {
 }
 
 /// `proxmox.verify_workspace_role_tags`
-fn verify_workspace_role_tags(vmid: u32, vm_cfg: &VmConfig) -> Result<(), CoreError> {
+pub fn verify_workspace_role_tags(vmid: u32, vm_cfg: &VmConfig) -> Result<(), CoreError> {
     let tags = parse_tags(vm_cfg.get("tags").map(String::as_str));
     if !tags.contains(WORKSPACE_TAG) {
         return Err(CoreError::Failed(format!(
@@ -159,7 +159,7 @@ fn verify_workspace_role_tags(vmid: u32, vm_cfg: &VmConfig) -> Result<(), CoreEr
 }
 
 /// `proxmox.require_gold_tag`
-fn require_gold_tag(vmid: u32, vm_cfg: &VmConfig) -> Result<(), CoreError> {
+pub(crate) fn require_gold_tag(vmid: u32, vm_cfg: &VmConfig) -> Result<(), CoreError> {
     let tags = vm_cfg.get("tags").map(String::as_str);
     if has_tag(tags, ALIEN_WORKSPACE_TAG) {
         return Err(CoreError::Refused(format!(
@@ -185,7 +185,7 @@ async fn vm_pool(pve: &impl Pve, vmid: u32) -> Result<Option<String>, CoreError>
 }
 
 /// The gate before phase 5: changes only to VMs in the instance's pool.
-async fn require_pool(pve: &impl Pve, vmid: u32, pool: &str) -> Result<(), CoreError> {
+pub(crate) async fn require_pool(pve: &impl Pve, vmid: u32, pool: &str) -> Result<(), CoreError> {
     match vm_pool(pve, vmid).await? {
         Some(found) if found == pool => Ok(()),
         found => Err(CoreError::OutsidePool(format!(
@@ -233,7 +233,7 @@ fn upid(answer: &Value) -> Result<String, CoreError> {
 }
 
 /// Start a Proxmox task with `POST` and wait for it to succeed.
-async fn post_task(
+pub(crate) async fn post_task(
     pve: &impl Pve,
     path: &str,
     form: &[(&str, &str)],
@@ -268,11 +268,11 @@ async fn delete_task(
     }
 }
 
-fn step_started(observer: &impl Observer, name: &str) {
+pub(crate) fn step_started(observer: &impl Observer, name: &str) {
     observer.event(JobEvent::StepStarted { name: name.to_owned() });
 }
 
-fn step_finished(observer: &impl Observer, name: &str, ok: bool) {
+pub(crate) fn step_finished(observer: &impl Observer, name: &str, ok: bool) {
     observer.event(JobEvent::StepFinished {
         name: name.to_owned(),
         ok,
@@ -390,19 +390,19 @@ pub async fn plan_create(
     }))
 }
 
-fn text<'a>(plan: &'a Value, key: &str) -> Result<&'a str, CoreError> {
+pub(crate) fn text<'a>(plan: &'a Value, key: &str) -> Result<&'a str, CoreError> {
     plan.get(key)
         .and_then(Value::as_str)
         .ok_or_else(|| CoreError::Invalid(format!("The plan has no {key}")))
 }
 
-fn number(plan: &Value, key: &str) -> Result<u64, CoreError> {
+pub(crate) fn number(plan: &Value, key: &str) -> Result<u64, CoreError> {
     plan.get(key)
         .and_then(Value::as_u64)
         .ok_or_else(|| CoreError::Invalid(format!("The plan has no {key}")))
 }
 
-fn vmid_of(plan: &Value) -> Result<u32, CoreError> {
+pub(crate) fn vmid_of(plan: &Value) -> Result<u32, CoreError> {
     u32::try_from(number(plan, "vmid")?).map_err(|_| CoreError::Invalid("The plan's VMID is out of range".to_owned()))
 }
 

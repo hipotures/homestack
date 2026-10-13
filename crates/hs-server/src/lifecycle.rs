@@ -1,5 +1,6 @@
-//! `workspace.create` and `workspace.destroy` (phase 5): the operations of
-//! `hs_core::lifecycle` in the plan and job model.
+//! `workspace.create`, `workspace.destroy` (phase 5) and `workspace.refresh`
+//! (phase 6): the operations of `hs_core::lifecycle` and `hs_core::refresh`
+//! in the plan and job model.
 //!
 //! `POST /v1/plans` with `{"operation": "workspace.create", "parameters":
 //! {"vmid": 240, "name": "hst-a", "home_size": "20G", "storage": "..."}}`
@@ -7,6 +8,13 @@
 //! "workspace.destroy", "parameters": {"vmid": 240}}`. The job's result is
 //! the plan with what the client needs for its local steps and the event,
 //! `workspace.created` or `workspace.destroyed`.
+//!
+//! `{"operation": "workspace.refresh", "parameters": {"vmid": 240}}` replaces
+//! the root with a copy of Gold's, or, when the VM's description holds the
+//! journal of an interrupted refresh, recovers it; `"force": true` attaches
+//! the new root of such a journal even when the VM disagrees with it, without
+//! deleting any volume (decision 4). Events `workspace.refreshed` and
+//! `workspace.refresh_recovered`.
 
 use std::sync::Arc;
 
@@ -14,6 +22,7 @@ use hs_core::CoreError;
 use hs_core::lifecycle::{
     CreateRequest, LifecycleTiming, create_workspace, destroy_workspace, plan_create, plan_destroy,
 };
+use hs_core::refresh::{plan_refresh, refresh_workspace};
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -22,7 +31,11 @@ use crate::operations::{BoxFuture, JobHandle, OpContext, OpFailure, Operation, P
 /// The lifecycle operations with `timing`.
 #[must_use]
 pub fn operations(timing: LifecycleTiming) -> Vec<Arc<dyn Operation>> {
-    vec![Arc::new(Create { timing }), Arc::new(Destroy { timing })]
+    vec![
+        Arc::new(Create { timing }),
+        Arc::new(Destroy { timing }),
+        Arc::new(Refresh { timing }),
+    ]
 }
 
 fn config(ctx: &OpContext) -> Result<&hs_model::config::Config, OpFailure> {
@@ -135,6 +148,67 @@ impl Operation for Destroy {
         Box::pin(async move {
             vmid_of(&planned.summary)?;
             Ok(destroy_workspace(
+                ctx.pve.as_ref(),
+                config(ctx)?,
+                &ctx.pools.workspaces,
+                &planned.summary,
+                &self.timing,
+                job,
+            )
+            .await?)
+        })
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RefreshParameters {
+    vmid: u32,
+    #[serde(default)]
+    force: bool,
+}
+
+struct Refresh {
+    timing: LifecycleTiming,
+}
+
+impl Operation for Refresh {
+    fn name(&self) -> &'static str {
+        "workspace.refresh"
+    }
+
+    fn plan<'a>(&'a self, ctx: &'a OpContext, parameters: &'a Value) -> BoxFuture<'a, Result<Planned, OpFailure>> {
+        Box::pin(async move {
+            let parameters: RefreshParameters = serde_json::from_value(parameters.clone())
+                .map_err(|_| OpFailure::invalid("workspace.refresh takes vmid and optionally force."))?;
+            let summary = plan_refresh(
+                ctx.pve.as_ref(),
+                config(ctx)?,
+                &ctx.pools.workspaces,
+                parameters.vmid,
+                parameters.force,
+            )
+            .await
+            .map_err(|error| match error {
+                CoreError::NotFound(_) => OpFailure::not_found("No such VM."),
+                other => OpFailure::Core(other),
+            })?;
+            Ok(Planned {
+                targets: vec![parameters.vmid],
+                summary,
+            })
+        })
+    }
+
+    fn execute<'a>(
+        &'a self,
+        ctx: &'a OpContext,
+        planned: &'a Planned,
+        job: &'a JobHandle,
+    ) -> BoxFuture<'a, Result<Value, OpFailure>> {
+        Box::pin(async move {
+            vmid_of(&planned.summary)?;
+            Ok(refresh_workspace(
                 ctx.pve.as_ref(),
                 config(ctx)?,
                 &ctx.pools.workspaces,

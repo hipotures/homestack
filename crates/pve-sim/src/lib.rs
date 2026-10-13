@@ -105,6 +105,18 @@ impl PveSim {
         self.lock().ops.clear();
     }
 
+    /// Fail a call from now on ([`scenario::FaultSpec`]; its `occurrence`
+    /// counts the calls of its operation from this moment).
+    pub fn inject_fault(&self, fault: scenario::FaultSpec) -> Result<(), SimError> {
+        self.lock().inject_fault(fault).map_err(SimError::Scenario)
+    }
+
+    /// Calls a `hang` fault has left unanswered so far.
+    #[must_use]
+    pub fn hangs(&self) -> u32 {
+        self.lock().hangs
+    }
+
     /// UPIDs of all known tasks, in creation order.
     #[must_use]
     pub fn task_upids(&self) -> Vec<String> {

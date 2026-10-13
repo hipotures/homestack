@@ -244,7 +244,7 @@ async fn config_changes_carry_the_digest_they_were_planned_with() -> TestResult 
         .map(|e| e.to_string());
     assert_eq!(
         error.as_deref(),
-        Some("Proxmox error 500: detected modified configuration - file changed by other user? Try again.")
+        Some("Proxmox error 500: checksum mismatch (file change by other user?)")
     );
     hs_core::inventory::set_vm_config(&pve, NODE, 240, &[("description", "third")], None).await?;
     Ok(())

@@ -245,3 +245,58 @@ async fn reads_of_vms_outside_the_pools_are_refused() -> TestResult {
     assert_ne!(status, StatusCode::CONFLICT, "VM 160 is in the pool: {body}");
     Ok(())
 }
+
+/// `workspace.refresh` through the API: the job's steps and result, and
+/// its refusals.
+#[tokio::test]
+async fn refresh_runs_as_a_job_with_its_steps() -> TestResult {
+    let server = start().await?;
+    let job = server
+        .run("workspace.create", json!({"vmid": 240, "name": "hst-api"}))
+        .await?;
+    assert_eq!(job["state"], "succeeded", "{job}");
+
+    let (status, body) = server
+        .plan("workspace.refresh", json!({"vmid": 240, "force": true}))
+        .await?;
+    assert_eq!(
+        status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "force needs a journal: {body}"
+    );
+    let (status, body) = server
+        .plan("workspace.refresh", json!({"vmid": 240, "extra": 1}))
+        .await?;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    let (status, body) = server.plan("workspace.refresh", json!({"vmid": 150})).await?;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["error"]["code"], "outside_pool");
+
+    let (status, plan) = server.plan("workspace.refresh", json!({"vmid": 240})).await?;
+    assert_eq!(status, StatusCode::CREATED, "{plan}");
+    assert_eq!(plan["summary"]["mode"], "replace", "{plan}");
+    let (status, job) = server.apply(&plan, Some(&server.version)).await?;
+    assert_eq!(status, StatusCode::ACCEPTED, "{job}");
+    let job = server.finished(&job).await?;
+    assert_eq!(job["state"], "succeeded", "{job}");
+    assert_eq!(job["result"]["event"], "workspace.refreshed");
+    assert_eq!(job["result"]["status"], "running");
+    assert_eq!(job["result"]["host_key_changed"], true);
+    let steps: Vec<&str> = job["steps"]
+        .as_array()
+        .map(|steps| steps.iter().filter_map(|s| s["name"].as_str()).collect())
+        .unwrap_or_default();
+    assert_eq!(
+        steps,
+        [
+            "Import Gold root",
+            "Stop workspace",
+            "Switch root disks",
+            "Cloud-Init",
+            "Boot verification",
+            "Restore power state",
+            "Delete previous root"
+        ]
+    );
+    Ok(())
+}

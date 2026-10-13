@@ -39,6 +39,16 @@ an agent stops when a phase needs one that is still open
 - Herdr's root shell on pve2 is allowed only for administration on the node
   (`homestack-pve.sh`), never to build or test the application.
 
+### Owner's decision of 2026-10-13 (phase 6)
+
+- `PUT /nodes/{node}/qemu/{vmid}/unlink` has no `digest` (probe below), so
+  Python's `qm disk unlink ... --digest` cannot succeed. The owner: the
+  server unlinks without `digest`. It reads the config again right before
+  the call and checks that the slot holds the expected volume, and checks
+  the result after it; the journal write just before each unlink carries
+  the config's `digest`, so a change made by someone else before that write
+  is still caught. Python is not changed by the agent.
+
 ## Probe results
 
 | Date | Probe | Result |

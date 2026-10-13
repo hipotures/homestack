@@ -16,6 +16,7 @@ pub mod keys;
 pub mod lifecycle;
 pub mod power;
 pub mod pve;
+pub mod refresh;
 pub mod status;
 pub mod tasks;
 pub mod verify;

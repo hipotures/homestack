@@ -145,13 +145,28 @@ fn default_exitstatus() -> String {
 }
 
 /// Make the `occurrence`-th call of `op` (1-based) fail with `status`.
+///
+/// With `applied`, the call is carried out first and only its answer is the
+/// error (a lost acknowledgement). With `hang`, no answer comes at all, as
+/// when the caller is killed while it waits; `applied` says whether the
+/// call was carried out.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FaultSpec {
     pub op: String,
     pub occurrence: u32,
+    #[serde(default = "default_fault_status")]
     pub status: u16,
+    #[serde(default)]
     pub message: String,
+    #[serde(default)]
+    pub applied: bool,
+    #[serde(default)]
+    pub hang: bool,
+}
+
+const fn default_fault_status() -> u16 {
+    500
 }
 
 impl ClusterSpec {
@@ -214,6 +229,10 @@ pub struct VolumeSpec {
     /// The ext4 label of the filesystem on it; `None` for a blank volume.
     #[serde(default)]
     pub label: Option<String>,
+    /// The VM whose disk this volume was copied from (`import-from`); its
+    /// guest boots from it (`api::boot_image`).
+    #[serde(skip)]
+    pub image_of: Option<u32>,
 }
 
 fn default_format() -> String {
@@ -242,6 +261,12 @@ pub struct VmSpec {
     /// through native Cloud-Init (`api::boot_clone`).
     #[serde(skip)]
     pub clone_of: Option<u32>,
+    /// The root volume the guest last booted from (`api::boot_root`).
+    #[serde(skip)]
+    pub booted_root: Option<String>,
+    /// Guests of the roots it booted from before, by root volume.
+    #[serde(skip)]
+    pub guests_by_root: BTreeMap<String, GuestSpec>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
