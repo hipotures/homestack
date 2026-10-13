@@ -173,8 +173,7 @@ fn boot_order_contains_root_disk() {
     assert!(!boot_order_contains_disk("", "scsi0"));
 }
 
-/// `CreateExecutionTests::test_same_node_default_plan_uses_clone_only`;
-/// another node is phase 10 (B2) and refused.
+/// `CreateExecutionTests::test_same_node_default_plan_uses_clone_only`
 #[tokio::test]
 async fn same_node_default_plan_uses_clone_only() -> TestResult {
     let (sim, pve) = cluster("").await?;
@@ -196,11 +195,13 @@ async fn same_node_default_plan_uses_clone_only() -> TestResult {
         "planning changes nothing: {ops:?}"
     );
 
+    // Another node is B2 (phase 10, `create_transfer.rs`); this cluster has
+    // only one.
     let mut elsewhere = request(200, "test1");
     elsewhere.node = Some("pve-example-2".to_owned());
     assert!(matches!(
         plan_create(&pve, &cfg, POOL, &elsewhere).await,
-        Err(CoreError::Invalid(_))
+        Err(CoreError::Refused(message)) if message == "Target node 'pve-example-2' is not in the Proxmox cluster"
     ));
     Ok(())
 }

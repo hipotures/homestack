@@ -14,7 +14,7 @@
 //! - Gold is `/vms/<gold_vmid>`: Proxmox adds the roles of Gold's pool
 //!   (`homestack-gold`, decision 9) to that path, so asking about it
 //!   covers both.
-//! - `create` and `refresh` allocate on the Gold node's layout; `resize` and
+//! - `refresh` allocates on the Gold node's layout; `create`, `resize` and
 //!   `migrate` may touch any node, so they need every layout's storages.
 //! - Guest verification (D2) reads with `VM.GuestAgent.Audit` and
 //!   `FileRead` (decision 5): `create` needs no `VM.GuestAgent.Unrestricted`.
@@ -93,7 +93,7 @@ const fn needs(operation: Operation) -> Needs {
             allocate: Storages::None,
             snippets: false,
         },
-        // B1
+        // B1, B2 (on another node the clone is migrated there, decision 3 = A)
         Operation::Create => Needs {
             pool: &[
                 "Pool.Audit",
@@ -104,11 +104,12 @@ const fn needs(operation: Operation) -> Needs {
                 "VM.Config.Options",
                 "VM.GuestAgent.Audit",
                 "VM.GuestAgent.FileRead",
+                "VM.Migrate",
                 "VM.PowerMgmt",
             ],
             gold: &["VM.Audit", "VM.Clone"],
             audit_storages: false,
-            allocate: Storages::Active,
+            allocate: Storages::All,
             snippets: true,
         },
         // B3

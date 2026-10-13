@@ -51,7 +51,11 @@ struct Running {
 }
 
 async fn start() -> Result<Running, Error> {
-    let sim = PveSim::start(ClusterSpec::from_scenario(CLUSTER)?).await?;
+    start_with(CLUSTER, SERVER_TOML).await
+}
+
+async fn start_with(cluster: &str, server_toml: &str) -> Result<Running, Error> {
+    let sim = PveSim::start(ClusterSpec::from_scenario(cluster)?).await?;
     let dir = tempfile::tempdir()?;
     let mut pve = PveClientConfig::new(vec![sim.base_url().parse()?], PveToken::parse(PVE_TOKEN)?);
     pve.extra_ca_pem = Some(sim.ca_pem().to_owned());
@@ -82,11 +86,11 @@ async fn start() -> Result<Running, Error> {
         .put(format!("{base}/v1/config"))
         .bearer_auth(API_TOKEN)
         .header("if-none-match", "*")
-        .body(SERVER_TOML)
+        .body(server_toml.to_owned())
         .send()
         .await?;
     assert_eq!(upload.status(), StatusCode::OK);
-    let version = hs_model::config::config_version(SERVER_TOML);
+    let version = hs_model::config::config_version(server_toml);
     Ok(Running {
         _sim: sim,
         base,
@@ -180,6 +184,45 @@ async fn create_and_destroy_run_as_jobs_with_their_events() -> TestResult {
     assert_eq!(job["state"], "succeeded", "{job}");
     assert_eq!(job["result"]["event"], "workspace.destroyed");
     assert_eq!(job["result"]["status"], "absent");
+    Ok(())
+}
+
+/// `create` with `node` (phase 10, decision 3 = A): the job clones on
+/// Gold's node, migrates the clone and finishes on the target.
+#[tokio::test]
+async fn create_on_another_node_clones_then_migrates() -> TestResult {
+    let cluster = include_str!("../../hs-core/tests/data/create-transfer-cluster.toml");
+    let server_toml = SERVER_TOML.replace(
+        "homestack-storage-1 = [\"local-lvm\"]",
+        "homestack-storage-1 = [\"local-lvm\"]\nhomestack-storage-2 = [\"fast\"]",
+    );
+    let server = start_with(cluster, &server_toml).await?;
+    let job = server
+        .run(
+            "workspace.create",
+            json!({"vmid": 240, "name": "hst-api", "node": "pve-example-2"}),
+        )
+        .await?;
+    assert_eq!(job["state"], "succeeded", "{job}");
+    assert_eq!(job["result"]["node"], "pve-example-2");
+    assert_eq!(job["result"]["source_node"], "pve-example-1");
+    assert_eq!(job["result"]["transfer_method"], "clone-migrate");
+    assert_eq!(job["result"]["root_storage"], "fast");
+    let kinds: Vec<&str> = job["tasks"]
+        .as_array()
+        .map(|tasks| tasks.iter().filter_map(|t| t["kind"].as_str()).collect())
+        .unwrap_or_default();
+    assert_eq!(kinds.first(), Some(&"qmclone"), "{kinds:?}");
+    assert_eq!(kinds.get(1), Some(&"qmigrate"), "{kinds:?}");
+    assert!(kinds.contains(&"qmstart"), "{kinds:?}");
+
+    let (status, plan) = server
+        .plan(
+            "workspace.create",
+            json!({"vmid": 241, "name": "hst-off", "node": "pve-example-3"}),
+        )
+        .await?;
+    assert_eq!(status, StatusCode::CONFLICT, "{plan}");
     Ok(())
 }
 

@@ -42,7 +42,7 @@ pub fn agent_enabled(value: Option<&str>) -> bool {
             .any(|token| matches!(token.trim().to_lowercase().as_str(), "enabled=1" | "enabled=true"))
 }
 
-fn is_disk_slot(slot: &str) -> bool {
+pub(crate) fn is_disk_slot(slot: &str) -> bool {
     ["ide", "sata", "scsi", "virtio"].iter().any(|prefix| {
         slot.strip_prefix(prefix)
             .is_some_and(|index| !index.is_empty() && index.bytes().all(|b| b.is_ascii_digit()))

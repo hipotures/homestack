@@ -11,11 +11,12 @@
 # (scripts/live-compare-*.sh), and HOMESTACK_LIVE_TEST_TOKEN_FILE for the
 # changes in the test pool (crates/hs-server/tests/live_jobs.rs,
 # live_cloudinit.rs, live_lifecycle.rs, live_refresh.rs, live_resize.rs,
-# live_migrate.rs, live_addkey.rs), the only live checks that change the
-# cluster; the boot also needs the vendor snippets of this tree on Gold's
-# node (docs/migration/deploy.md). With HOMESTACK_LIVE_OUTSIDE_VMID (a VM
-# in 240-249 tagged homestack-ws and in no pool) it also checks that
-# changes outside the pool are refused (live_pool_guard.rs).
+# live_migrate.rs, live_addkey.rs, live_create_node.rs), the only live checks
+# that change the cluster; the boot also needs the vendor snippets of this
+# tree on every node (docs/migration/deploy.md). With
+# HOMESTACK_LIVE_OUTSIDE_VMID (a VM in 240-249 tagged homestack-ws and in no
+# pool) it also checks that changes outside the pool are refused
+# (live_pool_guard.rs).
 set -euo pipefail
 
 usage() {
@@ -115,6 +116,8 @@ if ((live)); then
     cargo test -p hs-server --locked --test live_migrate -- --ignored --nocapture
     step "live cluster (L4): addkey on a running, a restarted and a stopped VM in the test pool"
     cargo test -p hs-server --locked --test live_addkey -- --ignored --nocapture
+    step "live cluster (L4): create on another node than Gold's in the test pool"
+    cargo test -p hs-server --locked --test live_create_node -- --ignored --nocapture
 fi
 
 step "all checks passed$( ((live)) && echo ' (including live)')"

@@ -126,13 +126,12 @@ async fn a_read_only_token_can_read_but_not_change_anything() -> TestResult {
         privilege("/storage/fast", "Datastore.AllocateSpace"),
         privilege("/storage/snippets", "Datastore.AllocateSpace"),
         privilege("/pool/homestack", "VM.GuestAgent.FileRead"),
+        // On another node the clone is migrated there (phase 10).
+        privilege("/pool/homestack", "VM.Migrate"),
+        privilege("/storage/other", "Datastore.AllocateSpace"),
     ] {
         assert!(missing.contains(&expected), "{expected} not in {missing:?}");
     }
-    assert!(
-        !missing.contains(&privilege("/storage/other", "Datastore.AllocateSpace")),
-        "create only allocates on the Gold node's layout: {missing:?}"
-    );
     for id in ["refresh", "resize", "migrate", "destroy", "addkey"] {
         assert_eq!(operation(&body, id)["available"], false, "{id}");
     }

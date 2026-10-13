@@ -73,25 +73,20 @@ fn storage_paths_follow_the_layouts() {
             "{storage}"
         );
     }
-    // pve2 creates and refreshes on homestack-storage-2 only.
+    // pve2 refreshes on homestack-storage-2 only.
+    let required = requirements(Operation::Refresh, &config, DEFAULT_POOL);
+    assert!(has(&required, "/storage/two-a", "Datastore.AllocateSpace"));
+    assert!(!has(&required, "/storage/one", "Datastore.AllocateSpace"));
     for operation in [Operation::Create, Operation::Refresh] {
         let required = requirements(operation, &config, DEFAULT_POOL);
-        assert!(
-            has(&required, "/storage/two-a", "Datastore.AllocateSpace"),
-            "{operation:?}"
-        );
-        assert!(
-            !has(&required, "/storage/one", "Datastore.AllocateSpace"),
-            "{operation:?}"
-        );
         assert!(
             has(&required, "/storage/local", "Datastore.AllocateSpace"),
             "{operation:?}: cicustom"
         );
         assert!(has(&required, "/vms/101", "VM.Clone"), "{operation:?}: Gold");
     }
-    // A workspace may live on any node.
-    for operation in [Operation::Resize, Operation::Migrate] {
+    // A workspace may live on any node, and be created on any (phase 10).
+    for operation in [Operation::Create, Operation::Resize, Operation::Migrate] {
         let required = requirements(operation, &config, DEFAULT_POOL);
         assert!(
             has(&required, "/storage/one", "Datastore.AllocateSpace"),
@@ -115,6 +110,7 @@ fn the_mapping_privileges_are_required() {
                 "VM.Config.Disk",
                 "VM.Config.Cloudinit",
                 "VM.Config.Options",
+                "VM.Migrate",
                 "VM.PowerMgmt",
             ],
         ),

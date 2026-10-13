@@ -11,11 +11,13 @@
 use std::collections::BTreeSet;
 use std::time::Duration;
 
+use hs_model::NodeName;
 use hs_model::config::Config;
 use hs_model::jobs::JobEvent;
 use serde_json::{Map, Value, json};
 
 use crate::cloudinit::{HomeFormat, cloud_init_settings};
+use crate::create_transfer::{migrate_clone, revalidate_source, validate_cross_node_create, verify_migrated_clone};
 use crate::error::CoreError;
 use crate::gold::extract_mac;
 use crate::inventory::{
@@ -311,13 +313,14 @@ pub async fn plan_create(
     validate_name(name)?;
     let ip = derive_ip(cfg, vmid)?;
     let node = cfg.node.as_str();
-    if let Some(target) = request.node.as_deref().map(str::trim)
-        && target != node
-    {
-        return Err(CoreError::Invalid(
-            "Create on another node than Gold's is not available yet (phase 10)".to_owned(),
-        ));
+    let target = request.node.as_deref().map_or(node, str::trim);
+    if target.is_empty() {
+        return Err(CoreError::Invalid("Create target node cannot be empty".to_owned()));
     }
+    let target = NodeName::parse(target)
+        .map_err(|_| CoreError::Invalid(format!("Invalid node name {}", py_repr(Some(target)))))?
+        .to_string();
+    let elsewhere = target != node;
     let home_size = request.home_size.as_deref().unwrap_or(&cfg.default_home_size);
     let (home_size, home_size_gib) = parse_home_size(home_size)?;
     let home_volume = home_volume_name(vmid, &cfg.user.name)?;
@@ -357,7 +360,12 @@ pub async fn plan_create(
         .filter(|value| !value.is_empty())
         .ok_or_else(|| CoreError::Failed(format!("Gold VM {gold} has no {} disk", cfg.root_disk)))?;
     let root_gb = parse_disk_size_gb(root_cfg);
-    let storage = resolve_homestack_storage(cfg, node, request.storage.as_deref())?;
+    let (storage, transfer) = if elsewhere {
+        let transfer = validate_cross_node_create(pve, cfg, &target, &gold_cfg, request.storage.as_deref()).await?;
+        (transfer.target_storage.clone(), Some(transfer))
+    } else {
+        (resolve_homestack_storage(cfg, node, request.storage.as_deref())?, None)
+    };
     require_bridge_use(pve, gold, &gold_cfg).await?;
 
     let keys = workspace_authorized_keys(pve, cfg).await?;
@@ -366,13 +374,13 @@ pub async fn plan_create(
         .map(|record| record.label)
         .collect();
 
-    Ok(json!({
+    let mut plan = json!({
         "command": "create",
         "vmid": vmid,
         "name": name,
-        "node": node,
+        "node": target,
         "source_node": node,
-        "transfer_method": "clone",
+        "transfer_method": if elsewhere { "clone-migrate" } else { "clone" },
         "pool": pool,
         "ip": ip,
         "cidr": cfg.network.cidr,
@@ -395,7 +403,13 @@ pub async fn plan_create(
         "gid": cfg.user.gid,
         "ssh_key_source": keys.source,
         "ssh_public_keys": labels,
-    }))
+    });
+    if let Some(transfer) = transfer {
+        // The clone needs room on Gold's node until it is migrated.
+        plan["clone_storage"] = json!(resolve_homestack_storage(cfg, node, None)?);
+        plan["source_metadata"] = transfer.source_metadata;
+    }
+    Ok(plan)
 }
 
 pub(crate) fn text<'a>(plan: &'a Value, key: &str) -> Result<&'a str, CoreError> {
@@ -430,8 +444,10 @@ pub async fn create_workspace(
     observer: &impl Observer,
 ) -> Result<Value, CoreError> {
     let vmid = vmid_of(plan)?;
-    let node = text(plan, "node")?;
     let name = text(plan, "name")?;
+    if plan.get("source_metadata").is_some() {
+        revalidate_source(pve, cfg, plan).await?;
+    }
     let mut progress = Progress::default();
     match create_steps(pve, cfg, plan, timing, observer, &mut progress).await {
         Ok(result) => Ok(result),
@@ -441,7 +457,7 @@ pub async fn create_workspace(
             }
             let mut cleanup = Vec::new();
             if progress.cloned
-                && let Err(failure) = remove_failed_clone(pve, node, vmid, name, timing, observer).await
+                && let Err(failure) = remove_failed_clone(pve, vmid, name, timing, observer).await
             {
                 cleanup.push(format!("VM cleanup failed: {failure}"));
             }
@@ -458,19 +474,19 @@ pub async fn create_workspace(
 }
 
 /// Destroy a clone that was never started, after checking it is the one
-/// this create made.
+/// this create made, on whichever node it is (a failed migration leaves it
+/// on Gold's).
 async fn remove_failed_clone(
     pve: &impl Pve,
-    node: &str,
     vmid: u32,
     name: &str,
     timing: &LifecycleTiming,
     observer: &impl Observer,
 ) -> Result<(), CoreError> {
-    let exists = cluster_vm_resources(pve).await?.iter().any(|r| r.vmid == vmid);
-    if !exists {
+    let Some(resource) = cluster_vm_resources(pve).await?.into_iter().find(|r| r.vmid == vmid) else {
         return Ok(());
-    }
+    };
+    let node = resource.node.as_str();
     let vm_cfg = vm_config(pve, node, vmid).await?;
     if vm_cfg.get("name").map(String::as_str) != Some(name) {
         return Err(CoreError::Failed(format!(
@@ -519,17 +535,26 @@ async fn create_steps(
     let keys = keys?;
     let expected = parse_authorized_key_records(&keys.keys)?;
 
+    // On another node the clone is made on Gold's and migrated (decision 3 = A).
+    let migrated = plan.get("source_metadata").is_some();
+    let source = text(plan, "source_node")?;
+    let clone_storage = if migrated {
+        text(plan, "clone_storage")?
+    } else {
+        storage
+    };
+
     let step = "Full clone";
     step_started(observer, step);
     let gold = cfg.gold_vmid.to_string();
     let cloned = post_task(
         pve,
-        &format!("/nodes/{node}/qemu/{gold}/clone"),
+        &format!("/nodes/{source}/qemu/{gold}/clone"),
         &[
             ("newid", &id),
             ("name", name),
             ("full", "1"),
-            ("storage", storage),
+            ("storage", clone_storage),
             ("pool", pool),
         ],
         &format!("Cloning Gold VM {gold} to {vmid}"),
@@ -541,6 +566,20 @@ async fn create_steps(
     progress.cloned = true;
     step_finished(observer, step, cloned.is_ok());
     cloned?;
+
+    if migrated {
+        let step = "Migrate to target node";
+        step_started(observer, step);
+        let moved = migrate_clone(pve, cfg, plan, timing, observer).await;
+        step_finished(observer, step, moved.is_ok());
+        moved?;
+
+        let step = "Verify migrated clone";
+        step_started(observer, step);
+        let checked = verify_migrated_clone(pve, cfg, plan).await;
+        step_finished(observer, step, checked.is_ok());
+        checked?;
+    }
 
     let step = "Persistent home disk";
     step_started(observer, step);

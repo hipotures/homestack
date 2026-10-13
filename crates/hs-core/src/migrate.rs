@@ -437,36 +437,7 @@ async fn migrate_steps(
 
     let step = "Migrate local disks";
     step_started(observer, step);
-    let migrated = crate::tasks::retry_while_locked(timing.poll, || async {
-        let answer = pve
-            .post(
-                &format!("/nodes/{source}/qemu/{vmid}/migrate"),
-                &[
-                    ("target", target),
-                    ("with-local-disks", "1"),
-                    ("targetstorage", storage),
-                ],
-            )
-            .await?;
-        let upid = answer
-            .as_str()
-            .ok_or_else(|| CoreError::Unusable(format!("Proxmox did not return a task id: {answer}")))?;
-        let wait = TaskWait {
-            poll: timing.poll,
-            timeout: MIGRATE_TIMEOUT,
-        };
-        let mut tracker = MigrationTracker::new(&planned.volumes);
-        let result = wait_task_tracking(pve, upid, &wait, observer, &mut tracker).await?;
-        if result.ok() {
-            Ok(())
-        } else {
-            Err(CoreError::Failed(format!(
-                "Proxmox task qmigrate for VM {vmid} on {source} failed: {}",
-                result.exitstatus
-            )))
-        }
-    })
-    .await;
+    let migrated = migrate_offline(pve, source, target, vmid, storage, &planned.volumes, timing, observer).await;
     step_finished(observer, step, migrated.is_ok());
     migrated?;
 
@@ -527,6 +498,53 @@ async fn migrate_steps(
         )));
     }
     Ok(status)
+}
+
+/// `qm migrate VMID TARGET --with-local-disks --targetstorage STORAGE` of a
+/// stopped VM: the `qmigrate` task, its log feeding the progress of
+/// `volumes` ([`migration_volume_plan`]); tried again while the VM's lock
+/// is taken.
+#[allow(clippy::too_many_arguments, reason = "one Proxmox call and its tracking")]
+pub(crate) async fn migrate_offline(
+    pve: &impl Pve,
+    source: &str,
+    target: &str,
+    vmid: u32,
+    storage: &str,
+    volumes: &[Value],
+    timing: &LifecycleTiming,
+    observer: &impl Observer,
+) -> Result<(), CoreError> {
+    crate::tasks::retry_while_locked(timing.poll, || async {
+        let answer = pve
+            .post(
+                &format!("/nodes/{source}/qemu/{vmid}/migrate"),
+                &[
+                    ("target", target),
+                    ("with-local-disks", "1"),
+                    ("targetstorage", storage),
+                ],
+            )
+            .await?;
+        let upid = answer
+            .as_str()
+            .ok_or_else(|| CoreError::Unusable(format!("Proxmox did not return a task id: {answer}")))?;
+        let wait = TaskWait {
+            poll: timing.poll,
+            timeout: MIGRATE_TIMEOUT,
+        };
+        let mut tracker = MigrationTracker::new(volumes);
+        let result = wait_task_tracking(pve, upid, &wait, observer, &mut tracker).await?;
+        if result.ok() {
+            Ok(())
+        } else {
+            Err(CoreError::Failed(format!(
+                "Proxmox task qmigrate for VM {vmid} on {source} failed: {}",
+                result.exitstatus
+            )))
+        }
+    })
+    .await
 }
 
 /// Python's `except` branch: start the VM again on the source node when it

@@ -8,6 +8,7 @@
 pub mod addkey;
 pub mod capabilities;
 pub mod cloudinit;
+pub mod create_transfer;
 pub mod discovery;
 pub mod error;
 pub mod gold;
