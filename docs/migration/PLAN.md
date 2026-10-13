@@ -352,6 +352,16 @@ Bez poola, zawężonego tokenu i zapisanych decyzji 9 i 10 agent nie zaczyna faz
 
 **Bramka:** `--live`: z TUI plan i wykonanie operacji na VM testowej przez serwer, z postępem zadania.
 
+### Faza 13c: instalator w Rust
+
+**Dodana 2026-10-13 decyzją właściciela** (wcześniej F1 nie miał fazy, testy czekały w fazie 13).
+
+**Zakres:** F1, interaktywny `homestack install` w kliencie Rust: wykrywanie przez odczyty serwera (`/v1/discovery`, `/v1/networks`, `/v1/gold/readiness`, `/v1/storage`), wybór Gold, storage, sieci i lokalnych kluczy FIDO, szkic z etapami i wznawianie, zapis `client.toml` i wgranie `server.toml` (`PUT /v1/config`).
+
+**Testy:** `test_install.py` i `InstallDraftTests` z `test_config.py`.
+
+**Bramka:** `--live`: instalator na instancjach testowych daje config, z którym `homestack status` działa.
+
 ### Faza 14: setup, repo i backup w Rust
 
 **Zakres:** G1–G8, H1–H3 (po stronie klienta, zgodnie z 7.5 A). Dzielona na podfazy według grup: 14a Files i Credentials, 14b Environment, 14c Applications i structured config, 14d BK, 14e Herdr, 14f repo.

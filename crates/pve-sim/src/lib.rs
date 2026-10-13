@@ -14,7 +14,7 @@ mod guest;
 pub mod ops;
 pub mod scenario;
 mod state;
-mod tls;
+pub mod tls;
 
 use std::net::{SocketAddr, TcpListener};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};

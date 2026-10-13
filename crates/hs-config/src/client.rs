@@ -6,13 +6,15 @@
 //! [workspace_ssh]   # user, identity_files, identities_only, log_level, fido_devices
 //! [repo]            # owner, checkout_root, sort
 //! [display]         # storage_unit, storage_decimals
+//! [server]          # urls (https only), token_file, ca_file
 //! [sounds]          # optional, kept as written
 //! [[setup.groups]]  # optional, kept as written; validated by the client
 //! [[setup.items]]
 //! ```
 //!
-//! The Rust client that reads it arrives in phase 13; until then this module
-//! carries the validation of `config.load_config` for these sections.
+//! The validation of `config.load_config` for these sections, and of
+//! `[server]`, which only the Rust client (phase 13) has: where the
+//! HomeStack server instances are and how the client authenticates to them.
 
 use hs_model::config::fields::{self, toml_array, toml_string, type_error};
 use hs_model::config::{ConfigError, FORMAT_VERSION};
@@ -23,6 +25,8 @@ pub struct ClientConfig {
     pub workspace_ssh: WorkspaceSsh,
     pub repo: Repo,
     pub display: Display,
+    /// `[server]`; never in a Python `config.toml`.
+    pub server: Option<Server>,
     /// `[sounds]`, validated, as written.
     pub sounds: Option<Table>,
     /// `[setup]` (groups and items), as written.
@@ -54,6 +58,19 @@ pub struct Display {
     pub storage_decimals: u8,
 }
 
+/// `[server]`: the instances, the client token's file and an extra CA.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Server {
+    /// `https://` only (decision 8: the token goes only over TLS).
+    pub urls: Vec<String>,
+    /// `~/...` allowed.
+    pub token_file: String,
+    pub ca_file: Option<String>,
+}
+
+/// The client token's file when `[server] token_file` is not set.
+pub const DEFAULT_TOKEN_FILE: &str = "~/.config/homestack/api-token";
+
 const LOG_LEVELS: [&str; 9] = [
     "DEBUG", "DEBUG1", "DEBUG2", "DEBUG3", "ERROR", "FATAL", "INFO", "QUIET", "VERBOSE",
 ];
@@ -64,13 +81,25 @@ const FIDO_NAMES: [&str; 2] = ["yubikey", "trezor"];
 const SOUNDS_KEYS: [&str; 6] = ["enabled", "player", "wait", "ok", "fail", "repeat_seconds"];
 
 const SCHEMA: &[(&str, &[&str])] = &[
-    ("", &["version", "workspace_ssh", "repo", "display", "sounds", "setup"]),
+    (
+        "",
+        &[
+            "version",
+            "workspace_ssh",
+            "repo",
+            "display",
+            "server",
+            "sounds",
+            "setup",
+        ],
+    ),
     (
         "workspace_ssh",
         &["user", "identity_files", "identities_only", "log_level", "fido_devices"],
     ),
     ("repo", &["owner", "checkout_root", "sort"]),
     ("display", &["storage_unit", "storage_decimals"]),
+    ("server", &["urls", "token_file", "ca_file"]),
 ];
 
 impl ClientConfig {
@@ -85,7 +114,9 @@ impl ClientConfig {
             }
         }
         fields::version(&doc)?;
-        Self::from_sections(&doc)
+        let mut config = Self::from_sections(&doc)?;
+        config.server = server(&doc)?;
+        Ok(config)
     }
 
     /// Read the client sections of a document that may hold others, in the
@@ -104,6 +135,7 @@ impl ClientConfig {
             workspace_ssh,
             repo,
             display,
+            server: None,
             sounds,
             setup,
         })
@@ -138,6 +170,17 @@ impl ClientConfig {
             format!("storage_decimals = {}", self.display.storage_decimals),
             String::new(),
         ]);
+        if let Some(server) = &self.server {
+            lines.extend([
+                "[server]".to_owned(),
+                format!("urls = {}", toml_array(&server.urls)),
+                format!("token_file = {}", toml_string(&server.token_file)),
+            ]);
+            if let Some(ca_file) = &server.ca_file {
+                lines.push(format!("ca_file = {}", toml_string(ca_file)));
+            }
+            lines.push(String::new());
+        }
         let mut text = lines.join("\n");
         let mut rest = Table::new();
         if let Some(sounds) = &self.sounds {
@@ -215,6 +258,52 @@ fn repo(doc: &Table) -> Result<Repo, ConfigError> {
         checkout_root,
         sort,
     })
+}
+
+/// `[server]`, optional here; the Rust client requires it.
+fn server(doc: &Table) -> Result<Option<Server>, ConfigError> {
+    let Some(table) = fields::section(doc, "server")? else {
+        return Ok(None);
+    };
+    let urls_error = |message: &str| ConfigError::new("server.urls", message);
+    let raw = match table.get("urls") {
+        Some(Value::Array(items)) if !items.is_empty() => items,
+        _ => return Err(urls_error("[server] urls must be a non-empty array")),
+    };
+    let mut urls: Vec<String> = Vec::with_capacity(raw.len());
+    for item in raw {
+        let url = item
+            .as_str()
+            .ok_or_else(|| urls_error("[server] urls entries must be strings"))?
+            .trim();
+        let host = url.strip_prefix("https://").ok_or_else(|| {
+            urls_error("[server] urls must start with https://; the client token is sent only over TLS")
+        })?;
+        if host.is_empty() || host.starts_with('/') || url.chars().any(char::is_whitespace) {
+            return Err(urls_error("[server] urls entries must be https://HOST[:PORT] URLs"));
+        }
+        if urls.iter().any(|known| known == url) {
+            return Err(urls_error("[server] urls contains duplicate entries"));
+        }
+        urls.push(url.to_owned());
+    }
+    let path = |key: &str| -> Result<Option<String>, ConfigError> {
+        match table.get(key) {
+            None => Ok(None),
+            Some(Value::String(path)) if !path.trim().is_empty() && !path.contains('\0') => {
+                Ok(Some(path.trim().to_owned()))
+            }
+            Some(_) => Err(ConfigError::new(
+                format!("server.{key}"),
+                format!("[server] {key} must be a non-empty path"),
+            )),
+        }
+    };
+    Ok(Some(Server {
+        urls,
+        token_file: path("token_file")?.unwrap_or_else(|| DEFAULT_TOKEN_FILE.to_owned()),
+        ca_file: path("ca_file")?,
+    }))
 }
 
 /// Python's `validate_repo_checkout_root`.

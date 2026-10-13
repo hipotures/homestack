@@ -33,6 +33,8 @@ scripts/check.sh --live     # also against the real cluster, read-only
 
 Running and configuring the server (`server.toml`, made from an existing `config.toml` with `cargo run -p hs-config -- split`): [docs/migration/deploy.md](docs/migration/deploy.md). API contract: [docs/openapi.json](docs/openapi.json).
 
+The Rust client (`crates/hs-cli`, binary `homestack`) runs `status`, `transport`, `discover`, `create`, `refresh`, `resize`, `addkey`, `destroy` and `migrate` through the server, with the same confirmations, `--json` output and exit codes as the Python CLI, and keeps the desktop's SSH config, `known_hosts` and `identity_files` itself. `setup`, `repo` and `install` are still Python's. It reads `~/.config/homestack/client.toml` (from `hs-config split --server-url https://...`); its `[server]` section names the instances (HTTPS only), the client token file (default `~/.config/homestack/api-token`, mode 0600) and an optional CA file. Details: [docs/migration/phase-13.md](docs/migration/phase-13.md).
+
 ## Configuration
 
 Inspect the local Herdr/Proxmox environment without reading a HomeStack config or changing Proxmox resources:

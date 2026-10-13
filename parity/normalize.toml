@@ -129,3 +129,30 @@ are the server's own; the rest, `ok` included, is compared. The
 `exec-status` polls only pair each command with its result, and differ in
 number by the two extra commands.
 """
+
+[[rule]]
+id = "cli-status-global"
+python_drop = ["config", "execution"]
+rust_drop = ["config", "execution"]
+python_ops_drop = ["guest_exec{*", "guest_exec_status{*"]
+rust_ops_drop = ["get{path=/nodes/*/qemu/*/agent/*", "get{path=/access/permissions,*"]
+reason = """
+Phase 13: `homestack status --json` of the Rust client against the server,
+compared with the Python CLI as a whole, `ok`, `command`, `scope` and the
+display settings of `[display]` included. `config` is the client's file
+(`client.toml` instead of `config.toml`) and `execution` names the server
+instance that answered instead of the Herdr session. The operations differ
+as in status-global.
+"""
+
+[[rule]]
+id = "cli-status-workspace"
+python_drop = ["config", "execution", "mounted_home_label", "ubuntu_user_present"]
+rust_drop = ["config", "execution"]
+python_ops_drop = ["guest_exec{*", "guest_exec_status{*"]
+rust_ops_drop = ["get{path=/nodes/*/qemu/*/agent/*"]
+reason = """
+Phase 13: `homestack status VMID --json` of the Rust client, with `ok` and
+`command` compared; `config` and `execution` as cli-status-global, the guest
+fields as status-workspace.
+"""

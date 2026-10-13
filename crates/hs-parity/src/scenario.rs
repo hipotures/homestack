@@ -52,8 +52,9 @@ pub struct Parity {
     /// `homestack` arguments (without `--config`), or `["@NAME"]` for a
     /// function of `parity/python/homestack_parity/func_driver.py`.
     pub python: Vec<String>,
-    /// Server request as `METHOD /path`, or `@NAME ARGS` for a server
-    /// function without a route (`crates/hs-parity/tests/scenarios.rs`).
+    /// Server request as `METHOD /path`, `@NAME ARGS` for a server
+    /// function without a route, or `cli ARGS` for the Rust client's
+    /// `homestack ARGS` against the server (`crates/hs-parity/tests/scenarios.rs`).
     pub rust: String,
     /// Rule in `parity/normalize.toml`.
     pub normalize: String,

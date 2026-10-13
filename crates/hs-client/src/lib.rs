@@ -260,6 +260,14 @@ impl Client {
             .map(|(_, value)| value)
     }
 
+    /// `GET path` from the first instance that answers, with that
+    /// instance's URL.
+    pub async fn get_from(&self, path: &str) -> Result<(Url, Value), ClientError> {
+        self.first(Method::GET, path, Body::None, &[])
+            .await
+            .map(|(index, value)| (self.instances[index].url.clone(), value))
+    }
+
     /// `GET path` from instance `index` only.
     pub async fn get_on(&self, index: usize, path: &str) -> Result<Value, ClientError> {
         self.on(index, Method::GET, path, Body::None, &[]).await
@@ -387,8 +395,17 @@ impl Session<'_> {
     /// Apply the plan with the configuration version it was made with; the
     /// job as accepted.
     pub async fn apply(&self, config_version: &str) -> Result<Value, ClientError> {
+        self.apply_with(config_version, None).await
+    }
+
+    /// As [`apply`](Self::apply), with the secrets the plan's
+    /// `secrets_required` names (decision 6: the LUKS passphrase).
+    pub async fn apply_with(&self, config_version: &str, secrets: Option<&Value>) -> Result<Value, ClientError> {
         let id = self.plan["id"].as_str().unwrap_or_default();
-        let body = json!({"digest": self.plan["digest"]});
+        let mut body = json!({"digest": self.plan["digest"]});
+        if let Some(secrets) = secrets {
+            body["secrets"] = secrets.clone();
+        }
         self.client
             .on(
                 self.index,
@@ -397,6 +414,14 @@ impl Session<'_> {
                 Body::Json(&body),
                 &[(CONFIG_VERSION_HEADER, config_version)],
             )
+            .await
+            .map_err(|error| self.lost(error))
+    }
+
+    /// The configuration version of the instance that holds the plan.
+    pub async fn config_version(&self) -> Result<Option<String>, ClientError> {
+        self.client
+            .config_version_on(self.index)
             .await
             .map_err(|error| self.lost(error))
     }

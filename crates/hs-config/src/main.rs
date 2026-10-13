@@ -1,7 +1,7 @@
 //! `hs-config`: configuration tools for the HomeStack server migration.
 //!
 //! ```text
-//! hs-config split [--config FILE] [--server-out FILE] [--client-out FILE]
+//! hs-config split [--config FILE] [--server-out FILE] [--client-out FILE] [--server-url URL]...
 //! hs-config check FILE
 //! ```
 //!
@@ -18,11 +18,10 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use hs_config::paths::default_config_path;
-use hs_config::split::split;
+use hs_config::split::split_with_server;
 use hs_model::config::{Config, config_version};
 
-const USAGE: &str =
-    "usage: hs-config split [--config FILE] [--server-out FILE] [--client-out FILE]\n       hs-config check FILE";
+const USAGE: &str = "usage: hs-config split [--config FILE] [--server-out FILE] [--client-out FILE] [--server-url URL]...\n       hs-config check FILE";
 
 enum Failure {
     Usage(String),
@@ -57,8 +56,16 @@ fn run_split(args: &[String]) -> Result<(), Failure> {
     let mut config = None;
     let mut server_out = None;
     let mut client_out = None;
+    let mut server_urls = Vec::new();
     let mut rest = args.iter();
     while let Some(flag) = rest.next() {
+        if flag == "--server-url" {
+            let url = rest
+                .next()
+                .ok_or_else(|| Failure::Usage("--server-url needs a URL".to_owned()))?;
+            server_urls.push(url.clone());
+            continue;
+        }
         let slot = match flag.as_str() {
             "--config" => &mut config,
             "--server-out" => &mut server_out,
@@ -80,8 +87,8 @@ fn run_split(args: &[String]) -> Result<(), Failure> {
     let client_out = client_out.unwrap_or_else(|| dir.join("client.toml"));
 
     let text = read(&config)?;
-    let files =
-        split(&text).map_err(|error| Failure::Failed(format!("{}: {}: {error}", config.display(), error.field)))?;
+    let files = split_with_server(&text, &server_urls)
+        .map_err(|error| Failure::Failed(format!("{}: {}: {error}", config.display(), error.field)))?;
     for out in [&server_out, &client_out] {
         if out.exists() {
             return Err(Failure::Failed(format!("{} exists; not overwriting", out.display())));

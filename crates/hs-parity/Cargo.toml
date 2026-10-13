@@ -17,6 +17,8 @@ thiserror = "2.0.21"
 toml = "1.1.8"
 
 [dev-dependencies]
+axum-server = { version = "0.8.0", features = ["tls-rustls"] }
+hs-cli = { path = "../hs-cli" }
 hs-config = { path = "../hs-config" }
 hs-core = { path = "../hs-core" }
 hs-model = { path = "../hs-model" }

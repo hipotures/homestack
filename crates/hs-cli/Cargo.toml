@@ -1,0 +1,36 @@
+[package]
+name = "hs-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+crossterm = { version = "0.29.0", default-features = false }
+hs-client = { version = "0.1.0", path = "../hs-client" }
+hs-config = { version = "0.1.0", path = "../hs-config" }
+hs-model = { version = "0.1.0", path = "../hs-model" }
+rpassword = "7.5.4"
+serde_json = "1.0.154"
+tempfile = "3.27.0"
+tokio = { version = "1.53.2", features = ["rt-multi-thread", "macros", "time", "signal"] }
+toml = "1.1.8"
+url = "2.5.8"
+
+[dev-dependencies]
+axum = "0.8.9"
+axum-server = { version = "0.8.0", features = ["tls-rustls"] }
+hs-core = { version = "0.1.0", path = "../hs-core" }
+hs-deploy = { version = "0.1.0", path = "../hs-deploy" }
+hs-pve = { version = "0.1.0", path = "../hs-pve" }
+hs-server = { version = "0.1.0", path = "../hs-server" }
+pve-sim = { version = "0.1.0", path = "../pve-sim" }
+tokio = { version = "1.53.2", features = ["rt-multi-thread", "macros", "net"] }
+
+[[bin]]
+name = "homestack"
+path = "src/main.rs"

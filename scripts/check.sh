@@ -21,6 +21,8 @@
 # files of its live-deploy.toml (deploy token, client token, certificate)
 # and the node image of HEAD on ghcr.io (CI publishes it after a push), or
 # HOMESTACK_LIVE_IMAGE.
+# The client gate (crates/hs-cli/tests/live_cli.rs) deploys the same test
+# instances and runs homestack create, status, refresh and destroy on VM 240.
 set -euo pipefail
 
 usage() {
@@ -126,6 +128,8 @@ if ((live)); then
     image=${HOMESTACK_LIVE_IMAGE:-ghcr.io/hipotures/homestack-server:$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)-$(git rev-parse HEAD | cut -c1-12)}
     step "live cluster (L4): three instances deployed from $image, one stopped"
     HOMESTACK_LIVE_IMAGE=$image cargo test -p hs-deploy --locked --test live_deploy -- --ignored --nocapture
+    step "live cluster (L4): the homestack client on VM 240 through the test instances"
+    HOMESTACK_LIVE_IMAGE=$image cargo test -p hs-cli --locked --test live_cli -- --ignored --nocapture
 fi
 
 step "all checks passed$( ((live)) && echo ' (including live)')"

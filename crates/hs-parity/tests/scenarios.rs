@@ -120,6 +120,9 @@ async fn run_rust(scenario: &Scenario, sim: &PveSim, request: &str) -> Result<Va
         let config = hs_model::config::Config::parse(&server_toml)?;
         return run_rust_function(hs_pve::PveClient::new(pve)?, &config, function).await;
     }
+    if let Some(args) = request.strip_prefix("cli ") {
+        return run_rust_cli(pve, &python_config, &server_toml, args).await;
+    }
     let (method, path) = request.split_once(' ').ok_or("rust request must be `METHOD /path`")?;
     let state = tempfile::tempdir()?;
     std::fs::write(state.path().join("server.toml"), server_toml)?;
@@ -146,6 +149,97 @@ async fn run_rust(scenario: &Scenario, sim: &PveSim, request: &str) -> Result<Va
         return Err(format!("Rust request failed ({status}): {body}").into());
     }
     Ok(body)
+}
+
+/// What the Rust client printed.
+#[derive(Clone, Default)]
+struct Captured(std::sync::Arc<std::sync::Mutex<String>>);
+
+impl hs_cli::system::Console for Captured {
+    fn out(&mut self, text: &str) {
+        if let Ok(mut out) = self.0.lock() {
+            out.push_str(text);
+        }
+    }
+
+    fn err(&mut self, _text: &str) {}
+
+    fn ask(&mut self, _question: &str) -> Option<String> {
+        None
+    }
+
+    fn secret(&mut self, _prompt: &str) -> Option<String> {
+        None
+    }
+}
+
+/// `homestack ARGS` of the Rust client (phase 13) against the server behind
+/// HTTPS, with the client part of the scenario's Python configuration.
+async fn run_rust_cli(
+    pve: PveClientConfig,
+    python_config: &str,
+    server_toml: &str,
+    args: &str,
+) -> Result<Value, Box<dyn std::error::Error>> {
+    let state = tempfile::tempdir()?;
+    std::fs::write(state.path().join("server.toml"), server_toml)?;
+    let app = hs_server::app(ServerConfig {
+        api_token: ApiToken::parse(API_TOKEN)?.into(),
+        pve: pve.into(),
+        config_file: state.path().join("server.toml"),
+        instance: hs_server::Instance::default(),
+        pools: hs_server::Pools::default(),
+    })?;
+    let certs = pve_sim::tls::generate()?;
+    let tls = axum_server::tls_rustls::RustlsConfig::from_pem(certs.chain_pem.into_bytes(), certs.key_pem.into_bytes())
+        .await?;
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+    listener.set_nonblocking(true)?;
+    let url = format!("https://localhost:{}", listener.local_addr()?.port());
+    let handle = axum_server::Handle::new();
+    let server = axum_server::from_tcp_rustls(listener, tls)?
+        .handle(handle.clone())
+        .serve(app.into_make_service());
+    tokio::spawn(server);
+
+    let home = tempfile::tempdir()?;
+    let dir = home.path().join(".config/homestack");
+    std::fs::create_dir_all(&dir)?;
+    let client_toml = hs_config::split::split_with_server(python_config, &[url])?.client_toml;
+    let ca = dir.join("ca.pem");
+    std::fs::write(&ca, &certs.ca_pem)?;
+    std::fs::write(
+        dir.join("client.toml"),
+        client_toml.replace(
+            "token_file = ",
+            &format!("ca_file = {:?}\ntoken_file = ", ca.display().to_string()),
+        ),
+    )?;
+    let token = dir.join("api-token");
+    std::fs::write(&token, API_TOKEN)?;
+    std::fs::set_permissions(&token, std::os::unix::fs::PermissionsExt::from_mode(0o600))?;
+
+    let captured = Captured::default();
+    let mut context = hs_cli::app::Context {
+        home: home.path().to_owned(),
+        config_home: None,
+        stdin_tty: false,
+        style: hs_cli::view::Style {
+            color: false,
+            width: 120,
+        },
+        system: std::sync::Arc::new(hs_cli::system::RealSystem::default()),
+        console: Box::new(captured.clone()),
+        poll: std::time::Duration::from_millis(10),
+    };
+    let argv: Vec<String> = args.split_whitespace().map(str::to_owned).collect();
+    let code = hs_cli::app::run(&argv, &mut context).await;
+    handle.shutdown();
+    let out = captured.0.lock().map(|out| out.clone()).unwrap_or_default();
+    if code != 0 {
+        return Err(format!("homestack {args} exited {code}:\n{out}").into());
+    }
+    Ok(serde_json::from_str(&out)?)
 }
 
 /// Server functions that have no route of their own, called in-process the

@@ -259,3 +259,74 @@ fn the_client_file_is_strict() -> TestResult {
     assert_eq!(error.field, "node");
     Ok(())
 }
+
+/// `[server]` of the Rust client (phase 13, decision 8): HTTPS only.
+#[test]
+fn the_server_section_takes_only_https_urls() -> TestResult {
+    let urls = vec![
+        "https://api1.hs.example:443".to_owned(),
+        "https://api2.hs.example".to_owned(),
+    ];
+    let files = hs_config::split::split_with_server(&example(), &urls)?;
+    let client = ClientConfig::parse(&files.client_toml)?;
+    let server = client.server.ok_or("no [server]")?;
+    assert_eq!(server.urls, urls);
+    assert_eq!(server.token_file, hs_config::client::DEFAULT_TOKEN_FILE);
+    assert_eq!(server.ca_file, None);
+    assert!(split(&example())?.client_toml.find("[server]").is_none());
+
+    let plain = hs_config::split::split_with_server(&example(), &["http://api1.hs.example".to_owned()]);
+    let error = plain.err().ok_or("accepted an http:// URL")?;
+    assert_eq!(error.field, "server.urls");
+    assert!(error.to_string().contains("https://"), "{error}");
+
+    let base = split(&example())?.client_toml;
+    for (section, field) in [
+        ("[server]\nurls = []\n", "server.urls"),
+        ("[server]\nurls = [\"https://\"]\n", "server.urls"),
+        ("[server]\nurls = [\"https://a\", \"https://a\"]\n", "server.urls"),
+        (
+            "[server]\nurls = [\"https://a\"]\ntoken_file = \"\"\n",
+            "server.token_file",
+        ),
+        ("[server]\nurls = [\"https://a\"]\nport = 1\n", "server.port"),
+    ] {
+        let error = match ClientConfig::parse(&format!("{base}{section}")) {
+            Ok(_) => return Err(format!("accepted {section:?}").into()),
+            Err(error) => error,
+        };
+        assert_eq!(error.field, field, "{section:?}");
+    }
+    let with_ca = ClientConfig::parse(&format!(
+        "{base}[server]\nurls = [\"https://a\"]\ntoken_file = \"~/t\"\nca_file = \"/c.pem\"\n"
+    ))?;
+    let server = with_ca.server.clone().ok_or("no [server]")?;
+    assert_eq!(
+        (server.token_file.as_str(), server.ca_file.as_deref()),
+        ("~/t", Some("/c.pem"))
+    );
+    assert_eq!(ClientConfig::parse(&with_ca.to_toml()?)?, with_ca);
+    Ok(())
+}
+
+/// Port of `test_fido.py::ConfigTests::test_fido_devices_are_parsed_deduplicated_and_round_trip`.
+#[test]
+fn fido_devices_are_parsed_deduplicated_and_round_trip() -> TestResult {
+    let text = example();
+    let section = text.find("[workspace_ssh]").ok_or("no [workspace_ssh]")?;
+    let marker = section + text[section..].find("log_level =").ok_or("no log_level")?;
+    let end = marker + text[marker..].find('\n').ok_or("no line end")? + 1;
+    let patched = format!(
+        "{}fido_devices = [\"YubiKey\", \"trezor\", \"yubikey\"]\n{}",
+        &text[..end],
+        &text[end..]
+    );
+    let loaded = legacy::read(&patched)?;
+    assert_eq!(loaded.client.workspace_ssh.fido_devices, ["yubikey", "trezor"]);
+    let again = ClientConfig::parse(&split(&patched)?.client_toml)?;
+    assert_eq!(again.workspace_ssh.fido_devices, ["yubikey", "trezor"]);
+    assert!(!split(&example())?.client_toml.contains("fido_devices"));
+    let bad = format!("{}fido_devices = \"yubikey\"\n{}", &text[..end], &text[end..]);
+    assert!(legacy::read(&bad).is_err());
+    Ok(())
+}

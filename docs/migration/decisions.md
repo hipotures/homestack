@@ -16,7 +16,7 @@ an agent stops when a phase needs one that is still open
 | 5 | Guest verification without `VM.GuestAgent.Unrestricted` (`Audit` + `FileRead`) | yes / no | phase 3 | **decided 2026-10-12: yes.** D2 uses the `get-*` agent commands and `file-read`; `exec` (`VM.GuestAgent.Unrestricted`) stays only for `resize` and the Gold guest contract (E2) |
 | 6 | LUKS passphrase for `resize` | stays in the client / sent to the server for `input-data` | phase 7 | **decided 2026-10-13: sent to the server.** The client sends the passphrase with the request that applies the plan, never in the plan; the server passes it to `cryptsetup --key-file -` as `input-data` of `agent/exec` (stdin, not the arguments) and keeps it only in memory for that job. A LUKS root unlocked by a key file stays as it is (in the guest, through QGA) |
 | 7 | Setup and repo stay in the client in the first stage (7.5 A) | yes / no | phase 14 | open |
-| 8 | Client authentication to the server | bearer token / plus hardware-key signature for destructive operations | not set by the plan | open |
+| 8 | Client authentication to the server | bearer token / plus hardware-key signature for destructive operations | phase 13 | **decided 2026-10-13: bearer token only, over an encrypted connection.** The client sends its token only over HTTPS and refuses an instance URL that is not `https://`; no hardware-key signature |
 | 9 | Gold in its own pool with narrower privileges | yes / no | before phase 5 | **decided 2026-10-13: yes.** Gold goes into its own pool `homestack-gold`, where the server token gets only what cloning and the Gold checks need (`VM.Audit`, `VM.Clone`, the guest agent for E2), granted on `/pool/homestack-gold` instead of `/vms/<gold_vmid>`. Gold is not in pool `homestack`, so the server cannot change or delete it |
 | 10 | Detached-volume scan once write privileges are limited to pool `homestack` (PLAN.md, gate before phase 5) | A keep `VM.Config.Disk` on `/vms` (cannot delete a VM, but can detach and delete the disks of every VM, the desktop included); B `Datastore.Allocate` on the HomeStack storages (complete scan, but may delete any volume on them); C `VM.Config.Disk` only on the pool: volumes of deleted VMs are not listed, the scan is reported incomplete | before phase 5 | **decided 2026-10-13: C.** `VM.Config.Disk` only on the HomeStack pools; `VM.Config.Disk` on `/vms` is removed. The scan reports that volumes of deleted VMs cannot be listed |
 
@@ -137,6 +137,18 @@ an agent stops when a phase needs one that is still open
   is written only in Rust, and no Python is written in the migration. A
   Rust TUI like MyPowers' (`frontends/tui`, ratatui) is added as phase 13b,
   on the same `hs-client` as the CLI of phase 13.
+
+### Owner's decisions of 2026-10-13 (phase 13)
+
+- Decision 8: bearer token only, sent only over an encrypted connection
+  (the client refuses an instance URL that is not `https://`).
+- The installer (`homestack install`, F1) becomes its own phase 13c, after
+  the TUI; its Python tests move there.
+- The Rust client binary is named `homestack`, like Python's; commands
+  still only in Python (`setup`, `repo`, `install`) say so and fail.
+- `transport` checks the server instances (reachable, version, config
+  version, capabilities) and `discover` shows the server's `/v1/discovery`
+  with the desktop's hardware keys; neither uses Herdr or SSH to a node.
 
 ## Probe results
 
