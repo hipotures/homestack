@@ -6,11 +6,13 @@
 //! `docs/migration/phase-N.md` records a difference.
 
 pub mod capabilities;
+pub mod cloudinit;
 pub mod discovery;
 pub mod error;
 pub mod gold;
 pub mod guest;
 pub mod inventory;
+pub mod keys;
 pub mod power;
 pub mod pve;
 pub mod status;

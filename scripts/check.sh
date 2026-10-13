@@ -9,12 +9,14 @@
 # (see crates/hs-server/tests/live.rs), docker for the image check, the
 # Python CLI's own config and transport for the comparisons
 # (scripts/live-compare-*.sh), and HOMESTACK_LIVE_TEST_TOKEN_FILE for the
-# jobs in the test pool (crates/hs-server/tests/live_jobs.rs), the only
-# live check that changes the cluster.
+# jobs and the Cloud-Init boot in the test pool
+# (crates/hs-server/tests/live_jobs.rs, live_cloudinit.rs), the only live
+# checks that change the cluster; the boot also needs the vendor snippets
+# on Gold's node (docs/migration/deploy.md).
 set -euo pipefail
 
 usage() {
-    sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'
     exit 2
 }
 
@@ -88,6 +90,8 @@ if ((live)); then
     "$root/scripts/live-compare-gold.sh"
     step "live cluster (L4): jobs in the test pool"
     cargo test -p hs-server --locked --test live_jobs -- --ignored --nocapture
+    step "live cluster (L4): native Cloud-Init boot in the test pool"
+    cargo test -p hs-server --locked --test live_cloudinit -- --ignored --nocapture
 fi
 
 step "all checks passed$( ((live)) && echo ' (including live)')"

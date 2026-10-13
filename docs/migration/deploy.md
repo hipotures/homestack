@@ -107,6 +107,37 @@ pveum acl modify /vms/101 --users homestack@pve --roles HomeStackServerGoldGuest
 pveum acl modify /vms/101 --tokens 'homestack@pve!server' --roles PVEAuditor,HomeStackServerDisks,HomeStackServerGoldGuest
 ```
 
+## Cloud-Init vendor snippets
+
+Workspaces made by the server use Proxmox's own Cloud-Init (decision 1 =
+A): Proxmox writes user-data, network-config and meta-data from the VM's
+options (`ciuser=root`, `sshkeys`, `ipconfig0`, `nameserver`,
+`ciupgrade=0`), and `cicustom` names only a vendor snippet. The API cannot
+write files to a node, so the two snippets are installed once on every node
+that runs workspaces, by the owner, as root:
+
+```
+scp deploy/cloud-init/homestack-vendor-*.yaml root@NODE:/var/lib/vz/snippets/
+ssh root@NODE chmod 644 '/var/lib/vz/snippets/homestack-vendor-*.yaml'
+```
+
+The directory is that of `[cloud_init] snippet_storage` (`local` above),
+whose content types must include `snippets`. The files are generated from
+`crates/hs-core/src/cloudinit_vendor.yaml` and a test keeps them equal;
+after a change, copy them again. `homestack-vendor-create.yaml` formats a
+blank new home, `homestack-vendor-keep.yaml` refuses to (refresh, addkey).
+
+Setting `cicustom` needs `VM.Config.Cloudinit` on the VM and
+`Datastore.AllocateSpace` on the snippet storage. Checking that a snippet is
+installed needs `Datastore.Allocate` on that storage, which the server does
+not ask for: a missing snippet fails the VM's start.
+
+The snippet expects of Gold: exactly one regular account (UID 1000–65533),
+whose home is `/home/<name>`; NetworkManager (it selects NetworkManager as
+netplan's renderer, which Python's network snippet did per workspace), and
+`netplan`, `udevadm`, `python3` with PyYAML (cloud-init's own) besides the
+tools of the Gold guest contract.
+
 ## Docker
 
 ```

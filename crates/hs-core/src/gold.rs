@@ -15,6 +15,7 @@ use crate::guest::{GUEST_EXEC_TIMEOUT, guest_out};
 use crate::inventory::{
     ALIEN_WORKSPACE_TAG, GOLD_TAG, VmConfig, WORKSPACE_TAG, disk_option, disk_volume, has_tag, vm_config, vm_status,
 };
+use crate::keys::{unquote, validate_authorized_keys};
 use crate::pve::Pve;
 
 fn check(scope: &str, name: &str, status: &str, detail: impl Into<String>, requirement: &str) -> GoldCheck {
@@ -120,45 +121,11 @@ pub fn boot_order_contains_disk(boot: &str, disk: &str) -> bool {
         .is_some_and(|(_, order)| order.split(';').any(|token| token == disk))
 }
 
-/// `urllib.parse.unquote`
-fn unquote(text: &str) -> String {
-    let bytes = text.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut index = 0;
-    while index < bytes.len() {
-        let hex = |i: usize| bytes.get(i).and_then(|b| (*b as char).to_digit(16));
-        match (bytes[index], hex(index + 1), hex(index + 2)) {
-            (b'%', Some(high), Some(low)) => {
-                out.push(u8::try_from(high * 16 + low).unwrap_or(b'?'));
-                index += 3;
-            }
-            (byte, _, _) => {
-                out.push(byte);
-                index += 1;
-            }
-        }
-    }
-    String::from_utf8_lossy(&out).into_owned()
-}
-
 /// `workspace_ssh.validate_authorized_keys`: the number of key lines.
 pub fn count_authorized_keys(text: &str) -> Result<usize, String> {
-    let mut count = 0;
-    for line in text
-        .lines()
-        .map(str::trim)
-        .filter(|l| !l.is_empty() && !l.starts_with('#'))
-    {
-        if !["ssh-", "ecdsa-", "sk-"].iter().any(|prefix| line.starts_with(prefix)) {
-            let shown: String = line.chars().take(80).collect();
-            return Err(format!("Unexpected line in authorized_keys source: '{shown}'"));
-        }
-        count += 1;
-    }
-    if count == 0 {
-        return Err("No SSH public keys found for workspace user".to_owned());
-    }
-    Ok(count)
+    validate_authorized_keys(text)
+        .map(|keys| keys.lines().count())
+        .map_err(|error| error.to_string())
 }
 
 /// `_pve_ssh_keys_usable`

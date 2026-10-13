@@ -14,6 +14,9 @@ NAME is one of:
 - `verify-refresh VMID`: `lifecycle._verify_refreshed_guest` for a running
   workspace, with the name from its config, its `prefix.<vmid>` address and
   its home label; prints `ok` and `cloud_id`, or `ok` and the error.
+- `workspace-keys [VMID]`: `workspace_ssh.get_workspace_authorized_keys`
+  with Gold VMID instead of the configured one; prints `ok`, `keys` and
+  `source`, or `ok` and the error.
 
 The functions run unchanged on a RecordingTransport around a
 FixtureTransport, like cli_driver. Output is JSON on stdout; the commands
@@ -31,7 +34,7 @@ from pathlib import Path
 from typing import Any, Iterator
 from unittest import mock
 
-from homestack import discovery, gold, lifecycle
+from homestack import discovery, gold, lifecycle, workspace_ssh
 from homestack.config import load_config
 from homestack.guest import derive_ip
 from homestack.models import AppError
@@ -114,11 +117,22 @@ def run_verify_refresh(session: RecordingTransport, cfg: Any, vmid_text: str) ->
     return {"ok": True, "cloud_id": cloud_id}
 
 
+def run_workspace_keys(session: RecordingTransport, cfg: Any, *args: str) -> Any:
+    if args:
+        cfg = dataclasses.replace(cfg, gold_vmid=int(args[0]))
+    try:
+        keys, source = workspace_ssh.get_workspace_authorized_keys(session, cfg)
+    except AppError as exc:
+        return {"ok": False, "error": str(exc)}
+    return {"ok": True, "keys": keys, "source": source}
+
+
 FUNCTIONS = {
     "discovery": run_discovery,
     "networks": run_networks,
     "gold-readiness": run_gold_readiness,
     "verify-refresh": run_verify_refresh,
+    "workspace-keys": run_workspace_keys,
 }
 
 

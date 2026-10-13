@@ -404,6 +404,18 @@ fn exec_checks(guest: &GuestSpec, shell: &str) -> Option<ExecResult> {
             .map(|a| a.passwd_line());
         return Some(line.map_or_else(|| ExecResult::ok(""), |line| ExecResult::line(&line)));
     }
+    // `workspace_ssh.get_workspace_authorized_keys` (phase 4).
+    if let Some((path, again)) = shell
+        .strip_prefix("test -s ")
+        .and_then(|rest| rest.split_once(" && cat "))
+        && path == again
+        && !path.contains(' ')
+    {
+        return Some(non_empty(guest, path).map_or_else(
+            || failed(1, String::new()),
+            |bytes| ExecResult::ok(String::from_utf8_lossy(&bytes).into_owned()),
+        ));
+    }
     if let Some(path) = between(shell, "cat ", " 2>/dev/null || true") {
         return Some(match file(guest, path) {
             Node::File(bytes) => ExecResult::ok(String::from_utf8_lossy(&bytes).into_owned()),

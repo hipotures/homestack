@@ -152,6 +152,8 @@ async fn run_rust(scenario: &Scenario, sim: &PveSim, request: &str) -> Result<Va
 /// - `verify-refresh VMID`: `hs_core::verify::verify_refreshed_guest` with
 ///   the VM's name, its `prefix.<vmid>` address and its home label, as
 ///   `func_driver.py verify-refresh` calls Python's.
+/// - `workspace-keys [VMID]`: `hs_core::keys::workspace_authorized_keys`
+///   with Gold VMID instead of the configured one.
 async fn run_rust_function(
     pve: hs_pve::PveClient,
     config: &hs_model::config::Config,
@@ -181,6 +183,16 @@ async fn run_rust_function(
                     Err(error) => serde_json::json!({ "ok": false, "error": error.to_string() }),
                 },
             )
+        }
+        ["workspace-keys", rest @ ..] => {
+            let mut config = config.clone();
+            if let [gold] = rest {
+                config.gold_vmid = gold.parse()?;
+            }
+            Ok(match hs_core::keys::workspace_authorized_keys(&pve, &config).await {
+                Ok(found) => serde_json::json!({ "ok": true, "keys": found.keys, "source": found.source }),
+                Err(error) => serde_json::json!({ "ok": false, "error": error.to_string() }),
+            })
         }
         _ => Err(format!("unknown Rust function @{function}").into()),
     }

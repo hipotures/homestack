@@ -1,0 +1,114 @@
+#cloud-config
+# HomeStack vendor data (decision 1 = A). Proxmox generates user-data,
+# network-config and meta-data from the VM config (ciuser=root, sshkeys,
+# ipconfig0, nameserver, ciupgrade=0); this file adds what they lack and
+# mounts the persistent home. The same file serves every workspace: the
+# home disk is the one whose serial is HS_HOME_<vmid>, the account is the
+# image's only regular account. Installed once per node, never edited:
+# homestack-vendor-create.yaml formats a blank new home,
+# homestack-vendor-keep.yaml refuses to.
+users: []
+disable_root: false
+ssh_pwauth: false
+ssh_deletekeys: true
+preserve_hostname: false
+# Proxmox's network-config names no renderer, so netplan would hand eth0 to
+# systemd-networkd, which the image masks; Python's network snippet said
+# `renderer: NetworkManager`. Netplan's generator reads this file on every
+# later boot; the first boot rendered before vendor data ran, so render again
+# and let udev re-read netplan's rules, which mark the interface unmanaged
+# for NetworkManager until then. NetworkManager is not ordered against
+# cloud-init: restart it only if it already runs (`netplan apply` would
+# restart the masked networkd and fail).
+bootcmd:
+  - |
+      if [ ! -e /etc/netplan/90-homestack-renderer.yaml ]; then
+          (umask 077 && printf 'network:\n  version: 2\n  renderer: NetworkManager\n' > /etc/netplan/90-homestack-renderer.yaml)
+          netplan generate
+          udevadm control --reload
+          udevadm trigger --action=change --subsystem-match=net
+          udevadm settle
+          if systemctl is-active --quiet NetworkManager.service; then
+              systemctl restart --no-block NetworkManager.service
+          fi
+      fi
+runcmd:
+  - |
+      set -eu
+      allow_format=@ALLOW_FORMAT@
+
+      accounts="$(awk -F: '$3 >= 1000 && $3 < 65534 { print $1 ":" $3 ":" $4 }' /etc/passwd)"
+      account_count="$(printf '%s\n' "$accounts" | sed '/^$/d' | wc -l)"
+      if [ "$account_count" -ne 1 ]; then
+          echo "HomeStack: expected exactly one regular account in the image, found $account_count" >&2
+          exit 75
+      fi
+      user_name="${accounts%%:*}"
+      user_ids="${accounts#*:}"
+      user_uid="${user_ids%%:*}"
+      user_gid="${user_ids#*:}"
+      home_path="/home/$user_name"
+
+      disks="$(lsblk -dn -o PATH,SERIAL | awk '$2 ~ /^HS_HOME_[0-9]+$/ { print $1 " " $2 }')"
+      device_count="$(printf '%s\n' "$disks" | sed '/^$/d' | wc -l)"
+      if [ "$device_count" -ne 1 ]; then
+          echo "HomeStack: expected exactly one disk with serial HS_HOME_<vmid>, found $device_count" >&2
+          exit 70
+      fi
+      device="${disks%% *}"
+      expected_label="${disks#* }"
+
+      fstype="$(blkid -s TYPE -o value "$device" 2>/dev/null || true)"
+      fslabel="$(blkid -s LABEL -o value "$device" 2>/dev/null || true)"
+
+      if [ "$allow_format" = "1" ]; then
+          authorized_keys="$(cloud-init query userdata | python3 -c 'import sys, yaml; data = yaml.safe_load(sys.stdin) or {}; sys.stdout.write("".join(key + "\n" for key in data.get("ssh_authorized_keys") or []))')"
+          if [ -z "$authorized_keys" ]; then
+              echo "HomeStack: user-data has no ssh_authorized_keys for the new home" >&2
+              exit 76
+          fi
+      fi
+
+      if [ "$fstype" = "ext4" ] && [ "$fslabel" = "$expected_label" ]; then
+          :
+      elif [ -z "$fstype" ] && [ -z "$fslabel" ]; then
+          if [ "$allow_format" != "1" ]; then
+              echo "HomeStack: persistent home is blank during refresh; refusing mkfs" >&2
+              exit 71
+          fi
+          if [ "$(lsblk -nr -o TYPE "$device" | wc -l)" -ne 1 ]; then
+              echo "HomeStack: new home disk has child block devices; refusing mkfs" >&2
+              exit 72
+          fi
+          if [ -n "$(wipefs -n "$device" 2>/dev/null)" ]; then
+              echo "HomeStack: new home disk has filesystem signatures; refusing mkfs" >&2
+              exit 73
+          fi
+          mkfs.ext4 -m 0 -L "$expected_label" "$device"
+      else
+          echo "HomeStack: unexpected filesystem on $device: type=$fstype label=$fslabel; refusing changes" >&2
+          exit 74
+      fi
+
+      home_mount_unit="$(systemd-escape --path --suffix=mount "$home_path")"
+      systemctl disable --now "$home_mount_unit" >/dev/null 2>&1 || true
+      rm -f "/etc/systemd/system/$home_mount_unit"
+      mkdir -p "$home_path"
+      sed -i "\|[[:space:]]$home_path[[:space:]]|d" /etc/fstab
+      printf '\nLABEL=%s %s ext4 defaults 0 2\n' "$expected_label" "$home_path" >> /etc/fstab
+      systemctl daemon-reload
+      mountpoint -q "$home_path" || mount "$home_path"
+
+      if [ "$allow_format" = "1" ]; then
+          rm -rf -- "$home_path/lost+found"
+          chown "$user_uid:$user_gid" "$home_path"
+          chmod 700 "$home_path"
+          install -d -m 700 -o "$user_uid" -g "$user_gid" "$home_path/.ssh"
+          printf '%s\n' "$authorized_keys" > "$home_path/.ssh/authorized_keys"
+          chown "$user_uid:$user_gid" "$home_path/.ssh/authorized_keys"
+          chmod 600 "$home_path/.ssh/authorized_keys"
+      fi
+
+      if [ -f "$home_path/.config/systemd/user/herdr.service" ]; then
+          loginctl enable-linger "$user_name"
+      fi

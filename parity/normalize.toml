@@ -99,3 +99,14 @@ Decision 5: the server verifies a guest with the audit-level agent commands
 device, `/run/cloud-init/*`, the `sudo` binary) instead of shell commands
 through `exec`. The pings, the reads of the VM and the outcome are compared.
 """
+
+[[rule]]
+id = "workspace-keys"
+python_ops_drop = ["guest_exec{*", "guest_exec_status{*"]
+rust_ops_drop = ["get{*path=/nodes/*/qemu/*/agent/file-read*"]
+reason = """
+Phase 4, mapping C5: Python reads Gold's authorized_keys files with
+`test -s F && cat F` through `exec`; the server reads them with `file-read`
+(decision 5, VM.GuestAgent.FileRead). The reads of the cluster and of Gold's
+config and status, the ping and the outcome are compared.
+"""
