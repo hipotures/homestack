@@ -366,6 +366,26 @@ Bez poola, zawężonego tokenu i zapisanych decyzji 9 i 10 agent nie zaczyna faz
 - Python CLI usunięty albo zarchiwizowany, testy zgodności zastąpione plikami wzorcowymi zapisanymi z ostatniej wersji Pythona.
 - README i dokumentacja tylko dla wersji Rust.
 
+### Faza 16: `resize` na różnych układach dysków (po całej implementacji)
+
+Zlecone przez właściciela 2026-10-13. W fazie 7 LUKS, LVM i Btrfs sprawdzono tylko na symulatorze, bo testowa Gold ma zwykły ext4 na partycji.
+
+- **Generator układów dysków:** skrypt albo narzędzie, które w poolu testowym (VMID 240–249) przygotowuje VM z różnymi układami root i home. Co najmniej:
+  - ext4 na całym dysku;
+  - ext4 na ostatniej partycji;
+  - LVM + ext4;
+  - LUKS z plikiem klucza + LVM + ext4;
+  - LUKS z hasłem + LVM + ext4;
+  - Btrfs z podwolumenem;
+  - Btrfs na LUKS.
+- **Dla każdego układu:**
+  - `resize` przez serwer, a system plików widzi nowy rozmiar;
+  - powtórzenie z tym samym rozmiarem;
+  - przerwane rozszerzanie dokończone powtórzeniem.
+- **Odmowy:** przypadki, których `resize` nie obsługuje, muszą kończyć się odmową bez żadnej zmiany. Przykłady: wielodyskowy Btrfs, VG z kilkoma LV, partycja, która nie jest ostatnia.
+
+**Bramka:** `--live`: każdy wygenerowany układ przechodzi powyższe kroki, a VM testowe są potem usunięte.
+
 ---
 
 ## 5. Pliki prowadzone przez agenta

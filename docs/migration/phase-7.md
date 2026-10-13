@@ -249,5 +249,7 @@ Gold has none of them; they run on the simulator only.
 
 - Python's `resize` with a passphrase keeps working the old way (SSH as
   root); the client in phase 12/13 will use the server's path.
-- LUKS, LVM and Btrfs are not checked on a real guest; a test Gold with
-  such a layout would be needed for that.
+- LUKS, LVM and Btrfs are not checked on a real guest. The owner added
+  phase 16 to PLAN.md (2026-10-13): after the whole implementation, a
+  generator of disk layouts in the test pool and live `resize` checks on
+  each.
