@@ -97,6 +97,26 @@ fn text(value: Option<&Value>) -> String {
     value.and_then(Value::as_str).unwrap_or_default().to_owned()
 }
 
+/// `shlex.quote`
+#[must_use]
+pub fn shell_quote(word: &str) -> String {
+    let safe = !word.is_empty()
+        && word
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"@%+=:,./-_".contains(&b));
+    if safe {
+        word.to_owned()
+    } else {
+        format!("'{}'", word.replace('\'', r#"'"'"'"#))
+    }
+}
+
+/// `shlex.join`
+#[must_use]
+pub fn shell_join(words: &[&str]) -> String {
+    words.iter().map(|word| shell_quote(word)).collect::<Vec<_>>().join(" ")
+}
+
 /// `guest._complete_guest_exec`: run `/bin/sh -lc COMMAND`, poll
 /// `exec-status` every 0.2 s until the command has exited or `timeout` has
 /// passed, and check the answer. With `check`, a failed call or a non-zero
@@ -108,6 +128,21 @@ pub async fn guest_exec(
     node: &str,
     vmid: u32,
     command: &str,
+    check: bool,
+    timeout: Duration,
+) -> Result<ExecResult, CoreError> {
+    guest_exec_with_input(pve, node, vmid, command, None, check, timeout).await
+}
+
+/// [`guest_exec`] with `input` on the command's standard input
+/// (`input-data`), e.g. a LUKS passphrase for `cryptsetup --key-file -`
+/// (decision 6). The input is never part of an error message.
+pub async fn guest_exec_with_input(
+    pve: &impl Pve,
+    node: &str,
+    vmid: u32,
+    command: &str,
+    input: Option<&str>,
     check: bool,
     timeout: Duration,
 ) -> Result<ExecResult, CoreError> {
@@ -127,7 +162,10 @@ pub async fn guest_exec(
             err: String::new(),
         })
     };
-    let form = [("command", "/bin/sh"), ("command", "-lc"), ("command", command)];
+    let mut form = vec![("command", "/bin/sh"), ("command", "-lc"), ("command", command)];
+    if let Some(input) = input {
+        form.push(("input-data", input));
+    }
     let mut parsed = match pve.post(&agent(node, vmid, "exec"), &form).await {
         Ok(parsed) => parsed,
         Err(error) => return failed_call("exec", error),
@@ -229,6 +267,51 @@ pub async fn read_file(
                 .map_err(|_| CoreError::Unusable(format!("file-read of {path} in VM {vmid} returned invalid base64")))
         }
         Err(error) if guest_file_error(&error) => Ok(None),
+        Err(error) => Err(error.into()),
+    }
+}
+
+/// Why the guest could not read a file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FileError {
+    /// No such file or directory.
+    Missing,
+    /// Any other reason, as the agent gave it.
+    Unreadable(String),
+}
+
+/// The first [`FILE_LIMIT`] bytes of a file as text, or why the guest could
+/// not read it (Python: `open()` raising `FileNotFoundError` or another
+/// `OSError`).
+pub async fn read_text_or_reason(
+    pve: &impl Pve,
+    node: &str,
+    vmid: u32,
+    path: &str,
+) -> Result<Result<String, FileError>, CoreError> {
+    let count = FILE_LIMIT.to_string();
+    let query = [
+        ("file", path),
+        ("offset", "0"),
+        ("count", count.as_str()),
+        ("decode", "0"),
+    ];
+    match pve.get(&agent(node, vmid, "file-read"), &query).await {
+        Ok(answer) => {
+            let content = answer.get("content").and_then(Value::as_str).unwrap_or_default();
+            let bytes = base64::engine::general_purpose::STANDARD.decode(content).map_err(|_| {
+                CoreError::Unusable(format!("file-read of {path} in VM {vmid} returned invalid base64"))
+            })?;
+            Ok(Ok(String::from_utf8_lossy(&bytes).into_owned()))
+        }
+        Err(error) if guest_file_error(&error) => {
+            let message = error.to_string();
+            if message.contains("No such file or directory") {
+                Ok(Err(FileError::Missing))
+            } else {
+                Ok(Err(FileError::Unreadable(message)))
+            }
+        }
         Err(error) => Err(error.into()),
     }
 }

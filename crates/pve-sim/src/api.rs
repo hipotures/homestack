@@ -50,6 +50,7 @@ pub fn router(state: Shared) -> Router {
             get(vm_config).put(vm_config_update).post(vm_config_post),
         )
         .route("/nodes/{node}/qemu/{vmid}/unlink", put(vm_unlink))
+        .route("/nodes/{node}/qemu/{vmid}/resize", put(vm_resize))
         .route("/nodes/{node}/qemu/{vmid}/pending", get(vm_pending))
         .route("/nodes/{node}/qemu/{vmid}/status/current", get(vm_status))
         .route("/nodes/{node}/qemu/{vmid}/status/{action}", post(vm_power))
@@ -180,6 +181,40 @@ fn exec_shell(body: &Bytes) -> String {
         [shell, flag, command] if shell == "/bin/sh" && flag == "-lc" => command.clone(),
         _ => words.join(" "),
     }
+}
+
+/// The `input-data` of an `exec` body (standard input). It is not part of
+/// the recorded operation.
+fn exec_input(body: &Bytes) -> Option<String> {
+    match serde_json::from_slice::<Value>(body) {
+        Ok(json) => json["input-data"].as_str().map(str::to_owned),
+        Err(_) => form_urlencoded::parse(body)
+            .find(|(key, _)| key == "input-data")
+            .map(|(_, value)| value.into_owned()),
+    }
+}
+
+/// The VM's disks by slot: size and `serial=` from the config.
+fn vm_disks(config: &toml::Table) -> crate::blocks::Disks {
+    config
+        .iter()
+        .filter(|(key, _)| is_disk_key(key))
+        .filter_map(|(key, value)| {
+            let text = value.as_str()?;
+            let option = |name: &str| {
+                text.split(',')
+                    .find_map(|part| part.strip_prefix(name).and_then(|rest| rest.strip_prefix('=')))
+            };
+            let size = option("size").and_then(size_bytes)?;
+            Some((
+                key.clone(),
+                crate::blocks::DiskInfo {
+                    size,
+                    serial: option("serial").map(str::to_owned),
+                },
+            ))
+        })
+        .collect()
 }
 
 fn token(request_token: Option<axum::Extension<TokenSpec>>) -> Option<TokenSpec> {
@@ -763,6 +798,98 @@ fn reach_vm<'a>(
         })
 }
 
+/// `PUT /nodes/{node}/qemu/{vmid}/resize` with `disk`, `size` (absolute or
+/// `+N`) and `digest`: a `resize` task. Needs `VM.Config.Disk` on the VM
+/// and `Datastore.AllocateSpace` on the disk's storage. Not observed live:
+/// the message of a stale `digest` (that of `update_vm_api` is used) and of
+/// a shrink.
+async fn vm_resize(
+    State(state): State<Shared>,
+    request_token: Option<axum::Extension<TokenSpec>>,
+    Path((node, vmid)): Path<(String, String)>,
+    body: Bytes,
+) -> Response {
+    let mut state = lock(&state);
+    let Some(token) = token(request_token) else {
+        return pve_error(401, "");
+    };
+    let form = form(&body);
+    if let Some((key, _)) = form
+        .iter()
+        .find(|(key, _)| !matches!(key.as_str(), "disk" | "size" | "digest" | "skiplock"))
+    {
+        return parameter_error(
+            key,
+            "property is not defined in schema and the schema does not allow additional properties",
+        );
+    }
+    let (Some(disk), Some(size)) = (form_value(&form, "disk"), form_value(&form, "size")) else {
+        return parameter_error("size", "property is missing and it is not optional");
+    };
+    let (vmid_number, node_name, user) = match reach_vm(&state, Some(&token), &node, &vmid, &["VM.Config.Disk"]) {
+        Ok(vm) => (
+            vm.vmid,
+            vm.node.clone(),
+            token.id.split('!').next().unwrap_or_default().to_owned(),
+        ),
+        Err(failure) => return failure.into_response(),
+    };
+    let Some(vm) = state.vms.get(&vmid_number) else {
+        return pve_error(500, "VM vanished");
+    };
+    if let Some(digest) = form_value(&form, "digest")
+        && digest != config_digest(&vm.config)
+    {
+        return pve_error(500, "checksum mismatch (file change by other user?)\n");
+    }
+    let Some(value) = vm.config.get(disk).and_then(toml::Value::as_str).map(str::to_owned) else {
+        return pve_error(500, &format!("disk '{disk}' does not exist\n"));
+    };
+    let volume = value.split(',').next().unwrap_or_default().to_owned();
+    let storage = volume.split(':').next().unwrap_or_default().to_owned();
+    if !state.allows(&token, &format!("/storage/{storage}"), "Datastore.AllocateSpace") {
+        return forbidden(&format!("/storage/{storage}"), "Datastore.AllocateSpace");
+    }
+    let current = value
+        .split(',')
+        .find_map(|part| part.strip_prefix("size="))
+        .and_then(size_bytes)
+        .unwrap_or_default();
+    let Some(requested) = size_bytes(size.trim_start_matches('+')) else {
+        return parameter_error("size", "value does not match the regex pattern");
+    };
+    let new = if size.starts_with('+') {
+        current + requested
+    } else {
+        requested
+    };
+    if new < current {
+        return pve_error(500, "shrinking disks is not supported\n");
+    }
+    let options: Vec<&str> = value
+        .split(',')
+        .skip(1)
+        .filter(|part| !part.starts_with("size="))
+        .collect();
+    let mut updated = volume.clone();
+    for option in options {
+        updated.push(',');
+        updated.push_str(option);
+    }
+    updated.push_str(&format!(",size={}", human_size(new)));
+    if let Some(vm) = state.vms.get_mut(&vmid_number) {
+        vm.config.insert(disk.to_owned(), toml::Value::String(updated));
+    }
+    if let Some(stored) = state
+        .volumes
+        .iter_mut()
+        .find(|v| v.node == node_name && v.volid == volume)
+    {
+        stored.size = new;
+    }
+    task(&mut state, &node_name, "resize", vmid_number, &user)
+}
+
 async fn vm_config(
     State(state): State<Shared>,
     request_token: Option<axum::Extension<TokenSpec>>,
@@ -1113,17 +1240,27 @@ async fn agent_exec(
     body: Bytes,
 ) -> Response {
     let mut state = lock(&state);
-    let result = match reach_guest(
+    let vmid_number = match reach_guest(
         &state,
         token(request_token).as_ref(),
         &node,
         &vmid,
         &["VM.GuestAgent.Unrestricted"],
     ) {
-        Ok((vm, guest)) => (vm.vmid, guest::exec(guest, &exec_shell(&body))),
+        Ok((vm, _)) => vm.vmid,
         Err(failure) => return failure.into_response(),
     };
-    let pid = state.add_exec(result.0, result.1);
+    let shell = exec_shell(&body);
+    let input = exec_input(&body);
+    let Some(vm) = state.vms.get_mut(&vmid_number) else {
+        return pve_error(500, "VM vanished");
+    };
+    let disks = vm_disks(&vm.config);
+    let Some(guest) = vm.guest.as_mut() else {
+        return pve_error(500, "QEMU guest agent is not running\n");
+    };
+    let result = guest::exec(guest, &disks, &shell, input.as_deref());
+    let pid = state.add_exec(vmid_number, result);
     data(json!({ "pid": pid }))
 }
 
@@ -1349,7 +1486,9 @@ fn import_source(value: &str) -> Option<(&str, &str)> {
 
 /// `16G` for whole GiB, `4M` for whole MiB, else bytes.
 fn human_size(bytes: u64) -> String {
-    if bytes > 0 && bytes.is_multiple_of(1 << 30) {
+    if bytes > 0 && bytes.is_multiple_of(1 << 40) {
+        format!("{}T", bytes >> 40)
+    } else if bytes > 0 && bytes.is_multiple_of(1 << 30) {
         format!("{}G", bytes >> 30)
     } else if bytes > 0 && bytes.is_multiple_of(1 << 20) {
         format!("{}M", bytes >> 20)
@@ -1948,6 +2087,7 @@ fn boot_image(
                     device: "sdb".to_owned(),
                     slot,
                     label: Some(label),
+                    subvolume: None,
                     size: volume.size,
                     used: 0,
                     avail: volume.size,

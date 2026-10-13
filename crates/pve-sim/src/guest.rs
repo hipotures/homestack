@@ -77,6 +77,9 @@ pub fn file(guest: &GuestSpec, path: &str) -> Node {
     {
         return Node::File(block_device(fs));
     }
+    if let Some(node) = crate::blocks::sysfs(guest, path) {
+        return node;
+    }
     if let Some((dir, name)) = path.rsplit_once('/')
         && BIN_DIRS.contains(&dir)
         && guest.has_command(name)
@@ -225,10 +228,15 @@ pub fn fsinfo(guest: &GuestSpec) -> Value {
     Value::Array(list)
 }
 
-/// Run one of the shell commands HomeStack sends through `exec`.
+/// Run one of the shell commands HomeStack sends through `exec`, with
+/// `input` on its standard input; `disks` are the VM config's disks.
 #[must_use]
-pub fn exec(guest: &GuestSpec, shell: &str) -> ExecResult {
+pub fn exec(guest: &mut GuestSpec, disks: &crate::blocks::Disks, shell: &str, input: Option<&str>) -> ExecResult {
     let shell = shell.trim();
+    if let Some(result) = crate::blocks::exec(guest, disks, shell, input) {
+        return result;
+    }
+    let guest: &GuestSpec = guest;
     if shell == "hostname" {
         return ExecResult::line(&guest.hostname);
     }
@@ -484,6 +492,7 @@ mod tests {
                     device: "dm-1".to_owned(),
                     slot: "scsi0".to_owned(),
                     label: None,
+                    subvolume: None,
                     size: 10_464_022_528,
                     used: 3_457_495_040,
                     avail: 6_452_879_360,
@@ -494,6 +503,7 @@ mod tests {
                     device: "sdb".to_owned(),
                     slot: "scsi1".to_owned(),
                     label: Some("HS_HOME_200".to_owned()),
+                    subvolume: None,
                     size: 20_957_446_144,
                     used: 338_767_872,
                     avail: 20_601_901_056,
@@ -503,13 +513,14 @@ mod tests {
             commands: Vec::new(),
             files: std::collections::BTreeMap::new(),
             cloud_id: None,
+            blocks: Vec::new(),
         }
     }
 
     #[test]
     fn exec_prints_what_the_tools_print() {
         let guest = guest();
-        let out = |shell: &str| exec(&guest, shell).out;
+        let out = |shell: &str| exec(&mut guest.clone(), &crate::blocks::Disks::new(), shell, None).out;
         assert_eq!(out("hostname"), "test1\n");
         assert_eq!(
             out("ip -4 -o addr show dev eth0 2>/dev/null | awk '{print $4}' | head -n1"),
@@ -536,7 +547,10 @@ mod tests {
             out("findmnt -n -o SOURCE,FSTYPE,TARGET /home/other 2>/dev/null || true"),
             ""
         );
-        assert_eq!(exec(&guest, "rm -rf /").exitcode, 127);
+        assert_eq!(
+            exec(&mut guest.clone(), &crate::blocks::Disks::new(), "rm -rf /", None).exitcode,
+            127
+        );
     }
 
     #[test]

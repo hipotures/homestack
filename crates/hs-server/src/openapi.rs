@@ -67,6 +67,7 @@ use utoipa::{Modify, OpenApi};
         hs_model::jobs::PlanRequest,
         hs_model::jobs::Plan,
         hs_model::jobs::ApplyRequest,
+        hs_model::jobs::ApplySecrets,
         hs_model::jobs::Job,
         hs_model::jobs::JobState,
         hs_model::jobs::JobStep,

@@ -134,6 +134,7 @@ const fn needs(operation: Operation) -> Needs {
                 "VM.Audit",
                 "VM.Config.Disk",
                 "VM.GuestAgent.Audit",
+                "VM.GuestAgent.FileRead",
                 "VM.GuestAgent.Unrestricted",
             ],
             gold: NONE,

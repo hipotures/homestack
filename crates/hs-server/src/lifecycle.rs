@@ -1,6 +1,7 @@
-//! `workspace.create`, `workspace.destroy` (phase 5) and `workspace.refresh`
-//! (phase 6): the operations of `hs_core::lifecycle` and `hs_core::refresh`
-//! in the plan and job model.
+//! `workspace.create`, `workspace.destroy` (phase 5), `workspace.refresh`
+//! (phase 6) and `workspace.resize` (phase 7): the operations of
+//! `hs_core::lifecycle`, `hs_core::refresh` and `hs_core::resize` in the plan
+//! and job model.
 //!
 //! `POST /v1/plans` with `{"operation": "workspace.create", "parameters":
 //! {"vmid": 240, "name": "hst-a", "home_size": "20G", "storage": "..."}}`
@@ -15,6 +16,13 @@
 //! the new root of such a journal even when the VM disagrees with it, without
 //! deleting any volume (decision 4). Events `workspace.refreshed` and
 //! `workspace.refresh_recovered`.
+//!
+//! `{"operation": "workspace.resize", "parameters": {"vmid": 240,
+//! "home_size": "21G"}}` (or `root_size`) grows a disk to that size; the
+//! same size again finishes an interrupted growth. A plan whose
+//! `secrets_required` names `luks_passphrase` is applied with
+//! `{"digest": "...", "secrets": {"luks_passphrase": "..."}}` (decision 6).
+//! Event `workspace.resized`.
 
 use std::sync::Arc;
 
@@ -23,6 +31,8 @@ use hs_core::lifecycle::{
     CreateRequest, LifecycleTiming, create_workspace, destroy_workspace, plan_create, plan_destroy,
 };
 use hs_core::refresh::{plan_refresh, refresh_workspace};
+use hs_core::resize::{ResizeRequest, plan_resize, resize_workspace};
+use hs_model::jobs::Secret;
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -35,6 +45,7 @@ pub fn operations(timing: LifecycleTiming) -> Vec<Arc<dyn Operation>> {
         Arc::new(Create { timing }),
         Arc::new(Destroy { timing }),
         Arc::new(Refresh { timing }),
+        Arc::new(Resize { timing }),
     ]
 }
 
@@ -217,6 +228,59 @@ impl Operation for Refresh {
                 job,
             )
             .await?)
+        })
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ResizeParameters {
+    vmid: u32,
+    root_size: Option<String>,
+    home_size: Option<String>,
+}
+
+struct Resize {
+    timing: LifecycleTiming,
+}
+
+impl Operation for Resize {
+    fn name(&self) -> &'static str {
+        "workspace.resize"
+    }
+
+    fn plan<'a>(&'a self, ctx: &'a OpContext, parameters: &'a Value) -> BoxFuture<'a, Result<Planned, OpFailure>> {
+        Box::pin(async move {
+            let parameters: ResizeParameters = serde_json::from_value(parameters.clone())
+                .map_err(|_| OpFailure::invalid("workspace.resize takes vmid and one of root_size and home_size."))?;
+            let request = ResizeRequest {
+                vmid: parameters.vmid,
+                root_size: parameters.root_size,
+                home_size: parameters.home_size,
+            };
+            let summary = plan_resize(ctx.pve.as_ref(), config(ctx)?, &ctx.pools.workspaces, &request)
+                .await
+                .map_err(|error| match error {
+                    CoreError::NotFound(_) => OpFailure::not_found("No such VM."),
+                    other => OpFailure::Core(other),
+                })?;
+            Ok(Planned {
+                targets: vec![request.vmid],
+                summary,
+            })
+        })
+    }
+
+    fn execute<'a>(
+        &'a self,
+        ctx: &'a OpContext,
+        planned: &'a Planned,
+        job: &'a JobHandle,
+    ) -> BoxFuture<'a, Result<Value, OpFailure>> {
+        Box::pin(async move {
+            vmid_of(&planned.summary)?;
+            let passphrase = ctx.secrets.luks_passphrase.as_ref().map(Secret::expose);
+            Ok(resize_workspace(ctx.pve.as_ref(), &planned.summary, passphrase, &self.timing, job).await?)
         })
     }
 }

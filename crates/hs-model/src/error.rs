@@ -52,6 +52,10 @@ pub enum ErrorCode {
     PlanChanged,
     /// The plan has already been applied; make a new plan.
     PlanApplied,
+    /// Applying the plan needs a secret the request did not send (the
+    /// plan's `summary.secrets_required`), or sent one the plan does not
+    /// need.
+    SecretRequired,
     /// Another job is working on one of the plan's VMs.
     Busy,
     /// The VM is not in the instance's pool; the server changes only the
@@ -87,6 +91,7 @@ impl ErrorCode {
             | Self::OutsidePool
             | Self::OperationRefused
             | Self::PlanApplied
+            | Self::SecretRequired
             | Self::Internal => false,
         }
     }

@@ -317,6 +317,9 @@ pub struct GuestSpec {
     /// exists) when it is set.
     #[serde(default = "default_cloud_id")]
     pub cloud_id: Option<String>,
+    /// Block devices (`lsblk`) for `resize`; see [`BlockSpec`].
+    #[serde(default)]
+    pub blocks: Vec<BlockSpec>,
 }
 
 /// The programs of a guest that meets the Gold contract (no `sudo`), and
@@ -343,6 +346,10 @@ fn default_commands() -> Vec<String> {
         "netplan",
         "udevadm",
         "NetworkManager",
+        "findmnt",
+        "blockdev",
+        "resize2fs",
+        "growpart",
         "python3",
         "python3-yaml",
     ]
@@ -459,7 +466,87 @@ pub struct FilesystemSpec {
     pub slot: String,
     /// Filesystem label (`blkid`).
     pub label: Option<String>,
+    /// The Btrfs subvolume mounted (`findmnt` prints `SOURCE[/SUBVOL]`).
+    #[serde(default)]
+    pub subvolume: Option<String>,
     pub size: u64,
     pub used: u64,
     pub avail: u64,
+}
+
+/// A block device of the guest as `lsblk` lists it, for `resize`. A guest
+/// without any has one whole disk per filesystem on `sdX`/`vdX`
+/// ([`GuestSpec::block_devices`]).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BlockSpec {
+    /// The path `lsblk --paths` prints, e.g. `/dev/sda1` or
+    /// `/dev/mapper/vg-root`.
+    pub name: String,
+    /// `disk`, `part`, `crypt` or `lvm`.
+    #[serde(rename = "type")]
+    pub kind: String,
+    #[serde(rename = "maj-min")]
+    pub maj_min: String,
+    /// The device it sits on.
+    pub pkname: Option<String>,
+    /// A disk's VM slot: its size and `serial=` come from the VM config.
+    pub slot: Option<String>,
+    /// Size in bytes of anything but a disk.
+    #[serde(default)]
+    pub size: u64,
+    /// A partition's number and first sector.
+    pub partition: Option<u32>,
+    pub start: Option<u64>,
+    /// A device-mapper device's kernel name (`dm-0`) and `dm/name`.
+    pub dm: Option<String>,
+    pub dm_name: Option<String>,
+    /// Further paths of the same device, e.g. `/dev/vg/root`.
+    #[serde(default)]
+    pub aliases: Vec<String>,
+    /// `blkid` tags (`UUID`, `PARTUUID`, `TYPE`, `LABEL`); a filesystem's
+    /// `TYPE` and `LABEL` come from its filesystem entry.
+    #[serde(default)]
+    pub blkid: BTreeMap<String, String>,
+    /// A `crypt` mapping's key: its passphrase, or the content of its key
+    /// file (`cryptsetup --key-file`).
+    pub luks_key: Option<String>,
+    /// An `lvm` volume's volume group and `lvs` path, and the size of its
+    /// physical volume as LVM last saw it (`pvresize`).
+    pub vg: Option<String>,
+    pub lv_path: Option<String>,
+    pub pv_size: Option<u64>,
+}
+
+impl BlockSpec {
+    /// A whole disk on `slot`.
+    #[must_use]
+    pub fn disk(name: &str, maj_min: &str, slot: &str) -> Self {
+        Self {
+            name: name.to_owned(),
+            kind: "disk".to_owned(),
+            maj_min: maj_min.to_owned(),
+            pkname: None,
+            slot: Some(slot.to_owned()),
+            size: 0,
+            partition: None,
+            start: None,
+            dm: None,
+            dm_name: None,
+            aliases: Vec::new(),
+            blkid: BTreeMap::new(),
+            luks_key: None,
+            vg: None,
+            lv_path: None,
+            pv_size: None,
+        }
+    }
+
+    /// The kernel name under `/sys/class/block`.
+    #[must_use]
+    pub fn kernel_name(&self) -> &str {
+        self.dm
+            .as_deref()
+            .unwrap_or_else(|| self.name.rsplit('/').next().unwrap_or(&self.name))
+    }
 }

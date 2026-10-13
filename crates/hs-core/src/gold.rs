@@ -11,7 +11,7 @@ use hs_model::status::{GoldCheck, GoldReadiness};
 use hs_pve::PveError;
 
 use crate::error::CoreError;
-use crate::guest::{GUEST_EXEC_TIMEOUT, guest_out};
+use crate::guest::{GUEST_EXEC_TIMEOUT, guest_out, shell_quote};
 use crate::inventory::{
     ALIEN_WORKSPACE_TAG, GOLD_TAG, VmConfig, WORKSPACE_TAG, disk_option, disk_volume, has_tag, vm_config, vm_status,
 };
@@ -184,21 +184,6 @@ fn missing_loop(tools: &[&str]) -> String {
         r#"for c in {}; do command -v "$c" >/dev/null 2>&1 || printf "%s\n" "$c"; done"#,
         tools.join(" ")
     )
-}
-
-/// `shlex.quote` for the words HomeStack passes (user names are validated
-/// by the configuration, so they need no quotes unless they contain unsafe
-/// characters).
-fn shell_quote(word: &str) -> String {
-    let safe = !word.is_empty()
-        && word
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b"@%+=:,./-_".contains(&b));
-    if safe {
-        word.to_owned()
-    } else {
-        format!("'{}'", word.replace('\'', r#"'"'"'"#))
-    }
 }
 
 /// `guest_out_on_node(..., check=False)`, except that a refused call (no

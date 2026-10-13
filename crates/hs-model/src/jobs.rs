@@ -45,6 +45,58 @@ pub struct Plan {
 pub struct ApplyRequest {
     /// The `digest` of the plan the client reviewed.
     pub digest: String,
+    /// What the plan's `summary.secrets_required` names, and nothing else.
+    /// Secrets are never part of a plan, a job or a log.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secrets: Option<ApplySecrets>,
+}
+
+/// Secrets an operation needs to run (decision 6).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ApplySecrets {
+    /// The passphrase of the LUKS layer `workspace.resize` grows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(value_type = Option<String>)]
+    pub luks_passphrase: Option<Secret>,
+}
+
+impl ApplySecrets {
+    /// The names of the secrets given.
+    #[must_use]
+    pub fn names(&self) -> Vec<&'static str> {
+        self.luks_passphrase.iter().map(|_| "luks_passphrase").collect()
+    }
+}
+
+/// A secret string: printed as `<redacted>`, wiped from memory when
+/// dropped.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct Secret(String);
+
+impl Secret {
+    #[must_use]
+    pub const fn new(value: String) -> Self {
+        Self(value)
+    }
+
+    #[must_use]
+    pub fn expose(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for Secret {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("<redacted>")
+    }
+}
+
+impl Drop for Secret {
+    fn drop(&mut self) {
+        zeroize::Zeroize::zeroize(&mut self.0);
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]

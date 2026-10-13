@@ -1,0 +1,232 @@
+# The cluster of crates/hs-core/tests/resize.rs and
+# crates/hs-server/tests/resize.rs: the pools and tokens of
+# deploy/pve/homestack-pve.sh install, and running workspaces with the disk
+# layouts `resize` supports.
+#
+# 200  Ubuntu cloud image: root ext4 on sda1, the last partition (after the
+#      BIOS and EFI ones); home ext4 on the whole of sdb. Tagged
+#      homestack-lock, which does not stop a resize.
+# 201  Root on LUKS (key file in /etc/crypttab) + LVM + ext4.
+# 202  The same with a passphrase (crypttab key `none`).
+# 203  Root Btrfs subvolume /@ on sda1.
+# 204  A third data disk.
+# 205  Stopped.
+# 206  Root XFS.
+[pve]
+version = { release = "9.2", version = "9.2.21", repoid = "4f6e0ac86f9e8c7f" }
+
+[[pve.nodes]]
+name = "pve-example-1"
+pveversion = "pve-manager/9.2.21/4f6e0ac86f9e8c7f"
+kversion = "Linux 7.0.14-20-pve"
+uptime = 1
+storages = [
+  { storage = "local-lvm", total = 10000000000000, used = 0, avail = 10000000000000 },
+  { storage = "local", total = 100000000000, used = 0, avail = 100000000000 },
+]
+
+[[pve.storages]]
+storage = "local-lvm"
+type = "lvmthin"
+content = "images,rootdir"
+
+[[pve.storages]]
+storage = "local"
+type = "dir"
+content = "iso,vztmpl,backup,snippets"
+
+[[pve.vms]]
+vmid = 101
+node = "pve-example-1"
+status = "running"
+[pve.vms.config]
+name = "gold"
+tags = "homestack-gold"
+scsi0 = "local-lvm:vm-101-disk-0,iothread=1,size=16G"
+[pve.vms.guest]
+hostname = "gold"
+users = ["root", "developer"]
+
+# --- 200 ---------------------------------------------------------------------
+
+[[pve.vms]]
+vmid = 200
+node = "pve-example-1"
+status = "running"
+[pve.vms.config]
+name = "plain"
+tags = "homestack-ws;homestack-lock"
+boot = "order=scsi0;ide2;net0"
+ide2 = "local-lvm:vm-200-cloudinit,media=cdrom"
+scsi0 = "local-lvm:vm-200-disk-0,iothread=1,size=16G"
+scsi1 = "local-lvm:vm-200-hs-home-developer,serial=HS_HOME_200,size=20G"
+net0 = "virtio=BC:24:11:00:02:00,bridge=vmbr0"
+ipconfig0 = "ip=192.0.2.200/24,gw=192.0.2.1"
+[pve.vms.guest]
+hostname = "plain"
+users = ["root", "developer"]
+filesystems = [
+  { mountpoint = "/", type = "ext4", device = "sda1", slot = "scsi0", size = 17063460352, used = 4000000000, avail = 12000000000 },
+  { mountpoint = "/home/developer", type = "ext4", device = "sdb", slot = "scsi1", label = "HS_HOME_200", size = 21474836480, used = 1000000000, avail = 20000000000 },
+]
+blocks = [
+  { name = "/dev/sda", type = "disk", maj-min = "8:0", slot = "scsi0" },
+  { name = "/dev/sda1", type = "part", maj-min = "8:1", pkname = "/dev/sda", partition = 1, start = 227328, size = 17063460352 },
+  { name = "/dev/sda14", type = "part", maj-min = "8:14", pkname = "/dev/sda", partition = 14, start = 2048, size = 4194304 },
+  { name = "/dev/sda15", type = "part", maj-min = "8:15", pkname = "/dev/sda", partition = 15, start = 10240, size = 111149056 },
+  { name = "/dev/sdb", type = "disk", maj-min = "8:16", slot = "scsi1" },
+]
+
+# --- 201 ---------------------------------------------------------------------
+
+[[pve.vms]]
+vmid = 201
+node = "pve-example-1"
+status = "running"
+[pve.vms.config]
+name = "luks-key"
+tags = "homestack-ws"
+scsi0 = "local-lvm:vm-201-disk-0,size=16G"
+scsi1 = "local-lvm:vm-201-hs-home-developer,serial=HS_HOME_201,size=20G"
+[pve.vms.guest]
+hostname = "luks-key"
+users = ["root", "developer"]
+commands = ["findmnt", "lsblk", "blkid", "blockdev", "resize2fs", "growpart", "cryptsetup", "pvs", "vgs", "lvs", "pvresize", "lvextend"]
+filesystems = [
+  { mountpoint = "/", type = "ext4", device = "mapper/vg-root", slot = "scsi0", size = 17159946240, used = 4000000000, avail = 12000000000 },
+  { mountpoint = "/home/developer", type = "ext4", device = "sdb", slot = "scsi1", label = "HS_HOME_201", size = 21474836480, used = 1000000000, avail = 20000000000 },
+]
+blocks = [
+  { name = "/dev/sda", type = "disk", maj-min = "8:0", slot = "scsi0" },
+  { name = "/dev/sda1", type = "part", maj-min = "8:1", pkname = "/dev/sda", partition = 1, start = 2048, size = 17178803712, blkid = { UUID = "uuid-201" } },
+  { name = "/dev/mapper/cryptroot", type = "crypt", maj-min = "253:0", pkname = "/dev/sda1", dm = "dm-0", dm_name = "cryptroot", size = 17162026496, luks_key = "file-key-201" },
+  { name = "/dev/mapper/vg-root", type = "lvm", maj-min = "253:1", pkname = "/dev/mapper/cryptroot", dm = "dm-1", dm_name = "vg-root", aliases = ["/dev/vg/root"], lv_path = "/dev/vg/root", vg = "vg", size = 17159946240, pv_size = 17160977920 },
+  { name = "/dev/sdb", type = "disk", maj-min = "8:16", slot = "scsi1" },
+]
+[pve.vms.guest.files]
+"/etc/crypttab" = "cryptroot UUID=uuid-201 /etc/cryptsetup-keys.d/cryptroot.key luks,discard\n"
+"/etc/cryptsetup-keys.d/cryptroot.key" = "file-key-201"
+
+# --- 202 ---------------------------------------------------------------------
+
+[[pve.vms]]
+vmid = 202
+node = "pve-example-1"
+status = "running"
+[pve.vms.config]
+name = "luks-pass"
+tags = "homestack-ws"
+scsi0 = "local-lvm:vm-202-disk-0,size=16G"
+scsi1 = "local-lvm:vm-202-hs-home-developer,serial=HS_HOME_202,size=20G"
+[pve.vms.guest]
+hostname = "luks-pass"
+users = ["root", "developer"]
+commands = ["findmnt", "lsblk", "blkid", "blockdev", "resize2fs", "growpart", "cryptsetup", "pvs", "vgs", "lvs", "pvresize", "lvextend"]
+filesystems = [
+  { mountpoint = "/", type = "ext4", device = "mapper/vg-root", slot = "scsi0", size = 17159946240, used = 4000000000, avail = 12000000000 },
+  { mountpoint = "/home/developer", type = "ext4", device = "sdb", slot = "scsi1", label = "HS_HOME_202", size = 21474836480, used = 1000000000, avail = 20000000000 },
+]
+blocks = [
+  { name = "/dev/sda", type = "disk", maj-min = "8:0", slot = "scsi0" },
+  { name = "/dev/sda1", type = "part", maj-min = "8:1", pkname = "/dev/sda", partition = 1, start = 2048, size = 17178803712, blkid = { UUID = "uuid-202" } },
+  { name = "/dev/mapper/cryptroot", type = "crypt", maj-min = "253:0", pkname = "/dev/sda1", dm = "dm-0", dm_name = "cryptroot", size = 17162026496, luks_key = "correct horse battery staple" },
+  { name = "/dev/mapper/vg-root", type = "lvm", maj-min = "253:1", pkname = "/dev/mapper/cryptroot", dm = "dm-1", dm_name = "vg-root", aliases = ["/dev/vg/root"], lv_path = "/dev/vg/root", vg = "vg", size = 17159946240, pv_size = 17160977920 },
+  { name = "/dev/sdb", type = "disk", maj-min = "8:16", slot = "scsi1" },
+]
+[pve.vms.guest.files]
+"/etc/crypttab" = "cryptroot UUID=uuid-202 none luks,discard\n"
+
+# --- 203 ---------------------------------------------------------------------
+
+[[pve.vms]]
+vmid = 203
+node = "pve-example-1"
+status = "running"
+[pve.vms.config]
+name = "btrfs"
+tags = "homestack-ws"
+scsi0 = "local-lvm:vm-203-disk-0,size=16G"
+scsi1 = "local-lvm:vm-203-hs-home-developer,serial=HS_HOME_203,size=20G"
+[pve.vms.guest]
+hostname = "btrfs"
+users = ["root", "developer"]
+commands = ["findmnt", "lsblk", "blkid", "blockdev", "btrfs", "growpart"]
+filesystems = [
+  { mountpoint = "/", type = "btrfs", device = "sda1", slot = "scsi0", subvolume = "/@", size = 17178803712, used = 4000000000, avail = 12000000000 },
+  { mountpoint = "/home/developer", type = "ext4", device = "sdb", slot = "scsi1", label = "HS_HOME_203", size = 21474836480, used = 1000000000, avail = 20000000000 },
+]
+blocks = [
+  { name = "/dev/sda", type = "disk", maj-min = "8:0", slot = "scsi0" },
+  { name = "/dev/sda1", type = "part", maj-min = "8:1", pkname = "/dev/sda", partition = 1, start = 2048, size = 17178803712 },
+  { name = "/dev/sdb", type = "disk", maj-min = "8:16", slot = "scsi1" },
+]
+
+# --- 204 ---------------------------------------------------------------------
+
+[[pve.vms]]
+vmid = 204
+node = "pve-example-1"
+status = "running"
+[pve.vms.config]
+name = "three-disks"
+tags = "homestack-ws"
+scsi0 = "local-lvm:vm-204-disk-0,size=16G"
+scsi1 = "local-lvm:vm-204-hs-home-developer,serial=HS_HOME_204,size=20G"
+scsi2 = "local-lvm:vm-204-disk-1,size=8G"
+[pve.vms.guest]
+hostname = "three-disks"
+users = ["root", "developer"]
+
+# --- 205 ---------------------------------------------------------------------
+
+[[pve.vms]]
+vmid = 205
+node = "pve-example-1"
+status = "stopped"
+[pve.vms.config]
+name = "stopped"
+tags = "homestack-ws"
+scsi0 = "local-lvm:vm-205-disk-0,size=16G"
+scsi1 = "local-lvm:vm-205-hs-home-developer,serial=HS_HOME_205,size=20G"
+
+# --- 206 ---------------------------------------------------------------------
+
+[[pve.vms]]
+vmid = 206
+node = "pve-example-1"
+status = "running"
+[pve.vms.config]
+name = "xfs"
+tags = "homestack-ws"
+scsi0 = "local-lvm:vm-206-disk-0,size=16G"
+scsi1 = "local-lvm:vm-206-hs-home-developer,serial=HS_HOME_206,size=20G"
+[pve.vms.guest]
+hostname = "xfs"
+users = ["root", "developer"]
+filesystems = [
+  { mountpoint = "/", type = "xfs", device = "sda", slot = "scsi0", size = 17179869184, used = 4000000000, avail = 12000000000 },
+  { mountpoint = "/home/developer", type = "ext4", device = "sdb", slot = "scsi1", label = "HS_HOME_206", size = 21474836480, used = 1000000000, avail = 20000000000 },
+]
+
+[[pve.pools]]
+poolid = "homestack"
+vms = [200, 201, 202, 203, 204, 205, 206]
+
+[[pve.pools]]
+poolid = "homestack-gold"
+vms = [101]
+
+[[pve.tokens]]
+id = "root@pam!sim"
+secret = "00000000-0000-0000-0000-00000000000a"
+acl = { "/" = ["*"] }
+
+[[pve.tokens]]
+id = "homestack@pve!server"
+secret = "00000000-0000-0000-0000-00000000000b"
+[pve.tokens.acl]
+"/" = ["Sys.Audit", "VM.Audit", "Datastore.Audit", "VM.GuestAgent.Audit", "Pool.Audit", "SDN.Audit"]
+"/pool/homestack" = ["Pool.Audit", "VM.Allocate", "VM.Audit", "VM.Config.Cloudinit", "VM.Config.Disk", "VM.Config.Options", "VM.GuestAgent.Audit", "VM.GuestAgent.FileRead", "VM.GuestAgent.Unrestricted", "VM.Migrate", "VM.PowerMgmt"]
+"/pool/homestack-gold" = ["Pool.Audit", "VM.Audit", "VM.Clone", "VM.GuestAgent.Audit", "VM.GuestAgent.FileRead", "VM.GuestAgent.Unrestricted"]
+"/storage/local-lvm" = ["Datastore.AllocateSpace", "Datastore.Audit"]
+"/storage/local" = ["Datastore.AllocateSpace", "Datastore.Audit"]

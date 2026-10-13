@@ -28,6 +28,7 @@ fn context(state: &AppState) -> OpContext {
         pve: Arc::clone(&state.pve),
         config: state.config.current(),
         pools: Arc::clone(&state.pools),
+        secrets: hs_model::jobs::ApplySecrets::default(),
     }
 }
 
@@ -155,7 +156,7 @@ pub async fn get_plan(State(state): State<AppState>, Path(id): Path<String>) -> 
         (status = 404, body = hs_model::ErrorBody, description = "No such plan, or it expired"),
         (status = 409, body = hs_model::ErrorBody, description = "`plan_changed`, `plan_applied`, `busy`, `config_version_mismatch`, `outside_pool` or `operation_refused`"),
         (status = 428, body = hs_model::ErrorBody, description = "`HomeStack-Config-Version` is missing"),
-        (status = 422, body = hs_model::ErrorBody, description = "Invalid request body"),
+        (status = 422, body = hs_model::ErrorBody, description = "Invalid request body; `secret_required`: the request lacks a secret the plan's `summary.secrets_required` names, or sends one it does not"),
         (status = 502, body = hs_model::ErrorBody, description = "Proxmox rejected the request or answered unusably"),
         (status = 503, body = hs_model::ErrorBody, description = "No Proxmox endpoint is reachable"),
     )
@@ -171,9 +172,11 @@ pub async fn apply_plan(
     if state.config.current().is_some() {
         crate::precondition::expected_config(&headers, &state)?;
     }
+    let mut ctx = context(&state);
+    ctx.secrets = request.secrets.unwrap_or_default();
     let job = state
         .ops
-        .apply(context(&state), &id, &request.digest)
+        .apply(ctx, &id, &request.digest)
         .await
         .map_err(|refusal| match refusal {
             ApplyRefusal::Unknown => ApiError::new(ErrorCode::NotFound, "No such plan; plans expire."),
@@ -183,6 +186,7 @@ pub async fn apply_plan(
             ),
             ApplyRefusal::Applied => ApiError::new(ErrorCode::PlanApplied, "The plan was already applied."),
             ApplyRefusal::Busy => ApiError::new(ErrorCode::Busy, "Another job is working on a VM of this plan."),
+            ApplyRefusal::Secrets(message) => ApiError::new(ErrorCode::SecretRequired, message),
             ApplyRefusal::Failure(failure) => plan_error(failure),
         })?;
     let location = format!("/v1/jobs/{}", job.id);

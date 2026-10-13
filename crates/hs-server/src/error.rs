@@ -64,7 +64,9 @@ const fn status(code: ErrorCode) -> StatusCode {
         ErrorCode::Unauthorized => StatusCode::UNAUTHORIZED,
         ErrorCode::NotFound => StatusCode::NOT_FOUND,
         ErrorCode::MethodNotAllowed => StatusCode::METHOD_NOT_ALLOWED,
-        ErrorCode::ValidationFailed | ErrorCode::ConfigInvalid => StatusCode::UNPROCESSABLE_ENTITY,
+        ErrorCode::ValidationFailed | ErrorCode::ConfigInvalid | ErrorCode::SecretRequired => {
+            StatusCode::UNPROCESSABLE_ENTITY
+        }
         ErrorCode::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
         ErrorCode::PreconditionRequired => StatusCode::PRECONDITION_REQUIRED,
         ErrorCode::PreconditionFailed => StatusCode::PRECONDITION_FAILED,

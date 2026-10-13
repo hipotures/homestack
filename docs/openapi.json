@@ -1025,7 +1025,7 @@
             }
           },
           "422": {
-            "description": "Invalid request body",
+            "description": "Invalid request body; `secret_required`: the request lacks a secret the plan's `summary.secrets_required` names, or sends one it does not",
             "content": {
               "application/json": {
                 "schema": {
@@ -1445,6 +1445,31 @@
           "digest": {
             "type": "string",
             "description": "The `digest` of the plan the client reviewed."
+          },
+          "secrets": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ApplySecrets",
+                "description": "What the plan's `summary.secrets_required` names, and nothing else.\nSecrets are never part of a plan, a job or a log."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "ApplySecrets": {
+        "type": "object",
+        "description": "Secrets an operation needs to run (decision 6).",
+        "properties": {
+          "luks_passphrase": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The passphrase of the LUKS layer `workspace.resize` grows."
           }
         },
         "additionalProperties": false
@@ -1632,6 +1657,7 @@
           "pve_error",
           "plan_changed",
           "plan_applied",
+          "secret_required",
           "busy",
           "outside_pool",
           "operation_refused",

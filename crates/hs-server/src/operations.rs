@@ -34,6 +34,8 @@ pub struct OpContext {
     pub config: Option<Arc<Stored>>,
     /// The instance's pools.
     pub pools: Arc<crate::Pools>,
+    /// The secrets of the apply request (decision 6); empty while planning.
+    pub secrets: hs_model::jobs::ApplySecrets,
 }
 
 /// What an operation would do.
@@ -114,8 +116,8 @@ pub trait Operation: Send + Sync {
 #[derive(Clone)]
 pub struct AppOptions {
     /// Operations clients may plan: `workspace.create`,
-    /// `workspace.destroy` (phase 5) and `workspace.refresh` (phase 6)
-    /// unless replaced.
+    /// `workspace.destroy` (phase 5), `workspace.refresh` (phase 6) and
+    /// `workspace.resize` (phase 7), unless replaced.
     pub operations: Vec<Arc<dyn Operation>>,
     /// Longest silence on a job stream.
     pub heartbeat: Duration,
@@ -180,6 +182,8 @@ pub enum ApplyRefusal {
     Changed,
     Applied,
     Busy,
+    /// The secrets sent do not match the plan's `secrets_required`.
+    Secrets(&'static str),
     Failure(OpFailure),
 }
 
@@ -270,6 +274,24 @@ impl OpsState {
             }
             if stored.applied {
                 return Err(ApplyRefusal::Applied);
+            }
+            let required: BTreeSet<&str> = stored
+                .plan
+                .summary
+                .get("secrets_required")
+                .and_then(Value::as_array)
+                .map(|names| names.iter().filter_map(Value::as_str).collect())
+                .unwrap_or_default();
+            let given: BTreeSet<&str> = ctx.secrets.names().into_iter().collect();
+            if !required.is_subset(&given) {
+                return Err(ApplyRefusal::Secrets(
+                    "The plan needs a secret the request did not send; see the plan's secrets_required.",
+                ));
+            }
+            if !given.is_subset(&required) {
+                return Err(ApplyRefusal::Secrets(
+                    "The request sends a secret the plan does not need.",
+                ));
             }
             let found = (
                 stored.plan.clone(),
