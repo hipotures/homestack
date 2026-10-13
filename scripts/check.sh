@@ -10,8 +10,8 @@
 # Python CLI's own config and transport for the comparisons
 # (scripts/live-compare-*.sh), and HOMESTACK_LIVE_TEST_TOKEN_FILE for the
 # changes in the test pool (crates/hs-server/tests/live_jobs.rs,
-# live_cloudinit.rs, live_lifecycle.rs, live_refresh.rs), the only live
-# checks that change the cluster; the boot also needs the vendor snippets
+# live_cloudinit.rs, live_lifecycle.rs, live_refresh.rs, live_resize.rs),
+# the only live checks that change the cluster; the boot also needs the vendor snippets
 # on Gold's node (docs/migration/deploy.md). With HOMESTACK_LIVE_OUTSIDE_VMID
 # (a VM in 240-249 tagged homestack-ws and in no pool) it also checks that
 # changes outside the pool are refused (live_pool_guard.rs).
@@ -108,6 +108,8 @@ if ((live)); then
     cargo test -p hs-server --locked --test live_lifecycle -- --ignored --nocapture
     step "live cluster (L4): refresh, a killed server and its recovery in the test pool"
     cargo test -p hs-server --locked --test live_refresh -- --ignored --nocapture
+    step "live cluster (L4): resize of a home and a root in the test pool"
+    cargo test -p hs-server --locked --test live_resize -- --ignored --nocapture
 fi
 
 step "all checks passed$( ((live)) && echo ' (including live)')"

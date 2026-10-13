@@ -800,9 +800,10 @@ fn reach_vm<'a>(
 
 /// `PUT /nodes/{node}/qemu/{vmid}/resize` with `disk`, `size` (absolute or
 /// `+N`) and `digest`: a `resize` task. Needs `VM.Config.Disk` on the VM
-/// and `Datastore.AllocateSpace` on the disk's storage. Not observed live:
-/// the message of a stale `digest` (that of `update_vm_api` is used) and of
-/// a shrink.
+/// and `Datastore.AllocateSpace` on the disk's storage. A stale `digest`
+/// is accepted and fails the task with "checksum mismatch (file change by
+/// other user?)" (observed on PVE 9.2, phase 7 live gate); a missing disk
+/// and a shrink fail the task the same way (not observed live).
 async fn vm_resize(
     State(state): State<Shared>,
     request_token: Option<axum::Extension<TokenSpec>>,
@@ -840,10 +841,18 @@ async fn vm_resize(
     if let Some(digest) = form_value(&form, "digest")
         && digest != config_digest(&vm.config)
     {
-        return pve_error(500, "checksum mismatch (file change by other user?)\n");
+        return failed_task(
+            &mut state,
+            &node_name,
+            "resize",
+            vmid_number,
+            &user,
+            "checksum mismatch (file change by other user?)",
+        );
     }
     let Some(value) = vm.config.get(disk).and_then(toml::Value::as_str).map(str::to_owned) else {
-        return pve_error(500, &format!("disk '{disk}' does not exist\n"));
+        let message = format!("disk '{disk}' does not exist");
+        return failed_task(&mut state, &node_name, "resize", vmid_number, &user, &message);
     };
     let volume = value.split(',').next().unwrap_or_default().to_owned();
     let storage = volume.split(':').next().unwrap_or_default().to_owned();
@@ -864,7 +873,14 @@ async fn vm_resize(
         requested
     };
     if new < current {
-        return pve_error(500, "shrinking disks is not supported\n");
+        return failed_task(
+            &mut state,
+            &node_name,
+            "resize",
+            vmid_number,
+            &user,
+            "shrinking disks is not supported",
+        );
     }
     let options: Vec<&str> = value
         .split(',')
@@ -1325,6 +1341,20 @@ fn task(state: &mut ClusterState, node: &NodeName, kind: &str, id: u32, user: &s
         log: vec!["TASK OK".to_owned()],
         polls_until_done: 2,
         exitstatus: "OK".to_owned(),
+    });
+    data(Value::String(upid))
+}
+
+/// A task that fails after two status polls with `message`.
+fn failed_task(state: &mut ClusterState, node: &NodeName, kind: &str, id: u32, user: &str, message: &str) -> Response {
+    let upid = state.add_task(TaskSpec {
+        node: node.clone(),
+        kind: kind.to_owned(),
+        id: id.to_string(),
+        user: user.to_owned(),
+        log: vec![format!("TASK ERROR: {message}")],
+        polls_until_done: 2,
+        exitstatus: message.to_owned(),
     });
     data(Value::String(upid))
 }

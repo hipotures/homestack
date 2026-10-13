@@ -577,3 +577,26 @@ async fn missing_or_empty_passphrase_refuses_before_any_change() -> TestResult {
     }
     Ok(())
 }
+
+/// Observed live (phase 7): `PUT /resize` with a stale `digest` starts a
+/// task, which fails with "checksum mismatch" and leaves the disk alone.
+#[tokio::test]
+async fn a_stale_digest_fails_the_resize_task() -> TestResult {
+    let (_sim, pve) = cluster().await?;
+    let upid = pve
+        .put_value(
+            &["nodes", NODE, "qemu", "200", "resize"],
+            &[("disk", "scsi0"), ("size", "+1G"), ("digest", &"0".repeat(40))],
+        )
+        .await?;
+    let upid = upid.as_str().ok_or("no task id")?;
+    let wait = hs_core::tasks::TaskWait {
+        poll: Duration::from_millis(5),
+        timeout: Duration::from_secs(5),
+    };
+    let result = hs_core::tasks::wait_task(&pve, upid, &wait, &NoObserver).await?;
+    assert!(!result.ok());
+    assert_eq!(result.exitstatus, "checksum mismatch (file change by other user?)");
+    assert!(disk_config(&pve, 200, "scsi0").await?.ends_with("size=16G"));
+    Ok(())
+}
