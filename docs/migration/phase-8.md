@@ -203,6 +203,7 @@ on the source is tested on the simulator), and pve1 with `worker-roots`.
   fails the task after the shutdown and the VM is started again on the
   source. Python does the same. `GET /qemu/{vmid}/migrate?target=...`
   (mapping B6) lists the local disks and could refuse earlier; not added,
-  since it changes Python's behaviour.
+  since it changes Python's behaviour. The owner added phase 17 to
+  PLAN.md (2026-10-13): this check, after the whole implementation.
 - Phase 9 (`addkey`) is next; it needs the third way of adding keys to the
   home noted in phase 4 (open question 4).

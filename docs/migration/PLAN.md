@@ -386,6 +386,15 @@ Zlecone przez właściciela 2026-10-13. W fazie 7 LUKS, LVM i Btrfs sprawdzono t
 
 **Bramka:** `--live`: każdy wygenerowany układ przechodzi powyższe kroki, a VM testowe są potem usunięte.
 
+### Faza 17: `migrate` sprawdza miejsce przed wyłączeniem VM (po całej implementacji)
+
+Zlecone przez właściciela 2026-10-13, z otwartego pytania fazy 8 (`phase-8.md`, sekcja 6).
+
+- **Problem:** plan `migrate` nie sprawdza wolnego miejsca na docelowym storage. Python też tego nie robi. Przy braku miejsca Proxmox przerywa zadanie `qmigrate` dopiero po wyłączeniu VM, a serwer uruchamia ją z powrotem na nodzie źródłowym.
+- **Do zrobienia:** sprawdzić miejsce już w planie, przed wyłączeniem VM. Na przykład przez `GET /nodes/{node}/qemu/{vmid}/migrate?target=…` (lista lokalnych dysków i ograniczeń, mapowanie B6) i wolne miejsce storage docelowego. Brak miejsca kończy się odmową bez żadnej zmiany. To świadoma różnica wobec Pythona, zapisana w raporcie fazy.
+
+**Bramka:** symulator: odmowa w planie, bez wyłączenia VM; `--live`: migracja VM testowej na storage z wystarczającym miejscem nadal przechodzi.
+
 ---
 
 ## 5. Pliki prowadzone przez agenta
