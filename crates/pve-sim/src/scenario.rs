@@ -267,6 +267,10 @@ pub struct VmSpec {
     /// Guests of the roots it booted from before, by root volume.
     #[serde(skip)]
     pub guests_by_root: BTreeMap<String, GuestSpec>,
+    /// Disks whose deletion Proxmox has pending (`true`: with `force`), as a
+    /// call cut off between writing and applying it leaves them.
+    #[serde(skip)]
+    pub pending_delete: BTreeMap<String, bool>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]

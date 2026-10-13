@@ -191,6 +191,47 @@ fn has_storage(volume: &str) -> bool {
     volume.contains(':')
 }
 
+/// The key a disk whose unlink Proxmox has pending gets in
+/// [`effective_config`].
+const PENDING_UNUSED: &str = "unused-pending-";
+
+fn is_disk_slot(key: &str) -> bool {
+    ["scsi", "virtio", "sata", "ide", "efidisk", "tpmstate"]
+        .iter()
+        .any(|prefix| {
+            key.strip_prefix(prefix)
+                .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+        })
+}
+
+/// A VM's config as it is once Proxmox applies its pending changes.
+/// `PUT /unlink` and config changes write a pending change first and apply
+/// it after (`update_vm_api`); a call cut off in between leaves it pending.
+/// `GET config` shows pending values but drops a disk whose deletion is
+/// pending; here such a disk appears as `unused-pending-<slot>` (where an
+/// unlink without `force` puts it), and one pending for physical deletion
+/// is left out. Any config change of a stopped VM applies them.
+async fn effective_config(pve: &impl Pve, node: &str, vmid: u32) -> Result<VmConfig, CoreError> {
+    let mut vm_cfg = vm_config(pve, node, vmid).await?;
+    let pending = pve.get(&format!("/nodes/{node}/qemu/{vmid}/pending"), &[]).await?;
+    for entry in pending.as_array().into_iter().flatten() {
+        let delete = entry.get("delete").and_then(Value::as_u64).unwrap_or(0);
+        let Some(key) = entry.get("key").and_then(Value::as_str).filter(|_| delete != 0) else {
+            continue;
+        };
+        vm_cfg.remove(key);
+        let value = entry.get("value").and_then(Value::as_str).unwrap_or_default();
+        if delete == 1 && is_disk_slot(key) && has_storage(disk_volume(value)) {
+            vm_cfg.insert(format!("{PENDING_UNUSED}{key}"), value.to_owned());
+        }
+    }
+    Ok(vm_cfg)
+}
+
+fn has_pending(vm_cfg: &VmConfig) -> bool {
+    vm_cfg.keys().any(|key| key.starts_with(PENDING_UNUSED))
+}
+
 /// `_validate_refresh_journal` for the server's journal.
 fn validate_journal(cfg: &Config, journal: &Journal) -> Result<(), CoreError> {
     let invalid = |what: &str| Err(CoreError::Unusable(format!("Refresh journal has an invalid {what}")));
@@ -359,7 +400,7 @@ fn place_of(journal: &Journal, vm_cfg: &VmConfig, volume: &str) -> Place {
         [] => Place::Absent,
         [slot] if **slot == journal.root_disk => Place::Root,
         [slot] if **slot == journal.staging_slot => Place::Staging,
-        [slot] if is_unused_key(slot) => Place::Unused((*slot).clone()),
+        [slot] if is_unused_key(slot) || slot.starts_with(PENDING_UNUSED) => Place::Unused((*slot).clone()),
         [slot] => Place::Other((*slot).clone()),
         many => Place::Other(many.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")),
     }
@@ -436,9 +477,9 @@ pub fn journal_mismatches(journal: &Journal, node: &str, vm_cfg: &VmConfig) -> V
     } else {
         match journal.phase {
             Phase::Prepared => (old == Place::Root, matches!(new, Place::Absent | Place::Staging)),
-            Phase::Imported => (old == Place::Root, new == Place::Staging || unused(&new)),
+            Phase::Imported => (old == Place::Root, new == Place::Staging),
             Phase::Switching => match (&old, &new) {
-                (Place::Root, new) => (true, unused(new)),
+                (Place::Root, new) => (true, *new == Place::Staging || unused(new)),
                 (old, Place::Root) => (unused(old), true),
                 (old, new) => (unused(old) && root.is_empty(), unused(new)),
             },
@@ -529,7 +570,7 @@ struct Vm<'a, P: Pve, O: Observer> {
 
 impl<P: Pve, O: Observer> Vm<'_, P, O> {
     async fn config(&self) -> Result<VmConfig, CoreError> {
-        vm_config(self.pve, self.node, self.vmid).await
+        effective_config(self.pve, self.node, self.vmid).await
     }
 
     async fn write(&self, vm_cfg: &VmConfig, journal: Option<&Journal>) -> Result<VmConfig, CoreError> {
@@ -647,7 +688,7 @@ pub async fn plan_refresh(
         )));
     }
     let node = resource.node.clone();
-    let vm_cfg = vm_config(pve, &node, vmid).await?;
+    let vm_cfg = effective_config(pve, &node, vmid).await?;
     require_refresh_unlocked(vmid, &vm_cfg)?;
     if let Some(journal) = read_journal(cfg, vmid, &vm_cfg)? {
         if journal.node != node {
@@ -935,13 +976,8 @@ async fn replace<P: Pve, O: Observer>(
                 "Imported root did not produce a distinct volume".to_owned(),
             ));
         }
-        journal.new_root_volume = new.clone();
+        journal.new_root_volume = new;
         journal.phase = Phase::Imported;
-        vm.write(&vm_cfg, Some(&journal)).await?;
-        let vm_cfg = vm.unlink(&staging, &new, false).await?;
-        let key = unused_key_of(&vm_cfg, &new)
-            .ok_or_else(|| CoreError::Failed("Proxmox did not keep the imported root as an unused disk".to_owned()))?;
-        journal.new_unused_key = key;
         vm.write(&vm_cfg, Some(&journal)).await
     }
     .await;
@@ -972,6 +1008,13 @@ async fn replace<P: Pve, O: Observer>(
             ));
         }
         journal.phase = Phase::Switching;
+        vm.write(&vm_cfg, Some(&journal)).await?;
+        // The copy leaves its slot only now, with the VM stopped: a running
+        // VM would unplug it, which Proxmox records as a pending change
+        // first and may leave half done.
+        let vm_cfg = vm.unlink(&journal.staging_slot, &new_volume, false).await?;
+        journal.new_unused_key = unused_key_of(&vm_cfg, &new_volume)
+            .ok_or_else(|| CoreError::Failed("Proxmox did not keep the imported root as an unused disk".to_owned()))?;
         vm.write(&vm_cfg, Some(&journal)).await?;
         let vm_cfg = vm.unlink(&cfg.root_disk, &journal.old_root_volume, false).await?;
         let old_unused = unused_key_of(&vm_cfg, &journal.old_root_volume).ok_or_else(|| {
@@ -1129,6 +1172,17 @@ async fn recover<P: Pve, O: Observer>(
     if vm.status().await == "running" {
         vm.shutdown().await?;
     }
+    // Changes Proxmox left pending: rewriting the journal applies them now
+    // that the VM is stopped (they agreed with the journal, as checked).
+    let vm_cfg = vm.config().await?;
+    if has_pending(&vm_cfg) {
+        let vm_cfg = vm.write(&vm_cfg, Some(&journal)).await?;
+        if has_pending(&vm_cfg) {
+            return Err(CoreError::Failed(format!(
+                "Proxmox did not apply the pending changes of VM {vmid}"
+            )));
+        }
+    }
 
     if journal.phase == Phase::Verified && !journal.rolling_back {
         let vm_cfg = vm.config().await?;
@@ -1271,6 +1325,10 @@ async fn force_new_root<P: Pve, O: Observer>(
         vm.shutdown().await?;
     }
     let mut vm_cfg = vm.config().await?;
+    if has_pending(&vm_cfg) {
+        // Applies what Proxmox left pending; a pending unlink keeps the volume.
+        vm_cfg = vm.write(&vm_cfg, Some(journal)).await?;
+    }
     let root = root_of(cfg, &vm_cfg);
     if root != new {
         if !root.is_empty() {

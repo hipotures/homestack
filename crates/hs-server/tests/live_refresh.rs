@@ -111,13 +111,44 @@ impl Vm {
         Ok(())
     }
 
-    async fn read_file(&self, file: &str) -> Option<String> {
+    /// A file in the guest, once its agent answers (at most 5 minutes after
+    /// a start); `None` when the agent answers and the file is missing.
+    async fn read_file(&self, file: &str) -> Result<Option<String>, Error> {
         let id = self.vmid.to_string();
-        self.pve
+        let mut answered = false;
+        for _ in 0..300 {
+            if self
+                .pve
+                .post_value(&self.path(&id, &["agent", "ping"]), &[])
+                .await
+                .is_ok()
+            {
+                answered = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+        if !answered {
+            return Err(format!("the guest agent of VM {} does not answer", self.vmid).into());
+        }
+        Ok(self
+            .pve
             .get_value(&self.path(&id, &["agent", "file-read"]), &[("file", file)])
             .await
             .ok()
-            .and_then(|read| read["content"].as_str().map(str::to_owned))
+            .and_then(|read| read["content"].as_str().map(str::to_owned)))
+    }
+
+    /// [`Self::read_file`] until the file is there (the home is mounted
+    /// during boot, possibly after the agent answers), at most 2 minutes.
+    async fn wait_file(&self, file: &str) -> Result<Option<String>, Error> {
+        for _ in 0..60 {
+            if let Some(content) = self.read_file(file).await? {
+                return Ok(Some(content));
+            }
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        }
+        Ok(None)
     }
 
     /// The journal phase in the VM's description, if any.
@@ -234,10 +265,10 @@ async fn gate(vm: &Vm, cfg: &Config, launch: &Launch, dir: &std::path::Path) -> 
     if second_root == first_root {
         return Err(format!("the root is still {first_root}").into());
     }
-    if vm.read_file(HOME_MARKER).await.as_deref() != Some("kept across refresh\n") {
+    if vm.wait_file(HOME_MARKER).await?.as_deref() != Some("kept across refresh\n") {
         return Err("the file in the home is gone".into());
     }
-    if vm.read_file(ROOT_MARKER).await.is_some() {
+    if vm.read_file(ROOT_MARKER).await?.is_some() {
         return Err("the file in the old root is still there".into());
     }
     eprintln!("live refresh: refreshed, root {second_root}, home file kept, root file gone");
@@ -289,7 +320,11 @@ async fn gate(vm: &Vm, cfg: &Config, launch: &Launch, dir: &std::path::Path) -> 
         return Err(format!("after {recovery} the root is {root}, expected {expected}").into());
     }
     let config = vm.config().await?;
-    if config.get("description").is_some() {
+    if config["description"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("homestack-journal")
+    {
         return Err(format!("the journal is still there: {config}").into());
     }
     let unused: Vec<&String> = config
@@ -302,7 +337,7 @@ async fn gate(vm: &Vm, cfg: &Config, launch: &Launch, dir: &std::path::Path) -> 
     if !unused.is_empty() {
         return Err(format!("volumes left as unused disks: {unused:?}").into());
     }
-    if vm.read_file(HOME_MARKER).await.as_deref() != Some("kept across refresh\n") {
+    if vm.wait_file(HOME_MARKER).await?.as_deref() != Some("kept across refresh\n") {
         return Err("the file in the home is gone after the recovery".into());
     }
     eprintln!("live refresh: recovered ({recovery}), root {root}, home file kept");

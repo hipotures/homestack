@@ -111,6 +111,21 @@ impl PveSim {
         self.lock().inject_fault(fault).map_err(SimError::Scenario)
     }
 
+    /// Leave the deletion of `key` of VM `vmid` pending, as a config change
+    /// cut off between writing and applying it does (`force`: physical).
+    pub fn set_pending_delete(&self, vmid: u32, key: &str, force: bool) -> Result<(), SimError> {
+        let mut state = self.lock();
+        let vm = state
+            .vms
+            .get_mut(&vmid)
+            .ok_or_else(|| SimError::Scenario(format!("VM {vmid} does not exist")))?;
+        if !vm.config.contains_key(key) {
+            return Err(SimError::Scenario(format!("VM {vmid} has no {key}")));
+        }
+        vm.pending_delete.insert(key.to_owned(), force);
+        Ok(())
+    }
+
     /// Calls a `hang` fault has left unanswered so far.
     #[must_use]
     pub fn hangs(&self) -> u32 {

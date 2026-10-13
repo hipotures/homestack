@@ -19,7 +19,10 @@ results". Both work. The server uses **variant A**: `import-from` into a
 free slot while the workspace runs, then `PUT /unlink` without `force`,
 which leaves the copy as `unusedN`. That keeps Python's order (the copy is
 made while the workspace runs, then the same journal phases) and the same
-short downtime; variant B would change both (PLAN.md 1.2).
+short downtime; variant B would change both (PLAN.md 1.2). The copy is
+unlinked from its slot only after the shutdown (section 5): unlinking from
+a running VM unplugs the disk, and the first live gate showed that a
+server killed meanwhile leaves the unlink pending in Proxmox.
 
 The probe also showed that `PUT /unlink` has no `digest`, so Python's
 `qm disk unlink ... --digest` (`lifecycle._unlink_disk`, `_digest_args`)
@@ -137,7 +140,7 @@ is `unusedN`.
 | Python | Server |
 |---|---|
 | journal file on the node | a block `<!-- homestack-journal: <base64 JSON> -->` in the VM's `description`, written with `PUT config` and the `digest` of the config the step was checked against (decision 4) |
-| `pvesm path` + `qm disk import ... --target-disk unusedN` | `POST config` `scsiK=<storage>:0,import-from=<Gold's root>` into a free slot (highest free `scsiK`, recorded as `staging_slot`), then `PUT /unlink idlist=scsiK` → `unusedN` |
+| `pvesm path` + `qm disk import ... --target-disk unusedN` | `POST config` `scsiK=<storage>:0,import-from=<Gold's root>` into a free slot while the VM runs (highest free `scsiK`, recorded as `staging_slot`); after the shutdown, `PUT /unlink idlist=scsiK` → `unusedN` |
 | `qm disk unlink --idlist X [--force 1] --digest D` | `PUT /unlink idlist=X [force=1]`, no `digest` (owner's decision); the config is read and checked right before |
 | `qm set --<root> ...`, `qm set --boot ...` | `POST config` (task) with `digest` |
 | snippets `preserve_home=True`, `qm cloudinit update` | `cloud_init_settings(.., HomeFormat::Keep, ..)`: `ipconfig0`, `nameserver`, `ciuser`, `ciupgrade`, `cicustom vendor=...keep.yaml`; the keys stay as they are; Proxmox writes the Cloud-Init drive at start |
@@ -170,8 +173,8 @@ is `unusedN`.
   | Phase | Root slot | Staged volume | Old root |
   |---|---|---|---|
   | `prepared` | old | not yet, or in the staging slot (journal not updated) | root |
-  | `imported` | old | staging slot or `unusedN` | root |
-  | `switching` | old, empty, or new | `unusedN`, or root | root, or `unusedN` |
+  | `imported` | old | staging slot | root |
+  | `switching` | old, empty, or new | staging slot, `unusedN`, or root | root, or `unusedN` |
   | `switched`, `verifying` | new | root | `unusedN` |
   | `verified` | new | root | `unusedN`, or gone |
 
@@ -205,3 +208,103 @@ is `unusedN`.
   `root@pam`).
 - The result names the event `workspace.refreshed` and
   `host_key_changed: true`; the local `known_hosts` step is the client's.
+
+## 5. Pending changes in Proxmox
+
+`update_vm_api` (behind `PUT /unlink` and config changes) writes a deletion
+as a pending change first and applies it after (hot-unplug for a running
+VM, `vmconfig_apply_pending` for a stopped one). The first run of the live
+gate killed the server while the copy was being unlinked from the running
+VM: `GET config` (pending values applied) no longer showed the copy, and
+nothing had put it in `unusedN`, so the recovery reported "the new root ...
+is not in the VM's config" and changed nothing (rule 4). Two changes
+followed:
+
+- The copy stays in its staging slot until the VM is stopped and is
+  unlinked as the first step of the switch (journal `switching`), so a
+  refresh never unplugs a disk from a running VM.
+- Every check reads `GET /pending` as well: a disk whose deletion is
+  pending counts as where Proxmox will put it (`unusedN`, or gone with
+  `force`). After the shutdown, the recovery applies what is pending by
+  writing the journal again (any config change of a stopped VM applies all
+  pending changes), then goes on.
+
+## 6. Tests
+
+- **Ported (11):** `test_refresh_lock.py` (all five),
+  `RefreshPowerStateTests` (all four of `test_lifecycle.py`), and the two
+  refresh tests of `LifecycleAlienGuardsTests`, in
+  `crates/hs-core/tests/refresh.rs`. Python patches its functions; the
+  ports run on the simulator and check the calls it saw (e.g. nothing but
+  reads before a refusal).
+- **Excluded (1):** `test_replace_disk_volume_preserves_options`:
+  `replace_disk_volume` serves only the root rename (decision 2 = A).
+- **New, on the simulator:** a running workspace keeps its home files and
+  gets Gold's root (twice in a row); outside the pool and `force` without a
+  journal refused; a failure injected at each of the 17 changing calls of a
+  refresh ends where Python's automatic recovery ends; the server killed
+  at each of them, with and without Proxmox having carried the call out (a
+  lost acknowledgement), is recovered by the next refresh to Python's end
+  state (34 cases); a VM that disagrees with its journal is reported in
+  full and left alone, and `force` attaches the new root without deleting a
+  volume; the journal keeps the owner's notes in the description and goes
+  through Python's phases; a pending unlink left in Proxmox is finished by
+  the recovery; through the API, the job's steps and the refusals; the
+  server as its own process killed with `SIGKILL` mid-refresh and the
+  recovery by a new process (`crates/hs-server/tests/refresh_process.rs`).
+- **The simulator** gained `import-from`, `PUT /unlink` (refusing
+  `digest`), `GET /pending` and pending deletions, PVE's removal of an
+  `unusedN` whose volume is attached again, the boot order losing an
+  unlinked disk, the 8192-character limit of `description`, agent
+  `file-write`, a guest rebuilt from Gold's when it boots a copy of Gold's
+  disk (home files kept), and faults that are carried out before failing
+  (`applied`), never answer (`hang`), or are added while it runs.
+- Python cannot run `refresh` on the simulator (it writes the journal and
+  imports through the node's shell); the comparison is with Python's rules
+  in section 1, as in phase 5.
+- Tests and code were written together in this phase, not tests first.
+- `scripts/check.sh`: green; manifest 74 ported, 451 todo, 68 excluded.
+
+## 7. Gate
+
+`scripts/check.sh --live` on 2026-10-13, green, with the new step
+`crates/hs-server/tests/live_refresh.rs` (test token, VM 240 `hst-refresh`
+in `homestack-test`, test Gold 248, the server as its own process):
+
+- `create`; a file written into `/home/user` and one into `/root`
+  through the agent;
+- `refresh`: the root changed (`vm-240-disk-0` → `vm-240-disk-1`), the file
+  in the home is there, the one in the old root is gone;
+- a second `refresh`, its server killed with `SIGKILL` at journal phase
+  `imported`; a new server process planned the recovery (phase
+  `imported`, no mismatches) and rolled back: root `vm-240-disk-1`, no
+  `unusedN`, no journal, the file in the home there;
+- `destroy`: VM 240 gone.
+
+The first run stopped at the recovery: the server had been killed while
+the copy was being unlinked from the running VM, and Proxmox kept the
+unlink pending (section 5). The recovery refused, as rule 4 says, and the
+test destroyed the VM. After the change of section 5 the gate passed (two
+further runs failed on the test's own checks: Gold's own `description`
+copied into the clone, and reading the home before the guest agent
+answered after the restart).
+
+## 8. What was built
+
+- `hs-core::refresh`: `require_refresh_unlocked`, `parse_ipconfig0`, the
+  journal (`Journal`, `Phase`, `PowerState`, `read_journal`,
+  `journal_mismatches`), `root_attachment_spec`, `plan_refresh`,
+  `refresh_workspace` (replace, recover, `force`).
+- `hs-server`: operation `workspace.refresh` (`vmid`, optional `force`);
+  events `workspace.refreshed` and `workspace.refresh_recovered`.
+- `scripts/live-probe-import-from.sh` (the opening probe).
+
+## 9. Open questions
+
+- Python's `refresh` cannot finish on PVE 9.2 (`qm disk unlink --digest`,
+  section 0). The owner decided the server's side; whether Python is fixed
+  is the owner's call.
+- A refresh journal Python left as a file on a node is invisible to the
+  server; `destroy` names the file, `refresh` does not look for it.
+- Clones inherit Gold's `description` (seen live with the test Gold); the
+  journal is added to it and removed again.

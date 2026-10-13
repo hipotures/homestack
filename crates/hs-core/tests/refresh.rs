@@ -575,10 +575,10 @@ fn changing_calls() -> Vec<(String, u32, &'static str)> {
         (journal.clone(), 1, "none (prepared written)"),
         (config.clone(), 1, "prepared (import)"),
         (journal.clone(), 2, "prepared (imported written)"),
-        (unlink.clone(), 1, "imported (staging unlink)"),
-        (journal.clone(), 3, "imported (unused key written)"),
         (shutdown, 1, "imported (shutdown)"),
-        (journal.clone(), 4, "imported (switching written)"),
+        (journal.clone(), 3, "imported (switching written)"),
+        (unlink.clone(), 1, "switching (staging unlink)"),
+        (journal.clone(), 4, "switching (new unused key written)"),
         (unlink.clone(), 2, "switching (old root unlink)"),
         (journal.clone(), 5, "switching (old unused key written)"),
         (config.clone(), 2, "switching (new root attach)"),
@@ -768,4 +768,49 @@ async fn the_journal_keeps_the_owners_notes_and_pythons_phases() -> TestResult {
     assert_eq!(vm_config(&pve).await?["description"], "owner's notes");
     drop(sim);
     Ok(())
+}
+
+/// An unlink cut off inside Proxmox leaves its deletion pending (seen on
+/// the cluster when the server was killed): `GET config` no longer shows
+/// the disk, but nothing put it in `unusedN` yet. The recovery counts it
+/// where Proxmox will put it, applies it, and ends as Python's.
+#[tokio::test]
+async fn a_pending_unlink_is_finished_by_the_recovery() -> TestResult {
+    // The copy's unlink from the staging slot, left pending.
+    let (sim, pve) = workspace().await?;
+    let before = vm_config(&pve).await?;
+    interrupt(&sim, &pve, &format!("put{{path={}}}", path("unlink")), 1, false).await?;
+    let staging = vm_config(&pve)
+        .await?
+        .as_object()
+        .into_iter()
+        .flatten()
+        .find(|(_, value)| value.as_str().is_some_and(|v| v.starts_with(NEW_ROOT)))
+        .map(|(key, _)| key.clone())
+        .ok_or("no staged copy")?;
+    sim.set_pending_delete(200, &staging, false)?;
+    assert!(vm_config(&pve).await?.get(&staging).is_none());
+    let cfg = config()?;
+    let plan = plan_refresh(&pve, &cfg, POOL, 200, false).await?;
+    assert_eq!(plan["recovery_phase"], "switching");
+    assert_eq!(plan["mismatches"], json!([]), "{plan}");
+    let result = refresh_workspace(&pve, &cfg, POOL, &plan, &quick(), &NoObserver).await?;
+    assert_eq!(result["recovery"], "rolled back to original root");
+    assert_rolled_back(&sim, &pve, &before, "running", "pending staging unlink").await?;
+
+    // The old root's deletion, left pending after `verified`.
+    let (sim, pve) = workspace().await?;
+    interrupt(&sim, &pve, &format!("put{{path={}}}", path("unlink")), 3, false).await?;
+    let old = unused(&vm_config(&pve).await?)
+        .into_iter()
+        .find(|entry| entry.ends_with(OLD_ROOT))
+        .ok_or("no unused old root")?;
+    let key = old.split('=').next().unwrap_or_default().to_owned();
+    sim.set_pending_delete(200, &key, true)?;
+    let plan = plan_refresh(&pve, &cfg, POOL, 200, false).await?;
+    assert_eq!(plan["recovery_phase"], "verified");
+    assert_eq!(plan["mismatches"], json!([]), "{plan}");
+    let result = refresh_workspace(&pve, &cfg, POOL, &plan, &quick(), &NoObserver).await?;
+    assert_eq!(result["recovery"], "completed verified cleanup");
+    assert_refreshed(&sim, &pve, "running", "pending old root deletion").await
 }

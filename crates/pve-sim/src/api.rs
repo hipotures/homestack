@@ -50,6 +50,7 @@ pub fn router(state: Shared) -> Router {
             get(vm_config).put(vm_config_update).post(vm_config_post),
         )
         .route("/nodes/{node}/qemu/{vmid}/unlink", put(vm_unlink))
+        .route("/nodes/{node}/qemu/{vmid}/pending", get(vm_pending))
         .route("/nodes/{node}/qemu/{vmid}/status/current", get(vm_status))
         .route("/nodes/{node}/qemu/{vmid}/status/{action}", post(vm_power))
         .route("/nodes/{node}/qemu/{vmid}/agent/file-read", get(agent_file_read))
@@ -771,11 +772,67 @@ async fn vm_config(
     match reach_vm(&state, token(request_token).as_ref(), &node, &vmid, &["VM.Audit"]) {
         Ok(vm) => {
             let mut config = toml_to_json(&toml::Value::Table(vm.config.clone()));
+            if let Some(map) = config.as_object_mut() {
+                // Pending values applied: a disk pending deletion is gone.
+                map.retain(|key, _| !vm.pending_delete.contains_key(key));
+            }
             config["digest"] = json!(config_digest(&vm.config));
             data(config)
         }
         Err(failure) => failure.into_response(),
     }
+}
+
+/// `GET .../pending`: every key with its current `value`, and `delete` 1
+/// (2 with `force`) for a disk whose deletion is pending.
+async fn vm_pending(
+    State(state): State<Shared>,
+    request_token: Option<axum::Extension<TokenSpec>>,
+    Path((node, vmid)): Path<(String, String)>,
+) -> Response {
+    let state = lock(&state);
+    match reach_vm(&state, token(request_token).as_ref(), &node, &vmid, &["VM.Audit"]) {
+        Ok(vm) => data(Value::Array(
+            vm.config
+                .iter()
+                .map(|(key, value)| {
+                    let mut entry = json!({ "key": key, "value": toml_to_json(value) });
+                    if let Some(force) = vm.pending_delete.get(key) {
+                        entry["delete"] = json!(if *force { 2 } else { 1 });
+                    }
+                    entry
+                })
+                .collect(),
+        )),
+        Err(failure) => failure.into_response(),
+    }
+}
+
+/// PVE's `vmconfig_apply_pending` for a stopped VM, which every config
+/// change and every start runs: a disk pending deletion goes to the first
+/// free `unusedN`, or is deleted (`force`, or an `unusedN` itself).
+fn apply_pending(state: &mut ClusterState, vmid: u32) {
+    let Some(vm) = state.vms.get_mut(&vmid) else { return };
+    if vm.status == VmState::Running || vm.pending_delete.is_empty() {
+        return;
+    }
+    let node = vm.node.clone();
+    let mut deleted = Vec::new();
+    for (key, force) in std::mem::take(&mut vm.pending_delete) {
+        let Some(volume) = vm.config.get(&key).and_then(config_volume).map(str::to_owned) else {
+            continue;
+        };
+        vm.config.remove(&key);
+        if force || key.starts_with("unused") {
+            deleted.push(volume);
+        } else {
+            let unused = free_unused_key(&vm.config);
+            vm.config.insert(unused, toml::Value::String(volume));
+        }
+    }
+    state
+        .volumes
+        .retain(|v| !(v.node == node && deleted.contains(&v.volid)));
 }
 
 async fn vm_status(
@@ -864,6 +921,7 @@ async fn vm_config_update(
             }
         }
     }
+    apply_pending(&mut state, vmid_number);
     data(Value::Null)
 }
 
@@ -901,6 +959,9 @@ async fn vm_power(
         ("qmshutdown", VmState::Running) if !acpi => (status, Some("VM quit/powerdown failed".to_owned())),
         _ => (VmState::Stopped, None),
     };
+    if kind == "qmstart" && error.is_none() {
+        apply_pending(&mut state, vmid_number);
+    }
     if let Some(vm) = state.vms.get_mut(&vmid_number) {
         vm.status = next;
     }
@@ -1497,6 +1558,7 @@ async fn vm_config_post(
     vm.config.retain(|key, value| {
         !(key.starts_with("unused") && config_volume(value).is_some_and(|v| used.iter().any(|u| u == v)))
     });
+    apply_pending(&mut state, vmid_number);
     task(&mut state, &node_name, "qmconfig", vmid_number, &token.id)
 }
 
@@ -1549,6 +1611,7 @@ async fn vm_unlink(
     state
         .volumes
         .retain(|v| !(v.node == node_name && deleted.contains(&v.volid)));
+    apply_pending(&mut state, vmid_number);
     data(Value::Null)
 }
 
@@ -1670,6 +1733,7 @@ async fn vm_clone(
             clone_of: Some(source),
             booted_root: None,
             guests_by_root: std::collections::BTreeMap::new(),
+            pending_delete: std::collections::BTreeMap::new(),
         },
     );
     if let Some(pool) = pool
