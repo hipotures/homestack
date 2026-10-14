@@ -72,6 +72,13 @@ impl SshRoot {
                 "-o".to_owned(),
                 "IdentitiesOnly=yes".to_owned(),
             ]);
+            // Asked in the TUI: ssh signs itself, so the touch of a security
+            // key reaches the askpass (an agent would ask on the key alone).
+            if host_keys == "ask" {
+                master
+                    .options
+                    .extend(["-o".to_owned(), "IdentityAgent=none".to_owned()]);
+            }
         }
         master.open(system.as_ref(), home)?;
         Ok(Self { system, master, target })

@@ -136,6 +136,8 @@ pub struct App {
     pub notice: Option<(String, Vec<String>)>,
     /// The action box of the workspaces panel.
     pub action: Option<super::action::Action>,
+    /// Where the log lines are kept too (`tui.log`); none in tests.
+    pub log_file: Option<std::path::PathBuf>,
     /// The install screen, over everything else while it is open.
     pub install: Option<super::install::Install>,
     /// ssh's question, in a box over the screen.
@@ -174,6 +176,7 @@ impl App {
             clock: String::new(),
             notice: None,
             action: None,
+            log_file: None,
             install: None,
             asking: None,
             keys: Vec::new(),
@@ -213,16 +216,51 @@ impl App {
     /// Open the install screen; `first_start` when there is no `client.toml`.
     pub fn open_install(&mut self, mode: super::install::Mode, first_start: bool) {
         self.overlay = None;
-        self.install = Some(super::install::Install::new(mode, first_start));
+        let mut install = super::install::Install::new(mode, first_start);
+        // The last access that connected (tui.toml).
+        if let Some(host) = self.preferences.table.get("install_host").and_then(toml::Value::as_str) {
+            host.clone_into(&mut install.host);
+            install.caret = install.host.chars().count();
+        }
+        self.install = Some(install);
     }
 
-    /// What the install worker tells; its run's lines go to the log too.
+    /// What the install worker tells; it all goes to the log too.
     pub fn install_event(&mut self, event: super::install::Event) {
-        if let super::install::Event::Line(line) = &event {
-            self.log(&self.clock.clone(), line.trim_start_matches("- "));
-        }
-        if let super::install::Event::Failed(error) = &event {
-            self.log(&self.clock.clone(), error);
+        use super::install::Event;
+        let time = self.clock.clone();
+        match &event {
+            Event::Line(line) => self.log(&time, line.trim_start_matches("- ")),
+            Event::Busy(text) => self.log(&time, &format!("install: {text}")),
+            Event::Failed(error) => self.log(&time, &format!("install: {error}")),
+            Event::Connected(found) => {
+                self.keep_access();
+                self.log(&time, &format!("install: connected, {}", found.root));
+                let titles: Vec<String> = found
+                    .settings
+                    .iter()
+                    .map(|setting| format!("{} = {}", setting.title, setting.value()))
+                    .collect();
+                self.log(&time, &format!("settings: {}", titles.join("; ")));
+                for (mark, label, text) in &found.check {
+                    self.log(&time, &format!("check {} {label}: {text}", mark.symbol()));
+                }
+            }
+            Event::Reviewed { problems, .. } => {
+                self.log(&time, &format!("review: {} problems", problems.len()));
+                for problem in problems {
+                    self.log(&time, &format!("problem: {problem}"));
+                }
+            }
+            Event::Done { ok, lines } => {
+                self.log(
+                    &time,
+                    &format!("install: {}", if *ok { "done" } else { "not finished" }),
+                );
+                for line in lines {
+                    self.log(&time, line);
+                }
+            }
         }
         if let Some(install) = self.install.as_mut() {
             install.event(event);
@@ -266,6 +304,18 @@ impl App {
     }
 
     pub fn log(&mut self, time: &str, text: &str) {
+        if let Some(path) = &self.log_file {
+            use std::io::Write;
+            use std::os::unix::fs::OpenOptionsExt;
+            let file = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .mode(0o600)
+                .open(path);
+            if let Ok(mut file) = file {
+                let _ = writeln!(file, "{time}  {text}");
+            }
+        }
         self.lines.push(LogLine {
             time: time.to_owned(),
             text: text.to_owned(),
@@ -374,6 +424,23 @@ impl App {
         }
     }
 
+    /// Keep the access that connected for the next install screen.
+    fn keep_access(&mut self) {
+        let Some(install) = &self.install else { return };
+        if install.method != super::install::Method::Ssh {
+            return;
+        }
+        let mut table = self.preferences.table.clone();
+        table.insert("install_host".to_owned(), toml::Value::String(install.host.clone()));
+        match self.preferences.write(&table) {
+            Ok(()) => self.preferences.table = table,
+            Err(error) => {
+                let time = self.clock.clone();
+                self.log(&time, &error.0);
+            }
+        }
+    }
+
     fn save_preset(&mut self) {
         let mut table = self.preferences.table.clone();
         table.insert(
@@ -399,9 +466,15 @@ impl App {
             return None;
         }
         if let Some(install) = self.install.as_mut() {
+            let before = install.stage;
             let (close, request) = install.key(key.code);
+            let after = install.stage;
             if close {
                 self.install = None;
+            }
+            if before != after {
+                let time = self.clock.clone();
+                self.log(&time, &format!("install step: {after:?}"));
             }
             return request;
         }
@@ -442,7 +515,9 @@ impl App {
                 self.filter.clear();
                 self.keep_selection();
             }
-            KeyCode::Char('m') | KeyCode::Esc => self.overlay = Some(Overlay::Menu { index: 0 }),
+            KeyCode::Char('m') => self.overlay = Some(Overlay::Menu { index: 0 }),
+            // Esc leaves, as q does (the owner, 2026-10-14).
+            KeyCode::Esc => return Some(Request::Quit),
             KeyCode::Char(digit @ '1'..='4') => {
                 self.shown
                     .toggle(u8::try_from(digit.to_digit(10).unwrap_or(0)).unwrap_or(0));

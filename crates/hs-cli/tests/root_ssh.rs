@@ -176,3 +176,23 @@ fn from_the_terminal_a_new_host_key_is_accepted_as_before() {
     assert_eq!(masters[0][0], "ssh");
     assert!(masters[0].iter().any(|word| word == "StrictHostKeyChecking=accept-new"));
 }
+
+#[test]
+fn a_key_chosen_in_the_tui_is_signed_by_ssh_itself_not_by_the_agent() {
+    let fake = Arc::new(Fake::default());
+    let _root = SshRoot::open_asking(
+        fake.clone(),
+        Path::new("/home/nobody"),
+        "root@pve2",
+        Some("~/.ssh/id_ecdsa_sk_example"),
+        &Sounds::disabled(),
+        vec!["env".to_owned()],
+    )
+    .expect("open");
+    let argv = fake.masters.lock().expect("masters")[0].clone();
+    let at = argv.iter().position(|word| word == "-i").expect("-i");
+    assert_eq!(argv[at + 1], "/home/nobody/.ssh/id_ecdsa_sk_example");
+    for option in ["IdentitiesOnly=yes", "IdentityAgent=none"] {
+        assert!(argv.iter().any(|word| word == option), "{option}: {argv:?}");
+    }
+}

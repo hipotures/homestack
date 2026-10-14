@@ -263,7 +263,7 @@ fn start(request: &Request, client: Option<&Arc<Client>>, ctx: &Context, updates
             tokio::spawn(async move {
                 let lines = match transport_report(&client).await {
                     Ok(report) => transport_lines(&report),
-                    Err(error) => vec![error.0],
+                    Err(error) => super::draw::unreachable_lines(&error.0),
                 };
                 let _ = updates.send(Update::Report("servers".to_owned(), lines));
             });
@@ -429,6 +429,12 @@ pub async fn run(ctx: &mut Context) -> Result<i32, AppError> {
         Err(error) => (Preferences::fallback(&path), Some(error.0)),
     };
     let mut app = App::new(preferences, no_color)?;
+    let log_dir = config::default_path(&ctx.home, ctx.config_home.as_deref())
+        .parent()
+        .map_or_else(|| ctx.home.clone(), std::path::Path::to_path_buf);
+    if std::fs::create_dir_all(&log_dir).is_ok() {
+        app.log_file = Some(log_dir.join("tui.log"));
+    }
     let clock = Clock::new();
     app.clock = clock.now();
     if let Some(problem) = problem {
@@ -501,7 +507,10 @@ pub async fn run(ctx: &mut Context) -> Result<i32, AppError> {
                                 tokio::spawn(async move { read_status(&client, &updates).await });
                             }
                         }
-                        Request::Install(command) => installing.send(command, &mut app, ctx, &updates),
+                        Request::Install(command) => {
+                            app.log(&clock.now(), &format!("install: {command:?}"));
+                            installing.send(command, &mut app, ctx, &updates);
+                        }
                         Request::Answer(answer) => {
                             if let Some(question) = installing.pending.take() {
                                 question.answer(answer);

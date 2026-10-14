@@ -41,7 +41,7 @@ pub(super) fn screen(buf: &mut Buffer, area: Rect, app: &App, install: &Install)
             "not finished".to_owned()
         }
     } else {
-        format!("{}/{steps}", step + 1)
+        format!("step {} of {steps}", step + 1)
     };
     let sides = Sides {
         bottom_left: buttons(install),
@@ -112,50 +112,43 @@ pub(super) fn screen(buf: &mut Buffer, area: Rect, app: &App, install: &Install)
 fn buttons(install: &Install) -> Vec<Control> {
     match install.stage {
         Stage::Access => vec![
-            Control::key("next ⇥"),
-            Control::key("&Connect ↵"),
-            Control::key(if install.first_start { "Quit esc" } else { "back esc" }),
+            Control::key("field ↑↓"),
+            Control::key("Connect Enter"),
+            Control::key(if install.first_start { "Quit Esc" } else { "back Esc" }),
         ],
         Stage::Check => vec![
             Control::key(match install.mode {
-                Mode::Install => "&Settings ↵",
-                Mode::Uninstall => "&Review ↵",
+                Mode::Install => "&Settings Enter",
+                Mode::Uninstall => "&Review Enter",
             }),
-            Control::key("&Back"),
-            Control::key("cancel esc"),
+            Control::key("back Esc"),
         ],
         Stage::Settings => vec![
-            Control::key("next ⇥"),
-            Control::key("&Review ↵"),
-            Control::key("&Back"),
-            Control::key("cancel esc"),
+            Control::key("box Tab"),
+            Control::key("&Review Enter"),
+            Control::key("back Esc"),
         ],
         Stage::Review => {
             let ready = install.reviewed && install.problems.is_empty();
             match install.mode {
                 Mode::Install => vec![
                     Control::key("scroll ↑↓"),
-                    Control::key("&Install ↵").enabled(ready),
-                    Control::key("&Back"),
-                    Control::key("cancel esc"),
+                    Control::key("&Install Enter").enabled(ready),
+                    Control::key("back Esc"),
                 ],
                 Mode::Uninstall => {
                     let (remove, cancel) = if install.remove_focused {
-                        ("▶Remove ↵", "cancel esc")
+                        ("▶Remove Enter", "cancel")
                     } else {
-                        ("Remove", "▶cancel esc")
+                        ("Remove", "▶cancel Enter")
                     };
-                    vec![
-                        Control::key(remove).enabled(ready),
-                        Control::key("&Back"),
-                        Control::key(cancel),
-                    ]
+                    vec![Control::key(remove).enabled(ready), Control::key(cancel)]
                 }
             }
         }
-        Stage::Run => vec![Control::key("stop esc").muted()],
-        Stage::Done if install.ok => vec![Control::key("&Open HomeStack ↵"), Control::key("&Quit")],
-        Stage::Done => vec![Control::key("back to the review ↵"), Control::key("&Quit")],
+        Stage::Run => vec![Control::key("stop Esc").muted()],
+        Stage::Done if install.ok => vec![Control::key("&Open HomeStack Enter"), Control::key("&Quit")],
+        Stage::Done => vec![Control::key("back to the review Enter"), Control::key("&Quit")],
     }
 }
 
@@ -199,16 +192,25 @@ fn access(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
         y,
         width.saturating_sub(10),
         method,
-        if install.field == 1 { focus } else { text },
+        if install.field == 2 { focus } else { text },
+    );
+    write(
+        buf,
+        x + 28,
+        y,
+        width.saturating_sub(28),
+        "↑ then ← →: SSH or a Herdr pane",
+        muted,
     );
     y += 2;
     match install.method {
         Method::Ssh => {
             write(buf, x, y, 10, "Host", text);
-            let cursor = if install.field == 0 { "▏" } else { "" };
+            let cursor = if install.field == 0 { "▏" } else { " " };
+            let before: String = install.host.chars().take(install.caret).collect();
+            let after: String = install.host.chars().skip(install.caret).collect();
             let field = format!(
-                "[ {}{cursor:<1}{} ]",
-                install.host,
+                "[ {before}{cursor}{after}{} ]",
                 " ".repeat(30usize.saturating_sub(install.host.chars().count()))
             );
             write(
@@ -222,7 +224,7 @@ fn access(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
             write(
                 buf,
                 x + 10,
-                y + 2,
+                y + 1,
                 width.saturating_sub(10),
                 "USER@HOST of one node; ssh may ask for a touch, a PIN or the host key here.",
                 muted,
@@ -331,13 +333,33 @@ fn settings(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
         );
     }
     if let Some(found) = &install.found {
-        let line = format!("  Root access  {}", found.root);
+        let how = found.root.split(" · ").next().unwrap_or_default();
+        let line = format!("  Root access  {how}");
         write(
             buf,
             x,
             at(inner.y, rows.len() + 2),
             left - 1,
             &cut(&line, usize::from(left - 1)),
+            muted,
+        );
+    }
+    // How to change them, always shown under the list, in two columns.
+    let help = [
+        ("↑ ↓", "a setting"),
+        ("Tab", "into its box and out"),
+        ("Space", "tick in the box"),
+        ("letters", "the server domain"),
+        ("Enter", "review"),
+    ];
+    for (row, (key, what)) in help.iter().enumerate() {
+        let line = format!("{key:<9}{what}");
+        write(
+            buf,
+            x + 2,
+            at(inner.y, rows.len() + 4 + row),
+            left - 3,
+            &cut(&line, usize::from(left - 3)),
             muted,
         );
     }
@@ -377,21 +399,29 @@ fn settings(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
     let Some(setting) = install.settings.get(install.row) else {
         return;
     };
-    let counter = format!("{}/{}", install.row + 1, install.rows());
     let box_inner = frame(
         buf,
         rect,
         palette,
         &Sides {
             top_left: vec![Control::plain(&setting.title)],
-            bottom_left: vec![Control::key(if setting.multiple { "tick ␣" } else { "choose ␣" })],
-            bottom_right: vec![Control::plain(&counter)],
+            bottom_left: vec![Control::key(if setting.multiple {
+                "tick Space"
+            } else {
+                "choose Space"
+            })],
             focused: install.chooser,
             ..Sides::default()
         },
     );
     let lines = paragraph(buf, box_inner, box_inner.y, &setting.note, text);
     let width = box_inner.width.saturating_sub(4);
+    let name_width = setting
+        .choices
+        .iter()
+        .map(|(value, _)| value.chars().count())
+        .max()
+        .unwrap_or(0);
     for (index, (value, detail)) in setting.choices.iter().enumerate() {
         let ticked = setting.picked.contains(&index);
         let cursor = install.chooser && index == install.cursor;
@@ -402,7 +432,7 @@ fn settings(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
             (false, true) => "(•)",
             (false, false) => "( )",
         };
-        let line = format!("{mark} {tick} {value:<12} {detail}");
+        let line = format!("{mark} {tick} {value:<name_width$}  {detail}");
         let style = if cursor { focus } else { text };
         write(
             buf,
@@ -581,7 +611,7 @@ pub(super) fn asking(buf: &mut Buffer, area: Rect, app: &App, asking: &AskView) 
                 ),
                 text.fg(palette.focus),
             ));
-            ("ssh", lines, vec![Control::key("OK ↵"), Control::key("cancel esc")])
+            ("ssh", lines, vec![Control::key("OK Enter"), Control::key("cancel Esc")])
         }
         Kind::HostKey => {
             let lines = asking
@@ -593,7 +623,7 @@ pub(super) fn asking(buf: &mut Buffer, area: Rect, app: &App, asking: &AskView) 
             (
                 "host key",
                 lines,
-                vec![Control::key("&Trust ↵"), Control::key("cancel esc")],
+                vec![Control::key("&Trust Enter"), Control::key("cancel Esc")],
             )
         }
     };

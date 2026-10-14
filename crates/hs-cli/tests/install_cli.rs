@@ -1464,11 +1464,18 @@ async fn the_servers_put_workspace_disks_on_the_storages_chosen_in_the_form() {
     );
 }
 
-/// The next event of the TUI's install worker, waited for.
+/// The next event of the TUI's install worker, waited for; what it is busy
+/// with is skipped.
 fn next_event(events: &std::sync::mpsc::Receiver<hs_cli::tui::install::Event>) -> hs_cli::tui::install::Event {
-    events
-        .recv_timeout(Duration::from_secs(30))
-        .expect("an event from the worker")
+    loop {
+        match events
+            .recv_timeout(Duration::from_secs(30))
+            .expect("an event from the worker")
+        {
+            hs_cli::tui::install::Event::Busy(_) => {}
+            event => return event,
+        }
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]

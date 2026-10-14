@@ -94,7 +94,7 @@ fn without_client_toml_the_install_screen_opens_at_access() {
         "Method",
         "‹ SSH ›",
         "Host",
-        "1/5",
+        "step 1 of 5",
     ] {
         assert!(text.contains(part), "{part:?} missing:\n{text}");
     }
@@ -115,7 +115,10 @@ fn the_menu_opens_install_and_uninstall_and_esc_goes_back() {
     press(&mut fixture.app, KeyCode::Enter);
     let text = screen(&render(&fixture.app, 120, 36));
     assert!(text.contains("HomeStack uninstall"), "{text}");
-    assert!(text.contains("1/4"), "access › check › review › remove:\n{text}");
+    assert!(
+        text.contains("step 1 of 4"),
+        "access › check › review › remove:\n{text}"
+    );
     assert_eq!(press(&mut fixture.app, KeyCode::Esc), None);
     assert!(fixture.app.install.is_none(), "esc goes back to the main screen");
 }
@@ -126,7 +129,7 @@ fn connect_sends_the_method_and_the_host_and_herdr_lists_its_tabs() {
     fixture.app.open_install(Mode::Install, false);
     type_text(&mut fixture.app, "root@pve2");
     match press(&mut fixture.app, KeyCode::Enter) {
-        Some(Request::Install(Command::Connect { method, target })) => {
+        Some(Request::Install(Command::Connect { method, target, .. })) => {
             assert_eq!((method, target.as_str()), (Method::Ssh, "root@pve2"));
         }
         other => panic!("{other:?}"),
@@ -145,7 +148,7 @@ fn connect_sends_the_method_and_the_host_and_herdr_lists_its_tabs() {
     let text = screen(&render(&fixture.app, 120, 36));
     assert!(text.contains("‹ Herdr pane ›") && text.contains("w3:p2"), "{text}");
     match press(&mut fixture.app, KeyCode::Enter) {
-        Some(Request::Install(Command::Connect { method, target })) => {
+        Some(Request::Install(Command::Connect { method, target, .. })) => {
             assert_eq!((method, target.as_str()), (Method::Herdr, "w3:p2"));
         }
         other => panic!("{other:?}"),
@@ -216,7 +219,10 @@ fn ssh_asks_for_a_touch_a_pin_and_a_host_key_in_a_box() {
 
 #[test]
 fn the_check_shows_what_is_there_and_what_the_install_adds() {
-    let fixture = checked(Mode::Install);
+    let mut fixture = checked(Mode::Install);
+    assert_eq!(stage(&fixture.app), Stage::Settings, "connecting opens the settings");
+    // One Esc back shows the check.
+    press(&mut fixture.app, KeyCode::Esc);
     assert_eq!(stage(&fixture.app), Stage::Check);
     let text = screen(&render(&fixture.app, 120, 36));
     for part in [
@@ -227,7 +233,7 @@ fn the_check_shows_what_is_there_and_what_the_install_adds() {
         "· Proxmox",
         "! domain",
         "Nothing was changed.",
-        "2/5",
+        "step 2 of 5",
     ] {
         assert!(text.contains(part), "{part:?} missing:\n{text}");
     }
@@ -236,7 +242,6 @@ fn the_check_shows_what_is_there_and_what_the_install_adds() {
 #[test]
 fn the_settings_are_chosen_in_a_box_and_go_to_the_review() {
     let mut fixture = checked(Mode::Install);
-    press(&mut fixture.app, KeyCode::Enter);
     assert_eq!(stage(&fixture.app), Stage::Settings);
     let text = screen(&render(&fixture.app, 120, 36));
     for part in [
@@ -248,7 +253,7 @@ fn the_settings_are_chosen_in_a_box_and_go_to_the_review() {
         "hs.example.net",
         "[x] local-lvm",
         "[ ] local-zfs",
-        "3/5",
+        "step 3 of 5",
     ] {
         assert!(text.contains(part), "{part:?} missing:\n{text}");
     }
@@ -278,7 +283,6 @@ fn the_settings_are_chosen_in_a_box_and_go_to_the_review() {
 fn the_review_lists_every_change_and_problems_keep_install_grey() {
     let mut fixture = checked(Mode::Install);
     press(&mut fixture.app, KeyCode::Enter);
-    press(&mut fixture.app, KeyCode::Enter);
     fixture.app.install_event(Event::Reviewed {
         sections: vec![
             (
@@ -299,7 +303,7 @@ fn the_review_lists_every_change_and_problems_keep_install_grey() {
         "api2.hs.example.net does not resolve",
         "Your choices",
         "CT 2097",
-        "4/5",
+        "step 4 of 5",
     ] {
         assert!(text.contains(part), "{part:?} missing:\n{text}");
     }
@@ -327,7 +331,6 @@ fn the_review_lists_every_change_and_problems_keep_install_grey() {
 fn the_run_shows_each_step_and_the_end_opens_the_main_screen() {
     let mut fixture = checked(Mode::Install);
     press(&mut fixture.app, KeyCode::Enter);
-    press(&mut fixture.app, KeyCode::Enter);
     fixture.app.install_event(Event::Reviewed {
         sections: Vec::new(),
         problems: Vec::new(),
@@ -342,7 +345,7 @@ fn the_run_shows_each_step_and_the_end_opens_the_main_screen() {
     let text = screen(&render(&fixture.app, 120, 36));
     assert!(text.contains("✓ create user homestack@pve"), "{text}");
     assert!(text.contains("◐ create token homestack@pve!server"), "{text}");
-    assert!(text.contains("5/5"), "{text}");
+    assert!(text.contains("step 5 of 5"), "{text}");
     // It cannot be stopped midway.
     assert_eq!(press(&mut fixture.app, KeyCode::Esc), None);
     assert_eq!(stage(&fixture.app), Stage::Run);
@@ -361,7 +364,6 @@ fn the_run_shows_each_step_and_the_end_opens_the_main_screen() {
 #[test]
 fn a_failed_run_says_so_and_goes_back_to_the_review() {
     let mut fixture = checked(Mode::Install);
-    press(&mut fixture.app, KeyCode::Enter);
     press(&mut fixture.app, KeyCode::Enter);
     fixture.app.install_event(Event::Reviewed {
         sections: Vec::new(),
@@ -397,7 +399,7 @@ fn the_uninstall_goes_from_check_straight_to_its_review_with_cancel_focused() {
         "┌review┐",
         "Removed from Proxmox",
         "▶cancel",
-        "3/4",
+        "step 3 of 4",
     ] {
         assert!(text.contains(part), "{part:?} missing:\n{text}");
     }
@@ -416,4 +418,114 @@ fn the_log_panel_shows_under_the_install_at_120_by_36_only() {
     fixture.app.log("10:41:02", "install screen opened");
     assert!(screen(&render(&fixture.app, 120, 36)).contains("⁴log"));
     assert!(!screen(&render(&fixture.app, 80, 24)).contains("⁴log"));
+}
+
+#[test]
+fn the_access_that_connected_is_kept_for_the_next_install_screen() {
+    let mut fixture = app();
+    fixture.app.open_install(Mode::Install, false);
+    type_text(&mut fixture.app, "root@pve1.example.net");
+    press(&mut fixture.app, KeyCode::Enter);
+    fixture.app.install_event(Event::Connected(found()));
+    fixture.app.install = None;
+
+    fixture.app.open_install(Mode::Install, false);
+    let install = fixture.app.install.as_ref().unwrap();
+    assert_eq!(install.host, "root@pve1.example.net");
+    let saved = std::fs::read_to_string(fixture.app.preferences.path.clone()).unwrap();
+    assert!(saved.contains("install_host = \"root@pve1.example.net\""), "{saved}");
+}
+
+#[test]
+fn the_host_is_edited_where_the_cursor_is() {
+    let mut fixture = app();
+    fixture.app.open_install(Mode::Install, false);
+    type_text(&mut fixture.app, "pve1.example.net");
+    press(&mut fixture.app, KeyCode::Home);
+    type_text(&mut fixture.app, "root@");
+    press(&mut fixture.app, KeyCode::End);
+    press(&mut fixture.app, KeyCode::Left);
+    press(&mut fixture.app, KeyCode::Left);
+    press(&mut fixture.app, KeyCode::Left);
+    press(&mut fixture.app, KeyCode::Backspace);
+    type_text(&mut fixture.app, ".");
+    press(&mut fixture.app, KeyCode::Delete);
+    type_text(&mut fixture.app, "o");
+    let text = screen(&render(&fixture.app, 120, 36));
+    assert!(text.contains("[ root@pve1.example.o▏et"), "{text}");
+    match press(&mut fixture.app, KeyCode::Enter) {
+        Some(Request::Install(Command::Connect { target, .. })) => assert_eq!(target, "root@pve1.example.oet"),
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn esc_goes_back_one_step_and_leaves_only_from_access() {
+    let mut fixture = checked(Mode::Install);
+    press(&mut fixture.app, KeyCode::Enter);
+    fixture.app.install_event(Event::Reviewed {
+        sections: Vec::new(),
+        problems: Vec::new(),
+    });
+    assert_eq!(press(&mut fixture.app, KeyCode::Esc), None);
+    assert_eq!(stage(&fixture.app), Stage::Settings);
+    assert_eq!(press(&mut fixture.app, KeyCode::Esc), None);
+    assert_eq!(stage(&fixture.app), Stage::Check);
+    assert_eq!(
+        press(&mut fixture.app, KeyCode::Esc),
+        Some(Request::Install(Command::Cancel))
+    );
+    assert_eq!(stage(&fixture.app), Stage::Access);
+    assert_eq!(press(&mut fixture.app, KeyCode::Esc), None);
+    assert!(fixture.app.install.is_none(), "esc at access leaves the screen");
+}
+
+#[test]
+fn up_goes_to_the_method_and_left_or_right_switches_it_to_herdr() {
+    let mut fixture = app();
+    fixture.app.open_install(Mode::Install, false);
+    press(&mut fixture.app, KeyCode::Up);
+    assert_eq!(press(&mut fixture.app, KeyCode::Right), Some(Request::HerdrTabs));
+    assert_eq!(fixture.app.install.as_ref().unwrap().method, Method::Herdr);
+    assert_eq!(press(&mut fixture.app, KeyCode::Left), None);
+    assert_eq!(fixture.app.install.as_ref().unwrap().method, Method::Ssh);
+    // Down is the host again: ← → move the cursor there.
+    press(&mut fixture.app, KeyCode::Down);
+    type_text(&mut fixture.app, "ab");
+    press(&mut fixture.app, KeyCode::Left);
+    type_text(&mut fixture.app, "x");
+    assert_eq!(fixture.app.install.as_ref().unwrap().host, "axb");
+}
+
+#[test]
+fn the_red_letters_do_what_their_buttons_do() {
+    let mut fixture = checked(Mode::Install);
+    assert_eq!(stage(&fixture.app), Stage::Settings, "connecting opens the settings");
+    assert!(matches!(
+        press(&mut fixture.app, KeyCode::Char('r')),
+        Some(Request::Install(Command::Review { .. }))
+    ));
+    fixture.app.install_event(Event::Reviewed {
+        sections: Vec::new(),
+        problems: Vec::new(),
+    });
+    assert_eq!(
+        press(&mut fixture.app, KeyCode::Char('i')),
+        Some(Request::Install(Command::Apply))
+    );
+    fixture.app.install_event(Event::Done {
+        ok: true,
+        lines: Vec::new(),
+    });
+    assert_eq!(press(&mut fixture.app, KeyCode::Char('o')), Some(Request::Installed));
+}
+
+#[test]
+fn esc_on_the_main_screen_quits_and_m_opens_the_menu() {
+    let mut fixture = app();
+    assert_eq!(press(&mut fixture.app, KeyCode::Esc), Some(Request::Quit));
+    assert_eq!(press(&mut fixture.app, KeyCode::Char('m')), None);
+    assert!(fixture.app.overlay.is_some(), "m opens the menu");
+    assert_eq!(press(&mut fixture.app, KeyCode::Esc), None, "esc closes the menu first");
+    assert!(fixture.app.overlay.is_none());
 }

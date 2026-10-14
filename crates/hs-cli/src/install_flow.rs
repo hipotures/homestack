@@ -51,6 +51,7 @@ pub struct Session {
 }
 
 /// A plan made from answers, with what the review shows.
+#[derive(Clone)]
 pub struct Review {
     pub plan: Option<Plan>,
     pub servers: Option<ServerPlan>,

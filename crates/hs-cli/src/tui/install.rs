@@ -138,6 +138,8 @@ pub enum Event {
         sections: Vec<(String, Vec<String>)>,
         problems: Vec<String>,
     },
+    /// What is being waited for now (connected, reading the cluster, …).
+    Busy(String),
     /// One more thing done in the run.
     Line(String),
     Done {
@@ -195,10 +197,12 @@ pub struct Install {
     pub first_start: bool,
     pub method: Method,
     pub host: String,
+    /// Where typing goes in `host`, in characters.
+    pub caret: usize,
     /// Herdr tabs: name and title.
     pub tabs: Vec<(String, String)>,
     pub tab: usize,
-    /// Access: 0 the host (or tab), 1 the method.
+    /// Access: 0 the host (or tab), 2 the method.
     pub field: usize,
     /// What is being waited for.
     pub busy: Option<String>,
@@ -230,6 +234,7 @@ impl Install {
             first_start,
             method: Method::Ssh,
             host: String::new(),
+            caret: 0,
             tabs: Vec::new(),
             tab: 0,
             field: 0,
@@ -292,7 +297,12 @@ impl Install {
                 self.settings.clone_from(&found.settings);
                 self.domain.clone_from(&found.domain);
                 self.found = Some(found);
-                self.stage = Stage::Check;
+                // The install goes straight to its settings (the check stays
+                // in the log and one Esc back); the uninstall shows the check.
+                self.stage = match self.mode {
+                    Mode::Install => Stage::Settings,
+                    Mode::Uninstall => Stage::Check,
+                };
             }
             Event::Failed(error) => {
                 self.error = Some(error);
@@ -306,6 +316,7 @@ impl Install {
                 self.reviewed = true;
                 self.scroll = 0;
             }
+            Event::Busy(text) => self.busy = Some(text),
             Event::Line(line) => self.lines.push(line),
             Event::Done { ok, lines } => {
                 self.ok = ok;
@@ -313,17 +324,6 @@ impl Install {
                 self.stage = Stage::Done;
             }
         }
-    }
-
-    /// Leave the screen (or start again on the first start).
-    fn cancel(&mut self) -> (bool, Option<Request>) {
-        let connected = self.found.is_some();
-        let request = connected.then_some(Request::Install(Command::Cancel));
-        if self.first_start {
-            *self = Self::new(self.mode, true);
-            return (false, request);
-        }
-        (true, request)
     }
 
     /// A key; whether the screen closes, and what the loop does.
@@ -334,20 +334,20 @@ impl Install {
         match self.stage {
             Stage::Access => self.access_key(code),
             Stage::Check => match code {
-                KeyCode::Enter => (false, self.after_check()),
-                KeyCode::Char('b') => {
+                KeyCode::Enter | KeyCode::Char('s' | 'r') => (false, self.after_check()),
+                // Back (b or Esc) lets root go and starts at access again.
+                KeyCode::Char('b') | KeyCode::Esc => {
                     self.stage = Stage::Access;
                     self.found = None;
                     (false, Some(Request::Install(Command::Cancel)))
                 }
-                KeyCode::Esc => self.cancel(),
                 _ => (false, None),
             },
             Stage::Settings => self.settings_key(code),
             Stage::Review => self.review_key(code),
             Stage::Run => (false, None),
             Stage::Done => match code {
-                KeyCode::Enter if self.ok => (true, Some(Request::Installed)),
+                KeyCode::Enter | KeyCode::Char('o') if self.ok => (true, Some(Request::Installed)),
                 KeyCode::Enter => {
                     self.stage = Stage::Review;
                     self.lines.clear();
@@ -367,7 +367,11 @@ impl Install {
                 }
                 return (true, None);
             }
-            KeyCode::Tab | KeyCode::BackTab => self.field = 1 - self.field,
+            // The host (or tab) and the method.
+            KeyCode::Tab | KeyCode::BackTab => self.field = if self.field == 0 { 2 } else { 0 },
+            // Method is the row above the host.
+            KeyCode::Up => self.field = 2,
+            KeyCode::Down => self.field = 0,
             KeyCode::Enter => {
                 let Some(target) = self.target() else {
                     self.error = Some(match self.method {
@@ -386,7 +390,7 @@ impl Install {
                     })),
                 );
             }
-            KeyCode::Left | KeyCode::Right if self.field == 1 => {
+            KeyCode::Left | KeyCode::Right if self.field == 2 => {
                 self.method = match self.method {
                     Method::Ssh => Method::Herdr,
                     Method::Herdr => Method::Ssh,
@@ -395,7 +399,7 @@ impl Install {
                     return (false, Some(Request::HerdrTabs));
                 }
             }
-            KeyCode::Left | KeyCode::Right | KeyCode::Up | KeyCode::Down if self.method == Method::Herdr => {
+            KeyCode::Left | KeyCode::Right if self.method == Method::Herdr && self.field == 0 => {
                 let count = self.tabs.len().max(1);
                 self.tab = if matches!(code, KeyCode::Right | KeyCode::Down) {
                     (self.tab + 1) % count
@@ -403,13 +407,43 @@ impl Install {
                     (self.tab + count - 1) % count
                 };
             }
-            KeyCode::Char(c) if self.field == 0 && self.method == Method::Ssh => self.host.push(c),
-            KeyCode::Backspace if self.field == 0 && self.method == Method::Ssh => {
-                self.host.pop();
+            KeyCode::Char(c) if self.field == 0 && self.method == Method::Ssh => {
+                let at = self.byte_at(self.caret);
+                self.host.insert(at, c);
+                self.caret += 1;
             }
+            KeyCode::Backspace if self.field == 0 && self.method == Method::Ssh => {
+                if self.caret > 0 {
+                    self.caret -= 1;
+                    let at = self.byte_at(self.caret);
+                    self.host.remove(at);
+                }
+            }
+            KeyCode::Delete if self.field == 0 && self.method == Method::Ssh => {
+                if self.caret < self.host.chars().count() {
+                    let at = self.byte_at(self.caret);
+                    self.host.remove(at);
+                }
+            }
+            KeyCode::Left if self.field == 0 && self.method == Method::Ssh => {
+                self.caret = self.caret.saturating_sub(1);
+            }
+            KeyCode::Right if self.field == 0 && self.method == Method::Ssh => {
+                self.caret = (self.caret + 1).min(self.host.chars().count());
+            }
+            KeyCode::Home if self.field == 0 => self.caret = 0,
+            KeyCode::End if self.field == 0 => self.caret = self.host.chars().count(),
             _ => {}
         }
         (false, None)
+    }
+
+    /// The byte index of character `index` of the host.
+    fn byte_at(&self, index: usize) -> usize {
+        self.host
+            .char_indices()
+            .nth(index)
+            .map_or(self.host.len(), |(at, _)| at)
     }
 
     fn after_check(&mut self) -> Option<Request> {
@@ -434,7 +468,9 @@ impl Install {
     fn settings_key(&mut self, code: KeyCode) -> (bool, Option<Request>) {
         let on_domain = self.domain.is_some() && self.row == self.settings.len();
         match code {
-            KeyCode::Esc => return self.cancel(),
+            KeyCode::Esc if !self.chooser => self.stage = Stage::Check,
+            KeyCode::Esc => self.chooser = false,
+            KeyCode::Char('r') if !on_domain => return self.settings_key(KeyCode::Enter),
             KeyCode::Enter => {
                 self.stage = Stage::Review;
                 self.reviewed = false;
@@ -498,7 +534,8 @@ impl Install {
     fn review_key(&mut self, code: KeyCode) -> (bool, Option<Request>) {
         let ready = self.reviewed && self.problems.is_empty();
         match (self.mode, code) {
-            (_, KeyCode::Esc) => return self.cancel(),
+            (Mode::Install, KeyCode::Esc) => self.stage = Stage::Settings,
+            (Mode::Uninstall, KeyCode::Esc) => self.stage = Stage::Check,
             (_, KeyCode::Down) => self.scroll += 1,
             (_, KeyCode::Up) => self.scroll = self.scroll.saturating_sub(1),
             (Mode::Install, KeyCode::Enter | KeyCode::Char('i')) if ready => {

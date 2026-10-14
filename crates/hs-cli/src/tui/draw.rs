@@ -643,12 +643,19 @@ fn workspaces(buf: &mut Buffer, area: Rect, app: &App, mut controls: Vec<Control
                 &[
                     ("✗ ".to_owned(), text.fg(palette.error)),
                     (format!("{}   ", short_host(url)), text),
-                    (reason.clone(), muted),
+                    (short_reason(reason), muted),
                 ],
             );
             y += 1;
         }
-        write(buf, inner.x + 2, y + 1, inner.width, "It tries again by itself.", muted);
+        write(
+            buf,
+            inner.x + 2,
+            y + 1,
+            inner.width.saturating_sub(4),
+            "It tries again by itself. Menu › Install or reconfigure deploys the servers again.",
+            muted,
+        );
         return;
     }
     if app.status.is_none() {
@@ -886,7 +893,11 @@ fn draw_overlay(buf: &mut Buffer, area: Rect, app: &App, overlay: &Overlay) {
         ),
         Overlay::Report { title, lines } => (
             title.as_str(),
-            lines.iter().map(|line| (line.clone(), text)).collect(),
+            lines
+                .iter()
+                .flat_map(|line| wrap(line, usize::from(area.width.saturating_sub(8))))
+                .map(|line| (line, text))
+                .collect(),
             vec![Control::key("close esc")],
         ),
     };
@@ -937,12 +948,12 @@ const HELP: [&str; 18] = [
     "1 2 3 4     show or hide workspaces, cluster, storage, log",
     "0           the standard view: every panel and node, no filter",
     "p           next preset (auto, 1, 2)",
-    "m  esc      menu (esc first clears the filter)",
+    "m           menu",
     "↑ ↓         select a workspace; PgUp PgDn Home End",
     "↵           details of the selected workspace",
     "← →         one node or all",
     "f           filter by name or VMID; ↵ keeps it, esc clears it",
-    "q  ctrl-c   quit",
+    "q  esc      quit (esc first clears the filter)",
     "",
     "On the selected workspace (a box opens in the panel):",
     "n new   r refresh   z resize   k add key   g migrate   d destroy",
@@ -1173,4 +1184,39 @@ fn action_box(buf: &mut Buffer, area: Rect, app: &App, action: &Action) {
         }
     }
     scrollbar(buf, area, palette, scroll, height, lines.len());
+}
+
+const NONE_ANSWERED: &str = "No HomeStack server instance answered: ";
+
+/// A server's reason without the wrapping the client puts around it
+/// (`No HomeStack server instance answered: <url>: <reason>`, nested).
+#[must_use]
+pub fn short_reason(text: &str) -> String {
+    let mut rest = text.trim();
+    while let Some(inner) = rest.strip_prefix(NONE_ANSWERED) {
+        rest = inner;
+        if (rest.starts_with("https://") || rest.starts_with("http://"))
+            && let Some((_, after)) = rest.split_once("/: ")
+        {
+            rest = after;
+        }
+    }
+    rest.to_owned()
+}
+
+/// The lines of a check of the servers that none answered.
+#[must_use]
+pub fn unreachable_lines(text: &str) -> Vec<String> {
+    let Some(rest) = text.strip_prefix(NONE_ANSWERED) else {
+        return vec![text.to_owned()];
+    };
+    let mut lines = vec!["No server answered.".to_owned(), String::new()];
+    for part in rest.split("; https://") {
+        let part = part.strip_prefix("https://").unwrap_or(part);
+        let (host, reason) = part.split_once("/: ").unwrap_or((part, ""));
+        lines.push(format!("✗ {host}  {}", short_reason(reason)));
+    }
+    lines.push(String::new());
+    lines.push("Menu › Install or reconfigure deploys the servers again.".to_owned());
+    lines
 }

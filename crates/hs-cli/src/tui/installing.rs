@@ -107,21 +107,39 @@ pub fn spawn(setup: Setup, commands: Receiver<Command>, tell: impl Fn(Event) + S
     });
 }
 
+/// A review made from these answers and this domain.
+type Kept = (Vec<Answer>, Option<String>, Review);
+
 fn work(setup: &Setup, commands: &Receiver<Command>, tell: &(dyn Fn(Event) + Send + Sync)) {
     let mut session: Option<Session> = None;
     let mut last: Option<Review> = None;
+    // The check's plan: the review of unchanged settings needs no new read.
+    let mut kept: Option<Kept> = None;
     while let Ok(command) = commands.recv() {
         match command {
-            Command::Connect { method, target } => match connect(setup, method, &target) {
-                Ok((started, found)) => {
+            Command::Connect { method, target } => match connect(setup, method, &target, tell) {
+                Ok((started, found, first)) => {
                     session = Some(started);
+                    kept = first;
                     tell(Event::Connected(found));
                 }
                 Err(error) => tell(Event::Failed(error.0)),
             },
             Command::Review { answers, domain } => {
                 let Some(session) = session.as_mut() else { continue };
-                let review = review(setup, session, &answers, domain.as_deref());
+                let reused = kept
+                    .take()
+                    .filter(|(old_answers, old_domain, _)| *old_answers == answers && *old_domain == domain);
+                let review = match reused {
+                    Some((_, _, review)) => {
+                        session.keep(&answers, domain.as_deref());
+                        review
+                    }
+                    None => {
+                        tell(Event::Busy("Reading the cluster and planning…".to_owned()));
+                        review(setup, session, &answers, domain.as_deref())
+                    }
+                };
                 tell(Event::Reviewed {
                     sections: review.summary.sections.clone(),
                     problems: review.summary.problems.clone(),
@@ -140,8 +158,17 @@ fn work(setup: &Setup, commands: &Receiver<Command>, tell: &(dyn Fn(Event) + Sen
     }
 }
 
-fn connect(setup: &Setup, method: Method, target: &str) -> Result<(Session, Found), AppError> {
+fn connect(
+    setup: &Setup,
+    method: Method,
+    target: &str,
+    tell: &(dyn Fn(Event) + Send + Sync),
+) -> Result<(Session, Found, Option<Kept>), AppError> {
+    tell(Event::Busy(format!(
+        "Connecting to {target}… (touch your key or give its PIN if it asks)"
+    )));
     let root = setup.open(method, target)?;
+    tell(Event::Busy("Connected; reading the cluster…".to_owned()));
     let mut session = Session::start(
         root,
         setup.command(),
@@ -155,6 +182,7 @@ fn connect(setup: &Setup, method: Method, target: &str) -> Result<(Session, Foun
         Arc::clone(&setup.servers),
     )?;
     let access = session.access.clone();
+    let mut first = None;
     let describe = session.describe();
     let mut check = vec![
         (
@@ -172,8 +200,10 @@ fn connect(setup: &Setup, method: Method, target: &str) -> Result<(Session, Foun
                 .map(|question| Answer::Picked(question.defaults.clone()))
                 .collect();
             let domain = session.draft_domain.clone();
+            tell(Event::Busy("Planning with the last choices…".to_owned()));
             let review = session.review(&answers, Some(domain.as_str()));
             check.extend(install_check(&review));
+            first = Some((answers, Some(domain), review));
         }
         Mode::Uninstall => match session.plan(&setup.settings()) {
             Ok(plan) => {
@@ -215,7 +245,7 @@ fn connect(setup: &Setup, method: Method, target: &str) -> Result<(Session, Foun
         settings,
         domain: (setup.mode == Mode::Install).then(|| session.draft_domain.clone()),
     };
-    Ok((session, found))
+    Ok((session, found, first))
 }
 
 /// The check's lines of a first plan made from the kept choices.
@@ -229,7 +259,7 @@ fn install_check(review: &Review) -> Vec<(Mark, String, String)> {
             (
                 Mark::Ok,
                 "Proxmox".to_owned(),
-                "HomeStack is installed as chosen".to_owned(),
+                "user, roles, pools and tokens are in place as chosen".to_owned(),
             )
         } else {
             (
@@ -241,6 +271,19 @@ fn install_check(review: &Review) -> Vec<(Mark, String, String)> {
         for warning in &plan.warnings {
             lines.push((Mark::Note, "warning".to_owned(), warning.clone()));
         }
+    }
+    // The servers are a part of their own: "installed" above is Proxmox's.
+    if let Some(config) = review.servers.as_ref().and_then(|servers| servers.config.as_ref()) {
+        let names: Vec<String> = config
+            .instances
+            .iter()
+            .map(|instance| format!("{}.{}", instance.name, config.domain))
+            .collect();
+        lines.push((
+            Mark::Add,
+            "servers".to_owned(),
+            format!("{}: to deploy, in the last step after the review", names.join(", ")),
+        ));
     }
     for problem in &review.summary.problems {
         lines.push((Mark::Note, "to fix".to_owned(), problem.clone()));
@@ -310,7 +353,7 @@ fn apply(
     };
     let mut lines = Vec::new();
     lines.push(if plan.steps.is_empty() {
-        "Proxmox: nothing to change".to_owned()
+        "Proxmox: user, roles, pools and tokens were already in place as chosen".to_owned()
     } else {
         format!("Proxmox: {} changes made", plan.steps.len())
     });
