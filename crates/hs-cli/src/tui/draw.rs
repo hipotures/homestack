@@ -377,19 +377,20 @@ fn columns(width: usize) -> Vec<Column> {
     let all = [
         Column {
             heading: "VMID",
-            width: 4,
+            // 101010: the numbering by address (owner, 2026-10-14).
+            width: 6,
             right: false,
             value: |entry| entry.vmid.to_string(),
         },
         Column {
             heading: "NAME",
-            width: 13,
+            width: 12,
             right: false,
             value: |entry| entry.name.clone().unwrap_or_default(),
         },
         Column {
             heading: "NODE",
-            width: 5,
+            width: 4,
             right: false,
             value: |entry| entry.node.clone(),
         },
@@ -402,12 +403,12 @@ fn columns(width: usize) -> Vec<Column> {
                     return entry.status.clone();
                 }
                 let symbol = if entry.status == "running" { "●" } else { "○" };
-                format!("{symbol} {}", entry.status)
+                symbol.to_owned()
             },
         },
         Column {
             heading: "ADDRESS",
-            width: 11,
+            width: 15,
             right: false,
             value: |entry| entry.ip.clone().unwrap_or_else(|| "—".to_owned()),
         },

@@ -341,3 +341,25 @@ fn the_gold_line_of_the_servers_box_has_its_dot_first_and_fits() {
         .unwrap_or_else(|| panic!("no gold line:\n{text}"));
     assert!(line.contains("pve1"), "{line}");
 }
+
+#[test]
+fn a_six_digit_vmid_is_shown_whole() {
+    let mut fixture = app();
+    let mut status = tui_fixture::status();
+    status["workspaces"][0]["vmid"] = serde_json::json!(101_010);
+    fixture.app.set_status(&status);
+    for (width, height) in [(80, 24), (120, 36)] {
+        let text = screen(&render(&fixture.app, width, height));
+        assert!(text.contains("101010"), "{width}x{height}:\n{text}");
+    }
+}
+
+#[test]
+fn an_address_of_the_new_numbering_is_shown_whole() {
+    let mut fixture = app();
+    let mut status = tui_fixture::status();
+    status["workspaces"][0]["ip"] = serde_json::json!("192.168.101.10");
+    fixture.app.set_status(&status);
+    let text = screen(&render(&fixture.app, 120, 36));
+    assert!(text.contains("192.168.101.10 "), "{text}");
+}
