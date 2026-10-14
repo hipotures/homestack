@@ -278,6 +278,17 @@ pub async fn power(pve: &impl Pve, node: &str, ctid: u32, action: &str) -> Resul
     wait(pve, &upid, &format!("{action} CT {ctid}")).await
 }
 
+/// Whether container `ctid` was made with `description` (its server, image
+/// and certificate) and `net0`: then only its configuration is sent again.
+pub async fn unchanged(pve: &impl Pve, node: &str, ctid: u32, description: &str, net0: &str) -> Result<bool, String> {
+    let config = pve
+        .get(&format!("/nodes/{node}/lxc/{ctid}/config"), &[])
+        .await
+        .map_err(|e| format!("CT {ctid} config: {e}"))?;
+    let same = |key: &str, value: &str| config[key].as_str().map(str::trim_end) == Some(value.trim_end());
+    Ok(same("description", description) && same("net0", net0))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

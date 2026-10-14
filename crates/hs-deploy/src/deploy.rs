@@ -169,15 +169,46 @@ pub async fn apply(config: &DeployConfig, only: &[String], say: &impl Fn(&str)) 
         .collect::<Vec<_>>()
         .join(",");
 
+    // What the container is made with, in its description: the same server,
+    // image, certificate and settings keep the container.
+    let settings: String = Sha256::digest(
+        format!(
+            "{hash}\n{endpoints}\n{}\n{}",
+            config.server.pool, config.server.gold_pool
+        )
+        .as_bytes(),
+    )
+    .iter()
+    .take(6)
+    .map(|b| format!("{b:02x}"))
+    .collect();
     for instance in selected {
         say(&format!(
             "{}: CT {} on {} ({}, {})",
             instance.name, instance.ctid, instance.node, instance.address, instance.storage
         ));
-        let ostemplate = node::ensure_image(&pve, &instance.node, &config.template_storage, &config.image, say).await?;
+        let net0 = format!(
+            "name=eth0,bridge={},ip={}/{},gw={}",
+            config.bridge, instance.address, config.cidr, config.gateway
+        );
+        let description = format!(
+            "HomeStack server {}.{}\nimage {}\ncertificate {}\nsettings {settings}\nmade by homestack-deploy",
+            instance.name, config.domain, config.image, stored.not_after
+        );
         if let Some(found) = node::container(&pve, instance.ctid).await? {
+            let same = found.node == instance.node
+                && found.status == "running"
+                && node::unchanged(&pve, &instance.node, instance.ctid, &description, &net0).await?;
+            if same {
+                say("  the same image, certificate and address: only the configuration is sent");
+                let client = instances_client(config, &[instance], &api_token)?;
+                wait_health(&client, HEALTH_LIMIT).await?;
+                configure(&client, instance, &pve_token, &server_toml, say).await?;
+                continue;
+            }
             node::destroy(&pve, &found, instance.ctid, say).await?;
         }
+        let ostemplate = node::ensure_image(&pve, &instance.node, &config.template_storage, &config.image, say).await?;
         let spec = NewContainer {
             node: &instance.node,
             ctid: instance.ctid,
@@ -188,15 +219,9 @@ pub async fn apply(config: &DeployConfig, only: &[String], say: &impl Fn(&str)) 
             disk_gib: config.disk_gib,
             memory_mib: config.memory_mib,
             cores: config.cores,
-            net0: format!(
-                "name=eth0,bridge={},ip={}/{},gw={}",
-                config.bridge, instance.address, config.cidr, config.gateway
-            ),
+            net0,
             nameserver: config.nameserver.map(|ip| ip.to_string()),
-            description: format!(
-                "HomeStack server {}.{}\nimage {}\nmade by homestack-deploy",
-                instance.name, config.domain, config.image
-            ),
+            description,
         };
         node::create(&pve, &spec, say).await?;
         let env = [
@@ -228,15 +253,7 @@ pub async fn apply(config: &DeployConfig, only: &[String], say: &impl Fn(&str)) 
                 instance.name
             ));
         }
-        client
-            .put_text_on(0, "/v1/secrets/pve-token", &pve_token, "text/plain")
-            .await
-            .map_err(|e| format!("{}: Proxmox token: {e}", instance.name))?;
-        let version = client
-            .configure_on(0, &server_toml)
-            .await
-            .map_err(|e| format!("{}: server.toml: {e}", instance.name))?;
-        say(&format!("  ready, configuration {}", &version[..12.min(version.len())]));
+        configure(&client, instance, &pve_token, &server_toml, say).await?;
     }
     check_versions(config, &api_token, say).await
 }
@@ -323,5 +340,25 @@ pub async fn remove(config: &DeployConfig, only: &[String], say: &impl Fn(&str))
             None => say(&format!("{}: CT {} does not exist", instance.name, instance.ctid)),
         }
     }
+    Ok(())
+}
+
+/// Send the Proxmox token and `server.toml` to one instance.
+async fn configure(
+    client: &Client,
+    instance: &InstanceSpec,
+    pve_token: &str,
+    server_toml: &str,
+    say: &impl Fn(&str),
+) -> Result<(), String> {
+    client
+        .put_text_on(0, "/v1/secrets/pve-token", pve_token, "text/plain")
+        .await
+        .map_err(|e| format!("{}: Proxmox token: {e}", instance.name))?;
+    let version = client
+        .configure_on(0, server_toml)
+        .await
+        .map_err(|e| format!("{}: server.toml: {e}", instance.name))?;
+    say(&format!("  ready, configuration {}", &version[..12.min(version.len())]));
     Ok(())
 }

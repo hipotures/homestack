@@ -15,6 +15,8 @@ struct FakePve {
     containers: Value,
     env: String,
     pending_env: bool,
+    description: String,
+    net0: String,
 }
 
 impl FakePve {
@@ -38,7 +40,9 @@ impl Pve for FakePve {
                 Value::Array(self.images.iter().map(|volid| json!({"volid": volid})).collect())
             }
             "/cluster/resources" => self.containers.clone(),
-            p if p.ends_with("/config") => json!({"env": self.env, "digest": "d1"}),
+            p if p.ends_with("/config") => {
+                json!({"env": self.env, "digest": "d1", "description": self.description, "net0": self.net0})
+            }
             p if p.ends_with("/pending") => {
                 if self.pending_env {
                     json!([{"key": "env", "value": "old", "pending": "new"}])
@@ -174,5 +178,31 @@ async fn old_server_images_are_listed_not_others() -> Result<(), String> {
         node::old_images(&pve, "pve2", "local", &current).await?,
         ["local:vztmpl/homestack-server_0.1.0-aaaaaaaaaaaa.tar"]
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_container_with_the_same_image_certificate_and_address_is_kept() -> Result<(), String> {
+    let description = "HomeStack server api1.example.net\nimage i:1\ncertificate 1700000000\nmade by homestack-deploy";
+    let net0 = "name=eth0,bridge=vmbr0,ip=192.0.2.97/24,gw=192.0.2.1";
+    let pve = FakePve {
+        description: description.to_owned(),
+        net0: net0.to_owned(),
+        ..FakePve::default()
+    };
+    assert!(node::unchanged(&pve, "pve1", 2097, description, net0).await?);
+    let newer = description.replace("image i:1", "image i:2");
+    assert!(!node::unchanged(&pve, "pve1", 2097, &newer, net0).await?, "a new image");
+    let renewed = description.replace("1700000000", "1800000000");
+    assert!(
+        !node::unchanged(&pve, "pve1", 2097, &renewed, net0).await?,
+        "a new certificate"
+    );
+    let moved = net0.replace("192.0.2.97", "192.0.2.98");
+    assert!(
+        !node::unchanged(&pve, "pve1", 2097, description, &moved).await?,
+        "a new address"
+    );
+    assert!(pve.calls().is_empty(), "only read");
     Ok(())
 }
