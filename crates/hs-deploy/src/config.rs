@@ -232,6 +232,30 @@ impl DeployConfig {
     pub fn url(&self, instance: &InstanceSpec) -> Result<Url, String> {
         Url::parse(&format!("https://{}.{}", instance.name, self.domain)).map_err(|error| error.to_string())
     }
+
+    /// What `self` and `other` share: a CTID, an address or a server name.
+    /// Two deployments that share any of them would take each other's
+    /// container, address or name (owner, 2026-10-14: the live gate's
+    /// instances took the address of the installed servers).
+    #[must_use]
+    pub fn clashes(&self, other: &Self) -> Vec<String> {
+        let mut found = Vec::new();
+        for mine in &self.instances {
+            for theirs in &other.instances {
+                if mine.ctid == theirs.ctid {
+                    found.push(format!("CT {} ({} and {})", mine.ctid, mine.name, theirs.name));
+                }
+                if mine.address == theirs.address {
+                    found.push(format!("address {} ({} and {})", mine.address, mine.name, theirs.name));
+                }
+                let (a, b) = (self.url(mine), other.url(theirs));
+                if a.is_ok() && a == b {
+                    found.push(format!("name {}.{}", mine.name, self.domain));
+                }
+            }
+        }
+        found
+    }
 }
 
 fn home() -> PathBuf {
@@ -315,5 +339,36 @@ storage = "local-zfs"
             "{EXAMPLE}[[instances]]\nname = \"api2\"\nnode = \"pve2\"\nctid = 997\naddress = \"192.0.2.98\"\nstorage = \"local-lvm\"\n"
         );
         assert!(DeployConfig::parse(&twice).is_err_and(|e| e.contains("997 appears twice")));
+    }
+}
+
+#[cfg(test)]
+mod clash_tests {
+    use super::DeployConfig;
+
+    fn config(domain: &str, rows: &[(&str, u32, &str)]) -> DeployConfig {
+        let mut text = format!(
+            "image = \"i\"\ndomain = \"{domain}\"\ntemplate_storage = \"local\"\nbridge = \"vmbr0\"\ncidr = 24\n\
+gateway = \"192.0.2.1\"\n[pve]\nendpoints = [\"https://pve1.example.net:8006\"]\ndeploy_token_file = \"d\"\n\
+[server]\npve_token_file = \"p\"\npool = \"homestack\"\nconfig_file = \"/c\"\napi_token_file = \"a\"\n\
+[acme]\novh_file = \"o\"\nzone = \"example.net\"\ndir = \"acme\"\n"
+        );
+        for (name, ctid, address) in rows {
+            text.push_str(&format!(
+                "[[instances]]\nname = \"{name}\"\nnode = \"pve1\"\nctid = {ctid}\naddress = \"{address}\"\nstorage = \"local-lvm\"\n"
+            ));
+        }
+        toml::from_str(&text).unwrap_or_else(|error| panic!("{error}"))
+    }
+
+    #[test]
+    fn a_shared_ctid_address_or_name_is_a_clash_and_nothing_else_is() {
+        let installed = config("hs.example.net", &[("api1", 115, "192.0.2.97")]);
+        let same_address = config("test.example.net", &[("t1", 997, "192.0.2.97")]);
+        let same_name = config("hs.example.net", &[("api1", 997, "192.0.2.94")]);
+        let apart = config("test.example.net", &[("t1", 997, "192.0.2.94")]);
+        assert_eq!(same_address.clashes(&installed), ["address 192.0.2.97 (t1 and api1)"]);
+        assert_eq!(same_name.clashes(&installed), ["name api1.hs.example.net"]);
+        assert!(apart.clashes(&installed).is_empty());
     }
 }

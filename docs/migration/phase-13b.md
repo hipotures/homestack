@@ -240,3 +240,23 @@ Rendering into ratatui's `TestBackend`, as MyPowers does, with a fake status:
   - Then it removes the instances.
 - **Seen live (read-only)** in `tmux` on the owner's cluster: the new form and
   the create plan of VM 245 (a plan changes nothing), then Esc.
+
+### The live gate was not passed (2026-10-14)
+
+- **What happened.** The first run of `live_tui.rs` deployed test CT 997
+  (api1) on pve1 at `192.168.100.97`. That is the address of the installed
+  server CT 115 (api1), which `homestack install` (phase 13c step 2) gave the
+  same names and addresses as the live gate's `live-deploy.toml`:
+  `api1–3.hs.efez.net` at `.97–.99`.
+- **Effect.** The deployment reached the installed server through the shared
+  name and was refused (401). Nothing changed there: its configuration
+  version stayed the same.
+- **Cleanup.** CT 997 stood next to CT 115 on the same address for about a
+  minute and was then removed (`homestack-deploy remove`). CT 998 and 999 had
+  not been made.
+- **Guard** (`DeployConfig::clashes`):
+  - `live_deploy.rs`, `live_cli.rs` and `live_tui.rs` compare their instances
+    with `~/.config/homestack/deploy.toml` when it exists;
+  - on a shared CTID, address or name they refuse before anything is made.
+- **To pass the gate** the test instances need their own names and addresses
+  (owner's decision: DNS records in `hs.efez.net` are the owner's).

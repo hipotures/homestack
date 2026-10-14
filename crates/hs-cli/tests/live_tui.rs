@@ -47,6 +47,22 @@ fn load() -> Result<DeployConfig, Error> {
     {
         return Err("the live gate uses CTIDs 997-999 only".into());
     }
+    // The installed servers (homestack install writes deploy.toml) must keep
+    // their containers, addresses and names: the gate stops before it starts.
+    let installed = std::env::var_os("HOME")
+        .map(|home| Path::new(&home).join(".config/homestack/deploy.toml"))
+        .filter(|path| path.exists());
+    if let Some(path) = installed {
+        let clashes = config.clashes(&DeployConfig::load(&path)?);
+        if !clashes.is_empty() {
+            return Err(format!(
+                "the live gate's test instances share {} with the installed servers of {}; refusing",
+                clashes.join(", "),
+                path.display()
+            )
+            .into());
+        }
+    }
     Ok(config)
 }
 
