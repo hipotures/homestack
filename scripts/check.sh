@@ -23,6 +23,8 @@
 # HOMESTACK_LIVE_IMAGE.
 # The client gate (crates/hs-cli/tests/live_cli.rs) deploys the same test
 # instances and runs homestack create, status, refresh and destroy on VM 240.
+# The TUI gate (crates/hs-cli/tests/live_tui.rs) does the same with the
+# TUI's actions (plan, Apply, the job's steps), and a Cancel first.
 set -euo pipefail
 
 usage() {
@@ -130,6 +132,8 @@ if ((live)); then
     HOMESTACK_LIVE_IMAGE=$image cargo test -p hs-deploy --locked --test live_deploy -- --ignored --nocapture
     step "live cluster (L4): the homestack client on VM 240 through the test instances"
     HOMESTACK_LIVE_IMAGE=$image cargo test -p hs-cli --locked --test live_cli -- --ignored --nocapture
+    step "live cluster (L4): the TUI's actions on VM 240 through the test instances"
+    HOMESTACK_LIVE_IMAGE=$image cargo test -p hs-cli --locked --test live_tui -- --ignored --nocapture
 fi
 
 step "all checks passed$( ((live)) && echo ' (including live)')"

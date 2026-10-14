@@ -1,6 +1,6 @@
 # Phase 13b: the HomeStack TUI
 
-Status: in progress (step 1 done, not yet seen by the owner; steps 2–5 to do). This file is written before the code (PLAN.md
+Status: in progress (steps 1 and 2 done; steps 3–5 to do). This file is written before the code (PLAN.md
 1.1) and updated as the phase goes; the report at the end says what was done
 and what differs.
 
@@ -173,3 +173,70 @@ Rendering into ratatui's `TestBackend`, as MyPowers does, with a fake status:
   - 2: workspaces only.
 
   The choice is kept in `tui.toml`.
+
+## 6. Step 2: actions in the workspaces panel
+
+- **Keys** on the selected workspace:
+  - `r` refresh;
+  - `z` resize;
+  - `k` add key;
+  - `g` migrate;
+  - `d` destroy;
+  - `n` new (needs no selection).
+
+  The buttons in the bottom border light up as soon as a row is selected and
+  no other action is open.
+- **The box** (`tui/action.rs`, `tui/acting.rs`, `draw::action_box`):
+  - **Position.** At 120 columns and wider it sits beside a narrow list
+    (VMID, name, node, state). Below 120 columns it takes the top of the
+    panel.
+  - **Stages.** They sit in the top border, the current one raised:
+    `┐form┌ ✓form …`. Refresh and destroy have no form.
+  - **Buttons.** They sit in the bottom border; the focused one is raised.
+- **Forms.**
+  - **new**: VMID, name, node (default: Gold's), storage (follows the node),
+    home size.
+  - **resize**: disk (home or root) and the new total size.
+  - **add key**: "the keys already in sshkeys" or a `~/.ssh/*.pub`.
+  - **migrate**: the other nodes and their storages.
+
+  A bad VMID, name or empty size is said in the form; nothing is sent.
+- **Plan.** The worker (`action::work`) asks the server for the plan and shows
+  it as the CLI prints it, without the CLI's frame (`action::unframe`), with
+  the CLI's question.
+  - **Destroy** starts with the focus on cancel.
+  - **Resize to the same size** shows the CLI's reason and has no apply.
+  - **A LUKS passphrase** is typed into a hidden field in the plan.
+  - **Esc** cancels; nothing is applied.
+- **Run.** Apply starts the job (`app::run_job`, now shared with the CLI).
+  - Each read of the job shows its steps (✓ done, ◐ running, ✗ failed), and
+    the row in the list shows `◐ refresh` (etc.).
+  - Esc hides the box and the work goes on; ↵ shows it again. A second action
+    waits until the first is closed (a log line says so).
+- **After the job.** The desktop's part is the CLI's own code, moved out of
+  the CLI into shared functions (`app::after_create`, `after_refresh`,
+  `after_destroy`, `after_addkey`).
+  - The SSH config and `known_hosts` are handled exactly as with the CLI.
+  - The result is the CLI's result text.
+  - Add key on a running VM asks the CLI's second question ("Restart … now?",
+    default: later).
+  - The status is read again when the box closes.
+- **Not changed:** what the CLI prints and returns.
+  - The CLI calls the same moved functions.
+  - `tests/cli.rs`, `install_cli.rs` and `views.rs` pass unchanged.
+- **Tests:**
+  - `tests/tui_actions.rs`: 17 tests (keys, forms, plan, run, hide, result,
+    question, passphrase, no-apply plan, narrow box).
+  - `tests/tui_work.rs`: 4 tests. They run the worker against the in-process
+    server on the Proxmox simulator: the plan in the CLI's words; cancel and a
+    closed box change nothing; create with its steps and the SSH config;
+    destroy removes it; a refused plan ends with the server's message.
+- **Gate** (`tests/live_tui.rs`, in `check.sh --live` after `live_cli`):
+  - It deploys the three test instances (CT 997–999).
+  - On VM 240 in `homestack-test` it runs, through the TUI's worker: a
+    cancelled create (nothing made), then create, refresh and destroy.
+  - It checks the plan comes first, every step ends done, and the SSH config
+    is written and removed.
+  - Then it removes the instances.
+- **Seen live (read-only)** in `tmux` on the owner's cluster: the new form and
+  the create plan of VM 245 (a plan changes nothing), then Esc.

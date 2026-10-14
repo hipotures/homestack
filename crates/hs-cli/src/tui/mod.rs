@@ -1,5 +1,7 @@
 //! The HomeStack TUI (phase 13b, `docs/migration/phase-13b.md`).
 
+pub mod acting;
+pub mod action;
 pub mod chrome;
 pub mod draw;
 pub mod layout;

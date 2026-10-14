@@ -13,10 +13,12 @@ use ratatui::backend::CrosstermBackend;
 use serde_json::Value;
 use tokio::sync::mpsc;
 
+use super::action::{Decision, Desktop, Progress, work};
 use super::draw::draw;
 use super::state::{App, Overlay, Request};
 use super::theme::Preferences;
 use crate::app::{Context, client_error, discovery_report, transport_report};
+use crate::config::Loaded;
 use crate::{AppError, config, view};
 
 /// How often the status is read.
@@ -30,6 +32,8 @@ enum Update {
     Details(u32, Value),
     Report(String, Vec<String>),
     Log(String),
+    /// The running action's progress.
+    Action(Progress),
 }
 
 /// The terminal in raw mode on the alternate screen; put back on drop,
@@ -114,25 +118,30 @@ async fn health(client: &Client) -> Vec<(String, Option<String>)> {
     servers
 }
 
+/// Read the status and the servers' health once.
+async fn read_status(client: &Client, updates: &mpsc::UnboundedSender<Update>) {
+    let servers = health(client).await;
+    match client.get_from("/v1/status").await {
+        Ok((url, status)) => {
+            let _ = updates.send(Update::Servers(servers));
+            let _ = updates.send(Update::Status(url.to_string(), status));
+        }
+        Err(error) => {
+            let reason = client_error(error).0;
+            let unreachable = servers
+                .into_iter()
+                .map(|(url, error)| (url, error.unwrap_or_else(|| reason.clone())))
+                .collect();
+            let _ = updates.send(Update::Unreachable(unreachable));
+        }
+    }
+}
+
 /// Read the status and the servers' health now and every [`REFRESH`].
 fn spawn_refresh(client: Arc<Client>, updates: mpsc::UnboundedSender<Update>) {
     tokio::spawn(async move {
         loop {
-            let servers = health(&client).await;
-            match client.get_from("/v1/status").await {
-                Ok((url, status)) => {
-                    let _ = updates.send(Update::Servers(servers));
-                    let _ = updates.send(Update::Status(url.to_string(), status));
-                }
-                Err(error) => {
-                    let reason = client_error(error).0;
-                    let unreachable = servers
-                        .into_iter()
-                        .map(|(url, error)| (url, error.unwrap_or_else(|| reason.clone())))
-                        .collect();
-                    let _ = updates.send(Update::Unreachable(unreachable));
-                }
-            }
+            read_status(&client, &updates).await;
             if updates.is_closed() {
                 return;
             }
@@ -256,12 +265,12 @@ fn start(request: &Request, client: Option<&Arc<Client>>, ctx: &Context, updates
                 let _ = updates.send(Update::Report("this desktop".to_owned(), discovery_lines(&report)));
             });
         }
-        Request::Quit => {}
+        Request::Quit | Request::Act(_) | Request::Decide(_) | Request::Reload => {}
     }
 }
 
-/// The client of `client.toml`, or why there is none.
-fn client(ctx: &Context) -> Result<Client, (String, Vec<String>)> {
+/// The client of `client.toml` and the file itself, or why there is none.
+fn client(ctx: &Context) -> Result<(Client, Loaded), (String, Vec<String>)> {
     let path = config::default_path(&ctx.home, ctx.config_home.as_deref());
     if !path.exists() {
         return Err((
@@ -277,7 +286,9 @@ fn client(ctx: &Context) -> Result<Client, (String, Vec<String>)> {
     let settings = loaded
         .client_config(&ctx.home)
         .map_err(|error| ("client.toml cannot be used".to_owned(), vec![error.0]))?;
-    Client::new(settings).map_err(|error| ("The client cannot start".to_owned(), vec![client_error(error).0]))
+    let client =
+        Client::new(settings).map_err(|error| ("The client cannot start".to_owned(), vec![client_error(error).0]))?;
+    Ok((client, loaded))
 }
 
 /// Run the TUI until the user quits; the exit code.
@@ -294,8 +305,15 @@ pub async fn run(ctx: &mut Context) -> Result<i32, AppError> {
         app.log(&clock.now(), &format!("{problem}; the HomeStack theme is used"));
     }
     let (updates, mut received) = mpsc::unbounded_channel::<Update>();
+    app.set_keys(public_keys(&ctx.home));
+    let mut desktop = None;
     let client = match client(ctx) {
-        Ok(client) => {
+        Ok((client, loaded)) => {
+            desktop = Some(Desktop {
+                home: ctx.home.clone(),
+                loaded,
+                poll: ctx.poll,
+            });
             let client = Arc::new(client);
             spawn_refresh(Arc::clone(&client), updates.clone());
             Some(client)
@@ -316,6 +334,7 @@ pub async fn run(ctx: &mut Context) -> Result<i32, AppError> {
     let mut screen = Screen::open().map_err(|error| AppError::new(format!("Cannot open the terminal: {error}")))?;
     let mut tick = tokio::time::interval(Duration::from_secs(1));
     let mut connected: Option<String> = None;
+    let mut decide: Option<mpsc::UnboundedSender<Decision>> = None;
     loop {
         app.clock = clock.now();
         screen
@@ -331,7 +350,33 @@ pub async fn run(ctx: &mut Context) -> Result<i32, AppError> {
                     if request == Request::Quit {
                         return Ok(0);
                     }
-                    start(&request, client.as_ref(), ctx, &updates);
+                    match request {
+                        Request::Act(start) => {
+                            if let (Some(client), Some(desktop)) = (client.clone(), desktop.clone()) {
+                                let (sender, mut decisions) = mpsc::unbounded_channel();
+                                decide = Some(sender);
+                                let updates = updates.clone();
+                                tokio::spawn(async move {
+                                    let tell = move |progress: Progress| {
+                                        let _ = updates.send(Update::Action(progress));
+                                    };
+                                    work(&client, &desktop, start, &mut decisions, &tell).await;
+                                });
+                            }
+                        }
+                        Request::Decide(decision) => {
+                            if let Some(sender) = &decide {
+                                let _ = sender.send(decision);
+                            }
+                        }
+                        Request::Reload => {
+                            if let Some(client) = client.clone() {
+                                let updates = updates.clone();
+                                tokio::spawn(async move { read_status(&client, &updates).await });
+                            }
+                        }
+                        other => start(&other, client.as_ref(), ctx, &updates),
+                    }
                 }
             }
             Some(update) = received.recv() => match update {
@@ -357,8 +402,37 @@ pub async fn run(ctx: &mut Context) -> Result<i32, AppError> {
                     }
                 }
                 Update::Log(line) => app.log(&clock.now(), &line),
+                Update::Action(progress) => {
+                    if let Progress::Done { ok, lines } = &progress {
+                        let title = app.action.as_ref().map(super::action::Action::title).unwrap_or_default();
+                        let outcome = if *ok { "done" } else { "failed" };
+                        let first = lines.first().cloned().unwrap_or_default();
+                        app.log(&clock.now(), &format!("{title}: {outcome}; {first}"));
+                        decide = None;
+                        if let Some(client) = client.clone() {
+                            let updates = updates.clone();
+                            tokio::spawn(async move { read_status(&client, &updates).await });
+                        }
+                    }
+                    app.progress(progress);
+                }
             },
             _ = tick.tick() => {}
         }
     }
+}
+
+/// The public keys in `~/.ssh`, as `~/.ssh/NAME.pub`, sorted.
+fn public_keys(home: &std::path::Path) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(home.join(".ssh")) else {
+        return Vec::new();
+    };
+    let mut keys: Vec<String> = entries
+        .filter_map(Result::ok)
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .filter(|name| name.ends_with(".pub"))
+        .map(|name| format!("~/.ssh/{name}"))
+        .collect();
+    keys.sort();
+    keys
 }

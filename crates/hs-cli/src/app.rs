@@ -566,65 +566,33 @@ impl<'a> Cli<'a> {
         Ok(Ok(session))
     }
 
-    /// Apply the plan and follow its job to the end; the job's result.
+    /// Apply the plan and follow its job to the end, printing each step as
+    /// it finishes; the job's result.
     async fn apply(&mut self, session: &Session<'a>, secrets: Option<&Value>) -> Result<Value, AppError> {
-        let version = session
-            .config_version()
-            .await
-            .map_err(client_error)?
-            .ok_or_else(|| AppError::new("The server has no configuration; upload server.toml first."))?;
-        let job = session.apply_with(&version, secrets).await.map_err(client_error)?;
-        let id = job["id"].as_str().unwrap_or_default().to_owned();
-        *self.running.lock().unwrap_or_else(PoisonError::into_inner) = Some(format!("job {id} on {}", session.url()));
-        let finished = self.follow(session, &id).await;
-        *self.running.lock().unwrap_or_else(PoisonError::into_inner) = None;
-        let job = finished?;
-        if job["state"] == "succeeded" {
-            return Ok(job["result"].clone());
-        }
-        let message = job["error"]["message"]
-            .as_str()
-            .filter(|message| !message.is_empty())
-            .map_or_else(|| format!("Job {id} failed"), str::to_owned);
-        Err(AppError::new(message))
-    }
-
-    /// Read the job until it ends, printing each step as it finishes.
-    async fn follow(&mut self, session: &Session<'a>, id: &str) -> Result<Value, AppError> {
-        let deadline = tokio::time::Instant::now() + JOB_LIMIT;
+        let running = self.running;
+        let json_mode = self.args.json;
+        let style = self.ctx.style;
+        let console = &mut self.ctx.console;
         let mut shown = 0;
-        loop {
-            let job = session.job(id).await.map_err(client_error)?;
+        let finished = run_job(session, secrets, self.ctx.poll, |id, job| {
+            *running.lock().unwrap_or_else(PoisonError::into_inner) = Some(format!("job {id} on {}", session.url()));
+            if json_mode {
+                return;
+            }
             let steps = job["steps"].as_array().cloned().unwrap_or_default();
-            if !self.args.json {
-                while let Some(step) = steps.get(shown) {
-                    let mark = match step["state"].as_str() {
-                        Some("done") => self.ctx.style.paint("✓", Color::Green),
-                        Some("failed") => self.ctx.style.paint("✗", Color::Red),
-                        _ => break,
-                    };
-                    let line = format!("  {mark} {}\n", view::text(&step["name"]));
-                    self.out(&line);
-                    shown += 1;
-                }
+            while let Some(step) = steps.get(shown) {
+                let mark = match step["state"].as_str() {
+                    Some("done") => style.paint("✓", Color::Green),
+                    Some("failed") => style.paint("✗", Color::Red),
+                    _ => break,
+                };
+                console.out(&format!("  {mark} {}\n", view::text(&step["name"])));
+                shown += 1;
             }
-            if matches!(job["state"].as_str(), Some("succeeded" | "failed")) {
-                return Ok(job);
-            }
-            if tokio::time::Instant::now() >= deadline {
-                return Err(AppError::new(format!(
-                    "Job {id} did not finish in time; it may still run on {}",
-                    session.url()
-                )));
-            }
-            tokio::time::sleep(self.ctx.poll).await;
-        }
-    }
-
-    /// Remove the workspace's own `known_hosts` file (the paths removed).
-    fn known_hosts(&self, vmid: u32) -> Result<Vec<String>, AppError> {
-        local_ssh::forget_known_hosts(&self.ctx.home, vmid)
-            .map(|removed| removed.iter().map(|path| path.display().to_string()).collect())
+        })
+        .await;
+        *self.running.lock().unwrap_or_else(PoisonError::into_inner) = None;
+        finished
     }
 
     async fn create(&mut self, parameters: Value) -> Result<Code, AppError> {
@@ -639,25 +607,7 @@ impl<'a> Cli<'a> {
             Err(code) => return Ok(code),
         };
         let mut result = self.apply(&session, None).await?;
-        let vmid = vmid_of(&result)?;
-        let name = view::text(&result["name"]);
-        let ip = view::text(&result["ip"]);
-        let removed = self.known_hosts(vmid)?;
-        let ssh = &self.loaded.client.workspace_ssh;
-        let path = local_ssh::write_local_ssh_config(&self.ctx.home, ssh, vmid, &name, &ip).map_err(|error| {
-            AppError::new(format!(
-                "Workspace VM {vmid} ({name}) was created and verified successfully, but local SSH config generation failed: {error}"
-            ))
-        })?;
-        merge(
-            &mut result,
-            json!({
-                "ok": true,
-                "ssh_known_hosts_removed": removed,
-                "ssh_config_path": path.display().to_string(),
-                "ssh": {"root": format!("ssh root@{name}"), "user": format!("ssh {name}")},
-            }),
-        );
+        after_create(&self.ctx.home, &self.loaded.client.workspace_ssh, &mut result)?;
         if self.args.json {
             self.emit(&result);
         } else {
@@ -686,21 +636,12 @@ impl<'a> Cli<'a> {
             Err(code) => return Ok(code),
         };
         let mut result = self.apply(&session, None).await?;
-        let ip = view::text(&result["ip"]);
-        let removed = if result["host_key_changed"] == false {
-            Vec::new()
-        } else {
-            self.known_hosts(vmid)?
-        };
-        let user = &self.loaded.client.workspace_ssh.user;
-        merge(
+        after_refresh(
+            &self.ctx.home,
+            &self.loaded.client.workspace_ssh.user,
+            vmid,
             &mut result,
-            json!({
-                "ok": true,
-                "ssh_known_hosts_removed": removed,
-                "ssh": {"root": format!("ssh root@{ip}"), "user": format!("ssh {user}@{ip}")},
-            }),
-        );
+        )?;
         if self.args.json {
             self.emit(&result);
         } else {
@@ -717,14 +658,7 @@ impl<'a> Cli<'a> {
             question: "Resize this workspace disk?",
             recover: None,
         };
-        let same_size = |plan: &Value| {
-            let target = plan["target_size_gib"].as_f64();
-            (target.is_some() && target == plan["current_size_gib"].as_f64()).then(|| {
-                let size = view::text(&plan["size"]);
-                format!("Disk is already {size}: {size} -> {size} changes nothing.")
-            })
-        };
-        let session = match self.plan(&confirm, parameters, resize_plan, same_size).await? {
+        let session = match self.plan(&confirm, parameters, resize_plan, resize_same_size).await? {
             Ok(session) => session,
             Err(code) => return Ok(code),
         };
@@ -755,12 +689,7 @@ impl<'a> Cli<'a> {
         if self.args.json {
             self.emit(&result);
         } else {
-            let line = format!(
-                "VM {}: {} resized to {}; filesystem expanded.\n",
-                view::text(&summary["vmid"]),
-                view::text(&summary["disk"]),
-                view::text(&summary["size"])
-            );
+            let line = resize_result_text(&summary);
             self.out(&line);
         }
         Ok(0)
@@ -793,7 +722,6 @@ impl<'a> Cli<'a> {
             Err(code) => return Ok(code),
         };
         let mut result = self.apply(&session, None).await?;
-        let ip = view::text(&result["ip"]);
         let name = view::text(&result["name"]);
         let ask = !restart && !self.args.json && self.ctx.stdin_tty && result["pending_restart"] == true;
         if ask {
@@ -813,27 +741,7 @@ impl<'a> Cli<'a> {
                 }
             }
         }
-        let removed = if result["restarted"] == true {
-            self.known_hosts(vmid)?
-        } else {
-            Vec::new()
-        };
-        result["known_hosts_removed"] = json!(removed);
-        if let Some(shown) = &private_shown {
-            let local = identity::sync_local_ssh(
-                &self.ctx.home,
-                &self.loaded.path,
-                &self.loaded.client.workspace_ssh,
-                shown,
-                vmid,
-                &name,
-                &ip,
-            );
-            match local {
-                Ok(local) => result["local"] = local,
-                Err(error) => result["local_error"] = json!(error.0),
-            }
-        }
+        after_addkey(&self.ctx.home, self.loaded, vmid, private_shown.as_deref(), &mut result)?;
         if self.args.json {
             self.emit(&result);
         } else {
@@ -843,33 +751,7 @@ impl<'a> Cli<'a> {
     }
 
     fn addkey_result(&mut self, vmid: u32, name: &str, result: &Value) {
-        let state = if result["verified"] == true {
-            "; restarted and verified in root and user authorized_keys."
-        } else if result["pending_restart"] == true {
-            "; VM NOT restarted, the key applies after the next restart."
-        } else {
-            "; applies on the next start."
-        };
-        let mut text = format!(
-            "VM {vmid} ({name}): keys ready: {}{state}\n",
-            view::text(&result["key"])
-        );
-        if result["new_instance_at_next_start"] == true {
-            text.push_str(
-                "The next start runs Cloud-Init again and the VM gets new SSH host keys; \
-remove the old one with `ssh-keygen -R ADDRESS` after that start.\n",
-            );
-        }
-        if let Some(path) = result["local"]["ssh_config"].as_str() {
-            text.push_str(&format!("Local ssh config updated: {path}\n"));
-        }
-        if let Some(error) = result["local_error"].as_str() {
-            let warning = self
-                .ctx
-                .style
-                .paint(&format!("WARNING: local ssh config not updated: {error}"), Color::Red);
-            text.push_str(&format!("{warning}\n"));
-        }
+        let text = addkey_result_text(vmid, name, result, &self.ctx.style);
         self.out(&text);
     }
 
@@ -888,14 +770,7 @@ remove the old one with `ssh-keygen -R ADDRESS` after that start.\n",
             Err(code) => return Ok(code),
         };
         let mut result = self.apply(&session, None).await?;
-        let name = view::text(&result["name"]);
-        let local = self.destroy_locally(vmid).map_err(|error| {
-            AppError::new(format!(
-                "Workspace VM {vmid} ({name}) was destroyed successfully, but local SSH cleanup failed: {error}"
-            ))
-        })?;
-        merge(&mut result, local);
-        result["ok"] = json!(true);
+        after_destroy(&self.ctx.home, vmid, &mut result)?;
         if self.args.json {
             self.emit(&result);
         } else {
@@ -903,19 +778,6 @@ remove the old one with `ssh-keygen -R ADDRESS` after that start.\n",
             self.out(&text);
         }
         Ok(0)
-    }
-
-    /// The desktop's steps once the VM is verified absent, in Python's
-    /// order: BK keys, SSH config, `known_hosts`.
-    fn destroy_locally(&self, vmid: u32) -> Result<Value, AppError> {
-        let left = backup_keys_left(&self.ctx.home, vmid);
-        let removed = local_ssh::remove_local_ssh_config(&self.ctx.home, vmid)?;
-        let forgotten = self.known_hosts(vmid)?;
-        Ok(json!({
-            "backup_keys_left": left,
-            "ssh_config_removed": removed.iter().map(|path| path.display().to_string()).collect::<Vec<_>>(),
-            "ssh_known_hosts_removed": forgotten,
-        }))
     }
 
     async fn migrate(&mut self, parameters: Value) -> Result<Code, AppError> {
@@ -934,14 +796,7 @@ remove the old one with `ssh-keygen -R ADDRESS` after that start.\n",
         if self.args.json {
             self.emit(&result);
         } else {
-            let line = format!(
-                "VM {} ({}): migrated to {} on {}; power state {}.\n",
-                view::text(&result["vmid"]),
-                view::text(&result["name"]),
-                view::text(&result["target_node"]),
-                view::text(&result["target_storage"]),
-                view::text(&result["status"])
-            );
+            let line = migrate_result_text(&result);
             self.out(&line);
         }
         Ok(0)
@@ -949,7 +804,7 @@ remove the old one with `ssh-keygen -R ADDRESS` after that start.\n",
 }
 
 /// `addkey`'s plan: the panel and the numbered steps (Python `cli.main`).
-fn addkey_plan(plan: &Value, style: &Style) -> String {
+pub fn addkey_plan(plan: &Value, style: &Style) -> String {
     let key = if plan["key"].is_object() {
         format!(
             "{} ({})",
@@ -975,7 +830,7 @@ fn addkey_plan(plan: &Value, style: &Style) -> String {
 }
 
 /// `resize`'s plan panel (Python `cli.main`).
-fn resize_plan(plan: &Value, style: &Style) -> String {
+pub fn resize_plan(plan: &Value, style: &Style) -> String {
     let guest = &plan["guest"];
     let current = plan["current_size_gib"]
         .as_f64()
@@ -1003,12 +858,12 @@ fn resize_plan(plan: &Value, style: &Style) -> String {
     view::kv_panel("RESIZE PLAN — NO CHANGES MADE YET", &sections, style)
 }
 
-fn is_vmid(text: &str) -> bool {
+pub fn is_vmid(text: &str) -> bool {
     !text.is_empty() && text.bytes().all(|b| b.is_ascii_digit())
 }
 
 /// Python `models.validate_name`'s pattern: `[A-Za-z][A-Za-z0-9.-]{0,62}`.
-fn valid_name(text: &str) -> bool {
+pub fn valid_name(text: &str) -> bool {
     let mut chars = text.chars();
     chars.next().is_some_and(|first| first.is_ascii_alphabetic())
         && text.len() <= 63
@@ -1134,4 +989,217 @@ pub async fn discovery_report(client: &Client, system: &dyn System, home: &Path)
         }
     }
     report
+}
+
+/// Apply `session`'s plan and read its job until it ends; `each` sees the
+/// job's id and every read of it. The job's result, or its error.
+pub async fn run_job(
+    session: &Session<'_>,
+    secrets: Option<&Value>,
+    poll: Duration,
+    mut each: impl FnMut(&str, &Value),
+) -> Result<Value, AppError> {
+    let version = session
+        .config_version()
+        .await
+        .map_err(client_error)?
+        .ok_or_else(|| AppError::new("The server has no configuration; upload server.toml first."))?;
+    let job = session.apply_with(&version, secrets).await.map_err(client_error)?;
+    let id = job["id"].as_str().unwrap_or_default().to_owned();
+    let deadline = tokio::time::Instant::now() + JOB_LIMIT;
+    let job = loop {
+        let job = session.job(&id).await.map_err(client_error)?;
+        each(&id, &job);
+        if matches!(job["state"].as_str(), Some("succeeded" | "failed")) {
+            break job;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err(AppError::new(format!(
+                "Job {id} did not finish in time; it may still run on {}",
+                session.url()
+            )));
+        }
+        tokio::time::sleep(poll).await;
+    };
+    if job["state"] == "succeeded" {
+        return Ok(job["result"].clone());
+    }
+    let message = job["error"]["message"]
+        .as_str()
+        .filter(|message| !message.is_empty())
+        .map_or_else(|| format!("Job {id} failed"), str::to_owned);
+    Err(AppError::new(message))
+}
+
+/// Remove the workspace's own `known_hosts` file (the paths removed).
+pub fn forget_known_hosts(home: &Path, vmid: u32) -> Result<Vec<String>, AppError> {
+    local_ssh::forget_known_hosts(home, vmid)
+        .map(|removed| removed.iter().map(|path| path.display().to_string()).collect())
+}
+
+/// The desktop's part of `create`, after the job: the old `known_hosts`
+/// of the VMID goes, the workspace's SSH config is written.
+pub fn after_create(home: &Path, ssh: &hs_config::client::WorkspaceSsh, result: &mut Value) -> Result<(), AppError> {
+    let vmid = vmid_of(result)?;
+    let name = view::text(&result["name"]);
+    let ip = view::text(&result["ip"]);
+    let removed = forget_known_hosts(home, vmid)?;
+    let path = local_ssh::write_local_ssh_config(home, ssh, vmid, &name, &ip).map_err(|error| {
+        AppError::new(format!(
+            "Workspace VM {vmid} ({name}) was created and verified successfully, but local SSH config generation failed: {error}"
+        ))
+    })?;
+    merge(
+        result,
+        json!({
+            "ok": true,
+            "ssh_known_hosts_removed": removed,
+            "ssh_config_path": path.display().to_string(),
+            "ssh": {"root": format!("ssh root@{name}"), "user": format!("ssh {name}")},
+        }),
+    );
+    Ok(())
+}
+
+/// The desktop's part of `refresh`: `known_hosts` goes unless the host
+/// key stayed.
+pub fn after_refresh(home: &Path, user: &str, vmid: u32, result: &mut Value) -> Result<(), AppError> {
+    let ip = view::text(&result["ip"]);
+    let removed = if result["host_key_changed"] == false {
+        Vec::new()
+    } else {
+        forget_known_hosts(home, vmid)?
+    };
+    merge(
+        result,
+        json!({
+            "ok": true,
+            "ssh_known_hosts_removed": removed,
+            "ssh": {"root": format!("ssh root@{ip}"), "user": format!("ssh {user}@{ip}")},
+        }),
+    );
+    Ok(())
+}
+
+/// The desktop's part of `destroy` once the VM is verified absent, in
+/// Python's order: BK keys (listed), SSH config, `known_hosts`.
+pub fn after_destroy(home: &Path, vmid: u32, result: &mut Value) -> Result<(), AppError> {
+    let name = view::text(&result["name"]);
+    let local = (|| -> Result<Value, AppError> {
+        let left = backup_keys_left(home, vmid);
+        let removed = local_ssh::remove_local_ssh_config(home, vmid)?;
+        let forgotten = forget_known_hosts(home, vmid)?;
+        Ok(json!({
+            "backup_keys_left": left,
+            "ssh_config_removed": removed.iter().map(|path| path.display().to_string()).collect::<Vec<_>>(),
+            "ssh_known_hosts_removed": forgotten,
+        }))
+    })()
+    .map_err(|error| {
+        AppError::new(format!(
+            "Workspace VM {vmid} ({name}) was destroyed successfully, but local SSH cleanup failed: {error}"
+        ))
+    })?;
+    merge(result, local);
+    result["ok"] = json!(true);
+    Ok(())
+}
+
+/// The desktop's part of `addkey`: `known_hosts` goes after a restart, and
+/// a key given as a file joins the local SSH settings.
+pub fn after_addkey(
+    home: &Path,
+    loaded: &Loaded,
+    vmid: u32,
+    private_shown: Option<&str>,
+    result: &mut Value,
+) -> Result<(), AppError> {
+    let removed = if result["restarted"] == true {
+        forget_known_hosts(home, vmid)?
+    } else {
+        Vec::new()
+    };
+    result["known_hosts_removed"] = json!(removed);
+    if let Some(shown) = private_shown {
+        let name = view::text(&result["name"]);
+        let ip = view::text(&result["ip"]);
+        let local = identity::sync_local_ssh(
+            home,
+            &loaded.path,
+            &loaded.client.workspace_ssh,
+            shown,
+            vmid,
+            &name,
+            &ip,
+        );
+        match local {
+            Ok(local) => result["local"] = local,
+            Err(error) => result["local_error"] = json!(error.0),
+        }
+    }
+    Ok(())
+}
+
+/// What `addkey` says at the end (Python `cli.main`).
+#[must_use]
+pub fn addkey_result_text(vmid: u32, name: &str, result: &Value, style: &Style) -> String {
+    let state = if result["verified"] == true {
+        "; restarted and verified in root and user authorized_keys."
+    } else if result["pending_restart"] == true {
+        "; VM NOT restarted, the key applies after the next restart."
+    } else {
+        "; applies on the next start."
+    };
+    let mut text = format!(
+        "VM {vmid} ({name}): keys ready: {}{state}\n",
+        view::text(&result["key"])
+    );
+    if result["new_instance_at_next_start"] == true {
+        text.push_str(
+            "The next start runs Cloud-Init again and the VM gets new SSH host keys; \
+remove the old one with `ssh-keygen -R ADDRESS` after that start.\n",
+        );
+    }
+    if let Some(path) = result["local"]["ssh_config"].as_str() {
+        text.push_str(&format!("Local ssh config updated: {path}\n"));
+    }
+    if let Some(error) = result["local_error"].as_str() {
+        let warning = style.paint(&format!("WARNING: local ssh config not updated: {error}"), Color::Red);
+        text.push_str(&format!("{warning}\n"));
+    }
+    text
+}
+
+/// What `resize` says at the end.
+#[must_use]
+pub fn resize_result_text(summary: &Value) -> String {
+    format!(
+        "VM {}: {} resized to {}; filesystem expanded.\n",
+        view::text(&summary["vmid"]),
+        view::text(&summary["disk"]),
+        view::text(&summary["size"])
+    )
+}
+
+/// What `migrate` says at the end.
+#[must_use]
+pub fn migrate_result_text(result: &Value) -> String {
+    format!(
+        "VM {} ({}): migrated to {} on {}; power state {}.\n",
+        view::text(&result["vmid"]),
+        view::text(&result["name"]),
+        view::text(&result["target_node"]),
+        view::text(&result["target_storage"]),
+        view::text(&result["status"])
+    )
+}
+
+/// `resize`'s refusal before the question when the size does not change.
+#[must_use]
+pub fn resize_same_size(plan: &Value) -> Option<String> {
+    let target = plan["target_size_gib"].as_f64();
+    (target.is_some() && target == plan["current_size_gib"].as_f64()).then(|| {
+        let size = view::text(&plan["size"]);
+        format!("Disk is already {size}: {size} -> {size} changes nothing.")
+    })
 }

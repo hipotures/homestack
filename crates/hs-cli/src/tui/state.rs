@@ -12,7 +12,7 @@ use super::theme::{Palette, Preferences, THEMES};
 use crate::AppError;
 
 /// What the loop has to do after a key.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Request {
     /// Read `/v1/workspaces/{vmid}`.
     Details(u32),
@@ -20,6 +20,12 @@ pub enum Request {
     Transport,
     /// Menu › Check this desktop (`homestack discover`).
     Discover,
+    /// Start an action (its plan first).
+    Act(super::action::Start),
+    /// The user's answer to the running action.
+    Decide(super::action::Decision),
+    /// Read the status now (an action ended).
+    Reload,
     Quit,
 }
 
@@ -118,6 +124,10 @@ pub struct App {
     pub clock: String,
     /// Shown instead of the list: a title and lines (no client.toml, …).
     pub notice: Option<(String, Vec<String>)>,
+    /// The action box of the workspaces panel.
+    pub action: Option<super::action::Action>,
+    /// The desktop's public keys for add key (`~/.ssh/….pub`).
+    pub keys: Vec<String>,
 }
 
 impl App {
@@ -149,6 +159,8 @@ impl App {
             lines: Vec::new(),
             clock: String::new(),
             notice: None,
+            action: None,
+            keys: Vec::new(),
         })
     }
 
@@ -335,6 +347,18 @@ impl App {
                 _ => {}
             }
             self.keep_selection();
+            return None;
+        }
+        if self.action.as_ref().is_some_and(|action| !action.hidden) {
+            return self.action_key(key.code);
+        }
+        if let KeyCode::Char(c @ ('n' | 'r' | 'z' | 'k' | 'g' | 'd')) = key.code {
+            return self.open_action(c);
+        }
+        if key.code == KeyCode::Enter
+            && let Some(action) = self.action.as_mut()
+        {
+            action.hidden = false;
             return None;
         }
         match key.code {

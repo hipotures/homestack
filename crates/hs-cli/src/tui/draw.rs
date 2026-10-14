@@ -6,6 +6,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
 
+use super::action::Action;
 use super::chrome::{Control, Sides, frame, scrollbar, text_style};
 use super::layout::{MIN_HEIGHT, MIN_WIDTH, arrange};
 use super::state::{App, MENU, Overlay, PRESETS};
@@ -388,6 +389,9 @@ fn columns(width: usize) -> Vec<Column> {
             width: 9,
             right: false,
             value: |entry| {
+                if entry.status.starts_with('◐') {
+                    return entry.status.clone();
+                }
                 let symbol = if entry.status == "running" { "●" } else { "○" };
                 format!("{symbol} {}", entry.status)
             },
@@ -466,17 +470,18 @@ fn list_line(columns: &[Column], cell: impl Fn(&Column) -> String) -> String {
 fn workspace_actions(app: &App) -> Vec<Control> {
     let selected = app.selected_entry();
     let running = selected.is_some_and(|entry| entry.status == "running");
-    // Step 1 is read-only: every action but info waits for step 2.
+    // ssh, start/stop and setup come in steps 4 and 5 of phase 13b.
+    let free = selected.is_some() && app.action.is_none();
     vec![
         Control::key("info ↵").enabled(selected.is_some()),
         Control::key("&ssh").muted(),
         Control::key(if running { "s&top" } else { "s&tart" }).muted(),
         Control::key("s&etup").muted(),
-        Control::key("&refresh").muted(),
-        Control::key("resi&ze").muted(),
-        Control::key("add&key").muted(),
-        Control::key("mi&grate").muted(),
-        Control::key("&destroy").muted(),
+        Control::key("&refresh").enabled(free),
+        Control::key("resi&ze").enabled(free),
+        Control::key("add&key").enabled(free),
+        Control::key("mi&grate").enabled(free),
+        Control::key("&destroy").enabled(free),
     ]
 }
 
@@ -587,7 +592,7 @@ fn workspaces(buf: &mut Buffer, area: Rect, app: &App, mut controls: Vec<Control
         top_left,
         top_right: vec![
             Control::plain(&format!("‹ node: {node} ›")),
-            Control::key("&new").muted(),
+            Control::key("&new").enabled(app.status.is_some() && app.action.is_none()),
         ],
         bottom_left: workspace_actions(app),
         bottom_right: vec![Control::plain(&format!("{position}/{}", rows.len()))],
@@ -645,7 +650,20 @@ fn workspaces(buf: &mut Buffer, area: Rect, app: &App, mut controls: Vec<Control
     }
     let mut list = inner;
     let selected = app.selected_entry();
-    if let Some(entry) = selected {
+    let open = app.action.as_ref().filter(|action| !action.hidden);
+    if let Some(action) = open {
+        if inner.width >= 82 {
+            let sub = Rect::new(inner.x + 36, inner.y, inner.width - 36, inner.height);
+            action_box(buf, sub, app, action);
+            list.width = 35;
+        } else {
+            let height = inner.height.saturating_sub(6).max(3);
+            let sub = Rect::new(inner.x, inner.y, inner.width, height);
+            action_box(buf, sub, app, action);
+            list.y += height;
+            list.height -= height;
+        }
+    } else if let Some(entry) = selected {
         let wide = inner.width >= 82;
         if wide {
             let box_width = if inner.width >= 108 { 45 } else { 35 };
@@ -693,13 +711,24 @@ fn workspaces(buf: &mut Buffer, area: Rect, app: &App, mut controls: Vec<Control
                 style = style.add_modifier(Modifier::REVERSED);
             }
         }
-        let line = list_line(&columns, |column| (column.value)(entry));
+        let mut shown = (*entry).clone();
+        if let Some(action) = app
+            .action
+            .as_ref()
+            .filter(|action| action.busy() && action.vmid == Some(entry.vmid))
+        {
+            shown.status = format!("◐ {}", action.kind.word());
+        }
+        let line = list_line(&columns, |column| (column.value)(&shown));
         let line = format!("{line:<width$}", width = usize::from(list.width));
         write(buf, list.x, y, list.width, &line, style);
         // The state dot in its colour.
-        if let Some(at) = line.find(['●', '○']) {
+        if let Some(at) = line.find(['●', '○', '◐']) {
             let x = list.x + u16::try_from(line[..at].chars().count()).unwrap_or(0);
-            let color: Color = if entry.status == "running" {
+            let busy = shown.status.starts_with('◐');
+            let color: Color = if busy {
+                palette.info
+            } else if entry.status == "running" {
                 palette.ok
             } else {
                 palette.muted
@@ -709,7 +738,13 @@ fn workspaces(buf: &mut Buffer, area: Rect, app: &App, mut controls: Vec<Control
                 x,
                 y,
                 1,
-                if entry.status == "running" { "●" } else { "○" },
+                if busy {
+                    "◐"
+                } else if entry.status == "running" {
+                    "●"
+                } else {
+                    "○"
+                },
                 style.fg(color),
             );
         }
@@ -891,7 +926,7 @@ fn list_item(palette: &Palette, label: &str, chosen: bool) -> (String, Style) {
     }
 }
 
-const HELP: [&str; 15] = [
+const HELP: [&str; 18] = [
     "1 2 3 4     show or hide workspaces, cluster, storage, log",
     "0           the standard view: every panel and node, no filter",
     "p           next preset (auto, 1, 2)",
@@ -902,9 +937,233 @@ const HELP: [&str; 15] = [
     "f           filter by name or VMID; ↵ keeps it, esc clears it",
     "q  ctrl-c   quit",
     "",
-    "The actions in the bottom border of the workspaces panel",
-    "(ssh, start/stop, setup, refresh, resize, add key, migrate,",
-    "destroy, new) come in the next steps of phase 13b; until",
-    "then they are grey. The CLI has them all:",
+    "On the selected workspace (a box opens in the panel):",
+    "n new   r refresh   z resize   k add key   g migrate   d destroy",
+    "In the box: tab next field, ← → choose, ↵ plan, a apply,",
+    "esc cancel (while it runs esc hides the box; ↵ shows it).",
+    "",
+    "ssh, start/stop and setup come in the next steps of phase 13b;",
+    "until then they are grey. The CLI has every command:",
     "homestack --help",
 ];
+
+/// `line` cut into pieces of at most `width` characters, at spaces when it
+/// can; the indentation of the first piece is kept on the others.
+fn wrap(line: &str, width: usize) -> Vec<String> {
+    if width == 0 || line.chars().count() <= width {
+        return vec![line.to_owned()];
+    }
+    // A rule (----) is cut to the width, never wrapped.
+    if line.trim().chars().all(|c| c == '-') {
+        return vec![line.chars().take(width).collect()];
+    }
+    let indent: String = line.chars().take_while(|c| *c == ' ').collect();
+    let indent = if indent.len() * 2 > width {
+        String::new()
+    } else {
+        indent
+    };
+    let mut pieces = Vec::new();
+    let mut current = String::new();
+    for word in line.split(' ') {
+        let fits = current.chars().count() + word.chars().count() < width;
+        if !current.trim().is_empty() && !fits {
+            pieces.push(current.trim_end().to_owned());
+            current = indent.clone();
+        }
+        if !current.is_empty() || pieces.is_empty() {
+            current.push_str(word);
+            current.push(' ');
+        } else {
+            current = format!("{indent}{word} ");
+        }
+        while current.chars().count() > width {
+            let head: String = current.chars().take(width).collect();
+            pieces.push(head);
+            current = format!("{indent}{}", current.chars().skip(width).collect::<String>());
+        }
+    }
+    if !current.trim().is_empty() {
+        pieces.push(current.trim_end().to_owned());
+    }
+    pieces
+}
+
+/// The box of an action (mockups 12–14): its stages in the top border, its
+/// buttons in the bottom border.
+fn action_box(buf: &mut Buffer, area: Rect, app: &App, action: &Action) {
+    use super::action::{Input, PlanFocus, Stage, StepState};
+    let palette = &app.palette;
+    let text = text_style(palette);
+    let muted = text.fg(palette.muted);
+    let stages: &[&str] = if action.kind.has_form() {
+        &["form", "plan", "run"]
+    } else {
+        &["plan", "run"]
+    };
+    let current = match action.stage {
+        Stage::Form(_) => "form",
+        Stage::Asking | Stage::Plan { .. } => "plan",
+        _ => "run",
+    };
+    let at = stages.iter().position(|stage| *stage == current).unwrap_or(0);
+    let mut top_left = vec![Control::plain(&action.title())];
+    for (index, stage) in stages.iter().enumerate() {
+        top_left.push(match index.cmp(&at) {
+            std::cmp::Ordering::Less => Control::plain(&format!("✓{stage}")).muted(),
+            std::cmp::Ordering::Equal => Control::plain(stage).raised(),
+            std::cmp::Ordering::Greater => Control::plain(stage).muted(),
+        });
+    }
+    let raised = |control: Control, on: bool| if on { control.raised() } else { control };
+    let bottom_left = match &action.stage {
+        Stage::Form(_) => vec![
+            Control::key("next ⇥"),
+            Control::key("plan ↵"),
+            Control::key("cancel esc"),
+        ],
+        Stage::Asking => vec![Control::key("cancel esc")],
+        Stage::Plan { blocked, focus, .. } => {
+            let mut buttons = Vec::new();
+            if blocked.is_none() {
+                buttons.push(raised(Control::key("&apply"), *focus == PlanFocus::Apply));
+            }
+            buttons.push(raised(Control::key("cancel esc"), *focus == PlanFocus::Cancel));
+            buttons
+        }
+        Stage::Running { .. } => vec![Control::key("hide esc")],
+        Stage::Question { yes, .. } => vec![
+            raised(Control::key("&restart now"), *yes),
+            raised(Control::key("later esc"), !*yes),
+        ],
+        Stage::Done { ok, .. } => vec![
+            Control::plain(if *ok { "✓ done" } else { "✗ failed" }),
+            Control::key("close ↵"),
+        ],
+    };
+    let inner = frame(
+        buf,
+        area,
+        palette,
+        &Sides {
+            top_left,
+            bottom_left,
+            focused: true,
+            ..Sides::default()
+        },
+    );
+    let width = usize::from(inner.width.saturating_sub(2));
+    let mut lines: Vec<(String, Style)> = Vec::new();
+    let push = |line: &str, style: Style, lines: &mut Vec<(String, Style)>| {
+        for piece in wrap(line, width) {
+            lines.push((piece, style));
+        }
+    };
+    let mut scroll = 0;
+    match &action.stage {
+        Stage::Form(form) => {
+            lines.push((String::new(), text));
+            for (index, field) in form.fields.iter().enumerate() {
+                let focused = index == form.focus;
+                let value = match &field.input {
+                    Input::Text(value) => {
+                        let cursor = if focused { "▏" } else { "" };
+                        format!("[ {value}{cursor} ]")
+                    }
+                    Input::Choice { options, index } => {
+                        format!("‹ {} ›", options.get(*index).map_or("—", String::as_str))
+                    }
+                };
+                let mut style = text;
+                if focused {
+                    style = style.bg(palette.selection).add_modifier(Modifier::BOLD);
+                }
+                lines.push((format!("{:<11}{value}", field.label), style));
+            }
+            lines.push((String::new(), text));
+            if let Some(field) = form.fields.get(form.focus) {
+                push(&field.note, muted, &mut lines);
+            }
+            if let Some(error) = &form.error {
+                push(error, text.fg(palette.error), &mut lines);
+            }
+        }
+        Stage::Asking => lines.push(("asking the server for the plan…".to_owned(), muted)),
+        Stage::Plan {
+            lines: plan,
+            question,
+            blocked,
+            secret,
+            focus,
+            scroll: offset,
+        } => {
+            scroll = *offset;
+            for line in plan {
+                let style = if line.ends_with("NO CHANGES MADE YET") {
+                    text.add_modifier(Modifier::BOLD)
+                } else {
+                    text
+                };
+                push(line, style, &mut lines);
+            }
+            lines.push((String::new(), text));
+            match blocked {
+                Some(reason) => push(reason, text.fg(palette.warning), &mut lines),
+                None => push(question, text.add_modifier(Modifier::BOLD), &mut lines),
+            }
+            if let Some((prompt, typed)) = secret {
+                let cursor = if *focus == PlanFocus::Secret { "▏" } else { "" };
+                let dots = "•".repeat(typed.chars().count());
+                push(&format!("{prompt}: [ {dots}{cursor} ]"), text, &mut lines);
+            }
+        }
+        Stage::Running { steps } => {
+            lines.push((String::new(), text));
+            for step in steps {
+                let mark = match step.state {
+                    StepState::Done => "✓",
+                    StepState::Failed => "✗",
+                    StepState::Running => "◐",
+                };
+
+                push(&format!("{mark} {}", step.name), text, &mut lines);
+            }
+            let done = steps.iter().filter(|step| step.state == StepState::Done).count();
+            lines.push((String::new(), text));
+            let label = if steps.is_empty() {
+                "starting…".to_owned()
+            } else {
+                format!("{done} of {} steps done", steps.len())
+            };
+            lines.push((label, muted));
+        }
+        Stage::Question { lines: question, .. } => {
+            lines.push((String::new(), text));
+            for line in question {
+                push(line, text, &mut lines);
+            }
+        }
+        Stage::Done { ok, lines: result } => {
+            let style = if *ok { text } else { text.fg(palette.error) };
+            for line in result {
+                push(line, style, &mut lines);
+            }
+        }
+    }
+    let height = usize::from(inner.height);
+    let scroll = scroll.min(lines.len().saturating_sub(height));
+    for (row, (line, style)) in lines.iter().skip(scroll).take(height).enumerate() {
+        let y = inner.y + u16::try_from(row).unwrap_or(0);
+        write(buf, inner.x + 1, y, inner.width.saturating_sub(2), line, *style);
+        // Step marks in their colours.
+        if let Some(mark) = line.chars().next().filter(|c| matches!(c, '✓' | '✗' | '◐')) {
+            let color = match mark {
+                '✓' => palette.ok,
+                '✗' => palette.error,
+                _ => palette.info,
+            };
+            write(buf, inner.x + 1, y, 1, &mark.to_string(), style.fg(color));
+        }
+    }
+    scrollbar(buf, area, palette, scroll, height, lines.len());
+}
