@@ -394,3 +394,14 @@ fn a_rule_of_the_plan_is_cut_not_wrapped() {
     let text = screen(&render(&fixture.app, 120, 36));
     assert!(!text.lines().any(|line| line.contains("│ - ")), "{text}");
 }
+
+#[test]
+fn a_rule_of_dashes_of_the_cli_is_a_blank_line_in_the_box() {
+    let lines = hs_cli::tui::action::unframe(
+        "╭── WORKSPACE CREATED ──╮\n│ VMID : 101010 │\n│ ------------- │\n│ IP   : 192.168.101.10/22 │\n╰───────────────╯\n",
+    );
+    assert_eq!(
+        lines,
+        ["WORKSPACE CREATED", "VMID : 101010", "", "IP   : 192.168.101.10/22"]
+    );
+}

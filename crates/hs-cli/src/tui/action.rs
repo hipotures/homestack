@@ -171,9 +171,15 @@ pub fn unframe(text: &str) -> Vec<String> {
         }
     }
     flush(&mut framed, &mut lines);
-    // No blank lines at the ends, and never two in a row.
+    // A rule of dashes between groups is a blank line in the box; no blank
+    // lines at the ends, and never two in a row.
     let mut tidy: Vec<String> = Vec::new();
     for line in lines {
+        let line = if !line.is_empty() && line.chars().all(|c| c == '-' || c == '─') {
+            String::new()
+        } else {
+            line
+        };
         if line.is_empty() && tidy.last().is_none_or(String::is_empty) {
             continue;
         }

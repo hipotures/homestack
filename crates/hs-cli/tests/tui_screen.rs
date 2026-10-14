@@ -48,7 +48,10 @@ fn the_cluster_line_names_nodes_servers_gold_and_free_storage() {
     let line = row(&buf, 1);
     assert!(line.contains("pve1") && line.contains("pve3"), "{line}");
     assert!(line.contains("servers ●●●"), "{line}");
-    assert!(line.contains("gold ○ 112"), "the dot before, as for the servers: {line}");
+    assert!(
+        line.contains("gold ○ 112"),
+        "the dot before, as for the servers: {line}"
+    );
     assert!(line.contains("free"), "{line}");
 }
 
