@@ -526,6 +526,12 @@ impl Action {
             Stage::Asking | Stage::Plan { .. } | Stage::Running { .. } | Stage::Question { .. }
         )
     }
+
+    /// Whether it changes something now (after Apply): the row shows it.
+    #[must_use]
+    pub fn running(&self) -> bool {
+        matches!(self.stage, Stage::Running { .. } | Stage::Question { .. })
+    }
 }
 
 /// The plan or the end of a start or a stop, in a few lines.

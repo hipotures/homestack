@@ -406,7 +406,9 @@ fn columns(width: usize) -> Vec<Column> {
             right: false,
             value: |entry| {
                 if entry.status.starts_with('◐') {
-                    return entry.status.clone();
+                    // The busy dot under the middle of STATE; the action's
+                    // name is in its box.
+                    return "  ◐".to_owned();
                 }
                 let symbol = if entry.status == "running" { "●" } else { "○" };
                 // Under the middle of STATE.
@@ -770,7 +772,7 @@ fn workspaces(buf: &mut Buffer, area: Rect, app: &App, mut controls: Vec<Control
         if let Some(action) = app
             .action
             .as_ref()
-            .filter(|action| action.busy() && action.vmid == Some(entry.vmid))
+            .filter(|action| action.running() && action.vmid == Some(entry.vmid))
         {
             shown.status = format!("◐ {}", action.kind.word());
         }

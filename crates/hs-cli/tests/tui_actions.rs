@@ -122,7 +122,11 @@ fn a_applies_the_plan_and_the_steps_show_while_it_runs() {
     assert!(text.contains("✓ Stop the VM"), "{text}");
     assert!(text.contains("◐ Clone Gold"), "{text}");
     assert!(text.contains("┐run┌"), "{text}");
-    assert!(text.contains("◐ refresh"), "the row shows the work: {text}");
+    let busy = text.lines().find(|line| line.contains("│ 203 ")).unwrap_or_default();
+    assert!(
+        busy.contains("◐") && !busy.contains("refresh"),
+        "a busy dot, the word is in the box: {busy}"
+    );
 }
 
 #[test]
@@ -141,7 +145,8 @@ fn esc_hides_a_running_action_and_enter_shows_it_again() {
     assert_eq!(press(&mut fixture.app, KeyCode::Esc), None);
     let text = screen(&render(&fixture.app, 120, 36));
     assert!(!text.contains("┐refresh 203"), "{text}");
-    assert!(text.contains("◐ refresh"), "{text}");
+    let busy = text.lines().find(|line| line.contains("│ 203 ")).unwrap_or_default();
+    assert!(busy.contains("◐"), "the hidden action still shows on its row: {busy}");
     // A second action waits for the first.
     select(&mut fixture.app, 201);
     assert_eq!(press(&mut fixture.app, KeyCode::Char('d')), None);
@@ -485,4 +490,17 @@ fn resize_starts_at_the_disk_s_size_only_grows_and_needs_a_change() {
     assert!(text.contains("‹ 75G ›") && text.contains("+11G"), "{text}");
     let start = started(press(&mut fixture.app, KeyCode::Enter));
     assert_eq!(start.parameters, json!({"vmid": 201, "home_size": "75G"}));
+}
+
+#[test]
+fn a_plan_is_not_a_change_so_its_row_shows_no_busy_dot() {
+    let mut fixture = app();
+    select(&mut fixture.app, 203);
+    started(press(&mut fixture.app, KeyCode::Char('d')));
+    fixture
+        .app
+        .progress(plan(&["DESTROY PLAN"], "Permanently destroy this workspace?"));
+    let text = screen(&render(&fixture.app, 120, 36));
+    let row = text.lines().find(|line| line.contains("│ 203 ")).unwrap_or_default();
+    assert!(!row.contains('◐'), "only a plan: {row}");
 }
