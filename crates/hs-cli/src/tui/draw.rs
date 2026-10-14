@@ -103,6 +103,7 @@ fn first_label(url: &str) -> String {
 }
 
 fn draw_into(buf: &mut Buffer, area: Rect, app: &App) {
+    super::chrome::clear_hits();
     let palette = &app.palette;
     let base = text_style(palette);
     for y in area.top()..area.bottom() {
@@ -967,6 +968,10 @@ fn draw_overlay(buf: &mut Buffer, area: Rect, app: &App, overlay: &Overlay) {
     {
         let y = inner.y + 1 + u16::try_from(row).unwrap_or(0);
         write(buf, inner.x + 1, y, inner.width.saturating_sub(2), line, *style);
+        // The menu's and the themes' items are clicked.
+        if matches!(overlay, Overlay::Menu { .. } | Overlay::Themes { .. }) {
+            super::chrome::register(Rect::new(inner.x, y, inner.width, 1), super::chrome::Hit::Item(row));
+        }
     }
     let _ = muted;
 }

@@ -463,14 +463,32 @@ impl App {
     /// A mouse event: a click on a workspace selects it, the wheel moves the
     /// selection.
     pub fn mouse(&mut self, event: crossterm::event::MouseEvent) -> Option<Request> {
+        use super::chrome::Hit;
         use crossterm::event::{MouseButton, MouseEventKind};
-        if self.install.is_some() || self.overlay.is_some() || self.asking.is_some() {
-            return None;
-        }
+        let press = |app: &mut Self, code: KeyCode| app.key(KeyEvent::new(code, KeyModifiers::NONE));
+        let in_box = self.install.is_some() || self.overlay.is_some() || self.asking.is_some();
         match event.kind {
-            MouseEventKind::ScrollDown => self.move_by(1),
-            MouseEventKind::ScrollUp => self.move_by(-1),
             MouseEventKind::Down(MouseButton::Left) => {
+                // A button in a border is its key; an item of the menu or
+                // the themes is chosen and opened.
+                match super::chrome::hit_at(event.column, event.row) {
+                    Some(Hit::Key(code)) => return press(self, code),
+                    Some(Hit::Item(item)) => {
+                        match &mut self.overlay {
+                            Some(Overlay::Menu { index }) => *index = item,
+                            Some(Overlay::Themes { index, .. }) => *index = item,
+                            _ => return None,
+                        }
+                        if matches!(self.overlay, Some(Overlay::Themes { .. })) {
+                            self.preview(item);
+                        }
+                        return press(self, KeyCode::Enter);
+                    }
+                    None => {}
+                }
+                if in_box {
+                    return None;
+                }
                 let (x, width, first, shown, offset) = self.list_rows.get();
                 let inside = event.column >= x
                     && event.column < x.saturating_add(width)
@@ -481,6 +499,10 @@ impl App {
                 }
                 self.select_at(offset + usize::from(event.row - first))
             }
+            MouseEventKind::ScrollDown if in_box => press(self, KeyCode::Down),
+            MouseEventKind::ScrollUp if in_box => press(self, KeyCode::Up),
+            MouseEventKind::ScrollDown => self.move_by(1),
+            MouseEventKind::ScrollUp => self.move_by(-1),
             _ => None,
         }
     }

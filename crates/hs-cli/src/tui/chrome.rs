@@ -236,11 +236,15 @@ pub fn frame(buf: &mut Buffer, area: Rect, palette: &Palette, sides: &Sides) -> 
         let (shown_left, shown_right) = fit(given_left, given_right, room);
         let mut x = left + 2;
         for control in &shown_left {
-            x += draw_control(buf, x, row, control, palette, ends, border);
+            let used = draw_control(buf, x, row, control, palette, ends, border);
+            register_control(Rect::new(x, row, used, 1), control);
+            x += used;
         }
         let mut x = right - 1 - sum(&shown_right);
         for control in &shown_right {
-            x += draw_control(buf, x, row, control, palette, ends, border);
+            let used = draw_control(buf, x, row, control, palette, ends, border);
+            register_control(Rect::new(x, row, used, 1), control);
+            x += used;
         }
     }
     Rect::new(area.x + 1, area.y + 1, area.width - 2, area.height - 2)
@@ -269,5 +273,75 @@ pub fn scrollbar(buf: &mut Buffer, area: Rect, palette: &Palette, offset: usize,
         } else {
             put(buf, x, y, '│', border);
         }
+    }
+}
+
+/// What a click on the screen means.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Hit {
+    /// The key of a control in a border.
+    Key(crossterm::event::KeyCode),
+    /// An item of a list in a box (the menu, the themes).
+    Item(usize),
+}
+
+thread_local! {
+    /// Where the last drawing put what can be clicked, the latest last.
+    static HITS: std::cell::RefCell<Vec<(Rect, Hit)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Forget the clickable places (a new drawing starts).
+pub fn clear_hits() {
+    HITS.with(|hits| hits.borrow_mut().clear());
+}
+
+/// `area` means `hit` when clicked.
+pub fn register(area: Rect, hit: Hit) {
+    HITS.with(|hits| hits.borrow_mut().push((area, hit)));
+}
+
+/// What was drawn last at `x`, `y`.
+#[must_use]
+pub fn hit_at(x: u16, y: u16) -> Option<Hit> {
+    let position = ratatui::layout::Position { x, y };
+    HITS.with(|hits| {
+        hits.borrow()
+            .iter()
+            .rev()
+            .find(|(area, _)| area.contains(position))
+            .map(|(_, hit)| *hit)
+    })
+}
+
+/// The key a control stands for: its key letter, its panel digit, or the
+/// key its label names (Enter, Esc, Tab, Space).
+#[must_use]
+pub fn control_key(control: &Control) -> Option<crossterm::event::KeyCode> {
+    use crossterm::event::KeyCode;
+    if let Some(digit) = control.digit {
+        return char::from_digit(u32::from(digit), 10).map(KeyCode::Char);
+    }
+    if let Some(c) = control.key_char() {
+        return Some(KeyCode::Char(c));
+    }
+    let text = control.text.to_lowercase();
+    if text.contains("enter") || text.contains('↵') {
+        Some(KeyCode::Enter)
+    } else if text.contains("esc") {
+        Some(KeyCode::Esc)
+    } else if text.contains("tab") || text.contains('⇥') {
+        Some(KeyCode::Tab)
+    } else if text.contains("space") || text.contains('␣') {
+        Some(KeyCode::Char(' '))
+    } else {
+        None
+    }
+}
+
+fn register_control(area: Rect, control: &Control) {
+    if control.look != Look::Muted
+        && let Some(key) = control_key(control)
+    {
+        register(area, Hit::Key(key));
     }
 }

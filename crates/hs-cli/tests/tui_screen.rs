@@ -418,3 +418,36 @@ fn the_node_table_counts_running_and_stopped_workspaces_with_dots() {
     assert!(line.contains("● 2") && line.contains("○ 2"), "{line}");
     assert!(!line.contains("running"), "{line}");
 }
+
+fn click(app: &mut hs_cli::tui::state::App, x: u16, y: u16) -> Option<Request> {
+    use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+    app.mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: x,
+        row: y,
+        modifiers: KeyModifiers::NONE,
+    })
+}
+
+#[test]
+fn the_buttons_in_the_borders_and_the_menu_s_items_are_clicked() {
+    let mut fixture = app();
+    // ┐menu┌ in the border opens the menu.
+    let buf = render(&fixture.app, 120, 36);
+    let (x, y) = position(&buf, "menu");
+    assert_eq!(click(&mut fixture.app, x, y), None);
+    assert!(matches!(
+        fixture.app.overlay,
+        Some(hs_cli::tui::state::Overlay::Menu { .. })
+    ));
+    // Its item "Check the servers" asks the servers.
+    let buf = render(&fixture.app, 120, 36);
+    let (x, y) = position(&buf, "Check the servers");
+    assert_eq!(click(&mut fixture.app, x, y), Some(Request::Transport));
+    // A panel's digit hides it.
+    fixture.app.overlay = None;
+    let buf = render(&fixture.app, 120, 36);
+    let (x, y) = position(&buf, "³storage");
+    click(&mut fixture.app, x + 1, y);
+    assert!(!fixture.app.shown.storage, "the storage panel is hidden");
+}
