@@ -259,4 +259,20 @@ Rendering into ratatui's `TestBackend`, as MyPowers does, with a fake status:
     with `~/.config/homestack/deploy.toml` when it exists;
   - on a shared CTID, address or name they refuse before anything is made.
 - **To pass the gate** the test instances need their own names and addresses
-  (owner's decision: DNS records in `hs.efez.net` are the owner's).
+  (owner's decision: DNS records in `hs.efez.net` are the owner's). Done
+  2026-10-14: `test1–3` at `.240–.242` (`live-deploy.toml`); the run then
+  stopped at `pve_auth_failed`: the test token `homestack@pve!test` is gone
+  (an uninstall of phase 13c deleted the user `homestack@pve` with its
+  tokens), and so is the test Gold 248.
+
+### Open after the owner's decisions of 2026-10-14 (`decisions.md`)
+
+- Workspaces numbered by address: the code still makes the address
+  `<prefix>.<vmid>`; by the decision VMID 101010 is `192.168.101.10` (the
+  third octet times 1000 plus the fourth, both ways).
+- The live gates: the test part of Proxmox again (test token, a test Gold)
+  and the test addresses of the decision (test services from
+  `192.168.102.200`, test workspaces from `192.168.101.200`, numbered the
+  same way), names in `homestack.app`.
+- The router's zones `hs.efez.net` and `pve1–3.efez.net` go once the
+  servers answer at `apiN.homestack.app`.
