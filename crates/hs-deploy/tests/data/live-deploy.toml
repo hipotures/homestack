@@ -12,7 +12,7 @@ cidr = 24
 gateway = "192.168.100.1"
 
 [pve]
-endpoints = ["https://pve1.efez.net:8006", "https://pve2.efez.net:8006", "https://pve3.efez.net:8006"]
+endpoints = ["https://pve1.homestack.app:8006", "https://pve2.homestack.app:8006", "https://pve3.homestack.app:8006"]
 deploy_token_file = "~/.config/homestack/pve-token-deploy"
 
 [server]
