@@ -43,6 +43,8 @@ pub struct Choice {
     pub value: String,
     /// What the user needs to tell it apart (type, nodes, name, state).
     pub detail: String,
+    /// Why it cannot be chosen, when it is listed only to show it exists.
+    pub blocked: Option<String>,
 }
 
 /// An option the user has not given, with what can be chosen for it.
@@ -92,7 +94,12 @@ pub fn describe_missing(questions: &[Question]) -> String {
             if choice.detail.chars().count() > WIDTH {
                 detail.push_str("...");
             }
-            out.push_str(&format!("    {:<width$}  {detail}\n", choice.value));
+            let marker = choice
+                .blocked
+                .as_ref()
+                .map(|reason| format!("  (not available: {reason})"))
+                .unwrap_or_default();
+            out.push_str(&format!("    {:<width$}  {detail}{marker}\n", choice.value));
         }
     }
     out.trim_end().to_owned()

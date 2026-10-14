@@ -52,25 +52,46 @@ pub fn check_versions(root: &mut dyn Root, state: &State, found: &mut Findings) 
     }
 }
 
-/// The storages that allow `content`, as choices: id, type and nodes.
+/// Every storage as a choice for `content`: id, type and nodes. Those that
+/// cannot take it are listed after the others with the reason, so that the
+/// user sees they exist and why they are not offered.
 fn storage_choices(state: &State, content: &str) -> Vec<Choice> {
-    state
-        .storages
-        .iter()
-        .filter(|(_, storage)| !storage.disabled && storage.content.iter().any(|item| item == content))
-        .map(|(id, storage)| {
-            let nodes = if storage.nodes.is_empty() {
-                "all nodes".to_owned()
-            } else {
-                storage.nodes.join(",")
-            };
-            let shared = if storage.shared { " (shared)" } else { "" };
-            Choice {
-                value: id.clone(),
-                detail: format!("{:<8} {nodes}{shared}", storage.kind),
-            }
-        })
-        .collect()
+    let what = match content {
+        "images" => "disk images",
+        "snippets" => "snippets",
+        "rootdir" => "container disks",
+        "vztmpl" => "container templates",
+        other => other,
+    };
+    let mut fits = Vec::new();
+    let mut blocked_ones = Vec::new();
+    for (id, storage) in &state.storages {
+        let blocked = if storage.disabled {
+            Some("disabled".to_owned())
+        } else if !storage.content.iter().any(|item| item == content) {
+            Some(format!("no {what}"))
+        } else {
+            None
+        };
+        let nodes = if storage.nodes.is_empty() {
+            "all nodes".to_owned()
+        } else {
+            storage.nodes.join(",")
+        };
+        let shared = if storage.shared { " (shared)" } else { "" };
+        let choice = Choice {
+            value: id.clone(),
+            detail: format!("{:<8} {nodes}{shared}", storage.kind),
+            blocked: blocked.clone(),
+        };
+        if blocked.is_none() {
+            fits.push(choice);
+        } else {
+            blocked_ones.push(choice);
+        }
+    }
+    fits.extend(blocked_ones);
+    fits
 }
 
 fn check_storage(state: &State, found: &mut Findings, id: &str, content: &str) {
@@ -95,7 +116,7 @@ fn ask_storage(
     multiple: bool,
 ) {
     let choices = storage_choices(state, content);
-    if choices.is_empty() {
+    if choices.iter().all(|choice| choice.blocked.is_some()) {
         found.errors.push(format!(
             "{option} is required, but no storage allows content type {content}: the cluster's owner adds it (Datacenter > Storage > the storage > Content)"
         ));
@@ -118,7 +139,7 @@ pub fn check_storages(state: &State, settings: &Settings, found: &mut Findings) 
             "--storages",
             (
                 "Storages for the workspace disks",
-                "Where HomeStack creates the disks of the workspace VMs (root and home). It gets permission to use only the storages you tick, so tick every storage workspaces may use. Listed: storages that allow disk images.",
+                "Where HomeStack creates the disks of the workspace VMs (root and home). It gets permission to use only the storages you tick, so tick every storage workspaces may use. Greyed-out storages cannot hold disk images.",
             ),
             "images",
             true,
@@ -134,7 +155,7 @@ pub fn check_storages(state: &State, settings: &Settings, found: &mut Findings) 
             "--snippet-storage",
             (
                 "Storage for the Cloud-Init snippets",
-                "Where HomeStack keeps the two small Cloud-Init files that set up every new workspace (hostname, SSH keys, home disk). They are written on every node that has this storage, once if it is shared. Listed: storages that allow snippets.",
+                "Where HomeStack keeps the two small Cloud-Init files that set up every new workspace (hostname, SSH keys, home disk). They are written on every node that has this storage, once if it is shared. Greyed-out storages cannot hold snippets.",
             ),
             "snippets",
             false,
@@ -148,7 +169,7 @@ pub fn check_storages(state: &State, settings: &Settings, found: &mut Findings) 
             "--service-storages",
             (
                 "Storages for the server root disks",
-                "Where the disks of the HomeStack server containers are created: the server that clients talk to runs in a container on each node. Tick the storages those containers may use. Listed: storages that allow container disks.",
+                "Where the disks of the HomeStack server containers are created: the server that clients talk to runs in a container on each node. Tick the storages those containers may use. Greyed-out storages cannot hold container disks.",
             ),
             "rootdir",
             true,
@@ -164,7 +185,7 @@ pub fn check_storages(state: &State, settings: &Settings, found: &mut Findings) 
             "--template-storage",
             (
                 "Storage for the server image",
-                "Where the server image (the HomeStack program that runs in a container) is stored on the nodes before it becomes a container. Listed: storages that allow container templates.",
+                "Where the server image (the HomeStack program that runs in a container) is stored on the nodes before it becomes a container. Greyed-out storages cannot hold container templates.",
             ),
             "vztmpl",
             false,
@@ -186,6 +207,7 @@ fn vm_choices(state: &State, only: impl Fn(&Vm) -> bool) -> Vec<Choice> {
             detail: format!("{:<16} {:<6} {}", vm.name, vm.node, vm.status)
                 .trim_end()
                 .to_owned(),
+            blocked: None,
         })
         .collect()
 }

@@ -15,6 +15,8 @@ use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wra
 pub struct Item {
     pub value: String,
     pub detail: String,
+    /// Listed to show it exists; the cursor skips it and it is never chosen.
+    pub blocked: bool,
 }
 
 /// A key the picker understands, whatever produced it.
@@ -55,12 +57,13 @@ impl Picker {
     #[must_use]
     pub fn new(title: &str, multiple: bool, items: Vec<Item>) -> Self {
         let ticked = vec![false; items.len()];
+        let cursor = items.iter().position(|item| !item.blocked).unwrap_or(0);
         Self {
             title: title.to_owned(),
             description: String::new(),
             multiple,
             items,
-            cursor: 0,
+            cursor,
             ticked,
             outcome: None,
             list: ListState::default(),
@@ -80,20 +83,38 @@ impl Picker {
         self.outcome.clone()
     }
 
+    /// The nearest item that can be chosen from the cursor, `steps` items on
+    /// (negative: back); the cursor stays when there is none.
+    fn moved(&self, steps: isize) -> usize {
+        let free: Vec<usize> = (0..self.items.len()).filter(|i| !self.items[*i].blocked).collect();
+        let Some(at) = free.iter().position(|i| *i >= self.cursor) else {
+            return free.last().copied().unwrap_or(self.cursor);
+        };
+        let from = if free[at] == self.cursor || steps >= 0 {
+            at as isize
+        } else {
+            at as isize - 1
+        };
+        let target = (from + steps).clamp(0, free.len() as isize - 1);
+        free.get(usize::try_from(target).unwrap_or(0))
+            .copied()
+            .unwrap_or(self.cursor)
+    }
+
     pub fn handle(&mut self, key: Key) {
         if self.outcome.is_some() {
             return;
         }
-        let last = self.items.len().saturating_sub(1);
         match key {
-            Key::Up => self.cursor = self.cursor.saturating_sub(1),
-            Key::Down => self.cursor = (self.cursor + 1).min(last),
-            Key::PageUp => self.cursor = self.cursor.saturating_sub(PAGE),
-            Key::PageDown => self.cursor = (self.cursor + PAGE).min(last),
-            Key::Home => self.cursor = 0,
-            Key::End => self.cursor = last,
+            Key::Up => self.cursor = self.moved(-1),
+            Key::Down => self.cursor = self.moved(1),
+            Key::PageUp => self.cursor = self.moved(-(PAGE as isize)),
+            Key::PageDown => self.cursor = self.moved(PAGE as isize),
+            Key::Home => self.cursor = self.moved(isize::MIN / 2),
+            Key::End => self.cursor = self.moved(isize::MAX / 2),
             Key::Space => {
                 if self.multiple
+                    && !self.items.get(self.cursor).is_none_or(|item| item.blocked)
                     && let Some(mark) = self.ticked.get_mut(self.cursor)
                 {
                     *mark = !*mark;
@@ -104,7 +125,7 @@ impl Picker {
                 if !self.multiple || chosen.is_empty() {
                     chosen = vec![self.cursor];
                 }
-                if !self.items.is_empty() {
+                if self.items.get(self.cursor).is_some_and(|item| !item.blocked) {
                     self.outcome = Some(Outcome::Chosen(chosen));
                 }
             }
@@ -148,12 +169,18 @@ impl Picker {
             .enumerate()
             .map(|(index, item)| {
                 let mark = match (self.multiple, self.ticked[index], index == self.cursor) {
+                    _ if item.blocked => "[-]",
                     (true, true, _) => "[x]",
                     (true, false, _) => "[ ]",
                     (false, _, true) => "(\u{2022})",
                     (false, _, false) => "( )",
                 };
-                ListItem::new(format!("{mark} {:<value_width$}  {}", item.value, item.detail))
+                let row = ListItem::new(format!("{mark} {:<value_width$}  {}", item.value, item.detail));
+                if item.blocked {
+                    row.style(Style::default().add_modifier(Modifier::DIM))
+                } else {
+                    row
+                }
             })
             .collect();
         self.list.select(Some(self.cursor));

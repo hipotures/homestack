@@ -679,7 +679,13 @@ fn missing_options_are_questions_with_a_choice_per_line() {
         questions
             .iter()
             .find(|q| q.option == option)
-            .map(|q| q.choices.iter().map(|c| c.value.clone()).collect())
+            .map(|q| {
+                q.choices
+                    .iter()
+                    .filter(|c| c.blocked.is_none())
+                    .map(|c| c.value.clone())
+                    .collect()
+            })
             .unwrap_or_default()
     };
     // Only storages that allow what the option needs.
@@ -909,4 +915,52 @@ fn every_question_explains_what_is_chosen() {
     let text = run.error.as_ref().map(ToString::to_string).unwrap_or_default();
     assert!(text.contains("disks of the workspace VMs"), "{text}");
     assert!(text.lines().all(|l| l.chars().count() <= 100), "{text}");
+}
+
+#[test]
+fn storages_that_do_not_fit_are_listed_too_with_the_reason() {
+    let fake = Fake::new(&["pve1", "pve2"]);
+    let run = fake.install(&Settings::default());
+    let questions = missing(&run);
+    let images = &questions[0];
+    assert_eq!(images.option, "--storages");
+    let reason = |value: &str| {
+        images
+            .choices
+            .iter()
+            .find(|c| c.value == value)
+            .map(|c| c.blocked.clone())
+            .unwrap_or_else(|| panic!("{value} is not listed: {:?}", images.choices))
+    };
+    assert_eq!(reason("local-lvm"), None);
+    assert_eq!(reason("local").as_deref(), Some("no disk images"));
+    // The ones that fit come first.
+    let first_blocked = images
+        .choices
+        .iter()
+        .position(|c| c.blocked.is_some())
+        .unwrap_or(usize::MAX);
+    assert!(images.choices[..first_blocked].iter().all(|c| c.blocked.is_none()));
+    assert!(images.choices[first_blocked..].iter().all(|c| c.blocked.is_some()));
+    // The printed list says so too.
+    let text = run.error.as_ref().map(ToString::to_string).unwrap_or_default();
+    assert!(
+        text.lines()
+            .any(|l| l.contains("local ") && l.contains("no disk images")),
+        "{text}"
+    );
+    // A disabled storage is listed as disabled.
+    let fake = Fake::new(&["pve1"]);
+    fake.replace(
+        "storage.json",
+        "\"storage\":\"worker-roots\"",
+        "\"storage\":\"worker-roots\",\"disable\":1",
+    );
+    let questions = missing(&fake.install(&Settings::default()));
+    let disabled = questions[0]
+        .choices
+        .iter()
+        .find(|c| c.value == "worker-roots")
+        .and_then(|c| c.blocked.clone());
+    assert_eq!(disabled.as_deref(), Some("disabled"));
 }

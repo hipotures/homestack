@@ -11,6 +11,7 @@ use crate::app::Context;
 use crate::args::{Args, InstallArgs};
 use crate::root_herdr::HerdrRoot;
 use crate::root_ssh::SshRoot;
+use crate::system::Entry;
 use crate::touch::Sounds;
 use crate::view::Color;
 use crate::{AppError, config, expand_home};
@@ -132,10 +133,13 @@ fn confirm(ctx: &mut Context, question: &str) -> bool {
 /// when the user gives up.
 fn choose(ctx: &mut Context, questions: &[hs_install::Question], settings: &mut Settings) -> bool {
     for (step, question) in questions.iter().enumerate() {
-        let items: Vec<(String, String)> = question
+        let items: Vec<Entry> = question
             .choices
             .iter()
-            .map(|choice| (choice.value.clone(), choice.detail.clone()))
+            .map(|choice| match &choice.blocked {
+                Some(reason) => Entry::blocked(&choice.value, &format!("{}  \u{2014} {reason}", choice.detail)),
+                None => Entry::new(&choice.value, &choice.detail),
+            })
             .collect();
         let Some(picked) = ctx.console.pick(
             &format!("{} ({} of {})", question.title, step + 1, questions.len()),
@@ -347,13 +351,13 @@ pub fn run(args: &Args, given: &InstallArgs, command: Install, ctx: &mut Context
 /// up. The answer goes into `install`.
 fn ask_access(ctx: &mut Context, install: &mut InstallArgs) -> Result<bool, AppError> {
     let ways = [
-        (
-            "SSH".to_owned(),
-            "log in to a node as root over SSH (touch the security key when it blinks)".to_owned(),
+        Entry::new(
+            "SSH",
+            "log in to a node as root over SSH (touch the security key when it blinks)",
         ),
-        (
-            "Herdr".to_owned(),
-            "use a Herdr tab or pane in which you are already root on a node".to_owned(),
+        Entry::new(
+            "Herdr",
+            "use a Herdr tab or pane in which you are already root on a node",
         ),
     ];
     let Some(way) = ctx.console.pick(
@@ -382,7 +386,7 @@ everything goes through the API, and you can drop the key or close the tab.",
             "Herdr has no tab with a single pane: open a tab, log in as root on the node there, and run this again",
         ));
     }
-    let items: Vec<(String, String)> = tabs
+    let items: Vec<Entry> = tabs
         .iter()
         .map(|tab| {
             let title = if tab.title.is_empty() {
@@ -390,7 +394,7 @@ everything goes through the API, and you can drop the key or close the tab.",
             } else {
                 tab.title.as_str()
             };
-            (tab.name.clone(), title.to_owned())
+            Entry::new(&tab.name, title)
         })
         .collect();
     let Some(picked) = ctx.console.pick(

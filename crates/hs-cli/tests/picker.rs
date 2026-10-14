@@ -7,13 +7,14 @@ mod common;
 
 use common::Recorded;
 use hs_cli::picker::{Item, Key, Outcome, Picker};
-use hs_cli::system::Console;
+use hs_cli::system::{Console, Entry};
 
 fn items(count: usize) -> Vec<Item> {
     (0..count)
         .map(|i| Item {
             value: format!("storage-{i}"),
             detail: format!("lvmthin  pve{i}"),
+            blocked: false,
         })
         .collect()
 }
@@ -130,7 +131,7 @@ fn the_numbered_fallback_asks_until_the_answer_is_valid() {
         ("local-zfs", "zfspool  pve1"),
         ("vm-ssd-a", "lvmthin  pve1"),
     ]
-    .map(|(v, d)| (v.to_owned(), d.to_owned()));
+    .map(|(v, d)| Entry::new(v, d));
     let mut console = Recorded::answering(&["x", "9", "2"]);
     assert_eq!(
         console.pick("--snippet-storage", "where the snippets go", false, &choices),
@@ -190,4 +191,67 @@ fn the_description_is_wrapped_inside_the_window_not_cut_off_in_the_title() {
         assert!(flat.contains(word), "{word:?} is cut off:\n{screen}");
     }
     assert!(screen.contains("storage-0") && screen.contains("storage-1"), "{screen}");
+}
+
+fn mixed() -> Vec<Item> {
+    [("a", false), ("b", true), ("c", false), ("d", true)]
+        .iter()
+        .map(|(v, blocked)| Item {
+            value: (*v).to_owned(),
+            detail: if *blocked {
+                "dir  no disk images".to_owned()
+            } else {
+                "lvmthin".to_owned()
+            },
+            blocked: *blocked,
+        })
+        .collect()
+}
+
+#[test]
+fn a_blocked_item_is_shown_but_the_cursor_skips_it_and_it_cannot_be_chosen() {
+    let mut picker = Picker::new("Storages", true, mixed());
+    keys(
+        &mut picker,
+        &[Key::Down, Key::Space, Key::Down, Key::Down, Key::Space, Key::Enter],
+    );
+    // a -> c (b skipped) -> stays on c (d is blocked): ticks c twice = none, Enter takes c.
+    assert_eq!(picker.outcome(), Some(Outcome::Chosen(vec![2])));
+    let mut picker = Picker::new("Storages", true, mixed());
+    keys(&mut picker, &[Key::End, Key::Space, Key::Enter]);
+    assert_eq!(
+        picker.outcome(),
+        Some(Outcome::Chosen(vec![2])),
+        "End lands on the last item that can be chosen"
+    );
+    let screen = Picker::new("Storages", true, mixed()).render_to_string(60, 12);
+    assert!(
+        screen
+            .lines()
+            .any(|l| l.contains('b') && l.contains("no disk images") && l.contains("[-]")),
+        "{screen}"
+    );
+}
+
+#[test]
+fn the_numbered_fallback_numbers_only_what_can_be_chosen() {
+    let choices = vec![
+        Entry::new("local-lvm", "lvmthin"),
+        Entry::blocked("local", "dir  no disk images"),
+        Entry::new("vm-ssd-a", "lvmthin"),
+    ];
+    let mut console = Recorded::answering(&["3", "2"]);
+    // "3" is out of range (two can be chosen); "2" is the third entry.
+    assert_eq!(console.pick("Storages", "where", false, &choices), Some(vec![2]));
+    let shown = console.out();
+    assert!(
+        shown.contains("1) local-lvm") && shown.contains("2) vm-ssd-a"),
+        "{shown}"
+    );
+    assert!(
+        shown
+            .lines()
+            .any(|l| l.contains("local ") && l.contains("no disk images") && !l.contains(") local ")),
+        "{shown}"
+    );
 }
