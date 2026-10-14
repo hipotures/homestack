@@ -130,6 +130,7 @@ impl Desk {
             system: Arc::new(RealSystem::default()),
             console: Box::new(self.console.clone()),
             poll: Duration::from_secs(2),
+            servers: std::sync::Arc::new(hs_cli::servers::RealServers),
         };
         let argv: Vec<String> = argv.iter().map(|word| (*word).to_owned()).collect();
         let code = app::run(&argv, &mut context).await;

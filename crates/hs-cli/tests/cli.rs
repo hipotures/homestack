@@ -170,6 +170,7 @@ impl Desk {
             system: Arc::clone(system) as Arc<dyn hs_cli::system::System>,
             console: Box::new(console.clone()),
             poll: Duration::from_millis(10),
+            servers: Arc::new(hs_cli::servers::RealServers),
         }
     }
 
@@ -217,6 +218,7 @@ async fn package_cli_main_is_callable() -> TestResult {
         system: Arc::new(FakeSystem::new()),
         console: Box::new(console.clone()),
         poll: Duration::from_millis(10),
+        servers: Arc::new(hs_cli::servers::RealServers),
     };
     assert_eq!(app::run(&strings(&["--help"]), &mut context).await, 0);
     assert!(console.out().contains("homestack create VMID NAME"));

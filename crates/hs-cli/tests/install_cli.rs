@@ -6,7 +6,9 @@
 
 mod common;
 
+use std::collections::BTreeMap;
 use std::io;
+use std::net::Ipv4Addr;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::process::Command as Process;
@@ -16,8 +18,10 @@ use std::time::Duration;
 use common::{FakeSystem, Recorded, strings};
 use hs_cli::app::{self, Context};
 use hs_cli::args::{self, Command};
+use hs_cli::servers::Servers;
 use hs_cli::system::Output;
 use hs_cli::view::Style;
+use hs_deploy::config::DeployConfig;
 use serde_json::Value;
 
 /// A fake single-node or three-node cluster on disk.
@@ -191,6 +195,10 @@ impl Run {
 }
 
 async fn run(cluster: &Cluster, argv: &[&str], answers: &[&str], tty: bool) -> Run {
+    run_with(cluster, argv, answers, tty, Arc::new(FakeServers::default())).await
+}
+
+async fn run_with(cluster: &Cluster, argv: &[&str], answers: &[&str], tty: bool, servers: Arc<FakeServers>) -> Run {
     let console = Recorded::answering(answers);
     let system = Arc::new(cluster.system());
     let mut context = Context {
@@ -204,6 +212,7 @@ async fn run(cluster: &Cluster, argv: &[&str], answers: &[&str], tty: bool) -> R
         system: system as Arc<dyn hs_cli::system::System>,
         console: Box::new(console.clone()),
         poll: Duration::from_millis(10),
+        servers: servers as Arc<dyn Servers>,
     };
     let code = app::run(&strings(argv), &mut context).await;
     Run { code, console }
@@ -221,7 +230,7 @@ const STORAGES: [&str; 8] = [
 ];
 
 fn install_argv<'a>(access: &'a [&'a str], extra: &'a [&'a str]) -> Vec<&'a str> {
-    let mut argv = vec!["install"];
+    let mut argv = vec!["install", "--no-servers"];
     argv.extend(access);
     argv.extend(STORAGES);
     argv.extend(extra);
@@ -272,7 +281,7 @@ fn the_commands_are_parsed() {
     assert!(install.force);
 
     // Neither way given is allowed (the installer asks); both is not.
-    assert!(args::parse(&strings(&["install"])).is_ok());
+    assert!(args::parse(&strings(&["install", "--no-servers"])).is_ok());
     // --force belongs to uninstall.
     for bad in [
         vec!["install", "--ssh", "a", "--herdr", "b"],
@@ -521,7 +530,7 @@ fn two_disk_storages(cluster: &Cluster) {
 async fn without_a_terminal_the_missing_options_are_listed_with_their_defaults() {
     let cluster = Cluster::new(&["pve1"]);
     two_disk_storages(&cluster);
-    let text = run(&cluster, &["install", "--ssh", "root@pve1"], &[], false).await;
+    let text = run(&cluster, &["install", "--no-servers", "--ssh", "root@pve1"], &[], false).await;
     assert_eq!(text.code, 1);
     let out = text.console.out();
     assert!(!out.contains("ERROR"), "{out}");
@@ -537,7 +546,13 @@ async fn without_a_terminal_the_missing_options_are_listed_with_their_defaults()
     assert!(out.lines().all(|l| l.chars().count() <= 100), "{out}");
     assert_eq!(cluster.changes(), 0);
 
-    let json = run(&cluster, &["install", "--ssh", "root@pve1", "--json"], &[], false).await;
+    let json = run(
+        &cluster,
+        &["install", "--no-servers", "--ssh", "root@pve1", "--json"],
+        &[],
+        false,
+    )
+    .await;
     assert_eq!(json.code, 1);
     let out = json.json();
     assert_eq!(out["missing"][0]["option"], "--storages", "{out}");
@@ -549,12 +564,24 @@ async fn on_a_terminal_every_setting_is_shown_and_nothing_happens_before_install
     let cluster = Cluster::new(&["pve1"]);
     two_disk_storages(&cluster);
     // Enter installs from the form; the confirmation is declined.
-    let declined = run(&cluster, &["install", "--ssh", "root@pve1"], &["", "n"], true).await;
+    let declined = run(
+        &cluster,
+        &["install", "--no-servers", "--ssh", "root@pve1"],
+        &["", "n"],
+        true,
+    )
+    .await;
     assert_eq!(declined.code, 0, "{}", declined.console.out());
     assert!(declined.console.out().contains("Cancelled. No changes were made."));
     assert_eq!(cluster.changes(), 0, "something changed before Install");
 
-    let done = run(&cluster, &["install", "--ssh", "root@pve1"], &["", "y"], true).await;
+    let done = run(
+        &cluster,
+        &["install", "--no-servers", "--ssh", "root@pve1"],
+        &["", "y"],
+        true,
+    )
+    .await;
     assert_eq!(done.code, 0, "{}", done.console.out());
     let out = done.console.out();
     let form = out.split("Confirm the installation").next().unwrap_or_default();
@@ -575,7 +602,7 @@ async fn on_a_terminal_every_setting_is_shown_and_nothing_happens_before_install
     for text in [
         "Account and tokens",
         "new user homestack@pve",
-        "Same as: homestack install --ssh root@pve1 --storages local-lvm --snippet-storage local --service-storages local-lvm --template-storage local --gold 101",
+        "Same as: homestack install --ssh root@pve1 --storages local-lvm --snippet-storage local --service-storages local-lvm --template-storage local --gold 101 --no-servers",
     ] {
         assert!(out.contains(text), "{text:?} missing:\n{out}");
     }
@@ -594,7 +621,7 @@ async fn a_setting_is_changed_from_its_list_and_gold_can_be_chosen() {
     // 1 = workspace disks: tick both; 5 = Gold: the second VM; then install.
     let done = run(
         &cluster,
-        &["install", "--ssh", "root@pve1"],
+        &["install", "--no-servers", "--ssh", "root@pve1"],
         &["1", "1,2", "5", "2", "", "y"],
         true,
     )
@@ -616,7 +643,14 @@ async fn options_given_on_the_command_line_are_shown_but_not_asked() {
     two_disk_storages(&cluster);
     let done = run(
         &cluster,
-        &["install", "--ssh", "root@pve1", "--storages", "backup-a"],
+        &[
+            "install",
+            "--no-servers",
+            "--ssh",
+            "root@pve1",
+            "--storages",
+            "backup-a",
+        ],
         &["", "y"],
         true,
     )
@@ -634,7 +668,7 @@ async fn options_given_on_the_command_line_are_shown_but_not_asked() {
 async fn giving_up_changes_nothing() {
     let cluster = Cluster::new(&["pve1"]);
     two_disk_storages(&cluster);
-    let gave_up = run(&cluster, &["install", "--ssh", "root@pve1"], &[], true).await;
+    let gave_up = run(&cluster, &["install", "--no-servers", "--ssh", "root@pve1"], &[], true).await;
     assert_eq!(gave_up.code, 0, "{}", gave_up.console.out());
     assert!(gave_up.console.out().contains("Cancelled"), "{}", gave_up.console.out());
     assert_eq!(cluster.changes(), 0);
@@ -646,7 +680,13 @@ async fn giving_up_changes_nothing() {
 async fn without_an_access_option_the_installer_asks_for_one_and_goes_on() {
     let cluster = Cluster::new(&["pve1"]);
     // 1 = SSH, the node, then the form and the confirmation.
-    let done = run(&cluster, &["install"], &["1", "root@pve1", "", "y"], true).await;
+    let done = run(
+        &cluster,
+        &["install", "--no-servers"],
+        &["1", "root@pve1", "", "y"],
+        true,
+    )
+    .await;
     assert_eq!(done.code, 0, "{}", done.console.out());
     let out = done.console.out();
     assert!(
@@ -664,7 +704,7 @@ async fn without_an_access_option_the_installer_asks_for_one_and_goes_on() {
 async fn the_herdr_tabs_are_offered_to_choose_from() {
     let cluster = Cluster::new(&["pve1"]);
     // 2 = Herdr, the only tab, then the form and the confirmation.
-    let done = run(&cluster, &["install"], &["2", "1", "", "y"], true).await;
+    let done = run(&cluster, &["install", "--no-servers"], &["2", "1", "", "y"], true).await;
     assert_eq!(done.code, 0, "{}", done.console.out());
     let out = done.console.out();
     assert!(
@@ -678,7 +718,13 @@ async fn the_herdr_tabs_are_offered_to_choose_from() {
 #[tokio::test]
 async fn without_a_terminal_an_access_option_is_required() {
     let cluster = Cluster::new(&["pve1"]);
-    let refused = run(&cluster, &["install", "--storages", "local-lvm"], &[], false).await;
+    let refused = run(
+        &cluster,
+        &["install", "--no-servers", "--storages", "local-lvm"],
+        &[],
+        false,
+    )
+    .await;
     assert_eq!(refused.code, 1);
     let out = refused.console.out();
     assert!(
@@ -687,7 +733,7 @@ async fn without_a_terminal_an_access_option_is_required() {
     );
     assert_eq!(cluster.changes(), 0);
 
-    let gave_up = run(&cluster, &["install"], &[], true).await;
+    let gave_up = run(&cluster, &["install", "--no-servers"], &[], true).await;
     assert_eq!(gave_up.code, 0, "{}", gave_up.console.out());
     assert!(gave_up.console.out().contains("Cancelled"), "{}", gave_up.console.out());
 }
@@ -697,7 +743,13 @@ async fn the_choices_are_kept_for_the_next_run() {
     let cluster = Cluster::new(&["pve1"]);
     two_disk_storages(&cluster);
     // Workspace disks: only backup-a; then the user leaves without installing.
-    let left = run(&cluster, &["install", "--ssh", "root@pve1"], &["1", "1"], true).await;
+    let left = run(
+        &cluster,
+        &["install", "--no-servers", "--ssh", "root@pve1"],
+        &["1", "1"],
+        true,
+    )
+    .await;
     assert_eq!(left.code, 0, "{}", left.console.out());
     assert_eq!(cluster.changes(), 0);
     let draft = cluster.token_dir().join("install-draft.toml");
@@ -708,13 +760,25 @@ async fn the_choices_are_kept_for_the_next_run() {
     );
 
     // The next run starts from them.
-    let again = run(&cluster, &["install", "--ssh", "root@pve1"], &["", "n"], true).await;
+    let again = run(
+        &cluster,
+        &["install", "--no-servers", "--ssh", "root@pve1"],
+        &["", "n"],
+        true,
+    )
+    .await;
     let out = again.console.out();
     assert!(out.contains("Workspace disks      backup-a"), "{out}");
 
     // A draft that cannot be read is ignored.
     std::fs::write(&draft, "not = [toml").expect("write");
-    let again = run(&cluster, &["install", "--ssh", "root@pve1"], &["", "n"], true).await;
+    let again = run(
+        &cluster,
+        &["install", "--no-servers", "--ssh", "root@pve1"],
+        &["", "n"],
+        true,
+    )
+    .await;
     assert!(
         again.console.out().contains("Workspace disks      local-lvm"),
         "{}",
@@ -726,7 +790,13 @@ async fn the_choices_are_kept_for_the_next_run() {
 async fn the_confirmation_groups_the_changes_in_short_lines() {
     let cluster = Cluster::new(&["pve1"]);
     std::fs::write(cluster.token_dir().join("pve-token"), "old\n").expect("old token file");
-    let done = run(&cluster, &["install", "--ssh", "root@pve1"], &["", "n"], true).await;
+    let done = run(
+        &cluster,
+        &["install", "--no-servers", "--ssh", "root@pve1"],
+        &["", "n"],
+        true,
+    )
+    .await;
     let out = done.console.out();
     let confirm = out.split("Confirm the installation").nth(1).unwrap_or_default();
     for heading in [
@@ -750,4 +820,418 @@ async fn the_confirmation_groups_the_changes_in_short_lines() {
         changes.lines().all(|l| l.chars().count() <= 100),
         "a line is too long:\n{changes}"
     );
+}
+
+// --- the servers and the final status (section 8) --------------------------
+
+const API_TOKEN: &str = "install-test-api-token-0123456789abcdef";
+const PVE_TOKEN: &str = "homestack@pve!server=00000000-0000-0000-0000-00000000000b";
+const LIFECYCLE: &str = include_str!("../../hs-core/tests/data/lifecycle-cluster.toml");
+/// The configuration of the status server, for the lifecycle cluster.
+const STATUS_SERVER_TOML: &str = r#"version = 1
+[node]
+name = "pve-example-1"
+gold_vmid = 101
+[storage_layouts]
+homestack-storage-1 = ["local-lvm"]
+[root]
+disk = "scsi0"
+[home]
+disk = "scsi1"
+default_size = "20G"
+[network]
+prefix = "192.0.2"
+cidr = 24
+gateway = "192.0.2.1"
+dns = ["192.0.2.53"]
+[cloud_init]
+snippet_storage = "local"
+snippet_dir = "/var/lib/vz/snippets"
+[user]
+name = "developer"
+uid = 1000
+gid = 1000
+"#;
+
+/// The deployment and the desktop's DNS, recorded instead of done.
+#[derive(Default)]
+struct FakeServers {
+    /// What `apiN.<domain>` resolves to; a name not here does not resolve.
+    names: BTreeMap<String, Ipv4Addr>,
+    deployed: Mutex<Vec<DeployConfig>>,
+    /// The URL and CA file the client reaches the servers at; none: nothing answers.
+    reach: Option<(String, String)>,
+    fail: Option<String>,
+}
+
+impl FakeServers {
+    fn resolving(names: &[(&str, &str)]) -> Self {
+        Self {
+            names: names
+                .iter()
+                .map(|(name, ip)| ((*name).to_owned(), ip.parse().expect("address")))
+                .collect(),
+            ..Self::default()
+        }
+    }
+
+    fn deployed(&self) -> Vec<DeployConfig> {
+        self.deployed.lock().expect("deployed").clone()
+    }
+}
+
+impl Servers for FakeServers {
+    fn resolve(&self, name: &str) -> Option<Ipv4Addr> {
+        self.names.get(name).copied()
+    }
+
+    fn deploy<'a>(
+        &'a self,
+        config: &'a DeployConfig,
+        say: &'a (dyn Fn(&str) + Send + Sync),
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send + 'a>> {
+        Box::pin(async move {
+            self.deployed.lock().expect("deployed").push(config.clone());
+            say("fake deployment");
+            self.fail.clone().map_or(Ok(()), Err)
+        })
+    }
+
+    fn client_server(&self, _config: &DeployConfig) -> (Vec<String>, Option<String>) {
+        match &self.reach {
+            Some((url, ca)) => (vec![url.clone()], Some(ca.clone())),
+            None => (vec!["https://127.0.0.1:9".to_owned()], None),
+        }
+    }
+}
+
+/// The desktop files an install with servers needs: the old configuration,
+/// the client token, the OVH key.
+fn desktop_files(cluster: &Cluster) {
+    let dir = cluster.token_dir();
+    let example =
+        std::fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../python/config.example.toml"))
+            .expect("example configuration");
+    std::fs::write(dir.join("config.toml"), example).expect("config.toml");
+    for (name, text) in [("api-token", API_TOKEN), ("ovh-dns", "OVH_AK=a\nOVH_AS=b\nOVH_CK=c\n")] {
+        std::fs::write(dir.join(name), text).expect("file");
+        std::fs::set_permissions(dir.join(name), std::fs::Permissions::from_mode(0o600)).expect("mode");
+    }
+}
+
+/// A server on the simulated lifecycle cluster, behind TLS: its URL and CA.
+async fn status_server() -> (String, String, pve_sim::PveSim) {
+    let sim = pve_sim::PveSim::start(pve_sim::ClusterSpec::from_scenario(LIFECYCLE).expect("scenario"))
+        .await
+        .expect("simulator");
+    let mut pve = hs_pve::PveClientConfig::new(
+        vec![sim.base_url().parse().expect("url")],
+        hs_pve::PveToken::parse(PVE_TOKEN).expect("token"),
+    );
+    pve.extra_ca_pem = Some(sim.ca_pem().to_owned());
+    let state = tempfile::tempdir().expect("state").keep();
+    let app = hs_server::app_with(
+        hs_server::ServerConfig {
+            api_token: hs_server::ApiToken::parse(API_TOKEN).expect("api token").into(),
+            pve: pve.into(),
+            config_file: state.join("server.toml"),
+            instance: hs_server::Instance::default(),
+            pools: hs_server::Pools::default(),
+        },
+        hs_server::AppOptions::default(),
+    )
+    .expect("server");
+    let certs = pve_sim::tls::generate().expect("certificate");
+    let tls = axum_server::tls_rustls::RustlsConfig::from_pem(
+        certs.chain_pem.clone().into_bytes(),
+        certs.key_pem.clone().into_bytes(),
+    )
+    .await
+    .expect("tls");
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("listener");
+    listener.set_nonblocking(true).expect("nonblocking");
+    let port = listener.local_addr().expect("address").port();
+    tokio::spawn(
+        axum_server::from_tcp_rustls(listener, tls)
+            .expect("serve")
+            .serve(app.into_make_service()),
+    );
+    let url = format!("https://localhost:{port}");
+    let mut client =
+        hs_client::ClientConfig::new(vec![url.parse::<url::Url>().expect("url").into()], API_TOKEN.to_owned());
+    client.extra_ca_pem = Some(certs.ca_pem.clone());
+    hs_client::Client::new(client)
+        .expect("client")
+        .configure_on(0, STATUS_SERVER_TOML)
+        .await
+        .expect("configured");
+    (url, certs.ca_pem, sim)
+}
+
+fn server_argv<'a>(extra: &'a [&'a str]) -> Vec<&'a str> {
+    let mut argv = vec!["install", "--ssh", "root@pve1"];
+    argv.extend(STORAGES);
+    argv.extend(extra);
+    argv
+}
+
+#[tokio::test]
+async fn the_servers_are_deployed_after_proxmox_and_the_install_ends_with_status() {
+    let cluster = Cluster::new(&["pve1", "pve2", "pve3"]);
+    desktop_files(&cluster);
+    let (url, ca_pem, _sim) = status_server().await;
+    let ca = cluster.token_dir().join("server-ca.pem");
+    std::fs::write(&ca, ca_pem).expect("ca");
+    let servers = Arc::new(FakeServers {
+        reach: Some((url.clone(), ca.display().to_string())),
+        ..FakeServers::resolving(&[
+            ("api1.hs.example.net", "192.0.2.97"),
+            ("api2.hs.example.net", "192.0.2.98"),
+            ("api3.hs.example.net", "192.0.2.99"),
+        ])
+    });
+    let done = run_with(
+        &cluster,
+        &server_argv(&["--server-domain", "hs.example.net", "--yes"]),
+        &[],
+        false,
+        Arc::clone(&servers),
+    )
+    .await;
+    let out = done.console.out();
+    assert_eq!(done.code, 0, "{out}\n{}", done.console.err());
+    assert!(
+        cluster.read("users").contains("homestack@pve"),
+        "the Proxmox part is missing"
+    );
+
+    let deployed = servers.deployed();
+    assert_eq!(deployed.len(), 1, "deployed {} times", deployed.len());
+    let config = &deployed[0];
+    let instances: Vec<(String, String, String, u32, String)> = config
+        .instances
+        .iter()
+        .map(|i| {
+            (
+                i.name.clone(),
+                i.node.clone(),
+                i.address.to_string(),
+                i.ctid,
+                i.storage.clone(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        instances,
+        [
+            (
+                "api1".into(),
+                "pve1".into(),
+                "192.0.2.97".into(),
+                100,
+                "local-lvm".into()
+            ),
+            (
+                "api2".into(),
+                "pve2".into(),
+                "192.0.2.98".into(),
+                102,
+                "local-lvm".into()
+            ),
+            (
+                "api3".into(),
+                "pve3".into(),
+                "192.0.2.99".into(),
+                103,
+                "local-lvm".into()
+            ),
+        ]
+    );
+    assert_eq!(config.domain, "hs.example.net");
+    assert!(
+        config.image.starts_with("ghcr.io/hipotures/homestack-server:0.1.0-"),
+        "{}",
+        config.image
+    );
+    assert_eq!(config.template_storage, "local");
+    assert_eq!(config.pool, "homestack-service");
+    assert_eq!(
+        (config.bridge.as_str(), config.cidr, config.gateway.to_string()),
+        ("vmbr0", 24, "192.0.2.1".to_owned())
+    );
+    assert_eq!(
+        config.nameserver.map(|ip| ip.to_string()).as_deref(),
+        Some("192.0.2.53")
+    );
+    let endpoints: Vec<String> = config.pve.endpoints.iter().map(ToString::to_string).collect();
+    assert_eq!(
+        endpoints,
+        [
+            "https://pve1.example.net:8006/",
+            "https://pve2.example.net:8006/",
+            "https://pve3.example.net:8006/"
+        ]
+    );
+    let dir = cluster.token_dir();
+    assert_eq!(config.pve.deploy_token_file, dir.join("pve-token-deploy"));
+    assert_eq!(config.server.pve_token_file, dir.join("pve-token"));
+    assert_eq!(config.server.api_token_file, dir.join("api-token"));
+    assert_eq!(config.server.pool, "homestack");
+    assert_eq!(config.acme.zone, "example.net");
+    assert_eq!(config.acme.ovh_file, dir.join("ovh-dns"));
+    assert_eq!(config.acme.dir, dir.join("acme"));
+
+    // The server's configuration is the old file's, with the Gold installed.
+    let server_toml = std::fs::read_to_string(&config.server.config_file).expect("server.toml");
+    assert!(server_toml.contains("gold_vmid = 101"), "{server_toml}");
+    // The client's: the old file's, with the servers.
+    let client_toml = std::fs::read_to_string(dir.join("client.toml")).expect("client.toml");
+    assert!(
+        client_toml.contains(&url) && client_toml.contains("[workspace_ssh]"),
+        "{client_toml}"
+    );
+    for name in ["client.toml", "deploy.toml", "server.toml"] {
+        let mode = std::fs::metadata(dir.join(name)).expect(name).permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "{name}");
+    }
+    let written = DeployConfig::load(&dir.join("deploy.toml")).expect("deploy.toml reads");
+    assert_eq!(written.instances.len(), 3);
+
+    // The last thing shown is the status the new client gets.
+    assert!(out.contains("homestack status"), "{out}");
+    assert!(out.contains("pve-example-1"), "no status:\n{out}");
+}
+
+#[tokio::test]
+async fn a_server_name_that_does_not_resolve_stops_before_any_change() {
+    let cluster = Cluster::new(&["pve1", "pve2"]);
+    desktop_files(&cluster);
+    let servers = Arc::new(FakeServers::resolving(&[("api1.hs.example.net", "192.0.2.97")]));
+    let refused = run_with(
+        &cluster,
+        &server_argv(&["--server-domain", "hs.example.net", "--yes"]),
+        &[],
+        false,
+        Arc::clone(&servers),
+    )
+    .await;
+    assert_eq!(refused.code, 1);
+    let out = format!("{}{}", refused.console.out(), refused.console.err());
+    assert!(out.contains("api2.hs.example.net does not resolve"), "{out}");
+    assert_eq!(cluster.changes(), 0, "something changed");
+    assert!(servers.deployed().is_empty());
+}
+
+#[tokio::test]
+async fn without_the_old_configuration_the_install_stops_before_any_change() {
+    let cluster = Cluster::new(&["pve1"]);
+    let servers = Arc::new(FakeServers::resolving(&[("api1.hs.example.net", "192.0.2.97")]));
+    let refused = run_with(
+        &cluster,
+        &server_argv(&["--server-domain", "hs.example.net", "--yes"]),
+        &[],
+        false,
+        Arc::clone(&servers),
+    )
+    .await;
+    assert_eq!(refused.code, 1);
+    let out = format!("{}{}", refused.console.out(), refused.console.err());
+    assert!(out.contains("config.toml"), "{out}");
+    assert_eq!(cluster.changes(), 0);
+}
+
+#[tokio::test]
+async fn the_manual_way_needs_a_server_domain_or_no_servers() {
+    let cluster = Cluster::new(&["pve1"]);
+    let refused = run(&cluster, &server_argv(&["--yes"]), &[], false).await;
+    assert_eq!(refused.code, 1);
+    let out = refused.console.out();
+    assert!(out.contains("--server-domain") && out.contains("--no-servers"), "{out}");
+    assert_eq!(cluster.changes(), 0);
+}
+
+#[tokio::test]
+async fn an_existing_server_keeps_its_container_id_and_a_status_that_fails_fails_the_install() {
+    let cluster = Cluster::new(&["pve1"]);
+    desktop_files(&cluster);
+    cluster.write(
+        "vms.tsv",
+        "100\tpve1\tdesktop\t\tvirtio=BC:24:11:00:00:02,bridge=vmbr0\t\n\
+         101\tpve1\tgold\thomestack-gold\tvirtio=BC:24:11:00:00:01,bridge=vmbr0\t\n\
+         120\tpve1\tapi1\t\t\t\tlxc\n",
+    );
+    cluster.write("pools.tsv", "homestack-service\t120\tHomeStack servers\n");
+    let servers = Arc::new(FakeServers::resolving(&[("api1.hs.example.net", "192.0.2.97")]));
+    let done = run_with(
+        &cluster,
+        &server_argv(&["--server-domain", "hs.example.net", "--yes"]),
+        &[],
+        false,
+        Arc::clone(&servers),
+    )
+    .await;
+    let deployed = servers.deployed();
+    assert_eq!(deployed.len(), 1, "{}", done.console.out());
+    assert_eq!(deployed[0].instances[0].ctid, 120);
+    // Nothing answers at the servers' address: the install is not done.
+    assert_eq!(done.code, 1, "{}", done.console.out());
+    let out = format!("{}{}", done.console.out(), done.console.err());
+    assert!(out.contains("homestack status"), "{out}");
+    assert!(cluster.token_dir().join("client.toml").exists());
+}
+
+#[tokio::test]
+async fn a_failed_deployment_writes_no_client_configuration() {
+    let cluster = Cluster::new(&["pve1"]);
+    desktop_files(&cluster);
+    let servers = Arc::new(FakeServers {
+        fail: Some("api1: no answer over TLS within 180 s".to_owned()),
+        ..FakeServers::resolving(&[("api1.hs.example.net", "192.0.2.97")])
+    });
+    let done = run_with(
+        &cluster,
+        &server_argv(&["--server-domain", "hs.example.net", "--yes"]),
+        &[],
+        false,
+        servers,
+    )
+    .await;
+    assert_eq!(done.code, 1);
+    let out = format!("{}{}", done.console.out(), done.console.err());
+    assert!(out.contains("no answer over TLS"), "{out}");
+    assert!(!cluster.token_dir().join("client.toml").exists());
+}
+
+#[tokio::test]
+async fn the_form_asks_the_server_domain_and_the_confirmation_lists_the_servers() {
+    let cluster = Cluster::new(&["pve1"]);
+    desktop_files(&cluster);
+    let servers = Arc::new(FakeServers::resolving(&[("api1.hs.example.net", "192.0.2.97")]));
+    // 6 = Server domain; then install from the form and decline.
+    let declined = run_with(
+        &cluster,
+        &["install", "--ssh", "root@pve1"],
+        &["6", "hs.example.net", "", "n"],
+        true,
+        Arc::clone(&servers),
+    )
+    .await;
+    let out = declined.console.out();
+    let form = out.split("Confirm the installation").next().unwrap_or_default();
+    assert!(form.contains("Server domain"), "{form}");
+    let confirm = out.split("Confirm the installation").nth(1).unwrap_or_default();
+    assert!(confirm.contains("Servers"), "{confirm}");
+    let line = confirm
+        .lines()
+        .find(|l| l.contains("api1.hs.example.net"))
+        .unwrap_or_default();
+    for part in ["192.0.2.97", "pve1", "CT 100", "local-lvm"] {
+        assert!(line.contains(part), "{part:?} missing in {line:?}:\n{confirm}");
+    }
+    assert!(confirm.contains("Then: homestack status"), "{confirm}");
+    assert_eq!(cluster.changes(), 0);
+    assert!(servers.deployed().is_empty());
+    // The domain is kept for the next run.
+    let draft = std::fs::read_to_string(cluster.token_dir().join("install-draft.toml")).expect("draft");
+    assert!(draft.contains("hs.example.net"), "{draft}");
 }

@@ -1,6 +1,6 @@
 # Phase 13c: `homestack install` and `homestack uninstall`
 
-Status: in progress (step 1 of 3 done: see section 6). This file is written before the code (PLAN.md 1.1) and
+Status: in progress (steps 1 and 2 done, step 2 not yet live: see sections 6 and 8). This file is written before the code (PLAN.md 1.1) and
 updated as the phase goes; the report at the end says what was done and
 what differs.
 
@@ -193,3 +193,62 @@ with the owner's approval.
   Proxmox) no longer stops the install: the plan keeps it as
   `NAME.replaced-<seconds>` and writes the new secret under the name; it is
   never overwritten, and it is put back if the token cannot be created.
+
+## 8. Step 2: the servers, and `homestack status` at the end (owner, 2026-10-14)
+
+The owner's rule: **an installation ends with the client connecting to the
+server and `homestack status` answering correctly**; no file is written by
+hand. `homestack install` therefore goes on, after the Proxmox part, to
+what `homestack-deploy` did from a hand-written `deploy.toml`:
+
+1. the Proxmox part (sections 3–7);
+2. the certificate `*.<domain>` (Let's Encrypt, DNS-01 at OVH; a stored one
+   that is still valid for 30 days is used);
+3. one server container per node (`hs_deploy::deploy::apply`, deploy token,
+   pool `homestack-service`);
+4. `client.toml` and `deploy.toml` written on the desktop (an existing file
+   that differs is kept as `NAME.replaced-<seconds>`);
+5. `homestack status` with the new `client.toml`; its exit code is the
+   install's.
+
+**Asked:** one more row of the form, **Server domain** (typed, kept in the
+draft; `--server-domain` on the command line). Everything else is found:
+
+| What | Where it comes from |
+|---|---|
+| instances | one per online node that has a chosen server-disk storage: `api1`, `api2`, ... in the order of the nodes |
+| address | the desktop's DNS answer for `apiN.<domain>`; a name that does not resolve is a problem (Install cannot be pressed) |
+| network | `[network]` of the server configuration (`cidr`, `gateway`, the first `dns`); an address outside `prefix` is a problem |
+| bridge | Gold's `net0` |
+| CTID | the container of `homestack-service` with that host name (it is replaced), otherwise the lowest free id from 100 (Proxmox's own rule) |
+| root disk | the first chosen server-disk storage on that node |
+| Proxmox endpoints | `https://<name on the node's API certificate>:8006` |
+| image | `ghcr.io/hipotures/homestack-server:<version>-<commit>` of this client's build (`--server-image` overrides) |
+| server configuration | `server.toml` from `~/.config/homestack/config.toml` (`hs-config split`); without it the install stops with a problem (the configuration wizard is step 3) |
+| tokens | `pve-token`, `pve-token-deploy` of the Proxmox part; the client token `api-token`, made (32 random bytes, hex, 0600) when missing |
+| certificate | OVH key `~/.config/homestack/ovh-dns`, zone = `<domain>` without its first label, kept in `~/.config/homestack/acme` |
+
+The confirmation gets a section **Servers** with one line per instance
+(`api1.hs.example.net  192.0.2.97  pve1  CT 120  local-zfs`), the image and
+the certificate, and the last line **Then: homestack status**.
+
+`--test` installs the test part only, with no servers. On the command line
+the manual way needs `--server-domain` or `--no-servers` (the Proxmox part
+only); without either it is listed as missing. `uninstall` does not remove
+the containers (owner's rule: never a container); the plan lists them as
+kept, `homestack-deploy remove` removes them.
+
+Tests: the instances, addresses, CTIDs, problems and the confirmation are
+computed from the fake cluster and a fake resolver; the deployment and the
+final `status` go through `Context::servers`, a fake in the tests that
+records the `DeployConfig` and the `client.toml` it gets. The real
+deployment is the `--live` gate.
+
+As built (2026-10-14): `crates/hs-cli/src/servers.rs` (the plan of the
+servers, `client.toml`, files kept aside), `Context::servers` (`RealServers`:
+the system resolver, `hs_deploy::deploy::cert` then `apply`), the commit of
+the build from `crates/hs-cli/build.rs`, `app::status_of` for the last
+check. `server.toml` is the old file's server part with `[node] gold_vmid`
+set to the installed Gold. The deployment's progress is shown as it comes.
+Tests: 7 new in `install_cli.rs` (the whole way to a real `status` against a
+server on the simulator), 3 in `form.rs` (the typed setting).

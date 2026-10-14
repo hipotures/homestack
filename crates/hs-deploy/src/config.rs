@@ -126,7 +126,13 @@ fn dns_label(text: &str) -> bool {
 impl DeployConfig {
     /// Read and check `path`; paths in it become absolute.
     pub fn load(path: &Path) -> Result<Self, String> {
-        let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {}", path.display(), e.kind()))?;
+        let text = std::fs::read_to_string(path).map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                format!("{} does not exist; `homestack install` writes it", path.display())
+            } else {
+                format!("{}: {}", path.display(), e.kind())
+            }
+        })?;
         let base = path.parent().unwrap_or(Path::new("."));
         let mut config = Self::parse(&text)?;
         config.resolve_paths(base, &home());

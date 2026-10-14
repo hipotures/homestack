@@ -231,6 +231,7 @@ async fn run_rust_cli(
         system: std::sync::Arc::new(hs_cli::system::RealSystem::default()),
         console: Box::new(captured.clone()),
         poll: std::time::Duration::from_millis(10),
+        servers: std::sync::Arc::new(hs_cli::servers::RealServers),
     };
     let argv: Vec<String> = args.split_whitespace().map(str::to_owned).collect();
     let code = hs_cli::app::run(&argv, &mut context).await;

@@ -10,7 +10,7 @@
 #   storage.json GET /storage
 #   options.json GET /cluster/options
 #   vnets.json   GET /cluster/sdn/vnets (optional)
-#   vms.tsv      vmid node name tags net0 cicustom
+#   vms.tsv      vmid node name tags net0 cicustom [type: qemu (default) or lxc]
 #   users        user ids
 #   tokens.tsv   userid tokenid privsep
 #   roles.tsv    roleid privs(comma) special(0|1)
@@ -66,13 +66,13 @@ cluster_status() {
 }
 
 resources() {
-    local first=1 vmid node name tags net0 cicustom pool
+    local first=1 vmid node name tags net0 cicustom kind pool
     printf '['
-    while IFS=$us read -r vmid node name tags net0 cicustom; do
+    while IFS=$us read -r vmid node name tags net0 cicustom kind; do
         ((first)) || printf ','
         first=0
         pool=$(pool_of "$vmid")
-        printf '{"vmid":%s,"node":"%s","name":"%s","type":"qemu","template":0' "$vmid" "$node" "$name"
+        printf '{"vmid":%s,"node":"%s","name":"%s","type":"%s","template":0' "$vmid" "$node" "$name" "${kind:-qemu}"
         [[ -n $tags ]] && printf ',"tags":"%s"' "$tags"
         [[ -n $pool ]] && printf ',"pool":"%s"' "$pool"
         printf '}'

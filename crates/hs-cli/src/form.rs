@@ -31,12 +31,21 @@ pub struct Choice {
     pub cursor: usize,
 }
 
+/// A setting that is typed: what it is for and what is typed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Input {
+    pub note: String,
+    pub value: String,
+}
+
 /// One row of the form.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Field {
     pub label: String,
     /// `None`: shown only (given on the command line, or how root is reached).
     pub choice: Option<Choice>,
+    /// A typed setting.
+    pub input: Option<Input>,
     /// The value of a row that cannot be changed.
     pub fixed: String,
 }
@@ -47,8 +56,27 @@ impl Field {
         Self {
             label: label.to_owned(),
             choice: None,
+            input: None,
             fixed: value.to_owned(),
         }
+    }
+
+    /// A setting that is typed, starting from `value`.
+    #[must_use]
+    pub fn text(label: &str, note: &str, value: &str) -> Self {
+        Self {
+            label: label.to_owned(),
+            choice: None,
+            input: Some(Input {
+                note: note.to_owned(),
+                value: value.to_owned(),
+            }),
+            fixed: String::new(),
+        }
+    }
+
+    fn editable(&self) -> bool {
+        self.choice.is_some() || self.input.is_some()
     }
 
     /// A setting; `ticked` are chosen at first.
@@ -70,6 +98,7 @@ impl Field {
                 ticked: marks,
                 cursor,
             }),
+            input: None,
             fixed: String::new(),
         }
     }
@@ -77,6 +106,13 @@ impl Field {
     /// What the row shows as its value.
     #[must_use]
     pub fn value(&self) -> String {
+        if let Some(input) = &self.input {
+            return if input.value.trim().is_empty() {
+                NOT_SET.to_owned()
+            } else {
+                input.value.clone()
+            };
+        }
         match &self.choice {
             None => self.fixed.clone(),
             Some(choice) => {
@@ -108,9 +144,26 @@ impl Field {
     }
 
     fn answer(&self) -> Option<Answer> {
+        if let Some(input) = &self.input {
+            return Some(Answer::Text(input.value.trim().to_owned()));
+        }
         self.choice
             .as_ref()
             .map(|choice| Answer::Picked((0..choice.ticked.len()).filter(|i| choice.ticked[*i]).collect()))
+    }
+}
+
+/// The value of a typed setting with nothing typed.
+const NOT_SET: &str = "(not set)";
+
+/// Letters that move where nothing is typed (vi keys).
+const fn moves(key: Key) -> Key {
+    match key {
+        Key::Char('k') => Key::Up,
+        Key::Char('j') => Key::Down,
+        Key::Char('h') => Key::Left,
+        Key::Char('l') => Key::Right,
+        other => other,
     }
 }
 
@@ -149,7 +202,7 @@ impl Form {
     pub fn new(title: &str, fields: Vec<Field>) -> Self {
         let focus = fields
             .iter()
-            .position(|field| field.choice.is_some())
+            .position(|field| field.editable())
             .map_or(Focus::Install, Focus::Field);
         Self {
             title: title.to_owned(),
@@ -194,9 +247,7 @@ impl Form {
     }
 
     fn editable(&self) -> Vec<usize> {
-        (0..self.fields.len())
-            .filter(|i| self.fields[*i].choice.is_some())
-            .collect()
+        (0..self.fields.len()).filter(|i| self.fields[*i].editable()).collect()
     }
 
     fn move_focus(&mut self, down: bool) {
@@ -220,12 +271,18 @@ impl Form {
             self.outcome = Some(Outcome::Cancelled);
             return;
         }
+        let typing = self
+            .open
+            .as_ref()
+            .is_some_and(|(index, _)| self.fields[*index].input.is_some());
         if self.confirm.is_some() {
-            self.handle_confirm(key);
+            self.handle_confirm(moves(key));
+        } else if typing {
+            self.handle_input(key);
         } else if self.open.is_some() {
-            self.handle_list(key);
+            self.handle_list(moves(key));
         } else {
-            match key {
+            match moves(key) {
                 Key::Up => self.move_focus(false),
                 Key::Down | Key::Tab => self.move_focus(true),
                 Key::Left if self.focus == Focus::Cancel => self.focus = Focus::Install,
@@ -238,6 +295,32 @@ impl Form {
                 Key::Back => self.outcome = Some(Outcome::Cancelled),
                 _ => {}
             }
+        }
+    }
+
+    fn handle_input(&mut self, key: Key) {
+        let Some((index, before)) = self.open.clone() else {
+            return;
+        };
+        let Some(input) = self.fields[index].input.as_mut() else {
+            self.open = None;
+            return;
+        };
+        match key {
+            Key::Char(c) => input.value.push(c),
+            Key::Space => input.value.push(' '),
+            Key::Backspace => {
+                input.value.pop();
+            }
+            Key::Enter => {
+                input.value = input.value.trim().to_owned();
+                self.open = None;
+            }
+            Key::Back => {
+                self.fields[index] = before;
+                self.open = None;
+            }
+            _ => {}
         }
     }
 
@@ -322,9 +405,9 @@ impl Form {
         let mut lines = vec![Line::from("")];
         for (index, field) in self.fields.iter().enumerate() {
             let focused = self.open.is_none() && self.confirm.is_none() && self.focus == Focus::Field(index);
-            let value_style = if field.choice.is_none() {
+            let value_style = if !field.editable() {
                 Style::default().fg(Color::Gray)
-            } else if field.value() == "(none chosen)" {
+            } else if field.value() == "(none chosen)" || field.value() == NOT_SET {
                 Style::default().fg(Color::Red)
             } else {
                 Style::default().fg(Color::Green)
@@ -338,7 +421,7 @@ impl Form {
                 Span::raw("   "),
                 Span::styled(field.value(), value_style),
             ];
-            if field.choice.is_some() {
+            if field.editable() {
                 row.push(Span::styled("  [change]", Style::default().fg(Color::DarkGray)));
             }
             let mut line = Line::from(row);
@@ -358,6 +441,8 @@ impl Form {
         frame.render_widget(Paragraph::new(lines), inside);
         let keys = if self.confirm.is_some() {
             "\u{2190}/\u{2192} button   enter press   \u{2191}/\u{2193} scroll   esc back to the settings"
+        } else if self.open.as_ref().is_some_and(|(i, _)| self.fields[*i].input.is_some()) {
+            "type   backspace erase   enter done   esc undo"
         } else if self
             .open
             .as_ref()
@@ -381,8 +466,61 @@ impl Form {
         }
     }
 
+    fn render_input(&self, frame: &mut Frame, area: Rect, index: usize) {
+        let field = &self.fields[index];
+        let Some(input) = &field.input else { return };
+        let width = area.width.saturating_mul(9) / 10;
+        let note_rows =
+            u16::try_from(wrapped_lines(&input.note, usize::from(width.saturating_sub(2)).max(1))).unwrap_or(1);
+        let height = (note_rows + 5).min(area.height);
+        let [row] = Layout::vertical([Constraint::Length(height)])
+            .flex(Flex::Center)
+            .areas(area);
+        let [popup] = Layout::horizontal([Constraint::Length(width)])
+            .flex(Flex::Center)
+            .areas(row);
+        frame.render_widget(Clear, popup);
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(Color::Yellow))
+            .title(Span::styled(
+                format!(" {} ", field.label),
+                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            ));
+        let inside = block.inner(popup);
+        frame.render_widget(block, popup);
+        let [note, _, line] = Layout::vertical([
+            Constraint::Length(note_rows),
+            Constraint::Length(1),
+            Constraint::Length(1),
+        ])
+        .areas(inside);
+        frame.render_widget(
+            Paragraph::new(input.note.as_str())
+                .style(Style::default().fg(Color::Gray))
+                .wrap(Wrap { trim: true }),
+            note,
+        );
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled("> ", Style::default().fg(Color::Yellow)),
+                Span::styled(
+                    input.value.clone(),
+                    Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled("\u{2588}", Style::default().fg(Color::Gray)),
+            ])),
+            line,
+        );
+    }
+
     fn render_list(&mut self, frame: &mut Frame, area: Rect, index: usize) {
         let field = &self.fields[index];
+        if field.input.is_some() {
+            self.render_input(frame, area, index);
+            return;
+        }
         let Some(choice) = &field.choice else { return };
         let popup = centered(area, 90, 80);
         frame.render_widget(Clear, popup);
@@ -590,17 +728,21 @@ fn key_of(event: &crossterm::event::KeyEvent) -> Option<Key> {
     if event.modifiers.contains(KeyModifiers::CONTROL) {
         return matches!(event.code, KeyCode::Char('c' | 'd')).then_some(Key::Quit);
     }
+    // Letters stay letters: the form makes h, j, k, l moves where nothing
+    // is typed.
     Some(match event.code {
-        KeyCode::Up | KeyCode::Char('k') => Key::Up,
-        KeyCode::Down | KeyCode::Char('j') => Key::Down,
+        KeyCode::Up => Key::Up,
+        KeyCode::Down => Key::Down,
         KeyCode::PageUp => Key::PageUp,
         KeyCode::PageDown => Key::PageDown,
         KeyCode::Home => Key::Home,
         KeyCode::End => Key::End,
-        KeyCode::Left | KeyCode::Char('h') => Key::Left,
-        KeyCode::Right | KeyCode::Char('l') => Key::Right,
+        KeyCode::Left => Key::Left,
+        KeyCode::Right => Key::Right,
         KeyCode::Tab | KeyCode::BackTab => Key::Tab,
         KeyCode::Char(' ') => Key::Space,
+        KeyCode::Char(c) => Key::Char(c),
+        KeyCode::Backspace => Key::Backspace,
         KeyCode::Enter => Key::Enter,
         KeyCode::Esc => Key::Back,
         _ => return None,
@@ -667,6 +809,16 @@ pub fn run_numbered<C: Console + ?Sized>(
             continue;
         };
         let label = form.fields[index].label.clone();
+        if let Some(input) = form.fields[index].input.as_mut() {
+            console.out(&format!("\n{label}\n{}\n", input.note));
+            let Some(typed) = console.ask(&format!("{label} [{}]: ", input.value)) else {
+                return Outcome::Cancelled;
+            };
+            if !typed.trim().is_empty() {
+                input.value = typed.trim().to_owned();
+            }
+            continue;
+        }
         let Some(choice) = form.fields[index].choice.as_mut() else {
             continue;
         };

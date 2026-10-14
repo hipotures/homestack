@@ -12,6 +12,7 @@ use crate::args::{Args, InstallArgs};
 use crate::form::{Field, Form, Outcome as FormOutcome};
 use crate::root_herdr::HerdrRoot;
 use crate::root_ssh::SshRoot;
+use crate::servers::{Files, ServerPlan, ensure_api_token, plan_servers, write_private};
 use crate::touch::Sounds;
 use crate::view::Color;
 use crate::wizard::{Answer, Item, Outcome, Step, Summary, Wizard};
@@ -19,6 +20,8 @@ use crate::{AppError, config, expand_home};
 
 const CONFIRM_TTY: &str = "Interactive confirmation requires a TTY; use --yes for automation";
 const CANCELLED: &str = "Cancelled. No changes were made.";
+/// The draft's key of the server domain.
+const DRAFT_DOMAIN: &str = "server-domain";
 
 fn failure(error: InstallError) -> AppError {
     AppError::new(error.to_string())
@@ -131,7 +134,7 @@ fn confirm(ctx: &mut Context, question: &str) -> bool {
 }
 
 /// The command line that gives the same answers without being asked.
-fn same_as(command: Install, install: &InstallArgs, settings: &Settings) -> String {
+fn same_as(command: Install, install: &InstallArgs, settings: &Settings, domain: Option<&str>) -> String {
     let mut words = vec!["homestack".to_owned(), command.name().to_owned()];
     if let Some(ssh) = &install.ssh {
         words.extend(["--ssh".to_owned(), ssh.clone()]);
@@ -159,6 +162,16 @@ fn same_as(command: Install, install: &InstallArgs, settings: &Settings) -> Stri
     }
     if let Some(vmid) = settings.gold {
         words.extend(["--gold".to_owned(), vmid.to_string()]);
+    }
+    match domain {
+        Some(domain) => {
+            words.extend(["--server-domain".to_owned(), domain.to_owned()]);
+            if let Some(image) = &install.server_image {
+                words.extend(["--server-image".to_owned(), image.clone()]);
+            }
+        }
+        None if command == Install::Install && !settings.test => words.push("--no-servers".to_owned()),
+        None => {}
     }
     if install.force {
         words.push("--force".to_owned());
@@ -429,9 +442,41 @@ fn summary_of(access_line: &str, plan: &Plan, home: &std::path::Path) -> Summary
     }
 }
 
+/// The row of the form for the servers.
+fn servers_field(install: &InstallArgs, want: bool, draft_domain: &str) -> Field {
+    if !want {
+        let why = if install.test {
+            "none for the test part"
+        } else {
+            "not deployed  (given on the command line)"
+        };
+        return Field::fixed("Servers", why);
+    }
+    match &install.server_domain {
+        Some(domain) => Field::fixed("Server domain", &format!("{domain}  (given on the command line)")),
+        None => Field::text(
+            "Server domain",
+            "The servers are named apiN.<domain>, one per node (api1 on the first node, ...). Each name must \
+resolve on this desktop to the server's address in the workspace network; the certificate *.<domain> comes \
+from Let's Encrypt.",
+            draft_domain,
+        ),
+    }
+}
+
+/// The confirmation's section of the servers, and their problems.
+fn servers_section(summary: &mut Summary, servers: &ServerPlan) {
+    let mut lines = servers.lines.clone();
+    lines.extend(servers.warnings.iter().map(|warning| format!("warning: {warning}")));
+    lines.push("Then: homestack status".to_owned());
+    summary.sections.push(("Servers".to_owned(), lines));
+    summary.problems.extend(servers.problems.iter().cloned());
+}
+
 /// Run `install` or `uninstall`; the exit code.
-pub fn run(args: &Args, given: &InstallArgs, command: Install, ctx: &mut Context) -> Result<i32, AppError> {
+pub async fn run(args: &Args, given: &InstallArgs, command: Install, ctx: &mut Context) -> Result<i32, AppError> {
     let mut install = given.clone();
+    let want_servers = command == Install::Install && !install.test && !install.no_servers;
     // The default is the interactive installer: what is not given is asked,
     // and the last screen confirms. Giving every option is the manual way.
     let interactive = ctx.stdin_tty
@@ -442,7 +487,8 @@ pub fn run(args: &Args, given: &InstallArgs, command: Install, ctx: &mut Context
             || install.storages.is_empty()
             || install.snippet_storage.is_none()
             || install.service_storages.is_empty()
-            || install.template_storage.is_none());
+            || install.template_storage.is_none()
+            || want_servers && install.server_domain.is_none());
     if install.ssh.is_none() && install.herdr.is_none() {
         if !ctx.stdin_tty {
             return Err(AppError::new(
@@ -458,11 +504,22 @@ pub fn run(args: &Args, given: &InstallArgs, command: Install, ctx: &mut Context
     let access = hs_install::probe(root.as_mut()).map_err(failure)?;
     let access_line = access_line(root.as_ref(), &access);
     let settings = settings(ctx, args, install);
+    let files = Files {
+        dir: settings.token_dir.clone(),
+        home: ctx.home.clone(),
+    };
+    let servers = std::sync::Arc::clone(&ctx.servers);
 
-    let plan = if interactive {
+    let (plan, server_plan, domain) = if interactive {
         let mut questions = hs_install::questions(root.as_mut(), &access, &settings).map_err(failure)?;
         let draft = draft_path(&settings);
-        apply_draft(&mut questions, &load_draft(&draft));
+        let kept = load_draft(&draft);
+        apply_draft(&mut questions, &kept);
+        let draft_domain = kept
+            .get(DRAFT_DOMAIN)
+            .and_then(|values| values.first())
+            .cloned()
+            .unwrap_or_default();
         let root_line = format!(
             "{}  \u{2014}  {}, Proxmox VE {}, {}",
             root.describe(),
@@ -474,15 +531,30 @@ pub fn run(args: &Args, given: &InstallArgs, command: Install, ctx: &mut Context
                 "single node".to_owned()
             }
         );
-        let mut form = Form::new("HomeStack install", form_fields(&root_line, &settings, &questions));
+        let mut fields = form_fields(&root_line, &settings, &questions);
+        fields.push(servers_field(install, want_servers, &draft_domain));
+        let mut form = Form::new("HomeStack install", fields);
         let home = ctx.home.clone();
-        let mut last: Option<Plan> = None;
+        let mut last: Option<(Plan, Option<ServerPlan>, Option<String>)> = None;
         let mut summarize = |answers: &[Answer]| {
             let chosen = answered(&settings, &questions, answers);
+            let domain = typed_domain(install, answers);
             match hs_install::make_plan(root.as_mut(), &access, command, &chosen) {
                 Ok(plan) => {
-                    let summary = summary_of(&access_line, &plan, &home);
-                    last = Some(plan);
+                    let mut summary = summary_of(&access_line, &plan, &home);
+                    let server_plan = want_servers.then(|| {
+                        plan_servers(
+                            &plan,
+                            domain.as_deref().unwrap_or_default(),
+                            install.server_image.as_deref(),
+                            &files,
+                            servers.as_ref(),
+                        )
+                    });
+                    if let Some(server_plan) = &server_plan {
+                        servers_section(&mut summary, server_plan);
+                    }
+                    last = Some((plan, server_plan, domain));
                     summary
                 }
                 Err(error) => {
@@ -495,24 +567,31 @@ pub fn run(args: &Args, given: &InstallArgs, command: Install, ctx: &mut Context
             }
         };
         let outcome = ctx.console.form(&mut form, &mut summarize);
-        save_draft(&draft, &questions, &form.answers());
+        let answers = form.answers();
+        save_draft(&draft, &questions, &answers, typed_domain(install, &answers).as_deref());
         match (outcome, last) {
-            (FormOutcome::Install(_), Some(plan)) => {
-                let line = same_as(command, install, &plan.settings);
+            (FormOutcome::Install(_), Some((plan, server_plan, domain))) => {
+                let line = same_as(
+                    command,
+                    install,
+                    &plan.settings,
+                    domain.as_deref().filter(|_| want_servers),
+                );
                 ctx.console.out(&format!("Same as: {line}\n"));
-                plan
+                (plan, server_plan, domain)
             }
             _ => return cancelled(ctx),
         }
     } else {
+        let no_domain = want_servers && install.server_domain.is_none();
         let first = hs_install::make_plan(root.as_mut(), &access, command, &settings);
-        match first {
+        let plan = match first {
             Ok(plan) => plan,
             // Options the user has not given are not an error: show what
             // can be chosen, one choice a line.
             Err(InstallError::Missing(questions)) => {
                 if args.json {
-                    let missing: Vec<Value> = questions
+                    let mut missing: Vec<Value> = questions
                         .iter()
                         .map(|question| {
                             json!({
@@ -530,23 +609,73 @@ pub fn run(args: &Args, given: &InstallArgs, command: Install, ctx: &mut Context
                             })
                         })
                         .collect();
+                    if no_domain {
+                        missing.push(domain_missing_json());
+                    }
                     emit(
                         ctx,
                         &json!({"ok": false, "command": command.name(), "missing": missing,
                                 "error": hs_install::describe_missing(&questions)}),
                     );
                 } else {
-                    ctx.console
-                        .out(&format!("{}\n", hs_install::describe_missing(&questions)));
+                    let mut text = hs_install::describe_missing(&questions);
+                    if no_domain {
+                        text.push_str(&format!("\n{DOMAIN_MISSING}\n"));
+                    }
+                    ctx.console.out(&format!("{text}\n"));
                 }
                 return Ok(1);
             }
             Err(error) => return Err(failure(error)),
+        };
+        if no_domain {
+            if args.json {
+                emit(
+                    ctx,
+                    &json!({"ok": false, "command": command.name(), "missing": [domain_missing_json()],
+                            "error": DOMAIN_MISSING}),
+                );
+            } else {
+                ctx.console.out(&format!("{DOMAIN_MISSING}\n"));
+            }
+            return Ok(1);
         }
+        let domain = install.server_domain.clone().filter(|_| want_servers);
+        let server_plan = domain
+            .as_deref()
+            .map(|domain| plan_servers(&plan, domain, install.server_image.as_deref(), &files, servers.as_ref()));
+        if let Some(server_plan) = &server_plan
+            && !server_plan.problems.is_empty()
+        {
+            let message = format!(
+                "The servers cannot be deployed; nothing changed:\n{}",
+                server_plan
+                    .problems
+                    .iter()
+                    .map(|problem| format!("  - {problem}"))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            );
+            return Err(AppError::new(message));
+        }
+        (plan, server_plan, domain)
     };
+    let _ = &domain;
 
     let steps = plan.steps.len();
-    if !interactive && steps > 0 && !args.yes {
+    let servers_text = server_plan.as_ref().map(|server_plan| {
+        let mut text = String::from("Servers:\n");
+        for line in &server_plan.lines {
+            text.push_str(&format!("  {line}\n"));
+        }
+        for warning in &server_plan.warnings {
+            text.push_str(&format!("  warning: {warning}\n"));
+        }
+        text.push_str("  Then: homestack status\n");
+        text
+    });
+    let changes = steps + usize::from(server_plan.is_some());
+    if !interactive && changes > 0 && !args.yes {
         if args.json {
             emit(
                 ctx,
@@ -556,21 +685,162 @@ pub fn run(args: &Args, given: &InstallArgs, command: Install, ctx: &mut Context
                     "message": format!("Apply these {steps} changes?"),
                     "access": access_line,
                     "plan": plan_json(&plan),
+                    "servers": server_plan.as_ref().map(|s| s.lines.clone()),
                 }),
             );
             return Ok(3);
         }
-        ctx.console.out(&format!("{access_line}\n{}", plan.text()));
+        ctx.console.out(&format!(
+            "{access_line}\n{}{}",
+            plan.text(),
+            servers_text.clone().unwrap_or_default()
+        ));
         if !ctx.stdin_tty {
             return Err(AppError::new(CONFIRM_TTY));
         }
-        if !confirm(ctx, &format!("Apply these {steps} changes?")) {
+        let question = if server_plan.is_some() {
+            format!("Apply these {steps} changes and deploy the servers?")
+        } else {
+            format!("Apply these {steps} changes?")
+        };
+        if !confirm(ctx, &question) {
             return cancelled(ctx);
         }
     } else if !interactive && !args.json {
-        ctx.console.out(&format!("{access_line}\n{}", plan.text()));
+        ctx.console.out(&format!(
+            "{access_line}\n{}{}",
+            plan.text(),
+            servers_text.unwrap_or_default()
+        ));
     }
-    finish(ctx, args, root.as_mut(), &plan, command, &access_line)
+    let code = finish(ctx, args, root.as_mut(), &plan, command, &access_line)?;
+    let Some(server_plan) = server_plan else {
+        return Ok(code);
+    };
+    if code != 0 {
+        return Err(AppError::new(
+            "The Proxmox part did not finish, so the servers were not deployed; run this again",
+        ));
+    }
+    drop(root);
+    let client_path = args
+        .config
+        .clone()
+        .unwrap_or_else(|| config::default_path(&ctx.home, ctx.config_home.as_deref()));
+    let client_path = expand_home(&client_path.display().to_string(), &ctx.home);
+    deploy_servers(ctx, args, &files, &server_plan, &client_path).await
+}
+
+/// The domain the form was given, or the command line's.
+fn typed_domain(install: &InstallArgs, answers: &[Answer]) -> Option<String> {
+    if let Some(domain) = &install.server_domain {
+        return Some(domain.clone());
+    }
+    answers.iter().rev().find_map(|answer| match answer {
+        Answer::Text(text) if !text.is_empty() => Some(text.clone()),
+        _ => None,
+    })
+}
+
+const DOMAIN_MISSING: &str = "--server-domain is required: the servers are named apiN.<domain> (one per node, \
+each name resolving to its address); or --no-servers for the Proxmox part only. Nothing was changed.";
+
+fn domain_missing_json() -> Value {
+    json!({
+        "option": "--server-domain",
+        "title": "Domain of the servers (apiN.<domain>)",
+        "note": "or --no-servers for the Proxmox part only",
+        "multiple": false,
+        "choices": [],
+        "defaults": [],
+    })
+}
+
+/// After the Proxmox part: the servers, `client.toml`, and `homestack
+/// status`, whose exit code is the install's.
+async fn deploy_servers(
+    ctx: &mut Context,
+    args: &Args,
+    files: &Files,
+    server_plan: &ServerPlan,
+    client_path: &std::path::Path,
+) -> Result<i32, AppError> {
+    let Some(config) = &server_plan.config else {
+        return Err(AppError::new(
+            "The servers cannot be deployed: the deployment is incomplete",
+        ));
+    };
+    let say_out = |ctx: &mut Context, line: &str| {
+        if !args.json {
+            ctx.console.out(&format!("{line}\n"));
+        }
+    };
+    say_out(ctx, "\nServers:");
+    if ensure_api_token(&files.api_token()).map_err(AppError::new)? {
+        say_out(
+            ctx,
+            &format!("  new client token in {}", tilde(&files.api_token(), &files.home)),
+        );
+    }
+    for (path, text) in [
+        (files.server_toml(), server_plan.server_toml.as_str()),
+        (files.deploy_toml(), server_plan.deploy_toml.as_str()),
+    ] {
+        if let Some(kept) = write_private(&path, text).map_err(AppError::new)? {
+            say_out(
+                ctx,
+                &format!("  the old {} is kept as {}", tilde(&path, &files.home), kept.display()),
+            );
+        }
+    }
+
+    // The deployment says what it does as it goes.
+    let (sender, receiver) = std::sync::mpsc::channel::<String>();
+    let say = move |line: &str| {
+        let _ = sender.send(line.to_owned());
+    };
+    let servers = std::sync::Arc::clone(&ctx.servers);
+    let mut deploying = servers.deploy(config, &say);
+    let result = loop {
+        tokio::select! {
+            result = &mut deploying => break result,
+            () = tokio::time::sleep(std::time::Duration::from_millis(200)) => {}
+        }
+        while let Ok(line) = receiver.try_recv() {
+            say_out(ctx, &format!("  {line}"));
+        }
+    };
+    drop(deploying);
+    while let Ok(line) = receiver.try_recv() {
+        say_out(ctx, &format!("  {line}"));
+    }
+    result.map_err(|error| {
+        AppError::new(format!(
+            "Deploying the servers failed: {error}\nThe Proxmox part is installed; run homestack install again to retry."
+        ))
+    })?;
+
+    let (urls, ca_file) = servers.client_server(config);
+    let token_file = tilde(&files.api_token(), &files.home);
+    let text = crate::servers::client_toml(&server_plan.old_config, &urls, ca_file, &token_file)
+        .map_err(|error| AppError::new(format!("client.toml: {error}")))?;
+    if let Some(kept) = write_private(client_path, &text).map_err(AppError::new)? {
+        say_out(ctx, &format!("  the old client.toml is kept as {}", kept.display()));
+    }
+    say_out(ctx, &format!("  {} written", tilde(client_path, &files.home)));
+    say_out(ctx, "\nThe last check: homestack status\n");
+    match crate::app::status_of(client_path, ctx).await {
+        Ok(0) => {
+            say_out(ctx, "\nHomeStack is installed: the client reaches the servers.");
+            Ok(0)
+        }
+        Ok(code) => Err(AppError::new(format!(
+            "homestack status ended with {code}: the install is not finished"
+        ))),
+        Err(error) => Err(AppError::new(format!(
+            "homestack status failed: {error}\nThe install is not finished: the client does not reach the servers."
+        ))),
+    }
 }
 
 fn cancelled(ctx: &mut Context) -> Result<i32, AppError> {
@@ -757,7 +1027,7 @@ fn apply_draft(questions: &mut [hs_install::Question], draft: &std::collections:
 }
 
 /// Keep the choices of the form (mode 0600); a failure only loses them.
-fn save_draft(path: &std::path::Path, questions: &[hs_install::Question], answers: &[Answer]) {
+fn save_draft(path: &std::path::Path, questions: &[hs_install::Question], answers: &[Answer], domain: Option<&str>) {
     use std::io::Write;
     use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
     let mut table = toml::Table::new();
@@ -771,6 +1041,12 @@ fn save_draft(path: &std::path::Path, questions: &[hs_install::Question], answer
         table.insert(
             question.option.trim_start_matches('-').to_owned(),
             toml::Value::Array(values),
+        );
+    }
+    if let Some(domain) = domain {
+        table.insert(
+            DRAFT_DOMAIN.to_owned(),
+            toml::Value::Array(vec![toml::Value::String(domain.to_owned())]),
         );
     }
     let text = format!("# The last choices of `homestack install`; the next run starts from them.\n{table}");

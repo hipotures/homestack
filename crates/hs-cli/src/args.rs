@@ -22,6 +22,12 @@ pub struct InstallArgs {
     /// Uninstall: remove snippets that VMs still name.
     pub force: bool,
     pub token_dir: Option<PathBuf>,
+    /// The servers are `apiN.<domain>` (section 8 of phase-13c.md).
+    pub server_domain: Option<String>,
+    /// The node image instead of this build's.
+    pub server_image: Option<String>,
+    /// Only the Proxmox part: no servers.
+    pub no_servers: bool,
 }
 
 /// What was asked.
@@ -130,7 +136,7 @@ fn usage_of(command: &str) -> String {
         "addkey" => "TARGET [--key KEY] [--restart] [--json] [-y]",
         "migrate" => "TARGET TARGET_NODE --target-storage TARGET_STORAGE [--json] [-y]",
         "install" => {
-            "[--ssh USER@HOST | --herdr NAME] [--identity FILE] [--test] --storages IDS --snippet-storage ID --service-storages IDS --template-storage ID [--gold VMID] [--token-dir DIR] [--json] [-y]"
+            "[--ssh USER@HOST | --herdr NAME] [--identity FILE] [--test] --storages IDS --snippet-storage ID --service-storages IDS --template-storage ID [--gold VMID] (--server-domain DOMAIN [--server-image IMAGE] | --no-servers) [--token-dir DIR] [--json] [-y]"
         }
         "uninstall" => {
             "[--ssh USER@HOST | --herdr NAME] [--identity FILE] [--test] [--snippet-storage ID] [--gold VMID] [--force] [--token-dir DIR] [--json] [-y]"
@@ -297,23 +303,26 @@ pub fn parse(argv: &[String]) -> Result<Args, UsageError> {
         }
         "install" | "uninstall" => {
             let uninstall = name == "uninstall";
-            let extra: &[&str] = if uninstall { &["--test", "--force"] } else { &["--test"] };
-            let words = words(
-                name,
-                rest,
-                &[
-                    "--ssh",
-                    "--herdr",
-                    "--identity",
-                    "--storages",
-                    "--snippet-storage",
-                    "--service-storages",
-                    "--template-storage",
-                    "--gold",
-                    "--token-dir",
-                ],
-                &common(extra),
-            )?;
+            let extra: &[&str] = if uninstall {
+                &["--test", "--force"]
+            } else {
+                &["--test", "--no-servers"]
+            };
+            let mut values = vec![
+                "--ssh",
+                "--herdr",
+                "--identity",
+                "--storages",
+                "--snippet-storage",
+                "--service-storages",
+                "--template-storage",
+                "--gold",
+                "--token-dir",
+            ];
+            if !uninstall {
+                values.extend(["--server-domain", "--server-image"]);
+            }
+            let words = words(name, rest, &values, &common(extra))?;
             words.positionals(&[], 0)?;
             let gold = match words.value("--gold") {
                 None => None,
@@ -352,6 +361,9 @@ pub fn parse(argv: &[String]) -> Result<Args, UsageError> {
                 gold,
                 force: words.flag("--force"),
                 token_dir: words.value("--token-dir").map(PathBuf::from),
+                server_domain: words.value("--server-domain"),
+                server_image: words.value("--server-image"),
+                no_servers: words.flag("--no-servers"),
             };
             let command = if uninstall {
                 Command::Uninstall(install)

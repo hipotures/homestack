@@ -248,7 +248,7 @@ What it needs, once:
    locally. The OVH API key of Proxmox's ACME plugin (`OVH_AK`, `OVH_AS`,
    `OVH_CK`) in a file, mode `0600`.
 3. A client token: `openssl rand -hex 32 > api-token`, mode `0600`.
-4. `deploy.toml` (example: `crates/hs-deploy/tests/data/live-deploy.toml`):
+4. `deploy.toml`, written by `homestack install` (phase 13c, section 8), or by hand (example: `crates/hs-deploy/tests/data/live-deploy.toml`):
    the image, `domain`, the network (`bridge`, `cidr`, `gateway`,
    `nameserver`), `[pve]` endpoints and the deploy token, `[server]` the
    instances' Proxmox token, pools, `server.toml` and the client token,

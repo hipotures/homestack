@@ -30,6 +30,8 @@ pub struct Context {
     pub console: Box<dyn Console>,
     /// How often a job is read while it runs.
     pub poll: Duration,
+    /// The servers of `install` (section 8 of phase-13c.md).
+    pub servers: Arc<dyn crate::servers::Servers>,
 }
 
 /// The job being followed, for the message on Ctrl+C.
@@ -133,7 +135,7 @@ fn help(config: &Path) -> String {
         ),
         (
             "homestack install (--ssh USER@HOST | --herdr NAME) ...",
-            "Install HomeStack in Proxmox: root on a node once, a plan, then pools, roles, user, tokens, ACL and snippets; token secrets go to this desktop.",
+            "Install HomeStack: root on a node once for the Proxmox part, then a server on every node, client.toml, and homestack status at the end.",
         ),
         (
             "homestack uninstall (--ssh USER@HOST | --herdr NAME) ...",
@@ -239,6 +241,28 @@ fn help(config: &Path) -> String {
     text
 }
 
+/// `homestack status` with the configuration at `path`: how an install ends.
+pub async fn status_of(path: &Path, ctx: &mut Context) -> Result<Code, AppError> {
+    let args = Args {
+        help: false,
+        config: Some(path.to_owned()),
+        json: false,
+        yes: false,
+        command: Command::Status { target: None },
+    };
+    let loaded = config::load(path)?;
+    let client = Client::new(loaded.client_config(&ctx.home)?).map_err(client_error)?;
+    let running = Running::default();
+    let mut cli = Cli {
+        args: &args,
+        ctx,
+        loaded: &loaded,
+        client: &client,
+        running: &running,
+    };
+    cli.global_status().await
+}
+
 async fn execute(args: &Args, ctx: &mut Context, running: &Running) -> Result<Code, AppError> {
     let phase = match args.command {
         Command::Setup | Command::Repo { .. } => Some("14"),
@@ -251,8 +275,8 @@ async fn execute(args: &Args, ctx: &mut Context, running: &Running) -> Result<Co
         )));
     }
     match &args.command {
-        Command::Install(install) => return installer::run(args, install, hs_install::Command::Install, ctx),
-        Command::Uninstall(install) => return installer::run(args, install, hs_install::Command::Uninstall, ctx),
+        Command::Install(install) => return installer::run(args, install, hs_install::Command::Install, ctx).await,
+        Command::Uninstall(install) => return installer::run(args, install, hs_install::Command::Uninstall, ctx).await,
         _ => {}
     }
     let path = args

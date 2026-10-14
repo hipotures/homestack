@@ -98,6 +98,24 @@ impl Step {
     }
 }
 
+/// What the deployment of the servers needs to know of the cluster
+/// (section 8 of `docs/migration/phase-13c.md`), read with the plan.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Cluster {
+    /// The online nodes, in the cluster's order.
+    pub nodes: Vec<String>,
+    /// Each enabled storage: its content types and the nodes it is on
+    /// (empty: every node).
+    pub storages: BTreeMap<String, (Vec<String>, Vec<String>)>,
+    /// Every guest: id -> (name, `qemu` or `lxc`, pool).
+    pub guests: BTreeMap<u32, (String, String, String)>,
+    /// The bridge of Gold's `net0`.
+    pub bridge: String,
+    /// Node -> the name on its API certificate.
+    pub api_names: BTreeMap<String, String>,
+    pub gold: Option<u32>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Plan {
     pub command: Command,
@@ -120,6 +138,8 @@ pub struct Plan {
     pub settings: Settings,
     /// Options that had one possible value and got it, as sentences.
     pub taken: Vec<String>,
+    /// The cluster as the servers need it.
+    pub cluster: Cluster,
     /// Gold, as `VMID name (node)`, when the install has one.
     pub gold: Option<String>,
 }
@@ -813,6 +833,29 @@ pub fn make_plan(
             ));
         }
     }
+    let cluster = Cluster {
+        nodes: state
+            .topology
+            .nodes
+            .iter()
+            .filter(|node| node.online)
+            .map(|node| node.name.clone())
+            .collect(),
+        storages: state
+            .storages
+            .iter()
+            .filter(|(_, storage)| !storage.disabled)
+            .map(|(id, storage)| (id.clone(), (storage.content.clone(), storage.nodes.clone())))
+            .collect(),
+        guests: state
+            .vms
+            .iter()
+            .map(|(vmid, vm)| (*vmid, (vm.name.clone(), vm.kind.clone(), vm.pool.clone())))
+            .collect(),
+        bridge: found.sdn_path.rsplit('/').next().unwrap_or_default().to_owned(),
+        api_names: found.api_names,
+        gold: found.gold,
+    };
     Ok(Plan {
         command,
         part,
@@ -826,6 +869,7 @@ pub fn make_plan(
         node_errors,
         steps,
         gold: gold_label,
+        cluster,
         taken,
         settings: resolved.clone(),
     })

@@ -33,6 +33,7 @@ fn context() -> Context {
         system: Arc::new(RealSystem::default()),
         console: Box::new(Terminal),
         poll: Duration::from_millis(500),
+        servers: Arc::new(hs_cli::servers::RealServers),
     }
 }
 

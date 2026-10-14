@@ -2,6 +2,8 @@
 //! setting, the confirmation with Install and Back.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
+mod common;
+
 use hs_cli::form::{Field, Form, Outcome};
 use hs_cli::wizard::{Answer, Item, Key, Summary};
 
@@ -166,4 +168,62 @@ fn a_long_confirmation_has_a_scrollbar_and_stops_at_its_end() {
     press(&mut short, &[Key::Down, Key::Down, Key::Enter]);
     let screen = short.render_to_string(70, 20);
     assert!(!screen.contains('\u{2588}'), "a scrollbar on a short list:\n{screen}");
+}
+
+fn form_with_text() -> Form {
+    let mut fields = form().fields().to_vec();
+    fields.push(Field::text(
+        "Server domain",
+        "The servers are apiN.<domain>; each name must resolve.",
+        "hs.example.net",
+    ));
+    Form::new("HomeStack install", fields)
+}
+
+#[test]
+fn a_text_setting_is_typed_in_its_box_and_esc_undoes_it() {
+    let mut f = form_with_text();
+    let screen = f.render_to_string(80, 16);
+    assert!(
+        screen.contains("Server domain") && screen.contains("hs.example.net"),
+        "{screen}"
+    );
+    assert_eq!(f.answers()[2], Answer::Text("hs.example.net".to_owned()));
+    // To the text row, open it, erase two characters, type "et2".
+    press(
+        &mut f,
+        &[Key::Down, Key::Down, Key::Enter, Key::Backspace, Key::Backspace],
+    );
+    let open = f.render_to_string(80, 16);
+    assert!(open.contains("each name must resolve"), "{open}");
+    // Letters are text here, not moves (j, k, h, l).
+    press(&mut f, &[Key::Char('e'), Key::Char('t'), Key::Char('j'), Key::Enter]);
+    assert_eq!(f.answers()[2], Answer::Text("hs.example.netj".to_owned()));
+    press(&mut f, &[Key::Enter, Key::Char('x'), Key::Back]);
+    assert_eq!(f.answers()[2], Answer::Text("hs.example.netj".to_owned()));
+}
+
+#[test]
+fn an_empty_text_setting_is_shown_as_missing() {
+    let mut fields = form().fields().to_vec();
+    fields.push(Field::text("Server domain", "note", ""));
+    let mut f = Form::new("HomeStack install", fields);
+    let screen = f.render_to_string(80, 16);
+    let row = screen.lines().find(|l| l.contains("Server domain")).unwrap_or_default();
+    assert!(row.contains("(not set)"), "{screen}");
+}
+
+#[test]
+fn the_numbered_way_asks_a_text_setting() {
+    let mut console = common::Recorded::answering(&["3", "hs.other.net", "", "y"]);
+    let mut f = form_with_text();
+    let outcome = hs_cli::form::run_numbered(&mut console, &mut f, &mut |_| changes());
+    assert_eq!(
+        outcome,
+        Outcome::Install(vec![
+            Answer::Picked(vec![0]),
+            Answer::Picked(vec![1]),
+            Answer::Text("hs.other.net".to_owned())
+        ])
+    );
 }

@@ -24,6 +24,8 @@ pub struct Findings {
     pub questions: Vec<Question>,
     pub gold: Option<u32>,
     pub sdn_path: String,
+    /// Node -> the name on its API certificate.
+    pub api_names: std::collections::BTreeMap<String, String>,
 }
 
 pub fn in_list(word: &str, list: &str) -> bool {
@@ -441,6 +443,7 @@ pub fn check_certificates(root: &mut dyn Root, state: &State, found: &mut Findin
             ));
             continue;
         };
+        found.api_names.insert(node.name.clone(), name.clone());
         let address = if node.ip.is_empty() {
             name.as_str()
         } else {
