@@ -1085,8 +1085,11 @@ fn action_box(buf: &mut Buffer, area: Rect, app: &App, action: &Action) {
                 let focused = index == form.focus;
                 let value = match &field.input {
                     Input::Text(value) => {
-                        let cursor = if focused { "▏" } else { "" };
-                        format!("[ {value}{cursor} ]")
+                        let cursor = if focused { "▏" } else { " " };
+                        format!(
+                            "[ {value}{cursor}{} ]",
+                            " ".repeat(24usize.saturating_sub(value.chars().count()))
+                        )
                     }
                     Input::Choice { options, index } => {
                         format!("‹ {} ›", options.get(*index).map_or("—", String::as_str))

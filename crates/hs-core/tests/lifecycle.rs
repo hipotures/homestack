@@ -442,3 +442,22 @@ async fn destroy_names_the_node_files_of_a_python_workspace() -> TestResult {
     );
     Ok(())
 }
+
+#[test]
+fn a_large_vmid_gets_the_address_of_its_last_two_octets() -> Result<(), Error> {
+    use hs_core::lifecycle::derive_ip;
+    let mut config = config()?;
+    config.network.prefix = "192.168.100".to_owned();
+    config.network.gateway = "192.168.100.1".to_owned();
+    config.network.cidr = 22;
+    assert_eq!(derive_ip(&config, 240)?, "192.168.100.240");
+    assert_eq!(derive_ip(&config, 101_010)?, "192.168.101.10");
+    let refused = derive_ip(&config, 104_010).map_err(|error| error.to_string());
+    assert!(
+        refused.is_err_and(|error| error.contains("192.168.100.0/22")),
+        "outside the network"
+    );
+    config.network.cidr = 24;
+    assert!(derive_ip(&config, 101_010).is_err(), "a /24 has no 192.168.101.x");
+    Ok(())
+}

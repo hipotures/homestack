@@ -191,22 +191,22 @@ fn new_opens_a_form_and_its_values_go_to_the_plan() {
     assert_eq!(press(&mut fixture.app, KeyCode::Char('n')), None);
     let text = screen(&render(&fixture.app, 120, 36));
     assert!(text.contains("┐new workspace┌") && text.contains("┐form┌"), "{text}");
+    // The VMID is the first free one of the workspaces' range.
+    assert!(text.contains("[ 101010"), "{text}");
     for label in ["VMID", "Name", "Node", "Storage", "Home size"] {
         assert!(text.contains(label), "{label}: {text}");
     }
-    type_text(&mut fixture.app, "213");
     press(&mut fixture.app, KeyCode::Tab);
     type_text(&mut fixture.app, "lab-new");
     let start = started(press(&mut fixture.app, KeyCode::Enter));
     assert_eq!(start.kind, Kind::New);
-    assert_eq!(start.parameters, json!({"vmid": 213, "name": "lab-new"}));
+    assert_eq!(start.parameters, json!({"vmid": 101010, "name": "lab-new"}));
 }
 
 #[test]
 fn the_form_refuses_a_bad_name_before_asking_the_server() {
     let mut fixture = app();
     press(&mut fixture.app, KeyCode::Char('n'));
-    type_text(&mut fixture.app, "213");
     press(&mut fixture.app, KeyCode::Tab);
     type_text(&mut fixture.app, "1bad");
     assert_eq!(press(&mut fixture.app, KeyCode::Enter), None);
@@ -218,7 +218,6 @@ fn the_form_refuses_a_bad_name_before_asking_the_server() {
 fn a_node_and_storage_chosen_in_the_form_are_sent() {
     let mut fixture = app();
     press(&mut fixture.app, KeyCode::Char('n'));
-    type_text(&mut fixture.app, "213");
     press(&mut fixture.app, KeyCode::Tab);
     type_text(&mut fixture.app, "lab-new");
     press(&mut fixture.app, KeyCode::Tab);
@@ -233,7 +232,7 @@ fn a_node_and_storage_chosen_in_the_form_are_sent() {
     let start = started(press(&mut fixture.app, KeyCode::Enter));
     assert_eq!(
         start.parameters,
-        json!({"vmid": 213, "name": "lab-new", "node": "pve2", "storage": "local-lvm", "home_size": "64G"})
+        json!({"vmid": 101010, "name": "lab-new", "node": "pve2", "storage": "local-lvm", "home_size": "64G"})
     );
 }
 

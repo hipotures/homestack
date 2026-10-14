@@ -31,6 +31,26 @@ impl App {
         storages
     }
 
+    /// The first VMID of the workspaces' range that no workspace and not
+    /// Gold has (owner's decision of 2026-10-14: 101010–101199).
+    fn free_vmid(&self) -> String {
+        let used: Vec<u32> = self
+            .status
+            .iter()
+            .flat_map(|status| {
+                status
+                    .workspaces
+                    .iter()
+                    .map(|entry| entry.vmid)
+                    .chain(status.gold.as_ref().map(|gold| gold.vmid))
+            })
+            .collect();
+        (101_010..=101_199)
+            .find(|vmid| !used.contains(vmid))
+            .map(|vmid| vmid.to_string())
+            .unwrap_or_default()
+    }
+
     fn gold_node(&self) -> Option<String> {
         self.status.as_ref()?.gold.as_ref().map(|gold| gold.node.clone())
     }
@@ -62,24 +82,29 @@ impl App {
         let name = entry.as_ref().and_then(|entry| entry.name.clone()).unwrap_or_default();
         let fields = match kind {
             Kind::New => {
-                let mut nodes = vec![DEFAULT.to_owned()];
+                let gold = self.gold_node().unwrap_or_default();
+                let mut nodes = vec![format!("{DEFAULT}: {gold}, the node of Gold")];
                 nodes.extend(self.nodes());
                 let storage_node = self.gold_node().unwrap_or_default();
-                let mut storages = vec![DEFAULT.to_owned()];
+                let mut storages = vec![format!("{DEFAULT}: {}", self.storages_on(&storage_node).join(", "))];
                 storages.extend(self.storages_on(&storage_node));
                 vec![
-                    Field::text("VMID", "", "A free VMID for the new VM."),
+                    Field::text(
+                        "VMID",
+                        &self.free_vmid(),
+                        "The first free VMID of the workspaces (101010-101199); it is also the address: 101010 is .101.10.",
+                    ),
                     Field::text(
                         "Name",
                         "",
                         "A letter first, then letters, digits, '.' or '-'; it is also the SSH alias.",
                     ),
-                    Field::choice("Node", nodes, "default: the node of Gold."),
-                    Field::choice("Storage", storages, "default: the node's layout for workspace disks."),
+                    Field::choice("Node", nodes, "Where the VM is made; ← → to choose."),
+                    Field::choice("Storage", storages, "Where its disks are made; ← → to choose."),
                     Field::text(
                         "Home size",
                         "",
-                        "Persistent home, e.g. 64G; empty: the server's default.",
+                        "Persistent home in G or T, e.g. 64G or 1T; empty: the server's default.",
                     ),
                 ]
             }
@@ -159,7 +184,7 @@ impl App {
                 let mut parameters = json!({"vmid": id.parse::<u64>().unwrap_or(0), "name": name});
                 for (label, key) in [("Node", "node"), ("Storage", "storage")] {
                     let chosen = value(label);
-                    if chosen != DEFAULT && !chosen.is_empty() {
+                    if !chosen.starts_with(DEFAULT) && !chosen.is_empty() {
                         parameters[key] = json!(chosen);
                     }
                 }
@@ -214,14 +239,14 @@ impl App {
             .find(|field| field.label == "Node")
             .map(super::action::Field::value)
             .unwrap_or_default();
-        let node = if node == DEFAULT {
+        let node = if node.starts_with(DEFAULT) {
             self.gold_node().unwrap_or_default()
         } else {
             node
         };
         let mut storages = Vec::new();
         if kind == Kind::New {
-            storages.push(DEFAULT.to_owned());
+            storages.push(format!("{DEFAULT}: {}", self.storages_on(&node).join(", ")));
         }
         storages.extend(self.storages_on(&node));
         if let Some(field) = form.fields.iter_mut().find(|field| field.label == "Storage")

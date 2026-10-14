@@ -27,12 +27,10 @@ use crate::inventory::{
 };
 use crate::pve::Pve;
 
-/// `expected_ip`: `network.prefix.<vmid>` for VMIDs 2–254.
+/// `expected_ip`: the workspace's address (`hs_model::address::address_of`).
 #[must_use]
 pub fn expected_ip(cfg: &Config, vmid: u32) -> Option<String> {
-    (2..=254)
-        .contains(&vmid)
-        .then(|| format!("{}.{vmid}", cfg.network.prefix))
+    hs_model::address::address_of(vmid, &cfg.network).map(|address| address.to_string())
 }
 
 /// `homestack_status_resources`: Gold and VMs tagged as workspaces.

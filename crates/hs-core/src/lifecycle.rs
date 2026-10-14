@@ -75,16 +75,31 @@ pub fn validate_name(name: &str) -> Result<(), CoreError> {
     }
 }
 
-/// `guest.derive_ip`
+/// `guest.derive_ip`: VMIDs 2–254 are `<prefix>.<vmid>` as in Python; from
+/// 1000 the address is the VMID's last two octets in the gateway's network
+/// (owner's decision of 2026-10-14; `hs_model::address::address_of`).
 pub fn derive_ip(cfg: &Config, vmid: u32) -> Result<String, CoreError> {
-    if (2..=254).contains(&vmid) {
-        Ok(format!("{}.{vmid}", cfg.network.prefix))
-    } else {
-        Err(CoreError::Invalid(format!(
-            "VMID {vmid} cannot be mapped to {}.<vmid>; this addressing scheme requires VMID 2..254.",
-            cfg.network.prefix
-        )))
+    if let Some(address) = hs_model::address::address_of(vmid, &cfg.network) {
+        return Ok(address.to_string());
     }
+    let network = cfg
+        .network
+        .gateway
+        .parse::<std::net::Ipv4Addr>()
+        .map(|gateway| {
+            let mask = u32::MAX.checked_shl(32 - u32::from(cfg.network.cidr)).unwrap_or(0);
+            format!(
+                "{}/{}",
+                std::net::Ipv4Addr::from(u32::from(gateway) & mask),
+                cfg.network.cidr
+            )
+        })
+        .unwrap_or_else(|_| format!("{}.0/{}", cfg.network.prefix, cfg.network.cidr));
+    Err(CoreError::Invalid(format!(
+        "VMID {vmid} has no address in the network {network}: VMIDs 2..254 are {}.<vmid>, and from 1000 the VMID is \
+         the last two octets of the address (101010 is .101.10).",
+        cfg.network.prefix
+    )))
 }
 
 /// `proxmox.parse_home_size`: `<n>G` or `<n>T`, as text and in GiB.
