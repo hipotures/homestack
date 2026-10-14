@@ -473,6 +473,8 @@ pub async fn run(ctx: &mut Context) -> Result<i32, AppError> {
     });
     let mut screen = Screen::open().map_err(|error| AppError::new(format!("Cannot open the terminal: {error}")))?;
     let mut tick = tokio::time::interval(Duration::from_secs(1));
+    // While the first status is read, the waiting bar moves ten times a second.
+    let mut fast = tokio::time::interval(Duration::from_millis(100));
     let mut connected: Option<String> = None;
     let mut decide: Option<mpsc::UnboundedSender<Decision>> = None;
     loop {
@@ -604,6 +606,7 @@ pub async fn run(ctx: &mut Context) -> Result<i32, AppError> {
                 }
             },
             _ = tick.tick() => app.tick(),
+            _ = fast.tick(), if app.status.is_none() && app.unreachable.is_empty() => app.waiting += 1,
         }
     }
 }

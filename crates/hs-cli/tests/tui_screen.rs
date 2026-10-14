@@ -370,5 +370,12 @@ fn before_the_first_status_the_list_says_it_is_reading() {
     let preferences = hs_cli::tui::theme::Preferences::load(&dir.path().join("tui.toml")).unwrap();
     let app = hs_cli::tui::state::App::new(preferences, false).unwrap();
     let text = screen(&render(&app, 120, 36));
-    assert!(text.contains("Reading the status from the servers…"), "{text}");
+    assert!(text.contains("Reading the status from the servers…  0.0 s"), "{text}");
+    let mut later = app.clone();
+    later.waiting = 12;
+    let text = screen(&render(&later, 120, 36));
+    assert!(
+        text.contains("1.2 s") && text.contains("██████"),
+        "a moving bar: {text}"
+    );
 }

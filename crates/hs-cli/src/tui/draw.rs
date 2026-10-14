@@ -612,13 +612,29 @@ fn workspaces(buf: &mut Buffer, area: Rect, app: &App, mut controls: Vec<Control
     let text = text_style(palette);
     let muted = text.fg(palette.muted);
     if app.status.is_none() && app.unreachable.is_empty() && app.notice.is_none() {
+        // A moving bar and the time, so the start is never a still screen.
+        let seconds = f64::from(app.waiting) / 10.0;
         write(
             buf,
             inner.x + 2,
             inner.y + 1,
             inner.width.saturating_sub(2),
-            "Reading the status from the servers…",
+            &format!("Reading the status from the servers…  {seconds:.1} s"),
             muted,
+        );
+        let width = 30_usize;
+        let block = 6_usize;
+        let at = usize::try_from(app.waiting).unwrap_or(0) % (width + block);
+        let bar: String = (0..width)
+            .map(|cell| if cell + block >= at && cell < at { '█' } else { '░' })
+            .collect();
+        write(
+            buf,
+            inner.x + 2,
+            inner.y + 3,
+            inner.width.saturating_sub(2),
+            &bar,
+            text.fg(palette.focus),
         );
         return;
     }

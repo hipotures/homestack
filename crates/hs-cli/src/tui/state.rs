@@ -132,6 +132,8 @@ pub struct App {
     /// Oldest first.
     pub lines: Vec<LogLine>,
     pub clock: String,
+    /// Tenths of a second spent waiting for the first status.
+    pub waiting: u32,
     /// Shown instead of the list: a title and lines (no client.toml, …).
     pub notice: Option<(String, Vec<String>)>,
     /// The action box of the workspaces panel.
@@ -174,6 +176,7 @@ impl App {
             overlay: None,
             lines: Vec::new(),
             clock: String::new(),
+            waiting: 0,
             notice: None,
             action: None,
             log_file: None,
