@@ -336,6 +336,10 @@ fn settings(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
             &cut(&line, usize::from(left - 1)),
             if chosen && !install.chooser { focus } else { text },
         );
+        super::chrome::register(
+            Rect::new(x, at(inner.y, row + 1), left - 1, 1),
+            super::chrome::Hit::Setting(row),
+        );
     }
     if let Some(found) = &install.found {
         let how = found.root.split(" · ").next().unwrap_or_default();
@@ -460,6 +464,10 @@ fn settings(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
             width,
             &cut(&line, usize::from(width)),
             style,
+        );
+        super::chrome::register(
+            Rect::new(box_inner.x, at(box_inner.y, lines + 1 + index), box_inner.width, 1),
+            super::chrome::Hit::Choice(index),
         );
     }
 }

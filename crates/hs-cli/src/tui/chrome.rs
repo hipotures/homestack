@@ -281,6 +281,12 @@ pub fn scrollbar(buf: &mut Buffer, area: Rect, palette: &Palette, offset: usize,
 pub enum Hit {
     /// The key of a control in a border.
     Key(crossterm::event::KeyCode),
+    /// A field of an action's form, and the key a click on its ‹ or › is.
+    Field(usize, Option<crossterm::event::KeyCode>),
+    /// A row of the install's settings.
+    Setting(usize),
+    /// A choice in the box of the focused setting.
+    Choice(usize),
     /// An item of a list in a box (the menu, the themes).
     Item(usize),
 }

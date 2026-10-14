@@ -86,7 +86,7 @@ impl App {
         let fields = match kind {
             Kind::New => {
                 let gold = self.gold_node().unwrap_or_default();
-                let mut nodes = vec![format!("{DEFAULT}: {gold}, the node of Gold")];
+                let mut nodes = vec![format!("{DEFAULT}: {gold}")];
                 nodes.extend(self.nodes());
                 let storage_node = self.gold_node().unwrap_or_default();
                 let mut storages = vec![format!("{DEFAULT}: {}", self.storages_on(&storage_node).join(", "))];
@@ -102,8 +102,16 @@ impl App {
                         "",
                         "A letter first, then letters, digits, '.' or '-'; it is also the SSH alias.",
                     ),
-                    Field::choice("Node", nodes, "Where the VM is made; ← → to choose."),
-                    Field::choice("Storage", storages, "Where its disks are made; ← → to choose."),
+                    Field::choice(
+                        "Node",
+                        nodes,
+                        "Where the VM is made (default: the node of Gold); ← → or a click on ‹ › to choose.",
+                    ),
+                    Field::choice(
+                        "Storage",
+                        storages,
+                        "Where its disks are made; ← → or a click on ‹ › to choose.",
+                    ),
                     Field::text(
                         "Home size",
                         "",

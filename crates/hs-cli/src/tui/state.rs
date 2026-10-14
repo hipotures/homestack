@@ -473,6 +473,30 @@ impl App {
                 // the themes is chosen and opened.
                 match super::chrome::hit_at(event.column, event.row) {
                     Some(Hit::Key(code)) => return press(self, code),
+                    // A setting of the install, and a choice in its box.
+                    Some(Hit::Setting(row)) => {
+                        if let Some(install) = self.install.as_mut() {
+                            install.row = row;
+                            install.chooser = false;
+                        }
+                        return None;
+                    }
+                    Some(Hit::Choice(choice)) => {
+                        if let Some(install) = self.install.as_mut() {
+                            install.chooser = true;
+                            install.cursor = choice;
+                        }
+                        return press(self, KeyCode::Char(' '));
+                    }
+                    // A field of a form: focus it; its ‹ or › is a key on it.
+                    Some(Hit::Field(field, key)) => {
+                        if let Some(action) = self.action.as_mut()
+                            && let super::action::Stage::Form(form) = &mut action.stage
+                        {
+                            form.focus = field;
+                        }
+                        return key.and_then(|code| press(self, code));
+                    }
                     Some(Hit::Item(item)) => {
                         match &mut self.overlay {
                             Some(Overlay::Menu { index }) => *index = item,

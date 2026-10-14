@@ -570,3 +570,23 @@ fn esc_after_a_failed_run_goes_back_to_the_review() {
         Some(Request::Install(Command::Apply))
     );
 }
+
+#[test]
+fn a_click_chooses_a_setting_and_ticks_a_choice() {
+    use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+    let click = |column, row| MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column,
+        row,
+        modifiers: KeyModifiers::NONE,
+    };
+    let mut fixture = checked(Mode::Install);
+    let buf = render(&fixture.app, 120, 36);
+    let (x, y) = tui_fixture::position(&buf, "Gold VM");
+    fixture.app.mouse(click(x, y));
+    assert_eq!(fixture.app.install.as_ref().unwrap().row, 1);
+    let buf = render(&fixture.app, 120, 36);
+    let (x, y) = tui_fixture::position(&buf, "old-gold");
+    fixture.app.mouse(click(x, y));
+    assert_eq!(fixture.app.install.as_ref().unwrap().settings[1].picked, [1]);
+}

@@ -1,5 +1,6 @@
 //! Drawing the main screen (mockups 09–11, 15–17) from an [`App`].
 
+use crossterm::event::KeyCode;
 use hs_model::status::{LayoutCapacity, StatusEntry};
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
@@ -1116,6 +1117,8 @@ fn action_box(buf: &mut Buffer, area: Rect, app: &App, action: &Action) {
     );
     let width = usize::from(inner.width.saturating_sub(2));
     let mut lines: Vec<(String, Style)> = Vec::new();
+    // Which line is which field of a form, for the mouse.
+    let mut field_rows: Vec<(usize, usize)> = Vec::new();
     let push = |line: &str, style: Style, lines: &mut Vec<(String, Style)>| {
         for piece in wrap(line, width) {
             lines.push((piece, style));
@@ -1143,6 +1146,7 @@ fn action_box(buf: &mut Buffer, area: Rect, app: &App, action: &Action) {
                 if focused {
                     style = style.bg(palette.selection).add_modifier(Modifier::BOLD);
                 }
+                field_rows.push((lines.len(), index));
                 lines.push((format!("{:<11}{value}", field.label), style));
             }
             lines.push((String::new(), text));
@@ -1217,6 +1221,23 @@ fn action_box(buf: &mut Buffer, area: Rect, app: &App, action: &Action) {
     }
     let height = usize::from(inner.height);
     let scroll = scroll.min(lines.len().saturating_sub(height));
+    for (line, field) in &field_rows {
+        if *line < scroll || *line >= scroll + height {
+            continue;
+        }
+        let y = inner.y + u16::try_from(line - scroll).unwrap_or(0);
+        super::chrome::register(
+            Rect::new(inner.x, y, inner.width, 1),
+            super::chrome::Hit::Field(*field, None),
+        );
+        let text = &lines[*line].0;
+        for (mark, key) in [('‹', KeyCode::Left), ('›', KeyCode::Right)] {
+            if let Some(at) = text.chars().position(|c| c == mark) {
+                let x = inner.x + 1 + u16::try_from(at).unwrap_or(0);
+                super::chrome::register(Rect::new(x, y, 1, 1), super::chrome::Hit::Field(*field, Some(key)));
+            }
+        }
+    }
     for (row, (line, style)) in lines.iter().skip(scroll).take(height).enumerate() {
         let y = inner.y + u16::try_from(row).unwrap_or(0);
         write(buf, inner.x + 1, y, inner.width.saturating_sub(2), line, *style);

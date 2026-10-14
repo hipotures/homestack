@@ -418,3 +418,30 @@ fn t_stops_a_running_workspace_and_starts_a_stopped_one() {
     let start = started(press(&mut fixture.app, KeyCode::Char('t')));
     assert_eq!((start.kind, start.kind.operation()), (Kind::Start, "workspace.start"));
 }
+
+#[test]
+fn a_click_focuses_a_field_and_a_click_on_its_arrow_changes_the_choice() {
+    use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+    let mut fixture = app();
+    press(&mut fixture.app, KeyCode::Char('n'));
+    let buf = render(&fixture.app, 120, 36);
+    let (x, y) = position(&buf, "Node");
+    let click = |column, row| MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column,
+        row,
+        modifiers: KeyModifiers::NONE,
+    };
+    fixture.app.mouse(click(x, y));
+    let buf = render(&fixture.app, 120, 36);
+    let text = screen(&buf);
+    assert!(
+        text.contains("Where the VM is made"),
+        "the Node field has the focus: {text}"
+    );
+    let line = row(&buf, y);
+    let arrow = u16::try_from(line.chars().position(|c| c == '›').unwrap()).unwrap();
+    fixture.app.mouse(click(arrow, y));
+    let text = screen(&render(&fixture.app, 120, 36));
+    assert!(text.contains("‹ pve1 ›"), "the next node: {text}");
+}
