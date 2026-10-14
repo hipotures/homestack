@@ -265,6 +265,57 @@ Rendering into ratatui's `TestBackend`, as MyPowers does, with a fake status:
   (an uninstall of phase 13c deleted the user `homestack@pve` with its
   tokens), and so is the test Gold 248.
 
+## 7. Step 3: install and uninstall in the TUI
+
+- **Where it opens.** Without `client.toml` the TUI starts on the install
+  screen (Esc quits). Menu › Install or reconfigure and Menu › Uninstall
+  open it over the main screen (Esc goes back).
+- **The screen** (`tui/install.rs`, `tui/draw_install.rs`; mockups 02–08,
+  18):
+  - The steps are in the top border, done ones `✓`, the current one raised
+    `┌check┐`; how root is reached and the Proxmox version on the right.
+  - The step's buttons are in the bottom border, `n/5` (`n/4` for the
+    uninstall) on the right. At 120 x 36 the log panel is under it.
+  - **access:** Method `‹ SSH ›` or `‹ Herdr pane ›` (← → on the method;
+    Herdr lists its tabs), the host as `USER@HOST`; ↵ connects.
+  - **check:** `✓` found, `·` the install adds it, `!` to note, from a
+    first plan of the kept choices; "Nothing was changed."
+  - **settings:** every question of 13c on the left with its value, the
+    chooser of the focused one in a box on the right (⇥ in and out, ␣
+    ticks), the server domain as a text row; ↵ reviews.
+  - **review:** problems first (Install stays grey while there are any),
+    then the same sections as the CLI's confirmation; ↑↓ scroll.
+    The uninstall's review lists what is removed and what is kept, with
+    cancel focused.
+  - **install:** each step as it is done (`✓`, the running one `◐`), then
+    the end: `HomeStack is installed.` and ↵ opens the main screen, which
+    reads `client.toml` again; a failed run says why and ↵ goes back to
+    the review.
+- **ssh's questions** (`askpass.rs`): ssh runs under `setsid` with
+  `SSH_ASKPASS` set to this `homestack` and `SSH_ASKPASS_REQUIRE=force`;
+  `homestack` started that way asks through a Unix socket in a private
+  (0700) directory. The TUI shows a box: the touch (with the key and a
+  countdown; it closes when ssh stops its notifier), a PIN or passphrase
+  (dots), an unknown host key (`Trust ↵`, Esc answers no; the TUI's master
+  uses `StrictHostKeyChecking=ask`, the CLI keeps `accept-new`).
+- **One install for both** (`install_flow.rs`): `Session` (start, review,
+  keep, apply) and `deploy` are what the CLI's form and the TUI's worker
+  (`tui/installing.rs`, a thread holding root) both run.
+- **Tests:** `tests/askpass.rs` (5: the kinds, an answer, a cancel, the
+  touch ending, a fake ssh behind the prefix with no terminal),
+  `tests/root_ssh.rs` (the TUI's master behind the prefix asks about host
+  keys), `tests/tui_install.rs` (12: every step, the boxes, the uninstall,
+  the log panel), `install_cli.rs` (the worker installs the fake cluster
+  through the same session: Proxmox part, servers, `client.toml`, the
+  status through the new client).
+- **Differences from the mockups:**
+  - no "each node gets" box in the settings and no grouped progress with
+    an overall bar (open since 13c);
+  - the run cannot be stopped midway (Esc does nothing while it runs);
+  - the touch countdown assumes ssh's 30 s.
+- **Live:** the owner installs the servers of `homestack.app` from this
+  screen (step 3 replaces the 13c form for that).
+
 ### Open after the owner's decisions of 2026-10-14 (`decisions.md`)
 
 - Workspaces numbered by address: the code still makes the address
