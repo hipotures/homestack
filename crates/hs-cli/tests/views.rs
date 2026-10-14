@@ -179,3 +179,30 @@ fn error_panel_preserves_bracketed_config_section() {
     assert!(rendered.contains("[transport]"));
     assert!(rendered.contains("ERROR"));
 }
+
+/// The owner (2026-10-14): the incomplete orphan scan is by design
+/// (decision 10) and nothing can be done about it, so the status view does
+/// not show it; `--json` keeps it.
+#[test]
+fn the_incomplete_orphan_scan_is_not_shown_as_a_warning() {
+    let result = json!({
+        "summary": {"workspace_count": 0, "running": 0, "stopped": 0,
+            "homes": {"used_bytes": null, "quota_bytes": 0, "free_percent": null, "missing_count": 0}},
+        "workspaces": [],
+        "warnings": [
+            "HomeStack orphan scan incomplete: The server's Proxmox token cannot list the volumes of VMs outside pool homestack",
+            "pve3 is offline",
+        ],
+    });
+    let text = view::global_status(&result, &plain());
+    assert!(!text.contains("orphan scan"), "{text}");
+    assert!(text.contains("WARNINGS") && text.contains("pve3 is offline"), "{text}");
+
+    let only = json!({
+        "summary": result["summary"].clone(),
+        "workspaces": [],
+        "warnings": ["HomeStack orphan scan incomplete: anything"],
+    });
+    let text = view::global_status(&only, &plain());
+    assert!(!text.contains("WARNINGS"), "{text}");
+}

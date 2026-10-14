@@ -416,7 +416,7 @@ fn is_layout_name(name: &str) -> bool {
 
 /// `homestack-storage-<N>` for the trailing number of the node name, as
 /// Python's `re.search(r"([1-9][0-9]*)$", node)`.
-fn active_layout_name(node: &NodeName) -> Result<String, ConfigError> {
+pub fn active_layout_name(node: &NodeName) -> Result<String, ConfigError> {
     let name = node.as_str();
     let digits = name.len() - name.trim_end_matches(|c: char| c.is_ascii_digit()).len();
     let number = name[name.len() - digits..].trim_start_matches('0');

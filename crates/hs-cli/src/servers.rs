@@ -163,6 +163,46 @@ fn now() -> i64 {
         .map_or(0, |since| i64::try_from(since.as_secs()).unwrap_or(i64::MAX))
 }
 
+/// `[storage_layouts]`: node `...N` uses `homestack-storage-N`, made of the
+/// chosen workspace-disk storages that are on that node.
+fn layouts(
+    plan: &Plan,
+    warnings: &mut Vec<String>,
+    lines: &mut Vec<String>,
+) -> std::collections::BTreeMap<String, Vec<String>> {
+    let mut layouts = std::collections::BTreeMap::new();
+    for node in &plan.cluster.nodes {
+        let Ok(name) = hs_model::node::NodeName::parse(node)
+            .map_err(|_| ())
+            .and_then(|parsed| hs_model::config::active_layout_name(&parsed).map_err(|_| ()))
+        else {
+            warnings.push(format!(
+                "{node}: its name does not end in a number, so it gets no workspace disks"
+            ));
+            continue;
+        };
+        let storages: Vec<String> = plan
+            .settings
+            .storages
+            .iter()
+            .filter(|id| {
+                plan.cluster
+                    .storages
+                    .get(*id)
+                    .is_some_and(|(_, nodes)| nodes.is_empty() || nodes.contains(node))
+            })
+            .cloned()
+            .collect();
+        if storages.is_empty() {
+            warnings.push(format!("{node}: no chosen workspace-disk storage there"));
+            continue;
+        }
+        lines.push(format!("workspace disks on {node}: {}", storages.join(", ")));
+        layouts.insert(name, storages);
+    }
+    layouts
+}
+
 /// The servers of `plan` under `domain`.
 pub fn plan_servers(
     plan: &Plan,
@@ -195,6 +235,7 @@ pub fn plan_servers(
     // The server configuration comes from the old one, with this Gold.
     let old_path = files.old_config();
     let mut network = None;
+    let mut layout_lines = Vec::new();
     match std::fs::read_to_string(&old_path) {
         Err(_) => out.problems.push(format!(
             "the server configuration is made from {}, which cannot be read",
@@ -206,6 +247,9 @@ pub fn plan_servers(
                 if let Some(gold) = plan.cluster.gold {
                     read.server.gold_vmid = gold;
                 }
+                // The workspace disks go where the form says, not where the
+                // old file did: per node, the chosen storages on it.
+                read.server.storage_layouts = layouts(plan, &mut out.warnings, &mut layout_lines);
                 network = Some(read.server.network.clone());
                 out.server_toml = read.server.to_toml();
                 out.old_config = text;
@@ -313,6 +357,7 @@ pub fn plan_servers(
         return out;
     };
     out.lines.insert(0, format!("image {image}"));
+    out.lines.extend(layout_lines);
     out.lines.push(format!(
         "{} and deploy.toml in {}",
         "client.toml, server.toml",

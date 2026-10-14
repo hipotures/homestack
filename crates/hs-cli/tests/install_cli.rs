@@ -1235,3 +1235,58 @@ async fn the_form_asks_the_server_domain_and_the_confirmation_lists_the_servers(
     let draft = std::fs::read_to_string(cluster.token_dir().join("install-draft.toml")).expect("draft");
     assert!(draft.contains("hs.example.net"), "{draft}");
 }
+
+#[tokio::test]
+async fn the_servers_put_workspace_disks_on_the_storages_chosen_in_the_form() {
+    let cluster = Cluster::new(&["pve1", "pve2", "pve3"]);
+    desktop_files(&cluster);
+    cluster.write(
+        "storage.json",
+        r#"[{"storage":"local","type":"dir","content":"iso,vztmpl,backup,snippets"},
+ {"storage":"fast-roots","type":"lvmthin","content":"images,rootdir","nodes":"pve1"},
+ {"storage":"local-lvm","type":"lvmthin","content":"images,rootdir","nodes":"pve2,pve3"}]
+"#,
+    );
+    let servers = Arc::new(FakeServers::resolving(&[
+        ("api1.hs.example.net", "192.0.2.97"),
+        ("api2.hs.example.net", "192.0.2.98"),
+        ("api3.hs.example.net", "192.0.2.99"),
+    ]));
+    let done = run_with(
+        &cluster,
+        &[
+            "install",
+            "--ssh",
+            "root@pve1",
+            "--storages",
+            "fast-roots,local-lvm",
+            "--snippet-storage",
+            "local",
+            "--service-storages",
+            "fast-roots,local-lvm",
+            "--template-storage",
+            "local",
+            "--server-domain",
+            "hs.example.net",
+            "--yes",
+        ],
+        &[],
+        false,
+        Arc::clone(&servers),
+    )
+    .await;
+    let deployed = servers.deployed();
+    assert_eq!(deployed.len(), 1, "{}{}", done.console.out(), done.console.err());
+    let server_toml = std::fs::read_to_string(&deployed[0].server.config_file).expect("server.toml");
+    for line in [
+        "homestack-storage-1 = [\"fast-roots\"]",
+        "homestack-storage-2 = [\"local-lvm\"]",
+        "homestack-storage-3 = [\"local-lvm\"]",
+    ] {
+        assert!(server_toml.contains(line), "{line:?} missing:\n{server_toml}");
+    }
+    assert!(
+        !server_toml.contains("example-storage"),
+        "the old file's layouts are kept:\n{server_toml}"
+    );
+}

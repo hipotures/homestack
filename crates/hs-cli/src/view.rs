@@ -1100,7 +1100,10 @@ pub fn global_status(result: &Value, style: &Style) -> String {
         .as_array()
         .into_iter()
         .flatten()
-        .map(|warning| style.paint(&format!("! {}", text(warning)), Color::Yellow))
+        .map(text)
+        // By design (decision 10) and nothing to act on: `--json` keeps it.
+        .filter(|warning| !warning.starts_with("HomeStack orphan scan incomplete:"))
+        .map(|warning| style.paint(&format!("! {warning}"), Color::Yellow))
         .collect();
     if !warnings.is_empty() {
         out.push_str(&panel(
