@@ -1519,7 +1519,11 @@ async fn the_tui_worker_installs_through_the_same_session_as_the_cli() {
         other => panic!("{other:?}"),
     };
     assert!(found.root.starts_with("ssh root@pve1 · PVE "), "{}", found.root);
-    assert!(found.check.iter().any(|(_, label, _)| label == "Proxmox"), "{:?}", found.check);
+    assert!(
+        found.check.iter().any(|(_, label, _)| label == "Proxmox"),
+        "{:?}",
+        found.check
+    );
     assert!(!found.settings.is_empty(), "nothing to choose: {found:?}");
     assert_eq!(cluster.changes(), 0, "connecting changed something");
 
@@ -1558,7 +1562,9 @@ async fn the_tui_worker_installs_through_the_same_session_as_the_cli() {
     assert_eq!(servers.deployed().len(), 1);
     assert!(client_path.exists(), "client.toml was not written");
     assert!(
-        result.iter().any(|line| line.starts_with("Check: the client reaches the servers")),
+        result
+            .iter()
+            .any(|line| line.starts_with("Check: the client reaches the servers")),
         "{result:?}"
     );
     commands.send(Command::Cancel).unwrap();
