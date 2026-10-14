@@ -8,7 +8,7 @@ name = "pve2"
 gold_vmid = 248
 
 [storage_layouts]
-homestack-storage-1 = ["worker-roots"]
+homestack-storage-1 = ["local-zfs"]
 homestack-storage-2 = ["local-lvm"]
 homestack-storage-3 = ["local-lvm"]
 
