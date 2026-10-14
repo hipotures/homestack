@@ -130,6 +130,10 @@ fn sorted(value: &Value) -> Value {
 fn help(config: &Path) -> String {
     let rows: &[(&str, &str)] = &[
         (
+            "homestack",
+            "In a terminal: the HomeStack TUI (workspaces, cluster, storage, log; m for the menu, q to quit).",
+        ),
+        (
             "homestack discover",
             "Read-only check of the local tools and keys and of what the server finds in Proxmox.",
         ),
@@ -350,7 +354,7 @@ async fn execute(args: &Args, ctx: &mut Context, running: &Running) -> Result<Co
 }
 
 /// A server error as the user sees it.
-fn client_error(error: ClientError) -> AppError {
+pub fn client_error(error: ClientError) -> AppError {
     match error {
         ClientError::Api { message, code, .. } if !message.is_empty() => {
             if code == "unauthorized" {
@@ -480,48 +484,7 @@ impl<'a> Cli<'a> {
     }
 
     async fn transport(&mut self) -> Result<Code, AppError> {
-        let urls: Vec<url::Url> = self.client.urls().cloned().collect();
-        let mut instances = Vec::new();
-        for (index, url) in urls.iter().enumerate() {
-            instances.push(match self.client.config_version_on(index).await {
-                Ok(version) => json!({"url": url.as_str(), "ok": true, "config_version": version, "error": null}),
-                Err(error) => {
-                    json!({"url": url.as_str(), "ok": false, "config_version": null, "error": client_error(error).0})
-                }
-            });
-        }
-        if !instances.iter().any(|instance| instance["ok"] == true) {
-            return Err(AppError::new(format!(
-                "No HomeStack server instance answered: {}",
-                instances
-                    .iter()
-                    .map(|i| format!("{}: {}", view::text(&i["url"]), view::text(&i["error"])))
-                    .collect::<Vec<_>>()
-                    .join("; ")
-            )));
-        }
-        let (url, stored) = self.client.get_from("/v1/config").await.map_err(client_error)?;
-        let node = stored
-            .as_str()
-            .and_then(|text| text.parse::<toml::Table>().ok())
-            .and_then(|table| table.get("node")?.get("name")?.as_str().map(str::to_owned))
-            .ok_or_else(|| AppError::new("The server's configuration names no [node]"))?;
-        let status = self
-            .client
-            .get(&format!("/v1/pve/nodes/{node}/status"))
-            .await
-            .map_err(client_error)?;
-        let out = json!({
-            "ok": true,
-            "command": "transport",
-            "transport": {"type": "server", "url": url.as_str(), "instances": instances},
-            "pve": {
-                "node": node,
-                "version": status["pveversion"],
-                "kernel": status["kversion"],
-                "uptime": status["uptime"],
-            },
-        });
+        let out = transport_report(self.client).await?;
         if self.args.json {
             self.emit(&out);
         } else {
@@ -532,30 +495,7 @@ impl<'a> Cli<'a> {
     }
 
     async fn discover(&mut self) -> Result<Code, AppError> {
-        let mut commands = Map::new();
-        for name in ["ssh", "ssh-keygen", "fido2-token", "bwrap"] {
-            commands.insert(name.to_owned(), json!(self.ctx.system.which(name).is_some()));
-        }
-        let mut report = json!({
-            "ok": false,
-            "config_used": true,
-            "read_only": true,
-            "local": {
-                "commands": commands,
-                "hardware_ssh_identities": local_ssh::discover_hardware_identities(&self.ctx.home),
-            },
-            "server": null,
-            "errors": [],
-        });
-        match self.client.get_from("/v1/discovery").await {
-            Ok((url, discovery)) => {
-                report["server"] = json!({"url": url.as_str(), "discovery": discovery});
-                report["ok"] = json!(true);
-            }
-            Err(error) => {
-                report["errors"] = json!([client_error(error).0]);
-            }
-        }
+        let report = discovery_report(self.client, self.ctx.system.as_ref(), &self.ctx.home).await;
         let ok = report["ok"] == true;
         if self.args.json {
             self.emit(&report);
@@ -1118,4 +1058,80 @@ pub fn backup_keys_left(home: &Path, vmid: u32) -> Vec<String> {
         .filter(|path| path.symlink_metadata().is_ok())
         .map(|path| path.display().to_string())
         .collect()
+}
+
+/// What `homestack transport` reports: every server's state and
+/// configuration version, and the Proxmox node the servers are set to.
+pub async fn transport_report(client: &Client) -> Result<Value, AppError> {
+    let urls: Vec<url::Url> = client.urls().cloned().collect();
+    let mut instances = Vec::new();
+    for (index, url) in urls.iter().enumerate() {
+        instances.push(match client.config_version_on(index).await {
+            Ok(version) => json!({"url": url.as_str(), "ok": true, "config_version": version, "error": null}),
+            Err(error) => {
+                json!({"url": url.as_str(), "ok": false, "config_version": null, "error": client_error(error).0})
+            }
+        });
+    }
+    if !instances.iter().any(|instance| instance["ok"] == true) {
+        return Err(AppError::new(format!(
+            "No HomeStack server instance answered: {}",
+            instances
+                .iter()
+                .map(|i| format!("{}: {}", view::text(&i["url"]), view::text(&i["error"])))
+                .collect::<Vec<_>>()
+                .join("; ")
+        )));
+    }
+    let (url, stored) = client.get_from("/v1/config").await.map_err(client_error)?;
+    let node = stored
+        .as_str()
+        .and_then(|text| text.parse::<toml::Table>().ok())
+        .and_then(|table| table.get("node")?.get("name")?.as_str().map(str::to_owned))
+        .ok_or_else(|| AppError::new("The server's configuration names no [node]"))?;
+    let status = client
+        .get(&format!("/v1/pve/nodes/{node}/status"))
+        .await
+        .map_err(client_error)?;
+    Ok(json!({
+        "ok": true,
+        "command": "transport",
+        "transport": {"type": "server", "url": url.as_str(), "instances": instances},
+        "pve": {
+            "node": node,
+            "version": status["pveversion"],
+            "kernel": status["kversion"],
+            "uptime": status["uptime"],
+        },
+    }))
+}
+
+/// What `homestack discover` reports: the local tools and keys, and what
+/// the server finds in Proxmox.
+pub async fn discovery_report(client: &Client, system: &dyn System, home: &Path) -> Value {
+    let mut commands = Map::new();
+    for name in ["ssh", "ssh-keygen", "fido2-token", "bwrap"] {
+        commands.insert(name.to_owned(), json!(system.which(name).is_some()));
+    }
+    let mut report = json!({
+        "ok": false,
+        "config_used": true,
+        "read_only": true,
+        "local": {
+            "commands": commands,
+            "hardware_ssh_identities": local_ssh::discover_hardware_identities(home),
+        },
+        "server": null,
+        "errors": [],
+    });
+    match client.get_from("/v1/discovery").await {
+        Ok((url, discovery)) => {
+            report["server"] = json!({"url": url.as_str(), "discovery": discovery});
+            report["ok"] = json!(true);
+        }
+        Err(error) => {
+            report["errors"] = json!([client_error(error).0]);
+        }
+    }
+    report
 }

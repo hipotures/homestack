@@ -1,0 +1,457 @@
+//! What the TUI shows and what a key does (no drawing, no I/O): the status
+//! from the server, the selection, the filter, the panels shown and the
+//! boxes over the screen. A key returns a [`Request`] when the loop has to
+//! read something.
+
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use hs_model::status::{GlobalStatus, StatusEntry, WorkspaceStatus};
+use serde_json::Value;
+
+use super::layout::Shown;
+use super::theme::{Palette, Preferences, THEMES};
+use crate::AppError;
+
+/// What the loop has to do after a key.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Request {
+    /// Read `/v1/workspaces/{vmid}`.
+    Details(u32),
+    /// Menu › Check the servers (`homestack transport`).
+    Transport,
+    /// Menu › Check this desktop (`homestack discover`).
+    Discover,
+    Quit,
+}
+
+/// The presets `p` walks through: their names and panels.
+pub const PRESETS: [(&str, Shown); 3] = [
+    (
+        "auto",
+        Shown {
+            workspaces: true,
+            cluster: true,
+            storage: true,
+            log: true,
+        },
+    ),
+    (
+        "1",
+        Shown {
+            workspaces: true,
+            cluster: true,
+            storage: false,
+            log: false,
+        },
+    ),
+    (
+        "2",
+        Shown {
+            workspaces: true,
+            cluster: false,
+            storage: false,
+            log: false,
+        },
+    ),
+];
+
+/// The items of the menu, in order.
+pub const MENU: [&str; 5] = [
+    "Check the servers",
+    "Check this desktop",
+    "Theme",
+    "Help: every key",
+    "Quit",
+];
+
+/// A box over the screen.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Overlay {
+    Menu {
+        index: usize,
+    },
+    /// The theme list; `previous` comes back with Esc.
+    Themes {
+        index: usize,
+        previous: Box<Palette>,
+    },
+    Help,
+    /// A read-only report: the server check or the desktop check.
+    Report {
+        title: String,
+        lines: Vec<String>,
+    },
+}
+
+/// One line of the log panel.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LogLine {
+    pub time: String,
+    pub text: String,
+}
+
+const LOG_LIMIT: usize = 500;
+
+#[derive(Debug, Clone)]
+pub struct App {
+    pub preferences: Preferences,
+    pub palette: Palette,
+    no_color: bool,
+    pub status: Option<GlobalStatus>,
+    /// Every server: its URL and why it did not answer, if it did not.
+    pub servers: Vec<(String, Option<String>)>,
+    /// Set when no server answered: each URL with its reason.
+    pub unreachable: Vec<(String, String)>,
+    pub details: Option<WorkspaceStatus>,
+    pub shown: Shown,
+    pub preset: usize,
+    /// The selected workspace.
+    pub selected: Option<u32>,
+    /// Details split the list at narrow widths (Enter).
+    pub info: bool,
+    pub filter: String,
+    pub filtering: bool,
+    /// The node carousel: `None` is every node.
+    pub node: Option<usize>,
+    pub overlay: Option<Overlay>,
+    /// Oldest first.
+    pub lines: Vec<LogLine>,
+    pub clock: String,
+    /// Shown instead of the list: a title and lines (no client.toml, …).
+    pub notice: Option<(String, Vec<String>)>,
+}
+
+impl App {
+    pub fn new(preferences: Preferences, no_color: bool) -> Result<Self, AppError> {
+        let palette = preferences.palette(no_color)?;
+        let preset = preferences
+            .table
+            .get("preset")
+            .and_then(toml::Value::as_integer)
+            .and_then(|value| usize::try_from(value).ok())
+            .filter(|value| *value < PRESETS.len())
+            .unwrap_or(0);
+        Ok(Self {
+            preferences,
+            palette,
+            no_color,
+            status: None,
+            servers: Vec::new(),
+            unreachable: Vec::new(),
+            details: None,
+            shown: PRESETS[preset].1,
+            preset,
+            selected: None,
+            info: false,
+            filter: String::new(),
+            filtering: false,
+            node: None,
+            overlay: None,
+            lines: Vec::new(),
+            clock: String::new(),
+            notice: None,
+        })
+    }
+
+    /// The answer of `/v1/status`.
+    pub fn set_status(&mut self, status: &Value) {
+        match serde_json::from_value::<GlobalStatus>(status.clone()) {
+            Ok(status) => {
+                self.status = Some(status);
+                self.unreachable.clear();
+                self.keep_selection();
+            }
+            Err(error) => self.log("", &format!("The server's status could not be read: {error}")),
+        }
+    }
+
+    /// Shown instead of the list until cleared with `None`.
+    pub fn set_notice(&mut self, notice: Option<(String, Vec<String>)>) {
+        self.notice = notice;
+    }
+
+    pub fn set_servers(&mut self, servers: Vec<(String, Option<String>)>) {
+        self.servers = servers;
+    }
+
+    /// No server answered.
+    pub fn set_unreachable(&mut self, servers: Vec<(String, String)>) {
+        self.servers = servers
+            .iter()
+            .map(|(url, reason)| (url.clone(), Some(reason.clone())))
+            .collect();
+        self.unreachable = servers;
+    }
+
+    /// The answer of `/v1/workspaces/{vmid}`; kept only for the selection.
+    pub fn set_details(&mut self, vmid: u32, details: &Value) {
+        if self.selected != Some(vmid) {
+            return;
+        }
+        if let Ok(details) = serde_json::from_value::<WorkspaceStatus>(details.clone()) {
+            self.details = Some(details);
+        }
+    }
+
+    pub fn log(&mut self, time: &str, text: &str) {
+        self.lines.push(LogLine {
+            time: time.to_owned(),
+            text: text.to_owned(),
+        });
+        if self.lines.len() > LOG_LIMIT {
+            self.lines.remove(0);
+        }
+    }
+
+    /// The nodes of the cluster, for the carousel.
+    #[must_use]
+    pub fn nodes(&self) -> Vec<String> {
+        self.status
+            .as_ref()
+            .map(|status| status.summary.nodes.iter().map(|node| node.node.clone()).collect())
+            .unwrap_or_default()
+    }
+
+    /// The node the carousel shows, `None` for all.
+    #[must_use]
+    pub fn node_name(&self) -> Option<String> {
+        self.node.and_then(|index| self.nodes().get(index).cloned())
+    }
+
+    /// The workspaces the list shows: the filter and the node applied.
+    #[must_use]
+    pub fn rows(&self) -> Vec<&StatusEntry> {
+        let Some(status) = &self.status else {
+            return Vec::new();
+        };
+        let node = self.node_name();
+        let filter = self.filter.to_lowercase();
+        status
+            .workspaces
+            .iter()
+            .filter(|entry| node.as_ref().is_none_or(|node| &entry.node == node))
+            .filter(|entry| {
+                filter.is_empty()
+                    || entry.vmid.to_string().contains(&filter)
+                    || entry
+                        .name
+                        .as_deref()
+                        .is_some_and(|name| name.to_lowercase().contains(&filter))
+            })
+            .collect()
+    }
+
+    /// The selected row's position in [`App::rows`].
+    #[must_use]
+    pub fn selected_index(&self) -> Option<usize> {
+        let vmid = self.selected?;
+        self.rows().iter().position(|entry| entry.vmid == vmid)
+    }
+
+    /// The selected workspace's row.
+    #[must_use]
+    pub fn selected_entry(&self) -> Option<&StatusEntry> {
+        let vmid = self.selected?;
+        self.rows().into_iter().find(|entry| entry.vmid == vmid)
+    }
+
+    /// The details of the selection, when they were read.
+    #[must_use]
+    pub fn selected_details(&self) -> Option<&WorkspaceStatus> {
+        self.details
+            .as_ref()
+            .filter(|details| Some(details.vmid) == self.selected)
+    }
+
+    /// Drop a selection the list no longer shows.
+    fn keep_selection(&mut self) {
+        if self.selected_index().is_none() {
+            self.selected = None;
+            self.info = false;
+        }
+    }
+
+    fn select_at(&mut self, index: usize) -> Option<Request> {
+        let vmid = self.rows().get(index).map(|entry| entry.vmid)?;
+        if self.selected == Some(vmid) {
+            return None;
+        }
+        self.selected = Some(vmid);
+        Some(Request::Details(vmid))
+    }
+
+    fn move_by(&mut self, step: isize) -> Option<Request> {
+        let count = self.rows().len();
+        if count == 0 {
+            return None;
+        }
+        let index = match self.selected_index() {
+            None => 0,
+            Some(at) => at.saturating_add_signed(step).min(count - 1),
+        };
+        self.select_at(index)
+    }
+
+    fn preview(&mut self, index: usize) {
+        let mut preferences = self.preferences.clone();
+        if let Some(name) = THEMES.get(index) {
+            (*name).clone_into(&mut preferences.theme);
+            if let Ok(palette) = preferences.palette(self.no_color) {
+                self.palette = palette;
+            }
+        }
+    }
+
+    fn save_preset(&mut self) {
+        let mut table = self.preferences.table.clone();
+        table.insert(
+            "preset".to_owned(),
+            toml::Value::Integer(i64::try_from(self.preset).unwrap_or(0)),
+        );
+        match self.preferences.write(&table) {
+            Ok(()) => self.preferences.table = table,
+            Err(error) => self.log("", &error.0),
+        }
+    }
+
+    /// Handle one key.
+    pub fn key(&mut self, key: KeyEvent) -> Option<Request> {
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
+            return Some(Request::Quit);
+        }
+        if let Some(overlay) = self.overlay.take() {
+            return self.overlay_key(overlay, key.code);
+        }
+        if self.filtering {
+            match key.code {
+                KeyCode::Char(c) => self.filter.push(c),
+                KeyCode::Backspace => {
+                    self.filter.pop();
+                }
+                KeyCode::Enter => self.filtering = false,
+                KeyCode::Esc => {
+                    self.filter.clear();
+                    self.filtering = false;
+                }
+                _ => {}
+            }
+            self.keep_selection();
+            return None;
+        }
+        match key.code {
+            KeyCode::Char('q') => return Some(Request::Quit),
+            KeyCode::Esc if !self.filter.is_empty() => {
+                self.filter.clear();
+                self.keep_selection();
+            }
+            KeyCode::Char('m') | KeyCode::Esc => self.overlay = Some(Overlay::Menu { index: 0 }),
+            KeyCode::Char(digit @ '1'..='4') => {
+                self.shown
+                    .toggle(u8::try_from(digit.to_digit(10).unwrap_or(0)).unwrap_or(0));
+            }
+            KeyCode::Char('p') => {
+                self.preset = (self.preset + 1) % PRESETS.len();
+                self.shown = PRESETS[self.preset].1;
+                self.save_preset();
+            }
+            KeyCode::Char('f') => self.filtering = true,
+            KeyCode::Right | KeyCode::Left => {
+                let count = self.nodes().len();
+                if count > 0 {
+                    // None, 0, 1, …, count-1, None, …
+                    let position = self.node.map_or(0, |index| index + 1);
+                    let next = if key.code == KeyCode::Right {
+                        (position + 1) % (count + 1)
+                    } else {
+                        (position + count) % (count + 1)
+                    };
+                    self.node = next.checked_sub(1);
+                    self.keep_selection();
+                }
+            }
+            KeyCode::Down => return self.move_by(1),
+            KeyCode::Up => return self.move_by(-1),
+            KeyCode::PageDown => return self.move_by(10),
+            KeyCode::PageUp => return self.move_by(-10),
+            KeyCode::Home => return self.select_at(0),
+            KeyCode::End => return self.select_at(self.rows().len().saturating_sub(1)),
+            KeyCode::Enter if self.selected.is_some() => self.info = !self.info,
+            _ => {}
+        }
+        None
+    }
+
+    fn overlay_key(&mut self, overlay: Overlay, code: KeyCode) -> Option<Request> {
+        match overlay {
+            Overlay::Menu { index } => match code {
+                KeyCode::Down => {
+                    self.overlay = Some(Overlay::Menu {
+                        index: (index + 1) % MENU.len(),
+                    })
+                }
+                KeyCode::Up => {
+                    self.overlay = Some(Overlay::Menu {
+                        index: (index + MENU.len() - 1) % MENU.len(),
+                    });
+                }
+                KeyCode::Enter => match index {
+                    0 => {
+                        self.overlay = Some(Overlay::Report {
+                            title: "servers".to_owned(),
+                            lines: vec!["Asking every server…".to_owned()],
+                        });
+                        return Some(Request::Transport);
+                    }
+                    1 => {
+                        self.overlay = Some(Overlay::Report {
+                            title: "this desktop".to_owned(),
+                            lines: vec!["Checking this desktop…".to_owned()],
+                        });
+                        return Some(Request::Discover);
+                    }
+                    2 => {
+                        let current = THEMES.iter().position(|name| *name == self.palette.name).unwrap_or(0);
+                        self.overlay = Some(Overlay::Themes {
+                            index: current,
+                            previous: Box::new(self.palette.clone()),
+                        });
+                    }
+                    3 => self.overlay = Some(Overlay::Help),
+                    _ => return Some(Request::Quit),
+                },
+                KeyCode::Char('q') => return Some(Request::Quit),
+                KeyCode::Esc | KeyCode::Char('m') => {}
+                _ => self.overlay = Some(Overlay::Menu { index }),
+            },
+            Overlay::Themes { index, previous } => match code {
+                KeyCode::Down | KeyCode::Up => {
+                    let index = if code == KeyCode::Down {
+                        (index + 1) % THEMES.len()
+                    } else {
+                        (index + THEMES.len() - 1) % THEMES.len()
+                    };
+                    self.preview(index);
+                    self.overlay = Some(Overlay::Themes { index, previous });
+                }
+                KeyCode::Enter => {
+                    let name = THEMES.get(index).copied().unwrap_or(THEMES[0]);
+                    if let Err(error) = self.preferences.save_theme(name) {
+                        self.palette = *previous;
+                        self.log("", &error.0);
+                    }
+                }
+                KeyCode::Esc => {
+                    self.palette = *previous;
+                    self.overlay = Some(Overlay::Menu { index: 2 });
+                }
+                _ => self.overlay = Some(Overlay::Themes { index, previous }),
+            },
+            Overlay::Help | Overlay::Report { .. } => match code {
+                KeyCode::Esc | KeyCode::Enter => {}
+                KeyCode::Char('m') => self.overlay = Some(Overlay::Menu { index: 0 }),
+                KeyCode::Char('q') => return Some(Request::Quit),
+                _ => self.overlay = Some(overlay),
+            },
+        }
+        None
+    }
+}

@@ -46,6 +46,20 @@ fn main() -> ExitCode {
             return ExitCode::from(1);
         }
     };
+    if hs_cli::tui::wants_tui(&argv, std::io::stdin().is_terminal(), std::io::stdout().is_terminal()) {
+        // Raw mode turns Ctrl+C into a key, so the TUI handles it itself.
+        let code = runtime.block_on(async {
+            let mut ctx = context();
+            match hs_cli::tui::run::run(&mut ctx).await {
+                Ok(code) => code,
+                Err(error) => {
+                    eprintln!("homestack: {error}");
+                    1
+                }
+            }
+        });
+        return ExitCode::from(u8::try_from(code).unwrap_or(1));
+    }
     let code = runtime.block_on(async {
         let mut ctx = context();
         let running = Running::default();

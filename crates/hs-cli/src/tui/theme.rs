@@ -291,3 +291,16 @@ impl Preferences {
         result.map_err(fail)
     }
 }
+
+impl Preferences {
+    /// The defaults for `path`, when the file there cannot be used.
+    #[must_use]
+    pub fn fallback(path: &Path) -> Self {
+        Self {
+            path: path.to_owned(),
+            theme: THEMES[0].to_owned(),
+            colors: BTreeMap::new(),
+            table: toml::Table::new(),
+        }
+    }
+}

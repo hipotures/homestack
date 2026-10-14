@@ -1,6 +1,6 @@
 # Phase 13b: the HomeStack TUI
 
-Status: in progress (step 1). This file is written before the code (PLAN.md
+Status: in progress (step 1 done, not yet seen by the owner; steps 2–5 to do). This file is written before the code (PLAN.md
 1.1) and updated as the phase goes; the report at the end says what was done
 and what differs.
 
@@ -122,3 +122,54 @@ Rendering into ratatui's `TestBackend`, as MyPowers does, with a fake status:
 - an unreachable server shows the servers that did not answer and why;
 - `homestack` with no command opens the TUI only on a terminal and prints the
   help otherwise; `homestack --help` prints the help.
+
+## 5. Step 1: what was done
+
+- **Modules** (`crates/hs-cli/src/tui/`):
+  - `theme.rs`: the seven themes, `[colors]` and `tui.toml`;
+  - `chrome.rs`: the border grammar;
+  - `layout.rs`: panels and window sizes;
+  - `state.rs`: the status, selection, filter, node carousel, presets, menu,
+    theme list, help and reports;
+  - `draw.rs`: all the drawing;
+  - `run.rs`: the terminal, the key reader thread, the status and the
+    servers' health every 10 s, and the requests started by keys.
+- **Shared with the CLI**: the reports of `transport` and `discover` are now
+  `app::transport_report` and `app::discovery_report`; the CLI prints them as
+  before, and the TUI shows them in a box. No request is new.
+- **Entry**: plain `homestack` opens the TUI when stdin and stdout are
+  terminals (`tui::wants_tui`); everything else is the CLI as before.
+  `homestack --help` lists it.
+- **Read-only**: step 1 changes nothing anywhere.
+  - Every action in the workspaces border is drawn muted until step 2.
+  - Without `client.toml` the workspaces panel says so and points to
+    `homestack install` (the install screen is step 3).
+- **Tests** (written first, shown failing, then passing):
+  - `tests/tui_theme.rs`: 10 tests;
+  - `tests/tui_chrome.rs`: 13 tests;
+  - `tests/tui_screen.rs`: 19 tests.
+- **Seen live** in `tmux` at 80 x 24 and 120 x 36 against the owner's
+  cluster (read-only): nodes, servers, Gold, storage, log, and the server
+  check box. Colours cannot be checked from `capture-pane`; the owner looks
+  at them.
+
+### Differences from the mockups
+
+- The menu has only what works in step 1:
+  - Check the servers;
+  - Check this desktop;
+  - Theme;
+  - Help;
+  - Quit.
+
+  Reconfigure, Uninstall and Backup on this desktop come with steps 3 and 5.
+- The cluster panel cannot tie a server to its node: the client knows only
+  the servers' URLs. The servers and Gold are in a box of their own.
+- There is no certificate line, because the client does not read the
+  certificate.
+- Presets are fixed for now:
+  - auto: all panels;
+  - 1: workspaces and cluster;
+  - 2: workspaces only.
+
+  The choice is kept in `tui.toml`.
