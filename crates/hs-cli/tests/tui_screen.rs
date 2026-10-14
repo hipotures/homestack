@@ -421,3 +421,16 @@ fn zero_brings_back_the_standard_view() {
     let saved = std::fs::read_to_string(fixture._dir.path().join("tui.toml")).unwrap();
     assert!(saved.contains("preset = 0"), "{saved}");
 }
+
+#[test]
+fn the_node_table_lines_up_under_its_headings() {
+    let fixture = app();
+    let buf = render(&fixture.app, 120, 36);
+    let (state, heading_y) = position(&buf, "STATE      WORKSPACES");
+    let (workspaces, _) = position(&buf, "WORKSPACES");
+    let line = row(&buf, heading_y + 1);
+    let dot = line.chars().position(|c| c == '●').unwrap();
+    let count = line.chars().position(|c| c == '4').unwrap();
+    assert_eq!(dot, usize::from(state), "{line}");
+    assert_eq!(count, usize::from(workspaces), "{line}");
+}

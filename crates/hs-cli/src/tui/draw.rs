@@ -287,9 +287,9 @@ fn cluster(buf: &mut Buffer, area: Rect, app: &App, mut controls: Vec<Control>) 
             y,
             table_width,
             &[
-                (format!(" {}   ", pad(&node.node, 5)), text),
+                (format!(" {}  ", pad(&node.node, 5)), text),
                 (symbol, style),
-                (format!(" {}  ", pad(&node.status, 8)), text),
+                (format!(" {} ", pad(&node.status, 8)), text),
                 (format!("{}, {running} running", here.len()), text),
             ],
         );
