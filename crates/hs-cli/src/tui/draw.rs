@@ -403,7 +403,8 @@ fn columns(width: usize) -> Vec<Column> {
                     return entry.status.clone();
                 }
                 let symbol = if entry.status == "running" { "●" } else { "○" };
-                symbol.to_owned()
+                // Under the middle of STATE.
+                format!("  {symbol}")
             },
         },
         Column {
