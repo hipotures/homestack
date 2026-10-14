@@ -1,0 +1,41 @@
+22  t = stop, on 201 dev-main (120 x 36); start is the same on a stopped VM
+    Stop asks the guest to shut down (agent, then ACPI) and waits; the plan
+    says how long before it is forced. Start needs no plan: it runs at once
+    and the run stage shows "◐ starting", then "✓ running, agent answers".
+    s = ssh: how it runs is decided after the TUI is built (see 00, part 8).
+╭┌Menu┐─²cluster ─────────────────────── 10:57:12 ────────────────── hs.example.net ────────────────┌‹ Preset: auto ›┐─╮
+│ NODE  STATE     SERVER                    CT   WORKSPACES                  ╭─ gold & certificate ───────────────────╮│
+│ pve1  ● online  ● api1.hs.example.net     115  4, 2 running                │ gold  112 hs-gold  pve1  ○ stopped     ││
+│ pve2  ● online  ● api2.hs.example.net     116  4, 2 running                │ cert  *.hs.example.net, 89 days left   ││
+│ pve3  ● online  ● api3.hs.example.net     117  4, 4 running                ╰────────────────────────────────────────╯│
+╰──────────────────────────────────────────────────────────────────────────────────────────── 3/3 nodes ─ 3/3 servers ─╯
+╭─¹workspaces┌Filter┐─────────────────────────────────────────┌‹ node: all ›┐┌New┐─╮╭─³storage ────────────────────────╮
+│ VMID NAME          NODE STATE     ╭─ stop 201 dev-main ─ ✓form ─┌plan┐─ run ────╮││ pve1  local-zfs         1.7T free│
+│▶201  dev-main      pve2 ● running │                                             │││ ████░░░░░░░░░░░░░░░░░░░░░░ 18%   │
+│ 202  rust-builder  pve3 ● running │  Shut down VM 201 dev-main on pve2.         │││ pve2  local-lvm         1.2T free│
+│ 203  web-lab       pve1 ○ stopped │                                             │││ ████████░░░░░░░░░░░░░░░░░░ 31%   │
+│ 204  data-play     pve2 ● running │  The guest agent asks the system to shut    │││ pve3  local-lvm         2.9T free│
+│ 205  scratch       pve1 ○ stopped │  down; HomeStack waits up to 3 min, then    │││ █████░░░░░░░░░░░░░░░░░░░░░ 18%   │
+│ 206  ml-lab        pve3 ● running │  stops it hard.                             │││                                  │
+│ 207  docs-site     pve1 ● running │                                             │││ snippets  local, all nodes       │
+│ 208  api-proto     pve2 ○ stopped │  ssh sessions to dev-main will close.       │││ servers   local-lvm, local-zfs   │
+│ 209  db-test       pve3 ● running │                                             │││                                  │
+│ 210  ci-runner     pve1 ● running │                                             ││╰──────────────────────── 3 nodes ─╯
+│ 211  game-dev      pve2 ○ stopped │                                             ││╭─⁴log ────────────────────────────╮
+│ 212  notes         pve3 ● running │                                             │││ 10:49:31  destroy 205: plan      │
+│                                   │                                             │││ 10:47:01  status refreshed       │
+│                                   ╰└Stop ↵┘└cancel esc┘─────────────────────────╯││ 10:41:58  refresh 203: done      │
+│                                                                                  ││ 10:38:12  addkey 201: 1 key      │
+│                                                                                  ││                                  │
+│                                                                                  ││                                  │
+│                                                                                  ││                                  │
+│                                                                                  ││                                  │
+│                                                                                  ││                                  │
+│                                                                                  ││                                  │
+│                                                                                  ││                                  │
+│                                                                                  ││                                  │
+│                                                                                  ││                                  │
+│                                                                                  ││                                  │
+│                                                                                  ││                                  │
+│                                                                                  ││                                  │
+╰└info ↵┘└Ssh┘└sTop┘└sEtup┘└Refresh┘└resiZe┘└addKey┘└miGrate┘└Destroy┘────── 1/12 ─╯╰──────────────────────── 5 lines ─╯

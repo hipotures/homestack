@@ -39,4 +39,4 @@
 │                                                                                  ││                                  │
 │                                                                                  ││                                  │
 │                                                                                  ││                                  │
-╰└select ↑↓┘└info ↵┘└Ssh┘└sTart┘└Refresh┘└resiZe┘└addKey┘└miGrate┘└Destroy┘─ 5/12 ─╯╰──────────────────────── 5 lines ─╯
+╰└info ↵┘└Ssh┘└sTart┘└sEtup┘└Refresh┘└resiZe┘└addKey┘└miGrate┘└Destroy┘───── 5/12 ─╯╰──────────────────────── 5 lines ─╯

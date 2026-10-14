@@ -1,0 +1,40 @@
+25  Menu › Check this desktop = `discover` (120 x 36)
+    Read-only: the local tools and keys, and what the server finds in Proxmox.
+    A box over the screen; └Again ↵┘ reads again, Esc closes.
+
+╭┌Menu┐─²cluster ─────────────────────── 10:47:03 ────────────────── hs.example.net ────────────────┌‹ Preset: auto ›┐─╮
+│ NODE  STATE     SERVER                    CT   WORKSPACES                  ╭─ gold & certificate ───────────────────╮│
+│ pve1  ● online  ● api1.hs.example.net     115  4, 2 running                │ gold  112 hs-gold  pve1  ○ stopped     ││
+│ pve2  ● online  ● api2.hs.example.net     116  4, 2 running                │ cert  *.hs.example.net, 89 days left   ││
+│ pve3  ● online  ● api3.hs.example.net     117  4, 4 running                ╰────────────────────────────────────────╯│
+╰──────────────────────────────────────────────────────────────────────────────────────────── 3/3 nodes ─ 3/3 servers ─╯
+╭─¹workspaces┌Filter┐─────────────────────────────────────────┌‹ node: all ›┐┌New┐─╮╭─³storage ────────────────────────╮
+│ VMID NAME          NODE STATE     ADDRESS   ╭─ 201 dev-main ────────────────────╮││ pve1  local-zfs         1.7T free│
+│▶201  dev-main      pve2 ● running 10.0.0.21 │ ● running on pve2                 │││ ████░░░░░░░░░░░░░░░░░░░░░░ 18%   │
+│ 202  rust-builder  pve3 ●╭─ this desktop ─────────────────────────────────────────────────╮ocal-lvm         1.2T free│
+│ 203  web-lab       pve1 ○│                                                                │█░░░░░░░░░░░░░░░░░░ 31%   │
+│ 204  data-play     pve2 ●│  TOOL                        STATE                             │ocal-lvm         2.9T free│
+│ 205  scratch       pve1 ○│  ssh                         ✓ found                           │░░░░░░░░░░░░░░░░░░░ 18%   │
+│ 206  ml-lab        pve3 ●│  ssh-keygen                  ✓ found                           │                          │
+│ 207  docs-site     pve1 ●│  fido2-token                 ✓ found                           │s  local, all nodes       │
+│ 208  api-proto     pve2 ○│  bwrap                       ✓ found                           │   local-lvm, local-zfs   │
+│ 209  db-test       pve3 ●│  security-key SSH identities 6                                 │                          │
+│ 210  ci-runner     pve1 ●│                                                                │──────────────── 3 nodes ─╯
+│ 211  game-dev      pve2 ○│  server   api1.hs.example.net                                  │──────────────────────────╮
+│ 212  notes         pve3 ●│  nodes    pve1 ● online   pve2 ● online   pve3 ● online        │1  status refreshed       │
+│                          │  Gold     candidates: 112 hs-gold on pve1                      │8  refresh 203: done      │
+│                          │                                                                │2  addkey 201: 1 key      │
+│                          ╰└Again ↵┘└close esc┘──────────────────────────────── read-only ─╯2  connected to api2      │
+│                                                                                  ││                                  │
+│                                                                                  ││                                  │
+│                                                                                  ││                                  │
+│                                                                                  ││                                  │
+│                                                                                  ││                                  │
+│                                                                                  ││                                  │
+│                                                                                  ││                                  │
+│                                                                                  ││                                  │
+│                                                                                  ││                                  │
+│                                                                                  ││                                  │
+│                                                                                  ││                                  │
+│                                                                                  ││                                  │
+╰└info ↵┘└Ssh┘└sTop┘└sEtup┘└Refresh┘└resiZe┘└addKey┘└miGrate┘└Destroy┘────── 1/12 ─╯╰──────────────────────── 4 lines ─╯

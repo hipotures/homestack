@@ -49,4 +49,4 @@
 │                                                                                                              ││                                              │
 │                                                                                                              ││                                              │
 │                                                                                                              ││                                              │
-╰└select ↑↓┘└info ↵┘└Ssh┘└sTop┘└Refresh┘└resiZe┘└addKey┘└miGrate┘└Destroy┘────────────────────────────── 1/12 ─╯╰──────────────────────────────────── 4 lines ─╯
+╰└select ↑↓┘└info ↵┘└Ssh┘└sTop┘└sEtup┘└Refresh┘└resiZe┘└addKey┘└miGrate┘└Destroy┘─────────────────────── 1/12 ─╯╰──────────────────────────────────── 4 lines ─╯

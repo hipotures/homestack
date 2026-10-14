@@ -85,9 +85,10 @@ B. Main screen (09–17)
 4. Actions happen in a sub-box, never on a new screen
 -----------------------------------------------------
 
-Ssh, start/stop, refresh, resize, add key, migrate, destroy and new open as a
-sub-box of the workspaces panel (ssh: see 8). The other panels stay. The stages
-of an action are in the top border of its sub-box, the current one raised:
+Ssh, start/stop, setup, refresh, resize, add key, migrate, destroy and new
+open as a sub-box of the workspaces panel (ssh: see 8). The other panels stay.
+The stages of an action are in the top border of its sub-box, the current
+one raised:
 
     ┌form┐ ─ plan ─ run
 
@@ -153,6 +154,10 @@ The only boxes over the screen are for things that stop everything:
   13  action plan: destroy               14  action running: refresh
   15  menu                               16  only the workspaces panel
   17  servers not answering              18  uninstall: review
+  19  action form: resize (80x24)        20  action form: add key
+  21  action form: migrate               22  action plan: stop (start, ssh)
+  23  setup: group Files                 24  setup: Repositories (repo)
+  25  menu: check this desktop           26  menu: check the servers
 
 
 8. Decisions (owner, 2026-10-14)
@@ -166,3 +171,30 @@ The only boxes over the screen are for things that stop everything:
     Start/stop needs new server operations (hs-core already has the Proxmox
     calls). How ssh runs (TUI suspended, a terminal in a panel, or a new
     window or Herdr pane) is decided after the TUI is built.
+
+
+9. Every CLI command in the TUI
+-------------------------------
+
+  homestack                  opens the TUI
+  homestack --help           the help, as today
+  install                    install screen (02–08)
+  uninstall                  Menu › Uninstall (18)
+  discover                   Menu › Check this desktop (25)
+  transport                  Menu › Check the servers (26)
+  status                     main screen (09–11)
+  status VMID|NAME           details sub-box of the selected row (09b, 10)
+  create                     ┌New┐ (12)
+  refresh                    └Refresh┘ (14)
+  resize                     └resiZe┘ (19)
+  addkey                     └addKey┘ (20)
+  migrate                    └miGrate┘ (21)
+  destroy                    └Destroy┘ (13)
+  start, stop (new)          └sTart┘ / └sTop┘ (22)
+  ssh (new)                  └Ssh┘; how it runs is decided later
+  setup VMID [selectors]     └sEtup┘ (23)
+  setup list                 the items in └sEtup┘ (the catalog)
+  setup status VMID          the STATE column in └sEtup┘
+  setup --local backup=bk    Menu › Backup on this desktop
+  repo VMID [OWNER/REPO]     └sEtup┘ › Repositories (24)
+  --json, -y                 CLI only; the TUI always shows the plan

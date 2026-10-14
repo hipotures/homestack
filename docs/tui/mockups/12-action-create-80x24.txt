@@ -28,4 +28,4 @@
 │ 205  scratch         pve1  ○ stopped  —            16G    —                  │
 │ 206  ml-lab          pve3  ● running  10.0.0.26   256G    63%                │
 │ 207  docs-site       pve1  ● running  10.0.0.27    16G    88%                ↓
-╰└info ↵┘└Ssh┘└sTart┘└Refresh┘└resiZe┘└addKey┘└miGrate┘└Destroy┘──────── 0/12 ─╯
+╰└info ↵┘└Ssh┘└sTart┘└sEtup┘└Refresh┘└resiZe┘└addKey┘└miGrate┘└Destroy┘─ 0/12 ─╯

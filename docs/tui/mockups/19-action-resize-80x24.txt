@@ -1,0 +1,27 @@
+19  z = resize, on 201 dev-main (80 x 24)
+    Grow root or home to a new total size; the filesystem grows while the VM
+    runs. Disks only grow; a smaller size is refused in the form.
+╭┌Menu┐─²cluster ───────────── 10:47:03 ────────────────────┌‹ Preset: auto ›┐─╮
+│ ● pve1  ● pve2  ● pve3    servers ● ● ●    gold 112 ○    storage 71% free    │
+╰────────────────────────────────────────────────────────────────── 3/3 nodes ─╯
+╭─¹workspaces┌Filter┐─────────────────────────────────────┌‹ node: all ›┐┌New┐─╮
+│╭─ resize 201 dev-main ─┌form┐─ plan ─ run ──────────────────────────────────╮│
+││                                                                            ││
+││  Disk        ‹ home ›          root 32 GiB · home 64 GiB                   ││
+││  New size    [ 96G▏       ]    total size, now 64 GiB                      ││
+││  Storage     local-lvm on pve2, 1.2T free                                  ││
+││                                                                            ││
+││  Grows the disk and its ext4 filesystem while the                          ││
+││  VM runs. Disks only grow.                                                 ││
+││                                                                            ││
+││                                                                            ││
+│╰└next ⇥┘└Plan ↵┘└cancel esc┘────────────────────────────────────────────────╯│
+│ VMID NAME            NODE  STATE      ADDRESS     HOME   FREE                │
+│▶201  dev-main        pve2  ● running  10.0.0.21    64G    41%                ↑
+│ 202  rust-builder    pve3  ● running  10.0.0.22   128G    77%                █
+│ 203  web-lab         pve1  ○ stopped  —            32G    —                  █
+│ 204  data-play       pve2  ● running  10.0.0.24    64G    12%                █
+│ 205  scratch         pve1  ○ stopped  —            16G    —                  │
+│ 206  ml-lab          pve3  ● running  10.0.0.26   256G    63%                │
+│ 207  docs-site       pve1  ● running  10.0.0.27    16G    88%                ↓
+╰└info ↵┘└Ssh┘└sTop┘└sEtup┘└Refresh┘└resiZe┘└addKey┘└miGrate┘└Destroy┘── 1/12 ─╯

@@ -1,0 +1,40 @@
+26  Menu › Check the servers = `transport` (120 x 36)
+    Read-only: every server, its state and config version ("same" when it
+    matches the first), and the Proxmox node the client is set to.
+
+╭┌Menu┐─²cluster ─────────────────────── 10:47:03 ────────────────── hs.example.net ────────────────┌‹ Preset: auto ›┐─╮
+│ NODE  STATE     SERVER                    CT   WORKSPACES                  ╭─ gold & certificate ───────────────────╮│
+│ pve1  ● online  ● api1.hs.example.net     115  4, 2 running                │ gold  112 hs-gold  pve1  ○ stopped     ││
+│ pve2  ● online  ● api2.hs.example.net     116  4, 2 running                │ cert  *.hs.example.net, 89 days left   ││
+│ pve3  ● online  ● api3.hs.example.net     117  4, 4 running                ╰────────────────────────────────────────╯│
+╰──────────────────────────────────────────────────────────────────────────────────────────── 3/3 nodes ─ 3/3 servers ─╯
+╭─¹workspaces┌Filter┐─────────────────────────────────────────┌‹ node: all ›┐┌New┐─╮╭─³storage ────────────────────────╮
+│ VMID NAME          NODE STATE     ADDRESS   ╭─ 201 dev-main ────────────────────╮││ pve1  local-zfs         1.7T free│
+│▶201  dev-main      pve2 ● running 10.0.0.21 │ ● running on pve2                 │││ ████░░░░░░░░░░░░░░░░░░░░░░ 18%   │
+│ 202  rust-builder  pve3 ●╭─ servers ──────────────────────────────────────────────────────╮ocal-lvm         1.2T free│
+│ 203  web-lab       pve1 ○│                                                                │█░░░░░░░░░░░░░░░░░░ 31%   │
+│ 204  data-play     pve2 ●│  SERVER                  STATE      CONFIG VERSION             │ocal-lvm         2.9T free│
+│ 205  scratch       pve1 ○│  api1.hs.example.net     ✓ server   3f9a1c07e2b4…              │░░░░░░░░░░░░░░░░░░░ 18%   │
+│ 206  ml-lab        pve3 ●│  api2.hs.example.net     ✓ server   3f9a1c07e2b4…  same        │                          │
+│ 207  docs-site     pve1 ●│  api3.hs.example.net     ✓ server   3f9a1c07e2b4…  same        │s  local, all nodes       │
+│ 208  api-proto     pve2 ○│                                                                │   local-lvm, local-zfs   │
+│ 209  db-test       pve3 ●│  node     pve2                                                 │                          │
+│ 210  ci-runner     pve1 ●│  PVE      pve-manager/9.2.21                                   │──────────────── 3 nodes ─╯
+│ 211  game-dev      pve2 ○│  kernel   Linux 7.0.14-20-pve                                  │──────────────────────────╮
+│ 212  notes         pve3 ●│  uptime   8 days 20 h                                          │1  status refreshed       │
+│                          │                                                                │8  refresh 203: done      │
+│                          ╰└Again ↵┘└close esc┘──────────────────────────────── read-only ─╯2  addkey 201: 1 key      │
+│                                                                                  ││ 10:30:02  connected to api2      │
+│                                                                                  ││                                  │
+│                                                                                  ││                                  │
+│                                                                                  ││                                  │
+│                                                                                  ││                                  │
+│                                                                                  ││                                  │
+│                                                                                  ││                                  │
+│                                                                                  ││                                  │
+│                                                                                  ││                                  │
+│                                                                                  ││                                  │
+│                                                                                  ││                                  │
+│                                                                                  ││                                  │
+│                                                                                  ││                                  │
+╰└info ↵┘└Ssh┘└sTop┘└sEtup┘└Refresh┘└resiZe┘└addKey┘└miGrate┘└Destroy┘────── 1/12 ─╯╰──────────────────────── 4 lines ─╯

@@ -27,7 +27,7 @@
 │                                                                              │
 │                                                                              │
 │                                                                              │
-╰└info ↵┘└Ssh┘└sTop┘└Refresh┘└resiZe┘└addKey┘└miGrate┘└Destroy┘───────── 0/12 ─╯
+╰└info ↵┘└Ssh┘└sTop┘└sEtup┘└Refresh┘└resiZe┘└addKey┘└miGrate┘└Destroy┘── 0/12 ─╯
 
 
 09b The same after ↓ (201 selected) and ↵ (info)
@@ -58,4 +58,4 @@
 │ 209  db-test         pve3  ● running  10.0.0.29    64G    35%                │
 │ 210  ci-runner       pve1  ● running  10.0.0.30    32G    54%                │
 │ 211  game-dev        pve2  ○ stopped  —           128G    —                  ↓
-╰└info ↵┘└Ssh┘└sTop┘└Refresh┘└resiZe┘└addKey┘└miGrate┘└Destroy┘───────── 1/12 ─╯
+╰└info ↵┘└Ssh┘└sTop┘└sEtup┘└Refresh┘└resiZe┘└addKey┘└miGrate┘└Destroy┘── 1/12 ─╯

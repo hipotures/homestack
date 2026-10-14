@@ -1,0 +1,42 @@
+23  e = setup, on 201 dev-main (120 x 36): group Files
+    ←→ in the top border walks the groups: Files, Environment, Applications,
+    Credentials, Backup, Repositories (24). STATE is what `setup status`
+    reads over one ssh session (the security key may ask, box 03). The items
+    come from the catalog (`setup list`); ticked items go to the plan.
+    `setup --local backup=bk` is Menu › Backup on this desktop.
+╭┌Menu┐─²cluster ─────────────────────── 10:58:05 ────────────────── hs.example.net ────────────────┌‹ Preset: auto ›┐─╮
+│ NODE  STATE     SERVER                    CT   WORKSPACES                  ╭─ gold & certificate ───────────────────╮│
+│ pve1  ● online  ● api1.hs.example.net     115  4, 2 running                │ gold  112 hs-gold  pve1  ○ stopped     ││
+│ pve2  ● online  ● api2.hs.example.net     116  4, 2 running                │ cert  *.hs.example.net, 89 days left   ││
+│ pve3  ● online  ● api3.hs.example.net     117  4, 4 running                ╰────────────────────────────────────────╯│
+╰──────────────────────────────────────────────────────────────────────────────────────────── 3/3 nodes ─ 3/3 servers ─╯
+╭─¹workspaces┌Filter┐─────────────────────────────────────────┌‹ node: all ›┐┌New┐─╮╭─³storage ────────────────────────╮
+│ VMID NAME          NODE STATE     ╭─ setup 201 ─┌‹ Files ›┐─ plan ─ run ────────╮││ pve1  local-zfs         1.7T free│
+│▶201  dev-main      pve2 ● running │                                             │││ ████░░░░░░░░░░░░░░░░░░░░░░ 18%   │
+│ 202  rust-builder  pve3 ● running │  Desktop files copied into persistent home; │││ pve2  local-lvm         1.2T free│
+│ 203  web-lab       pve1 ○ stopped │  no deletes.                                │││ ████████░░░░░░░░░░░░░░░░░░ 31%   │
+│ 204  data-play     pve2 ● running │                                             │││ pve3  local-lvm         2.9T free│
+│ 205  scratch       pve1 ○ stopped │      ITEM               STATE               │││ █████░░░░░░░░░░░░░░░░░░░░░ 18%   │
+│ 206  ml-lab        pve3 ● running │  [x] gitconfig          ✓ in place          │││                                  │
+│ 207  docs-site     pve1 ● running │  [x] ssh-config         ! differs           │││ snippets  local, all nodes       │
+│ 208  api-proto     pve2 ○ stopped │  [ ] bashrc-extra       —                   │││ servers   local-lvm, local-zfs   │
+│ 209  db-test       pve3 ● running │  [ ] vimrc              —                   │││                                  │
+│ 210  ci-runner     pve1 ● running │  [ ] tmux-conf          ✓ in place          ││╰──────────────────────── 3 nodes ─╯
+│ 211  game-dev      pve2 ○ stopped │                                             ││╭─⁴log ────────────────────────────╮
+│ 212  notes         pve3 ● running │  catalog 2026-10-12 · 6 groups · 23 items   │││ 10:49:31  destroy 205: plan      │
+│                                   │                                             │││ 10:47:01  status refreshed       │
+│                                   ╰└tick ␣┘└Plan ↵┘└cancel esc┘─────────────────╯││ 10:41:58  refresh 203: done      │
+│                                                                                  ││ 10:38:12  addkey 201: 1 key      │
+│                                                                                  ││                                  │
+│                                                                                  ││                                  │
+│                                                                                  ││                                  │
+│                                                                                  ││                                  │
+│                                                                                  ││                                  │
+│                                                                                  ││                                  │
+│                                                                                  ││                                  │
+│                                                                                  ││                                  │
+│                                                                                  ││                                  │
+│                                                                                  ││                                  │
+│                                                                                  ││                                  │
+│                                                                                  ││                                  │
+╰└info ↵┘└Ssh┘└sTop┘└sEtup┘└Refresh┘└resiZe┘└addKey┘└miGrate┘└Destroy┘────── 1/12 ─╯╰──────────────────────── 5 lines ─╯
