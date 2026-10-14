@@ -144,6 +144,15 @@ pub trait Console: Send {
     ) -> crate::wizard::Outcome {
         crate::wizard::run_numbered(self, wizard, summarize)
     }
+
+    /// Run the installer's form; the default asks by number.
+    fn form(
+        &mut self,
+        form: &mut crate::form::Form,
+        summarize: &mut dyn FnMut(&[crate::wizard::Answer]) -> crate::wizard::Summary,
+    ) -> crate::form::Outcome {
+        crate::form::run_numbered(self, form, summarize)
+    }
 }
 
 /// stdout, stderr and stdin.
@@ -190,5 +199,19 @@ impl Console for Terminal {
             return outcome;
         }
         crate::wizard::run_numbered(self, wizard, summarize)
+    }
+
+    fn form(
+        &mut self,
+        form: &mut crate::form::Form,
+        summarize: &mut dyn FnMut(&[crate::wizard::Answer]) -> crate::wizard::Summary,
+    ) -> crate::form::Outcome {
+        if io::stdin().is_terminal()
+            && io::stdout().is_terminal()
+            && let Ok(outcome) = crate::form::run_on_terminal(form, summarize)
+        {
+            return outcome;
+        }
+        crate::form::run_numbered(self, form, summarize)
     }
 }

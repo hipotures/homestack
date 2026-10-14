@@ -236,12 +236,10 @@ pub fn check_storages(state: &State, settings: &Settings, found: &mut Findings) 
 
 /// The VMs that pass `only`, as choices for Gold: id, name, node, state.
 fn vm_choices(state: &State, only: impl Fn(&Vm) -> bool) -> Vec<Choice> {
-    const SHOWN: usize = 30;
     state
         .vms
         .iter()
         .filter(|(_, vm)| only(vm))
-        .take(SHOWN)
         .map(|(vmid, vm)| Choice {
             value: vmid.to_string(),
             detail: format!("{:<16} {:<6} {}", vm.name, vm.node, vm.status)
@@ -471,4 +469,84 @@ pub fn check_certificates(root: &mut dyn Root, state: &State, found: &mut Findin
             ));
         }
     }
+}
+
+/// Every option the user has not given, as a question with its choices and
+/// what is chosen at first: for the installer's form, where every setting is
+/// shown and can be changed. Gold's first choice is the one the installer
+/// would take by itself (the only tagged VM, or the VM named `hs-gold`).
+pub fn all_questions(state: &State, settings: &Settings) -> Vec<Question> {
+    let mut found = Findings::default();
+    let mut questions = Vec::new();
+    let storages: [(&'static str, &str, &str, bool, bool); 4] = [
+        (
+            "--storages",
+            "Workspace disks",
+            "images",
+            true,
+            settings.storages.is_empty(),
+        ),
+        (
+            "--snippet-storage",
+            "Cloud-Init snippets",
+            "snippets",
+            false,
+            settings.snippet_storage.is_none(),
+        ),
+        (
+            "--service-storages",
+            "Server disks",
+            "rootdir",
+            true,
+            settings.service_storages.is_empty(),
+        ),
+        (
+            "--template-storage",
+            "Server image",
+            "vztmpl",
+            false,
+            settings.template_storage.is_none(),
+        ),
+    ];
+    let notes = [
+        "Where HomeStack creates the disks of the workspace VMs (root and home). It gets permission to use only the storages you tick.",
+        "Where HomeStack keeps the two small Cloud-Init files that set up every new workspace. They are written on every node that has this storage, once if it is shared.",
+        "Where the disks of the HomeStack server containers are created (the server runs in a container on each node).",
+        "Where the server image is stored on the nodes before it becomes a container.",
+    ];
+    for ((option, title, content, multiple, open), note) in storages.into_iter().zip(notes) {
+        if !open {
+            continue;
+        }
+        let choices = storage_choices(state, content);
+        let mut ticked = defaults(state, content, &choices);
+        if ticked.is_empty() && choices.len() == 1 {
+            ticked = vec![0];
+        }
+        questions.push(Question {
+            option,
+            title: title.to_owned(),
+            note: note.to_owned(),
+            multiple,
+            choices,
+            defaults: ticked,
+        });
+    }
+    if settings.gold.is_none() {
+        let chosen = find_gold(state, settings, &mut found);
+        let choices = vm_choices(state, |vm| vm.kind == "qemu");
+        let defaults = chosen
+            .and_then(|vmid| choices.iter().position(|choice| choice.value == vmid.to_string()))
+            .into_iter()
+            .collect();
+        questions.push(Question {
+            option: "--gold",
+            title: "Gold VM".to_owned(),
+            note: "The prepared base VM that every workspace is cloned from; the installer tags it homestack-gold and puts it in the pool homestack-gold.".to_owned(),
+            multiple: false,
+            choices,
+            defaults,
+        });
+    }
+    questions
 }

@@ -545,10 +545,10 @@ async fn without_a_terminal_the_missing_options_are_listed_with_their_defaults()
 }
 
 #[tokio::test]
-async fn on_a_terminal_the_choices_end_in_a_summary_and_nothing_happens_before_install() {
+async fn on_a_terminal_every_setting_is_shown_and_nothing_happens_before_install() {
     let cluster = Cluster::new(&["pve1"]);
     two_disk_storages(&cluster);
-    // Enter keeps the ticked storage; the summary is declined.
+    // Enter installs from the form; the confirmation is declined.
     let declined = run(&cluster, &["install", "--ssh", "root@pve1"], &["", "n"], true).await;
     assert_eq!(declined.code, 0, "{}", declined.console.out());
     assert!(declined.console.out().contains("Cancelled. No changes were made."));
@@ -557,51 +557,77 @@ async fn on_a_terminal_the_choices_end_in_a_summary_and_nothing_happens_before_i
     let done = run(&cluster, &["install", "--ssh", "root@pve1"], &["", "y"], true).await;
     assert_eq!(done.code, 0, "{}", done.console.out());
     let out = done.console.out();
+    let form = out.split("Confirm the installation").next().unwrap_or_default();
+    for row in [
+        "Root access",
+        "Workspace disks      local-lvm",
+        "Cloud-Init snippets  local",
+        "Server disks         local-lvm",
+        "Server image         local",
+        "Gold VM              101 gold",
+    ] {
+        assert!(form.contains(row), "the form lacks {row:?}:\n{form}");
+    }
+    assert!(
+        !form.contains("--"),
+        "a command-line option is shown in the form:\n{form}"
+    );
     for text in [
-        "Storages for the workspace disks",
-        "Summary",
-        "Your choices",
-        "Workspace disks:     local-lvm",
-        "Chosen without asking",
         "Changes in Proxmox",
         "create user homestack@pve",
-        "Same as: homestack install --ssh root@pve1 --storages local-lvm --snippet-storage local --service-storages local-lvm --template-storage local",
+        "Same as: homestack install --ssh root@pve1 --storages local-lvm --snippet-storage local --service-storages local-lvm --template-storage local --gold 101",
     ] {
         assert!(out.contains(text), "{text:?} missing:\n{out}");
     }
-    let lists = out.split("Summary").next().unwrap_or_default();
-    assert!(
-        !lists.contains("--"),
-        "a command-line option is shown in the lists:\n{lists}"
-    );
     assert!(cluster.read("users").contains("homestack@pve"), "not installed");
 }
 
 #[tokio::test]
-async fn a_single_possibility_is_not_asked_and_options_given_are_not_asked_again() {
-    // Every option has one possible storage: only the summary is asked.
+async fn a_setting_is_changed_from_its_list_and_gold_can_be_chosen() {
     let cluster = Cluster::new(&["pve1"]);
-    let done = run(&cluster, &["install", "--ssh", "root@pve1"], &["y"], true).await;
+    two_disk_storages(&cluster);
+    cluster.write(
+        "vms.tsv",
+        "101\tpve1\tgold\thomestack-gold\tvirtio=BC:24:11:00:00:01,bridge=vmbr0\t\n\
+         150\tpve1\tother\t\tvirtio=BC:24:11:00:00:05,bridge=vmbr0\t\n",
+    );
+    // 1 = workspace disks: tick both; 5 = Gold: the second VM; then install.
+    let done = run(
+        &cluster,
+        &["install", "--ssh", "root@pve1"],
+        &["1", "1,2", "5", "2", "", "y"],
+        true,
+    )
+    .await;
     assert_eq!(done.code, 0, "{}", done.console.out());
-    assert_eq!(done.console.questions(), ["Install? [y/n] (n): "]);
+    let out = done.console.out();
+    assert!(out.contains("Workspace disks:     backup-a, local-lvm"), "{out}");
+    assert!(out.contains("Gold:                150 other"), "{out}");
+    assert!(
+        cluster.read("pools.tsv").contains("homestack-gold\t150"),
+        "{}",
+        cluster.read("pools.tsv")
+    );
+}
 
-    // A given option is not asked even when there is a choice.
+#[tokio::test]
+async fn options_given_on_the_command_line_are_shown_but_not_asked() {
     let cluster = Cluster::new(&["pve1"]);
     two_disk_storages(&cluster);
     let done = run(
         &cluster,
         &["install", "--ssh", "root@pve1", "--storages", "backup-a"],
-        &["y"],
+        &["", "y"],
         true,
     )
     .await;
     assert_eq!(done.code, 0, "{}", done.console.out());
-    assert_eq!(done.console.questions(), ["Install? [y/n] (n): "]);
+    let out = done.console.out();
     assert!(
-        done.console.out().contains("Workspace disks:     backup-a"),
-        "{}",
-        done.console.out()
+        out.contains("Workspace disks      backup-a  (given on the command line)"),
+        "{out}"
     );
+    assert!(out.contains("Workspace disks:     backup-a"), "{out}");
 }
 
 #[tokio::test]
@@ -619,8 +645,8 @@ async fn giving_up_changes_nothing() {
 #[tokio::test]
 async fn without_an_access_option_the_installer_asks_for_one_and_goes_on() {
     let cluster = Cluster::new(&["pve1"]);
-    // 1 = SSH, the node, then the summary.
-    let done = run(&cluster, &["install"], &["1", "root@pve1", "y"], true).await;
+    // 1 = SSH, the node, then the form and the confirmation.
+    let done = run(&cluster, &["install"], &["1", "root@pve1", "", "y"], true).await;
     assert_eq!(done.code, 0, "{}", done.console.out());
     let out = done.console.out();
     assert!(
@@ -637,8 +663,8 @@ async fn without_an_access_option_the_installer_asks_for_one_and_goes_on() {
 #[tokio::test]
 async fn the_herdr_tabs_are_offered_to_choose_from() {
     let cluster = Cluster::new(&["pve1"]);
-    // 2 = Herdr, the only tab, then the summary.
-    let done = run(&cluster, &["install"], &["2", "1", "y"], true).await;
+    // 2 = Herdr, the only tab, then the form and the confirmation.
+    let done = run(&cluster, &["install"], &["2", "1", "", "y"], true).await;
     assert_eq!(done.code, 0, "{}", done.console.out());
     let out = done.console.out();
     assert!(

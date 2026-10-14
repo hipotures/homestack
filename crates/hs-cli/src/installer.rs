@@ -9,6 +9,7 @@ use serde_json::{Value, json};
 
 use crate::app::Context;
 use crate::args::{Args, InstallArgs};
+use crate::form::{Field, Form, Outcome as FormOutcome};
 use crate::root_herdr::HerdrRoot;
 use crate::root_ssh::SshRoot;
 use crate::touch::Sounds;
@@ -168,25 +169,53 @@ fn same_as(command: Install, install: &InstallArgs, settings: &Settings) -> Stri
     words.join(" ")
 }
 
-/// The steps of the wizard for the options not given.
-fn steps_of(questions: &[hs_install::Question]) -> Vec<Step> {
-    questions
-        .iter()
-        .map(|question| {
-            let items = question
-                .choices
-                .iter()
-                .map(|choice| Item::new(&choice.value, &choice.detail))
-                .collect();
-            Step::pick(
-                &question.title,
-                &question.note,
-                question.multiple,
-                items,
-                &question.defaults,
-            )
-        })
-        .collect()
+/// The rows of the installer's form, in a fixed order: how root is reached,
+/// then every setting; a setting given on the command line is shown only.
+fn form_fields(root_line: &str, settings: &Settings, questions: &[hs_install::Question]) -> Vec<Field> {
+    let given = [
+        ("--storages", "Workspace disks", settings.storages.join(", ")),
+        (
+            "--snippet-storage",
+            "Cloud-Init snippets",
+            settings.snippet_storage.clone().unwrap_or_default(),
+        ),
+        (
+            "--service-storages",
+            "Server disks",
+            settings.service_storages.join(", "),
+        ),
+        (
+            "--template-storage",
+            "Server image",
+            settings.template_storage.clone().unwrap_or_default(),
+        ),
+        (
+            "--gold",
+            "Gold VM",
+            settings.gold.map(|vmid| vmid.to_string()).unwrap_or_default(),
+        ),
+    ];
+    let mut fields = vec![Field::fixed("Root access", root_line)];
+    for (option, label, value) in given {
+        match questions.iter().find(|question| question.option == option) {
+            Some(question) => {
+                let items = question
+                    .choices
+                    .iter()
+                    .map(|choice| Item::new(&choice.value, &choice.detail))
+                    .collect();
+                fields.push(Field::choose(
+                    label,
+                    &question.note,
+                    question.multiple,
+                    items,
+                    &question.defaults,
+                ));
+            }
+            None => fields.push(Field::fixed(label, &format!("{value}  (given on the command line)"))),
+        }
+    }
+    fields
 }
 
 /// `settings` with the answers to `questions` put in.
@@ -283,15 +312,21 @@ pub fn run(args: &Args, given: &InstallArgs, command: Install, ctx: &mut Context
     let access = hs_install::probe(root.as_mut()).map_err(failure)?;
     let access_line = access_line(root.as_ref(), &access);
     let settings = settings(ctx, args, install);
-    let first = hs_install::make_plan(root.as_mut(), &access, command, &settings);
 
     let plan = if interactive {
-        let questions = match &first {
-            Err(InstallError::Missing(questions)) => questions.clone(),
-            Ok(_) => Vec::new(),
-            Err(error) => return Err(failure(error.clone())),
-        };
-        let mut wizard = Wizard::new(steps_of(&questions), true);
+        let questions = hs_install::questions(root.as_mut(), &access, &settings).map_err(failure)?;
+        let root_line = format!(
+            "{}  \u{2014}  {}, Proxmox VE {}, {}",
+            root.describe(),
+            access.host,
+            access.version,
+            if access.topology.cluster {
+                format!("cluster of {} nodes", access.topology.nodes.len())
+            } else {
+                "single node".to_owned()
+            }
+        );
+        let mut form = Form::new("HomeStack install", form_fields(&root_line, &settings, &questions));
         let mut last: Option<Plan> = None;
         let mut summarize = |answers: &[Answer]| {
             let chosen = answered(&settings, &questions, answers);
@@ -310,9 +345,9 @@ pub fn run(args: &Args, given: &InstallArgs, command: Install, ctx: &mut Context
                 }
             }
         };
-        let outcome = ctx.console.wizard(&mut wizard, &mut summarize);
+        let outcome = ctx.console.form(&mut form, &mut summarize);
         match (outcome, last) {
-            (Outcome::Done(_), Some(plan)) => {
+            (FormOutcome::Install(_), Some(plan)) => {
                 let line = same_as(command, install, &plan.settings);
                 ctx.console.out(&format!("Same as: {line}\n"));
                 plan
@@ -320,6 +355,7 @@ pub fn run(args: &Args, given: &InstallArgs, command: Install, ctx: &mut Context
             _ => return cancelled(ctx),
         }
     } else {
+        let first = hs_install::make_plan(root.as_mut(), &access, command, &settings);
         match first {
             Ok(plan) => plan,
             // Options the user has not given are not an error: show what

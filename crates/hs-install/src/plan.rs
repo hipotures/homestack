@@ -820,3 +820,14 @@ pub fn make_plan(
         settings: resolved.clone(),
     })
 }
+
+/// Every option not given in `settings`, with its choices and what is chosen
+/// at first, read from the cluster. Nothing is changed.
+pub fn questions(
+    root: &mut dyn Root,
+    access: &Access,
+    settings: &Settings,
+) -> Result<Vec<crate::Question>, InstallError> {
+    let state = State::load(root, &access.topology)?;
+    Ok(checks::all_questions(&state, settings))
+}

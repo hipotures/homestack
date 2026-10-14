@@ -19,7 +19,7 @@ mod snippets;
 mod state;
 
 pub use apply::{Applied, apply};
-pub use plan::{Action, Plan, Step, make_plan};
+pub use plan::{Action, Plan, Step, make_plan, questions};
 pub use probe::{Access, Node, Topology, probe};
 pub use root::{LocalShell, Output, Root};
 pub use settings::{Command, Settings};

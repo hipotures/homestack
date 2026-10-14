@@ -31,7 +31,7 @@ fn wizard() -> Wizard {
                 "Where the snippets go.",
                 false,
                 vec![
-                    Item::new("NFS1", "nfs  all nodes (shared)"),
+                    Item::new("shared-nfs", "nfs  all nodes (shared)"),
                     Item::new("local", "dir  all nodes"),
                 ],
                 &[1],

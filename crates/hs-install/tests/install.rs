@@ -887,7 +887,7 @@ fn block_storages_are_ticked_at_first_and_local_for_single_files() {
     fake.write(
         "storage.json",
         r#"[{"storage":"local","type":"dir","content":"iso,vztmpl,snippets"},
- {"storage":"NFS1","type":"nfs","shared":1,"content":"images,rootdir,snippets,vztmpl"},
+ {"storage":"shared-nfs","type":"nfs","shared":1,"content":"images,rootdir,snippets,vztmpl"},
  {"storage":"backup-a","type":"dir","nodes":"pve1","content":"images,rootdir,vztmpl,snippets"},
  {"storage":"local-lvm","type":"lvmthin","content":"images,rootdir"},
  {"storage":"local-zfs","type":"zfspool","content":"images,rootdir"},
@@ -903,7 +903,7 @@ fn block_storages_are_ticked_at_first_and_local_for_single_files() {
     let offered: Vec<String> = question("--storages").choices.iter().map(|c| c.value.clone()).collect();
     assert_eq!(
         offered,
-        ["NFS1", "backup-a", "local-lvm", "local-zfs"],
+        ["backup-a", "local-lvm", "local-zfs", "shared-nfs"],
         "a disabled storage is not offered"
     );
     assert_eq!(ticked("--storages"), ["local-lvm", "local-zfs"]);

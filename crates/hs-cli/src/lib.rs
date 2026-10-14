@@ -10,6 +10,7 @@ pub mod app;
 pub mod args;
 pub mod config;
 pub mod fido;
+pub mod form;
 pub mod identity;
 pub mod installer;
 pub mod local_ssh;

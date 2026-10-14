@@ -174,3 +174,14 @@ with the owner's approval.
   `homestack-ws` or `homestack-alien` is refused. Uninstall takes Gold out of
   the pool and leaves its tag.
 - The fake Proxmox (`fake-pve`) learned `pvesh set ... --tags`.
+- **Revised the same day (owner): one form instead of steps.** The installer
+  shows one screen with every setting and its value: how root is reached,
+  workspace disks, Cloud-Init snippets, server disks, server image and Gold,
+  with the buttons **[ Install ]** and **[ Cancel ]** (`form.rs`). Enter on a
+  setting opens its list (only what can be chosen; space ticks, enter takes,
+  esc undoes); Gold can always be changed, its first choice being the VM the
+  installer would take. Install opens **Confirm the installation** with the
+  choices, warnings and every change, and the buttons **[ Install ]** and
+  **[ Back ]**; Esc returns to the form. A setting given on the command line
+  is shown with "(given on the command line)" and cannot be changed there.
+  Where nothing can be drawn, the form is asked by number.
