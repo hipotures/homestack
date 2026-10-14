@@ -461,3 +461,40 @@ fn a_large_vmid_gets_the_address_of_its_last_two_octets() -> Result<(), Error> {
     assert!(derive_ip(&config, 101_010).is_err(), "a /24 has no 192.168.101.x");
     Ok(())
 }
+
+/// Start and stop (owner, 2026-10-14; Python had neither): a workspace of
+/// the pool is shut down cleanly and started again; one outside the pool is
+/// refused before any change.
+#[tokio::test]
+async fn a_workspace_is_stopped_and_started_and_one_outside_the_pool_refused() -> TestResult {
+    use hs_core::lifecycle::{plan_power, power_workspace};
+    let (sim, pve) = cluster("").await?;
+    let cfg = config()?;
+    let plan = plan_create(&pve, &cfg, POOL, &request(240, "hst-power")).await?;
+    create_workspace(&pve, &cfg, &plan, &quick(), &NoObserver).await?;
+
+    let plan = plan_power(&pve, &cfg, POOL, 240, false).await?;
+    assert_eq!(
+        (plan["command"].as_str(), plan["status"].as_str()),
+        (Some("stop"), Some("running"))
+    );
+    let result = power_workspace(&pve, &cfg, POOL, &plan, &quick(), &NoObserver).await?;
+    assert_eq!(result["event"], "workspace.stopped");
+    assert_eq!(result["status"], "stopped");
+
+    let plan = plan_power(&pve, &cfg, POOL, 240, true).await?;
+    let result = power_workspace(&pve, &cfg, POOL, &plan, &quick(), &NoObserver).await?;
+    assert_eq!(result["event"], "workspace.started");
+    assert_eq!(result["status"], "running");
+
+    let before = sim.ops().len();
+    assert!(matches!(
+        plan_power(&pve, &cfg, POOL, 150, false).await,
+        Err(CoreError::OutsidePool(_))
+    ));
+    assert!(
+        sim.ops()[before..].iter().all(|op| op.to_string().starts_with("get{")),
+        "nothing changed outside the pool"
+    );
+    Ok(())
+}

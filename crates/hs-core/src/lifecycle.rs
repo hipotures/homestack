@@ -916,3 +916,61 @@ pub async fn destroy_workspace(
     result.insert("event".to_owned(), json!("workspace.destroyed"));
     Ok(Value::Object(result))
 }
+
+/// `workspace.start` and `workspace.stop` (owner, 2026-10-14; Python had
+/// neither): the plan names the workspace, its node and its state now.
+pub async fn plan_power(pve: &impl Pve, cfg: &Config, pool: &str, vmid: u32, start: bool) -> Result<Value, CoreError> {
+    require_pool(pve, vmid, pool).await?;
+    let info = resolve_existing_workspace(pve, cfg, vmid).await?;
+    Ok(json!({
+        "command": if start { "start" } else { "stop" },
+        "vmid": vmid,
+        "name": info.name,
+        "node": info.node,
+        "pool": pool,
+        "status": info.status,
+        "ip": derive_ip(cfg, vmid).ok(),
+    }))
+}
+
+/// Start or stop the workspace of `plan`. A stop shuts the guest down and
+/// never forces it, as every operation does; a workspace already in the
+/// wanted state is left alone.
+pub async fn power_workspace(
+    pve: &impl Pve,
+    cfg: &Config,
+    pool: &str,
+    plan: &Value,
+    timing: &LifecycleTiming,
+    observer: &impl Observer,
+) -> Result<Value, CoreError> {
+    let vmid = vmid_of(plan)?;
+    let node = text(plan, "node")?;
+    let start = plan.get("command").and_then(Value::as_str) == Some("start");
+    require_pool(pve, vmid, pool).await?;
+    resolve_existing_workspace(pve, cfg, vmid).await?;
+    let step = if start { "Start" } else { "Shutdown" };
+    step_started(observer, step);
+    let done = if start {
+        if vm_status(pve, node, vmid).await == "running" {
+            Ok(())
+        } else {
+            start_vm(pve, node, vmid, &timing.wait(START_TIMEOUT_SECS), observer).await
+        }
+    } else {
+        shutdown_vm(pve, node, vmid, SHUTDOWN_TIMEOUT_SECS, &timing.wait(600), observer).await
+    };
+    step_finished(observer, step, done.is_ok());
+    done?;
+    let mut result: Map<String, Value> = plan.as_object().cloned().unwrap_or_default();
+    result.insert("status".to_owned(), json!(vm_status(pve, node, vmid).await));
+    result.insert(
+        "event".to_owned(),
+        json!(if start {
+            "workspace.started"
+        } else {
+            "workspace.stopped"
+        }),
+    );
+    Ok(Value::Object(result))
+}

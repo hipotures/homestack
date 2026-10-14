@@ -554,7 +554,7 @@ impl App {
         if self.action.as_ref().is_some_and(|action| !action.hidden) {
             return self.action_key(key.code);
         }
-        if let KeyCode::Char(c @ ('n' | 'r' | 'z' | 'k' | 'g' | 'd')) = key.code {
+        if let KeyCode::Char(c @ ('n' | 'r' | 'z' | 'k' | 'g' | 'd' | 't')) = key.code {
             return self.open_action(c);
         }
         if key.code == KeyCode::Enter

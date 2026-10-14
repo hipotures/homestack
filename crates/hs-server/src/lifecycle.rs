@@ -46,7 +46,8 @@ use std::sync::Arc;
 use hs_core::CoreError;
 use hs_core::addkey::{AddkeyRequest, add_key, plan_addkey};
 use hs_core::lifecycle::{
-    CreateRequest, LifecycleTiming, create_workspace, destroy_workspace, plan_create, plan_destroy,
+    CreateRequest, LifecycleTiming, create_workspace, destroy_workspace, plan_create, plan_destroy, plan_power,
+    power_workspace,
 };
 use hs_core::migrate::{MigrateRequest, migrate_workspace, plan_migrate};
 use hs_core::refresh::{plan_refresh, refresh_workspace};
@@ -67,6 +68,8 @@ pub fn operations(timing: LifecycleTiming) -> Vec<Arc<dyn Operation>> {
         Arc::new(Resize { timing }),
         Arc::new(Migrate { timing }),
         Arc::new(Addkey { timing }),
+        Arc::new(Power { timing, start: true }),
+        Arc::new(Power { timing, start: false }),
     ]
 }
 
@@ -416,6 +419,66 @@ impl Operation for Addkey {
         Box::pin(async move {
             vmid_of(&planned.summary)?;
             Ok(add_key(
+                ctx.pve.as_ref(),
+                config(ctx)?,
+                &ctx.pools.workspaces,
+                &planned.summary,
+                &self.timing,
+                job,
+            )
+            .await?)
+        })
+    }
+}
+
+/// `workspace.start` and `workspace.stop`: `{"vmid": 240}` (owner,
+/// 2026-10-14). Events `workspace.started` and `workspace.stopped`.
+struct Power {
+    timing: LifecycleTiming,
+    start: bool,
+}
+
+impl Operation for Power {
+    fn name(&self) -> &'static str {
+        if self.start {
+            "workspace.start"
+        } else {
+            "workspace.stop"
+        }
+    }
+
+    fn plan<'a>(&'a self, ctx: &'a OpContext, parameters: &'a Value) -> BoxFuture<'a, Result<Planned, OpFailure>> {
+        Box::pin(async move {
+            let parameters: DestroyParameters = serde_json::from_value(parameters.clone())
+                .map_err(|_| OpFailure::invalid("workspace.start and workspace.stop take vmid."))?;
+            let summary = plan_power(
+                ctx.pve.as_ref(),
+                config(ctx)?,
+                &ctx.pools.workspaces,
+                parameters.vmid,
+                self.start,
+            )
+            .await
+            .map_err(|error| match error {
+                CoreError::NotFound(_) => OpFailure::not_found("No such VM."),
+                other => OpFailure::Core(other),
+            })?;
+            Ok(Planned {
+                targets: vec![parameters.vmid],
+                summary,
+            })
+        })
+    }
+
+    fn execute<'a>(
+        &'a self,
+        ctx: &'a OpContext,
+        planned: &'a Planned,
+        job: &'a JobHandle,
+    ) -> BoxFuture<'a, Result<Value, OpFailure>> {
+        Box::pin(async move {
+            vmid_of(&planned.summary)?;
+            Ok(power_workspace(
                 ctx.pve.as_ref(),
                 config(ctx)?,
                 &ctx.pools.workspaces,

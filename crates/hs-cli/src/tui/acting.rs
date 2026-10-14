@@ -64,6 +64,9 @@ impl App {
             'z' => Kind::Resize,
             'k' => Kind::Addkey,
             'g' => Kind::Migrate,
+            // t: stop a running workspace, start a stopped one.
+            't' if self.selected_entry().is_some_and(|entry| entry.status == "running") => Kind::Stop,
+            't' => Kind::Start,
             _ => Kind::Destroy,
         };
         if let Some(action) = &self.action {
@@ -130,7 +133,7 @@ impl App {
                     Field::choice("Storage", storages, "The storage on the target node."),
                 ]
             }
-            Kind::Refresh | Kind::Destroy => Vec::new(),
+            Kind::Refresh | Kind::Destroy | Kind::Start | Kind::Stop => Vec::new(),
         };
         let mut action = Action {
             kind,
@@ -221,7 +224,7 @@ impl App {
                 }
                 json!({"vmid": vmid, "target_node": node, "target_storage": storage})
             }
-            Kind::Refresh | Kind::Destroy => json!({"vmid": vmid}),
+            Kind::Refresh | Kind::Destroy | Kind::Start | Kind::Stop => json!({"vmid": vmid}),
         };
         Ok(Start {
             kind: action.kind,

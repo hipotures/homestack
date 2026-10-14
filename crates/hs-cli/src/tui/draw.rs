@@ -486,12 +486,12 @@ fn list_line(columns: &[Column], cell: impl Fn(&Column) -> String) -> String {
 fn workspace_actions(app: &App) -> Vec<Control> {
     let selected = app.selected_entry();
     let running = selected.is_some_and(|entry| entry.status == "running");
-    // ssh, start/stop and setup come in steps 4 and 5 of phase 13b.
+    // ssh and setup come in steps 4 and 5 of phase 13b.
     let free = selected.is_some() && app.action.is_none();
     vec![
         Control::key("&info").enabled(selected.is_some()),
         Control::key("&ssh").muted(),
-        Control::key(if running { "s&top" } else { "s&tart" }).muted(),
+        Control::key(if running { "s&top" } else { "s&tart" }).enabled(free),
         Control::key("s&etup").muted(),
         Control::key("&refresh").enabled(free),
         Control::key("resi&ze").enabled(free),

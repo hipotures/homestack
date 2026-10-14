@@ -405,3 +405,16 @@ fn a_rule_of_dashes_of_the_cli_is_a_blank_line_in_the_box() {
         ["WORKSPACE CREATED", "VMID : 101010", "", "IP   : 192.168.101.10/22"]
     );
 }
+
+#[test]
+fn t_stops_a_running_workspace_and_starts_a_stopped_one() {
+    let mut fixture = app();
+    select(&mut fixture.app, 201);
+    let start = started(press(&mut fixture.app, KeyCode::Char('t')));
+    assert_eq!((start.kind, start.vmid), (Kind::Stop, Some(201)));
+    assert_eq!(start.kind.operation(), "workspace.stop");
+    fixture.app.action = None;
+    select(&mut fixture.app, 203);
+    let start = started(press(&mut fixture.app, KeyCode::Char('t')));
+    assert_eq!((start.kind, start.kind.operation()), (Kind::Start, "workspace.start"));
+}

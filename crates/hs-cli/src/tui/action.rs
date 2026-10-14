@@ -24,6 +24,9 @@ pub enum Kind {
     Addkey,
     Migrate,
     Destroy,
+    /// Start or stop (owner, 2026-10-14).
+    Start,
+    Stop,
 }
 
 impl Kind {
@@ -36,6 +39,8 @@ impl Kind {
             Self::Addkey => "workspace.addkey",
             Self::Migrate => "workspace.migrate",
             Self::Destroy => "workspace.destroy",
+            Self::Start => "workspace.start",
+            Self::Stop => "workspace.stop",
         }
     }
 
@@ -49,13 +54,15 @@ impl Kind {
             Self::Addkey => "add key",
             Self::Migrate => "migrate",
             Self::Destroy => "destroy",
+            Self::Start => "start",
+            Self::Stop => "stop",
         }
     }
 
     /// Whether the action has a form before its plan.
     #[must_use]
     pub fn has_form(self) -> bool {
-        !matches!(self, Self::Refresh | Self::Destroy)
+        !matches!(self, Self::Refresh | Self::Destroy | Self::Start | Self::Stop)
     }
 
     /// The CLI's question before the change.
@@ -69,6 +76,8 @@ impl Kind {
             Self::Addkey => "Prepare this key? The VM is not restarted without a separate question.",
             Self::Migrate => "Migrate this workspace?",
             Self::Destroy => "Permanently destroy this workspace INCLUDING its persistent home?",
+            Self::Start => "Start this workspace?",
+            Self::Stop => "Stop this workspace? Its system shuts down; it is never forced.",
         }
     }
 }
@@ -224,6 +233,7 @@ fn plan_text(kind: Kind, summary: &Value) -> String {
         Kind::Addkey => app::addkey_plan(summary, &style),
         Kind::Migrate => view::migrate_plan(summary, &style),
         Kind::Destroy => view::destroy_plan(summary, &style),
+        Kind::Start | Kind::Stop => power_text(summary),
     }
 }
 
@@ -309,6 +319,7 @@ pub async fn work(
         Kind::Refresh => app::after_refresh(home, &desktop.loaded.client.workspace_ssh.user, vmid, &mut result)
             .map(|()| view::refresh_result(&result, &style)),
         Kind::Destroy => app::after_destroy(home, vmid, &mut result).map(|()| view::destroy_result(&result, &style)),
+        Kind::Start | Kind::Stop => Ok(power_text(&result)),
         Kind::Resize => Ok(app::resize_result_text(&summary)),
         Kind::Migrate => Ok(app::migrate_result_text(&result)),
         Kind::Addkey => {
@@ -496,4 +507,19 @@ impl Action {
             Stage::Asking | Stage::Plan { .. } | Stage::Running { .. } | Stage::Question { .. }
         )
     }
+}
+
+/// The plan or the end of a start or a stop, in a few lines.
+fn power_text(summary: &Value) -> String {
+    let word = match summary["command"].as_str() {
+        Some("start") => "Start",
+        _ => "Stop",
+    };
+    format!(
+        "{word} workspace\nVMID   : {}\nName   : {}\nNode   : {}\nState  : {}\n",
+        view::text(&summary["vmid"]),
+        view::text(&summary["name"]),
+        view::text(&summary["node"]),
+        view::text(&summary["status"])
+    )
 }
