@@ -133,6 +133,10 @@ async fn health(client: &Client) -> Vec<(String, Option<String>)> {
 /// `stop` is set (a new client.toml replaced this client meanwhile).
 async fn read_status(client: &Client, updates: &mpsc::UnboundedSender<Update>, stop: &AtomicBool) {
     let servers = health(client).await;
+    // The servers' dots at once; the status takes a few seconds more.
+    if !stop.load(Ordering::SeqCst) {
+        let _ = updates.send(Update::Servers(servers.clone()));
+    }
     let answer = client.get_from("/v1/status").await;
     if stop.load(Ordering::SeqCst) {
         return;

@@ -363,3 +363,12 @@ fn an_address_of_the_new_numbering_is_shown_whole() {
     let text = screen(&render(&fixture.app, 120, 36));
     assert!(text.contains("192.168.101.10 "), "{text}");
 }
+
+#[test]
+fn before_the_first_status_the_list_says_it_is_reading() {
+    let dir = tempfile::tempdir().unwrap();
+    let preferences = hs_cli::tui::theme::Preferences::load(&dir.path().join("tui.toml")).unwrap();
+    let app = hs_cli::tui::state::App::new(preferences, false).unwrap();
+    let text = screen(&render(&app, 120, 36));
+    assert!(text.contains("Reading the status from the servers…"), "{text}");
+}

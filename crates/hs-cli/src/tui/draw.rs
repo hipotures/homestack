@@ -611,6 +611,17 @@ fn workspaces(buf: &mut Buffer, area: Rect, app: &App, mut controls: Vec<Control
     let inner = frame(buf, area, palette, &sides);
     let text = text_style(palette);
     let muted = text.fg(palette.muted);
+    if app.status.is_none() && app.unreachable.is_empty() && app.notice.is_none() {
+        write(
+            buf,
+            inner.x + 2,
+            inner.y + 1,
+            inner.width.saturating_sub(2),
+            "Reading the status from the servers…",
+            muted,
+        );
+        return;
+    }
     if let Some((title, lines)) = &app.notice {
         write(
             buf,
