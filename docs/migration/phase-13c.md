@@ -138,37 +138,39 @@ Herdr, deployment, `homestack status`, uninstall with no trace and no change
 to foreign VMs). The gate changes ACLs on the real cluster, so it runs only
 with the owner's approval.
 
-## 7. Added after step 1 (owner's requests of 2026-10-14)
+## 7. The interactive installer (owner's requests of 2026-10-14)
 
-- **Options not given are chosen from lists.** `--storages`,
-  `--snippet-storage`, `--service-storages`, `--template-storage` and
-  `--gold` are asked for when missing. The lists hold only what fits: the
-  storages that allow the content type each option needs (id, type, nodes),
-  and the VMs that can be Gold (name, node, state). On a terminal the
-  lists are drawn with ratatui (`picker.rs`: arrows or `j`/`k` move, space
-  ticks where several are allowed, enter confirms, esc cancels), and the
-  command prints the equivalent command line (`Same as: ...`). Where the
-  terminal cannot be drawn on, the same choices are asked by number. With
-  no terminal the lists are printed, one choice a line (`--json`: a
-  `missing` array), and the exit code is 1. Giving up a list changes
-  nothing.
-- **The default Gold is the VM named `hs-gold`.** Order: `--gold`; the only
-  VM tagged `homestack-gold`; the only QEMU VM named `hs-gold`; otherwise
-  a list. The installer **tags** the Gold it uses `homestack-gold` (the
-  existing tags are kept) and puts it in pool `homestack-gold`; both are
-  steps of the plan, shown before anything is changed. When `hs-gold` is
-  chosen by name and other VMs are tagged `homestack-gold`, a warning names
-  them and leaves them alone. A Gold tagged `homestack-ws` or
-  `homestack-alien` is refused. Uninstall takes Gold out of the pool but
-  leaves its tag: the machine is the owner's.
+- **`homestack install` is a TUI wizard by default** (ratatui, `wizard.rs`);
+  giving the options on the command line is the manual way, and whatever is
+  given is not asked. The wizard is used when the command runs on a terminal
+  without `--json` and `-y` and not every option is given.
+- **Steps:** how to reach root (SSH: the node typed as `USER@HOST`; Herdr: a
+  tab from the tabs with one pane, with its pane's title), then one step per
+  option still open: workspace disks, Cloud-Init snippets, server disks,
+  server image, Gold. A step shows a heading, the step number, a sentence on
+  what is chosen, and **only what can be chosen** (storages with the content
+  type it needs, VMs that can be Gold). No command-line option name is shown.
+- **Not asked:** an option with a single possible value is taken (the summary
+  lists it under "Chosen without asking"); Gold is not asked when one VM is
+  tagged `homestack-gold` or one is named `hs-gold`.
+- **Defaults:** for disks the block storages are ticked (not `dir`, `nfs`,
+  `cifs`, `cephfs`, `glusterfs`, `pbs`); for the snippets and the image,
+  `local` when it is there.
+- **Summary, the last step:** where root comes from, every choice, the
+  warnings and every change the plan would make, with the buttons
+  **[ Install ]** and **[ Back ]**. Esc, or Back, returns to the choices;
+  nothing is changed before Install. A problem (an error of the checks) is
+  shown at the top and Install cannot be pressed. After Install the command
+  prints the equivalent command line (`Same as: ...`) and applies the plan.
+- Where the terminal cannot be drawn on, the same steps are asked by number
+  (Enter keeps the marked defaults) and the summary ends with `Install? [y/n]`.
+  Without a terminal the missing options are printed with their defaults
+  (`--json`: a `missing` array with `defaults`), exit code 1.
+- **Gold:** the default Gold is the VM named `hs-gold`; the installer tags the
+  Gold it uses `homestack-gold` (other tags kept) and puts it in pool
+  `homestack-gold`, both as steps of the plan. Order: `--gold`; the only VM
+  tagged `homestack-gold`; the only QEMU VM named `hs-gold` (other tagged VMs
+  are named in a warning and left alone); otherwise a step. A Gold tagged
+  `homestack-ws` or `homestack-alien` is refused. Uninstall takes Gold out of
+  the pool and leaves its tag.
 - The fake Proxmox (`fake-pve`) learned `pvesh set ... --tags`.
-- **`homestack install` with no options is the interactive installer** (owner's
-  decision of 2026-10-14); giving `--ssh`, `--herdr`, `--storages` and the rest
-  is the manual way, and whatever is given is not asked again. On a terminal it
-  asks, in turn: how to reach root (SSH: the node as `USER@HOST`; Herdr: a tab
-  chosen from the tabs that have one pane, with the title their pane shows),
-  then each missing option from a list, with the step in the heading ("2 of
-  5"). Every list explains in words what is chosen and which storages it
-  shows; no command-line option name is shown. The command ends with the
-  `Same as: ...` line. Without a terminal and without `--ssh`/`--herdr` it
-  stops with a message (exit 1).

@@ -11,9 +11,9 @@ use crate::app::Context;
 use crate::args::{Args, InstallArgs};
 use crate::root_herdr::HerdrRoot;
 use crate::root_ssh::SshRoot;
-use crate::system::Entry;
 use crate::touch::Sounds;
 use crate::view::Color;
+use crate::wizard::{Answer, Item, Outcome, Step, Summary, Wizard};
 use crate::{AppError, config, expand_home};
 
 const CONFIRM_TTY: &str = "Interactive confirmation requires a TTY; use --yes for automation";
@@ -129,43 +129,6 @@ fn confirm(ctx: &mut Context, question: &str) -> bool {
     }
 }
 
-/// Ask each question in turn and put the answers in `settings`; `false`
-/// when the user gives up.
-fn choose(ctx: &mut Context, questions: &[hs_install::Question], settings: &mut Settings) -> bool {
-    for (step, question) in questions.iter().enumerate() {
-        let items: Vec<Entry> = question
-            .choices
-            .iter()
-            .map(|choice| match &choice.blocked {
-                Some(reason) => Entry::blocked(&choice.value, &format!("{}  \u{2014} {reason}", choice.detail)),
-                None => Entry::new(&choice.value, &choice.detail),
-            })
-            .collect();
-        let Some(picked) = ctx.console.pick(
-            &format!("{} ({} of {})", question.title, step + 1, questions.len()),
-            &question.note,
-            question.multiple,
-            &items,
-        ) else {
-            return false;
-        };
-        let values: Vec<String> = picked
-            .iter()
-            .filter_map(|index| question.choices.get(*index))
-            .map(|choice| choice.value.clone())
-            .collect();
-        match question.option {
-            "--storages" => settings.storages = values,
-            "--snippet-storage" => settings.snippet_storage = values.into_iter().next(),
-            "--service-storages" => settings.service_storages = values,
-            "--template-storage" => settings.template_storage = values.into_iter().next(),
-            "--gold" => settings.gold = values.first().and_then(|vmid| vmid.parse().ok()),
-            _ => {}
-        }
-    }
-    true
-}
-
 /// The command line that gives the same answers without being asked.
 fn same_as(command: Install, install: &InstallArgs, settings: &Settings) -> String {
     let mut words = vec!["homestack".to_owned(), command.name().to_owned()];
@@ -205,12 +168,106 @@ fn same_as(command: Install, install: &InstallArgs, settings: &Settings) -> Stri
     words.join(" ")
 }
 
+/// The steps of the wizard for the options not given.
+fn steps_of(questions: &[hs_install::Question]) -> Vec<Step> {
+    questions
+        .iter()
+        .map(|question| {
+            let items = question
+                .choices
+                .iter()
+                .map(|choice| Item::new(&choice.value, &choice.detail))
+                .collect();
+            Step::pick(
+                &question.title,
+                &question.note,
+                question.multiple,
+                items,
+                &question.defaults,
+            )
+        })
+        .collect()
+}
+
+/// `settings` with the answers to `questions` put in.
+fn answered(settings: &Settings, questions: &[hs_install::Question], answers: &[Answer]) -> Settings {
+    let mut settings = settings.clone();
+    for (question, answer) in questions.iter().zip(answers) {
+        let Answer::Picked(picked) = answer else { continue };
+        let values: Vec<String> = picked
+            .iter()
+            .filter_map(|index| question.choices.get(*index))
+            .map(|choice| choice.value.clone())
+            .collect();
+        match question.option {
+            "--storages" => settings.storages = values,
+            "--snippet-storage" => settings.snippet_storage = values.into_iter().next(),
+            "--service-storages" => settings.service_storages = values,
+            "--template-storage" => settings.template_storage = values.into_iter().next(),
+            "--gold" => settings.gold = values.first().and_then(|vmid| vmid.parse().ok()),
+            _ => {}
+        }
+    }
+    settings
+}
+
+/// The summary of a plan: where root comes from, the choices, warnings and
+/// every change.
+fn summary_of(access_line: &str, plan: &Plan) -> Summary {
+    let settings = &plan.settings;
+    let mut chosen = vec![
+        format!("Workspace disks:     {}", settings.storages.join(", ")),
+        format!(
+            "Cloud-Init snippets: {}",
+            settings.snippet_storage.clone().unwrap_or_default()
+        ),
+        format!("Server disks:        {}", settings.service_storages.join(", ")),
+        format!(
+            "Server image:        {}",
+            settings.template_storage.clone().unwrap_or_default()
+        ),
+    ];
+    if let Some(gold) = &plan.gold {
+        chosen.push(format!("Gold:                {gold}"));
+    }
+    let mut sections = vec![
+        ("Root access".to_owned(), vec![access_line.to_owned()]),
+        ("Your choices".to_owned(), chosen),
+    ];
+    if !plan.taken.is_empty() {
+        sections.push(("Chosen without asking".to_owned(), plan.taken.clone()));
+    }
+    let mut notices = plan.warnings.clone();
+    notices.extend(plan.node_errors.iter().cloned());
+    if !notices.is_empty() {
+        sections.push(("Warnings (they do not stop the install)".to_owned(), notices));
+    }
+    let changes = if plan.steps.is_empty() {
+        vec!["Nothing to change: HomeStack is installed as chosen.".to_owned()]
+    } else {
+        plan.steps.iter().map(|step| step.description.clone()).collect()
+    };
+    sections.push((format!("Changes in Proxmox ({})", plan.steps.len()), changes));
+    Summary {
+        sections,
+        problems: Vec::new(),
+    }
+}
+
 /// Run `install` or `uninstall`; the exit code.
 pub fn run(args: &Args, given: &InstallArgs, command: Install, ctx: &mut Context) -> Result<i32, AppError> {
     let mut install = given.clone();
-    let mut chosen = false;
-    // The default installer asks how to reach root; giving --ssh or --herdr
-    // (and the other options) is the manual way.
+    // The default is the interactive installer: what is not given is asked,
+    // and the last screen confirms. Giving every option is the manual way.
+    let interactive = ctx.stdin_tty
+        && !args.json
+        && !args.yes
+        && command == Install::Install
+        && (install.ssh.is_none() && install.herdr.is_none()
+            || install.storages.is_empty()
+            || install.snippet_storage.is_none()
+            || install.service_storages.is_empty()
+            || install.template_storage.is_none());
     if install.ssh.is_none() && install.herdr.is_none() {
         if !ctx.stdin_tty {
             return Err(AppError::new(
@@ -218,28 +275,53 @@ pub fn run(args: &Args, given: &InstallArgs, command: Install, ctx: &mut Context
             ));
         }
         if !ask_access(ctx, &mut install)? {
-            let text = ctx.style.paint(CANCELLED, Color::Bold);
-            ctx.console.out(&format!("{text}\n"));
-            return Ok(0);
+            return cancelled(ctx);
         }
-        chosen = true;
     }
     let install = &install;
     let mut root = open_root(args, install, ctx)?;
     let access = hs_install::probe(root.as_mut()).map_err(failure)?;
-    let mut settings = settings(ctx, args, install);
-    let plan = loop {
-        match hs_install::make_plan(root.as_mut(), &access, command, &settings) {
-            Ok(plan) => break plan,
-            // On a terminal the user chooses from lists.
-            Err(InstallError::Missing(questions)) if ctx.stdin_tty && !args.json => {
-                if !choose(ctx, &questions, &mut settings) {
-                    let text = ctx.style.paint(CANCELLED, Color::Bold);
-                    ctx.console.out(&format!("{text}\n"));
-                    return Ok(0);
+    let access_line = access_line(root.as_ref(), &access);
+    let settings = settings(ctx, args, install);
+    let first = hs_install::make_plan(root.as_mut(), &access, command, &settings);
+
+    let plan = if interactive {
+        let questions = match &first {
+            Err(InstallError::Missing(questions)) => questions.clone(),
+            Ok(_) => Vec::new(),
+            Err(error) => return Err(failure(error.clone())),
+        };
+        let mut wizard = Wizard::new(steps_of(&questions), true);
+        let mut last: Option<Plan> = None;
+        let mut summarize = |answers: &[Answer]| {
+            let chosen = answered(&settings, &questions, answers);
+            match hs_install::make_plan(root.as_mut(), &access, command, &chosen) {
+                Ok(plan) => {
+                    let summary = summary_of(&access_line, &plan);
+                    last = Some(plan);
+                    summary
                 }
-                chosen = true;
+                Err(error) => {
+                    last = None;
+                    Summary {
+                        sections: Vec::new(),
+                        problems: error.to_string().lines().map(str::to_owned).collect(),
+                    }
+                }
             }
+        };
+        let outcome = ctx.console.wizard(&mut wizard, &mut summarize);
+        match (outcome, last) {
+            (Outcome::Done(_), Some(plan)) => {
+                let line = same_as(command, install, &plan.settings);
+                ctx.console.out(&format!("Same as: {line}\n"));
+                plan
+            }
+            _ => return cancelled(ctx),
+        }
+    } else {
+        match first {
+            Ok(plan) => plan,
             // Options the user has not given are not an error: show what
             // can be chosen, one choice a line.
             Err(InstallError::Missing(questions)) => {
@@ -255,6 +337,10 @@ pub fn run(args: &Args, given: &InstallArgs, command: Install, ctx: &mut Context
                                 "choices": question.choices.iter().map(|choice| json!({
                                     "value": choice.value, "detail": choice.detail,
                                 })).collect::<Vec<_>>(),
+                                "defaults": question.defaults.iter()
+                                    .filter_map(|i| question.choices.get(*i))
+                                    .map(|choice| choice.value.clone())
+                                    .collect::<Vec<_>>(),
                             })
                         })
                         .collect();
@@ -272,14 +358,9 @@ pub fn run(args: &Args, given: &InstallArgs, command: Install, ctx: &mut Context
             Err(error) => return Err(failure(error)),
         }
     };
-    if chosen {
-        let line = same_as(command, install, &settings);
-        ctx.console.out(&format!("\nSame as: {line}\n"));
-    }
 
-    let access_line = access_line(root.as_ref(), &access);
     let steps = plan.steps.len();
-    if steps > 0 && !args.yes {
+    if !interactive && steps > 0 && !args.yes {
         if args.json {
             emit(
                 ctx,
@@ -298,28 +379,46 @@ pub fn run(args: &Args, given: &InstallArgs, command: Install, ctx: &mut Context
             return Err(AppError::new(CONFIRM_TTY));
         }
         if !confirm(ctx, &format!("Apply these {steps} changes?")) {
-            let text = ctx.style.paint(CANCELLED, Color::Bold);
-            ctx.console.out(&format!("{text}\n"));
-            return Ok(0);
+            return cancelled(ctx);
         }
-    } else if !args.json {
+    } else if !interactive && !args.json {
         ctx.console.out(&format!("{access_line}\n{}", plan.text()));
     }
+    finish(ctx, args, root.as_mut(), &plan, command, &access_line)
+}
 
+fn cancelled(ctx: &mut Context) -> Result<i32, AppError> {
+    let text = ctx.style.paint(CANCELLED, Color::Bold);
+    ctx.console.out(&format!("{text}\n"));
+    Ok(0)
+}
+
+/// Apply the plan and report.
+fn finish(
+    ctx: &mut Context,
+    args: &Args,
+    root: &mut dyn Root,
+    plan: &Plan,
+    command: Install,
+    access_line: &str,
+) -> Result<i32, AppError> {
     let mut lines: Vec<String> = Vec::new();
-    let applied = if steps > 0 {
+    let applied = if plan.steps.is_empty() {
+        if !args.json {
+            ctx.console.out("Nothing to change.\n");
+        }
+        None
+    } else {
         let mut progress = |line: &str| {
             if !args.json {
                 lines.push(format!("{line}\n"));
             }
         };
-        let result = hs_install::apply(root.as_mut(), &plan, &settings, &mut progress);
+        let result = hs_install::apply(root, plan, &plan.settings, &mut progress);
         for line in lines.drain(..) {
             ctx.console.out(&line);
         }
         Some(result.map_err(failure)?)
-    } else {
-        None
     };
     let token_files: Vec<String> = applied
         .as_ref()
@@ -335,13 +434,16 @@ pub fn run(args: &Args, given: &InstallArgs, command: Install, ctx: &mut Context
                 "access": access_line,
                 "applied_steps": applied.as_ref().map_or(0, |done| done.steps_done),
                 "token_files": token_files,
-                "plan": plan_json(&plan),
+                "plan": plan_json(plan),
             }),
         );
     } else {
         for file in &token_files {
             ctx.console
                 .out(&format!("Token secret written to {file} (mode 0600).\n"));
+        }
+        for error in &plan.node_errors {
+            ctx.console.out(&format!("error: {error}\n"));
         }
     }
     Ok(code)
@@ -350,64 +452,74 @@ pub fn run(args: &Args, given: &InstallArgs, command: Install, ctx: &mut Context
 /// Ask how to reach root and which node or tab: `false` when the user gives
 /// up. The answer goes into `install`.
 fn ask_access(ctx: &mut Context, install: &mut InstallArgs) -> Result<bool, AppError> {
-    let ways = [
-        Entry::new(
-            "SSH",
-            "log in to a node as root over SSH (touch the security key when it blinks)",
-        ),
-        Entry::new(
-            "Herdr",
-            "use a Herdr tab or pane in which you are already root on a node",
-        ),
-    ];
-    let Some(way) = ctx.console.pick(
-        "How to reach root on a Proxmox node",
-        "Root on one node is needed once, only to install or remove HomeStack in Proxmox; afterwards \
+    let mut nothing = |_: &[Answer]| Summary::default();
+    loop {
+        let mut way = Wizard::new(
+            vec![Step::pick(
+                "How to reach root on a Proxmox node",
+                "Root on one node is needed once, only to install or remove HomeStack in Proxmox; afterwards \
 everything goes through the API, and you can drop the key or close the tab.",
-        false,
-        &ways,
-    ) else {
-        return Ok(false);
-    };
-    if way.first() == Some(&0) {
-        let Some(answer) = ctx.console.ask("Node to log in to (USER@HOST, e.g. root@pve1): ") else {
+                false,
+                vec![
+                    Item::new(
+                        "SSH",
+                        "log in to a node as root over SSH (touch the security key when it blinks)",
+                    ),
+                    Item::new("Herdr", "use a Herdr tab in which you are already root on a node"),
+                ],
+                &[0],
+            )],
+            false,
+        );
+        let Outcome::Done(answers) = ctx.console.wizard(&mut way, &mut nothing) else {
             return Ok(false);
         };
-        let answer = answer.trim();
-        if answer.is_empty() {
-            return Ok(false);
+        let ssh = answers.first() == Some(&Answer::Picked(vec![0]));
+        let step = if ssh {
+            Step::text(
+                "Node to log in to",
+                "The Proxmox node as USER@HOST, for example root@pve1.",
+                "root@",
+            )
+        } else {
+            let tabs = crate::root_herdr::tabs(ctx.system.as_ref())?;
+            if tabs.is_empty() {
+                return Err(AppError::new(
+                    "Herdr has no tab with a single pane: open a tab, log in as root on the node there, and run this again",
+                ));
+            }
+            let items = tabs
+                .iter()
+                .map(|tab| {
+                    let title = if tab.title.is_empty() {
+                        "(no title)"
+                    } else {
+                        tab.title.as_str()
+                    };
+                    Item::new(&tab.name, title)
+                })
+                .collect();
+            Step::pick(
+                "Herdr tab",
+                "The tab whose shell is root on the Proxmox node; it must be at its prompt.",
+                false,
+                items,
+                &[],
+            )
+        };
+        let mut which = Wizard::new(vec![step.clone()], false);
+        let Outcome::Done(answers) = ctx.console.wizard(&mut which, &mut nothing) else {
+            // Esc: back to the way.
+            continue;
+        };
+        match answers.first() {
+            Some(Answer::Text(target)) => install.ssh = Some(target.clone()),
+            Some(Answer::Picked(picked)) => {
+                let tabs = crate::root_herdr::tabs(ctx.system.as_ref())?;
+                install.herdr = picked.first().and_then(|i| tabs.get(*i)).map(|tab| tab.name.clone());
+            }
+            None => return Ok(false),
         }
-        install.ssh = Some(answer.to_owned());
-        return Ok(true);
+        return Ok(install.ssh.is_some() || install.herdr.is_some());
     }
-    let tabs = crate::root_herdr::tabs(ctx.system.as_ref())?;
-    if tabs.is_empty() {
-        return Err(AppError::new(
-            "Herdr has no tab with a single pane: open a tab, log in as root on the node there, and run this again",
-        ));
-    }
-    let items: Vec<Entry> = tabs
-        .iter()
-        .map(|tab| {
-            let title = if tab.title.is_empty() {
-                "(no title)"
-            } else {
-                tab.title.as_str()
-            };
-            Entry::new(&tab.name, title)
-        })
-        .collect();
-    let Some(picked) = ctx.console.pick(
-        "Herdr tab",
-        "The tab whose shell is root on the Proxmox node. It must be at its prompt.",
-        false,
-        &items,
-    ) else {
-        return Ok(false);
-    };
-    install.herdr = picked
-        .first()
-        .and_then(|index| tabs.get(*index))
-        .map(|tab| tab.name.clone());
-    Ok(install.herdr.is_some())
 }

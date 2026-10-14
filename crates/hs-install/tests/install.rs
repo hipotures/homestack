@@ -474,15 +474,16 @@ fn checks_stop_the_install_before_any_change() {
     settings.storages.clear();
     stops(&fake, &settings, &["--storages"]);
 
+    // With one possible storage each, they are taken instead of asked.
     let fake = Fake::new(&["pve1"]);
     let mut settings = standard(false);
     settings.service_storages.clear();
     settings.template_storage = None;
-    stops(
-        &fake,
-        &settings,
-        &["--service-storages is required", "--template-storage is required"],
-    );
+    let run = fake.run(Command::Install, &settings, false);
+    assert!(run.ok, "{}", run.out);
+    let plan = run.plan.expect("a plan");
+    assert_eq!(plan.settings.service_storages, ["local-lvm"]);
+    assert_eq!(plan.settings.template_storage.as_deref(), Some("local"));
 
     let fake = Fake::new(&["pve1"]);
     let mut settings = standard(false);
@@ -657,57 +658,6 @@ fn missing(run: &common::Run) -> Vec<hs_install::Question> {
         Some(InstallError::Missing(questions)) => questions.clone(),
         other => panic!("expected missing options, got {other:?}\n{}", run.out),
     }
-}
-
-#[test]
-fn missing_options_are_questions_with_a_choice_per_line() {
-    let fake = Fake::new(&["pve1", "pve2"]);
-    let run = fake.install(&Settings::default());
-    assert!(!run.ok);
-    let questions = missing(&run);
-    let options: Vec<&str> = questions.iter().map(|q| q.option).collect();
-    assert_eq!(
-        options,
-        [
-            "--storages",
-            "--snippet-storage",
-            "--service-storages",
-            "--template-storage"
-        ]
-    );
-    let values = |option: &str| -> Vec<String> {
-        questions
-            .iter()
-            .find(|q| q.option == option)
-            .map(|q| {
-                q.choices
-                    .iter()
-                    .filter(|c| c.blocked.is_none())
-                    .map(|c| c.value.clone())
-                    .collect()
-            })
-            .unwrap_or_default()
-    };
-    // Only storages that allow what the option needs.
-    assert_eq!(values("--storages"), ["local-lvm", "worker-roots"]);
-    assert_eq!(values("--snippet-storage"), ["local"]);
-    assert_eq!(values("--service-storages"), ["local-lvm"]);
-    assert_eq!(values("--template-storage"), ["local"]);
-    assert!(questions[0].multiple && !questions[1].multiple);
-
-    // The text: one choice a line, each line short.
-    let text = run.error.as_ref().map(ToString::to_string).unwrap_or_default();
-    assert!(text.contains("--storages is required"), "{text}");
-    assert!(
-        text.lines()
-            .any(|l| l.trim_start().starts_with("local-lvm") && l.contains("lvmthin")),
-        "{text}"
-    );
-    assert!(
-        text.lines().all(|l| l.chars().count() <= 100),
-        "a line is too long:\n{text}"
-    );
-    assert!(!text.contains("cluster's owner"), "{text}");
 }
 
 #[test]
@@ -896,71 +846,75 @@ fn uninstall_leaves_the_tag_on_gold() {
 }
 
 #[test]
-fn every_question_explains_what_is_chosen() {
-    let fake = Fake::new(&["pve1", "pve2"]);
-    fake.append(
-        "vms.tsv",
-        "111\tpve1\tgold-backup\thomestack-gold\tvirtio=BC:24:11:00:00:09,bridge=vmbr0\t\n",
-    );
-    let run = fake.install(&Settings::default());
-    for question in missing(&run) {
-        assert!(
-            question.note.split_whitespace().count() >= 8,
-            "{}: {:?}",
-            question.option,
-            question.note
-        );
-    }
-    // The printed list carries the explanation too, in lines that fit.
-    let text = run.error.as_ref().map(ToString::to_string).unwrap_or_default();
-    assert!(text.contains("disks of the workspace VMs"), "{text}");
-    assert!(text.lines().all(|l| l.chars().count() <= 100), "{text}");
-}
-
-#[test]
-fn storages_that_do_not_fit_are_listed_too_with_the_reason() {
+fn only_what_can_be_chosen_is_offered_and_a_single_possibility_is_taken() {
+    // Two storages can hold disk images; snippets, container disks and the
+    // image each have one possible storage, which is taken without asking.
     let fake = Fake::new(&["pve1", "pve2"]);
     let run = fake.install(&Settings::default());
     let questions = missing(&run);
-    let images = &questions[0];
-    assert_eq!(images.option, "--storages");
-    let reason = |value: &str| {
-        images
-            .choices
-            .iter()
-            .find(|c| c.value == value)
-            .map(|c| c.blocked.clone())
-            .unwrap_or_else(|| panic!("{value} is not listed: {:?}", images.choices))
-    };
-    assert_eq!(reason("local-lvm"), None);
-    assert_eq!(reason("local").as_deref(), Some("no disk images"));
-    // The ones that fit come first.
-    let first_blocked = images
-        .choices
-        .iter()
-        .position(|c| c.blocked.is_some())
-        .unwrap_or(usize::MAX);
-    assert!(images.choices[..first_blocked].iter().all(|c| c.blocked.is_none()));
-    assert!(images.choices[first_blocked..].iter().all(|c| c.blocked.is_some()));
-    // The printed list says so too.
-    let text = run.error.as_ref().map(ToString::to_string).unwrap_or_default();
-    assert!(
-        text.lines()
-            .any(|l| l.contains("local ") && l.contains("no disk images")),
-        "{text}"
+    let options: Vec<&str> = questions.iter().map(|q| q.option).collect();
+    assert_eq!(options, ["--storages"]);
+    let values: Vec<&str> = questions[0].choices.iter().map(|c| c.value.as_str()).collect();
+    assert_eq!(
+        values,
+        ["local-lvm", "worker-roots"],
+        "only storages that hold disk images"
     );
-    // A disabled storage is listed as disabled.
+    assert!(questions[0].multiple);
+    assert!(
+        questions[0].note.split_whitespace().count() >= 8,
+        "{:?}",
+        questions[0].note
+    );
+
+    // Once the one question is answered, the plan says what was taken.
+    let settings = Settings {
+        storages: vec!["local-lvm".into()],
+        ..Settings::default()
+    };
+    let run = fake.run(Command::Install, &settings, false);
+    let plan = run.plan.expect("a plan");
+    assert_eq!(plan.settings.snippet_storage.as_deref(), Some("local"));
+    assert_eq!(plan.settings.service_storages, ["local-lvm"]);
+    assert_eq!(plan.settings.template_storage.as_deref(), Some("local"));
+    assert_eq!(plan.taken.len(), 3, "{:?}", plan.taken);
+    assert_eq!(plan.gold.as_deref(), Some("101 gold (pve1)"));
+}
+
+#[test]
+fn block_storages_are_ticked_at_first_and_local_for_single_files() {
     let fake = Fake::new(&["pve1"]);
-    fake.replace(
+    fake.write(
         "storage.json",
-        "\"storage\":\"worker-roots\"",
-        "\"storage\":\"worker-roots\",\"disable\":1",
+        r#"[{"storage":"local","type":"dir","content":"iso,vztmpl,snippets"},
+ {"storage":"NFS1","type":"nfs","shared":1,"content":"images,rootdir,snippets,vztmpl"},
+ {"storage":"backup-a","type":"dir","nodes":"pve1","content":"images,rootdir,vztmpl,snippets"},
+ {"storage":"local-lvm","type":"lvmthin","content":"images,rootdir"},
+ {"storage":"local-zfs","type":"zfspool","content":"images,rootdir"},
+ {"storage":"off","type":"lvmthin","disable":1,"content":"images,rootdir"}]
+"#,
     );
     let questions = missing(&fake.install(&Settings::default()));
-    let disabled = questions[0]
-        .choices
-        .iter()
-        .find(|c| c.value == "worker-roots")
-        .and_then(|c| c.blocked.clone());
-    assert_eq!(disabled.as_deref(), Some("disabled"));
+    let question = |option: &str| questions.iter().find(|q| q.option == option).expect(option).clone();
+    let ticked = |option: &str| -> Vec<String> {
+        let q = question(option);
+        q.defaults.iter().map(|i| q.choices[*i].value.clone()).collect()
+    };
+    let offered: Vec<String> = question("--storages").choices.iter().map(|c| c.value.clone()).collect();
+    assert_eq!(
+        offered,
+        ["NFS1", "backup-a", "local-lvm", "local-zfs"],
+        "a disabled storage is not offered"
+    );
+    assert_eq!(ticked("--storages"), ["local-lvm", "local-zfs"]);
+    assert_eq!(ticked("--service-storages"), ["local-lvm", "local-zfs"]);
+    assert_eq!(ticked("--snippet-storage"), ["local"]);
+    assert_eq!(ticked("--template-storage"), ["local"]);
+    // The printed list marks them.
+    let text = fake.install(&Settings::default()).out;
+    assert!(
+        text.lines().any(|l| l.contains("local-lvm") && l.contains("(default)")),
+        "{text}"
+    );
+    assert!(text.lines().all(|l| l.chars().count() <= 100), "{text}");
 }

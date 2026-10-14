@@ -124,34 +124,6 @@ impl System for RealSystem {
     }
 }
 
-/// One entry of a list to choose from.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Entry {
-    pub value: String,
-    pub detail: String,
-    /// Listed only to show it exists: it cannot be chosen.
-    pub blocked: bool,
-}
-
-impl Entry {
-    #[must_use]
-    pub fn new(value: &str, detail: &str) -> Self {
-        Self {
-            value: value.to_owned(),
-            detail: detail.to_owned(),
-            blocked: false,
-        }
-    }
-
-    #[must_use]
-    pub fn blocked(value: &str, detail: &str) -> Self {
-        Self {
-            blocked: true,
-            ..Self::new(value, detail)
-        }
-    }
-}
-
 /// The terminal: output, the questions of a confirmation and a hidden
 /// passphrase.
 pub trait Console: Send {
@@ -162,11 +134,15 @@ pub trait Console: Send {
     /// Read a line without echo; `None` when that is not possible.
     fn secret(&mut self, prompt: &str) -> Option<String>;
 
-    /// Choose among `items` (a value and what tells it apart): the indexes
-    /// of the chosen ones, `None` when the user gives up. The default asks
-    /// for numbers, for a console that cannot draw a list.
-    fn pick(&mut self, title: &str, description: &str, multiple: bool, items: &[Entry]) -> Option<Vec<usize>> {
-        pick_numbered(self, title, description, multiple, items)
+    /// Run the installer's wizard: the steps, then the summary `summarize`
+    /// makes from the answers. The default asks by number, for a console
+    /// that cannot draw.
+    fn wizard(
+        &mut self,
+        wizard: &mut crate::wizard::Wizard,
+        summarize: &mut dyn FnMut(&[crate::wizard::Answer]) -> crate::wizard::Summary,
+    ) -> crate::wizard::Outcome {
+        crate::wizard::run_numbered(self, wizard, summarize)
     }
 }
 
@@ -202,78 +178,17 @@ impl Console for Terminal {
         rpassword::read_password().ok()
     }
 
-    fn pick(&mut self, title: &str, description: &str, multiple: bool, items: &[Entry]) -> Option<Vec<usize>> {
-        use crate::picker::{Item, Outcome, Picker, run_on_terminal};
-        if io::stdin().is_terminal() && io::stdout().is_terminal() {
-            let rows = items
-                .iter()
-                .map(|entry| Item {
-                    value: entry.value.clone(),
-                    detail: entry.detail.clone(),
-                    blocked: entry.blocked,
-                })
-                .collect();
-            let mut picker = Picker::new(title, multiple, rows).with_description(description);
-            if let Ok(outcome) = run_on_terminal(&mut picker) {
-                return match outcome {
-                    Outcome::Chosen(chosen) => Some(chosen),
-                    Outcome::Cancelled => None,
-                };
-            }
+    fn wizard(
+        &mut self,
+        wizard: &mut crate::wizard::Wizard,
+        summarize: &mut dyn FnMut(&[crate::wizard::Answer]) -> crate::wizard::Summary,
+    ) -> crate::wizard::Outcome {
+        if io::stdin().is_terminal()
+            && io::stdout().is_terminal()
+            && let Ok(outcome) = crate::wizard::run_on_terminal(wizard, summarize)
+        {
+            return outcome;
         }
-        pick_numbered(self, title, description, multiple, items)
-    }
-}
-
-/// [`Console::pick`] with numbers: the list, one choice a line, then
-/// "Choose ...:" until the answer is valid; end of input gives up. Only
-/// what can be chosen is numbered; the rest is listed with its reason.
-pub fn pick_numbered<C: Console + ?Sized>(
-    console: &mut C,
-    title: &str,
-    description: &str,
-    multiple: bool,
-    items: &[Entry],
-) -> Option<Vec<usize>> {
-    let width = items.iter().map(|item| item.value.chars().count()).max().unwrap_or(0);
-    let mut text = format!("\n{title}\n{description}\n");
-    // The index in `items` of each number the user can type.
-    let mut numbered: Vec<usize> = Vec::new();
-    for (index, item) in items.iter().enumerate() {
-        if item.blocked {
-            continue;
-        }
-        numbered.push(index);
-        text.push_str(&format!(
-            "  {:>2}) {:<width$}  {}\n",
-            numbered.len(),
-            item.value,
-            item.detail
-        ));
-    }
-    for item in items.iter().filter(|item| item.blocked) {
-        text.push_str(&format!("   -  {:<width$}  {}\n", item.value, item.detail));
-    }
-    console.out(&text);
-    let count = numbered.len();
-    let prompt = if multiple {
-        format!("Choose one or more (numbers, e.g. 1,3) [1-{count}]: ")
-    } else {
-        format!("Choose one [1-{count}]: ")
-    };
-    loop {
-        let answer = console.ask(&prompt)?;
-        let numbers: Option<Vec<usize>> = answer
-            .split(',')
-            .map(|part| part.trim().parse::<usize>().ok().filter(|n| (1..=count).contains(n)))
-            .collect();
-        match numbers {
-            Some(mut numbers) if !numbers.is_empty() && (multiple || numbers.len() == 1) => {
-                numbers.sort_unstable();
-                numbers.dedup();
-                return Some(numbers.into_iter().map(|n| numbered[n - 1]).collect());
-            }
-            _ => console.out("Please enter a number from the list.\n"),
-        }
+        crate::wizard::run_numbered(self, wizard, summarize)
     }
 }

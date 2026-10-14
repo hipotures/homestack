@@ -20,7 +20,7 @@ impl Command {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Settings {
     /// The test part (pool `homestack-test`, token `test`) instead of the
     /// production part (pool `homestack`, token `server`).

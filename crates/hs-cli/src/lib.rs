@@ -14,12 +14,12 @@ pub mod identity;
 pub mod installer;
 pub mod local_ssh;
 pub mod master;
-pub mod picker;
 pub mod root_herdr;
 pub mod root_ssh;
 pub mod system;
 pub mod touch;
 pub mod view;
+pub mod wizard;
 
 /// A failure shown to the user as it is written (Python's `AppError`).
 #[derive(Debug, Clone, PartialEq, Eq)]

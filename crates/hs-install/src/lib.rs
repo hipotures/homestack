@@ -43,8 +43,6 @@ pub struct Choice {
     pub value: String,
     /// What the user needs to tell it apart (type, nodes, name, state).
     pub detail: String,
-    /// Why it cannot be chosen, when it is listed only to show it exists.
-    pub blocked: Option<String>,
 }
 
 /// An option the user has not given, with what can be chosen for it.
@@ -57,7 +55,10 @@ pub struct Question {
     pub note: String,
     /// Several values, comma-separated, are allowed.
     pub multiple: bool,
+    /// Only what can be chosen.
     pub choices: Vec<Choice>,
+    /// The choices ticked before the user changes anything.
+    pub defaults: Vec<usize>,
 }
 
 /// The questions as the user reads them: the option and one choice a line.
@@ -89,16 +90,16 @@ pub fn describe_missing(questions: &[Question]) -> String {
             .map(|c| c.value.chars().count())
             .max()
             .unwrap_or(0);
-        for choice in &question.choices {
+        for (index, choice) in question.choices.iter().enumerate() {
             let mut detail: String = choice.detail.chars().take(WIDTH).collect();
             if choice.detail.chars().count() > WIDTH {
                 detail.push_str("...");
             }
-            let marker = choice
-                .blocked
-                .as_ref()
-                .map(|reason| format!("  (not available: {reason})"))
-                .unwrap_or_default();
+            let marker = if question.defaults.contains(&index) {
+                "  (default)"
+            } else {
+                ""
+            };
             out.push_str(&format!("    {:<width$}  {detail}{marker}\n", choice.value));
         }
     }

@@ -248,6 +248,15 @@ an agent stops when a phase needs one that is still open
   over both; uninstall leaves the tag on Gold; a Gold with a workspace role
   tag is refused.
 
+
+### Owner's decision of 2026-10-14 (phase 13c, the installer)
+
+- `homestack install` is a TUI installer by default; options on the command
+  line are the manual way. A step offers only what can be chosen (nothing
+  greyed out), sensible choices are ticked at first, and an option with one
+  possibility is not asked. The last screen lists the choices and the changes
+  with the buttons Install and Back; Esc returns to the choices.
+
 ## Probe results
 
 | Date | Probe | Result |

@@ -111,6 +111,12 @@ pub struct Plan {
     /// Nodes that did not answer: the rest is done, the command fails.
     pub node_errors: Vec<String>,
     pub steps: Vec<Step>,
+    /// The options the plan was made with, the given and the taken ones.
+    pub settings: Settings,
+    /// Options that had one possible value and got it, as sentences.
+    pub taken: Vec<String>,
+    /// Gold, as `VMID name (node)`, when the install has one.
+    pub gold: Option<String>,
 }
 
 impl Plan {
@@ -673,6 +679,13 @@ pub fn make_plan(
     settings: &Settings,
 ) -> Result<Plan, InstallError> {
     let state = State::load(root, &access.topology)?;
+    // An option with only one possible value is not asked for.
+    let (resolved, taken) = if command == Command::Install {
+        checks::resolve(&state, settings)
+    } else {
+        (settings.clone(), Vec::new())
+    };
+    let settings = &resolved;
     let (part, pool, token) = if settings.test {
         ("test", "homestack-test", "test")
     } else {
@@ -753,6 +766,12 @@ pub fn make_plan(
         pool,
         sdn_path: &found.sdn_path,
     };
+    let gold_label = found.gold.and_then(|vmid| {
+        state
+            .vms
+            .get(&vmid)
+            .map(|vm| format!("{vmid} {} ({})", vm.name, vm.node))
+    });
     let ctx = Context {
         state: &state,
         settings,
@@ -796,5 +815,8 @@ pub fn make_plan(
         notes,
         node_errors,
         steps,
+        gold: gold_label,
+        taken,
+        settings: resolved.clone(),
     })
 }
