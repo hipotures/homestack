@@ -8,8 +8,10 @@ examples (the repository is public). Version 1 is in git history (c45db43).
 1. One program for everything
 -----------------------------
 
-`homestack tui` (name to be decided) opens one full-screen program for the
-install, the everyday work and the uninstall. The CLI commands stay.
+`homestack` with no command, in a terminal, opens one full-screen program for
+the install, the everyday work and the uninstall. `homestack --help` prints
+the help; when the output is not a terminal, plain `homestack` prints the
+help as today. The CLI commands stay. The minimum size is 80 x 24.
 
 Nothing leaves the TUI. Choosing an SSH key, "touch your security key", a PIN,
 an unknown host key, progress and errors are all shown inside it (03).
@@ -29,7 +31,7 @@ same in every panel:
                  filter: ┌Filter┐
   top right      how the panel shows its data: carousels ┌‹ node: all ›┐
                  (changed with ←→), toggles, and ┌New┐
-  bottom left    actions on the selected row: └Refresh┘└reSize┘…
+  bottom left    actions on the selected row: └Ssh┘└sTop┘└Refresh┘…
                  They are grey while nothing is selected.
   bottom right   the counter: selected / total (1/12), or the step (3/5)
   right edge     the scrollbar when the content is longer than the panel:
@@ -37,7 +39,7 @@ same in every panel:
 
 The key of a control is its highlighted letter.
   - In the TUI that letter has the accent colour.
-  - In these TXT files it is the upper-case letter: └reSize┘ is s,
+  - In these TXT files it is the upper-case letter: └resiZe┘ is z,
     └miGrate┘ is g, ┌Filter┐ is f.
   - A symbol in the label is its key: └info ↵┘ is Enter, └tick ␣┘ is Space,
     └next ⇥┘ is Tab, ‹ › is ←→.
@@ -83,9 +85,9 @@ B. Main screen (09–17)
 4. Actions happen in a sub-box, never on a new screen
 -----------------------------------------------------
 
-New, refresh, resize, add key, migrate and destroy open as a sub-box of the
-workspaces panel. The other panels stay. The stages of an action are in the
-top border of its sub-box, the current one raised:
+Ssh, start/stop, refresh, resize, add key, migrate, destroy and new open as a
+sub-box of the workspaces panel (ssh: see 8). The other panels stay. The stages
+of an action are in the top border of its sub-box, the current one raised:
 
     ┌form┐ ─ plan ─ run
 
@@ -110,6 +112,7 @@ The only boxes over the screen are for things that stop everything:
                     The details and actions split the list top and bottom.
                     ³storage and ⁴log are hidden; turning off ²cluster (2)
                     gives room to one of them (09, 12, 17).
+                    The bottom border drops └select ↑↓┘ to fit the actions.
 
   120–159 x 36–44   All four panels. Details are a sub-box next to the list.
                     ⁴log shows under the install screen too (10, 13, 14).
@@ -152,13 +155,14 @@ The only boxes over the screen are for things that stop everything:
   17  servers not answering              18  uninstall: review
 
 
-8. Open questions for the owner
--------------------------------
+8. Decisions (owner, 2026-10-14)
+--------------------------------
 
-  - Command name: `homestack tui`, or plain `homestack` with no command in a
-    terminal? (Today plain `homestack` prints the help.)
-  - Minimum size: 80 x 24 as btop, or 80 x 20?
-  - Node CPU and RAM (11, marked *) need a new read-only endpoint on the
-    server. Wanted or not?
-  - Start/stop and ssh into a workspace are not HomeStack commands today.
-    Should the TUI get them? (Not in these mockups.)
+  - Command: plain `homestack` opens the TUI.
+  - Minimum size: 80 x 24.
+  - Node CPU and RAM (11, marked *): decided after the TUI is built.
+  - Start/stop and ssh into a workspace: yes. └sTart┘ / └sTop┘ (t) follows
+    the state of the selected row; └Ssh┘ is s, so resize is └resiZe┘ (z).
+    Start/stop needs new server operations (hs-core already has the Proxmox
+    calls). How ssh runs (TUI suspended, a terminal in a panel, or a new
+    window or Herdr pane) is decided after the TUI is built.
