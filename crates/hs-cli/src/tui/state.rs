@@ -353,6 +353,15 @@ impl App {
                 self.shown = PRESETS[self.preset].1;
                 self.save_preset();
             }
+            // The standard view: every panel, every node, no filter.
+            KeyCode::Char('0') => {
+                self.preset = 0;
+                self.shown = PRESETS[0].1;
+                self.node = None;
+                self.filter.clear();
+                self.keep_selection();
+                self.save_preset();
+            }
             KeyCode::Char('f') => self.filtering = true,
             KeyCode::Right | KeyCode::Left => {
                 let count = self.nodes().len();

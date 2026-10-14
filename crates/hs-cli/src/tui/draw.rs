@@ -891,8 +891,9 @@ fn list_item(palette: &Palette, label: &str, chosen: bool) -> (String, Style) {
     }
 }
 
-const HELP: [&str; 14] = [
+const HELP: [&str; 15] = [
     "1 2 3 4     show or hide workspaces, cluster, storage, log",
+    "0           the standard view: every panel and node, no filter",
     "p           next preset (auto, 1, 2)",
     "m  esc      menu (esc first clears the filter)",
     "↑ ↓         select a workspace; PgUp PgDn Home End",

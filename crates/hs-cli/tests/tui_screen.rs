@@ -395,3 +395,29 @@ fn plain_homestack_opens_the_tui_only_on_a_terminal() {
     assert!(!wants_tui(&["--help".to_owned()], true, true));
     assert!(!wants_tui(&["status".to_owned()], true, true));
 }
+
+#[test]
+fn zero_brings_back_the_standard_view() {
+    let mut fixture = app();
+    press(&mut fixture.app, KeyCode::Char('p'));
+    press(&mut fixture.app, KeyCode::Char('2'));
+    press(&mut fixture.app, KeyCode::Right);
+    press(&mut fixture.app, KeyCode::Char('f'));
+    press(&mut fixture.app, KeyCode::Char('x'));
+    press(&mut fixture.app, KeyCode::Enter);
+    press(&mut fixture.app, KeyCode::Char('0'));
+    let text = screen(&render(&fixture.app, 120, 36));
+    for part in [
+        "┐²cluster┌",
+        "┐³storage┌",
+        "┐⁴log┌",
+        "┐preset auto┌",
+        "‹ node: all ›",
+        "┐filter┌",
+        "dev-main",
+    ] {
+        assert!(text.contains(part), "{part}: {text}");
+    }
+    let saved = std::fs::read_to_string(fixture._dir.path().join("tui.toml")).unwrap();
+    assert!(saved.contains("preset = 0"), "{saved}");
+}

@@ -77,6 +77,7 @@ B. Main screen (09–17)
    The digits 1–4 show and hide panels. They are not tabs: you can have all
    four, or only the list (16). When the cluster panel is hidden, ┌Menu┐ and
    the preset move to the first panel that is shown.
+   0 brings back the standard view: every panel, every node, no filter.
 
    Presets (P, or ┌‹ Preset ›┐) are saved sets of panels, chosen in
    Menu › Options. "auto" shows what fits the window.
