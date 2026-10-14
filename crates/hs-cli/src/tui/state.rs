@@ -611,7 +611,7 @@ impl App {
             KeyCode::PageUp => return self.move_by(-10),
             KeyCode::Home => return self.select_at(0),
             KeyCode::End => return self.select_at(self.rows().len().saturating_sub(1)),
-            KeyCode::Enter if self.selected.is_some() => self.info = !self.info,
+            KeyCode::Enter | KeyCode::Char('i') if self.selected.is_some() => self.info = !self.info,
             _ => {}
         }
         None

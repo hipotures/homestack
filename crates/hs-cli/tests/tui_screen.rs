@@ -451,3 +451,14 @@ fn the_buttons_in_the_borders_and_the_menu_s_items_are_clicked() {
     click(&mut fixture.app, x + 1, y);
     assert!(!fixture.app.shown.storage, "the storage panel is hidden");
 }
+
+#[test]
+fn i_shows_and_hides_the_details_of_the_selected_workspace() {
+    let mut fixture = app();
+    press(&mut fixture.app, KeyCode::Down);
+    assert!(!fixture.app.info);
+    press(&mut fixture.app, KeyCode::Char('i'));
+    assert!(fixture.app.info);
+    press(&mut fixture.app, KeyCode::Char('i'));
+    assert!(!fixture.app.info);
+}
