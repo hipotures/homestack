@@ -1,21 +1,23 @@
 17  client.toml exists but no server answers (80 x 24)
-    The board opens anyway; the list area says what is wrong and what to do.
-    It retries by itself every 10 s; r retries at once.
+    The screen opens anyway. The cluster panel shows ✗; the workspaces panel
+    says what is wrong, and its bottom border has what can be done.
+    It retries by itself every 10 s.
 
-╭─ HomeStack ─ [¹Workspaces] ─ ²Cluster ─ ³Storage ─ ⁴Keys ─ ⁵Log ───── ᵐmenu ─╮
-│ nodes ? ? ?   servers ✗✗✗ 0/3   gold ?   retry in 7 s                        │
-├─ No server answers ──────────────────────────────────────────────────────────┤
+╭┌Menu┐─²cluster ───────────── 10:47:03 ────────────────────┌‹ Preset: auto ›┐─╮
+│ ? pve1  ? pve2  ? pve3    servers ✗ ✗ ✗    gold ?    retry in 7 s            │
+╰──────────────────────────────────────────────────────────────── 0/3 servers ─╯
+╭─¹workspaces ─────────────────────────────────────────────────────────────────╮
 │                                                                              │
-│  api1.hs.example.net   ✗ connection refused   (10.0.0.115:8443)              │
-│  api2.hs.example.net   ✗ timed out after 5 s  (10.0.0.116:8443)              │
-│  api3.hs.example.net   ✗ name does not resolve on this desktop               │
+│  No server answers.                                                          │
+│                                                                              │
+│  ✗ api1.hs.example.net   connection refused   10.0.0.115:8443                │
+│  ✗ api2.hs.example.net   timed out after 5 s  10.0.0.116:8443                │
+│  ✗ api3.hs.example.net   does not resolve on this desktop                    │
 │                                                                              │
 │  The servers run in containers 115, 116 and 117. Check that they             │
 │  are running in Proxmox and that this desktop reaches 10.0.0.0/24.           │
 │                                                                              │
-│     [ Retry now ]   [ Check the servers ]   [ Reinstall… ]   [ Quit ]        │
-│                                                                              │
-│  Config: ~/.config/homestack/client.toml                                     │
+│  config  ~/.config/homestack/client.toml                                     │
 │                                                                              │
 │                                                                              │
 │                                                                              │
@@ -24,5 +26,4 @@
 │                                                                              │
 │                                                                              │
 │                                                                              │
-│                                                                              │
-╰─ r retry ─ enter choose ─ q quit ────────────────────────────────────────────╯
+╰└Retry ↵┘└Check servers┘└Reinstall…┘└Quit┘────────────────────────────────────╯

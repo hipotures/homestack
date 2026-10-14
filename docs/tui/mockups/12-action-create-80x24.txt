@@ -1,31 +1,31 @@
-12  An action opens in the side panel, not in a new screen (80 x 24): n = new workspace
-    The list narrows to make room; the strip, tabs and list stay.
-    Every action has the same three stages shown in its title:
-      1 form  →  2 plan (exactly what will change; the CLI's question)  →  3 run.
-    Esc closes the panel before Apply; after Apply the run goes on and the
-    panel can be hidden (Esc) and shown again from ⁵Log.
+12  An action opens as a box inside the workspaces panel (80 x 24): N = new
+    At this width it splits the panel like info does: the action on top, the
+    list below with its scrollbar. Every action has the same stages in its
+    top border, the current one raised: ┌form┐ › plan › run.
+    Its buttons are in its own bottom border. Nothing changes before Apply
+    (in the plan stage). Esc closes the box.
 
-╭─ HomeStack ─ [¹Workspaces] ─ ²Cluster ─ ³Storage ─ ⁴Keys ─ ⁵Log ───── ᵐmenu ─╮
-│ nodes ●●● 3/3   servers ●●● 3/3   gold 112 ○ stopped   storage 71% free      │
-├─ Workspaces 5 ─────────┬─ New workspace ─ [1 form] › 2 plan › 3 run ─────────┤
-│ 201 dev-main      ●    │                                                     │
-│ 202 rust-builder  ●    │  VMID        [ 206        ]  next free              │
-│ 203 web-lab       ○    │  Name        [ ml-lab▏      ]                       │
-│ 204 data-play     ●    │  Node        ‹ pve3 ›        Gold is on pve1        │
-│ 205 scratch       ○    │  Storage     ‹ local-lvm ›   2.9T free on pve3      │
-│                        │  Home size   [ 64G        ]  persistent, ext4       │
-│                        │                                                     │
-│                        │  Root is a full clone of Gold 112 hs-gold.          │
-│                        │  Home stays when the root is refreshed.             │
-│                        │                                                     │
-│                        │                                                     │
-│                        │                                                     │
-│                        │                                                     │
-│                        │                                                     │
-│                        │                                                     │
-│                        │                                                     │
-│                        │                                                     │
-│                        │                                                     │
-│                        │                                                     │
-│                        │            [ Plan ]   [ Cancel ]                    │
-╰─ ↑↓ field ─────────────┴─ ←→ choose ─ enter plan ─ esc cancel ───────────────╯
+╭┌Menu┐─²cluster ───────────── 10:47:03 ────────────────────┌‹ Preset: auto ›┐─╮
+│ ● pve1  ● pve2  ● pve3    servers ● ● ●    gold 112 ○    storage 71% free    │
+╰────────────────────────────────────────────────────────────────── 3/3 nodes ─╯
+╭─¹workspaces┌Filter┐─────────────────────────────────────┌‹ node: all ›┐┌New┐─╮
+│╭─ new workspace ─┌form┐─ plan ─ run ────────────────────────────────────────╮│
+││                                                                            ││
+││  VMID        [ 213        ]   next free                                    ││
+││  Name        [ lab-new▏     ]                                              ││
+││  Node        ‹ pve3 ›         Gold is on pve1                              ││
+││  Storage     ‹ local-lvm ›    2.9T free on pve3                            ││
+││  Home size   [ 64G        ]   persistent, ext4                             ││
+││                                                                            ││
+││                                                                            ││
+││  Root is a full clone of Gold 112; home stays when root is refreshed.      ││
+│╰└next ⇥┘└Plan ↵┘└cancel esc┘────────────────────────────────────────────────╯│
+│ VMID NAME            NODE  STATE      ADDRESS     HOME   FREE                │
+│ 201  dev-main        pve2  ● running  10.0.0.21    64G    41%                ↑
+│ 202  rust-builder    pve3  ● running  10.0.0.22   128G    77%                █
+│ 203  web-lab         pve1  ○ stopped  —            32G    —                  █
+│ 204  data-play       pve2  ● running  10.0.0.24    64G    12%                █
+│ 205  scratch         pve1  ○ stopped  —            16G    —                  │
+│ 206  ml-lab          pve3  ● running  10.0.0.26   256G    63%                │
+│ 207  docs-site       pve1  ● running  10.0.0.27    16G    88%                ↓
+╰└select ↑↓┘└info ↵┘└Refresh┘└reSize┘└addKey┘└miGrate┘└Destroy┘───────── 0/12 ─╯

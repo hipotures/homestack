@@ -1,0 +1,42 @@
+16  Panels on and off (120 x 36): after 2, 3 and 4 only ¹workspaces is left
+    The digits hide and show panels, as in btop (they are not tabs). P cycles
+    the presets (saved sets of panels, chosen in Menu › Options); "auto" shows
+    what fits the window. With the cluster panel hidden, ┌Menu┐ and the preset
+    move into the first panel's top border. The list gets every column.
+
+╭┌Menu┐─¹workspaces┌Filter┐ ──────────────────────────────────────────────────────┌‹ node: all ›┐┌New┐─┌‹ Preset: 1 ›┐─╮
+│ VMID NAME          NODE STATE     ADDRESS    ROOT  HOME  FREE  AGENT          ╭─ 201 dev-main ──────────────────────╮│
+│▶201  dev-main      pve2 ● running 10.0.0.21   32G   64G   41%    ✓            │ ● running on pve2                   ││
+│ 202  rust-builder  pve3 ● running 10.0.0.22   32G  128G   77%    ✓            │ address  10.0.0.21                  ││
+│ 203  web-lab       pve1 ○ stopped —           32G   32G     —    —            │ agent    ✓ answers                  ││
+│ 204  data-play     pve2 ● running 10.0.0.24   32G   64G   12%    ✓            │ root     32 GiB  local-lvm          ││
+│ 205  scratch       pve1 ○ stopped —           32G   16G     —    —            │ home     64 GiB  local-lvm          ││
+│ 206  ml-lab        pve3 ● running 10.0.0.26   32G  256G   63%    ✓            │          █████████████░░░░░░░ 59%   ││
+│ 207  docs-site     pve1 ● running 10.0.0.27   32G   16G   88%    ✓            │ ssh      ssh dev-main               ││
+│ 208  api-proto     pve2 ○ stopped —           32G   32G     —    —            │ home is kept on refresh             ││
+│ 209  db-test       pve3 ● running 10.0.0.29   32G   64G   35%    ✓            ╰─────────────────────────────────────╯│
+│ 210  ci-runner     pve1 ● running 10.0.0.30   32G   32G   54%    ✓                                                   │
+│ 211  game-dev      pve2 ○ stopped —           32G  128G     —    —                                                   │
+│ 212  notes         pve3 ● running 10.0.0.32   32G    8G   90%    ✓                                                   │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+╰└select ↑↓┘└info ↵┘└Refresh┘└reSize┘└addKey┘└miGrate┘└Destroy┘───────────────────────────────────────────────── 1/12 ─╯

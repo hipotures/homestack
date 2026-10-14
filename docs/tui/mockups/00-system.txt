@@ -1,147 +1,155 @@
-HomeStack TUI: the design the mockups show
-==========================================
+HomeStack TUI: the design the mockups show (version 2, btop grammar)
+=====================================================================
 
 Draft for review. Nothing here is built yet. All names and addresses are
-examples (the repository is public).
+examples (the repository is public). Version 1 is in git history (c45db43).
 
 
 1. One program for everything
 -----------------------------
 
 `homestack tui` (name to be decided) opens one full-screen program for the
-install, the everyday work and the uninstall. The CLI commands stay as they are.
+install, the everyday work and the uninstall. The CLI commands stay.
 
 Nothing leaves the TUI. Choosing an SSH key, "touch your security key", a PIN,
-an unknown host key, progress and errors are all shown inside it. When ssh or
-the key needs an answer, a small modal asks for it (03).
+an unknown host key, progress and errors are all shown inside it (03).
 
-It uses ratatui, as the current installer form does: text only, works over SSH,
-rounded boxes, titles and key hints written into the box borders (btop style).
-
-
-2. Two boards
--------------
-
-A. Install board (02–08, and 18 for the uninstall)
-   It opens by itself when there is no client.toml. Later it opens only from
-   Menu › Reconfigure or Menu › Uninstall.
-   Steps:
-     1 Access    how to reach root on one node: SSH or a Herdr pane
-     2 Check     what is on the cluster (read-only)
-     3 Settings  the form: disks, Cloud-Init, server disks, image, Gold, domain
-     4 Review    every change, grouped; Install is the only button that acts
-     5 Install   live progress, then "Open HomeStack"
-   The step bar is on top. At 120 columns and wider there is also a step
-   column on the left. After "Open HomeStack" the install board is gone.
-
-B. Main board (09–17)
-   It opens at every start once client.toml exists. It is always the same
-   board: a fixed frame with variable parts.
-
-   Fixed parts (they never move):
-     - title line: tabs ¹Workspaces ²Cluster ³Storage ⁴Keys ⁵Log, the domain,
-       ᵐmenu;
-     - status strip: nodes, servers, Gold, time; red ✗ when something is down;
-     - bottom border: the keys that work right now.
-
-   Variable parts:
-     - the list: what the active tab shows (workspaces, nodes, storages,
-       keys, log);
-     - the side panel: details of the selected row, or the running action;
-     - the bottom area and the sidebar: only when the window is large enough
-       (see 4).
+It uses ratatui, as the current installer form does. It is text only and works
+over SSH.
 
 
-3. Actions happen in the side panel, never on a new screen
-----------------------------------------------------------
+2. The border is the interface (as in btop)
+-------------------------------------------
 
-New, refresh, resize, add key, migrate and destroy all open in the side panel
-(12–14). The list, the strip and the tabs stay visible. Every action has the
-same three stages, shown in the panel title:
+Every panel is a rounded box. Its controls sit in its border, not on extra
+rows, so the inside holds only data. Each place in the border has one job, the
+same in every panel:
 
-    1 form  ›  2 plan  ›  3 run
+  top left       name of the panel and its digit (¹workspaces), and the
+                 filter: ┌Filter┐
+  top right      how the panel shows its data: carousels ┌‹ node: all ›┐
+                 (changed with ←→), toggles, and ┌New┐
+  bottom left    actions on the selected row: └Refresh┘└reSize┘…
+                 They are grey while nothing is selected.
+  bottom right   the counter: selected / total (1/12), or the step (3/5)
+  right edge     the scrollbar when the content is longer than the panel:
+                 ↑ under the top corner, █ thumb, ↓ above the bottom corner
 
-  - The plan shows exactly what will change, in the words of the CLI's question.
-  - Nothing changes before Apply. Esc closes the panel without changes.
-  - For destroy the focus starts on Cancel.
-  - Once running, Esc only hides the panel; the work goes on. ⁵Log and the
-    Activity box show it, and the row in the list is marked ◐.
+The key of a control is its highlighted letter.
+  - In the TUI that letter has the accent colour.
+  - In these TXT files it is the upper-case letter: └reSize┘ is s,
+    └miGrate┘ is g, ┌Filter┐ is f.
+  - A symbol in the label is its key: └info ↵┘ is Enter, └tick ␣┘ is Space,
+    └next ⇥┘ is Tab, ‹ › is ←→.
+  - Mouse clicks on a control do the same as its key.
 
-Modals are used only for things that stop everything: the security key, PIN
-or host key (03), the Menu (15), Help, and the quit question.
+┌Filter┐ opens in place: the border becomes the input ┌filter: lab▏───┐.
+Enter keeps the filter; Esc clears it. There is no pop-up.
 
-
-4. Window size: elements appear and disappear as a whole
---------------------------------------------------------
-
-  < 80 x 24        Only the "terminal too small" notice (01).
-
-  S  80–119 cols   List + side panel. The strip uses one short line. The list
-     24–35 rows    has no address or disk columns. When an action opens, the
-                   list narrows to VMID, name and state. Cluster, storage and
-                   log are reached through the tabs (09, 12, 17).
-
-  M  120–159 cols  The list adds address, home and free columns. The strip
-     36–44 rows    names each node and server. A bottom area appears with three
-                   boxes: Cluster, Storage and Activity (10, 13–15).
-
-  L  160+ cols     A left sidebar appears with nodes, servers, Gold, storage
-     45+ rows      bars and the certificate, always visible. The list adds Root
-                   and Agent columns. Activity runs under the list and the side
-                   panel (11).
-
-Width and height count separately:
-  - wide but short: the sidebar shows, the bottom area does not;
-  - tall but narrow: the bottom area shows, the sidebar does not.
-
-Nothing wraps. Text that does not fit is cut with "…". Columns drop from the
-right, least important first. Each box keeps a fixed width or share; the
-board never shrinks to a small square in the middle of the window.
+A box inside a panel (a sub-box) holds what belongs to that panel:
+  - the details of the selected workspace (10);
+  - an action (12–14);
+  - "each node gets" next to the storage chooser (06).
+A sub-box has a fixed width; the list takes the rest. On a narrow window it
+splits the panel top and bottom instead (09b, 12).
 
 
-5. Keys
--------
+3. Two screens
+--------------
 
-  1–5           tabs                     m, Esc   menu (Esc first closes a panel)
-  ↑↓ PgUp PgDn  move / scroll            Enter    open / choose
-  Tab           next field or column     Space    tick in a list
-  /             filter the list          ?        help: every key of this view
-  q             quit (asks while work runs)
-  On a workspace:
-    n new     r refresh     e resize     k add key     v migrate     x destroy
-  Mouse: click selects; wheel scrolls.
+A. Install screen (02–08; 18 is the uninstall)
+   It opens by itself when there is no client.toml. Later it opens only
+   from Menu › Reconfigure or Menu › Uninstall.
+   The steps are in the top border, the current one raised:
+       ✓access ─ ✓check ─┌settings┐─ review ─ install
+   The buttons of the step are in the bottom border.
+   After └Open HomeStack ↵┘ the install screen is gone.
+
+B. Main screen (09–17)
+   It opens at every start once client.toml exists. Its panels:
+     ²cluster      nodes, servers, Gold, certificate, clock; ┌Menu┐ and the
+                   preset in its top border
+     ¹workspaces   the list, the details sub-box, the actions
+     ³storage      the workspace disks of each node, with bars
+     ⁴log          what HomeStack did and is doing
+   The digits 1–4 show and hide panels. They are not tabs: you can have all
+   four, or only the list (16). When the cluster panel is hidden, ┌Menu┐ and
+   the preset move to the first panel that is shown.
+
+   Presets (P, or ┌‹ Preset ›┐) are saved sets of panels, chosen in
+   Menu › Options. "auto" shows what fits the window.
+
+
+4. Actions happen in a sub-box, never on a new screen
+-----------------------------------------------------
+
+New, refresh, resize, add key, migrate and destroy open as a sub-box of the
+workspaces panel. The other panels stay. The stages of an action are in the
+top border of its sub-box, the current one raised:
+
+    ┌form┐ ─ plan ─ run
+
+  - The plan says exactly what will change, in the words of the CLI's question.
+  - Nothing changes before Apply. Esc closes the sub-box.
+  - For destroy the focus starts on cancel.
+  - Once the work runs, Esc only hides the sub-box; the work goes on. ⁴log
+    shows it, and the row in the list is marked ◐.
+
+The only boxes over the screen are for things that stop everything:
+  - the security key, PIN or host key (03);
+  - the Menu (15), with Help and Options in it;
+  - the quit question.
+
+
+5. Window size: panels appear and disappear as a whole
+------------------------------------------------------
+
+  < 80 x 24         Only the "terminal too small" notice (01).
+
+  80–119 x 24–35    ²cluster on two lines, plus ¹workspaces.
+                    The details and actions split the list top and bottom.
+                    ³storage and ⁴log are hidden; turning off ²cluster (2)
+                    gives room to one of them (09, 12, 17).
+
+  120–159 x 36–44   All four panels. Details are a sub-box next to the list.
+                    ⁴log shows under the install screen too (10, 13, 14).
+
+  160+ x 45+        The same panels, with more in each: CPU*/RAM* per node,
+                    Root/Home/Free columns, a storage table, a taller log (11).
+
+  - Width and height count separately. A panel shows when the user has it on
+    AND it fits, in this order: workspaces, cluster, storage, log.
+  - Nothing wraps. Text that does not fit is cut with "…".
+  - Columns drop from the right, least important first.
+  - The screen never shrinks to a small square in the middle of the window.
 
 
 6. Colours (TXT cannot show them)
 ---------------------------------
 
-Inside the TUI:
-  - borders are grey; box titles are bold;
-  - the hotkey digits and letters in titles have the accent colour;
-  - the active tab is bright and underlined;
-  - the selected row is inverse;
-  - ● running / online / ✓ are green, ○ stopped is grey, ! is yellow,
-    ✗ is red, ◐ (running work) is cyan;
-  - bars go green → yellow → red as the disk fills.
-
-In these TXT files:
-  [x]  is the active tab, step or button;
-  ▶    is the selected row;
-  *    marks data the server does not send today.
+  - Borders are grey; panel names are bold; the key letters are the accent
+    colour.
+  - Raised items (┌settings┐, ┌form┐) are bright; grey controls are dim.
+  - The selected row (▶ in TXT) is inverse.
+  - ● running / online and ✓ are green; ○ stopped is grey; ! is yellow;
+    ✗ is red; ◐ (running work) is cyan.
+  - Bars go green → yellow → red as the disk fills.
+  - What is behind the Menu or the security-key box is dimmed.
+  - * marks data the server does not send today.
 
 
 7. Files
 --------
 
-  01  too small                         02  install: access (80x24)
-  03  install: touch the key (120x36)   04  install: check
-  05  install: settings (80x24)         06  install: settings (120x36)
-  07  install: review                   08  install: running, then done
-  09  main board 80x24                  10  main board 120x36
-  11  main board 160x45                 12  action form: new workspace (80x24)
-  13  action plan: destroy              14  action running: refresh
-  15  menu                              16  tab Cluster
-  17  servers not answering             18  uninstall: review
+  01  too small                          02  install: access (80x24)
+  03  install: touch the key (120x36)    04  install: check
+  05  install: settings (80x24)          06  install: settings (120x36)
+  07  install: review, with scrollbar    08  install: running, then done
+  09  main screen 80x24 (+ info open)    10  main screen 120x36
+  11  main screen 160x45                 12  action form: new (80x24)
+  13  action plan: destroy               14  action running: refresh
+  15  menu                               16  only the workspaces panel
+  17  servers not answering              18  uninstall: review
 
 
 8. Open questions for the owner
@@ -150,6 +158,7 @@ In these TXT files:
   - Command name: `homestack tui`, or plain `homestack` with no command in a
     terminal? (Today plain `homestack` prints the help.)
   - Minimum size: 80 x 24 as btop, or 80 x 20?
-  - Node CPU and RAM bars (11, marked *): they need a new read-only endpoint
-    on the server. Wanted or not?
-  - ⁴Keys tab: now, or with phase 14 (setup, repo deploy keys)?
+  - Node CPU and RAM (11, marked *) need a new read-only endpoint on the
+    server. Wanted or not?
+  - Start/stop and ssh into a workspace are not HomeStack commands today.
+    Should the TUI get them? (Not in these mockups.)

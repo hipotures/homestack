@@ -1,41 +1,42 @@
-10  Main board at 120 x 36
-    The list gains Address, Home and Free columns; the strip names every node
-    and server. A bottom area appears: Cluster, Storage and Activity. On the
-    tabs ²Cluster ³Storage ⁵Log the same data is shown full size.
+10  Main screen at 120 x 36 (preset auto)
+    All four panels fit: ²cluster on top, ¹workspaces, ³storage and ⁴log.
+    The details of the selected workspace are a small box inside the
+    workspaces panel (like the address box inside btop's net panel): fixed
+    width on the right, the list takes the rest.
 
-╭─ HomeStack ─ [¹Workspaces] ─ ²Cluster ─ ³Storage ─ ⁴Keys ─ ⁵Log ──────────────────────────── hs.example.net ─ ᵐmenu ─╮
-│ nodes ● pve1 ● pve2 ● pve3    servers ● api1 ● api2 ● api3    gold 112 hs-gold ○ stopped    v0.1.0   10:47:03        │
-├─ Workspaces 5 ─ 3 running ─ /filter ─────────────────────────────┬─ 201 dev-main ────────────────────────────────────┤
-│ VMID  NAME            NODE  STATE      ADDRESS     HOME    FREE  │ State      ● running on pve2                      │
-│▶201   dev-main        pve2  ● running  10.0.0.21   64 GiB   41%  │ Address    10.0.0.21                              │
-│ 202   rust-builder    pve3  ● running  10.0.0.22  128 GiB   77%  │ Agent      ✓ answers                              │
-│ 203   web-lab         pve1  ○ stopped  —           32 GiB   —    │ Root disk  32 GiB on local-lvm                    │
-│ 204   data-play       pve2  ● running  10.0.0.24   64 GiB   12%  │ Home disk  64 GiB on local-lvm, kept on refresh   │
-│ 205   scratch         pve1  ○ stopped  —           16 GiB   —    │            ████████████████░░░░░░░░░░ 59% used    │
-│                                                                  │ SSH        ssh dev-main                           │
-│                                                                  │                                                   │
-│                                                                  ├─ Actions ─────────────────────────────────────────┤
-│                                                                  │ r  refresh root from Gold   e  resize disks       │
-│                                                                  │ k  add an SSH key           v  migrate            │
-│                                                                  │ x  destroy (asks first)                           │
-│                                                                  │                                                   │
-│                                                                  │                                                   │
-│                                                                  │                                                   │
-│                                                                  │                                                   │
-│                                                                  │                                                   │
-│                                                                  │                                                   │
-│                                                                  │                                                   │
-├─ Cluster ─────────────────────────────┬─ Storage ────────────────┴────────────┬─ Activity ───────────────────────────┤
-│ NODE  STATE     SERVER  CT   HEALTH   │ NODE  STORAGE    USED            FREE │ 10:41:58  refresh 203 web-lab: done  │
-│ pve1  ● online  api1    115  ✓ ok     │ pve1  local-zfs  ███░░░░░░░ 18%  1.7T │ 10:38:12  addkey 201: 1 key added    │
-│ pve2  ● online  api2    116  ✓ ok     │ pve2  local-lvm  ███░░░░░░░ 31%  1.2T │ 10:30:02  connected to api2          │
-│ pve3  ● online  api3    117  ✓ ok     │ pve3  local-lvm  ██░░░░░░░░ 18%  2.9T │ 10:29:58  status refreshed           │
-│                                       │                                       │                                      │
-│ Gold  112 hs-gold on pve1, stopped    │                                       │                                      │
-│ cert  *.hs.example.net, 89 days       │                                       │                                      │
-│                                       │                                       │                                      │
-│                                       │                                       │                                      │
-│                                       │                                       │                                      │
-│                                       │                                       │                                      │
-│                                       │                                       │                                      │
-╰─ ↑↓ select ─ enter open ─ n new ──────┴─ ? help ──────────────────────────────┴─ q quit ─────────────────────────────╯
+╭┌Menu┐─²cluster ─────────────────────── 10:47:03 ────────────────── hs.example.net ────────────────┌‹ Preset: auto ›┐─╮
+│ NODE  STATE     SERVER                    CT   WORKSPACES                  ╭─ gold & certificate ───────────────────╮│
+│ pve1  ● online  ● api1.hs.example.net     115  4, 2 running                │ gold  112 hs-gold  pve1  ○ stopped     ││
+│ pve2  ● online  ● api2.hs.example.net     116  4, 2 running                │ cert  *.hs.example.net, 89 days left   ││
+│ pve3  ● online  ● api3.hs.example.net     117  4, 4 running                ╰────────────────────────────────────────╯│
+╰──────────────────────────────────────────────────────────────────────────────────────────── 3/3 nodes ─ 3/3 servers ─╯
+╭─¹workspaces┌Filter┐─────────────────────────────────────────┌‹ node: all ›┐┌New┐─╮╭─³storage ────────────────────────╮
+│ VMID NAME          NODE STATE     ADDRESS   ╭─ 201 dev-main ────────────────────╮││ pve1  local-zfs         1.7T free│
+│▶201  dev-main      pve2 ● running 10.0.0.21 │ ● running on pve2                 │││ ████░░░░░░░░░░░░░░░░░░░░░░ 18%   │
+│ 202  rust-builder  pve3 ● running 10.0.0.22 │ address  10.0.0.21                │││ pve2  local-lvm         1.2T free│
+│ 203  web-lab       pve1 ○ stopped —         │ agent    ✓ answers                │││ ████████░░░░░░░░░░░░░░░░░░ 31%   │
+│ 204  data-play     pve2 ● running 10.0.0.24 │ root     32 GiB  local-lvm        │││ pve3  local-lvm         2.9T free│
+│ 205  scratch       pve1 ○ stopped —         │ home     64 GiB  local-lvm        │││ █████░░░░░░░░░░░░░░░░░░░░░ 18%   │
+│ 206  ml-lab        pve3 ● running 10.0.0.26 │          ███████████░░░░░░░ 59%   │││                                  │
+│ 207  docs-site     pve1 ● running 10.0.0.27 │ ssh      ssh dev-main             │││ snippets  local, all nodes       │
+│ 208  api-proto     pve2 ○ stopped —         │ home is kept on refresh           │││ servers   local-lvm, local-zfs   │
+│ 209  db-test       pve3 ● running 10.0.0.29 ╰───────────────────────────────────╯││                                  │
+│ 210  ci-runner     pve1 ● running 10.0.0.30                                      │╰──────────────────────── 3 nodes ─╯
+│ 211  game-dev      pve2 ○ stopped —                                              │╭─⁴log ────────────────────────────╮
+│ 212  notes         pve3 ● running 10.0.0.32                                      ││ 10:47:01  status refreshed       │
+│                                                                                  ││ 10:41:58  refresh 203: done      │
+│                                                                                  ││ 10:38:12  addkey 201: 1 key      │
+│                                                                                  ││ 10:30:02  connected to api2      │
+│                                                                                  ││                                  │
+│                                                                                  ││                                  │
+│                                                                                  ││                                  │
+│                                                                                  ││                                  │
+│                                                                                  ││                                  │
+│                                                                                  ││                                  │
+│                                                                                  ││                                  │
+│                                                                                  ││                                  │
+│                                                                                  ││                                  │
+│                                                                                  ││                                  │
+│                                                                                  ││                                  │
+│                                                                                  ││                                  │
+╰└select ↑↓┘└info ↵┘└Refresh┘└reSize┘└addKey┘└miGrate┘└Destroy┘───────────── 1/12 ─╯╰──────────────────────── 4 lines ─╯

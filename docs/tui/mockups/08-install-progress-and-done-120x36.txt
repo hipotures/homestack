@@ -1,80 +1,80 @@
-08  Step 5: the install runs, then it is done (120 x 36)
-    First frame: running. Each group shows ✓ done, ◐ running (animated), · waiting.
-    The log at the bottom streams the details. Esc asks before it stops.
-    Second frame: done. Enter opens the main board; the install board is gone
+08  Install: running, then done (120 x 36)
+    Running: ✓ done, ◐ running (animated), · waiting; the overall bar sits in a
+    small box inside the panel. Esc asks before it stops.
+    Done (second frame): ↵ opens the main screen; the install screen is gone
     and comes back only through Menu › Reconfigure or Menu › Uninstall.
 
-╭─ HomeStack install ────────────────────────────────────────────────────────── ssh root@pve2.lan · PVE 9.2 · 3 nodes ─╮
-│ ✓ 1 Access › ✓ 2 Check › ✓ 3 Settings › ✓ 4 Review › [5 Install]                                                     │
-├─ Steps ─────────────┬─ Installing ───────────────────────────────────────────────────────────────────────────────────┤
-│                     │                                                                                                │
-│ ✓ 1 Access          │  ✓ Account       user homestack@pve, token server                                              │
-│ ✓ 2 Check           │  ✓ Roles         9 of 9                                                                        │
-│ ✓ 3 Settings        │  ✓ Pools         homestack, homestack-service                                                  │
-│ ✓ 4 Review          │  ✓ Gold          VM 112 in pool homestack-gold                                                 │
-│ ▶ 5 Install         │  ✓ Permissions   12 of 12                                                                      │
-│                     │  ✓ Certificate   *.hs.example.net, valid 89 days                                               │
-│                     │  ◐ Servers       api1 ✓ running   api2 ◐ starting the container   api3 · waiting               │
-│                     │  · Client        client.toml                                                                   │
-│                     │  · Check         status of the cluster                                                         │
-│                     │                                                                                                │
-│                     │  ███████████████████████████████████████████░░░░░░░░░░░░░░░░░░  7 of 9                         │
-│                     │                                                                                                │
-│                     │                                                                                                │
-│                     │                                                                                                │
-│                     │                                                                                                │
-│                     │                                                                                                │
-│                     │                                                                                                │
-│                     │                                                                                                │
-│                     │                                                                                                │
-│                     │                                                                                                │
-│                     │                                                                                                │
-│                     │                                                                                                │
-│                     │                                                                                                │
-│                     │                                                                                                │
-├─ Log ───────────────┴────────────────────────────────────────────────────────────────────────────────────────────────┤
+╭─ HomeStack install ─ ✓access ─ ✓check ─ ✓settings ─ ✓review ─┌install┐ ──────────────── ssh root@pve2.lan · PVE 9.2 ─╮
+│                                                                                                                      │
+│  ✓ Account       user homestack@pve, token server                   ╭─ progress ───────────────────────────────────╮ │
+│  ✓ Roles         9 of 9                                             │ ███████████████████████░░░░░░░               │ │
+│  ✓ Pools         homestack, homestack-service                       │ 7 of 9 groups      1 min 02 s                │ │
+│  ✓ Gold          VM 112 in pool homestack-gold                      ╰──────────────────────────────────────────────╯ │
+│  ✓ Permissions   12 of 12                                                                                            │
+│  ✓ Certificate   *.hs.example.net, valid 89 days                                                                     │
+│  ◐ Servers       api1 ✓ running    api2 ◐ starting the container    api3 · waiting                                   │
+│  · Client        client.toml                                                                                         │
+│  · Check         status of the cluster                                                                               │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+╰└stop esc┘────────────────────────────────────────────────────────────────────────────────────────────────────── 5/5 ─╯
+╭─⁴log ────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ 10:42:51  api1: container 115 running on pve1, health /v1/version ok                                                 │
 │ 10:42:52  api2: creating container 116 on pve2 (local-lvm, 8 GiB)                                                    │
 │ 10:42:58  api2: starting the container                                                                               │
 │ 10:43:01  api2: waiting for the server to answer (3 s)                                                               │
-│                                                                                                                      │
-│                                                                                                                      │
-╰─ esc stop (asks first) ─ PgUp/PgDn log ─ q quit (asks first) ────────────────────────────────────────────────────────╯
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────── 4 lines ─╯
 
 
-╭─ HomeStack install ────────────────────────────────────────────────────────── ssh root@pve2.lan · PVE 9.2 · 3 nodes ─╮
-│ ✓ 1 Access › ✓ 2 Check › ✓ 3 Settings › ✓ 4 Review › ✓ 5 Install                                                     │
-├─ Steps ─────────────┬─ HomeStack is installed ───────────────────────────────────────────────────────────────────────┤
-│                     │                                                                                                │
-│ ✓ 1 Access          │  ✓ Proxmox     user, token, 9 roles, 2 pools, 12 permissions, Gold 112                         │
-│ ✓ 2 Check           │  ✓ Servers     api1 ● pve1    api2 ● pve2    api3 ● pve3     certificate 89 days               │
-│ ✓ 3 Settings        │  ✓ Client      ~/.config/homestack/client.toml                                                 │
-│ ✓ 4 Review          │  ✓ Check       the client reaches all 3 servers                                                │
-│ ✓ 5 Install         │                                                                                                │
-│                     │  Root on pve2 is no longer needed; the ssh session is closed.                                  │
-│                     │  Kept aside:   ~/.config/homestack/server.toml.replaced-1760430171                             │
-│                     │                                                                                                │
-│                     │                                                                                                │
-│                     │                    [ Open HomeStack ]   [ Quit ]                                               │
-│                     │                                                                                                │
-│                     │                                                                                                │
-│                     │                                                                                                │
-│                     │                                                                                                │
-│                     │                                                                                                │
-│                     │                                                                                                │
-│                     │                                                                                                │
-│                     │                                                                                                │
-│                     │                                                                                                │
-│                     │                                                                                                │
-│                     │                                                                                                │
-│                     │                                                                                                │
-│                     │                                                                                                │
-│                     │                                                                                                │
-├─ Log ───────────────┴────────────────────────────────────────────────────────────────────────────────────────────────┤
+╭─ HomeStack install ─ ✓access ─ ✓check ─ ✓settings ─ ✓review ─ ✓install ──────────────── ssh root@pve2.lan · PVE 9.2 ─╮
+│                                                                                                                      │
+│  HomeStack is installed.                                                                                             │
+│                                                                                                                      │
+│  ✓ Proxmox     user, token, 9 roles, 2 pools, 12 permissions, Gold 112                                               │
+│  ✓ Servers     api1 ● pve1    api2 ● pve2    api3 ● pve3    certificate 89 days                                      │
+│  ✓ Client      ~/.config/homestack/client.toml                                                                       │
+│  ✓ Check       the client reaches all 3 servers                                                                      │
+│                                                                                                                      │
+│  Root on pve2 is not needed any more; the ssh session is closed.                                                     │
+│  Kept aside:   ~/.config/homestack/server.toml.replaced-1760430171                                                   │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+╰└Open HomeStack ↵┘└Quit┘───────────────────────────────────────────────────────────────────────── done in 1 min 20 s ─╯
+╭─⁴log ────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ 10:43:20  api3: container 117 running on pve3, health /v1/version ok                                                 │
 │ 10:43:21  client.toml written                                                                                        │
 │ 10:43:22  status: 3 nodes online, 3 servers, Gold 112, 0 workspaces                                                  │
 │ 10:43:22  install done in 1 min 20 s                                                                                 │
-│                                                                                                                      │
-│                                                                                                                      │
-╰─ enter open HomeStack ─ q quit ──────────────────────────────────────────────────────────────────────────────────────╯
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────── 4 lines ─╯

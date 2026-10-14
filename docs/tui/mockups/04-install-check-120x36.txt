@@ -1,40 +1,40 @@
-04  Step 2: what was found on the cluster (120 x 36)
-    Read-only. Symbols: ✓ fine, · not there yet (install adds it), ! needs attention.
-    The list scrolls when longer than the panel (scrollbar on the right edge).
+04  Check: what is on the cluster (120 x 36)
+    Read-only. ✓ fine, · not there yet (the install adds it), ! needs attention.
+    The node and storage counts sit in small boxes inside the panel.
 
-╭─ HomeStack install ────────────────────────────────────────────────────────── ssh root@pve2.lan · PVE 9.2 · 3 nodes ─╮
-│ ✓ 1 Access › [2 Check] › 3 Settings › 4 Review › 5 Install                                                           │
-├─ Steps ─────────────────────┬─ What is on the cluster ───────────────────────────────────────────────────────────────┤
-│                             │                                                                                        │
-│ ✓ 1 Access   pve2           │  ✓ root       ssh root@pve2.lan answers, Proxmox VE 9.2                                │
-│ ▶ 2 Check                   │  ✓ nodes      pve1 ● online   pve2 ● online   pve3 ● online                            │
-│   3 Settings                │  ✓ storages   8 found: 5 hold VM disks, 2 hold snippets, 1 holds container images      │
-│   4 Review                  │  ✓ Gold       VM 112 hs-gold on pve1, stopped, has a cloud-init disk                   │
-│   5 Install                 │  · user       homestack@pve does not exist yet                                         │
-│                             │  · roles      none of the 9 HomeStack roles exist yet                                  │
-│                             │  · pools      homestack, homestack-service do not exist yet                            │
-│                             │  · servers    no container named api1, api2 or api3                                    │
-│                             │  ! domain     no certificate for *.<domain> yet: the install requests one              │
-│                             │                                                                                        │
-│                             │  Nothing was changed. Next: choose the settings.                                       │
-│                             │                                                                                        │
-│                             │             [ Settings ]   [ Back ]   [ Cancel ]                                       │
-│                             │                                                                                        │
-│                             │                                                                                        │
-│                             │                                                                                        │
-│                             │                                                                                        │
-│                             │                                                                                        │
-│                             │                                                                                        │
-│                             │                                                                                        │
-│                             │                                                                                        │
-│                             │                                                                                        │
-│                             │                                                                                        │
-│                             │                                                                                        │
-│                             │                                                                                        │
-│                             │                                                                                        │
-├─ Log ───────────────────────┴────────────────────────────────────────────────────────────────────────────────────────┤
+╭─ HomeStack install ─ ✓access ─┌check┐─ settings ─ review ─ install ──────────────────── ssh root@pve2.lan · PVE 9.2 ─╮
+│                                                                                                                      │
+│  ✓ root       ssh root@pve2.lan answers, Proxmox VE 9.2             ╭─ nodes ──────────────────────────────────────╮ │
+│  ✓ nodes      3 online                                              │ pve1 ● online   pve2 ● online                │ │
+│  ✓ storages   8 found                                               │ pve3 ● online                                │ │
+│  ✓ Gold       VM 112 hs-gold on pve1, stopped                       ╰──────────────────────────────────────────────╯ │
+│  · user       homestack@pve does not exist yet                      ╭─ storages ───────────────────────────────────╮ │
+│  · roles      none of the 9 HomeStack roles exist yet               │ 5 hold VM disks                              │ │
+│  · pools      homestack, homestack-service do not exist             │ 2 hold snippets                              │ │
+│  · servers    no container api1, api2 or api3                       │ 1 holds container images                     │ │
+│  ! domain     no certificate *.<domain> yet: requested              ╰──────────────────────────────────────────────╯ │
+│               during the install                                                                                     │
+│                                                                                                                      │
+│  Nothing was changed.                                                                                                │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+╰└Settings ↵┘└Back┘└cancel esc┘────────────────────────────────────────────────────────────────────────────────── 2/5 ─╯
+╭─⁴log ────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ 10:41:12  ssh root@pve2.lan: connected (security key touched)                                                        │
-│ 10:41:13  pvesh get /nodes, /storage, /pools, /access/users, /cluster/resources                                      │
+│ 10:41:13  read nodes, storages, pools, users, guests                                                                 │
 │ 10:41:14  check done: 4 found, 4 to add, 1 to note                                                                   │
 │                                                                                                                      │
-╰─ enter settings ─ b back ─ esc cancel ─ q quit ──────────────────────────────────────────────────────────────────────╯
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────── 3 lines ─╯

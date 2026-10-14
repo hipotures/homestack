@@ -1,42 +1,42 @@
-07  Step 4: review every change before anything is done (120 x 36)
-    Grouped like the current confirmation. Scrolls with ↑↓ / PgUp / PgDn;
-    the scrollbar (█ on the right edge) shows the position. Install is the
-    only button that changes anything. Problems (if any) are listed first and
-    Install is disabled until they are fixed in Settings.
+07  Review: every change before anything is done (120 x 36)
+    Grouped like the current confirmation. It is longer than the panel, so the
+    right edge is a scrollbar (↑ █ ↓) and the bottom-right counter shows the
+    lines in view. Install is the only button that changes anything. Problems
+    (if any) come first and Install stays grey until they are fixed.
 
-╭─ HomeStack install ────────────────────────────────────────────────────────── ssh root@pve2.lan · PVE 9.2 · 3 nodes ─╮
-│ ✓ 1 Access › ✓ 2 Check › ✓ 3 Settings › [4 Review] › 5 Install                                                       │
-├─ Steps ─────────────┬─ What the install will do ─────────────────────────────────────────────────────────────────────┤
-│                     │                                                                                                █
-│ ✓ 1 Access          │  Your choices                                                                                  █
-│ ✓ 2 Check           │    Workspace disks       local-lvm, local-zfs   (pve1: local-zfs · pve2, pve3: local-lvm)      █
-│ ✓ 3 Settings        │    Cloud-Init snippets   local                                                                 █
-│ ▶ 4 Review          │    Server disks          local-lvm, local-zfs                                                  █
-│   5 Install         │    Server image          local                                                                 │
-│                     │    Gold VM               112 hs-gold                                                           │
-│                     │                                                                                                │
-│                     │  Changes in Proxmox                                                                            │
-│                     │    Account       new user homestack@pve                                                        │
-│                     │                  new token server, secret to ~/.config/homestack/pve-token                     │
-│                     │    Roles         new: HomeStack, HomeStackStorage, HomeStackGold, HomeStackDeploy, …  (9)      │
-│                     │    Pools         new: homestack, homestack-service                                             │
-│                     │    Gold          put VM 112 in pool homestack-gold, tag it homestack-gold                      │
-│                     │    Permissions   12 ACL entries for the user and its tokens   (enter shows them)               │
-│                     │                                                                                                │
-│                     │  Servers                                                                                       │
-│                     │    api1.hs.example.net   new container on pve1, disk on local-zfs                              │
-│                     │    api2.hs.example.net   new container on pve2, disk on local-lvm                              │
-│                     │    api3.hs.example.net   new container on pve3, disk on local-lvm                              │
-│                     │    certificate           *.hs.example.net from Let's Encrypt                                   │
-│                     │    this desktop          writes ~/.config/homestack/client.toml                                │
-│                     │                                                                                                │
-│                     │                                                                                                │
-│                     │  Then: the main board opens with the status of the cluster.                                    │
-│                     │                                                                                                │
-│                     │      [ Install ]   [ Back to settings ]   [ Cancel ]                                           │
-├─ Log ───────────────┴────────────────────────────────────────────────────────────────────────────────────────────────┤
+╭─ HomeStack install ─ ✓access ─ ✓check ─ ✓settings ─┌review┐─ install ────────────────── ssh root@pve2.lan · PVE 9.2 ─╮
+│                                                                                                                      ↑
+│  Your choices                                                                                                        █
+│    Workspace disks       local-lvm, local-zfs     pve1: local-zfs · pve2, pve3: local-lvm                            █
+│    Cloud-Init snippets   local                                                                                       █
+│    Server disks          local-lvm, local-zfs                                                                        █
+│    Server image          local                                                                                       █
+│    Gold VM               112 hs-gold                                                                                 █
+│                                                                                                                      █
+│  Changes in Proxmox                                                                                                  █
+│    Account       new user homestack@pve                                                                              █
+│                  new token server, secret to ~/.config/homestack/pve-token                                           █
+│    Roles         new: HomeStack, HomeStackStorage, HomeStackGold, HomeStackDeploy, … (9)                             █
+│    Pools         new: homestack, homestack-service                                                                   █
+│    Gold          put VM 112 in pool homestack-gold, tag it homestack-gold                                            █
+│    Permissions   12 ACL entries for the user and its tokens          ↵ shows them                                    │
+│                                                                                                                      │
+│  Servers                                                                                                             │
+│    api1.hs.example.net   new container on pve1, disk on local-zfs                                                    │
+│    api2.hs.example.net   new container on pve2, disk on local-lvm                                                    │
+│    api3.hs.example.net   new container on pve3, disk on local-lvm                                                    │
+│    certificate           *.hs.example.net from Let's Encrypt                                                         │
+│                                                                                                                      │
+│  On this desktop                                                                                                     │
+│    ~/.config/homestack/client.toml   written                                                                         │
+│                                                                                                                      │
+│  Then the main screen opens with the status of the cluster.                                                          │
+│                                                                                                                      │
+│                                                                                                                      ↓
+╰└scroll ↑↓┘└Install ↵┘└Back┘└cancel esc┘─────────────────────────────────────────────────────────── 1–28 of 44 ─ 4/5 ─╯
+╭─⁴log ────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ 10:41:30  choices kept from the last run: Gold VM, Server domain                                                     │
 │ 10:42:02  plan: 31 changes in Proxmox, 3 servers, 0 problems                                                         │
 │                                                                                                                      │
 │                                                                                                                      │
-╰─ ↑↓ scroll ─ enter on a group: details ─ i install ─ b back ─ esc cancel ────────────────────────────────────────────╯
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────── 2 lines ─╯
