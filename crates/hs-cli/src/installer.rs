@@ -131,21 +131,18 @@ fn confirm(ctx: &mut Context, question: &str) -> bool {
 /// Ask each question in turn and put the answers in `settings`; `false`
 /// when the user gives up.
 fn choose(ctx: &mut Context, questions: &[hs_install::Question], settings: &mut Settings) -> bool {
-    for question in questions {
+    for (step, question) in questions.iter().enumerate() {
         let items: Vec<(String, String)> = question
             .choices
             .iter()
             .map(|choice| (choice.value.clone(), choice.detail.clone()))
             .collect();
-        let description = if question.note.is_empty() {
-            question.option.to_owned()
-        } else {
-            format!("{}  {}", question.option, question.note)
-        };
-        let Some(picked) = ctx
-            .console
-            .pick(&question.title, &description, question.multiple, &items)
-        else {
+        let Some(picked) = ctx.console.pick(
+            &format!("{} ({} of {})", question.title, step + 1, questions.len()),
+            &question.note,
+            question.multiple,
+            &items,
+        ) else {
             return false;
         };
         let values: Vec<String> = picked
@@ -205,11 +202,28 @@ fn same_as(command: Install, install: &InstallArgs, settings: &Settings) -> Stri
 }
 
 /// Run `install` or `uninstall`; the exit code.
-pub fn run(args: &Args, install: &InstallArgs, command: Install, ctx: &mut Context) -> Result<i32, AppError> {
+pub fn run(args: &Args, given: &InstallArgs, command: Install, ctx: &mut Context) -> Result<i32, AppError> {
+    let mut install = given.clone();
+    let mut chosen = false;
+    // The default installer asks how to reach root; giving --ssh or --herdr
+    // (and the other options) is the manual way.
+    if install.ssh.is_none() && install.herdr.is_none() {
+        if !ctx.stdin_tty {
+            return Err(AppError::new(
+                "Root on a node is needed: give --ssh USER@HOST or --herdr NAME, or run this on a terminal to be asked",
+            ));
+        }
+        if !ask_access(ctx, &mut install)? {
+            let text = ctx.style.paint(CANCELLED, Color::Bold);
+            ctx.console.out(&format!("{text}\n"));
+            return Ok(0);
+        }
+        chosen = true;
+    }
+    let install = &install;
     let mut root = open_root(args, install, ctx)?;
     let access = hs_install::probe(root.as_mut()).map_err(failure)?;
     let mut settings = settings(ctx, args, install);
-    let mut chosen = false;
     let plan = loop {
         match hs_install::make_plan(root.as_mut(), &access, command, &settings) {
             Ok(plan) => break plan,
@@ -327,4 +341,69 @@ pub fn run(args: &Args, install: &InstallArgs, command: Install, ctx: &mut Conte
         }
     }
     Ok(code)
+}
+
+/// Ask how to reach root and which node or tab: `false` when the user gives
+/// up. The answer goes into `install`.
+fn ask_access(ctx: &mut Context, install: &mut InstallArgs) -> Result<bool, AppError> {
+    let ways = [
+        (
+            "SSH".to_owned(),
+            "log in to a node as root over SSH (touch the security key when it blinks)".to_owned(),
+        ),
+        (
+            "Herdr".to_owned(),
+            "use a Herdr tab or pane in which you are already root on a node".to_owned(),
+        ),
+    ];
+    let Some(way) = ctx.console.pick(
+        "How to reach root on a Proxmox node",
+        "Root on one node is needed once, only to install or remove HomeStack in Proxmox; afterwards \
+everything goes through the API, and you can drop the key or close the tab.",
+        false,
+        &ways,
+    ) else {
+        return Ok(false);
+    };
+    if way.first() == Some(&0) {
+        let Some(answer) = ctx.console.ask("Node to log in to (USER@HOST, e.g. root@pve1): ") else {
+            return Ok(false);
+        };
+        let answer = answer.trim();
+        if answer.is_empty() {
+            return Ok(false);
+        }
+        install.ssh = Some(answer.to_owned());
+        return Ok(true);
+    }
+    let tabs = crate::root_herdr::tabs(ctx.system.as_ref())?;
+    if tabs.is_empty() {
+        return Err(AppError::new(
+            "Herdr has no tab with a single pane: open a tab, log in as root on the node there, and run this again",
+        ));
+    }
+    let items: Vec<(String, String)> = tabs
+        .iter()
+        .map(|tab| {
+            let title = if tab.title.is_empty() {
+                "(no title)"
+            } else {
+                tab.title.as_str()
+            };
+            (tab.name.clone(), title.to_owned())
+        })
+        .collect();
+    let Some(picked) = ctx.console.pick(
+        "Herdr tab",
+        "The tab whose shell is root on the Proxmox node. It must be at its prompt.",
+        false,
+        &items,
+    ) else {
+        return Ok(false);
+    };
+    install.herdr = picked
+        .first()
+        .and_then(|index| tabs.get(*index))
+        .map(|tab| tab.name.clone());
+    Ok(install.herdr.is_some())
 }

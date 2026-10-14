@@ -86,7 +86,14 @@ fn check_storage(state: &State, found: &mut Findings, id: &str, content: &str) {
     }
 }
 
-fn ask_storage(state: &State, found: &mut Findings, option: &'static str, title: &str, content: &str, multiple: bool) {
+fn ask_storage(
+    state: &State,
+    found: &mut Findings,
+    option: &'static str,
+    (title, note): (&str, &str),
+    content: &str,
+    multiple: bool,
+) {
     let choices = storage_choices(state, content);
     if choices.is_empty() {
         found.errors.push(format!(
@@ -96,7 +103,7 @@ fn ask_storage(state: &State, found: &mut Findings, option: &'static str, title:
         found.questions.push(Question {
             option,
             title: title.to_owned(),
-            note: String::new(),
+            note: note.to_owned(),
             multiple,
             choices,
         });
@@ -109,7 +116,10 @@ pub fn check_storages(state: &State, settings: &Settings, found: &mut Findings) 
             state,
             found,
             "--storages",
-            "Storages for the workspace disks",
+            (
+                "Storages for the workspace disks",
+                "Where HomeStack creates the disks of the workspace VMs (root and home). It gets permission to use only the storages you tick, so tick every storage workspaces may use. Listed: storages that allow disk images.",
+            ),
             "images",
             true,
         );
@@ -122,7 +132,10 @@ pub fn check_storages(state: &State, settings: &Settings, found: &mut Findings) 
             state,
             found,
             "--snippet-storage",
-            "Storage for the Cloud-Init snippets",
+            (
+                "Storage for the Cloud-Init snippets",
+                "Where HomeStack keeps the two small Cloud-Init files that set up every new workspace (hostname, SSH keys, home disk). They are written on every node that has this storage, once if it is shared. Listed: storages that allow snippets.",
+            ),
             "snippets",
             false,
         ),
@@ -133,7 +146,10 @@ pub fn check_storages(state: &State, settings: &Settings, found: &mut Findings) 
             state,
             found,
             "--service-storages",
-            "Storages for the server root disks",
+            (
+                "Storages for the server root disks",
+                "Where the disks of the HomeStack server containers are created: the server that clients talk to runs in a container on each node. Tick the storages those containers may use. Listed: storages that allow container disks.",
+            ),
             "rootdir",
             true,
         );
@@ -146,7 +162,10 @@ pub fn check_storages(state: &State, settings: &Settings, found: &mut Findings) 
             state,
             found,
             "--template-storage",
-            "Storage for the server image",
+            (
+                "Storage for the server image",
+                "Where the server image (the HomeStack program that runs in a container) is stored on the nodes before it becomes a container. Listed: storages that allow container templates.",
+            ),
             "vztmpl",
             false,
         ),
@@ -212,11 +231,11 @@ pub fn find_gold(state: &State, settings: &Settings, found: &mut Findings) -> Op
     let (note, choices) = match tagged.as_slice() {
         [one] => return Some(*one),
         [] => (
-            "No VM is tagged homestack-gold; these are the QEMU VMs (prepare Gold first, see the README).".to_owned(),
+            "The prepared base VM that every workspace is cloned from; the installer tags it homestack-gold and puts it in the pool homestack-gold. No VM is tagged homestack-gold yet; these are the QEMU VMs (prepare Gold first, see the README).".to_owned(),
             vm_choices(state, |vm| vm.kind == "qemu"),
         ),
         _ => (
-            "Several VMs are tagged homestack-gold.".to_owned(),
+            "The prepared base VM that every workspace is cloned from; the installer tags it homestack-gold and puts it in the pool homestack-gold. Several VMs are tagged homestack-gold.".to_owned(),
             vm_choices(state, |vm| has_tag(vm, "homestack-gold")),
         ),
     };

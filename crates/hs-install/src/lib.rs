@@ -74,7 +74,9 @@ pub fn describe_missing(questions: &[Question]) -> String {
             question.option, question.title
         ));
         if !question.note.is_empty() {
-            out.push_str(&format!("    {}\n", question.note));
+            for line in wrap(&question.note, 88) {
+                out.push_str(&format!("    {line}\n"));
+            }
         }
         if question.choices.is_empty() {
             out.push_str("    (nothing to choose from: see the message above)\n");
@@ -121,3 +123,18 @@ impl std::fmt::Display for InstallError {
 }
 
 impl std::error::Error for InstallError {}
+
+/// `text` broken at spaces into lines of at most `width` characters.
+fn wrap(text: &str, width: usize) -> Vec<String> {
+    let mut lines: Vec<String> = Vec::new();
+    for word in text.split_whitespace() {
+        match lines.last_mut() {
+            Some(line) if line.chars().count() + 1 + word.chars().count() <= width => {
+                line.push(' ');
+                line.push_str(word);
+            }
+            _ => lines.push(word.to_owned()),
+        }
+    }
+    lines
+}

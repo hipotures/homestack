@@ -148,7 +148,7 @@ impl Cluster {
                     r#"{"result":{"tabs":[{"label":"pve1","tab_id":"w3:t1","workspace_id":"w3"}]}}"#,
                 )),
                 ["herdr", "pane", "list"] => Ok(Output::stdout(
-                    r#"{"result":{"panes":[{"pane_id":"w3:p1","tab_id":"w3:t1"}]}}"#,
+                    r#"{"result":{"panes":[{"pane_id":"w3:p1","tab_id":"w3:t1","terminal_title_stripped":"root@pve1:~"}]}}"#,
                 )),
                 ["herdr", "pane", "read", _, "--source", ..] => {
                     Ok(Output::stdout(&me.screen.lock().expect("screen").clone()))
@@ -271,9 +271,10 @@ fn the_commands_are_parsed() {
     assert_eq!(install.herdr.as_deref(), Some("pve1"));
     assert!(install.force);
 
-    // Exactly one way to reach root; --force belongs to uninstall.
+    // Neither way given is allowed (the installer asks); both is not.
+    assert!(args::parse(&strings(&["install"])).is_ok());
+    // --force belongs to uninstall.
     for bad in [
-        vec!["install", "--storages", "a"],
         vec!["install", "--ssh", "a", "--herdr", "b"],
         vec!["install", "--ssh", "a", "--force"],
         vec!["uninstall", "--ssh", "a", "--gold", "x"],
@@ -619,4 +620,91 @@ async fn the_lists_on_a_terminal_carry_no_hint_about_typing_commas() {
         "{}",
         text.console.out()
     );
+}
+
+/// What is chosen is explained in words; the name of a command-line option
+/// is not shown to someone who is picking from a list.
+#[tokio::test]
+async fn each_list_explains_what_is_chosen_and_shows_no_option_name() {
+    let cluster = Cluster::new(&["pve1"]);
+    let done = run(
+        &cluster,
+        &["install", "--ssh", "root@pve1"],
+        &["1", "1", "1", "1", "n"],
+        true,
+    )
+    .await;
+    assert_eq!(done.code, 0, "{}", done.console.out());
+    let out = done.console.out();
+    let lists = out.split("Same as:").next().unwrap_or_default();
+    assert!(!lists.contains("--"), "an option name is shown to the user:\n{lists}");
+    for sentence in [
+        "disks of the workspace VMs",
+        "Cloud-Init",
+        "the HomeStack server",
+        "the server image",
+    ] {
+        assert!(
+            lists.contains(sentence),
+            "no explanation containing {sentence:?}:\n{lists}"
+        );
+    }
+}
+
+// --- the default installer asks how to reach root --------------------------
+
+#[tokio::test]
+async fn without_an_access_option_the_installer_asks_for_one_and_goes_on() {
+    let cluster = Cluster::new(&["pve1"]);
+    // 1 = SSH, the node, then the four storages, then the confirmation.
+    let done = run(
+        &cluster,
+        &["install"],
+        &["1", "root@pve1", "1", "1", "1", "1", "y"],
+        true,
+    )
+    .await;
+    assert_eq!(done.code, 0, "{}", done.console.out());
+    let out = done.console.out();
+    assert!(
+        out.contains("SSH") && out.contains("Herdr"),
+        "the ways to reach root are not offered:\n{out}"
+    );
+    assert!(
+        out.contains("Same as: homestack install --ssh root@pve1 --storages local-lvm"),
+        "{out}"
+    );
+    assert!(cluster.read("users").contains("homestack@pve"), "not installed");
+}
+
+#[tokio::test]
+async fn the_herdr_tabs_are_offered_to_choose_from() {
+    let cluster = Cluster::new(&["pve1"]);
+    // 2 = Herdr, the only tab, then the storages and the confirmation.
+    let done = run(&cluster, &["install"], &["2", "1", "1", "1", "1", "1", "y"], true).await;
+    assert_eq!(done.code, 0, "{}", done.console.out());
+    let out = done.console.out();
+    assert!(
+        out.contains("PVE/pve1") && out.contains("root@pve1:~"),
+        "the tab is not described:\n{out}"
+    );
+    assert!(out.contains("Same as: homestack install --herdr PVE/pve1"), "{out}");
+    assert!(cluster.read("users").contains("homestack@pve"));
+}
+
+#[tokio::test]
+async fn without_a_terminal_an_access_option_is_required() {
+    let cluster = Cluster::new(&["pve1"]);
+    let refused = run(&cluster, &["install", "--storages", "local-lvm"], &[], false).await;
+    assert_eq!(refused.code, 1);
+    let out = refused.console.out();
+    assert!(
+        out.contains("--ssh") && out.contains("--herdr") && out.contains("terminal"),
+        "{out}"
+    );
+    assert_eq!(cluster.changes(), 0);
+
+    let gave_up = run(&cluster, &["install"], &[], true).await;
+    assert_eq!(gave_up.code, 0, "{}", gave_up.console.out());
+    assert!(gave_up.console.out().contains("Cancelled"), "{}", gave_up.console.out());
 }

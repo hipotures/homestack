@@ -162,3 +162,13 @@ with the owner's approval.
   `homestack-alien` is refused. Uninstall takes Gold out of the pool but
   leaves its tag: the machine is the owner's.
 - The fake Proxmox (`fake-pve`) learned `pvesh set ... --tags`.
+- **`homestack install` with no options is the interactive installer** (owner's
+  decision of 2026-10-14); giving `--ssh`, `--herdr`, `--storages` and the rest
+  is the manual way, and whatever is given is not asked again. On a terminal it
+  asks, in turn: how to reach root (SSH: the node as `USER@HOST`; Herdr: a tab
+  chosen from the tabs that have one pane, with the title their pane shows),
+  then each missing option from a list, with the step in the heading ("2 of
+  5"). Every list explains in words what is chosen and which storages it
+  shows; no command-line option name is shown. The command ends with the
+  `Same as: ...` line. Without a terminal and without `--ssh`/`--herdr` it
+  stops with a message (exit 1).

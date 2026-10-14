@@ -718,7 +718,8 @@ fn gold_is_a_question_when_it_is_not_one_tagged_vm() {
     assert_eq!(questions[0].option, "--gold");
     let values: Vec<&str> = questions[0].choices.iter().map(|c| c.value.as_str()).collect();
     assert_eq!(values, ["101", "111"]);
-    assert!(run.out.contains("Several VMs are tagged homestack-gold"), "{}", run.out);
+    let flat = run.out.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(flat.contains("Several VMs are tagged homestack-gold"), "{}", run.out);
     assert!(
         questions[0].choices[1].detail.contains("gold-backup") && questions[0].choices[1].detail.contains("pve1"),
         "{:?}",
@@ -731,7 +732,8 @@ fn gold_is_a_question_when_it_is_not_one_tagged_vm() {
     let questions = missing(&run);
     let values: Vec<&str> = questions[0].choices.iter().map(|c| c.value.as_str()).collect();
     assert_eq!(values, ["100", "101"]);
-    assert!(run.out.contains("No VM is tagged homestack-gold"), "{}", run.out);
+    let flat = run.out.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(flat.contains("No VM is tagged homestack-gold"), "{}", run.out);
 }
 
 #[test]
@@ -885,4 +887,26 @@ fn uninstall_leaves_the_tag_on_gold() {
         !fake.read("pools.tsv").contains("homestack-gold"),
         "the Gold pool is gone"
     );
+}
+
+#[test]
+fn every_question_explains_what_is_chosen() {
+    let fake = Fake::new(&["pve1", "pve2"]);
+    fake.append(
+        "vms.tsv",
+        "111\tpve1\tgold-backup\thomestack-gold\tvirtio=BC:24:11:00:00:09,bridge=vmbr0\t\n",
+    );
+    let run = fake.install(&Settings::default());
+    for question in missing(&run) {
+        assert!(
+            question.note.split_whitespace().count() >= 8,
+            "{}: {:?}",
+            question.option,
+            question.note
+        );
+    }
+    // The printed list carries the explanation too, in lines that fit.
+    let text = run.error.as_ref().map(ToString::to_string).unwrap_or_default();
+    assert!(text.contains("disks of the workspace VMs"), "{text}");
+    assert!(text.lines().all(|l| l.chars().count() <= 100), "{text}");
 }

@@ -357,3 +357,43 @@ impl Root for HerdrRoot {
         self.label.clone()
     }
 }
+
+/// A Herdr tab that can hold the root shell: its name as `find` takes it,
+/// and what its pane says it is running.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Tab {
+    /// `WORKSPACE/TAB`.
+    pub name: String,
+    /// The pane's terminal title, often `user@host:dir`.
+    pub title: String,
+}
+
+/// Every tab that has exactly one pane.
+pub fn tabs(system: &dyn System) -> Result<Vec<Tab>, AppError> {
+    let workspaces = herdr_json(system, &["workspace", "list"])?;
+    let tabs = herdr_json(system, &["tab", "list"])?;
+    let panes = herdr_json(system, &["pane", "list"])?;
+    let empty = Vec::new();
+    let label_of = |id: &str| -> String {
+        workspaces["result"]["workspaces"]
+            .as_array()
+            .unwrap_or(&empty)
+            .iter()
+            .find(|item| text(item, "workspace_id") == id)
+            .map(|item| text(item, "label"))
+            .unwrap_or_default()
+    };
+    let all_panes = panes["result"]["panes"].as_array().unwrap_or(&empty);
+    let mut found = Vec::new();
+    for tab in tabs["result"]["tabs"].as_array().unwrap_or(&empty) {
+        let tab_id = text(tab, "tab_id");
+        let in_tab: Vec<&Value> = all_panes.iter().filter(|pane| text(pane, "tab_id") == tab_id).collect();
+        if let [pane] = in_tab.as_slice() {
+            found.push(Tab {
+                name: format!("{}/{}", label_of(&text(tab, "workspace_id")), text(tab, "label")),
+                title: text(pane, "terminal_title_stripped"),
+            });
+        }
+    }
+    Ok(found)
+}

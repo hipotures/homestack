@@ -130,10 +130,10 @@ fn usage_of(command: &str) -> String {
         "addkey" => "TARGET [--key KEY] [--restart] [--json] [-y]",
         "migrate" => "TARGET TARGET_NODE --target-storage TARGET_STORAGE [--json] [-y]",
         "install" => {
-            "(--ssh USER@HOST | --herdr NAME) [--identity FILE] [--test] --storages IDS --snippet-storage ID --service-storages IDS --template-storage ID [--gold VMID] [--token-dir DIR] [--json] [-y]"
+            "[--ssh USER@HOST | --herdr NAME] [--identity FILE] [--test] --storages IDS --snippet-storage ID --service-storages IDS --template-storage ID [--gold VMID] [--token-dir DIR] [--json] [-y]"
         }
         "uninstall" => {
-            "(--ssh USER@HOST | --herdr NAME) [--identity FILE] [--test] [--snippet-storage ID] [--gold VMID] [--force] [--token-dir DIR] [--json] [-y]"
+            "[--ssh USER@HOST | --herdr NAME] [--identity FILE] [--test] [--snippet-storage ID] [--gold VMID] [--force] [--token-dir DIR] [--json] [-y]"
         }
         "repo" => "TARGET [REPOSITORY] [--json]",
         "status" => "[TARGET] [--json]",
@@ -325,17 +325,8 @@ pub fn parse(argv: &[String]) -> Result<Args, UsageError> {
                 })?),
             };
             let (ssh, herdr) = (words.value("--ssh"), words.value("--herdr"));
-            match (&ssh, &herdr) {
-                (None, None) => {
-                    return Err(error(
-                        words.usage,
-                        "one of the arguments --ssh --herdr is required (root on a node is reached once, over SSH or through a Herdr pane)",
-                    ));
-                }
-                (Some(_), Some(_)) => {
-                    return Err(error(words.usage, "argument --herdr: not allowed with argument --ssh"));
-                }
-                _ => {}
+            if ssh.is_some() && herdr.is_some() {
+                return Err(error(words.usage, "argument --herdr: not allowed with argument --ssh"));
             }
             let list = |name: &str| -> Vec<String> {
                 words
