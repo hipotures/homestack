@@ -38,6 +38,14 @@ fn context() -> Context {
 }
 
 fn main() -> ExitCode {
+    // Run by ssh as its askpass (SSH_ASKPASS) for the TUI: the prompt is the
+    // only argument.
+    if let Some(socket) = std::env::var_os(hs_cli::askpass::SOCKET_ENV) {
+        let prompt = std::env::args().nth(1).unwrap_or_default();
+        let hint = std::env::var("SSH_ASKPASS_PROMPT").ok();
+        let code = hs_cli::askpass::client(std::path::Path::new(&socket), hint.as_deref(), &prompt);
+        return ExitCode::from(u8::try_from(code).unwrap_or(1));
+    }
     let argv: Vec<String> = std::env::args().skip(1).collect();
     let runtime = match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
         Ok(runtime) => runtime,

@@ -45,8 +45,22 @@ impl SshRoot {
         identity: Option<&str>,
         sounds: &Sounds,
     ) -> Result<Self, AppError> {
+        Self::open_with(system, home, text, identity, sounds, Vec::new(), "accept-new")
+    }
+
+    fn open_with(
+        system: Arc<dyn System>,
+        home: &Path,
+        text: &str,
+        identity: Option<&str>,
+        sounds: &Sounds,
+        prefix: Vec<String>,
+        host_keys: &str,
+    ) -> Result<Self, AppError> {
         let target = target(text)?;
         let mut master = Master::new(&target);
+        master.prefix = prefix;
+        master.host_keys = host_keys.to_owned();
         master.name = target
             .rsplit_once('@')
             .map_or(target.clone(), |(_, host)| host.to_owned());
@@ -61,6 +75,20 @@ impl SshRoot {
         }
         master.open(system.as_ref(), home)?;
         Ok(Self { system, master, target })
+    }
+
+    /// [`SshRoot::open`] for the TUI: ssh runs behind `prefix` (the askpass
+    /// bridge, `askpass::Bridge::command_prefix`), so its questions, a new
+    /// host key among them, are asked in the TUI.
+    pub fn open_asking(
+        system: Arc<dyn System>,
+        home: &Path,
+        text: &str,
+        identity: Option<&str>,
+        sounds: &Sounds,
+        prefix: Vec<String>,
+    ) -> Result<Self, AppError> {
+        Self::open_with(system, home, text, identity, sounds, prefix, "ask")
     }
 }
 

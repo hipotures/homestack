@@ -8,6 +8,7 @@
 
 pub mod app;
 pub mod args;
+pub mod askpass;
 pub mod config;
 pub mod fido;
 pub mod form;

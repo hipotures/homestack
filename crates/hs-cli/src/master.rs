@@ -25,6 +25,11 @@ pub struct Master {
     /// ssh options (`-o`, `-i`, `-F`).
     pub options: Vec<String>,
     pub fido_devices: Vec<String>,
+    /// Words before the master's `ssh`: the TUI's askpass (`askpass::Bridge`).
+    pub prefix: Vec<String>,
+    /// `StrictHostKeyChecking` of the master: `accept-new`, or `ask` when a
+    /// new host key can be asked about (the TUI).
+    pub host_keys: String,
     pub sounds: Sounds,
     pub player: Player,
     /// The kind of key the sandbox shows, once chosen.
@@ -44,6 +49,8 @@ impl Master {
             address: None,
             options: Vec::new(),
             fido_devices: Vec::new(),
+            prefix: Vec::new(),
+            host_keys: "accept-new".to_owned(),
             sounds: Sounds::disabled(),
             player: touch::default_player(),
             fido_kind: None,
@@ -189,7 +196,8 @@ impl Master {
             Some(kind) => fido::filter_identity_options(kind, &self.options),
             None => self.options.clone(),
         };
-        let mut argv = prefix;
+        let mut argv = self.prefix.clone();
+        argv.extend(prefix);
         argv.push("ssh".to_owned());
         argv.extend(config_args);
         argv.extend(master_options);
@@ -202,7 +210,7 @@ impl Master {
                 "-o",
                 "ControlPersist=yes",
                 "-o",
-                "StrictHostKeyChecking=accept-new",
+                &format!("StrictHostKeyChecking={}", self.host_keys),
                 "-o",
                 "PasswordAuthentication=no",
                 "-o",

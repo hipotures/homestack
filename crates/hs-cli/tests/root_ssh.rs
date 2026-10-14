@@ -134,3 +134,45 @@ fn a_failure_of_ssh_itself_is_an_error_with_its_reason() {
     assert!(error.to_string().contains("Connection timed out"), "{error}");
     assert!(error.to_string().contains("root@pve1"), "{error}");
 }
+
+#[test]
+fn for_the_tui_ssh_runs_behind_the_askpass_prefix_and_asks_about_a_new_host_key() {
+    let fake = Arc::new(Fake::default());
+    let prefix = vec![
+        "env".to_owned(),
+        "SSH_ASKPASS=/bin/homestack".to_owned(),
+        "setsid".to_owned(),
+        "-w".to_owned(),
+    ];
+    let _root = SshRoot::open_asking(
+        fake.clone(),
+        Path::new("/home/nobody"),
+        "root@pve2",
+        None,
+        &Sounds::disabled(),
+        prefix.clone(),
+    )
+    .expect("open");
+    let masters = fake.masters.lock().expect("masters").clone();
+    assert_eq!(masters.len(), 1);
+    let argv = &masters[0];
+    assert_eq!(argv[..4], prefix[..], "{argv:?}");
+    assert_eq!(argv[4], "ssh", "{argv:?}");
+    assert!(argv.iter().any(|word| word == "StrictHostKeyChecking=ask"), "{argv:?}");
+    assert!(
+        !argv.iter().any(|word| word == "StrictHostKeyChecking=accept-new"),
+        "{argv:?}"
+    );
+    // The commands go through the master, with no askpass of their own.
+    let calls = fake.calls.lock().expect("calls").clone();
+    assert!(calls.iter().all(|call| call[0] == "ssh"), "{calls:?}");
+}
+
+#[test]
+fn from_the_terminal_a_new_host_key_is_accepted_as_before() {
+    let fake = Arc::new(Fake::default());
+    let _root = open(&fake, "root@pve2", None);
+    let masters = fake.masters.lock().expect("masters").clone();
+    assert_eq!(masters[0][0], "ssh");
+    assert!(masters[0].iter().any(|word| word == "StrictHostKeyChecking=accept-new"));
+}
