@@ -1,0 +1,41 @@
+10  Main board at 120 x 36
+    The list gains Address, Home and Free columns; the strip names every node
+    and server. A bottom area appears: Cluster, Storage and Activity. On the
+    tabs ²Cluster ³Storage ⁵Log the same data is shown full size.
+
+╭─ HomeStack ─ [¹Workspaces] ─ ²Cluster ─ ³Storage ─ ⁴Keys ─ ⁵Log ──────────────────────────── hs.example.net ─ ᵐmenu ─╮
+│ nodes ● pve1 ● pve2 ● pve3    servers ● api1 ● api2 ● api3    gold 112 hs-gold ○ stopped    v0.1.0   10:47:03        │
+├─ Workspaces 5 ─ 3 running ─ /filter ─────────────────────────────┬─ 201 dev-main ────────────────────────────────────┤
+│ VMID  NAME            NODE  STATE      ADDRESS     HOME    FREE  │ State      ● running on pve2                      │
+│▶201   dev-main        pve2  ● running  10.0.0.21   64 GiB   41%  │ Address    10.0.0.21                              │
+│ 202   rust-builder    pve3  ● running  10.0.0.22  128 GiB   77%  │ Agent      ✓ answers                              │
+│ 203   web-lab         pve1  ○ stopped  —           32 GiB   —    │ Root disk  32 GiB on local-lvm                    │
+│ 204   data-play       pve2  ● running  10.0.0.24   64 GiB   12%  │ Home disk  64 GiB on local-lvm, kept on refresh   │
+│ 205   scratch         pve1  ○ stopped  —           16 GiB   —    │            ████████████████░░░░░░░░░░ 59% used    │
+│                                                                  │ SSH        ssh dev-main                           │
+│                                                                  │                                                   │
+│                                                                  ├─ Actions ─────────────────────────────────────────┤
+│                                                                  │ r  refresh root from Gold   e  resize disks       │
+│                                                                  │ k  add an SSH key           v  migrate            │
+│                                                                  │ x  destroy (asks first)                           │
+│                                                                  │                                                   │
+│                                                                  │                                                   │
+│                                                                  │                                                   │
+│                                                                  │                                                   │
+│                                                                  │                                                   │
+│                                                                  │                                                   │
+│                                                                  │                                                   │
+├─ Cluster ─────────────────────────────┬─ Storage ────────────────┴────────────┬─ Activity ───────────────────────────┤
+│ NODE  STATE     SERVER  CT   HEALTH   │ NODE  STORAGE    USED            FREE │ 10:41:58  refresh 203 web-lab: done  │
+│ pve1  ● online  api1    115  ✓ ok     │ pve1  local-zfs  ███░░░░░░░ 18%  1.7T │ 10:38:12  addkey 201: 1 key added    │
+│ pve2  ● online  api2    116  ✓ ok     │ pve2  local-lvm  ███░░░░░░░ 31%  1.2T │ 10:30:02  connected to api2          │
+│ pve3  ● online  api3    117  ✓ ok     │ pve3  local-lvm  ██░░░░░░░░ 18%  2.9T │ 10:29:58  status refreshed           │
+│                                       │                                       │                                      │
+│ Gold  112 hs-gold on pve1, stopped    │                                       │                                      │
+│ cert  *.hs.example.net, 89 days       │                                       │                                      │
+│                                       │                                       │                                      │
+│                                       │                                       │                                      │
+│                                       │                                       │                                      │
+│                                       │                                       │                                      │
+│                                       │                                       │                                      │
+╰─ ↑↓ select ─ enter open ─ n new ──────┴─ ? help ──────────────────────────────┴─ q quit ─────────────────────────────╯

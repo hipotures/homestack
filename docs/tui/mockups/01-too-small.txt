@@ -1,0 +1,23 @@
+01  Terminal smaller than 80 x 24 (here 70 x 20)
+    Nothing else is drawn. The board comes back by itself when the window grows.
+
+╭─ HomeStack ────────────────────────────────────────────────────────╮
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                       Terminal too small                           │
+│                                                                    │
+│                  Now        70 columns x 20 rows                   │
+│                  Needed     80 columns x 24 rows                   │
+│                                                                    │
+│              Make the window larger, or press q to quit.           │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯

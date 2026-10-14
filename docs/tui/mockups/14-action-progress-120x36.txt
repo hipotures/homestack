@@ -1,0 +1,43 @@
+14  Stage 3 of an action: it runs (120 x 36): r = refresh 203 web-lab
+    (The step names here are examples; the real ones come from the server.)
+    Live progress from the server. The list stays usable: you can select and
+    look at other workspaces while it runs; the running one is marked ◐.
+    If an action needs the security key, the modal from 03 appears.
+    When it ends the panel shows the result and "enter close".
+
+╭─ HomeStack ─ [¹Workspaces] ─ ²Cluster ─ ³Storage ─ ⁴Keys ─ ⁵Log ──────────────────────────── hs.example.net ─ ᵐmenu ─╮
+│ nodes ● pve1 ● pve2 ● pve3    servers ● api1 ● api2 ● api3    gold 112 hs-gold ○ stopped    v0.1.0   10:52:13        │
+├─ Workspaces 5 ─ 3 running ────────────────────────┬─ Refresh 203 web-lab ─ ✓ 1 form › ✓ 2 plan › [3 run] ────────────┤
+│ VMID  NAME            NODE  STATE      ADDRESS    │                                                                  │
+│ 201   dev-main        pve2  ● running  10.0.0.21  │  ✓ stop the VM                                                   │
+│ 202   rust-builder    pve3  ● running  10.0.0.22  │  ✓ full clone of Gold 112 to a new root disk                     │
+│▶203   web-lab         pve1  ◐ refresh  —          │  ◐ swap the root disk, keep the home disk                        │
+│ 204   data-play       pve2  ● running  10.0.0.24  │  · start the VM                                                  │
+│ 205   scratch         pve1  ○ stopped  —          │  · wait for the guest agent                                      │
+│                                                   │  · new host key into known_hosts                                 │
+│                                                   │                                                                  │
+│                                                   │  ██████████████████████████░░░░░░░░░░░░░░  3 of 6   1 min 12 s   │
+│                                                   │                                                                  │
+│                                                   │  esc hides this panel; the refresh goes on.                      │
+│                                                   │                                                                  │
+│                                                   │                                                                  │
+│                                                   │                                                                  │
+│                                                   │                                                                  │
+│                                                   │                                                                  │
+│                                                   │                                                                  │
+│                                                   │                                                                  │
+│                                                   │                                                                  │
+├─ Cluster ─────────────────────────────┬───────────┴─ Storage ─────────────────┬─ Activity ───────────────────────────┤
+│ NODE  STATE     SERVER  CT   HEALTH   │ NODE  STORAGE    USED            FREE │ 10:52:10  refresh 203: swapping root │
+│ pve1  ● online  api1    115  ✓ ok     │ pve1  local-zfs  ████░░░░░░ 20%  1.6T │ 10:51:02  refresh 203: clone done    │
+│ pve2  ● online  api2    116  ✓ ok     │ pve2  local-lvm  ███░░░░░░░ 31%  1.2T │ 10:51:01  refresh 203: VM stopped    │
+│ pve3  ● online  api3    117  ✓ ok     │ pve3  local-lvm  ██░░░░░░░░ 18%  2.9T │ 10:51:00  refresh 203: started       │
+│                                       │                                       │                                      │
+│ Gold  112 hs-gold on pve1, stopped    │                                       │                                      │
+│ cert  *.hs.example.net, 89 days       │                                       │                                      │
+│                                       │                                       │                                      │
+│                                       │                                       │                                      │
+│                                       │                                       │                                      │
+│                                       │                                       │                                      │
+│                                       │                                       │                                      │
+╰─ ↑↓ select ─ esc hide panel ──────────┴─ ? help ──────────────────────────────┴─ q quit (asks first) ────────────────╯

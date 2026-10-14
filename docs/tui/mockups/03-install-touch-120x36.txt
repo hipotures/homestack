@@ -1,0 +1,42 @@
+03  Step 1 after Connect: the security key asks for a touch (120 x 36)
+    The question appears as a small modal over the board; nothing leaves the TUI.
+    The same modal asks for a PIN ("PIN [••••    ]") or for an unknown host key
+    ("pve2.lan  ED25519 SHA256:3f9a…  [ Trust ] [ Cancel ]") when ssh needs it.
+    At 120 x 36 the steps stay on the left as a column.
+
+╭─ HomeStack install ──────────────────────────────────────────────────────────────────── new install: no client.toml ─╮
+│ [1 Access] › 2 Check › 3 Settings › 4 Review › 5 Install                                                             │
+├─ Steps ─────────────────────┬─ Root on one Proxmox node ─────────────────────────────────────────────────────────────┤
+│                             │                                                                                        │
+│ ▶ 1 Access   connecting     │  HomeStack needs root on one node once: it creates its user, roles, pool and token,    │
+│   2 Check                   │  then a server on every node. Nothing changes in Proxmox before step 4 (Install).      │
+│   3 Settings                │                                                                                        │
+│   4 Review                  │  Method    (•) SSH              ( ) Herdr pane                                         │
+│   5 Install                 │  Host      [ root@pve2.lan                        ]                                    │
+│                             │  SSH key   ▶ ~/.ssh/id_ed25519_sk   security key, asks for a touch                     │
+│                             │               ╭─ Security key ───────────────────────────╮                             │
+│                             │               │                                          │                             │
+│                             │               │   Touch your security key now.           │                             │
+│                             │               │                                          │                             │
+│                             │               │   key   ~/.ssh/id_ed25519_sk             │                             │
+│                             │               │   for   ssh root@pve2.lan                │                             │
+│                             │               │                                          │                             │
+│                             │               │   ████████████░░░░░░░░░░░░  waits 18 s   │                             │
+│                             │               │                                          │                             │
+│                             │               │               [ Cancel ]                 │                             │
+│                             │               ╰──────────────────────────────────────────╯                             │
+│                             │                                                                                        │
+│                             │                                                                                        │
+│                             │                                                                                        │
+│                             │                                                                                        │
+│                             │                                                                                        │
+│                             │                                                                                        │
+│                             │                                                                                        │
+│                             │                                                                                        │
+│                             │                                                                                        │
+├─ Log ───────────────────────┴────────────────────────────────────────────────────────────────────────────────────────┤
+│ 10:41:02  no ~/.config/homestack/client.toml: install mode                                                           │
+│ 10:41:02  SSH keys: 2 files, 1 in the agent                                                                          │
+│ 10:41:09  ssh root@pve2.lan: waiting for the security key                                                            │
+│                                                                                                                      │
+╰─ esc cancel ─ q quit ────────────────────────────────────────────────────────────────────────────────────────────────╯

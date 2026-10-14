@@ -1,0 +1,29 @@
+02  First start: there is no client.toml, so the install board opens (80 x 24)
+    Step 1 of 5. The board shows a step bar instead of tabs.
+    With "Herdr pane" picked, Host and SSH key are replaced by one list of the
+    Herdr panes that hold a root shell (e.g. "w3:p2  root@pve2").
+
+╭─ HomeStack install ──────────────────────────── new install: no client.toml ─╮
+│ [1 Access] › 2 Check › 3 Settings › 4 Review › 5 Install                     │
+├─ Root on one Proxmox node ───────────────────────────────────────────────────┤
+│                                                                              │
+│  HomeStack needs root on one node once: it creates its user, roles,          │
+│  pool and token there, then a server on every node. Nothing changes          │
+│  in Proxmox until you press Install in step 4.                               │
+│                                                                              │
+│  Method    (•) SSH              ( ) Herdr pane                               │
+│  Host      [ root@pve2.lan                        ]                          │
+│  SSH key   ▶ ~/.ssh/id_ed25519_sk   security key, asks for a touch           │
+│              ~/.ssh/id_ed25519                                               │
+│              agent: ed25519  user@desktop                                    │
+│                                                                              │
+│            [ Connect ]   [ Quit ]                                            │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+├─ Log ────────────────────────────────────────────────────────────────────────┤
+│ 10:41:02  no ~/.config/homestack/client.toml: install mode                   │
+│ 10:41:02  SSH keys: 2 files, 1 in the agent                                  │
+│                                                                              │
+╰─ tab next ─ ↑↓ choose ─ space pick ─ enter connect ─ q quit ─────────────────╯

@@ -1,0 +1,28 @@
+05  Step 3 at the minimum size (80 x 24)
+    The step column is gone; the step bar on top shows where you are.
+    Left: every setting with its value. Right: the chooser of the focused setting.
+
+╭─ HomeStack install ────────────────────────────────────── ssh root@pve2.lan ─╮
+│ ✓ Access › ✓ Check › [3 Settings] › 4 Review › 5 Install                     │
+├─ Settings ───────────────────┬─ Workspace disks ─────────────────────────────┤
+│                              │ Where workspace VM disks (root and            │
+│▶Workspace disks  2 chosen    │ home) are made. Tick one or more.             │
+│ Cloud-Init       local       │                                               │
+│ Server disks     2 chosen    │       STORAGE    TYPE      NODES   FREE       │
+│ Server image     local       │   [ ] backup-a   dir       pve1    210G       │
+│ Gold VM          112         │   [ ] backup-b   dir       pve1    190G       │
+│ Server domain    hs.exam…    │ ▶ [x] local-lvm  lvmthin   pve2,3  4.0T       │
+│                              │   [x] local-zfs  zfspool   pve1    1.7T       │
+│ Root access  ssh pve2        │   [ ] fast-roots lvmthin   pve1    900G       │
+│                              │   [ ] shared-nfs nfs       all     3.1T       │
+│                              │                                               │
+│                              │ pve1 gets local-zfs; pve2 and                 │
+│                              │ pve3 get local-lvm.                           │
+│                              │                                               │
+│                              │                                               │
+│                              │                                               │
+│                              │                                               │
+│                              │                                               │
+│                              │                                               │
+│  [ Review ]   [ Cancel ]     │                                               │
+╰─ ↑↓ move ─ space tick ───────┴─ tab column ─ enter review ─ esc back ────────╯

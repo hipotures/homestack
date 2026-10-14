@@ -1,0 +1,40 @@
+15  Menu (m or Esc on the main board), over the main board (120 x 36)
+    Things used rarely live here, not on the board. Reconfigure and Uninstall
+    open the install board (02–08, 18); everything else stays on the board.
+
+╭─ HomeStack ─ [¹Workspaces] ─ ²Cluster ─ ³Storage ─ ⁴Keys ─ ⁵Log ────────────────────────── hs.example.net ─ [ᵐmenu] ─╮
+│ nodes ● pve1 ● pve2 ● pve3    servers ● api1 ● api2 ● api3    gold 112 hs-gold ○ stopped    v0.1.0   10:52:13        │
+├─ Workspaces 5 ─ 3 running ─ /filter ─────────────────────────────┬─ 201 dev-main ────────────────────────────────────┤
+│ VMID  NAME            NODE  STATE      ADDRESS     HOME    FREE  │ State      ● running on pve2                      │
+│▶201   dev-main        pve2  ● running  10.0.0.21   64 GiB   41%  │ Address    10.0.0.21                              │
+│ 202   rust-builder    pve3  ● running  10.0.0.22  128 GiB   77%  │ Agent      ✓ answers                              │
+│ 203   web-lab         pve1  ○ stopp   ╭─ Menu ────────────────────────────────╮                                      │
+│ 204   data-play       pve2  ● runni   │                                       │                                      │
+│ 205   scratch         pve1  ○ stopp   │  ▶ Check the servers                  │                                      │
+│                                       │    Check this desktop (discover)      │                                      │
+│                                       │    Reconfigure HomeStack…             │                                      │
+│                                       │    Uninstall HomeStack…               │                                      │
+│                                       │    Settings of this client            │                                      │
+│                                       │    Keys and help                      │                                      │
+│                                       │    Quit                               │                                      │
+│                                       │                                       │                                      │
+│                                       ╰─ ↑↓ enter ─ esc close ────────────────╯                                      │
+│                                                                  │                                                   │
+│                                                                  │                                                   │
+│                                                                  │                                                   │
+│                                                                  │                                                   │
+│                                                                  │                                                   │
+├─ Cluster ─────────────────────────────┬─ Storage ────────────────┴────────────┬─ Activity ───────────────────────────┤
+│ NODE  STATE     SERVER  CT   HEALTH   │ NODE  STORAGE    USED            FREE │ 10:47:01  status refreshed           │
+│ pve1  ● online  api1    115  ✓ ok     │ pve1  local-zfs  ███░░░░░░░ 18%  1.7T │ 10:41:58  refresh 203 web-lab: done  │
+│ pve2  ● online  api2    116  ✓ ok     │ pve2  local-lvm  ███░░░░░░░ 31%  1.2T │                                      │
+│ pve3  ● online  api3    117  ✓ ok     │ pve3  local-lvm  ██░░░░░░░░ 18%  2.9T │                                      │
+│                                       │                                       │                                      │
+│ Gold  112 hs-gold on pve1, stopped    │                                       │                                      │
+│ cert  *.hs.example.net, 89 days       │                                       │                                      │
+│                                       │                                       │                                      │
+│                                       │                                       │                                      │
+│                                       │                                       │                                      │
+│                                       │                                       │                                      │
+│                                       │                                       │                                      │
+╰─ ↑↓ choose ─ enter open ──────────────┴─ esc close ───────────────────────────┴─ q quit ─────────────────────────────╯

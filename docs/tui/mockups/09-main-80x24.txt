@@ -1,0 +1,31 @@
+09  Main board at the minimum size (80 x 24)
+    Fixed: title line with tabs and menu, the one-line cluster strip, the
+    key hints in the bottom border. Variable: the list (by tab) and the side
+    panel (details of the selected row, or an action, see 12).
+    Hidden at this size: IP and disk columns, the bottom area (10), the
+    sidebar (11). They are reachable through tabs ²Cluster ³Storage ⁵Log.
+
+╭─ HomeStack ─ [¹Workspaces] ─ ²Cluster ─ ³Storage ─ ⁴Keys ─ ⁵Log ───── ᵐmenu ─╮
+│ nodes ●●● 3/3   servers ●●● 3/3   gold 112 ○ stopped   storage 71% free      │
+├─ Workspaces 5 ─ 3 running ─────────────┬─ 201 dev-main ──────────────────────┤
+│ VMID NAME            NODE STATE        │ State    ● running on pve2          │
+│▶201  dev-main        pve2 ● running    │ Address  10.0.0.21                  │
+│ 202  rust-builder    pve3 ● running    │ Agent    ✓ answers                  │
+│ 203  web-lab         pve1 ○ stopped    │ Root     32 GiB on local-lvm        │
+│ 204  data-play       pve2 ● running    │ Home     64 GiB on local-lvm        │
+│ 205  scratch         pve1 ○ stopped    │          ███████████░░░░░░░ 59% used│
+│                                        │ SSH      ssh dev-main               │
+│                                        │                                     │
+│                                        ├─ Actions ───────────────────────────┤
+│                                        │ r  refresh root from Gold           │
+│                                        │ e  resize root or home              │
+│                                        │ k  add an SSH key                   │
+│                                        │ v  migrate to another node          │
+│                                        │ x  destroy (asks first)             │
+│                                        │                                     │
+│                                        │                                     │
+│                                        │                                     │
+│                                        │                                     │
+│                                        │                                     │
+│                                        │                                     │
+╰─ ↑↓ select ─ n new ─ / filter ─────────┴─ ? help ─ q quit ───────────────────╯

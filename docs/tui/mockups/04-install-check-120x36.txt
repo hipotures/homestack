@@ -1,0 +1,40 @@
+04  Step 2: what was found on the cluster (120 x 36)
+    Read-only. Symbols: ✓ fine, · not there yet (install adds it), ! needs attention.
+    The list scrolls when longer than the panel (scrollbar on the right edge).
+
+╭─ HomeStack install ────────────────────────────────────────────────────────── ssh root@pve2.lan · PVE 9.2 · 3 nodes ─╮
+│ ✓ 1 Access › [2 Check] › 3 Settings › 4 Review › 5 Install                                                           │
+├─ Steps ─────────────────────┬─ What is on the cluster ───────────────────────────────────────────────────────────────┤
+│                             │                                                                                        │
+│ ✓ 1 Access   pve2           │  ✓ root       ssh root@pve2.lan answers, Proxmox VE 9.2                                │
+│ ▶ 2 Check                   │  ✓ nodes      pve1 ● online   pve2 ● online   pve3 ● online                            │
+│   3 Settings                │  ✓ storages   8 found: 5 hold VM disks, 2 hold snippets, 1 holds container images      │
+│   4 Review                  │  ✓ Gold       VM 112 hs-gold on pve1, stopped, has a cloud-init disk                   │
+│   5 Install                 │  · user       homestack@pve does not exist yet                                         │
+│                             │  · roles      none of the 9 HomeStack roles exist yet                                  │
+│                             │  · pools      homestack, homestack-service do not exist yet                            │
+│                             │  · servers    no container named api1, api2 or api3                                    │
+│                             │  ! domain     no certificate for *.<domain> yet: the install requests one              │
+│                             │                                                                                        │
+│                             │  Nothing was changed. Next: choose the settings.                                       │
+│                             │                                                                                        │
+│                             │             [ Settings ]   [ Back ]   [ Cancel ]                                       │
+│                             │                                                                                        │
+│                             │                                                                                        │
+│                             │                                                                                        │
+│                             │                                                                                        │
+│                             │                                                                                        │
+│                             │                                                                                        │
+│                             │                                                                                        │
+│                             │                                                                                        │
+│                             │                                                                                        │
+│                             │                                                                                        │
+│                             │                                                                                        │
+│                             │                                                                                        │
+│                             │                                                                                        │
+├─ Log ───────────────────────┴────────────────────────────────────────────────────────────────────────────────────────┤
+│ 10:41:12  ssh root@pve2.lan: connected (security key touched)                                                        │
+│ 10:41:13  pvesh get /nodes, /storage, /pools, /access/users, /cluster/resources                                      │
+│ 10:41:14  check done: 4 found, 4 to add, 1 to note                                                                   │
+│                                                                                                                      │
+╰─ enter settings ─ b back ─ esc cancel ─ q quit ──────────────────────────────────────────────────────────────────────╯

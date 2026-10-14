@@ -1,0 +1,40 @@
+13  Stage 2 of an action: the plan (120 x 36): x = destroy 205 scratch
+    The plan lists exactly what changes, in the words of the CLI's question.
+    For destroy the focus starts on Cancel; Apply must be chosen on purpose.
+
+╭─ HomeStack ─ [¹Workspaces] ─ ²Cluster ─ ³Storage ─ ⁴Keys ─ ⁵Log ──────────────────────────── hs.example.net ─ ᵐmenu ─╮
+│ nodes ● pve1 ● pve2 ● pve3    servers ● api1 ● api2 ● api3    gold 112 hs-gold ○ stopped    v0.1.0   10:49:40        │
+├─ Workspaces 5 ─ 3 running ────────────────────────┬─ Destroy 205 scratch ─ ✓ 1 form › [2 plan] › 3 run ──────────────┤
+│ VMID  NAME            NODE  STATE      ADDRESS    │                                                                  │
+│ 201   dev-main        pve2  ● running  10.0.0.21  │  This permanently deletes:                                       │
+│ 202   rust-builder    pve3  ● running  10.0.0.22  │                                                                  │
+│ 203   web-lab         pve1  ○ stopped  —          │    VM 205 scratch on pve1 (stopped)                              │
+│ 204   data-play       pve2  ● running  10.0.0.24  │    root disk         32 GiB on local-zfs                         │
+│▶205   scratch         pve1  ○ stopped  —          │    persistent home   16 GiB on local-zfs                         │
+│                                                   │    cloud-init disk                                               │
+│                                                   │    on this desktop:  the SSH config, known_hosts and keys of 205 │
+│                                                   │                                                                  │
+│                                                   │  The home disk is NOT kept. This cannot be undone.               │
+│                                                   │                                                                  │
+│                                                   │                                                                  │
+│                                                   │               [ Destroy ]   [▶Cancel ]                           │
+│                                                   │                                                                  │
+│                                                   │                                                                  │
+│                                                   │                                                                  │
+│                                                   │                                                                  │
+│                                                   │                                                                  │
+│                                                   │                                                                  │
+├─ Cluster ─────────────────────────────┬───────────┴─ Storage ─────────────────┬─ Activity ───────────────────────────┤
+│ NODE  STATE     SERVER  CT   HEALTH   │ NODE  STORAGE    USED            FREE │ 10:49:31  destroy 205: plan ready    │
+│ pve1  ● online  api1    115  ✓ ok     │ pve1  local-zfs  ███░░░░░░░ 18%  1.7T │ 10:47:01  status refreshed           │
+│ pve2  ● online  api2    116  ✓ ok     │ pve2  local-lvm  ███░░░░░░░ 31%  1.2T │ 10:41:58  refresh 203 web-lab: done  │
+│ pve3  ● online  api3    117  ✓ ok     │ pve3  local-lvm  ██░░░░░░░░ 18%  2.9T │                                      │
+│                                       │                                       │                                      │
+│ Gold  112 hs-gold on pve1, stopped    │                                       │                                      │
+│ cert  *.hs.example.net, 89 days       │                                       │                                      │
+│                                       │                                       │                                      │
+│                                       │                                       │                                      │
+│                                       │                                       │                                      │
+│                                       │                                       │                                      │
+│                                       │                                       │                                      │
+╰─ ←→ button ─ enter choose ────────────┴─ esc back ────────────────────────────┴─ q quit ─────────────────────────────╯

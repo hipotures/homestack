@@ -1,0 +1,40 @@
+06  Step 3 at 120 x 36
+    Same as 05; the steps column comes back and the chooser shows more columns
+    plus a summary of what each node gets. The domain is a text field.
+
+╭─ HomeStack install ────────────────────────────────────────────────────────── ssh root@pve2.lan · PVE 9.2 · 3 nodes ─╮
+│ ✓ 1 Access › ✓ 2 Check › [3 Settings] › 4 Review › 5 Install                                                         │
+├─ Steps ─────────────┬─ Settings ─────────────────────────────┬─ Workspace disks ─────────────────────────────────────┤
+│                     │                                        │                                                       │
+│ ✓ 1 Access          │ ▶ Workspace disks    2 chosen          │ Where HomeStack makes workspace VM disks (root        │
+│ ✓ 2 Check           │   Cloud-Init         local             │ and persistent home). Tick one or more.               │
+│ ▶ 3 Settings        │   Server disks       2 chosen          │                                                       │
+│   4 Review          │   Server image       local             │        STORAGE    TYPE      NODES      USED  FREE     │
+│   5 Install         │   Gold VM            112 hs-gold       │    [ ] backup-a   dir       pve1       12%   210G     │
+│                     │   Server domain      hs.example.net    │    [ ] backup-b   dir       pve1       30%   190G     │
+│                     │                                        │  ▶ [x] local-lvm  lvmthin   pve2,pve3  27%   4.0T     │
+│                     │   Root access   ssh root@pve2.lan      │    [x] local-zfs  zfspool   pve1       18%   1.7T     │
+│                     │                                        │    [ ] fast-roots lvmthin   pve1        0%   900G     │
+│                     │                                        │    [ ] shared-nfs nfs       all        44%   3.1T     │
+│                     │                                        │                                                       │
+│                     │                                        ├─ Each node gets ──────────────────────────────────────┤
+│                     │                                        │  pve1   local-zfs                                     │
+│                     │                                        │  pve2   local-lvm                                     │
+│                     │                                        │  pve3   local-lvm                                     │
+│                     │                                        │                                                       │
+│                     │                                        │                                                       │
+│                     │                                        │                                                       │
+│                     │                                        │                                                       │
+│                     │                                        │                                                       │
+│                     │                                        │                                                       │
+│                     │                                        │                                                       │
+│                     │                                        │                                                       │
+│                     │                                        │                                                       │
+│                     │                                        │                                                       │
+│                     │  [ Review ]  [ Cancel ]                │                                                       │
+├─ Log ───────────────┴────────────────────────────────────────┴───────────────────────────────────────────────────────┤
+│ 10:41:14  check done: 4 found, 4 to add, 1 to note                                                                   │
+│ 10:41:30  choices kept from the last run: Gold VM, Server domain                                                     │
+│                                                                                                                      │
+│                                                                                                                      │
+╰─ ↑↓ move ─ space tick ─ tab next column ─ enter review ─ b back ─ esc cancel ────────────────────────────────────────╯

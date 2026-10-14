@@ -1,0 +1,31 @@
+12  An action opens in the side panel, not in a new screen (80 x 24): n = new workspace
+    The list narrows to make room; the strip, tabs and list stay.
+    Every action has the same three stages shown in its title:
+      1 form  →  2 plan (exactly what will change; the CLI's question)  →  3 run.
+    Esc closes the panel before Apply; after Apply the run goes on and the
+    panel can be hidden (Esc) and shown again from ⁵Log.
+
+╭─ HomeStack ─ [¹Workspaces] ─ ²Cluster ─ ³Storage ─ ⁴Keys ─ ⁵Log ───── ᵐmenu ─╮
+│ nodes ●●● 3/3   servers ●●● 3/3   gold 112 ○ stopped   storage 71% free      │
+├─ Workspaces 5 ─────────┬─ New workspace ─ [1 form] › 2 plan › 3 run ─────────┤
+│ 201 dev-main      ●    │                                                     │
+│ 202 rust-builder  ●    │  VMID        [ 206        ]  next free              │
+│ 203 web-lab       ○    │  Name        [ ml-lab▏      ]                       │
+│ 204 data-play     ●    │  Node        ‹ pve3 ›        Gold is on pve1        │
+│ 205 scratch       ○    │  Storage     ‹ local-lvm ›   2.9T free on pve3      │
+│                        │  Home size   [ 64G        ]  persistent, ext4       │
+│                        │                                                     │
+│                        │  Root is a full clone of Gold 112 hs-gold.          │
+│                        │  Home stays when the root is refreshed.             │
+│                        │                                                     │
+│                        │                                                     │
+│                        │                                                     │
+│                        │                                                     │
+│                        │                                                     │
+│                        │                                                     │
+│                        │                                                     │
+│                        │                                                     │
+│                        │                                                     │
+│                        │                                                     │
+│                        │            [ Plan ]   [ Cancel ]                    │
+╰─ ↑↓ field ─────────────┴─ ←→ choose ─ enter plan ─ esc cancel ───────────────╯

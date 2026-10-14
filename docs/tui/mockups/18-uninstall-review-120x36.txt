@@ -1,0 +1,41 @@
+18  Menu › Uninstall: the install board in uninstall mode, review step (120 x 36)
+    Same board and steps as the install (Access, Check, Review, Remove);
+    root on one node is needed again. It never removes a VM, a container or a
+    volume, and says so.
+
+╭─ HomeStack uninstall ──────────────────────────────────────────────────────── ssh root@pve2.lan · PVE 9.2 · 3 nodes ─╮
+│ ✓ 1 Access › ✓ 2 Check › [3 Review] › 4 Remove                                                                       │
+├─ Steps ─────────────┬─ What the uninstall will remove ───────────────────────────────────────────────────────────────┤
+│                     │                                                                                                │
+│ ✓ 1 Access          │  From Proxmox                                                                                  │
+│ ✓ 2 Check           │    Permissions   12 ACL entries of homestack@pve and its tokens                                │
+│ ▶ 3 Review          │    Tokens        server, deploy                                                                │
+│   4 Remove          │    User          homestack@pve                                                                 │
+│                     │    Roles         HomeStack, HomeStackStorage, HomeStackGold, HomeStackDeploy, …  (9)           │
+│                     │                                                                                                │
+│                     │  Kept, never removed                                                                           │
+│                     │    every VM and container: workspaces 201–205, Gold 112, servers 115–117                       │
+│                     │    every disk and volume, the pools that still hold guests                                     │
+│                     │    ~/.config/homestack on this desktop                                                         │
+│                     │                                                                                                │
+│                     │  After this the servers can no longer reach Proxmox; the main board                            │
+│                     │  shows them as not answering until HomeStack is installed again.                               │
+│                     │                                                                                                │
+│                     │      [ Remove ]   [▶Cancel ]                                                                   │
+│                     │                                                                                                │
+│                     │                                                                                                │
+│                     │                                                                                                │
+│                     │                                                                                                │
+│                     │                                                                                                │
+│                     │                                                                                                │
+│                     │                                                                                                │
+│                     │                                                                                                │
+│                     │                                                                                                │
+│                     │                                                                                                │
+│                     │                                                                                                │
+├─ Log ───────────────┴────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ 10:58:40  ssh root@pve2.lan: connected (security key touched)                                                        │
+│ 10:58:41  check done: 22 to remove, 9 guests kept                                                                    │
+│                                                                                                                      │
+│                                                                                                                      │
+╰─ ←→ button ─ enter choose ─ b back ─ esc cancel ─────────────────────────────────────────────────────────────────────╯
