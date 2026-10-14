@@ -327,3 +327,10 @@ Rendering into ratatui's `TestBackend`, as MyPowers does, with a fake status:
   same way), names in `homestack.app`.
 - The router's zones `hs.efez.net` and `pve1–3.efez.net` go once the
   servers answer at `apiN.homestack.app`.
+- Renumbering a workspace to the numbering by address (VMID 206 →
+  1010xx): Proxmox cannot renumber a VM, so it is a full copy of the
+  stopped VM under the new VMID, the home's serial and its filesystem
+  label `HS_HOME_<vmid>`, the address in Cloud-Init, a start with the
+  create's checks, the desktop's SSH entry, and the old VM removed last.
+  Until then a workspace of the Python HomeStack (2–254) joins by being
+  put in pool `homestack` (done for 206 `cpu`, 2026-10-15).
