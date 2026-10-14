@@ -64,9 +64,9 @@ fn moving_down_selects_the_first_workspace_and_lights_the_counter() {
     assert!(row(&buf, 23).contains("┘1/12└"), "{}", screen(&buf));
     let palette = Palette::named("HomeStack", false).unwrap();
     let (x, y) = position(&buf, "dev-main");
-    assert_eq!(buf[(x, y)].bg, palette.selection);
+    assert_eq!(buf[(x, y)].bg, palette.focus);
     let (x, y) = position(&buf, "rust-builder");
-    assert_ne!(buf[(x, y)].bg, palette.selection);
+    assert_ne!(buf[(x, y)].bg, palette.focus);
 }
 
 #[test]
@@ -378,4 +378,26 @@ fn before_the_first_status_the_list_says_it_is_reading() {
         text.contains("1.2 s") && text.contains("██████"),
         "a moving bar: {text}"
     );
+}
+
+#[test]
+fn a_click_on_a_workspace_selects_it_and_the_wheel_moves_the_selection() {
+    use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+    let mut fixture = app();
+    let buf = render(&fixture.app, 120, 36);
+    let (x, y) = position(&buf, "rust-builder");
+    let click = MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: x,
+        row: y,
+        modifiers: KeyModifiers::NONE,
+    };
+    assert_eq!(fixture.app.mouse(click), Some(Request::Details(202)));
+    let wheel = MouseEvent {
+        kind: MouseEventKind::ScrollDown,
+        column: x,
+        row: y,
+        modifiers: KeyModifiers::NONE,
+    };
+    assert_eq!(fixture.app.mouse(wheel), Some(Request::Details(203)));
 }

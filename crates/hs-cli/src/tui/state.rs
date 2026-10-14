@@ -132,6 +132,9 @@ pub struct App {
     /// Oldest first.
     pub lines: Vec<LogLine>,
     pub clock: String,
+    /// Where the list's rows were drawn last: x, width, the first row's y,
+    /// the rows shown and the index of the first; for the mouse.
+    pub list_rows: std::cell::Cell<(u16, u16, u16, u16, usize)>,
     /// Tenths of a second spent waiting for the first status.
     pub waiting: u32,
     /// Shown instead of the list: a title and lines (no client.toml, …).
@@ -177,6 +180,7 @@ impl App {
             lines: Vec::new(),
             clock: String::new(),
             waiting: 0,
+            list_rows: std::cell::Cell::new((0, 0, 0, 0, 0)),
             notice: None,
             action: None,
             log_file: None,
@@ -453,6 +457,31 @@ impl App {
         match self.preferences.write(&table) {
             Ok(()) => self.preferences.table = table,
             Err(error) => self.log("", &error.0),
+        }
+    }
+
+    /// A mouse event: a click on a workspace selects it, the wheel moves the
+    /// selection.
+    pub fn mouse(&mut self, event: crossterm::event::MouseEvent) -> Option<Request> {
+        use crossterm::event::{MouseButton, MouseEventKind};
+        if self.install.is_some() || self.overlay.is_some() || self.asking.is_some() {
+            return None;
+        }
+        match event.kind {
+            MouseEventKind::ScrollDown => self.move_by(1),
+            MouseEventKind::ScrollUp => self.move_by(-1),
+            MouseEventKind::Down(MouseButton::Left) => {
+                let (x, width, first, shown, offset) = self.list_rows.get();
+                let inside = event.column >= x
+                    && event.column < x.saturating_add(width)
+                    && event.row >= first
+                    && event.row < first.saturating_add(shown);
+                if !inside {
+                    return None;
+                }
+                self.select_at(offset + usize::from(event.row - first))
+            }
+            _ => None,
         }
     }
 

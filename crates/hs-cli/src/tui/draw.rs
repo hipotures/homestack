@@ -746,12 +746,23 @@ fn workspaces(buf: &mut Buffer, area: Rect, app: &App, mut controls: Vec<Control
     let visible = usize::from(list.height - 1);
     let index = app.selected_index();
     let offset = index.map_or(0, |at| (at + 1).saturating_sub(visible));
+    app.list_rows.set((
+        list.x,
+        list.width,
+        list.y + 1,
+        u16::try_from(rows.len().saturating_sub(offset).min(visible)).unwrap_or(0),
+        offset,
+    ));
     for (row, entry) in rows.iter().enumerate().skip(offset).take(visible) {
         let y = list.y + 1 + u16::try_from(row - offset).unwrap_or(0);
         let chosen = Some(row) == index;
         let mut style = text;
         if chosen {
-            style = style.bg(palette.selection).add_modifier(Modifier::BOLD);
+            // A bar in the accent colour, as btop's, visible in every theme.
+            style = style
+                .fg(palette.background)
+                .bg(palette.focus)
+                .add_modifier(Modifier::BOLD);
             if palette.no_color {
                 style = style.add_modifier(Modifier::REVERSED);
             }

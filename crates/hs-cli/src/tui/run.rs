@@ -57,7 +57,12 @@ impl Screen {
     fn open() -> io::Result<Self> {
         terminal::enable_raw_mode()?;
         let mut stdout = io::stdout();
-        execute!(stdout, terminal::EnterAlternateScreen, crossterm::cursor::Hide)?;
+        execute!(
+            stdout,
+            terminal::EnterAlternateScreen,
+            crossterm::cursor::Hide,
+            crossterm::event::EnableMouseCapture
+        )?;
         let previous = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| {
             restore();
@@ -71,7 +76,12 @@ impl Screen {
 
 fn restore() {
     let _ = terminal::disable_raw_mode();
-    let _ = execute!(io::stdout(), terminal::LeaveAlternateScreen, crossterm::cursor::Show);
+    let _ = execute!(
+        io::stdout(),
+        crossterm::event::DisableMouseCapture,
+        terminal::LeaveAlternateScreen,
+        crossterm::cursor::Show
+    );
 }
 
 impl Drop for Screen {
@@ -485,10 +495,12 @@ pub async fn run(ctx: &mut Context) -> Result<i32, AppError> {
             .map_err(|error| AppError::new(format!("Cannot draw: {error}")))?;
         tokio::select! {
             Some(event) = events.recv() => {
-                if let Event::Key(key) = event
-                    && key.kind == KeyEventKind::Press
-                    && let Some(request) = app.key(key)
-                {
+                let request = match event {
+                    Event::Key(key) if key.kind == KeyEventKind::Press => app.key(key),
+                    Event::Mouse(mouse) => app.mouse(mouse),
+                    _ => None,
+                };
+                if let Some(request) = request {
                     if request == Request::Quit {
                         installing.send(Command::Cancel, &mut app, ctx, &updates);
                         return Ok(0);
