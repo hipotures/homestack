@@ -240,9 +240,155 @@ fn answered(settings: &Settings, questions: &[hs_install::Question], answers: &[
     settings
 }
 
+/// `path` with the home directory written as `~`.
+fn tilde(path: &std::path::Path, home: &std::path::Path) -> String {
+    path.strip_prefix(home)
+        .map_or_else(|_| path.display().to_string(), |rest| format!("~/{}", rest.display()))
+}
+
+/// What an ACL path is: its kind (in the order shown) and its name.
+fn place(path: &str) -> (u8, &'static str, String) {
+    match path.split('/').collect::<Vec<_>>().as_slice() {
+        ["", "nodes"] => (0, "whole cluster", "nodes".to_owned()),
+        ["", "sdn"] => (0, "whole cluster", "networks".to_owned()),
+        ["", "storage"] => (0, "whole cluster", "storages".to_owned()),
+        ["", "pool", pool] => (1, "pools", (*pool).to_owned()),
+        ["", "storage", id] => (2, "storages", (*id).to_owned()),
+        ["", "sdn", "zones", _, bridge] => (3, "networks", (*bridge).to_owned()),
+        _ => (4, "other", path.to_owned()),
+    }
+}
+
+/// The plan's steps grouped by what they change, a short line each.
+fn grouped_changes(plan: &Plan, home: &std::path::Path) -> Vec<(String, Vec<String>)> {
+    use hs_install::Action;
+    let mut account = Vec::new();
+    let mut roles: std::collections::BTreeMap<&str, Vec<String>> = std::collections::BTreeMap::new();
+    let mut pools: std::collections::BTreeMap<&str, Vec<String>> = std::collections::BTreeMap::new();
+    let mut gold = Vec::new();
+    // Who -> (places given, places taken).
+    let mut permissions: std::collections::BTreeMap<String, Permissions> = std::collections::BTreeMap::new();
+    let mut entries = 0usize;
+    let mut snippets: std::collections::BTreeMap<String, Vec<String>> = std::collections::BTreeMap::new();
+    for step in &plan.steps {
+        match &step.action {
+            Action::Pveum(args) => {
+                let words: Vec<&str> = args.iter().map(String::as_str).collect();
+                match words.as_slice() {
+                    ["user", "add", user, ..] => account.push(format!("new user {user}")),
+                    ["user", "delete", user] => account.push(format!("remove user {user}")),
+                    ["user", "token", "delete", _, token] => account.push(format!("remove token {token}")),
+                    ["user", "token", "modify", _, token, ..] => {
+                        account.push(format!("token {token}: separate its privileges"));
+                    }
+                    ["role", "add", role, ..] => roles.entry("new").or_default().push((*role).to_owned()),
+                    ["role", "modify", role, ..] => roles.entry("changed").or_default().push((*role).to_owned()),
+                    ["role", "delete", role] => roles.entry("removed").or_default().push((*role).to_owned()),
+                    ["pool", "add", pool, ..] => pools.entry("new").or_default().push((*pool).to_owned()),
+                    ["pool", "delete", pool] => pools.entry("removed").or_default().push((*pool).to_owned()),
+                    ["pool", "modify", pool, "--vms", vmid, rest @ ..] => {
+                        if rest.contains(&"--delete") {
+                            gold.push(format!("take VM {vmid} out of pool {pool}"));
+                        } else {
+                            gold.push(format!("put VM {vmid} in pool {pool}"));
+                        }
+                    }
+                    ["acl", action, path, _, who, "--roles", roles_given] => {
+                        let short = who
+                            .strip_prefix("homestack@pve!")
+                            .map_or_else(|| "the user homestack@pve".to_owned(), |token| format!("token {token}"));
+                        let count = roles_given.split(',').count();
+                        entries += count;
+                        let slot = permissions.entry(short).or_default();
+                        let (order, kind, name) = place(path);
+                        let list = if *action == "modify" {
+                            slot.given.entry((order, kind)).or_default()
+                        } else {
+                            slot.taken.entry((order, kind)).or_default()
+                        };
+                        if !list.contains(&name) {
+                            list.push(name);
+                        }
+                    }
+                    _ => account.push(step.description.clone()),
+                }
+            }
+            Action::Pvesh(_) => gold.push(step.description.replace("tag Gold", "tag VM")),
+            Action::CreateToken {
+                token, file, replaced, ..
+            } => {
+                let mut line = format!("new token {token}, secret to {}", tilde(file, home));
+                if let Some(old) = replaced {
+                    let name = old
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default();
+                    account.push(line.clone());
+                    line = format!("old file kept as {name}");
+                }
+                account.push(line);
+            }
+            Action::WriteSnippet { node, name, .. } => {
+                snippets.entry(format!("write {name}")).or_default().push(node.clone());
+            }
+            Action::RemoveSnippet { node, name, .. } => {
+                snippets.entry(format!("remove {name}")).or_default().push(node.clone());
+            }
+        }
+    }
+    let mut sections = Vec::new();
+    if !account.is_empty() {
+        sections.push(("Account and tokens".to_owned(), account));
+    }
+    for (title, group) in [("Roles", roles), ("Pools", pools)] {
+        if group.is_empty() {
+            continue;
+        }
+        let counts: Vec<String> = group
+            .iter()
+            .map(|(kind, names)| format!("{} {kind}", names.len()))
+            .collect();
+        let lines = group
+            .iter()
+            .flat_map(|(kind, names)| wrap_names(&format!("{kind}: "), names))
+            .collect();
+        sections.push((format!("{title} ({})", counts.join(", ")), lines));
+    }
+    if !gold.is_empty() {
+        let heading = plan
+            .gold
+            .as_ref()
+            .map_or_else(|| "Gold".to_owned(), |g| format!("Gold {g}"));
+        sections.push((heading, gold));
+    }
+    if !permissions.is_empty() {
+        let lines = permissions
+            .iter()
+            .flat_map(|(who, slot)| {
+                let mut lines = vec![format!("{who}:")];
+                for (heading, map) in [("", &slot.given), ("taken away from ", &slot.taken)] {
+                    for ((_, kind), names) in map {
+                        lines.extend(wrap_names(&format!("    {heading}{kind:<14} "), names));
+                    }
+                }
+                lines
+            })
+            .collect();
+        sections.push((format!("Permissions ({entries} entries)"), lines));
+    }
+    if !snippets.is_empty() {
+        let lines = snippets
+            .iter()
+            .map(|(what, nodes)| format!("{what} on {}", nodes.join(", ")))
+            .collect();
+        sections.push(("Cloud-Init snippets".to_owned(), lines));
+    }
+    sections
+}
+
 /// The summary of a plan: where root comes from, the choices, warnings and
 /// every change.
-fn summary_of(access_line: &str, plan: &Plan) -> Summary {
+fn summary_of(access_line: &str, plan: &Plan, home: &std::path::Path) -> Summary {
     let settings = &plan.settings;
     let mut chosen = vec![
         format!("Workspace disks:     {}", settings.storages.join(", ")),
@@ -259,10 +405,8 @@ fn summary_of(access_line: &str, plan: &Plan) -> Summary {
     if let Some(gold) = &plan.gold {
         chosen.push(format!("Gold:                {gold}"));
     }
-    let mut sections = vec![
-        ("Root access".to_owned(), vec![access_line.to_owned()]),
-        ("Your choices".to_owned(), chosen),
-    ];
+    let _ = access_line;
+    let mut sections = vec![("Your choices".to_owned(), chosen)];
     if !plan.taken.is_empty() {
         sections.push(("Chosen without asking".to_owned(), plan.taken.clone()));
     }
@@ -271,12 +415,14 @@ fn summary_of(access_line: &str, plan: &Plan) -> Summary {
     if !notices.is_empty() {
         sections.push(("Warnings (they do not stop the install)".to_owned(), notices));
     }
-    let changes = if plan.steps.is_empty() {
-        vec!["Nothing to change: HomeStack is installed as chosen.".to_owned()]
+    if plan.steps.is_empty() {
+        sections.push((
+            "Changes in Proxmox".to_owned(),
+            vec!["Nothing to change: HomeStack is installed as chosen.".to_owned()],
+        ));
     } else {
-        plan.steps.iter().map(|step| step.description.clone()).collect()
-    };
-    sections.push((format!("Changes in Proxmox ({})", plan.steps.len()), changes));
+        sections.extend(grouped_changes(plan, home));
+    }
     Summary {
         sections,
         problems: Vec::new(),
@@ -329,12 +475,13 @@ pub fn run(args: &Args, given: &InstallArgs, command: Install, ctx: &mut Context
             }
         );
         let mut form = Form::new("HomeStack install", form_fields(&root_line, &settings, &questions));
+        let home = ctx.home.clone();
         let mut last: Option<Plan> = None;
         let mut summarize = |answers: &[Answer]| {
             let chosen = answered(&settings, &questions, answers);
             match hs_install::make_plan(root.as_mut(), &access, command, &chosen) {
                 Ok(plan) => {
-                    let summary = summary_of(&access_line, &plan);
+                    let summary = summary_of(&access_line, &plan, &home);
                     last = Some(plan);
                     summary
                 }
@@ -640,4 +787,32 @@ fn save_draft(path: &std::path::Path, questions: &[hs_install::Question], answer
         let _ = file.set_permissions(std::fs::Permissions::from_mode(0o600));
         let _ = file.write_all(text.as_bytes());
     }
+}
+
+/// `names` after `lead`, comma-separated, in lines of at most 80 characters.
+fn wrap_names(lead: &str, names: &[String]) -> Vec<String> {
+    let indent = " ".repeat(lead.chars().count());
+    let mut lines = vec![lead.to_owned()];
+    for (index, name) in names.iter().enumerate() {
+        let piece = if index + 1 < names.len() {
+            format!("{name}, ")
+        } else {
+            name.clone()
+        };
+        let current = lines.last().map_or(0, |line| line.chars().count());
+        if current + piece.chars().count() > 80 && current > indent.len() {
+            lines.push(indent.clone());
+        }
+        if let Some(line) = lines.last_mut() {
+            line.push_str(&piece);
+        }
+    }
+    lines.into_iter().map(|line| line.trim_end().to_owned()).collect()
+}
+
+/// What one account or token is given and loses, by kind of place.
+#[derive(Default)]
+struct Permissions {
+    given: std::collections::BTreeMap<(u8, &'static str), Vec<String>>,
+    taken: std::collections::BTreeMap<(u8, &'static str), Vec<String>>,
 }

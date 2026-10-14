@@ -133,3 +133,37 @@ fn cancel_and_esc_leave_without_installing() {
     press(&mut f, &[Key::Down, Key::Down, Key::Right, Key::Enter]);
     assert_eq!(f.outcome(), Some(Outcome::Cancelled));
 }
+
+#[test]
+fn a_long_confirmation_has_a_scrollbar_and_stops_at_its_end() {
+    let mut f = form();
+    press(&mut f, &[Key::Down, Key::Down]);
+    f.handle(Key::Enter);
+    let many: Vec<String> = (0..40).map(|i| format!("change {i}")).collect();
+    f.set_summary(Summary {
+        sections: vec![("Changes".to_owned(), many)],
+        problems: Vec::new(),
+    });
+    let first = f.render_to_string(70, 20);
+    assert!(
+        first.contains('\u{2193}') || first.contains('\u{2588}'),
+        "no scrollbar:\n{first}"
+    );
+    assert!(first.contains("change 0"), "{first}");
+    for _ in 0..200 {
+        f.handle(Key::Down);
+    }
+    let end = f.render_to_string(70, 20);
+    assert!(end.contains("change 39"), "the end is not shown:\n{end}");
+    // Scrolled to the end it stays there: one Up shows the line above.
+    f.handle(Key::Up);
+    let up = f.render_to_string(70, 20);
+    assert!(
+        !up.contains("change 39") || up.contains("change 30"),
+        "scrolled past the end:\n{up}"
+    );
+    let mut short = form();
+    press(&mut short, &[Key::Down, Key::Down, Key::Enter]);
+    let screen = short.render_to_string(70, 20);
+    assert!(!screen.contains('\u{2588}'), "a scrollbar on a short list:\n{screen}");
+}

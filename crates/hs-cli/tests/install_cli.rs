@@ -573,8 +573,8 @@ async fn on_a_terminal_every_setting_is_shown_and_nothing_happens_before_install
         "a command-line option is shown in the form:\n{form}"
     );
     for text in [
-        "Changes in Proxmox",
-        "create user homestack@pve",
+        "Account and tokens",
+        "new user homestack@pve",
         "Same as: homestack install --ssh root@pve1 --storages local-lvm --snippet-storage local --service-storages local-lvm --template-storage local --gold 101",
     ] {
         assert!(out.contains(text), "{text:?} missing:\n{out}");
@@ -719,5 +719,35 @@ async fn the_choices_are_kept_for_the_next_run() {
         again.console.out().contains("Workspace disks      local-lvm"),
         "{}",
         again.console.out()
+    );
+}
+
+#[tokio::test]
+async fn the_confirmation_groups_the_changes_in_short_lines() {
+    let cluster = Cluster::new(&["pve1"]);
+    std::fs::write(cluster.token_dir().join("pve-token"), "old\n").expect("old token file");
+    let done = run(&cluster, &["install", "--ssh", "root@pve1"], &["", "n"], true).await;
+    let out = done.console.out();
+    let confirm = out.split("Confirm the installation").nth(1).unwrap_or_default();
+    for heading in [
+        "Account and tokens",
+        "Roles (6 new)",
+        "Pools (3 new)",
+        "Gold",
+        "Permissions",
+        "Cloud-Init snippets",
+    ] {
+        assert!(confirm.contains(heading), "no {heading:?}:\n{confirm}");
+    }
+    assert!(confirm.contains("old file kept as pve-token.replaced-"), "{confirm}");
+    assert!(confirm.contains("~/.config/homestack/pve-token"), "{confirm}");
+    assert!(
+        !confirm.contains("give homestack@pve"),
+        "raw permission steps are listed:\n{confirm}"
+    );
+    let changes = confirm.split("Account and tokens").nth(1).unwrap_or_default();
+    assert!(
+        changes.lines().all(|l| l.chars().count() <= 100),
+        "a line is too long:\n{changes}"
     );
 }

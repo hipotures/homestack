@@ -13,7 +13,10 @@ use ratatui::backend::TestBackend;
 use ratatui::layout::{Constraint, Flex, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap};
+use ratatui::widgets::{
+    Block, BorderType, Borders, Clear, List, ListItem, ListState, Paragraph, Scrollbar, ScrollbarOrientation,
+    ScrollbarState, Wrap,
+};
 
 use crate::system::Console;
 use crate::wizard::{Answer, Item, Key, Summary};
@@ -135,6 +138,8 @@ pub struct Form {
     confirm: Option<Option<Summary>>,
     confirm_install: bool,
     scroll: u16,
+    /// How far the confirmation can scroll, as last drawn.
+    max_scroll: std::cell::Cell<u16>,
     outcome: Option<Outcome>,
     list: ListState,
 }
@@ -154,6 +159,7 @@ impl Form {
             confirm: None,
             confirm_install: true,
             scroll: 0,
+            max_scroll: std::cell::Cell::new(u16::MAX),
             outcome: None,
             list: ListState::default(),
         }
@@ -282,9 +288,11 @@ impl Form {
         match key {
             Key::Left | Key::Right | Key::Tab => self.confirm_install = can_install && !self.confirm_install,
             Key::Up => self.scroll = self.scroll.saturating_sub(1),
-            Key::Down => self.scroll = self.scroll.saturating_add(1),
+            Key::Down => self.scroll = self.scroll.saturating_add(1).min(self.max_scroll.get()),
             Key::PageUp => self.scroll = self.scroll.saturating_sub(10),
-            Key::PageDown => self.scroll = self.scroll.saturating_add(10),
+            Key::PageDown => self.scroll = self.scroll.saturating_add(10).min(self.max_scroll.get()),
+            Key::Home => self.scroll = 0,
+            Key::End => self.scroll = self.max_scroll.get(),
             Key::Enter if matches!(self.confirm, Some(Some(_))) => {
                 if self.confirm_install && can_install {
                     self.outcome = Some(Outcome::Install(self.answers()));
@@ -472,16 +480,38 @@ impl Form {
                 Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
             ));
             for item in items {
-                lines.push(Line::from(format!("  \u{2022} {item}")));
+                let bullet = if item.starts_with(' ') { "    " } else { "  \u{2022} " };
+                lines.push(Line::from(format!("{bullet}{item}")));
             }
             lines.push(Line::from(""));
         }
+        // The rows the text takes once wrapped, so that scrolling stops at
+        // its end and the scrollbar shows where the view is.
+        let width = usize::from(text.width.saturating_sub(1)).max(1);
+        let rows: usize = lines
+            .iter()
+            .map(|line| {
+                let content: String = line.spans.iter().map(|span| span.content.as_ref()).collect();
+                if content.trim().is_empty() {
+                    1
+                } else {
+                    wrapped_lines(&content, width)
+                }
+            })
+            .sum();
+        let view = usize::from(text.height);
+        let max_scroll = u16::try_from(rows.saturating_sub(view)).unwrap_or(u16::MAX);
+        self.max_scroll.set(max_scroll);
+        let scroll = self.scroll.min(max_scroll);
+        let [words, bar] = Layout::horizontal([Constraint::Min(1), Constraint::Length(1)]).areas(text);
         frame.render_widget(
-            Paragraph::new(lines)
-                .wrap(Wrap { trim: false })
-                .scroll((self.scroll, 0)),
-            text,
+            Paragraph::new(lines).wrap(Wrap { trim: false }).scroll((scroll, 0)),
+            words,
         );
+        if rows > view {
+            let mut state = ScrollbarState::new(rows.saturating_sub(view)).position(usize::from(scroll));
+            frame.render_stateful_widget(Scrollbar::new(ScrollbarOrientation::VerticalRight), bar, &mut state);
+        }
         let can_install = summary.problems.is_empty();
         frame.render_widget(
             Paragraph::new(buttons(
@@ -682,7 +712,8 @@ pub fn run_numbered<C: Console + ?Sized>(
     for (heading, items) in &summary.sections {
         text.push_str(&format!("{heading}\n"));
         for item in items {
-            text.push_str(&format!("  - {item}\n"));
+            let bullet = if item.starts_with(' ') { "    " } else { "  - " };
+            text.push_str(&format!("{bullet}{item}\n"));
         }
     }
     console.out(&text);
