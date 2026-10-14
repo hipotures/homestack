@@ -1,0 +1,579 @@
+//! The install and the uninstall as steps that the CLI's form and the TUI's
+//! install screen both drive (phase 13b step 3): root is reached, the
+//! cluster read, the choices answered and reviewed, the plan applied, the
+//! servers deployed and `client.toml` written. Nothing here talks to a
+//! terminal; what happens is told through `say` and `progress`.
+
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use hs_install::{Access, Applied, Command as Install, InstallError, Plan, Root, Settings};
+
+use crate::AppError;
+use crate::servers::{Files, ServerPlan, Servers, ensure_api_token, plan_servers, write_private};
+use crate::wizard::{Answer, Summary};
+
+/// The draft's key of the server domain.
+const DRAFT_DOMAIN: &str = "server-domain";
+
+fn failure(error: InstallError) -> AppError {
+    AppError::new(error.to_string())
+}
+
+/// `Root access: <how>; <host> is Proxmox VE <version>, <topology>.`
+#[must_use]
+pub fn access_line(root: &dyn Root, access: &Access) -> String {
+    format!(
+        "Root access: {}; {} is Proxmox VE {}, {}.",
+        root.describe(),
+        access.host,
+        access.version,
+        access.topology.describe()
+    )
+}
+
+/// One install or uninstall with root reached.
+pub struct Session {
+    pub command: Install,
+    root: Box<dyn Root>,
+    pub access: Access,
+    pub access_line: String,
+    /// The options given before any question (token directory, test part).
+    pub settings: Settings,
+    /// What is asked, starting from the kept choices; none for an uninstall.
+    pub questions: Vec<hs_install::Question>,
+    /// The server domain of the last run.
+    pub draft_domain: String,
+    pub want_servers: bool,
+    pub server_image: Option<String>,
+    pub files: Files,
+    servers: Arc<dyn Servers>,
+}
+
+/// A plan made from answers, with what the review shows.
+pub struct Review {
+    pub plan: Option<Plan>,
+    pub servers: Option<ServerPlan>,
+    pub domain: Option<String>,
+    pub summary: Summary,
+}
+
+impl Review {
+    /// Whether it can be applied: a plan and no problem.
+    #[must_use]
+    pub fn ready(&self) -> bool {
+        self.plan.is_some() && self.summary.problems.is_empty()
+    }
+}
+
+impl Session {
+    /// Check the access and read what can be chosen.
+    pub fn start(
+        mut root: Box<dyn Root>,
+        command: Install,
+        settings: Settings,
+        want_servers: bool,
+        server_image: Option<String>,
+        files: Files,
+        servers: Arc<dyn Servers>,
+    ) -> Result<Self, AppError> {
+        let access = hs_install::probe(root.as_mut()).map_err(failure)?;
+        let access_line = access_line(root.as_ref(), &access);
+        let mut questions = if command == Install::Install {
+            hs_install::questions(root.as_mut(), &access, &settings).map_err(failure)?
+        } else {
+            Vec::new()
+        };
+        let kept = load_draft(&draft_path(&settings));
+        apply_draft(&mut questions, &kept);
+        let draft_domain = kept
+            .get(DRAFT_DOMAIN)
+            .and_then(|values| values.first())
+            .cloned()
+            .unwrap_or_default();
+        Ok(Self {
+            command,
+            root,
+            access,
+            access_line,
+            settings,
+            questions,
+            draft_domain,
+            want_servers,
+            server_image,
+            files,
+            servers,
+        })
+    }
+
+    /// How root is reached (`ssh root@pve2`).
+    #[must_use]
+    pub fn describe(&self) -> String {
+        self.root.describe()
+    }
+
+    /// The plan of `settings` as they are. Nothing is changed.
+    pub fn plan(&mut self, settings: &Settings) -> Result<Plan, InstallError> {
+        hs_install::make_plan(self.root.as_mut(), &self.access, self.command, settings)
+    }
+
+    /// The servers' part of `plan` under `domain`.
+    #[must_use]
+    pub fn server_plan(&self, plan: &Plan, domain: &str) -> ServerPlan {
+        plan_servers(
+            plan,
+            domain,
+            self.server_image.as_deref(),
+            &self.files,
+            self.servers.as_ref(),
+        )
+    }
+
+    /// The plan of the answers to [`Session::questions`] and `domain`, and
+    /// the review of it. Nothing is changed.
+    pub fn review(&mut self, answers: &[Answer], domain: Option<&str>) -> Review {
+        let chosen = answered(&self.settings, &self.questions, answers);
+        let domain = domain.filter(|domain| !domain.is_empty()).map(str::to_owned);
+        match self.plan(&chosen) {
+            Ok(plan) => {
+                let mut summary = summary_of(&self.access_line, &plan, &self.files.home);
+                let servers = self
+                    .want_servers
+                    .then(|| self.server_plan(&plan, domain.as_deref().unwrap_or_default()));
+                if let Some(server_plan) = &servers {
+                    servers_section(&mut summary, server_plan);
+                }
+                Review {
+                    plan: Some(plan),
+                    servers,
+                    domain,
+                    summary,
+                }
+            }
+            Err(error) => Review {
+                plan: None,
+                servers: None,
+                domain,
+                summary: Summary {
+                    sections: Vec::new(),
+                    problems: error.to_string().lines().map(str::to_owned).collect(),
+                },
+            },
+        }
+    }
+
+    /// Keep the answers for the next run.
+    pub fn keep(&self, answers: &[Answer], domain: Option<&str>) {
+        save_draft(&draft_path(&self.settings), &self.questions, answers, domain);
+    }
+
+    /// Apply `plan` in Proxmox; `progress` gets a line per step.
+    pub fn apply(&mut self, plan: &Plan, progress: &mut dyn FnMut(&str)) -> Result<Option<Applied>, AppError> {
+        if plan.steps.is_empty() {
+            return Ok(None);
+        }
+        hs_install::apply(self.root.as_mut(), plan, &plan.settings, progress)
+            .map(Some)
+            .map_err(failure)
+    }
+
+    /// The servers of this session.
+    #[must_use]
+    pub fn servers(&self) -> Arc<dyn Servers> {
+        Arc::clone(&self.servers)
+    }
+}
+
+/// After the Proxmox part: the client token, `server.toml` and
+/// `deploy.toml`, the deployment, then `client.toml` at `client_path`.
+/// `say` gets every line of it.
+pub async fn deploy(
+    files: &Files,
+    server_plan: &ServerPlan,
+    client_path: &Path,
+    servers: &dyn Servers,
+    say: &(dyn Fn(&str) + Send + Sync),
+) -> Result<(), AppError> {
+    let Some(config) = &server_plan.config else {
+        return Err(AppError::new(
+            "The servers cannot be deployed: the deployment is incomplete",
+        ));
+    };
+    if ensure_api_token(&files.api_token()).map_err(AppError::new)? {
+        say(&format!(
+            "new client token in {}",
+            tilde(&files.api_token(), &files.home)
+        ));
+    }
+    for (path, text) in [
+        (files.server_toml(), server_plan.server_toml.as_str()),
+        (files.deploy_toml(), server_plan.deploy_toml.as_str()),
+    ] {
+        if let Some(kept) = write_private(&path, text).map_err(AppError::new)? {
+            say(&format!(
+                "the old {} is kept as {}",
+                tilde(&path, &files.home),
+                kept.display()
+            ));
+        }
+    }
+    servers.deploy(config, say).await.map_err(|error| {
+        AppError::new(format!(
+            "Deploying the servers failed: {error}\nThe Proxmox part is installed; run homestack install again to retry."
+        ))
+    })?;
+    let (urls, ca_file) = servers.client_server(config);
+    let token_file = tilde(&files.api_token(), &files.home);
+    let text = crate::servers::client_toml(&server_plan.old_config, &urls, ca_file, &token_file)
+        .map_err(|error| AppError::new(format!("client.toml: {error}")))?;
+    if let Some(kept) = write_private(client_path, &text).map_err(AppError::new)? {
+        say(&format!("the old client.toml is kept as {}", kept.display()));
+    }
+    say(&format!("{} written", tilde(client_path, &files.home)));
+    Ok(())
+}
+
+/// Where `client.toml` is: `--config`, or the default.
+#[must_use]
+pub fn client_path(given: Option<&Path>, home: &Path, config_home: Option<&Path>) -> PathBuf {
+    let path = given.map_or_else(|| crate::config::default_path(home, config_home), Path::to_path_buf);
+    crate::expand_home(&path.display().to_string(), home)
+}
+
+/// `settings` with the answers to `questions` put in.
+pub fn answered(settings: &Settings, questions: &[hs_install::Question], answers: &[Answer]) -> Settings {
+    let mut settings = settings.clone();
+    for (question, answer) in questions.iter().zip(answers) {
+        let Answer::Picked(picked) = answer else { continue };
+        let values: Vec<String> = picked
+            .iter()
+            .filter_map(|index| question.choices.get(*index))
+            .map(|choice| choice.value.clone())
+            .collect();
+        match question.option {
+            "--storages" => settings.storages = values,
+            "--snippet-storage" => settings.snippet_storage = values.into_iter().next(),
+            "--service-storages" => settings.service_storages = values,
+            "--template-storage" => settings.template_storage = values.into_iter().next(),
+            "--gold" => settings.gold = values.first().and_then(|vmid| vmid.parse().ok()),
+            _ => {}
+        }
+    }
+    settings
+}
+
+/// `path` with the home directory written as `~`.
+pub fn tilde(path: &std::path::Path, home: &std::path::Path) -> String {
+    path.strip_prefix(home)
+        .map_or_else(|_| path.display().to_string(), |rest| format!("~/{}", rest.display()))
+}
+
+/// What an ACL path is: its kind (in the order shown) and its name.
+fn place(path: &str) -> (u8, &'static str, String) {
+    match path.split('/').collect::<Vec<_>>().as_slice() {
+        ["", "nodes"] => (0, "whole cluster", "nodes".to_owned()),
+        ["", "sdn"] => (0, "whole cluster", "networks".to_owned()),
+        ["", "storage"] => (0, "whole cluster", "storages".to_owned()),
+        ["", "pool", pool] => (1, "pools", (*pool).to_owned()),
+        ["", "storage", id] => (2, "storages", (*id).to_owned()),
+        ["", "sdn", "zones", _, bridge] => (3, "networks", (*bridge).to_owned()),
+        _ => (4, "other", path.to_owned()),
+    }
+}
+
+/// The plan's steps grouped by what they change, a short line each.
+fn grouped_changes(plan: &Plan, home: &std::path::Path) -> Vec<(String, Vec<String>)> {
+    use hs_install::Action;
+    let mut account = Vec::new();
+    let mut roles: std::collections::BTreeMap<&str, Vec<String>> = std::collections::BTreeMap::new();
+    let mut pools: std::collections::BTreeMap<&str, Vec<String>> = std::collections::BTreeMap::new();
+    let mut gold = Vec::new();
+    // Who -> (places given, places taken).
+    let mut permissions: std::collections::BTreeMap<String, Permissions> = std::collections::BTreeMap::new();
+    let mut entries = 0usize;
+    let mut snippets: std::collections::BTreeMap<String, Vec<String>> = std::collections::BTreeMap::new();
+    for step in &plan.steps {
+        match &step.action {
+            Action::Pveum(args) => {
+                let words: Vec<&str> = args.iter().map(String::as_str).collect();
+                match words.as_slice() {
+                    ["user", "add", user, ..] => account.push(format!("new user {user}")),
+                    ["user", "delete", user] => account.push(format!("remove user {user}")),
+                    ["user", "token", "delete", _, token] => account.push(format!("remove token {token}")),
+                    ["user", "token", "modify", _, token, ..] => {
+                        account.push(format!("token {token}: separate its privileges"));
+                    }
+                    ["role", "add", role, ..] => roles.entry("new").or_default().push((*role).to_owned()),
+                    ["role", "modify", role, ..] => roles.entry("changed").or_default().push((*role).to_owned()),
+                    ["role", "delete", role] => roles.entry("removed").or_default().push((*role).to_owned()),
+                    ["pool", "add", pool, ..] => pools.entry("new").or_default().push((*pool).to_owned()),
+                    ["pool", "delete", pool] => pools.entry("removed").or_default().push((*pool).to_owned()),
+                    ["pool", "modify", pool, "--vms", vmid, rest @ ..] => {
+                        if rest.contains(&"--delete") {
+                            gold.push(format!("take VM {vmid} out of pool {pool}"));
+                        } else {
+                            gold.push(format!("put VM {vmid} in pool {pool}"));
+                        }
+                    }
+                    ["acl", action, path, _, who, "--roles", roles_given] => {
+                        let short = who
+                            .strip_prefix("homestack@pve!")
+                            .map_or_else(|| "the user homestack@pve".to_owned(), |token| format!("token {token}"));
+                        let count = roles_given.split(',').count();
+                        entries += count;
+                        let slot = permissions.entry(short).or_default();
+                        let (order, kind, name) = place(path);
+                        let list = if *action == "modify" {
+                            slot.given.entry((order, kind)).or_default()
+                        } else {
+                            slot.taken.entry((order, kind)).or_default()
+                        };
+                        if !list.contains(&name) {
+                            list.push(name);
+                        }
+                    }
+                    _ => account.push(step.description.clone()),
+                }
+            }
+            Action::Pvesh(_) => gold.push(step.description.replace("tag Gold", "tag VM")),
+            Action::CreateToken {
+                token, file, replaced, ..
+            } => {
+                let mut line = format!("new token {token}, secret to {}", tilde(file, home));
+                if let Some(old) = replaced {
+                    let name = old
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default();
+                    account.push(line.clone());
+                    line = format!("old file kept as {name}");
+                }
+                account.push(line);
+            }
+            Action::WriteSnippet { node, name, .. } => {
+                snippets.entry(format!("write {name}")).or_default().push(node.clone());
+            }
+            Action::RemoveSnippet { node, name, .. } => {
+                snippets.entry(format!("remove {name}")).or_default().push(node.clone());
+            }
+        }
+    }
+    let mut sections = Vec::new();
+    if !account.is_empty() {
+        sections.push(("Account and tokens".to_owned(), account));
+    }
+    for (title, group) in [("Roles", roles), ("Pools", pools)] {
+        if group.is_empty() {
+            continue;
+        }
+        let counts: Vec<String> = group
+            .iter()
+            .map(|(kind, names)| format!("{} {kind}", names.len()))
+            .collect();
+        let lines = group
+            .iter()
+            .flat_map(|(kind, names)| wrap_names(&format!("{kind}: "), names))
+            .collect();
+        sections.push((format!("{title} ({})", counts.join(", ")), lines));
+    }
+    if !gold.is_empty() {
+        let heading = plan
+            .gold
+            .as_ref()
+            .map_or_else(|| "Gold".to_owned(), |g| format!("Gold {g}"));
+        sections.push((heading, gold));
+    }
+    if !permissions.is_empty() {
+        let lines = permissions
+            .iter()
+            .flat_map(|(who, slot)| {
+                let mut lines = vec![format!("{who}:")];
+                for (heading, map) in [("", &slot.given), ("taken away from ", &slot.taken)] {
+                    for ((_, kind), names) in map {
+                        lines.extend(wrap_names(&format!("    {heading}{kind:<14} "), names));
+                    }
+                }
+                lines
+            })
+            .collect();
+        sections.push((format!("Permissions ({entries} entries)"), lines));
+    }
+    if !snippets.is_empty() {
+        let lines = snippets
+            .iter()
+            .map(|(what, nodes)| format!("{what} on {}", nodes.join(", ")))
+            .collect();
+        sections.push(("Cloud-Init snippets".to_owned(), lines));
+    }
+    sections
+}
+
+/// The summary of a plan: where root comes from, the choices, warnings and
+/// every change.
+pub fn summary_of(access_line: &str, plan: &Plan, home: &std::path::Path) -> Summary {
+    let settings = &plan.settings;
+    let mut chosen = vec![
+        format!("Workspace disks:     {}", settings.storages.join(", ")),
+        format!(
+            "Cloud-Init snippets: {}",
+            settings.snippet_storage.clone().unwrap_or_default()
+        ),
+        format!("Server disks:        {}", settings.service_storages.join(", ")),
+        format!(
+            "Server image:        {}",
+            settings.template_storage.clone().unwrap_or_default()
+        ),
+    ];
+    if let Some(gold) = &plan.gold {
+        chosen.push(format!("Gold:                {gold}"));
+    }
+    let _ = access_line;
+    let mut sections = vec![("Your choices".to_owned(), chosen)];
+    if !plan.taken.is_empty() {
+        sections.push(("Chosen without asking".to_owned(), plan.taken.clone()));
+    }
+    let mut notices = plan.warnings.clone();
+    notices.extend(plan.node_errors.iter().cloned());
+    if !notices.is_empty() {
+        sections.push(("Warnings (they do not stop the install)".to_owned(), notices));
+    }
+    if plan.steps.is_empty() {
+        sections.push((
+            "Changes in Proxmox".to_owned(),
+            vec!["Nothing to change: HomeStack is installed as chosen.".to_owned()],
+        ));
+    } else {
+        sections.extend(grouped_changes(plan, home));
+    }
+    Summary {
+        sections,
+        problems: Vec::new(),
+    }
+}
+
+/// The confirmation's section of the servers, and their problems.
+pub fn servers_section(summary: &mut Summary, servers: &ServerPlan) {
+    let mut lines = servers.lines.clone();
+    lines.extend(servers.warnings.iter().map(|warning| format!("warning: {warning}")));
+    lines.push("Then: homestack status".to_owned());
+    summary.sections.push(("Servers".to_owned(), lines));
+    summary.problems.extend(servers.problems.iter().cloned());
+}
+
+/// Where the choices of the form are kept between runs.
+pub fn draft_path(settings: &Settings) -> std::path::PathBuf {
+    settings.token_dir.join("install-draft.toml")
+}
+
+/// The kept choices, by option name without dashes; nothing when the file
+/// is missing or cannot be read.
+pub fn load_draft(path: &std::path::Path) -> std::collections::BTreeMap<String, Vec<String>> {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return std::collections::BTreeMap::new();
+    };
+    let Ok(table) = text.parse::<toml::Table>() else {
+        return std::collections::BTreeMap::new();
+    };
+    table
+        .into_iter()
+        .filter_map(|(key, value)| {
+            let values: Vec<String> = value
+                .as_array()?
+                .iter()
+                .filter_map(|item| item.as_str().map(str::to_owned))
+                .collect();
+            Some((key, values))
+        })
+        .collect()
+}
+
+/// Start each question from the kept choices that are still possible.
+pub fn apply_draft(questions: &mut [hs_install::Question], draft: &std::collections::BTreeMap<String, Vec<String>>) {
+    for question in questions {
+        let Some(values) = draft.get(question.option.trim_start_matches('-')) else {
+            continue;
+        };
+        let picked: Vec<usize> = question
+            .choices
+            .iter()
+            .enumerate()
+            .filter(|(_, choice)| values.contains(&choice.value))
+            .map(|(index, _)| index)
+            .collect();
+        if !picked.is_empty() {
+            question.defaults = picked;
+        }
+    }
+}
+
+/// Keep the choices of the form (mode 0600); a failure only loses them.
+pub fn save_draft(
+    path: &std::path::Path,
+    questions: &[hs_install::Question],
+    answers: &[Answer],
+    domain: Option<&str>,
+) {
+    use std::io::Write;
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    let mut table = toml::Table::new();
+    for (question, answer) in questions.iter().zip(answers) {
+        let Answer::Picked(picked) = answer else { continue };
+        let values: Vec<toml::Value> = picked
+            .iter()
+            .filter_map(|index| question.choices.get(*index))
+            .map(|choice| toml::Value::String(choice.value.clone()))
+            .collect();
+        table.insert(
+            question.option.trim_start_matches('-').to_owned(),
+            toml::Value::Array(values),
+        );
+    }
+    if let Some(domain) = domain {
+        table.insert(
+            DRAFT_DOMAIN.to_owned(),
+            toml::Value::Array(vec![toml::Value::String(domain.to_owned())]),
+        );
+    }
+    let text = format!("# The last choices of `homestack install`; the next run starts from them.\n{table}");
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(path)
+    {
+        let _ = file.set_permissions(std::fs::Permissions::from_mode(0o600));
+        let _ = file.write_all(text.as_bytes());
+    }
+}
+
+/// `names` after `lead`, comma-separated, in lines of at most 80 characters.
+fn wrap_names(lead: &str, names: &[String]) -> Vec<String> {
+    let indent = " ".repeat(lead.chars().count());
+    let mut lines = vec![lead.to_owned()];
+    for (index, name) in names.iter().enumerate() {
+        let piece = if index + 1 < names.len() {
+            format!("{name}, ")
+        } else {
+            name.clone()
+        };
+        let current = lines.last().map_or(0, |line| line.chars().count());
+        if current + piece.chars().count() > 80 && current > indent.len() {
+            lines.push(indent.clone());
+        }
+        if let Some(line) = lines.last_mut() {
+            line.push_str(&piece);
+        }
+    }
+    lines.into_iter().map(|line| line.trim_end().to_owned()).collect()
+}
+
+/// What one account or token is given and loses, by kind of place.
+#[derive(Default)]
+struct Permissions {
+    given: std::collections::BTreeMap<(u8, &'static str), Vec<String>>,
+    taken: std::collections::BTreeMap<(u8, &'static str), Vec<String>>,
+}

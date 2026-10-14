@@ -13,6 +13,7 @@ pub mod config;
 pub mod fido;
 pub mod form;
 pub mod identity;
+pub mod install_flow;
 pub mod installer;
 pub mod local_ssh;
 pub mod master;
