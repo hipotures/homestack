@@ -129,7 +129,22 @@ certificates() {
     printf '{"filename":"pveproxy-ssl.pem","san":["%s"],"issuer":"/CN=Fake CA","notafter":2000000000}]\n' "$name"
 }
 
+# pvesh set /nodes/N/qemu/V/config --tags TAGS: the only change a test makes.
+vm_set_tags() {
+    local path=$1 tags=$2 vmid
+    vmid=$(cut -d/ -f5 <<< "$path")
+    [[ -n $(field vms.tsv "$vmid" 1) ]] || die "Configuration file 'nodes/x/qemu-server/$vmid.conf' does not exist"
+    log "set $path --tags $tags"
+    awk -F'\t' -v OFS='\t' -v v="$vmid" -v t="$tags" '$1 == v { $4 = t } 1' "$HS_FAKE/vms.tsv" > "$HS_FAKE/vms.tmp"
+    mv "$HS_FAKE/vms.tmp" "$HS_FAKE/vms.tsv"
+}
+
 pvesh_main() {
+    if [[ ${1:-} == set ]]; then
+        [[ ${3:-} == --tags && $2 == /nodes/*/qemu/*/config ]] || die "fake pvesh: only set --tags is supported: $*"
+        vm_set_tags "$2" "$4"
+        return
+    fi
     [[ ${1:-} == get ]] || die "fake pvesh: only get is supported: $*"
     local path=$2
     shift 2

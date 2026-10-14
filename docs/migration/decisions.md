@@ -236,6 +236,18 @@ an agent stops when a phase needs one that is still open
   connects by `user@ip` without the host config, so it must be given the same
   `UserKnownHostsFile` of the workspace.
 
+
+### Owner's requests of 2026-10-14 (phase 13c, choices and Gold)
+
+- Options of `install` that are not given are chosen from lists drawn with
+  ratatui (the library MyPowers' TUI uses), every option, each list showing
+  only what fits it.
+- The default Gold is the VM named `hs-gold`; the installer tags it
+  `homestack-gold` and puts it in pool `homestack-gold`.
+- Agent's choices: a tagged Gold still wins over the name; `--gold` wins
+  over both; uninstall leaves the tag on Gold; a Gold with a workspace role
+  tag is refused.
+
 ## Probe results
 
 | Date | Probe | Result |

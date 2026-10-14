@@ -55,6 +55,8 @@ const LEGACY_ROLES: [&str; 5] = [
 pub enum Action {
     /// `pveum ARGS` on the node.
     Pveum(Vec<String>),
+    /// `pvesh ARGS` on the node (a change of a VM's tags).
+    Pvesh(Vec<String>),
     /// A new token; its secret goes to `file` on the desktop.
     CreateToken {
         token: String,
@@ -79,6 +81,7 @@ impl Step {
     pub fn command_line(&self) -> String {
         match &self.action {
             Action::Pveum(args) => format!("pveum {}", join(args)),
+            Action::Pvesh(args) => format!("pvesh {}", join(args)),
             Action::CreateToken { token, comment, file } => format!(
                 "pveum user token add {HS_USER} {token} --privsep 1 --comment {} (secret to {})",
                 quote(comment),
@@ -456,6 +459,22 @@ fn plan_install(ctx: &Context) -> Result<Vec<Step>, InstallError> {
             format!("create pool {}", ctx.pool),
             &["pool", "add", ctx.pool, "--comment", comment],
         ));
+    }
+    if let Some(gold) = ctx.gold
+        && let Some(vm) = state.vms.get(&gold)
+        && !vm.tags.iter().any(|tag| tag == "homestack-gold")
+    {
+        let mut tags = vm.tags.clone();
+        tags.push("homestack-gold".to_owned());
+        steps.push(Step {
+            description: format!("tag Gold {gold} homestack-gold"),
+            action: Action::Pvesh(vec![
+                "set".to_owned(),
+                format!("/nodes/{}/qemu/{gold}/config", vm.node),
+                "--tags".to_owned(),
+                tags.join(";"),
+            ]),
+        });
     }
     if let Some(gold) = ctx.gold
         && state.vms.get(&gold).is_some_and(|vm| vm.pool != POOL_GOLD)

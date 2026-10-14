@@ -128,43 +128,128 @@ fn confirm(ctx: &mut Context, question: &str) -> bool {
     }
 }
 
+/// Ask each question in turn and put the answers in `settings`; `false`
+/// when the user gives up.
+fn choose(ctx: &mut Context, questions: &[hs_install::Question], settings: &mut Settings) -> bool {
+    for question in questions {
+        let items: Vec<(String, String)> = question
+            .choices
+            .iter()
+            .map(|choice| (choice.value.clone(), choice.detail.clone()))
+            .collect();
+        let title = format!("{}: {}", question.option, question.text);
+        let Some(picked) = ctx.console.pick(&title, question.multiple, &items) else {
+            return false;
+        };
+        let values: Vec<String> = picked
+            .iter()
+            .filter_map(|index| question.choices.get(*index))
+            .map(|choice| choice.value.clone())
+            .collect();
+        match question.option {
+            "--storages" => settings.storages = values,
+            "--snippet-storage" => settings.snippet_storage = values.into_iter().next(),
+            "--service-storages" => settings.service_storages = values,
+            "--template-storage" => settings.template_storage = values.into_iter().next(),
+            "--gold" => settings.gold = values.first().and_then(|vmid| vmid.parse().ok()),
+            _ => {}
+        }
+    }
+    true
+}
+
+/// The command line that gives the same answers without being asked.
+fn same_as(command: Install, install: &InstallArgs, settings: &Settings) -> String {
+    let mut words = vec!["homestack".to_owned(), command.name().to_owned()];
+    if let Some(ssh) = &install.ssh {
+        words.extend(["--ssh".to_owned(), ssh.clone()]);
+    }
+    if let Some(herdr) = &install.herdr {
+        words.extend(["--herdr".to_owned(), herdr.clone()]);
+    }
+    if let Some(identity) = &install.identity {
+        words.extend(["--identity".to_owned(), identity.clone()]);
+    }
+    if settings.test {
+        words.push("--test".to_owned());
+    }
+    if !settings.storages.is_empty() {
+        words.extend(["--storages".to_owned(), settings.storages.join(",")]);
+    }
+    if let Some(id) = &settings.snippet_storage {
+        words.extend(["--snippet-storage".to_owned(), id.clone()]);
+    }
+    if !settings.service_storages.is_empty() {
+        words.extend(["--service-storages".to_owned(), settings.service_storages.join(",")]);
+    }
+    if let Some(id) = &settings.template_storage {
+        words.extend(["--template-storage".to_owned(), id.clone()]);
+    }
+    if let Some(vmid) = settings.gold {
+        words.extend(["--gold".to_owned(), vmid.to_string()]);
+    }
+    if install.force {
+        words.push("--force".to_owned());
+    }
+    if let Some(dir) = &install.token_dir {
+        words.extend(["--token-dir".to_owned(), dir.display().to_string()]);
+    }
+    words.join(" ")
+}
+
 /// Run `install` or `uninstall`; the exit code.
 pub fn run(args: &Args, install: &InstallArgs, command: Install, ctx: &mut Context) -> Result<i32, AppError> {
     let mut root = open_root(args, install, ctx)?;
     let access = hs_install::probe(root.as_mut()).map_err(failure)?;
-    let settings = settings(ctx, args, install);
-    let plan = match hs_install::make_plan(root.as_mut(), &access, command, &settings) {
-        Ok(plan) => plan,
-        // Options the user has not given are not an error: show what can be
-        // chosen, one choice a line.
-        Err(InstallError::Missing(questions)) => {
-            if args.json {
-                let missing: Vec<Value> = questions
-                    .iter()
-                    .map(|question| {
-                        json!({
-                            "option": question.option,
-                            "text": question.text,
-                            "multiple": question.multiple,
-                            "choices": question.choices.iter().map(|choice| json!({
-                                "value": choice.value, "detail": choice.detail,
-                            })).collect::<Vec<_>>(),
-                        })
-                    })
-                    .collect();
-                emit(
-                    ctx,
-                    &json!({"ok": false, "command": command.name(), "missing": missing,
-                            "error": hs_install::describe_missing(&questions)}),
-                );
-            } else {
-                ctx.console
-                    .out(&format!("{}\n", hs_install::describe_missing(&questions)));
+    let mut settings = settings(ctx, args, install);
+    let mut chosen = false;
+    let plan = loop {
+        match hs_install::make_plan(root.as_mut(), &access, command, &settings) {
+            Ok(plan) => break plan,
+            // On a terminal the user chooses from lists.
+            Err(InstallError::Missing(questions)) if ctx.stdin_tty && !args.json => {
+                if !choose(ctx, &questions, &mut settings) {
+                    let text = ctx.style.paint(CANCELLED, Color::Bold);
+                    ctx.console.out(&format!("{text}\n"));
+                    return Ok(0);
+                }
+                chosen = true;
             }
-            return Ok(1);
+            // Options the user has not given are not an error: show what
+            // can be chosen, one choice a line.
+            Err(InstallError::Missing(questions)) => {
+                if args.json {
+                    let missing: Vec<Value> = questions
+                        .iter()
+                        .map(|question| {
+                            json!({
+                                "option": question.option,
+                                "text": question.text,
+                                "multiple": question.multiple,
+                                "choices": question.choices.iter().map(|choice| json!({
+                                    "value": choice.value, "detail": choice.detail,
+                                })).collect::<Vec<_>>(),
+                            })
+                        })
+                        .collect();
+                    emit(
+                        ctx,
+                        &json!({"ok": false, "command": command.name(), "missing": missing,
+                                "error": hs_install::describe_missing(&questions)}),
+                    );
+                } else {
+                    ctx.console
+                        .out(&format!("{}\n", hs_install::describe_missing(&questions)));
+                }
+                return Ok(1);
+            }
+            Err(error) => return Err(failure(error)),
         }
-        Err(error) => return Err(failure(error)),
     };
+    if chosen {
+        let line = same_as(command, install, &settings);
+        ctx.console.out(&format!("\nSame as: {line}\n"));
+    }
 
     let access_line = access_line(root.as_ref(), &access);
     let steps = plan.steps.len();

@@ -276,7 +276,7 @@ impl Fake {
     pub fn changes(&self) -> usize {
         self.read("calls.log")
             .lines()
-            .filter(|line| line.starts_with("pveum "))
+            .filter(|line| line.starts_with("pveum ") || line.starts_with("pvesh set "))
             .count()
     }
 

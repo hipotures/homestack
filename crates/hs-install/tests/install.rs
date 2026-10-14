@@ -759,3 +759,130 @@ fn a_wrong_choice_is_an_error_that_lists_the_right_ones_briefly() {
         run.out
     );
 }
+
+// --- Gold: the VM named hs-gold by default ---------------------------------
+
+fn tags_of(fake: &Fake, vmid: &str) -> String {
+    fake.read("vms.tsv")
+        .lines()
+        .find(|line| line.starts_with(&format!("{vmid}\t")))
+        .and_then(|line| line.split('\t').nth(3))
+        .unwrap_or_default()
+        .to_owned()
+}
+
+#[test]
+fn gold_defaults_to_the_vm_named_hs_gold_which_is_tagged_and_pooled() {
+    let fake = Fake::new(&["pve1"]);
+    // The owner's VM 101 is the tagged one; make another, untagged, named hs-gold.
+    fake.replace("vms.tsv", "101\tpve1\tgold\thomestack-gold", "101\tpve1\tgold\t");
+    fake.append(
+        "vms.tsv",
+        "150\tpve1\ths-gold\tother\tvirtio=BC:24:11:00:00:07,bridge=vmbr0\t\n",
+    );
+    let run = fake.install(&standard(false));
+    assert!(run.ok, "{}", run.out);
+    contains(&run, "tag Gold 150 homestack-gold");
+    assert_eq!(tags_of(&fake, "150"), "other;homestack-gold", "existing tags are kept");
+    assert!(
+        fake.read("pools.tsv").contains("homestack-gold\t150"),
+        "not in the Gold pool: {}",
+        fake.read("pools.tsv")
+    );
+    // The owner's other VM is not touched.
+    assert_eq!(tags_of(&fake, "101"), "");
+
+    fake.clear_calls();
+    let again = fake.install(&standard(false));
+    assert!(again.ok, "{}", again.out);
+    assert_eq!(fake.changes(), 0, "second install changed: {}", fake.read("calls.log"));
+    contains(&again, "Nothing to change");
+}
+
+#[test]
+fn a_tagged_gold_is_used_before_the_name_and_an_explicit_gold_before_both() {
+    // One tagged VM wins over a VM named hs-gold.
+    let fake = Fake::new(&["pve1"]);
+    fake.append(
+        "vms.tsv",
+        "150\tpve1\ths-gold\t\tvirtio=BC:24:11:00:00:07,bridge=vmbr0\t\n",
+    );
+    let run = fake.install(&standard(false));
+    assert!(run.ok, "{}", run.out);
+    assert!(
+        fake.read("pools.tsv").contains("homestack-gold\t101"),
+        "{}",
+        fake.read("pools.tsv")
+    );
+    assert_eq!(tags_of(&fake, "150"), "");
+
+    // --gold wins over both, and is tagged.
+    let fake = Fake::new(&["pve1"]);
+    let mut settings = standard(false);
+    settings.gold = Some(100);
+    let run = fake.install(&settings);
+    assert!(run.ok, "{}", run.out);
+    assert_eq!(tags_of(&fake, "100"), "homestack-gold");
+    assert!(fake.read("pools.tsv").contains("homestack-gold\t100"));
+}
+
+#[test]
+fn hs_gold_wins_over_other_tagged_vms_with_a_warning() {
+    let fake = Fake::new(&["pve1"]);
+    fake.append(
+        "vms.tsv",
+        "150\tpve1\ths-gold\t\tvirtio=BC:24:11:00:00:07,bridge=vmbr0\t\n",
+    );
+    fake.append(
+        "vms.tsv",
+        "111\tpve1\tgold-backup\thomestack-gold\tvirtio=BC:24:11:00:00:09,bridge=vmbr0\t\n",
+    );
+    let run = fake.install(&standard(false));
+    assert!(run.ok, "{}", run.out);
+    assert_eq!(tags_of(&fake, "150"), "homestack-gold");
+    assert!(
+        run.out.contains("warning:") && run.out.contains("101") && run.out.contains("111"),
+        "no warning about the other tagged VMs:\n{}",
+        run.out
+    );
+}
+
+#[test]
+fn a_gold_with_a_workspace_role_tag_is_refused_before_any_change() {
+    let fake = Fake::new(&["pve1"]);
+    fake.replace(
+        "vms.tsv",
+        "101\tpve1\tgold\thomestack-gold",
+        "101\tpve1\ths-gold\thomestack-gold;homestack-ws",
+    );
+    let run = fake.install(&standard(false));
+    assert!(!run.ok);
+    contains(&run, "homestack-ws");
+    contains(&run, "Gold 101");
+    assert_eq!(fake.changes(), 0);
+}
+
+#[test]
+fn uninstall_leaves_the_tag_on_gold() {
+    let fake = Fake::new(&["pve1"]);
+    fake.append(
+        "vms.tsv",
+        "150\tpve1\ths-gold\t\tvirtio=BC:24:11:00:00:07,bridge=vmbr0\t\n",
+    );
+    fake.replace("vms.tsv", "101\tpve1\tgold\thomestack-gold", "101\tpve1\tgold\t");
+    assert!(fake.install(&standard(false)).ok);
+    let removal = Settings {
+        snippet_storage: Some("local".into()),
+        ..Settings::default()
+    };
+    assert!(fake.uninstall(&removal).ok);
+    assert_eq!(
+        tags_of(&fake, "150"),
+        "homestack-gold",
+        "Gold is the owner's machine: its tag stays"
+    );
+    assert!(
+        !fake.read("pools.tsv").contains("homestack-gold"),
+        "the Gold pool is gone"
+    );
+}

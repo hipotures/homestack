@@ -137,3 +137,28 @@ last one, after the `--live` gate (a clean cluster: install over SSH and over
 Herdr, deployment, `homestack status`, uninstall with no trace and no change
 to foreign VMs). The gate changes ACLs on the real cluster, so it runs only
 with the owner's approval.
+
+## 7. Added after step 1 (owner's requests of 2026-10-14)
+
+- **Options not given are chosen from lists.** `--storages`,
+  `--snippet-storage`, `--service-storages`, `--template-storage` and
+  `--gold` are asked for when missing. The lists hold only what fits: the
+  storages that allow the content type each option needs (id, type, nodes),
+  and the VMs that can be Gold (name, node, state). On a terminal the
+  lists are drawn with ratatui (`picker.rs`: arrows or `j`/`k` move, space
+  ticks where several are allowed, enter confirms, esc cancels), and the
+  command prints the equivalent command line (`Same as: ...`). Where the
+  terminal cannot be drawn on, the same choices are asked by number. With
+  no terminal the lists are printed, one choice a line (`--json`: a
+  `missing` array), and the exit code is 1. Giving up a list changes
+  nothing.
+- **The default Gold is the VM named `hs-gold`.** Order: `--gold`; the only
+  VM tagged `homestack-gold`; the only QEMU VM named `hs-gold`; otherwise
+  a list. The installer **tags** the Gold it uses `homestack-gold` (the
+  existing tags are kept) and puts it in pool `homestack-gold`; both are
+  steps of the plan, shown before anything is changed. When `hs-gold` is
+  chosen by name and other VMs are tagged `homestack-gold`, a warning names
+  them and leaves them alone. A Gold tagged `homestack-ws` or
+  `homestack-alien` is refused. Uninstall takes Gold out of the pool but
+  leaves its tag: the machine is the owner's.
+- The fake Proxmox (`fake-pve`) learned `pvesh set ... --tags`.

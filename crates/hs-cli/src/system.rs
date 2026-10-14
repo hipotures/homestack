@@ -133,6 +133,13 @@ pub trait Console: Send {
     fn ask(&mut self, question: &str) -> Option<String>;
     /// Read a line without echo; `None` when that is not possible.
     fn secret(&mut self, prompt: &str) -> Option<String>;
+
+    /// Choose among `items` (a value and what tells it apart): the indexes
+    /// of the chosen ones, `None` when the user gives up. The default asks
+    /// for numbers, for a console that cannot draw a list.
+    fn pick(&mut self, title: &str, multiple: bool, items: &[(String, String)]) -> Option<Vec<usize>> {
+        pick_numbered(self, title, multiple, items)
+    }
 }
 
 /// stdout, stderr and stdin.
@@ -165,5 +172,67 @@ impl Console for Terminal {
         }
         let _ = io::stderr().lock().write_all(prompt.as_bytes());
         rpassword::read_password().ok()
+    }
+
+    fn pick(&mut self, title: &str, multiple: bool, items: &[(String, String)]) -> Option<Vec<usize>> {
+        use crate::picker::{Item, Outcome, Picker, run_on_terminal};
+        if io::stdin().is_terminal() && io::stdout().is_terminal() {
+            let rows = items
+                .iter()
+                .map(|(value, detail)| Item {
+                    value: value.clone(),
+                    detail: detail.clone(),
+                })
+                .collect();
+            let mut picker = Picker::new(title, multiple, rows);
+            if let Ok(outcome) = run_on_terminal(&mut picker) {
+                return match outcome {
+                    Outcome::Chosen(chosen) => Some(chosen),
+                    Outcome::Cancelled => None,
+                };
+            }
+        }
+        pick_numbered(self, title, multiple, items)
+    }
+}
+
+/// [`Console::pick`] with numbers: the list, one choice a line, then
+/// "Choose ...:" until the answer is valid; end of input gives up.
+pub fn pick_numbered<C: Console + ?Sized>(
+    console: &mut C,
+    title: &str,
+    multiple: bool,
+    items: &[(String, String)],
+) -> Option<Vec<usize>> {
+    let width = items.iter().map(|(value, _)| value.chars().count()).max().unwrap_or(0);
+    let mut text = format!("\n{title}\n");
+    for (index, (value, detail)) in items.iter().enumerate() {
+        text.push_str(&format!("  {:>2}) {value:<width$}  {detail}\n", index + 1));
+    }
+    console.out(&text);
+    let prompt = if multiple {
+        format!("Choose one or more (numbers, e.g. 1,3) [1-{}]: ", items.len())
+    } else {
+        format!("Choose one [1-{}]: ", items.len())
+    };
+    loop {
+        let answer = console.ask(&prompt)?;
+        let numbers: Option<Vec<usize>> = answer
+            .split(',')
+            .map(|part| {
+                part.trim()
+                    .parse::<usize>()
+                    .ok()
+                    .filter(|n| (1..=items.len()).contains(n))
+            })
+            .collect();
+        match numbers {
+            Some(mut numbers) if !numbers.is_empty() && (multiple || numbers.len() == 1) => {
+                numbers.sort_unstable();
+                numbers.dedup();
+                return Some(numbers.into_iter().map(|n| n - 1).collect());
+            }
+            _ => console.out("Please enter a number from the list.\n"),
+        }
     }
 }

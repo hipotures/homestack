@@ -11,6 +11,8 @@ use crate::shell::quote;
 use crate::state::{State, Vm};
 use crate::{Choice, Question};
 
+/// The name of the VM that is Gold when none is chosen.
+pub const DEFAULT_GOLD_NAME: &str = "hs-gold";
 pub const MIN_MAJOR: u32 = 9;
 pub const MIN_MINOR: u32 = 2;
 
@@ -186,6 +188,26 @@ pub fn find_gold(state: &State, settings: &Settings, found: &mut Findings) -> Op
         .filter(|(_, vm)| has_tag(vm, "homestack-gold"))
         .map(|(vmid, _)| *vmid)
         .collect();
+    if let [one] = tagged.as_slice() {
+        return Some(*one);
+    }
+    // The default Gold is the VM named `hs-gold`; the installer tags it.
+    let named: Vec<u32> = state
+        .vms
+        .iter()
+        .filter(|(_, vm)| vm.kind == "qemu" && vm.name == DEFAULT_GOLD_NAME)
+        .map(|(vmid, _)| *vmid)
+        .collect();
+    if let [one] = named.as_slice() {
+        let others: Vec<String> = tagged.iter().map(u32::to_string).collect();
+        if !others.is_empty() {
+            found.warnings.push(format!(
+                "Gold is VM {one} ({DEFAULT_GOLD_NAME}); VM {} also tagged homestack-gold, left as it is (pass --gold to choose another)",
+                others.join(", ")
+            ));
+        }
+        return Some(*one);
+    }
     let (text, choices) = match tagged.as_slice() {
         [one] => return Some(*one),
         [] => (
@@ -217,6 +239,13 @@ pub fn check_gold(root: &mut dyn Root, state: &State, settings: &Settings, found
     if vm.kind != "qemu" {
         found.errors.push(format!("Gold {gold} is not a QEMU VM"));
         return;
+    }
+    for role in ["homestack-ws", "homestack-alien"] {
+        if has_tag(vm, role) {
+            found.errors.push(format!(
+                "Gold {gold} is tagged {role}, a workspace role; take that tag off before it can be Gold"
+            ));
+        }
     }
     if !vm.pool.is_empty() && vm.pool != "homestack-gold" {
         found.errors.push(format!(

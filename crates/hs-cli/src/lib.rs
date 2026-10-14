@@ -14,6 +14,7 @@ pub mod identity;
 pub mod installer;
 pub mod local_ssh;
 pub mod master;
+pub mod picker;
 pub mod root_herdr;
 pub mod root_ssh;
 pub mod system;

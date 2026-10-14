@@ -11,7 +11,8 @@ workspace = true
 
 [dependencies]
 base64 = "0.23.1"
-crossterm = { version = "0.29.0", default-features = false }
+crossterm = { version = "0.29.0", default-features = false, features = ["events"] }
+ratatui = { version = "0.30.2", default-features = false, features = ["crossterm"] }
 hs-client = { version = "0.1.0", path = "../hs-client" }
 hs-install = { version = "0.1.0", path = "../hs-install" }
 hs-config = { version = "0.1.0", path = "../hs-config" }

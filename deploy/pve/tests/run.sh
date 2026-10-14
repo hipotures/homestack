@@ -129,7 +129,7 @@ hs_fails() {
     fi
 }
 
-changes() { grep -c '^pveum ' "$HS_FAKE/calls.log" || true; }
+changes() { grep -c '^pveum \|^pvesh set ' "$HS_FAKE/calls.log" || true; }
 
 expect_out() {
     grep -qF -- "$1" "$HS_FAKE/out" || { fail "output lacks '$1':"; sed 's/^/    /' "$HS_FAKE/out" >&2; }

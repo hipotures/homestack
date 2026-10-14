@@ -97,7 +97,7 @@ impl Cluster {
     fn changes(&self) -> usize {
         self.read("calls.log")
             .lines()
-            .filter(|l| l.starts_with("pveum "))
+            .filter(|l| l.starts_with("pveum ") || l.starts_with("pvesh set "))
             .count()
     }
 
@@ -525,4 +525,58 @@ async fn missing_options_are_listed_as_choices_not_as_an_error_panel() {
     assert_eq!(out["ok"], false, "{out}");
     assert_eq!(out["missing"][0]["option"], "--storages", "{out}");
     assert_eq!(out["missing"][0]["choices"][0]["value"], "local-lvm", "{out}");
+}
+
+#[tokio::test]
+async fn on_a_terminal_the_missing_options_are_chosen_from_lists() {
+    let cluster = Cluster::new(&["pve1"]);
+    // storages, snippet storage, service storages, template storage; Gold is
+    // the one tagged VM; then the plan is confirmed.
+    let done = run(
+        &cluster,
+        &["install", "--ssh", "root@pve1"],
+        &["1", "1", "1", "1", "y"],
+        true,
+    )
+    .await;
+    assert_eq!(done.code, 0, "{}", done.console.out());
+    let out = done.console.out();
+    assert!(out.contains("1) local-lvm") && out.contains("lvmthin"), "{out}");
+    assert!(
+        out.contains("Same as: homestack install --ssh root@pve1 --storages local-lvm --snippet-storage local --service-storages local-lvm --template-storage local"),
+        "{out}"
+    );
+    assert!(cluster.read("users").contains("homestack@pve"), "not installed");
+    assert_eq!(done.console.questions().len(), 5, "four lists and the confirmation");
+}
+
+#[tokio::test]
+async fn giving_up_a_list_changes_nothing() {
+    let cluster = Cluster::new(&["pve1"]);
+    let gave_up = run(&cluster, &["install", "--ssh", "root@pve1"], &["1"], true).await;
+    assert_eq!(gave_up.code, 0, "{}", gave_up.console.out());
+    assert!(
+        gave_up.console.out().contains("Cancelled. No changes were made."),
+        "{}",
+        gave_up.console.out()
+    );
+    assert_eq!(cluster.changes(), 0);
+}
+
+#[tokio::test]
+async fn options_already_given_are_not_asked_again() {
+    let cluster = Cluster::new(&["pve1"]);
+    let argv = [
+        "install",
+        "--ssh",
+        "root@pve1",
+        "--storages",
+        "local-lvm",
+        "--template-storage",
+        "local",
+    ];
+    // Only the snippet storage and the service storages are missing.
+    let done = run(&cluster, &argv, &["1", "1", "y"], true).await;
+    assert_eq!(done.code, 0, "{}", done.console.out());
+    assert_eq!(done.console.questions().len(), 3, "{:?}", done.console.questions());
 }

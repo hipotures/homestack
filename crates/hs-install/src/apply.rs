@@ -107,6 +107,12 @@ pub fn apply(
                     return Err(failed(output.detail()));
                 }
             }
+            Action::Pvesh(args) => {
+                let output = root.run(&format!("pvesh {}", join(args)))?;
+                if output.code != 0 {
+                    return Err(failed(output.detail()));
+                }
+            }
             Action::CreateToken { token, comment, file } => {
                 create_token(root, token, comment, file)?;
                 done.token_files.push(file.clone());
