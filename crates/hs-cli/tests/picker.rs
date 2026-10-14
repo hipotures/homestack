@@ -132,7 +132,10 @@ fn the_numbered_fallback_asks_until_the_answer_is_valid() {
     ]
     .map(|(v, d)| (v.to_owned(), d.to_owned()));
     let mut console = Recorded::answering(&["x", "9", "2"]);
-    assert_eq!(console.pick("Snippets", false, &choices), Some(vec![1]));
+    assert_eq!(
+        console.pick("--snippet-storage", "where the snippets go", false, &choices),
+        Some(vec![1])
+    );
     let shown = console.out();
     assert!(
         shown.contains("1) local-lvm") && shown.contains("3) vm-ssd-a"),
@@ -141,13 +144,22 @@ fn the_numbered_fallback_asks_until_the_answer_is_valid() {
     assert!(shown.contains("lvmthin  pve2"), "{shown}");
 
     let mut console = Recorded::answering(&["1, 3"]);
-    assert_eq!(console.pick("Storages", true, &choices), Some(vec![0, 2]));
+    assert_eq!(
+        console.pick("--storages", "where the disks go", true, &choices),
+        Some(vec![0, 2])
+    );
     // A single choice takes one number only.
     let mut console = Recorded::answering(&["1,2", "3"]);
-    assert_eq!(console.pick("Snippets", false, &choices), Some(vec![2]));
+    assert_eq!(
+        console.pick("--snippet-storage", "where the snippets go", false, &choices),
+        Some(vec![2])
+    );
     // End of input is a cancel.
     let mut console = Recorded::answering(&[]);
-    assert_eq!(console.pick("Snippets", false, &choices), None);
+    assert_eq!(
+        console.pick("--snippet-storage", "where the snippets go", false, &choices),
+        None
+    );
 }
 
 /// The title of the frame starts with the two hyphens of an option name; it
@@ -162,4 +174,20 @@ fn the_title_is_set_off_from_the_frame_by_spaces() {
         top[title_end..].starts_with(' '),
         "the title runs into the border: {top}"
     );
+}
+
+/// The description is not in the frame's title, where a narrow window cuts
+/// it off: it is drawn, wrapped, inside the window.
+#[test]
+fn the_description_is_wrapped_inside_the_window_not_cut_off_in_the_title() {
+    let description = "where the workspace disks go and a few more words to make it long";
+    let mut picker = Picker::new("--storages", true, items(2)).with_description(description);
+    let screen = picker.render_to_string(34, 14);
+    let top = screen.lines().next().unwrap_or_default();
+    assert!(top.starts_with("\u{250c} --storages "), "{top}");
+    let flat = screen.replace(['\u{2502}', '\n'], " ");
+    for word in description.split_whitespace() {
+        assert!(flat.contains(word), "{word:?} is cut off:\n{screen}");
+    }
+    assert!(screen.contains("storage-0") && screen.contains("storage-1"), "{screen}");
 }

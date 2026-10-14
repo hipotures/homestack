@@ -580,3 +580,43 @@ async fn options_already_given_are_not_asked_again() {
     assert_eq!(done.code, 0, "{}", done.console.out());
     assert_eq!(done.console.questions().len(), 3, "{:?}", done.console.questions());
 }
+
+#[tokio::test]
+async fn the_lists_on_a_terminal_carry_no_hint_about_typing_commas() {
+    let cluster = Cluster::new(&["pve1"]);
+    let done = run(
+        &cluster,
+        &["install", "--ssh", "root@pve1"],
+        &["1", "1", "1", "1", "n"],
+        true,
+    )
+    .await;
+    assert_eq!(done.code, 0, "{}", done.console.out());
+    let out = done.console.out();
+    assert!(
+        out.contains("--storages") && out.contains("Storages for the workspace disks"),
+        "{out}"
+    );
+    assert!(
+        !out.contains("comma-separated"),
+        "a list for ticking says how to type: {out}"
+    );
+
+    // Without a terminal the values are typed, so the printed list says how.
+    let text = run(&cluster, &["install", "--ssh", "root@pve1"], &[], false).await;
+    assert!(
+        text.console
+            .out()
+            .contains("--storages is required: Storages for the workspace disks (several, comma-separated)"),
+        "{}",
+        text.console.out()
+    );
+    assert!(
+        !text
+            .console
+            .out()
+            .contains("--snippet-storage is required: Storage for the Cloud-Init snippets ("),
+        "{}",
+        text.console.out()
+    );
+}

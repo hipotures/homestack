@@ -8,7 +8,7 @@ use ratatui::backend::TestBackend;
 use ratatui::layout::{Constraint, Layout};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::Line;
-use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
+use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap};
 
 /// One choice: what the option takes and what tells it apart.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -40,6 +40,7 @@ pub enum Outcome {
 
 pub struct Picker {
     title: String,
+    description: String,
     multiple: bool,
     items: Vec<Item>,
     cursor: usize,
@@ -56,6 +57,7 @@ impl Picker {
         let ticked = vec![false; items.len()];
         Self {
             title: title.to_owned(),
+            description: String::new(),
             multiple,
             items,
             cursor: 0,
@@ -63,6 +65,13 @@ impl Picker {
             outcome: None,
             list: ListState::default(),
         }
+    }
+
+    /// A few words on what the choice is for, drawn wrapped inside the window.
+    #[must_use]
+    pub fn with_description(mut self, description: &str) -> Self {
+        self.description = description.to_owned();
+        self
     }
 
     /// Set once the user has chosen or cancelled.
@@ -104,9 +113,30 @@ impl Picker {
     }
 
     pub fn render(&mut self, frame: &mut Frame) {
-        let area = frame.area();
-        let [body, hint] = Layout::vertical([Constraint::Min(3), Constraint::Length(1)]).areas(area);
-        let width = self
+        let [window, hint] = Layout::vertical([Constraint::Min(5), Constraint::Length(1)]).areas(frame.area());
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title(format!(" {} ", self.title));
+        let inside = block.inner(window);
+        frame.render_widget(block, window);
+        let width = usize::from(inside.width).max(1);
+        let rows_needed = if self.description.is_empty() {
+            0
+        } else {
+            u16::try_from(wrapped_lines(&self.description, width) + 1).unwrap_or(u16::MAX)
+        };
+        let [text, body] = Layout::vertical([
+            Constraint::Length(rows_needed.min(inside.height.saturating_sub(3))),
+            Constraint::Min(1),
+        ])
+        .areas(inside);
+        if !self.description.is_empty() {
+            frame.render_widget(
+                Paragraph::new(self.description.as_str()).wrap(Wrap { trim: true }),
+                text,
+            );
+        }
+        let value_width = self
             .items
             .iter()
             .map(|item| item.value.chars().count())
@@ -123,16 +153,11 @@ impl Picker {
                     (false, _, true) => "(\u{2022})",
                     (false, _, false) => "( )",
                 };
-                ListItem::new(format!("{mark} {:<width$}  {}", item.value, item.detail))
+                ListItem::new(format!("{mark} {:<value_width$}  {}", item.value, item.detail))
             })
             .collect();
         self.list.select(Some(self.cursor));
         let list = List::new(rows)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title(format!(" {} ", self.title)),
-            )
             .highlight_symbol("> ")
             .highlight_style(Style::default().add_modifier(Modifier::BOLD | Modifier::REVERSED));
         frame.render_stateful_widget(list, body, &mut self.list);
@@ -211,4 +236,26 @@ pub fn run_on_terminal(picker: &mut Picker) -> std::io::Result<Outcome> {
     })();
     ratatui::restore();
     result
+}
+
+/// How many lines `text` takes when wrapped at whole words to `width`.
+fn wrapped_lines(text: &str, width: usize) -> usize {
+    let mut lines = 1;
+    let mut used = 0;
+    for word in text.split_whitespace() {
+        let length = word.chars().count();
+        if used == 0 {
+            used = length;
+        } else if used + 1 + length <= width {
+            used += 1 + length;
+        } else {
+            lines += 1;
+            used = length;
+        }
+        while used > width {
+            lines += 1;
+            used -= width;
+        }
+    }
+    lines
 }

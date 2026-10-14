@@ -137,8 +137,15 @@ fn choose(ctx: &mut Context, questions: &[hs_install::Question], settings: &mut 
             .iter()
             .map(|choice| (choice.value.clone(), choice.detail.clone()))
             .collect();
-        let title = format!("{}: {}", question.option, question.text);
-        let Some(picked) = ctx.console.pick(&title, question.multiple, &items) else {
+        let description = if question.note.is_empty() {
+            question.option.to_owned()
+        } else {
+            format!("{}  {}", question.option, question.note)
+        };
+        let Some(picked) = ctx
+            .console
+            .pick(&question.title, &description, question.multiple, &items)
+        else {
             return false;
         };
         let values: Vec<String> = picked
@@ -224,7 +231,8 @@ pub fn run(args: &Args, install: &InstallArgs, command: Install, ctx: &mut Conte
                         .map(|question| {
                             json!({
                                 "option": question.option,
-                                "text": question.text,
+                                "title": question.title,
+                                "note": question.note,
                                 "multiple": question.multiple,
                                 "choices": question.choices.iter().map(|choice| json!({
                                     "value": choice.value, "detail": choice.detail,

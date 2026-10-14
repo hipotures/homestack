@@ -86,7 +86,7 @@ fn check_storage(state: &State, found: &mut Findings, id: &str, content: &str) {
     }
 }
 
-fn ask_storage(state: &State, found: &mut Findings, option: &'static str, text: &str, content: &str, multiple: bool) {
+fn ask_storage(state: &State, found: &mut Findings, option: &'static str, title: &str, content: &str, multiple: bool) {
     let choices = storage_choices(state, content);
     if choices.is_empty() {
         found.errors.push(format!(
@@ -95,7 +95,8 @@ fn ask_storage(state: &State, found: &mut Findings, option: &'static str, text: 
     } else {
         found.questions.push(Question {
             option,
-            text: text.to_owned(),
+            title: title.to_owned(),
+            note: String::new(),
             multiple,
             choices,
         });
@@ -108,7 +109,7 @@ pub fn check_storages(state: &State, settings: &Settings, found: &mut Findings) 
             state,
             found,
             "--storages",
-            "where the workspace disks go (several, comma-separated)",
+            "Storages for the workspace disks",
             "images",
             true,
         );
@@ -121,7 +122,7 @@ pub fn check_storages(state: &State, settings: &Settings, found: &mut Findings) 
             state,
             found,
             "--snippet-storage",
-            "where the Cloud-Init snippets go",
+            "Storage for the Cloud-Init snippets",
             "snippets",
             false,
         ),
@@ -132,7 +133,7 @@ pub fn check_storages(state: &State, settings: &Settings, found: &mut Findings) 
             state,
             found,
             "--service-storages",
-            "root disks of the server containers (several, comma-separated)",
+            "Storages for the server root disks",
             "rootdir",
             true,
         );
@@ -145,7 +146,7 @@ pub fn check_storages(state: &State, settings: &Settings, found: &mut Findings) 
             state,
             found,
             "--template-storage",
-            "where the server image is kept",
+            "Storage for the server image",
             "vztmpl",
             false,
         ),
@@ -208,20 +209,21 @@ pub fn find_gold(state: &State, settings: &Settings, found: &mut Findings) -> Op
         }
         return Some(*one);
     }
-    let (text, choices) = match tagged.as_slice() {
+    let (note, choices) = match tagged.as_slice() {
         [one] => return Some(*one),
         [] => (
-            "no VM is tagged homestack-gold (prepare Gold first, see the README); QEMU VMs".to_owned(),
+            "No VM is tagged homestack-gold; these are the QEMU VMs (prepare Gold first, see the README).".to_owned(),
             vm_choices(state, |vm| vm.kind == "qemu"),
         ),
         _ => (
-            "several VMs are tagged homestack-gold".to_owned(),
+            "Several VMs are tagged homestack-gold.".to_owned(),
             vm_choices(state, |vm| has_tag(vm, "homestack-gold")),
         ),
     };
     found.questions.push(Question {
         option: "--gold",
-        text,
+        title: "Gold VM".to_owned(),
+        note,
         multiple: false,
         choices,
     });

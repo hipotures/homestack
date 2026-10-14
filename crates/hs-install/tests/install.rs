@@ -455,7 +455,7 @@ fn checks_stop_the_install_before_any_change() {
 
     let fake = Fake::new(&["pve1"]);
     fake.replace("vms.tsv", "homestack-gold", "");
-    stops(&fake, &standard(false), &["no VM is tagged homestack-gold"]);
+    stops(&fake, &standard(false), &["No VM is tagged homestack-gold"]);
 
     let fake = Fake::new(&["pve1"]);
     fake.write("pools.tsv", "other\t101\tsomeone else\n");
@@ -718,7 +718,7 @@ fn gold_is_a_question_when_it_is_not_one_tagged_vm() {
     assert_eq!(questions[0].option, "--gold");
     let values: Vec<&str> = questions[0].choices.iter().map(|c| c.value.as_str()).collect();
     assert_eq!(values, ["101", "111"]);
-    assert!(run.out.contains("several VMs are tagged homestack-gold"), "{}", run.out);
+    assert!(run.out.contains("Several VMs are tagged homestack-gold"), "{}", run.out);
     assert!(
         questions[0].choices[1].detail.contains("gold-backup") && questions[0].choices[1].detail.contains("pve1"),
         "{:?}",
@@ -731,7 +731,7 @@ fn gold_is_a_question_when_it_is_not_one_tagged_vm() {
     let questions = missing(&run);
     let values: Vec<&str> = questions[0].choices.iter().map(|c| c.value.as_str()).collect();
     assert_eq!(values, ["100", "101"]);
-    assert!(run.out.contains("no VM is tagged homestack-gold"), "{}", run.out);
+    assert!(run.out.contains("No VM is tagged homestack-gold"), "{}", run.out);
 }
 
 #[test]

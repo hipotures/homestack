@@ -137,8 +137,14 @@ pub trait Console: Send {
     /// Choose among `items` (a value and what tells it apart): the indexes
     /// of the chosen ones, `None` when the user gives up. The default asks
     /// for numbers, for a console that cannot draw a list.
-    fn pick(&mut self, title: &str, multiple: bool, items: &[(String, String)]) -> Option<Vec<usize>> {
-        pick_numbered(self, title, multiple, items)
+    fn pick(
+        &mut self,
+        title: &str,
+        description: &str,
+        multiple: bool,
+        items: &[(String, String)],
+    ) -> Option<Vec<usize>> {
+        pick_numbered(self, title, description, multiple, items)
     }
 }
 
@@ -174,7 +180,13 @@ impl Console for Terminal {
         rpassword::read_password().ok()
     }
 
-    fn pick(&mut self, title: &str, multiple: bool, items: &[(String, String)]) -> Option<Vec<usize>> {
+    fn pick(
+        &mut self,
+        title: &str,
+        description: &str,
+        multiple: bool,
+        items: &[(String, String)],
+    ) -> Option<Vec<usize>> {
         use crate::picker::{Item, Outcome, Picker, run_on_terminal};
         if io::stdin().is_terminal() && io::stdout().is_terminal() {
             let rows = items
@@ -184,7 +196,7 @@ impl Console for Terminal {
                     detail: detail.clone(),
                 })
                 .collect();
-            let mut picker = Picker::new(title, multiple, rows);
+            let mut picker = Picker::new(title, multiple, rows).with_description(description);
             if let Ok(outcome) = run_on_terminal(&mut picker) {
                 return match outcome {
                     Outcome::Chosen(chosen) => Some(chosen),
@@ -192,7 +204,7 @@ impl Console for Terminal {
                 };
             }
         }
-        pick_numbered(self, title, multiple, items)
+        pick_numbered(self, title, description, multiple, items)
     }
 }
 
@@ -201,11 +213,12 @@ impl Console for Terminal {
 pub fn pick_numbered<C: Console + ?Sized>(
     console: &mut C,
     title: &str,
+    description: &str,
     multiple: bool,
     items: &[(String, String)],
 ) -> Option<Vec<usize>> {
     let width = items.iter().map(|(value, _)| value.chars().count()).max().unwrap_or(0);
-    let mut text = format!("\n{title}\n");
+    let mut text = format!("\n{title}\n{description}\n");
     for (index, (value, detail)) in items.iter().enumerate() {
         text.push_str(&format!("  {:>2}) {value:<width$}  {detail}\n", index + 1));
     }

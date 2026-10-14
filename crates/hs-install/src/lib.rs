@@ -49,8 +49,10 @@ pub struct Choice {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Question {
     pub option: &'static str,
-    /// Why it is needed, in a few words.
-    pub text: String,
+    /// What is chosen, as a heading (capitalised, no full stop).
+    pub title: String,
+    /// A sentence more when the heading is not enough; may be empty.
+    pub note: String,
     /// Several values, comma-separated, are allowed.
     pub multiple: bool,
     pub choices: Vec<Choice>,
@@ -62,7 +64,18 @@ pub fn describe_missing(questions: &[Question]) -> String {
     const WIDTH: usize = 60;
     let mut out = String::from("Choose where to install; nothing was changed.\n");
     for question in questions {
-        out.push_str(&format!("\n{} is required: {}\n", question.option, question.text));
+        let hint = if question.multiple {
+            " (several, comma-separated)"
+        } else {
+            ""
+        };
+        out.push_str(&format!(
+            "\n{} is required: {}{hint}\n",
+            question.option, question.title
+        ));
+        if !question.note.is_empty() {
+            out.push_str(&format!("    {}\n", question.note));
+        }
         if question.choices.is_empty() {
             out.push_str("    (nothing to choose from: see the message above)\n");
         }
