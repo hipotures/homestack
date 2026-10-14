@@ -1039,21 +1039,21 @@ async fn the_servers_are_deployed_after_proxmox_and_the_install_ends_with_status
                 "api1".into(),
                 "pve1".into(),
                 "192.0.2.97".into(),
-                100,
+                2097,
                 "local-lvm".into()
             ),
             (
                 "api2".into(),
                 "pve2".into(),
                 "192.0.2.98".into(),
-                102,
+                2098,
                 "local-lvm".into()
             ),
             (
                 "api3".into(),
                 "pve3".into(),
                 "192.0.2.99".into(),
-                103,
+                2099,
                 "local-lvm".into()
             ),
         ]
@@ -1264,16 +1264,16 @@ async fn the_manual_way_needs_a_server_domain_or_no_servers() {
 }
 
 #[tokio::test]
-async fn an_existing_server_keeps_its_container_id_and_a_status_that_fails_fails_the_install() {
+async fn the_server_on_its_number_is_replaced_and_a_status_that_fails_fails_the_install() {
     let cluster = Cluster::new(&["pve1"]);
     desktop_files(&cluster);
     cluster.write(
         "vms.tsv",
         "100\tpve1\tdesktop\t\tvirtio=BC:24:11:00:00:02,bridge=vmbr0\t\n\
          101\tpve1\tgold\thomestack-gold\tvirtio=BC:24:11:00:00:01,bridge=vmbr0\t\n\
-         120\tpve1\tapi1\t\t\t\tlxc\n",
+         2097\tpve1\tapi1\t\t\t\tlxc\n",
     );
-    cluster.write("pools.tsv", "homestack-service\t120\tHomeStack servers\n");
+    cluster.write("pools.tsv", "homestack-service\t2097\tHomeStack servers\n");
     let servers = Arc::new(FakeServers::resolving(&[("api1.hs.example.net", "192.0.2.97")]));
     let done = run_with(
         &cluster,
@@ -1285,12 +1285,80 @@ async fn an_existing_server_keeps_its_container_id_and_a_status_that_fails_fails
     .await;
     let deployed = servers.deployed();
     assert_eq!(deployed.len(), 1, "{}", done.console.out());
-    assert_eq!(deployed[0].instances[0].ctid, 120);
+    assert_eq!(deployed[0].instances[0].ctid, 2097);
+    assert!(
+        done.console.out().contains("CT 2097  local-lvm  (replaced)"),
+        "{}",
+        done.console.out()
+    );
     // Nothing answers at the servers' address: the install is not done.
     assert_eq!(done.code, 1, "{}", done.console.out());
     let out = format!("{}{}", done.console.out(), done.console.err());
     assert!(out.contains("homestack status"), "{out}");
     assert!(cluster.token_dir().join("client.toml").exists());
+}
+
+#[tokio::test]
+async fn a_server_number_that_is_taken_left_over_or_too_low_stops_before_any_change() {
+    // The number is the last two octets of the address (owner's decision of
+    // 2026-10-14): 192.0.2.97 is CT 2097.
+    let cases = [
+        (
+            "2097	pve1	desktop		virtio=BC:24:11:00:00:03,bridge=vmbr0	
+",
+            "",
+            "192.0.2.97",
+            "CT 2097 for api1.hs.example.net is taken by desktop",
+        ),
+        (
+            "120	pve1	api1				lxc
+",
+            "homestack-service	120	HomeStack servers
+",
+            "192.0.2.97",
+            "api1 is CT 120, but its address gives CT 2097: remove CT 120 first",
+        ),
+        (
+            "",
+            "",
+            "10.0.0.5",
+            "api1.hs.example.net is 10.0.0.5, which gives CT 5; Proxmox numbers start at 100",
+        ),
+        (
+            "",
+            "",
+            "198.51.100.7",
+            "api1.hs.example.net is 198.51.100.7, outside the network 192.0.2.0/24 of the gateway 192.0.2.1",
+        ),
+    ];
+    for (vms, pools, address, expected) in cases {
+        let cluster = Cluster::new(&["pve1"]);
+        desktop_files(&cluster);
+        cluster.write(
+            "vms.tsv",
+            &format!(
+                "101	pve1	gold	homestack-gold	virtio=BC:24:11:00:00:01,bridge=vmbr0	
+{vms}"
+            ),
+        );
+        if !pools.is_empty() {
+            cluster.write("pools.tsv", pools);
+        }
+        let servers = Arc::new(FakeServers::resolving(&[("api1.hs.example.net", address)]));
+        let refused = run_with(
+            &cluster,
+            &server_argv(&["--server-domain", "hs.example.net", "--yes"]),
+            &[],
+            false,
+            Arc::clone(&servers),
+        )
+        .await;
+        let out = format!("{}{}", refused.console.out(), refused.console.err());
+        assert_eq!(refused.code, 1, "{expected}: {out}");
+        assert!(out.contains(expected), "{expected}: {out}");
+        assert_eq!(cluster.changes(), 0, "{expected}: something changed");
+        assert!(servers.deployed().is_empty(), "{expected}");
+    }
 }
 
 #[tokio::test]
@@ -1338,7 +1406,7 @@ async fn the_form_asks_the_server_domain_and_the_confirmation_lists_the_servers(
         .lines()
         .find(|l| l.contains("api1.hs.example.net"))
         .unwrap_or_default();
-    for part in ["192.0.2.97", "pve1", "CT 100", "local-lvm"] {
+    for part in ["192.0.2.97", "pve1", "CT 2097", "local-lvm"] {
         assert!(line.contains(part), "{part:?} missing in {line:?}:\n{confirm}");
     }
     assert!(confirm.contains("Then: homestack status"), "{confirm}");

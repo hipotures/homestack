@@ -218,9 +218,9 @@ draft; `--server-domain` on the command line). Everything else is found:
 |---|---|
 | instances | one per online node that has a chosen server-disk storage: `api1`, `api2`, ... in the order of the nodes |
 | address | the desktop's DNS answer for `apiN.<domain>`; a name that does not resolve is a problem (Install cannot be pressed) |
-| network | `[network]` of the server configuration (`cidr`, `gateway`, the first `dns`); an address outside `prefix` is a problem |
+| network | `[network]` of the server configuration (`cidr`, `gateway`, the first `dns`); an address outside the gateway's network (`gateway` and `cidr`) is a problem (2026-10-14; it was a text match on `prefix`) |
 | bridge | Gold's `net0` |
-| CTID | the container of `homestack-service` with that host name (it is replaced), otherwise the lowest free id from 100 (Proxmox's own rule) |
+| CTID | the last two octets of the address, the third times 1000 plus the fourth (`192.168.102.1` is CT 102001; owner's decision of 2026-10-14). The container of `homestack-service` with that number and host name is replaced; that number held by anything else, the host name on another number, or a number under 100 is a problem |
 | root disk | the first chosen server-disk storage on that node |
 | Proxmox endpoints | `https://<name on the node's API certificate>:8006` |
 | image | `ghcr.io/hipotures/homestack-server:<version>-<commit>` of this client's build (`--server-image` overrides) |

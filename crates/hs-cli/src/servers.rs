@@ -187,6 +187,17 @@ fn now() -> i64 {
         .map_or(0, |since| i64::try_from(since.as_secs()).unwrap_or(i64::MAX))
 }
 
+/// Why `address` is not on the gateway's network, if it is not.
+fn outside_network(address: Ipv4Addr, network: &hs_model::config::Network) -> Option<String> {
+    let Ok(gateway) = network.gateway.parse::<Ipv4Addr>() else {
+        return Some(format!("but the gateway {:?} is not an IPv4 address", network.gateway));
+    };
+    let mask = u32::MAX.checked_shl(32 - u32::from(network.cidr)).unwrap_or(0);
+    let base = Ipv4Addr::from(u32::from(gateway) & mask);
+    (u32::from(address) & mask != u32::from(base))
+        .then(|| format!("outside the network {base}/{} of the gateway {gateway}", network.cidr))
+}
+
 /// `[storage_layouts]`: node `...N` uses `homestack-storage-N`, made of the
 /// chosen workspace-disk storages that are on that node.
 fn layouts(
@@ -319,8 +330,8 @@ pub fn plan_servers(
         out.problems.push("Gold's bridge is unknown".to_owned());
     }
 
-    // The instances: one per online node with a server-disk storage.
-    let mut taken: Vec<u32> = plan.cluster.guests.keys().copied().collect();
+    // The instances: one per online node with a server-disk storage, each
+    // numbered by its address (`hs_model::address`).
     let mut instances = Vec::new();
     for (index, node) in plan.cluster.nodes.iter().enumerate() {
         let storage = settings.service_storages.iter().find(|id| {
@@ -336,17 +347,6 @@ pub fn plan_servers(
         };
         let name = format!("api{}", index + 1);
         let fqdn = format!("{name}.{domain}");
-        let existing = plan
-            .cluster
-            .guests
-            .iter()
-            .find(|(_, (guest, kind, pool))| *guest == name && kind == "lxc" && pool == SERVICE_POOL)
-            .map(|(id, _)| *id);
-        let ctid = existing.unwrap_or_else(|| {
-            let free = (100..).find(|id| !taken.contains(id)).unwrap_or(100);
-            taken.push(free);
-            free
-        });
         let Some(address) = servers.resolve(&fqdn) else {
             out.problems.push(format!(
                 "{fqdn} does not resolve on this desktop: give it the server's address in DNS"
@@ -354,14 +354,31 @@ pub fn plan_servers(
             continue;
         };
         if let Some(network) = &network
-            && !address.to_string().starts_with(&format!("{}.", network.prefix))
+            && let Some(outside) = outside_network(address, network)
         {
-            out.problems.push(format!(
-                "{fqdn} is {address}, outside the workspace network {}.0/{}",
-                network.prefix, network.cidr
-            ));
+            out.problems.push(format!("{fqdn} is {address}, {outside}"));
         }
-        let replaced = if existing.is_some() { "  (replaced)" } else { "" };
+        let ctid = hs_model::address::vmid_of(address);
+        if ctid < 100 {
+            out.problems.push(format!(
+                "{fqdn} is {address}, which gives CT {ctid}; Proxmox numbers start at 100"
+            ));
+            continue;
+        }
+        let is_server = |kind: &str, pool: &str| kind == "lxc" && pool == SERVICE_POOL;
+        let mut replaced = "";
+        for (id, (guest, kind, pool)) in &plan.cluster.guests {
+            if *id == ctid && *guest == name && is_server(kind, pool) {
+                replaced = "  (replaced)";
+            } else if *id == ctid {
+                out.problems.push(format!("CT {ctid} for {fqdn} is taken by {guest}"));
+            } else if *guest == name && is_server(kind, pool) {
+                out.problems.push(format!(
+                    "{name} is CT {id}, but its address gives CT {ctid}: remove CT {id} first \
+                     (homestack-deploy --config <deploy.toml> remove --only {name} --yes)"
+                ));
+            }
+        }
         out.lines
             .push(format!("{fqdn}  {address}  {node}  CT {ctid}  {storage}{replaced}"));
         instances.push((name, node.clone(), ctid, address, storage.clone()));

@@ -3,6 +3,7 @@
 //! Everything here is plain data with `serde` and OpenAPI schemas, plus the
 //! validation of `server.toml`. Nothing in this crate performs I/O.
 
+pub mod address;
 pub mod capabilities;
 pub mod config;
 pub mod error;
