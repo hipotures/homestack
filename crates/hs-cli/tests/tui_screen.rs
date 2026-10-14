@@ -344,7 +344,7 @@ fn the_gold_line_of_the_servers_box_has_its_dot_first_and_fits() {
     let text = screen(&render(&fixture.app, 120, 36));
     let line = text
         .lines()
-        .find(|line| line.contains(" gold ○ 112 hs-gold"))
+        .find(|line| line.contains(" gold ○ 112 hs-gold@pve1"))
         .unwrap_or_else(|| panic!("no gold line:\n{text}"));
     assert!(line.contains("pve1"), "{line}");
 }

@@ -247,7 +247,16 @@ fn resize_sends_the_chosen_disk_and_size() {
         "{text}"
     );
     press(&mut fixture.app, KeyCode::Tab);
-    type_text(&mut fixture.app, "96G");
+    // From the 64G home: three times 10 GiB and twice 1 GiB.
+    for code in [
+        KeyCode::PageUp,
+        KeyCode::PageUp,
+        KeyCode::PageUp,
+        KeyCode::Right,
+        KeyCode::Right,
+    ] {
+        press(&mut fixture.app, code);
+    }
     let start = started(press(&mut fixture.app, KeyCode::Enter));
     assert_eq!(start.kind, Kind::Resize);
     assert_eq!(start.parameters, json!({"vmid": 201, "home_size": "96G"}));
@@ -317,7 +326,16 @@ fn a_luks_passphrase_is_typed_hidden_in_the_plan() {
     select(&mut fixture.app, 201);
     press(&mut fixture.app, KeyCode::Char('z'));
     press(&mut fixture.app, KeyCode::Tab);
-    type_text(&mut fixture.app, "96G");
+    // From the 64G home: three times 10 GiB and twice 1 GiB.
+    for code in [
+        KeyCode::PageUp,
+        KeyCode::PageUp,
+        KeyCode::PageUp,
+        KeyCode::Right,
+        KeyCode::Right,
+    ] {
+        press(&mut fixture.app, code);
+    }
     started(press(&mut fixture.app, KeyCode::Enter));
     fixture.app.progress(Progress::Plan {
         lines: vec!["RESIZE PLAN — NO CHANGES MADE YET".to_owned()],
@@ -343,7 +361,7 @@ fn a_plan_that_changes_nothing_has_no_apply() {
     select(&mut fixture.app, 201);
     press(&mut fixture.app, KeyCode::Char('z'));
     press(&mut fixture.app, KeyCode::Tab);
-    type_text(&mut fixture.app, "64G");
+    press(&mut fixture.app, KeyCode::Right);
     started(press(&mut fixture.app, KeyCode::Enter));
     fixture.app.progress(Progress::Plan {
         lines: vec!["RESIZE PLAN — NO CHANGES MADE YET".to_owned()],
@@ -444,4 +462,27 @@ fn a_click_focuses_a_field_and_a_click_on_its_arrow_changes_the_choice() {
     fixture.app.mouse(click(arrow, y));
     let text = screen(&render(&fixture.app, 120, 36));
     assert!(text.contains("‹ pve1 ›"), "the next node: {text}");
+}
+
+#[test]
+fn resize_starts_at_the_disk_s_size_only_grows_and_needs_a_change() {
+    let mut fixture = app();
+    select(&mut fixture.app, 201);
+    fixture.app.set_details(201, &tui_fixture::details());
+    press(&mut fixture.app, KeyCode::Char('z'));
+    press(&mut fixture.app, KeyCode::Down);
+    let text = screen(&render(&fixture.app, 120, 36));
+    assert!(text.contains("‹ 64G ›"), "the home's size now: {text}");
+    // Unchanged: refused before the server is asked.
+    assert_eq!(press(&mut fixture.app, KeyCode::Enter), None);
+    assert!(screen(&render(&fixture.app, 120, 36)).contains("Choose a size above the 64G"));
+    // Never below the size now.
+    press(&mut fixture.app, KeyCode::Left);
+    assert!(screen(&render(&fixture.app, 120, 36)).contains("‹ 64G ›"));
+    press(&mut fixture.app, KeyCode::Right);
+    press(&mut fixture.app, KeyCode::PageUp);
+    let text = screen(&render(&fixture.app, 120, 36));
+    assert!(text.contains("‹ 75G ›") && text.contains("+11G"), "{text}");
+    let start = started(press(&mut fixture.app, KeyCode::Enter));
+    assert_eq!(start.parameters, json!({"vmid": 201, "home_size": "75G"}));
 }

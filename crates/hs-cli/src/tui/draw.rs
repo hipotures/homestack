@@ -344,7 +344,7 @@ fn cluster(buf: &mut Buffer, area: Rect, app: &App, mut controls: Vec<Control>) 
     if let Some(gold) = gold {
         // The state dot before the name, as for the servers; its word only
         // when it fits.
-        let label = format!(" {} {}  {}", gold.vmid, gold.name.as_deref().unwrap_or(""), gold.node);
+        let label = format!(" {} {}@{}", gold.vmid, gold.name.as_deref().unwrap_or(""), gold.node);
         let room = usize::from(sub_inner.width).saturating_sub(" gold ".len() + 1 + label.chars().count());
         let mut line = vec![
             (" gold ".to_owned(), text),
@@ -1137,6 +1137,14 @@ fn action_box(buf: &mut Buffer, area: Rect, app: &App, action: &Action) {
                             "[ {value}{cursor}{} ]",
                             " ".repeat(24usize.saturating_sub(value.chars().count()))
                         )
+                    }
+                    Input::Size { gib, min } => {
+                        let grown = if gib > min {
+                            format!("  +{}G", gib - min)
+                        } else {
+                            String::new()
+                        };
+                        format!("‹ {gib}G ›{grown}")
                     }
                     Input::Choice { options, index } => {
                         format!("‹ {} ›", options.get(*index).map_or("—", String::as_str))

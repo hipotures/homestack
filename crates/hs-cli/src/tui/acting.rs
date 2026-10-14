@@ -51,6 +51,33 @@ impl App {
             .unwrap_or_default()
     }
 
+    /// The size in GiB of the selected workspace's root or home disk, from
+    /// its details (or, for the home, its row).
+    fn disk_gib(&self, root: bool) -> Option<u64> {
+        const GIB: u64 = 1024 * 1024 * 1024;
+        let role = if root { "root" } else { "home" };
+        let from_details = self.selected_details().and_then(|details| {
+            details
+                .volumes
+                .iter()
+                .find(|volume| volume.role == role)
+                .and_then(|volume| volume.size.as_deref())
+                .and_then(|size| {
+                    let size = size.trim();
+                    size.strip_suffix('T')
+                        .and_then(|t| t.parse::<u64>().ok())
+                        .map(|t| t * 1024)
+                        .or_else(|| size.strip_suffix('G').and_then(|g| g.parse::<u64>().ok()))
+                })
+        });
+        from_details.or_else(|| {
+            (!root)
+                .then(|| self.selected_entry()?.home.as_ref()?.size_bytes)
+                .flatten()
+                .map(|bytes| bytes / GIB)
+        })
+    }
+
     fn gold_node(&self) -> Option<String> {
         self.status.as_ref()?.gold.as_ref().map(|gold| gold.node.clone())
     }
@@ -120,8 +147,16 @@ impl App {
                 ]
             }
             Kind::Resize => vec![
-                Field::choice("Disk", vec!["home".to_owned(), "root".to_owned()], "Disks only grow."),
-                Field::text("New size", "", "The total size, e.g. 96G; the filesystem grows online."),
+                Field::choice(
+                    "Disk",
+                    vec!["home".to_owned(), "root".to_owned()],
+                    "Disks only grow; ← → to choose.",
+                ),
+                Field::size(
+                    "New size",
+                    self.disk_gib(false).unwrap_or(1),
+                    "← → 1 GiB, PgUp PgDn 10 GiB; never below the size now. The filesystem grows online.",
+                ),
             ],
             Kind::Addkey => {
                 let mut keys = vec![EXISTING_KEYS.to_owned()];
@@ -206,6 +241,15 @@ impl App {
                 parameters
             }
             Kind::Resize => {
+                let grown = form.fields.iter().find_map(|field| match field.input {
+                    Input::Size { gib, min } => Some((gib, min)),
+                    _ => None,
+                });
+                if let Some((gib, min)) = grown
+                    && gib <= min
+                {
+                    return Err(format!("Choose a size above the {min}G it has now (→ or PgUp)."));
+                }
                 let size = value("New size");
                 if size.is_empty() {
                     return Err("Write the new total size, e.g. 96G.".to_owned());
@@ -244,6 +288,19 @@ impl App {
 
     /// A choice moved: the storages follow the node.
     fn follow_choice(&self, kind: Kind, form: &mut Form) {
+        if kind == Kind::Resize {
+            // The size starts again at the chosen disk's.
+            let root = form
+                .fields
+                .iter()
+                .find(|field| field.label == "Disk")
+                .is_some_and(|field| field.value() == "root");
+            let now = self.disk_gib(root).unwrap_or(1);
+            if let Some(field) = form.fields.iter_mut().find(|field| field.label == "New size") {
+                field.input = Input::Size { gib: now, min: now };
+            }
+            return;
+        }
         let node = form
             .fields
             .iter()
@@ -392,6 +449,32 @@ impl App {
         match code {
             KeyCode::Tab | KeyCode::Down => form.focus = (form.focus + 1) % count,
             KeyCode::BackTab | KeyCode::Up => form.focus = (form.focus + count - 1) % count,
+            KeyCode::Left | KeyCode::Right | KeyCode::PageUp | KeyCode::PageDown
+                if matches!(
+                    form.fields.get(form.focus),
+                    Some(Field {
+                        input: Input::Size { .. },
+                        ..
+                    })
+                ) =>
+            {
+                if let Some(Field {
+                    input: Input::Size { gib, min },
+                    ..
+                }) = form.fields.get_mut(form.focus)
+                {
+                    let step = if matches!(code, KeyCode::PageUp | KeyCode::PageDown) {
+                        10
+                    } else {
+                        1
+                    };
+                    *gib = if matches!(code, KeyCode::Right | KeyCode::PageUp) {
+                        gib.saturating_add(step)
+                    } else {
+                        gib.saturating_sub(step).max(*min)
+                    };
+                }
+            }
             KeyCode::Left | KeyCode::Right => {
                 if let Some(Field {
                     input: Input::Choice { options, index },

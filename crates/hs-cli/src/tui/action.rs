@@ -387,7 +387,15 @@ async fn restart_if_asked(
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Input {
     Text(String),
-    Choice { options: Vec<String>, index: usize },
+    Choice {
+        options: Vec<String>,
+        index: usize,
+    },
+    /// A size in GiB that only grows from `min`.
+    Size {
+        gib: u64,
+        min: u64,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -416,19 +424,30 @@ impl Field {
         }
     }
 
+    /// A size that starts at `gib` and cannot go below it.
+    #[must_use]
+    pub fn size(label: &'static str, gib: u64, note: &str) -> Self {
+        Self {
+            label,
+            input: Input::Size { gib, min: gib },
+            note: note.to_owned(),
+        }
+    }
+
     /// The text, or the chosen option.
     #[must_use]
     pub fn value(&self) -> String {
         match &self.input {
             Input::Text(text) => text.trim().to_owned(),
             Input::Choice { options, index } => options.get(*index).cloned().unwrap_or_default(),
+            Input::Size { gib, .. } => format!("{gib}G"),
         }
     }
 
     #[must_use]
     pub fn index(&self) -> usize {
         match &self.input {
-            Input::Text(_) => 0,
+            Input::Text(_) | Input::Size { .. } => 0,
             Input::Choice { index, .. } => *index,
         }
     }
