@@ -219,6 +219,8 @@ async fn plan_refusals_come_before_any_guest_command() -> TestResult {
             "Resize requires exactly the configured root and home data disks",
         ),
         (root(101, "32G"), "VM 101 is not in pool homestack"),
+        // local-lvm has 10 TB free: about 98 TiB more is refused.
+        (root(200, "100000G"), "Not enough space on local-lvm"),
     ];
     for (request, expected) in cases {
         let error = plan(&pve, &request)

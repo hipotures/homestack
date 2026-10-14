@@ -151,6 +151,27 @@ pub async fn plan_resize(
             format_g(current)
         )));
     }
+    // The growth must fit in the storage's free space (owner, 2026-10-15).
+    let storage = disk_volume(&disk_cfg)
+        .split_once(':')
+        .map(|(storage, _)| storage.to_owned())
+        .unwrap_or_default();
+    #[allow(clippy::cast_precision_loss, reason = "sizes in GiB are small")]
+    let growth_bytes = ((target_gib as f64 - current).max(0.0) * 1024.0 * 1024.0 * 1024.0) as u64;
+    if growth_bytes > 0 && !storage.is_empty() {
+        let status = pve
+            .get(&format!("/nodes/{}/storage/{storage}/status", info.node), &[])
+            .await?;
+        if let Some(avail) = status.get("avail").and_then(Value::as_u64)
+            && growth_bytes > avail
+        {
+            return Err(CoreError::Refused(format!(
+                "Not enough space on {storage}: {disk} would grow by {}G, {}G is free",
+                growth_bytes / (1024 * 1024 * 1024),
+                avail / (1024 * 1024 * 1024)
+            )));
+        }
+    }
     let guest = inspect_guest(pve, cfg, &info.node, vmid, role, &info.home_label).await?;
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss, reason = "Python's int()")]
     let current_bytes = (current * 1024.0 * 1024.0 * 1024.0) as u64;
