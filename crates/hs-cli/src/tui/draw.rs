@@ -300,7 +300,11 @@ fn cluster(buf: &mut Buffer, area: Rect, app: &App, mut controls: Vec<Control>) 
                 (format!(" {}  ", pad(&node.node, 5)), text),
                 (symbol, style),
                 (format!(" {} ", pad(&node.status, 8)), text),
-                (format!("{}, {running} running", here.len()), text),
+                // Running and stopped as dots with their counts.
+                ("● ".to_owned(), text.fg(palette.ok)),
+                (format!("{running:<3}"), text),
+                ("○ ".to_owned(), text.fg(palette.muted)),
+                ((here.len() - running).to_string(), text),
             ],
         );
     }

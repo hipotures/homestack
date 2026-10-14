@@ -314,7 +314,14 @@ fn the_node_table_lines_up_under_its_headings() {
     let (workspaces, _) = position(&buf, "WORKSPACES");
     let line = row(&buf, heading_y + 1);
     let dot = line.chars().position(|c| c == '●').unwrap();
-    let count = line.chars().position(|c| c == '4').unwrap();
+    // The second dot is the running workspaces', under WORKSPACES.
+    let count = line
+        .chars()
+        .enumerate()
+        .filter(|(_, c)| *c == '●')
+        .nth(1)
+        .map(|(at, _)| at)
+        .unwrap();
     assert_eq!(dot, usize::from(state), "{line}");
     assert_eq!(count, usize::from(workspaces), "{line}");
 }
@@ -400,4 +407,14 @@ fn a_click_on_a_workspace_selects_it_and_the_wheel_moves_the_selection() {
         modifiers: KeyModifiers::NONE,
     };
     assert_eq!(fixture.app.mouse(wheel), Some(Request::Details(203)));
+}
+
+#[test]
+fn the_node_table_counts_running_and_stopped_workspaces_with_dots() {
+    let fixture = app();
+    let text = screen(&render(&fixture.app, 120, 36));
+    // pve2 holds dev-main, data-play (running), api-proto, game-dev (stopped).
+    let line = text.lines().find(|line| line.contains(" pve2  ")).unwrap();
+    assert!(line.contains("● 2") && line.contains("○ 2"), "{line}");
+    assert!(!line.contains("running"), "{line}");
 }
