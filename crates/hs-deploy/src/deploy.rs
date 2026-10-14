@@ -11,8 +11,8 @@ use sha2::{Digest, Sha256};
 
 use crate::acme;
 use crate::config::{DeployConfig, InstanceSpec};
+use crate::dns::DnsApi;
 use crate::node::{self, NewContainer};
-use crate::ovh::{OvhClient, OvhCredentials};
 
 /// How long a new instance may take to answer over TLS.
 const HEALTH_LIMIT: Duration = Duration::from_secs(180);
@@ -112,12 +112,12 @@ pub async fn cert(config: &DeployConfig, force: bool, push: bool, say: &impl Fn(
         }
         _ => {
             say(&format!("obtaining *.{} from {}", config.domain, config.acme.directory));
-            let ovh = OvhClient::connect(OvhCredentials::from_file(&config.acme.ovh_file)?).await?;
+            let dns = DnsApi::connect(&config.acme).await?;
             let stored = acme::obtain(
                 &config.acme.directory,
                 &config.acme.dir,
                 &config.domain,
-                &ovh,
+                &dns,
                 &config.acme.zone,
                 say,
             )

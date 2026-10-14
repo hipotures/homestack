@@ -1,7 +1,7 @@
 //! The wildcard certificate of the instances, `*.<domain>`, from an ACME CA
-//! (Let's Encrypt) by DNS-01 in the public zone at OVH (owner's decision,
-//! phase 11). Kept on the desktop in `[acme] dir`: `account.json`,
-//! `cert.pem`, `key.pem` (mode `0600`).
+//! (Let's Encrypt) by DNS-01 in the public zone at OVH or Spaceship (owner's
+//! decisions, phase 11 and 2026-10-14). Kept on the desktop in `[acme] dir`:
+//! `account.json`, `cert.pem`, `key.pem` (mode `0600`).
 
 use std::io::Write;
 use std::net::{IpAddr, SocketAddr};
@@ -17,7 +17,7 @@ use instant_acme::{
     RetryPolicy,
 };
 
-use crate::ovh::OvhClient;
+use crate::dns::DnsApi;
 
 /// Renew when fewer days than this are left.
 pub const RENEW_DAYS: i64 = 30;
@@ -130,9 +130,9 @@ async fn account(directory: &str, dir: &Path) -> Result<Account, String> {
 /// Wait until every authoritative name server of `zone` answers `name`
 /// with a TXT record holding `value` (the local DNS may hold another zone
 /// of the same name, so the public servers are asked directly).
-async fn wait_for_txt(ovh: &OvhClient, zone: &str, name: &str, value: &str, say: &impl Fn(&str)) -> Result<(), String> {
+async fn wait_for_txt(dns: &DnsApi, zone: &str, name: &str, value: &str, say: &impl Fn(&str)) -> Result<(), String> {
     let mut servers = Vec::new();
-    for host in ovh.name_servers(zone).await? {
+    for host in dns.name_servers(zone).await? {
         let addresses = tokio::net::lookup_host((host.as_str(), 53))
             .await
             .map_err(|e| format!("{host}: {e}"))?;
@@ -174,7 +174,7 @@ pub async fn obtain(
     directory: &str,
     dir: &Path,
     domain: &str,
-    ovh: &OvhClient,
+    dns: &DnsApi,
     zone: &str,
     say: impl Fn(&str),
 ) -> Result<Stored, String> {
@@ -213,15 +213,15 @@ pub async fn obtain(
                 break;
             };
             let value = challenge.key_authorization().dns_value();
-            say(&format!("  TXT {challenge_name} at OVH"));
-            match ovh.add_txt(zone, &sub, &value).await {
+            say(&format!("  TXT {challenge_name} at {}", dns.name()));
+            match dns.add_txt(zone, &sub, &value).await {
                 Ok(id) => records.push(id),
                 Err(e) => {
                     outcome = Err(e);
                     break;
                 }
             }
-            if let Err(e) = wait_for_txt(ovh, zone, &challenge_name, &value, &say).await {
+            if let Err(e) = wait_for_txt(dns, zone, &challenge_name, &value, &say).await {
                 outcome = Err(e);
                 break;
             }
@@ -235,9 +235,9 @@ pub async fn obtain(
         Ok(()) => finish(&mut order, dir).await,
         Err(error) => Err(error),
     };
-    for id in records {
-        if let Err(error) = ovh.remove(zone, id).await {
-            say(&format!("  warning: the TXT record {id} was not removed: {error}"));
+    for record in records {
+        if let Err(error) = dns.remove(zone, &record).await {
+            say(&format!("  warning: the TXT record {record} was not removed: {error}"));
         }
     }
     result

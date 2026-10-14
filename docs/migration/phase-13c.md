@@ -226,7 +226,7 @@ draft; `--server-domain` on the command line). Everything else is found:
 | image | `ghcr.io/hipotures/homestack-server:<version>-<commit>` of this client's build (`--server-image` overrides) |
 | server configuration | `server.toml` from `~/.config/homestack/config.toml` (`hs-config split`); without it the install stops with a problem (the configuration wizard is step 3) |
 | tokens | `pve-token`, `pve-token-deploy` of the Proxmox part; the client token `api-token`, made (32 random bytes, hex, 0600) when missing |
-| certificate | OVH key `~/.config/homestack/ovh-dns`, zone = `<domain>` without its first label, kept in `~/.config/homestack/acme` |
+| certificate | zone = the longest of `<domain>` and its parents that has NS records in the public DNS (asked of 1.1.1.1 and 8.8.8.8, not the local DNS); its DNS at OVH takes the key `~/.config/homestack/ovh-dns`, at Spaceship `~/.config/homestack/spaceship-dns` (`SPACESHIP_API_KEY`, `SPACESHIP_API_SECRET`), anywhere else is a problem (2026-10-14); kept in `~/.config/homestack/acme` |
 
 The confirmation gets a section **Servers** with one line per instance
 (`api1.hs.example.net  192.0.2.97  pve1  CT 120  local-zfs`), the image and

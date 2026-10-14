@@ -278,6 +278,40 @@ an agent stops when a phase needs one that is still open
   suspended, a terminal in a panel, or a new window) and node CPU/RAM are
   decided after the TUI is built.
 
+### Owner's decisions of 2026-10-14 (domain and addressing)
+
+- One domain for all of HomeStack: `homestack.app`, registered at
+  Spaceship. `efez.net` (the owner's mail) is left out. In the home network
+  the router is master of the zone `homestack.app` (TSIG key `homestack`);
+  the public zone at Spaceship holds only what is published on purpose and
+  the DNS-01 records of the certificates. A wildcard `*` in the router's
+  zone may later point at Pangolin, so published names work at home too.
+- The nodes are `pve1/2/3.homestack.app` (certificates from Proxmox's own
+  ACME, plugin `spaceship`); the zones `pveN.efez.net` go. The servers move
+  from `apiN.hs.efez.net` to `apiN.homestack.app`, then `hs.efez.net` goes.
+- `hs-deploy` gets the certificate through OVH or Spaceship: `[acme]` takes
+  `ovh_file` or `spaceship_file`; the installer picks the one that serves
+  the domain's public zone.
+- Addressing (network `192.168.100.0/22`, gateway `192.168.100.1`; not
+  applied yet): an address no longer follows from the VMID. The VMID is the
+  last two octets of the address, the third octet times 1000 plus the
+  fourth (`192.168.101.10` is VMID 101010).
+
+  | Addresses | What | VMIDs |
+  |---|---|---|
+  | 192.168.100.x | what is there now (router, nodes, desktop, DHCP, the owner's VMs) | unchanged |
+  | 192.168.101.1–9 | Golds | 101001–101009 |
+  | 192.168.101.10–199 | workspaces | 101010–101199 |
+  | 192.168.101.200–254 | test workspaces | 101200–101254 |
+  | 192.168.102.1–199 | services (LXC, the servers) | 102001–102199 |
+  | 192.168.102.200–254 | test services | 102200–102254 |
+  | 192.168.103.x | free | |
+
+  If a range needs more addresses, its test part moves to .240–.254.
+- Later: HomeStack writes each machine's name and address to the DNS;
+  service containers are replaced with their data kept on a separate volume
+  mounted at `/app` (as a workspace keeps `/home`); containers have no Gold.
+
 ## Probe results
 
 | Date | Probe | Result |

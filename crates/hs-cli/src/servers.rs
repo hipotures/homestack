@@ -8,12 +8,14 @@
 //! configuration, the endpoints from the nodes' API certificates. What is
 //! missing is a problem shown in the confirmation, before any change.
 
+use std::collections::BTreeMap;
 use std::future::Future;
 use std::net::{Ipv4Addr, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 
 use hs_deploy::config::DeployConfig;
+use hs_deploy::dns::DnsHost;
 use hs_install::Plan;
 
 /// The node image's repository; the tag is `<version>-<commit>`.
@@ -29,6 +31,8 @@ pub type Deploying<'a> = Pin<Box<dyn Future<Output = Result<(), String>> + Send 
 pub trait Servers: Send + Sync {
     /// The IPv4 address `name` resolves to on this desktop.
     fn resolve(&self, name: &str) -> Option<Ipv4Addr>;
+    /// The public zone that holds `domain` and who serves its DNS.
+    fn public_zone(&self, domain: &str) -> Result<(String, DnsHost), String>;
     /// The certificate (obtained when the stored one will not do) and every
     /// instance of `config`.
     fn deploy<'a>(&'a self, config: &'a DeployConfig, say: &'a (dyn Fn(&str) + Send + Sync)) -> Deploying<'a>;
@@ -49,6 +53,22 @@ impl Servers for RealServers {
                 std::net::IpAddr::V4(ip) => Some(ip),
                 std::net::IpAddr::V6(_) => None,
             })
+    }
+
+    fn public_zone(&self, domain: &str) -> Result<(String, DnsHost), String> {
+        // The form plans again after every answer: ask once per domain.
+        static FOUND: std::sync::OnceLock<std::sync::Mutex<BTreeMap<String, (String, DnsHost)>>> =
+            std::sync::OnceLock::new();
+        let found = FOUND.get_or_init(Default::default);
+        if let Some(known) = found.lock().ok().and_then(|map| map.get(domain).cloned()) {
+            return Ok(known);
+        }
+        let handle = tokio::runtime::Handle::try_current().map_err(|error| error.to_string())?;
+        let answer = tokio::task::block_in_place(|| handle.block_on(hs_deploy::dns::public_zone(domain)))?;
+        if let Ok(mut map) = found.lock() {
+            map.insert(domain.to_owned(), answer.clone());
+        }
+        Ok(answer)
     }
 
     fn deploy<'a>(&'a self, config: &'a DeployConfig, say: &'a (dyn Fn(&str) + Send + Sync)) -> Deploying<'a> {
@@ -132,6 +152,10 @@ impl Files {
     #[must_use]
     pub fn ovh(&self) -> PathBuf {
         self.dir.join("ovh-dns")
+    }
+    #[must_use]
+    pub fn spaceship(&self) -> PathBuf {
+        self.dir.join("spaceship-dns")
     }
     #[must_use]
     pub fn acme(&self) -> PathBuf {
@@ -230,7 +254,30 @@ pub fn plan_servers(
         out.problems.push(format!("Server domain {domain:?} is not a DNS name"));
         return out;
     }
-    let zone = domain.split_once('.').map_or("", |(_, rest)| rest).to_owned();
+    // The public zone of the domain and its DNS API: the certificate's
+    // DNS-01 record is written there.
+    let (zone, dns_key) = match servers.public_zone(&domain) {
+        Ok((zone, DnsHost::Ovh)) => (zone, Some(("OVH", files.ovh(), "OVH_AK, OVH_AS, OVH_CK"))),
+        Ok((zone, DnsHost::Spaceship)) => (
+            zone,
+            Some((
+                "Spaceship",
+                files.spaceship(),
+                "SPACESHIP_API_KEY, SPACESHIP_API_SECRET",
+            )),
+        ),
+        Ok((zone, DnsHost::Other(name_server))) => {
+            out.problems.push(format!(
+                "the DNS of {zone} is at {name_server}: HomeStack gets the certificate for *.{domain} only through OVH or Spaceship"
+            ));
+            (zone, None)
+        }
+        Err(error) => {
+            out.problems
+                .push(format!("cannot tell which public zone holds {domain}: {error}"));
+            (String::new(), None)
+        }
+    };
 
     // The server configuration comes from the old one, with this Gold.
     let old_path = files.old_config();
@@ -335,20 +382,21 @@ pub fn plan_servers(
     }
 
     // The certificate: the stored one while it is good, otherwise from
-    // Let's Encrypt with the OVH key.
+    // Let's Encrypt with the DNS API key of the zone.
     let stored = hs_deploy::acme::stored(&files.acme()).ok().flatten();
-    match stored {
-        Some(stored) if hs_deploy::acme::current(&stored, &domain, now()) => out.lines.push(format!(
+    match (stored, &dns_key) {
+        (Some(stored), _) if hs_deploy::acme::current(&stored, &domain, now()) => out.lines.push(format!(
             "certificate *.{domain}: the stored one, {} more days",
             (stored.not_after - now()) / 86_400
         )),
-        _ if files.ovh().exists() => out.lines.push(format!(
-            "certificate *.{domain} from Let's Encrypt (DNS at OVH, zone {zone})"
+        (_, Some((host, file, _))) if file.exists() => out.lines.push(format!(
+            "certificate *.{domain} from Let's Encrypt (DNS at {host}, zone {zone})"
         )),
-        _ => out.problems.push(format!(
-            "a certificate for *.{domain} needs the OVH API key in {} (OVH_AK, OVH_AS, OVH_CK)",
-            files.short(&files.ovh())
+        (_, Some((host, file, keys))) => out.problems.push(format!(
+            "a certificate for *.{domain} needs the {host} API key in {} ({keys})",
+            files.short(file)
         )),
+        (_, None) => {}
     }
     let Some(network) = network else {
         return out;
@@ -393,9 +441,17 @@ image = {}\ndomain = {}\ntemplate_storage = {}\npool = {}\nbridge = {}\ncidr = {
         path(files.server_toml()),
         path(files.api_token()),
     ));
+    let Some((host, dns_file, _)) = &dns_key else {
+        return out;
+    };
+    let key = if *host == "Spaceship" {
+        "spaceship_file"
+    } else {
+        "ovh_file"
+    };
     text.push_str(&format!(
-        "\n[acme]\novh_file = {}\nzone = {}\ndir = {}\n",
-        path(files.ovh()),
+        "\n[acme]\n{key} = {}\nzone = {}\ndir = {}\n",
+        path(dns_file.clone()),
         quoted(&zone),
         path(files.acme()),
     ));

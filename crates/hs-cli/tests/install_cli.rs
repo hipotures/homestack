@@ -22,6 +22,7 @@ use hs_cli::servers::Servers;
 use hs_cli::system::Output;
 use hs_cli::view::Style;
 use hs_deploy::config::DeployConfig;
+use hs_deploy::dns::DnsHost;
 use serde_json::Value;
 
 /// A fake single-node or three-node cluster on disk.
@@ -862,6 +863,9 @@ struct FakeServers {
     /// The URL and CA file the client reaches the servers at; none: nothing answers.
     reach: Option<(String, String)>,
     fail: Option<String>,
+    /// The public zone of a server domain and who serves its DNS; none:
+    /// the domain's parent at OVH.
+    zone: Option<(String, DnsHost)>,
 }
 
 impl FakeServers {
@@ -881,6 +885,13 @@ impl FakeServers {
 }
 
 impl Servers for FakeServers {
+    fn public_zone(&self, domain: &str) -> Result<(String, DnsHost), String> {
+        Ok(self.zone.clone().unwrap_or_else(|| {
+            let parent = domain.split_once('.').map_or(domain, |(_, rest)| rest);
+            (parent.to_owned(), DnsHost::Ovh)
+        }))
+    }
+
     fn resolve(&self, name: &str) -> Option<Ipv4Addr> {
         self.names.get(name).copied()
     }
@@ -1078,7 +1089,8 @@ async fn the_servers_are_deployed_after_proxmox_and_the_install_ends_with_status
     assert_eq!(config.server.api_token_file, dir.join("api-token"));
     assert_eq!(config.server.pool, "homestack");
     assert_eq!(config.acme.zone, "example.net");
-    assert_eq!(config.acme.ovh_file, dir.join("ovh-dns"));
+    assert_eq!(config.acme.ovh_file, Some(dir.join("ovh-dns")));
+    assert_eq!(config.acme.spaceship_file, None);
     assert_eq!(config.acme.dir, dir.join("acme"));
 
     // The server's configuration is the old file's, with the Gold installed.
@@ -1118,6 +1130,107 @@ async fn a_server_name_that_does_not_resolve_stops_before_any_change() {
     assert_eq!(refused.code, 1);
     let out = format!("{}{}", refused.console.out(), refused.console.err());
     assert!(out.contains("api2.hs.example.net does not resolve"), "{out}");
+    assert_eq!(cluster.changes(), 0, "something changed");
+    assert!(servers.deployed().is_empty());
+}
+
+/// A server domain that is itself the zone, served by Spaceship.
+fn at_spaceship() -> FakeServers {
+    FakeServers {
+        zone: Some(("homestack.example".to_owned(), DnsHost::Spaceship)),
+        ..FakeServers::resolving(&[
+            ("api1.homestack.example", "192.0.2.97"),
+            ("api2.homestack.example", "192.0.2.98"),
+            ("api3.homestack.example", "192.0.2.99"),
+        ])
+    }
+}
+
+#[tokio::test]
+async fn a_domain_at_spaceship_gets_its_certificate_through_spaceship() {
+    let cluster = Cluster::new(&["pve1", "pve2", "pve3"]);
+    desktop_files(&cluster);
+    let dir = cluster.token_dir();
+    std::fs::write(
+        dir.join("spaceship-dns"),
+        "SPACESHIP_API_KEY=k
+SPACESHIP_API_SECRET=s
+",
+    )
+    .expect("key");
+    std::fs::set_permissions(dir.join("spaceship-dns"), std::fs::Permissions::from_mode(0o600)).expect("mode");
+    let servers = Arc::new(at_spaceship());
+    let done = run_with(
+        &cluster,
+        &server_argv(&["--server-domain", "homestack.example", "--yes"]),
+        &[],
+        false,
+        Arc::clone(&servers),
+    )
+    .await;
+    let out = format!("{}{}", done.console.out(), done.console.err());
+    assert!(out.contains("DNS at Spaceship, zone homestack.example"), "{out}");
+    let deployed = servers.deployed();
+    assert_eq!(deployed.len(), 1, "{out}");
+    let config = &deployed[0];
+    assert_eq!(config.domain, "homestack.example");
+    assert_eq!(config.acme.zone, "homestack.example");
+    assert_eq!(config.acme.spaceship_file, Some(dir.join("spaceship-dns")));
+    assert_eq!(config.acme.ovh_file, None);
+    assert_eq!(
+        config.url(&config.instances[0]).expect("url").as_str(),
+        "https://api1.homestack.example/"
+    );
+}
+
+#[tokio::test]
+async fn a_domain_at_spaceship_without_its_key_stops_before_any_change() {
+    let cluster = Cluster::new(&["pve1", "pve2", "pve3"]);
+    desktop_files(&cluster);
+    let servers = Arc::new(at_spaceship());
+    let refused = run_with(
+        &cluster,
+        &server_argv(&["--server-domain", "homestack.example", "--yes"]),
+        &[],
+        false,
+        Arc::clone(&servers),
+    )
+    .await;
+    assert_eq!(refused.code, 1);
+    let out = format!("{}{}", refused.console.out(), refused.console.err());
+    assert!(
+        out.contains("spaceship-dns (SPACESHIP_API_KEY, SPACESHIP_API_SECRET)"),
+        "{out}"
+    );
+    assert_eq!(cluster.changes(), 0, "something changed");
+    assert!(servers.deployed().is_empty());
+}
+
+#[tokio::test]
+async fn a_domain_whose_dns_is_elsewhere_stops_before_any_change() {
+    let cluster = Cluster::new(&["pve1", "pve2", "pve3"]);
+    desktop_files(&cluster);
+    let servers = Arc::new(FakeServers {
+        zone: Some((
+            "homestack.example".to_owned(),
+            DnsHost::Other("ns1.elsewhere.example".to_owned()),
+        )),
+        ..at_spaceship()
+    });
+    let refused = run_with(
+        &cluster,
+        &server_argv(&["--server-domain", "homestack.example", "--yes"]),
+        &[],
+        false,
+        Arc::clone(&servers),
+    )
+    .await;
+    assert_eq!(refused.code, 1);
+    let out = format!("{}{}", refused.console.out(), refused.console.err());
+    assert!(
+        out.contains("the DNS of homestack.example is at ns1.elsewhere.example"),
+        "{out}"
+    );
     assert_eq!(cluster.changes(), 0, "something changed");
     assert!(servers.deployed().is_empty());
 }

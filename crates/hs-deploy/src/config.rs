@@ -70,9 +70,15 @@ pub struct ServerSection {
 pub struct AcmeSection {
     #[serde(default = "default_directory")]
     pub directory: String,
-    /// `OVH_AK`, `OVH_AS`, `OVH_CK` and optionally `OVH_END_POINT`.
-    pub ovh_file: PathBuf,
-    /// The public zone at OVH that holds `<domain>`.
+    /// `OVH_AK`, `OVH_AS`, `OVH_CK` and optionally `OVH_END_POINT`, when
+    /// the zone is at OVH.
+    #[serde(default)]
+    pub ovh_file: Option<PathBuf>,
+    /// `SPACESHIP_API_KEY` and `SPACESHIP_API_SECRET`, when the zone is at
+    /// Spaceship.
+    #[serde(default)]
+    pub spaceship_file: Option<PathBuf>,
+    /// The public zone that holds `<domain>`.
     pub zone: String,
     /// Where the account and the certificate are kept.
     pub dir: PathBuf,
@@ -161,6 +167,11 @@ impl DeployConfig {
         if self.pve.endpoints.is_empty() {
             return Err("[pve] endpoints is empty".to_owned());
         }
+        match (&self.acme.ovh_file, &self.acme.spaceship_file) {
+            (Some(_), Some(_)) => return Err("[acme] takes only one of ovh_file and spaceship_file".to_owned()),
+            (None, None) => return Err("[acme] needs ovh_file or spaceship_file".to_owned()),
+            _ => {}
+        }
         if !self.domain.ends_with(&format!(".{}", self.acme.zone)) && self.domain != self.acme.zone {
             return Err(format!("domain {} is not in zone {}", self.domain, self.acme.zone));
         }
@@ -206,7 +217,12 @@ impl DeployConfig {
         fix(&mut self.server.pve_token_file);
         fix(&mut self.server.config_file);
         fix(&mut self.server.api_token_file);
-        fix(&mut self.acme.ovh_file);
+        for file in [&mut self.acme.ovh_file, &mut self.acme.spaceship_file]
+            .into_iter()
+            .flatten()
+        {
+            fix(file);
+        }
         fix(&mut self.acme.dir);
         if let Some(path) = &mut self.acme.ca_file {
             fix(path);
@@ -339,6 +355,28 @@ storage = "local-zfs"
             "{EXAMPLE}[[instances]]\nname = \"api2\"\nnode = \"pve2\"\nctid = 997\naddress = \"192.0.2.98\"\nstorage = \"local-lvm\"\n"
         );
         assert!(DeployConfig::parse(&twice).is_err_and(|e| e.contains("997 appears twice")));
+    }
+
+    #[test]
+    fn the_dns_api_is_ovh_or_spaceship_and_only_one() -> Result<(), String> {
+        let ovh = DeployConfig::parse(EXAMPLE)?;
+        assert_eq!(ovh.acme.ovh_file.as_deref(), Some(Path::new("ovh-dns")));
+        assert_eq!(ovh.acme.spaceship_file, None);
+
+        let text = EXAMPLE.replacen("ovh_file = \"ovh-dns\"", "spaceship_file = \"spaceship-dns\"", 1);
+        let mut spaceship = DeployConfig::parse(&text)?;
+        spaceship.resolve_paths(Path::new("/conf"), Path::new("/home/u"));
+        assert_eq!(spaceship.acme.ovh_file, None);
+        assert_eq!(
+            spaceship.acme.spaceship_file.as_deref(),
+            Some(Path::new("/conf/spaceship-dns"))
+        );
+
+        let both = EXAMPLE.replacen("ovh_file = \"ovh-dns\"", "ovh_file = \"o\"\nspaceship_file = \"s\"", 1);
+        assert!(DeployConfig::parse(&both).is_err_and(|e| e.contains("only one of")));
+        let neither = EXAMPLE.replacen("ovh_file = \"ovh-dns\"\n", "", 1);
+        assert!(DeployConfig::parse(&neither).is_err_and(|e| e.contains("ovh_file or spaceship_file")));
+        Ok(())
     }
 }
 
