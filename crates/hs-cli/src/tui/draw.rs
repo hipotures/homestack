@@ -260,8 +260,9 @@ fn cluster(buf: &mut Buffer, area: Rect, app: &App, mut controls: Vec<Control>) 
         parts.push(("  servers ".to_owned(), text));
         parts.extend(server_dots);
         if let Some(gold) = gold {
-            parts.push((format!("   gold {} ", gold.vmid), text));
+            parts.push(("   gold ".to_owned(), text));
             parts.push(dot_state(palette, &gold.status));
+            parts.push((format!(" {}", gold.vmid), text));
         }
         if let Some(percent) = free_percent(app) {
             parts.push((format!("   storage {percent:.0}% free"), text));
@@ -335,19 +336,19 @@ fn cluster(buf: &mut Buffer, area: Rect, app: &App, mut controls: Vec<Control>) 
         lines.push(line);
     }
     if let Some(gold) = gold {
-        lines.push(vec![
-            (
-                format!(
-                    " gold {} {}  {}  ",
-                    gold.vmid,
-                    gold.name.as_deref().unwrap_or(""),
-                    gold.node
-                ),
-                text,
-            ),
+        // The state dot before the name, as for the servers; its word only
+        // when it fits.
+        let label = format!(" {} {}  {}", gold.vmid, gold.name.as_deref().unwrap_or(""), gold.node);
+        let room = usize::from(sub_inner.width).saturating_sub(" gold ".len() + 1 + label.chars().count());
+        let mut line = vec![
+            (" gold ".to_owned(), text),
             dot_state(palette, &gold.status),
-            (format!(" {}", gold.status), muted),
-        ]);
+            (label, text),
+        ];
+        if gold.status.chars().count() + 2 <= room {
+            line.push((format!("  {}", gold.status), muted));
+        }
+        lines.push(line);
     }
     for (row, line) in lines.iter().enumerate().take(rows) {
         let y = sub_inner.y + u16::try_from(row).unwrap_or(0);

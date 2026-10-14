@@ -48,7 +48,7 @@ fn the_cluster_line_names_nodes_servers_gold_and_free_storage() {
     let line = row(&buf, 1);
     assert!(line.contains("pve1") && line.contains("pve3"), "{line}");
     assert!(line.contains("servers ●●●"), "{line}");
-    assert!(line.contains("gold 112"), "{line}");
+    assert!(line.contains("gold ○ 112"), "the dot before, as for the servers: {line}");
     assert!(line.contains("free"), "{line}");
 }
 
@@ -326,4 +326,15 @@ fn a_newline_or_a_tab_in_a_text_is_drawn_as_a_space() {
     )]);
     let text = screen(&render(&fixture.app, 120, 36));
     assert!(text.contains("first line second line"), "{text}");
+}
+
+#[test]
+fn the_gold_line_of_the_servers_box_has_its_dot_first_and_fits() {
+    let fixture = app();
+    let text = screen(&render(&fixture.app, 120, 36));
+    let line = text
+        .lines()
+        .find(|line| line.contains(" gold ○ 112 hs-gold"))
+        .unwrap_or_else(|| panic!("no gold line:\n{text}"));
+    assert!(line.contains("pve1"), "{line}");
 }
