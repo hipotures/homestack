@@ -24,6 +24,14 @@ pub enum Request {
     Act(super::action::Start),
     /// The user's answer to the running action.
     Decide(super::action::Decision),
+    /// A step of the install screen, for its worker.
+    Install(super::installing::Command),
+    /// The answer to ssh's question (`None` cancels it).
+    Answer(Option<String>),
+    /// List the Herdr tabs for the install screen.
+    HerdrTabs,
+    /// The install ended: read `client.toml` again and show the main screen.
+    Installed,
     /// Read the status now (an action ended).
     Reload,
     Quit,
@@ -61,9 +69,11 @@ pub const PRESETS: [(&str, Shown); 3] = [
 ];
 
 /// The items of the menu, in order.
-pub const MENU: [&str; 5] = [
+pub const MENU: [&str; 7] = [
     "Check the servers",
     "Check this desktop",
+    "Install or reconfigure",
+    "Uninstall",
     "Theme",
     "Help: every key",
     "Quit",
@@ -126,6 +136,10 @@ pub struct App {
     pub notice: Option<(String, Vec<String>)>,
     /// The action box of the workspaces panel.
     pub action: Option<super::action::Action>,
+    /// The install screen, over everything else while it is open.
+    pub install: Option<super::install::Install>,
+    /// ssh's question, in a box over the screen.
+    pub asking: Option<super::install::AskView>,
     /// The desktop's public keys for add key (`~/.ssh/….pub`).
     pub keys: Vec<String>,
 }
@@ -160,6 +174,8 @@ impl App {
             clock: String::new(),
             notice: None,
             action: None,
+            install: None,
+            asking: None,
             keys: Vec::new(),
         })
     }
@@ -192,6 +208,51 @@ impl App {
             .map(|(url, reason)| (url.clone(), Some(reason.clone())))
             .collect();
         self.unreachable = servers;
+    }
+
+    /// Open the install screen; `first_start` when there is no `client.toml`.
+    pub fn open_install(&mut self, mode: super::install::Mode, first_start: bool) {
+        self.overlay = None;
+        self.install = Some(super::install::Install::new(mode, first_start));
+    }
+
+    /// What the install worker tells; its run's lines go to the log too.
+    pub fn install_event(&mut self, event: super::install::Event) {
+        if let super::install::Event::Line(line) = &event {
+            self.log(&self.clock.clone(), line.trim_start_matches("- "));
+        }
+        if let super::install::Event::Failed(error) = &event {
+            self.log(&self.clock.clone(), error);
+        }
+        if let Some(install) = self.install.as_mut() {
+            install.event(event);
+        }
+    }
+
+    pub fn set_herdr_tabs(&mut self, tabs: Vec<(String, String)>) {
+        if let Some(install) = self.install.as_mut() {
+            install.tabs = tabs;
+            install.tab = 0;
+        }
+    }
+
+    /// ssh asks something.
+    pub fn ask(&mut self, view: super::install::AskView) {
+        self.asking = Some(view);
+    }
+
+    /// ssh's question `id` is over (the key was touched).
+    pub fn ask_ended(&mut self, id: u64) {
+        if self.asking.as_ref().is_some_and(|asking| asking.id == id) {
+            self.asking = None;
+        }
+    }
+
+    /// One second more on ssh's question.
+    pub fn tick(&mut self) {
+        if let Some(asking) = self.asking.as_mut() {
+            asking.seconds += 1;
+        }
     }
 
     /// The answer of `/v1/workspaces/{vmid}`; kept only for the selection.
@@ -330,6 +391,20 @@ impl App {
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
             return Some(Request::Quit);
         }
+        if let Some(asking) = self.asking.as_mut() {
+            if let Some(answer) = asking.key(key.code) {
+                self.asking = None;
+                return Some(Request::Answer(answer));
+            }
+            return None;
+        }
+        if let Some(install) = self.install.as_mut() {
+            let (close, request) = install.key(key.code);
+            if close {
+                self.install = None;
+            }
+            return request;
+        }
         if let Some(overlay) = self.overlay.take() {
             return self.overlay_key(overlay, key.code);
         }
@@ -441,14 +516,22 @@ impl App {
                         });
                         return Some(Request::Discover);
                     }
-                    2 => {
+                    2 | 3 => {
+                        let mode = if index == 2 {
+                            super::install::Mode::Install
+                        } else {
+                            super::install::Mode::Uninstall
+                        };
+                        self.open_install(mode, false);
+                    }
+                    4 => {
                         let current = THEMES.iter().position(|name| *name == self.palette.name).unwrap_or(0);
                         self.overlay = Some(Overlay::Themes {
                             index: current,
                             previous: Box::new(self.palette.clone()),
                         });
                     }
-                    3 => self.overlay = Some(Overlay::Help),
+                    5 => self.overlay = Some(Overlay::Help),
                     _ => return Some(Request::Quit),
                 },
                 KeyCode::Char('q') => return Some(Request::Quit),
@@ -474,7 +557,7 @@ impl App {
                 }
                 KeyCode::Esc => {
                     self.palette = *previous;
-                    self.overlay = Some(Overlay::Menu { index: 2 });
+                    self.overlay = Some(Overlay::Menu { index: 4 });
                 }
                 _ => self.overlay = Some(Overlay::Themes { index, previous }),
             },

@@ -28,7 +28,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
 }
 
 /// Write `text` from `x`, at most `width` cells; the cells written.
-fn write(buf: &mut Buffer, x: u16, y: u16, width: u16, text: &str, style: Style) -> u16 {
+pub(super) fn write(buf: &mut Buffer, x: u16, y: u16, width: u16, text: &str, style: Style) -> u16 {
     let mut used = 0;
     for c in text.chars() {
         if used >= width {
@@ -46,7 +46,7 @@ fn write(buf: &mut Buffer, x: u16, y: u16, width: u16, text: &str, style: Style)
 }
 
 /// `text` cut to `width` characters, with "…" when cut.
-fn cut(text: &str, width: usize) -> String {
+pub(super) fn cut(text: &str, width: usize) -> String {
     if text.chars().count() <= width {
         return text.to_owned();
     }
@@ -77,7 +77,7 @@ fn size(bytes: u64) -> String {
     }
 }
 
-fn bar(width: usize, percent: f64) -> String {
+pub(super) fn bar(width: usize, percent: f64) -> String {
     #[allow(
         clippy::cast_possible_truncation,
         clippy::cast_sign_loss,
@@ -114,6 +114,13 @@ fn draw_into(buf: &mut Buffer, area: Rect, app: &App) {
     let screen = arrange(area, app.shown);
     if screen.too_small {
         too_small(buf, area, palette);
+        return;
+    }
+    if let Some(install) = &app.install {
+        super::draw_install::screen(buf, area, app, install);
+        if let Some(asking) = &app.asking {
+            super::draw_install::asking(buf, area, app, asking);
+        }
         return;
     }
     // ┐menu┌ and the preset go to the first panel shown.
@@ -797,7 +804,7 @@ fn storage(buf: &mut Buffer, area: Rect, app: &App, mut controls: Vec<Control>) 
     }
 }
 
-fn log(buf: &mut Buffer, area: Rect, app: &App, mut controls: Vec<Control>) {
+pub(super) fn log(buf: &mut Buffer, area: Rect, app: &App, mut controls: Vec<Control>) {
     let palette = &app.palette;
     let mut top_left = vec![Control::panel(4, "log")];
     top_left.append(&mut controls);
@@ -824,7 +831,7 @@ fn log(buf: &mut Buffer, area: Rect, app: &App, mut controls: Vec<Control>) {
     }
 }
 
-fn centered(area: Rect, width: u16, height: u16) -> Rect {
+pub(super) fn centered(area: Rect, width: u16, height: u16) -> Rect {
     let width = width.min(area.width);
     let height = height.min(area.height);
     Rect::new(
@@ -949,7 +956,7 @@ const HELP: [&str; 18] = [
 
 /// `line` cut into pieces of at most `width` characters, at spaces when it
 /// can; the indentation of the first piece is kept on the others.
-fn wrap(line: &str, width: usize) -> Vec<String> {
+pub(super) fn wrap(line: &str, width: usize) -> Vec<String> {
     if width == 0 || line.chars().count() <= width {
         return vec![line.to_owned()];
     }

@@ -3,6 +3,7 @@
 
 use std::io::{self, Stdout};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use crossterm::event::{self, Event, KeyEventKind};
@@ -15,10 +16,14 @@ use tokio::sync::mpsc;
 
 use super::action::{Decision, Desktop, Progress, work};
 use super::draw::draw;
+use super::install::{AskView, Mode};
+use super::installing::{self, Command, Setup};
 use super::state::{App, Overlay, Request};
 use super::theme::Preferences;
 use crate::app::{Context, client_error, discovery_report, transport_report};
+use crate::askpass::{Bridge, Event as AskEvent};
 use crate::config::Loaded;
+use crate::touch::Sounds;
 use crate::{AppError, config, view};
 
 /// How often the status is read.
@@ -32,6 +37,12 @@ enum Update {
     Details(u32, Value),
     Report(String, Vec<String>),
     Log(String),
+    /// What the install worker tells.
+    Install(super::install::Event),
+    /// ssh asks through the askpass bridge.
+    Ask(crate::askpass::Question),
+    /// ssh's question is over.
+    AskEnded(u64),
     /// The running action's progress.
     Action(Progress),
 }
@@ -138,11 +149,11 @@ async fn read_status(client: &Client, updates: &mpsc::UnboundedSender<Update>) {
 }
 
 /// Read the status and the servers' health now and every [`REFRESH`].
-fn spawn_refresh(client: Arc<Client>, updates: mpsc::UnboundedSender<Update>) {
+fn spawn_refresh(client: Arc<Client>, updates: mpsc::UnboundedSender<Update>, stop: Arc<AtomicBool>) {
     tokio::spawn(async move {
         loop {
             read_status(&client, &updates).await;
-            if updates.is_closed() {
+            if updates.is_closed() || stop.load(Ordering::SeqCst) {
                 return;
             }
             tokio::time::sleep(REFRESH).await;
@@ -265,7 +276,14 @@ fn start(request: &Request, client: Option<&Arc<Client>>, ctx: &Context, updates
                 let _ = updates.send(Update::Report("this desktop".to_owned(), discovery_lines(&report)));
             });
         }
-        Request::Quit | Request::Act(_) | Request::Decide(_) | Request::Reload => {}
+        Request::Quit
+        | Request::Act(_)
+        | Request::Decide(_)
+        | Request::Reload
+        | Request::Install(_)
+        | Request::Answer(_)
+        | Request::HerdrTabs
+        | Request::Installed => {}
     }
 }
 
@@ -277,8 +295,7 @@ fn client(ctx: &Context) -> Result<(Client, Loaded), (String, Vec<String>)> {
             "HomeStack is not installed on this desktop yet.".to_owned(),
             vec![
                 format!("There is no {}.", path.display()),
-                "The install screen comes to the TUI in step 3 of phase 13b;".to_owned(),
-                "until then quit (q) and run: homestack install".to_owned(),
+                "Menu › Install or reconfigure sets it up.".to_owned(),
             ],
         ));
     }
@@ -291,6 +308,118 @@ fn client(ctx: &Context) -> Result<(Client, Loaded), (String, Vec<String>)> {
     Ok((client, loaded))
 }
 
+/// The client of the TUI and how it is read: started again after an install.
+struct Connection {
+    client: Option<Arc<Client>>,
+    desktop: Option<Desktop>,
+    stop: Arc<AtomicBool>,
+}
+
+impl Connection {
+    /// Read `client.toml` and start reading the status; a notice when it
+    /// cannot be used.
+    fn open(ctx: &Context, updates: &mpsc::UnboundedSender<Update>) -> Result<Self, (String, Vec<String>)> {
+        let (client, loaded) = client(ctx)?;
+        let client = Arc::new(client);
+        let stop = Arc::new(AtomicBool::new(false));
+        spawn_refresh(Arc::clone(&client), updates.clone(), Arc::clone(&stop));
+        Ok(Self {
+            client: Some(client),
+            desktop: Some(Desktop {
+                home: ctx.home.clone(),
+                loaded,
+                poll: ctx.poll,
+            }),
+            stop,
+        })
+    }
+
+    fn none() -> Self {
+        Self {
+            client: None,
+            desktop: None,
+            stop: Arc::new(AtomicBool::new(true)),
+        }
+    }
+}
+
+/// The install worker and the askpass bridge it asks through.
+#[derive(Default)]
+struct Installing {
+    bridge: Option<Bridge>,
+    worker: Option<std::sync::mpsc::Sender<Command>>,
+    /// ssh's question waiting for its answer.
+    pending: Option<crate::askpass::Question>,
+}
+
+impl Installing {
+    fn send(&mut self, command: Command, app: &mut App, ctx: &Context, updates: &mpsc::UnboundedSender<Update>) {
+        if self.worker.is_none() && matches!(command, Command::Connect { .. }) {
+            self.start(app, ctx, updates);
+        }
+        let cancel = command == Command::Cancel;
+        if let Some(worker) = &self.worker {
+            let _ = worker.send(command);
+        }
+        if cancel {
+            self.worker = None;
+        }
+    }
+
+    fn start(&mut self, app: &mut App, ctx: &Context, updates: &mpsc::UnboundedSender<Update>) {
+        if self.bridge.is_none() {
+            let program = std::env::current_exe().unwrap_or_else(|_| "homestack".into());
+            match Bridge::start(program) {
+                Ok((bridge, events)) => {
+                    let updates = updates.clone();
+                    std::thread::spawn(move || {
+                        for event in events {
+                            let update = match event {
+                                AskEvent::Ask(question) => Update::Ask(question),
+                                AskEvent::Ended(id) => Update::AskEnded(id),
+                            };
+                            if updates.send(update).is_err() {
+                                return;
+                            }
+                        }
+                    });
+                    self.bridge = Some(bridge);
+                }
+                Err(error) => app.log(
+                    &app.clock.clone(),
+                    &format!("ssh's questions cannot reach the TUI: {error}"),
+                ),
+            }
+        }
+        let client_path = config::default_path(&ctx.home, ctx.config_home.as_deref());
+        let token_dir = client_path
+            .parent()
+            .map_or_else(|| ctx.home.clone(), std::path::Path::to_path_buf);
+        let sounds = config::load(&client_path)
+            .map(|loaded| Sounds::from_table(loaded.client.sounds.as_ref()))
+            .unwrap_or_default();
+        let mode = app.install.as_ref().map_or(Mode::Install, |install| install.mode);
+        let setup = Setup {
+            mode,
+            system: Arc::clone(&ctx.system),
+            home: ctx.home.clone(),
+            token_dir,
+            client_path,
+            servers: Arc::clone(&ctx.servers),
+            sounds,
+            ssh_prefix: self.bridge.as_ref().map(Bridge::command_prefix).unwrap_or_default(),
+            server_image: None,
+            handle: tokio::runtime::Handle::current(),
+        };
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let updates = updates.clone();
+        installing::spawn(setup, receiver, move |event| {
+            let _ = updates.send(Update::Install(event));
+        });
+        self.worker = Some(sender);
+    }
+}
+
 /// Run the TUI until the user quits; the exit code.
 pub async fn run(ctx: &mut Context) -> Result<i32, AppError> {
     let path = Preferences::default_path(&ctx.home, ctx.config_home.as_deref());
@@ -301,28 +430,24 @@ pub async fn run(ctx: &mut Context) -> Result<i32, AppError> {
     };
     let mut app = App::new(preferences, no_color)?;
     let clock = Clock::new();
+    app.clock = clock.now();
     if let Some(problem) = problem {
         app.log(&clock.now(), &format!("{problem}; the HomeStack theme is used"));
     }
     let (updates, mut received) = mpsc::unbounded_channel::<Update>();
     app.set_keys(public_keys(&ctx.home));
-    let mut desktop = None;
-    let client = match client(ctx) {
-        Ok((client, loaded)) => {
-            desktop = Some(Desktop {
-                home: ctx.home.clone(),
-                loaded,
-                poll: ctx.poll,
-            });
-            let client = Arc::new(client);
-            spawn_refresh(Arc::clone(&client), updates.clone());
-            Some(client)
-        }
-        Err(notice) => {
+    let first_start = !config::default_path(&ctx.home, ctx.config_home.as_deref()).exists();
+    let mut connection = if first_start {
+        app.open_install(Mode::Install, true);
+        app.log(&clock.now(), "no client.toml: the install screen");
+        Connection::none()
+    } else {
+        Connection::open(ctx, &updates).unwrap_or_else(|notice| {
             app.set_notice(Some(notice));
-            None
-        }
+            Connection::none()
+        })
     };
+    let mut installing = Installing::default();
     let (keys, mut events) = mpsc::unbounded_channel::<Event>();
     std::thread::spawn(move || {
         while let Ok(event) = event::read() {
@@ -348,11 +473,12 @@ pub async fn run(ctx: &mut Context) -> Result<i32, AppError> {
                     && let Some(request) = app.key(key)
                 {
                     if request == Request::Quit {
+                        installing.send(Command::Cancel, &mut app, ctx, &updates);
                         return Ok(0);
                     }
                     match request {
                         Request::Act(start) => {
-                            if let (Some(client), Some(desktop)) = (client.clone(), desktop.clone()) {
+                            if let (Some(client), Some(desktop)) = (connection.client.clone(), connection.desktop.clone()) {
                                 let (sender, mut decisions) = mpsc::unbounded_channel();
                                 decide = Some(sender);
                                 let updates = updates.clone();
@@ -370,12 +496,39 @@ pub async fn run(ctx: &mut Context) -> Result<i32, AppError> {
                             }
                         }
                         Request::Reload => {
-                            if let Some(client) = client.clone() {
+                            if let Some(client) = connection.client.clone() {
                                 let updates = updates.clone();
                                 tokio::spawn(async move { read_status(&client, &updates).await });
                             }
                         }
-                        other => start(&other, client.as_ref(), ctx, &updates),
+                        Request::Install(command) => installing.send(command, &mut app, ctx, &updates),
+                        Request::Answer(answer) => {
+                            if let Some(question) = installing.pending.take() {
+                                question.answer(answer);
+                            }
+                        }
+                        Request::HerdrTabs => match crate::root_herdr::tabs(ctx.system.as_ref()) {
+                            Ok(tabs) => app.set_herdr_tabs(
+                                tabs.into_iter().map(|tab| (tab.name, tab.title)).collect(),
+                            ),
+                            Err(error) => app.log(&clock.now(), &error.0),
+                        },
+                        Request::Installed => {
+                            installing.send(Command::Cancel, &mut app, ctx, &updates);
+                            connection.stop.store(true, Ordering::SeqCst);
+                            connected = None;
+                            connection = match Connection::open(ctx, &updates) {
+                                Ok(opened) => {
+                                    app.set_notice(None);
+                                    opened
+                                }
+                                Err(notice) => {
+                                    app.set_notice(Some(notice));
+                                    Connection::none()
+                                }
+                            };
+                        }
+                        other => start(&other, connection.client.as_ref(), ctx, &updates),
                     }
                 }
             }
@@ -402,6 +555,19 @@ pub async fn run(ctx: &mut Context) -> Result<i32, AppError> {
                     }
                 }
                 Update::Log(line) => app.log(&clock.now(), &line),
+                Update::Install(event) => app.install_event(event),
+                Update::Ask(question) => {
+                    app.ask(AskView::new(question.id, question.kind, &question.prompt));
+                    if question.kind != crate::askpass::Kind::Touch {
+                        installing.pending = Some(question);
+                    }
+                }
+                Update::AskEnded(id) => {
+                    app.ask_ended(id);
+                    if installing.pending.as_ref().is_some_and(|question| question.id == id) {
+                        installing.pending = None;
+                    }
+                }
                 Update::Action(progress) => {
                     if let Progress::Done { ok, lines } = &progress {
                         let title = app.action.as_ref().map(super::action::Action::title).unwrap_or_default();
@@ -409,7 +575,7 @@ pub async fn run(ctx: &mut Context) -> Result<i32, AppError> {
                         let first = lines.first().cloned().unwrap_or_default();
                         app.log(&clock.now(), &format!("{title}: {outcome}; {first}"));
                         decide = None;
-                        if let Some(client) = client.clone() {
+                        if let Some(client) = connection.client.clone() {
                             let updates = updates.clone();
                             tokio::spawn(async move { read_status(&client, &updates).await });
                         }
@@ -417,7 +583,7 @@ pub async fn run(ctx: &mut Context) -> Result<i32, AppError> {
                     app.progress(progress);
                 }
             },
-            _ = tick.tick() => {}
+            _ = tick.tick() => app.tick(),
         }
     }
 }

@@ -1463,3 +1463,103 @@ async fn the_servers_put_workspace_disks_on_the_storages_chosen_in_the_form() {
         "the old file's layouts are kept:\n{server_toml}"
     );
 }
+
+/// The next event of the TUI's install worker, waited for.
+fn next_event(events: &std::sync::mpsc::Receiver<hs_cli::tui::install::Event>) -> hs_cli::tui::install::Event {
+    events
+        .recv_timeout(Duration::from_secs(30))
+        .expect("an event from the worker")
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_tui_worker_installs_through_the_same_session_as_the_cli() {
+    use hs_cli::tui::install::{Event, Method, Mode};
+    use hs_cli::tui::installing::{self, Command, Setup};
+
+    let cluster = Cluster::new(&["pve1", "pve2", "pve3"]);
+    desktop_files(&cluster);
+    let (url, ca_pem, _sim) = status_server().await;
+    let ca = cluster.token_dir().join("server-ca.pem");
+    std::fs::write(&ca, ca_pem).expect("ca");
+    let servers = Arc::new(FakeServers {
+        reach: Some((url.clone(), ca.display().to_string())),
+        ..FakeServers::resolving(&[
+            ("api1.hs.example.net", "192.0.2.97"),
+            ("api2.hs.example.net", "192.0.2.98"),
+            ("api3.hs.example.net", "192.0.2.99"),
+        ])
+    });
+    let client_path = cluster.token_dir().join("client.toml");
+    let setup = Setup {
+        mode: Mode::Install,
+        system: Arc::new(cluster.system()),
+        home: cluster.home.clone(),
+        token_dir: cluster.token_dir(),
+        client_path: client_path.clone(),
+        servers: Arc::clone(&servers) as Arc<dyn Servers>,
+        sounds: hs_cli::touch::Sounds::disabled(),
+        ssh_prefix: Vec::new(),
+        server_image: None,
+        handle: tokio::runtime::Handle::current(),
+    };
+    let (commands, receiver) = std::sync::mpsc::channel();
+    let (sender, events) = std::sync::mpsc::channel();
+    installing::spawn(setup, receiver, move |event| {
+        let _ = sender.send(event);
+    });
+
+    commands
+        .send(Command::Connect {
+            method: Method::Ssh,
+            target: "root@pve1".to_owned(),
+        })
+        .unwrap();
+    let found = match next_event(&events) {
+        Event::Connected(found) => found,
+        other => panic!("{other:?}"),
+    };
+    assert!(found.root.starts_with("ssh root@pve1 · PVE "), "{}", found.root);
+    assert!(found.check.iter().any(|(_, label, _)| label == "Proxmox"), "{:?}", found.check);
+    assert!(!found.settings.is_empty(), "nothing to choose: {found:?}");
+    assert_eq!(cluster.changes(), 0, "connecting changed something");
+
+    let answers: Vec<hs_cli::wizard::Answer> = found
+        .settings
+        .iter()
+        .map(|setting| hs_cli::wizard::Answer::Picked(setting.picked.clone()))
+        .collect();
+    commands
+        .send(Command::Review {
+            answers,
+            domain: Some("hs.example.net".to_owned()),
+        })
+        .unwrap();
+    match next_event(&events) {
+        Event::Reviewed { sections, problems } => {
+            assert!(problems.is_empty(), "{problems:?}");
+            assert!(sections.iter().any(|(heading, _)| heading == "Servers"), "{sections:?}");
+        }
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(cluster.changes(), 0, "the review changed something");
+
+    commands.send(Command::Apply).unwrap();
+    let mut lines = Vec::new();
+    let (ok, result) = loop {
+        match next_event(&events) {
+            Event::Line(line) => lines.push(line),
+            Event::Done { ok, lines } => break (ok, lines),
+            other => panic!("{other:?}"),
+        }
+    };
+    assert!(ok, "{result:?}\n{lines:?}");
+    assert!(lines.iter().any(|line| line.contains("homestack@pve")), "{lines:?}");
+    assert!(cluster.read("users").contains("homestack@pve"));
+    assert_eq!(servers.deployed().len(), 1);
+    assert!(client_path.exists(), "client.toml was not written");
+    assert!(
+        result.iter().any(|line| line.starts_with("Check: the client reaches the servers")),
+        "{result:?}"
+    );
+    commands.send(Command::Cancel).unwrap();
+}
