@@ -38,7 +38,7 @@ pub enum Request {
 }
 
 /// The presets `p` walks through: their names and panels.
-pub const PRESETS: [(&str, Shown); 3] = [
+pub const VIEWS: [(&str, Shown); 3] = [
     (
         "auto",
         Shown {
@@ -119,7 +119,7 @@ pub struct App {
     pub unreachable: Vec<(String, String)>,
     pub details: Option<WorkspaceStatus>,
     pub shown: Shown,
-    pub preset: usize,
+    pub view: usize,
     /// The selected workspace.
     pub selected: Option<u32>,
     /// Details split the list at narrow widths (Enter).
@@ -154,12 +154,14 @@ pub struct App {
 impl App {
     pub fn new(preferences: Preferences, no_color: bool) -> Result<Self, AppError> {
         let palette = preferences.palette(no_color)?;
-        let preset = preferences
+        let view = preferences
             .table
-            .get("preset")
+            // "preset" is the name of before 2026-10-15.
+            .get("view")
+            .or_else(|| preferences.table.get("preset"))
             .and_then(toml::Value::as_integer)
             .and_then(|value| usize::try_from(value).ok())
-            .filter(|value| *value < PRESETS.len())
+            .filter(|value| *value < VIEWS.len())
             .unwrap_or(0);
         Ok(Self {
             preferences,
@@ -169,8 +171,8 @@ impl App {
             servers: Vec::new(),
             unreachable: Vec::new(),
             details: None,
-            shown: PRESETS[preset].1,
-            preset,
+            shown: VIEWS[view].1,
+            view,
             selected: None,
             info: false,
             filter: String::new(),
@@ -448,11 +450,12 @@ impl App {
         }
     }
 
-    fn save_preset(&mut self) {
+    fn save_view(&mut self) {
         let mut table = self.preferences.table.clone();
+        table.remove("preset");
         table.insert(
-            "preset".to_owned(),
-            toml::Value::Integer(i64::try_from(self.preset).unwrap_or(0)),
+            "view".to_owned(),
+            toml::Value::Integer(i64::try_from(self.view).unwrap_or(0)),
         );
         match self.preferences.write(&table) {
             Ok(()) => self.preferences.table = table,
@@ -600,19 +603,19 @@ impl App {
                 self.shown
                     .toggle(u8::try_from(digit.to_digit(10).unwrap_or(0)).unwrap_or(0));
             }
-            KeyCode::Char('p') => {
-                self.preset = (self.preset + 1) % PRESETS.len();
-                self.shown = PRESETS[self.preset].1;
-                self.save_preset();
+            KeyCode::Char('v') => {
+                self.view = (self.view + 1) % VIEWS.len();
+                self.shown = VIEWS[self.view].1;
+                self.save_view();
             }
             // The standard view: every panel, every node, no filter.
             KeyCode::Char('0') => {
-                self.preset = 0;
-                self.shown = PRESETS[0].1;
+                self.view = 0;
+                self.shown = VIEWS[0].1;
                 self.node = None;
                 self.filter.clear();
                 self.keep_selection();
-                self.save_preset();
+                self.save_view();
             }
             KeyCode::Char('f') => self.filtering = true,
             KeyCode::Right | KeyCode::Left => {

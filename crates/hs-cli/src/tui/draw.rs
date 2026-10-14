@@ -10,7 +10,7 @@ use ratatui::style::{Color, Modifier, Style};
 use super::action::Action;
 use super::chrome::{Control, Sides, frame, scrollbar, text_style};
 use super::layout::{MIN_HEIGHT, MIN_WIDTH, arrange};
-use super::state::{App, MENU, Overlay, PRESETS};
+use super::state::{App, MENU, Overlay, VIEWS};
 use super::theme::{Palette, THEMES};
 
 /// The screen at `width` x `height`, for tests and snapshots.
@@ -138,7 +138,7 @@ fn draw_into(buf: &mut Buffer, area: Rect, app: &App) {
     };
     let menu = vec![
         Control::key("&menu"),
-        Control::key(&format!("&preset {}", PRESETS[app.preset].0)),
+        Control::key(&format!("&view {}", VIEWS[app.view].0)),
     ];
     let host_controls = |digit: u8| if digit == host { menu.clone() } else { Vec::new() };
     if let Some(rect) = screen.cluster {
@@ -992,7 +992,7 @@ fn list_item(palette: &Palette, label: &str, chosen: bool) -> (String, Style) {
 const HELP: [&str; 18] = [
     "1 2 3 4     show or hide workspaces, cluster, storage, log",
     "0           the standard view: every panel and node, no filter",
-    "p           next preset (auto, 1, 2)",
+    "v           next view (auto, 1, 2)",
     "m           menu",
     "↑ ↓         select a workspace; PgUp PgDn Home End",
     "↵           details of the selected workspace",

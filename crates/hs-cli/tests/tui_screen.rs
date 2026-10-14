@@ -28,7 +28,7 @@ fn at_80_by_24_the_cluster_and_the_workspaces_are_drawn_in_btop_borders() {
     let fixture = app();
     let buf = render(&fixture.app, 80, 24);
     let text = screen(&buf);
-    assert!(row(&buf, 0).starts_with("╭─┐²cluster┌┐menu┌┐preset auto┌"), "{text}");
+    assert!(row(&buf, 0).starts_with("╭─┐²cluster┌┐menu┌┐view auto┌"), "{text}");
     assert!(row(&buf, 3).starts_with("╭─┐¹workspaces┌┐filter┌"), "{text}");
     assert!(!text.contains("³storage") && !text.contains("⁴log"), "{text}");
     for name in ["dev-main", "rust-builder", "notes", "pve1", "10.0.0.21"] {
@@ -114,24 +114,24 @@ fn a_digit_hides_its_panel_and_the_menu_moves_to_the_first_panel_shown() {
     press(&mut fixture.app, KeyCode::Char('2'));
     let buf = render(&fixture.app, 120, 36);
     let top = row(&buf, 0);
-    assert!(top.starts_with("╭─┐¹workspaces┌┐menu┌┐preset auto┌┐filter┌"), "{top}");
+    assert!(top.starts_with("╭─┐¹workspaces┌┐menu┌┐view auto┌┐filter┌"), "{top}");
     press(&mut fixture.app, KeyCode::Char('2'));
     let buf = render(&fixture.app, 120, 36);
     assert!(row(&buf, 0).starts_with("╭─┐²cluster┌"));
 }
 
 #[test]
-fn p_cycles_the_presets() {
+fn v_cycles_the_views() {
     let mut fixture = app();
-    press(&mut fixture.app, KeyCode::Char('p'));
+    press(&mut fixture.app, KeyCode::Char('v'));
     let text = screen(&render(&fixture.app, 120, 36));
-    assert!(text.contains("┐preset 1┌") && !text.contains("³storage"), "{text}");
-    press(&mut fixture.app, KeyCode::Char('p'));
+    assert!(text.contains("┐view 1┌") && !text.contains("³storage"), "{text}");
+    press(&mut fixture.app, KeyCode::Char('v'));
     let text = screen(&render(&fixture.app, 120, 36));
-    assert!(text.contains("┐preset 2┌") && !text.contains("²cluster"), "{text}");
-    press(&mut fixture.app, KeyCode::Char('p'));
+    assert!(text.contains("┐view 2┌") && !text.contains("²cluster"), "{text}");
+    press(&mut fixture.app, KeyCode::Char('v'));
     let text = screen(&render(&fixture.app, 120, 36));
-    assert!(text.contains("┐preset auto┌") && text.contains("⁴log"), "{text}");
+    assert!(text.contains("┐view auto┌") && text.contains("⁴log"), "{text}");
 }
 
 #[test]
@@ -283,7 +283,7 @@ fn plain_homestack_opens_the_tui_only_on_a_terminal() {
 #[test]
 fn zero_brings_back_the_standard_view() {
     let mut fixture = app();
-    press(&mut fixture.app, KeyCode::Char('p'));
+    press(&mut fixture.app, KeyCode::Char('v'));
     press(&mut fixture.app, KeyCode::Char('2'));
     press(&mut fixture.app, KeyCode::Right);
     press(&mut fixture.app, KeyCode::Char('f'));
@@ -295,7 +295,7 @@ fn zero_brings_back_the_standard_view() {
         "┐²cluster┌",
         "┐³storage┌",
         "┐⁴log┌",
-        "┐preset auto┌",
+        "┐view auto┌",
         "‹ node: all ›",
         "┐filter┌",
         "dev-main",
@@ -303,7 +303,7 @@ fn zero_brings_back_the_standard_view() {
         assert!(text.contains(part), "{part}: {text}");
     }
     let saved = std::fs::read_to_string(fixture._dir.path().join("tui.toml")).unwrap();
-    assert!(saved.contains("preset = 0"), "{saved}");
+    assert!(saved.contains("view = 0"), "{saved}");
 }
 
 #[test]
@@ -461,4 +461,14 @@ fn i_shows_and_hides_the_details_of_the_selected_workspace() {
     assert!(fixture.app.info);
     press(&mut fixture.app, KeyCode::Char('i'));
     assert!(!fixture.app.info);
+}
+
+#[test]
+fn a_view_saved_as_preset_before_is_read() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("tui.toml");
+    std::fs::write(&path, "preset = 2\n").unwrap();
+    let preferences = hs_cli::tui::theme::Preferences::load(&path).unwrap();
+    let app = hs_cli::tui::state::App::new(preferences, false).unwrap();
+    assert_eq!(app.view, 2);
 }
