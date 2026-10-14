@@ -1153,9 +1153,7 @@ async fn a_domain_at_spaceship_gets_its_certificate_through_spaceship() {
     let dir = cluster.token_dir();
     std::fs::write(
         dir.join("spaceship-dns"),
-        "SPACESHIP_API_KEY=k
-SPACESHIP_API_SECRET=s
-",
+        "SPACESHIP_API_KEY=k\nSPACESHIP_API_SECRET=s\n",
     )
     .expect("key");
     std::fs::set_permissions(dir.join("spaceship-dns"), std::fs::Permissions::from_mode(0o600)).expect("mode");
@@ -1304,17 +1302,14 @@ async fn a_server_number_that_is_taken_left_over_or_too_low_stops_before_any_cha
     // 2026-10-14): 192.0.2.97 is CT 2097.
     let cases = [
         (
-            "2097	pve1	desktop		virtio=BC:24:11:00:00:03,bridge=vmbr0	
-",
+            "2097\tpve1\tdesktop\t\tvirtio=BC:24:11:00:00:03,bridge=vmbr0\t\n",
             "",
             "192.0.2.97",
             "CT 2097 for api1.hs.example.net is taken by desktop",
         ),
         (
-            "120	pve1	api1				lxc
-",
-            "homestack-service	120	HomeStack servers
-",
+            "120\tpve1\tapi1\t\t\t\tlxc\n",
+            "homestack-service\t120\tHomeStack servers\n",
             "192.0.2.97",
             "api1 is CT 120, but its address gives CT 2097: remove CT 120 first",
         ),
@@ -1336,10 +1331,7 @@ async fn a_server_number_that_is_taken_left_over_or_too_low_stops_before_any_cha
         desktop_files(&cluster);
         cluster.write(
             "vms.tsv",
-            &format!(
-                "101	pve1	gold	homestack-gold	virtio=BC:24:11:00:00:01,bridge=vmbr0	
-{vms}"
-            ),
+            &format!("101\tpve1\tgold\thomestack-gold\tvirtio=BC:24:11:00:00:01,bridge=vmbr0\t\n{vms}"),
         );
         if !pools.is_empty() {
             cluster.write("pools.tsv", pools);
