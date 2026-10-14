@@ -314,7 +314,9 @@ pub fn run(args: &Args, given: &InstallArgs, command: Install, ctx: &mut Context
     let settings = settings(ctx, args, install);
 
     let plan = if interactive {
-        let questions = hs_install::questions(root.as_mut(), &access, &settings).map_err(failure)?;
+        let mut questions = hs_install::questions(root.as_mut(), &access, &settings).map_err(failure)?;
+        let draft = draft_path(&settings);
+        apply_draft(&mut questions, &load_draft(&draft));
         let root_line = format!(
             "{}  \u{2014}  {}, Proxmox VE {}, {}",
             root.describe(),
@@ -346,6 +348,7 @@ pub fn run(args: &Args, given: &InstallArgs, command: Install, ctx: &mut Context
             }
         };
         let outcome = ctx.console.form(&mut form, &mut summarize);
+        save_draft(&draft, &questions, &form.answers());
         match (outcome, last) {
             (FormOutcome::Install(_), Some(plan)) => {
                 let line = same_as(command, install, &plan.settings);
@@ -557,5 +560,84 @@ everything goes through the API, and you can drop the key or close the tab.",
             None => return Ok(false),
         }
         return Ok(install.ssh.is_some() || install.herdr.is_some());
+    }
+}
+
+/// Where the choices of the form are kept between runs.
+fn draft_path(settings: &Settings) -> std::path::PathBuf {
+    settings.token_dir.join("install-draft.toml")
+}
+
+/// The kept choices, by option name without dashes; nothing when the file
+/// is missing or cannot be read.
+fn load_draft(path: &std::path::Path) -> std::collections::BTreeMap<String, Vec<String>> {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return std::collections::BTreeMap::new();
+    };
+    let Ok(table) = text.parse::<toml::Table>() else {
+        return std::collections::BTreeMap::new();
+    };
+    table
+        .into_iter()
+        .filter_map(|(key, value)| {
+            let values: Vec<String> = value
+                .as_array()?
+                .iter()
+                .filter_map(|item| item.as_str().map(str::to_owned))
+                .collect();
+            Some((key, values))
+        })
+        .collect()
+}
+
+/// Start each question from the kept choices that are still possible.
+fn apply_draft(questions: &mut [hs_install::Question], draft: &std::collections::BTreeMap<String, Vec<String>>) {
+    for question in questions {
+        let Some(values) = draft.get(question.option.trim_start_matches('-')) else {
+            continue;
+        };
+        let picked: Vec<usize> = question
+            .choices
+            .iter()
+            .enumerate()
+            .filter(|(_, choice)| values.contains(&choice.value))
+            .map(|(index, _)| index)
+            .collect();
+        if !picked.is_empty() {
+            question.defaults = picked;
+        }
+    }
+}
+
+/// Keep the choices of the form (mode 0600); a failure only loses them.
+fn save_draft(path: &std::path::Path, questions: &[hs_install::Question], answers: &[Answer]) {
+    use std::io::Write;
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    let mut table = toml::Table::new();
+    for (question, answer) in questions.iter().zip(answers) {
+        let Answer::Picked(picked) = answer else { continue };
+        let values: Vec<toml::Value> = picked
+            .iter()
+            .filter_map(|index| question.choices.get(*index))
+            .map(|choice| toml::Value::String(choice.value.clone()))
+            .collect();
+        table.insert(
+            question.option.trim_start_matches('-').to_owned(),
+            toml::Value::Array(values),
+        );
+    }
+    let text = format!("# The last choices of `homestack install`; the next run starts from them.\n{table}");
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(path)
+    {
+        let _ = file.set_permissions(std::fs::Permissions::from_mode(0o600));
+        let _ = file.write_all(text.as_bytes());
     }
 }

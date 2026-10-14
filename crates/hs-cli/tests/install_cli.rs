@@ -691,3 +691,33 @@ async fn without_a_terminal_an_access_option_is_required() {
     assert_eq!(gave_up.code, 0, "{}", gave_up.console.out());
     assert!(gave_up.console.out().contains("Cancelled"), "{}", gave_up.console.out());
 }
+
+#[tokio::test]
+async fn the_choices_are_kept_for_the_next_run() {
+    let cluster = Cluster::new(&["pve1"]);
+    two_disk_storages(&cluster);
+    // Workspace disks: only backup-a; then the user leaves without installing.
+    let left = run(&cluster, &["install", "--ssh", "root@pve1"], &["1", "1"], true).await;
+    assert_eq!(left.code, 0, "{}", left.console.out());
+    assert_eq!(cluster.changes(), 0);
+    let draft = cluster.token_dir().join("install-draft.toml");
+    assert!(draft.exists(), "the choices were not kept");
+    assert_eq!(
+        std::fs::metadata(&draft).expect("draft").permissions().mode() & 0o777,
+        0o600
+    );
+
+    // The next run starts from them.
+    let again = run(&cluster, &["install", "--ssh", "root@pve1"], &["", "n"], true).await;
+    let out = again.console.out();
+    assert!(out.contains("Workspace disks      backup-a"), "{out}");
+
+    // A draft that cannot be read is ignored.
+    std::fs::write(&draft, "not = [toml").expect("write");
+    let again = run(&cluster, &["install", "--ssh", "root@pve1"], &["", "n"], true).await;
+    assert!(
+        again.console.out().contains("Workspace disks      local-lvm"),
+        "{}",
+        again.console.out()
+    );
+}

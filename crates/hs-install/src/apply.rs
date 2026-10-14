@@ -113,8 +113,26 @@ pub fn apply(
                     return Err(failed(output.detail()));
                 }
             }
-            Action::CreateToken { token, comment, file } => {
-                create_token(root, token, comment, file)?;
+            Action::CreateToken {
+                token,
+                comment,
+                file,
+                replaced,
+            } => {
+                if let Some(old) = replaced {
+                    std::fs::rename(file, old).map_err(|error| {
+                        failed(format!("cannot keep {} as {}: {error}", file.display(), old.display()))
+                    })?;
+                }
+                if let Err(error) = create_token(root, token, comment, file) {
+                    // Put the old file back where it was.
+                    if let Some(old) = replaced
+                        && !file.exists()
+                    {
+                        let _ = std::fs::rename(old, file);
+                    }
+                    return Err(error);
+                }
                 done.token_files.push(file.clone());
             }
             Action::WriteSnippet { node, name, path } => {

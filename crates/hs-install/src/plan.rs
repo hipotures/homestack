@@ -62,6 +62,9 @@ pub enum Action {
         token: String,
         comment: String,
         file: PathBuf,
+        /// Where a file left at `file` by an earlier installation is moved
+        /// first (its token no longer exists); it is never overwritten.
+        replaced: Option<PathBuf>,
     },
     /// A vendor snippet written on a node.
     WriteSnippet { node: String, name: String, path: String },
@@ -82,7 +85,9 @@ impl Step {
         match &self.action {
             Action::Pveum(args) => format!("pveum {}", join(args)),
             Action::Pvesh(args) => format!("pvesh {}", join(args)),
-            Action::CreateToken { token, comment, file } => format!(
+            Action::CreateToken {
+                token, comment, file, ..
+            } => format!(
                 "pveum user token add {HS_USER} {token} --privsep 1 --comment {} (secret to {})",
                 quote(comment),
                 file.display()
@@ -364,18 +369,23 @@ fn plan_token(ctx: &Context, id: &str, comment: &str, steps: &mut Vec<Step>) -> 
     match ctx.state.tokens.get(id) {
         None => {
             let file = ctx.settings.token_dir.join(token_file_name(id));
-            if file.exists() {
-                return Err(InstallError::failed(format!(
-                    "{} exists; move it away so the new token's secret can be written there",
-                    file.display()
-                )));
+            // A file there belongs to a token that no longer exists: it is
+            // kept under another name, never overwritten.
+            let replaced = file.exists().then(|| aside(&file));
+            let mut description = format!("create token {HS_USER}!{id} (secret to {}, mode 0600)", file.display());
+            if let Some(old) = &replaced {
+                description.push_str(&format!(
+                    "; the old file, whose token no longer exists, is kept as {}",
+                    old.display()
+                ));
             }
             steps.push(Step {
-                description: format!("create token {HS_USER}!{id} (secret to {}, mode 0600)", file.display()),
+                description,
                 action: Action::CreateToken {
                     token: id.to_owned(),
                     comment: comment.to_owned(),
                     file,
+                    replaced,
                 },
             });
         }
@@ -830,4 +840,22 @@ pub fn questions(
 ) -> Result<Vec<crate::Question>, InstallError> {
     let state = State::load(root, &access.topology)?;
     Ok(checks::all_questions(&state, settings))
+}
+
+/// A free name next to `file` for keeping it: `NAME.replaced-<seconds>`.
+fn aside(file: &Path) -> PathBuf {
+    let seconds = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_secs());
+    let name = file
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let mut candidate = file.with_file_name(format!("{name}.replaced-{seconds}"));
+    let mut n = 1;
+    while candidate.exists() {
+        candidate = file.with_file_name(format!("{name}.replaced-{seconds}-{n}"));
+        n += 1;
+    }
+    candidate
 }

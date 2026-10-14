@@ -185,3 +185,11 @@ with the owner's approval.
   **[ Back ]**; Esc returns to the form. A setting given on the command line
   is shown with "(given on the command line)" and cannot be changed there.
   Where nothing can be drawn, the form is asked by number.
+- **Kept between runs (owner, 2026-10-14):** the choices of the form are
+  written to `~/.config/homestack/install-draft.toml` (mode 0600) whenever the
+  form is left (Install, Cancel, Esc) and are where the next run starts; a
+  choice no longer possible, or a file that cannot be read, is ignored.
+- **A token file left by an earlier installation** (its token is gone from
+  Proxmox) no longer stops the install: the plan keeps it as
+  `NAME.replaced-<seconds>` and writes the new secret under the name; it is
+  never overwritten, and it is put back if the token cannot be created.

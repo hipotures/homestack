@@ -595,16 +595,26 @@ fn a_cluster_without_quorum_stops_the_run() {
 // --- the token files on the desktop --------------------------------------
 
 #[test]
-fn an_existing_token_file_is_never_overwritten() {
+fn an_existing_token_file_is_kept_aside_never_overwritten() {
+    // A file left by an earlier installation whose token is gone: it is
+    // renamed, not overwritten, and the new secret takes its name.
     let fake = Fake::new(&["pve1"]);
     fs::write(fake.desktop.join("pve-token"), "keep me\n").expect("existing file");
     let run = fake.install(&standard(false));
-    assert!(!run.ok);
-    contains(&run, "pve-token");
-    contains(&run, "exists");
-    assert_eq!(fake.changes(), 0, "changed Proxmox before stopping");
+    assert!(run.ok, "{}", run.out);
+    contains(&run, "pve-token.replaced-");
     assert_eq!(
         fs::read_to_string(fake.desktop.join("pve-token")).expect("file"),
+        "homestack@pve!server=fake-secret-server\n"
+    );
+    let kept: Vec<String> = fake
+        .token_files()
+        .into_iter()
+        .filter(|name| name.starts_with("pve-token.replaced-"))
+        .collect();
+    assert_eq!(kept.len(), 1, "{:?}", fake.token_files());
+    assert_eq!(
+        fs::read_to_string(fake.desktop.join(&kept[0])).expect("kept file"),
         "keep me\n"
     );
 }
