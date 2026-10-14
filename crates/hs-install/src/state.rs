@@ -15,6 +15,8 @@ pub const POOLS: [&str; 4] = ["homestack", "homestack-test", "homestack-gold", "
 
 #[derive(Debug, Clone)]
 pub struct Vm {
+    pub name: String,
+    pub status: String,
     pub node: String,
     /// `qemu` or `lxc`.
     pub kind: String,
@@ -24,6 +26,7 @@ pub struct Vm {
 
 #[derive(Debug, Clone)]
 pub struct Storage {
+    pub kind: String,
     pub content: Vec<String>,
     pub shared: bool,
     pub nodes: Vec<String>,
@@ -110,6 +113,8 @@ impl State {
             vms.insert(
                 vmid,
                 Vm {
+                    name: text(item.get("name")),
+                    status: text(item.get("status")),
                     node: text(item.get("node")),
                     kind: text(item.get("type")),
                     tags: list(&text(item.get("tags")), &[';', ',']),
@@ -123,6 +128,7 @@ impl State {
             storages.insert(
                 text(item.get("storage")),
                 Storage {
+                    kind: text(item.get("type")),
                     content: list(&text(item.get("content")), &[',']),
                     shared: flag(item.get("shared")),
                     nodes: list(&text(item.get("nodes")), &[',']),

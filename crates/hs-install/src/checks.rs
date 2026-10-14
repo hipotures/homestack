@@ -48,12 +48,41 @@ pub fn check_versions(root: &mut dyn Root, state: &State, found: &mut Findings) 
     }
 }
 
+/// The storages that allow `content`, as a user can choose them: id, type
+/// and where it is.
+fn offer(state: &State, content: &str) -> String {
+    let found: Vec<String> = state
+        .storages
+        .iter()
+        .filter(|(_, storage)| !storage.disabled && storage.content.iter().any(|item| item == content))
+        .map(|(id, storage)| {
+            let nodes = if storage.nodes.is_empty() {
+                "all nodes".to_owned()
+            } else {
+                storage.nodes.join(",")
+            };
+            let shared = if storage.shared { ", shared" } else { "" };
+            format!("{id} ({}, {nodes}{shared})", storage.kind)
+        })
+        .collect();
+    if found.is_empty() {
+        format!(
+            "no storage allows content type {content}: the cluster's owner adds it (Datacenter > Storage > the storage > Content)"
+        )
+    } else {
+        format!("choose from: {}", found.join(", "))
+    }
+}
+
 fn check_storage(state: &State, found: &mut Findings, id: &str, content: &str) {
     match state.storages.get(id) {
-        None => found.errors.push(format!("storage {id} does not exist")),
+        None => found
+            .errors
+            .push(format!("storage {id} does not exist; {}", offer(state, content))),
         Some(storage) if storage.disabled => found.errors.push(format!("storage {id} is disabled")),
         Some(storage) if !storage.content.iter().any(|item| item == content) => found.errors.push(format!(
-            "storage {id} does not allow content type {content} (the cluster's owner adds it: Datacenter > Storage > {id} > Content)"
+            "storage {id} does not allow content type {content} (the cluster's owner adds it: Datacenter > Storage > {id} > Content); {}",
+            offer(state, content)
         )),
         Some(_) => {}
     }
@@ -61,33 +90,60 @@ fn check_storage(state: &State, found: &mut Findings, id: &str, content: &str) {
 
 pub fn check_storages(state: &State, settings: &Settings, found: &mut Findings) {
     if settings.storages.is_empty() {
-        found
-            .errors
-            .push("--storages is required: the storages of [storage_layouts]".to_owned());
+        found.errors.push(format!(
+            "--storages is required: the storages of [storage_layouts], where the workspace disks go (several, separated by commas); {}",
+            offer(state, "images")
+        ));
     }
     for id in &settings.storages {
         check_storage(state, found, id, "images");
     }
     match &settings.snippet_storage {
-        None => found
-            .errors
-            .push("--snippet-storage is required: [cloud_init] snippet_storage".to_owned()),
+        None => found.errors.push(format!(
+            "--snippet-storage is required: [cloud_init] snippet_storage, where the Cloud-Init vendor snippets go; {}",
+            offer(state, "snippets")
+        )),
         Some(id) => check_storage(state, found, id, "snippets"),
     }
     if settings.service_storages.is_empty() {
-        found
-            .errors
-            .push("--service-storages is required: the storages for the server containers' root disks".to_owned());
+        found.errors.push(format!(
+            "--service-storages is required: the storages for the server containers' root disks (several, separated by commas); {}",
+            offer(state, "rootdir")
+        ));
     }
     for id in &settings.service_storages {
         check_storage(state, found, id, "rootdir");
     }
     match &settings.template_storage {
-        None => found
-            .errors
-            .push("--template-storage is required: the storage for the server image".to_owned()),
+        None => found.errors.push(format!(
+            "--template-storage is required: the storage for the server image; {}",
+            offer(state, "vztmpl")
+        )),
         Some(id) => check_storage(state, found, id, "vztmpl"),
     }
+}
+
+/// The VMs as a user can choose Gold: id, name and where it is.
+fn vms(state: &State, only: impl Fn(&Vm) -> bool) -> String {
+    const SHOWN: usize = 30;
+    let all: Vec<String> = state
+        .vms
+        .iter()
+        .filter(|(_, vm)| only(vm))
+        .map(|(vmid, vm)| {
+            let status = if vm.status.is_empty() {
+                String::new()
+            } else {
+                format!(", {}", vm.status)
+            };
+            format!("{vmid} {} ({}{status})", vm.name, vm.node)
+        })
+        .collect();
+    let mut shown = all.iter().take(SHOWN).cloned().collect::<Vec<_>>().join(", ");
+    if all.len() > SHOWN {
+        shown.push_str(&format!(" and {} more", all.len() - SHOWN));
+    }
+    shown
 }
 
 /// Gold: the one given, or the only VM tagged `homestack-gold`.
@@ -96,7 +152,10 @@ pub fn find_gold(state: &State, settings: &Settings, found: &mut Findings) -> Op
         if state.vms.contains_key(&vmid) {
             return Some(vmid);
         }
-        found.errors.push(format!("Gold {vmid} does not exist"));
+        found.errors.push(format!(
+            "Gold {vmid} does not exist; QEMU VMs: {}",
+            vms(state, |vm| vm.kind == "qemu")
+        ));
         return None;
     }
     let tagged: Vec<u32> = state
@@ -107,17 +166,17 @@ pub fn find_gold(state: &State, settings: &Settings, found: &mut Findings) -> Op
         .collect();
     match tagged.as_slice() {
         [] => {
-            found.errors.push(
-                "no VM is tagged homestack-gold: prepare Gold (README, Preparing a Gold VM) or pass --gold".to_owned(),
-            );
+            found.errors.push(format!(
+                "no VM is tagged homestack-gold: prepare Gold (README, Preparing a Gold VM) or pass --gold VMID with one of the QEMU VMs: {}",
+                vms(state, |vm| vm.kind == "qemu")
+            ));
             None
         }
         [one] => Some(*one),
-        many => {
-            let ids: Vec<String> = many.iter().map(u32::to_string).collect();
+        _ => {
             found.errors.push(format!(
-                "several VMs are tagged homestack-gold ({}): pass --gold",
-                ids.join(" ")
+                "several VMs are tagged homestack-gold: {}: pass --gold VMID",
+                vms(state, |vm| has_tag(vm, "homestack-gold"))
             ));
             None
         }

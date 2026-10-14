@@ -649,3 +649,97 @@ fn the_token_directory_must_be_writable_before_anything_changes() {
     assert!(error.to_string().contains("missing"), "{error}");
     assert_eq!(fake.changes(), 0);
 }
+
+// --- what the user can choose ---------------------------------------------
+
+#[test]
+fn a_missing_option_says_what_can_be_chosen() {
+    let fake = Fake::new(&["pve1", "pve2"]);
+    let settings = Settings::default();
+    let run = fake.install(&settings);
+    assert!(!run.ok);
+    let errors = match run.error {
+        Some(InstallError::Checks { errors, .. }) => errors,
+        other => panic!("expected the checks to stop it, got {other:?}"),
+    };
+    let line = |option: &str| {
+        errors
+            .iter()
+            .find(|error| error.starts_with(option))
+            .unwrap_or_else(|| panic!("no error for {option}: {errors:?}"))
+            .clone()
+    };
+    // Storages with the content type each option needs, with what they are.
+    let images = line("--storages");
+    assert!(images.contains("local-lvm (lvmthin, all nodes)"), "{images}");
+    assert!(images.contains("worker-roots (lvmthin, pve1)"), "{images}");
+    assert!(
+        !images.contains("local ("),
+        "a storage without images is offered: {images}"
+    );
+    let snippets = line("--snippet-storage");
+    assert!(
+        snippets.contains("local (dir, all nodes)") && !snippets.contains("local-lvm"),
+        "{snippets}"
+    );
+    let service = line("--service-storages");
+    assert!(
+        service.contains("local-lvm") && !service.contains("worker-roots"),
+        "{service}"
+    );
+    let template = line("--template-storage");
+    assert!(
+        template.contains("local (dir") && !template.contains("local-lvm"),
+        "{template}"
+    );
+    // No VM is tagged: every QEMU VM is listed, with its node.
+    fake.replace("vms.tsv", "homestack-gold", "");
+    let run = fake.install(&settings);
+    let text = run.out;
+    assert!(text.contains("no VM is tagged homestack-gold"), "{text}");
+    assert!(
+        text.contains("101 gold (pve1") && text.contains("100 desktop (pve1"),
+        "{text}"
+    );
+}
+
+#[test]
+fn several_gold_candidates_are_listed_with_their_names() {
+    let fake = Fake::new(&["pve1"]);
+    fake.append(
+        "vms.tsv",
+        "111\tpve1\tgold-backup\thomestack-gold\tvirtio=BC:24:11:00:00:09,bridge=vmbr0\t\n",
+    );
+    let run = fake.install(&standard(false));
+    assert!(!run.ok);
+    assert!(
+        run.out
+            .contains("several VMs are tagged homestack-gold: 101 gold (pve1")
+            && run.out.contains("111 gold-backup (pve1"),
+        "{}",
+        run.out
+    );
+    assert!(run.out.contains("pass --gold VMID"), "{}", run.out);
+}
+
+#[test]
+fn a_wrong_choice_names_the_right_ones() {
+    let fake = Fake::new(&["pve1"]);
+    let mut settings = standard(false);
+    settings.snippet_storage = Some("local-lvm".into());
+    settings.storages = vec!["nowhere".into()];
+    let run = fake.install(&settings);
+    assert!(!run.ok);
+    assert!(
+        run.out
+            .contains("storage local-lvm does not allow content type snippets")
+            && run.out.contains("local (dir, all nodes)"),
+        "{}",
+        run.out
+    );
+    assert!(
+        run.out.contains("storage nowhere does not exist") && run.out.contains("local-lvm (lvmthin, all nodes)"),
+        "{}",
+        run.out
+    );
+}
