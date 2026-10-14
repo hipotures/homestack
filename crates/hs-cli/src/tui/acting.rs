@@ -535,7 +535,9 @@ impl App {
             } => {
                 let focus = if secret.is_some() {
                     PlanFocus::Secret
-                } else if action.kind == Kind::Destroy || blocked.is_some() {
+                // Enter applies in every plan (owner, 2026-10-15), destroy too;
+                // only a plan that cannot be applied starts on cancel.
+                } else if blocked.is_some() {
                     PlanFocus::Cancel
                 } else {
                     PlanFocus::Apply

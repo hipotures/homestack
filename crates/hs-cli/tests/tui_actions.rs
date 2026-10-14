@@ -86,12 +86,11 @@ fn destroy_asks_the_server_for_the_plan_and_shows_it_in_a_box() {
     assert!(text.contains("DESTROY PLAN"), "{text}");
     assert!(text.contains("Permanently destroy this workspace"), "{text}");
     assert!(text.contains("┐plan┌"), "the stage is raised: {text}");
-    // For destroy the focus starts on cancel: Enter cancels.
+    // Enter applies, in destroy too (owner, 2026-10-15).
     assert_eq!(
         press(&mut fixture.app, KeyCode::Enter),
-        Some(Request::Decide(Decision::Cancel))
+        Some(Request::Decide(Decision::Apply(None)))
     );
-    assert!(fixture.app.action.is_none());
 }
 
 #[test]
