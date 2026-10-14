@@ -129,10 +129,15 @@ async fn health(client: &Client) -> Vec<(String, Option<String>)> {
     servers
 }
 
-/// Read the status and the servers' health once.
-async fn read_status(client: &Client, updates: &mpsc::UnboundedSender<Update>) {
+/// Read the status and the servers' health once; nothing is told once
+/// `stop` is set (a new client.toml replaced this client meanwhile).
+async fn read_status(client: &Client, updates: &mpsc::UnboundedSender<Update>, stop: &AtomicBool) {
     let servers = health(client).await;
-    match client.get_from("/v1/status").await {
+    let answer = client.get_from("/v1/status").await;
+    if stop.load(Ordering::SeqCst) {
+        return;
+    }
+    match answer {
         Ok((url, status)) => {
             let _ = updates.send(Update::Servers(servers));
             let _ = updates.send(Update::Status(url.to_string(), status));
@@ -152,7 +157,7 @@ async fn read_status(client: &Client, updates: &mpsc::UnboundedSender<Update>) {
 fn spawn_refresh(client: Arc<Client>, updates: mpsc::UnboundedSender<Update>, stop: Arc<AtomicBool>) {
     tokio::spawn(async move {
         loop {
-            read_status(&client, &updates).await;
+            read_status(&client, &updates, &stop).await;
             if updates.is_closed() || stop.load(Ordering::SeqCst) {
                 return;
             }
@@ -504,7 +509,8 @@ pub async fn run(ctx: &mut Context) -> Result<i32, AppError> {
                         Request::Reload => {
                             if let Some(client) = connection.client.clone() {
                                 let updates = updates.clone();
-                                tokio::spawn(async move { read_status(&client, &updates).await });
+                                let stop = Arc::clone(&connection.stop);
+                                tokio::spawn(async move { read_status(&client, &updates, &stop).await });
                             }
                         }
                         Request::Install(command) => {
@@ -586,7 +592,8 @@ pub async fn run(ctx: &mut Context) -> Result<i32, AppError> {
                         decide = None;
                         if let Some(client) = connection.client.clone() {
                             let updates = updates.clone();
-                            tokio::spawn(async move { read_status(&client, &updates).await });
+                                let stop = Arc::clone(&connection.stop);
+                                tokio::spawn(async move { read_status(&client, &updates, &stop).await });
                         }
                     }
                     app.progress(progress);
