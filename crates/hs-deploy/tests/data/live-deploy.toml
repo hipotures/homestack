@@ -2,6 +2,8 @@
 # instances, one per node, with the test token and pool homestack-test,
 # the test Gold 248 (live-server.toml). The image is replaced by
 # HOMESTACK_LIVE_IMAGE. The containers are removed after the gate.
+# Names test1-3 and addresses .240-.242 are the test instances' own
+# (A records in hs.efez.net), apart from the installed servers api1-3.
 image = "ghcr.io/hipotures/homestack-server:replaced-by-the-test"
 domain = "hs.efez.net"
 template_storage = "local"
@@ -25,22 +27,22 @@ zone = "efez.net"
 dir = "~/.config/homestack/acme"
 
 [[instances]]
-name = "api1"
+name = "test1"
 node = "pve1"
 ctid = 997
-address = "192.168.100.97"
+address = "192.168.100.240"
 storage = "local-zfs"
 
 [[instances]]
-name = "api2"
+name = "test2"
 node = "pve2"
 ctid = 998
-address = "192.168.100.98"
+address = "192.168.100.241"
 storage = "local-lvm"
 
 [[instances]]
-name = "api3"
+name = "test3"
 node = "pve3"
 ctid = 999
-address = "192.168.100.99"
+address = "192.168.100.242"
 storage = "local-lvm"
