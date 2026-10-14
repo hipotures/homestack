@@ -576,10 +576,20 @@ fn the_probe_tells_a_single_node_from_a_cluster() {
     let cluster = Fake::new(&["pve2", "pve1", "pve3"]);
     let access = probe(&mut cluster.shell()).expect("probe");
     assert!(access.topology.cluster);
-    assert_eq!(access.topology.describe(), "cluster of 3 nodes (pve2 pve1 pve3)");
+    assert_eq!(access.topology.describe(), "cluster of 3 nodes (pve1 pve2 pve3)");
     assert_eq!(access.host, "pve2");
     assert_eq!(access.topology.local_node().map(|n| n.name.as_str()), Some("pve2"));
     assert_eq!(access.topology.quorate, Some(true));
+}
+
+#[test]
+fn the_nodes_come_in_the_order_of_their_numbers() {
+    // GET /cluster/status lists the nodes in any order; the servers apiN
+    // follow the nodes, so one order keeps them where they were.
+    let cluster = Fake::new(&["pve3", "pve10", "pve1", "pve2"]);
+    let access = probe(&mut cluster.shell()).expect("probe");
+    assert_eq!(access.topology.describe(), "cluster of 4 nodes (pve1 pve2 pve3 pve10)");
+    assert_eq!(access.host, "pve3");
 }
 
 #[test]

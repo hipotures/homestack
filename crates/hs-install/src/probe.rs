@@ -91,7 +91,7 @@ pub(crate) fn get(root: &mut dyn Root, path: &str, extra: &str) -> Result<Value,
 pub(crate) fn topology(status: &Value) -> Topology {
     let entries = status.as_array().map_or(&[][..], Vec::as_slice);
     let cluster = entries.iter().find(|entry| entry["type"] == "cluster");
-    let nodes = entries
+    let mut nodes: Vec<Node> = entries
         .iter()
         .filter(|entry| entry["type"] == "node")
         .map(|entry| Node {
@@ -101,6 +101,13 @@ pub(crate) fn topology(status: &Value) -> Topology {
             local: flag(entry.get("local")),
         })
         .collect();
+    // The list comes in any order; the servers apiN follow the nodes, so
+    // the order of the nodes' numbers (pve2 before pve10) keeps them in place.
+    nodes.sort_by_cached_key(|node| {
+        let stem = node.name.trim_end_matches(|c: char| c.is_ascii_digit());
+        let number = node.name[stem.len()..].parse::<u64>().ok();
+        (stem.to_owned(), number, node.name.clone())
+    });
     Topology {
         cluster: cluster.is_some(),
         quorate: cluster.map(|entry| flag(entry.get("quorate"))),
