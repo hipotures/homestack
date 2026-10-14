@@ -721,6 +721,9 @@ pub fn make_plan(
             warnings: found.warnings,
         });
     }
+    if !found.questions.is_empty() {
+        return Err(InstallError::Missing(found.questions));
+    }
     if command == Command::Install {
         check_token_dir(&settings.token_dir)?;
     }

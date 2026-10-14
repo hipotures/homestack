@@ -502,3 +502,27 @@ async fn the_help_names_both_commands() {
     );
     assert!(!out.contains("still in the Python client (phase 13c)"), "{out}");
 }
+
+#[tokio::test]
+async fn missing_options_are_listed_as_choices_not_as_an_error_panel() {
+    let cluster = Cluster::new(&["pve1"]);
+    let text = run(&cluster, &["install", "--ssh", "root@pve1"], &[], false).await;
+    assert_eq!(text.code, 1);
+    let out = text.console.out();
+    assert!(!out.contains("ERROR"), "{out}");
+    assert!(out.contains("--storages is required"), "{out}");
+    assert!(
+        out.lines()
+            .any(|l| l.trim_start().starts_with("local-lvm") && l.contains("lvmthin")),
+        "{out}"
+    );
+    assert!(out.lines().all(|l| l.chars().count() <= 100), "{out}");
+    assert_eq!(cluster.changes(), 0);
+
+    let json = run(&cluster, &["install", "--ssh", "root@pve1", "--json"], &[], false).await;
+    assert_eq!(json.code, 1);
+    let out = json.json();
+    assert_eq!(out["ok"], false, "{out}");
+    assert_eq!(out["missing"][0]["option"], "--storages", "{out}");
+    assert_eq!(out["missing"][0]["choices"][0]["value"], "local-lvm", "{out}");
+}

@@ -9,6 +9,7 @@ use crate::root::Root;
 use crate::settings::Settings;
 use crate::shell::quote;
 use crate::state::{State, Vm};
+use crate::{Choice, Question};
 
 pub const MIN_MAJOR: u32 = 9;
 pub const MIN_MINOR: u32 = 2;
@@ -18,6 +19,7 @@ pub struct Findings {
     pub errors: Vec<String>,
     pub warnings: Vec<String>,
     pub infos: Vec<String>,
+    pub questions: Vec<Question>,
     pub gold: Option<u32>,
     pub sdn_path: String,
 }
@@ -48,10 +50,9 @@ pub fn check_versions(root: &mut dyn Root, state: &State, found: &mut Findings) 
     }
 }
 
-/// The storages that allow `content`, as a user can choose them: id, type
-/// and where it is.
-fn offer(state: &State, content: &str) -> String {
-    let found: Vec<String> = state
+/// The storages that allow `content`, as choices: id, type and nodes.
+fn storage_choices(state: &State, content: &str) -> Vec<Choice> {
+    state
         .storages
         .iter()
         .filter(|(_, storage)| !storage.disabled && storage.content.iter().any(|item| item == content))
@@ -61,100 +62,121 @@ fn offer(state: &State, content: &str) -> String {
             } else {
                 storage.nodes.join(",")
             };
-            let shared = if storage.shared { ", shared" } else { "" };
-            format!("{id} ({}, {nodes}{shared})", storage.kind)
+            let shared = if storage.shared { " (shared)" } else { "" };
+            Choice {
+                value: id.clone(),
+                detail: format!("{:<8} {nodes}{shared}", storage.kind),
+            }
         })
-        .collect();
-    if found.is_empty() {
-        format!(
-            "no storage allows content type {content}: the cluster's owner adds it (Datacenter > Storage > the storage > Content)"
-        )
-    } else {
-        format!("choose from: {}", found.join(", "))
-    }
+        .collect()
 }
 
 fn check_storage(state: &State, found: &mut Findings, id: &str, content: &str) {
     match state.storages.get(id) {
-        None => found
-            .errors
-            .push(format!("storage {id} does not exist; {}", offer(state, content))),
+        None => found.errors.push(format!(
+            "storage {id} does not exist (leave the option out to see the choices)"
+        )),
         Some(storage) if storage.disabled => found.errors.push(format!("storage {id} is disabled")),
         Some(storage) if !storage.content.iter().any(|item| item == content) => found.errors.push(format!(
-            "storage {id} does not allow content type {content} (the cluster's owner adds it: Datacenter > Storage > {id} > Content); {}",
-            offer(state, content)
+            "storage {id} does not allow content type {content} (the cluster's owner adds it: Datacenter > Storage > {id} > Content)"
         )),
         Some(_) => {}
     }
 }
 
+fn ask_storage(state: &State, found: &mut Findings, option: &'static str, text: &str, content: &str, multiple: bool) {
+    let choices = storage_choices(state, content);
+    if choices.is_empty() {
+        found.errors.push(format!(
+            "{option} is required, but no storage allows content type {content}: the cluster's owner adds it (Datacenter > Storage > the storage > Content)"
+        ));
+    } else {
+        found.questions.push(Question {
+            option,
+            text: text.to_owned(),
+            multiple,
+            choices,
+        });
+    }
+}
+
 pub fn check_storages(state: &State, settings: &Settings, found: &mut Findings) {
     if settings.storages.is_empty() {
-        found.errors.push(format!(
-            "--storages is required: the storages of [storage_layouts], where the workspace disks go (several, separated by commas); {}",
-            offer(state, "images")
-        ));
+        ask_storage(
+            state,
+            found,
+            "--storages",
+            "where the workspace disks go (several, comma-separated)",
+            "images",
+            true,
+        );
     }
     for id in &settings.storages {
         check_storage(state, found, id, "images");
     }
     match &settings.snippet_storage {
-        None => found.errors.push(format!(
-            "--snippet-storage is required: [cloud_init] snippet_storage, where the Cloud-Init vendor snippets go; {}",
-            offer(state, "snippets")
-        )),
+        None => ask_storage(
+            state,
+            found,
+            "--snippet-storage",
+            "where the Cloud-Init snippets go",
+            "snippets",
+            false,
+        ),
         Some(id) => check_storage(state, found, id, "snippets"),
     }
     if settings.service_storages.is_empty() {
-        found.errors.push(format!(
-            "--service-storages is required: the storages for the server containers' root disks (several, separated by commas); {}",
-            offer(state, "rootdir")
-        ));
+        ask_storage(
+            state,
+            found,
+            "--service-storages",
+            "root disks of the server containers (several, comma-separated)",
+            "rootdir",
+            true,
+        );
     }
     for id in &settings.service_storages {
         check_storage(state, found, id, "rootdir");
     }
     match &settings.template_storage {
-        None => found.errors.push(format!(
-            "--template-storage is required: the storage for the server image; {}",
-            offer(state, "vztmpl")
-        )),
+        None => ask_storage(
+            state,
+            found,
+            "--template-storage",
+            "where the server image is kept",
+            "vztmpl",
+            false,
+        ),
         Some(id) => check_storage(state, found, id, "vztmpl"),
     }
 }
 
-/// The VMs as a user can choose Gold: id, name and where it is.
-fn vms(state: &State, only: impl Fn(&Vm) -> bool) -> String {
+/// The VMs that pass `only`, as choices for Gold: id, name, node, state.
+fn vm_choices(state: &State, only: impl Fn(&Vm) -> bool) -> Vec<Choice> {
     const SHOWN: usize = 30;
-    let all: Vec<String> = state
+    state
         .vms
         .iter()
         .filter(|(_, vm)| only(vm))
-        .map(|(vmid, vm)| {
-            let status = if vm.status.is_empty() {
-                String::new()
-            } else {
-                format!(", {}", vm.status)
-            };
-            format!("{vmid} {} ({}{status})", vm.name, vm.node)
+        .take(SHOWN)
+        .map(|(vmid, vm)| Choice {
+            value: vmid.to_string(),
+            detail: format!("{:<16} {:<6} {}", vm.name, vm.node, vm.status)
+                .trim_end()
+                .to_owned(),
         })
-        .collect();
-    let mut shown = all.iter().take(SHOWN).cloned().collect::<Vec<_>>().join(", ");
-    if all.len() > SHOWN {
-        shown.push_str(&format!(" and {} more", all.len() - SHOWN));
-    }
-    shown
+        .collect()
 }
 
-/// Gold: the one given, or the only VM tagged `homestack-gold`.
+/// Gold: the one given, or the only VM tagged `homestack-gold`; otherwise a
+/// question with the candidates.
 pub fn find_gold(state: &State, settings: &Settings, found: &mut Findings) -> Option<u32> {
     if let Some(vmid) = settings.gold {
         if state.vms.contains_key(&vmid) {
             return Some(vmid);
         }
         found.errors.push(format!(
-            "Gold {vmid} does not exist; QEMU VMs: {}",
-            vms(state, |vm| vm.kind == "qemu")
+            "Gold {vmid} does not exist (leave --gold out to see the QEMU VMs)"
         ));
         return None;
     }
@@ -164,23 +186,24 @@ pub fn find_gold(state: &State, settings: &Settings, found: &mut Findings) -> Op
         .filter(|(_, vm)| has_tag(vm, "homestack-gold"))
         .map(|(vmid, _)| *vmid)
         .collect();
-    match tagged.as_slice() {
-        [] => {
-            found.errors.push(format!(
-                "no VM is tagged homestack-gold: prepare Gold (README, Preparing a Gold VM) or pass --gold VMID with one of the QEMU VMs: {}",
-                vms(state, |vm| vm.kind == "qemu")
-            ));
-            None
-        }
-        [one] => Some(*one),
-        _ => {
-            found.errors.push(format!(
-                "several VMs are tagged homestack-gold: {}: pass --gold VMID",
-                vms(state, |vm| has_tag(vm, "homestack-gold"))
-            ));
-            None
-        }
-    }
+    let (text, choices) = match tagged.as_slice() {
+        [one] => return Some(*one),
+        [] => (
+            "no VM is tagged homestack-gold (prepare Gold first, see the README); QEMU VMs".to_owned(),
+            vm_choices(state, |vm| vm.kind == "qemu"),
+        ),
+        _ => (
+            "several VMs are tagged homestack-gold".to_owned(),
+            vm_choices(state, |vm| has_tag(vm, "homestack-gold")),
+        ),
+    };
+    found.questions.push(Question {
+        option: "--gold",
+        text,
+        multiple: false,
+        choices,
+    });
+    None
 }
 
 pub fn check_gold(root: &mut dyn Root, state: &State, settings: &Settings, found: &mut Findings) {

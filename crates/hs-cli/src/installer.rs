@@ -133,7 +133,38 @@ pub fn run(args: &Args, install: &InstallArgs, command: Install, ctx: &mut Conte
     let mut root = open_root(args, install, ctx)?;
     let access = hs_install::probe(root.as_mut()).map_err(failure)?;
     let settings = settings(ctx, args, install);
-    let plan = hs_install::make_plan(root.as_mut(), &access, command, &settings).map_err(failure)?;
+    let plan = match hs_install::make_plan(root.as_mut(), &access, command, &settings) {
+        Ok(plan) => plan,
+        // Options the user has not given are not an error: show what can be
+        // chosen, one choice a line.
+        Err(InstallError::Missing(questions)) => {
+            if args.json {
+                let missing: Vec<Value> = questions
+                    .iter()
+                    .map(|question| {
+                        json!({
+                            "option": question.option,
+                            "text": question.text,
+                            "multiple": question.multiple,
+                            "choices": question.choices.iter().map(|choice| json!({
+                                "value": choice.value, "detail": choice.detail,
+                            })).collect::<Vec<_>>(),
+                        })
+                    })
+                    .collect();
+                emit(
+                    ctx,
+                    &json!({"ok": false, "command": command.name(), "missing": missing,
+                            "error": hs_install::describe_missing(&questions)}),
+                );
+            } else {
+                ctx.console
+                    .out(&format!("{}\n", hs_install::describe_missing(&questions)));
+            }
+            return Ok(1);
+        }
+        Err(error) => return Err(failure(error)),
+    };
 
     let access_line = access_line(root.as_ref(), &access);
     let steps = plan.steps.len();
