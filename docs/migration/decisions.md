@@ -257,6 +257,27 @@ an agent stops when a phase needs one that is still open
   possibility is not asked. The last screen lists the choices and the changes
   with the buttons Install and Back; Esc returns to the choices.
 
+### Owner's decisions of 2026-10-14 (phase 13b, one TUI)
+
+- HomeStack gets one TUI for the install, the everyday work and the
+  uninstall; the CLI commands stay. Nothing in it leaves the TUI: the choice
+  of the SSH key, "touch your security key", a PIN, a host key, progress and
+  errors are all shown inside it. The installer of phase 13c moves into it.
+- The design is the mockups in `docs/tui/mockups/` (version 2, btop
+  grammar): controls live in the panel borders, the digits 1–4 show and hide
+  the panels `workspaces`, `cluster`, `storage`, `log`, presets, details and
+  actions as boxes inside the workspaces panel, a menu under `m`/Esc. A
+  hotkey is a letter of its label in a contrasting colour (red, as in
+  btop); a title in a border is framed `┐title┌`.
+- Plain `homestack` (no command, in a terminal) opens the TUI; `homestack
+  --help` prints the help. Minimum size 80 x 24.
+- Themes as in MyPowers: a list to choose from, the default one in the
+  colours of the owner's reference picture (dark blue-grey, blue accent,
+  teal values).
+- Start/stop and ssh into a workspace are added. How ssh runs (TUI
+  suspended, a terminal in a panel, or a new window) and node CPU/RAM are
+  decided after the TUI is built.
+
 ## Probe results
 
 | Date | Probe | Result |

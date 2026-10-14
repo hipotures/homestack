@@ -915,6 +915,7 @@ dependencies = [
  "hs-server",
  "pve-sim",
  "ratatui",
+ "ratcn",
  "rpassword",
  "serde_json",
  "tempfile",
@@ -2020,6 +2021,7 @@ checksum = "cbb175c433c8e28a809d1f5773a2ae96e68c0ce40db865cbab1020bf33ae479c"
 dependencies = [
  "bitflags",
  "compact_str",
+ "critical-section",
  "hashbrown 0.17.1",
  "itertools",
  "kasuari",
@@ -2061,6 +2063,17 @@ dependencies = [
  "serde",
  "strum",
  "time",
+ "unicode-segmentation",
+ "unicode-width",
+]
+
+[[package]]
+name = "ratcn"
+version = "0.0.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f69bec4ea1cda85dc05981c13554c99e2cf04b28bce983347dd22115bfb7216e"
+dependencies = [
+ "ratatui",
  "unicode-segmentation",
  "unicode-width",
 ]

@@ -20,6 +20,7 @@ pub mod root_ssh;
 pub mod servers;
 pub mod system;
 pub mod touch;
+pub mod tui;
 pub mod view;
 pub mod wizard;
 
