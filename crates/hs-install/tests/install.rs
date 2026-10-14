@@ -138,6 +138,7 @@ fn install_on_a_single_node() {
 }
 
 #[test]
+#[ignore = "slow (owner, 2026-10-15): run with cargo test -- --ignored"]
 fn install_in_a_cluster_and_uninstall() {
     let fake = Fake::new(&["pve1", "pve2", "pve3"]);
     let mut settings = standard(false);
@@ -189,6 +190,7 @@ fn install_in_a_cluster_and_uninstall() {
 }
 
 #[test]
+#[ignore = "slow (owner, 2026-10-15): run with cargo test -- --ignored"]
 fn adopt_the_hand_made_state_with_the_test_part() {
     let fake = Fake::today();
     let mut settings = standard(true);

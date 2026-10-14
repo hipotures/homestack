@@ -217,6 +217,8 @@ pub struct Install {
     pub problems: Vec<String>,
     pub reviewed: bool,
     pub scroll: usize,
+    /// The settings' help box is open.
+    pub help: bool,
     /// Uninstall review: Remove is focused (Cancel otherwise).
     pub remove_focused: bool,
     /// The run, oldest first.
@@ -251,6 +253,7 @@ impl Install {
             reviewed: false,
             scroll: 0,
             remove_focused: false,
+            help: false,
             lines: Vec::new(),
             ok: false,
             result: Vec::new(),
@@ -347,8 +350,8 @@ impl Install {
             Stage::Review => self.review_key(code),
             Stage::Run => (false, None),
             Stage::Done => match code {
-                KeyCode::Enter | KeyCode::Char('o') if self.ok => (true, Some(Request::Installed)),
-                KeyCode::Enter => {
+                KeyCode::Enter | KeyCode::Esc | KeyCode::Char('o') if self.ok => (true, Some(Request::Installed)),
+                KeyCode::Enter | KeyCode::Esc | KeyCode::Char('b') => {
                     self.stage = Stage::Review;
                     self.lines.clear();
                     (false, None)
@@ -466,6 +469,15 @@ impl Install {
     }
 
     fn settings_key(&mut self, code: KeyCode) -> (bool, Option<Request>) {
+        // ? opens the help (a domain has no ?); any key closes it.
+        if self.help {
+            self.help = false;
+            return (false, None);
+        }
+        if code == KeyCode::Char('?') {
+            self.help = true;
+            return (false, None);
+        }
         let on_domain = self.domain.is_some() && self.row == self.settings.len();
         match code {
             KeyCode::Esc if !self.chooser => self.stage = Stage::Check,

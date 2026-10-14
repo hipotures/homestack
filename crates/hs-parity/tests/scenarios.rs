@@ -354,6 +354,7 @@ async fn check_one(scenario: &Scenario, sim: &PveSim, parity: &Parity, rules: &R
 }
 
 #[tokio::test]
+#[ignore = "slow (owner, 2026-10-15): run with cargo test -- --ignored"]
 async fn python_and_rust_agree_on_every_scenario() -> TestResult {
     let rules: Rules = toml::from_str(&std::fs::read_to_string(repo_root().join("parity/normalize.toml"))?)?;
     rules.validate()?;

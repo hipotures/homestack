@@ -22,6 +22,8 @@ pub struct Vm {
     pub kind: String,
     pub tags: Vec<String>,
     pub pool: String,
+    /// A Proxmox template: it cannot be started, so it is no Gold.
+    pub template: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -119,6 +121,7 @@ impl State {
                     kind: text(item.get("type")),
                     tags: list(&text(item.get("tags")), &[';', ',']),
                     pool: text(item.get("pool")),
+                    template: item.get("template").and_then(Value::as_u64) == Some(1),
                 },
             );
         }

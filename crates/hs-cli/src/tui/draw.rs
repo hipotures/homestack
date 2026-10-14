@@ -37,7 +37,8 @@ pub(super) fn write(buf: &mut Buffer, x: u16, y: u16, width: u16, text: &str, st
         let at = Position { x: x + used, y };
         if buf.area.contains(at) {
             let cell = &mut buf[(at.x, at.y)];
-            cell.set_char(c);
+            // A control character (a newline from a server's text) cannot be drawn.
+            cell.set_char(if c.is_control() { ' ' } else { c });
             cell.set_style(style);
         }
         used += 1;

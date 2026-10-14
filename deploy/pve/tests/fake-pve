@@ -72,7 +72,9 @@ resources() {
         ((first)) || printf ','
         first=0
         pool=$(pool_of "$vmid")
-        printf '{"vmid":%s,"node":"%s","name":"%s","type":"%s","template":0' "$vmid" "$node" "$name" "${kind:-qemu}"
+        local type=${kind:-qemu} template=0
+        [[ $type == template ]] && type=qemu template=1
+        printf '{"vmid":%s,"node":"%s","name":"%s","type":"%s","template":%s' "$vmid" "$node" "$name" "$type" "$template"
         [[ -n $tags ]] && printf ',"tags":"%s"' "$tags"
         [[ -n $pool ]] && printf ',"pool":"%s"' "$pool"
         printf '}'

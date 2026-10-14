@@ -98,7 +98,12 @@ pub(super) fn screen(buf: &mut Buffer, area: Rect, app: &App, install: &Install)
     match install.stage {
         Stage::Access => access(buf, inner, app, install),
         Stage::Check => check(buf, inner, app, install),
-        Stage::Settings => settings(buf, inner, app, install),
+        Stage::Settings => {
+            settings(buf, inner, app, install);
+            if install.help {
+                settings_help(buf, inner, app, install);
+            }
+        }
         Stage::Review => review(buf, inner, app, install),
         Stage::Run => run(buf, inner, app, install),
         Stage::Done => done(buf, inner, app, install),
@@ -148,7 +153,7 @@ fn buttons(install: &Install) -> Vec<Control> {
         }
         Stage::Run => vec![Control::key("stop Esc").muted()],
         Stage::Done if install.ok => vec![Control::key("&Open HomeStack Enter"), Control::key("&Quit")],
-        Stage::Done => vec![Control::key("back to the review Enter"), Control::key("&Quit")],
+        Stage::Done => vec![Control::key("&back to the review Enter or Esc"), Control::key("&Quit")],
     }
 }
 
@@ -351,6 +356,7 @@ fn settings(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
         ("Space", "tick in the box"),
         ("letters", "the server domain"),
         ("Enter", "review"),
+        ("?", "help: what each one is"),
     ];
     for (row, (key, what)) in help.iter().enumerate() {
         let line = format!("{key:<9}{what}");
@@ -377,19 +383,11 @@ fn settings(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
                 ..Sides::default()
             },
         );
-        let lines = paragraph(
-            buf,
-            box_inner,
-            box_inner.y,
-            "The servers are named apiN.<domain>, one per node; each name must resolve on this desktop to the \
-             server's address. The certificate *.<domain> comes from Let's Encrypt.",
-            text,
-        );
         let domain = install.domain.clone().unwrap_or_default();
         write(
             buf,
             box_inner.x + 2,
-            at(box_inner.y, lines + 1),
+            at(box_inner.y, 1),
             box_inner.width.saturating_sub(4),
             &format!("[ {domain}▏ ]"),
             focus,
@@ -414,15 +412,31 @@ fn settings(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
             ..Sides::default()
         },
     );
-    let lines = paragraph(buf, box_inner, box_inner.y, &setting.note, text);
+    // The choices only; what a setting is for is in the help.
+    let lines = 0;
     let width = box_inner.width.saturating_sub(4);
-    let name_width = setting
+    // The value and the words of its detail in columns as wide as their
+    // longest entry (a long VM name moves nothing).
+    let rows: Vec<Vec<&str>> = setting
         .choices
         .iter()
-        .map(|(value, _)| value.chars().count())
-        .max()
-        .unwrap_or(0);
-    for (index, (value, detail)) in setting.choices.iter().enumerate() {
+        .map(|(value, detail)| {
+            std::iter::once(value.as_str())
+                .chain(detail.split_whitespace())
+                .collect()
+        })
+        .collect();
+    let columns = rows.iter().map(Vec::len).max().unwrap_or(0);
+    let widths: Vec<usize> = (0..columns)
+        .map(|column| {
+            rows.iter()
+                .filter_map(|row| row.get(column))
+                .map(|word| word.chars().count())
+                .max()
+                .unwrap_or(0)
+        })
+        .collect();
+    for (index, row) in rows.iter().enumerate() {
         let ticked = setting.picked.contains(&index);
         let cursor = install.chooser && index == install.cursor;
         let mark = if cursor { "▶" } else { " " };
@@ -432,7 +446,12 @@ fn settings(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
             (false, true) => "(•)",
             (false, false) => "( )",
         };
-        let line = format!("{mark} {tick} {value:<name_width$}  {detail}");
+        let cells: Vec<String> = row
+            .iter()
+            .zip(&widths)
+            .map(|(word, width)| format!("{word:<width$}"))
+            .collect();
+        let line = format!("{mark} {tick} {}", cells.join("  ").trim_end());
         let style = if cursor { focus } else { text };
         write(
             buf,
@@ -646,6 +665,60 @@ pub(super) fn asking(buf: &mut Buffer, area: Rect, app: &App, asking: &AskView) 
             buf,
             inner.x + 2,
             at(inner.y, row),
+            inner.width.saturating_sub(4),
+            line,
+            *style,
+        );
+    }
+}
+
+/// What the server domain is, for the settings' help.
+const DOMAIN_NOTE: &str = "The servers are named apiN.<domain>, one per node; each name must resolve on this desktop to \
+the server's address. The certificate *.<domain> comes from Let's Encrypt.";
+
+/// The settings' help (?): what each setting is for, and the keys.
+fn settings_help(buf: &mut Buffer, area: Rect, app: &App, install: &Install) {
+    let palette = &app.palette;
+    let text = text_style(palette);
+    let bold = text.add_modifier(Modifier::BOLD);
+    let width = area.width.saturating_sub(8).min(100);
+    let inner_width = usize::from(width.saturating_sub(4));
+    let mut lines: Vec<(String, Style)> = Vec::new();
+    let mut add = |title: &str, note: &str| {
+        lines.push((title.to_owned(), bold));
+        for piece in wrap(note, inner_width) {
+            lines.push((piece, text));
+        }
+        lines.push((String::new(), text));
+    };
+    for setting in &install.settings {
+        add(&setting.title, &setting.note);
+    }
+    if install.domain.is_some() {
+        add("Server domain", DOMAIN_NOTE);
+    }
+    lines.push((
+        "↑ ↓ a setting · Tab into its box and out · Space tick · Enter review".to_owned(),
+        text.fg(palette.muted),
+    ));
+    let height = u16::try_from(lines.len() + 3).unwrap_or(u16::MAX).min(area.height);
+    let rect = centered(area, width, height);
+    let inner = frame(
+        buf,
+        rect,
+        palette,
+        &Sides {
+            top_left: vec![Control::plain("help: the settings")],
+            bottom_left: vec![Control::key("close Esc")],
+            focused: true,
+            ..Sides::default()
+        },
+    );
+    for (row, (line, style)) in lines.iter().enumerate().take(usize::from(inner.height)) {
+        write(
+            buf,
+            inner.x + 2,
+            at(inner.y, row + 1),
             inner.width.saturating_sub(4),
             line,
             *style,

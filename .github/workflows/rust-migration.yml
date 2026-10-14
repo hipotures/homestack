@@ -30,11 +30,12 @@ jobs:
       - name: L1-L3 checks
         run: scripts/check.sh
 
-  # The node image (Containerfile, target node) for homestack-deploy:
-  # ghcr.io/hipotures/homestack-server:<version>-<commit>, public, once the
-  # checks pass on a push to rust-migration.
+  # The node image for homestack-deploy:
+  # ghcr.io/hipotures/homestack-server:<version>-<commit>, public, on every
+  # push to rust-migration (deploy/image/Containerfile).
   image:
-    needs: check
+    # Built at once, beside the checks: a deployment names the commit's
+    # image, and the checks still say whether the commit is good.
     if: github.event_name == 'push' && github.ref == 'refs/heads/rust-migration'
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -48,6 +49,24 @@ jobs:
         run: |
           version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
           echo "tag=${version}-${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
+      - name: Install Rust 1.99.0 for musl
+        run: |
+          sudo apt-get install -y --no-install-recommends musl-tools
+          rustup toolchain install 1.99.0 --profile minimal --target x86_64-unknown-linux-musl
+          rustup default 1.99.0
+      - uses: Swatinem/rust-cache@v2.9.2
+        with:
+          key: musl-server
+      - name: Build the server
+        env:
+          RUSTFLAGS: "-C target-feature=+crt-static"
+        run: |
+          cargo build --release --locked --target x86_64-unknown-linux-musl -p hs-server --bin homestack-server
+          ! readelf -l target/x86_64-unknown-linux-musl/release/homestack-server | grep -q INTERP
+          mkdir -p image
+          cp target/x86_64-unknown-linux-musl/release/homestack-server image/
+          cp deploy/lxc/Caddyfile image/
+          cp -r deploy/lxc/service image/service
       - uses: docker/login-action@v3.4.0
         with:
           registry: ghcr.io
@@ -55,9 +74,8 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - uses: docker/build-push-action@v6.18.0
         with:
-          context: .
-          file: Containerfile
-          target: node
+          context: image
+          file: deploy/image/Containerfile
           push: true
           tags: ghcr.io/hipotures/homestack-server:${{ steps.tag.outputs.tag }}
           labels: org.opencontainers.image.source=https://github.com/hipotures/homestack

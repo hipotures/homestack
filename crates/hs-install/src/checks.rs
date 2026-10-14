@@ -293,7 +293,7 @@ pub fn find_gold(state: &State, settings: &Settings, found: &mut Findings) -> Op
         [one] => return Some(*one),
         [] => (
             "The prepared base VM that every workspace is cloned from; the installer tags it homestack-gold and puts it in the pool homestack-gold. No VM is tagged homestack-gold yet; these are the QEMU VMs (prepare Gold first, see the README).".to_owned(),
-            vm_choices(state, |vm| vm.kind == "qemu"),
+            vm_choices(state, |vm| vm.kind == "qemu" && !vm.template),
         ),
         _ => (
             "The prepared base VM that every workspace is cloned from; the installer tags it homestack-gold and puts it in the pool homestack-gold. Several VMs are tagged homestack-gold.".to_owned(),
@@ -537,7 +537,7 @@ pub fn all_questions(state: &State, settings: &Settings) -> Vec<Question> {
     }
     if settings.gold.is_none() {
         let chosen = find_gold(state, settings, &mut found);
-        let choices = vm_choices(state, |vm| vm.kind == "qemu");
+        let choices = vm_choices(state, |vm| vm.kind == "qemu" && !vm.template);
         let defaults = chosen
             .and_then(|vmid| choices.iter().position(|choice| choice.value == vmid.to_string()))
             .into_iter()

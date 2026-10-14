@@ -154,7 +154,8 @@ pub fn text_style(palette: &Palette) -> Style {
 fn put(buf: &mut Buffer, x: u16, y: u16, symbol: char, style: Style) {
     if buf.area.contains(ratatui::layout::Position { x, y }) {
         let cell = &mut buf[(x, y)];
-        cell.set_char(symbol);
+        // A control character (a newline from a server's text) cannot be drawn.
+        cell.set_char(if symbol.is_control() { ' ' } else { symbol });
         cell.set_style(style);
     }
 }

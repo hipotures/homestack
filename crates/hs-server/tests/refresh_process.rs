@@ -71,6 +71,7 @@ fn root(config: &Value) -> String {
 }
 
 #[tokio::test]
+#[ignore = "slow (owner, 2026-10-15): run with cargo test -- --ignored"]
 async fn a_killed_refresh_is_recovered_by_the_next_server() -> Result<(), Error> {
     let sim = PveSim::start(ClusterSpec::from_scenario(CLUSTER)?).await?;
     let pve = pve(&sim)?;

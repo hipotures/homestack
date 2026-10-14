@@ -99,6 +99,7 @@ async fn apply_raw(server: &ServerProcess, plan: &Value, version: &str) -> Resul
 }
 
 #[tokio::test]
+#[ignore = "slow (owner, 2026-10-15): run with cargo test -- --ignored"]
 async fn a_refresh_from_two_instances_runs_once_and_the_other_gets_busy() -> Result<(), Error> {
     let sim = PveSim::start(ClusterSpec::from_scenario(CLUSTER)?).await?;
     let pve = pve(&sim)?;

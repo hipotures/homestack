@@ -315,3 +315,15 @@ fn the_node_table_lines_up_under_its_headings() {
     assert_eq!(dot, usize::from(state), "{line}");
     assert_eq!(count, usize::from(workspaces), "{line}");
 }
+
+#[test]
+fn a_newline_or_a_tab_in_a_text_is_drawn_as_a_space() {
+    let mut fixture = app();
+    fixture.app.log("10:00:00", "first line\nsecond\tline\r");
+    fixture.app.set_unreachable(vec![(
+        "https://api1.example.net/".to_owned(),
+        "error sending request\ncaused by: refused".to_owned(),
+    )]);
+    let text = screen(&render(&fixture.app, 120, 36));
+    assert!(text.contains("first line second line"), "{text}");
+}

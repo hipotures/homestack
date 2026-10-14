@@ -529,3 +529,44 @@ fn esc_on_the_main_screen_quits_and_m_opens_the_menu() {
     assert_eq!(press(&mut fixture.app, KeyCode::Esc), None, "esc closes the menu first");
     assert!(fixture.app.overlay.is_none());
 }
+
+#[test]
+fn what_a_setting_is_for_is_in_the_help_not_in_its_box() {
+    let mut fixture = checked(Mode::Install);
+    let text = screen(&render(&fixture.app, 120, 36));
+    assert!(!text.contains("Where workspace VM disks are made."), "{text}");
+    press(&mut fixture.app, KeyCode::Char('?'));
+    let text = screen(&render(&fixture.app, 120, 36));
+    for part in [
+        "help: the settings",
+        "Where workspace VM disks are made.",
+        "The VM workspaces are cloned from.",
+        "apiN.<domain>",
+    ] {
+        assert!(text.contains(part), "{part:?} missing:\n{text}");
+    }
+    press(&mut fixture.app, KeyCode::Esc);
+    assert!(!screen(&render(&fixture.app, 120, 36)).contains("help: the settings"));
+    assert_eq!(stage(&fixture.app), Stage::Settings, "esc closed only the help");
+}
+
+#[test]
+fn esc_after_a_failed_run_goes_back_to_the_review() {
+    let mut fixture = checked(Mode::Install);
+    press(&mut fixture.app, KeyCode::Enter);
+    fixture.app.install_event(Event::Reviewed {
+        sections: Vec::new(),
+        problems: Vec::new(),
+    });
+    press(&mut fixture.app, KeyCode::Enter);
+    fixture.app.install_event(Event::Done {
+        ok: false,
+        lines: vec!["Deploying the servers failed".to_owned()],
+    });
+    assert_eq!(press(&mut fixture.app, KeyCode::Esc), None);
+    assert_eq!(stage(&fixture.app), Stage::Review);
+    assert_eq!(
+        press(&mut fixture.app, KeyCode::Enter),
+        Some(Request::Install(Command::Apply))
+    );
+}

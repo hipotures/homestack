@@ -1147,6 +1147,7 @@ fn at_spaceship() -> FakeServers {
 }
 
 #[tokio::test]
+#[ignore = "slow (owner, 2026-10-15): run with cargo test -- --ignored"]
 async fn a_domain_at_spaceship_gets_its_certificate_through_spaceship() {
     let cluster = Cluster::new(&["pve1", "pve2", "pve3"]);
     desktop_files(&cluster);
@@ -1479,6 +1480,7 @@ fn next_event(events: &std::sync::mpsc::Receiver<hs_cli::tui::install::Event>) -
 }
 
 #[tokio::test(flavor = "multi_thread")]
+#[ignore = "slow (owner, 2026-10-15): run with cargo test -- --ignored"]
 async fn the_tui_worker_installs_through_the_same_session_as_the_cli() {
     use hs_cli::tui::install::{Event, Method, Mode};
     use hs_cli::tui::installing::{self, Command, Setup};
@@ -1575,4 +1577,36 @@ async fn the_tui_worker_installs_through_the_same_session_as_the_cli() {
         "{result:?}"
     );
     commands.send(Command::Cancel).unwrap();
+}
+
+#[tokio::test]
+async fn a_proxmox_template_is_no_gold_to_choose() {
+    let cluster = Cluster::new(&["pve1"]);
+    cluster.write(
+        "vms.tsv",
+        "101\tpve1\tvm-a\t\tvirtio=BC:24:11:00:00:01,bridge=vmbr0\t\n\
+         102\tpve1\tvm-b\t\tvirtio=BC:24:11:00:00:02,bridge=vmbr0\t\n\
+         105\tpve1\tbase-template\t\tvirtio=BC:24:11:00:00:05,bridge=vmbr0\t\ttemplate\n",
+    );
+    let json = run(
+        &cluster,
+        &install_argv(&["--ssh", "root@pve1", "--json"], &[]),
+        &[],
+        false,
+    )
+    .await;
+    let out = json.json();
+    let gold = out["missing"]
+        .as_array()
+        .and_then(|missing| missing.iter().find(|question| question["option"] == "--gold"))
+        .cloned()
+        .unwrap_or_else(|| panic!("no --gold question: {out}"));
+    let values: Vec<&str> = gold["choices"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|choice| choice["value"].as_str())
+        .collect();
+    assert_eq!(values, ["101", "102"], "{out}");
+    assert_eq!(cluster.changes(), 0);
 }

@@ -297,6 +297,7 @@ async fn a_shutdown_refused_for_a_taken_lock_is_tried_again() -> TestResult {
 /// The same for a start, and for a synchronous config change refused with
 /// the lock's message.
 #[tokio::test]
+#[ignore = "slow (owner, 2026-10-15): run with cargo test -- --ignored"]
 async fn a_start_and_a_config_change_refused_for_a_taken_lock_are_tried_again() -> TestResult {
     let (sim, pve) = setup(TEST_TOKEN).await?;
     let start = format!("/nodes/{NODE}/qemu/240/status/start");

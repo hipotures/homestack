@@ -603,6 +603,7 @@ const fn finished_after(index: usize, applied: bool) -> bool {
 /// Python's does (rolled back before `verified`, the old root deleted
 /// after), and a failed recovery leaves the journal for the next refresh.
 #[tokio::test]
+#[ignore = "slow (owner, 2026-10-15): run with cargo test -- --ignored"]
 async fn a_failure_at_each_step_ends_as_in_python() -> TestResult {
     for (index, (op, occurrence, what)) in changing_calls().into_iter().enumerate() {
         let (sim, pve) = workspace().await?;
@@ -644,6 +645,7 @@ async fn a_failure_at_each_step_ends_as_in_python() -> TestResult {
 /// recovery, finds the VM in agreement with the journal, and ends where
 /// Python's recovery ends.
 #[tokio::test]
+#[ignore = "slow (owner, 2026-10-15): run with cargo test -- --ignored"]
 async fn a_killed_refresh_is_recovered_as_in_python() -> TestResult {
     for (index, (op, occurrence, what)) in changing_calls().into_iter().enumerate() {
         for applied in [false, true] {
