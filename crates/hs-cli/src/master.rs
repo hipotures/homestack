@@ -184,7 +184,9 @@ impl Master {
         };
         // An ssh-agent signs outside the sandbox and would ask every attached
         // key, so ssh signs by itself unless an agent was chosen explicitly.
-        let agent_args: Vec<String> = if !prefix.is_empty()
+        // Asked in the TUI (`self.prefix`, the askpass bridge) the same: the
+        // agent would ask for the touch on its own, so the TUI never would.
+        let agent_args: Vec<String> = if (!prefix.is_empty() || !self.prefix.is_empty())
             && !self
                 .options
                 .iter()
@@ -234,6 +236,7 @@ impl Master {
         self.opened = output.code == 0;
         if !self.opened {
             return Err(AppError::new(Self::failure(
+                output.code,
                 &output.stderr,
                 system.monotonic() - started,
             )));
@@ -242,8 +245,8 @@ impl Master {
     }
 
     /// A short message for a failed master; raw ssh output is not shown.
-    fn failure(stderr: &str, elapsed: f64) -> String {
-        let kind = touch::classify_ssh_failure(255, elapsed, stderr);
+    fn failure(code: i32, stderr: &str, elapsed: f64) -> String {
+        let kind = touch::classify_ssh_failure(code, elapsed, stderr);
         let mut message = touch::message(kind).to_owned();
         if kind == touch::FailureKind::Failed
             && let Some(last) = stderr.lines().map(str::trim).rfind(|line| !line.is_empty())

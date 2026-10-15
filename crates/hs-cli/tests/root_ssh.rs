@@ -196,3 +196,26 @@ fn a_key_chosen_in_the_tui_is_signed_by_ssh_itself_not_by_the_agent() {
         assert!(argv.iter().any(|word| word == option), "{option}: {argv:?}");
     }
 }
+
+#[test]
+fn the_node_asked_in_the_tui_is_signed_by_ssh_itself_even_without_a_chosen_key() {
+    // With the agent signing, the agent asked for the touch on its own and
+    // the TUI showed no box (the owner's uninstall, 2026-10-15).
+    let fake = Arc::new(Fake::default());
+    let _root = SshRoot::open_asking(
+        fake.clone(),
+        Path::new("/home/nobody"),
+        "root@pve2",
+        None,
+        &Sounds::disabled(),
+        vec!["env".to_owned()],
+    )
+    .expect("open");
+    let argv = fake.masters.lock().expect("masters")[0].clone();
+    assert!(argv.iter().any(|word| word == "IdentityAgent=none"), "{argv:?}");
+
+    let fake = Arc::new(Fake::default());
+    let _root = open(&fake, "root@pve2", None);
+    let argv = fake.masters.lock().expect("masters")[0].clone();
+    assert!(!argv.iter().any(|word| word == "IdentityAgent=none"), "{argv:?}");
+}

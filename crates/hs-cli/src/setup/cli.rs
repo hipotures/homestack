@@ -229,16 +229,7 @@ pub fn connect_asking(
         &target.ip,
         Some(&target.name),
     );
-    if !prefix.is_empty()
-        && !master
-            .options
-            .iter()
-            .any(|option| option.to_lowercase().starts_with("identityagent"))
-    {
-        master
-            .options
-            .extend(["-o".to_owned(), "IdentityAgent=none".to_owned()]);
-    }
+    // `Master::start` lets ssh sign itself behind the bridge.
     master.prefix = prefix;
     Ok(Box::new(SshWorkspace::open(Arc::clone(system), home, master)?))
 }

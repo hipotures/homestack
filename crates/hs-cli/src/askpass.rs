@@ -47,14 +47,26 @@ pub struct Question {
     pub kind: Kind,
     pub prompt: String,
     reply: Option<Sender<Option<String>>>,
+    /// The touch: the process group of the askpass, ssh's (`setsid` made
+    /// ssh its leader), stopped when the touch is cancelled.
+    group: Option<i32>,
 }
 
 impl Question {
     /// The answer, or `None` to cancel (the askpass fails, so ssh does).
-    /// A touch takes no answer.
+    /// A touch takes no answer; cancelled, ssh is stopped, as ssh waits on
+    /// the key and not on the askpass.
     pub fn answer(mut self, answer: Option<String>) {
+        let cancelled = answer.is_none();
         if let Some(reply) = self.reply.take() {
             let _ = reply.send(answer);
+        }
+        if cancelled
+            && let Some(group) = self.group.and_then(rustix::process::Pid::from_raw)
+            // Never the TUI's own group (ssh without `setsid`).
+            && group != rustix::process::getpgrp()
+        {
+            let _ = rustix::process::kill_process_group(group, rustix::process::Signal::TERM);
         }
     }
 }
@@ -164,11 +176,16 @@ fn serve(stream: UnixStream, id: u64, events: &Sender<Event>) {
     let prompt = request["prompt"].as_str().unwrap_or_default().to_owned();
     let kind = kind_of(request["hint"].as_str(), &prompt);
     if kind == Kind::Touch {
+        let group = request["group"]
+            .as_i64()
+            .and_then(|group| i32::try_from(group).ok())
+            .filter(|group| *group > 1);
         let _ = events.send(Event::Ask(Question {
             id,
             kind,
             prompt,
             reply: None,
+            group,
         }));
         // The notice lasts until ssh stops the askpass: its end of the
         // socket closes.
@@ -186,6 +203,7 @@ fn serve(stream: UnixStream, id: u64, events: &Sender<Event>) {
             kind,
             prompt,
             reply: Some(reply),
+            group: None,
         }))
         .is_err()
     {
@@ -206,7 +224,9 @@ pub fn client(socket: &Path, hint: Option<&str>, prompt: &str) -> i32 {
     let Ok(mut stream) = UnixStream::connect(socket) else {
         return 1;
     };
-    let request = json!({"hint": hint, "prompt": prompt});
+    // The group lets the TUI stop ssh when the touch is cancelled.
+    let group = rustix::process::getpgrp().as_raw_nonzero().get();
+    let request = json!({"hint": hint, "prompt": prompt, "group": group});
     if writeln!(stream, "{request}").is_err() {
         return 1;
     }

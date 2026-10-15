@@ -634,7 +634,7 @@ pub(super) fn asking(buf: &mut Buffer, area: Rect, app: &App, asking: &AskView) 
                     (String::new(), text),
                     (timer, text.fg(palette.focus)),
                 ],
-                Vec::new(),
+                vec![Control::key("cancel Esc")],
             )
         }
         Kind::Secret => {

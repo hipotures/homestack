@@ -154,6 +154,33 @@ fn ssh_run_through_the_prefix_asks_through_the_bridge_without_a_terminal() {
 }
 
 #[test]
+fn a_cancelled_touch_stops_ssh_waiting_on_the_key() {
+    let (bridge, events) = Bridge::start(program()).expect("bridge");
+    // ssh waits on the key, not on its touch notifier.
+    let script = "SSH_ASKPASS_PROMPT=none \"$SSH_ASKPASS\" 'Confirm user presence for key ECDSA-SK SHA256:abc' &\n\
+                  sleep 30\n";
+    let mut argv = bridge.command_prefix();
+    argv.extend(["sh".to_owned(), "-c".to_owned(), script.to_owned()]);
+    let mut child = Command::new(&argv[0])
+        .args(&argv[1..])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .spawn()
+        .unwrap();
+    match next(&events) {
+        Event::Ask(question) => {
+            assert_eq!(question.kind, Kind::Touch);
+            question.answer(None);
+        }
+        Event::Ended(_) => panic!("ended before the touch"),
+    }
+    assert!(matches!(next(&events), Event::Ended(_)));
+    let started = std::time::Instant::now();
+    assert!(!child.wait().unwrap().success());
+    assert!(started.elapsed() < Duration::from_secs(10));
+}
+
+#[test]
 fn the_socket_goes_with_the_bridge() {
     let (bridge, _events) = Bridge::start(program()).expect("bridge");
     let socket = bridge.socket().to_path_buf();

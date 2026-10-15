@@ -330,6 +330,8 @@ pub enum FailureKind {
     Absent,
     NotConfirmed,
     Denied,
+    /// ssh was stopped by a signal: the touch was cancelled in the TUI.
+    Cancelled,
     Failed,
 }
 
@@ -340,6 +342,7 @@ pub const fn message(kind: FailureKind) -> &'static str {
         FailureKind::Absent => "Security key not found; plug it in and retry.",
         FailureKind::NotConfirmed => "Key touch was not confirmed in time.",
         FailureKind::Denied => "The server rejected the key.",
+        FailureKind::Cancelled => "Cancelled before the key was touched.",
         FailureKind::Failed => "SSH authentication failed.",
     }
 }
@@ -348,7 +351,11 @@ pub const fn message(kind: FailureKind) -> &'static str {
 /// touch runs to ssh's own timeout and then reports a signing failure. With
 /// several keys an unconfirmed touch wins.
 #[must_use]
-pub fn classify_ssh_failure(_code: i32, elapsed: f64, stderr: &str) -> FailureKind {
+pub fn classify_ssh_failure(code: i32, elapsed: f64, stderr: &str) -> FailureKind {
+    // No exit code: a signal stopped ssh.
+    if code == -1 {
+        return FailureKind::Cancelled;
+    }
     let text = stderr.to_lowercase();
     if text.contains("signing failed") && elapsed >= TIMEOUT_SECONDS - 5.0 {
         return FailureKind::NotConfirmed;

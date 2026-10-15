@@ -231,10 +231,12 @@ fn failure_classes_follow_measured_ssh_behaviour() {
     assert_eq!(c(255, 35.8, mixed), FailureKind::NotConfirmed);
     assert_eq!(c(255, 0.5, mixed), FailureKind::Absent);
     assert_eq!(c(255, 1.0, "Connection refused"), FailureKind::Failed);
+    assert_eq!(c(-1, 2.0, ""), FailureKind::Cancelled);
     for kind in [
         FailureKind::Absent,
         FailureKind::NotConfirmed,
         FailureKind::Denied,
+        FailureKind::Cancelled,
         FailureKind::Failed,
     ] {
         assert!(!touch::message(kind).is_empty());

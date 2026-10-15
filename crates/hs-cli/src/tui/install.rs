@@ -186,6 +186,8 @@ impl AskView {
             (Kind::Secret, KeyCode::Esc) => return Some(None),
             (Kind::HostKey, KeyCode::Enter | KeyCode::Char('t')) => return Some(Some("yes".to_owned())),
             (Kind::HostKey, KeyCode::Esc) => return Some(Some("no".to_owned())),
+            // Cancelled, ssh is stopped (`askpass::Question::answer`).
+            (Kind::Touch, KeyCode::Esc) => return Some(None),
             _ => {}
         }
         None

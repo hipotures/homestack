@@ -181,6 +181,7 @@ fn ssh_asks_for_a_touch_a_pin_and_a_host_key_in_a_box() {
     let text = screen(&render(&fixture.app, 120, 36));
     assert!(text.contains("Touch your security key now."), "{text}");
     assert!(text.contains("SHA256:abc"), "{text}");
+    assert!(text.contains("cancel Esc"), "{text}");
     fixture.app.ask_ended(1);
     let text = screen(&render(&fixture.app, 120, 36));
     assert!(!text.contains("Touch your security key"), "{text}");
@@ -589,4 +590,21 @@ fn a_click_chooses_a_setting_and_ticks_a_choice() {
     let (x, y) = tui_fixture::position(&buf, "old-gold");
     fixture.app.mouse(click(x, y));
     assert_eq!(fixture.app.install.as_ref().unwrap().settings[1].picked, [1]);
+}
+
+#[test]
+fn esc_cancels_the_touch_of_the_security_key() {
+    let mut fixture = app();
+    fixture.app.open_install(Mode::Uninstall, false);
+    type_text(&mut fixture.app, "root@pve2");
+    press(&mut fixture.app, KeyCode::Enter);
+    fixture.app.ask(AskView::new(
+        1,
+        Kind::Touch,
+        "Confirm user presence for key ECDSA-SK SHA256:abc",
+    ));
+    assert_eq!(press(&mut fixture.app, KeyCode::Esc), Some(Request::Answer(None)));
+    assert!(fixture.app.asking.is_none());
+    // The install screen stays; the failure brings it back to the access.
+    assert!(fixture.app.install.is_some());
 }

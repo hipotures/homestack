@@ -819,9 +819,8 @@ pub async fn run(ctx: &mut Context) -> Result<i32, AppError> {
                     let mut view = AskView::new(question.id, question.kind, &question.prompt);
                     view.key_names = crate::identity::key_names(&ctx.home, &question.prompt);
                     app.ask(view);
-                    if question.kind != crate::askpass::Kind::Touch {
-                        installing.pending = Some(question);
-                    }
+                    // A touch too: Esc cancels it.
+                    installing.pending = Some(question);
                 }
                 Update::AskEnded(id) => {
                     app.ask_ended(id);
