@@ -71,6 +71,7 @@ fn found() -> Found {
 fn checked(mode: Mode) -> tui_fixture::Fixture {
     let mut fixture = app();
     fixture.app.open_install(mode, false);
+    press(&mut fixture.app, KeyCode::Down);
     type_text(&mut fixture.app, "root@pve2");
     assert!(matches!(
         press(&mut fixture.app, KeyCode::Enter),
@@ -127,6 +128,7 @@ fn the_menu_opens_install_and_uninstall_and_esc_goes_back() {
 fn connect_sends_the_method_and_the_host_and_herdr_lists_its_tabs() {
     let mut fixture = app();
     fixture.app.open_install(Mode::Install, false);
+    press(&mut fixture.app, KeyCode::Down);
     type_text(&mut fixture.app, "root@pve2");
     match press(&mut fixture.app, KeyCode::Enter) {
         Some(Request::Install(Command::Connect { method, target, .. })) => {
@@ -139,8 +141,7 @@ fn connect_sends_the_method_and_the_host_and_herdr_lists_its_tabs() {
 
     let mut fixture = app();
     fixture.app.open_install(Mode::Install, false);
-    // Tab to the method, then → for Herdr: its tabs are asked for.
-    press(&mut fixture.app, KeyCode::Tab);
+    // The method is focused first: → for Herdr asks for its tabs.
     assert_eq!(press(&mut fixture.app, KeyCode::Right), Some(Request::HerdrTabs));
     fixture
         .app
@@ -159,6 +160,7 @@ fn connect_sends_the_method_and_the_host_and_herdr_lists_its_tabs() {
 fn a_connection_that_fails_says_why_and_stays_at_access() {
     let mut fixture = app();
     fixture.app.open_install(Mode::Install, false);
+    press(&mut fixture.app, KeyCode::Down);
     type_text(&mut fixture.app, "root@pve2");
     press(&mut fixture.app, KeyCode::Enter);
     fixture
@@ -464,6 +466,7 @@ fn the_log_panel_shows_under_the_install_at_120_by_36_only() {
 fn the_access_that_connected_is_kept_for_the_next_install_screen() {
     let mut fixture = app();
     fixture.app.open_install(Mode::Install, false);
+    press(&mut fixture.app, KeyCode::Down);
     type_text(&mut fixture.app, "root@pve1.example.net");
     press(&mut fixture.app, KeyCode::Enter);
     fixture.app.install_event(Event::Connected(found()));
@@ -480,6 +483,7 @@ fn the_access_that_connected_is_kept_for_the_next_install_screen() {
 fn the_host_is_edited_where_the_cursor_is() {
     let mut fixture = app();
     fixture.app.open_install(Mode::Install, false);
+    press(&mut fixture.app, KeyCode::Down);
     type_text(&mut fixture.app, "pve1.example.net");
     press(&mut fixture.app, KeyCode::Home);
     type_text(&mut fixture.app, "root@");
@@ -635,6 +639,7 @@ fn a_click_chooses_a_setting_and_ticks_a_choice() {
 fn the_connection_is_a_box_with_a_spinner_and_esc_cancels_it() {
     let mut fixture = app();
     fixture.app.open_install(Mode::Uninstall, false);
+    press(&mut fixture.app, KeyCode::Down);
     type_text(&mut fixture.app, "root@pve2");
     press(&mut fixture.app, KeyCode::Enter);
     fixture.app.install_event(Event::Busy(
@@ -670,6 +675,7 @@ fn the_connection_is_a_box_with_a_spinner_and_esc_cancels_it() {
 fn esc_on_the_touch_cancels_the_connection_under_it() {
     let mut fixture = app();
     fixture.app.open_install(Mode::Uninstall, false);
+    press(&mut fixture.app, KeyCode::Down);
     type_text(&mut fixture.app, "root@pve2");
     press(&mut fixture.app, KeyCode::Enter);
     fixture.app.ask(AskView::new(
@@ -698,6 +704,7 @@ fn esc_on_the_touch_cancels_the_connection_under_it() {
 fn a_failed_connection_is_a_box_closed_by_enter_or_esc() {
     let mut fixture = app();
     fixture.app.open_install(Mode::Uninstall, false);
+    press(&mut fixture.app, KeyCode::Down);
     type_text(&mut fixture.app, "root@pve2");
     press(&mut fixture.app, KeyCode::Enter);
     fixture
@@ -715,4 +722,32 @@ fn a_failed_connection_is_a_box_closed_by_enter_or_esc() {
     assert_eq!(install.stage, Stage::Access);
     assert_eq!(press(&mut fixture.app, KeyCode::Esc), None);
     assert!(fixture.app.install.is_none());
+}
+
+#[test]
+fn a_herdr_access_that_connected_is_chosen_again_with_its_tab() {
+    let mut fixture = app();
+    assert_eq!(fixture.app.open_install(Mode::Install, false), None);
+    assert_eq!(fixture.app.install.as_ref().unwrap().field, 2, "the method first");
+    assert_eq!(press(&mut fixture.app, KeyCode::Right), Some(Request::HerdrTabs));
+    let tabs = vec![
+        ("PVE/pve1".to_owned(), "root@pve1:~#".to_owned()),
+        ("PVE/pve2".to_owned(), "root@pve2:~#".to_owned()),
+    ];
+    fixture.app.set_herdr_tabs(tabs.clone());
+    press(&mut fixture.app, KeyCode::Down);
+    press(&mut fixture.app, KeyCode::Right);
+    match press(&mut fixture.app, KeyCode::Enter) {
+        Some(Request::Install(Command::Connect { method, target })) => {
+            assert_eq!((method, target.as_str()), (Method::Herdr, "PVE/pve2"));
+        }
+        other => panic!("{other:?}"),
+    }
+    fixture.app.install_event(Event::Connected(found()));
+    fixture.app.install = None;
+
+    assert_eq!(fixture.app.open_install(Mode::Install, false), Some(Request::HerdrTabs));
+    fixture.app.set_herdr_tabs(tabs);
+    let install = fixture.app.install.as_ref().unwrap();
+    assert_eq!((install.method, install.tab), (Method::Herdr, 1));
 }

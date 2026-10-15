@@ -217,7 +217,7 @@ pub struct Install {
     /// Herdr tabs: name and title.
     pub tabs: Vec<(String, String)>,
     pub tab: usize,
-    /// Access: 0 the host (or tab), 2 the method.
+    /// Access: 2 the method (first), 0 the host (or tab).
     pub field: usize,
     /// What is being waited for.
     pub busy: Option<String>,
@@ -260,7 +260,7 @@ impl Install {
             caret: 0,
             tabs: Vec::new(),
             tab: 0,
-            field: 0,
+            field: 2,
             busy: None,
             error: None,
             failed: None,

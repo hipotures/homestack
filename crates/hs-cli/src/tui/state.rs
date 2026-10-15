@@ -283,15 +283,22 @@ impl App {
     }
 
     /// Open the install screen; `first_start` when there is no `client.toml`.
-    pub fn open_install(&mut self, mode: super::install::Mode, first_start: bool) {
+    /// The access that connected last (tui.toml) is chosen again; for Herdr
+    /// its tabs are to be read.
+    pub fn open_install(&mut self, mode: super::install::Mode, first_start: bool) -> Option<Request> {
         self.overlay = None;
         let mut install = super::install::Install::new(mode, first_start);
-        // The last access that connected (tui.toml).
-        if let Some(host) = self.preferences.table.get("install_host").and_then(toml::Value::as_str) {
+        let kept = |key: &str| self.preferences.table.get(key).and_then(toml::Value::as_str);
+        if let Some(host) = kept("install_host") {
             host.clone_into(&mut install.host);
             install.caret = install.host.chars().count();
         }
+        let herdr = kept("install_method") == Some("herdr");
+        if herdr {
+            install.method = super::install::Method::Herdr;
+        }
         self.install = Some(install);
+        herdr.then_some(Request::HerdrTabs)
     }
 
     /// What the install worker tells; it all goes to the log too.
@@ -338,8 +345,11 @@ impl App {
 
     pub fn set_herdr_tabs(&mut self, tabs: Vec<(String, String)>) {
         if let Some(install) = self.install.as_mut() {
+            let kept = self.preferences.table.get("install_tab").and_then(toml::Value::as_str);
+            install.tab = kept
+                .and_then(|kept| tabs.iter().position(|(name, _)| name == kept))
+                .unwrap_or(0);
             install.tabs = tabs;
-            install.tab = 0;
         }
     }
 
@@ -567,11 +577,20 @@ impl App {
     /// Keep the access that connected for the next install screen.
     fn keep_access(&mut self) {
         let Some(install) = &self.install else { return };
-        if install.method != super::install::Method::Ssh {
-            return;
-        }
         let mut table = self.preferences.table.clone();
-        table.insert("install_host".to_owned(), toml::Value::String(install.host.clone()));
+        let method = match install.method {
+            super::install::Method::Ssh => {
+                table.insert("install_host".to_owned(), toml::Value::String(install.host.clone()));
+                "ssh"
+            }
+            super::install::Method::Herdr => {
+                if let Some((name, _)) = install.tabs.get(install.tab) {
+                    table.insert("install_tab".to_owned(), toml::Value::String(name.clone()));
+                }
+                "herdr"
+            }
+        };
+        table.insert("install_method".to_owned(), toml::Value::String(method.to_owned()));
         match self.preferences.write(&table) {
             Ok(()) => self.preferences.table = table,
             Err(error) => {
@@ -1038,7 +1057,7 @@ impl App {
                         } else {
                             super::install::Mode::Uninstall
                         };
-                        self.open_install(mode, false);
+                        return self.open_install(mode, false);
                     }
                     4 => {
                         let current = THEMES.iter().position(|name| *name == self.palette.name).unwrap_or(0);

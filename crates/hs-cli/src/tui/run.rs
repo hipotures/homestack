@@ -647,7 +647,12 @@ pub async fn run(ctx: &mut Context) -> Result<i32, AppError> {
     app.set_keys(public_keys(&ctx.home));
     let first_start = !config::default_path(&ctx.home, ctx.config_home.as_deref()).exists();
     let mut connection = if first_start {
-        app.open_install(Mode::Install, true);
+        if app.open_install(Mode::Install, true) == Some(Request::HerdrTabs) {
+            match crate::root_herdr::tabs(ctx.system.as_ref()) {
+                Ok(tabs) => app.set_herdr_tabs(tabs.into_iter().map(|tab| (tab.name, tab.title)).collect()),
+                Err(error) => app.log(&clock.now(), &error.0),
+            }
+        }
         app.log(&clock.now(), "no client.toml: the install screen");
         Connection::none()
     } else {
