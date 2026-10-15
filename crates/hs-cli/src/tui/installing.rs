@@ -32,6 +32,12 @@ pub enum Command {
         answers: Vec<Answer>,
         domain: Option<String>,
     },
+    /// Read the cluster's choices again (F5, rescan cluster), keeping these
+    /// answers and this domain.
+    Rescan {
+        answers: Vec<Answer>,
+        domain: Option<String>,
+    },
     /// Apply the last review.
     Apply,
     /// Let root go; the worker ends.
@@ -129,6 +135,18 @@ fn work(setup: &Setup, commands: &Receiver<Command>, tell: &(dyn Fn(Event) + Sen
                 }
                 Err(error) => tell(Event::Failed(error.0)),
             },
+            Command::Rescan { answers, domain } => {
+                let Some(session) = session.as_mut() else { continue };
+                tell(Event::Busy("Rescanning the cluster…".to_owned()));
+                match session.rescan(&answers, domain.as_deref()) {
+                    Ok(()) => {
+                        let (found, first) = survey(setup, session, tell);
+                        kept = first;
+                        tell(Event::Connected(found));
+                    }
+                    Err(error) => tell(Event::Failed(error.0)),
+                }
+            }
             Command::Review { answers, domain } => {
                 let Some(session) = session.as_mut() else { continue };
                 let reused = kept
@@ -185,6 +203,13 @@ fn connect(
         },
         Arc::clone(&setup.servers),
     )?;
+    let (found, first) = survey(setup, &mut session, tell);
+    Ok((session, found, first))
+}
+
+/// What the screen shows of a session: the check, the settings and the
+/// domain, with the plan of the kept choices for the install.
+fn survey(setup: &Setup, session: &mut Session, tell: &(dyn Fn(Event) + Send + Sync)) -> (Found, Option<Kept>) {
     let access = session.access.clone();
     let mut first = None;
     let describe = session.describe();
@@ -249,7 +274,7 @@ fn connect(
         settings,
         domain: (setup.mode == Mode::Install).then(|| session.draft_domain.clone()),
     };
-    Ok((session, found, first))
+    (found, first)
 }
 
 /// The check's lines of a first plan made from the kept choices.

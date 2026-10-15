@@ -241,6 +241,24 @@ fn the_check_shows_what_is_there_and_what_the_install_adds() {
 }
 
 #[test]
+fn f5_rescans_the_cluster_with_the_choices_made() {
+    let mut fixture = checked(Mode::Install);
+    let text = screen(&render(&fixture.app, 120, 36));
+    assert!(text.contains("F5       rescan cluster"), "{text}");
+    match press(&mut fixture.app, KeyCode::F(5)) {
+        Some(Request::Install(Command::Rescan { answers, domain })) => {
+            assert_eq!(answers, [Answer::Picked(vec![0]), Answer::Picked(vec![0])]);
+            assert_eq!(domain.as_deref(), Some("hs.example.net"));
+        }
+        other => panic!("{other:?}"),
+    }
+    let text = screen(&render(&fixture.app, 120, 36));
+    assert!(text.contains("Rescanning the cluster"), "{text}");
+    fixture.app.install_event(Event::Connected(found()));
+    assert_eq!(stage(&fixture.app), Stage::Settings);
+}
+
+#[test]
 fn the_chooser_is_as_wide_as_its_choices_on_a_wide_screen() {
     let fixture = checked(Mode::Install);
     let text = screen(&render(&fixture.app, 200, 50));

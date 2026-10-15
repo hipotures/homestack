@@ -353,6 +353,8 @@ impl Install {
                 self.error = None;
                 self.settings.clone_from(&found.settings);
                 self.domain.clone_from(&found.domain);
+                // A rescan may offer a row less.
+                self.row = self.row.min(self.rows().saturating_sub(1));
                 self.found = Some(found);
                 // The install goes straight to its settings (the check stays
                 // in the log and one Esc back); the uninstall shows the check.
@@ -533,6 +535,14 @@ impl Install {
         }
     }
 
+    /// The settings as answers, in their order.
+    fn answers(&self) -> Vec<Answer> {
+        self.settings
+            .iter()
+            .map(|setting| Answer::Picked(setting.picked.clone()))
+            .collect()
+    }
+
     fn settings_key(&mut self, code: KeyCode) -> (bool, Option<Request>) {
         // ? opens the help (a domain has no ?); any key closes it.
         if self.help {
@@ -552,15 +562,23 @@ impl Install {
                 self.stage = Stage::Review;
                 self.reviewed = false;
                 self.busy = Some("Reading the plan…".to_owned());
-                let answers = self
-                    .settings
-                    .iter()
-                    .map(|setting| Answer::Picked(setting.picked.clone()))
-                    .collect();
                 return (
                     false,
                     Some(Request::Install(Command::Review {
-                        answers,
+                        answers: self.answers(),
+                        domain: self.domain.clone(),
+                    })),
+                );
+            }
+            // Rescan cluster: what changed in Proxmox since the connection
+            // (a VM taken out of its pool) is offered, the choices kept.
+            KeyCode::F(5) => {
+                self.chooser = false;
+                self.busy = Some("Rescanning the cluster…".to_owned());
+                return (
+                    false,
+                    Some(Request::Install(Command::Rescan {
+                        answers: self.answers(),
                         domain: self.domain.clone(),
                     })),
                 );

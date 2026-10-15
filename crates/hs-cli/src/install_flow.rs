@@ -117,6 +117,44 @@ impl Session {
         self.root.describe()
     }
 
+    /// Read the cluster's choices again (F5, rescan cluster), keeping what
+    /// was picked where it is still offered; a guest newly found by its
+    /// tags comes ticked, as on the first read. `domain` is the one typed.
+    pub fn rescan(&mut self, answers: &[Answer], domain: Option<&str>) -> Result<(), AppError> {
+        let mut questions = hs_install::questions(self.root.as_mut(), &self.access, &self.settings).map_err(failure)?;
+        for question in &mut questions {
+            let Some((old, Answer::Picked(picked))) = self
+                .questions
+                .iter()
+                .zip(answers)
+                .find(|(old, _)| old.option == question.option)
+            else {
+                continue;
+            };
+            let kept: Vec<&str> = picked
+                .iter()
+                .filter_map(|index| old.choices.get(*index))
+                .map(|choice| choice.value.as_str())
+                .collect();
+            let new_ticked = question.option == hs_install::discover::OPTION;
+            question.defaults = question
+                .choices
+                .iter()
+                .enumerate()
+                .filter(|(_, choice)| {
+                    kept.contains(&choice.value.as_str())
+                        || new_ticked && !old.choices.iter().any(|known| known.value == choice.value)
+                })
+                .map(|(index, _)| index)
+                .collect();
+        }
+        self.questions = questions;
+        if let Some(domain) = domain {
+            domain.clone_into(&mut self.draft_domain);
+        }
+        Ok(())
+    }
+
     /// The plan of `settings` as they are. Nothing is changed.
     pub fn plan(&mut self, settings: &Settings) -> Result<Plan, InstallError> {
         hs_install::make_plan(self.root.as_mut(), &self.access, self.command, settings)

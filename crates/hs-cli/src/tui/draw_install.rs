@@ -103,6 +103,18 @@ pub(super) fn screen(buf: &mut Buffer, area: Rect, app: &App, install: &Install)
             if install.help {
                 settings_help(buf, inner, app, install);
             }
+            // F5: the rescan in the connection's box.
+            if let Some(busy) = &install.busy {
+                let spinner = SPINNER[install.frame % SPINNER.len()];
+                let text = text_style(palette);
+                message_box(
+                    buf,
+                    inner,
+                    app,
+                    "rescan cluster",
+                    &[(format!("{spinner} {busy}"), text)],
+                );
+            }
         }
         Stage::Review => review(buf, inner, app, install),
         Stage::Run => run(buf, inner, app, install),
@@ -378,6 +390,7 @@ fn settings(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
         ("Space", "tick in the box"),
         ("letters", "the server domain"),
         ("Enter", "review"),
+        ("F5", "rescan cluster"),
         ("?", "help: what each one is"),
     ];
     for (row, (key, what)) in help.iter().enumerate() {

@@ -1686,3 +1686,75 @@ async fn a_proxmox_template_is_no_gold_to_choose() {
     assert_eq!(values, ["101", "102"], "{out}");
     assert_eq!(cluster.changes(), 0);
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_rescan_offers_a_vm_taken_out_of_its_pool_and_keeps_the_choices() {
+    use hs_cli::tui::install::{Event, Method, Mode};
+    use hs_cli::tui::installing::{self, Command, Setup};
+    use hs_cli::wizard::Answer;
+
+    let cluster = Cluster::new(&["pve1"]);
+    two_disk_storages(&cluster);
+    let setup = Setup {
+        mode: Mode::Install,
+        system: Arc::new(cluster.system()),
+        home: cluster.home.clone(),
+        token_dir: cluster.token_dir(),
+        client_path: cluster.token_dir().join("client.toml"),
+        servers: Arc::new(FakeServers::resolving(&[])) as Arc<dyn Servers>,
+        sounds: hs_cli::touch::Sounds::disabled(),
+        ssh_prefix: Vec::new(),
+        stop: Arc::default(),
+        server_image: None,
+        handle: tokio::runtime::Handle::current(),
+    };
+    let (commands, receiver) = std::sync::mpsc::channel();
+    let (sender, events) = std::sync::mpsc::channel();
+    installing::spawn(setup, receiver, move |event| {
+        let _ = sender.send(event);
+    });
+    commands
+        .send(Command::Connect {
+            method: Method::Ssh,
+            target: "root@pve1".to_owned(),
+        })
+        .unwrap();
+    let Event::Connected(found) = next_event(&events) else {
+        panic!("not connected");
+    };
+    assert!(
+        found.settings.iter().all(|setting| setting.title != "Back into pools"),
+        "{found:?}"
+    );
+
+    // A workspace leaves its pool in Proxmox; the screen still has the
+    // first read. Both disk storages ticked, a domain typed.
+    let vms = cluster.read("vms.tsv");
+    cluster.write("vms.tsv", &format!("{vms}240\tpve1\tws\thomestack-ws\t\t\n"));
+    let mut answers: Vec<Answer> = found
+        .settings
+        .iter()
+        .map(|setting| Answer::Picked(setting.picked.clone()))
+        .collect();
+    answers[0] = Answer::Picked(vec![0, 1]);
+    commands
+        .send(Command::Rescan {
+            answers,
+            domain: Some("typed.example.net".to_owned()),
+        })
+        .unwrap();
+    let Event::Connected(found) = next_event(&events) else {
+        panic!("no rescan");
+    };
+    let adopt = found
+        .settings
+        .iter()
+        .find(|setting| setting.title == "Back into pools")
+        .unwrap_or_else(|| panic!("VM 240 not offered: {found:?}"));
+    assert_eq!(adopt.choices[0].0, "240");
+    assert_eq!(adopt.picked, [0], "a VM found is ticked");
+    assert_eq!(found.settings[0].picked, [0, 1], "the choice was not kept");
+    assert_eq!(found.domain.as_deref(), Some("typed.example.net"));
+    assert_eq!(cluster.changes(), 0, "rescanning changed something");
+    commands.send(Command::Cancel).unwrap();
+}

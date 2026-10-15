@@ -188,7 +188,10 @@ with the owner's approval.
   `homestack-service`. Gold is not among them (it has its own setting). A
   VMID that cannot be adopted stops the install before any change. The
   uninstall names each guest it takes out that no tag brings back. What was
-  ticked is not kept in the draft of the form.
+  ticked is not kept in the draft of the form. The choices are read once,
+  at the connection; F5 in the TUI's settings (rescan cluster) reads them
+  again, keeping what is ticked and the domain typed, a guest newly found
+  ticked.
 - The fake Proxmox (`fake-pve`) learned `pvesh set ... --tags`.
 - **Revised the same day (owner): one form instead of steps.** The installer
   shows one screen with every setting and its value: how root is reached,
