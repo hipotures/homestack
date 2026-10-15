@@ -1220,6 +1220,9 @@ async fn the_tui_worker_installs_through_the_same_session_as_the_cli() {
 
     let cluster = Cluster::new(&["pve1", "pve2", "pve3"]);
     desktop_files(&cluster);
+    // A workspace in no pool: the review names it.
+    let vms = cluster.read("vms.tsv");
+    cluster.write("vms.tsv", &format!("{vms}240\tpve1\tws-one\thomestack-ws\t\t\n"));
     let (url, ca_pem, _sim) = status_server().await;
     let ca = cluster.token_dir().join("server-ca.pem");
     std::fs::write(&ca, ca_pem).expect("ca");
@@ -1285,6 +1288,12 @@ async fn the_tui_worker_installs_through_the_same_session_as_the_cli() {
         Event::Reviewed { sections, problems } => {
             assert!(problems.is_empty(), "{problems:?}");
             assert!(sections.iter().any(|(heading, _)| heading == "Servers"), "{sections:?}");
+            assert!(
+                sections
+                    .iter()
+                    .any(|(_, lines)| lines.iter().any(|line| line == "put VM 240 (ws-one) in pool homestack")),
+                "{sections:?}"
+            );
             // Only what changes: no choices repeated, no notes (the owner,
             // 2026-10-15).
             for (heading, lines) in &sections {

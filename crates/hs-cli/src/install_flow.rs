@@ -369,12 +369,9 @@ fn grouped_changes(plan: &Plan, home: &std::path::Path) -> Vec<(String, Vec<Stri
                     ["role", "delete", role] => roles.entry("removed").or_default().push((*role).to_owned()),
                     ["pool", "add", pool, ..] => pools.entry("new").or_default().push((*pool).to_owned()),
                     ["pool", "delete", pool] => pools.entry("removed").or_default().push((*pool).to_owned()),
-                    ["pool", "modify", pool, "--vms", vmid, rest @ ..] => {
-                        let line = if rest.contains(&"--delete") {
-                            format!("take VM {vmid} out of pool {pool}")
-                        } else {
-                            format!("put VM {vmid} in pool {pool}")
-                        };
+                    ["pool", "modify", ..] => {
+                        // The step says it with the VM's name.
+                        let line = step.description.trim_end_matches(", as its tags say").to_owned();
                         // Gold's pool is homestack-gold, or the test pool for
                         // the test part's Gold.
                         if step.description.contains("Gold ") {
