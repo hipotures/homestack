@@ -1123,7 +1123,7 @@ pub(super) fn wrap(line: &str, width: usize) -> Vec<String> {
 /// The box of an action (mockups 12–14): its stages in the top border, its
 /// buttons in the bottom border.
 fn action_box(buf: &mut Buffer, area: Rect, app: &App, action: &Action) {
-    use super::action::{Input, PlanFocus, Stage, StepState};
+    use super::action::{Input, Kind, PlanFocus, Stage, StepState};
     let palette = &app.palette;
     let text = text_style(palette);
     let muted = text.fg(palette.muted);
@@ -1224,6 +1224,17 @@ fn action_box(buf: &mut Buffer, area: Rect, app: &App, action: &Action) {
                 }
                 field_rows.push((lines.len(), index));
                 lines.push((format!("{:<11}{value}", field.label), style));
+                // What the pool gives, shown and not edited.
+                if action.kind == Kind::New && field.label == "Pool" {
+                    let vmid = app.free_vmid();
+                    let ip = vmid.and_then(|vmid| app.address_of(vmid));
+                    let shown = |value: Option<String>| value.unwrap_or_else(|| "—".to_owned());
+                    lines.push((
+                        format!("{:<11}{}", "VMID", shown(vmid.map(|vmid| vmid.to_string()))),
+                        muted,
+                    ));
+                    lines.push((format!("{:<11}{}", "IP", shown(ip.map(|ip| ip.to_string()))), muted));
+                }
             }
             lines.push((String::new(), text));
             if let Some(field) = form.fields.get(form.focus) {

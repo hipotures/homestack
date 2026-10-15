@@ -196,6 +196,8 @@ pub struct App {
     pub before_setup: Option<Shown>,
     /// The desktop's public keys for add key (`~/.ssh/….pub`).
     pub keys: Vec<String>,
+    /// The server's workspace pool (`/v1/capabilities`), for new.
+    pub pool: Option<String>,
 }
 
 impl App {
@@ -241,6 +243,7 @@ impl App {
             install: None,
             asking: None,
             keys: Vec::new(),
+            pool: None,
             setup: None,
             before_setup: None,
         })

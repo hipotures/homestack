@@ -7,10 +7,13 @@ use serde_json::{Value, json};
 
 use super::action::{Action, Decision, Field, Form, Input, Kind, PlanFocus, Progress, Stage, Start};
 use super::state::{App, Request};
-use crate::app::{is_vmid, valid_name};
+use crate::app::valid_name;
 
 const DEFAULT: &str = "default";
 const EXISTING_KEYS: &str = "the keys already in sshkeys";
+/// The VMIDs of the workspaces' default pool (owner's decision of
+/// 2026-10-14: 101010–101199), the only pool for now.
+const POOL_VMIDS: (u32, u32) = (101_010, 101_199);
 
 impl App {
     /// The desktop's public keys, offered by add key.
@@ -31,9 +34,19 @@ impl App {
         storages
     }
 
-    /// The first VMID of the workspaces' range that no workspace and not
-    /// Gold has (owner's decision of 2026-10-14: 101010–101199).
-    fn free_vmid(&self) -> String {
+    /// The pools a new workspace can go to: the server's workspace pool,
+    /// the default (its name once `/v1/capabilities` told it).
+    fn pools(&self) -> Vec<String> {
+        vec![
+            self.pool
+                .as_ref()
+                .map_or_else(|| DEFAULT.to_owned(), |pool| format!("{DEFAULT}: {pool}")),
+        ]
+    }
+
+    /// The VMID a new workspace gets: the first of the pool's range that no
+    /// workspace and not Gold has.
+    pub(super) fn free_vmid(&self) -> Option<u32> {
         let used: Vec<u32> = self
             .status
             .iter()
@@ -45,10 +58,24 @@ impl App {
                     .chain(status.gold.as_ref().map(|gold| gold.vmid))
             })
             .collect();
-        (101_010..=101_199)
-            .find(|vmid| !used.contains(vmid))
-            .map(|vmid| vmid.to_string())
-            .unwrap_or_default()
+        (POOL_VMIDS.0..=POOL_VMIDS.1).find(|vmid| !used.contains(vmid))
+    }
+
+    /// The address of `vmid` (`.101.10` for 101010) under the first two
+    /// octets of the addresses the server gives Gold and the workspaces.
+    pub(super) fn address_of(&self, vmid: u32) -> Option<std::net::Ipv4Addr> {
+        let status = self.status.as_ref()?;
+        let known: std::net::Ipv4Addr = status
+            .gold
+            .iter()
+            .chain(&status.workspaces)
+            .find_map(|entry| entry.ip.as_deref()?.split('/').next()?.parse().ok())?;
+        let [first, second, _, _] = known.octets();
+        let third = u8::try_from(vmid / 1000).ok()?;
+        let fourth = u8::try_from(vmid % 1000)
+            .ok()
+            .filter(|fourth| (1..=254).contains(fourth))?;
+        Some(std::net::Ipv4Addr::new(first, second, third, fourth))
     }
 
     /// The size in GiB of the selected workspace's root or home disk, from
@@ -120,10 +147,10 @@ impl App {
                 let mut storages = vec![format!("{DEFAULT}: {}", self.storages_on(&storage_node).join(", "))];
                 storages.extend(self.storages_on(&storage_node));
                 vec![
-                    Field::text(
-                        "VMID",
-                        &self.free_vmid(),
-                        "The first free VMID of the workspaces (101010-101199); it is also the address: 101010 is .101.10.",
+                    Field::choice(
+                        "Pool",
+                        self.pools(),
+                        "The workspace's VMID and address follow from its pool.",
                     ),
                     Field::text(
                         "Name",
@@ -218,17 +245,19 @@ impl App {
         let mut key_file = None;
         let parameters: Value = match action.kind {
             Kind::New => {
-                let id = value("VMID");
-                if !is_vmid(&id) {
-                    return Err("The VMID is a number, e.g. 213.".to_owned());
-                }
+                let Some(id) = self.free_vmid() else {
+                    return Err(format!(
+                        "No VMID of the pool is free ({}-{}).",
+                        POOL_VMIDS.0, POOL_VMIDS.1
+                    ));
+                };
                 let name = value("Name");
                 if !valid_name(&name) {
                     return Err(format!(
                         "Invalid name {name:?}: the first character is a letter, then letters, digits, '.' or '-'."
                     ));
                 }
-                let mut parameters = json!({"vmid": id.parse::<u64>().unwrap_or(0), "name": name});
+                let mut parameters = json!({"vmid": id, "name": name});
                 for (label, key) in [("Node", "node"), ("Storage", "storage")] {
                     let chosen = value(label);
                     if !chosen.starts_with(DEFAULT) && !chosen.is_empty() {

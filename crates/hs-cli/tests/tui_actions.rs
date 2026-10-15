@@ -194,9 +194,13 @@ fn new_opens_a_form_and_its_values_go_to_the_plan() {
     assert_eq!(press(&mut fixture.app, KeyCode::Char('n')), None);
     let text = screen(&render(&fixture.app, 120, 36));
     assert!(text.contains("┐new workspace┌") && text.contains("┐form┌"), "{text}");
-    // The VMID is the first free one of the workspaces' range.
-    assert!(text.contains("[ 101010"), "{text}");
-    for label in ["VMID", "Name", "Node", "Storage", "Home size"] {
+    // The pool is chosen; its first free VMID and that VMID's address are
+    // only shown.
+    assert!(text.contains("Pool       ‹ default ›"), "{text}");
+    assert!(text.contains("VMID       101010"), "{text}");
+    assert!(text.contains("IP         10.0.101.10"), "{text}");
+    assert!(!text.contains("[ 101010"), "{text}");
+    for label in ["Name", "Node", "Storage", "Home size"] {
         assert!(text.contains(label), "{label}: {text}");
     }
     press(&mut fixture.app, KeyCode::Tab);
@@ -521,4 +525,13 @@ fn the_focused_button_of_a_plan_is_an_accent_bar() {
     let buf = render(&fixture.app, 120, 36);
     let (x, y) = position(&buf, "cancel esc");
     assert_eq!(buf[(x + 1, y)].bg, palette.focus, "cancel has it now");
+}
+
+#[test]
+fn new_shows_the_servers_pool_as_the_default() {
+    let mut fixture = app();
+    fixture.app.pool = Some("homestack".to_owned());
+    press(&mut fixture.app, KeyCode::Char('n'));
+    let text = screen(&render(&fixture.app, 120, 36));
+    assert!(text.contains("Pool       ‹ default: homestack ›"), "{text}");
 }
