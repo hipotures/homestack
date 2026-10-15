@@ -576,7 +576,9 @@ impl App {
 
     /// Handle one key.
     pub fn key(&mut self, key: KeyEvent) -> Option<Request> {
-        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
+        // Ctrl+C and Ctrl+Q leave at once, wherever the user is (Ctrl+Q: the
+        // owner, 2026-10-15; not in the help).
+        if key.modifiers.contains(KeyModifiers::CONTROL) && matches!(key.code, KeyCode::Char('c' | 'q')) {
             return Some(Request::Quit);
         }
         if let Some(asking) = self.asking.as_mut() {

@@ -1861,3 +1861,19 @@ fn repositories_on_the_workspace_come_first() {
     assert!(label(&setup, "owner/second").contains("2. owner/second"));
     assert!(label(&setup, "owner/first").contains("1. owner/first"));
 }
+
+/// Ctrl+Q leaves at once from anywhere: the setup box, its filter, a menu.
+#[test]
+fn ctrl_q_quits_from_anywhere() {
+    let ctrl_q = KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL);
+    let mut fixture = tui_fixture::app();
+    let app = &mut fixture.app;
+    assert_eq!(app.key(ctrl_q), Some(Request::Quit));
+    app_key(app, KeyCode::Char('m'));
+    assert_eq!(app.key(ctrl_q), Some(Request::Quit));
+    let Boxed { setup, _home } = default_box();
+    let (mut fixture, _keep) = tui(setup);
+    let app = &mut fixture.app;
+    app_key(app, KeyCode::Char('/'));
+    assert_eq!(app.key(ctrl_q), Some(Request::Quit));
+}
