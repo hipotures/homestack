@@ -1294,8 +1294,6 @@ async fn the_tui_worker_installs_through_the_same_session_as_the_cli() {
                     .any(|(_, lines)| lines.iter().any(|line| line == "put VM 240 (ws-one) in pool homestack")),
                 "{sections:?}"
             );
-            // Only what changes: no choices repeated, no notes (the owner,
-            // 2026-10-15).
             for (heading, lines) in &sections {
                 assert!(
                     heading != "Your choices" && heading != "Chosen without asking",

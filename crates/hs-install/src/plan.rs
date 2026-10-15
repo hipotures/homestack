@@ -213,9 +213,6 @@ fn token_target_acl(names: &Names) -> BTreeSet<Acl> {
     for path in ["/nodes", "/storage", "/sdn"] {
         entries.insert(acl_token(path, names.token, "PVEAuditor"));
     }
-    // The test token works only in the test pool, where its own Gold is
-    // too; the server's token (the panel) also in the test pool, so the
-    // panel shows and makes test workspaces (the owner, 2026-10-15).
     let pools: &[(&str, &str)] = if names.settings.test {
         &[(POOL_TEST, "HomeStack"), (POOL_TEST, "HomeStackGold")]
     } else {
@@ -224,8 +221,6 @@ fn token_target_acl(names: &Names) -> BTreeSet<Acl> {
             (POOL_GOLD, "HomeStackGold"),
             (POOL_TEST, "HomeStack"),
             (POOL_TEST, "HomeStackGold"),
-            // The panel is the admin of everything HomeStack makes: the
-            // containers too (the owner, 2026-10-15).
             (POOL_SERVICE, "HomeStackDeploy"),
         ]
     };

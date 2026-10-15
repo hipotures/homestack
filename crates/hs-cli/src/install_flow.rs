@@ -476,8 +476,7 @@ fn grouped_changes(plan: &Plan, home: &std::path::Path) -> Vec<(String, Vec<Stri
     sections
 }
 
-/// The summary of a plan: its warnings and only what changes; the choices
-/// that change nothing are not repeated (the owner, 2026-10-15).
+/// The summary of a plan: its warnings and what changes.
 pub fn summary_of(access_line: &str, plan: &Plan, home: &std::path::Path) -> Summary {
     let _ = access_line;
     let mut sections = Vec::new();

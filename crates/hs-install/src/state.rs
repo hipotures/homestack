@@ -15,8 +15,7 @@ pub const POOL_TEST: &str = "homestack-test";
 pub const POOL_GOLD: &str = "homestack-gold";
 pub const POOL_SERVICE: &str = "homestack-service";
 
-/// The pool Gold of the part is in: the test part keeps its own Gold among
-/// its workspaces (the owner, 2026-10-15).
+/// The pool Gold of the part is in.
 #[must_use]
 pub const fn gold_pool(test: bool) -> &'static str {
     if test { POOL_TEST } else { POOL_GOLD }

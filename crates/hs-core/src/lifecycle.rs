@@ -102,9 +102,7 @@ pub fn derive_ip(cfg: &Config, vmid: u32) -> Result<String, CoreError> {
     )))
 }
 
-/// `proxmox.parse_home_size`: `<n>M`, `<n>G` or `<n>T`, as text and in
-/// MiB. Python takes only G and T; M is the owner's of 2026-10-15 (homes
-/// below a GiB, and containers from 100M later).
+/// `proxmox.parse_home_size`: `<n>M`, `<n>G` or `<n>T`, as text and in MiB.
 pub fn parse_home_size(size: &str) -> Result<(String, u64), CoreError> {
     let text = size.trim().to_ascii_uppercase();
     let invalid = || {

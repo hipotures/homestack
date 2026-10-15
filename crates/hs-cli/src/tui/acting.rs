@@ -13,8 +13,7 @@ use crate::app::valid_name;
 
 const DEFAULT: &str = "default";
 const EXISTING_KEYS: &str = "the keys already in sshkeys";
-/// The VMIDs of the workspaces' default pool (owner's decision of
-/// 2026-10-14: 101010–101199), the only pool for now.
+/// The VMIDs of the workspaces' default pool, the only pool for now.
 const POOL_VMIDS: (u32, u32) = (101_010, 101_199);
 
 impl App {
