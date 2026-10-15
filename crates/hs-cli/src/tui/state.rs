@@ -34,6 +34,8 @@ pub enum Request {
     Installed,
     /// Read the status now (an action ended).
     Reload,
+    /// Give the terminal to ssh on the running workspace (step 4).
+    Ssh(u32),
     Quit,
 }
 
@@ -583,6 +585,12 @@ impl App {
         }
         if let KeyCode::Char(c @ ('n' | 'r' | 'z' | 'k' | 'g' | 'd' | 't')) = key.code {
             return self.open_action(c);
+        }
+        if key.code == KeyCode::Char('s') {
+            return self
+                .selected_entry()
+                .filter(|entry| entry.status == "running")
+                .map(|entry| Request::Ssh(entry.vmid));
         }
         if key.code == KeyCode::Enter
             && let Some(action) = self.action.as_mut()

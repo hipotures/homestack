@@ -334,3 +334,27 @@ Rendering into ratatui's `TestBackend`, as MyPowers does, with a fake status:
   create's checks, the desktop's SSH entry, and the old VM removed last.
   Until then a workspace of the Python HomeStack (2–254) joins by being
   put in pool `homestack` (done for 206 `cpu`, 2026-10-15).
+
+## 8. Step 4: start/stop and ssh
+
+- **start/stop** (`t`): new server operations `workspace.start` and
+  `workspace.stop` (`{"vmid": N}`, events `workspace.started` and
+  `workspace.stopped`; `hs_core::lifecycle::plan_power` and
+  `power_workspace`), shown as the other actions: plan › run. They need the
+  servers deployed from this code.
+- **ssh** (`s`, owner 2026-10-14: decided once the TUI was built): on a
+  running workspace the TUI gives its terminal to `ssh` and takes it back
+  when ssh ends (`tui/shell.rs`, `run.rs` `hand_over`).
+  - The target is the desktop's entry `vm<VMID>` when
+    `~/.ssh/config.d/homestack/vm<VMID>-*.conf` exists (its keys, its
+    `known_hosts`, the touch of a security key in the terminal as with a
+    plain `ssh`); else the user login the server reports (`USER@IP`).
+  - The reader of the TUI's keys stops while ssh runs, so no key typed for
+    ssh is taken; the TUI ignores SIGINT, so Ctrl+C before ssh's session
+    does not end it.
+  - A failed ssh (not 0) leaves its message on the screen until Enter; the
+    log panel gets how it ended.
+  - Not done: ssh in a Herdr pane or another terminal window.
+- **Tests:** `tests/tui_shell.rs` (5: the key on a running and a stopped
+  workspace, the button's colour, the target from the entry or the login,
+  the log line); `tests/tui_actions.rs` for start/stop.

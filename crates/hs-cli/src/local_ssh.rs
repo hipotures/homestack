@@ -162,6 +162,12 @@ pub fn write_local_ssh_config_with(
     Ok(target)
 }
 
+/// Whether the desktop has an SSH config file of `vmid`.
+#[must_use]
+pub fn has_config(home: &Path, vmid: u32) -> bool {
+    matching(&config_directory(home), vmid).is_ok_and(|found| !found.is_empty())
+}
+
 /// `vm<VMID>-*.conf` in `directory`, sorted.
 fn matching(directory: &Path, vmid: u32) -> std::io::Result<Vec<PathBuf>> {
     let prefix = format!("vm{vmid}-");

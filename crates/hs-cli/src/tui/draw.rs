@@ -489,11 +489,11 @@ fn list_line(columns: &[Column], cell: impl Fn(&Column) -> String) -> String {
 fn workspace_actions(app: &App) -> Vec<Control> {
     let selected = app.selected_entry();
     let running = selected.is_some_and(|entry| entry.status == "running");
-    // ssh and setup come in steps 4 and 5 of phase 13b.
+    // setup comes in step 5 of phase 13b.
     let free = selected.is_some() && app.action.is_none();
     vec![
         Control::key("&info").enabled(selected.is_some()),
-        Control::key("&ssh").muted(),
+        Control::key("&ssh").enabled(running),
         Control::key(if running { "s&top" } else { "s&tart" }).enabled(free),
         Control::key("s&etup").muted(),
         Control::key("&refresh").enabled(free),
@@ -997,19 +997,19 @@ const HELP: [&str; 18] = [
     "v           next view (auto, 1, 2)",
     "m           menu",
     "↑ ↓         select a workspace; PgUp PgDn Home End",
-    "↵           details of the selected workspace",
+    "↵  i        details of the selected workspace",
     "← →         one node or all",
     "f           filter by name or VMID; ↵ keeps it, esc clears it",
     "q  esc      quit (esc first clears the filter)",
     "",
-    "On the selected workspace (a box opens in the panel):",
+    "On the selected workspace:",
+    "s ssh (log out to come back)   t start or stop",
     "n new   r refresh   z resize   k add key   g migrate   d destroy",
-    "In the box: tab next field, ← → choose, ↵ plan, a apply,",
+    "In the box: tab next field, ← → choose, ↵ plan, ↵ or a apply,",
     "esc cancel (while it runs esc hides the box; ↵ shows it).",
     "",
-    "ssh, start/stop and setup come in the next steps of phase 13b;",
-    "until then they are grey. The CLI has every command:",
-    "homestack --help",
+    "setup comes in the next step of phase 13b; the CLI has every",
+    "command: homestack --help",
 ];
 
 /// `line` cut into pieces of at most `width` characters, at spaces when it

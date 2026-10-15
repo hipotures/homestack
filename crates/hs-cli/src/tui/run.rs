@@ -90,6 +90,87 @@ impl Drop for Screen {
     }
 }
 
+/// The thread that reads the terminal's events; it stops reading while ssh
+/// has the terminal, so no key typed for ssh is taken.
+struct Reader {
+    paused: Arc<AtomicBool>,
+    /// Set by the thread once it no longer reads.
+    idle: Arc<AtomicBool>,
+}
+
+impl Reader {
+    fn start(keys: mpsc::UnboundedSender<Event>) -> Self {
+        let paused = Arc::new(AtomicBool::new(false));
+        let idle = Arc::new(AtomicBool::new(false));
+        let (thread_paused, thread_idle) = (Arc::clone(&paused), Arc::clone(&idle));
+        std::thread::spawn(move || {
+            loop {
+                if thread_paused.load(Ordering::SeqCst) {
+                    thread_idle.store(true, Ordering::SeqCst);
+                    std::thread::sleep(Duration::from_millis(20));
+                    continue;
+                }
+                match event::poll(Duration::from_millis(50)) {
+                    Ok(true) => match event::read() {
+                        Ok(event) => {
+                            if keys.send(event).is_err() {
+                                return;
+                            }
+                        }
+                        Err(_) => return,
+                    },
+                    Ok(false) => {}
+                    Err(_) => return,
+                }
+            }
+        });
+        Self { paused, idle }
+    }
+
+    /// Stop reading; returns once the thread is out of its last poll.
+    fn pause(&self) {
+        self.paused.store(true, Ordering::SeqCst);
+        while !self.idle.load(Ordering::SeqCst) {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    fn resume(&self) {
+        self.idle.store(false, Ordering::SeqCst);
+        self.paused.store(false, Ordering::SeqCst);
+    }
+}
+
+/// Give the terminal to `ssh TARGET` and take it back when ssh ends; the
+/// exit code (`None`: ssh did not start). A failed ssh waits for Enter, so
+/// its message can be read.
+fn hand_over(screen: &mut Screen, reader: &Reader, target: &str, name: &str) -> Option<i32> {
+    reader.pause();
+    restore();
+    println!("{}", super::shell::banner(target, name));
+    let code = std::process::Command::new("ssh")
+        .arg(target)
+        .status()
+        .ok()
+        .map(|status| status.code().unwrap_or(-1));
+    if code != Some(0) {
+        println!("{}", super::shell::outcome(target, code));
+        println!("Press Enter to go back to HomeStack.");
+        let mut line = String::new();
+        let _ = io::stdin().read_line(&mut line);
+    }
+    let _ = terminal::enable_raw_mode();
+    let _ = execute!(
+        io::stdout(),
+        terminal::EnterAlternateScreen,
+        crossterm::cursor::Hide,
+        crossterm::event::EnableMouseCapture
+    );
+    let _ = screen.terminal.clear();
+    reader.resume();
+    code
+}
+
 /// The local time `HH:MM:SS`, from the offset of `date +%z` read once.
 struct Clock {
     offset: i64,
@@ -299,6 +380,7 @@ fn start(request: &Request, client: Option<&Arc<Client>>, ctx: &Context, updates
         | Request::Act(_)
         | Request::Decide(_)
         | Request::Reload
+        | Request::Ssh(_)
         | Request::Install(_)
         | Request::Answer(_)
         | Request::HerdrTabs
@@ -474,13 +556,11 @@ pub async fn run(ctx: &mut Context) -> Result<i32, AppError> {
     };
     let mut installing = Installing::default();
     let (keys, mut events) = mpsc::unbounded_channel::<Event>();
-    std::thread::spawn(move || {
-        while let Ok(event) = event::read() {
-            if keys.send(event).is_err() {
-                return;
-            }
-        }
-    });
+    let reader = Reader::start(keys);
+    // While ssh has the terminal it is not in raw mode, and Ctrl+C before
+    // ssh's own session must not end the TUI.
+    #[cfg(unix)]
+    let _interrupt = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt());
     let mut screen = Screen::open().map_err(|error| AppError::new(format!("Cannot open the terminal: {error}")))?;
     let mut tick = tokio::time::interval(Duration::from_secs(1));
     // While the first status is read, the waiting bar moves ten times a second.
@@ -538,6 +618,28 @@ pub async fn run(ctx: &mut Context) -> Result<i32, AppError> {
                         Request::Answer(answer) => {
                             if let Some(question) = installing.pending.take() {
                                 question.answer(answer);
+                            }
+                        }
+                        Request::Ssh(vmid) => {
+                            let name = app
+                                .selected_entry()
+                                .and_then(|entry| entry.name.clone())
+                                .unwrap_or_else(|| vmid.to_string());
+                            let login = app
+                                .selected_details()
+                                .and_then(|details| details.ssh.user.clone());
+                            match super::shell::target(&ctx.home, vmid, login.as_deref()) {
+                                Some(target) => {
+                                    app.log(&clock.now(), &format!("ssh {target} ({name})"));
+                                    let code = tokio::task::block_in_place(|| {
+                                        hand_over(&mut screen, &reader, &target, &name)
+                                    });
+                                    app.log(&clock.now(), &super::shell::outcome(&target, code));
+                                }
+                                None => app.log(
+                                    &clock.now(),
+                                    &format!("ssh {name}: no SSH entry on this desktop and no address yet"),
+                                ),
                             }
                         }
                         Request::HerdrTabs => match crate::root_herdr::tabs(ctx.system.as_ref()) {

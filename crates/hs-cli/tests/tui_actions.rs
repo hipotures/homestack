@@ -57,7 +57,7 @@ fn the_actions_light_up_when_a_workspace_is_selected() {
         let (x, y) = position(&buf, label);
         assert_eq!(buf[(x + 1, y)].fg, palette.foreground, "{label}");
     }
-    // Not yet: ssh, start/stop and setup come in steps 4 and 5.
+    // Not yet: setup comes in step 5.
     let (x, y) = position(&buf, "setup");
     assert_eq!(buf[(x, y)].fg, palette.muted);
 }

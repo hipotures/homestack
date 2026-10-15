@@ -9,6 +9,7 @@ pub mod install;
 pub mod installing;
 pub mod layout;
 pub mod run;
+pub mod shell;
 pub mod state;
 pub mod theme;
 
