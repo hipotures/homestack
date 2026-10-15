@@ -360,6 +360,7 @@ fn environment_inspection_reports_file_drift_requiring_overwrite() {
     assert_eq!(unchanged["ready"], json!(true));
     assert_eq!(unchanged["will_overwrite"], json!(false));
     assert_eq!(unchanged["changed_since_apply"], json!([]));
+    assert_eq!(unchanged["differs"], json!([]));
     let mut profile = std::fs::read_to_string(home.join(".profile")).unwrap();
     profile.push_str("#\n");
     std::fs::write(home.join(".profile"), profile).unwrap();
@@ -368,6 +369,8 @@ fn environment_inspection_reports_file_drift_requiring_overwrite() {
     assert_eq!(modified["will_overwrite"], json!(true));
     assert_eq!(modified["changed_since_apply"], json!([".profile"]));
     assert_eq!(modified["state"], json!("needs update"));
+    // Which files differ from what the setup writes (marked in the TUI).
+    assert_eq!(modified["differs"], json!([".profile"]));
     std::fs::remove_file(home.join(".bashrc")).unwrap();
     let missing = inspect();
     let changed = missing["changed_since_apply"].as_array().unwrap();

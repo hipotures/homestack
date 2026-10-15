@@ -60,6 +60,10 @@ its units (14d) are sent unchanged the same way.
   - `setup TARGET` without selectors (Python's Textual setup app) says to
     open it in the TUI (`e` on the workspace), where the setup box is;
   - `--json` keeps the key order of `serde_json` (sorted), not Python's.
+  - an environment item of `setup status` also has `differs`: the files
+    that differ from what the setup writes (the TUI marks them with `*`,
+    and its STATE column says `differs` for Python's `needs update`; the
+    owner, 2026-10-15).
 - **Tests** (76 of the 76 of 14a ported; the manifest names them):
   `tests/setup_definitions.rs`, `setup_catalog.rs`, `setup_plan.rs`,
   `setup_guest.rs`, `setup_engine.rs`, and the CLI in `tests/cli.rs`

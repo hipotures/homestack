@@ -1331,12 +1331,18 @@ impl SetupBox {
                 );
             }
             _ => {
+                let differs = strings(&live["differs"]);
                 lines.push("Managed paths:".to_owned());
-                lines.extend(
-                    write_paths(&self.settings, entry)
-                        .iter()
-                        .map(|path| format!("~/{path}")),
-                );
+                lines.extend(write_paths(&self.settings, entry).iter().map(|path| {
+                    if differs.contains(path) {
+                        format!("~/{path}  *")
+                    } else {
+                        format!("~/{path}")
+                    }
+                }));
+                if !differs.is_empty() {
+                    lines.push("* differs from what HomeStack writes; applying replaces the whole file".to_owned());
+                }
             }
         }
         if let Params::Structured {
@@ -1406,7 +1412,10 @@ impl SetupBox {
         } else {
             ("○", Tone::Dim)
         };
-        let mut text = format!("{mark} {state}");
+        // "needs update" read as an offer; it means the files differ and
+        // applying replaces them (the owner, 2026-10-15).
+        let shown = if state == "needs update" { "differs" } else { state };
+        let mut text = format!("{mark} {shown}");
         if !self.available(entry) {
             text = format!("{mark} {}", self.availability(identity));
         }

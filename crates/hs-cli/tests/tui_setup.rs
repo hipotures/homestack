@@ -1733,10 +1733,7 @@ fn the_box_is_wide_and_every_item_shows_its_state() {
         "fish": {"ready": false, "state": "not configured"},
     }}));
     assert_eq!(setup.row_state("bash"), Some(("✓ configured".to_owned(), Tone::Green)));
-    assert_eq!(
-        setup.row_state("zsh"),
-        Some(("! needs update".to_owned(), Tone::Yellow))
-    );
+    assert_eq!(setup.row_state("zsh"), Some(("! differs".to_owned(), Tone::Yellow)));
     assert_eq!(
         setup.row_state("fish"),
         Some(("○ not configured".to_owned(), Tone::Dim))
@@ -1747,7 +1744,7 @@ fn the_box_is_wide_and_every_item_shows_its_state() {
     assert_eq!(setup.row_state("fish").unwrap().0, "○ not configured → install");
     assert_eq!(
         setup.row_state("zsh"),
-        Some(("! needs update → update".to_owned(), Tone::Red))
+        Some(("! differs → update".to_owned(), Tone::Red))
     );
     setup.show_section(section(&setup, "env"));
     let (fixture, _keep) = tui(setup);
@@ -1821,4 +1818,18 @@ fn the_touch_box_replaces_the_connecting_box() {
     let text = screen(&render(app, 120, 36));
     assert!(text.contains("security key"), "{text}");
     assert!(!text.contains("connecting"), "{text}");
+}
+
+/// The details mark the shell files that differ from what the setup writes.
+#[test]
+fn the_details_mark_the_files_that_differ() {
+    let Boxed { setup, _home } = state_box(json!({"items": {"bash": {
+        "ready": false, "managed": true, "state": "needs update", "will_overwrite": true,
+        "differs": [".bashrc"],
+    }}}));
+    let details = setup.details("bash");
+    assert!(details.contains("~/.bashrc  *"), "{details}");
+    assert!(details.contains("~/.profile\n"), "{details}");
+    assert!(details.contains("* differs from what HomeStack writes; applying replaces the whole file"));
+    assert_eq!(setup.row_state("bash").unwrap().0, "! differs");
 }
