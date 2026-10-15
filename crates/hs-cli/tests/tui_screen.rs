@@ -593,3 +593,109 @@ fn the_list_s_scrollbar_is_held_and_dragged_and_the_selection_follows() {
     fixture.app.mouse(event(MouseEventKind::Up(MouseButton::Left), 70, 0));
     assert!(fixture.app.dragging.is_none());
 }
+
+fn mouse_at(
+    app: &mut hs_cli::tui::state::App,
+    kind: crossterm::event::MouseEventKind,
+    column: u16,
+    row: u16,
+) -> Option<Request> {
+    app.mouse(crossterm::event::MouseEvent {
+        kind,
+        column,
+        row,
+        modifiers: KeyModifiers::NONE,
+    })
+}
+
+#[test]
+fn a_log_line_is_highlighted_by_a_click_and_the_wheel_moves_the_highlight() {
+    use crossterm::event::{MouseButton, MouseEventKind};
+    let mut fixture = app();
+    for minute in 0..30 {
+        fixture
+            .app
+            .log(&format!("10:{minute:02}:00"), &format!("line {minute}"));
+    }
+    let buf = render(&fixture.app, 150, 40);
+    let (x, y) = position(&buf, "line 27");
+    mouse_at(&mut fixture.app, MouseEventKind::Down(MouseButton::Left), x, y);
+    assert_eq!(fixture.app.log_cursor, Some(2));
+    let buf = render(&fixture.app, 150, 40);
+    assert!(screen(&buf).contains("3/30"), "{}", screen(&buf));
+    let (_, highlighted) = position(&buf, "line 27");
+    assert_eq!(buf[(x, highlighted)].bg, fixture.app.palette.focus);
+    // The wheel moves the highlight a line; the view follows it down.
+    for _ in 0..10 {
+        mouse_at(&mut fixture.app, MouseEventKind::ScrollDown, x, y);
+    }
+    assert_eq!(fixture.app.log_cursor, Some(12));
+    let buf = render(&fixture.app, 150, 40);
+    let (_, line_17) = position(&buf, "line 17 ");
+    assert_eq!(buf[(x, line_17)].bg, fixture.app.palette.focus);
+    assert!(fixture.app.log_scroll > 0);
+    // The scrollbar dragged to the newest takes the highlight with the view.
+    let (bar_x, up_y) = position(&buf, "↑");
+    let thumb_y = (0..40).find(|row| buf[(bar_x, *row)].symbol() == "█").unwrap();
+    mouse_at(
+        &mut fixture.app,
+        MouseEventKind::Down(MouseButton::Left),
+        bar_x,
+        thumb_y,
+    );
+    mouse_at(
+        &mut fixture.app,
+        MouseEventKind::Drag(MouseButton::Left),
+        bar_x,
+        up_y - 5,
+    );
+    mouse_at(&mut fixture.app, MouseEventKind::Up(MouseButton::Left), bar_x, up_y - 5);
+    assert_eq!(fixture.app.log_scroll, 0);
+    let cursor = fixture.app.log_cursor.unwrap();
+    assert!(cursor < 6, "the highlight is on a line shown: {cursor}");
+    // A new line keeps the highlight on its line.
+    fixture.app.log("10:30:00", "line 30");
+    assert_eq!(fixture.app.log_cursor, Some(cursor + 1));
+}
+
+#[test]
+fn new_lines_above_a_log_scrolled_back_star_its_top_right_corner_until_read() {
+    use crossterm::event::MouseEventKind;
+    let mut fixture = app();
+    for minute in 0..30 {
+        fixture
+            .app
+            .log(&format!("10:{minute:02}:00"), &format!("line {minute}"));
+    }
+    let star = |app: &hs_cli::tui::state::App| {
+        let buf = render(app, 150, 40);
+        let (_, log_y) = position(&buf, "⁴log");
+        row(&buf, log_y).contains("┐*┌─╮")
+    };
+    // At the newest line a new line is seen: no star.
+    fixture.app.log("10:30:00", "line 30");
+    assert!(!star(&fixture.app));
+    // Scrolled back, a new line does not move the view and stars the corner.
+    let buf = render(&fixture.app, 150, 40);
+    let (x, y) = position(&buf, "line 30");
+    mouse_at(&mut fixture.app, MouseEventKind::ScrollDown, x, y);
+    assert!(!star(&fixture.app));
+    let before = screen(&render(&fixture.app, 150, 40));
+    fixture.app.log("10:31:00", "line 31");
+    let text = screen(&render(&fixture.app, 150, 40));
+    assert!(!text.contains("line 31") && text.contains("line 27"), "{text}");
+    assert_eq!(before.contains("line 28"), text.contains("line 28"));
+    assert!(star(&fixture.app), "{text}");
+    // Scrolled part of the way up it stays; at the newest line it goes.
+    mouse_at(&mut fixture.app, MouseEventKind::ScrollUp, x, y);
+    assert_eq!(fixture.app.log_scroll, 1);
+    assert!(star(&fixture.app));
+    for _ in 0..3 {
+        mouse_at(&mut fixture.app, MouseEventKind::ScrollUp, x, y);
+    }
+    assert_eq!(fixture.app.log_scroll, 0);
+    assert!(!star(&fixture.app));
+    // Scrolled back again, the lines read do not star it.
+    mouse_at(&mut fixture.app, MouseEventKind::ScrollDown, x, y);
+    assert!(!star(&fixture.app));
+}

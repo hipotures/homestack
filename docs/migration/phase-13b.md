@@ -457,3 +457,16 @@ TARGET SELECTORS…`.
   the setup tree) moves the selection to the bottom row shown.
 - The thumb stays shorter than the track while rows do not fit, so it can
   always move.
+
+### The log's highlight and its unread star (owner, 2026-10-15)
+
+- A click on a line of the log highlights it with the list's bar; the
+  wheel over the log moves the highlight a line and the view follows it
+  (with no highlight the wheel scrolls three lines). The scrollbar takes
+  the highlight with the view, onto the nearest line shown. The counter
+  says its place, `3/40`, 1 the newest; a new line keeps the highlight on
+  its line.
+- Scrolled back, new lines do not move the view: they come above it and
+  `┐*┌` shows in the log's top right corner until the log is scrolled to
+  the newest line, as an editor marks a change. At the newest line new
+  lines are seen as they come and there is no star.

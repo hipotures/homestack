@@ -140,6 +140,11 @@ pub struct App {
     pub lines: Vec<LogLine>,
     /// Lines the log is scrolled back from the newest.
     pub log_scroll: usize,
+    /// The highlighted line of the log, lines back from the newest.
+    pub log_cursor: Option<usize>,
+    /// New lines that came above the view while the log was scrolled back:
+    /// the log's border shows ┐*┌ until it is scrolled to the newest.
+    pub log_unread: usize,
     /// The scrollbar whose thumb the mouse holds, and the row of the thumb
     /// it holds.
     pub dragging: Option<(super::chrome::Bar, u16)>,
@@ -198,6 +203,8 @@ impl App {
             overlay: None,
             lines: Vec::new(),
             log_scroll: 0,
+            log_cursor: None,
+            log_unread: 0,
             dragging: None,
             clock: String::new(),
             waiting: 0,
@@ -360,12 +367,18 @@ impl App {
             time: time.to_owned(),
             text: text.to_owned(),
         });
-        // Scrolled back, the lines read stay in place.
+        // Scrolled back, the lines read stay in place; the highlight stays
+        // on its line.
         if self.log_scroll > 0 {
             self.log_scroll += 1;
+            self.log_unread += 1;
+        }
+        if let Some(at) = self.log_cursor.as_mut() {
+            *at += 1;
         }
         if self.lines.len() > LOG_LIMIT {
             self.lines.remove(0);
+            self.log_cursor = self.log_cursor.map(|at| at.min(LOG_LIMIT - 1));
         }
     }
 
@@ -513,7 +526,13 @@ impl App {
             }
         };
         match bar.scrolls {
-            Scrolls::Log => self.log_scroll = offset,
+            // The highlight moves with the view, onto the nearest line shown.
+            Scrolls::Log => {
+                self.log_scroll = offset;
+                self.log_cursor = self
+                    .log_cursor
+                    .map(|at| at.clamp(offset, offset + bar.visible.max(1) - 1));
+            }
             Scrolls::List => return row(self.selected_index()).and_then(|index| self.select_at(index)),
             Scrolls::Action => {
                 if let Some(action) = self.action.as_mut()
@@ -557,6 +576,13 @@ impl App {
     /// A mouse event: a click on a workspace selects it, the wheel moves the
     /// selection; a scrollbar is pressed, held and dragged.
     pub fn mouse(&mut self, event: crossterm::event::MouseEvent) -> Option<Request> {
+        let request = self.mouse_event(event);
+        // The new lines the log was scrolled up to are read.
+        self.log_unread = self.log_unread.min(self.log_scroll);
+        request
+    }
+
+    fn mouse_event(&mut self, event: crossterm::event::MouseEvent) -> Option<Request> {
         use super::chrome::Hit;
         use crossterm::event::{MouseButton, MouseEventKind};
         let press = |app: &mut Self, code: KeyCode| app.key(KeyEvent::new(code, KeyModifiers::NONE));
@@ -589,12 +615,29 @@ impl App {
             }
             (MouseEventKind::ScrollDown, Some(Hit::Bar(bar))) => return self.scroll_to(bar, bar.wheel(3)),
             (MouseEventKind::ScrollUp, Some(Hit::Bar(bar))) => return self.scroll_to(bar, bar.wheel(-3)),
-            (MouseEventKind::ScrollDown, Some(Hit::Log(most))) => {
-                self.log_scroll = (self.log_scroll + 3).min(most);
+            // A line of the log clicked: it is highlighted.
+            (MouseEventKind::Down(MouseButton::Left), Some(Hit::Log { line: Some(line), .. })) => {
+                self.log_cursor = Some(line);
                 return None;
             }
-            (MouseEventKind::ScrollUp, Some(Hit::Log(most))) => {
-                self.log_scroll = self.log_scroll.min(most).saturating_sub(3);
+            // The wheel over the log moves the highlight a line and the view
+            // with it; with no highlight it scrolls three lines.
+            (MouseEventKind::ScrollDown | MouseEventKind::ScrollUp, Some(Hit::Log { most, visible, .. })) => {
+                let down = event.kind == MouseEventKind::ScrollDown;
+                match self.log_cursor {
+                    Some(at) => {
+                        let at = if down {
+                            (at + 1).min(self.lines.len().saturating_sub(1))
+                        } else {
+                            at.saturating_sub(1)
+                        };
+                        self.log_cursor = Some(at);
+                        let scroll = self.log_scroll.min(most);
+                        self.log_scroll = scroll.clamp((at + 1).saturating_sub(visible.max(1)), at).min(most);
+                    }
+                    None if down => self.log_scroll = (self.log_scroll + 3).min(most),
+                    None => self.log_scroll = self.log_scroll.min(most).saturating_sub(3),
+                }
                 return None;
             }
             _ => {}
@@ -634,7 +677,7 @@ impl App {
                         return None;
                     }
                     Some(Hit::SetupDetails) => return None,
-                    Some(Hit::Log(_) | Hit::Bar(_)) => return None,
+                    Some(Hit::Log { .. } | Hit::Bar(_)) => return None,
                     Some(Hit::SetupGroup(index)) => {
                         if let Some(setup) = self.setup.as_mut()
                             && matches!(setup.stage, super::setup::Stage::Tree)

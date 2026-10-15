@@ -866,24 +866,64 @@ pub(super) fn log(buf: &mut Buffer, area: Rect, app: &App, mut controls: Vec<Con
     let palette = &app.palette;
     let mut top_left = vec![Control::panel(4, "log")];
     top_left.append(&mut controls);
+    // The highlighted line's place (1 the newest), as the list's counter.
+    let total = app.lines.len();
+    let counter = match (app.log_cursor, total) {
+        (Some(at), _) => format!("{}/{total}", at + 1),
+        (None, 1) => "1 line".to_owned(),
+        (None, _) => format!("{total} lines"),
+    };
+    // Newest first; scrolled back by app.log_scroll lines.
+    let visible = usize::from(area.height.saturating_sub(2));
+    let most = total.saturating_sub(visible);
+    let offset = app.log_scroll.min(most);
+    // ┐*┌ in the top right corner: new lines above the view, unread until
+    // the log is scrolled to the newest, as an editor marks a change.
+    let top_right = if app.log_unread.min(offset) > 0 {
+        vec![Control::plain("*").raised()]
+    } else {
+        Vec::new()
+    };
     let sides = Sides {
         top_left,
-        bottom_right: vec![Control::plain(&match app.lines.len() {
-            1 => "1 line".to_owned(),
-            count => format!("{count} lines"),
-        })],
+        top_right,
+        bottom_right: vec![Control::plain(&counter)],
         ..Sides::default()
     };
     let inner = frame(buf, area, palette, &sides);
     let text = text_style(palette);
     let muted = text.fg(palette.muted);
-    // Newest first; scrolled back by app.log_scroll lines.
-    let visible = usize::from(inner.height);
-    let total = app.lines.len();
-    let most = total.saturating_sub(visible);
-    let offset = app.log_scroll.min(most);
+    register(
+        inner,
+        Hit::Log {
+            most,
+            visible,
+            line: None,
+        },
+    );
     for (row, line) in app.lines.iter().rev().skip(offset).take(visible).enumerate() {
         let y = inner.y + u16::try_from(row).unwrap_or(0);
+        let (text, muted) = if app.log_cursor == Some(offset + row) {
+            // The list's bar in the accent colour.
+            let mut chosen = text
+                .fg(palette.background)
+                .bg(palette.focus)
+                .add_modifier(Modifier::BOLD);
+            if palette.no_color {
+                chosen = chosen.add_modifier(Modifier::REVERSED);
+            }
+            write(
+                buf,
+                inner.x,
+                y,
+                inner.width,
+                &" ".repeat(usize::from(inner.width)),
+                chosen,
+            );
+            (chosen, chosen)
+        } else {
+            (text, muted)
+        };
         spans(
             buf,
             inner.x,
@@ -891,8 +931,15 @@ pub(super) fn log(buf: &mut Buffer, area: Rect, app: &App, mut controls: Vec<Con
             inner.width,
             &[(format!(" {}  ", line.time), muted), (line.text.clone(), text)],
         );
+        register(
+            Rect::new(inner.x, y, inner.width, 1),
+            Hit::Log {
+                most,
+                visible,
+                line: Some(offset + row),
+            },
+        );
     }
-    register(inner, Hit::Log(most));
     scrollbar(buf, area, palette, Scrolls::Log, offset, visible, total);
 }
 

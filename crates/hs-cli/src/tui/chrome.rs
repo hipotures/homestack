@@ -436,8 +436,14 @@ pub enum Hit {
     Choice(usize),
     /// An item of a list in a box (the menu, the themes).
     Item(usize),
-    /// The log panel, and the farthest the wheel scrolls it.
-    Log(usize),
+    /// The log panel: the farthest it scrolls, the rows it shows and the
+    /// line under the pointer (lines back from the newest; `None` below
+    /// the last).
+    Log {
+        most: usize,
+        visible: usize,
+        line: Option<usize>,
+    },
     /// A scrollbar.
     Bar(Bar),
 }
