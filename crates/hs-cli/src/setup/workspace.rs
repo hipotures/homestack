@@ -124,3 +124,111 @@ impl Drop for SshWorkspace {
         self.master.close(self.system.as_ref());
     }
 }
+
+/// The desktop's own account and home (`setup --local`, Python
+/// `LocalSetup`): commands run here, the guest program with the desktop's
+/// `python3`, no SSH.
+pub struct LocalWorkspace {
+    pub home: std::path::PathBuf,
+    pub user: String,
+}
+
+/// The name and home of the account `uid` (`getent passwd`).
+#[must_use]
+pub fn account(uid: u32) -> Option<(String, String)> {
+    let output = std::process::Command::new("getent")
+        .args(["passwd", &uid.to_string()])
+        .output()
+        .ok()?;
+    let line = String::from_utf8_lossy(&output.stdout).lines().next()?.to_owned();
+    let fields: Vec<&str> = line.split(':').collect();
+    (fields.len() >= 6).then(|| (fields[0].to_owned(), fields[5].to_owned()))
+}
+
+impl LocalWorkspace {
+    fn identity(&mut self) -> Result<String, AppError> {
+        use std::os::unix::fs::MetadataExt;
+        let uid = rustix::process::getuid().as_raw();
+        let gid = rustix::process::getgid().as_raw();
+        let refused = || AppError::new("Local Setup requires the current non-root user's owned home directory");
+        let meta = std::fs::symlink_metadata(&self.home).map_err(|_| refused())?;
+        let home_dir = account(uid).map(|(_, dir)| dir).unwrap_or_default();
+        if uid == 0 || !meta.is_dir() || meta.uid() != uid || meta.gid() != gid || Path::new(&home_dir) != self.home {
+            return Err(refused());
+        }
+        let registry = self.local_guest(&serde_json::json!({
+            "home": self.home.display().to_string(), "operation": "state-read", "vmid": 0, "name": "",
+        }))?;
+        let answer: Value = serde_json::from_str(&registry).unwrap_or(Value::Null);
+        if answer["ok"] != Value::Bool(true) {
+            return Ok(registry);
+        }
+        Ok(r#"{"ok": true}"#.to_owned())
+    }
+}
+
+impl Workspace for LocalWorkspace {
+    fn run(&mut self, _command: &str, _input: Option<&str>, _interactive: bool) -> Result<Output, AppError> {
+        Err(AppError::new("Local Setup currently supports only the Backup category"))
+    }
+
+    fn transfer(&mut self, _source: &str, _destination: &str) -> Result<(), AppError> {
+        Err(AppError::new("Local Setup currently supports only the Backup category"))
+    }
+
+    fn local(&self) -> bool {
+        true
+    }
+
+    fn local_guest(&mut self, payload: &Value) -> Result<String, AppError> {
+        let mut payload = payload.clone();
+        payload["home"] = Value::String(self.home.display().to_string());
+        if payload["operation"] == "identity" {
+            return self.identity();
+        }
+        let mut child = std::process::Command::new("python3")
+            .arg("-")
+            .current_dir(&self.home)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .map_err(|_| AppError::new("Missing local executable python3; install system prerequisites separately"))?;
+        let script = super::guest::script(&payload);
+        if let Some(mut stdin) = child.stdin.take() {
+            use std::io::Write;
+            let _ = stdin.write_all(script.as_bytes());
+        }
+        let output = child
+            .wait_with_output()
+            .map_err(|_| AppError::new("Local transport or file operation failed; output withheld"))?;
+        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    }
+
+    fn local_command(&mut self, command: &str) -> Result<Output, AppError> {
+        // The system runtime, not whatever environment runs HomeStack.
+        let mut process = std::process::Command::new("/bin/sh");
+        process
+            .args(["-c", &format!("umask 077\n{command}")])
+            .current_dir(&self.home)
+            .env_clear()
+            .env("HOME", &self.home)
+            .env("USER", &self.user)
+            .env("LOGNAME", &self.user)
+            .env("LANG", "C.UTF-8")
+            .env("PATH", "/usr/local/bin:/usr/bin:/bin");
+        for key in ["XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS"] {
+            if let Some(value) = std::env::var_os(key) {
+                process.env(key, value);
+            }
+        }
+        let output = process
+            .output()
+            .map_err(|_| AppError::new("Local transport or file operation failed; output withheld"))?;
+        Ok(Output {
+            code: output.status.code().unwrap_or(-1),
+            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        })
+    }
+}

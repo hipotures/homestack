@@ -9,6 +9,7 @@ use std::path::Path;
 
 use serde_json::{Map, Value, json};
 
+use super::backup;
 use super::definitions::{Entry, Params};
 use super::documents;
 use super::guest::{command_environment, guest, require_tool};
@@ -446,7 +447,7 @@ pub fn inspect_workspace_state(
                 }
                 Err(error) => Err(error.clone()),
             },
-            _ => inspect_item(workspace, settings, entry, &record, &remote, &mut item),
+            _ => inspect_item(workspace, settings, target, entry, &record, &remote, &mut item),
         };
         if let Err(error) = outcome {
             item["state"] = json!("unavailable");
@@ -466,6 +467,7 @@ pub fn inspect_workspace_state(
 fn inspect_item(
     workspace: &mut dyn Workspace,
     settings: &Settings,
+    target: &Target,
     entry: &Entry,
     record: &Value,
     remote: &HashMap<String, Value>,
@@ -584,6 +586,14 @@ fn inspect_item(
                 item["backup_paths"] = json!(p.backup_paths);
             }
         }
+        Params::Backup => {
+            if let (Some(item), Value::Object(found)) = (
+                item.as_object_mut(),
+                backup::inspect(workspace, settings, target.vmid, true)?,
+            ) {
+                item.extend(found);
+            }
+        }
         _ => return Err(pending(entry)),
     }
     Ok(())
@@ -683,6 +693,7 @@ fn record_entry_state(
 fn preflight_entry(
     workspace: &mut dyn Workspace,
     settings: &Settings,
+    target: &Target,
     system: &dyn System,
     entry: &Entry,
 ) -> Result<Value, AppError> {
@@ -787,6 +798,7 @@ fn preflight_entry(
             }
             Ok(json!({"installed": installed, "ready": installed}))
         }
+        Params::Backup => backup::inspect(workspace, settings, target.vmid, true),
         _ => Err(pending(entry)),
     }
 }
@@ -892,6 +904,9 @@ fn apply_entry(
                 )
             }
         }
+        Params::Backup => backup::apply(workspace, settings, plan.target.vmid, state, &mut |message| {
+            observer.activity(Some(id), message);
+        }),
         _ => Err(pending(entry)),
     }
 }
@@ -1037,7 +1052,7 @@ fn run_plan(
                 }
                 documents[&config.path].clone()
             }
-            _ => preflight_entry(workspace, settings, system, entry),
+            _ => preflight_entry(workspace, settings, &plan.target, system, entry),
         };
         match state {
             Ok(state) => {

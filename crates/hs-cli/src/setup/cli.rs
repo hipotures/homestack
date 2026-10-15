@@ -190,6 +190,55 @@ pub fn connect(
     Ok(Box::new(SshWorkspace::open(Arc::clone(system), home, master)?))
 }
 
+/// The workspace connection, or the desktop itself for a local target.
+fn open_workspace(
+    system: &Arc<dyn System>,
+    home: &Path,
+    loaded: &Loaded,
+    settings: &Settings,
+    target: &Target,
+) -> Result<Box<dyn Workspace>, AppError> {
+    if target.local {
+        return Ok(Box::new(super::workspace::LocalWorkspace {
+            home: settings.home.clone(),
+            user: settings.user.clone(),
+        }));
+    }
+    connect(system, home, loaded, settings, target)
+}
+
+/// `setup --local` (Python `local_configuration`): the desktop's own
+/// account, only the Backup items, no repositories.
+pub fn local_settings(mut settings: Settings) -> Result<Settings, AppError> {
+    let uid = rustix::process::getuid().as_raw();
+    let (name, _) =
+        super::workspace::account(uid).ok_or_else(|| AppError::new("The desktop account cannot be read"))?;
+    settings.user = name;
+    settings.uid = uid;
+    settings.gid = rustix::process::getgid().as_raw();
+    settings.repo.owner = None;
+    settings.setup.items.retain(|entry| entry.handler == "backup");
+    let groups: Vec<String> = settings.setup.items.iter().map(|entry| entry.group.clone()).collect();
+    settings.setup.groups.retain(|group| groups.contains(&group.id));
+    Ok(settings)
+}
+
+/// This desktop as the target of `setup --local`.
+#[must_use]
+pub fn local_target_of(settings: &Settings) -> Target {
+    Target {
+        vmid: 0,
+        name: rustix::system::uname().nodename().to_string_lossy().into_owned(),
+        node: String::new(),
+        status: String::new(),
+        alien: false,
+        ip: String::new(),
+        user: settings.user.clone(),
+        home: settings.home.display().to_string(),
+        local: true,
+    }
+}
+
 /// The catalog with the owner's repositories.
 fn catalog_with_repositories(system: &dyn System, settings: &Settings) -> Catalog {
     let discover = |settings: &Settings| discover_repositories(system, settings);
@@ -230,26 +279,45 @@ pub async fn run(
         let text = serde_json::to_string_pretty(value).unwrap_or_default();
         ctx.console.out(&format!("{text}\n"));
     };
-    if setup.local {
-        return Err(AppError::new(
-            "setup --local is not available in this version yet (phase 14d of docs/migration/PLAN.md)",
-        ));
+    let local = setup.local;
+    let mut tokens = setup.selectors.clone();
+    let mut target_arg = setup.target.clone();
+    let mut local_target = None;
+    if local {
+        settings = local_settings(settings)?;
+        local_target = Some(local_target_of(&settings));
+        if target_arg.as_deref().is_some_and(|text| text.contains('=')) {
+            tokens.insert(0, target_arg.take().unwrap_or_default());
+        } else if !matches!(target_arg.as_deref(), None | Some("list" | "status")) {
+            return Err(AppError::new(
+                "--local does not accept a workspace target; use setup --local backup=bk",
+            ));
+        }
     }
-    let tokens = setup.selectors.clone();
-    let target_arg = setup.target.clone();
+    let load = |settings: &Settings| {
+        if local {
+            load_catalog(settings, None)
+        } else {
+            catalog_with_repositories(system.as_ref(), settings)
+        }
+    };
     if target_arg.as_deref() == Some("status") {
-        if tokens.len() != 1 || args.yes || setup.dry_run || setup.non_interactive || setup.catalog.is_some() {
+        let wanted = usize::from(!local);
+        if tokens.len() != wanted || args.yes || setup.dry_run || setup.non_interactive || setup.catalog.is_some() {
             return Err(AppError::new(
                 "Usage: homestack setup status VMID|NAME [--json] or setup --local status [--json]",
             ));
         }
-        let catalog = catalog_with_repositories(system.as_ref(), &settings);
-        let target = resolve_target(client, &mut settings, &tokens[0]).await?;
-        if !json_mode {
+        let catalog = load(&settings);
+        let target = match &local_target {
+            Some(target) => target.clone(),
+            None => resolve_target(client, &mut settings, &tokens[0]).await?,
+        };
+        if !json_mode && !local {
             ctx.console
                 .out("SSH: authenticate once to inspect workspace setup state; the connection closes after status.\n");
         }
-        let mut workspace = connect(&system, &ctx.home, loaded, &settings, &target)?;
+        let mut workspace = open_workspace(&system, &ctx.home, loaded, &settings, &target)?;
         let state = inspect_workspace_state(workspace.as_mut(), &settings, &target, &catalog.entries)?;
         drop(workspace);
         let mut result = json!({"ok": true, "command": "setup status", "target": target.json()});
@@ -274,7 +342,7 @@ pub async fn run(
                 "setup list is targetless discovery; execution selectors/options are not accepted",
             ));
         }
-        let mut catalog = catalog_with_repositories(system.as_ref(), &settings);
+        let mut catalog = load(&settings);
         save_snapshot(&settings, &mut catalog)?;
         if json_mode {
             let groups: Vec<Value> = settings
@@ -293,11 +361,11 @@ pub async fn run(
         }
         return Ok(0);
     }
-    let Some(target_arg) = target_arg else {
+    if target_arg.is_none() && !local {
         return Err(AppError::new(
             "An explicit VMID or exact workspace name is required; use setup list for discovery",
         ));
-    };
+    }
     if tokens.is_empty() && setup.catalog.is_some() {
         return Err(AppError::new(
             "--catalog requires explicit selectors; use setup list to inspect a catalog",
@@ -322,7 +390,15 @@ pub async fn run(
         select_entries(&settings, &tokens, setup.catalog.as_deref(), &github)?
     };
     // The selection is checked before even the read-only resolution.
-    let target = resolve_target(client, &mut settings, &target_arg).await?;
+    let target = match (&local_target, &target_arg) {
+        (Some(target), _) => target.clone(),
+        (None, Some(text)) => resolve_target(client, &mut settings, text).await?,
+        (None, None) => {
+            return Err(AppError::new(
+                "An explicit resolved workspace and at least one action are required",
+            ));
+        }
+    };
     if entries.is_empty() {
         return Err(AppError::new(
             "Interactive setup opens in the HomeStack TUI: run homestack, select the workspace and press e",
@@ -335,7 +411,11 @@ pub async fn run(
         } else {
             let text = show::plan(&plan, &ctx.style);
             ctx.console.out(&text);
-            ctx.console.out("Dry run: no guest SSH or remote changes.\n");
+            ctx.console.out(if local {
+                "Dry run: no local changes.\n"
+            } else {
+                "Dry run: no guest SSH or remote changes.\n"
+            });
         }
         return Ok(0);
     }
@@ -359,16 +439,18 @@ pub async fn run(
         let text = show::plan(&plan, &ctx.style);
         ctx.console.out(&text);
     }
-    let notice = format!(
-        "SSH: authenticate with the configured workspace identity; touch your {} if prompted.\n",
-        key_label(system.as_ref(), loaded)
-    );
-    say(ctx, json_mode, &notice);
-    if let Some(tip) = key_advice(system.as_ref(), loaded) {
-        say(ctx, json_mode, &format!("{tip}\n"));
+    if !local {
+        let notice = format!(
+            "SSH: authenticate with the configured workspace identity; touch your {} if prompted.\n",
+            key_label(system.as_ref(), loaded)
+        );
+        say(ctx, json_mode, &notice);
+        if let Some(tip) = key_advice(system.as_ref(), loaded) {
+            say(ctx, json_mode, &format!("{tip}\n"));
+        }
     }
     let home = ctx.home.clone();
-    let mut open = || connect(&system, &home, loaded, &settings, &target);
+    let mut open = || open_workspace(&system, &home, loaded, &settings, &target);
     let result = {
         let mut printer = Printer {
             console: ctx.console.as_mut(),

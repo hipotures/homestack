@@ -28,14 +28,22 @@ fn yaml(candidate: &str) -> yaml_rust2::Yaml {
 #[test]
 fn empty_array_is_a_value_and_unrelated_null_is_preserved() {
     let empty = leaf(&["items"], Value::Array(Vec::new()));
-    let (candidate, states) =
-        merge_document("toml", Some("items = [1]\nother = \"keep\"\n"), std::slice::from_ref(&empty)).unwrap();
+    let (candidate, states) = merge_document(
+        "toml",
+        Some("items = [1]\nother = \"keep\"\n"),
+        std::slice::from_ref(&empty),
+    )
+    .unwrap();
     assert_eq!(states, ["different"]);
     let parsed = toml(&candidate);
     assert_eq!(parsed["items"], Value::Array(Vec::new()));
     assert_eq!(parsed["other"], text("keep"));
-    let (candidate, states) =
-        merge_document("json", Some(r#"{"items": [1], "other": null}"#), std::slice::from_ref(&empty)).unwrap();
+    let (candidate, states) = merge_document(
+        "json",
+        Some(r#"{"items": [1], "other": null}"#),
+        std::slice::from_ref(&empty),
+    )
+    .unwrap();
     assert_eq!(states, ["different"]);
     let parsed = json(&candidate);
     assert_eq!(parsed["items"], serde_json::json!([]));

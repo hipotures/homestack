@@ -932,6 +932,7 @@ dependencies = [
  "ratatui",
  "ratcn",
  "rpassword",
+ "rustix",
  "serde_json",
  "sha2",
  "tempfile",

@@ -20,6 +20,7 @@ hs-deploy = { version = "0.1.0", path = "../hs-deploy" }
 hs-model = { version = "0.1.0", path = "../hs-model" }
 ratcn = "=0.0.5"
 rpassword = "7.5.4"
+rustix = { version = "1.1.5", features = ["fs", "process", "system"] }
 serde_json = "1.0.154"
 sha2 = "0.11.0"
 tempfile = "3.27.0"

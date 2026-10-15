@@ -3,6 +3,7 @@
 //! Python HomeStack does. The program run on the workspace
 //! (`guest/setup_guest.py`) is Python's, sent unchanged.
 
+pub mod backup;
 pub mod catalog;
 pub mod cli;
 pub mod definitions;

@@ -9,7 +9,7 @@ section, and works exactly as it does now:
 |---|---|---|
 | 14a | the core; Files, Credentials, Environment | done (below) |
 | 14c | Applications: installers, managed values, application files | done (below) |
-| 14d | Backup (BK), `setup --local` | open |
+| 14d | Backup (BK), `setup --local` | done (below) |
 | 14e | Herdr | open |
 | 14f | Repositories, `homestack repo` | open |
 | 13b step 5 | the setup tree in the TUI (and `setup TARGET` without selectors) | open |
@@ -45,7 +45,7 @@ its units (14d) are sent unchanged the same way.
     TARGET`, `setup TARGET SELECTORS…` with `--dry-run`, `--catalog`,
     `--non-interactive`, `--yes`, `--json`; Rich's default tables.
 - **Handlers:** file (Files, Credentials), environment, application
-  installers (14c adds managed values). A handler not ported yet (Backup, Herdr,
+  installers (14c adds managed values, 14d Backup). A handler not ported yet (Herdr,
   Repositories) refuses in its preflight, so nothing is written.
 - **The workspace user** (name, uid, gid) and the address come from the
   server (`GET /v1/config`, `/v1/workspaces/{target}`); Python read them
@@ -104,3 +104,30 @@ its units (14d) are sent unchanged the same way.
   swap its functions in the middle of an operation (the program is sent
   unchanged). Open: the TUI test of the application files, with the setup
   box.
+
+## 14d: Backup (BK) and `setup --local`
+
+- **Where:** `setup/backup.rs` (Python `backup.py`); BK (`bk.py`) and its
+  units are in `guest/backup/`, Python's byte for byte (a test compares
+  them), installed with the guest program's `managed-files-install`.
+- **Retrieval keys** on the desktop, `~/.ssh/homestack/backup/vm<VMID>-bk-
+  {archive,status}[.pub]`: inspected without creating anything, reconciled
+  under a lock on the private (0700) directory, never rotated; every file
+  is read through `O_NOFOLLOW`, written through its pinned parent with a
+  check that nothing changed in between, and a private key's public half
+  is derived from a memory file, never from a path (`rustix`, as Python's
+  `os` calls). The public halves go to the workspace's `authorized_keys`
+  restricted to BK.
+- **The workspace:** the runtime checks (python3, file, git, systemctl,
+  the Python modules of BK, the user systemd manager, `/usr/bin/cat`),
+  only the changed assets sent, the configuration created only when
+  missing, `daemon-reload` when a unit changed, `backup.timer` enabled and
+  verified; BK's own data under `~/backup` is never read or written.
+- **`setup --local backup=bk`:** this desktop's own account (`getent
+  passwd`), only the Backup group, no SSH and no retrieval keys; commands
+  run with a clean environment, the guest program with the desktop's
+  `python3`.
+- **Tests** (19 of the 94 of 14d ported): `tests/setup_backup.rs` (the
+  retrieval keys with the real `ssh-keygen`), and the dry runs in
+  `tests/cli.rs`. Excluded: the 74 tests of BK itself (`test_bk.py`), a
+  program sent unchanged. Open: the TUI test, with the setup box.

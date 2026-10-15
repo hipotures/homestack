@@ -957,3 +957,71 @@ fn setup_arguments_are_python_s() {
         .unwrap_or_default();
     assert!(scattered.contains("unrecognized arguments: env=bash"), "{scattered}");
 }
+
+/// Port of `test_setup_backup.py::BackupDefinitionTests::test_dry_run_contains_bk_without_execution`.
+#[tokio::test]
+async fn dry_run_contains_bk_without_execution() -> TestResult {
+    let desk = desk(LIFECYCLE, SERVER_TOML).await?;
+    let run = desk
+        .run_with(
+            &["setup", "alien-workspace", "backup=bk", "--dry-run", "--json"],
+            Recorded::default(),
+            setup_system(),
+            false,
+        )
+        .await;
+    assert_eq!(run.code, 0, "{}", run.console.out());
+    let result = run.json();
+    assert_eq!(result["dry_run"], true);
+    assert_eq!(result["plan"]["actions"][0]["id"], "bk");
+    assert_eq!(
+        result["plan"]["actions"][0]["restricted_authorized_keys"],
+        "~/.ssh/authorized_keys"
+    );
+    assert!(run.system.masters().is_empty());
+    Ok(())
+}
+
+/// `setup --local backup=bk`: this desktop's account, no SSH, no retrieval keys.
+#[tokio::test]
+async fn local_setup_plans_bk_for_this_desktop_without_ssh() -> TestResult {
+    let desk = desk(LIFECYCLE, SERVER_TOML).await?;
+    let run = desk
+        .run_with(
+            &["setup", "--local", "backup=bk", "--dry-run", "--json"],
+            Recorded::default(),
+            setup_system(),
+            false,
+        )
+        .await;
+    assert_eq!(run.code, 0, "{}", run.console.out());
+    let result = run.json();
+    assert_eq!(result["plan"]["target"]["local"], true);
+    assert_eq!(result["plan"]["actions"][0]["id"], "bk");
+    assert!(result["plan"]["actions"][0].get("restricted_authorized_keys").is_none());
+    let run = desk
+        .run_with(
+            &["setup", "--local", "env=bash", "--dry-run", "--json"],
+            Recorded::default(),
+            setup_system(),
+            false,
+        )
+        .await;
+    assert_eq!(run.code, 1);
+    let run = desk
+        .run_with(
+            &["setup", "--local", "alien-workspace", "--json"],
+            Recorded::default(),
+            setup_system(),
+            false,
+        )
+        .await;
+    assert_eq!(run.code, 1);
+    assert!(
+        run.json()["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("--local does not accept a workspace target")
+    );
+    Ok(())
+}
