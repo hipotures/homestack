@@ -515,6 +515,14 @@ impl App {
                         return None;
                     }
                     Some(Hit::SetupDetails) => return None,
+                    Some(Hit::SetupGroup(index)) => {
+                        if let Some(setup) = self.setup.as_mut()
+                            && matches!(setup.stage, super::setup::Stage::Tree)
+                        {
+                            setup.show_section(index);
+                        }
+                        return None;
+                    }
                     Some(Hit::Item(item)) => {
                         match &mut self.overlay {
                             Some(Overlay::Menu { index }) => *index = item,

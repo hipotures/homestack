@@ -254,7 +254,9 @@ fn tree_stage(buf: &mut Buffer, inner: Rect, app: &App, setup: &SetupBox) {
         )
     };
     write(buf, inner.x + 1, y, inner.width.saturating_sub(2), &filter.0, filter.1);
-    y += 2;
+    y += 1;
+    y = group_bar(buf, inner, y, app, setup);
+    y += 1;
     let notice_rows = u16::from(setup.notice.is_some());
     let body = Rect::new(
         inner.x,
@@ -370,4 +372,38 @@ fn draw_details(buf: &mut Buffer, area: Rect, app: &App, setup: &SetupBox) {
     }
     let bar = Rect::new(area.x, area.y.saturating_sub(1), area.width, area.height + 2);
     scrollbar(buf, bar, palette, scroll, height, lines.len());
+}
+
+/// Every group with its count, the shown one raised; a click shows one.
+/// The bar wraps when the groups do not fit on one line.
+fn group_bar(buf: &mut Buffer, inner: Rect, mut y: u16, app: &App, setup: &SetupBox) -> u16 {
+    let palette = &app.palette;
+    let text = text_style(palette);
+    let right = inner.right().saturating_sub(1);
+    let mut x = inner.x + 1;
+    for (index, group) in setup.settings.setup.groups.iter().enumerate() {
+        let (count, total) = setup.group_count(&group.id);
+        let label = format!(" {} {count}/{total} ", group.label);
+        let width = u16::try_from(label.chars().count()).unwrap_or(0);
+        if x + width > right && x > inner.x + 1 {
+            x = inner.x + 1;
+            y += 1;
+        }
+        if y >= inner.bottom() {
+            break;
+        }
+        let style = if index == setup.section {
+            text.fg(palette.background)
+                .bg(palette.focus)
+                .add_modifier(Modifier::BOLD)
+        } else if count > 0 {
+            text.add_modifier(Modifier::BOLD)
+        } else {
+            text.fg(palette.muted)
+        };
+        let used = write(buf, x, y, right.saturating_sub(x), &label, style);
+        register(Rect::new(x, y, used, 1), Hit::SetupGroup(index));
+        x += used + 1;
+    }
+    y + 1
 }

@@ -303,6 +303,8 @@ pub enum Hit {
     SetupRow(usize, u8),
     /// The details of the setup box (the wheel scrolls them).
     SetupDetails,
+    /// A group in the setup box's bar: show it.
+    SetupGroup(usize),
     /// A row of the install's settings.
     Setting(usize),
     /// A choice in the box of the focused setting.

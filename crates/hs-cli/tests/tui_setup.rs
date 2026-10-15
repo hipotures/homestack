@@ -1684,3 +1684,29 @@ fn every_group_is_a_section() {
     }
     assert_eq!(setup.section, 0);
 }
+
+/// Every group is in the bar with its count; a click shows that group. The
+/// details of a group carry no key help (it is in Menu › Help).
+#[test]
+fn the_group_bar_shows_every_group_and_a_click_opens_it() {
+    let Boxed { mut setup, _home } = default_box();
+    setup.toggle("codex", false);
+    assert!(!setup.details("env").contains("Space or a click"));
+    let (mut fixture, _keep) = tui(setup);
+    let app = &mut fixture.app;
+    let buf = render(app, 120, 36);
+    let text = screen(&buf);
+    for group in [
+        " Files 0/",
+        " Environment 0/",
+        " Applications 1/",
+        " Credentials 0/",
+        " Backup 0/",
+        " Repositories 0/",
+    ] {
+        assert!(text.contains(group), "{group}: {text}");
+    }
+    click(app, position(&buf, " Backup 0/"));
+    assert_eq!(open(app).section, section(open(app), "backup"));
+    assert_eq!(open(app).cursor, "backup");
+}

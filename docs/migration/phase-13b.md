@@ -370,10 +370,10 @@ TARGET SELECTORS…`.
   without selectors says to open it here.
 - **Start** (`tui/setup_work.rs`, a thread of its own): the workspace is
   resolved through the server, the catalog loaded with the owner's
-  repositories and its snapshot saved, then the one connection the box
-  keeps until it closes is opened. The TUI lends the terminal for that
-  (the touch of a security key, as before Python's Textual started), then
-  the state is read (`inspect_workspace_state`). The box shows each step
+  repositories and its snapshot saved, then one connection is opened and
+  kept while the TUI runs (the box opens again without a touch). The TUI lends the terminal for that
+  (the touch of a security key is asked in the TUI's touch box, through
+  the askpass bridge of the install), then the state is read (`inspect_workspace_state`). The box shows each step
   with a spinner; a failure is shown in the box.
 - **Sections:** each group of the catalog (Files, Environment,
   Applications, Credentials, Backup, Repositories, and any configured) is

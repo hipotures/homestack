@@ -210,6 +210,39 @@ pub fn connect(
     Ok(Box::new(SshWorkspace::open(Arc::clone(system), home, master)?))
 }
 
+/// [`connect`] for the TUI: ssh runs behind `prefix` (the askpass bridge),
+/// so the touch of a security key and its other questions are asked in the
+/// TUI; ssh signs itself, so the touch reaches the askpass.
+pub fn connect_asking(
+    system: &Arc<dyn System>,
+    home: &Path,
+    loaded: &Loaded,
+    settings: &Settings,
+    target: &Target,
+    prefix: Vec<String>,
+) -> Result<Box<dyn Workspace>, AppError> {
+    let mut master = Master::configured(
+        home,
+        &loaded.client.workspace_ssh,
+        &Sounds::from_table(loaded.client.sounds.as_ref()),
+        &settings.user,
+        &target.ip,
+        Some(&target.name),
+    );
+    if !prefix.is_empty()
+        && !master
+            .options
+            .iter()
+            .any(|option| option.to_lowercase().starts_with("identityagent"))
+    {
+        master
+            .options
+            .extend(["-o".to_owned(), "IdentityAgent=none".to_owned()]);
+    }
+    master.prefix = prefix;
+    Ok(Box::new(SshWorkspace::open(Arc::clone(system), home, master)?))
+}
+
 /// The workspace connection, or the desktop itself for a local target.
 pub fn open_workspace(
     system: &Arc<dyn System>,

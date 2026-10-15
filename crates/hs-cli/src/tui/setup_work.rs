@@ -1,9 +1,10 @@
 //! The worker of the setup box: in a thread of its own it resolves the
-//! workspace, loads the catalog, opens the one connection the box keeps
-//! until it closes (Python opened it before Textual started), reads the
-//! state, and runs what the box asks. When it needs the terminal (the
-//! touch of a security key, an interactive installer, Herdr's desktop
-//! registration) it asks the TUI for it and waits.
+//! workspace, loads the catalog, opens one connection (the touch of the
+//! security key is asked in the TUI through the askpass bridge) and keeps
+//! it while the TUI runs, so the box opens again without a touch; it reads
+//! the state and runs what the box asks. An interactive installer and
+//! Herdr's desktop registration get the terminal: the worker asks the TUI
+//! for it and waits.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -17,8 +18,8 @@ use crate::AppError;
 use crate::config::Loaded;
 use crate::setup::catalog::{Catalog, load_catalog, save_snapshot};
 use crate::setup::cli::{
-    catalog_with_repositories, connect, key_advice, key_label, local_settings, local_target_of, resolve_target,
-    settings_of,
+    catalog_with_repositories, connect, connect_asking, key_advice, key_label, local_settings, local_target_of,
+    resolve_target, settings_of,
 };
 use crate::setup::definitions::Entry;
 use crate::setup::engine::{Connection, Observer, execute_plan};
@@ -63,7 +64,12 @@ pub enum Command {
     Refresh,
     Catalog,
     Execute(Box<Plan>),
+    /// The box closed: the connection stays for the next one.
     Close,
+    /// A box opened again on the same target: the state is read again.
+    Reopen,
+    /// The TUI ends: the connection closes.
+    Quit,
 }
 
 /// What the worker starts from.
@@ -76,6 +82,8 @@ pub struct Start {
     pub state_home: Option<PathBuf>,
     pub loaded: Loaded,
     pub handle: tokio::runtime::Handle,
+    /// The askpass bridge: ssh asks the touch and its questions in the TUI.
+    pub ssh_prefix: Vec<String>,
 }
 
 /// How the worker tells the box.
@@ -208,6 +216,18 @@ fn open(start: &Start, tell: &Tell) -> Result<(Session, Catalog, Value), AppErro
                 user: settings.user.clone(),
             }));
         }
+        // The touch is asked in the TUI through the askpass bridge; without
+        // the bridge, ssh gets the terminal.
+        if !start.ssh_prefix.is_empty() {
+            return connect_asking(
+                &start.system,
+                &start.home,
+                &start.loaded,
+                settings,
+                target,
+                start.ssh_prefix.clone(),
+            );
+        }
         let mut banner = vec![format!(
             "SSH: authenticate once; this session remains open until setup exits. Touch your {key} if prompted."
         )];
@@ -245,7 +265,7 @@ pub fn spawn(start: Start, tell: Tell, cancel: Arc<AtomicBool>) -> (Sender<Comma
 }
 
 fn run(start: &Start, tell: &Tell, cancel: &Arc<AtomicBool>, commands: &Receiver<Command>) {
-    let (mut session, catalog, state) = match open(start, tell) {
+    let (mut session, mut catalog, state) = match open(start, tell) {
         Ok(opened) => opened,
         Err(error) => {
             tell(Event::Failed(error.0));
@@ -255,20 +275,34 @@ fn run(start: &Start, tell: &Tell, cancel: &Arc<AtomicBool>, commands: &Receiver
     tell(Event::Ready {
         settings: Box::new(session.settings.clone()),
         target: Box::new(session.target.clone()),
-        catalog: Box::new(catalog),
+        catalog: Box::new(catalog.clone()),
         state,
     });
     let sounds = Sounds::from_table(start.loaded.client.sounds.as_ref());
     let system = start.system.as_ref();
     while let Ok(command) = commands.recv() {
         match command {
-            Command::Close => return,
+            Command::Close => {}
+            Command::Quit => return,
+            Command::Reopen => match session.inspect(system) {
+                Ok(state) => tell(Event::Ready {
+                    settings: Box::new(session.settings.clone()),
+                    target: Box::new(session.target.clone()),
+                    catalog: Box::new(catalog.clone()),
+                    state,
+                }),
+                // The connection is gone: the next box connects again.
+                Err(error) => {
+                    tell(Event::Failed(error.0));
+                    return;
+                }
+            },
             Command::Refresh => match session.inspect(system) {
                 Ok(state) => tell(Event::State(state)),
                 Err(error) => tell(Event::Notice(format!("State refresh failed: {}", error.0), true)),
             },
             Command::Catalog => {
-                let mut catalog = if session.target.local {
+                catalog = if session.target.local {
                     load_catalog(&session.settings, None)
                 } else {
                     catalog_with_repositories(system, &session.settings)
@@ -287,7 +321,7 @@ fn run(start: &Start, tell: &Tell, cancel: &Arc<AtomicBool>, commands: &Receiver
                         true,
                     ));
                 }
-                tell(Event::Catalog(Box::new(catalog), state));
+                tell(Event::Catalog(Box::new(catalog.clone()), state));
             }
             Command::Execute(plan) => {
                 cancel.store(false, Ordering::SeqCst);

@@ -45,7 +45,7 @@ enum Update {
     AskEnded(u64),
     /// What the setup box's worker tells, with the number of the box it
     /// was started for.
-    Setup(u64, super::setup_work::Event),
+    Setup(Option<u32>, super::setup_work::Event),
     /// The running action's progress.
     Action(Progress),
 }
@@ -501,7 +501,9 @@ impl Installing {
         }
     }
 
-    fn start(&mut self, app: &mut App, ctx: &Context, updates: &mpsc::UnboundedSender<Update>) {
+    /// The askpass bridge (started once): the prefix that sends ssh's
+    /// questions, the touch of a security key among them, to the TUI.
+    fn bridge(&mut self, app: &mut App, updates: &mpsc::UnboundedSender<Update>) -> Vec<String> {
         if self.bridge.is_none() {
             let program = std::env::current_exe().unwrap_or_else(|_| "homestack".into());
             match Bridge::start(program) {
@@ -526,6 +528,11 @@ impl Installing {
                 ),
             }
         }
+        self.bridge.as_ref().map(Bridge::command_prefix).unwrap_or_default()
+    }
+
+    fn start(&mut self, app: &mut App, ctx: &Context, updates: &mpsc::UnboundedSender<Update>) {
+        self.bridge(app, updates);
         let client_path = config::default_path(&ctx.home, ctx.config_home.as_deref());
         let token_dir = client_path
             .parent()
@@ -601,10 +608,11 @@ pub async fn run(ctx: &mut Context) -> Result<i32, AppError> {
     let mut fast = tokio::time::interval(Duration::from_millis(100));
     let mut connected: Option<String> = None;
     let mut decide: Option<mpsc::UnboundedSender<Decision>> = None;
-    let mut setup_worker: Option<SetupWorker> = None;
-    // Each box opened gets a number: a worker of a box closed while it was
-    // connecting cannot speak to the next one.
-    let mut setup_generation: u64 = 0;
+    // One worker and its connection per target (`None`: this desktop),
+    // kept until the TUI ends: opening the box again needs no new touch.
+    let mut setup_workers: std::collections::HashMap<Option<u32>, SetupWorker> = std::collections::HashMap::new();
+    // The target of the open box; another target's worker cannot speak to it.
+    let mut setup_open: Option<Option<u32>> = None;
     loop {
         app.clock = clock.now();
         screen
@@ -620,7 +628,7 @@ pub async fn run(ctx: &mut Context) -> Result<i32, AppError> {
                 };
                 if let Some(request) = request {
                     if request == Request::Quit {
-                        if let Some(worker) = setup_worker.take() {
+                        for (_, worker) in setup_workers.drain() {
                             worker.close();
                         }
                         installing.send(Command::Cancel, &mut app, ctx, &updates);
@@ -662,17 +670,25 @@ pub async fn run(ctx: &mut Context) -> Result<i32, AppError> {
                             }
                         }
                         Request::Setup(vmid) => match connection.desktop.clone() {
+                            Some(_) if setup_workers.get(&vmid).is_some_and(|worker| !worker.thread.is_finished()) => {
+                                setup_open = Some(vmid);
+                                if let Some(worker) = setup_workers.get(&vmid) {
+                                    let _ = worker.commands.send(super::setup_work::Command::Reopen);
+                                }
+                            }
                             Some(desktop) => {
-                                setup_generation += 1;
-                                let generation = setup_generation;
+                                setup_open = Some(vmid);
+                                let generation = vmid;
                                 let cancel = Arc::new(AtomicBool::new(false));
                                 let sender = updates.clone();
                                 let tell: Arc<dyn Fn(super::setup_work::Event) + Send + Sync> =
                                     Arc::new(move |event| {
                                         let _ = sender.send(Update::Setup(generation, event));
                                     });
+                                let ssh_prefix = installing.bridge(&mut app, &updates);
                                 let start = super::setup_work::Start {
                                     vmid,
+                                    ssh_prefix,
                                     client: connection.client.clone(),
                                     system: Arc::clone(&ctx.system),
                                     home: ctx.home.clone(),
@@ -681,7 +697,7 @@ pub async fn run(ctx: &mut Context) -> Result<i32, AppError> {
                                     handle: tokio::runtime::Handle::current(),
                                 };
                                 let (commands, thread) = super::setup_work::spawn(start, tell, Arc::clone(&cancel));
-                                setup_worker = Some(SetupWorker { commands, cancel, thread });
+                                setup_workers.insert(vmid, SetupWorker { commands, cancel, thread });
                             }
                             None => {
                                 app.setup = None;
@@ -691,7 +707,7 @@ pub async fn run(ctx: &mut Context) -> Result<i32, AppError> {
                         Request::SetupAsk(ask) => {
                             use super::setup::Ask;
                             use super::setup_work::Command as Work;
-                            if let Some(worker) = &setup_worker {
+                            if let Some(worker) = setup_open.and_then(|target| setup_workers.get(&target)) {
                                 let command = match ask {
                                     Ask::Refresh => Some(Work::Refresh),
                                     Ask::Catalog => Some(Work::Catalog),
@@ -711,7 +727,7 @@ pub async fn run(ctx: &mut Context) -> Result<i32, AppError> {
                                 }
                             }
                             if ask == Ask::Close {
-                                setup_worker = None;
+                                setup_open = None;
                             }
                         }
                         Request::Ssh(vmid) => {
@@ -797,8 +813,8 @@ pub async fn run(ctx: &mut Context) -> Result<i32, AppError> {
                         installing.pending = None;
                     }
                 }
-                // An old worker: its terminal request is dropped, which ends it.
-                Update::Setup(generation, _) if generation != setup_generation => {}
+                // Another target's worker: its terminal request is dropped.
+                Update::Setup(target, _) if setup_open != Some(target) => {}
                 Update::Setup(_, super::setup_work::Event::Terminal(handoff)) => {
                     // A box closed meanwhile does not get the terminal.
                     if app.setup.is_some() {
@@ -856,7 +872,7 @@ impl SetupWorker {
     /// Close the connection the worker keeps; wait a little for it, so the
     /// master connection does not outlive the TUI.
     fn close(self) {
-        let _ = self.commands.send(super::setup_work::Command::Close);
+        let _ = self.commands.send(super::setup_work::Command::Quit);
         self.cancel.store(true, Ordering::SeqCst);
         for _ in 0..30 {
             if self.thread.is_finished() {

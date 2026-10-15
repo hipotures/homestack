@@ -156,6 +156,10 @@ fn draw_into(buf: &mut Buffer, area: Rect, app: &App) {
     if let Some(overlay) = &app.overlay {
         draw_overlay(buf, area, app, overlay);
     }
+    // ssh's question (the touch of the setup's connection) over the screen.
+    if let Some(asking) = &app.asking {
+        super::draw_install::asking(buf, area, app, asking);
+    }
 }
 
 fn too_small(buf: &mut Buffer, area: Rect, palette: &Palette) {
@@ -994,7 +998,7 @@ fn list_item(palette: &Palette, label: &str, chosen: bool) -> (String, Style) {
     }
 }
 
-const HELP: [&str; 18] = [
+const HELP: [&str; 19] = [
     "1 2 3 4     show or hide workspaces, cluster, storage, log",
     "0           the standard view: every panel and node, no filter",
     "v           next view (auto, 1, 2)",
@@ -1011,8 +1015,9 @@ const HELP: [&str; 18] = [
     "In the box: tab next field, ← → choose, ↵ plan, ↵ or a apply,",
     "esc cancel (while it runs esc hides the box; ↵ shows it).",
     "",
-    "Setup: tab next group, ␣ toggle, 0 branch, / filter, ← → close",
-    "or open, ↵ review, F5 state, Ctrl+R catalog. The CLI: homestack --help",
+    "Setup: tab next group, ␣ toggle, 0 branch, / filter, ← → close or",
+    "open, ↵ review, F5 state, Ctrl+R catalog; green ready, red overwrite.",
+    "The CLI has every command: homestack --help",
 ];
 
 /// `line` cut into pieces of at most `width` characters, at spaces when it

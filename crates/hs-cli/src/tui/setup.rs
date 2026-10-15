@@ -356,6 +356,21 @@ impl SetupBox {
         self.settings.setup.groups.get(index).map(|group| group.id.clone())
     }
 
+    /// Of the group `id`: its items with something selected, and its items.
+    #[must_use]
+    pub fn group_count(&self, id: &str) -> (usize, usize) {
+        let entries: Vec<&Entry> = self.catalog.entries.iter().filter(|entry| entry.group == id).collect();
+        let count = entries
+            .iter()
+            .filter(|entry| {
+                self.descendant_ids(&entry.id, false)
+                    .iter()
+                    .any(|id| self.selected.contains(id))
+            })
+            .count();
+        (count, entries.len())
+    }
+
     /// The groups, for the carousel.
     #[must_use]
     pub fn groups(&self) -> Vec<String> {
@@ -1090,29 +1105,7 @@ impl SetupBox {
                     lines.push(self.catalog.repository_error.clone());
                 }
             }
-            lines.extend(
-                [
-                    "",
-                    "Green: detected ready. Red: selected update/reapply or overwrite risk.",
-                    "Space or a click on the checkbox toggles items.",
-                    "A click on a name shows its details without selecting.",
-                    "Left/Right or a click on the arrow collapses/expands.",
-                    "0 selects the branch; a filter (/) scopes bulk actions to visible matches.",
-                    "Tab / Shift+Tab or a click on ‹ › shows the next group.",
-                    "PageUp/PageDown or the mouse wheel over the details scrolls them.",
-                ]
-                .map(str::to_owned),
-            );
-            lines.push(
-                if self.target.local {
-                    "F5 refreshes local state."
-                } else {
-                    "F5 refreshes guest state through the existing SSH session."
-                }
-                .to_owned(),
-            );
-            lines.push("Ctrl+R refreshes the catalog and installation state.".to_owned());
-            lines.push("Enter reviews selected actions; confirmation is required before writes.".to_owned());
+            // The keys are in Menu › Help.
             lines.push(String::new());
             lines.push(format!(
                 "State registry: {}",
