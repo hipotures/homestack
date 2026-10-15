@@ -843,7 +843,7 @@ async fn the_confirmation_groups_the_changes_in_short_lines() {
     for heading in [
         "Account and tokens",
         "Roles (6 new)",
-        "Pools (3 new)",
+        "Pools (4 new)",
         "Gold",
         "Permissions",
         "Cloud-Init snippets",

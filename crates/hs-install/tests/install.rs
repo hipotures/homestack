@@ -67,6 +67,10 @@ const SINGLE_NODE_ACL: &str = "/nodes\ttoken\thomestack@pve!server\tPVEAuditor
 /pool/homestack\tuser\thomestack@pve\tHomeStack
 /pool/homestack-gold\ttoken\thomestack@pve!server\tHomeStackGold
 /pool/homestack-gold\tuser\thomestack@pve\tHomeStackGold
+/pool/homestack-test\ttoken\thomestack@pve!server\tHomeStack
+/pool/homestack-test\ttoken\thomestack@pve!server\tHomeStackGold
+/pool/homestack-test\tuser\thomestack@pve\tHomeStack
+/pool/homestack-test\tuser\thomestack@pve\tHomeStackGold
 /pool/homestack-service\ttoken\thomestack@pve!deploy\tHomeStackDeploy
 /pool/homestack-service\tuser\thomestack@pve\tHomeStackDeploy
 /sdn/zones/localnetwork/vmbr0\ttoken\thomestack@pve!server\tPVESDNUser
@@ -94,7 +98,10 @@ fn install_on_a_single_node() {
             .all(|line| !line.starts_with("/\t") && !line.starts_with("/vms")),
         "a token or the user can see VMs outside the HomeStack pools"
     );
-    expect_pools(&fake, "homestack\t\nhomestack-gold\t101\nhomestack-service\t");
+    expect_pools(
+        &fake,
+        "homestack\t\nhomestack-gold\t101\nhomestack-service\t\nhomestack-test\t",
+    );
     assert!(
         fake.read("users").lines().any(|line| line == "homestack@pve"),
         "user not created"
@@ -193,6 +200,15 @@ fn install_in_a_cluster_and_uninstall() {
 #[ignore = "slow (owner, 2026-10-15): run with cargo test -- --ignored"]
 fn adopt_the_hand_made_state_with_the_test_part() {
     let fake = Fake::today();
+    // The test part's own Gold, cloned by hand into the test pool.
+    fake.append(
+        "vms.tsv",
+        "249\tpve2\ttest-gold\thomestack-gold\tvirtio=BC:24:11:00:00:09,bridge=vmbr0\t\n",
+    );
+    fake.write(
+        "pools.tsv",
+        "homestack-test\t249\tHomeStack migration tests, VMIDs 240-249\n",
+    );
     let mut settings = standard(true);
     settings.storages = vec!["local-lvm".into(), "worker-roots".into()];
     let run = fake.install(&settings);
@@ -219,11 +235,10 @@ fn adopt_the_hand_made_state_with_the_test_part() {
 /sdn\tuser\thomestack@pve\tPVEAuditor
 /storage\ttoken\thomestack@pve!test\tPVEAuditor
 /storage\tuser\thomestack@pve\tPVEAuditor
-/pool/homestack-gold\ttoken\thomestack@pve!test\tHomeStackGold
-/pool/homestack-gold\tuser\thomestack@pve\tHomeStackGold
-/pool/homestack-gold\tuser\thomestack@pve\tPVEAuditor
 /pool/homestack-test\ttoken\thomestack@pve!test\tHomeStack
+/pool/homestack-test\ttoken\thomestack@pve!test\tHomeStackGold
 /pool/homestack-test\tuser\thomestack@pve\tHomeStack
+/pool/homestack-test\tuser\thomestack@pve\tHomeStackGold
 /pool/homestack-test\tuser\thomestack@pve\tPVEAuditor
 /sdn/zones/localnetwork/vmbr0\ttoken\thomestack@pve!test\tPVESDNUser
 /sdn/zones/localnetwork/vmbr0\tuser\thomestack@pve\tPVEAuditor
@@ -254,7 +269,7 @@ fn adopt_the_hand_made_state_with_the_test_part() {
             "{ROLES_TARGET}\nHomeStackServerDisks\tVM.Config.Disk\nHomeStackServerGoldGuest\tVM.GuestAgent.FileRead,VM.GuestAgent.Unrestricted"
         ),
     );
-    expect_pools(&fake, "homestack-gold\t101\nhomestack-service\t\nhomestack-test\t");
+    expect_pools(&fake, "homestack-gold\t\nhomestack-service\t\nhomestack-test\t249");
     let calls = fake.read("calls.log");
     assert!(
         !calls.contains("token add homestack@pve server") && !calls.contains("token add homestack@pve test"),
@@ -304,7 +319,7 @@ fn adopt_the_hand_made_state_with_the_test_part() {
     assert!(!acl.contains("homestack@pve!test"), "test token entries left");
     assert!(!fake.read("tokens.tsv").contains("\ttest\t"), "test token left");
     assert!(!acl.contains("homestack-test"), "user entries on the test pool left");
-    expect_pools(&fake, "homestack-gold\t101\nhomestack-service\t");
+    expect_pools(&fake, "homestack-gold\t\nhomestack-service\t");
     assert!(
         acl.contains("homestack@pve!deploy"),
         "uninstall --test removed the deploy token's entries"
@@ -477,7 +492,10 @@ fn the_ticked_guests_go_back_in_their_pools_and_the_rest_is_a_warning() {
         &run,
         "warning: in no pool, though their tags name one: 241 -> homestack",
     );
-    expect_pools(&fake, "homestack\t240\nhomestack-gold\t101\nhomestack-service\t243");
+    expect_pools(
+        &fake,
+        "homestack\t240\nhomestack-gold\t101\nhomestack-service\t243\nhomestack-test\t",
+    );
 
     // Run again: they are in their pools, nothing more to adopt.
     let again = fake.install(&Settings {
@@ -485,7 +503,10 @@ fn the_ticked_guests_go_back_in_their_pools_and_the_rest_is_a_warning() {
         ..standard(false)
     });
     assert!(again.ok, "{}", again.out);
-    expect_pools(&fake, "homestack\t240,241\nhomestack-gold\t101\nhomestack-service\t243");
+    expect_pools(
+        &fake,
+        "homestack\t240,241\nhomestack-gold\t101\nhomestack-service\t243\nhomestack-test\t",
+    );
 }
 
 #[test]
@@ -538,7 +559,10 @@ fn an_uninstall_then_an_install_puts_everything_back() {
         ..standard(false)
     });
     assert!(run.ok, "{}", run.out);
-    expect_pools(&fake, "homestack\t240\nhomestack-gold\t101\nhomestack-service\t243");
+    expect_pools(
+        &fake,
+        "homestack\t240\nhomestack-gold\t101\nhomestack-service\t243\nhomestack-test\t",
+    );
 }
 
 #[test]

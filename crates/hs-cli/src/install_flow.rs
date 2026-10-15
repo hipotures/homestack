@@ -359,7 +359,9 @@ fn grouped_changes(plan: &Plan, home: &std::path::Path) -> Vec<(String, Vec<Stri
                         } else {
                             format!("put VM {vmid} in pool {pool}")
                         };
-                        if *pool == "homestack-gold" {
+                        // Gold's pool is homestack-gold, or the test pool for
+                        // the test part's Gold.
+                        if step.description.contains("Gold ") {
                             gold.push(line);
                         } else {
                             members.push(line);

@@ -8,7 +8,7 @@ use crate::probe::{get, text};
 use crate::root::Root;
 use crate::settings::Settings;
 use crate::shell::quote;
-use crate::state::{State, Vm};
+use crate::state::{POOL_TEST, State, Vm, gold_pool};
 use crate::{Choice, Question};
 
 /// The name of the VM that is Gold when none is chosen.
@@ -263,10 +263,19 @@ pub fn find_gold(state: &State, settings: &Settings, found: &mut Findings) -> Op
         ));
         return None;
     }
+    // Each part has its own Gold: the test part's is the one in its pool
+    // (cloned there by hand), the production part's anywhere else.
+    let of_part = |vm: &Vm| {
+        if settings.test {
+            vm.pool == POOL_TEST
+        } else {
+            vm.pool != POOL_TEST
+        }
+    };
     let tagged: Vec<u32> = state
         .vms
         .iter()
-        .filter(|(_, vm)| has_tag(vm, "homestack-gold"))
+        .filter(|(_, vm)| has_tag(vm, "homestack-gold") && of_part(vm))
         .map(|(vmid, _)| *vmid)
         .collect();
     if let [one] = tagged.as_slice() {
@@ -276,7 +285,7 @@ pub fn find_gold(state: &State, settings: &Settings, found: &mut Findings) -> Op
     let named: Vec<u32> = state
         .vms
         .iter()
-        .filter(|(_, vm)| vm.kind == "qemu" && vm.name == DEFAULT_GOLD_NAME)
+        .filter(|(_, vm)| vm.kind == "qemu" && vm.name == DEFAULT_GOLD_NAME && of_part(vm))
         .map(|(vmid, _)| *vmid)
         .collect();
     if let [one] = named.as_slice() {
@@ -292,12 +301,18 @@ pub fn find_gold(state: &State, settings: &Settings, found: &mut Findings) -> Op
     let (note, choices) = match tagged.as_slice() {
         [one] => return Some(*one),
         [] => (
-            "The prepared base VM that every workspace is cloned from; the installer tags it homestack-gold and puts it in the pool homestack-gold. No VM is tagged homestack-gold yet; these are the QEMU VMs (prepare Gold first, see the README).".to_owned(),
+            format!(
+                "The prepared base VM that every workspace is cloned from; the installer tags it homestack-gold and puts it in the pool {}. No VM is tagged homestack-gold yet; these are the QEMU VMs (prepare Gold first, see the README).",
+                gold_pool(settings.test)
+            ),
             vm_choices(state, |vm| vm.kind == "qemu" && !vm.template),
         ),
         _ => (
-            "The prepared base VM that every workspace is cloned from; the installer tags it homestack-gold and puts it in the pool homestack-gold. Several VMs are tagged homestack-gold.".to_owned(),
-            vm_choices(state, |vm| has_tag(vm, "homestack-gold")),
+            format!(
+                "The prepared base VM that every workspace is cloned from; the installer tags it homestack-gold and puts it in the pool {}. Several VMs are tagged homestack-gold.",
+                gold_pool(settings.test)
+            ),
+            vm_choices(state, |vm| has_tag(vm, "homestack-gold") && of_part(vm)),
         ),
     };
     found.questions.push(Question {
@@ -330,9 +345,10 @@ pub fn check_gold(root: &mut dyn Root, state: &State, settings: &Settings, found
             ));
         }
     }
-    if !vm.pool.is_empty() && vm.pool != "homestack-gold" {
+    let pool = gold_pool(settings.test);
+    if !vm.pool.is_empty() && vm.pool != pool {
         found.errors.push(format!(
-            "Gold {gold} is in pool {0}; HomeStack needs it in homestack-gold (take it out of {0} first)",
+            "Gold {gold} is in pool {0}; this part needs it in {pool} (take it out of {0} first)",
             vm.pool
         ));
     }
@@ -549,7 +565,7 @@ pub fn all_questions(state: &State, settings: &Settings) -> Vec<Question> {
         questions.push(Question {
             option: "--gold",
             title: "Gold VM".to_owned(),
-            note: "The prepared base VM that every workspace is cloned from; the installer tags it homestack-gold and puts it in the pool homestack-gold.".to_owned(),
+            note: format!("The prepared base VM that every workspace is cloned from; the installer tags it homestack-gold and puts it in the pool {}.", gold_pool(settings.test)),
             multiple: false,
             choices,
             defaults,

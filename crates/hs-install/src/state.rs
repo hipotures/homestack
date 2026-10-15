@@ -15,6 +15,13 @@ pub const POOL_TEST: &str = "homestack-test";
 pub const POOL_GOLD: &str = "homestack-gold";
 pub const POOL_SERVICE: &str = "homestack-service";
 
+/// The pool Gold of the part is in: the test part keeps its own Gold among
+/// its workspaces (the owner, 2026-10-15).
+#[must_use]
+pub const fn gold_pool(test: bool) -> &'static str {
+    if test { POOL_TEST } else { POOL_GOLD }
+}
+
 /// The pools HomeStack owns, whose members are read.
 pub const POOLS: [&str; 4] = [POOL_WORKSPACES, POOL_TEST, POOL_GOLD, POOL_SERVICE];
 

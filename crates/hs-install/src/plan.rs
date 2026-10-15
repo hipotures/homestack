@@ -14,7 +14,7 @@ use crate::root::Root;
 use crate::settings::{Command, Settings};
 use crate::shell::{join, quote};
 use crate::snippets::{self, SNIPPETS};
-use crate::state::{Acl, HS_USER, POOL_GOLD, POOL_SERVICE, POOL_TEST, POOL_WORKSPACES, State, privs};
+use crate::state::{Acl, HS_USER, POOL_GOLD, POOL_SERVICE, POOL_TEST, POOL_WORKSPACES, State, gold_pool, privs};
 
 const DEPLOY_TOKEN: &str = "deploy";
 
@@ -201,7 +201,6 @@ fn pveum(description: impl Into<String>, args: &[&str]) -> Step {
 struct Names<'a> {
     settings: &'a Settings,
     token: &'a str,
-    pool: &'a str,
     sdn_path: &'a str,
 }
 
@@ -214,8 +213,22 @@ fn token_target_acl(names: &Names) -> BTreeSet<Acl> {
     for path in ["/nodes", "/storage", "/sdn"] {
         entries.insert(acl_token(path, names.token, "PVEAuditor"));
     }
-    entries.insert(acl_token(&format!("/pool/{}", names.pool), names.token, "HomeStack"));
-    entries.insert(acl_token(&format!("/pool/{POOL_GOLD}"), names.token, "HomeStackGold"));
+    // The test token works only in the test pool, where its own Gold is
+    // too; the server's token (the panel) also in the test pool, so the
+    // panel shows and makes test workspaces (the owner, 2026-10-15).
+    let pools: &[(&str, &str)] = if names.settings.test {
+        &[(POOL_TEST, "HomeStack"), (POOL_TEST, "HomeStackGold")]
+    } else {
+        &[
+            (POOL_WORKSPACES, "HomeStack"),
+            (POOL_GOLD, "HomeStackGold"),
+            (POOL_TEST, "HomeStack"),
+            (POOL_TEST, "HomeStackGold"),
+        ]
+    };
+    for (pool, role) in pools {
+        entries.insert(acl_token(&format!("/pool/{pool}"), names.token, role));
+    }
     for id in names
         .settings
         .storages
@@ -484,15 +497,24 @@ fn plan_install(ctx: &Context) -> Result<Vec<Step>, InstallError> {
             &["pool", "add", POOL_SERVICE, "--comment", "Containers"],
         ));
     }
-    if !state.pools.contains_key(ctx.pool) {
-        let comment = if ctx.settings.test {
+    // The production part makes the test pool too: the server's token has
+    // entries on it.
+    let mut pools = vec![ctx.pool];
+    if !ctx.settings.test {
+        pools.push(POOL_TEST);
+    }
+    for pool in pools {
+        if state.pools.contains_key(pool) {
+            continue;
+        }
+        let comment = if pool == POOL_TEST {
             "Test Workspaces"
         } else {
             "Workspaces"
         };
         steps.push(pveum(
-            format!("create pool {}", ctx.pool),
-            &["pool", "add", ctx.pool, "--comment", comment],
+            format!("create pool {pool}"),
+            &["pool", "add", pool, "--comment", comment],
         ));
     }
     for vmid in ctx.settings.adopt.iter().collect::<BTreeSet<_>>() {
@@ -521,12 +543,13 @@ fn plan_install(ctx: &Context) -> Result<Vec<Step>, InstallError> {
             ]),
         });
     }
+    let gold_pool = gold_pool(ctx.settings.test);
     if let Some(gold) = ctx.gold
-        && state.vms.get(&gold).is_some_and(|vm| vm.pool != POOL_GOLD)
+        && state.vms.get(&gold).is_some_and(|vm| vm.pool != gold_pool)
     {
         steps.push(pveum(
-            format!("put Gold {gold} in pool {POOL_GOLD}"),
-            &["pool", "modify", POOL_GOLD, "--vms", &gold.to_string()],
+            format!("put Gold {gold} in pool {gold_pool}"),
+            &["pool", "modify", gold_pool, "--vms", &gold.to_string()],
         ));
     }
     plan_token(ctx, ctx.token, &format!("HomeStack {}", ctx.part), &mut steps)?;
@@ -642,7 +665,7 @@ fn plan_uninstall(root: &mut dyn Root, ctx: &Context, kept: &mut Vec<String>) ->
             let id = vmid.parse::<u32>().ok();
             let vm = id.and_then(|id| state.vms.get(&id));
             let name = vm.map_or_else(String::new, |vm| format!(" ({})", vm.name));
-            let is_gold = pool == POOL_GOLD
+            let is_gold = (pool == POOL_GOLD || pool == POOL_TEST)
                 && (id.is_some() && id == ctx.settings.gold
                     || vm.is_some_and(|vm| vm.tags.iter().any(|tag| tag == discover::GOLD_TAG)));
             let description = if is_gold {
@@ -655,7 +678,7 @@ fn plan_uninstall(root: &mut dyn Root, ctx: &Context, kept: &mut Vec<String>) ->
                 &["pool", "modify", pool, "--vms", vmid, "--delete", "1"],
             ));
             let back = if is_gold {
-                Some(POOL_GOLD)
+                Some(pool)
             } else {
                 vm.and_then(discover::pool_by_tags)
             };
@@ -821,7 +844,6 @@ pub fn make_plan(
     let names = Names {
         settings,
         token,
-        pool,
         sdn_path: &found.sdn_path,
     };
     let gold_label = found.gold.and_then(|vmid| {
