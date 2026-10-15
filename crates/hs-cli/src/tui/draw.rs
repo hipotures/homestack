@@ -306,7 +306,9 @@ struct Column {
     value: fn(&StatusEntry) -> String,
 }
 
-fn columns(width: usize) -> Vec<Column> {
+/// The list's columns for `width` cells; NAME as wide as `name_width`, the
+/// longest name, and never narrower than its 12.
+fn columns(width: usize, name_width: usize) -> Vec<Column> {
     let all = [
         Column {
             heading: "VMID",
@@ -317,7 +319,7 @@ fn columns(width: usize) -> Vec<Column> {
         },
         Column {
             heading: "NAME",
-            width: 12,
+            width: name_width.max(12),
             right: false,
             value: |entry| entry.name.clone().unwrap_or_default(),
         },
@@ -661,7 +663,17 @@ fn workspaces(buf: &mut Buffer, area: Rect, app: &App, mut controls: Vec<Control
     if list.height == 0 {
         return;
     }
-    let columns = columns(usize::from(list.width));
+    // NAME fits the longest name of every group, so it does not change
+    // when the group does.
+    let name_width = app
+        .status
+        .iter()
+        .flat_map(|status| status.gold.iter().chain(&status.workspaces).chain(&status.others))
+        .filter_map(|entry| entry.name.as_deref())
+        .map(|name| name.chars().count())
+        .max()
+        .unwrap_or(0);
+    let columns = columns(usize::from(list.width), name_width);
     write(
         buf,
         list.x,

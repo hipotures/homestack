@@ -801,3 +801,13 @@ fn tab_moves_to_the_group_carousel_whose_groups_are_the_pools() {
         [202]
     );
 }
+
+#[test]
+fn a_long_name_is_shown_whole() {
+    let mut fixture = app();
+    let mut status = tui_fixture::status();
+    status["workspaces"][0]["name"] = serde_json::json!("tklivetracker");
+    fixture.app.set_status(&status);
+    let text = screen(&render(&fixture.app, 120, 36));
+    assert!(text.contains("tklivetracker ") && !text.contains("tklivetrack…"), "{text}");
+}
