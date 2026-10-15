@@ -238,7 +238,7 @@ fn form_fields(root_line: &str, settings: &Settings, questions: &[hs_install::Qu
     } else if !settings.adopt.is_empty() {
         let ids: Vec<String> = settings.adopt.iter().map(u32::to_string).collect();
         fields.push(Field::fixed(
-            "Found by their tags",
+            "Back into pools",
             &format!("{}  (given on the command line)", ids.join(", ")),
         ));
     }

@@ -87,10 +87,14 @@ impl Session {
         };
         let kept = load_draft(&draft_path(&settings));
         apply_draft(&mut questions, &kept);
+        // Without one in the draft, the domain the servers were deployed
+        // with: an install over an installed system starts from it.
         let draft_domain = kept
             .get(DRAFT_DOMAIN)
             .and_then(|values| values.first())
+            .filter(|domain| !domain.is_empty())
             .cloned()
+            .or_else(|| deployed_domain(&files.deploy_toml()))
             .unwrap_or_default();
         Ok(Self {
             command,
@@ -517,6 +521,17 @@ pub fn apply_draft(questions: &mut [hs_install::Question], draft: &std::collecti
     }
 }
 
+/// `domain` of the `deploy.toml` at `path`; nothing when it is missing or
+/// cannot be read.
+fn deployed_domain(path: &std::path::Path) -> Option<String> {
+    let table = std::fs::read_to_string(path).ok()?.parse::<toml::Table>().ok()?;
+    table
+        .get("domain")
+        .and_then(toml::Value::as_str)
+        .filter(|domain| !domain.is_empty())
+        .map(str::to_owned)
+}
+
 /// Keep the choices of the form (mode 0600); a failure only loses them.
 pub fn save_draft(
     path: &std::path::Path,
@@ -543,10 +558,22 @@ pub fn save_draft(
             toml::Value::Array(values),
         );
     }
+    // A run without a domain (no servers, the test part, the field left
+    // empty) keeps the one the draft had.
+    let domain = domain
+        .filter(|domain| !domain.is_empty())
+        .map(str::to_owned)
+        .or_else(|| {
+            load_draft(path)
+                .get(DRAFT_DOMAIN)
+                .and_then(|values| values.first())
+                .filter(|domain| !domain.is_empty())
+                .cloned()
+        });
     if let Some(domain) = domain {
         table.insert(
             DRAFT_DOMAIN.to_owned(),
-            toml::Value::Array(vec![toml::Value::String(domain.to_owned())]),
+            toml::Value::Array(vec![toml::Value::String(domain)]),
         );
     }
     let text = format!("# The last choices of `homestack install`; the next run starts from them.\n{table}");

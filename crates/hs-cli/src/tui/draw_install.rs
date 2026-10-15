@@ -325,7 +325,6 @@ fn settings(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
     let text = text_style(palette);
     let muted = text.fg(palette.muted);
     let focus = text.fg(palette.focus).add_modifier(Modifier::BOLD);
-    let left = if inner.width >= 110 { 40 } else { 28 };
     let x = inner.x + 1;
     let mut rows: Vec<(String, String)> = install
         .settings
@@ -335,7 +334,14 @@ fn settings(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
     if let Some(domain) = &install.domain {
         rows.push(("Server domain".to_owned(), domain.clone()));
     }
-    let label_width = if left >= 40 { 19 } else { 17 };
+    // As wide as the longest title and value, at most half the screen; a
+    // narrow screen cuts them.
+    let longest =
+        |pick: fn(&(String, String)) -> &String| rows.iter().map(|row| pick(row).chars().count()).max().unwrap_or(0);
+    let narrow = inner.width < 110;
+    let label_width = if narrow { 17 } else { longest(|row| &row.0) + 2 };
+    let wanted = u16::try_from(2 + label_width + longest(|row| &row.1) + 2).unwrap_or(u16::MAX);
+    let left = if narrow { 28 } else { wanted.clamp(40, inner.width / 2) };
     for (row, (title, value)) in rows.iter().enumerate() {
         let chosen = row == install.row;
         let mark = if chosen { "▶ " } else { "  " };
@@ -385,10 +391,20 @@ fn settings(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
             muted,
         );
     }
-    // The chooser of the focused row, in a box on the right.
-    let rect = Rect::new(inner.x + left, inner.y, inner.width.saturating_sub(left), inner.height);
+    // The chooser of the focused row, in a box on the right as big as what
+    // it holds: a blank line and a margin round the lines.
+    let fit = |content: usize, lines: usize| {
+        let available = inner.width.saturating_sub(left);
+        let width = u16::try_from(content + 6).unwrap_or(u16::MAX).min(available);
+        let height = u16::try_from(lines + 4).unwrap_or(u16::MAX).min(inner.height);
+        Rect::new(inner.x + left, inner.y, width, height)
+    };
     let on_domain = install.domain.is_some() && install.row == install.settings.len();
     if on_domain {
+        let domain = install.domain.clone().unwrap_or_default();
+        let field = format!("[ {domain}▏ ]");
+        // Room to type a longer one.
+        let rect = fit(field.chars().count().max(40), 1);
         let box_inner = frame(
             buf,
             rect,
@@ -399,13 +415,12 @@ fn settings(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
                 ..Sides::default()
             },
         );
-        let domain = install.domain.clone().unwrap_or_default();
         write(
             buf,
             box_inner.x + 2,
             at(box_inner.y, 1),
             box_inner.width.saturating_sub(4),
-            &format!("[ {domain}▏ ]"),
+            &field,
             focus,
         );
         return;
@@ -413,26 +428,9 @@ fn settings(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
     let Some(setting) = install.settings.get(install.row) else {
         return;
     };
-    let box_inner = frame(
-        buf,
-        rect,
-        palette,
-        &Sides {
-            top_left: vec![Control::plain(&setting.title)],
-            bottom_left: vec![Control::key(if setting.multiple {
-                "tick Space"
-            } else {
-                "choose Space"
-            })],
-            focused: install.chooser,
-            ..Sides::default()
-        },
-    );
-    // The choices only; what a setting is for is in the help.
-    let lines = 0;
-    let width = box_inner.width.saturating_sub(4);
-    // The value and the words of its detail in columns as wide as their
-    // longest entry (a long VM name moves nothing).
+    // The choices only; what a setting is for is in the help. The value and
+    // the words of its detail in columns as wide as their longest entry (a
+    // long VM name moves nothing).
     let rows: Vec<Vec<&str>> = setting
         .choices
         .iter()
@@ -452,33 +450,57 @@ fn settings(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
                 .unwrap_or(0)
         })
         .collect();
-    for (index, row) in rows.iter().enumerate() {
-        let ticked = setting.picked.contains(&index);
-        let cursor = install.chooser && index == install.cursor;
-        let mark = if cursor { "▶" } else { " " };
-        let tick = match (setting.multiple, ticked) {
-            (true, true) => "[x]",
-            (true, false) => "[ ]",
-            (false, true) => "(•)",
-            (false, false) => "( )",
-        };
-        let cells: Vec<String> = row
-            .iter()
-            .zip(&widths)
-            .map(|(word, width)| format!("{word:<width$}"))
-            .collect();
-        let line = format!("{mark} {tick} {}", cells.join("  ").trim_end());
-        let style = if cursor { focus } else { text };
+    let lines: Vec<(String, bool)> = rows
+        .iter()
+        .enumerate()
+        .map(|(index, row)| {
+            let ticked = setting.picked.contains(&index);
+            let cursor = install.chooser && index == install.cursor;
+            let mark = if cursor { "▶" } else { " " };
+            let tick = match (setting.multiple, ticked) {
+                (true, true) => "[x]",
+                (true, false) => "[ ]",
+                (false, true) => "(•)",
+                (false, false) => "( )",
+            };
+            let cells: Vec<String> = row
+                .iter()
+                .zip(&widths)
+                .map(|(word, width)| format!("{word:<width$}"))
+                .collect();
+            (format!("{mark} {tick} {}", cells.join("  ").trim_end()), cursor)
+        })
+        .collect();
+    let key = if setting.multiple { "tick Space" } else { "choose Space" };
+    let content = lines
+        .iter()
+        .map(|(line, _)| line.chars().count())
+        .chain([setting.title.chars().count(), key.chars().count() + 2])
+        .max()
+        .unwrap_or(0);
+    let box_inner = frame(
+        buf,
+        fit(content, lines.len()),
+        palette,
+        &Sides {
+            top_left: vec![Control::plain(&setting.title)],
+            bottom_left: vec![Control::key(key)],
+            focused: install.chooser,
+            ..Sides::default()
+        },
+    );
+    let width = box_inner.width.saturating_sub(2);
+    for (index, (line, cursor)) in lines.iter().enumerate() {
         write(
             buf,
             box_inner.x + 1,
-            at(box_inner.y, lines + 1 + index),
+            at(box_inner.y, 1 + index),
             width,
-            &cut(&line, usize::from(width)),
-            style,
+            &cut(line, usize::from(width)),
+            if *cursor { focus } else { text },
         );
         super::chrome::register(
-            Rect::new(box_inner.x, at(box_inner.y, lines + 1 + index), box_inner.width, 1),
+            Rect::new(box_inner.x, at(box_inner.y, 1 + index), box_inner.width, 1),
             super::chrome::Hit::Choice(index),
         );
     }

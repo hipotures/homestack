@@ -664,7 +664,7 @@ async fn guests_found_by_their_tags_are_ticked_in_the_form_and_put_back() {
     assert_eq!(done.code, 0, "{}", done.console.out());
     let out = done.console.out();
     let form = out.split("Confirm the installation").next().unwrap_or_default();
-    assert!(form.contains("Found by their tags  240, 243"), "{form}");
+    assert!(form.contains("Back into pools      240, 243"), "{form}");
     for text in [
         "Pool members",
         "put VM 240 in pool homestack",
@@ -1448,6 +1448,41 @@ async fn the_form_asks_the_server_domain_and_the_confirmation_lists_the_servers(
     // The domain is kept for the next run.
     let draft = std::fs::read_to_string(cluster.token_dir().join("install-draft.toml")).expect("draft");
     assert!(draft.contains("hs.example.net"), "{draft}");
+
+    // A run without servers keeps it.
+    run_with(
+        &cluster,
+        &["install", "--no-servers", "--ssh", "root@pve1"],
+        &["", "n"],
+        true,
+        Arc::clone(&servers),
+    )
+    .await;
+    let draft = std::fs::read_to_string(cluster.token_dir().join("install-draft.toml")).expect("draft");
+    assert!(draft.contains("hs.example.net"), "lost by --no-servers: {draft}");
+
+    // Without it in the draft, the form starts from the deployed one.
+    std::fs::remove_file(cluster.token_dir().join("install-draft.toml")).expect("remove draft");
+    std::fs::write(
+        cluster.token_dir().join("deploy.toml"),
+        "domain = \"deployed.example.net\"\n",
+    )
+    .expect("deploy.toml");
+    let again = run_with(
+        &cluster,
+        &["install", "--ssh", "root@pve1"],
+        &["", "n"],
+        true,
+        Arc::clone(&servers),
+    )
+    .await;
+    let out = again.console.out();
+    let form = out.split("Confirm the installation").next().unwrap_or_default();
+    assert!(
+        form.lines()
+            .any(|line| line.contains("Server domain") && line.contains("deployed.example.net")),
+        "{form}"
+    );
 }
 
 #[tokio::test]

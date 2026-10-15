@@ -84,20 +84,30 @@ pub struct Setting {
 }
 
 impl Setting {
-    /// The value in the list: `2 chosen`, or the one chosen.
+    /// The value in the list: what is chosen, a VMID with its name.
     #[must_use]
     pub fn value(&self) -> String {
-        if self.multiple {
-            return format!("{} chosen", self.picked.len());
-        }
-        self.picked
-            .first()
-            .and_then(|index| self.choices.get(*index))
+        // A VMID with the VM's name (the detail's first word), a storage as
+        // it is.
+        let shown: Vec<String> = self
+            .picked
+            .iter()
+            .take(if self.multiple { usize::MAX } else { 1 })
+            .filter_map(|index| self.choices.get(*index))
             .map(|(value, detail)| {
-                let first = detail.split_whitespace().next().unwrap_or_default();
-                format!("{value} {first}").trim_end().to_owned()
+                if value.chars().all(|c| c.is_ascii_digit()) {
+                    let first = detail.split_whitespace().next().unwrap_or_default();
+                    format!("{value} {first}").trim_end().to_owned()
+                } else {
+                    value.clone()
+                }
             })
-            .unwrap_or_else(|| "—".to_owned())
+            .collect();
+        if shown.is_empty() {
+            "—".to_owned()
+        } else {
+            shown.join(", ")
+        }
     }
 
     fn toggle(&mut self, index: usize) {

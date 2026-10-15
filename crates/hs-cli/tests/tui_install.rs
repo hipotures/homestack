@@ -241,13 +241,31 @@ fn the_check_shows_what_is_there_and_what_the_install_adds() {
 }
 
 #[test]
+fn the_chooser_is_as_wide_as_its_choices_on_a_wide_screen() {
+    let fixture = checked(Mode::Install);
+    let text = screen(&render(&fixture.app, 200, 50));
+    let line = text
+        .lines()
+        .find(|line| line.contains("[x] local-lvm"))
+        .unwrap_or_else(|| panic!("no choice:\n{text}"));
+    let tail = &line[line.find("[x] local-lvm").unwrap_or_default()..];
+    let border = tail.find('│').unwrap_or(usize::MAX);
+    assert!(border < 60, "the box reaches across the screen:\n{text}");
+    let row_of = |part: &str| text.lines().position(|line| line.contains(part)).unwrap_or(usize::MAX);
+    let (first, bottom) = (row_of("[x] local-lvm"), row_of("tick Space"));
+    assert!(
+        bottom > first && bottom - first < 6,
+        "the box reaches to the bottom:\n{text}"
+    );
+}
+
+#[test]
 fn the_settings_are_chosen_in_a_box_and_go_to_the_review() {
     let mut fixture = checked(Mode::Install);
     assert_eq!(stage(&fixture.app), Stage::Settings);
     let text = screen(&render(&fixture.app, 120, 36));
     for part in [
         "Workspace disks",
-        "1 chosen",
         "Gold VM",
         "112",
         "Server domain",
@@ -263,7 +281,10 @@ fn the_settings_are_chosen_in_a_box_and_go_to_the_review() {
     press(&mut fixture.app, KeyCode::Down);
     press(&mut fixture.app, KeyCode::Char(' '));
     let text = screen(&render(&fixture.app, 120, 36));
-    assert!(text.contains("[x] local-zfs") && text.contains("2 chosen"), "{text}");
+    assert!(
+        text.contains("[x] local-zfs") && text.contains("local-lvm, local-zfs"),
+        "{text}"
+    );
     // Back to the list, down to Gold, choose 101.
     press(&mut fixture.app, KeyCode::Tab);
     press(&mut fixture.app, KeyCode::Down);

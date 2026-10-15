@@ -177,8 +177,8 @@ with the owner's approval.
   `homestack-ws` or `homestack-alien` is refused. Uninstall takes Gold out of
   the pool and leaves its tag.
 - **Autodiscovery (owner, 2026-10-15).** A guest in no pool whose tags name
-  a pool of the part being installed is offered in the form, under "Found by
-  their tags", one checkbox each, all ticked; `--adopt VMIDS` on the command
+  a pool of the part being installed is offered in the form, under "Back into
+  pools", one checkbox each, all ticked; `--adopt VMIDS` on the command
   line, and without it a warning names them. The tag decides, never the
   address: a QEMU VM tagged `homestack-ws` or `homestack-alien` goes to
   `homestack`, or to `homestack-test` when it also carries `homestack-test`

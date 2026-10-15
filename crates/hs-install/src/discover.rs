@@ -97,7 +97,7 @@ pub fn question(state: &State, test: bool) -> Option<Question> {
         .collect();
     Some(Question {
         option: OPTION,
-        title: "Found by their tags".to_owned(),
+        title: "Back into pools".to_owned(),
         note: "VMs and containers with a HomeStack tag that are in no pool, as an uninstall leaves them. Each \
 ticked one is put in the pool its tag names; nothing else of it changes."
             .to_owned(),
