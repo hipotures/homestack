@@ -593,7 +593,42 @@ fn a_click_chooses_a_setting_and_ticks_a_choice() {
 }
 
 #[test]
-fn esc_cancels_the_touch_of_the_security_key() {
+fn the_connection_is_a_box_with_a_spinner_and_esc_cancels_it() {
+    let mut fixture = app();
+    fixture.app.open_install(Mode::Uninstall, false);
+    type_text(&mut fixture.app, "root@pve2");
+    press(&mut fixture.app, KeyCode::Enter);
+    fixture.app.install_event(Event::Busy(
+        "Connecting to root@pve2… (touch your key or give its PIN if it asks)".to_owned(),
+    ));
+    let text = screen(&render(&fixture.app, 120, 36));
+    assert!(
+        text.contains("connecting") && text.contains("Connecting to root@pve2"),
+        "{text}"
+    );
+    assert!(text.contains("cancel Esc"), "{text}");
+    // Other keys wait; Esc stops ssh (the loop sets the worker's stop flag).
+    assert_eq!(press(&mut fixture.app, KeyCode::Enter), None);
+    assert_eq!(
+        press(&mut fixture.app, KeyCode::Esc),
+        Some(Request::Install(Command::Cancel))
+    );
+    assert_eq!(press(&mut fixture.app, KeyCode::Esc), None);
+    // What the stopped worker says last brings the access back, quietly.
+    fixture
+        .app
+        .install_event(Event::Busy("Connected; reading the cluster…".to_owned()));
+    fixture
+        .app
+        .install_event(Event::Failed("Connection cancelled.".to_owned()));
+    let install = fixture.app.install.as_ref().unwrap();
+    assert_eq!(install.stage, Stage::Access);
+    assert!(install.failed.is_none() && install.busy.is_none());
+    assert_eq!(install.error.as_deref(), Some("Connection cancelled."));
+}
+
+#[test]
+fn esc_on_the_touch_cancels_the_connection_under_it() {
     let mut fixture = app();
     fixture.app.open_install(Mode::Uninstall, false);
     type_text(&mut fixture.app, "root@pve2");
@@ -603,8 +638,42 @@ fn esc_cancels_the_touch_of_the_security_key() {
         Kind::Touch,
         "Confirm user presence for key ECDSA-SK SHA256:abc",
     ));
-    assert_eq!(press(&mut fixture.app, KeyCode::Esc), Some(Request::Answer(None)));
+    // One box at a time: the touch box over the connection's.
+    let text = screen(&render(&fixture.app, 120, 36));
+    assert!(text.contains("Touch your security key now."), "{text}");
+    assert!(!text.contains("connecting"), "{text}");
+    assert_eq!(
+        press(&mut fixture.app, KeyCode::Esc),
+        Some(Request::Install(Command::Cancel))
+    );
     assert!(fixture.app.asking.is_none());
-    // The install screen stays; the failure brings it back to the access.
-    assert!(fixture.app.install.is_some());
+    // A touch with no connection under it is cancelled alone.
+    fixture
+        .app
+        .install_event(Event::Failed("Connection cancelled.".to_owned()));
+    fixture.app.ask(AskView::new(2, Kind::Touch, "Confirm user presence"));
+    assert_eq!(press(&mut fixture.app, KeyCode::Esc), Some(Request::Answer(None)));
+}
+
+#[test]
+fn a_failed_connection_is_a_box_closed_by_enter_or_esc() {
+    let mut fixture = app();
+    fixture.app.open_install(Mode::Uninstall, false);
+    type_text(&mut fixture.app, "root@pve2");
+    press(&mut fixture.app, KeyCode::Enter);
+    fixture
+        .app
+        .install_event(Event::Failed("The server rejected the key.".to_owned()));
+    let text = screen(&render(&fixture.app, 120, 36));
+    assert!(
+        text.contains("connection failed") && text.contains("ENTER or ESC closes."),
+        "{text}"
+    );
+    // Esc closes the box, not the screen.
+    assert_eq!(press(&mut fixture.app, KeyCode::Esc), None);
+    let install = fixture.app.install.as_ref().expect("the install screen");
+    assert!(install.failed.is_none());
+    assert_eq!(install.stage, Stage::Access);
+    assert_eq!(press(&mut fixture.app, KeyCode::Esc), None);
+    assert!(fixture.app.install.is_none());
 }

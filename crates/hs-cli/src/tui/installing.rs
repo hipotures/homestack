@@ -5,6 +5,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::Receiver;
 
 use hs_install::{Command as Install, Root, Settings};
@@ -49,6 +50,8 @@ pub struct Setup {
     pub sounds: Sounds,
     /// The askpass bridge's words before `ssh`; empty: ssh as from a terminal.
     pub ssh_prefix: Vec<String>,
+    /// Set by Esc while connecting: ssh is stopped.
+    pub stop: Arc<AtomicBool>,
     pub server_image: Option<String>,
     /// The runtime the deployment and the last check run on.
     pub handle: tokio::runtime::Handle,
@@ -91,6 +94,7 @@ impl Setup {
                 None,
                 &self.sounds,
                 self.ssh_prefix.clone(),
+                Arc::clone(&self.stop),
             )?)),
         }
     }

@@ -5,6 +5,7 @@ use std::io::{self, BufRead, IsTerminal, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 /// A finished local command.
@@ -47,6 +48,12 @@ pub trait System: Send + Sync {
     /// a file rather than a pipe, since the detached master keeps the
     /// descriptor open.
     fn run_master(&self, argv: &[String]) -> io::Result<Output>;
+    /// [`System::run_master`] stopped when `stop` is set: ssh and what it
+    /// started (its process group, when `setsid` made it the leader) get
+    /// SIGTERM, and the exit code is -1.
+    fn run_master_until(&self, argv: &[String], _stop: &AtomicBool) -> io::Result<Output> {
+        self.run_master(argv)
+    }
     /// Seconds on a monotonic clock.
     fn monotonic(&self) -> f64;
     /// Run `argv` with `input` on its stdin; its output captured.
@@ -134,6 +141,38 @@ impl System for RealSystem {
         })
     }
 
+    fn run_master_until(&self, argv: &[String], stop: &AtomicBool) -> io::Result<Output> {
+        let (program, args) = argv.split_first().ok_or_else(|| io::Error::other("empty command"))?;
+        let mut errors = tempfile::tempfile()?;
+        let mut child = Command::new(program)
+            .args(args)
+            .stdout(Stdio::null())
+            .stderr(errors.try_clone()?)
+            .spawn()?;
+        let status = loop {
+            if let Some(status) = child.try_wait()? {
+                break status;
+            }
+            if stop.load(Ordering::SeqCst) {
+                let pid = rustix::process::Pid::from_child(&child);
+                if rustix::process::getpgid(Some(pid)).is_ok_and(|group| group == pid) {
+                    let _ = rustix::process::kill_process_group(pid, rustix::process::Signal::TERM);
+                } else {
+                    let _ = child.kill();
+                }
+                break child.wait()?;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        };
+        let mut stderr = String::new();
+        io::Seek::rewind(&mut errors)?;
+        io::Read::read_to_string(&mut errors, &mut stderr)?;
+        Ok(Output {
+            code: code(status),
+            stdout: String::new(),
+            stderr,
+        })
+    }
     fn monotonic(&self) -> f64 {
         self.started.elapsed().as_secs_f64()
     }

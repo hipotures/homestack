@@ -5,7 +5,7 @@ use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 
 use super::chrome::{Control, Sides, frame, scrollbar, text_style};
-use super::draw::{bar, centered, cut, log, wrap, write};
+use super::draw::{SPINNER, bar, centered, cut, log, message_box, wrap, write};
 use super::install::{AskView, Install, Method, Mode, Stage};
 use super::state::App;
 use crate::askpass::Kind;
@@ -116,6 +116,8 @@ pub(super) fn screen(buf: &mut Buffer, area: Rect, app: &App, install: &Install)
 /// The buttons of the stage in the bottom border.
 fn buttons(install: &Install) -> Vec<Control> {
     match install.stage {
+        Stage::Access if install.failed.is_some() => vec![Control::key("close Esc")],
+        Stage::Access if install.connecting() => vec![Control::key("cancel Esc")],
         Stage::Access => vec![
             Control::key("field ↑↓"),
             Control::key("Connect Enter"),
@@ -260,10 +262,20 @@ fn access(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
         }
     }
     y += 4;
-    if let Some(busy) = &install.busy {
-        write(buf, x, y, width, busy, text.fg(palette.focus));
-    } else if let Some(error) = &install.error {
+    if let Some(error) = &install.error {
         paragraph(buf, inner, y, error, text.fg(palette.error));
+    }
+    // The connection in the setup's boxes; the touch box replaces it while
+    // ssh asks: one box at a time.
+    if let Some(failed) = &install.failed {
+        let style = text.fg(palette.error);
+        let mut lines: Vec<(String, Style)> = wrap(failed, 64).into_iter().map(|line| (line, style)).collect();
+        lines.push((String::new(), text));
+        lines.push(("ENTER or ESC closes.".to_owned(), muted));
+        message_box(buf, inner, app, "connection failed", &lines);
+    } else if let Some(busy) = install.busy.as_ref().filter(|_| app.asking.is_none()) {
+        let spinner = SPINNER[install.frame % SPINNER.len()];
+        message_box(buf, inner, app, "connecting", &[(format!("{spinner} {busy}"), text)]);
     }
 }
 

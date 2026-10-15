@@ -180,6 +180,28 @@ fn a_cancelled_touch_stops_ssh_waiting_on_the_key() {
     assert!(started.elapsed() < Duration::from_secs(10));
 }
 
+/// Esc while the master connects: ssh, the leader of its own group behind
+/// `setsid`, stops with what it started.
+#[test]
+fn a_stopped_master_stops_at_once_with_its_group() {
+    use hs_cli::system::{RealSystem, System};
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    {
+        let stop = std::sync::Arc::clone(&stop);
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(300));
+            stop.store(true, std::sync::atomic::Ordering::SeqCst);
+        });
+    }
+    let argv: Vec<String> = ["setsid", "sh", "-c", "sleep 30 & sleep 30"]
+        .map(str::to_owned)
+        .to_vec();
+    let started = std::time::Instant::now();
+    let output = RealSystem::default().run_master_until(&argv, &stop).unwrap();
+    assert_eq!(output.code, -1);
+    assert!(started.elapsed() < Duration::from_secs(10));
+}
+
 #[test]
 fn the_socket_goes_with_the_bridge() {
     let (bridge, _events) = Bridge::start(program()).expect("bridge");

@@ -1648,6 +1648,15 @@ fn key_e_opens_the_setup_of_a_running_workspace() {
         assert!(screen(&render(app, 120, 36)).contains(&format!("setup {vmid}")));
         assert_eq!(app_key(app, KeyCode::Esc), Some(Request::SetupAsk(Ask::Close)));
         assert!(app.setup.is_none());
+        // Esc on the touch while it connects is Esc on the box.
+        assert_eq!(app_key(app, KeyCode::Char('e')), Some(Request::Setup(Some(vmid))));
+        app.ask(hs_cli::tui::install::AskView::new(
+            1,
+            hs_cli::askpass::Kind::Touch,
+            "Confirm user presence for key ED25519-SK SHA256:abc",
+        ));
+        assert_eq!(app_key(app, KeyCode::Esc), Some(Request::SetupAsk(Ask::Close)));
+        assert!(app.setup.is_none() && app.asking.is_none());
     } else {
         assert_eq!(request, None);
     }

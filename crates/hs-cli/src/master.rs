@@ -7,6 +7,8 @@
 //! module carries the opening, its checks and its messages.
 
 use std::path::Path;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 use hs_config::client::WorkspaceSsh;
 
@@ -32,6 +34,8 @@ pub struct Master {
     pub host_keys: String,
     pub sounds: Sounds,
     pub player: Player,
+    /// Set while the master opens (Esc in the TUI): ssh is stopped.
+    pub stop: Option<Arc<AtomicBool>>,
     /// The kind of key the sandbox shows, once chosen.
     pub fido_kind: Option<String>,
     directory: Option<tempfile::TempDir>,
@@ -54,6 +58,7 @@ impl Master {
             sounds: Sounds::disabled(),
             player: touch::default_player(),
             fido_kind: None,
+            stop: None,
             directory: None,
             control: String::new(),
             opened: false,
@@ -226,7 +231,11 @@ impl Master {
         );
         let started = system.monotonic();
         let output = touch::touch_wait(&self.name, &self.sounds, self.player.clone(), |watch| {
-            let output = system.run_master(&argv).map_err(|error| error.to_string())?;
+            let output = match &self.stop {
+                Some(stop) => system.run_master_until(&argv, stop),
+                None => system.run_master(&argv),
+            }
+            .map_err(|error| error.to_string())?;
             if output.code != 0 {
                 watch.finish(false);
             }

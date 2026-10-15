@@ -84,6 +84,8 @@ pub struct Start {
     pub handle: tokio::runtime::Handle,
     /// The askpass bridge: ssh asks the touch and its questions in the TUI.
     pub ssh_prefix: Vec<String>,
+    /// Set when the box closes: ssh stops if it is still connecting.
+    pub stop: Arc<AtomicBool>,
 }
 
 /// How the worker tells the box.
@@ -226,6 +228,7 @@ fn open(start: &Start, tell: &Tell) -> Result<(Session, Catalog, Value), AppErro
                 settings,
                 target,
                 start.ssh_prefix.clone(),
+                Arc::clone(&start.stop),
             );
         }
         let mut banner = vec![format!(

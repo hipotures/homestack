@@ -200,6 +200,8 @@ fn lend_terminal(screen: &mut Screen, reader: &Reader, handoff: &super::setup_wo
 struct SetupWorker {
     commands: std::sync::mpsc::Sender<super::setup_work::Command>,
     cancel: Arc<AtomicBool>,
+    /// Set on close: ssh stops if it is still connecting.
+    stop: Arc<AtomicBool>,
     thread: std::thread::JoinHandle<()>,
 }
 
@@ -483,6 +485,8 @@ impl Connection {
 struct Installing {
     bridge: Option<Bridge>,
     worker: Option<std::sync::mpsc::Sender<Command>>,
+    /// The worker's: set, ssh stops connecting.
+    stop: Arc<AtomicBool>,
     /// ssh's question waiting for its answer.
     pending: Option<crate::askpass::Question>,
 }
@@ -497,6 +501,8 @@ impl Installing {
             let _ = worker.send(command);
         }
         if cancel {
+            // A worker still connecting does not read its commands.
+            self.stop.store(true, Ordering::SeqCst);
             self.worker = None;
         }
     }
@@ -533,6 +539,7 @@ impl Installing {
 
     fn start(&mut self, app: &mut App, ctx: &Context, updates: &mpsc::UnboundedSender<Update>) {
         self.bridge(app, updates);
+        self.stop = Arc::new(AtomicBool::new(false));
         let client_path = config::default_path(&ctx.home, ctx.config_home.as_deref());
         let token_dir = client_path
             .parent()
@@ -550,6 +557,7 @@ impl Installing {
             servers: Arc::clone(&ctx.servers),
             sounds,
             ssh_prefix: self.bridge.as_ref().map(Bridge::command_prefix).unwrap_or_default(),
+            stop: Arc::clone(&self.stop),
             server_image: None,
             handle: tokio::runtime::Handle::current(),
         };
@@ -696,9 +704,11 @@ pub async fn run(ctx: &mut Context) -> Result<i32, AppError> {
                                         let _ = sender.send(Update::Setup(generation, event));
                                     });
                                 let ssh_prefix = installing.bridge(&mut app, &updates);
+                                let stop = Arc::new(AtomicBool::new(false));
                                 let start = super::setup_work::Start {
                                     vmid,
                                     ssh_prefix,
+                                    stop: Arc::clone(&stop),
                                     client: connection.client.clone(),
                                     system: Arc::clone(&ctx.system),
                                     home: ctx.home.clone(),
@@ -707,7 +717,12 @@ pub async fn run(ctx: &mut Context) -> Result<i32, AppError> {
                                     handle: tokio::runtime::Handle::current(),
                                 };
                                 let (commands, thread) = super::setup_work::spawn(start, tell, Arc::clone(&cancel));
-                                setup_workers.insert(vmid, SetupWorker { commands, cancel, thread });
+                                setup_workers.insert(vmid, SetupWorker {
+                                    commands,
+                                    cancel,
+                                    stop,
+                                    thread,
+                                });
                             }
                             None => {
                                 app.setup = None;
@@ -734,7 +749,11 @@ pub async fn run(ctx: &mut Context) -> Result<i32, AppError> {
                                         worker.cancel.store(true, Ordering::SeqCst);
                                         None
                                     }
-                                    Ask::Close => Some(Work::Close),
+                                    Ask::Close => {
+                                        // Still connecting, ssh stops; connected, nothing.
+                                        worker.stop.store(true, Ordering::SeqCst);
+                                        Some(Work::Close)
+                                    }
                                 };
                                 if let Some(command) = command {
                                     let _ = worker.commands.send(command);
@@ -855,13 +874,17 @@ pub async fn run(ctx: &mut Context) -> Result<i32, AppError> {
             },
             _ = tick.tick() => app.tick(),
             _ = fast.tick(), if (app.status.is_none() && app.unreachable.is_empty())
-                || app.setup.as_ref().is_some_and(super::setup::SetupBox::animating) =>
+                || app.setup.as_ref().is_some_and(super::setup::SetupBox::animating)
+                || app.install.as_ref().is_some_and(super::install::Install::connecting) =>
             {
                 if app.status.is_none() && app.unreachable.is_empty() {
                     app.waiting += 1;
                 }
                 if let Some(setup) = app.setup.as_mut() {
                     setup.frame += 1;
+                }
+                if let Some(install) = app.install.as_mut() {
+                    install.frame += 1;
                 }
             }
         }

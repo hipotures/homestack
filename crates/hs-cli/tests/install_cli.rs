@@ -1509,6 +1509,7 @@ async fn the_tui_worker_installs_through_the_same_session_as_the_cli() {
         servers: Arc::clone(&servers) as Arc<dyn Servers>,
         sounds: hs_cli::touch::Sounds::disabled(),
         ssh_prefix: Vec::new(),
+        stop: Arc::default(),
         server_image: None,
         handle: tokio::runtime::Handle::current(),
     };

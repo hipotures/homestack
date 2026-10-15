@@ -5,6 +5,7 @@
 
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 use hs_install::{InstallError, Output, Root};
 
@@ -45,7 +46,7 @@ impl SshRoot {
         identity: Option<&str>,
         sounds: &Sounds,
     ) -> Result<Self, AppError> {
-        Self::open_with(system, home, text, identity, sounds, Vec::new(), "accept-new")
+        Self::open_with(system, home, text, identity, sounds, |_| {})
     }
 
     fn open_with(
@@ -54,13 +55,10 @@ impl SshRoot {
         text: &str,
         identity: Option<&str>,
         sounds: &Sounds,
-        prefix: Vec<String>,
-        host_keys: &str,
+        configure: impl FnOnce(&mut Master),
     ) -> Result<Self, AppError> {
         let target = target(text)?;
         let mut master = Master::new(&target);
-        master.prefix = prefix;
-        master.host_keys = host_keys.to_owned();
         master.name = target
             .rsplit_once('@')
             .map_or(target.clone(), |(_, host)| host.to_owned());
@@ -73,13 +71,15 @@ impl SshRoot {
                 "IdentitiesOnly=yes".to_owned(),
             ]);
         }
+        configure(&mut master);
         master.open(system.as_ref(), home)?;
         Ok(Self { system, master, target })
     }
 
     /// [`SshRoot::open`] for the TUI: ssh runs behind `prefix` (the askpass
     /// bridge, `askpass::Bridge::command_prefix`), so its questions, a new
-    /// host key among them, are asked in the TUI.
+    /// host key among them, are asked in the TUI; setting `stop` (Esc)
+    /// stops ssh while it connects.
     pub fn open_asking(
         system: Arc<dyn System>,
         home: &Path,
@@ -87,8 +87,13 @@ impl SshRoot {
         identity: Option<&str>,
         sounds: &Sounds,
         prefix: Vec<String>,
+        stop: Arc<AtomicBool>,
     ) -> Result<Self, AppError> {
-        Self::open_with(system, home, text, identity, sounds, prefix, "ask")
+        Self::open_with(system, home, text, identity, sounds, |master| {
+            master.prefix = prefix;
+            master.host_keys = "ask".to_owned();
+            master.stop = Some(stop);
+        })
     }
 }
 

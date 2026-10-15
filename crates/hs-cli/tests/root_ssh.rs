@@ -151,6 +151,7 @@ fn for_the_tui_ssh_runs_behind_the_askpass_prefix_and_asks_about_a_new_host_key(
         None,
         &Sounds::disabled(),
         prefix.clone(),
+        Arc::default(),
     )
     .expect("open");
     let masters = fake.masters.lock().expect("masters").clone();
@@ -187,6 +188,7 @@ fn a_key_chosen_in_the_tui_is_signed_by_ssh_itself_not_by_the_agent() {
         Some("~/.ssh/id_ecdsa_sk_example"),
         &Sounds::disabled(),
         vec!["env".to_owned()],
+        Arc::default(),
     )
     .expect("open");
     let argv = fake.masters.lock().expect("masters")[0].clone();
@@ -209,6 +211,7 @@ fn the_node_asked_in_the_tui_is_signed_by_ssh_itself_even_without_a_chosen_key()
         None,
         &Sounds::disabled(),
         vec!["env".to_owned()],
+        Arc::default(),
     )
     .expect("open");
     let argv = fake.masters.lock().expect("masters")[0].clone();

@@ -4,6 +4,7 @@
 
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 use hs_client::Client;
 use serde_json::{Value, json};
@@ -212,7 +213,8 @@ pub fn connect(
 
 /// [`connect`] for the TUI: ssh runs behind `prefix` (the askpass bridge),
 /// so the touch of a security key and its other questions are asked in the
-/// TUI; ssh signs itself, so the touch reaches the askpass.
+/// TUI; ssh signs itself, so the touch reaches the askpass. Setting `stop`
+/// stops ssh while it connects.
 pub fn connect_asking(
     system: &Arc<dyn System>,
     home: &Path,
@@ -220,6 +222,7 @@ pub fn connect_asking(
     settings: &Settings,
     target: &Target,
     prefix: Vec<String>,
+    stop: Arc<AtomicBool>,
 ) -> Result<Box<dyn Workspace>, AppError> {
     let mut master = Master::configured(
         home,
@@ -231,6 +234,7 @@ pub fn connect_asking(
     );
     // `Master::start` lets ssh sign itself behind the bridge.
     master.prefix = prefix;
+    master.stop = Some(stop);
     Ok(Box::new(SshWorkspace::open(Arc::clone(system), home, master)?))
 }
 

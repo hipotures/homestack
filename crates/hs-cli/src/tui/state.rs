@@ -302,6 +302,16 @@ impl App {
         self.asking = Some(view);
     }
 
+    /// An ssh connection is being opened in the install or the setup box.
+    #[must_use]
+    pub fn connecting(&self) -> bool {
+        self.install.as_ref().is_some_and(super::install::Install::connecting)
+            || self
+                .setup
+                .as_ref()
+                .is_some_and(|setup| matches!(setup.stage, super::setup::Stage::Loading { .. }))
+    }
+
     /// ssh's question `id` is over (the key was touched).
     pub fn ask_ended(&mut self, id: u64) {
         if self.asking.as_ref().is_some_and(|asking| asking.id == id) {
@@ -584,11 +594,14 @@ impl App {
             return Some(Request::Quit);
         }
         if let Some(asking) = self.asking.as_mut() {
-            if let Some(answer) = asking.key(key.code) {
-                self.asking = None;
+            let touch = asking.kind == crate::askpass::Kind::Touch;
+            let answer = asking.key(key.code)?;
+            self.asking = None;
+            // Esc on the touch is Esc on the connection under it: one way
+            // to cancel, and the connection's own end.
+            if !(touch && self.connecting()) {
                 return Some(Request::Answer(answer));
             }
-            return None;
         }
         if let Some(install) = self.install.as_mut() {
             let before = install.stage;

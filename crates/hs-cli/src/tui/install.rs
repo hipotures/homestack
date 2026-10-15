@@ -212,6 +212,12 @@ pub struct Install {
     /// What is being waited for.
     pub busy: Option<String>,
     pub error: Option<String>,
+    /// The connection failed: its box, closed by Enter or Esc.
+    pub failed: Option<String>,
+    /// Esc while connecting: ssh is being stopped.
+    pub cancelling: bool,
+    /// The spinner's frame.
+    pub frame: usize,
     pub found: Option<Found>,
     pub settings: Vec<Setting>,
     pub domain: Option<String>,
@@ -247,6 +253,9 @@ impl Install {
             field: 0,
             busy: None,
             error: None,
+            failed: None,
+            cancelling: false,
+            frame: 0,
             found: None,
             settings: Vec::new(),
             domain: None,
@@ -297,7 +306,37 @@ impl Install {
         }
     }
 
+    /// Connecting: the box with the spinner over the access, Esc cancels.
+    #[must_use]
+    pub fn connecting(&self) -> bool {
+        self.stage == Stage::Access && self.busy.is_some()
+    }
+
+    /// Esc while connecting: the loop stops ssh; the worker's last word
+    /// (failed, or connected after all) brings back the access.
+    fn cancel(&mut self) -> Option<Request> {
+        if self.cancelling {
+            return None;
+        }
+        self.cancelling = true;
+        self.busy = Some("Cancelling…".to_owned());
+        Some(Request::Install(Command::Cancel))
+    }
+
     pub fn event(&mut self, event: Event) {
+        if self.cancelling {
+            match event {
+                Event::Busy(_) | Event::Line(_) | Event::Reviewed { .. } => {}
+                Event::Connected(_) | Event::Failed(_) | Event::Done { .. } => {
+                    self.cancelling = false;
+                    self.busy = None;
+                    self.found = None;
+                    self.stage = Stage::Access;
+                    self.error = Some("Connection cancelled.".to_owned());
+                }
+            }
+            return;
+        }
         self.busy = None;
         match event {
             Event::Connected(found) => {
@@ -313,7 +352,9 @@ impl Install {
                 };
             }
             Event::Failed(error) => {
-                self.error = Some(error);
+                // In its box, as the setup's failure.
+                self.error = None;
+                self.failed = Some(error);
                 if self.stage != Stage::Access {
                     self.stage = Stage::Access;
                 }
@@ -336,6 +377,15 @@ impl Install {
 
     /// A key; whether the screen closes, and what the loop does.
     pub fn key(&mut self, code: KeyCode) -> (bool, Option<Request>) {
+        if self.failed.is_some() {
+            if matches!(code, KeyCode::Enter | KeyCode::Esc) {
+                self.failed = None;
+            }
+            return (false, None);
+        }
+        if self.connecting() {
+            return (false, if code == KeyCode::Esc { self.cancel() } else { None });
+        }
         if self.busy.is_some() && self.stage != Stage::Run {
             return (false, None);
         }
