@@ -1017,7 +1017,7 @@ const HELP: [&str; 19] = [
     "esc cancel (while it runs esc hides the box; ↵ shows it).",
     "",
     "Setup: tab next group, ␣ toggle, 0 branch, / filter, ← → close or",
-    "open, ↵ review, F5 state, Ctrl+R catalog; green ready, red overwrite.",
+    "open, ↵ review, F5 reread state, Ctrl+R catalog; green ready, red overwrite.",
     "The CLI has every command: homestack --help",
 ];
 

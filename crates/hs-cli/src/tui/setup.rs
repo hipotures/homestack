@@ -999,7 +999,7 @@ impl SetupBox {
             None => match state {
                 Some("missing") => "(not set)".to_owned(),
                 Some("unavailable") => "(unavailable)".to_owned(),
-                _ => "(unknown; refresh with F5)".to_owned(),
+                _ => "(unknown; reread with F5)".to_owned(),
             },
         };
         if state == Some("matching") {

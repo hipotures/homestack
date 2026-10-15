@@ -68,7 +68,7 @@ pub(super) fn setup_box(buf: &mut Buffer, area: Rect, app: &App, setup: &SetupBo
                 Control::named("SPACE", "toggle", KeyCode::Char(' ')),
                 Control::named("TAB", "group", KeyCode::Tab),
                 Control::named("/", "filter", KeyCode::Char('/')),
-                Control::named("F5", "refresh", KeyCode::F(5)),
+                Control::named("F5", "reread", KeyCode::F(5)),
                 if pending { review.chosen() } else { review },
                 Control::named("ESC", "cancel", KeyCode::Esc),
             ]
