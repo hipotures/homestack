@@ -1,0 +1,15 @@
+[Unit]
+Description=Herdr persistent terminal server
+
+[Service]
+Type=simple
+WorkingDirectory=%h
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStartPre=-%h/.local/bin/herdr update
+ExecStart=%h/.local/bin/herdr server
+TimeoutStartSec=5min
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

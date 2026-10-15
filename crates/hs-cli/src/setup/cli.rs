@@ -52,6 +52,10 @@ pub fn settings(ctx: &Context, loaded: &Loaded) -> Result<Settings, AppError> {
             .state_home
             .clone()
             .unwrap_or_else(|| ctx.home.join(".local").join("state")),
+        keys: super::Keys {
+            identity_files: loaded.client.workspace_ssh.identity_files.clone(),
+            identities_only: loaded.client.workspace_ssh.identities_only,
+        },
     })
 }
 
@@ -250,6 +254,7 @@ fn catalog_with_repositories(system: &dyn System, settings: &Settings) -> Catalo
 struct Printer<'a> {
     console: &'a mut dyn crate::system::Console,
     json: bool,
+    sounds: Sounds,
 }
 
 impl Observer for Printer<'_> {
@@ -260,6 +265,10 @@ impl Observer for Printer<'_> {
         } else {
             self.console.out(&line);
         }
+    }
+
+    fn register_desktop(&mut self, argv: &[String]) -> Result<crate::system::Output, AppError> {
+        super::herdr::register_desktop(argv, &self.sounds)
     }
 }
 
@@ -455,6 +464,7 @@ pub async fn run(
         let mut printer = Printer {
             console: ctx.console.as_mut(),
             json: json_mode,
+            sounds: Sounds::from_table(loaded.client.sounds.as_ref()),
         };
         execute_plan(
             &settings,

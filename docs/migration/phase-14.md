@@ -10,7 +10,7 @@ section, and works exactly as it does now:
 | 14a | the core; Files, Credentials, Environment | done (below) |
 | 14c | Applications: installers, managed values, application files | done (below) |
 | 14d | Backup (BK), `setup --local` | done (below) |
-| 14e | Herdr | open |
+| 14e | Herdr | done (below) |
 | 14f | Repositories, `homestack repo` | open |
 | 13b step 5 | the setup tree in the TUI (and `setup TARGET` without selectors) | open |
 
@@ -45,7 +45,7 @@ its units (14d) are sent unchanged the same way.
     TARGET`, `setup TARGET SELECTORS…` with `--dry-run`, `--catalog`,
     `--non-interactive`, `--yes`, `--json`; Rich's default tables.
 - **Handlers:** file (Files, Credentials), environment, application
-  installers (14c adds managed values, 14d Backup). A handler not ported yet (Herdr,
+  installers (14c adds managed values, 14d Backup, 14e Herdr). A handler not ported yet
   Repositories) refuses in its preflight, so nothing is written.
 - **The workspace user** (name, uid, gid) and the address come from the
   server (`GET /v1/config`, `/v1/workspaces/{target}`); Python read them
@@ -131,3 +131,27 @@ its units (14d) are sent unchanged the same way.
   retrieval keys with the real `ssh-keygen`), and the dry runs in
   `tests/cli.rs`. Excluded: the 74 tests of BK itself (`test_bk.py`), a
   program sent unchanged. Open: the TUI test, with the setup box.
+
+## 14e: Herdr
+
+- **Where:** `setup/herdr.rs` (Python `setup_herdr.py`); the user unit is
+  `guest/herdr/herdr.service`, Python's byte for byte.
+- **On the workspace:** the official installer only when Herdr is
+  missing, linger for the user (refused with the administrator's command
+  when not allowed), the unit written with the digest it replaces (a
+  concurrent edit is refused), the service enabled and started only when
+  no session runs; a running server is never updated, restarted or
+  stopped, and the service then starts at the next boot.
+- **On the desktop:** `herdr machine list` finds the workspace's profile
+  (by name or address, session `default`; a label taken by another
+  profile is refused); an existing profile is renamed and enabled without
+  authentication, a missing one is added with `herdr machine add`, which
+  may ask for the touch of a security key: the CLI shows the notice and
+  the command and gives it the terminal with the touch cues; the
+  desktop's SSH alias must resolve to the workspace's address, account
+  and keys first. Unattended, a missing profile blocks before anything is
+  written. External output is never shown; known diagnostics are named.
+- **Tests** (22 of the 24 of 14e ported): `tests/setup_herdr.rs` (a
+  simulated workspace and desktop, the real guest program), the cue in
+  `tests/touch.rs`, and the vendor snippet's linger after the home is
+  mounted. Open: the TUI test, with the setup box.

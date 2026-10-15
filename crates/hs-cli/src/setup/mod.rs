@@ -11,6 +11,7 @@ pub mod documents;
 pub mod engine;
 pub mod files;
 pub mod guest;
+pub mod herdr;
 pub mod plan;
 pub mod show;
 pub mod text;
@@ -66,6 +67,8 @@ pub struct Settings {
     pub config_path: PathBuf,
     /// `XDG_STATE_HOME`, else `~/.local/state`.
     pub state_home: PathBuf,
+    /// `[workspace_ssh]` keys: what the desktop's alias of a workspace uses.
+    pub keys: Keys,
 }
 
 impl Settings {
@@ -148,4 +151,11 @@ pub fn utc_now() -> String {
         now.minute(),
         now.second()
     )
+}
+
+/// The keys of `[workspace_ssh]` the desktop's SSH alias must offer.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Keys {
+    pub identity_files: Vec<String>,
+    pub identities_only: bool,
 }

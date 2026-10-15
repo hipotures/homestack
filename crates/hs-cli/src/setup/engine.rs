@@ -13,6 +13,7 @@ use super::backup;
 use super::definitions::{Entry, Params};
 use super::documents;
 use super::guest::{command_environment, guest, require_tool};
+use super::herdr;
 use super::plan::{Plan, all_bins, application_units, build_plan, expand_config_entries, source_item, write_paths};
 use super::workspace::Workspace;
 use super::{Settings, Target, json_of, sha256_hex, utc_now};
@@ -45,6 +46,11 @@ pub trait Observer {
     /// installer, the touch of the connection); the TUI steps aside.
     fn terminal(&mut self, operation: &mut dyn FnMut()) {
         operation();
+    }
+    /// Run Herdr's desktop registration (`herdr machine add`), which may
+    /// ask for the touch of a security key.
+    fn register_desktop(&mut self, argv: &[String]) -> Result<crate::system::Output, AppError> {
+        super::herdr::register_desktop(argv, &crate::touch::Sounds::disabled())
     }
 }
 
@@ -355,6 +361,23 @@ pub fn inspect_workspace_state(
     target: &Target,
     entries: &[Entry],
 ) -> Result<Value, AppError> {
+    inspect_workspace_state_with(
+        workspace,
+        settings,
+        &crate::system::RealSystem::default(),
+        target,
+        entries,
+    )
+}
+
+/// [`inspect_workspace_state`] with the desktop's commands given.
+pub fn inspect_workspace_state_with(
+    workspace: &mut dyn Workspace,
+    settings: &Settings,
+    system: &dyn System,
+    target: &Target,
+    entries: &[Entry],
+) -> Result<Value, AppError> {
     let entries = expand_config_entries(entries);
     require_tool(workspace, settings, "python3", &[])?;
     verify_identity(workspace, settings, target)?;
@@ -447,7 +470,7 @@ pub fn inspect_workspace_state(
                 }
                 Err(error) => Err(error.clone()),
             },
-            _ => inspect_item(workspace, settings, target, entry, &record, &remote, &mut item),
+            _ => inspect_item(workspace, settings, system, target, entry, &record, &remote, &mut item),
         };
         if let Err(error) = outcome {
             item["state"] = json!("unavailable");
@@ -464,9 +487,11 @@ pub fn inspect_workspace_state(
     }))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn inspect_item(
     workspace: &mut dyn Workspace,
     settings: &Settings,
+    system: &dyn System,
     target: &Target,
     entry: &Entry,
     record: &Value,
@@ -594,6 +619,14 @@ fn inspect_item(
                 item.extend(found);
             }
         }
+        Params::Herdr => {
+            if let (Some(item), Value::Object(found)) = (
+                item.as_object_mut(),
+                herdr::inspect(workspace, settings, system, target)?,
+            ) {
+                item.extend(found);
+            }
+        }
         _ => return Err(pending(entry)),
     }
     Ok(())
@@ -696,6 +729,7 @@ fn preflight_entry(
     target: &Target,
     system: &dyn System,
     entry: &Entry,
+    unattended: bool,
 ) -> Result<Value, AppError> {
     match &entry.params {
         Params::File { .. } => {
@@ -799,6 +833,7 @@ fn preflight_entry(
             Ok(json!({"installed": installed, "ready": installed}))
         }
         Params::Backup => backup::inspect(workspace, settings, target.vmid, true),
+        Params::Herdr => herdr::preflight(workspace, settings, system, target, unattended),
         _ => Err(pending(entry)),
     }
 }
@@ -806,6 +841,7 @@ fn preflight_entry(
 fn apply_entry(
     workspace: &mut dyn Workspace,
     settings: &Settings,
+    system: &dyn System,
     plan: &Plan,
     entry: &Entry,
     state: &Value,
@@ -907,6 +943,16 @@ fn apply_entry(
         Params::Backup => backup::apply(workspace, settings, plan.target.vmid, state, &mut |message| {
             observer.activity(Some(id), message);
         }),
+        Params::Herdr => herdr::apply(
+            workspace,
+            settings,
+            system,
+            &plan.target,
+            state,
+            observer,
+            id,
+            plan.unattended,
+        ),
         _ => Err(pending(entry)),
     }
 }
@@ -1052,7 +1098,7 @@ fn run_plan(
                 }
                 documents[&config.path].clone()
             }
-            _ => preflight_entry(workspace, settings, &plan.target, system, entry),
+            _ => preflight_entry(workspace, settings, &plan.target, system, entry, plan.unattended),
         };
         match state {
             Ok(state) => {
@@ -1167,7 +1213,7 @@ fn run_plan(
                             ("succeeded".to_owned(), "Managed value patched".to_owned())
                         }
                     }
-                    _ => apply_entry(workspace, settings, &plan, entry, &states[&entry.id], observer)?,
+                    _ => apply_entry(workspace, settings, system, &plan, entry, &states[&entry.id], observer)?,
                 };
                 results[index]["status"] = json!(status);
                 results[index]["detail"] = json!(detail);

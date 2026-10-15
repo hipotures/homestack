@@ -274,3 +274,17 @@ identities_only = true\nlog_level = \"FATAL\"\n";
     assert!(hs_config::client::ClientConfig::parse(&format!("{base}sounds = \"text\"\n")).is_err());
     Ok(())
 }
+
+/// Port of `TouchCueTests::test_herdr_registration_plays_failure_cue_on_nonzero_exit`.
+#[test]
+fn herdr_registration_plays_failure_cue_on_nonzero_exit() -> TestResult {
+    let loud = sounds(8.0, 5.0);
+    let rec = Recorder::default();
+    let result = hs_cli::setup::herdr::register_desktop_with(&["false".to_owned()], &loud, rec.player())?;
+    assert_eq!(result.code, 1);
+    assert_eq!(rec.events(), [Event::Fail]);
+    let rec = Recorder::default();
+    hs_cli::setup::herdr::register_desktop_with(&["true".to_owned()], &loud, rec.player())?;
+    assert!(rec.events().is_empty());
+    Ok(())
+}

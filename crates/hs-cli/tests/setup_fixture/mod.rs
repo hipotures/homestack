@@ -12,7 +12,7 @@ use hs_cli::AppError;
 use hs_cli::setup::definitions::{Entry, SetupConfig, defaults};
 use hs_cli::setup::guest::script;
 use hs_cli::setup::workspace::Workspace;
-use hs_cli::setup::{RepoSettings, Settings, Target};
+use hs_cli::setup::{Keys, RepoSettings, Settings, Target};
 use hs_cli::system::Output;
 use serde_json::{Value, json};
 
@@ -27,6 +27,10 @@ pub fn settings(home: &Path) -> Settings {
         repo: RepoSettings::default(),
         config_path: home.join("client.toml"),
         state_home: home.join("state"),
+        keys: Keys {
+            identity_files: vec!["~/.ssh/example-hardware-key".to_owned()],
+            identities_only: true,
+        },
     }
 }
 
