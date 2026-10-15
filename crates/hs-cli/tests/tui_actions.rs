@@ -503,3 +503,23 @@ fn a_plan_is_not_a_change_so_its_row_shows_no_busy_dot() {
     let row = text.lines().find(|line| line.contains("│ 203 ")).unwrap_or_default();
     assert!(!row.contains('◐'), "only a plan: {row}");
 }
+
+#[test]
+fn the_focused_button_of_a_plan_is_an_accent_bar() {
+    let mut fixture = app();
+    select(&mut fixture.app, 203);
+    started(press(&mut fixture.app, KeyCode::Char('r')));
+    fixture
+        .app
+        .progress(plan(&["REFRESH PLAN"], "Refresh this workspace root?"));
+    let palette = Palette::named("HomeStack", false).unwrap();
+    let buf = render(&fixture.app, 120, 36);
+    let (x, y) = position(&buf, "apply");
+    assert_eq!(buf[(x + 1, y)].bg, palette.focus, "apply has the focus");
+    let (x, y) = position(&buf, "cancel esc");
+    assert_ne!(buf[(x + 1, y)].bg, palette.focus);
+    press(&mut fixture.app, KeyCode::Right);
+    let buf = render(&fixture.app, 120, 36);
+    let (x, y) = position(&buf, "cancel esc");
+    assert_eq!(buf[(x + 1, y)].bg, palette.focus, "cancel has it now");
+}

@@ -19,6 +19,8 @@ pub enum Look {
     Normal,
     /// Does nothing now (no row selected): all of it muted.
     Muted,
+    /// The focused button: a bar in the accent colour, as a selected row.
+    Chosen,
     /// The current step or stage.
     Raised,
 }
@@ -89,6 +91,13 @@ impl Control {
     #[must_use]
     pub fn raised(mut self) -> Self {
         self.look = Look::Raised;
+        self
+    }
+
+    /// The focused button of a box.
+    #[must_use]
+    pub fn chosen(mut self) -> Self {
+        self.look = Look::Chosen;
         self
     }
 
@@ -174,9 +183,15 @@ fn draw_control(
         Look::Normal => palette.foreground,
         Look::Muted => palette.muted,
         Look::Raised => palette.focus,
+        Look::Chosen => palette.background,
     };
-    let mut style = Style::default().fg(base).bg(palette.background);
-    if control.bold || control.look == Look::Raised {
+    let background = if control.look == Look::Chosen {
+        palette.focus
+    } else {
+        palette.background
+    };
+    let mut style = Style::default().fg(base).bg(background);
+    if control.bold || matches!(control.look, Look::Raised | Look::Chosen) {
         style = style.add_modifier(Modifier::BOLD);
     }
     let key_style = if control.look == Look::Muted {

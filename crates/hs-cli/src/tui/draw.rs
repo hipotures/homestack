@@ -1080,7 +1080,7 @@ fn action_box(buf: &mut Buffer, area: Rect, app: &App, action: &Action) {
             std::cmp::Ordering::Greater => Control::plain(stage).muted(),
         });
     }
-    let raised = |control: Control, on: bool| if on { control.raised() } else { control };
+    let raised = |control: Control, on: bool| if on { control.chosen() } else { control };
     let bottom_left = match &action.stage {
         Stage::Form(_) => vec![
             Control::key("next ⇥"),
