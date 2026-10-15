@@ -22,6 +22,10 @@ pub struct FakeSystem {
     pub clock: Mutex<VecDeque<f64>>,
     pub runs: Mutex<Vec<Vec<String>>>,
     pub masters: Mutex<Vec<Vec<String>>>,
+    /// Commands run with input, and the input.
+    pub inputs: Mutex<Vec<(Vec<String>, String)>>,
+    /// Commands run on the terminal.
+    pub interactive: Mutex<Vec<Vec<String>>>,
 }
 
 impl FakeSystem {
@@ -34,6 +38,8 @@ impl FakeSystem {
             clock: Mutex::new(VecDeque::new()),
             runs: Mutex::new(Vec::new()),
             masters: Mutex::new(Vec::new()),
+            inputs: Mutex::new(Vec::new()),
+            interactive: Mutex::new(Vec::new()),
         }
     }
 
@@ -93,6 +99,22 @@ impl System for FakeSystem {
             .unwrap_or_else(PoisonError::into_inner)
             .pop_front()
             .unwrap_or(0.0)
+    }
+
+    fn run_input(&self, argv: &[String], input: &str) -> io::Result<Output> {
+        self.inputs
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push((argv.to_vec(), input.to_owned()));
+        (self.run)(argv)
+    }
+
+    fn run_interactive(&self, argv: &[String]) -> io::Result<i32> {
+        self.interactive
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(argv.to_vec());
+        (self.run)(argv).map(|output| output.code)
     }
 }
 

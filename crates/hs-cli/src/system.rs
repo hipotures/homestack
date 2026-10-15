@@ -49,6 +49,21 @@ pub trait System: Send + Sync {
     fn run_master(&self, argv: &[String]) -> io::Result<Output>;
     /// Seconds on a monotonic clock.
     fn monotonic(&self) -> f64;
+    /// Run `argv` with `input` on its stdin; its output captured.
+    fn run_input(&self, argv: &[String], _input: &str) -> io::Result<Output> {
+        Err(io::Error::other(format!(
+            "cannot run {:?} with input here",
+            argv.first()
+        )))
+    }
+    /// Run `argv` on the terminal (stdin, stdout and stderr inherited); its
+    /// exit code.
+    fn run_interactive(&self, argv: &[String]) -> io::Result<i32> {
+        Err(io::Error::other(format!(
+            "cannot run {:?} on the terminal here",
+            argv.first()
+        )))
+    }
 }
 
 /// The real desktop.
@@ -121,6 +136,33 @@ impl System for RealSystem {
 
     fn monotonic(&self) -> f64 {
         self.started.elapsed().as_secs_f64()
+    }
+
+    fn run_input(&self, argv: &[String], input: &str) -> io::Result<Output> {
+        let (program, args) = argv.split_first().ok_or_else(|| io::Error::other("empty command"))?;
+        let mut child = Command::new(program)
+            .args(args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?;
+        let mut stdin = child.stdin.take().ok_or_else(|| io::Error::other("no stdin"))?;
+        let input = input.to_owned();
+        // Written from a thread, so a large input cannot block on a full
+        // output pipe.
+        let writer = std::thread::spawn(move || stdin.write_all(input.as_bytes()));
+        let output = child.wait_with_output()?;
+        let _ = writer.join();
+        Ok(Output {
+            code: code(output.status),
+            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        })
+    }
+
+    fn run_interactive(&self, argv: &[String]) -> io::Result<i32> {
+        let (program, args) = argv.split_first().ok_or_else(|| io::Error::other("empty command"))?;
+        Ok(code(Command::new(program).args(args).status()?))
     }
 }
 

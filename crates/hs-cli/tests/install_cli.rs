@@ -205,6 +205,7 @@ async fn run_with(cluster: &Cluster, argv: &[&str], answers: &[&str], tty: bool,
     let mut context = Context {
         home: cluster.home.clone(),
         config_home: None,
+        state_home: None,
         stdin_tty: tty,
         style: Style {
             color: false,

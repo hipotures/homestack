@@ -25,6 +25,9 @@ fn context() -> Context {
     Context {
         home,
         config_home,
+        state_home: std::env::var_os("XDG_STATE_HOME")
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from),
         stdin_tty: std::io::stdin().is_terminal(),
         style: Style {
             color: stdout_tty && std::env::var_os("NO_COLOR").is_none(),

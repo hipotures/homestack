@@ -223,6 +223,7 @@ async fn run_rust_cli(
     let mut context = hs_cli::app::Context {
         home: home.path().to_owned(),
         config_home: None,
+        state_home: None,
         stdin_tty: false,
         style: hs_cli::view::Style {
             color: false,

@@ -138,6 +138,7 @@ impl Desk {
         let mut context = Context {
             home: self.home.path().to_owned(),
             config_home: None,
+            state_home: None,
             stdin_tty: false,
             style: Style {
                 color: false,

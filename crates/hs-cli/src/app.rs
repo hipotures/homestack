@@ -23,6 +23,8 @@ pub struct Context {
     pub home: PathBuf,
     /// `$XDG_CONFIG_HOME`, when set.
     pub config_home: Option<PathBuf>,
+    /// `$XDG_STATE_HOME`, when set (setup catalog snapshots).
+    pub state_home: Option<PathBuf>,
     /// Whether stdin is a terminal (confirmations need one).
     pub stdin_tty: bool,
     pub style: Style,
@@ -269,7 +271,7 @@ pub async fn status_of(path: &Path, ctx: &mut Context) -> Result<Code, AppError>
 
 async fn execute(args: &Args, ctx: &mut Context, running: &Running) -> Result<Code, AppError> {
     let phase = match args.command {
-        Command::Setup | Command::Repo { .. } => Some("14"),
+        Command::Repo { .. } => Some("14f"),
         _ => None,
     };
     if let Some(phase) = phase {
@@ -349,7 +351,8 @@ async fn execute(args: &Args, ctx: &mut Context, running: &Running) -> Result<Co
             cli.migrate(json!({"vmid": vmid, "target_node": target_node, "target_storage": target_storage}))
                 .await
         }
-        Command::None | Command::Setup | Command::Repo { .. } | Command::Install(_) | Command::Uninstall(_) => Ok(0),
+        Command::Setup(setup) => crate::setup::cli::run(args, setup, cli.ctx, cli.loaded, cli.client).await,
+        Command::None | Command::Repo { .. } | Command::Install(_) | Command::Uninstall(_) => Ok(0),
     }
 }
 

@@ -66,7 +66,7 @@ pub enum Command {
         target_node: String,
         target_storage: String,
     },
-    Setup,
+    Setup(Setup),
     Repo {
         target: String,
         repository: Option<String>,
@@ -75,6 +75,19 @@ pub enum Command {
         target: Option<String>,
     },
     Transport,
+}
+
+/// `homestack setup`: Python's arguments.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Setup {
+    /// A VMID, an exact name, `list` or `status`.
+    pub target: Option<String>,
+    /// `group=item,item`.
+    pub selectors: Vec<String>,
+    pub local: bool,
+    pub catalog: Option<String>,
+    pub dry_run: bool,
+    pub non_interactive: bool,
 }
 
 impl Command {
@@ -92,7 +105,7 @@ impl Command {
             Self::Addkey { .. } => "addkey",
             Self::Destroy { .. } => "destroy",
             Self::Migrate { .. } => "migrate",
-            Self::Setup => "setup",
+            Self::Setup(_) => "setup",
             Self::Repo { .. } => "repo",
             Self::Status { .. } => "status",
             Self::Transport => "transport",
@@ -141,6 +154,9 @@ fn usage_of(command: &str) -> String {
         "uninstall" => {
             "[--ssh USER@HOST | --herdr NAME] [--identity FILE] [--test] [--snippet-storage ID] [--gold VMID] [--force] [--token-dir DIR] [--json] [-y]"
         }
+        "setup" => {
+            "[--local] [--json] [-y] [--catalog CATALOG] [--dry-run] [--non-interactive] [target] [selectors ...]"
+        }
         "repo" => "TARGET [REPOSITORY] [--json]",
         "status" => "[TARGET] [--json]",
         _ => "[--json]",
@@ -161,6 +177,8 @@ struct Words {
     positionals: Vec<String>,
     values: Vec<(String, String)>,
     flags: Vec<String>,
+    /// Positionals after an option that followed earlier positionals.
+    later: Option<Vec<String>>,
 }
 
 impl Words {
@@ -204,14 +222,21 @@ fn words(command: &str, argv: &[String], valued: &[&str], flags: &[&str]) -> Res
         positionals: Vec::new(),
         values: Vec::new(),
         flags: Vec::new(),
+        later: None,
     };
     let mut rest = argv.iter();
     let mut only_positionals = false;
+    // Whether an option came after the first positionals.
+    let mut broken = false;
     while let Some(word) = rest.next() {
         if only_positionals || !word.starts_with('-') || word == "-" {
+            if broken {
+                parsed.later.get_or_insert_with(Vec::new).push(word.clone());
+            }
             parsed.positionals.push(word.clone());
             continue;
         }
+        broken |= !parsed.positionals.is_empty();
         if word == "--" {
             only_positionals = true;
             continue;
@@ -457,15 +482,30 @@ pub fn parse(argv: &[String]) -> Result<Args, UsageError> {
             (words, command)
         }
         "setup" => {
-            // Still Python's (phase 14): taken as a whole.
-            let help = rest.iter().any(|word| word == "-h" || word == "--help");
-            let words = Words {
-                usage: usage_of(name),
-                positionals: Vec::new(),
-                values: Vec::new(),
-                flags: if help { vec!["--help".to_owned()] } else { Vec::new() },
-            };
-            (words, Command::Setup)
+            let words = words(
+                name,
+                rest,
+                &["--catalog"],
+                &common(&["--local", "--dry-run", "--non-interactive"]),
+            )?;
+            // argparse takes the positionals of one run only (`target` and
+            // every selector); a later run is left over.
+            if let Some(extra) = &words.later {
+                return Err(error(
+                    words.usage.clone(),
+                    format!("unrecognized arguments: {}", extra.join(" ")),
+                ));
+            }
+            let mut positionals = words.positionals.clone().into_iter();
+            let command = Command::Setup(Setup {
+                target: positionals.next(),
+                selectors: positionals.collect(),
+                local: words.flag("--local"),
+                catalog: words.value("--catalog"),
+                dry_run: words.flag("--dry-run"),
+                non_interactive: words.flag("--non-interactive"),
+            });
+            (words, command)
         }
         "repo" => {
             let words = words(name, rest, &[], &["--json", "--help"])?;

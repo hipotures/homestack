@@ -162,6 +162,8 @@ impl Master {
         }
         let directory = tempfile::Builder::new()
             .prefix("hs-ssh-")
+            // Private, as Python's TemporaryDirectory: the socket gives a shell.
+            .permissions(std::os::unix::fs::PermissionsExt::from_mode(0o700))
             .tempdir()
             .map_err(|error| AppError::new(format!("Could not create the SSH control directory: {error}")))?;
         self.control = directory.path().join("master").display().to_string();

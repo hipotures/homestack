@@ -24,6 +24,7 @@ pub enum Color {
     Grey,
     Title,
     Bold,
+    Italic,
 }
 
 impl Color {
@@ -38,6 +39,7 @@ impl Color {
             Self::Grey => "90",
             Self::Title => "2;94",
             Self::Bold => "1",
+            Self::Italic => "3",
         }
     }
 }

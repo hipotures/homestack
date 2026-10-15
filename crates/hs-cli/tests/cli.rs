@@ -162,6 +162,7 @@ impl Desk {
         Context {
             home: self.home.path().to_owned(),
             config_home: None,
+            state_home: None,
             stdin_tty: tty,
             style: Style {
                 color: false,
@@ -210,6 +211,7 @@ async fn package_cli_main_is_callable() -> TestResult {
     let mut context = Context {
         home: home.path().to_owned(),
         config_home: None,
+        state_home: None,
         stdin_tty: false,
         style: Style {
             color: false,
@@ -722,7 +724,7 @@ async fn environment_discovery_reports_progress_without_changing_read_only_queri
 #[tokio::test]
 async fn python_only_commands_say_where_they_are() -> TestResult {
     let desk = desk(LIFECYCLE, SERVER_TOML).await?;
-    for (argv, phase) in [(vec!["setup", "list"], "14"), (vec!["repo", "x"], "14")] {
+    for (argv, phase) in [(vec!["repo", "x"], "14f")] {
         let run = desk.run(&argv).await;
         assert_eq!(run.code, 1, "{argv:?}");
         let text = run.console.out();
@@ -760,4 +762,198 @@ async fn migrate_moves_the_workspace_through_the_server() -> TestResult {
     let status = desk.run(&["status", "200", "--json"]).await;
     assert_eq!(status.json()["node"], "pve-example-2");
     Ok(())
+}
+
+/// A desktop whose workspace answers every guest call of the setup with
+/// `ok` and nothing to change.
+fn setup_system() -> FakeSystem {
+    FakeSystem::new().run(|argv| {
+        Ok(if argv[0] == "ssh" && argv.last().is_some_and(|last| last.contains("python3 -")) {
+            Output::stdout(
+                r#"{"ok": true, "changed": [], "paths": [], "items": [], "registry": {}, "created": false, "state_path": "~/.local/state/homestack/setup.json"}"#,
+            )
+        } else {
+            Output::default()
+        })
+    })
+}
+
+/// Port of `test_setup.py::CLITests::test_list_json_without_herdr_or_guest`.
+#[tokio::test]
+async fn list_json_without_herdr_or_guest() -> TestResult {
+    let desk = desk(LIFECYCLE, SERVER_TOML).await?;
+    let run = desk
+        .run_with(&["setup", "list", "--json"], Recorded::default(), setup_system(), false)
+        .await;
+    assert_eq!(run.code, 0, "{}", run.console.out());
+    let result = run.json();
+    assert!(result["catalog"].as_str().is_some_and(|id| !id.is_empty()));
+    assert!(result["items"].as_array().is_some_and(|items| !items.is_empty()));
+    assert_eq!(result["guest_state"], "unknown");
+    assert!(run.system.masters().is_empty());
+    Ok(())
+}
+
+/// Port of `CLITests::test_missing_target_selectors_and_invalid_input_no_transport`.
+#[tokio::test]
+async fn missing_target_selectors_and_invalid_input_no_transport() -> TestResult {
+    let desk = desk(LIFECYCLE, SERVER_TOML).await?;
+    for argv in [
+        &["setup", "--json"][..],
+        &["setup", "workspace", "--yes", "--json"],
+        &["setup", "workspace", "app=missing", "--yes", "--json"],
+        &["setup", "workspace", "f=1", "files=2", "--json"],
+    ] {
+        let run = desk.run_with(argv, Recorded::default(), setup_system(), false).await;
+        assert_eq!(run.code, 1, "{argv:?}");
+        assert_eq!(run.json()["ok"], false, "{argv:?}");
+        assert!(run.system.masters().is_empty());
+    }
+    Ok(())
+}
+
+/// Port of `CLITests::test_dry_run_confirmation_and_unattended_json`.
+#[tokio::test]
+async fn dry_run_confirmation_and_unattended_json() -> TestResult {
+    let desk = desk(LIFECYCLE, SERVER_TOML).await?;
+    let run = desk
+        .run_with(
+            &[
+                "setup",
+                "alien-workspace",
+                "env=bash",
+                "app=codex",
+                "--dry-run",
+                "--json",
+            ],
+            Recorded::default(),
+            setup_system(),
+            false,
+        )
+        .await;
+    assert_eq!(run.code, 0, "{}", run.console.out());
+    assert_eq!(run.json()["dry_run"], true);
+    assert!(run.system.masters().is_empty());
+    let run = desk
+        .run_with(
+            &["setup", "160", "env=bash", "--json"],
+            Recorded::default(),
+            setup_system(),
+            false,
+        )
+        .await;
+    assert_eq!(run.code, 3, "{}", run.console.out());
+    assert_eq!(run.json()["confirmation_required"], true);
+    assert!(run.system.masters().is_empty());
+    let run = desk
+        .run_with(
+            &[
+                "setup",
+                "alien-workspace",
+                "app=codex",
+                "--yes",
+                "--non-interactive",
+                "--json",
+            ],
+            Recorded::default(),
+            setup_system(),
+            false,
+        )
+        .await;
+    assert_eq!(run.code, 0, "{}", run.console.out());
+    let result = run.json();
+    assert_eq!(result["ok"], true, "{result}");
+    assert_eq!(result["plan"]["non_interactive"], true);
+    assert_eq!(run.system.masters().len(), 1);
+    Ok(())
+}
+
+/// Port of `CLITests::test_explicit_selectors_never_enter_tui_and_tty_review_can_cancel`.
+#[tokio::test]
+async fn explicit_selectors_never_enter_tui_and_tty_review_can_cancel() -> TestResult {
+    let desk = desk(LIFECYCLE, SERVER_TOML).await?;
+    let run = desk
+        .run_with(
+            &["setup", "alien-workspace", "env=bash"],
+            Recorded::answering(&["n"]),
+            setup_system(),
+            true,
+        )
+        .await;
+    assert_eq!(run.code, 0, "{}", run.console.out());
+    assert!(run.console.out().contains("Cancelled"));
+    assert!(run.system.masters().is_empty());
+    Ok(())
+}
+
+/// Port of `test_setup_state.py::SetupStatusCLITests::test_setup_status_is_read_only_and_uses_one_workspace_connection`.
+#[tokio::test]
+async fn setup_status_is_read_only_and_uses_one_workspace_connection() -> TestResult {
+    let desk = desk(LIFECYCLE, SERVER_TOML).await?;
+    let run = desk
+        .run_with(
+            &["setup", "status", "alien-workspace", "--json"],
+            Recorded::default(),
+            setup_system(),
+            false,
+        )
+        .await;
+    assert_eq!(run.code, 0, "{}", run.console.out());
+    let result = run.json();
+    assert_eq!(result["command"], "setup status");
+    assert_eq!(result["items"]["codex"]["state"], "installed");
+    assert_eq!(run.system.masters().len(), 1);
+    let exits = run
+        .system
+        .runs()
+        .iter()
+        .filter(|argv| argv.contains(&"exit".to_owned()))
+        .count();
+    assert_eq!(exits, 1);
+    let guests: Vec<String> = run
+        .system
+        .inputs
+        .lock()
+        .map(|inputs| {
+            inputs
+                .iter()
+                .map(|(_, input)| input.lines().last().unwrap_or_default().to_owned())
+                .collect()
+        })
+        .unwrap_or_default();
+    assert!(
+        guests
+            .iter()
+            .all(|call| !call.contains("\\\"apply\\\":true") && !call.contains("state-record"))
+    );
+    Ok(())
+}
+
+/// `homestack setup` takes Python's arguments, its positionals in one run.
+#[test]
+fn setup_arguments_are_python_s() {
+    assert_eq!(
+        parsed(&[
+            "setup",
+            "--json",
+            "alien-workspace",
+            "env=bash",
+            "app=codex",
+            "--catalog",
+            "abc",
+            "--dry-run"
+        ]),
+        Ok(Command::Setup(args::Setup {
+            target: Some("alien-workspace".to_owned()),
+            selectors: vec!["env=bash".to_owned(), "app=codex".to_owned()],
+            local: false,
+            catalog: Some("abc".to_owned()),
+            dry_run: true,
+            non_interactive: false,
+        }))
+    );
+    let scattered = parsed(&["setup", "alien-workspace", "--json", "env=bash"])
+        .err()
+        .unwrap_or_default();
+    assert!(scattered.contains("unrecognized arguments: env=bash"), "{scattered}");
 }
