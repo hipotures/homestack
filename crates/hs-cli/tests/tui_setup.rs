@@ -514,7 +514,7 @@ fn mouse_respects_filter_unavailable_items_and_busy_guard() {
     let env = section(open(app), "env");
     open_mut(app).show_section(env);
     let buf = render(app, 120, 40);
-    let (x, y) = position(&buf, "Environment");
+    let (x, y) = position(&buf, "Environment  ");
     click(app, (x.saturating_sub(4), y));
     assert_eq!(selected(open(app)), set_of(&["bash", "codex"]));
     assert!(open(app).target_label("").contains("Hidden selected: 1"));
@@ -526,7 +526,7 @@ fn mouse_respects_filter_unavailable_items_and_busy_guard() {
     assert_eq!(selected(open(app)), set_of(&["bash", "codex"]));
     open_mut(app).busy = false;
     let buf = render(app, 120, 40);
-    let (x, y) = position(&buf, "Environment");
+    let (x, y) = position(&buf, "Environment  ");
     click(app, (x.saturating_sub(4), y));
     assert_eq!(selected(open(app)), set_of(&["codex"]));
 }
@@ -1709,4 +1709,49 @@ fn the_group_bar_shows_every_group_and_a_click_opens_it() {
     click(app, position(&buf, " Backup 0/"));
     assert_eq!(open(app).section, section(open(app), "backup"));
     assert_eq!(open(app).cursor, "backup");
+}
+
+/// The box takes the width of the storage and log panels while it is open;
+/// they come back when it closes. Each item shows its state, and what
+/// applying it does once it is selected.
+#[test]
+fn the_box_is_wide_and_every_item_shows_its_state() {
+    let mut fixture = tui_fixture::app();
+    let app = &mut fixture.app;
+    app_key(app, KeyCode::Down);
+    let vmid = app.rows().iter().find(|entry| entry.status == "running").unwrap().vmid;
+    app.selected = Some(vmid);
+    let before = app.shown;
+    assert!(before.storage && before.log);
+    app_key(app, KeyCode::Char('e'));
+    assert!(!app.shown.storage && !app.shown.log);
+    app_key(app, KeyCode::Esc);
+    assert_eq!(app.shown, before);
+    let Boxed { mut setup, _home } = state_box(json!({"items": {
+        "bash": {"ready": true, "state": "configured"},
+        "zsh": {"ready": false, "will_overwrite": true, "state": "needs update"},
+        "fish": {"ready": false, "state": "not configured"},
+    }}));
+    assert_eq!(setup.row_state("bash"), Some(("✓ configured".to_owned(), Tone::Green)));
+    assert_eq!(
+        setup.row_state("zsh"),
+        Some(("! needs update".to_owned(), Tone::Yellow))
+    );
+    assert_eq!(
+        setup.row_state("fish"),
+        Some(("○ not configured".to_owned(), Tone::Dim))
+    );
+    assert_eq!(setup.row_state("env"), None);
+    setup.toggle("fish", false);
+    setup.toggle("zsh", false);
+    assert_eq!(setup.row_state("fish").unwrap().0, "○ not configured → install");
+    assert_eq!(
+        setup.row_state("zsh"),
+        Some(("! needs update → update".to_owned(), Tone::Red))
+    );
+    setup.show_section(section(&setup, "env"));
+    let (fixture, _keep) = tui(setup);
+    let text = screen(&render(&fixture.app, 120, 36));
+    assert!(text.contains("STATE"), "{text}");
+    assert!(text.contains("✓ configured"), "{text}");
 }

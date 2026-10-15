@@ -1118,26 +1118,7 @@ impl SetupBox {
         };
         let live = self.state_item(&entry.id);
         let state = live["state"].as_str();
-        let environment = matches!(entry.params, Params::Environment { .. });
-        let status = if matches!(entry.params, Params::Structured { .. }) {
-            match state {
-                Some("matching") => "NO CHANGES",
-                Some("missing") => "INSTALL",
-                Some("different") => "UPDATE",
-                Some("unavailable") => "UNAVAILABLE",
-                _ => "UNKNOWN",
-            }
-        } else if environment && truthy(&live["ready"]) && truthy(&live["changed_since_apply"]) {
-            "MODIFIED"
-        } else if environment && truthy(&live["ready"]) {
-            "NO CHANGES"
-        } else if truthy(&live["ready"]) || truthy(&live["will_overwrite"]) {
-            "UPDATE"
-        } else if !truthy(live) || state.unwrap_or("unknown").starts_with("unknown") {
-            "UNKNOWN"
-        } else {
-            "INSTALL"
-        };
+        let status = self.status(entry);
         let application = entry.application();
         let mut lines = vec![
             format!("Status: {status}"),
@@ -1377,6 +1358,71 @@ impl SetupBox {
             lines.push(format!("Requires explicit selection: {}", entry.depends_on.join(", ")));
         }
         lines.join("\n")
+    }
+
+    /// What applying `entry` does (Python's `Status:` of the details).
+    #[must_use]
+    pub fn status(&self, entry: &Entry) -> &'static str {
+        let live = self.state_item(&entry.id);
+        let state = live["state"].as_str();
+        let environment = matches!(entry.params, Params::Environment { .. });
+        if matches!(entry.params, Params::Structured { .. }) {
+            match state {
+                Some("matching") => "NO CHANGES",
+                Some("missing") => "INSTALL",
+                Some("different") => "UPDATE",
+                Some("unavailable") => "UNAVAILABLE",
+                _ => "UNKNOWN",
+            }
+        } else if environment && truthy(&live["ready"]) && truthy(&live["changed_since_apply"]) {
+            "MODIFIED"
+        } else if environment && truthy(&live["ready"]) {
+            "NO CHANGES"
+        } else if truthy(&live["ready"]) || truthy(&live["will_overwrite"]) {
+            "UPDATE"
+        } else if !truthy(live) || state.unwrap_or("unknown").starts_with("unknown") {
+            "UNKNOWN"
+        } else {
+            "INSTALL"
+        }
+    }
+
+    /// The STATE column of a row (mockup 23): what the workspace has, and
+    /// for a selected item what applying it does. None for a group or a
+    /// configuration file or section.
+    #[must_use]
+    pub fn row_state(&self, identity: &str) -> Option<(String, Tone)> {
+        let entry = self.entry(identity)?;
+        let live = self.state_item(identity);
+        let state = live["state"].as_str().unwrap_or("unknown");
+        let (mark, tone) = if !self.available(entry) {
+            ("✗", Tone::Dim)
+        } else if truthy(&live["ready"]) {
+            ("✓", Tone::Green)
+        } else if truthy(&live["will_overwrite"]) {
+            ("!", Tone::Yellow)
+        } else if state.starts_with("unknown") || state == "unavailable" {
+            ("?", Tone::Dim)
+        } else {
+            ("○", Tone::Dim)
+        };
+        let mut text = format!("{mark} {state}");
+        if !self.available(entry) {
+            text = format!("{mark} {}", self.availability(identity));
+        }
+        if self.selected.contains(identity) {
+            let action = match self.status(entry) {
+                "INSTALL" => "install",
+                "UPDATE" | "MODIFIED" => "update",
+                "NO CHANGES" => "verify",
+                _ => "apply",
+            };
+            return Some((
+                format!("{text} → {action}"),
+                if action == "update" { Tone::Red } else { tone },
+            ));
+        }
+        Some((text, tone))
     }
 
     /// The tone of the first line of the details (Python colours the
@@ -1866,6 +1912,15 @@ impl SetupBox {
 }
 
 impl super::state::App {
+    /// Open `setup` over the workspaces panel, which gets the width of the
+    /// storage and log panels while it is open.
+    pub fn open_setup_box(&mut self, setup: SetupBox) {
+        self.before_setup = Some(self.shown);
+        self.shown.storage = false;
+        self.shown.log = false;
+        self.setup = Some(setup);
+    }
+
     /// `e` on a running workspace: the setup box, connecting first.
     pub(super) fn open_setup(&mut self) -> Option<super::state::Request> {
         if let Some(action) = &self.action {
@@ -1879,7 +1934,7 @@ impl super::state::App {
             name: entry.name.clone().unwrap_or_default(),
             ..Target::default()
         };
-        self.setup = Some(SetupBox::loading(Settings::default(), target, "Starting setup…"));
+        self.open_setup_box(SetupBox::loading(Settings::default(), target, "Starting setup…"));
         Some(super::state::Request::Setup(Some(entry.vmid)))
     }
 
@@ -1893,6 +1948,9 @@ impl super::state::App {
         let ask = ask?;
         if ask == Ask::Close {
             self.setup = None;
+            if let Some(shown) = self.before_setup.take() {
+                self.shown = shown;
+            }
         }
         Some(super::state::Request::SetupAsk(ask))
     }

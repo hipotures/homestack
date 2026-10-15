@@ -371,10 +371,16 @@ TARGET SELECTORS…`.
 - **Start** (`tui/setup_work.rs`, a thread of its own): the workspace is
   resolved through the server, the catalog loaded with the owner's
   repositories and its snapshot saved, then one connection is opened and
-  kept while the TUI runs (the box opens again without a touch). The TUI lends the terminal for that
-  (the touch of a security key is asked in the TUI's touch box, through
-  the askpass bridge of the install), then the state is read (`inspect_workspace_state`). The box shows each step
-  with a spinner; a failure is shown in the box.
+  kept while the TUI runs (the box opens again without a touch). The touch
+  of the security key is asked in the TUI's touch box, through the askpass
+  bridge of the install; then the state is read (`inspect_workspace_state`).
+  The box shows each step with a spinner; a failure is shown in the box.
+- **Layout:** the box takes the whole workspaces panel (one frame, as
+  btop's panels; the workspace buttons go while it is open) and hides the
+  storage and log panels for its width; they come back when it closes. A
+  bar lists every group with its count; each item has a STATE column (✓
+  ready, ! will be overwritten, ○ absent, ? unknown) and, once selected,
+  what applying it does (→ install, → update, → verify).
 - **Sections:** each group of the catalog (Files, Environment,
   Applications, Credentials, Backup, Repositories, and any configured) is
   a section: Tab and Shift+Tab walk them, the group shows in the top

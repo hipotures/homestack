@@ -701,6 +701,9 @@ pub async fn run(ctx: &mut Context) -> Result<i32, AppError> {
                             }
                             None => {
                                 app.setup = None;
+                                if let Some(shown) = app.before_setup.take() {
+                                    app.shown = shown;
+                                }
                                 app.log(&clock.now(), "setup: there is no client.toml yet");
                             }
                         },

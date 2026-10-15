@@ -156,6 +156,9 @@ pub struct App {
     pub asking: Option<super::install::AskView>,
     /// The setup box, over the workspaces panel while it is open.
     pub setup: Option<super::setup::SetupBox>,
+    /// The panels before the setup box opened (it hides storage and log
+    /// for its width); they come back when it closes.
+    pub before_setup: Option<Shown>,
     /// The desktop's public keys for add key (`~/.ssh/….pub`).
     pub keys: Vec<String>,
 }
@@ -199,6 +202,7 @@ impl App {
             asking: None,
             keys: Vec::new(),
             setup: None,
+            before_setup: None,
         })
     }
 
@@ -740,7 +744,7 @@ impl App {
                         if self.action.is_some() || self.setup.is_some() {
                             return None;
                         }
-                        self.setup = Some(super::setup::SetupBox::loading(
+                        self.open_setup_box(super::setup::SetupBox::loading(
                             crate::setup::Settings::default(),
                             crate::setup::Target {
                                 name: "this desktop".to_owned(),

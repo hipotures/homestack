@@ -31,7 +31,9 @@ fn wrapped(lines: &[String], width: usize) -> Vec<String> {
 }
 
 /// The box over `area`.
-pub(super) fn setup_box(buf: &mut Buffer, area: Rect, app: &App, setup: &SetupBox) {
+/// It takes the workspaces panel (its digit, the menu when the panel has
+/// it): no box in a box.
+pub(super) fn setup_box(buf: &mut Buffer, area: Rect, app: &App, setup: &SetupBox, mut controls: Vec<Control>) {
     let palette = &app.palette;
     let text = text_style(palette);
     let title = if setup.target.local {
@@ -39,7 +41,8 @@ pub(super) fn setup_box(buf: &mut Buffer, area: Rect, app: &App, setup: &SetupBo
     } else {
         format!("setup {} {}", setup.target.vmid, setup.target.name)
     };
-    let mut top_left = vec![Control::plain(&title)];
+    let mut top_left = vec![Control::panel(1, &title)];
+    top_left.append(&mut controls);
     let groups = setup.groups();
     let tree = matches!(setup.stage, Stage::Tree);
     if !groups.is_empty() && !matches!(setup.stage, Stage::Loading { .. } | Stage::Failed { .. }) {
@@ -336,7 +339,29 @@ fn draw_tree(buf: &mut Buffer, area: Rect, app: &App, setup: &SetupBox) {
             x += write(buf, x, y, 2, arrow, base.fg(palette.muted));
         }
         register(Rect::new(x, y, 3, 1), Hit::SetupRow(index, 1));
-        let right = area.right();
+        // The STATE column (mockup 23); the group row heads it.
+        let column = (area.width * 2 / 5).min(32);
+        let state_x = area.right().saturating_sub(column);
+        let state = if row.depth == 0 {
+            Some(("STATE".to_owned(), Tone::Dim))
+        } else {
+            setup.row_state(&row.id)
+        };
+        if let Some((state, tone)) = &state {
+            write(
+                buf,
+                state_x,
+                y,
+                column.saturating_sub(1),
+                &cut(state, usize::from(column.saturating_sub(1))),
+                tone_style(palette, base, *tone),
+            );
+        }
+        let right = if state.is_some() {
+            state_x.saturating_sub(1)
+        } else {
+            area.right()
+        };
         for (part, tone) in &node.label {
             if x >= right {
                 break;
@@ -368,7 +393,23 @@ fn draw_details(buf: &mut Buffer, area: Rect, app: &App, setup: &SetupBox) {
             Some(tone) if row + scroll == 0 => tone_style(palette, text, tone).add_modifier(Modifier::BOLD),
             _ => text,
         };
-        write(buf, area.x + 1, y, area.width.saturating_sub(2), line, style);
+        let used = write(buf, area.x + 1, y, area.width.saturating_sub(2), line, style);
+        // `Label: value`: the label muted, so the values stand out.
+        if row + scroll > 0
+            && let Some(at) = line.find(": ")
+            && at <= 28
+            && !line[..at].contains(['~', '/', '"'])
+        {
+            let label = &line[..=at];
+            write(
+                buf,
+                area.x + 1,
+                y,
+                used.min(u16::try_from(label.chars().count()).unwrap_or(0)),
+                label,
+                text.fg(palette.muted),
+            );
+        }
     }
     let bar = Rect::new(area.x, area.y.saturating_sub(1), area.width, area.height + 2);
     scrollbar(buf, bar, palette, scroll, height, lines.len());

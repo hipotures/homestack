@@ -599,6 +599,11 @@ fn details_box(buf: &mut Buffer, area: Rect, app: &App, entry: &StatusEntry, pac
 
 fn workspaces(buf: &mut Buffer, area: Rect, app: &App, mut controls: Vec<Control>) {
     let palette = &app.palette;
+    // The setup takes the panel itself: one frame, as btop's panels.
+    if let Some(setup) = &app.setup {
+        super::draw_setup::setup_box(buf, area, app, setup, controls);
+        return;
+    }
     let rows = app.rows();
     let mut top_left = vec![Control::panel(1, "workspaces")];
     top_left.append(&mut controls);
@@ -621,10 +626,6 @@ fn workspaces(buf: &mut Buffer, area: Rect, app: &App, mut controls: Vec<Control
         focused: false,
     };
     let inner = frame(buf, area, palette, &sides);
-    if let Some(setup) = &app.setup {
-        super::draw_setup::setup_box(buf, inner, app, setup);
-        return;
-    }
     let text = text_style(palette);
     let muted = text.fg(palette.muted);
     if app.status.is_none() && app.unreachable.is_empty() && app.notice.is_none() {
