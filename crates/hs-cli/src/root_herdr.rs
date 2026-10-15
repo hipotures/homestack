@@ -210,19 +210,9 @@ impl HerdrRoot {
 
     /// The last line of the pane, which a root shell ends with `#`.
     fn require_root_prompt(&self, name: &str) -> Result<(), AppError> {
-        let output = herdr(
-            self.system.as_ref(),
-            &["pane", "read", &self.pane, "--source", "detection"],
-        )?;
-        if output.code != 0 {
-            return Err(AppError::new(format!("Could not read the Herdr pane {}", self.pane)));
-        }
-        let screen = strip_ansi(&output.stdout);
-        let last = screen
-            .lines()
-            .map(str::trim_end)
-            .rfind(|line| !line.trim().is_empty())
-            .unwrap_or_default();
+        let last = last_line(self.system.as_ref(), &self.pane)
+            .ok_or_else(|| AppError::new(format!("Could not read the Herdr pane {}", self.pane)))?;
+        let last = last.as_str();
         if !last.ends_with('#') {
             return Err(AppError::new(format!(
                 "The Herdr pane {name:?} is not at a root shell prompt (its last line is {last:?}); \
@@ -364,11 +354,32 @@ impl Root for HerdrRoot {
 pub struct Tab {
     /// `WORKSPACE/TAB`.
     pub name: String,
-    /// The pane's terminal title, often `user@host:dir`.
+    /// The last line of its pane: the prompt, `root@pve1:~#` when root is
+    /// logged in there (the terminal title does not follow an ssh).
     pub title: String,
 }
 
-/// Every tab that has exactly one pane.
+/// What a tab's name must contain to be offered (case does not matter).
+/// Fixed for now; to be a setting (see `docs/TODO.md`).
+const TAB_MASK: &str = "pve";
+
+/// The last line of `pane` that is not empty; `None` when it cannot be read.
+fn last_line(system: &dyn System, pane: &str) -> Option<String> {
+    let output = herdr(system, &["pane", "read", pane, "--source", "detection"]).ok()?;
+    if output.code != 0 {
+        return None;
+    }
+    Some(
+        strip_ansi(&output.stdout)
+            .lines()
+            .map(str::trim_end)
+            .rfind(|line| !line.trim().is_empty())
+            .unwrap_or_default()
+            .to_owned(),
+    )
+}
+
+/// Every tab that has exactly one pane and `pve` in its name.
 pub fn tabs(system: &dyn System) -> Result<Vec<Tab>, AppError> {
     let workspaces = herdr_json(system, &["workspace", "list"])?;
     let tabs = herdr_json(system, &["tab", "list"])?;
@@ -388,11 +399,15 @@ pub fn tabs(system: &dyn System) -> Result<Vec<Tab>, AppError> {
     for tab in tabs["result"]["tabs"].as_array().unwrap_or(&empty) {
         let tab_id = text(tab, "tab_id");
         let in_tab: Vec<&Value> = all_panes.iter().filter(|pane| text(pane, "tab_id") == tab_id).collect();
+        let name = format!("{}/{}", label_of(&text(tab, "workspace_id")), text(tab, "label"));
+        if !name.to_lowercase().contains(TAB_MASK) {
+            continue;
+        }
         if let [pane] = in_tab.as_slice() {
-            found.push(Tab {
-                name: format!("{}/{}", label_of(&text(tab, "workspace_id")), text(tab, "label")),
-                title: text(pane, "terminal_title_stripped"),
-            });
+            let title = last_line(system, &text(pane, "pane_id"))
+                .filter(|line| !line.is_empty())
+                .unwrap_or_else(|| text(pane, "terminal_title_stripped"));
+            found.push(Tab { name, title });
         }
     }
     Ok(found)

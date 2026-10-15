@@ -244,3 +244,13 @@ fn matching_is_exact() {
     assert_eq!(found.len(), 1);
     assert_eq!(found[0].workspace, "PVE");
 }
+
+#[test]
+fn only_the_pve_tabs_are_offered_with_their_prompt() {
+    let fake = Fake::standard();
+    let tabs = root_herdr::tabs(fake.as_ref()).expect("tabs");
+    let shown: Vec<(&str, &str)> = tabs.iter().map(|tab| (tab.name.as_str(), tab.title.as_str())).collect();
+    // ROOT/1 has no "pve" in its name; the last line, not the terminal
+    // title, says who is logged in.
+    assert_eq!(shown, [("PVE/pve1", "root@pve1:~#"), ("PVE/pve2", "root@pve1:~#")]);
+}
