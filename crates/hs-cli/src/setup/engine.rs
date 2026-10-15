@@ -10,6 +10,7 @@ use std::path::Path;
 use serde_json::{Map, Value, json};
 
 use super::definitions::{Entry, Params};
+use super::documents;
 use super::guest::{command_environment, guest, require_tool};
 use super::plan::{Plan, all_bins, application_units, build_plan, expand_config_entries, source_item, write_paths};
 use super::workspace::Workspace;
@@ -223,6 +224,128 @@ fn verify_identity(workspace: &mut dyn Workspace, settings: &Settings, target: &
     Ok(())
 }
 
+/// One configuration document read for its declared leaves (Python
+/// `inspect_config_file`): its candidate (merge only; never shown or
+/// stored), its digest, and each leaf's state and, on inspection, value.
+pub fn inspect_config_file(
+    workspace: &mut dyn Workspace,
+    settings: &Settings,
+    entries: &[&Entry],
+    inspection: bool,
+) -> Result<Value, AppError> {
+    use base64::Engine;
+    let Some(Params::Structured { config, .. }) = entries.first().map(|entry| &entry.params) else {
+        return Err(AppError::new("Unknown setup action handler"));
+    };
+    let relative = config.path.get(2..).unwrap_or_default();
+    let remote = guest(
+        workspace,
+        settings,
+        "structured-read",
+        guest_args! {"relative": relative},
+    )?;
+    let original = match &remote["content"] {
+        Value::Null => None,
+        content => {
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(content.as_str().unwrap_or_default())
+                .map_err(|_| AppError::new(format!("Configuration cannot be decoded: {}", config.path)))?;
+            Some(
+                String::from_utf8(bytes)
+                    .map_err(|_| AppError::new(format!("Configuration cannot be decoded: {}", config.path)))?,
+            )
+        }
+    };
+    let leaves: Vec<(Vec<String>, toml::Value)> = entries
+        .iter()
+        .filter_map(|entry| match &entry.params {
+            Params::Structured { key, value, .. } => Some((key.clone(), value.clone())),
+            _ => None,
+        })
+        .collect();
+    let mut current = Map::new();
+    let (candidate, statuses) = if inspection {
+        let inspected = documents::inspect_document_values(&config.format, original.as_deref(), &leaves)?;
+        for (entry, (state, value)) in entries.iter().zip(&inspected) {
+            if state == "matching" || state == "different" {
+                current.insert(
+                    entry.id.clone(),
+                    value.as_ref().map_or(Value::Null, documents::Plain::json),
+                );
+            }
+        }
+        (
+            Value::Null,
+            inspected.into_iter().map(|(state, _)| state).collect::<Vec<_>>(),
+        )
+    } else {
+        let (candidate, states) = documents::merge_document(&config.format, original.as_deref(), &leaves)?;
+        (Value::String(candidate), states)
+    };
+    let leaf_states: Map<String, Value> = entries
+        .iter()
+        .zip(&statuses)
+        .map(|(entry, state)| (entry.id.clone(), json!(state)))
+        .collect();
+    Ok(json!({
+        "candidate": candidate,
+        "sha256": remote.get("sha256").cloned().unwrap_or(Value::Null),
+        "changed": statuses.iter().any(|state| state != "matching"),
+        "leaves": leaf_states,
+        "current": current,
+    }))
+}
+
+/// Run an application's validator after its changes (Python
+/// `validate_application_config`); no output of it is ever shown.
+pub fn validate_application_config(
+    workspace: &mut dyn Workspace,
+    settings: &Settings,
+    application: &Entry,
+) -> Result<(), AppError> {
+    let Some(p) = application.application() else {
+        return Ok(());
+    };
+    let Some(validator) = &p.validation else { return Ok(()) };
+    let label = if validator.path.len() > 1 {
+        validator.path[..validator.path.len() - 1].join(".")
+    } else {
+        validator.path.join(".")
+    };
+    let prefix = format!("{} configuration validation failed: ", application.label);
+    let command = command_environment(settings, &validator.command, &p.interpreter, &p.bin_dirs, true);
+    let result = match workspace.run(&command, None, false) {
+        Ok(result) => result,
+        Err(_) => return Err(AppError::new(format!("{prefix}validator unavailable"))),
+    };
+    if validator.kind == "exit-code" {
+        if result.code != 0 {
+            return Err(AppError::new(format!(
+                "{prefix}validator exited with status {}",
+                result.code
+            )));
+        }
+        return Ok(());
+    }
+    if [126, 127, 255].contains(&result.code) {
+        return Err(AppError::new(format!("{prefix}validator unavailable")));
+    }
+    let mut value: Value =
+        serde_json::from_str(&result.stdout).map_err(|_| AppError::new(format!("{prefix}malformed JSON")))?;
+    for key in &validator.path {
+        let Some(child) = value.as_object().and_then(|map| map.get(key)) else {
+            return Err(AppError::new(format!("{prefix}missing status path")));
+        };
+        value = child.clone();
+    }
+    match value.as_str() {
+        Some(status) if validator.accepted.iter().any(|accepted| accepted == status) => Ok(()),
+        // Never echo arbitrary remote strings: a report can hold credentials.
+        Some(status @ ("ok" | "warning" | "fail")) => Err(AppError::new(format!("{prefix}{label}={status}"))),
+        _ => Err(AppError::new(format!("{prefix}{label}=unaccepted status"))),
+    }
+}
+
 /// Read the setup state of the workspace without changing it (`setup
 /// status`, and what the TUI shows).
 pub fn inspect_workspace_state(
@@ -265,6 +388,7 @@ pub fn inspect_workspace_state(
         }
     }
     let remote = remote_metadata(workspace, settings, &metadata_paths)?;
+    let mut documents: HashMap<String, Result<Value, AppError>> = HashMap::new();
     let mut items = Map::new();
     for entry in &entries {
         let record = registered
@@ -293,8 +417,38 @@ pub fn inspect_workspace_state(
             item["desired"] = json_of(value);
             item["config_file"] = json!(config.path);
             item["application"] = json!(application);
+            // One read per document for all its leaves.
+            if !documents.contains_key(&config.path) {
+                let siblings: Vec<&Entry> = entries
+                    .iter()
+                    .filter(|e| matches!(&e.params, Params::Structured { config: c, .. } if c.path == config.path))
+                    .collect();
+                let document = inspect_config_file(workspace, settings, &siblings, true);
+                documents.insert(config.path.clone(), document);
+            }
         }
-        if let Err(error) = inspect_item(workspace, settings, entry, &record, &remote, &mut item) {
+        let outcome = match &entry.params {
+            Params::Structured { config, .. } => match &documents[&config.path] {
+                Ok(document) => {
+                    let state = document["leaves"][&entry.id]
+                        .as_str()
+                        .unwrap_or("unavailable")
+                        .to_owned();
+                    if let Some(current) = document["current"].get(&entry.id) {
+                        item["current"] = current.clone();
+                    }
+                    let exists = !document["sha256"].is_null();
+                    item["state"] = json!(state);
+                    item["ready"] = json!(state == "matching");
+                    item["exists"] = json!(exists);
+                    item["will_overwrite"] = json!(exists && state != "matching");
+                    Ok(())
+                }
+                Err(error) => Err(error.clone()),
+            },
+            _ => inspect_item(workspace, settings, entry, &record, &remote, &mut item),
+        };
+        if let Err(error) = outcome {
             item["state"] = json!("unavailable");
             item["detail"] = json!(error.0);
         }
@@ -864,11 +1018,25 @@ fn run_plan(
         },
     );
     let mut states: HashMap<String, Value> = HashMap::new();
+    // The leaves of each document, read and merged once for all of them.
+    let config_groups = |path: &str| -> Vec<&Entry> {
+        plan.entries
+            .iter()
+            .filter(|e| matches!(&e.params, Params::Structured { config, .. } if config.path == path))
+            .collect()
+    };
+    let mut documents: HashMap<String, Result<Value, AppError>> = HashMap::new();
     for (index, entry) in plan.entries.iter().enumerate() {
         observer.activity(Some(&entry.id), &format!("Preflight {}", entry.label));
         observer.progress(&entry.id, "checking");
         let state = match &entry.params {
-            Params::Structured { .. } => Err(pending(entry)),
+            Params::Structured { config, .. } => {
+                if !documents.contains_key(&config.path) {
+                    let document = inspect_config_file(workspace, settings, &config_groups(&config.path), false);
+                    documents.insert(config.path.clone(), document);
+                }
+                documents[&config.path].clone()
+            }
             _ => preflight_entry(workspace, settings, system, entry),
         };
         match state {
@@ -926,7 +1094,19 @@ fn run_plan(
     }
     *preflight_complete = true;
     let position = |id: &str, results: &[Value]| results.iter().position(|r| r["id"] == json!(id)).unwrap_or(0);
-    for (_owner, entries) in application_units(&plan.entries) {
+    // Every configured application, the plan's own versions first.
+    let mut applications: Vec<&Entry> = plan.entries.iter().filter(|e| e.application().is_some()).collect();
+    applications.extend(
+        settings
+            .setup
+            .items
+            .iter()
+            .filter(|e| e.application().is_some() && !plan.entries.iter().any(|p| p.id == e.id)),
+    );
+    for (owner, entries) in application_units(&plan.entries) {
+        // Documents written in this unit and the digest written.
+        let mut applied_configs: Vec<(String, String)> = Vec::new();
+        let mut completed_files: HashMap<String, Value> = HashMap::new();
         let unit: Result<(), AppError> = (|| {
             for entry in &entries {
                 let index = position(&entry.id, results);
@@ -934,15 +1114,78 @@ fn run_plan(
                 observer.activity(Some(&entry.id), &format!("Apply {}", entry.label));
                 observer.progress(&entry.id, "running");
                 let (status, detail) = match &entry.params {
-                    Params::Structured { .. } => return Err(pending(entry)),
+                    Params::Structured { config, .. } => {
+                        let path = config.path.clone();
+                        if !completed_files.contains_key(&path) {
+                            // Installers may edit the document: merge against
+                            // its final content.
+                            let document = inspect_config_file(workspace, settings, &config_groups(&path), false)?;
+                            let preflight_digest = documents[&path].as_ref().map(|d| d["sha256"].clone()).ok();
+                            if !selected_applications.contains(&owner.as_str())
+                                && Some(&document["sha256"]) != preflight_digest.as_ref()
+                            {
+                                return Err(AppError::new(format!(
+                                    "Configuration changed since preflight: {path}; rerun setup"
+                                )));
+                            }
+                            if truthy(&document["changed"]) {
+                                use base64::Engine;
+                                let candidate = document["candidate"].as_str().unwrap_or_default();
+                                guest(
+                                    workspace,
+                                    settings,
+                                    "structured-write",
+                                    guest_args! {
+                                        "relative": path.get(2..).unwrap_or_default(),
+                                        "content": base64::engine::general_purpose::STANDARD.encode(candidate.as_bytes()),
+                                        "expected_sha256": document["sha256"],
+                                    },
+                                )?;
+                                applied_configs.push((path.clone(), sha256_hex(candidate.as_bytes())));
+                            }
+                            completed_files.insert(path.clone(), document);
+                        }
+                        let leaf = completed_files[&path]["leaves"][&entry.id].as_str().unwrap_or_default();
+                        if leaf == "matching" {
+                            ("already-ready".to_owned(), "Managed value already matches".to_owned())
+                        } else {
+                            ("succeeded".to_owned(), "Managed value patched".to_owned())
+                        }
+                    }
                     _ => apply_entry(workspace, settings, &plan, entry, &states[&entry.id], observer)?,
                 };
                 results[index]["status"] = json!(status);
                 results[index]["detail"] = json!(detail);
             }
+            let application = applications.iter().find(|e| e.id == owner);
+            if let Some(application) = application
+                && application.application().is_some_and(|a| a.validation.is_some())
+                && (selected_applications.contains(&owner.as_str()) || !applied_configs.is_empty())
+            {
+                *current = Some(position(&entries[0].id, results));
+                observer.activity(Some(&owner), "Validate final application configuration");
+                validate_application_config(workspace, settings, application)?;
+            }
             Ok(())
         })();
         if let Err(error) = unit {
+            let mut restore_errors = Vec::new();
+            for (path, digest) in applied_configs.iter().rev() {
+                let existed = documents[path].as_ref().is_ok_and(|d| !d["sha256"].is_null());
+                let restored = guest(
+                    workspace,
+                    settings,
+                    "structured-restore",
+                    guest_args! {
+                        "relative": path.get(2..).unwrap_or_default(), "snapshot": snapshot["id"],
+                        "expected_sha256": digest, "existed": existed,
+                    },
+                );
+                match restored {
+                    Ok(_) => observer.activity(None, &format!("Restored configuration {path}")),
+                    Err(_) => restore_errors.push(path.clone()),
+                }
+            }
             for entry in &entries {
                 let index = position(&entry.id, results);
                 if results[index]["status"] == json!("succeeded") || results[index]["status"] == json!("already-ready")
@@ -951,6 +1194,12 @@ fn run_plan(
                     results[index]["detail"] =
                         json!("Final validation or execution failed; setup state was not recorded");
                 }
+            }
+            if !restore_errors.is_empty() {
+                return Err(AppError::new(format!(
+                    "Configuration restoration failed; inspect the operation snapshot: {}",
+                    restore_errors.join(", ")
+                )));
             }
             return Err(error);
         }
@@ -965,10 +1214,4 @@ fn run_plan(
     }
     observer.activity(None, "Setup execution complete");
     Ok(())
-}
-
-/// `sha256` of text, for the structured documents.
-#[must_use]
-pub fn digest_text(text: &str) -> String {
-    sha256_hex(text.as_bytes())
 }

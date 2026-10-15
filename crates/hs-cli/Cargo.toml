@@ -26,8 +26,10 @@ tempfile = "3.27.0"
 time = { version = "0.3.55", features = ["formatting", "parsing"] }
 tokio = { version = "1.53.2", features = ["rt-multi-thread", "macros", "time", "signal"] }
 toml = "1.1.8"
+toml_edit = "0.25.17"
 url = "2.5.8"
 uuid = { version = "1.28.0", features = ["v4"] }
+yaml-rust2 = { version = "0.13.0", default-features = false }
 
 [dev-dependencies]
 axum = "0.8.9"

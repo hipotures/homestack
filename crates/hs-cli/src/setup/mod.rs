@@ -6,6 +6,7 @@
 pub mod catalog;
 pub mod cli;
 pub mod definitions;
+pub mod documents;
 pub mod engine;
 pub mod files;
 pub mod guest;
