@@ -371,7 +371,8 @@ TARGET SELECTORS…`.
 - **Start** (`tui/setup_work.rs`, a thread of its own): the workspace is
   resolved through the server, the catalog loaded with the owner's
   repositories and its snapshot saved, then one connection is opened and
-  kept while the TUI runs (the box opens again without a touch). The touch
+  kept until setup opens on another workspace (the box opens again without
+  a touch). The touch
   of the security key is asked in the TUI's touch box, through the askpass
   bridge of the install; then the state is read (`inspect_workspace_state`).
   The box shows each step with a spinner; a failure is shown in the box.

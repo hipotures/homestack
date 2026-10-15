@@ -2,6 +2,7 @@
 //! the line of the target, the filter, the tree beside its details (below
 //! them when narrow), the review and the run.
 
+use crossterm::event::KeyCode;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
@@ -59,27 +60,29 @@ pub(super) fn setup_box(buf: &mut Buffer, area: Rect, app: &App, setup: &SetupBo
     }
     let pending = !setup.selected.is_empty() && !setup.busy;
     let bottom_left = match &setup.stage {
-        Stage::Loading { .. } => vec![Control::key("cancel esc")],
-        Stage::Failed { .. } => vec![Control::key("close ↵")],
+        Stage::Loading { .. } => vec![Control::named("ESC", "cancel", KeyCode::Esc)],
+        Stage::Failed { .. } => vec![Control::named("ENTER", "close", KeyCode::Enter)],
         Stage::Tree => {
-            let review = Control::plain("review & apply ↵").enabled(!setup.busy);
+            let review = Control::named("ENTER", "review & apply", KeyCode::Enter).enabled(!setup.busy);
             vec![
-                Control::key("toggle ␣"),
-                Control::key("group ⇥"),
+                Control::named("SPACE", "toggle", KeyCode::Char(' ')),
+                Control::named("TAB", "group", KeyCode::Tab),
+                Control::named("/", "filter", KeyCode::Char('/')),
+                Control::named("F5", "refresh", KeyCode::F(5)),
                 if pending { review.chosen() } else { review },
-                Control::key("cancel esc"),
+                Control::named("ESC", "cancel", KeyCode::Esc),
             ]
         }
         Stage::Review { apply, .. } => {
-            let back = Control::key("back esc");
-            let run = Control::key("&apply this plan ↵");
+            let back = Control::named("ESC", "back", KeyCode::Esc);
+            let run = Control::named("ENTER", "apply this plan", KeyCode::Char('a'));
             vec![
                 if *apply { back } else { back.chosen() },
                 if *apply { run.chosen() } else { run },
             ]
         }
-        Stage::Running { finished: true, .. } => vec![Control::key("OK ↵").chosen()],
-        Stage::Running { .. } => vec![Control::key("cancel esc")],
+        Stage::Running { finished: true, .. } => vec![Control::named("ENTER", "OK", KeyCode::Enter).chosen()],
+        Stage::Running { .. } => vec![Control::named("ESC", "cancel", KeyCode::Esc)],
     };
     let bottom_right = if tree {
         vec![Control::plain(&format!("{}/{}", setup.section + 1, groups.len()))]

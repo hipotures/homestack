@@ -1,8 +1,8 @@
 //! The worker of the setup box: in a thread of its own it resolves the
 //! workspace, loads the catalog, opens one connection (the touch of the
 //! security key is asked in the TUI through the askpass bridge) and keeps
-//! it while the TUI runs, so the box opens again without a touch; it reads
-//! the state and runs what the box asks. An interactive installer and
+//! it until setup opens on another workspace, so the box opens again
+//! without a touch; it reads the state and runs what the box asks. An interactive installer and
 //! Herdr's desktop registration get the terminal: the worker asks the TUI
 //! for it and waits.
 

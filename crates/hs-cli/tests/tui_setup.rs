@@ -743,7 +743,7 @@ fn compact_mouse_actions_back_focus_and_escape() {
     let buf = render(app, 120, 40);
     click(app, position(&buf, "review & apply"));
     let buf = render(app, 120, 40);
-    click(app, position(&buf, "back esc"));
+    click(app, position(&buf, "ESC back"));
     assert!(matches!(open(app).stage, Stage::Tree));
     let buf = render(app, 120, 40);
     click(app, position(&buf, "review & apply"));
@@ -752,7 +752,7 @@ fn compact_mouse_actions_back_focus_and_escape() {
     assert_eq!(request, Some(Request::SetupAsk(Ask::Execute)));
     open_mut(app).finished(json!({"ok": true, "results": [], "snapshot": {"created": false}}), None);
     let buf = render(app, 120, 40);
-    click(app, position(&buf, "OK ↵"));
+    click(app, position(&buf, "ENTER OK"));
     assert!(matches!(open(app).stage, Stage::Tree));
 }
 
@@ -775,7 +775,7 @@ fn execution_modal_shows_activity_and_closes_with_ok_or_escape() {
     assert!(lines.contains("Setup finished"));
     let (mut fixture, _keep) = tui(setup);
     let buf = render(&fixture.app, 120, 40);
-    assert!(screen(&buf).contains("OK ↵"));
+    assert!(screen(&buf).contains("ENTER OK"));
     app_key(&mut fixture.app, KeyCode::Esc);
     assert!(matches!(open(&fixture.app).stage, Stage::Tree));
 }
@@ -790,7 +790,7 @@ fn execution_escape_requests_cancel_then_mouse_ok_closes_result() {
     let (mut fixture, _keep) = tui(setup);
     let app = &mut fixture.app;
     let buf = render(app, 120, 40);
-    assert!(!screen(&buf).contains("OK ↵"));
+    assert!(!screen(&buf).contains("ENTER OK"));
     assert_eq!(app_key(app, KeyCode::Esc), Some(Request::SetupAsk(Ask::Cancel)));
     assert!(open(app).cancel_requested);
     assert!(run_lines(open(app)).contains(&"Cancellation requested".to_owned()));
@@ -802,7 +802,7 @@ fn execution_escape_requests_cancel_then_mouse_ok_closes_result() {
     );
     assert!(run_lines(open(app)).contains(&"Setup stopped".to_owned()));
     let buf = render(app, 120, 40);
-    click(app, position(&buf, "OK ↵"));
+    click(app, position(&buf, "ENTER OK"));
     assert!(matches!(open(app).stage, Stage::Tree));
 }
 
@@ -937,8 +937,8 @@ fn narrow_confirmation_actions_keep_complete_labels() {
     }
     let (mut fixture, _keep) = tui(setup);
     let text = screen(&render(&fixture.app, 80, 24));
-    assert!(text.contains("back esc"), "{text}");
-    assert!(text.contains("apply this plan ↵"), "{text}");
+    assert!(text.contains("ESC back"), "{text}");
+    assert!(text.contains("ENTER apply this plan"), "{text}");
     app_key(&mut fixture.app, KeyCode::PageDown);
     assert!(matches!(open(&fixture.app).stage, Stage::Review { scroll: 10, .. }));
     app_key(&mut fixture.app, KeyCode::Esc);

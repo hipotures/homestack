@@ -31,6 +31,10 @@ pub struct Control {
     pub text: String,
     /// The character index of the key letter.
     pub key: Option<usize>,
+    /// How many characters from `key` are the key (`TAB`, `ESC`); 0 is one.
+    pub key_len: usize,
+    /// The key a click on a named key stands for.
+    pub code: Option<crossterm::event::KeyCode>,
     /// The panel digit, drawn as a superscript before the text.
     pub digit: Option<u8>,
     pub look: Look,
@@ -69,6 +73,19 @@ impl Control {
         Self {
             text,
             key,
+            ..Self::default()
+        }
+    }
+
+    /// A named key before its action: `TAB group`, the name in the hotkey
+    /// colour; a click is `code`.
+    #[must_use]
+    pub fn named(name: &str, action: &str, code: crossterm::event::KeyCode) -> Self {
+        Self {
+            text: format!("{name} {action}"),
+            key: Some(0),
+            key_len: name.chars().count(),
+            code: Some(code),
             ..Self::default()
         }
     }
@@ -212,7 +229,10 @@ fn draw_control(
         at += 1;
     }
     for (index, c) in control.text.chars().enumerate() {
-        let chosen = if Some(index) == control.key { key_style } else { style };
+        let in_key = control
+            .key
+            .is_some_and(|key| index >= key && index < key + control.key_len.max(1));
+        let chosen = if in_key { key_style } else { style };
         put(buf, at, y, c, chosen);
         at += 1;
     }
@@ -348,6 +368,9 @@ pub fn control_key(control: &Control) -> Option<crossterm::event::KeyCode> {
     use crossterm::event::KeyCode;
     if let Some(digit) = control.digit {
         return char::from_digit(u32::from(digit), 10).map(KeyCode::Char);
+    }
+    if let Some(code) = control.code {
+        return Some(code);
     }
     if let Some(c) = control.key_char() {
         return Some(KeyCode::Char(c));

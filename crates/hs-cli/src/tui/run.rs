@@ -608,8 +608,8 @@ pub async fn run(ctx: &mut Context) -> Result<i32, AppError> {
     let mut fast = tokio::time::interval(Duration::from_millis(100));
     let mut connected: Option<String> = None;
     let mut decide: Option<mpsc::UnboundedSender<Decision>> = None;
-    // One worker and its connection per target (`None`: this desktop),
-    // kept until the TUI ends: opening the box again needs no new touch.
+    // The worker and its connection of the last target (`None`: this
+    // desktop), kept until setup opens on another: no new touch.
     let mut setup_workers: std::collections::HashMap<Option<u32>, SetupWorker> = std::collections::HashMap::new();
     // The target of the open box; another target's worker cannot speak to it.
     let mut setup_open: Option<Option<u32>> = None;
@@ -669,7 +669,17 @@ pub async fn run(ctx: &mut Context) -> Result<i32, AppError> {
                                 question.answer(answer);
                             }
                         }
-                        Request::Setup(vmid) => match connection.desktop.clone() {
+                        Request::Setup(vmid) => {
+                            // One connection is kept: another workspace's closes
+                            // (the owner, 2026-10-15).
+                            setup_workers.retain(|target, worker| {
+                                if *target == vmid {
+                                    return true;
+                                }
+                                let _ = worker.commands.send(super::setup_work::Command::Quit);
+                                false
+                            });
+                            match connection.desktop.clone() {
                             Some(_) if setup_workers.get(&vmid).is_some_and(|worker| !worker.thread.is_finished()) => {
                                 setup_open = Some(vmid);
                                 if let Some(worker) = setup_workers.get(&vmid) {
@@ -706,7 +716,8 @@ pub async fn run(ctx: &mut Context) -> Result<i32, AppError> {
                                 }
                                 app.log(&clock.now(), "setup: there is no client.toml yet");
                             }
-                        },
+                            }
+                        }
                         Request::SetupAsk(ask) => {
                             use super::setup::Ask;
                             use super::setup_work::Command as Work;
