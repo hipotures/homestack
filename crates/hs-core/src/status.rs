@@ -20,10 +20,10 @@ use serde_json::{Map, Value};
 use crate::error::CoreError;
 pub use crate::inventory::StatusResource;
 use crate::inventory::{
-    ALIEN_WORKSPACE_TAG, GOLD_TAG, VmConfig, WORKSPACE_TAG, attached_disk_volumes, cluster_node_statuses,
-    cluster_vm_maps, cluster_vm_resources, disk_option, disk_storage, disk_volume, has_tag, home_label, integer_value,
-    layout_name_for_node, parse_disk_size_gb, parse_tags, py_repr, py_str, storage_ids_for_node, truthy, u64_value,
-    vm_config, vm_status, vm_volume_inventory, volume_identity,
+    ALIEN_WORKSPACE_TAG, GOLD_TAG, VmConfig, WORKSPACE_TAG, attached_disk_volumes, cluster_container_resources,
+    cluster_node_statuses, cluster_vm_maps, cluster_vm_resources, disk_option, disk_storage, disk_volume, has_tag,
+    home_label, integer_value, layout_name_for_node, parse_disk_size_gb, parse_tags, py_repr, py_str,
+    storage_ids_for_node, truthy, u64_value, vm_config, vm_status, vm_volume_inventory, volume_identity,
 };
 use crate::pve::Pve;
 
@@ -440,6 +440,7 @@ pub async fn global_status(pve: &impl Pve, cfg: &Config) -> Result<GlobalStatus,
                 node_status: nodes
                     .get(&gold_node)
                     .map_or_else(|| "unknown".to_owned(), |n| n.status.clone()),
+                pool: resource.pool.clone(),
                 node: gold_node,
                 ip: expected_ip(cfg, cfg.gold_vmid),
                 root_storage: disk_storage(gold_cfg.get(&cfg.root_disk).map(String::as_str)),
@@ -511,6 +512,7 @@ pub async fn global_status(pve: &impl Pve, cfg: &Config) -> Result<GlobalStatus,
             status: item.status.clone().unwrap_or_else(|| "unknown".to_owned()),
             node: item.node.clone(),
             node_status: node_info.map_or_else(|| "unknown".to_owned(), |n| n.status.clone()),
+            pool: item.pool.clone(),
             ip: expected_ip(cfg, item.vmid),
             root_storage: disk_storage(vm_cfg.get(&cfg.root_disk).map(String::as_str)),
             home,
@@ -518,6 +520,59 @@ pub async fn global_status(pve: &impl Pve, cfg: &Config) -> Result<GlobalStatus,
             warning,
         });
     }
+
+    // The other guests of the pools the token sees: more Golds, containers.
+    let listed: BTreeSet<u32> = managed.iter().map(|item| item.vmid).chain([cfg.gold_vmid]).collect();
+    let containers = cluster_container_resources(pve).await.unwrap_or_default();
+    let guests = inventory
+        .resources
+        .iter()
+        .map(|item| (item, false))
+        .chain(containers.iter().map(|item| (item, true)));
+    let mut others = Vec::new();
+    for (item, container) in guests {
+        if item.pool.is_none() || listed.contains(&item.vmid) {
+            continue;
+        }
+        let node_info = nodes.get(&item.node);
+        let online = node_info.is_some_and(|n| n.online);
+        let root_storage = if !online {
+            None
+        } else if container {
+            pve.get(&format!("/nodes/{}/lxc/{}/config", item.node, item.vmid), &[])
+                .await
+                .ok()
+                .and_then(|config| disk_storage(config.get("rootfs").and_then(Value::as_str)))
+        } else {
+            vm_config(pve, &item.node, item.vmid)
+                .await
+                .ok()
+                .and_then(|config| disk_storage(config.get(&cfg.root_disk).map(String::as_str)))
+        };
+        let role = if container {
+            "CT"
+        } else if parse_tags(item.tags.as_deref()).contains(GOLD_TAG) {
+            "GOLD"
+        } else {
+            "VM"
+        };
+        others.push(StatusEntry {
+            vmid: item.vmid,
+            role: role.to_owned(),
+            name: item.name.clone(),
+            status: item.status.clone().unwrap_or_else(|| "unknown".to_owned()),
+            node: item.node.clone(),
+            node_status: node_info.map_or_else(|| "unknown".to_owned(), |n| n.status.clone()),
+            pool: item.pool.clone(),
+            ip: expected_ip(cfg, item.vmid),
+            root_storage,
+            home: None,
+            role_tag_ok: true,
+            warning: None,
+        });
+    }
+    others.sort_by_key(|entry| entry.vmid);
+    let pools = crate::inventory::pools(pve).await;
 
     let (orphans, orphan_warnings, orphan_complete) =
         orphaned_volumes(pve, cfg, &inventory.attached_volumes(), &inventory.nodes).await;
@@ -577,6 +632,8 @@ pub async fn global_status(pve: &impl Pve, cfg: &Config) -> Result<GlobalStatus,
             orphan_scan_complete: orphan_complete,
         },
         workspaces,
+        others,
+        pools,
         warnings,
     })
 }

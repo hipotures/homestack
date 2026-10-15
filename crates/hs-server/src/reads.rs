@@ -101,12 +101,26 @@ async fn listing_gaps(state: &AppState, cfg: &Config, nodes: &[NodeState]) -> Re
     Ok(gaps)
 }
 
-/// Global status, as `homestack status --json`.
+/// What `/v1/status` lists: everything, or only one pool, one node or both.
+#[derive(Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct StatusScope {
+    /// Only the VMs and containers of this pool (its ID, e.g. `homestack-test`).
+    #[serde(default)]
+    pool: Option<String>,
+    /// Only those on this node.
+    #[serde(default)]
+    node: Option<String>,
+}
+
+/// Global status, as `homestack status --json`; with `pool` or `node` only
+/// the VMs and containers there are listed, the summary stays the cluster's.
 #[utoipa::path(
     get,
     path = "/v1/status",
     tag = "status",
     security(("bearer" = [])),
+    params(StatusScope),
     responses(
         (status = 200, body = GlobalStatus),
         (status = 401, body = hs_model::ErrorBody, description = "Missing or invalid bearer token"),
@@ -115,7 +129,10 @@ async fn listing_gaps(state: &AppState, cfg: &Config, nodes: &[NodeState]) -> Re
         (status = 503, body = hs_model::ErrorBody, description = "No Proxmox endpoint is reachable"),
     )
 )]
-pub async fn status(State(state): State<AppState>) -> Result<Json<GlobalStatus>, ApiError> {
+pub async fn status(
+    State(state): State<AppState>,
+    Query(scope): Query<StatusScope>,
+) -> Result<Json<GlobalStatus>, ApiError> {
     let stored = configuration(&state)?;
     let mut status = global_status(state.pve()?.as_ref(), &stored.config)
         .await
@@ -128,6 +145,13 @@ pub async fn status(State(state): State<AppState>) -> Result<Json<GlobalStatus>,
                 .map(|gap| format!("HomeStack orphan scan incomplete: {gap}")),
         );
     }
+    let shown = |entry: &hs_model::status::StatusEntry| {
+        scope.pool.as_ref().is_none_or(|pool| entry.pool.as_ref() == Some(pool))
+            && scope.node.as_ref().is_none_or(|node| &entry.node == node)
+    };
+    status.gold = status.gold.filter(|gold| shown(gold));
+    status.workspaces.retain(|entry| shown(entry));
+    status.others.retain(|entry| shown(entry));
     Ok(Json(status))
 }
 

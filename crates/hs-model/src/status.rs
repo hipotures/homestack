@@ -16,6 +16,13 @@ pub struct GlobalStatus {
     pub gold: Option<StatusEntry>,
     /// Workspaces (`homestack-ws`) and alien VMs (`homestack-alien`), by VMID.
     pub workspaces: Vec<StatusEntry>,
+    /// The other VMs and containers of the HomeStack pools (more Golds,
+    /// the servers), by VMID.
+    #[serde(default)]
+    pub others: Vec<StatusEntry>,
+    /// The HomeStack pools the server's token sees, by ID.
+    #[serde(default)]
+    pub pools: Vec<PoolInfo>,
     pub summary: StatusSummary,
     pub warnings: Vec<String>,
 }
@@ -31,6 +38,9 @@ pub struct StatusEntry {
     pub status: String,
     pub node: String,
     pub node_status: String,
+    /// The pool it is in; `null` for none.
+    #[serde(default)]
+    pub pool: Option<String>,
     /// `network.prefix.<vmid>` for VMIDs 2–254.
     pub ip: Option<String>,
     pub root_storage: Option<String>,
@@ -38,6 +48,13 @@ pub struct StatusEntry {
     pub home: Option<HomeUsage>,
     pub role_tag_ok: bool,
     pub warning: Option<String>,
+}
+
+/// A pool and its comment (the name shown for it).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct PoolInfo {
+    pub id: String,
+    pub comment: Option<String>,
 }
 
 /// A workspace home. Without guest data only `size_bytes` (from the VM

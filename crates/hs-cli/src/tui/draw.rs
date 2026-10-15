@@ -528,7 +528,11 @@ fn workspaces(buf: &mut Buffer, area: Rect, app: &App, mut controls: Vec<Control
         return;
     }
     let rows = app.rows();
-    let mut top_left = vec![Control::panel(1, "workspaces")];
+    let switch = |control: Control, on: bool| if on { control.raised() } else { control };
+    let mut top_left = vec![switch(
+        Control::panel(1, &format!("‹ {} ›", app.group_name())),
+        app.on_group,
+    )];
     top_left.append(&mut controls);
     if app.filtering || !app.filter.is_empty() {
         let cursor = if app.filtering { "▏" } else { "" };
@@ -541,7 +545,7 @@ fn workspaces(buf: &mut Buffer, area: Rect, app: &App, mut controls: Vec<Control
     let sides = Sides {
         top_left,
         top_right: vec![
-            Control::plain(&format!("‹ node: {node} ›")),
+            switch(Control::plain(&format!("‹ node: {node} ›")), !app.on_group),
             Control::key("&new").enabled(app.status.is_some() && app.action.is_none()),
         ],
         bottom_left: workspace_actions(app),

@@ -53,6 +53,7 @@ use utoipa::{Modify, OpenApi};
         hs_model::status::GlobalStatus,
         hs_model::status::StatusEntry,
         hs_model::status::HomeUsage,
+        hs_model::status::PoolInfo,
         hs_model::status::StatusSummary,
         hs_model::status::Capacity,
         hs_model::status::LayoutCapacity,

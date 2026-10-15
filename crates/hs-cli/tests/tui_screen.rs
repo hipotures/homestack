@@ -29,14 +29,14 @@ fn at_80_by_24_the_cluster_and_the_workspaces_are_drawn_in_btop_borders() {
     let buf = render(&fixture.app, 80, 24);
     let text = screen(&buf);
     assert!(row(&buf, 0).starts_with("╭─┐²cluster┌┐menu┌┐view auto┌"), "{text}");
-    assert!(row(&buf, 3).starts_with("╭─┐¹workspaces┌┐filter┌"), "{text}");
+    assert!(row(&buf, 3).starts_with("╭─┐¹‹ all ›┌┐filter┌"), "{text}");
     assert!(!text.contains("³storage") && !text.contains("⁴log"), "{text}");
     for name in ["dev-main", "rust-builder", "notes", "pve1", "10.0.0.21"] {
         assert!(text.contains(name), "{name}: {text}");
     }
-    // The first workspace is selected from the start: the counter says so
-    // and the actions are lit (the owner, 2026-10-15).
-    assert!(row(&buf, 23).contains("┘1/12└"), "{text}");
+    // The first row is selected from the start: the counter says so and
+    // the actions are lit.
+    assert!(row(&buf, 23).contains("┘1/13└"), "{text}");
     let palette = Palette::named("HomeStack", false).unwrap();
     let (x, y) = position(&buf, "refresh");
     assert_eq!(buf[(x + 1, y)].fg, palette.foreground);
@@ -53,17 +53,19 @@ fn the_cluster_line_names_nodes_and_free_storage_without_servers_or_gold() {
 }
 
 #[test]
-fn the_first_workspace_is_selected_and_down_moves_the_selection() {
+fn the_first_row_is_selected_and_down_moves_the_selection() {
     let mut fixture = app();
     let buf = render(&fixture.app, 80, 24);
-    assert!(row(&buf, 23).contains("┘1/12└"), "{}", screen(&buf));
+    assert!(row(&buf, 23).contains("┘1/13└"), "{}", screen(&buf));
     let palette = Palette::named("HomeStack", false).unwrap();
-    let (x, y) = position(&buf, "dev-main");
+    // Gold is the first row of all.
+    let (x, y) = position(&buf, "hs-gold");
     assert_eq!(buf[(x, y)].bg, palette.focus);
+    assert_eq!(press(&mut fixture.app, KeyCode::Down), Some(Request::Details(201)));
     assert_eq!(press(&mut fixture.app, KeyCode::Down), Some(Request::Details(202)));
     assert_eq!(press(&mut fixture.app, KeyCode::Up), Some(Request::Details(201)));
     let buf = render(&fixture.app, 80, 24);
-    assert!(row(&buf, 23).contains("┘1/12└"), "{}", screen(&buf));
+    assert!(row(&buf, 23).contains("┘2/13└"), "{}", screen(&buf));
     let palette = Palette::named("HomeStack", false).unwrap();
     let (x, y) = position(&buf, "dev-main");
     assert_eq!(buf[(x, y)].bg, palette.focus);
@@ -74,6 +76,7 @@ fn the_first_workspace_is_selected_and_down_moves_the_selection() {
 #[test]
 fn info_at_80_columns_splits_the_list_and_shows_its_scrollbar() {
     let mut fixture = app();
+    press(&mut fixture.app, KeyCode::Down);
     fixture.app.set_details(201, &details());
     press(&mut fixture.app, KeyCode::Char('i'));
     let buf = render(&fixture.app, 80, 24);
@@ -93,6 +96,7 @@ fn info_at_80_columns_splits_the_list_and_shows_its_scrollbar() {
 #[test]
 fn at_120_by_36_all_panels_and_the_details_box_are_drawn() {
     let mut fixture = app();
+    press(&mut fixture.app, KeyCode::Down);
     fixture.app.set_details(201, &details());
     // The details box opens on i only.
     assert!(!screen(&render(&fixture.app, 120, 36)).contains("┐201 dev-main┌"));
@@ -117,7 +121,7 @@ fn a_digit_hides_its_panel_and_the_menu_moves_to_the_first_panel_shown() {
     press(&mut fixture.app, KeyCode::Char('2'));
     let buf = render(&fixture.app, 120, 36);
     let top = row(&buf, 0);
-    assert!(top.starts_with("╭─┐¹workspaces┌┐menu┌┐view auto┌┐filter┌"), "{top}");
+    assert!(top.starts_with("╭─┐¹‹ all ›┌┐menu┌┐view auto┌┐filter┌"), "{top}");
     press(&mut fixture.app, KeyCode::Char('2'));
     let buf = render(&fixture.app, 120, 36);
     assert!(row(&buf, 0).starts_with("╭─┐²cluster┌"));
@@ -153,12 +157,14 @@ fn the_filter_opens_in_the_border_and_keeps_matching_rows() {
     assert!(text.contains("┘1/2└"), "{text}");
     press(&mut fixture.app, KeyCode::Esc);
     let text = screen(&render(&fixture.app, 80, 24));
-    assert!(text.contains("dev-main") && text.contains("/12└"), "{text}");
+    assert!(text.contains("dev-main") && text.contains("/13└"), "{text}");
 }
 
 #[test]
 fn the_node_carousel_keeps_the_rows_of_one_node() {
     let mut fixture = app();
+    // The groups have the focus first; Tab gives it to the nodes.
+    press(&mut fixture.app, KeyCode::Tab);
     press(&mut fixture.app, KeyCode::Right);
     let text = screen(&render(&fixture.app, 120, 36));
     assert!(text.contains("‹ node: pve1 ›"), "{text}");
@@ -479,7 +485,7 @@ fn a_view_saved_as_preset_before_is_read() {
 fn storage_and_the_log_lie_side_by_side_under_the_whole_width_list() {
     let fixture = app();
     let buf = render(&fixture.app, 150, 40);
-    let (list_x, list_y) = position(&buf, "¹workspaces");
+    let (list_x, list_y) = position(&buf, "¹‹ all ›");
     let (log_x, log_y) = position(&buf, "⁴log");
     let (storage_x, storage_y) = position(&buf, "³storage");
     assert_eq!(log_y, storage_y, "{}", screen(&buf));
@@ -742,5 +748,56 @@ fn the_log_starts_with_the_last_lines_of_the_earlier_runs_muted() {
     assert!(
         written.ends_with("2026-10-15 20:40:00  status from api3\n"),
         "{written}"
+    );
+}
+
+#[test]
+fn tab_moves_to_the_group_carousel_whose_groups_are_the_pools() {
+    let mut fixture = app();
+    let mut status = tui_fixture::status();
+    status["pools"] = serde_json::json!([
+        {"id": "homestack", "comment": "Workspaces"},
+        {"id": "homestack-gold", "comment": "Gold"},
+        {"id": "homestack-service", "comment": "Containers"},
+        {"id": "homestack-test", "comment": "Test Workspaces"},
+    ]);
+    status["gold"]["pool"] = serde_json::json!("homestack-gold");
+    for entry in status["workspaces"].as_array_mut().unwrap() {
+        entry["pool"] = serde_json::json!("homestack");
+    }
+    status["workspaces"][1]["pool"] = serde_json::json!("homestack-test");
+    status["others"] = serde_json::json!([{
+        "vmid": 102001, "role": "CT", "name": "api1", "status": "running", "node": "pve1",
+        "node_status": "online", "pool": "homestack-service", "ip": "10.0.102.1",
+        "root_storage": "local-zfs", "home": null, "role_tag_ok": true, "warning": null
+    }]);
+    fixture.app.set_status(&status);
+    let text = screen(&render(&fixture.app, 120, 36));
+    assert!(text.contains("¹‹ all ›") && text.contains("api1"), "{text}");
+
+    // The group carousel has the focus from the start.
+    let names: Vec<String> = (0..5)
+        .map(|_| {
+            press(&mut fixture.app, KeyCode::Right);
+            fixture.app.group_name()
+        })
+        .collect();
+    assert_eq!(names, ["workspaces", "gold", "containers", "test workspaces", "all"]);
+
+    // test workspaces: only rust-builder; with the node carousel on pve1, none.
+    press(&mut fixture.app, KeyCode::Left);
+    let text = screen(&render(&fixture.app, 120, 36));
+    assert!(text.contains("¹‹ test workspaces ›"), "{text}");
+    let vmids: Vec<u32> = fixture.app.rows().iter().map(|entry| entry.vmid).collect();
+    assert_eq!(vmids, [202]);
+    press(&mut fixture.app, KeyCode::Tab);
+    press(&mut fixture.app, KeyCode::Right);
+    assert_eq!(fixture.app.node_name().as_deref(), Some("pve1"));
+    assert!(fixture.app.rows().is_empty());
+    press(&mut fixture.app, KeyCode::Right);
+    press(&mut fixture.app, KeyCode::Right);
+    assert_eq!(
+        fixture.app.rows().iter().map(|entry| entry.vmid).collect::<Vec<_>>(),
+        [202]
     );
 }

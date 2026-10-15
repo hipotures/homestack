@@ -46,7 +46,7 @@ impl App {
     }
 
     /// The VMID a new workspace gets: the first of the pool's range that no
-    /// workspace and not Gold has.
+    /// VM or container of the HomeStack pools has.
     pub(super) fn free_vmid(&self) -> Option<u32> {
         let used: Vec<u32> = self
             .status
@@ -55,6 +55,7 @@ impl App {
                 status
                     .workspaces
                     .iter()
+                    .chain(&status.others)
                     .map(|entry| entry.vmid)
                     .chain(status.gold.as_ref().map(|gold| gold.vmid))
             })

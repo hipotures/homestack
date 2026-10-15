@@ -176,6 +176,7 @@ fn global_status_inspects_only_gold_and_tagged_workspaces() {
 fn global_status_marks_orphan_scan_incomplete_for_offline_storage_node() {
     let pve = FakePve::new()
         .with("GET /cluster/resources?type=vm", json!([]))
+        .with("GET /pools", json!([]))
         .with(
             "GET /nodes",
             json!([{"node": "example-node-1", "status": "online"}, {"node": "example-node-3", "status": "offline"}]),
@@ -410,6 +411,7 @@ fn global_status_counts_only_native_homes_and_skips_alien_disk_warnings() {
                 {"vmid": 201, "type": "qemu", "node": "example-node-1", "status": "running", "name": "alien", "tags": "homestack-alien"},
             ]),
         )
+        .with("GET /pools", json!([]))
         .with("GET /nodes", json!([{"node": "example-node-1", "status": "online"}]))
         .with("GET /nodes/example-node-1/qemu/101/config", json!({"name": "gold", "tags": "homestack-gold", "scsi0": "example-storage-a:vm-101-root,size=16G"}))
         .with(

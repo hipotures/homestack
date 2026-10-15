@@ -75,6 +75,52 @@ async fn global_status_reports_the_cluster() -> TestResult {
 }
 
 #[tokio::test]
+async fn status_names_the_pools_lists_their_other_vms_and_narrows_to_a_pool_or_node() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let mut spec = cluster()?;
+    spec.pools.push(toml::from_str(
+        r#"
+        poolid = "homestack-test"
+        comment = "Test Workspaces"
+        vms = [207]
+        "#,
+    )?);
+    let sim = PveSim::start(spec).await?;
+    let server = configured(&sim, SERVER_TOKEN, dir.path()).await?;
+    let (status, body, _) = get(&server, "/v1/status").await?;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let ids: Vec<&str> = body["pools"]
+        .as_array()
+        .ok_or("no pools")?
+        .iter()
+        .filter_map(|pool| pool["id"].as_str())
+        .collect();
+    assert_eq!(ids, ["homestack", "homestack-gold", "homestack-test"], "{body}");
+    assert_eq!(body["pools"][2]["comment"], "Test Workspaces");
+    assert_eq!(body["gold"]["pool"], "homestack-gold");
+    assert_eq!(body["workspaces"][0]["pool"], "homestack");
+    // VM 207 has no workspace tag: it is one of the others of its pool.
+    assert_eq!(body["others"][0]["vmid"], 207, "{body}");
+    assert_eq!(body["others"][0]["pool"], "homestack-test");
+    assert_eq!(body["others"][0]["role"], "VM");
+
+    let (_, body, _) = get(&server, "/v1/status?pool=homestack-test").await?;
+    assert!(body["gold"].is_null(), "{body}");
+    assert_eq!(body["workspaces"], json!([]));
+    assert_eq!(body["others"].as_array().map(Vec::len), Some(1));
+    let (_, body, _) = get(&server, "/v1/status?pool=homestack&node=pve-example-1").await?;
+    assert!(
+        body["workspaces"]
+            .as_array()
+            .is_some_and(|list| !list.is_empty()
+                && list.iter().all(|entry| entry["pool"] == "homestack" && entry["node"] == "pve-example-1")),
+        "{body}"
+    );
+    assert_eq!(body["summary"]["workspace_count"], 7, "the summary stays the cluster's");
+    Ok(())
+}
+
+#[tokio::test]
 async fn a_token_that_cannot_list_vm_volumes_makes_the_orphan_scan_incomplete() -> TestResult {
     let dir = tempfile::tempdir()?;
     let sim = PveSim::start(cluster()?).await?;

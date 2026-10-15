@@ -158,6 +158,10 @@ pub struct App {
     pub filtering: bool,
     /// The node carousel: `None` is every node.
     pub node: Option<usize>,
+    /// The group carousel: `None` is all, else a pool's ID.
+    pub group: Option<String>,
+    /// ← → turn the group carousel (the default) or, after Tab, the node one.
+    pub on_group: bool,
     pub overlay: Option<Overlay>,
     /// Oldest first.
     pub lines: Vec<LogLine>,
@@ -229,6 +233,8 @@ impl App {
             filter: String::new(),
             filtering: false,
             node: None,
+            group: None,
+            on_group: true,
             overlay: None,
             lines: Vec::new(),
             log_scroll: 0,
@@ -488,6 +494,30 @@ impl App {
         self.node.and_then(|index| self.nodes().get(index).cloned())
     }
 
+    /// The groups the list can show: the pools' IDs and names (their
+    /// comments in lower case).
+    #[must_use]
+    pub fn groups(&self) -> Vec<(String, String)> {
+        self.status
+            .iter()
+            .flat_map(|status| &status.pools)
+            .map(|pool| {
+                let name = pool.comment.as_deref().filter(|c| !c.is_empty()).unwrap_or(&pool.id);
+                (pool.id.clone(), name.to_lowercase())
+            })
+            .collect()
+    }
+
+    /// The group shown: `all` or a pool's name.
+    #[must_use]
+    pub fn group_name(&self) -> String {
+        let groups = self.groups();
+        self.group
+            .as_ref()
+            .and_then(|id| groups.iter().find(|(pool, _)| pool == id))
+            .map_or_else(|| "all".to_owned(), |(_, name)| name.clone())
+    }
+
     /// The workspaces the list shows: the filter and the node applied.
     #[must_use]
     pub fn rows(&self) -> Vec<&StatusEntry> {
@@ -496,9 +526,22 @@ impl App {
         };
         let node = self.node_name();
         let filter = self.filter.to_lowercase();
-        status
-            .workspaces
+        // Everything of the HomeStack pools: Gold, the workspaces and the
+        // others, by VMID.
+        let mut entries: Vec<&StatusEntry> = status
+            .gold
             .iter()
+            .chain(&status.workspaces)
+            .chain(&status.others)
+            .collect();
+        entries.sort_by_key(|entry| entry.vmid);
+        entries
+            .into_iter()
+            .filter(|entry| {
+                self.group
+                    .as_ref()
+                    .is_none_or(|group| entry.pool.as_ref() == Some(group))
+            })
             .filter(|entry| node.as_ref().is_none_or(|node| &entry.node == node))
             .filter(|entry| {
                 filter.is_empty()
@@ -990,6 +1033,27 @@ impl App {
                 self.save_view();
             }
             KeyCode::Char('f') => self.filtering = true,
+            KeyCode::Tab | KeyCode::BackTab => self.on_group = !self.on_group,
+            KeyCode::Right | KeyCode::Left if self.on_group => {
+                // None, the pools by ID, None, …
+                let groups = self.groups();
+                let count = groups.len();
+                let position = self
+                    .group
+                    .as_ref()
+                    .and_then(|id| groups.iter().position(|(pool, _)| pool == id))
+                    .map_or(0, |index| index + 1);
+                let next = if key.code == KeyCode::Right {
+                    (position + 1) % (count + 1)
+                } else {
+                    (position + count) % (count + 1)
+                };
+                self.group = next
+                    .checked_sub(1)
+                    .and_then(|index| groups.get(index))
+                    .map(|(id, _)| id.clone());
+                self.keep_selection();
+            }
             KeyCode::Right | KeyCode::Left => {
                 let count = self.nodes().len();
                 if count > 0 {

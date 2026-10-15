@@ -25,7 +25,7 @@ fn select(app: &mut App, vmid: u32) {
 #[test]
 fn s_on_a_running_workspace_asks_for_ssh() {
     let mut fixture = app();
-    // The first workspace, running, is selected from the start.
+    select(&mut fixture.app, 201);
     assert_eq!(press(&mut fixture.app, KeyCode::Char('s')), Some(Request::Ssh(201)));
     select(&mut fixture.app, 204);
     assert_eq!(press(&mut fixture.app, KeyCode::Char('s')), Some(Request::Ssh(204)));

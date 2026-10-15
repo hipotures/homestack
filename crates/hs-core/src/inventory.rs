@@ -399,6 +399,51 @@ pub async fn cluster_vm_resources(pve: &impl Pve) -> Result<Vec<StatusResource>,
     Ok(resources)
 }
 
+/// The containers of `/cluster/resources?type=vm`, by VMID.
+pub async fn cluster_container_resources(pve: &impl Pve) -> Result<Vec<StatusResource>, CoreError> {
+    let Value::Array(items) = pve.get("/cluster/resources", &[("type", "vm")]).await? else {
+        return Err(CoreError::Unusable(
+            "Proxmox VM inventory did not return a JSON array".to_owned(),
+        ));
+    };
+    let mut containers: Vec<StatusResource> = items
+        .iter()
+        .filter(|item| item.get("type").and_then(Value::as_str) == Some("lxc"))
+        .filter_map(|item| {
+            let vmid = integer_value(item.get("vmid")).and_then(|v| u32::try_from(v).ok())?;
+            Some(StatusResource {
+                vmid,
+                node: text_or_none(item.get("node")).unwrap_or_default(),
+                name: text_or_none(item.get("name")),
+                status: text_or_none(item.get("status")),
+                tags: text_or_none(item.get("tags")),
+                pool: text_or_none(item.get("pool")),
+            })
+        })
+        .collect();
+    containers.sort_by_key(|c| c.vmid);
+    Ok(containers)
+}
+
+/// The pools the token sees, with their comments, by ID; none when it may
+/// not list them.
+pub async fn pools(pve: &impl Pve) -> Vec<hs_model::status::PoolInfo> {
+    let Ok(Value::Array(items)) = pve.get("/pools", &[]).await else {
+        return Vec::new();
+    };
+    let mut pools: Vec<hs_model::status::PoolInfo> = items
+        .iter()
+        .filter_map(|item| {
+            Some(hs_model::status::PoolInfo {
+                id: text_or_none(item.get("poolid"))?,
+                comment: text_or_none(item.get("comment")),
+            })
+        })
+        .collect();
+    pools.sort_by(|a, b| a.id.cmp(&b.id));
+    pools
+}
+
 /// `qm_config_on_node`
 pub async fn vm_config(pve: &impl Pve, node: &str, vmid: u32) -> Result<VmConfig, CoreError> {
     let Value::Object(map) = pve.get(&format!("/nodes/{node}/qemu/{vmid}/config"), &[]).await? else {

@@ -1315,8 +1315,28 @@
         "tags": [
           "status"
         ],
-        "summary": "Global status, as `homestack status --json`.",
+        "summary": "Global status, as `homestack status --json`; with `pool` or `node` only\nthe VMs and containers there are listed, the summary stays the cluster's.",
         "operationId": "status",
+        "parameters": [
+          {
+            "name": "pool",
+            "in": "query",
+            "description": "Only the VMs and containers of this pool (its ID, e.g. `homestack-test`).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "node",
+            "in": "query",
+            "description": "Only those on this node.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -1823,6 +1843,20 @@
                 "type": "null"
               }
             ]
+          },
+          "others": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatusEntry"
+            },
+            "description": "The other VMs and containers of the HomeStack pools (more Golds,\nthe servers), by VMID."
+          },
+          "pools": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PoolInfo"
+            },
+            "description": "The HomeStack pools the server's token sees, by ID."
           },
           "summary": {
             "$ref": "#/components/schemas/StatusSummary"
@@ -2600,6 +2634,24 @@
         },
         "additionalProperties": false
       },
+      "PoolInfo": {
+        "type": "object",
+        "description": "A pool and its comment (the name shown for it).",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "comment": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          }
+        }
+      },
       "Privilege": {
         "type": "object",
         "description": "A Proxmox privilege on an ACL path.",
@@ -2700,6 +2752,13 @@
           },
           "node_status": {
             "type": "string"
+          },
+          "pool": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The pool it is in; `null` for none."
           },
           "role": {
             "type": "string",

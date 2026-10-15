@@ -406,7 +406,7 @@ fn at_80_columns_the_action_box_splits_the_panel() {
     );
     // The list keeps a few rows under the box.
     assert!(text.contains("scratch"), "{text}");
-    assert!(row(&buf, 23).contains("┘5/12└") || text.contains("5/12"), "{text}");
+    assert!(row(&buf, 23).contains("┘6/13└") || text.contains("6/13"), "{text}");
 }
 
 #[test]
