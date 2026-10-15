@@ -153,7 +153,8 @@ async fn a_new_container_gets_its_settings_and_environment() -> Result<(), Strin
     assert_eq!(
         pve.calls(),
         [
-            "POST /nodes/pve2/lxc vmid,ostemplate,hostname,pool,tags,rootfs,memory,swap,cores,net0,unprivileged,onboot,description",
+            "POST /nodes/pve2/lxc vmid,ostemplate,hostname,pool,rootfs,memory,swap,cores,net0,unprivileged,onboot,description",
+            "PUT /nodes/pve2/lxc/998/config tags=homestack-server&digest=d1",
             "PUT /nodes/pve2/lxc/998/config env=PATH=/usr/bin:/bin&digest=d1"
         ]
     );

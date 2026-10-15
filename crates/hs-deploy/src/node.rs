@@ -165,7 +165,9 @@ pub struct NewContainer<'a> {
 }
 
 /// Create the container (stopped); the image sets its entrypoint and
-/// environment.
+/// environment. The tag comes after: at creation Proxmox checks it against
+/// /vms/CTID, where the deploy token has nothing until the container is in
+/// its pool (`VM.Config.Options`, PVE 9.2, 2026-10-15).
 pub async fn create(pve: &impl Pve, spec: &NewContainer<'_>, say: &impl Fn(&str)) -> Result<(), String> {
     say(&format!(
         "  creating CT {} ({}) on {}",
@@ -180,7 +182,6 @@ pub async fn create(pve: &impl Pve, spec: &NewContainer<'_>, say: &impl Fn(&str)
         ("ostemplate", spec.ostemplate),
         ("hostname", spec.hostname),
         ("pool", spec.pool),
-        ("tags", SERVER_TAG),
         ("rootfs", rootfs.as_str()),
         ("memory", memory.as_str()),
         ("swap", "0"),
@@ -197,7 +198,9 @@ pub async fn create(pve: &impl Pve, spec: &NewContainer<'_>, say: &impl Fn(&str)
         .post(&format!("/nodes/{}/lxc", spec.node), &form)
         .await
         .map_err(|e| format!("create CT {}: {e}", spec.ctid))?;
-    wait(pve, &upid, &format!("create CT {}", spec.ctid)).await
+    wait(pve, &upid, &format!("create CT {}", spec.ctid)).await?;
+    ensure_tag(pve, spec.node, spec.ctid).await?;
+    Ok(())
 }
 
 /// `env` of a container: `KEY=value` entries separated by NUL.
