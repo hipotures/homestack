@@ -1801,3 +1801,24 @@ fn the_touch_names_the_key_and_the_start_is_a_small_box() {
     let (x, _) = position(&render(app, 120, 36), "Resolving workspace…");
     assert!(x > 20, "{text}");
 }
+
+/// While ssh asks for the touch, only the touch box is shown.
+#[test]
+fn the_touch_box_replaces_the_connecting_box() {
+    let mut fixture = tui_fixture::app();
+    let app = &mut fixture.app;
+    app.open_setup_box(SetupBox::loading(
+        Settings::default(),
+        target(),
+        "Connecting/authenticating SSH…",
+    ));
+    assert!(screen(&render(app, 120, 36)).contains("connecting"));
+    app.ask(hs_cli::tui::install::AskView::new(
+        1,
+        hs_cli::askpass::Kind::Touch,
+        "Confirm user presence for key ED25519-SK SHA256:x",
+    ));
+    let text = screen(&render(app, 120, 36));
+    assert!(text.contains("security key"), "{text}");
+    assert!(!text.contains("connecting"), "{text}");
+}

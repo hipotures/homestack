@@ -110,8 +110,11 @@ pub(super) fn setup_box(buf: &mut Buffer, area: Rect, app: &App, setup: &SetupBo
         // The start and its failure in a small box in the middle, as the
         // security key's box.
         Stage::Loading { message } => {
-            let lines = vec![(format!("{spinner} {message}"), text)];
-            message_box(buf, inner, app, "connecting", &lines);
+            // The touch box replaces it while ssh asks: one box at a time.
+            if app.asking.is_none() {
+                let lines = vec![(format!("{spinner} {message}"), text)];
+                message_box(buf, inner, app, "connecting", &lines);
+            }
         }
         Stage::Failed { lines } => {
             let style = text.fg(palette.error);
