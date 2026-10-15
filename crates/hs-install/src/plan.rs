@@ -475,20 +475,20 @@ fn plan_install(ctx: &Context) -> Result<Vec<Step>, InstallError> {
     if !state.pools.contains_key(POOL_GOLD) {
         steps.push(pveum(
             format!("create pool {POOL_GOLD}"),
-            &["pool", "add", POOL_GOLD, "--comment", "HomeStack Gold"],
+            &["pool", "add", POOL_GOLD, "--comment", "Gold"],
         ));
     }
     if !state.pools.contains_key(POOL_SERVICE) {
         steps.push(pveum(
             format!("create pool {POOL_SERVICE}"),
-            &["pool", "add", POOL_SERVICE, "--comment", "HomeStack server containers"],
+            &["pool", "add", POOL_SERVICE, "--comment", "Containers"],
         ));
     }
     if !state.pools.contains_key(ctx.pool) {
         let comment = if ctx.settings.test {
-            "HomeStack tests"
+            "Test Workspaces"
         } else {
-            "HomeStack workspaces"
+            "Workspaces"
         };
         steps.push(pveum(
             format!("create pool {}", ctx.pool),

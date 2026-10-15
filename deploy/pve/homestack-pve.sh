@@ -911,13 +911,13 @@ plan_install() {
             plan "set the privileges of role $role (were ${role_privs[$role]})" pveum role modify "$role" --privs "${ROLE_PRIVS[$role]}"
         fi
     done
-    [[ -n ${pool_members[$POOL_GOLD]+set} ]] || plan "create pool $POOL_GOLD" pveum pool add "$POOL_GOLD" --comment 'HomeStack Gold'
-    [[ -n ${pool_members[$POOL_SERVICE]+set} ]] || plan "create pool $POOL_SERVICE" pveum pool add "$POOL_SERVICE" --comment 'HomeStack server containers'
+    [[ -n ${pool_members[$POOL_GOLD]+set} ]] || plan "create pool $POOL_GOLD" pveum pool add "$POOL_GOLD" --comment 'Gold'
+    [[ -n ${pool_members[$POOL_SERVICE]+set} ]] || plan "create pool $POOL_SERVICE" pveum pool add "$POOL_SERVICE" --comment 'Containers'
     if [[ -z ${pool_members[$POOL]+set} ]]; then
         if ((test_part)); then
-            plan "create pool $POOL" pveum pool add "$POOL" --comment 'HomeStack tests'
+            plan "create pool $POOL" pveum pool add "$POOL" --comment 'Test Workspaces'
         else
-            plan "create pool $POOL" pveum pool add "$POOL" --comment 'HomeStack workspaces'
+            plan "create pool $POOL" pveum pool add "$POOL" --comment 'Workspaces'
         fi
     fi
     [[ ${vm_pool[$gold]} == "$POOL_GOLD" ]] || plan "put Gold $gold in pool $POOL_GOLD" pveum pool modify "$POOL_GOLD" --vms "$gold"

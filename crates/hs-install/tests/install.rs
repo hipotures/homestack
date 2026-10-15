@@ -504,7 +504,7 @@ fn what_cannot_be_adopted_stops_the_install_before_any_change() {
         (101, "--adopt 101: it is already in pool homestack-gold"),
     ] {
         if vmid == 101 {
-            fake.write("pools.tsv", "homestack-gold\t101\tHomeStack Gold\n");
+            fake.write("pools.tsv", "homestack-gold\t101\tGold\n");
         }
         let settings = Settings {
             adopt: vec![vmid],
