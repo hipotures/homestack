@@ -8,7 +8,7 @@ use ratatui::layout::{Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
 
 use super::action::Action;
-use super::chrome::{Control, Sides, frame, scrollbar, text_style};
+use super::chrome::{Control, Hit, Sides, frame, register, scrollbar, text_style};
 use super::layout::{MIN_HEIGHT, MIN_WIDTH, arrange};
 use super::state::{App, MENU, Overlay, VIEWS};
 use super::theme::{Palette, THEMES};
@@ -877,7 +877,12 @@ pub(super) fn log(buf: &mut Buffer, area: Rect, app: &App, mut controls: Vec<Con
     let inner = frame(buf, area, palette, &sides);
     let text = text_style(palette);
     let muted = text.fg(palette.muted);
-    for (row, line) in app.lines.iter().rev().take(usize::from(inner.height)).enumerate() {
+    // Newest first; scrolled back by app.log_scroll lines.
+    let visible = usize::from(inner.height);
+    let total = app.lines.len();
+    let most = total.saturating_sub(visible);
+    let offset = app.log_scroll.min(most);
+    for (row, line) in app.lines.iter().rev().skip(offset).take(visible).enumerate() {
         let y = inner.y + u16::try_from(row).unwrap_or(0);
         spans(
             buf,
@@ -886,6 +891,22 @@ pub(super) fn log(buf: &mut Buffer, area: Rect, app: &App, mut controls: Vec<Con
             inner.width,
             &[(format!(" {}  ", line.time), muted), (line.text.clone(), text)],
         );
+    }
+    register(inner, Hit::Log(most));
+    scrollbar(buf, area, palette, offset, visible, total);
+    if total > visible && area.height >= 5 {
+        // ↑ and ↓ move a line, a row of the track puts the thumb there.
+        let x = area.right() - 1;
+        let first = area.y + 1;
+        let last = area.bottom() - 2;
+        register(Rect::new(x, first, 1, 1), Hit::LogTo(offset.saturating_sub(1), most));
+        register(Rect::new(x, last, 1, 1), Hit::LogTo((offset + 1).min(most), most));
+        let track = usize::from(last - first - 1);
+        for row in 0..track {
+            let to = (row * most).div_ceil(track.saturating_sub(1).max(1));
+            let y = first + 1 + u16::try_from(row).unwrap_or(0);
+            register(Rect::new(x, y, 1, 1), Hit::LogTo(to.min(most), most));
+        }
     }
 }
 

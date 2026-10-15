@@ -138,6 +138,8 @@ pub struct App {
     pub overlay: Option<Overlay>,
     /// Oldest first.
     pub lines: Vec<LogLine>,
+    /// Lines the log is scrolled back from the newest.
+    pub log_scroll: usize,
     pub clock: String,
     /// Where the list's rows were drawn last: x, width, the first row's y,
     /// the rows shown and the index of the first; for the mouse.
@@ -192,6 +194,7 @@ impl App {
             node: None,
             overlay: None,
             lines: Vec::new(),
+            log_scroll: 0,
             clock: String::new(),
             waiting: 0,
             list_rows: std::cell::Cell::new((0, 0, 0, 0, 0)),
@@ -353,6 +356,10 @@ impl App {
             time: time.to_owned(),
             text: text.to_owned(),
         });
+        // Scrolled back, the lines read stay in place.
+        if self.log_scroll > 0 {
+            self.log_scroll += 1;
+        }
         if self.lines.len() > LOG_LIMIT {
             self.lines.remove(0);
         }
@@ -496,6 +503,30 @@ impl App {
         use crossterm::event::{MouseButton, MouseEventKind};
         let press = |app: &mut Self, code: KeyCode| app.key(KeyEvent::new(code, KeyModifiers::NONE));
         let in_box = self.install.is_some() || self.overlay.is_some() || self.asking.is_some() || self.setup.is_some();
+        // The log: its scrollbar clicked or dragged, the wheel over it (not
+        // under a box drawn over it).
+        let log = if self.overlay.is_none() && self.asking.is_none() {
+            match super::chrome::hit_at(event.column, event.row) {
+                Some(Hit::Log(most)) => Some((None, most)),
+                Some(Hit::LogTo(to, most)) => Some((Some(to), most)),
+                _ => None,
+            }
+        } else {
+            None
+        };
+        if let Some((to, most)) = log {
+            match event.kind {
+                MouseEventKind::Down(MouseButton::Left) | MouseEventKind::Drag(MouseButton::Left) => {
+                    if let Some(to) = to {
+                        self.log_scroll = to;
+                    }
+                }
+                MouseEventKind::ScrollDown => self.log_scroll = (self.log_scroll + 3).min(most),
+                MouseEventKind::ScrollUp => self.log_scroll = self.log_scroll.min(most).saturating_sub(3),
+                _ => {}
+            }
+            return None;
+        }
         match event.kind {
             MouseEventKind::Down(MouseButton::Left) => {
                 // A button in a border is its key; an item of the menu or
@@ -531,6 +562,7 @@ impl App {
                         return None;
                     }
                     Some(Hit::SetupDetails) => return None,
+                    Some(Hit::Log(_) | Hit::LogTo(..)) => return None,
                     Some(Hit::SetupGroup(index)) => {
                         if let Some(setup) = self.setup.as_mut()
                             && matches!(setup.stage, super::setup::Stage::Tree)

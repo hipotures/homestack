@@ -479,3 +479,64 @@ fn a_view_saved_as_preset_before_is_read() {
     let app = hs_cli::tui::state::App::new(preferences, false).unwrap();
     assert_eq!(app.view, 2);
 }
+
+#[test]
+fn storage_and_the_log_lie_side_by_side_under_the_whole_width_list() {
+    let fixture = app();
+    let buf = render(&fixture.app, 150, 40);
+    let (list_x, list_y) = position(&buf, "¹workspaces");
+    let (log_x, log_y) = position(&buf, "⁴log");
+    let (storage_x, storage_y) = position(&buf, "³storage");
+    assert_eq!(log_y, storage_y, "{}", screen(&buf));
+    assert!(log_y > list_y && log_x < storage_x, "{}", screen(&buf));
+    assert_eq!(log_x, list_x, "{}", screen(&buf));
+    // The list's border runs the whole width.
+    assert!(row(&buf, list_y).trim_end().ends_with('╮'), "{}", row(&buf, list_y));
+    assert_eq!(row(&buf, list_y).trim_end().chars().count(), 150);
+}
+
+#[test]
+fn the_log_scrolls_back_by_its_scrollbar_and_the_wheel() {
+    use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+    let mut fixture = app();
+    for minute in 0..30 {
+        fixture
+            .app
+            .log(&format!("10:{minute:02}:00"), &format!("line {minute}"));
+    }
+    let event = |kind, column, row| MouseEvent {
+        kind,
+        column,
+        row,
+        modifiers: KeyModifiers::NONE,
+    };
+    let buf = render(&fixture.app, 150, 40);
+    let text = screen(&buf);
+    assert!(text.contains("line 29") && !text.contains("line 0 "), "{text}");
+    // The wheel over the log goes back three lines.
+    let (x, y) = position(&buf, "line 29");
+    assert_eq!(fixture.app.mouse(event(MouseEventKind::ScrollDown, x, y)), None);
+    assert_eq!(fixture.app.log_scroll, 3);
+    let text = screen(&render(&fixture.app, 150, 40));
+    assert!(!text.contains("line 29") && text.contains("line 26"), "{text}");
+    // A new line keeps the lines read in place.
+    fixture.app.log("10:30:00", "line 30");
+    assert_eq!(fixture.app.log_scroll, 4);
+    // ↓ of the scrollbar goes back a line, the bottom of its track to the oldest.
+    let buf = render(&fixture.app, 150, 40);
+    let (down_x, down_y) = position(&buf, "↓");
+    fixture
+        .app
+        .mouse(event(MouseEventKind::Down(MouseButton::Left), down_x, down_y));
+    assert_eq!(fixture.app.log_scroll, 5);
+    fixture
+        .app
+        .mouse(event(MouseEventKind::Drag(MouseButton::Left), down_x, down_y - 1));
+    let text = screen(&render(&fixture.app, 150, 40));
+    assert!(text.contains("line 0 "), "{text}");
+    // The wheel back up stops at the newest line.
+    for _ in 0..20 {
+        fixture.app.mouse(event(MouseEventKind::ScrollUp, x, y));
+    }
+    assert_eq!(fixture.app.log_scroll, 0);
+}

@@ -172,26 +172,25 @@ fn at_80_by_24_cluster_and_workspaces_fit_and_storage_and_log_do_not() {
 }
 
 #[test]
-fn at_120_by_36_all_four_panels_fit_with_storage_and_log_on_the_right() {
+fn at_120_by_36_storage_and_log_lie_side_by_side_under_the_whole_width_list() {
     let screen = arrange(Rect::new(0, 0, 120, 36), Shown::all());
     let cluster = screen.cluster.unwrap();
     let workspaces = screen.workspaces.unwrap();
     let storage = screen.storage.unwrap();
     let log = screen.log.unwrap();
     assert_eq!(cluster, Rect::new(0, 0, 120, 6));
-    assert_eq!(workspaces, Rect::new(0, 6, 84, 30));
-    assert_eq!(storage.x, 84);
-    assert_eq!(storage.width, 36);
-    assert_eq!(log.y, storage.y + storage.height);
-    assert_eq!(log.y + log.height, 36);
+    assert_eq!(workspaces, Rect::new(0, 6, 120, 22));
+    assert_eq!(log, Rect::new(0, 28, 84, 8));
+    assert_eq!(storage, Rect::new(84, 28, 36, 8));
 }
 
 #[test]
-fn at_160_by_45_the_right_column_is_wider() {
+fn at_160_by_45_the_storage_column_is_wider_and_the_bottom_taller() {
     let screen = arrange(Rect::new(0, 0, 160, 45), Shown::all());
     assert_eq!(screen.cluster.unwrap().height, 8);
-    assert_eq!(screen.storage.unwrap().width, 48);
-    assert_eq!(screen.workspaces.unwrap().width, 112);
+    assert_eq!(screen.workspaces.unwrap().width, 160);
+    assert_eq!(screen.storage.unwrap(), Rect::new(112, 35, 48, 10));
+    assert_eq!(screen.log.unwrap(), Rect::new(0, 35, 112, 10));
 }
 
 #[test]
@@ -200,9 +199,11 @@ fn a_hidden_panel_gives_its_room_to_the_others() {
     shown.toggle(2);
     let screen = arrange(Rect::new(0, 0, 120, 36), shown);
     assert!(screen.cluster.is_none());
-    assert_eq!(screen.workspaces.unwrap().y, 0);
-    assert_eq!(screen.storage.unwrap().y, 0);
+    assert_eq!(screen.workspaces.unwrap(), Rect::new(0, 0, 120, 28));
+    // The log alone takes the whole width under the list.
     shown.toggle(3);
+    let screen = arrange(Rect::new(0, 0, 120, 36), shown);
+    assert_eq!(screen.log.unwrap(), Rect::new(0, 28, 120, 8));
     shown.toggle(4);
     let screen = arrange(Rect::new(0, 0, 120, 36), shown);
     assert_eq!(screen.workspaces.unwrap(), Rect::new(0, 0, 120, 36));
@@ -222,14 +223,13 @@ fn the_last_shown_panel_cannot_be_hidden() {
 }
 
 #[test]
-fn a_tall_narrow_window_puts_storage_and_log_under_the_list() {
+fn a_tall_narrow_window_puts_storage_and_log_side_by_side_under_the_list() {
     let screen = arrange(Rect::new(0, 0, 80, 48), Shown::all());
     let workspaces = screen.workspaces.unwrap();
     let storage = screen.storage.unwrap();
     let log = screen.log.unwrap();
-    assert_eq!(storage.width, 80);
-    assert!(storage.y >= workspaces.y + workspaces.height);
-    assert!(log.y >= storage.y + storage.height);
-    assert!(workspaces.height >= 12);
-    assert_eq!(log.y + log.height, 48);
+    assert_eq!(workspaces.width, 80);
+    assert_eq!(log, Rect::new(0, 38, 44, 10));
+    assert_eq!(storage, Rect::new(44, 38, 36, 10));
+    assert_eq!(workspaces.y + workspaces.height, 38);
 }

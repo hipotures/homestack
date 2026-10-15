@@ -6,13 +6,14 @@ use ratatui::layout::Rect;
 
 pub const MIN_WIDTH: u16 = 80;
 pub const MIN_HEIGHT: u16 = 24;
-/// Below this width storage and log go under the list, not beside it.
-const WIDE: u16 = 120;
+/// From this width the storage column under the list is wider.
 const WIDER: u16 = 160;
 /// Rows the workspaces panel keeps when storage and log go under it.
 const LIST_MIN: u16 = 16;
-/// Height of storage and log when they go under the list.
+/// Height of storage and log under the list (three nodes' bars fit), and
+/// in a window 45 rows high and more.
 const UNDER: u16 = 8;
+const UNDER_TALL: u16 = 10;
 
 /// The panels the user has on (digits 1–4).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -84,14 +85,16 @@ fn cluster_height(height: u16) -> u16 {
     }
 }
 
-/// Storage on top, log under it, in `area`.
-fn stack(area: Rect, storage: bool, log: bool, storage_height: u16) -> (Option<Rect>, Option<Rect>) {
+/// Storage and log side by side in `area`: the log on the left, storage in
+/// a column on the right; one of them alone takes the whole width.
+fn beside(area: Rect, storage: bool, log: bool) -> (Option<Rect>, Option<Rect>) {
     match (storage, log) {
         (true, true) => {
-            let top = storage_height.min(area.height.saturating_sub(3));
+            let column = if area.width >= WIDER { 48 } else { 36 };
+            let left = area.width - column;
             (
-                Some(Rect::new(area.x, area.y, area.width, top)),
-                Some(Rect::new(area.x, area.y + top, area.width, area.height - top)),
+                Some(Rect::new(area.x + left, area.y, column, area.height)),
+                Some(Rect::new(area.x, area.y, left, area.height)),
             )
         }
         (true, false) => (Some(area), None),
@@ -120,45 +123,20 @@ pub fn arrange(area: Rect, shown: Shown) -> Screen {
     if rest.height == 0 {
         return screen;
     }
-    let extra = shown.storage || shown.log;
     if !shown.workspaces {
-        let half = if shown.storage && shown.log {
-            rest.height / 2
-        } else {
-            rest.height
-        };
-        (screen.storage, screen.log) = stack(rest, shown.storage, shown.log, half);
+        (screen.storage, screen.log) = beside(rest, shown.storage, shown.log);
         return screen;
     }
-    if !extra {
+    // Storage and log go under the list, the whole width, while it keeps
+    // LIST_MIN rows.
+    let under = if area.height >= 45 { UNDER_TALL } else { UNDER };
+    if !(shown.storage || shown.log) || rest.height < LIST_MIN + under {
         screen.workspaces = Some(rest);
         return screen;
     }
-    if area.width >= WIDE {
-        let column = if area.width >= WIDER { 48 } else { 36 };
-        let storage_height = if area.height >= 45 { 15 } else { 12 };
-        let list = Rect::new(rest.x, rest.y, rest.width - column, rest.height);
-        let right = Rect::new(rest.x + list.width, rest.y, column, rest.height);
-        screen.workspaces = Some(list);
-        (screen.storage, screen.log) = stack(right, shown.storage, shown.log, storage_height);
-        return screen;
-    }
-    // Narrow: storage and log go under the list while it keeps LIST_MIN rows.
-    let wanted = UNDER * (u16::from(shown.storage) + u16::from(shown.log));
-    let (storage, log, under) = if rest.height >= LIST_MIN + wanted {
-        (shown.storage, shown.log, wanted)
-    } else if shown.storage && rest.height >= LIST_MIN + UNDER {
-        (true, false, UNDER)
-    } else if shown.log && rest.height >= LIST_MIN + UNDER {
-        (false, true, UNDER)
-    } else {
-        (false, false, 0)
-    };
     let list_height = rest.height - under;
     screen.workspaces = Some(Rect::new(rest.x, rest.y, rest.width, list_height));
-    if under > 0 {
-        let below = Rect::new(rest.x, rest.y + list_height, rest.width, under);
-        (screen.storage, screen.log) = stack(below, storage, log, UNDER);
-    }
+    let below = Rect::new(rest.x, rest.y + list_height, rest.width, under);
+    (screen.storage, screen.log) = beside(below, shown.storage, shown.log);
     screen
 }

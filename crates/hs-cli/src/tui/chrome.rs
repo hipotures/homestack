@@ -331,6 +331,11 @@ pub enum Hit {
     Choice(usize),
     /// An item of a list in a box (the menu, the themes).
     Item(usize),
+    /// The log panel, and the farthest the wheel scrolls it.
+    Log(usize),
+    /// A row of the log's scrollbar: the scroll a click or a drag there
+    /// puts, and the farthest the wheel scrolls.
+    LogTo(usize, usize),
 }
 
 thread_local! {

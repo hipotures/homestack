@@ -431,3 +431,16 @@ TARGET SELECTORS…`.
   list on a wide screen, so the list keeps its columns. Enter does not
   open it.
 - New is about no workspace: its form never takes the selection.
+
+### Storage and log under the list (owner, 2026-10-15)
+
+- Storage and log go under the workspaces list, side by side: the log on
+  the left, storage in a column of 36 (48 from 160 columns) on the right;
+  one of them alone takes the whole width. The list keeps the whole width
+  of the window, as the install keeps it above its log.
+- They are 8 rows high (10 from 45 rows) and only while the list keeps 16
+  rows; with the list hidden they share the room below the cluster.
+- The log scrolls back: the wheel over it, ↑ and ↓ of its scrollbar a
+  line, a click or a drag on the track to that place. Scrolled back, the
+  lines read stay in place while new ones come. The install's log is the
+  same panel and scrolls the same.
