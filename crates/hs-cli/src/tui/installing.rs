@@ -63,7 +63,6 @@ impl Setup {
             service_storages: Vec::new(),
             template_storage: None,
             gold: None,
-            force: false,
             token_dir: self.token_dir.clone(),
         }
     }

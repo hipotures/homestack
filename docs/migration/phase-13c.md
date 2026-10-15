@@ -47,7 +47,7 @@ homestack install   (--ssh USER@HOST | --herdr NAME) [--identity FILE] [--test]
                     --service-storages IDS --template-storage ID
                     [--gold VMID] [--token-dir DIR] [--json] [-y]
 homestack uninstall (--ssh USER@HOST | --herdr NAME) [--identity FILE] [--test]
-                    [--snippet-storage ID] [--gold VMID] [--force]
+                    [--snippet-storage ID] [--gold VMID]
                     [--token-dir DIR] [--json] [-y]
 ```
 

@@ -371,15 +371,20 @@ fn a_pool_with_vms_and_snippets_in_use_stay() {
     contains(&run, "homestack-vendor-keep.yaml is used by VM 240");
     assert!(fake.read("vms.tsv").contains("240\t"), "VM removed");
 
-    let forced = fake.uninstall(&Settings { force: true, ..removal });
-    assert!(forced.ok, "{}", forced.out);
-    for node in ["local", "pve2"] {
-        assert!(!fake.has_any_snippet(node), "--force left snippets on {node}");
-    }
-    assert!(
-        fake.read("pools.tsv").contains("homestack\t240"),
-        "--force deleted a pool with a VM"
+    // A second uninstall still keeps the snippet in use: there is no way to
+    // remove it (the owner, 2026-10-15).
+    let again = fake.uninstall(&removal);
+    assert!(again.ok, "{}", again.out);
+    contains(
+        &again,
+        "homestack-vendor-keep.yaml is used by VM 240 (cicustom); it stays",
     );
+    for node in ["local", "pve2"] {
+        assert!(
+            fake.snippet_dir(node).join("homestack-vendor-keep.yaml").exists(),
+            "{node}"
+        );
+    }
 }
 
 #[test]

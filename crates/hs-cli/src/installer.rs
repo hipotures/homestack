@@ -74,7 +74,6 @@ fn settings(ctx: &Context, args: &Args, install: &InstallArgs) -> Settings {
         service_storages: install.service_storages.clone(),
         template_storage: install.template_storage.clone(),
         gold: install.gold,
-        force: install.force,
         token_dir: expand_home(&token_dir.display().to_string(), &ctx.home),
     }
 }
@@ -161,9 +160,6 @@ fn same_as(command: Install, install: &InstallArgs, settings: &Settings, domain:
         }
         None if command == Install::Install && !settings.test => words.push("--no-servers".to_owned()),
         None => {}
-    }
-    if install.force {
-        words.push("--force".to_owned());
     }
     if let Some(dir) = &install.token_dir {
         words.extend(["--token-dir".to_owned(), dir.display().to_string()]);

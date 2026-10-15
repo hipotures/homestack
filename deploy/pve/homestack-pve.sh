@@ -9,7 +9,7 @@
 #                              --service-storages IDS --template-storage ID [--gold VMID]
 #                              [--dry-run] [--yes] [--token-dir DIR]
 #   homestack-pve.sh uninstall [--test] [--snippet-storage ID] [--gold VMID]
-#                              [--dry-run] [--yes] [--force]
+#                              [--dry-run] [--yes]
 #
 #   --test             the test part (pool homestack-test, token test)
 #                      instead of the production part (pool homestack,
@@ -22,7 +22,6 @@
 #   --gold VMID        Gold (default: the only VM tagged homestack-gold)
 #   --dry-run          show the plan, change nothing
 #   --yes              apply the plan without asking
-#   --force            uninstall: remove snippets that VMs still name
 #   --token-dir DIR    where a new token's secret is written (default /root)
 #
 # The tokens read nodes, storages and SDN (PVEAuditor on /nodes, /storage,
@@ -84,7 +83,7 @@ case $command in
     -h | --help | '') usage ;;
     *) die "unknown command '$command' (status, install or uninstall)" ;;
 esac
-test_part=0 dry_run=0 assume_yes=0 force=0
+test_part=0 dry_run=0 assume_yes=0
 gold_arg='' storages_arg='' snippet_storage='' token_dir=/root
 service_storages_arg='' template_storage=''
 while (($#)); do
@@ -92,7 +91,6 @@ while (($#)); do
         --test) test_part=1 ;;
         --dry-run) dry_run=1 ;;
         --yes) assume_yes=1 ;;
-        --force) force=1 ;;
         --gold) gold_arg=${2:?--gold needs a VMID}; shift ;;
         --storages) storages_arg=${2:?--storages needs storage IDs}; shift ;;
         --snippet-storage) snippet_storage=${2:?--snippet-storage needs a storage ID}; shift ;;
@@ -1021,13 +1019,15 @@ plan_uninstall() {
     ((test_part)) && return 0
     users=$(snippet_users)
     for name in "${SNIPPETS[@]}"; do
-        if grep -q '^? ' <<< "$users" && ((!force)); then
-            kept+=("$name: cannot read every VM's configuration ($(awk '$1 == "?" { print $2 }' <<< "$users" | paste -sd' ' -)); --force removes it anyway")
+        # A VM without its snippet does not start: a snippet a VM names, or that
+        # cannot be checked, is never removed (the owner, 2026-10-15).
+        if grep -q '^? ' <<< "$users"; then
+            kept+=("$name: cannot read every VM's configuration ($(awk '$1 == "?" { print $2 }' <<< "$users" | paste -sd' ' -)); it stays")
             continue
         fi
         vmid=$(awk -v n="$name" '$1 == n { print $2 }' <<< "$users" | sort -n | paste -sd' ' -)
-        if [[ -n $vmid ]] && ((!force)); then
-            kept+=("$name is used by VM $vmid (cicustom); --force removes it anyway")
+        if [[ -n $vmid ]]; then
+            kept+=("$name is used by VM $vmid (cicustom); it stays")
             continue
         fi
         for node in "${snippet_nodes[@]}"; do

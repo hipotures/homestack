@@ -93,7 +93,7 @@ homestack-pve.sh status    [--test] --storages IDS --snippet-storage ID [--gold 
 homestack-pve.sh install   [--test] --storages IDS --snippet-storage ID [--gold VMID]
                            [--dry-run] [--yes] [--token-dir DIR]
 homestack-pve.sh uninstall [--test] [--snippet-storage ID] [--gold VMID]
-                           [--dry-run] [--yes] [--force]
+                           [--dry-run] [--yes]
 
 --storages IDS       the storages of [storage_layouts], comma-separated
 --snippet-storage ID [cloud_init] snippet_storage (uninstall: to remove the
@@ -153,7 +153,7 @@ Removes the tokens' and the user's entries, the tokens, the user, the
 `HomeStack*` roles, Gold's membership in `homestack-gold` (Gold itself
 stays), the empty pools and the snippets. A pool that still holds VMs is
 kept and listed with its VMIDs. A snippet that some VM's `cicustom` still
-names is kept unless `--force`. Never touches a VM, a volume or anything of
+names is always kept (no `--force` since 2026-10-15). Never touches a VM, a volume or anything of
 section "What the script only checks". A token's secret file on the node is
 not removed (the script says where it is).
 
@@ -183,7 +183,7 @@ not removed (the script says where it is).
   and keep the cluster's state in files: install on a single node and in a
   three-node cluster, a second install changes nothing, uninstall after
   install returns to zero, the adoption of today's state, a pool with VMs
-  stays, a snippet in use stays without `--force`, an offline node, the
+  stays, a snippet in use stays (and `--force` is refused), an offline node, the
   missing storage or Gold stopping the install, `--dry-run` changing
   nothing.
 - Rust: the embedded snippets equal `deploy/cloud-init/`; capabilities on
@@ -201,7 +201,7 @@ again, so the test pool is there for later phases.
 ## 8. What was built
 
 - `deploy/pve/homestack-pve.sh` (`status`, `install`, `uninstall`,
-  `--test`, `--dry-run`, `--yes`, `--force`, `--gold`, `--token-dir`), with
+  `--test`, `--dry-run`, `--yes`, `--gold`, `--token-dir`), with
   both vendor snippets embedded; `deploy/pve/embed-snippets.sh`.
 - Server: `HOMESTACK_PVE_POOL`, `HOMESTACK_PVE_GOLD_POOL`; capabilities on
   the pool; `installation` in `GET /v1/capabilities`; the orphan-scan gap

@@ -274,20 +274,20 @@ fn the_commands_are_parsed() {
     assert_eq!(install.gold, Some(101));
     assert_eq!(install.token_dir, Some(PathBuf::from("/tmp/t")));
 
-    let parsed = args::parse(&strings(&["uninstall", "--herdr", "pve1", "--force", "-y"])).expect("parsed");
+    let parsed = args::parse(&strings(&["uninstall", "--herdr", "pve1", "-y"])).expect("parsed");
     assert!(parsed.yes);
     let Command::Uninstall(install) = parsed.command else {
         panic!("not uninstall");
     };
     assert_eq!(install.herdr.as_deref(), Some("pve1"));
-    assert!(install.force);
 
     // Neither way given is allowed (the installer asks); both is not.
     assert!(args::parse(&strings(&["install", "--no-servers"])).is_ok());
-    // --force belongs to uninstall.
+    // There is no --force: a snippet a VM names is never removed.
     for bad in [
         vec!["install", "--ssh", "a", "--herdr", "b"],
         vec!["install", "--ssh", "a", "--force"],
+        vec!["uninstall", "--ssh", "a", "--force"],
         vec!["uninstall", "--ssh", "a", "--gold", "x"],
     ] {
         assert!(args::parse(&strings(&bad)).is_err(), "{bad:?} was accepted");

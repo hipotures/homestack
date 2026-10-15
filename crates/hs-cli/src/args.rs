@@ -19,8 +19,6 @@ pub struct InstallArgs {
     pub service_storages: Vec<String>,
     pub template_storage: Option<String>,
     pub gold: Option<u32>,
-    /// Uninstall: remove snippets that VMs still name.
-    pub force: bool,
     pub token_dir: Option<PathBuf>,
     /// The servers are `apiN.<domain>` (section 8 of phase-13c.md).
     pub server_domain: Option<String>,
@@ -152,7 +150,7 @@ fn usage_of(command: &str) -> String {
             "[--ssh USER@HOST | --herdr NAME] [--identity FILE] [--test] --storages IDS --snippet-storage ID --service-storages IDS --template-storage ID [--gold VMID] (--server-domain DOMAIN [--server-image IMAGE] | --no-servers) [--token-dir DIR] [--json] [-y]"
         }
         "uninstall" => {
-            "[--ssh USER@HOST | --herdr NAME] [--identity FILE] [--test] [--snippet-storage ID] [--gold VMID] [--force] [--token-dir DIR] [--json] [-y]"
+            "[--ssh USER@HOST | --herdr NAME] [--identity FILE] [--test] [--snippet-storage ID] [--gold VMID] [--token-dir DIR] [--json] [-y]"
         }
         "setup" => {
             "[--local] [--json] [-y] [--catalog CATALOG] [--dry-run] [--non-interactive] [target] [selectors ...]"
@@ -329,7 +327,7 @@ pub fn parse(argv: &[String]) -> Result<Args, UsageError> {
         "install" | "uninstall" => {
             let uninstall = name == "uninstall";
             let extra: &[&str] = if uninstall {
-                &["--test", "--force"]
+                &["--test"]
             } else {
                 &["--test", "--no-servers"]
             };
@@ -384,7 +382,6 @@ pub fn parse(argv: &[String]) -> Result<Args, UsageError> {
                 service_storages: list("--service-storages"),
                 template_storage: words.value("--template-storage"),
                 gold,
-                force: words.flag("--force"),
                 token_dir: words.value("--token-dir").map(PathBuf::from),
                 server_domain: words.value("--server-domain"),
                 server_image: words.value("--server-image"),

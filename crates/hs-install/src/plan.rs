@@ -662,10 +662,12 @@ fn plan_uninstall(root: &mut dyn Root, ctx: &Context, kept: &mut Vec<String>) ->
     }
     let (users, unreadable) = snippet_users(root, state);
     for (name, _) in SNIPPETS {
-        if !unreadable.is_empty() && !ctx.settings.force {
+        // A VM without its snippet does not start: a snippet a VM names, or
+        // that cannot be checked, is never removed (the owner, 2026-10-15).
+        if !unreadable.is_empty() {
             let ids: Vec<String> = unreadable.iter().map(u32::to_string).collect();
             kept.push(format!(
-                "{name}: cannot read every VM's configuration ({}); --force removes it anyway",
+                "{name}: cannot read every VM's configuration ({}); it stays",
                 ids.join(" ")
             ));
             continue;
@@ -676,12 +678,9 @@ fn plan_uninstall(root: &mut dyn Root, ctx: &Context, kept: &mut Vec<String>) ->
             .map(|(_, vmid)| *vmid)
             .collect();
         vmids.sort_unstable();
-        if !vmids.is_empty() && !ctx.settings.force {
+        if !vmids.is_empty() {
             let ids: Vec<String> = vmids.iter().map(u32::to_string).collect();
-            kept.push(format!(
-                "{name} is used by VM {} (cicustom); --force removes it anyway",
-                ids.join(" ")
-            ));
+            kept.push(format!("{name} is used by VM {} (cicustom); it stays", ids.join(" ")));
             continue;
         }
         let path = ctx.paths.get(name).cloned().unwrap_or_default();

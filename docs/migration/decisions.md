@@ -312,6 +312,14 @@ an agent stops when a phase needs one that is still open
   service containers are replaced with their data kept on a separate volume
   mounted at `/app` (as a workspace keeps `/home`); containers have no Gold.
 
+### Owner's decision of 2026-10-15 (uninstall and the snippets)
+
+- A VM does not start without the vendor snippet its `cicustom` names, so
+  uninstall never removes a snippet a VM names, nor one whose use cannot be
+  checked (a VM configuration that cannot be read). `--force`, which removed
+  them anyway, is gone from `homestack uninstall` and `homestack-pve.sh`;
+  given, it is refused. Snippets no VM names are still removed.
+
 ## Probe results
 
 | Date | Probe | Result |

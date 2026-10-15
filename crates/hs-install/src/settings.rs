@@ -35,8 +35,6 @@ pub struct Settings {
     pub template_storage: Option<String>,
     /// Gold; the only VM tagged `homestack-gold` when not given.
     pub gold: Option<u32>,
-    /// Uninstall: remove snippets that VMs still name.
-    pub force: bool,
     /// Where the desktop writes the secret of a new token.
     pub token_dir: PathBuf,
 }

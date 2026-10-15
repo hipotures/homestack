@@ -375,9 +375,11 @@ test_pool_with_vms_and_snippets_in_use() {
     expect_out 'homestack-vendor-keep.yaml is used by VM 240'
     grep -q '^240' "$HS_FAKE/vms.tsv" || fail "VM removed"
 
-    hs_ok uninstall --snippet-storage local --yes --force || return
-    expect_no_snippets local pve2
-    grep -q "^homestack${tab}240" "$HS_FAKE/pools.tsv" || fail "--force deleted a pool with a VM"
+    # There is no --force: a snippet a VM names is never removed.
+    hs_fails uninstall --snippet-storage local --yes --force || return
+    for where in local pve2; do
+        [[ -e "$(snippet_dir "$where")/homestack-vendor-keep.yaml" ]] || fail "--force removed the snippet in use on $where"
+    done
 }
 
 test_service_pool_with_containers() {

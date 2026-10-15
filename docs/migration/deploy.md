@@ -156,7 +156,9 @@ finishes the job.
 
 `uninstall` never removes a VM, a volume or Gold (only Gold's membership in
 `homestack-gold`). A pool that still holds VMs is kept and listed; a
-snippet some VM's `cicustom` still names is kept unless `--force`.
+snippet some VM's `cicustom` still names, or that cannot be checked, is
+always kept: a VM does not start without it (the owner, 2026-10-15; there
+is no `--force`).
 
 The objects made by hand in phases 0–4 (roles `HomeStackServerDisks`,
 `HomeStackServerGoldGuest`, `HomeStackTest*`, the ACL on `/vms` and
