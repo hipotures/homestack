@@ -54,7 +54,7 @@ impl Default for RepoSettings {
 }
 
 /// What the setup reads of the configuration (Python's `Config` fields).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Settings {
     /// The desktop's home: sources of copied files.
     pub home: PathBuf,
@@ -81,7 +81,7 @@ impl Settings {
 }
 
 /// The resolved workspace a setup runs on (Python's target dict).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Target {
     pub vmid: u32,
     pub name: String,

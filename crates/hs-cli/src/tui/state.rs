@@ -34,6 +34,10 @@ pub enum Request {
     Installed,
     /// Read the status now (an action ended).
     Reload,
+    /// Open the setup box of the workspace (`None`: this desktop).
+    Setup(Option<u32>),
+    /// What the setup box asks its worker.
+    SetupAsk(super::setup::Ask),
     /// Give the terminal to ssh on the running workspace (step 4).
     Ssh(u32),
     Quit,
@@ -71,13 +75,14 @@ pub const VIEWS: [(&str, Shown); 3] = [
 ];
 
 /// The items of the menu, in order.
-pub const MENU: [&str; 7] = [
+pub const MENU: [&str; 8] = [
     "Check the servers",
     "Check this desktop",
     "Install or reconfigure",
     "Uninstall",
     "Theme",
     "Help: every key",
+    "Set up this desktop (backup)",
     "Quit",
 ];
 
@@ -149,6 +154,8 @@ pub struct App {
     pub install: Option<super::install::Install>,
     /// ssh's question, in a box over the screen.
     pub asking: Option<super::install::AskView>,
+    /// The setup box, over the workspaces panel while it is open.
+    pub setup: Option<super::setup::SetupBox>,
     /// The desktop's public keys for add key (`~/.ssh/….pub`).
     pub keys: Vec<String>,
 }
@@ -191,6 +198,7 @@ impl App {
             install: None,
             asking: None,
             keys: Vec::new(),
+            setup: None,
         })
     }
 
@@ -471,7 +479,7 @@ impl App {
         use super::chrome::Hit;
         use crossterm::event::{MouseButton, MouseEventKind};
         let press = |app: &mut Self, code: KeyCode| app.key(KeyEvent::new(code, KeyModifiers::NONE));
-        let in_box = self.install.is_some() || self.overlay.is_some() || self.asking.is_some();
+        let in_box = self.install.is_some() || self.overlay.is_some() || self.asking.is_some() || self.setup.is_some();
         match event.kind {
             MouseEventKind::Down(MouseButton::Left) => {
                 // A button in a border is its key; an item of the menu or
@@ -502,6 +510,11 @@ impl App {
                         }
                         return key.and_then(|code| press(self, code));
                     }
+                    Some(Hit::SetupRow(index, part)) => {
+                        self.setup_click(index, part);
+                        return None;
+                    }
+                    Some(Hit::SetupDetails) => return None,
                     Some(Hit::Item(item)) => {
                         match &mut self.overlay {
                             Some(Overlay::Menu { index }) => *index = item,
@@ -527,6 +540,19 @@ impl App {
                     return None;
                 }
                 self.select_at(offset + usize::from(event.row - first))
+            }
+            MouseEventKind::ScrollDown | MouseEventKind::ScrollUp
+                if self.setup.is_some()
+                    && super::chrome::hit_at(event.column, event.row) == Some(Hit::SetupDetails) =>
+            {
+                if let Some(setup) = self.setup.as_mut() {
+                    setup.details_scroll = if event.kind == MouseEventKind::ScrollDown {
+                        setup.details_scroll + 3
+                    } else {
+                        setup.details_scroll.saturating_sub(3)
+                    };
+                }
+                None
             }
             MouseEventKind::ScrollDown if in_box => press(self, KeyCode::Down),
             MouseEventKind::ScrollUp if in_box => press(self, KeyCode::Up),
@@ -564,6 +590,9 @@ impl App {
         if let Some(overlay) = self.overlay.take() {
             return self.overlay_key(overlay, key.code);
         }
+        if self.setup.is_some() {
+            return self.setup_key(key);
+        }
         if self.filtering {
             match key.code {
                 KeyCode::Char(c) => self.filter.push(c),
@@ -585,6 +614,9 @@ impl App {
         }
         if let KeyCode::Char(c @ ('n' | 'r' | 'z' | 'k' | 'g' | 'd' | 't')) = key.code {
             return self.open_action(c);
+        }
+        if key.code == KeyCode::Char('e') {
+            return self.open_setup();
         }
         if key.code == KeyCode::Char('s') {
             return self
@@ -696,6 +728,21 @@ impl App {
                         });
                     }
                     5 => self.overlay = Some(Overlay::Help),
+                    6 => {
+                        if self.action.is_some() || self.setup.is_some() {
+                            return None;
+                        }
+                        self.setup = Some(super::setup::SetupBox::loading(
+                            crate::setup::Settings::default(),
+                            crate::setup::Target {
+                                name: "this desktop".to_owned(),
+                                local: true,
+                                ..crate::setup::Target::default()
+                            },
+                            "Reading this desktop…",
+                        ));
+                        return Some(Request::Setup(None));
+                    }
                     _ => return Some(Request::Quit),
                 },
                 KeyCode::Char('q') => return Some(Request::Quit),

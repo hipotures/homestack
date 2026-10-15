@@ -1,6 +1,6 @@
 # Phase 13b: the HomeStack TUI
 
-Status: in progress (steps 1 and 2 done; steps 3–5 to do). This file is written before the code (PLAN.md
+Status: steps 1–5 done; the live gate is open. This file is written before the code (PLAN.md
 1.1) and updated as the phase goes; the report at the end says what was done
 and what differs.
 
@@ -358,3 +358,58 @@ Rendering into ratatui's `TestBackend`, as MyPowers does, with a fake status:
 - **Tests:** `tests/tui_shell.rs` (5: the key on a running and a stopped
   workspace, the button's colour, the target from the entry or the login,
   the log line); `tests/tui_actions.rs` for start/stop.
+
+## 9. Step 5: setup in the TUI
+
+The setup box is Python's Textual setup app (`setup_tui.py`) in the TUI;
+it runs the setup of phase 14 (`setup::engine`), the same as `setup
+TARGET SELECTORS…`.
+
+- **Opening it:** `e` (└sEtup┘) on a running workspace; Menu › Set up
+  this desktop (Python `setup --local`: only Backup). `setup TARGET`
+  without selectors says to open it here.
+- **Start** (`tui/setup_work.rs`, a thread of its own): the workspace is
+  resolved through the server, the catalog loaded with the owner's
+  repositories and its snapshot saved, then the one connection the box
+  keeps until it closes is opened. The TUI lends the terminal for that
+  (the touch of a security key, as before Python's Textual started), then
+  the state is read (`inspect_workspace_state`). The box shows each step
+  with a spinner; a failure is shown in the box.
+- **Sections:** each group of the catalog (Files, Environment,
+  Applications, Credentials, Backup, Repositories, and any configured) is
+  a section: Tab and Shift+Tab walk them, the group shows in the top
+  border (`‹ Applications ›`). The first row is the group: Space on it
+  toggles the whole group. Inside a section everything works as in
+  Python:
+  - the tree with tri-state checkboxes; an application's configuration
+    files, their sections, the managed values and the file copies under
+    it; counters `selected/total`; ← → close and open, ← on a leaf goes to
+    its parent; 0 selects the branch;
+  - `/` filters; bulk selection affects the visible matches only; the line
+    of the target says how many selected items the filter hides;
+  - green: detected ready; red: selected update, reapply or overwrite;
+  - the details of the highlighted node beside the tree (below it when
+    narrow), PageUp/PageDown or the wheel scroll them;
+  - the mouse: the checkbox toggles, the name only highlights, the arrow
+    opens and closes; a right click does nothing;
+  - F5 reads the state again over the same connection, Ctrl+R the catalog
+    and the state; a selected item that disappeared stays selected, marked
+    removed, until it is deselected.
+- **Review and run:** Enter shows the plan (Python's review text), Enter
+  or └apply┘ runs it, Esc goes back. The run shows the activity and the
+  item states; Esc asks to stop between items (the engine's
+  `Observer::cancelled`, Python's raise in `progress`). Interactive
+  installers and Herdr's `herdr machine add` get the terminal (the TUI
+  lends it as for ssh), with the touch notice and cues of the CLI. After
+  the run the state is read again; done items leave the selection.
+- **Differences from Python:**
+  - one section per group instead of one tree under a root, so a group
+    cannot be collapsed;
+  - Tab walks the groups (Textual moved the focus between the tree and the
+    details);
+  - Herdr's desktop registration gets the terminal instead of running
+    detached under the modal.
+- **Tests:** `tests/tui_setup.rs`: the 49 tests of `test_setup_tui.py` and
+  `test_setup_structured_ui.py`, the startup tests of `test_setup_startup.py`
+  and the TUI tests of the groups (colours, application files, Backup,
+  Herdr), the key `e` and the sections.

@@ -53,6 +53,11 @@ pub trait Observer {
     }
     /// Run Herdr's desktop registration (`herdr machine add`), which may
     /// ask for the touch of a security key.
+    /// Whether the user asked to stop: checked before each item is checked
+    /// or applied (Python raises from `progress`).
+    fn cancelled(&mut self) -> bool {
+        false
+    }
     fn register_desktop(&mut self, argv: &[String]) -> Result<crate::system::Output, AppError> {
         super::herdr::register_desktop(argv, &crate::touch::Sounds::disabled())
     }
@@ -60,6 +65,9 @@ pub trait Observer {
 
 /// An observer that ignores everything.
 pub struct Quiet;
+
+/// The detail of an item stopped by the user.
+pub const CANCELLED: &str = "Cancelled; remaining actions were not run";
 
 impl Observer for Quiet {}
 
@@ -1187,6 +1195,10 @@ fn run_plan(
     let mut documents: HashMap<String, Result<Value, AppError>> = HashMap::new();
     for (index, entry) in plan.entries.iter().enumerate() {
         observer.activity(Some(&entry.id), &format!("Preflight {}", entry.label));
+        if observer.cancelled() {
+            *current = Some(index);
+            return Err(AppError::new(CANCELLED));
+        }
         observer.progress(&entry.id, "checking");
         let state = match &entry.params {
             Params::Structured { config, .. } => {
@@ -1271,6 +1283,9 @@ fn run_plan(
                 let index = position(&entry.id, results);
                 *current = Some(index);
                 observer.activity(Some(&entry.id), &format!("Apply {}", entry.label));
+                if observer.cancelled() {
+                    return Err(AppError::new(CANCELLED));
+                }
                 observer.progress(&entry.id, "running");
                 let (status, detail) = match &entry.params {
                     Params::Structured { config, .. } => {

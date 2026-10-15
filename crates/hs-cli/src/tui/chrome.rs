@@ -298,6 +298,11 @@ pub enum Hit {
     Key(crossterm::event::KeyCode),
     /// A field of an action's form, and the key a click on its ‹ or › is.
     Field(usize, Option<crossterm::event::KeyCode>),
+    /// A row of the setup tree (its index in the rows drawn) and the part
+    /// clicked: 0 the arrow, 1 the checkbox, 2 the label.
+    SetupRow(usize, u8),
+    /// The details of the setup box (the wheel scrolls them).
+    SetupDetails,
     /// A row of the install's settings.
     Setting(usize),
     /// A choice in the box of the focused setting.

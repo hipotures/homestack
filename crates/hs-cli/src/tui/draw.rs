@@ -489,13 +489,12 @@ fn list_line(columns: &[Column], cell: impl Fn(&Column) -> String) -> String {
 fn workspace_actions(app: &App) -> Vec<Control> {
     let selected = app.selected_entry();
     let running = selected.is_some_and(|entry| entry.status == "running");
-    // setup comes in step 5 of phase 13b.
-    let free = selected.is_some() && app.action.is_none();
+    let free = selected.is_some() && app.action.is_none() && app.setup.is_none();
     vec![
         Control::key("&info").enabled(selected.is_some()),
         Control::key("&ssh").enabled(running),
         Control::key(if running { "s&top" } else { "s&tart" }).enabled(free),
-        Control::key("s&etup").muted(),
+        Control::key("s&etup").enabled(running && free),
         Control::key("&refresh").enabled(free),
         Control::key("resi&ze").enabled(free),
         Control::key("add&key").enabled(free),
@@ -618,6 +617,10 @@ fn workspaces(buf: &mut Buffer, area: Rect, app: &App, mut controls: Vec<Control
         focused: false,
     };
     let inner = frame(buf, area, palette, &sides);
+    if let Some(setup) = &app.setup {
+        super::draw_setup::setup_box(buf, inner, app, setup);
+        return;
+    }
     let text = text_style(palette);
     let muted = text.fg(palette.muted);
     if app.status.is_none() && app.unreachable.is_empty() && app.notice.is_none() {
@@ -1003,13 +1006,13 @@ const HELP: [&str; 18] = [
     "q  esc      quit (esc first clears the filter)",
     "",
     "On the selected workspace:",
-    "s ssh (log out to come back)   t start or stop",
+    "s ssh (log out to come back)   t start or stop   e setup",
     "n new   r refresh   z resize   k add key   g migrate   d destroy",
     "In the box: tab next field, ← → choose, ↵ plan, ↵ or a apply,",
     "esc cancel (while it runs esc hides the box; ↵ shows it).",
     "",
-    "setup comes in the next step of phase 13b; the CLI has every",
-    "command: homestack --help",
+    "Setup: tab next group, ␣ toggle, 0 branch, / filter, ← → close",
+    "or open, ↵ review, F5 state, Ctrl+R catalog. The CLI: homestack --help",
 ];
 
 /// `line` cut into pieces of at most `width` characters, at spaces when it

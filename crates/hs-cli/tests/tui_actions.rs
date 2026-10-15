@@ -57,9 +57,9 @@ fn the_actions_light_up_when_a_workspace_is_selected() {
         let (x, y) = position(&buf, label);
         assert_eq!(buf[(x + 1, y)].fg, palette.foreground, "{label}");
     }
-    // Not yet: setup comes in step 5.
+    // 201 runs: setup too (step 5); its key is the e.
     let (x, y) = position(&buf, "setup");
-    assert_eq!(buf[(x, y)].fg, palette.muted);
+    assert_eq!(buf[(x, y)].fg, palette.foreground);
 }
 
 #[test]

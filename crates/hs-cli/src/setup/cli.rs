@@ -33,12 +33,18 @@ const ALIEN_WORKSPACE_TAG: &str = "homestack-alien";
 /// The settings of a setup from `client.toml`; the workspace user comes
 /// from the server when the target is resolved.
 pub fn settings(ctx: &Context, loaded: &Loaded) -> Result<Settings, AppError> {
+    settings_of(&ctx.home, ctx.state_home.as_deref(), loaded)
+}
+
+/// [`settings`] from the desktop's home and `$XDG_STATE_HOME` (the TUI's
+/// worker has no [`Context`]).
+pub fn settings_of(home: &Path, state_home: Option<&Path>, loaded: &Loaded) -> Result<Settings, AppError> {
     let setup = match &loaded.client.setup {
         Some(table) => parse_setup(table)?,
         None => SetupConfig::default(),
     };
     Ok(Settings {
-        home: ctx.home.clone(),
+        home: home.to_path_buf(),
         user: loaded.client.workspace_ssh.user.clone(),
         uid: 0,
         gid: 0,
@@ -49,10 +55,7 @@ pub fn settings(ctx: &Context, loaded: &Loaded) -> Result<Settings, AppError> {
             sort: loaded.client.repo.sort.clone(),
         },
         config_path: loaded.path.clone(),
-        state_home: ctx
-            .state_home
-            .clone()
-            .unwrap_or_else(|| ctx.home.join(".local").join("state")),
+        state_home: state_home.map_or_else(|| home.join(".local").join("state"), Path::to_path_buf),
         keys: super::Keys {
             identity_files: loaded.client.workspace_ssh.identity_files.clone(),
             identities_only: loaded.client.workspace_ssh.identities_only,
@@ -61,7 +64,7 @@ pub fn settings(ctx: &Context, loaded: &Loaded) -> Result<Settings, AppError> {
 }
 
 /// The kind of security key that will be asked for, for prompts.
-fn key_label(system: &dyn System, loaded: &Loaded) -> String {
+pub fn key_label(system: &dyn System, loaded: &Loaded) -> String {
     let preference = &loaded.client.workspace_ssh.fido_devices;
     if preference.is_empty() {
         return "security key".to_owned();
@@ -72,7 +75,7 @@ fn key_label(system: &dyn System, loaded: &Loaded) -> String {
 }
 
 /// A hint about extra keys when no `fido_devices` preference is set.
-fn key_advice(system: &dyn System, loaded: &Loaded) -> Option<String> {
+pub fn key_advice(system: &dyn System, loaded: &Loaded) -> Option<String> {
     if !loaded.client.workspace_ssh.fido_devices.is_empty() {
         return None;
     }
@@ -208,7 +211,7 @@ pub fn connect(
 }
 
 /// The workspace connection, or the desktop itself for a local target.
-fn open_workspace(
+pub fn open_workspace(
     system: &Arc<dyn System>,
     home: &Path,
     loaded: &Loaded,
@@ -257,7 +260,7 @@ pub fn local_target_of(settings: &Settings) -> Target {
 }
 
 /// The catalog with the owner's repositories.
-fn catalog_with_repositories(system: &dyn System, settings: &Settings) -> Catalog {
+pub fn catalog_with_repositories(system: &dyn System, settings: &Settings) -> Catalog {
     let discover = |settings: &Settings| discover_repositories(system, settings);
     load_catalog(settings, Some(&discover))
 }

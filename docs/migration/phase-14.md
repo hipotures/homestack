@@ -11,8 +11,8 @@ section, and works exactly as it does now:
 | 14c | Applications: installers, managed values, application files | done (below) |
 | 14d | Backup (BK), `setup --local` | done (below) |
 | 14e | Herdr | done (below) |
-| 14f | Repositories, `homestack repo` | open |
-| 13b step 5 | the setup tree in the TUI (and `setup TARGET` without selectors) | open |
+| 14f | Repositories, `homestack repo` | done (below) |
+| 13b step 5 | the setup tree in the TUI (`e`; Menu › Set up this desktop) | done (`phase-13b.md` section 9) |
 
 ## The program on the workspace
 
@@ -57,15 +57,14 @@ its units (14d) are sent unchanged the same way.
   - a template VM is refused because it is not running, not with
     "Refusing Setup on template VM" (the server's workspace read has no
     template flag);
-  - `setup TARGET` without selectors (Python's Textual setup app) waits
-    for the TUI's setup box; it says so;
+  - `setup TARGET` without selectors (Python's Textual setup app) says to
+    open it in the TUI (`e` on the workspace), where the setup box is;
   - `--json` keeps the key order of `serde_json` (sorted), not Python's.
-- **Tests** (72 of the 76 of 14a ported; the manifest names them):
+- **Tests** (76 of the 76 of 14a ported; the manifest names them):
   `tests/setup_definitions.rs`, `setup_catalog.rs`, `setup_plan.rs`,
   `setup_guest.rs`, `setup_engine.rs`, and the CLI in `tests/cli.rs`
-  against the in-process server. Open: the 3 startup tests and the TUI
-  colour test of `test_setup_startup.py` and `test_setup_state.py`, with the
-  TUI's setup box.
+  against the in-process server; the 3 startup tests and the TUI colour
+  test in `tests/tui_setup.rs` with the setup box.
 
 ## 14c: Applications with managed values and files
 
@@ -99,11 +98,10 @@ its units (14d) are sent unchanged the same way.
 - **Application files** (`files = [...]` of an application): copies owned
   by the application, after its installer, selectable alone by their
   stable ID (`app=claude:file:~/.claude/statusline.sh`).
-- **Tests** (50 of the 55 of 14c ported): `tests/setup_documents.rs`,
+- **Tests** (51 of the 55 of 14c ported): `tests/setup_documents.rs`,
   `tests/setup_structured.rs`. Excluded: 4 tests of `setup_guest.py` that
   swap its functions in the middle of an operation (the program is sent
-  unchanged). Open: the TUI test of the application files, with the setup
-  box.
+  unchanged); the TUI test of the application files in `tests/tui_setup.rs`.
 
 ## 14d: Backup (BK) and `setup --local`
 
@@ -127,10 +125,10 @@ its units (14d) are sent unchanged the same way.
   passwd`), only the Backup group, no SSH and no retrieval keys; commands
   run with a clean environment, the guest program with the desktop's
   `python3`.
-- **Tests** (19 of the 94 of 14d ported): `tests/setup_backup.rs` (the
+- **Tests** (20 of the 94 of 14d ported): `tests/setup_backup.rs` (the
   retrieval keys with the real `ssh-keygen`), and the dry runs in
   `tests/cli.rs`. Excluded: the 74 tests of BK itself (`test_bk.py`), a
-  program sent unchanged. Open: the TUI test, with the setup box.
+  program sent unchanged; the TUI test in `tests/tui_setup.rs`.
 
 ## 14e: Herdr
 
@@ -151,10 +149,10 @@ its units (14d) are sent unchanged the same way.
   desktop's SSH alias must resolve to the workspace's address, account
   and keys first. Unattended, a missing profile blocks before anything is
   written. External output is never shown; known diagnostics are named.
-- **Tests** (22 of the 24 of 14e ported): `tests/setup_herdr.rs` (a
+- **Tests** (23 of the 23 of 14e ported): `tests/setup_herdr.rs` (a
   simulated workspace and desktop, the real guest program), the cue in
   `tests/touch.rs`, and the vendor snippet's linger after the home is
-  mounted. Open: the TUI test, with the setup box.
+  mounted; the TUI test in `tests/tui_setup.rs`.
 
 ## 14f: Repositories and `homestack repo`
 

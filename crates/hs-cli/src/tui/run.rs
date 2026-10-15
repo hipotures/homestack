@@ -43,6 +43,9 @@ enum Update {
     Ask(crate::askpass::Question),
     /// ssh's question is over.
     AskEnded(u64),
+    /// What the setup box's worker tells, with the number of the box it
+    /// was started for.
+    Setup(u64, super::setup_work::Event),
     /// The running action's progress.
     Action(Progress),
 }
@@ -169,6 +172,35 @@ fn hand_over(screen: &mut Screen, reader: &Reader, target: &str, name: &str) -> 
     let _ = screen.terminal.clear();
     reader.resume();
     code
+}
+
+/// Lend the terminal to the setup's worker: leave the screen, show the
+/// banner, let the worker run, and take the screen back when it is done.
+fn lend_terminal(screen: &mut Screen, reader: &Reader, handoff: &super::setup_work::Handoff) {
+    reader.pause();
+    restore();
+    for line in &handoff.banner {
+        println!("{line}");
+    }
+    if handoff.go.send(()).is_ok() {
+        let _ = handoff.done.recv();
+    }
+    let _ = terminal::enable_raw_mode();
+    let _ = execute!(
+        io::stdout(),
+        terminal::EnterAlternateScreen,
+        crossterm::cursor::Hide,
+        crossterm::event::EnableMouseCapture
+    );
+    let _ = screen.terminal.clear();
+    reader.resume();
+}
+
+/// The setup box's worker: where its commands go, and its cancel flag.
+struct SetupWorker {
+    commands: std::sync::mpsc::Sender<super::setup_work::Command>,
+    cancel: Arc<AtomicBool>,
+    thread: std::thread::JoinHandle<()>,
 }
 
 /// The local time `HH:MM:SS`, from the offset of `date +%z` read once.
@@ -381,6 +413,8 @@ fn start(request: &Request, client: Option<&Arc<Client>>, ctx: &Context, updates
         | Request::Decide(_)
         | Request::Reload
         | Request::Ssh(_)
+        | Request::Setup(_)
+        | Request::SetupAsk(_)
         | Request::Install(_)
         | Request::Answer(_)
         | Request::HerdrTabs
@@ -567,6 +601,10 @@ pub async fn run(ctx: &mut Context) -> Result<i32, AppError> {
     let mut fast = tokio::time::interval(Duration::from_millis(100));
     let mut connected: Option<String> = None;
     let mut decide: Option<mpsc::UnboundedSender<Decision>> = None;
+    let mut setup_worker: Option<SetupWorker> = None;
+    // Each box opened gets a number: a worker of a box closed while it was
+    // connecting cannot speak to the next one.
+    let mut setup_generation: u64 = 0;
     loop {
         app.clock = clock.now();
         screen
@@ -582,6 +620,9 @@ pub async fn run(ctx: &mut Context) -> Result<i32, AppError> {
                 };
                 if let Some(request) = request {
                     if request == Request::Quit {
+                        if let Some(worker) = setup_worker.take() {
+                            worker.close();
+                        }
                         installing.send(Command::Cancel, &mut app, ctx, &updates);
                         return Ok(0);
                     }
@@ -618,6 +659,59 @@ pub async fn run(ctx: &mut Context) -> Result<i32, AppError> {
                         Request::Answer(answer) => {
                             if let Some(question) = installing.pending.take() {
                                 question.answer(answer);
+                            }
+                        }
+                        Request::Setup(vmid) => match connection.desktop.clone() {
+                            Some(desktop) => {
+                                setup_generation += 1;
+                                let generation = setup_generation;
+                                let cancel = Arc::new(AtomicBool::new(false));
+                                let sender = updates.clone();
+                                let tell: Arc<dyn Fn(super::setup_work::Event) + Send + Sync> =
+                                    Arc::new(move |event| {
+                                        let _ = sender.send(Update::Setup(generation, event));
+                                    });
+                                let start = super::setup_work::Start {
+                                    vmid,
+                                    client: connection.client.clone(),
+                                    system: Arc::clone(&ctx.system),
+                                    home: ctx.home.clone(),
+                                    state_home: ctx.state_home.clone(),
+                                    loaded: desktop.loaded,
+                                    handle: tokio::runtime::Handle::current(),
+                                };
+                                let (commands, thread) = super::setup_work::spawn(start, tell, Arc::clone(&cancel));
+                                setup_worker = Some(SetupWorker { commands, cancel, thread });
+                            }
+                            None => {
+                                app.setup = None;
+                                app.log(&clock.now(), "setup: there is no client.toml yet");
+                            }
+                        },
+                        Request::SetupAsk(ask) => {
+                            use super::setup::Ask;
+                            use super::setup_work::Command as Work;
+                            if let Some(worker) = &setup_worker {
+                                let command = match ask {
+                                    Ask::Refresh => Some(Work::Refresh),
+                                    Ask::Catalog => Some(Work::Catalog),
+                                    Ask::Execute => app
+                                        .setup
+                                        .as_mut()
+                                        .and_then(|setup| setup.pending_plan.take())
+                                        .map(|plan| Work::Execute(Box::new(plan))),
+                                    Ask::Cancel => {
+                                        worker.cancel.store(true, Ordering::SeqCst);
+                                        None
+                                    }
+                                    Ask::Close => Some(Work::Close),
+                                };
+                                if let Some(command) = command {
+                                    let _ = worker.commands.send(command);
+                                }
+                            }
+                            if ask == Ask::Close {
+                                setup_worker = None;
                             }
                         }
                         Request::Ssh(vmid) => {
@@ -703,6 +797,15 @@ pub async fn run(ctx: &mut Context) -> Result<i32, AppError> {
                         installing.pending = None;
                     }
                 }
+                // An old worker: its terminal request is dropped, which ends it.
+                Update::Setup(generation, _) if generation != setup_generation => {}
+                Update::Setup(_, super::setup_work::Event::Terminal(handoff)) => {
+                    // A box closed meanwhile does not get the terminal.
+                    if app.setup.is_some() {
+                        tokio::task::block_in_place(|| lend_terminal(&mut screen, &reader, &handoff));
+                    }
+                }
+                Update::Setup(_, event) => app.setup_event(event),
                 Update::Action(progress) => {
                     if let Progress::Done { ok, lines } = &progress {
                         let title = app.action.as_ref().map(super::action::Action::title).unwrap_or_default();
@@ -720,7 +823,16 @@ pub async fn run(ctx: &mut Context) -> Result<i32, AppError> {
                 }
             },
             _ = tick.tick() => app.tick(),
-            _ = fast.tick(), if app.status.is_none() && app.unreachable.is_empty() => app.waiting += 1,
+            _ = fast.tick(), if (app.status.is_none() && app.unreachable.is_empty())
+                || app.setup.as_ref().is_some_and(super::setup::SetupBox::animating) =>
+            {
+                if app.status.is_none() && app.unreachable.is_empty() {
+                    app.waiting += 1;
+                }
+                if let Some(setup) = app.setup.as_mut() {
+                    setup.frame += 1;
+                }
+            }
         }
     }
 }
@@ -738,4 +850,19 @@ fn public_keys(home: &std::path::Path) -> Vec<String> {
         .collect();
     keys.sort();
     keys
+}
+
+impl SetupWorker {
+    /// Close the connection the worker keeps; wait a little for it, so the
+    /// master connection does not outlive the TUI.
+    fn close(self) {
+        let _ = self.commands.send(super::setup_work::Command::Close);
+        self.cancel.store(true, Ordering::SeqCst);
+        for _ in 0..30 {
+            if self.thread.is_finished() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    }
 }
