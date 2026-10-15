@@ -224,6 +224,9 @@ fn token_target_acl(names: &Names) -> BTreeSet<Acl> {
             (POOL_GOLD, "HomeStackGold"),
             (POOL_TEST, "HomeStack"),
             (POOL_TEST, "HomeStackGold"),
+            // The panel is the admin of everything HomeStack makes: the
+            // containers too (the owner, 2026-10-15).
+            (POOL_SERVICE, "HomeStackDeploy"),
         ]
     };
     for (pool, role) in pools {

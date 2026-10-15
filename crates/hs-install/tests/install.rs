@@ -72,6 +72,7 @@ const SINGLE_NODE_ACL: &str = "/nodes\ttoken\thomestack@pve!server\tPVEAuditor
 /pool/homestack-test\tuser\thomestack@pve\tHomeStack
 /pool/homestack-test\tuser\thomestack@pve\tHomeStackGold
 /pool/homestack-service\ttoken\thomestack@pve!deploy\tHomeStackDeploy
+/pool/homestack-service\ttoken\thomestack@pve!server\tHomeStackDeploy
 /pool/homestack-service\tuser\thomestack@pve\tHomeStackDeploy
 /sdn/zones/localnetwork/vmbr0\ttoken\thomestack@pve!server\tPVESDNUser
 /sdn/zones/localnetwork/vmbr0\ttoken\thomestack@pve!deploy\tPVESDNUser
