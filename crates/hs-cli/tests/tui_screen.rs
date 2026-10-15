@@ -699,3 +699,53 @@ fn new_lines_above_a_log_scrolled_back_star_its_top_right_corner_until_read() {
     mouse_at(&mut fixture.app, MouseEventKind::ScrollDown, x, y);
     assert!(!star(&fixture.app));
 }
+
+#[test]
+fn the_log_starts_with_the_last_lines_of_the_earlier_runs_muted() {
+    let mut fixture = app();
+    let path = fixture._dir.path().join("tui.log");
+    let mut earlier = String::new();
+    for minute in 0..250 {
+        earlier.push_str(&format!(
+            "2026-10-14 09:{:02}:{:02}  old line {minute}\n",
+            minute / 60,
+            minute % 60
+        ));
+    }
+    // Lines of before the date was written, and one without a time.
+    earlier.push_str("20:31:00  status from api2\n");
+    earlier.push_str("  The server's status could not be read: refused\n");
+    earlier.push_str("2026-10-15 20:32:21  status from api1\n");
+    std::fs::write(&path, earlier).unwrap();
+    fixture.app.log_file = Some(path.clone());
+    fixture.app.today = "2026-10-15".to_owned();
+    fixture.app.load_earlier();
+    fixture.app.log("20:40:00", "status from api3");
+    let lines = &fixture.app.lines;
+    // 200 earlier lines, the separator, this run's line.
+    assert_eq!(lines.len(), 202);
+    assert_eq!(lines[0].text, "old line 53");
+    assert_eq!(lines[0].time, "10-14 09:00:53", "another day shows its date");
+    assert_eq!(lines[197].time, "20:31:00");
+    assert_eq!(lines[198].time, "");
+    assert_eq!(lines[198].text, "The server's status could not be read: refused");
+    assert_eq!(lines[199].time, "20:32:21", "today shows the time only");
+    assert_eq!(lines[200].text, "── earlier runs ──");
+    assert!(lines[..201].iter().all(|line| line.earlier));
+    assert!(!lines[201].earlier);
+    // Drawn newest first: this run, the separator, the earlier lines muted.
+    let buf = render(&fixture.app, 150, 40);
+    let text = screen(&buf);
+    let now = text.find("status from api3").unwrap();
+    let separator = text.find("── earlier runs ──").unwrap();
+    let before = text.find("status from api1").unwrap();
+    assert!(now < separator && separator < before, "{text}");
+    let (x, y) = position(&buf, "status from api1");
+    assert_eq!(buf[(x, y)].fg, fixture.app.palette.muted);
+    // The file gets the date with each line of this run.
+    let written = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        written.ends_with("2026-10-15 20:40:00  status from api3\n"),
+        "{written}"
+    );
+}

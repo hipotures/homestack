@@ -470,3 +470,13 @@ TARGET SELECTORS…`.
   `┐*┌` shows in the log's top right corner until the log is scrolled to
   the newest line, as an editor marks a change. At the newest line new
   lines are seen as they come and there is no star.
+
+### The log starts with the earlier runs (owner, 2026-10-15)
+
+- At the start the log shows the last 200 lines of `tui.log` (from its
+  last 256 KiB), muted, under the line `── earlier runs ──`; this run's
+  lines come above it.
+- `tui.log` lines carry the date now, `YYYY-MM-DD HH:MM:SS  text`; read
+  back, a line of another day shows `MM-DD HH:MM:SS`, one of today the time
+  only. Lines of before the date was written are read as they are.
+- The file is not trimmed.

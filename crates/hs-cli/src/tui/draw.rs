@@ -921,6 +921,9 @@ pub(super) fn log(buf: &mut Buffer, area: Rect, app: &App, mut controls: Vec<Con
                 chosen,
             );
             (chosen, chosen)
+        } else if line.earlier {
+            // From an earlier run: all of it muted.
+            (muted, muted)
         } else {
             (text, muted)
         };

@@ -205,7 +205,7 @@ struct SetupWorker {
     thread: std::thread::JoinHandle<()>,
 }
 
-/// The local time `HH:MM:SS`, from the offset of `date +%z` read once.
+/// The local time `HH:MM:SS` and date, from the offset of `date +%z` read once.
 struct Clock {
     offset: i64,
 }
@@ -229,12 +229,24 @@ impl Clock {
         Self { offset }
     }
 
-    fn now(&self) -> String {
+    fn local_seconds(&self) -> i64 {
         let seconds = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |elapsed| i64::try_from(elapsed.as_secs()).unwrap_or(0));
-        let day = (seconds + self.offset).rem_euclid(86_400);
+        seconds + self.offset
+    }
+
+    fn now(&self) -> String {
+        let day = self.local_seconds().rem_euclid(86_400);
         format!("{:02}:{:02}:{:02}", day / 3600, day % 3600 / 60, day % 60)
+    }
+
+    /// The local date `YYYY-MM-DD`.
+    fn today(&self) -> String {
+        time::OffsetDateTime::from_unix_timestamp(self.local_seconds()).map_or_else(
+            |_| String::new(),
+            |at| format!("{:04}-{:02}-{:02}", at.year(), u8::from(at.month()), at.day()),
+        )
     }
 }
 
@@ -587,6 +599,8 @@ pub async fn run(ctx: &mut Context) -> Result<i32, AppError> {
     }
     let clock = Clock::new();
     app.clock = clock.now();
+    app.today = clock.today();
+    app.load_earlier();
     if let Some(problem) = problem {
         app.log(&clock.now(), &format!("{problem}; the HomeStack theme is used"));
     }
@@ -623,6 +637,7 @@ pub async fn run(ctx: &mut Context) -> Result<i32, AppError> {
     let mut setup_open: Option<Option<u32>> = None;
     loop {
         app.clock = clock.now();
+        app.today = clock.today();
         screen
             .terminal
             .draw(|frame| draw(frame, &app))

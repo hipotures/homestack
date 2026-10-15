@@ -110,9 +110,32 @@ pub enum Overlay {
 pub struct LogLine {
     pub time: String,
     pub text: String,
+    /// From an earlier run (`tui.log`): drawn muted.
+    pub earlier: bool,
 }
 
 const LOG_LIMIT: usize = 500;
+/// The lines of the earlier runs shown at the start.
+const EARLIER_LINES: usize = 200;
+/// How much of the end of `tui.log` is read for them.
+const EARLIER_BYTES: u64 = 256 * 1024;
+
+/// The last `most` bytes of `path` as text, without the line they cut.
+fn read_tail(path: &std::path::Path, most: u64) -> Option<String> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut file = std::fs::File::open(path).ok()?;
+    let start = file.metadata().ok()?.len().saturating_sub(most);
+    file.seek(SeekFrom::Start(start)).ok()?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes).ok()?;
+    let text = String::from_utf8_lossy(&bytes);
+    Some(if start > 0 {
+        text.split_once('\n')
+            .map_or_else(String::new, |(_, rest)| rest.to_owned())
+    } else {
+        text.into_owned()
+    })
+}
 
 #[derive(Debug, Clone)]
 pub struct App {
@@ -149,6 +172,8 @@ pub struct App {
     /// it holds.
     pub dragging: Option<(super::chrome::Bar, u16)>,
     pub clock: String,
+    /// The local date `YYYY-MM-DD` for `tui.log`; empty in tests.
+    pub today: String,
     /// Where the list's rows were drawn last: x, width, the first row's y,
     /// the rows shown and the index of the first; for the mouse.
     pub list_rows: std::cell::Cell<(u16, u16, u16, u16, usize)>,
@@ -207,6 +232,7 @@ impl App {
             log_unread: 0,
             dragging: None,
             clock: String::new(),
+            today: String::new(),
             waiting: 0,
             list_rows: std::cell::Cell::new((0, 0, 0, 0, 0)),
             notice: None,
@@ -350,6 +376,49 @@ impl App {
         }
     }
 
+    /// The last lines of `tui.log` from the earlier runs, muted, under a
+    /// separator line: the log does not start empty. A line of another day
+    /// shows its date (`10-14 20:32:21`).
+    pub fn load_earlier(&mut self) {
+        let Some(path) = &self.log_file else { return };
+        let Some(tail) = read_tail(path, EARLIER_BYTES) else {
+            return;
+        };
+        let rows: Vec<&str> = tail.lines().filter(|line| !line.trim().is_empty()).collect();
+        let mut earlier: Vec<LogLine> = rows[rows.len().saturating_sub(EARLIER_LINES)..]
+            .iter()
+            .map(|line| {
+                // `YYYY-MM-DD HH:MM:SS  text`, or without the date (before
+                // 2026-10-15), or `  text` without a time.
+                let (date, rest) = match line.get(..11) {
+                    Some(head) if head.as_bytes()[4] == b'-' && head.ends_with(' ') => (&head[..10], &line[11..]),
+                    _ => ("", *line),
+                };
+                let (time, text) = rest.split_once("  ").unwrap_or(("", rest));
+                let time = if date.is_empty() || date == self.today {
+                    time.to_owned()
+                } else {
+                    format!("{} {time}", &date[5..])
+                };
+                LogLine {
+                    time,
+                    text: text.to_owned(),
+                    earlier: true,
+                }
+            })
+            .collect();
+        if earlier.is_empty() {
+            return;
+        }
+        earlier.push(LogLine {
+            time: String::new(),
+            text: "── earlier runs ──".to_owned(),
+            earlier: true,
+        });
+        earlier.append(&mut self.lines);
+        self.lines = earlier;
+    }
+
     pub fn log(&mut self, time: &str, text: &str) {
         if let Some(path) = &self.log_file {
             use std::io::Write;
@@ -360,12 +429,18 @@ impl App {
                 .mode(0o600)
                 .open(path);
             if let Ok(mut file) = file {
-                let _ = writeln!(file, "{time}  {text}");
+                // The date too, for the lines read back at a later start.
+                if self.today.is_empty() || time.is_empty() {
+                    let _ = writeln!(file, "{time}  {text}");
+                } else {
+                    let _ = writeln!(file, "{} {time}  {text}", self.today);
+                }
             }
         }
         self.lines.push(LogLine {
             time: time.to_owned(),
             text: text.to_owned(),
+            earlier: false,
         });
         // Scrolled back, the lines read stay in place; the highlight stays
         // on its line.
