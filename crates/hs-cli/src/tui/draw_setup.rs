@@ -107,23 +107,18 @@ pub(super) fn setup_box(buf: &mut Buffer, area: Rect, app: &App, setup: &SetupBo
     let width = usize::from(inner.width.saturating_sub(2));
     let spinner = SPINNER[setup.frame % SPINNER.len()];
     match &setup.stage {
+        // The start and its failure in a small box in the middle, as the
+        // security key's box.
         Stage::Loading { message } => {
-            let y = inner.y + inner.height / 2;
-            write(
-                buf,
-                inner.x + 2,
-                y,
-                inner.width.saturating_sub(4),
-                &format!("{spinner} {message}"),
-                text,
-            );
+            let lines = vec![(format!("{spinner} {message}"), text)];
+            message_box(buf, inner, app, "connecting", &lines);
         }
         Stage::Failed { lines } => {
             let style = text.fg(palette.error);
-            for (row, line) in wrapped(lines, width).iter().take(usize::from(inner.height)).enumerate() {
-                let y = inner.y + u16::try_from(row).unwrap_or(0);
-                write(buf, inner.x + 1, y, inner.width.saturating_sub(2), line, style);
-            }
+            let mut shown: Vec<(String, Style)> = wrapped(lines, 64).into_iter().map(|line| (line, style)).collect();
+            shown.push((String::new(), text));
+            shown.push(("ENTER or ESC closes.".to_owned(), text.fg(palette.muted)));
+            message_box(buf, inner, app, "setup failed", &shown);
         }
         Stage::Review { lines, scroll, .. } => {
             let all = wrapped(lines, width);
@@ -450,4 +445,33 @@ fn group_bar(buf: &mut Buffer, inner: Rect, mut y: u16, app: &App, setup: &Setup
         x += used + 1;
     }
     y + 1
+}
+
+/// A small framed box in the middle of `area` with `lines` (the start of
+/// the setup, its failure).
+fn message_box(buf: &mut Buffer, area: Rect, app: &App, title: &str, lines: &[(String, Style)]) {
+    let palette = &app.palette;
+    let longest = lines.iter().map(|(line, _)| line.chars().count()).max().unwrap_or(0);
+    let width = u16::try_from(longest + 6)
+        .unwrap_or(u16::MAX)
+        .clamp(40, area.width.saturating_sub(4).max(10));
+    let height = u16::try_from(lines.len() + 4).unwrap_or(u16::MAX).min(area.height);
+    let rect = super::draw::centered(area, width, height);
+    let inner = frame(
+        buf,
+        rect,
+        palette,
+        &Sides {
+            top_left: vec![Control::plain(title)],
+            focused: true,
+            ..Sides::default()
+        },
+    );
+    for (row, (line, style)) in lines.iter().enumerate() {
+        let y = inner.y + 1 + u16::try_from(row).unwrap_or(0);
+        if y >= inner.bottom() {
+            break;
+        }
+        write(buf, inner.x + 2, y, inner.width.saturating_sub(4), line, *style);
+    }
 }

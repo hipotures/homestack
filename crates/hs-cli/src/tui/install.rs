@@ -158,6 +158,8 @@ pub struct AskView {
     pub input: String,
     /// Seconds since it was asked.
     pub seconds: u64,
+    /// The touch: the names of the key in `~/.ssh` (its comment).
+    pub key_names: Vec<String>,
 }
 
 impl AskView {
@@ -169,6 +171,7 @@ impl AskView {
             prompt: prompt.to_owned(),
             input: String::new(),
             seconds: 0,
+            key_names: Vec::new(),
         }
     }
 

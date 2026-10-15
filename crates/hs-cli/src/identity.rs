@@ -153,3 +153,60 @@ pub fn sync_local_ssh(
     let path = local_ssh::write_local_ssh_config(home, &updated, vmid, name, ip)?;
     Ok(json!({"identity_files_changed": changed, "ssh_config": path.display().to_string()}))
 }
+
+/// The names of the public keys in `~/.ssh` whose fingerprint is the
+/// `SHA256:…` in `text` (ssh's "Confirm user presence for key …"): each
+/// key's comment, else its file name; empty when none is known.
+#[must_use]
+pub fn key_names(home: &Path, text: &str) -> Vec<String> {
+    use base64::Engine;
+    use sha2::Digest;
+    let Some(wanted) = text
+        .split_whitespace()
+        .find(|word| word.starts_with("SHA256:"))
+        .map(|word| word.trim_end_matches(['.', ',', ')']))
+    else {
+        return Vec::new();
+    };
+    let Ok(entries) = std::fs::read_dir(home.join(".ssh")) else {
+        return Vec::new();
+    };
+    let mut files: Vec<PathBuf> = entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "pub"))
+        .collect();
+    files.sort();
+    let mut names: Vec<String> = Vec::new();
+    for file in files {
+        let Ok(line) = std::fs::read_to_string(&file) else {
+            continue;
+        };
+        let mut words = line.split_whitespace();
+        let (Some(_), Some(blob)) = (words.next(), words.next()) else {
+            continue;
+        };
+        let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(blob) else {
+            continue;
+        };
+        let fingerprint = format!(
+            "SHA256:{}",
+            base64::engine::general_purpose::STANDARD_NO_PAD.encode(sha2::Sha256::digest(&bytes))
+        );
+        if fingerprint != wanted {
+            continue;
+        }
+        let comment = words.collect::<Vec<_>>().join(" ");
+        let name = if comment.is_empty() {
+            file.file_stem()
+                .map(|stem| stem.to_string_lossy().into_owned())
+                .unwrap_or_default()
+        } else {
+            comment
+        };
+        if !names.contains(&name) {
+            names.push(name);
+        }
+    }
+    names
+}

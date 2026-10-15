@@ -615,7 +615,22 @@ pub(super) fn asking(buf: &mut Buffer, area: Rect, app: &App, asking: &AskView) 
                         text.add_modifier(Modifier::BOLD),
                     ),
                     (String::new(), text),
-                    (format!("key   {key}"), text),
+                    if asking.key_names.is_empty() {
+                        (format!("key   {key}"), text)
+                    } else {
+                        (
+                            format!("key   {}", asking.key_names.join(" / ")),
+                            text.add_modifier(Modifier::BOLD),
+                        )
+                    },
+                    if asking.key_names.is_empty() {
+                        (String::new(), text)
+                    } else {
+                        (
+                            format!("      {}", cut(&key, inner_width.saturating_sub(6))),
+                            text.fg(palette.muted),
+                        )
+                    },
                     (String::new(), text),
                     (timer, text.fg(palette.focus)),
                 ],

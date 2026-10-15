@@ -1755,3 +1755,49 @@ fn the_box_is_wide_and_every_item_shows_its_state() {
     assert!(text.contains("STATE"), "{text}");
     assert!(text.contains("✓ configured"), "{text}");
 }
+
+/// The touch box names the key by its comment in `~/.ssh` (two files of
+/// one key: both names); the start of the setup is a small box in the
+/// middle.
+#[test]
+fn the_touch_names_the_key_and_the_start_is_a_small_box() {
+    let home = tempfile::tempdir().unwrap();
+    let ssh = home.path().join(".ssh");
+    std::fs::create_dir(&ssh).unwrap();
+    let key = ssh.join("id_ed25519_test");
+    let made = std::process::Command::new("ssh-keygen")
+        .args(["-q", "-t", "ed25519", "-N", "", "-C", "key-one", "-f"])
+        .arg(&key)
+        .status();
+    if !made.is_ok_and(|status| status.success()) {
+        return;
+    }
+    let public = std::fs::read_to_string(ssh.join("id_ed25519_test.pub")).unwrap();
+    std::fs::write(ssh.join("copy.pub"), public.replace("key-one", "key-copy")).unwrap();
+    let listed = std::process::Command::new("ssh-keygen")
+        .arg("-lf")
+        .arg(ssh.join("id_ed25519_test.pub"))
+        .output()
+        .unwrap();
+    let fingerprint = String::from_utf8_lossy(&listed.stdout)
+        .split_whitespace()
+        .nth(1)
+        .unwrap()
+        .to_owned();
+    let prompt = format!("Confirm user presence for key ED25519-SK {fingerprint}");
+    assert_eq!(
+        hs_cli::identity::key_names(home.path(), &prompt),
+        ["key-copy", "key-one"]
+    );
+    assert!(
+        hs_cli::identity::key_names(home.path(), "Confirm user presence for key ED25519-SK SHA256:other").is_empty()
+    );
+
+    let mut fixture = tui_fixture::app();
+    let app = &mut fixture.app;
+    app.open_setup_box(SetupBox::loading(Settings::default(), target(), "Resolving workspace…"));
+    let text = screen(&render(app, 120, 36));
+    assert!(text.contains("connecting"), "{text}");
+    let (x, _) = position(&render(app, 120, 36), "Resolving workspace…");
+    assert!(x > 20, "{text}");
+}

@@ -816,7 +816,9 @@ pub async fn run(ctx: &mut Context) -> Result<i32, AppError> {
                 Update::Log(line) => app.log(&clock.now(), &line),
                 Update::Install(event) => app.install_event(event),
                 Update::Ask(question) => {
-                    app.ask(AskView::new(question.id, question.kind, &question.prompt));
+                    let mut view = AskView::new(question.id, question.kind, &question.prompt);
+                    view.key_names = crate::identity::key_names(&ctx.home, &question.prompt);
+                    app.ask(view);
                     if question.kind != crate::askpass::Kind::Touch {
                         installing.pending = Some(question);
                     }
