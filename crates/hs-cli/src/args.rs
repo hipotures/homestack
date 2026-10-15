@@ -19,6 +19,8 @@ pub struct InstallArgs {
     pub service_storages: Vec<String>,
     pub template_storage: Option<String>,
     pub gold: Option<u32>,
+    /// Guests in no pool put back in the pool their tags name.
+    pub adopt: Vec<u32>,
     pub token_dir: Option<PathBuf>,
     /// The servers are `apiN.<domain>` (section 8 of phase-13c.md).
     pub server_domain: Option<String>,
@@ -147,7 +149,7 @@ fn usage_of(command: &str) -> String {
         "addkey" => "TARGET [--key KEY] [--restart] [--json] [-y]",
         "migrate" => "TARGET TARGET_NODE --target-storage TARGET_STORAGE [--json] [-y]",
         "install" => {
-            "[--ssh USER@HOST | --herdr NAME] [--identity FILE] [--test] --storages IDS --snippet-storage ID --service-storages IDS --template-storage ID [--gold VMID] (--server-domain DOMAIN [--server-image IMAGE] | --no-servers) [--token-dir DIR] [--json] [-y]"
+            "[--ssh USER@HOST | --herdr NAME] [--identity FILE] [--test] --storages IDS --snippet-storage ID --service-storages IDS --template-storage ID [--gold VMID] [--adopt VMIDS] (--server-domain DOMAIN [--server-image IMAGE] | --no-servers) [--token-dir DIR] [--json] [-y]"
         }
         "uninstall" => {
             "[--ssh USER@HOST | --herdr NAME] [--identity FILE] [--test] [--snippet-storage ID] [--gold VMID] [--token-dir DIR] [--json] [-y]"
@@ -343,7 +345,7 @@ pub fn parse(argv: &[String]) -> Result<Args, UsageError> {
                 "--token-dir",
             ];
             if !uninstall {
-                values.extend(["--server-domain", "--server-image"]);
+                values.extend(["--server-domain", "--server-image", "--adopt"]);
             }
             let words = words(name, rest, &values, &common(extra))?;
             words.positionals(&[], 0)?;
@@ -372,6 +374,17 @@ pub fn parse(argv: &[String]) -> Result<Args, UsageError> {
                     })
                     .unwrap_or_default()
             };
+            let adopt = list("--adopt")
+                .iter()
+                .map(|text| {
+                    text.parse::<u32>().map_err(|_| {
+                        error(
+                            words.usage.clone(),
+                            format!("argument --adopt: invalid int value: '{text}'"),
+                        )
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
             let install = InstallArgs {
                 ssh,
                 herdr,
@@ -382,6 +395,7 @@ pub fn parse(argv: &[String]) -> Result<Args, UsageError> {
                 service_storages: list("--service-storages"),
                 template_storage: words.value("--template-storage"),
                 gold,
+                adopt,
                 token_dir: words.value("--token-dir").map(PathBuf::from),
                 server_domain: words.value("--server-domain"),
                 server_image: words.value("--server-image"),

@@ -17,6 +17,7 @@ struct FakePve {
     pending_env: bool,
     description: String,
     net0: String,
+    tags: String,
 }
 
 impl FakePve {
@@ -41,7 +42,7 @@ impl Pve for FakePve {
             }
             "/cluster/resources" => self.containers.clone(),
             p if p.ends_with("/config") => {
-                json!({"env": self.env, "digest": "d1", "description": self.description, "net0": self.net0})
+                json!({"env": self.env, "digest": "d1", "description": self.description, "net0": self.net0, "tags": self.tags})
             }
             p if p.ends_with("/pending") => {
                 if self.pending_env {
@@ -152,7 +153,7 @@ async fn a_new_container_gets_its_settings_and_environment() -> Result<(), Strin
     assert_eq!(
         pve.calls(),
         [
-            "POST /nodes/pve2/lxc vmid,ostemplate,hostname,pool,rootfs,memory,swap,cores,net0,unprivileged,onboot,description",
+            "POST /nodes/pve2/lxc vmid,ostemplate,hostname,pool,tags,rootfs,memory,swap,cores,net0,unprivileged,onboot,description",
             "PUT /nodes/pve2/lxc/998/config env=PATH=/usr/bin:/bin&digest=d1"
         ]
     );
@@ -204,5 +205,26 @@ async fn a_container_with_the_same_image_certificate_and_address_is_kept() -> Re
         "a new address"
     );
     assert!(pve.calls().is_empty(), "only read");
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_container_made_before_the_tag_gets_it_and_keeps_its_others() -> Result<(), String> {
+    let pve = FakePve {
+        tags: "backup".to_owned(),
+        ..FakePve::default()
+    };
+    assert!(node::ensure_tag(&pve, "pve1", 2097).await?);
+    assert_eq!(
+        pve.calls(),
+        ["PUT /nodes/pve1/lxc/2097/config tags=backup;homestack-server&digest=d1"]
+    );
+
+    let tagged = FakePve {
+        tags: "homestack-server".to_owned(),
+        ..FakePve::default()
+    };
+    assert!(!node::ensure_tag(&tagged, "pve1", 2097).await?);
+    assert!(tagged.calls().is_empty(), "only read");
     Ok(())
 }

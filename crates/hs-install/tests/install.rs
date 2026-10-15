@@ -337,7 +337,7 @@ fn pool_member(fake: &Fake, pool: &str, vmid: &str) {
 }
 
 #[test]
-fn a_pool_with_vms_and_snippets_in_use_stay() {
+fn pools_are_emptied_and_deleted_and_snippets_in_use_stay() {
     let fake = Fake::new(&["pve1", "pve2"]);
     assert!(fake.install(&standard(false)).ok);
     fake.append(
@@ -351,12 +351,9 @@ fn a_pool_with_vms_and_snippets_in_use_stay() {
     };
     let run = fake.uninstall(&removal);
     assert!(run.ok, "{}", run.out);
-    contains(&run, "homestack: 240");
-    assert!(
-        fake.read("pools.tsv").contains("homestack\t240"),
-        "pool with a VM was deleted"
-    );
-    assert!(!fake.read("pools.tsv").contains("homestack-gold"), "Gold pool left");
+    contains(&run, "take VM 240 (ws) out of pool homestack (it stays)");
+    lacks(&run, "leaves pool homestack;");
+    assert_eq!(fake.read("pools.tsv"), "", "pools left");
     for node in ["local", "pve2"] {
         assert_eq!(
             fs::read_to_string(fake.snippet_dir(node).join("homestack-vendor-keep.yaml")).ok(),
@@ -369,7 +366,10 @@ fn a_pool_with_vms_and_snippets_in_use_stay() {
         );
     }
     contains(&run, "homestack-vendor-keep.yaml is used by VM 240");
-    assert!(fake.read("vms.tsv").contains("240\t"), "VM removed");
+    assert!(
+        fake.read("vms.tsv").contains("240\tpve2\tws\thomestack-ws\t"),
+        "VM or its tag removed"
+    );
 
     // A second uninstall still keeps the snippet in use: there is no way to
     // remove it (the owner, 2026-10-15).
@@ -388,22 +388,157 @@ fn a_pool_with_vms_and_snippets_in_use_stay() {
 }
 
 #[test]
-fn the_service_pool_with_containers_stays() {
+fn the_service_pool_is_emptied_and_a_guest_no_tag_brings_back_is_named() {
     let fake = Fake::new(&["pve1", "pve2"]);
     assert!(fake.install(&standard(false)).ok);
+    fake.append("vms.tsv", "998\tpve1\tapi1\t\t\t\tlxc\n");
     pool_member(&fake, "homestack-service", "998");
     let run = fake.uninstall(&Settings {
         snippet_storage: Some("local".into()),
         ..Settings::default()
     });
     assert!(run.ok, "{}", run.out);
-    contains(&run, "homestack-service: 998");
-    assert!(
-        fake.read("pools.tsv").contains("homestack-service\t998"),
-        "pool with a server container was deleted"
+    contains(
+        &run,
+        "VM 998 (api1) leaves pool homestack-service; no tag of it puts it back at the next install",
     );
+    assert_eq!(fake.read("pools.tsv"), "", "pools left");
+    assert!(fake.read("vms.tsv").contains("998\t"), "container removed");
     assert!(!fake.read("tokens.tsv").contains("\tdeploy\t"), "deploy token left");
     assert!(fake.homestack_acl().is_empty(), "ACL entries left");
+}
+
+/// The questions of the installer's form.
+fn form_questions(fake: &Fake, settings: &Settings) -> Vec<hs_install::Question> {
+    let mut root = fake.shell();
+    let access = probe(&mut root).expect("probe");
+    hs_install::questions(&mut root, &access, settings).expect("questions")
+}
+
+/// Guests in no pool: a workspace, an alien one, a test workspace, a server
+/// container, and three no tag puts in a pool.
+fn guests_left_by_an_uninstall(fake: &Fake) {
+    fake.append(
+        "vms.tsv",
+        "240\tpve2\tws\thomestack-ws\t\t\n\
+         241\tpve1\talien\thomestack-alien\t\t\n\
+         242\tpve1\twstest\thomestack-ws;homestack-test\t\t\n\
+         243\tpve1\tapi1\thomestack-server\t\t\tlxc\n\
+         244\tpve1\tct\thomestack-ws\t\t\tlxc\n\
+         245\tpve1\tplain\tbackup\t\t\n\
+         246\tpve1\ttpl\thomestack-ws\t\t\ttemplate\n",
+    );
+}
+
+#[test]
+fn the_installer_offers_what_the_tags_put_in_a_pool_all_ticked() {
+    let fake = Fake::new(&["pve1", "pve2"]);
+    guests_left_by_an_uninstall(&fake);
+    let offered = |test: bool| -> (Vec<String>, Vec<String>, Vec<usize>) {
+        let questions = form_questions(&fake, &Settings { test, ..standard(test) });
+        let question = questions.iter().find(|q| q.option == "--adopt").expect("--adopt");
+        assert!(question.multiple);
+        (
+            question.choices.iter().map(|c| c.value.clone()).collect(),
+            question.choices.iter().map(|c| c.detail.clone()).collect(),
+            question.defaults.clone(),
+        )
+    };
+    let (values, details, ticked) = offered(false);
+    assert_eq!(values, ["240", "241", "243"]);
+    assert!(details[0].ends_with("-> pool homestack"), "{details:?}");
+    assert!(details[2].ends_with("-> pool homestack-service"), "{details:?}");
+    assert_eq!(ticked, [0, 1, 2]);
+    let (values, details, _) = offered(true);
+    assert_eq!(values, ["242", "243"]);
+    assert!(details[0].ends_with("-> pool homestack-test"), "{details:?}");
+
+    // Nothing found, nothing asked.
+    let empty = Fake::new(&["pve1"]);
+    assert!(
+        form_questions(&empty, &standard(false))
+            .iter()
+            .all(|q| q.option != "--adopt"),
+        "asked with nothing to adopt"
+    );
+}
+
+#[test]
+fn the_ticked_guests_go_back_in_their_pools_and_the_rest_is_a_warning() {
+    let fake = Fake::new(&["pve1", "pve2"]);
+    guests_left_by_an_uninstall(&fake);
+    let run = fake.install(&Settings {
+        adopt: vec![240, 243],
+        ..standard(false)
+    });
+    assert!(run.ok, "{}", run.out);
+    contains(&run, "put VM 240 (ws) in pool homestack, as its tags say");
+    contains(
+        &run,
+        "warning: in no pool, though their tags name one: 241 -> homestack",
+    );
+    expect_pools(&fake, "homestack\t240\nhomestack-gold\t101\nhomestack-service\t243");
+
+    // Run again: they are in their pools, nothing more to adopt.
+    let again = fake.install(&Settings {
+        adopt: vec![241],
+        ..standard(false)
+    });
+    assert!(again.ok, "{}", again.out);
+    expect_pools(&fake, "homestack\t240,241\nhomestack-gold\t101\nhomestack-service\t243");
+}
+
+#[test]
+fn what_cannot_be_adopted_stops_the_install_before_any_change() {
+    let fake = Fake::new(&["pve1", "pve2"]);
+    guests_left_by_an_uninstall(&fake);
+    for (vmid, expect) in [
+        (999, "--adopt 999: no such VM or container"),
+        (244, "--adopt 244: no tag puts it in a pool"),
+        (245, "--adopt 245: no tag puts it in a pool"),
+        (246, "--adopt 246: no tag puts it in a pool"),
+        (
+            242,
+            "--adopt 242: its tags put it in pool homestack-test, which this part does not install",
+        ),
+        (101, "--adopt 101: it is already in pool homestack-gold"),
+    ] {
+        if vmid == 101 {
+            fake.write("pools.tsv", "homestack-gold\t101\tHomeStack Gold\n");
+        }
+        let settings = Settings {
+            adopt: vec![vmid],
+            ..standard(false)
+        };
+        stops(&fake, &settings, &[expect]);
+    }
+}
+
+#[test]
+fn an_uninstall_then_an_install_puts_everything_back() {
+    let fake = Fake::new(&["pve1", "pve2"]);
+    assert!(fake.install(&standard(false)).ok);
+    fake.append(
+        "vms.tsv",
+        "240\tpve2\tws\thomestack-ws\t\t\n243\tpve1\tapi1\thomestack-server\t\t\tlxc\n",
+    );
+    for (vmid, pool) in [("240", "homestack"), ("243", "homestack-service")] {
+        pool_member(&fake, pool, vmid);
+    }
+    let run = fake.uninstall(&Settings::default());
+    assert!(run.ok, "{}", run.out);
+    lacks(&run, "leaves pool");
+    assert_eq!(fake.read("pools.tsv"), "", "pools left");
+
+    let questions = form_questions(&fake, &standard(false));
+    let question = questions.iter().find(|q| q.option == "--adopt").expect("--adopt");
+    let adopt = question.choices.iter().map(|c| c.value.parse().unwrap()).collect();
+    let run = fake.install(&Settings {
+        adopt,
+        ..standard(false)
+    });
+    assert!(run.ok, "{}", run.out);
+    expect_pools(&fake, "homestack\t240\nhomestack-gold\t101\nhomestack-service\t243");
 }
 
 #[test]

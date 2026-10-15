@@ -278,6 +278,7 @@ fn lock_is_exact_tag_and_error_explains_removal() {
 fn role_tags_allow_lock_but_reject_missing_gold_or_unknown() {
     let tags = |value: &str| [("tags".to_owned(), value.to_owned())].into();
     assert!(verify_workspace_role_tags(200, &tags("homestack-ws;homestack-lock")).is_ok());
+    assert!(verify_workspace_role_tags(200, &tags("homestack-ws;homestack-test")).is_ok());
     for bad in [
         "homestack-lock",
         "homestack-ws;homestack-gold",

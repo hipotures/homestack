@@ -9,6 +9,11 @@ use hs_core::pve::Pve;
 use hs_core::tasks::{NoObserver, TaskWait, wait_task};
 use serde_json::Value;
 
+/// Every server container carries it: after an uninstall, which empties the
+/// pools, `homestack install` finds the containers by it and puts them back
+/// in `homestack-service` (`hs_install::discover`).
+pub const SERVER_TAG: &str = "homestack-server";
+
 /// A task of the node takes at most this long (an image pull included).
 const TASK_LIMIT: Duration = Duration::from_secs(900);
 
@@ -175,6 +180,7 @@ pub async fn create(pve: &impl Pve, spec: &NewContainer<'_>, say: &impl Fn(&str)
         ("ostemplate", spec.ostemplate),
         ("hostname", spec.hostname),
         ("pool", spec.pool),
+        ("tags", SERVER_TAG),
         ("rootfs", rootfs.as_str()),
         ("memory", memory.as_str()),
         ("swap", "0"),
@@ -276,6 +282,34 @@ pub async fn power(pve: &impl Pve, node: &str, ctid: u32, action: &str) -> Resul
         .await
         .map_err(|e| format!("{action} CT {ctid}: {e}"))?;
     wait(pve, &upid, &format!("{action} CT {ctid}")).await
+}
+
+/// Give container `ctid` [`SERVER_TAG`], its other tags kept; whether it
+/// lacked it (a container made before the tag).
+pub async fn ensure_tag(pve: &impl Pve, node: &str, ctid: u32) -> Result<bool, String> {
+    let config = pve
+        .get(&format!("/nodes/{node}/lxc/{ctid}/config"), &[])
+        .await
+        .map_err(|e| format!("CT {ctid} config: {e}"))?;
+    let mut tags: Vec<&str> = config["tags"]
+        .as_str()
+        .unwrap_or_default()
+        .split([';', ','])
+        .map(str::trim)
+        .filter(|tag| !tag.is_empty())
+        .collect();
+    if tags.contains(&SERVER_TAG) {
+        return Ok(false);
+    }
+    tags.push(SERVER_TAG);
+    let digest = config["digest"].as_str().unwrap_or_default().to_owned();
+    pve.put(
+        &format!("/nodes/{node}/lxc/{ctid}/config"),
+        &[("tags", tags.join(";").as_str()), ("digest", digest.as_str())],
+    )
+    .await
+    .map_err(|e| format!("CT {ctid} tags: {e}"))?;
+    Ok(true)
 }
 
 /// Whether container `ctid` was made with `description` (its server, image

@@ -320,6 +320,21 @@ an agent stops when a phase needs one that is still open
   them anyway, is gone from `homestack uninstall` and `homestack-pve.sh`;
   given, it is refused. Snippets no VM names are still removed.
 
+### Owner's decisions of 2026-10-15 (uninstall empties the pools, autodiscovery)
+
+- Pools left with guests were litter. Uninstall takes every guest out of
+  the HomeStack pools it removes and deletes the pools; the guests, their
+  disks and their tags stay.
+- `homestack install` finds guests in no pool by their tags (never by the
+  address) and offers them in a list with a checkbox each and the pool each
+  goes to; the ticked ones are put back. `homestack-ws` and `homestack-alien`
+  (a workspace that cannot be refreshed) go to `homestack`, with
+  `homestack-test` as well to `homestack-test`; `homestack-server` on a
+  container goes to `homestack-service`.
+- The test instance tags its new workspaces `homestack-test` besides
+  `homestack-ws`; `homestack-deploy` tags the server containers
+  `homestack-server`. Tags are not removed by uninstall (for now).
+
 ## Probe results
 
 | Date | Probe | Result |

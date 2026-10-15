@@ -74,6 +74,7 @@ fn settings(ctx: &Context, args: &Args, install: &InstallArgs) -> Settings {
         service_storages: install.service_storages.clone(),
         template_storage: install.template_storage.clone(),
         gold: install.gold,
+        adopt: install.adopt.clone(),
         token_dir: expand_home(&token_dir.display().to_string(), &ctx.home),
     }
 }
@@ -151,6 +152,10 @@ fn same_as(command: Install, install: &InstallArgs, settings: &Settings, domain:
     if let Some(vmid) = settings.gold {
         words.extend(["--gold".to_owned(), vmid.to_string()]);
     }
+    if !settings.adopt.is_empty() {
+        let ids: Vec<String> = settings.adopt.iter().map(u32::to_string).collect();
+        words.extend(["--adopt".to_owned(), ids.join(",")]);
+    }
     match domain {
         Some(domain) => {
             words.extend(["--server-domain".to_owned(), domain.to_owned()]);
@@ -212,6 +217,30 @@ fn form_fields(root_line: &str, settings: &Settings, questions: &[hs_install::Qu
             }
             None => fields.push(Field::fixed(label, &format!("{value}  (given on the command line)"))),
         }
+    }
+    // Shown only when there is something to put back in a pool.
+    if let Some(question) = questions
+        .iter()
+        .find(|question| question.option == hs_install::discover::OPTION)
+    {
+        let items = question
+            .choices
+            .iter()
+            .map(|choice| Item::new(&choice.value, &choice.detail))
+            .collect();
+        fields.push(Field::choose(
+            &question.title,
+            &question.note,
+            question.multiple,
+            items,
+            &question.defaults,
+        ));
+    } else if !settings.adopt.is_empty() {
+        let ids: Vec<String> = settings.adopt.iter().map(u32::to_string).collect();
+        fields.push(Field::fixed(
+            "Found by their tags",
+            &format!("{}  (given on the command line)", ids.join(", ")),
+        ));
     }
     fields
 }

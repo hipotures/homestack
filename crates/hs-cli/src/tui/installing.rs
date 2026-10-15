@@ -66,6 +66,7 @@ impl Setup {
             service_storages: Vec::new(),
             template_storage: None,
             gold: None,
+            adopt: Vec::new(),
             token_dir: self.token_dir.clone(),
         }
     }
@@ -310,7 +311,11 @@ fn review(setup: &Setup, session: &mut Session, answers: &[Answer], domain: Opti
                     .collect::<Vec<_>>(),
             )];
             let mut kept = plan.kept.clone();
-            kept.push("every VM and container, every disk and volume".to_owned());
+            kept.push(
+                "every VM and container with its tags (the next install puts them back in their pools), \
+every disk and volume"
+                    .to_owned(),
+            );
             kept.push("~/.config/homestack on this desktop".to_owned());
             sections.push(("Kept, never removed".to_owned(), kept));
             if !plan.warnings.is_empty() {

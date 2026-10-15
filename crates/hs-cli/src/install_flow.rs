@@ -257,6 +257,7 @@ pub fn answered(settings: &Settings, questions: &[hs_install::Question], answers
             "--service-storages" => settings.service_storages = values,
             "--template-storage" => settings.template_storage = values.into_iter().next(),
             "--gold" => settings.gold = values.first().and_then(|vmid| vmid.parse().ok()),
+            "--adopt" => settings.adopt = values.iter().filter_map(|vmid| vmid.parse().ok()).collect(),
             _ => {}
         }
     }
@@ -289,6 +290,7 @@ fn grouped_changes(plan: &Plan, home: &std::path::Path) -> Vec<(String, Vec<Stri
     let mut roles: std::collections::BTreeMap<&str, Vec<String>> = std::collections::BTreeMap::new();
     let mut pools: std::collections::BTreeMap<&str, Vec<String>> = std::collections::BTreeMap::new();
     let mut gold = Vec::new();
+    let mut members = Vec::new();
     // Who -> (places given, places taken).
     let mut permissions: std::collections::BTreeMap<String, Permissions> = std::collections::BTreeMap::new();
     let mut entries = 0usize;
@@ -310,10 +312,15 @@ fn grouped_changes(plan: &Plan, home: &std::path::Path) -> Vec<(String, Vec<Stri
                     ["pool", "add", pool, ..] => pools.entry("new").or_default().push((*pool).to_owned()),
                     ["pool", "delete", pool] => pools.entry("removed").or_default().push((*pool).to_owned()),
                     ["pool", "modify", pool, "--vms", vmid, rest @ ..] => {
-                        if rest.contains(&"--delete") {
-                            gold.push(format!("take VM {vmid} out of pool {pool}"));
+                        let line = if rest.contains(&"--delete") {
+                            format!("take VM {vmid} out of pool {pool}")
                         } else {
-                            gold.push(format!("put VM {vmid} in pool {pool}"));
+                            format!("put VM {vmid} in pool {pool}")
+                        };
+                        if *pool == "homestack-gold" {
+                            gold.push(line);
+                        } else {
+                            members.push(line);
                         }
                     }
                     ["acl", action, path, _, who, "--roles", roles_given] => {
@@ -383,6 +390,9 @@ fn grouped_changes(plan: &Plan, home: &std::path::Path) -> Vec<(String, Vec<Stri
             .as_ref()
             .map_or_else(|| "Gold".to_owned(), |g| format!("Gold {g}"));
         sections.push((heading, gold));
+    }
+    if !members.is_empty() {
+        sections.push(("Pool members".to_owned(), members));
     }
     if !permissions.is_empty() {
         let lines = permissions
@@ -519,6 +529,10 @@ pub fn save_draft(
     let mut table = toml::Table::new();
     for (question, answer) in questions.iter().zip(answers) {
         let Answer::Picked(picked) = answer else { continue };
+        // What goes back in a pool is found anew each time.
+        if question.option == hs_install::discover::OPTION {
+            continue;
+        }
         let values: Vec<toml::Value> = picked
             .iter()
             .filter_map(|index| question.choices.get(*index))

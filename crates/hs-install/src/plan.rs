@@ -8,15 +8,14 @@ use std::path::{Path, PathBuf};
 
 use crate::InstallError;
 use crate::checks::{self, Findings};
+use crate::discover;
 use crate::probe::{Access, Topology};
 use crate::root::Root;
 use crate::settings::{Command, Settings};
 use crate::shell::{join, quote};
 use crate::snippets::{self, SNIPPETS};
-use crate::state::{Acl, HS_USER, State, privs};
+use crate::state::{Acl, HS_USER, POOL_GOLD, POOL_SERVICE, POOL_TEST, POOL_WORKSPACES, State, privs};
 
-const POOL_GOLD: &str = "homestack-gold";
-const POOL_SERVICE: &str = "homestack-service";
 const DEPLOY_TOKEN: &str = "deploy";
 
 /// The roles HomeStack owns and their privileges.
@@ -496,6 +495,16 @@ fn plan_install(ctx: &Context) -> Result<Vec<Step>, InstallError> {
             &["pool", "add", ctx.pool, "--comment", comment],
         ));
     }
+    for vmid in ctx.settings.adopt.iter().collect::<BTreeSet<_>>() {
+        let Some(vm) = state.vms.get(vmid) else { continue };
+        let Some(pool) = discover::pool_by_tags(vm) else {
+            continue;
+        };
+        steps.push(pveum(
+            format!("put VM {vmid} ({}) in pool {pool}, as its tags say", vm.name),
+            &["pool", "modify", pool, "--vms", &vmid.to_string()],
+        ));
+    }
     if let Some(gold) = ctx.gold
         && let Some(vm) = state.vms.get(&gold)
         && !vm.tags.iter().any(|tag| tag == "homestack-gold")
@@ -582,11 +591,11 @@ fn plan_uninstall(root: &mut dyn Root, ctx: &Context, kept: &mut Vec<String>) ->
     let state = ctx.state;
     let mut steps = Vec::new();
     let (scope, pools): (Vec<&str>, Vec<&str>) = if ctx.settings.test {
-        (vec!["test"], vec!["homestack-test"])
+        (vec!["test"], vec![POOL_TEST])
     } else {
         (
             vec!["server", "test", DEPLOY_TOKEN],
-            vec!["homestack", "homestack-test", POOL_GOLD, POOL_SERVICE],
+            vec![POOL_WORKSPACES, POOL_TEST, POOL_GOLD, POOL_SERVICE],
         )
     };
     let target = target_acl(state, &ctx.names, Command::Uninstall, ctx.settings.test, &scope);
@@ -624,38 +633,43 @@ fn plan_uninstall(root: &mut dyn Root, ctx: &Context, kept: &mut Vec<String>) ->
             }
         }
     }
+    // Every guest is taken out and the pool deleted; the guests and their
+    // tags stay, and the next install's autodiscovery puts them back
+    // (the owner, 2026-10-15).
     for pool in pools {
         let Some(members) = state.pools.get(pool) else { continue };
-        let mut rest = Vec::new();
-        if pool == POOL_GOLD {
-            for vmid in members {
-                let is_gold = vmid.parse::<u32>().ok().is_some_and(|id| {
-                    Some(id) == ctx.settings.gold
-                        || state
-                            .vms
-                            .get(&id)
-                            .is_some_and(|vm| vm.tags.iter().any(|tag| tag == "homestack-gold"))
-                });
-                if is_gold {
-                    steps.push(pveum(
-                        format!("take Gold {vmid} out of pool {POOL_GOLD} (Gold stays)"),
-                        &["pool", "modify", POOL_GOLD, "--vms", vmid, "--delete", "1"],
-                    ));
-                } else {
-                    rest.push(vmid.clone());
-                }
-            }
-        } else {
-            rest.clone_from(members);
-        }
-        if rest.is_empty() {
-            steps.push(pveum(format!("delete pool {pool}"), &["pool", "delete", pool]));
-        } else {
-            kept.push(format!(
-                "pool {pool}: {} (its VMs stay; move or destroy them first)",
-                rest.join(" ")
+        for vmid in members {
+            let id = vmid.parse::<u32>().ok();
+            let vm = id.and_then(|id| state.vms.get(&id));
+            let name = vm.map_or_else(String::new, |vm| format!(" ({})", vm.name));
+            let is_gold = pool == POOL_GOLD
+                && (id.is_some() && id == ctx.settings.gold
+                    || vm.is_some_and(|vm| vm.tags.iter().any(|tag| tag == discover::GOLD_TAG)));
+            let description = if is_gold {
+                format!("take Gold {vmid}{name} out of pool {pool} (Gold stays)")
+            } else {
+                format!("take VM {vmid}{name} out of pool {pool} (it stays)")
+            };
+            steps.push(pveum(
+                description,
+                &["pool", "modify", pool, "--vms", vmid, "--delete", "1"],
             ));
+            let back = if is_gold {
+                Some(POOL_GOLD)
+            } else {
+                vm.and_then(discover::pool_by_tags)
+            };
+            match back {
+                Some(back) if back == pool => {}
+                Some(other) => kept.push(format!(
+                    "VM {vmid}{name} leaves pool {pool}; its tags put it in pool {other} at the next install"
+                )),
+                None => kept.push(format!(
+                    "VM {vmid}{name} leaves pool {pool}; no tag of it puts it back at the next install"
+                )),
+            }
         }
+        steps.push(pveum(format!("delete pool {pool}"), &["pool", "delete", pool]));
     }
     if ctx.settings.test {
         return steps;
@@ -716,9 +730,9 @@ pub fn make_plan(
     };
     let settings = &resolved;
     let (part, pool, token) = if settings.test {
-        ("test", "homestack-test", "test")
+        ("test", POOL_TEST, "test")
     } else {
-        ("production", "homestack", "server")
+        ("production", POOL_WORKSPACES, "server")
     };
     let mut found = Findings::default();
     let mut node_errors = Vec::new();
@@ -742,6 +756,21 @@ pub fn make_plan(
             checks::check_gold(root, &state, settings, &mut found);
             checks::check_tags(root, settings, &mut found);
             checks::check_certificates(root, &state, &mut found);
+            for vmid in &settings.adopt {
+                found.errors.extend(discover::refusal(&state, settings.test, *vmid));
+            }
+            let left: Vec<String> = discover::found(&state, settings.test)
+                .into_iter()
+                .filter(|(vmid, _)| !settings.adopt.contains(vmid))
+                .map(|(vmid, pool)| format!("{vmid} -> {pool}"))
+                .collect();
+            if !left.is_empty() {
+                found.warnings.push(format!(
+                    "in no pool, though their tags name one: {} ({} VMIDS puts them back)",
+                    left.join(", "),
+                    discover::OPTION
+                ));
+            }
         }
     }
 

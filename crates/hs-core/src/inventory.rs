@@ -18,6 +18,21 @@ pub const GOLD_TAG: &str = "homestack-gold";
 pub const WORKSPACE_TAG: &str = "homestack-ws";
 pub const ALIEN_WORKSPACE_TAG: &str = "homestack-alien";
 pub const REFRESH_LOCK_TAG: &str = "homestack-lock";
+/// The pool of the test instance (`homestack install --test`).
+pub const TEST_POOL: &str = "homestack-test";
+/// What the test instance's workspaces carry besides [`WORKSPACE_TAG`], so
+/// the installer can tell which pool they go back in (`hs_install::discover`).
+pub const TEST_TAG: &str = "homestack-test";
+
+/// The tags a new workspace in `pool` gets.
+#[must_use]
+pub fn workspace_tags(pool: &str) -> String {
+    if pool == TEST_POOL {
+        format!("{WORKSPACE_TAG};{TEST_TAG}")
+    } else {
+        WORKSPACE_TAG.to_owned()
+    }
+}
 pub const HOME_LABEL_PREFIX: &str = "HS_HOME_";
 
 /// A VM configuration with every value as text (`qm_config_on_node`).

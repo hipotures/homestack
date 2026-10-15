@@ -381,9 +381,13 @@ pub fn check_tags(root: &mut dyn Root, settings: &Settings, found: &mut Findings
     };
     let allow = setting("user-allow");
     let allow_list = setting("user-allow-list");
-    let mut tags = vec!["homestack-ws", "homestack-lock"];
+    let mut tags = vec![
+        crate::discover::WORKSPACE_TAG,
+        "homestack-lock",
+        crate::discover::SERVER_TAG,
+    ];
     if settings.test {
-        tags.push("homestack-test");
+        tags.push(crate::discover::TEST_TAG);
     }
     for tag in tags {
         if in_list(tag, &registered) {
@@ -550,6 +554,11 @@ pub fn all_questions(state: &State, settings: &Settings) -> Vec<Question> {
             choices,
             defaults,
         });
+    }
+    if settings.adopt.is_empty()
+        && let Some(question) = crate::discover::question(state, settings.test)
+    {
+        questions.push(question);
     }
     questions
 }

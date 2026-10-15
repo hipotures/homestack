@@ -201,6 +201,9 @@ pub async fn apply(config: &DeployConfig, only: &[String], say: &impl Fn(&str)) 
                 && node::unchanged(&pve, &instance.node, instance.ctid, &description, &net0).await?;
             if same {
                 say("  the same image, certificate and address: only the configuration is sent");
+                if node::ensure_tag(&pve, &instance.node, instance.ctid).await? {
+                    say(&format!("  tagged {}", node::SERVER_TAG));
+                }
                 let client = instances_client(config, &[instance], &api_token)?;
                 wait_health(&client, HEALTH_LIMIT).await?;
                 configure(&client, instance, &pve_token, &server_toml, say).await?;

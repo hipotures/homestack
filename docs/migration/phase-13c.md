@@ -31,7 +31,9 @@ implementations are compared on the same fake Proxmox).
   the cues of phase 13) or Herdr as the alternative; afterwards everything is
   API only (`decisions.md`, "after phase 13").
 - Uninstall removes only HomeStack objects and **never** a VM, a container or
-  a volume; a pool that still holds machines stays and is listed.
+  a volume. Since 2026-10-15 it takes every guest out of the HomeStack pools
+  and deletes the pools; the guests keep their tags, and the next install
+  finds them by the tags and puts them back (autodiscovery, section 7).
 - The user opens the access and names it: for SSH `USER@HOST`
   (usually `root@pve1`), for Herdr the **name of a tab or a pane**. The
   client searches for the name and refuses when it finds none or more than
@@ -45,7 +47,7 @@ implementations are compared on the same fake Proxmox).
 homestack install   (--ssh USER@HOST | --herdr NAME) [--identity FILE] [--test]
                     --storages IDS --snippet-storage ID
                     --service-storages IDS --template-storage ID
-                    [--gold VMID] [--token-dir DIR] [--json] [-y]
+                    [--gold VMID] [--adopt VMIDS] [--token-dir DIR] [--json] [-y]
 homestack uninstall (--ssh USER@HOST | --herdr NAME) [--identity FILE] [--test]
                     [--snippet-storage ID] [--gold VMID]
                     [--token-dir DIR] [--json] [-y]
@@ -107,8 +109,9 @@ Written first and shown failing, then the implementation.
 - `crates/hs-install/tests/` — the scenarios of `deploy/pve/tests/run.sh`
   on its fake Proxmox (`deploy/pve/tests/fake-pve`, driven through a local
   shell as the `Root`): single node, cluster and uninstall, adoption of the
-  hand-made state of phases 0–4 with `--test`, a pool with VMs and snippets
-  in use, the service pool with containers, an unreachable node, an offline
+  hand-made state of phases 0–4 with `--test`, pools emptied and deleted
+  with snippets in use, guests no tag brings back named, autodiscovery
+  (offered, adopted, refused, uninstall then install), an unreachable node, an offline
   node, every check that stops an install, warnings that do not, plan
   without confirmation, snippet update, idempotence (a second run changes
   nothing); plus the new ones: not root, not Proxmox, single node versus
@@ -173,6 +176,19 @@ with the owner's approval.
   are named in a warning and left alone); otherwise a step. A Gold tagged
   `homestack-ws` or `homestack-alien` is refused. Uninstall takes Gold out of
   the pool and leaves its tag.
+- **Autodiscovery (owner, 2026-10-15).** A guest in no pool whose tags name
+  a pool of the part being installed is offered in the form, under "Found by
+  their tags", one checkbox each, all ticked; `--adopt VMIDS` on the command
+  line, and without it a warning names them. The tag decides, never the
+  address: a QEMU VM tagged `homestack-ws` or `homestack-alien` goes to
+  `homestack`, or to `homestack-test` when it also carries `homestack-test`
+  (the test instance tags its workspaces so); a container tagged
+  `homestack-server` (`homestack-deploy` tags every server container, and an
+  unchanged one gets the tag on its next `apply`) goes to
+  `homestack-service`. Gold is not among them (it has its own setting). A
+  VMID that cannot be adopted stops the install before any change. The
+  uninstall names each guest it takes out that no tag brings back. What was
+  ticked is not kept in the draft of the form.
 - The fake Proxmox (`fake-pve`) learned `pvesh set ... --tags`.
 - **Revised the same day (owner): one form instead of steps.** The installer
   shows one screen with every setting and its value: how root is reached,

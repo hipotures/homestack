@@ -21,9 +21,9 @@ use crate::create_transfer::{migrate_clone, revalidate_source, validate_cross_no
 use crate::error::CoreError;
 use crate::gold::extract_mac;
 use crate::inventory::{
-    ALIEN_WORKSPACE_TAG, GOLD_TAG, REFRESH_LOCK_TAG, VmConfig, WORKSPACE_TAG, cluster_vm_maps, cluster_vm_resources,
-    disk_option, has_tag, home_label, parse_disk_size_gb, parse_tags, py_repr, resolve_homestack_storage, text_or_none,
-    vm_config, vm_status,
+    ALIEN_WORKSPACE_TAG, GOLD_TAG, REFRESH_LOCK_TAG, TEST_TAG, VmConfig, WORKSPACE_TAG, cluster_vm_maps,
+    cluster_vm_resources, disk_option, has_tag, home_label, parse_disk_size_gb, parse_tags, py_repr,
+    resolve_homestack_storage, text_or_none, vm_config, vm_status, workspace_tags,
 };
 use crate::keys::{parse_authorized_key_records, workspace_authorized_keys};
 use crate::power::{SHUTDOWN_TIMEOUT_SECS, START_TIMEOUT_SECS, shutdown_vm, start_vm};
@@ -161,14 +161,14 @@ pub fn verify_workspace_role_tags(vmid: u32, vm_cfg: &VmConfig) -> Result<(), Co
             "VM {vmid} tag verification failed: inherited '{GOLD_TAG}'"
         )));
     }
-    let allowed: BTreeSet<String> = [WORKSPACE_TAG, REFRESH_LOCK_TAG]
+    let allowed: BTreeSet<String> = [WORKSPACE_TAG, REFRESH_LOCK_TAG, TEST_TAG]
         .iter()
         .map(|t| (*t).to_owned())
         .collect();
     if !tags.is_subset(&allowed) {
         let got: Vec<String> = tags.iter().map(|t| format!("'{t}'")).collect();
         return Err(CoreError::Failed(format!(
-            "VM {vmid} tag verification failed: expected '{WORKSPACE_TAG}' with optional '{REFRESH_LOCK_TAG}', got [{}]",
+            "VM {vmid} tag verification failed: expected '{WORKSPACE_TAG}' with optional '{REFRESH_LOCK_TAG}' and '{TEST_TAG}', got [{}]",
             got.join(", ")
         )));
     }
@@ -619,7 +619,7 @@ async fn create_steps(
         post_task(
             pve,
             &config_path,
-            &[("tags", WORKSPACE_TAG)],
+            &[("tags", &workspace_tags(pool))],
             &format!("Tagging VM {vmid}"),
             &timing.wait(600),
             observer,

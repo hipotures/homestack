@@ -258,6 +258,8 @@ fn the_commands_are_parsed() {
         "local",
         "--gold",
         "101",
+        "--adopt",
+        "240,243",
         "--token-dir",
         "/tmp/t",
     ]))
@@ -272,6 +274,7 @@ fn the_commands_are_parsed() {
     assert_eq!(install.storages, ["a", "b"]);
     assert_eq!(install.service_storages, ["c"]);
     assert_eq!(install.gold, Some(101));
+    assert_eq!(install.adopt, [240, 243]);
     assert_eq!(install.token_dir, Some(PathBuf::from("/tmp/t")));
 
     let parsed = args::parse(&strings(&["uninstall", "--herdr", "pve1", "-y"])).expect("parsed");
@@ -289,6 +292,8 @@ fn the_commands_are_parsed() {
         vec!["install", "--ssh", "a", "--force"],
         vec!["uninstall", "--ssh", "a", "--force"],
         vec!["uninstall", "--ssh", "a", "--gold", "x"],
+        vec!["install", "--ssh", "a", "--adopt", "240,x"],
+        vec!["uninstall", "--ssh", "a", "--adopt", "240"],
     ] {
         assert!(args::parse(&strings(&bad)).is_err(), "{bad:?} was accepted");
     }
@@ -637,6 +642,40 @@ async fn a_setting_is_changed_from_its_list_and_gold_can_be_chosen() {
         "{}",
         cluster.read("pools.tsv")
     );
+}
+
+#[tokio::test]
+async fn guests_found_by_their_tags_are_ticked_in_the_form_and_put_back() {
+    let cluster = Cluster::new(&["pve1"]);
+    two_disk_storages(&cluster);
+    cluster.write(
+        "vms.tsv",
+        "101\tpve1\tgold\thomestack-gold\tvirtio=BC:24:11:00:00:01,bridge=vmbr0\t\n\
+         240\tpve1\tws\thomestack-ws\t\t\n\
+         243\tpve1\tapi1\thomestack-server\t\t\tlxc\n",
+    );
+    let done = run(
+        &cluster,
+        &["install", "--no-servers", "--ssh", "root@pve1"],
+        &["", "y"],
+        true,
+    )
+    .await;
+    assert_eq!(done.code, 0, "{}", done.console.out());
+    let out = done.console.out();
+    let form = out.split("Confirm the installation").next().unwrap_or_default();
+    assert!(form.contains("Found by their tags  240, 243"), "{form}");
+    for text in [
+        "Pool members",
+        "put VM 240 in pool homestack",
+        "put VM 243 in pool homestack-service",
+        "--adopt 240,243",
+    ] {
+        assert!(out.contains(text), "{text:?} missing:\n{out}");
+    }
+    let pools = cluster.read("pools.tsv");
+    assert!(pools.contains("homestack\t240"), "{pools}");
+    assert!(pools.contains("homestack-service\t243"), "{pools}");
 }
 
 #[tokio::test]

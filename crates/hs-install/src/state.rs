@@ -10,8 +10,13 @@ use crate::root::Root;
 
 pub const HS_USER: &str = "homestack@pve";
 
+pub const POOL_WORKSPACES: &str = "homestack";
+pub const POOL_TEST: &str = "homestack-test";
+pub const POOL_GOLD: &str = "homestack-gold";
+pub const POOL_SERVICE: &str = "homestack-service";
+
 /// The pools HomeStack owns, whose members are read.
-pub const POOLS: [&str; 4] = ["homestack", "homestack-test", "homestack-gold", "homestack-service"];
+pub const POOLS: [&str; 4] = [POOL_WORKSPACES, POOL_TEST, POOL_GOLD, POOL_SERVICE];
 
 #[derive(Debug, Clone)]
 pub struct Vm {

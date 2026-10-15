@@ -9,7 +9,7 @@ use common::{FakePve, block_on, test_config};
 use hs_core::inventory::{
     VmConfig, attached_disk_volumes, cluster_node_statuses, has_tag, layout_name_for_node, node_dns, node_network,
     parse_tags, resolve_homestack_storage, storage_ids_for_node, vm_config, vm_status, vm_volume_inventory,
-    volume_identity,
+    volume_identity, workspace_tags,
 };
 use hs_model::status::{NodeState, VolumeEntry};
 use serde_json::json;
@@ -95,6 +95,14 @@ fn exact_semicolon_separated_tags() {
     assert!(has_tag(Some("backup;homestack-ws"), "homestack-ws"));
     assert!(!has_tag(Some("prefix-homestack-ws-suffix"), "homestack-ws"));
     assert!(parse_tags(None).is_empty());
+}
+
+/// The test instance marks its workspaces, so the installer puts them back in
+/// its pool after an uninstall.
+#[test]
+fn a_workspace_of_the_test_pool_is_tagged_homestack_test() {
+    assert_eq!(workspace_tags("homestack"), "homestack-ws");
+    assert_eq!(workspace_tags("homestack-test"), "homestack-ws;homestack-test");
 }
 
 /// `VmConfigTests::test_qm_config_uses_proxmox_json_api_not_terminal_text`
