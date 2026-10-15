@@ -13,6 +13,7 @@ pub mod files;
 pub mod guest;
 pub mod herdr;
 pub mod plan;
+pub mod repo;
 pub mod show;
 pub mod text;
 pub mod workspace;

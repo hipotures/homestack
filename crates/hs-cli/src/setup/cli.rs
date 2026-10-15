@@ -15,6 +15,7 @@ use super::catalog::{
 use super::definitions::{SetupConfig, parse_setup};
 use super::engine::{Connection, Observer, execute_plan, inspect_workspace_state};
 use super::plan::{build_plan, expand_config_entries};
+use super::repo::{inspect_repository, resolve_repository_argument, rotate_repository_key, setup_repository};
 use super::workspace::{SshWorkspace, Workspace};
 use super::{RepoSettings, Settings, Target, show};
 use crate::app::{Context, client_error, is_vmid, valid_name};
@@ -108,6 +109,20 @@ pub fn check_role(vmid: u32, tags: &[&str]) -> Result<bool, AppError> {
 /// Resolve `text` to a running workspace (Python `setup.resolve_target`),
 /// and take the workspace user from the server's configuration.
 pub async fn resolve_target(client: &Client, settings: &mut Settings, text: &str) -> Result<Target, AppError> {
+    resolve(client, settings, text, &|_, _| {
+        "Setup requires a running workspace; lifecycle operations must be performed separately".to_owned()
+    })
+    .await
+}
+
+/// [`resolve_target`] with the refusal of a workspace that is not
+/// running given.
+async fn resolve(
+    client: &Client,
+    settings: &mut Settings,
+    text: &str,
+    stopped: &(dyn Fn(u32, &str) -> String + Sync),
+) -> Result<Target, AppError> {
     let text = text.trim();
     let config = client.get("/v1/config").await.map_err(client_error)?;
     let server = hs_model::config::Config::parse(config.as_str().unwrap_or_default())
@@ -154,9 +169,7 @@ pub async fn resolve_target(client: &Client, settings: &mut Settings, text: &str
     }
     let status = found["status"].as_str().unwrap_or_default().to_owned();
     if status != "running" {
-        return Err(AppError::new(
-            "Setup requires a running workspace; lifecycle operations must be performed separately",
-        ));
+        return Err(AppError::new(stopped(vmid, &status)));
     }
     let ip = hs_model::address::address_of(vmid, &server.network)
         .map(|ip| ip.to_string())
@@ -515,5 +528,98 @@ fn say(ctx: &mut Context, json_mode: bool, text: &str) {
         ctx.console.err(text);
     } else {
         ctx.console.out(text);
+    }
+}
+
+/// Run `homestack repo TARGET [REPOSITORY]` (Python's `repo` command): the
+/// repository's state, then Setup or a key rotation chosen from a menu.
+pub async fn repo(
+    args: &Args,
+    target: &str,
+    explicit: Option<&str>,
+    ctx: &mut Context,
+    loaded: &Loaded,
+    client: &Client,
+) -> Result<i32, AppError> {
+    let mut settings = settings(ctx, loaded)?;
+    let target = resolve(client, &mut settings, target, &|vmid, status| {
+        format!("Workspace VM {vmid} is {status}; repository operations require a running VM.")
+    })
+    .await?;
+    let repository = resolve_repository_argument(settings.repo.owner.as_deref(), explicit, &target.name)?;
+    let system = Arc::clone(&ctx.system);
+    let mut workspace = connect(&system, &ctx.home, loaded, &settings, &target)?;
+    let state = inspect_repository(
+        &settings,
+        system.as_ref(),
+        workspace.as_mut(),
+        target.vmid,
+        &target.name,
+        &repository,
+        true,
+    )?;
+    if args.json {
+        let text = serde_json::to_string_pretty(&state).unwrap_or_default();
+        ctx.console.out(&format!("{text}\n"));
+        return Ok(0);
+    }
+    let text = show::repository(&state, &ctx.style);
+    ctx.console.out(&text);
+    if !ctx.stdin_tty {
+        return Err(AppError::new(
+            "Interactive repository action selection requires a TTY; use --json for status-only output",
+        ));
+    }
+    let bold = |text: &str| ctx.style.paint(text, crate::view::Color::Bold);
+    let menu = format!(
+        "{} Exit   {} Setup   {} Rotate key\n",
+        bold("[1]"),
+        bold("[2]"),
+        bold("[3]")
+    );
+    ctx.console.out(&menu);
+    let action = choose(ctx);
+    if action == "1" {
+        return Ok(0);
+    }
+    let live = ctx.style.color;
+    let console = ctx.console.as_mut();
+    let mut activity = |message: &str| {
+        if live {
+            console.out(&format!("\r\x1b[2K{message}"));
+        }
+    };
+    let result = if action == "2" {
+        setup_repository(&settings, system.as_ref(), workspace.as_mut(), &state, &mut activity)
+    } else {
+        rotate_repository_key(&settings, system.as_ref(), workspace.as_mut(), &state, &mut activity)
+    };
+    if live {
+        ctx.console.out("\r\x1b[2K");
+    }
+    let result = result?;
+    if let Some(message) = result["message"].as_str().filter(|message| !message.is_empty()) {
+        let line = ctx.style.paint(message, crate::view::Color::Bold);
+        ctx.console.out(&format!("{line}\n"));
+    }
+    let text = show::repository(&result, &ctx.style);
+    ctx.console.out(&text);
+    Ok(if result["ready"] == Value::Bool(true) { 0 } else { 1 })
+}
+
+/// Rich's `Prompt.ask("Action", choices=["1", "2", "3"], default="1")`.
+fn choose(ctx: &mut Context) -> String {
+    loop {
+        let Some(answer) = ctx.console.ask("Action [1/2/3] (1): ") else {
+            return "1".to_owned();
+        };
+        let answer = answer.trim();
+        if answer.is_empty() {
+            return "1".to_owned();
+        }
+        if ["1", "2", "3"].contains(&answer) {
+            return answer.to_owned();
+        }
+        ctx.console.out("Please select one of the available options\n");
     }
 }

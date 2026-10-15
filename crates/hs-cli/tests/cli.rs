@@ -278,10 +278,10 @@ fn create_refresh_destroy_status_and_migrate() {
         })
     );
     assert_eq!(
-        parsed(&["repo", "test1", "hipotures/tklivetracker"]),
+        parsed(&["repo", "test1", "example-owner/example-project"]),
         Ok(Command::Repo {
             target: "test1".to_owned(),
-            repository: Some("hipotures/tklivetracker".to_owned())
+            repository: Some("example-owner/example-project".to_owned())
         })
     );
     assert_eq!(parsed(&["status"]), Ok(Command::Status { target: None }));
@@ -720,19 +720,75 @@ async fn environment_discovery_reports_progress_without_changing_read_only_queri
     Ok(())
 }
 
-/// Commands still in Python say so (owner's decision for phase 13).
+/// A desktop whose `gh` knows one repository with no deploy keys and
+/// whose workspace answers every command with success and no output.
+fn repo_system() -> FakeSystem {
+    FakeSystem::new().run(|argv| {
+        Ok(if argv[0] == "gh" {
+            let endpoint = argv.last().cloned().unwrap_or_default();
+            if endpoint.contains("/keys") {
+                Output::stdout("[[]]")
+            } else {
+                Output::stdout(r#"{"full_name": "example-owner/example-project", "permissions": {"admin": true}}"#)
+            }
+        } else {
+            Output::default()
+        })
+    })
+}
+
+/// `repo` refuses Gold and a missing `[repo] owner` before any workspace
+/// connection (Python `repository_workspace_info`,
+/// `resolve_repository_argument`).
 #[tokio::test]
-async fn python_only_commands_say_where_they_are() -> TestResult {
+async fn repo_refuses_before_connecting() -> TestResult {
     let desk = desk(LIFECYCLE, SERVER_TOML).await?;
-    for (argv, phase) in [(vec!["repo", "x"], "14f")] {
-        let run = desk.run(&argv).await;
+    for (argv, message) in [
+        (&["repo", "101"][..], "Refusing repository operation on Gold VM 101"),
+        (&["repo", "alien-workspace"], "[repo] owner is not configured"),
+    ] {
+        let run = desk.run_with(argv, Recorded::default(), repo_system(), false).await;
         assert_eq!(run.code, 1, "{argv:?}");
-        let text = run.console.out();
-        assert!(
-            text.contains("still provided by the Python client") && text.contains(phase),
-            "{text}"
-        );
+        assert!(run.console.out().contains(message), "{}", run.console.out());
+        assert!(run.system.masters().is_empty());
     }
+    Ok(())
+}
+
+/// `repo --json` reports the state over one workspace connection; without
+/// a terminal the human form shows the panel, then refuses the menu.
+#[tokio::test]
+async fn repo_reports_state_and_needs_a_tty_for_actions() -> TestResult {
+    let desk = desk(LIFECYCLE, SERVER_TOML).await?;
+    let run = desk
+        .run_with(
+            &["repo", "alien-workspace", "example-owner/example-project", "--json"],
+            Recorded::default(),
+            repo_system(),
+            false,
+        )
+        .await;
+    assert_eq!(run.code, 0, "{}", run.console.out());
+    let state = run.json();
+    assert_eq!(state["command"], "repo");
+    assert_eq!(state["workspace"], "alien-workspace");
+    assert_eq!(state["repository"], "example-owner/example-project");
+    assert_eq!(state["checkout"], "/home/developer/DEV/example-project");
+    assert_eq!(state["deploy_key_state"], "missing");
+    assert_eq!(run.system.masters().len(), 1);
+    let run = desk
+        .run_with(
+            &["repo", "160", "example-owner/example-project"],
+            Recorded::default(),
+            repo_system(),
+            false,
+        )
+        .await;
+    assert_eq!(run.code, 1);
+    let text = run.console.out();
+    assert!(text.contains("REPOSITORY — alien-workspace"), "{text}");
+    assert!(text.contains("GitHub deploy key"), "{text}");
+    assert!(text.contains("requires a TTY; use --json"), "{text}");
     Ok(())
 }
 

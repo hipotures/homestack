@@ -270,16 +270,6 @@ pub async fn status_of(path: &Path, ctx: &mut Context) -> Result<Code, AppError>
 }
 
 async fn execute(args: &Args, ctx: &mut Context, running: &Running) -> Result<Code, AppError> {
-    let phase = match args.command {
-        Command::Repo { .. } => Some("14f"),
-        _ => None,
-    };
-    if let Some(phase) = phase {
-        return Err(AppError::new(format!(
-            "homestack {} is still provided by the Python client (phase {phase} of docs/migration/PLAN.md)",
-            args.command.name()
-        )));
-    }
     match &args.command {
         Command::Install(install) => return installer::run(args, install, hs_install::Command::Install, ctx).await,
         Command::Uninstall(install) => return installer::run(args, install, hs_install::Command::Uninstall, ctx).await,
@@ -352,7 +342,10 @@ async fn execute(args: &Args, ctx: &mut Context, running: &Running) -> Result<Co
                 .await
         }
         Command::Setup(setup) => crate::setup::cli::run(args, setup, cli.ctx, cli.loaded, cli.client).await,
-        Command::None | Command::Repo { .. } | Command::Install(_) | Command::Uninstall(_) => Ok(0),
+        Command::Repo { target, repository } => {
+            crate::setup::cli::repo(args, target, repository.as_deref(), cli.ctx, cli.loaded, cli.client).await
+        }
+        Command::None | Command::Install(_) | Command::Uninstall(_) => Ok(0),
     }
 }
 

@@ -45,8 +45,8 @@ its units (14d) are sent unchanged the same way.
     TARGET`, `setup TARGET SELECTORS…` with `--dry-run`, `--catalog`,
     `--non-interactive`, `--yes`, `--json`; Rich's default tables.
 - **Handlers:** file (Files, Credentials), environment, application
-  installers (14c adds managed values, 14d Backup, 14e Herdr). A handler not ported yet
-  Repositories) refuses in its preflight, so nothing is written.
+  installers; 14c adds managed values and files, 14d Backup, 14e Herdr,
+  14f Repositories.
 - **The workspace user** (name, uid, gid) and the address come from the
   server (`GET /v1/config`, `/v1/workspaces/{target}`); Python read them
   from `config.toml`.
@@ -155,3 +155,29 @@ its units (14d) are sent unchanged the same way.
   simulated workspace and desktop, the real guest program), the cue in
   `tests/touch.rs`, and the vendor snippet's linger after the home is
   mounted. Open: the TUI test, with the setup box.
+
+## 14f: Repositories and `homestack repo`
+
+- **Where:** `setup/repo.rs` (Python `repo.py`): the checkout under
+  `[repo] checkout_root`, a deploy key for each repository in
+  `~/.ssh/homestack/github/`, registered read-write on GitHub through the
+  desktop's `gh`, and the checkout's own `core.sshCommand`.
+- **In the setup:** one guest call reads every selected repository for
+  the status; the preflight checks on GitHub that the repository is still
+  the same one, administered and not archived, inspects the checkout and
+  refuses what it would have to clean, reset or replace (a non-Git
+  directory, another origin, uncommitted or untracked files, a detached
+  HEAD, no upstream) and any key repair, which only `homestack repo` does.
+  The apply clones, or fetches and fast-forwards only (merge options of
+  the branch and hooks ignored, ignored files never overwritten), then
+  verifies Git access. Only `.git/config` goes into the operation
+  snapshot, when the origin or SSH command changes.
+- **`homestack repo TARGET [REPOSITORY] [--json]`:** the repository
+  (default `[repo] owner`/workspace name) of a running workspace: `--json`
+  reports the state; otherwise the `REPOSITORY` panel and the menu Exit,
+  Setup, Rotate key (a terminal is needed). Rotation generates a new key,
+  revokes the old one on GitHub, installs and registers the new one, then
+  verifies access.
+- **Tests** (28 of the 28 of 14f ported): `tests/setup_repo.rs` (the
+  helpers and the actions, and setup on real temporary Git checkouts with
+  a simulated GitHub), and `repo` in `tests/cli.rs`.

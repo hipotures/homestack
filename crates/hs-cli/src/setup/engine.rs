@@ -10,11 +10,15 @@ use std::path::Path;
 use serde_json::{Map, Value, json};
 
 use super::backup;
+use super::catalog::github_json;
 use super::definitions::{Entry, Params};
 use super::documents;
 use super::guest::{command_environment, guest, require_tool};
 use super::herdr;
-use super::plan::{Plan, all_bins, application_units, build_plan, expand_config_entries, source_item, write_paths};
+use super::plan::{
+    Plan, all_bins, application_units, build_plan, expand_config_entries, repository_paths, source_item, write_paths,
+};
+use super::repo;
 use super::workspace::Workspace;
 use super::{Settings, Target, json_of, sha256_hex, utc_now};
 use crate::AppError;
@@ -58,14 +62,6 @@ pub trait Observer {
 pub struct Quiet;
 
 impl Observer for Quiet {}
-
-/// A handler that is not ported yet refuses, without changing anything.
-fn pending(entry: &Entry) -> AppError {
-    AppError::new(format!(
-        "{}: the {} setup handler is not available in this version yet",
-        entry.id, entry.handler
-    ))
-}
 
 struct Walk {
     digest: sha2::Sha256,
@@ -412,6 +408,24 @@ pub fn inspect_workspace_state_with(
         }
     }
     let remote = remote_metadata(workspace, settings, &metadata_paths)?;
+    let mut repo_states = json!({});
+    if !repositories.is_empty() {
+        let checkout_root = settings
+            .repo
+            .checkout_root
+            .get(2..)
+            .unwrap_or_default()
+            .trim_end_matches('/');
+        repo_states = guest(
+            workspace,
+            settings,
+            "repositories",
+            guest_args! {"checkout_root": checkout_root, "repositories": repositories},
+        )?
+        .get("repositories")
+        .cloned()
+        .unwrap_or(json!({}));
+    }
     let mut documents: HashMap<String, Result<Value, AppError>> = HashMap::new();
     let mut items = Map::new();
     for entry in &entries {
@@ -470,6 +484,19 @@ pub fn inspect_workspace_state_with(
                 }
                 Err(error) => Err(error.clone()),
             },
+            Params::Repository { repository } => {
+                let live = repo_states.get(repository).filter(|live| live.is_object());
+                for key in ["state", "ready", "exists", "detail", "remote", "key_pair"] {
+                    if let Some(value) = live.and_then(|live| live.get(key)) {
+                        item[key] = value.clone();
+                    }
+                }
+                if let Some(metadata) = live.map(|live| &live["metadata"]).filter(|m| truthy(m)) {
+                    item["files"] = json!([metadata]);
+                }
+                item["will_overwrite"] = json!(live.is_some_and(|live| truthy(&live["exists"])));
+                Ok(())
+            }
             _ => inspect_item(workspace, settings, system, target, entry, &record, &remote, &mut item),
         };
         if let Err(error) = outcome {
@@ -627,7 +654,7 @@ fn inspect_item(
                 item.extend(found);
             }
         }
-        _ => return Err(pending(entry)),
+        Params::Structured { .. } | Params::Repository { .. } => return Err(unknown_handler()),
     }
     Ok(())
 }
@@ -723,7 +750,9 @@ fn record_entry_state(
     guest(workspace, settings, "state-record", values)
 }
 
-fn preflight_entry(
+/// Check `entry` before anything changes (Python `preflight_entry`): the
+/// state its apply starts from, or why it cannot run.
+pub fn preflight_entry(
     workspace: &mut dyn Workspace,
     settings: &Settings,
     target: &Target,
@@ -834,7 +863,53 @@ fn preflight_entry(
         }
         Params::Backup => backup::inspect(workspace, settings, target.vmid, true),
         Params::Herdr => herdr::preflight(workspace, settings, system, target, unattended),
-        _ => Err(pending(entry)),
+        Params::Repository { repository } => {
+            let metadata = github_json(system, &[&format!("repos/{repository}")], false)?;
+            let same = metadata["full_name"].as_str().unwrap_or_default().to_lowercase() == repository.to_lowercase();
+            if !same
+                || !truthy(&metadata["permissions"]["admin"])
+                || truthy(&metadata["archived"])
+                || truthy(&metadata["disabled"])
+            {
+                return Err(AppError::new(format!(
+                    "{}: repository identity or administration permission changed; reselect explicitly",
+                    entry.id
+                )));
+            }
+            let (checkout, private, public) = repository_paths(settings, repository)?;
+            let prefix = format!("/home/{}/", settings.user);
+            let relative = |path: &str| path.strip_prefix(&prefix).unwrap_or(path).to_owned();
+            let relative_checkout = relative(&checkout);
+            let mut paths: Vec<Value> = [&checkout, &private, &public]
+                .iter()
+                .map(|path| json!({"relative": relative(path), "directory": **path == checkout}))
+                .collect();
+            paths.push(json!({"relative": format!("{relative_checkout}/.git"), "directory": true}));
+            paths.push(json!({"relative": format!("{relative_checkout}/.git/config")}));
+            guest(workspace, settings, "paths", guest_args! {"paths": paths})?;
+            let state = repo::inspect_repository(
+                settings,
+                system,
+                workspace,
+                target.vmid,
+                &target.name,
+                repository,
+                false,
+            )?;
+            repo::require_tools(&state)?;
+            let actions = repo::repository_setup_actions(&state)?;
+            if actions
+                .iter()
+                .any(|action| action == "replace-missing-private-key" || action == "replace-read-only-key")
+            {
+                return Err(AppError::new(format!(
+                    "{}: key repair requires standalone repo maintenance; setup never rotates keys",
+                    entry.id
+                )));
+            }
+            Ok(json!({"repository": state, "actions": actions}))
+        }
+        Params::Structured { .. } => Err(unknown_handler()),
     }
 }
 
@@ -953,7 +1028,30 @@ fn apply_entry(
             id,
             plan.unattended,
         ),
-        _ => Err(pending(entry)),
+        Params::Repository { .. } => {
+            observer.activity(Some(id), "Configure repository");
+            let result = repo::setup_repository(settings, system, workspace, &state["repository"], &mut |message| {
+                observer.activity(Some(id), message);
+            })?;
+            if !truthy(&result["ready"]) {
+                return Err(AppError::new(
+                    "Repository provisioning finished but verification failed",
+                ));
+            }
+            let message = result["message"]
+                .as_str()
+                .filter(|message| !message.is_empty())
+                .unwrap_or("Repository Git access verified");
+            done(
+                if truthy(&result["changed"]) {
+                    "succeeded"
+                } else {
+                    "already-ready"
+                },
+                message,
+            )
+        }
+        Params::Structured { .. } => Err(unknown_handler()),
     }
 }
 
@@ -1275,4 +1373,9 @@ fn run_plan(
     }
     observer.activity(None, "Setup execution complete");
     Ok(())
+}
+
+/// A handler the per-item path never receives.
+fn unknown_handler() -> AppError {
+    AppError::new("Unknown setup action handler")
 }

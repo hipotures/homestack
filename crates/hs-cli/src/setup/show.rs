@@ -467,3 +467,63 @@ pub fn status(target: &Value, state: &Value, order: &[String], style: &Style) ->
     }
     out.join("\n") + "\n"
 }
+
+/// A repository's state (Python `ui.show_repository_status`).
+#[must_use]
+pub fn repository(result: &Value, style: &Style) -> String {
+    let field = |key: &str| crate::view::text(&result[key]);
+    let status = result["status"].as_str().filter(|s| !s.is_empty()).unwrap_or("unknown");
+    let status_text = match status {
+        "ready" => style.paint("✓ ready", Color::Green),
+        "not configured" => style.paint("not configured", Color::Dim),
+        other => style.paint(other, Color::Yellow),
+    };
+    let mut deploy_text = result["deploy_key_state"]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .unwrap_or("missing")
+        .to_owned();
+    if let Some(id) = result["deploy_key_id"].as_i64() {
+        deploy_text.push(' ');
+        deploy_text.push_str(&style.paint(&format!("(ID {id})"), Color::Dim));
+    }
+    let tools = ["git", "ssh", "ssh-keygen"]
+        .iter()
+        .map(|name| {
+            let present = result["tools"].get(*name).is_some_and(super::engine::truthy);
+            format!("{name}: {}", if present { "yes" } else { "missing" })
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    let row = |label: &str, value: String| (label.to_owned(), value);
+    let mut sections = vec![
+        vec![
+            row("Workspace", field("workspace")),
+            row("Repository", field("repository")),
+            row("Status", status_text),
+        ],
+        vec![
+            row("Checkout", field("checkout")),
+            row("Checkout state", field("checkout_state")),
+            row("Working tree", field("working_tree")),
+            row("Origin", field("origin")),
+        ],
+        vec![
+            row("Key", field("key_path")),
+            row("Key state", field("key_state")),
+            row("Fingerprint", field("key_fingerprint")),
+            row("GitHub deploy key", deploy_text),
+            row("Git access", field("access")),
+            row("Repo SSH config", field("ssh_config_state")),
+            row("Workspace tools", tools),
+        ],
+    ];
+    if let Some(message) = result["message"].as_str().filter(|m| !m.is_empty()) {
+        sections.push(vec![row("Result", message.to_owned())]);
+    }
+    let workspace = result["workspace"]
+        .as_str()
+        .filter(|w| !w.is_empty())
+        .unwrap_or("workspace");
+    crate::view::kv_panel(&format!("REPOSITORY — {workspace}"), &sections, style)
+}
