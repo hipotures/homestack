@@ -224,6 +224,7 @@ fn the_form_refuses_a_bad_name_before_asking_the_server() {
 #[test]
 fn a_node_and_storage_chosen_in_the_form_are_sent() {
     let mut fixture = app();
+    fixture.app.home_default = Some(63 * 1024);
     press(&mut fixture.app, KeyCode::Char('n'));
     press(&mut fixture.app, KeyCode::Tab);
     type_text(&mut fixture.app, "lab-new");
@@ -235,7 +236,8 @@ fn a_node_and_storage_chosen_in_the_form_are_sent() {
     // Storage: default, then the storages of pve2.
     press(&mut fixture.app, KeyCode::Right);
     press(&mut fixture.app, KeyCode::Tab);
-    type_text(&mut fixture.app, "64G");
+    // Home size: one G above the server's default.
+    press(&mut fixture.app, KeyCode::Right);
     let start = started(press(&mut fixture.app, KeyCode::Enter));
     assert_eq!(
         start.parameters,
@@ -534,4 +536,110 @@ fn new_shows_the_servers_pool_as_the_default() {
     press(&mut fixture.app, KeyCode::Char('n'));
     let text = screen(&render(&fixture.app, 120, 36));
     assert!(text.contains("Pool       ‹ default: homestack ›"), "{text}");
+}
+
+/// The new form with the focus on Home size (the fifth field).
+fn home_size_form(default_gib: Option<u64>) -> tui_fixture::Fixture {
+    let mut fixture = app();
+    fixture.app.home_default = default_gib.map(|gib| gib * 1024);
+    press(&mut fixture.app, KeyCode::Char('n'));
+    press(&mut fixture.app, KeyCode::Tab);
+    type_text(&mut fixture.app, "lab-new");
+    for _ in 0..3 {
+        press(&mut fixture.app, KeyCode::Tab);
+    }
+    fixture
+}
+
+#[test]
+fn home_size_starts_at_the_default_and_is_sent_only_when_changed() {
+    let mut fixture = home_size_form(Some(64));
+    let text = screen(&render(&fixture.app, 120, 36));
+    assert!(text.contains("Home size  64G  -64G+  -0M+"), "{text}");
+    let start = started(press(&mut fixture.app, KeyCode::Enter));
+    assert_eq!(start.parameters, json!({"vmid": 101010, "name": "lab-new"}));
+
+    let mut fixture = home_size_form(None);
+    let text = screen(&render(&fixture.app, 120, 36));
+    assert!(text.contains("Home size  default  -0G+  -0M+"), "{text}");
+    // Nothing below nothing.
+    press(&mut fixture.app, KeyCode::Left);
+    assert!(screen(&render(&fixture.app, 120, 36)).contains("default  -0G+"));
+}
+
+#[test]
+fn home_size_steps_its_g_and_its_m_part() {
+    let mut fixture = home_size_form(Some(64));
+    // Space: the M part; three steps of 100M.
+    type_text(&mut fixture.app, " +++");
+    let text = screen(&render(&fixture.app, 120, 36));
+    assert!(text.contains("Home size  64.3G  -64G+  -300M+"), "{text}");
+    let start = started(press(&mut fixture.app, KeyCode::Enter));
+    assert_eq!(start.parameters["home_size"], json!("65836M"));
+
+    // The M part carries into the G part, both ways.
+    let mut fixture = home_size_form(Some(1));
+    press(&mut fixture.app, KeyCode::Char(' '));
+    for _ in 0..10 {
+        press(&mut fixture.app, KeyCode::Right);
+    }
+    assert!(screen(&render(&fixture.app, 120, 36)).contains("2G  -2G+  -0M+"));
+    press(&mut fixture.app, KeyCode::Left);
+    assert!(screen(&render(&fixture.app, 120, 36)).contains("1.9G  -1G+  -900M+"));
+    // Space again: the G part; down to 0G, the 900M stay.
+    type_text(&mut fixture.app, " --");
+    let text = screen(&render(&fixture.app, 120, 36));
+    assert!(text.contains("0.9G  -0G+  -900M+"), "{text}");
+    let start = started(press(&mut fixture.app, KeyCode::Enter));
+    assert_eq!(start.parameters["home_size"], json!("900M"));
+}
+
+#[test]
+fn home_size_never_outgrows_the_storage_and_its_colour_follows_its_share() {
+    // pve1's local-zfs, Gold's node's first storage, has 1720G free.
+    let palette = Palette::named("HomeStack", false).unwrap();
+    let colour = |default_gib| {
+        let fixture = home_size_form(Some(default_gib));
+        let buf = render(&fixture.app, 120, 36);
+        let (x, y) = position(&buf, &format!("Home size  {default_gib}G"));
+        buf[(x + 11, y)].fg
+    };
+    assert_eq!(colour(172), palette.foreground, "10 % is fine");
+    assert_eq!(colour(173), palette.warning, "above 10 %");
+    assert_eq!(colour(861), palette.error, "above 50 %");
+
+    let mut fixture = home_size_form(Some(1720));
+    press(&mut fixture.app, KeyCode::Right);
+    type_text(&mut fixture.app, " +");
+    let text = screen(&render(&fixture.app, 120, 36));
+    assert!(text.contains("Home size  1720G  -1720G+  -0M+"), "{text}");
+}
+
+#[test]
+fn a_click_chooses_a_part_of_home_size_and_the_wheel_steps_it() {
+    use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+    let mut fixture = home_size_form(Some(2));
+    let mouse = |kind, column, row| MouseEvent {
+        kind,
+        column,
+        row,
+        modifiers: KeyModifiers::NONE,
+    };
+    let click = MouseEventKind::Down(MouseButton::Left);
+    // A click on 0M chooses the M part: the wheel up adds 100M.
+    let buf = render(&fixture.app, 120, 36);
+    let (label, _) = position(&buf, "Home size");
+    let (x, y) = position(&buf, "0M+");
+    fixture.app.mouse(mouse(click, x, y));
+    fixture.app.mouse(mouse(MouseEventKind::ScrollUp, label, y));
+    let buf = render(&fixture.app, 120, 36);
+    assert!(screen(&buf).contains("2.1G  -2G+  -100M+"), "{}", screen(&buf));
+    // The + of the G part.
+    let (x, y) = position(&buf, "-2G+");
+    fixture.app.mouse(mouse(click, x + 3, y));
+    let buf = render(&fixture.app, 120, 36);
+    assert!(screen(&buf).contains("3.1G  -3G+  -100M+"), "{}", screen(&buf));
+    // The wheel down over the row: the chosen part, now G.
+    fixture.app.mouse(mouse(MouseEventKind::ScrollDown, label, y));
+    assert!(screen(&render(&fixture.app, 120, 36)).contains("2.1G  -2G+  -100M+"));
 }

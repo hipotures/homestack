@@ -182,7 +182,7 @@ async fn plan_reports_the_inspection_and_needs_no_secret_without_a_passphrase() 
     assert_eq!(plan["disk"], "scsi0");
     assert_eq!(plan["volume"], "local-lvm:vm-200-disk-0");
     assert_eq!(plan["current_size_gib"], json!(16.0));
-    assert_eq!(plan["target_size_gib"], 32);
+    assert_eq!(plan["target_size_gib"], json!(32.0));
     assert_eq!(plan["size"], "32G");
     assert_eq!(
         plan["guest"],
@@ -209,7 +209,10 @@ async fn plan_refusals_come_before_any_guest_command() -> TestResult {
             },
             "Specify exactly one of root_size or home_size",
         ),
-        (root(200, "32.5G"), "Home size must be an integer number of GiB or TiB"),
+        (
+            root(200, "32.5G"),
+            "Home size must be an integer number of MiB, GiB or TiB",
+        ),
         (
             root(205, "32G"),
             "Resize requires a running VM with a working QEMU Guest Agent",

@@ -18,7 +18,9 @@ instance's pool)
 1. Exactly one of `root_size` and `home_size` ("Specify exactly one of
    --root-size or --home-size"); the role is `root` or `home`.
 2. `proxmox.parse_home_size`: an integer number of GiB or TiB (`20G`,
-   `1T`), upper-cased; the target in GiB.
+   `1T`), upper-cased; the target in GiB. Since 2026-10-15 (owner) also
+   MiB (`500M`), which Python refuses; the target is then a fraction of a
+   GiB.
 3. `status.resolve_existing_workspace(require_network=False)`: not Gold,
    exists, has a node, the role tags, a valid name, root and home disks on
    different volumes, the home's serial `HS_HOME_<vmid>`.

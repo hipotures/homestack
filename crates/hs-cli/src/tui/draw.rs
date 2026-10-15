@@ -1123,7 +1123,7 @@ pub(super) fn wrap(line: &str, width: usize) -> Vec<String> {
 /// The box of an action (mockups 12–14): its stages in the top border, its
 /// buttons in the bottom border.
 fn action_box(buf: &mut Buffer, area: Rect, app: &App, action: &Action) {
-    use super::action::{Input, Kind, PlanFocus, Stage, StepState};
+    use super::action::{Input, Kind, Part, PlanFocus, Stage, StepState};
     let palette = &app.palette;
     let text = text_style(palette);
     let muted = text.fg(palette.muted);
@@ -1187,6 +1187,9 @@ fn action_box(buf: &mut Buffer, area: Rect, app: &App, action: &Action) {
     let mut lines: Vec<(String, Style)> = Vec::new();
     // Which line is which field of a form, for the mouse.
     let mut field_rows: Vec<(usize, usize)> = Vec::new();
+    // The amounts of a form: where their parts are, for the mouse and
+    // the colours.
+    let mut amounts: Vec<AmountRow> = Vec::new();
     let push = |line: &str, style: Style, lines: &mut Vec<(String, Style)>| {
         for piece in wrap(line, width) {
             lines.push((piece, style));
@@ -1216,6 +1219,34 @@ fn action_box(buf: &mut Buffer, area: Rect, app: &App, action: &Action) {
                     }
                     Input::Choice { options, index } => {
                         format!("‹ {} ›", options.get(*index).map_or("—", String::as_str))
+                    }
+                    input @ Input::Amount { g, m, part, set } => {
+                        let total = if !set && input.mib() == 0 {
+                            "default".to_owned()
+                        } else {
+                            amount_text(input.mib())
+                        };
+                        let pieces = [(Part::G, format!("-{g}G+")), (Part::M, format!("-{m}M+"))];
+                        let at = 11 + total.chars().count();
+                        let mut starts = [0; 2];
+                        let mut start = at;
+                        for (slot, (_, piece)) in starts.iter_mut().zip(&pieces) {
+                            start += 2;
+                            *slot = start;
+                            start += piece.chars().count();
+                        }
+                        amounts.push(AmountRow {
+                            line: lines.len(),
+                            field: index,
+                            total: (11, total.chars().count()),
+                            level: (input.mib() > 0).then(|| app.home_level(form, input.mib())),
+                            parts: [
+                                (Part::G, starts[0], pieces[0].1.chars().count()),
+                                (Part::M, starts[1], pieces[1].1.chars().count()),
+                            ],
+                            chosen: focused.then_some(*part),
+                        });
+                        format!("{total}  {}  {}", pieces[0].1, pieces[1].1)
                     }
                 };
                 let mut style = text;
@@ -1325,6 +1356,24 @@ fn action_box(buf: &mut Buffer, area: Rect, app: &App, action: &Action) {
             }
         }
     }
+    for amount in &amounts {
+        if amount.line < scroll || amount.line >= scroll + height {
+            continue;
+        }
+        let y = inner.y + u16::try_from(amount.line - scroll).unwrap_or(0);
+        let x = |at: usize| inner.x + 1 + u16::try_from(at).unwrap_or(0);
+        for (part, start, len) in amount.parts {
+            let cells = [
+                (start, 1, -1),
+                (start + 1, len.saturating_sub(2), 0),
+                (start + len - 1, 1, 1),
+            ];
+            for (at, width, delta) in cells {
+                let width = u16::try_from(width).unwrap_or(0);
+                super::chrome::register(Rect::new(x(at), y, width, 1), Hit::Amount(amount.field, part, delta));
+            }
+        }
+    }
     for (row, (line, style)) in lines.iter().skip(scroll).take(height).enumerate() {
         let y = inner.y + u16::try_from(row).unwrap_or(0);
         write(buf, inner.x + 1, y, inner.width.saturating_sub(2), line, *style);
@@ -1337,8 +1386,56 @@ fn action_box(buf: &mut Buffer, area: Rect, app: &App, action: &Action) {
             };
             write(buf, inner.x + 1, y, 1, &mark.to_string(), style.fg(color));
         }
+        // An amount: its total in the colour of its size, its chosen part
+        // marked.
+        if let Some(amount) = amounts.iter().find(|amount| amount.line == row + scroll) {
+            let x = |at: usize| inner.x + 1 + u16::try_from(at).unwrap_or(0);
+            let right = inner.x + inner.width.saturating_sub(1);
+            let mut paint = |at: usize, len: usize, paint_style: Style| {
+                let (from, len) = (x(at), u16::try_from(len).unwrap_or(0));
+                for column in from..from.saturating_add(len).min(right) {
+                    buf[(column, y)].set_style(paint_style);
+                }
+            };
+            let color = match amount.level {
+                Some(super::acting::Level::Danger) => Some(palette.error),
+                Some(super::acting::Level::Warning) => Some(palette.warning),
+                _ => None,
+            };
+            if let Some(color) = color {
+                paint(amount.total.0, amount.total.1, style.fg(color));
+            }
+            for (part, start, len) in amount.parts {
+                if amount.chosen == Some(part) {
+                    paint(start + 1, len.saturating_sub(2), style.add_modifier(Modifier::REVERSED));
+                }
+            }
+        }
     }
     scrollbar(buf, area, palette, Scrolls::Action, scroll, height, lines.len());
+}
+
+/// Where an amount of a form is drawn: its total and its two parts (each
+/// `-…+`: start and width in characters from the line's start).
+struct AmountRow {
+    line: usize,
+    field: usize,
+    total: (usize, usize),
+    level: Option<super::acting::Level>,
+    parts: [(super::action::Part, usize, usize); 2],
+    /// The part ← → change, when the field has the focus.
+    chosen: Option<super::action::Part>,
+}
+
+/// `2.3G`, `64G`, `0.5G`: MiB as GiB with a tenth when not whole.
+fn amount_text(mib: u64) -> String {
+    if mib.is_multiple_of(super::action::MIB_PER_GIB) {
+        format!("{}G", mib / super::action::MIB_PER_GIB)
+    } else {
+        #[allow(clippy::cast_precision_loss, reason = "home sizes are small")]
+        let gib = mib as f64 / super::action::MIB_PER_GIB as f64;
+        format!("{gib:.1}G")
+    }
 }
 
 const NONE_ANSWERED: &str = "No HomeStack server instance answered: ";

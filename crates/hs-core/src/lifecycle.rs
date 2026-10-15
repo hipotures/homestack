@@ -102,23 +102,29 @@ pub fn derive_ip(cfg: &Config, vmid: u32) -> Result<String, CoreError> {
     )))
 }
 
-/// `proxmox.parse_home_size`: `<n>G` or `<n>T`, as text and in GiB.
+/// `proxmox.parse_home_size`: `<n>M`, `<n>G` or `<n>T`, as text and in
+/// MiB. Python takes only G and T; M is the owner's of 2026-10-15 (homes
+/// below a GiB, and containers from 100M later).
 pub fn parse_home_size(size: &str) -> Result<(String, u64), CoreError> {
     let text = size.trim().to_ascii_uppercase();
-    let invalid =
-        || CoreError::Invalid("Home size must be an integer number of GiB or TiB, for example 20G or 1T".to_owned());
+    let invalid = || {
+        CoreError::Invalid(
+            "Home size must be an integer number of MiB, GiB or TiB, for example 500M, 20G or 1T".to_owned(),
+        )
+    };
     let (number, unit) = text.split_at(text.len().saturating_sub(1));
     let valid_number = !number.is_empty() && !number.starts_with('0') && number.bytes().all(|b| b.is_ascii_digit());
     if !valid_number {
         return Err(invalid());
     }
     let value: u64 = number.parse().map_err(|_| invalid())?;
-    let gib = match unit {
-        "G" => value,
-        "T" => value.checked_mul(1024).ok_or_else(invalid)?,
+    let mib = match unit {
+        "M" => value,
+        "G" => value.checked_mul(1024).ok_or_else(invalid)?,
+        "T" => value.checked_mul(1024 * 1024).ok_or_else(invalid)?,
         _ => return Err(invalid()),
     };
-    Ok((text, gib))
+    Ok((text, mib))
 }
 
 /// `proxmox.home_volume_name`
@@ -337,7 +343,7 @@ pub async fn plan_create(
         .to_string();
     let elsewhere = target != node;
     let home_size = request.home_size.as_deref().unwrap_or(&cfg.default_home_size);
-    let (home_size, home_size_gib) = parse_home_size(home_size)?;
+    let (home_size, home_size_mib) = parse_home_size(home_size)?;
     let home_volume = home_volume_name(vmid, &cfg.user.name)?;
     let label = home_label(vmid)?;
 
@@ -409,7 +415,7 @@ pub async fn plan_create(
         "home_storage": storage,
         "home_disk": cfg.home_disk,
         "home_size": home_size,
-        "home_size_gib": home_size_gib,
+        "home_size_mib": home_size_mib,
         "home_label": label,
         "home_policy": "persistent Proxmox disk; ext4 mounted by filesystem label",
         "home_volume_name": home_volume,
@@ -540,7 +546,7 @@ async fn create_steps(
     let storage = text(plan, "root_storage")?;
     let home_storage = text(plan, "home_storage")?;
     let label = text(plan, "home_label")?;
-    let home_size_gib = number(plan, "home_size_gib")?;
+    let home_size_mib = number(plan, "home_size_mib")?;
     let config_path = format!("/nodes/{node}/qemu/{id}/config");
 
     let step = "SSH keys";
@@ -604,7 +610,7 @@ async fn create_steps(
         node,
         vmid,
         home_storage,
-        home_size_gib,
+        home_size_mib,
         label,
         timing,
         observer,
@@ -755,14 +761,14 @@ async fn attach_home(
     node: &str,
     vmid: u32,
     storage: &str,
-    size_gib: u64,
+    size_mib: u64,
     label: &str,
     timing: &LifecycleTiming,
     observer: &impl Observer,
 ) -> Result<(), CoreError> {
     let filename = home_volume_name(vmid, &cfg.user.name)?;
     let id = vmid.to_string();
-    let size = format!("{size_gib}G");
+    let size = format!("{size_mib}M");
     let answer = pve
         .post(
             &format!("/nodes/{node}/storage/{storage}/content"),

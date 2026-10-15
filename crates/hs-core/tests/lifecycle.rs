@@ -140,9 +140,11 @@ fn create_name_cannot_start_with_digit() {
 #[test]
 fn home_label_and_size() -> TestResult {
     assert_eq!(home_label(200)?, "HS_HOME_200");
-    assert_eq!(parse_home_size("20G")?, ("20G".to_owned(), 20));
-    assert_eq!(parse_home_size("1t")?, ("1T".to_owned(), 1024));
-    assert!(parse_home_size("500M").is_err());
+    assert_eq!(parse_home_size("20G")?, ("20G".to_owned(), 20 * 1024));
+    assert_eq!(parse_home_size("1t")?, ("1T".to_owned(), 1024 * 1024));
+    assert_eq!(parse_home_size("500m")?, ("500M".to_owned(), 500));
+    assert!(parse_home_size("0M").is_err());
+    assert!(parse_home_size("1.5G").is_err());
     assert!(parse_home_size("0G").is_err());
     Ok(())
 }
@@ -185,7 +187,7 @@ async fn same_node_default_plan_uses_clone_only() -> TestResult {
     assert_eq!(plan["pool"], POOL);
     assert_eq!(plan["ip"], "192.0.2.200");
     assert_eq!(plan["home_size"], "20G");
-    assert_eq!(plan["home_size_gib"], 20);
+    assert_eq!(plan["home_size_mib"], 20 * 1024);
     assert_eq!(plan["home_label"], "HS_HOME_200");
     assert_eq!(plan["root_storage"], "local-lvm");
     assert_eq!(plan["ssh_public_keys"], serde_json::json!(["developer@desktop"]));
@@ -294,7 +296,7 @@ async fn create_refuses_a_used_vmid_a_missing_pool_and_bad_input() -> TestResult
         Err(CoreError::Invalid(_))
     ));
     let mut big = request(200, "test1");
-    big.home_size = Some("500M".to_owned());
+    big.home_size = Some("500K".to_owned());
     assert!(matches!(
         plan_create(&pve, &cfg, POOL, &big).await,
         Err(CoreError::Invalid(_))

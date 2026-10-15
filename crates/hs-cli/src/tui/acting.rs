@@ -5,7 +5,9 @@
 use crossterm::event::KeyCode;
 use serde_json::{Value, json};
 
-use super::action::{Action, Decision, Field, Form, Input, Kind, PlanFocus, Progress, Stage, Start};
+use super::action::{
+    Action, Decision, Field, Form, Input, Kind, M_MAX, M_STEP, MIB_PER_GIB, Part, PlanFocus, Progress, Stage, Start,
+};
 use super::state::{App, Request};
 use crate::app::valid_name;
 
@@ -76,6 +78,44 @@ impl App {
             .ok()
             .filter(|fourth| (1..=254).contains(fourth))?;
         Some(std::net::Ipv4Addr::new(first, second, third, fourth))
+    }
+
+    /// The MiB free on the storage the form makes the home on (the
+    /// default: the first of the node's, as the server picks it).
+    pub(super) fn home_room(&self, form: &Form) -> Option<u64> {
+        let chosen = |label: &str| {
+            form.fields
+                .iter()
+                .find(|field| field.label == label)
+                .map(super::action::Field::value)
+                .filter(|value| !value.starts_with(DEFAULT))
+        };
+        let node = chosen("Node").or_else(|| self.gold_node())?;
+        let storage = chosen("Storage").or_else(|| self.storages_on(&node).into_iter().next())?;
+        self.status
+            .as_ref()?
+            .summary
+            .storage_layouts
+            .iter()
+            .find(|layout| layout.node == node && layout.storage == storage)?
+            .available_bytes
+            .map(|bytes| bytes / (1024 * 1024))
+    }
+
+    /// How big a home of `mib` is: of the storage's free space above 10 %
+    /// a warning, above 50 % a danger; without it above 100G and 500G.
+    pub(super) fn home_level(&self, form: &Form, mib: u64) -> Level {
+        let (warning, danger) = match self.home_room(form) {
+            Some(room) => (room / 10, room / 2),
+            None => (100 * MIB_PER_GIB, 500 * MIB_PER_GIB),
+        };
+        if mib > danger {
+            Level::Danger
+        } else if mib > warning {
+            Level::Warning
+        } else {
+            Level::Fine
+        }
     }
 
     /// The size in GiB of the selected workspace's root or home disk, from
@@ -167,10 +207,10 @@ impl App {
                         storages,
                         "Where its disks are made; ← → or a click on ‹ › to choose.",
                     ),
-                    Field::text(
+                    Field::amount(
                         "Home size",
-                        "",
-                        "Persistent home in G or T, e.g. 64G or 1T; empty: the server's default.",
+                        self.home_default,
+                        "← → or the wheel: the chosen part; space: G or M.",
                     ),
                 ]
             }
@@ -505,6 +545,31 @@ impl App {
                     };
                 }
             }
+            KeyCode::Left | KeyCode::Right | KeyCode::Char('-' | '+' | ' ')
+                if matches!(
+                    form.fields.get(form.focus),
+                    Some(Field {
+                        input: Input::Amount { .. },
+                        ..
+                    })
+                ) =>
+            {
+                let room = self.home_room(form);
+                if let Some(field) = form.fields.get_mut(form.focus) {
+                    match code {
+                        KeyCode::Char(' ') => {
+                            if let Input::Amount { part, .. } = &mut field.input {
+                                *part = if *part == Part::G { Part::M } else { Part::G };
+                            }
+                        }
+                        _ => step(
+                            &mut field.input,
+                            matches!(code, KeyCode::Right | KeyCode::Char('+')),
+                            room,
+                        ),
+                    }
+                }
+            }
             KeyCode::Left | KeyCode::Right => {
                 if let Some(Field {
                     input: Input::Choice { options, index },
@@ -592,4 +657,35 @@ impl App {
             }
         };
     }
+}
+
+/// How big a new home is for the storage it goes to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Level {
+    Fine,
+    Warning,
+    Danger,
+}
+
+/// One step of an amount's chosen part, up or down: the M part carries
+/// into the G part. Never to nothing, never above `room` MiB.
+fn step(input: &mut Input, up: bool, room: Option<u64>) {
+    let Input::Amount { g, m, part, set } = input else {
+        return;
+    };
+    let (mut new_g, mut new_m) = (*g, *m);
+    match (*part, up) {
+        (Part::G, true) => new_g += 1,
+        (Part::G, false) if new_g > 0 => new_g -= 1,
+        (Part::M, true) if new_m < M_MAX => new_m += M_STEP,
+        (Part::M, true) => (new_g, new_m) = (new_g + 1, 0),
+        (Part::M, false) if new_m > 0 => new_m -= M_STEP,
+        (Part::M, false) if new_g > 0 => (new_g, new_m) = (new_g - 1, M_MAX),
+        _ => return,
+    }
+    let mib = new_g * MIB_PER_GIB + new_m;
+    if mib == 0 || room.is_some_and(|room| mib > room) {
+        return;
+    }
+    (*g, *m, *set) = (new_g, new_m, true);
 }

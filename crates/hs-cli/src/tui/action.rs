@@ -396,6 +396,49 @@ pub enum Input {
         gib: u64,
         min: u64,
     },
+    /// A size in whole GiB and hundreds of MiB, each part with its - and +
+    /// (`2.3G  -2G+  -300M+`); `set` is false while it is the server's
+    /// default, which is then not sent.
+    Amount {
+        g: u64,
+        m: u64,
+        part: Part,
+        set: bool,
+    },
+}
+
+/// The part of an amount that ← →, the wheel and its - + change.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Part {
+    G,
+    M,
+}
+
+/// MiB in a GiB; the M part goes up in [`M_STEP`] to [`M_MAX`].
+pub const MIB_PER_GIB: u64 = 1024;
+pub const M_STEP: u64 = 100;
+pub const M_MAX: u64 = 900;
+
+impl Input {
+    /// An amount of `mib`, the M part rounded down to its steps.
+    #[must_use]
+    pub fn amount(mib: u64, set: bool) -> Self {
+        Self::Amount {
+            g: mib / MIB_PER_GIB,
+            m: (mib % MIB_PER_GIB / M_STEP * M_STEP).min(M_MAX),
+            part: Part::G,
+            set,
+        }
+    }
+
+    /// The MiB of an amount; 0 for the other inputs.
+    #[must_use]
+    pub fn mib(&self) -> u64 {
+        match self {
+            Self::Amount { g, m, .. } => g * MIB_PER_GIB + m,
+            _ => 0,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -434,6 +477,17 @@ impl Field {
         }
     }
 
+    /// An amount that starts at `mib` (the server's default: not sent until
+    /// it changes); 0 when the default is not known.
+    #[must_use]
+    pub fn amount(label: &'static str, mib: Option<u64>, note: &str) -> Self {
+        Self {
+            label,
+            input: Input::amount(mib.unwrap_or(0), false),
+            note: note.to_owned(),
+        }
+    }
+
     /// The text, or the chosen option.
     #[must_use]
     pub fn value(&self) -> String {
@@ -441,13 +495,16 @@ impl Field {
             Input::Text(text) => text.trim().to_owned(),
             Input::Choice { options, index } => options.get(*index).cloned().unwrap_or_default(),
             Input::Size { gib, .. } => format!("{gib}G"),
+            Input::Amount { set: false, .. } => String::new(),
+            Input::Amount { g, m: 0, .. } => format!("{g}G"),
+            Input::Amount { .. } => format!("{}M", self.input.mib()),
         }
     }
 
     #[must_use]
     pub fn index(&self) -> usize {
         match &self.input {
-            Input::Text(_) | Input::Size { .. } => 0,
+            Input::Text(_) | Input::Size { .. } | Input::Amount { .. } => 0,
             Input::Choice { index, .. } => *index,
         }
     }

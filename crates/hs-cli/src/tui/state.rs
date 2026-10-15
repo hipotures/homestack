@@ -198,6 +198,8 @@ pub struct App {
     pub keys: Vec<String>,
     /// The server's workspace pool (`/v1/capabilities`), for new.
     pub pool: Option<String>,
+    /// The server's default home size in MiB (`/v1/config`), for new.
+    pub home_default: Option<u64>,
 }
 
 impl App {
@@ -244,6 +246,7 @@ impl App {
             asking: None,
             keys: Vec::new(),
             pool: None,
+            home_default: None,
             setup: None,
             before_setup: None,
         })
@@ -750,6 +753,15 @@ impl App {
                         }
                         return key.and_then(|code| press(self, code));
                     }
+                    // A part of an amount: chosen; its - or + a step of it.
+                    Some(Hit::Amount(field, part, delta)) => {
+                        self.choose_part(field, Some(part));
+                        return match delta {
+                            -1 => press(self, KeyCode::Left),
+                            1 => press(self, KeyCode::Right),
+                            _ => None,
+                        };
+                    }
                     Some(Hit::SetupRow(index, part)) => {
                         self.setup_click(index, part);
                         return None;
@@ -803,11 +815,58 @@ impl App {
                 }
                 None
             }
+            // The wheel over an amount steps it: the part under the pointer,
+            // or the chosen one.
+            MouseEventKind::ScrollDown | MouseEventKind::ScrollUp
+                if let Some((field, part)) = self.amount_at(event.column, event.row) =>
+            {
+                self.choose_part(field, part);
+                let code = if event.kind == MouseEventKind::ScrollUp {
+                    KeyCode::Right
+                } else {
+                    KeyCode::Left
+                };
+                press(self, code)
+            }
             MouseEventKind::ScrollDown if in_box => press(self, KeyCode::Down),
             MouseEventKind::ScrollUp if in_box => press(self, KeyCode::Up),
             MouseEventKind::ScrollDown => self.move_by(1),
             MouseEventKind::ScrollUp => self.move_by(-1),
             _ => None,
+        }
+    }
+
+    /// The amount of the open form at `x`, `y`, and its part there.
+    fn amount_at(&self, x: u16, y: u16) -> Option<(usize, Option<super::action::Part>)> {
+        let Some(super::action::Action {
+            stage: super::action::Stage::Form(form),
+            ..
+        }) = &self.action
+        else {
+            return None;
+        };
+        let (field, part) = match super::chrome::hit_at(x, y)? {
+            super::chrome::Hit::Amount(field, part, _) => (field, Some(part)),
+            super::chrome::Hit::Field(field, _) => (field, None),
+            _ => return None,
+        };
+        matches!(form.fields.get(field)?.input, super::action::Input::Amount { .. }).then_some((field, part))
+    }
+
+    /// Focus field `field` of the open form and choose `part` of its amount.
+    fn choose_part(&mut self, field: usize, part: Option<super::action::Part>) {
+        if let Some(action) = self.action.as_mut()
+            && let super::action::Stage::Form(form) = &mut action.stage
+        {
+            form.focus = field;
+            if let Some(chosen) = part
+                && let Some(super::action::Field {
+                    input: super::action::Input::Amount { part, .. },
+                    ..
+                }) = form.fields.get_mut(field)
+            {
+                *part = chosen;
+            }
         }
     }
 

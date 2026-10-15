@@ -423,6 +423,9 @@ pub enum Hit {
     Key(crossterm::event::KeyCode),
     /// A field of an action's form, and the key a click on its ‹ or › is.
     Field(usize, Option<crossterm::event::KeyCode>),
+    /// A part of an amount in a form: its field, the part, and -1 for its
+    /// -, 0 for its number, 1 for its +.
+    Amount(usize, super::action::Part, i8),
     /// A row of the setup tree (its index in the rows drawn) and the part
     /// clicked: 0 the arrow, 1 the checkbox, 2 the label.
     SetupRow(usize, u8),

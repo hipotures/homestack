@@ -48,8 +48,8 @@ enum Update {
     Setup(Option<u32>, super::setup_work::Event),
     /// The running action's progress.
     Action(Progress),
-    /// The server's workspace pool.
-    Pool(String),
+    /// The server's workspace pool and default home size (MiB).
+    Defaults(Option<String>, Option<u64>),
 }
 
 /// The terminal in raw mode on the alternate screen; put back on drop,
@@ -296,28 +296,47 @@ async fn read_status(client: &Client, updates: &mpsc::UnboundedSender<Update>, s
     }
 }
 
-/// Read the server's workspace pool, which new workspaces go to; false
-/// when no server answered.
-async fn read_pool(client: &Client, updates: &mpsc::UnboundedSender<Update>, stop: &AtomicBool) -> bool {
+/// Read what a new workspace gets by default: the server's workspace pool
+/// and its home size; false when no server answered.
+async fn read_defaults(client: &Client, updates: &mpsc::UnboundedSender<Update>, stop: &AtomicBool) -> bool {
     let Ok((_, capabilities)) = client.get_from("/v1/capabilities").await else {
         return false;
     };
-    if let Some(pool) = capabilities["installation"]["pool"].as_str()
-        && !stop.load(Ordering::SeqCst)
-    {
-        let _ = updates.send(Update::Pool(pool.to_owned()));
+    let pool = capabilities["installation"]["pool"].as_str().map(str::to_owned);
+    let home = match client.get_from("/v1/config").await {
+        Ok((_, stored)) => stored
+            .as_str()
+            .and_then(|text| text.parse::<toml::Table>().ok())
+            .and_then(|table| table.get("home")?.get("default_size")?.as_str().and_then(mib_of)),
+        Err(_) => None,
+    };
+    if !stop.load(Ordering::SeqCst) {
+        let _ = updates.send(Update::Defaults(pool, home));
     }
     true
+}
+
+/// The MiB of `512M`, `64G` or `1T`.
+fn mib_of(size: &str) -> Option<u64> {
+    let size = size.trim().to_ascii_uppercase();
+    let (number, unit) = size.split_at(size.len().checked_sub(1)?);
+    let number: u64 = number.parse().ok()?;
+    match unit {
+        "M" => Some(number),
+        "G" => number.checked_mul(1024),
+        "T" => number.checked_mul(1024 * 1024),
+        _ => None,
+    }
 }
 
 /// Read the status and the servers' health now and every [`REFRESH`].
 fn spawn_refresh(client: Arc<Client>, updates: mpsc::UnboundedSender<Update>, stop: Arc<AtomicBool>) {
     tokio::spawn(async move {
-        let mut pool_read = false;
+        let mut defaults_read = false;
         loop {
             read_status(&client, &updates, &stop).await;
-            if !pool_read {
-                pool_read = read_pool(&client, &updates, &stop).await;
+            if !defaults_read {
+                defaults_read = read_defaults(&client, &updates, &stop).await;
             }
             if updates.is_closed() || stop.load(Ordering::SeqCst) {
                 return;
@@ -855,7 +874,10 @@ pub async fn run(ctx: &mut Context) -> Result<i32, AppError> {
                     app.set_status(&status);
                 }
                 Update::Servers(servers) => app.set_servers(servers),
-                Update::Pool(pool) => app.pool = Some(pool),
+                Update::Defaults(pool, home) => {
+                    app.pool = pool;
+                    app.home_default = home;
+                }
                 Update::Unreachable(servers) => {
                     if connected.take().is_some() || app.unreachable.is_empty() {
                         app.log(&clock.now(), "no server answers");

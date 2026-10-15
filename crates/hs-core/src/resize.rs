@@ -109,7 +109,9 @@ pub async fn plan_resize(
         }
     };
     let vmid = request.vmid;
-    let (size, target_gib) = parse_home_size(requested)?;
+    let (size, target_mib) = parse_home_size(requested)?;
+    #[allow(clippy::cast_precision_loss, reason = "sizes in MiB are small")]
+    let target_gib = target_mib as f64 / 1024.0;
     require_pool(pve, vmid, pool).await?;
     let info = resolve_existing_workspace(pve, cfg, vmid).await?;
     let vm_cfg = &info.vm_config;
@@ -144,8 +146,7 @@ pub async fn plan_resize(
     let disk_cfg = vm_cfg.get(&disk).cloned().unwrap_or_default();
     let current = parse_disk_size_gb(&disk_cfg)
         .ok_or_else(|| CoreError::Unusable(format!("Cannot determine current disk size for {disk}")))?;
-    #[allow(clippy::cast_precision_loss, reason = "sizes in GiB are small")]
-    if (target_gib as f64) < current {
+    if target_gib < current {
         return Err(CoreError::Refused(format!(
             "Shrinking is not supported: {disk} is {}G, requested {size}",
             format_g(current)
@@ -157,7 +158,7 @@ pub async fn plan_resize(
         .map(|(storage, _)| storage.to_owned())
         .unwrap_or_default();
     #[allow(clippy::cast_precision_loss, reason = "sizes in GiB are small")]
-    let growth_bytes = ((target_gib as f64 - current).max(0.0) * 1024.0 * 1024.0 * 1024.0) as u64;
+    let growth_bytes = ((target_gib - current).max(0.0) * 1024.0 * 1024.0 * 1024.0) as u64;
     if growth_bytes > 0 && !storage.is_empty() {
         let status = pve
             .get(&format!("/nodes/{}/storage/{storage}/status", info.node), &[])
