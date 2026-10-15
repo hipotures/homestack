@@ -9,14 +9,12 @@ use serde_json::{Value, json};
 
 use crate::app::Context;
 use crate::args::{Args, InstallArgs};
-use crate::form::{Field, Form, Outcome as FormOutcome};
 use crate::install_flow::{self, Session};
 use crate::root_herdr::HerdrRoot;
 use crate::root_ssh::SshRoot;
 use crate::servers::{Files, ServerPlan};
 use crate::touch::Sounds;
 use crate::view::Color;
-use crate::wizard::{Answer, Item, Outcome, Step, Summary, Wizard};
 use crate::{AppError, config, expand_home};
 
 const CONFIRM_TTY: &str = "Interactive confirmation requires a TTY; use --yes for automation";
@@ -122,178 +120,67 @@ fn confirm(ctx: &mut Context, question: &str) -> bool {
     }
 }
 
-/// The command line that gives the same answers without being asked.
-fn same_as(command: Install, install: &InstallArgs, settings: &Settings, domain: Option<&str>) -> String {
-    let mut words = vec!["homestack".to_owned(), command.name().to_owned()];
-    if let Some(ssh) = &install.ssh {
-        words.extend(["--ssh".to_owned(), ssh.clone()]);
+/// The options `install` cannot go without, those not given: how root is
+/// reached, the storages and the servers' domain. Their choices come from
+/// the cluster, so they are listed once root is reached.
+fn missing_options(command: Install, install: &InstallArgs, want_servers: bool) -> String {
+    let mut lines = vec![(
+        "--ssh USER@HOST or --herdr NAME",
+        "how root on a Proxmox node is reached (once, for the install)",
+    )];
+    if command == Install::Install {
+        let given = [
+            (
+                install.storages.is_empty(),
+                "--storages IDS",
+                "storages for the workspaces' disks",
+            ),
+            (
+                install.snippet_storage.is_none(),
+                "--snippet-storage ID",
+                "storage for the Cloud-Init snippets",
+            ),
+            (
+                install.service_storages.is_empty(),
+                "--service-storages IDS",
+                "storages for the servers' disks",
+            ),
+            (
+                install.template_storage.is_none(),
+                "--template-storage ID",
+                "storage for the server image",
+            ),
+            (
+                want_servers && install.server_domain.is_none(),
+                "--server-domain DOMAIN or --no-servers",
+                "the servers' names apiN.<domain>, or the Proxmox part only",
+            ),
+        ];
+        lines.extend(
+            given
+                .iter()
+                .filter(|(missing, ..)| *missing)
+                .map(|(_, option, what)| (*option, *what)),
+        );
     }
-    if let Some(herdr) = &install.herdr {
-        words.extend(["--herdr".to_owned(), herdr.clone()]);
+    let width = lines.iter().map(|(option, _)| option.len()).max().unwrap_or(0);
+    let mut text = format!(
+        "homestack {} needs more options; nothing was changed:\n",
+        command.name()
+    );
+    for (option, what) in lines {
+        text.push_str(&format!("  {option:<width$}  {what}\n"));
     }
-    if let Some(identity) = &install.identity {
-        words.extend(["--identity".to_owned(), identity.clone()]);
-    }
-    if settings.test {
-        words.push("--test".to_owned());
-    }
-    if !settings.storages.is_empty() {
-        words.extend(["--storages".to_owned(), settings.storages.join(",")]);
-    }
-    if let Some(id) = &settings.snippet_storage {
-        words.extend(["--snippet-storage".to_owned(), id.clone()]);
-    }
-    if !settings.service_storages.is_empty() {
-        words.extend(["--service-storages".to_owned(), settings.service_storages.join(",")]);
-    }
-    if let Some(id) = &settings.template_storage {
-        words.extend(["--template-storage".to_owned(), id.clone()]);
-    }
-    if let Some(vmid) = settings.gold {
-        words.extend(["--gold".to_owned(), vmid.to_string()]);
-    }
-    if !settings.adopt.is_empty() {
-        let ids: Vec<String> = settings.adopt.iter().map(u32::to_string).collect();
-        words.extend(["--adopt".to_owned(), ids.join(",")]);
-    }
-    match domain {
-        Some(domain) => {
-            words.extend(["--server-domain".to_owned(), domain.to_owned()]);
-            if let Some(image) = &install.server_image {
-                words.extend(["--server-image".to_owned(), image.clone()]);
-            }
-        }
-        None if command == Install::Install && !settings.test => words.push("--no-servers".to_owned()),
-        None => {}
-    }
-    if let Some(dir) = &install.token_dir {
-        words.extend(["--token-dir".to_owned(), dir.display().to_string()]);
-    }
-    words.join(" ")
-}
-
-/// The rows of the installer's form, in a fixed order: how root is reached,
-/// then every setting; a setting given on the command line is shown only.
-fn form_fields(root_line: &str, settings: &Settings, questions: &[hs_install::Question]) -> Vec<Field> {
-    let given = [
-        ("--storages", "Workspace disks", settings.storages.join(", ")),
-        (
-            "--snippet-storage",
-            "Cloud-Init snippets",
-            settings.snippet_storage.clone().unwrap_or_default(),
-        ),
-        (
-            "--service-storages",
-            "Server disks",
-            settings.service_storages.join(", "),
-        ),
-        (
-            "--template-storage",
-            "Server image",
-            settings.template_storage.clone().unwrap_or_default(),
-        ),
-        (
-            "--gold",
-            "Gold VM",
-            settings.gold.map(|vmid| vmid.to_string()).unwrap_or_default(),
-        ),
-    ];
-    let mut fields = vec![Field::fixed("Root access", root_line)];
-    for (option, label, value) in given {
-        match questions.iter().find(|question| question.option == option) {
-            Some(question) => {
-                let items = question
-                    .choices
-                    .iter()
-                    .map(|choice| Item::new(&choice.value, &choice.detail))
-                    .collect();
-                fields.push(Field::choose(
-                    label,
-                    &question.note,
-                    question.multiple,
-                    items,
-                    &question.defaults,
-                ));
-            }
-            None => fields.push(Field::fixed(label, &format!("{value}  (given on the command line)"))),
-        }
-    }
-    // Shown only when there is something to put back in a pool.
-    if let Some(question) = questions
-        .iter()
-        .find(|question| question.option == hs_install::discover::OPTION)
-    {
-        let items = question
-            .choices
-            .iter()
-            .map(|choice| Item::new(&choice.value, &choice.detail))
-            .collect();
-        fields.push(Field::choose(
-            &question.title,
-            &question.note,
-            question.multiple,
-            items,
-            &question.defaults,
-        ));
-    } else if !settings.adopt.is_empty() {
-        let ids: Vec<String> = settings.adopt.iter().map(u32::to_string).collect();
-        fields.push(Field::fixed(
-            "Back into pools",
-            &format!("{}  (given on the command line)", ids.join(", ")),
-        ));
-    }
-    fields
-}
-
-/// The row of the form for the servers.
-fn servers_field(install: &InstallArgs, want: bool, draft_domain: &str) -> Field {
-    if !want {
-        let why = if install.test {
-            "none for the test part"
-        } else {
-            "not deployed  (given on the command line)"
-        };
-        return Field::fixed("Servers", why);
-    }
-    match &install.server_domain {
-        Some(domain) => Field::fixed("Server domain", &format!("{domain}  (given on the command line)")),
-        None => Field::text(
-            "Server domain",
-            "The servers are named apiN.<domain>, one per node (api1 on the first node, ...). Each name must \
-resolve on this desktop to the server's address in the workspace network; the certificate *.<domain> comes \
-from Let's Encrypt.",
-            draft_domain,
-        ),
-    }
+    text.push_str("With --ssh or --herdr, the choices of the other options are read from the cluster and listed.");
+    text
 }
 
 /// Run `install` or `uninstall`; the exit code.
-pub async fn run(args: &Args, given: &InstallArgs, command: Install, ctx: &mut Context) -> Result<i32, AppError> {
-    let mut install = given.clone();
+pub async fn run(args: &Args, install: &InstallArgs, command: Install, ctx: &mut Context) -> Result<i32, AppError> {
     let want_servers = command == Install::Install && !install.test && !install.no_servers;
-    // The default is the interactive installer: what is not given is asked,
-    // and the last screen confirms. Giving every option is the manual way.
-    let interactive = ctx.stdin_tty
-        && !args.json
-        && !args.yes
-        && command == Install::Install
-        && (install.ssh.is_none() && install.herdr.is_none()
-            || install.storages.is_empty()
-            || install.snippet_storage.is_none()
-            || install.service_storages.is_empty()
-            || install.template_storage.is_none()
-            || want_servers && install.server_domain.is_none());
     if install.ssh.is_none() && install.herdr.is_none() {
-        if !ctx.stdin_tty {
-            return Err(AppError::new(
-                "Root on a node is needed: give --ssh USER@HOST or --herdr NAME, or run this on a terminal to be asked",
-            ));
-        }
-        if !ask_access(ctx, &mut install)? {
-            return cancelled(ctx);
-        }
+        return Err(AppError::new(missing_options(command, install, want_servers)));
     }
-    let install = &install;
     let root = open_root(args, install, ctx)?;
     let settings = settings(ctx, args, install);
     let files = Files {
@@ -311,45 +198,7 @@ pub async fn run(args: &Args, given: &InstallArgs, command: Install, ctx: &mut C
     )?;
     let access_line = session.access_line.clone();
 
-    let (plan, server_plan, domain) = if interactive {
-        let access = &session.access;
-        let root_line = format!(
-            "{}  \u{2014}  {}, Proxmox VE {}, {}",
-            session.describe(),
-            access.host,
-            access.version,
-            if access.topology.cluster {
-                format!("cluster of {} nodes", access.topology.nodes.len())
-            } else {
-                "single node".to_owned()
-            }
-        );
-        let mut fields = form_fields(&root_line, &settings, &session.questions);
-        fields.push(servers_field(install, want_servers, &session.draft_domain));
-        let mut form = Form::new("HomeStack install", fields);
-        let mut last: Option<(Plan, Option<ServerPlan>, Option<String>)> = None;
-        let mut summarize = |answers: &[Answer]| {
-            let review = session.review(answers, typed_domain(install, answers).as_deref());
-            last = review.plan.map(|plan| (plan, review.servers, review.domain));
-            review.summary
-        };
-        let outcome = ctx.console.form(&mut form, &mut summarize);
-        let answers = form.answers();
-        session.keep(&answers, typed_domain(install, &answers).as_deref());
-        match (outcome, last) {
-            (FormOutcome::Install(_), Some((plan, server_plan, domain))) => {
-                let line = same_as(
-                    command,
-                    install,
-                    &plan.settings,
-                    domain.as_deref().filter(|_| want_servers),
-                );
-                ctx.console.out(&format!("Same as: {line}\n"));
-                (plan, server_plan, domain)
-            }
-            _ => return cancelled(ctx),
-        }
-    } else {
+    let (plan, server_plan) = {
         let no_domain = want_servers && install.server_domain.is_none();
         let first = session.plan(&settings);
         let plan = match first {
@@ -423,9 +272,8 @@ pub async fn run(args: &Args, given: &InstallArgs, command: Install, ctx: &mut C
             );
             return Err(AppError::new(message));
         }
-        (plan, server_plan, domain)
+        (plan, server_plan)
     };
-    let _ = &domain;
 
     let steps = plan.steps.len();
     let servers_text = server_plan.as_ref().map(|server_plan| {
@@ -440,7 +288,7 @@ pub async fn run(args: &Args, given: &InstallArgs, command: Install, ctx: &mut C
         text
     });
     let changes = steps + usize::from(server_plan.is_some());
-    if !interactive && changes > 0 && !args.yes {
+    if changes > 0 && !args.yes {
         if args.json {
             emit(
                 ctx,
@@ -471,7 +319,7 @@ pub async fn run(args: &Args, given: &InstallArgs, command: Install, ctx: &mut C
         if !confirm(ctx, &question) {
             return cancelled(ctx);
         }
-    } else if !interactive && !args.json {
+    } else if !args.json {
         ctx.console.out(&format!(
             "{access_line}\n{}{}",
             plan.text(),
@@ -494,17 +342,6 @@ pub async fn run(args: &Args, given: &InstallArgs, command: Install, ctx: &mut C
         .unwrap_or_else(|| config::default_path(&ctx.home, ctx.config_home.as_deref()));
     let client_path = expand_home(&client_path.display().to_string(), &ctx.home);
     deploy_servers(ctx, args, &files, &server_plan, &client_path).await
-}
-
-/// The domain the form was given, or the command line's.
-fn typed_domain(install: &InstallArgs, answers: &[Answer]) -> Option<String> {
-    if let Some(domain) = &install.server_domain {
-        return Some(domain.clone());
-    }
-    answers.iter().rev().find_map(|answer| match answer {
-        Answer::Text(text) if !text.is_empty() => Some(text.clone()),
-        _ => None,
-    })
 }
 
 const DOMAIN_MISSING: &str = "--server-domain is required: the servers are named apiN.<domain> (one per node, \
@@ -638,79 +475,4 @@ fn finish(
         }
     }
     Ok(code)
-}
-
-/// Ask how to reach root and which node or tab: `false` when the user gives
-/// up. The answer goes into `install`.
-fn ask_access(ctx: &mut Context, install: &mut InstallArgs) -> Result<bool, AppError> {
-    let mut nothing = |_: &[Answer]| Summary::default();
-    loop {
-        let mut way = Wizard::new(
-            vec![Step::pick(
-                "How to reach root on a Proxmox node",
-                "Root on one node is needed once, only to install or remove HomeStack in Proxmox; afterwards \
-everything goes through the API, and you can drop the key or close the tab.",
-                false,
-                vec![
-                    Item::new(
-                        "SSH",
-                        "log in to a node as root over SSH (touch the security key when it blinks)",
-                    ),
-                    Item::new("Herdr", "use a Herdr tab in which you are already root on a node"),
-                ],
-                &[0],
-            )],
-            false,
-        );
-        let Outcome::Done(answers) = ctx.console.wizard(&mut way, &mut nothing) else {
-            return Ok(false);
-        };
-        let ssh = answers.first() == Some(&Answer::Picked(vec![0]));
-        let step = if ssh {
-            Step::text(
-                "Node to log in to",
-                "The Proxmox node as USER@HOST, for example root@pve1.",
-                "root@",
-            )
-        } else {
-            let tabs = crate::root_herdr::tabs(ctx.system.as_ref())?;
-            if tabs.is_empty() {
-                return Err(AppError::new(
-                    "Herdr has no tab with a single pane: open a tab, log in as root on the node there, and run this again",
-                ));
-            }
-            let items = tabs
-                .iter()
-                .map(|tab| {
-                    let title = if tab.title.is_empty() {
-                        "(no title)"
-                    } else {
-                        tab.title.as_str()
-                    };
-                    Item::new(&tab.name, title)
-                })
-                .collect();
-            Step::pick(
-                "Herdr tab",
-                "The tab whose shell is root on the Proxmox node; it must be at its prompt.",
-                false,
-                items,
-                &[],
-            )
-        };
-        let mut which = Wizard::new(vec![step.clone()], false);
-        let Outcome::Done(answers) = ctx.console.wizard(&mut which, &mut nothing) else {
-            // Esc: back to the way.
-            continue;
-        };
-        match answers.first() {
-            Some(Answer::Text(target)) => install.ssh = Some(target.clone()),
-            Some(Answer::Picked(picked)) => {
-                let tabs = crate::root_herdr::tabs(ctx.system.as_ref())?;
-                install.herdr = picked.first().and_then(|i| tabs.get(*i)).map(|tab| tab.name.clone());
-            }
-            None => return Ok(false),
-        }
-        return Ok(install.ssh.is_some() || install.herdr.is_some());
-    }
 }

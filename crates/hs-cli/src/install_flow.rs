@@ -1,5 +1,5 @@
-//! The install and the uninstall as steps that the CLI's form and the TUI's
-//! install screen both drive (phase 13b step 3): root is reached, the
+//! The install and the uninstall as steps that the TUI's install screen
+//! drives (phase 13b step 3): root is reached, the
 //! cluster read, the choices answered and reviewed, the plan applied, the
 //! servers deployed and `client.toml` written. Nothing here talks to a
 //! terminal; what happens is told through `say` and `progress`.
@@ -11,7 +11,23 @@ use hs_install::{Access, Applied, Command as Install, InstallError, Plan, Root, 
 
 use crate::AppError;
 use crate::servers::{Files, ServerPlan, Servers, ensure_api_token, plan_servers, write_private};
-use crate::wizard::{Answer, Summary};
+
+/// What a setting of the install screen was answered with.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Answer {
+    /// The indexes of the chosen items.
+    Picked(Vec<usize>),
+    Text(String),
+}
+
+/// The review: what was chosen and what will change.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Summary {
+    /// Headed groups of lines.
+    pub sections: Vec<(String, Vec<String>)>,
+    /// What stops the install; Install cannot be pressed while there is one.
+    pub problems: Vec<String>,
+}
 
 /// The draft's key of the server domain.
 const DRAFT_DOMAIN: &str = "server-domain";
@@ -463,30 +479,11 @@ fn grouped_changes(plan: &Plan, home: &std::path::Path) -> Vec<(String, Vec<Stri
     sections
 }
 
-/// The summary of a plan: where root comes from, the choices, warnings and
-/// every change.
+/// The summary of a plan: its warnings and only what changes; the choices
+/// that change nothing are not repeated (the owner, 2026-10-15).
 pub fn summary_of(access_line: &str, plan: &Plan, home: &std::path::Path) -> Summary {
-    let settings = &plan.settings;
-    let mut chosen = vec![
-        format!("Workspace disks:     {}", settings.storages.join(", ")),
-        format!(
-            "Cloud-Init snippets: {}",
-            settings.snippet_storage.clone().unwrap_or_default()
-        ),
-        format!("Server disks:        {}", settings.service_storages.join(", ")),
-        format!(
-            "Server image:        {}",
-            settings.template_storage.clone().unwrap_or_default()
-        ),
-    ];
-    if let Some(gold) = &plan.gold {
-        chosen.push(format!("Gold:                {gold}"));
-    }
     let _ = access_line;
-    let mut sections = vec![("Your choices".to_owned(), chosen)];
-    if !plan.taken.is_empty() {
-        sections.push(("Chosen without asking".to_owned(), plan.taken.clone()));
-    }
+    let mut sections = Vec::new();
     let mut notices = plan.warnings.clone();
     notices.extend(plan.node_errors.iter().cloned());
     if !notices.is_empty() {
@@ -510,7 +507,6 @@ pub fn summary_of(access_line: &str, plan: &Plan, home: &std::path::Path) -> Sum
 pub fn servers_section(summary: &mut Summary, servers: &ServerPlan) {
     let mut lines = servers.lines.clone();
     lines.extend(servers.warnings.iter().map(|warning| format!("warning: {warning}")));
-    lines.push("Then: homestack status".to_owned());
     summary.sections.push(("Servers".to_owned(), lines));
     summary.problems.extend(servers.problems.iter().cloned());
 }

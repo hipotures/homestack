@@ -11,13 +11,12 @@ use std::sync::mpsc::Receiver;
 use hs_install::{Command as Install, Root, Settings};
 
 use super::install::{Event, Found, Mark, Method, Mode, Setting};
-use crate::install_flow::{self, Review, Session};
+use crate::install_flow::{self, Answer, Review, Session, Summary};
 use crate::root_herdr::HerdrRoot;
 use crate::root_ssh::SshRoot;
 use crate::servers::{Files, Servers};
 use crate::system::System;
 use crate::touch::Sounds;
-use crate::wizard::{Answer, Summary};
 use crate::{AppError, config};
 
 /// What the screen asks the worker.

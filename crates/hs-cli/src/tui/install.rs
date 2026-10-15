@@ -10,7 +10,7 @@ use crossterm::event::KeyCode;
 use super::installing::Command;
 use super::state::Request;
 use crate::askpass::Kind;
-use crate::wizard::Answer;
+use crate::install_flow::Answer;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {

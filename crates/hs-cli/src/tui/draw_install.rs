@@ -551,12 +551,6 @@ fn review(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
         }
         lines.push((String::new(), text));
     }
-    if install.mode == Mode::Install && install.problems.is_empty() {
-        lines.push((
-            "Then the main screen opens with the status of the cluster.".to_owned(),
-            text,
-        ));
-    }
     let visible = usize::from(inner.height.saturating_sub(1));
     let offset = install.scroll.min(lines.len().saturating_sub(visible));
     for (row, (line, style)) in lines.iter().skip(offset).take(visible).enumerate() {

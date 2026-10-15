@@ -11,7 +11,6 @@ pub mod args;
 pub mod askpass;
 pub mod config;
 pub mod fido;
-pub mod form;
 pub mod identity;
 pub mod install_flow;
 pub mod installer;
@@ -25,7 +24,6 @@ pub mod system;
 pub mod touch;
 pub mod tui;
 pub mod view;
-pub mod wizard;
 
 /// A failure shown to the user as it is written (Python's `AppError`).
 #[derive(Debug, Clone, PartialEq, Eq)]

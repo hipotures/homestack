@@ -143,6 +143,12 @@ with the owner's approval.
 
 ## 7. The interactive installer (owner's requests of 2026-10-14)
 
+**Removed 2026-10-15 (owner):** `homestack install` is a plain command
+again. Without `--ssh` or `--herdr` it lists the options it needs and stops;
+with them, the choices of the missing ones are read from the cluster and
+listed. The form and the wizard (`form.rs`, `wizard.rs`) are gone; the TUI's
+install screen is the interactive way. What follows is kept as history.
+
 - **`homestack install` is a TUI wizard by default** (ratatui, `wizard.rs`);
   giving the options on the command line is the manual way, and whatever is
   given is not asked. The wizard is used when the command runs on a terminal

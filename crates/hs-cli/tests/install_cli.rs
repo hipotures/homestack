@@ -566,301 +566,28 @@ async fn without_a_terminal_the_missing_options_are_listed_with_their_defaults()
     assert_eq!(out["missing"][0]["defaults"][0], "local-lvm", "{out}");
 }
 
-#[tokio::test]
-async fn on_a_terminal_every_setting_is_shown_and_nothing_happens_before_install() {
-    let cluster = Cluster::new(&["pve1"]);
-    two_disk_storages(&cluster);
-    // Enter installs from the form; the confirmation is declined.
-    let declined = run(
-        &cluster,
-        &["install", "--no-servers", "--ssh", "root@pve1"],
-        &["", "n"],
-        true,
-    )
-    .await;
-    assert_eq!(declined.code, 0, "{}", declined.console.out());
-    assert!(declined.console.out().contains("Cancelled. No changes were made."));
-    assert_eq!(cluster.changes(), 0, "something changed before Install");
+// --- what is missing is listed, nothing is asked ---------------------------
 
-    let done = run(
-        &cluster,
-        &["install", "--no-servers", "--ssh", "root@pve1"],
-        &["", "y"],
-        true,
-    )
-    .await;
-    assert_eq!(done.code, 0, "{}", done.console.out());
-    let out = done.console.out();
-    let form = out.split("Confirm the installation").next().unwrap_or_default();
-    for row in [
-        "Root access",
-        "Workspace disks      local-lvm",
-        "Cloud-Init snippets  local",
-        "Server disks         local-lvm",
-        "Server image         local",
-        "Gold VM              101 gold",
-    ] {
-        assert!(form.contains(row), "the form lacks {row:?}:\n{form}");
+#[tokio::test]
+async fn without_an_access_option_the_missing_options_are_listed() {
+    let cluster = Cluster::new(&["pve1"]);
+    for tty in [true, false] {
+        let refused = run(&cluster, &["install", "--storages", "local-lvm"], &[], tty).await;
+        assert_eq!(refused.code, 1);
+        let out = format!("{}{}", refused.console.out(), refused.console.err());
+        for option in [
+            "--ssh USER@HOST or --herdr NAME",
+            "--snippet-storage ID",
+            "--service-storages IDS",
+            "--template-storage ID",
+            "--server-domain DOMAIN or --no-servers",
+        ] {
+            assert!(out.contains(option), "{option:?} not listed:\n{out}");
+        }
+        assert!(!out.contains("--storages IDS"), "a given option is listed:\n{out}");
+        assert!(!out.contains("SSH  "), "the old access question:\n{out}");
     }
-    assert!(
-        !form.contains("--"),
-        "a command-line option is shown in the form:\n{form}"
-    );
-    for text in [
-        "Account and tokens",
-        "new user homestack@pve",
-        "Same as: homestack install --ssh root@pve1 --storages local-lvm --snippet-storage local --service-storages local-lvm --template-storage local --gold 101 --no-servers",
-    ] {
-        assert!(out.contains(text), "{text:?} missing:\n{out}");
-    }
-    assert!(cluster.read("users").contains("homestack@pve"), "not installed");
-}
-
-#[tokio::test]
-async fn a_setting_is_changed_from_its_list_and_gold_can_be_chosen() {
-    let cluster = Cluster::new(&["pve1"]);
-    two_disk_storages(&cluster);
-    cluster.write(
-        "vms.tsv",
-        "101\tpve1\tgold\thomestack-gold\tvirtio=BC:24:11:00:00:01,bridge=vmbr0\t\n\
-         150\tpve1\tother\t\tvirtio=BC:24:11:00:00:05,bridge=vmbr0\t\n",
-    );
-    // 1 = workspace disks: tick both; 5 = Gold: the second VM; then install.
-    let done = run(
-        &cluster,
-        &["install", "--no-servers", "--ssh", "root@pve1"],
-        &["1", "1,2", "5", "2", "", "y"],
-        true,
-    )
-    .await;
-    assert_eq!(done.code, 0, "{}", done.console.out());
-    let out = done.console.out();
-    assert!(out.contains("Workspace disks:     backup-a, local-lvm"), "{out}");
-    assert!(out.contains("Gold:                150 other"), "{out}");
-    assert!(
-        cluster.read("pools.tsv").contains("homestack-gold\t150"),
-        "{}",
-        cluster.read("pools.tsv")
-    );
-}
-
-#[tokio::test]
-async fn guests_found_by_their_tags_are_ticked_in_the_form_and_put_back() {
-    let cluster = Cluster::new(&["pve1"]);
-    two_disk_storages(&cluster);
-    cluster.write(
-        "vms.tsv",
-        "101\tpve1\tgold\thomestack-gold\tvirtio=BC:24:11:00:00:01,bridge=vmbr0\t\n\
-         240\tpve1\tws\thomestack-ws\t\t\n\
-         243\tpve1\tapi1\thomestack-server\t\t\tlxc\n",
-    );
-    let done = run(
-        &cluster,
-        &["install", "--no-servers", "--ssh", "root@pve1"],
-        &["", "y"],
-        true,
-    )
-    .await;
-    assert_eq!(done.code, 0, "{}", done.console.out());
-    let out = done.console.out();
-    let form = out.split("Confirm the installation").next().unwrap_or_default();
-    assert!(form.contains("Back into pools      240, 243"), "{form}");
-    for text in [
-        "Pool members",
-        "put VM 240 in pool homestack",
-        "put VM 243 in pool homestack-service",
-        "--adopt 240,243",
-    ] {
-        assert!(out.contains(text), "{text:?} missing:\n{out}");
-    }
-    let pools = cluster.read("pools.tsv");
-    assert!(pools.contains("homestack\t240"), "{pools}");
-    assert!(pools.contains("homestack-service\t243"), "{pools}");
-}
-
-#[tokio::test]
-async fn options_given_on_the_command_line_are_shown_but_not_asked() {
-    let cluster = Cluster::new(&["pve1"]);
-    two_disk_storages(&cluster);
-    let done = run(
-        &cluster,
-        &[
-            "install",
-            "--no-servers",
-            "--ssh",
-            "root@pve1",
-            "--storages",
-            "backup-a",
-        ],
-        &["", "y"],
-        true,
-    )
-    .await;
-    assert_eq!(done.code, 0, "{}", done.console.out());
-    let out = done.console.out();
-    assert!(
-        out.contains("Workspace disks      backup-a  (given on the command line)"),
-        "{out}"
-    );
-    assert!(out.contains("Workspace disks:     backup-a"), "{out}");
-}
-
-#[tokio::test]
-async fn giving_up_changes_nothing() {
-    let cluster = Cluster::new(&["pve1"]);
-    two_disk_storages(&cluster);
-    let gave_up = run(&cluster, &["install", "--no-servers", "--ssh", "root@pve1"], &[], true).await;
-    assert_eq!(gave_up.code, 0, "{}", gave_up.console.out());
-    assert!(gave_up.console.out().contains("Cancelled"), "{}", gave_up.console.out());
     assert_eq!(cluster.changes(), 0);
-}
-
-// --- the default installer asks how to reach root --------------------------
-
-#[tokio::test]
-async fn without_an_access_option_the_installer_asks_for_one_and_goes_on() {
-    let cluster = Cluster::new(&["pve1"]);
-    // 1 = SSH, the node, then the form and the confirmation.
-    let done = run(
-        &cluster,
-        &["install", "--no-servers"],
-        &["1", "root@pve1", "", "y"],
-        true,
-    )
-    .await;
-    assert_eq!(done.code, 0, "{}", done.console.out());
-    let out = done.console.out();
-    assert!(
-        out.contains("SSH") && out.contains("Herdr"),
-        "the ways to reach root are not offered:\n{out}"
-    );
-    assert!(
-        out.contains("Same as: homestack install --ssh root@pve1 --storages local-lvm"),
-        "{out}"
-    );
-    assert!(cluster.read("users").contains("homestack@pve"), "not installed");
-}
-
-#[tokio::test]
-async fn the_herdr_tabs_are_offered_to_choose_from() {
-    let cluster = Cluster::new(&["pve1"]);
-    // 2 = Herdr, the only tab, then the form and the confirmation.
-    let done = run(&cluster, &["install", "--no-servers"], &["2", "1", "", "y"], true).await;
-    assert_eq!(done.code, 0, "{}", done.console.out());
-    let out = done.console.out();
-    assert!(
-        out.contains("PVE/pve1") && out.contains("root@pve1:~"),
-        "the tab is not described:\n{out}"
-    );
-    assert!(out.contains("Same as: homestack install --herdr PVE/pve1"), "{out}");
-    assert!(cluster.read("users").contains("homestack@pve"));
-}
-
-#[tokio::test]
-async fn without_a_terminal_an_access_option_is_required() {
-    let cluster = Cluster::new(&["pve1"]);
-    let refused = run(
-        &cluster,
-        &["install", "--no-servers", "--storages", "local-lvm"],
-        &[],
-        false,
-    )
-    .await;
-    assert_eq!(refused.code, 1);
-    let out = refused.console.out();
-    assert!(
-        out.contains("--ssh") && out.contains("--herdr") && out.contains("terminal"),
-        "{out}"
-    );
-    assert_eq!(cluster.changes(), 0);
-
-    let gave_up = run(&cluster, &["install", "--no-servers"], &[], true).await;
-    assert_eq!(gave_up.code, 0, "{}", gave_up.console.out());
-    assert!(gave_up.console.out().contains("Cancelled"), "{}", gave_up.console.out());
-}
-
-#[tokio::test]
-async fn the_choices_are_kept_for_the_next_run() {
-    let cluster = Cluster::new(&["pve1"]);
-    two_disk_storages(&cluster);
-    // Workspace disks: only backup-a; then the user leaves without installing.
-    let left = run(
-        &cluster,
-        &["install", "--no-servers", "--ssh", "root@pve1"],
-        &["1", "1"],
-        true,
-    )
-    .await;
-    assert_eq!(left.code, 0, "{}", left.console.out());
-    assert_eq!(cluster.changes(), 0);
-    let draft = cluster.token_dir().join("install-draft.toml");
-    assert!(draft.exists(), "the choices were not kept");
-    assert_eq!(
-        std::fs::metadata(&draft).expect("draft").permissions().mode() & 0o777,
-        0o600
-    );
-
-    // The next run starts from them.
-    let again = run(
-        &cluster,
-        &["install", "--no-servers", "--ssh", "root@pve1"],
-        &["", "n"],
-        true,
-    )
-    .await;
-    let out = again.console.out();
-    assert!(out.contains("Workspace disks      backup-a"), "{out}");
-
-    // A draft that cannot be read is ignored.
-    std::fs::write(&draft, "not = [toml").expect("write");
-    let again = run(
-        &cluster,
-        &["install", "--no-servers", "--ssh", "root@pve1"],
-        &["", "n"],
-        true,
-    )
-    .await;
-    assert!(
-        again.console.out().contains("Workspace disks      local-lvm"),
-        "{}",
-        again.console.out()
-    );
-}
-
-#[tokio::test]
-async fn the_confirmation_groups_the_changes_in_short_lines() {
-    let cluster = Cluster::new(&["pve1"]);
-    std::fs::write(cluster.token_dir().join("pve-token"), "old\n").expect("old token file");
-    let done = run(
-        &cluster,
-        &["install", "--no-servers", "--ssh", "root@pve1"],
-        &["", "n"],
-        true,
-    )
-    .await;
-    let out = done.console.out();
-    let confirm = out.split("Confirm the installation").nth(1).unwrap_or_default();
-    for heading in [
-        "Account and tokens",
-        "Roles (6 new)",
-        "Pools (4 new)",
-        "Gold",
-        "Permissions",
-        "Cloud-Init snippets",
-    ] {
-        assert!(confirm.contains(heading), "no {heading:?}:\n{confirm}");
-    }
-    assert!(confirm.contains("old file kept as pve-token.replaced-"), "{confirm}");
-    assert!(confirm.contains("~/.config/homestack/pve-token"), "{confirm}");
-    assert!(
-        !confirm.contains("give homestack@pve"),
-        "raw permission steps are listed:\n{confirm}"
-    );
-    let changes = confirm.split("Account and tokens").nth(1).unwrap_or_default();
-    assert!(
-        changes.lines().all(|l| l.chars().count() <= 100),
-        "a line is too long:\n{changes}"
-    );
 }
 
 // --- the servers and the final status (section 8) --------------------------
@@ -1417,75 +1144,6 @@ async fn a_failed_deployment_writes_no_client_configuration() {
 }
 
 #[tokio::test]
-async fn the_form_asks_the_server_domain_and_the_confirmation_lists_the_servers() {
-    let cluster = Cluster::new(&["pve1"]);
-    desktop_files(&cluster);
-    let servers = Arc::new(FakeServers::resolving(&[("api1.hs.example.net", "192.0.2.97")]));
-    // 6 = Server domain; then install from the form and decline.
-    let declined = run_with(
-        &cluster,
-        &["install", "--ssh", "root@pve1"],
-        &["6", "hs.example.net", "", "n"],
-        true,
-        Arc::clone(&servers),
-    )
-    .await;
-    let out = declined.console.out();
-    let form = out.split("Confirm the installation").next().unwrap_or_default();
-    assert!(form.contains("Server domain"), "{form}");
-    let confirm = out.split("Confirm the installation").nth(1).unwrap_or_default();
-    assert!(confirm.contains("Servers"), "{confirm}");
-    let line = confirm
-        .lines()
-        .find(|l| l.contains("api1.hs.example.net"))
-        .unwrap_or_default();
-    for part in ["192.0.2.97", "pve1", "CT 2097", "local-lvm"] {
-        assert!(line.contains(part), "{part:?} missing in {line:?}:\n{confirm}");
-    }
-    assert!(confirm.contains("Then: homestack status"), "{confirm}");
-    assert_eq!(cluster.changes(), 0);
-    assert!(servers.deployed().is_empty());
-    // The domain is kept for the next run.
-    let draft = std::fs::read_to_string(cluster.token_dir().join("install-draft.toml")).expect("draft");
-    assert!(draft.contains("hs.example.net"), "{draft}");
-
-    // A run without servers keeps it.
-    run_with(
-        &cluster,
-        &["install", "--no-servers", "--ssh", "root@pve1"],
-        &["", "n"],
-        true,
-        Arc::clone(&servers),
-    )
-    .await;
-    let draft = std::fs::read_to_string(cluster.token_dir().join("install-draft.toml")).expect("draft");
-    assert!(draft.contains("hs.example.net"), "lost by --no-servers: {draft}");
-
-    // Without it in the draft, the form starts from the deployed one.
-    std::fs::remove_file(cluster.token_dir().join("install-draft.toml")).expect("remove draft");
-    std::fs::write(
-        cluster.token_dir().join("deploy.toml"),
-        "domain = \"deployed.example.net\"\n",
-    )
-    .expect("deploy.toml");
-    let again = run_with(
-        &cluster,
-        &["install", "--ssh", "root@pve1"],
-        &["", "n"],
-        true,
-        Arc::clone(&servers),
-    )
-    .await;
-    let out = again.console.out();
-    let form = out.split("Confirm the installation").next().unwrap_or_default();
-    assert!(
-        form.lines()
-            .any(|line| line.contains("Server domain") && line.contains("deployed.example.net")),
-        "{form}"
-    );
-}
-
-#[tokio::test]
 async fn the_servers_put_workspace_disks_on_the_storages_chosen_in_the_form() {
     let cluster = Cluster::new(&["pve1", "pve2", "pve3"]);
     desktop_files(&cluster);
@@ -1612,10 +1270,10 @@ async fn the_tui_worker_installs_through_the_same_session_as_the_cli() {
     assert!(!found.settings.is_empty(), "nothing to choose: {found:?}");
     assert_eq!(cluster.changes(), 0, "connecting changed something");
 
-    let answers: Vec<hs_cli::wizard::Answer> = found
+    let answers: Vec<hs_cli::install_flow::Answer> = found
         .settings
         .iter()
-        .map(|setting| hs_cli::wizard::Answer::Picked(setting.picked.clone()))
+        .map(|setting| hs_cli::install_flow::Answer::Picked(setting.picked.clone()))
         .collect();
     commands
         .send(Command::Review {
@@ -1627,6 +1285,20 @@ async fn the_tui_worker_installs_through_the_same_session_as_the_cli() {
         Event::Reviewed { sections, problems } => {
             assert!(problems.is_empty(), "{problems:?}");
             assert!(sections.iter().any(|(heading, _)| heading == "Servers"), "{sections:?}");
+            // Only what changes: no choices repeated, no notes (the owner,
+            // 2026-10-15).
+            for (heading, lines) in &sections {
+                assert!(
+                    heading != "Your choices" && heading != "Chosen without asking",
+                    "{sections:?}"
+                );
+                for line in lines {
+                    assert!(
+                        !line.starts_with("Then") && !line.starts_with("workspace disks on") && !line.contains(".toml"),
+                        "not a change: {line:?}"
+                    );
+                }
+            }
         }
         other => panic!("{other:?}"),
     }
@@ -1689,9 +1361,9 @@ async fn a_proxmox_template_is_no_gold_to_choose() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_rescan_offers_a_vm_taken_out_of_its_pool_and_keeps_the_choices() {
+    use hs_cli::install_flow::Answer;
     use hs_cli::tui::install::{Event, Method, Mode};
     use hs_cli::tui::installing::{self, Command, Setup};
-    use hs_cli::wizard::Answer;
 
     let cluster = Cluster::new(&["pve1"]);
     two_disk_storages(&cluster);

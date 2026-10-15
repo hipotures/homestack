@@ -7,11 +7,11 @@ mod tui_fixture;
 
 use crossterm::event::KeyCode;
 use hs_cli::askpass::Kind;
+use hs_cli::install_flow::Answer;
 use hs_cli::tui::draw::render;
 use hs_cli::tui::install::{AskView, Event, Found, Mark, Method, Mode, Setting, Stage};
 use hs_cli::tui::installing::Command;
 use hs_cli::tui::state::{App, MENU, Request};
-use hs_cli::wizard::Answer;
 use tui_fixture::{app, press, screen};
 
 fn type_text(app: &mut App, text: &str) {

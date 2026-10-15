@@ -200,11 +200,7 @@ fn outside_network(address: Ipv4Addr, network: &hs_model::config::Network) -> Op
 
 /// `[storage_layouts]`: node `...N` uses `homestack-storage-N`, made of the
 /// chosen workspace-disk storages that are on that node.
-fn layouts(
-    plan: &Plan,
-    warnings: &mut Vec<String>,
-    lines: &mut Vec<String>,
-) -> std::collections::BTreeMap<String, Vec<String>> {
+fn layouts(plan: &Plan, warnings: &mut Vec<String>) -> std::collections::BTreeMap<String, Vec<String>> {
     let mut layouts = std::collections::BTreeMap::new();
     for node in &plan.cluster.nodes {
         let Ok(name) = hs_model::node::NodeName::parse(node)
@@ -232,7 +228,6 @@ fn layouts(
             warnings.push(format!("{node}: no chosen workspace-disk storage there"));
             continue;
         }
-        lines.push(format!("workspace disks on {node}: {}", storages.join(", ")));
         layouts.insert(name, storages);
     }
     layouts
@@ -293,7 +288,6 @@ pub fn plan_servers(
     // The server configuration comes from the old one, with this Gold.
     let old_path = files.old_config();
     let mut network = None;
-    let mut layout_lines = Vec::new();
     match std::fs::read_to_string(&old_path) {
         Err(_) => out.problems.push(format!(
             "the server configuration is made from {}, which cannot be read",
@@ -307,7 +301,7 @@ pub fn plan_servers(
                 }
                 // The workspace disks go where the form says, not where the
                 // old file did: per node, the chosen storages on it.
-                read.server.storage_layouts = layouts(plan, &mut out.warnings, &mut layout_lines);
+                read.server.storage_layouts = layouts(plan, &mut out.warnings);
                 network = Some(read.server.network.clone());
                 out.server_toml = read.server.to_toml();
                 out.old_config = text;
@@ -402,10 +396,8 @@ pub fn plan_servers(
     // Let's Encrypt with the DNS API key of the zone.
     let stored = hs_deploy::acme::stored(&files.acme()).ok().flatten();
     match (stored, &dns_key) {
-        (Some(stored), _) if hs_deploy::acme::current(&stored, &domain, now()) => out.lines.push(format!(
-            "certificate *.{domain}: the stored one, {} more days",
-            (stored.not_after - now()) / 86_400
-        )),
+        // The stored one, still good: nothing changes.
+        (Some(stored), _) if hs_deploy::acme::current(&stored, &domain, now()) => {}
         (_, Some((host, file, _))) if file.exists() => out.lines.push(format!(
             "certificate *.{domain} from Let's Encrypt (DNS at {host}, zone {zone})"
         )),
@@ -422,12 +414,6 @@ pub fn plan_servers(
         return out;
     };
     out.lines.insert(0, format!("image {image}"));
-    out.lines.extend(layout_lines);
-    out.lines.push(format!(
-        "{} and deploy.toml in {}",
-        "client.toml, server.toml",
-        files.short(&files.dir)
-    ));
     if !out.problems.is_empty() {
         return out;
     }

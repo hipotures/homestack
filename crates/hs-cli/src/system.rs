@@ -214,26 +214,6 @@ pub trait Console: Send {
     fn ask(&mut self, question: &str) -> Option<String>;
     /// Read a line without echo; `None` when that is not possible.
     fn secret(&mut self, prompt: &str) -> Option<String>;
-
-    /// Run the installer's wizard: the steps, then the summary `summarize`
-    /// makes from the answers. The default asks by number, for a console
-    /// that cannot draw.
-    fn wizard(
-        &mut self,
-        wizard: &mut crate::wizard::Wizard,
-        summarize: &mut dyn FnMut(&[crate::wizard::Answer]) -> crate::wizard::Summary,
-    ) -> crate::wizard::Outcome {
-        crate::wizard::run_numbered(self, wizard, summarize)
-    }
-
-    /// Run the installer's form; the default asks by number.
-    fn form(
-        &mut self,
-        form: &mut crate::form::Form,
-        summarize: &mut dyn FnMut(&[crate::wizard::Answer]) -> crate::wizard::Summary,
-    ) -> crate::form::Outcome {
-        crate::form::run_numbered(self, form, summarize)
-    }
 }
 
 /// stdout, stderr and stdin.
@@ -266,33 +246,5 @@ impl Console for Terminal {
         }
         let _ = io::stderr().lock().write_all(prompt.as_bytes());
         rpassword::read_password().ok()
-    }
-
-    fn wizard(
-        &mut self,
-        wizard: &mut crate::wizard::Wizard,
-        summarize: &mut dyn FnMut(&[crate::wizard::Answer]) -> crate::wizard::Summary,
-    ) -> crate::wizard::Outcome {
-        if io::stdin().is_terminal()
-            && io::stdout().is_terminal()
-            && let Ok(outcome) = crate::wizard::run_on_terminal(wizard, summarize)
-        {
-            return outcome;
-        }
-        crate::wizard::run_numbered(self, wizard, summarize)
-    }
-
-    fn form(
-        &mut self,
-        form: &mut crate::form::Form,
-        summarize: &mut dyn FnMut(&[crate::wizard::Answer]) -> crate::wizard::Summary,
-    ) -> crate::form::Outcome {
-        if io::stdin().is_terminal()
-            && io::stdout().is_terminal()
-            && let Ok(outcome) = crate::form::run_on_terminal(form, summarize)
-        {
-            return outcome;
-        }
-        crate::form::run_numbered(self, form, summarize)
     }
 }
