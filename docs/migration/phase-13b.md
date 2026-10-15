@@ -420,3 +420,14 @@ TARGET SELECTORS…`.
   `test_setup_structured_ui.py`, the startup tests of `test_setup_startup.py`
   and the TUI tests of the groups (colours, application files, Backup,
   Herdr), the key `e` and the sections.
+
+### The selection and the details (owner, 2026-10-15)
+
+- The first workspace is selected from the start, and a selection the
+  list no longer shows (a filter, the node carousel) moves to the first
+  row it shows: there is always a selection when there are rows.
+- The details box of the selected workspace opens and closes with `i`
+  (└info┘) only, at every width; it no longer opens by itself beside the
+  list on a wide screen, so the list keeps its columns. Enter does not
+  open it.
+- New is about no workspace: its form never takes the selection.

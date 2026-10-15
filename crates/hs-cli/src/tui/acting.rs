@@ -104,7 +104,8 @@ impl App {
         if self.status.is_none() || !self.unreachable.is_empty() || self.notice.is_some() {
             return None;
         }
-        let entry = self.selected_entry().cloned();
+        // New is about no workspace, whatever is selected.
+        let entry = self.selected_entry().cloned().filter(|_| kind != Kind::New);
         if kind != Kind::New && entry.is_none() {
             return None;
         }

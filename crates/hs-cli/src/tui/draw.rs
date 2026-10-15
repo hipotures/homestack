@@ -717,14 +717,14 @@ fn workspaces(buf: &mut Buffer, area: Rect, app: &App, mut controls: Vec<Control
             list.y += height;
             list.height -= height;
         }
-    } else if let Some(entry) = selected {
+    } else if let Some(entry) = selected.filter(|_| app.info) {
         let wide = inner.width >= 82;
         if wide {
             let box_width = if inner.width >= 108 { 45 } else { 35 };
             let sub = Rect::new(inner.right() - box_width, inner.y, box_width, inner.height.min(10));
             details_box(buf, sub, app, entry, false);
             list.width -= box_width + 1;
-        } else if app.info {
+        } else {
             let sub = Rect::new(inner.x, inner.y, inner.width, 7.min(inner.height));
             details_box(buf, sub, app, entry, true);
             list.y += sub.height;
@@ -1005,7 +1005,7 @@ const HELP: [&str; 19] = [
     "v           next view (auto, 1, 2)",
     "m           menu",
     "↑ ↓         select a workspace; PgUp PgDn Home End",
-    "↵  i        details of the selected workspace",
+    "i           details of the selected workspace (again: hide them)",
     "← →         one node or all",
     "f           filter by name or VMID; ↵ keeps it, esc clears it",
     "q  esc      quit (esc first clears the filter)",

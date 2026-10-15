@@ -34,11 +34,12 @@ fn at_80_by_24_the_cluster_and_the_workspaces_are_drawn_in_btop_borders() {
     for name in ["dev-main", "rust-builder", "notes", "pve1", "10.0.0.21"] {
         assert!(text.contains(name), "{name}: {text}");
     }
-    // Nothing is selected yet: the counter says so and the actions are muted.
-    assert!(row(&buf, 23).contains("┘0/12└"), "{text}");
+    // The first workspace is selected from the start: the counter says so
+    // and the actions are lit (the owner, 2026-10-15).
+    assert!(row(&buf, 23).contains("┘1/12└"), "{text}");
     let palette = Palette::named("HomeStack", false).unwrap();
     let (x, y) = position(&buf, "refresh");
-    assert_eq!(buf[(x, y)].fg, palette.muted);
+    assert_eq!(buf[(x + 1, y)].fg, palette.foreground);
 }
 
 #[test]
@@ -56,10 +57,15 @@ fn the_cluster_line_names_nodes_servers_gold_and_free_storage() {
 }
 
 #[test]
-fn moving_down_selects_the_first_workspace_and_lights_the_counter() {
+fn the_first_workspace_is_selected_and_down_moves_the_selection() {
     let mut fixture = app();
-    let request = press(&mut fixture.app, KeyCode::Down);
-    assert_eq!(request, Some(Request::Details(201)));
+    let buf = render(&fixture.app, 80, 24);
+    assert!(row(&buf, 23).contains("┘1/12└"), "{}", screen(&buf));
+    let palette = Palette::named("HomeStack", false).unwrap();
+    let (x, y) = position(&buf, "dev-main");
+    assert_eq!(buf[(x, y)].bg, palette.focus);
+    assert_eq!(press(&mut fixture.app, KeyCode::Down), Some(Request::Details(202)));
+    assert_eq!(press(&mut fixture.app, KeyCode::Up), Some(Request::Details(201)));
     let buf = render(&fixture.app, 80, 24);
     assert!(row(&buf, 23).contains("┘1/12└"), "{}", screen(&buf));
     let palette = Palette::named("HomeStack", false).unwrap();
@@ -72,9 +78,8 @@ fn moving_down_selects_the_first_workspace_and_lights_the_counter() {
 #[test]
 fn info_at_80_columns_splits_the_list_and_shows_its_scrollbar() {
     let mut fixture = app();
-    press(&mut fixture.app, KeyCode::Down);
     fixture.app.set_details(201, &details());
-    press(&mut fixture.app, KeyCode::Enter);
+    press(&mut fixture.app, KeyCode::Char('i'));
     let buf = render(&fixture.app, 80, 24);
     let text = screen(&buf);
     assert!(text.contains("┐201 dev-main┌"), "{text}");
@@ -84,7 +89,7 @@ fn info_at_80_columns_splits_the_list_and_shows_its_scrollbar() {
         right.contains('↑') && right.contains('↓') && right.contains('█'),
         "{right}\n{text}"
     );
-    press(&mut fixture.app, KeyCode::Enter);
+    press(&mut fixture.app, KeyCode::Char('i'));
     let text = screen(&render(&fixture.app, 80, 24));
     assert!(!text.contains("┐201 dev-main┌"), "{text}");
 }
@@ -92,8 +97,10 @@ fn info_at_80_columns_splits_the_list_and_shows_its_scrollbar() {
 #[test]
 fn at_120_by_36_all_panels_and_the_details_box_are_drawn() {
     let mut fixture = app();
-    press(&mut fixture.app, KeyCode::Down);
     fixture.app.set_details(201, &details());
+    // The details box opens on i only.
+    assert!(!screen(&render(&fixture.app, 120, 36)).contains("┐201 dev-main┌"));
+    press(&mut fixture.app, KeyCode::Char('i'));
     let buf = render(&fixture.app, 120, 36);
     let text = screen(&buf);
     for part in ["┐³storage┌", "┐⁴log┌", "┐201 dev-main┌", "local-zfs", "ADDRESS", "api2"] {
@@ -147,10 +154,10 @@ fn the_filter_opens_in_the_border_and_keeps_matching_rows() {
     let text = screen(&render(&fixture.app, 80, 24));
     assert!(text.contains("web-lab") && text.contains("ml-lab"), "{text}");
     assert!(!text.contains("dev-main"), "{text}");
-    assert!(text.contains("┘0/2└"), "{text}");
+    assert!(text.contains("┘1/2└"), "{text}");
     press(&mut fixture.app, KeyCode::Esc);
     let text = screen(&render(&fixture.app, 80, 24));
-    assert!(text.contains("dev-main") && text.contains("┘0/12└"), "{text}");
+    assert!(text.contains("dev-main") && text.contains("/12└"), "{text}");
 }
 
 #[test]

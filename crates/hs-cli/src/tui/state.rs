@@ -409,9 +409,11 @@ impl App {
     }
 
     /// Drop a selection the list no longer shows.
+    /// A selection the list no longer shows moves to its first row; the
+    /// first row is selected from the start (the owner, 2026-10-15).
     fn keep_selection(&mut self) {
         if self.selected_index().is_none() {
-            self.selected = None;
+            self.selected = self.rows().first().map(|entry| entry.vmid);
             self.info = false;
         }
     }
@@ -692,7 +694,14 @@ impl App {
             KeyCode::PageUp => return self.move_by(-10),
             KeyCode::Home => return self.select_at(0),
             KeyCode::End => return self.select_at(self.rows().len().saturating_sub(1)),
-            KeyCode::Enter | KeyCode::Char('i') if self.selected.is_some() => self.info = !self.info,
+            // The details box opens on i only (as info), at every width (the
+            // owner, 2026-10-15).
+            KeyCode::Char('i') if self.selected.is_some() => {
+                self.info = !self.info;
+                if self.info {
+                    return self.selected.map(Request::Details);
+                }
+            }
             _ => {}
         }
         None

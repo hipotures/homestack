@@ -50,7 +50,6 @@ fn started(request: Option<Request>) -> Start {
 fn the_actions_light_up_when_a_workspace_is_selected() {
     let mut fixture = app();
     let palette = Palette::named("HomeStack", false).unwrap();
-    assert_eq!(press(&mut fixture.app, KeyCode::Char('d')), None, "nothing selected");
     select(&mut fixture.app, 201);
     let buf = render(&fixture.app, 120, 36);
     for label in ["refresh", "resize", "addkey", "migrate", "destroy"] {
