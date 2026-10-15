@@ -43,16 +43,12 @@ fn at_80_by_24_the_cluster_and_the_workspaces_are_drawn_in_btop_borders() {
 }
 
 #[test]
-fn the_cluster_line_names_nodes_servers_gold_and_free_storage() {
+fn the_cluster_line_names_nodes_and_free_storage_without_servers_or_gold() {
     let fixture = app();
     let buf = render(&fixture.app, 80, 24);
     let line = row(&buf, 1);
     assert!(line.contains("pve1") && line.contains("pve3"), "{line}");
-    assert!(line.contains("servers ●●●"), "{line}");
-    assert!(
-        line.contains("gold ○ 112"),
-        "the dot before, as for the servers: {line}"
-    );
+    assert!(!line.contains("servers") && !line.contains("gold"), "{line}");
     assert!(line.contains("free"), "{line}");
 }
 
@@ -103,7 +99,7 @@ fn at_120_by_36_all_panels_and_the_details_box_are_drawn() {
     press(&mut fixture.app, KeyCode::Char('i'));
     let buf = render(&fixture.app, 120, 36);
     let text = screen(&buf);
-    for part in ["┐³storage┌", "┐⁴log┌", "┐201 dev-main┌", "local-zfs", "ADDRESS", "api2"] {
+    for part in ["┐³storage┌", "┐⁴log┌", "┐201 dev-main┌", "local-zfs", "ADDRESS"] {
         assert!(text.contains(part), "{part}: {text}");
     }
 }
@@ -346,14 +342,13 @@ fn a_newline_or_a_tab_in_a_text_is_drawn_as_a_space() {
 }
 
 #[test]
-fn the_gold_line_of_the_servers_box_has_its_dot_first_and_fits() {
+fn the_cluster_panel_has_no_servers_and_gold_box() {
     let fixture = app();
     let text = screen(&render(&fixture.app, 120, 36));
-    let line = text
-        .lines()
-        .find(|line| line.contains(" gold ○ 112 hs-gold@pve1"))
-        .unwrap_or_else(|| panic!("no gold line:\n{text}"));
-    assert!(line.contains("pve1"), "{line}");
+    assert!(
+        !text.contains("servers & gold") && !text.contains("hs-gold@pve1"),
+        "{text}"
+    );
 }
 
 #[test]

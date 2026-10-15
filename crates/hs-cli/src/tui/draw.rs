@@ -99,10 +99,6 @@ fn short_host(url: &str) -> String {
         .to_owned()
 }
 
-fn first_label(url: &str) -> String {
-    short_host(url).split('.').next().unwrap_or_default().to_owned()
-}
-
 fn draw_into(buf: &mut Buffer, area: Rect, app: &App) {
     super::chrome::clear_hits();
     let palette = &app.palette;
@@ -247,12 +243,6 @@ fn cluster(buf: &mut Buffer, area: Rect, app: &App, mut controls: Vec<Control>) 
     let inner = frame(buf, area, palette, &sides);
     let text = text_style(palette);
     let muted = text.fg(palette.muted);
-    let gold = app.status.as_ref().and_then(|status| status.gold.as_ref());
-    let server_dots: Vec<(String, Style)> = app
-        .servers
-        .iter()
-        .map(|(_, error)| dot(palette, Some(error.is_none())))
-        .collect();
     if inner.height < 4 {
         let mut parts: Vec<(String, Style)> = vec![(" ".to_owned(), text)];
         if app.unreachable.is_empty() {
@@ -263,22 +253,14 @@ fn cluster(buf: &mut Buffer, area: Rect, app: &App, mut controls: Vec<Control>) 
         } else {
             parts.push(("nodes ?".to_owned(), muted));
         }
-        parts.push(("  servers ".to_owned(), text));
-        parts.extend(server_dots);
-        if let Some(gold) = gold {
-            parts.push(("   gold ".to_owned(), text));
-            parts.push(dot_state(palette, &gold.status));
-            parts.push((format!(" {}", gold.vmid), text));
-        }
         if let Some(percent) = free_percent(app) {
             parts.push((format!("   storage {percent:.0}% free"), text));
         }
         spans(buf, inner.x, inner.y, inner.width, &parts);
         return;
     }
-    // The table of nodes, and a box with the servers and Gold on the right.
-    let box_width = if inner.width >= 150 { 44 } else { 40 };
-    let table_width = inner.width.saturating_sub(box_width + 1);
+    // The table of nodes.
+    let table_width = inner.width;
     write(
         buf,
         inner.x,
@@ -313,65 +295,6 @@ fn cluster(buf: &mut Buffer, area: Rect, app: &App, mut controls: Vec<Control>) 
                 ((here.len() - running).to_string(), text),
             ],
         );
-    }
-    let sub = Rect::new(inner.x + inner.width - box_width, inner.y, box_width, inner.height);
-    let sub_inner = frame(
-        buf,
-        sub,
-        palette,
-        &Sides {
-            top_left: vec![Control::plain("servers & gold")],
-            ..Sides::default()
-        },
-    );
-    let mut lines: Vec<Vec<(String, Style)>> = Vec::new();
-    let rows = usize::from(sub_inner.height);
-    if rows > app.servers.len() {
-        for (url, error) in &app.servers {
-            let (symbol, style) = dot(palette, Some(error.is_none()));
-            lines.push(vec![
-                (" ".to_owned(), text),
-                (symbol, style),
-                (format!(" {}", short_host(url)), text),
-            ]);
-        }
-    } else {
-        let mut line = vec![(" servers".to_owned(), text)];
-        for (url, error) in &app.servers {
-            let (symbol, style) = dot(palette, Some(error.is_none()));
-            line.push((" ".to_owned(), text));
-            line.push((symbol, style));
-            line.push((format!(" {}", first_label(url)), text));
-        }
-        lines.push(line);
-    }
-    if let Some(gold) = gold {
-        // The state dot before the name, as for the servers; its word only
-        // when it fits.
-        let label = format!(" {} {}@{}", gold.vmid, gold.name.as_deref().unwrap_or(""), gold.node);
-        let room = usize::from(sub_inner.width).saturating_sub(" gold ".len() + 1 + label.chars().count());
-        let mut line = vec![
-            (" gold ".to_owned(), text),
-            dot_state(palette, &gold.status),
-            (label, text),
-        ];
-        if gold.status.chars().count() + 2 <= room {
-            line.push((format!("  {}", gold.status), muted));
-        }
-        lines.push(line);
-    }
-    for (row, line) in lines.iter().enumerate().take(rows) {
-        let y = sub_inner.y + u16::try_from(row).unwrap_or(0);
-        spans(buf, sub_inner.x, y, sub_inner.width, line);
-    }
-}
-
-fn dot_state(palette: &Palette, status: &str) -> (String, Style) {
-    let style = Style::default().bg(palette.background);
-    if status == "running" {
-        ("●".to_owned(), style.fg(palette.ok))
-    } else {
-        ("○".to_owned(), style.fg(palette.muted))
     }
 }
 
