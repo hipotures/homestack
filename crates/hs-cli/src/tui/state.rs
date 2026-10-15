@@ -140,6 +140,9 @@ pub struct App {
     pub lines: Vec<LogLine>,
     /// Lines the log is scrolled back from the newest.
     pub log_scroll: usize,
+    /// The scrollbar whose thumb the mouse holds, and the row of the thumb
+    /// it holds.
+    pub dragging: Option<(super::chrome::Bar, u16)>,
     pub clock: String,
     /// Where the list's rows were drawn last: x, width, the first row's y,
     /// the rows shown and the index of the first; for the mouse.
@@ -195,6 +198,7 @@ impl App {
             overlay: None,
             lines: Vec::new(),
             log_scroll: 0,
+            dragging: None,
             clock: String::new(),
             waiting: 0,
             list_rows: std::cell::Cell::new((0, 0, 0, 0, 0)),
@@ -496,36 +500,104 @@ impl App {
         }
     }
 
+    /// Scroll what `bar` scrolls to `offset`. A list scrolled by its
+    /// selection moves the selection: the bottom row shown when scrolled.
+    fn scroll_to(&mut self, bar: super::chrome::Bar, offset: usize) -> Option<Request> {
+        use super::chrome::Scrolls;
+        // The row a list scrolled to `offset` selects, if it must move.
+        let row = |at: Option<usize>| {
+            if offset > 0 {
+                Some(offset + bar.visible - 1)
+            } else {
+                at.filter(|at| *at >= bar.visible).map(|_| bar.visible - 1)
+            }
+        };
+        match bar.scrolls {
+            Scrolls::Log => self.log_scroll = offset,
+            Scrolls::List => return row(self.selected_index()).and_then(|index| self.select_at(index)),
+            Scrolls::Action => {
+                if let Some(action) = self.action.as_mut()
+                    && let super::action::Stage::Plan { scroll, .. } = &mut action.stage
+                {
+                    *scroll = offset;
+                }
+            }
+            Scrolls::SetupTree => {
+                if let Some(setup) = self.setup.as_mut()
+                    && matches!(setup.stage, super::setup::Stage::Tree)
+                {
+                    let rows = setup.rows();
+                    let at = rows.iter().position(|row| row.id == setup.cursor);
+                    if let Some(id) = row(at).and_then(|index| rows.get(index)).map(|row| row.id.clone()) {
+                        setup.highlight(&id);
+                    }
+                }
+            }
+            Scrolls::SetupDetails => {
+                if let Some(setup) = self.setup.as_mut() {
+                    setup.details_scroll = offset;
+                }
+            }
+            Scrolls::SetupReview => {
+                if let Some(setup) = self.setup.as_mut()
+                    && let super::setup::Stage::Review { scroll, .. } = &mut setup.stage
+                {
+                    *scroll = offset;
+                }
+            }
+            Scrolls::InstallReview => {
+                if let Some(install) = self.install.as_mut() {
+                    install.scroll = offset;
+                }
+            }
+        }
+        None
+    }
+
     /// A mouse event: a click on a workspace selects it, the wheel moves the
-    /// selection.
+    /// selection; a scrollbar is pressed, held and dragged.
     pub fn mouse(&mut self, event: crossterm::event::MouseEvent) -> Option<Request> {
         use super::chrome::Hit;
         use crossterm::event::{MouseButton, MouseEventKind};
         let press = |app: &mut Self, code: KeyCode| app.key(KeyEvent::new(code, KeyModifiers::NONE));
         let in_box = self.install.is_some() || self.overlay.is_some() || self.asking.is_some() || self.setup.is_some();
-        // The log: its scrollbar clicked or dragged, the wheel over it (not
-        // under a box drawn over it).
-        let log = if self.overlay.is_none() && self.asking.is_none() {
-            match super::chrome::hit_at(event.column, event.row) {
-                Some(Hit::Log(most)) => Some((None, most)),
-                Some(Hit::LogTo(to, most)) => Some((Some(to), most)),
-                _ => None,
+        // A scrollbar's thumb held: the drag moves it wherever the pointer
+        // goes, until the button is let go.
+        match event.kind {
+            MouseEventKind::Drag(MouseButton::Left) if self.dragging.is_some() => {
+                let (bar, grip) = self.dragging?;
+                return self.scroll_to(bar, bar.drag(event.row, grip));
             }
+            MouseEventKind::Up(MouseButton::Left) if self.dragging.is_some() => {
+                self.dragging = None;
+                return None;
+            }
+            _ => {}
+        }
+        // A scrollbar and the log under no box drawn over them: a press on
+        // the bar, the wheel over it or over the log.
+        let hit = if self.overlay.is_none() && self.asking.is_none() {
+            super::chrome::hit_at(event.column, event.row)
         } else {
             None
         };
-        if let Some((to, most)) = log {
-            match event.kind {
-                MouseEventKind::Down(MouseButton::Left) | MouseEventKind::Drag(MouseButton::Left) => {
-                    if let Some(to) = to {
-                        self.log_scroll = to;
-                    }
-                }
-                MouseEventKind::ScrollDown => self.log_scroll = (self.log_scroll + 3).min(most),
-                MouseEventKind::ScrollUp => self.log_scroll = self.log_scroll.min(most).saturating_sub(3),
-                _ => {}
+        match (event.kind, hit) {
+            (MouseEventKind::Down(MouseButton::Left), Some(Hit::Bar(bar))) => {
+                let (offset, grip) = bar.press(event.row);
+                self.dragging = grip.map(|grip| (bar, grip));
+                return self.scroll_to(bar, offset);
             }
-            return None;
+            (MouseEventKind::ScrollDown, Some(Hit::Bar(bar))) => return self.scroll_to(bar, bar.wheel(3)),
+            (MouseEventKind::ScrollUp, Some(Hit::Bar(bar))) => return self.scroll_to(bar, bar.wheel(-3)),
+            (MouseEventKind::ScrollDown, Some(Hit::Log(most))) => {
+                self.log_scroll = (self.log_scroll + 3).min(most);
+                return None;
+            }
+            (MouseEventKind::ScrollUp, Some(Hit::Log(most))) => {
+                self.log_scroll = self.log_scroll.min(most).saturating_sub(3);
+                return None;
+            }
+            _ => {}
         }
         match event.kind {
             MouseEventKind::Down(MouseButton::Left) => {
@@ -562,7 +634,7 @@ impl App {
                         return None;
                     }
                     Some(Hit::SetupDetails) => return None,
-                    Some(Hit::Log(_) | Hit::LogTo(..)) => return None,
+                    Some(Hit::Log(_) | Hit::Bar(_)) => return None,
                     Some(Hit::SetupGroup(index)) => {
                         if let Some(setup) = self.setup.as_mut()
                             && matches!(setup.stage, super::setup::Stage::Tree)

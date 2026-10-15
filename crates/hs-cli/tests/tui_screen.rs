@@ -522,21 +522,74 @@ fn the_log_scrolls_back_by_its_scrollbar_and_the_wheel() {
     // A new line keeps the lines read in place.
     fixture.app.log("10:30:00", "line 30");
     assert_eq!(fixture.app.log_scroll, 4);
-    // ↓ of the scrollbar goes back a line, the bottom of its track to the oldest.
+    // ↓ of the scrollbar goes back a line.
     let buf = render(&fixture.app, 150, 40);
-    let (down_x, down_y) = position(&buf, "↓");
+    let (bar_x, down_y) = position(&buf, "↓");
     fixture
         .app
-        .mouse(event(MouseEventKind::Down(MouseButton::Left), down_x, down_y));
+        .mouse(event(MouseEventKind::Down(MouseButton::Left), bar_x, down_y));
     assert_eq!(fixture.app.log_scroll, 5);
+    // The thumb held and dragged down, the pointer off the bar, to the oldest.
+    let buf = render(&fixture.app, 150, 40);
+    let thumb_y = (0..40).find(|y| buf[(bar_x, *y)].symbol() == "█").unwrap();
     fixture
         .app
-        .mouse(event(MouseEventKind::Drag(MouseButton::Left), down_x, down_y - 1));
+        .mouse(event(MouseEventKind::Down(MouseButton::Left), bar_x, thumb_y));
+    assert_eq!(fixture.app.log_scroll, 5, "holding the thumb does not move it");
+    fixture
+        .app
+        .mouse(event(MouseEventKind::Drag(MouseButton::Left), bar_x - 20, 39));
     let text = screen(&render(&fixture.app, 150, 40));
     assert!(text.contains("line 0 "), "{text}");
+    // Let go, a drag moves nothing.
+    fixture
+        .app
+        .mouse(event(MouseEventKind::Up(MouseButton::Left), bar_x - 20, 39));
+    let held = fixture.app.log_scroll;
+    fixture
+        .app
+        .mouse(event(MouseEventKind::Drag(MouseButton::Left), bar_x, down_y - 3));
+    assert_eq!(fixture.app.log_scroll, held);
     // The wheel back up stops at the newest line.
     for _ in 0..20 {
         fixture.app.mouse(event(MouseEventKind::ScrollUp, x, y));
     }
     assert_eq!(fixture.app.log_scroll, 0);
+}
+
+#[test]
+fn the_list_s_scrollbar_is_held_and_dragged_and_the_selection_follows() {
+    use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+    let mut fixture = app();
+    fixture.app.set_details(201, &details());
+    press(&mut fixture.app, KeyCode::Char('i'));
+    let event = |kind, column, row| MouseEvent {
+        kind,
+        column,
+        row,
+        modifiers: KeyModifiers::NONE,
+    };
+    let buf = render(&fixture.app, 80, 24);
+    let thumb_y = (0..24).find(|y| buf[(79, *y)].symbol() == "█").unwrap();
+    let (_, down_y) = (0..24)
+        .find(|y| buf[(79, *y)].symbol() == "↓")
+        .map(|y| (79, y))
+        .unwrap();
+    fixture
+        .app
+        .mouse(event(MouseEventKind::Down(MouseButton::Left), 79, thumb_y));
+    let last = fixture.app.rows().last().unwrap().vmid;
+    let request = fixture
+        .app
+        .mouse(event(MouseEventKind::Drag(MouseButton::Left), 70, down_y));
+    assert_eq!(request, Some(Request::Details(last)));
+    assert_eq!(fixture.app.selected, Some(last));
+    // Back up to the top: the selection moves to the last row then shown.
+    fixture.app.mouse(event(MouseEventKind::Drag(MouseButton::Left), 70, 0));
+    let text = screen(&render(&fixture.app, 80, 24));
+    let first = fixture.app.rows().first().unwrap().vmid.to_string();
+    assert!(text.contains(&format!(" {first} ")), "{text}");
+    assert_ne!(fixture.app.selected, Some(last));
+    fixture.app.mouse(event(MouseEventKind::Up(MouseButton::Left), 70, 0));
+    assert!(fixture.app.dragging.is_none());
 }

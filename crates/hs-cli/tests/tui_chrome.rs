@@ -4,7 +4,7 @@
 //! panels fit the window.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
-use hs_cli::tui::chrome::{Control, Sides, frame, scrollbar};
+use hs_cli::tui::chrome::{Control, Scrolls, Sides, frame, scrollbar};
 use hs_cli::tui::layout::{Shown, arrange};
 use hs_cli::tui::theme::Palette;
 use ratatui::buffer::Buffer;
@@ -136,21 +136,49 @@ fn the_scrollbar_replaces_the_right_border_only_when_the_list_is_longer() {
     let mut buf = Buffer::empty(Rect::new(0, 0, 20, 12));
     let area = buf.area;
     frame(&mut buf, area, &palette, &Sides::default());
-    scrollbar(&mut buf, area, &palette, 0, 10, 10);
+    scrollbar(&mut buf, area, &palette, Scrolls::Log, 0, 10, 10);
     assert!((1..11).all(|y| buf[(19, y)].symbol() == "│"));
-    scrollbar(&mut buf, area, &palette, 0, 10, 20);
+    scrollbar(&mut buf, area, &palette, Scrolls::Log, 0, 10, 20);
     assert_eq!(buf[(19, 1)].symbol(), "↑");
     assert_eq!(buf[(19, 10)].symbol(), "↓");
     let thumb: Vec<u16> = (2..10).filter(|y| buf[(19, *y)].symbol() == "█").collect();
     assert_eq!(thumb.first(), Some(&2), "the thumb starts at the top: {thumb:?}");
     assert_eq!(thumb.len(), 4, "half the list is visible: {thumb:?}");
-    scrollbar(&mut buf, area, &palette, 10, 10, 20);
+    scrollbar(&mut buf, area, &palette, Scrolls::Log, 10, 10, 20);
     let thumb: Vec<u16> = (2..10).filter(|y| buf[(19, *y)].symbol() == "█").collect();
     assert_eq!(
         thumb.last(),
         Some(&9),
         "at the end the thumb is at the bottom: {thumb:?}"
     );
+}
+
+#[test]
+fn the_scrollbar_s_thumb_is_held_and_dragged_and_its_arrows_and_track_pressed() {
+    use hs_cli::tui::chrome::{Hit, clear_hits, hit_at};
+    let palette = palette();
+    let mut buf = Buffer::empty(Rect::new(0, 0, 20, 12));
+    let area = buf.area;
+    clear_hits();
+    scrollbar(&mut buf, area, &palette, Scrolls::Log, 0, 10, 20);
+    let Some(Hit::Bar(bar)) = hit_at(19, 2) else {
+        panic!("no scrollbar at its thumb");
+    };
+    assert_eq!(bar.scrolls, Scrolls::Log);
+    // The thumb held at its second row moves nothing; dragged, it follows.
+    assert_eq!(bar.press(3), (0, Some(1)));
+    assert_eq!(bar.drag(9, 1), 10, "dragged to the bottom: the end");
+    assert_eq!(bar.drag(0, 1), 0, "dragged above the bar: the start");
+    assert_eq!(bar.drag(5, 1), 5, "halfway");
+    // The arrows move a line; the track beside the thumb puts its middle there.
+    assert_eq!(bar.press(1), (0, None));
+    assert_eq!(bar.press(10), (1, None));
+    assert_eq!(bar.press(9).0, 10);
+    // A long list: the thumb stays shorter than the track, so it can move.
+    clear_hits();
+    scrollbar(&mut buf, area, &palette, Scrolls::Log, 0, 11, 12);
+    let thumb = (2..10).filter(|y| buf[(19, *y)].symbol() == "█").count();
+    assert_eq!(thumb, 7);
 }
 
 #[test]

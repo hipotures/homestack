@@ -444,3 +444,16 @@ TARGET SELECTORS…`.
   line, a click or a drag on the track to that place. Scrolled back, the
   lines read stay in place while new ones come. The install's log is the
   same panel and scrolls the same.
+
+### The scrollbar and the mouse (owner, 2026-10-15)
+
+- Every scrollbar of the TUI is one element (`chrome::scrollbar`) that
+  says what it scrolls: the workspaces list, the log, the action's plan,
+  the setup tree, its details and its review, the install's review.
+- The mouse holds its thumb and drags it, also with the pointer off the
+  bar, until the button is let go; ↑ and ↓ move a line; a press on the
+  track puts the thumb's middle there and holds it; the wheel over the bar
+  scrolls three lines. A list scrolled by its selection (the workspaces,
+  the setup tree) moves the selection to the bottom row shown.
+- The thumb stays shorter than the track while rows do not fit, so it can
+  always move.

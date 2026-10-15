@@ -4,7 +4,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 
-use super::chrome::{Control, Sides, frame, scrollbar, text_style};
+use super::chrome::{Control, Scrolls, Sides, frame, scrollbar, text_style};
 use super::draw::{SPINNER, bar, centered, cut, log, message_box, wrap, write};
 use super::install::{AskView, Install, Method, Mode, Stage};
 use super::state::App;
@@ -566,6 +566,7 @@ fn review(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
         buf,
         Rect::new(inner.x - 1, inner.y - 1, inner.width + 2, inner.height + 2),
         palette,
+        Scrolls::InstallReview,
         offset,
         visible,
         lines.len(),

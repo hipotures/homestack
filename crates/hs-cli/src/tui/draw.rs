@@ -8,7 +8,7 @@ use ratatui::layout::{Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
 
 use super::action::Action;
-use super::chrome::{Control, Hit, Sides, frame, register, scrollbar, text_style};
+use super::chrome::{Control, Hit, Scrolls, Sides, frame, register, scrollbar, text_style};
 use super::layout::{MIN_HEIGHT, MIN_WIDTH, arrange};
 use super::state::{App, MENU, Overlay, VIEWS};
 use super::theme::{Palette, THEMES};
@@ -815,7 +815,7 @@ fn workspaces(buf: &mut Buffer, area: Rect, app: &App, mut controls: Vec<Control
         }
     }
     let bar_area = Rect::new(area.x, list.y, area.width, list.height + 1);
-    scrollbar(buf, bar_area, palette, offset, visible, rows.len());
+    scrollbar(buf, bar_area, palette, Scrolls::List, offset, visible, rows.len());
 }
 
 fn storage_line(layout: &LayoutCapacity, width: usize) -> (String, String) {
@@ -893,21 +893,7 @@ pub(super) fn log(buf: &mut Buffer, area: Rect, app: &App, mut controls: Vec<Con
         );
     }
     register(inner, Hit::Log(most));
-    scrollbar(buf, area, palette, offset, visible, total);
-    if total > visible && area.height >= 5 {
-        // ↑ and ↓ move a line, a row of the track puts the thumb there.
-        let x = area.right() - 1;
-        let first = area.y + 1;
-        let last = area.bottom() - 2;
-        register(Rect::new(x, first, 1, 1), Hit::LogTo(offset.saturating_sub(1), most));
-        register(Rect::new(x, last, 1, 1), Hit::LogTo((offset + 1).min(most), most));
-        let track = usize::from(last - first - 1);
-        for row in 0..track {
-            let to = (row * most).div_ceil(track.saturating_sub(1).max(1));
-            let y = first + 1 + u16::try_from(row).unwrap_or(0);
-            register(Rect::new(x, y, 1, 1), Hit::LogTo(to.min(most), most));
-        }
-    }
+    scrollbar(buf, area, palette, Scrolls::Log, offset, visible, total);
 }
 
 pub(super) fn centered(area: Rect, width: u16, height: u16) -> Rect {
@@ -1291,7 +1277,7 @@ fn action_box(buf: &mut Buffer, area: Rect, app: &App, action: &Action) {
             write(buf, inner.x + 1, y, 1, &mark.to_string(), style.fg(color));
         }
     }
-    scrollbar(buf, area, palette, scroll, height, lines.len());
+    scrollbar(buf, area, palette, Scrolls::Action, scroll, height, lines.len());
 }
 
 const NONE_ANSWERED: &str = "No HomeStack server instance answered: ";

@@ -285,9 +285,98 @@ pub fn frame(buf: &mut Buffer, area: Rect, palette: &Palette, sides: &Sides) -> 
     Rect::new(area.x + 1, area.y + 1, area.width - 2, area.height - 2)
 }
 
+/// What a scrollbar scrolls; a press or a drag on it sets that (`App::scroll_to`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Scrolls {
+    /// The workspaces list (the selection moves with it).
+    List,
+    Log,
+    /// The plan in the action box.
+    Action,
+    /// The setup tree (the highlight moves with it), its details, its review.
+    SetupTree,
+    SetupDetails,
+    SetupReview,
+    /// The install's review.
+    InstallReview,
+}
+
+/// A scrollbar as drawn: what it scrolls and where its parts are.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Bar {
+    pub scrolls: Scrolls,
+    /// The rows of `↑` and `↓`; the track lies between them.
+    pub up: u16,
+    pub down: u16,
+    /// The thumb's length and its first row in the track.
+    pub thumb: u16,
+    pub start: u16,
+    pub offset: usize,
+    pub visible: usize,
+    /// The farthest offset: the rows that do not fit.
+    pub most: usize,
+}
+
+impl Bar {
+    fn track(&self) -> u16 {
+        self.down - self.up - 1
+    }
+
+    /// The offset that puts the thumb's first row at `row` of the track.
+    fn offset_at(&self, row: i32) -> usize {
+        let room = self.track() - self.thumb;
+        if room == 0 {
+            return self.offset;
+        }
+        let row = usize::try_from(row.clamp(0, i32::from(room))).unwrap_or(0);
+        let room = usize::from(room);
+        (row * self.most + room / 2) / room
+    }
+
+    /// A press at row `y`: the offset it puts, and where it holds the thumb
+    /// for a drag (`None`: an arrow, a line at a time).
+    #[must_use]
+    pub fn press(&self, y: u16) -> (usize, Option<u16>) {
+        if y <= self.up {
+            return (self.offset.saturating_sub(1), None);
+        }
+        if y >= self.down {
+            return ((self.offset + 1).min(self.most), None);
+        }
+        let row = y - self.up - 1;
+        if (self.start..self.start + self.thumb).contains(&row) {
+            return (self.offset, Some(row - self.start));
+        }
+        // Beside the thumb: the thumb's middle jumps there.
+        let grip = self.thumb / 2;
+        (self.offset_at(i32::from(row) - i32::from(grip)), Some(grip))
+    }
+
+    /// The offset of a drag at row `y`, the thumb held at `grip`.
+    #[must_use]
+    pub fn drag(&self, y: u16, grip: u16) -> usize {
+        self.offset_at(i32::from(y) - i32::from(self.up) - 1 - i32::from(grip))
+    }
+
+    /// The offset `lines` further (back when negative), as the wheel moves it.
+    #[must_use]
+    pub fn wheel(&self, lines: isize) -> usize {
+        self.offset.saturating_add_signed(lines).min(self.most)
+    }
+}
+
 /// The scrollbar on the right border of `area` when `total` rows do not fit
 /// in `visible`: `↑` under the corner, the thumb `█`, `↓` above the corner.
-pub fn scrollbar(buf: &mut Buffer, area: Rect, palette: &Palette, offset: usize, visible: usize, total: usize) {
+/// The mouse holds and drags its thumb, presses its arrows and its track.
+pub fn scrollbar(
+    buf: &mut Buffer,
+    area: Rect,
+    palette: &Palette,
+    scrolls: Scrolls,
+    offset: usize,
+    visible: usize,
+    total: usize,
+) {
     if total <= visible || area.height < 5 {
         return;
     }
@@ -299,8 +388,13 @@ pub fn scrollbar(buf: &mut Buffer, area: Rect, palette: &Palette, offset: usize,
     put(buf, x, first, '↑', border);
     put(buf, x, last, '↓', border);
     let track = usize::from(last - first - 1);
-    let thumb = (track * visible).div_ceil(total).clamp(1, track);
-    let start = (offset.min(total - visible) * (track - thumb)).div_ceil(total - visible);
+    let most = total - visible;
+    let offset = offset.min(most);
+    // Shorter than the track while rows do not fit, so it can move.
+    let thumb = (track * visible)
+        .div_ceil(total)
+        .clamp(1, track.saturating_sub(1).max(1));
+    let start = (offset * (track - thumb)).div_ceil(most);
     for row in 0..track {
         let y = first + 1 + u16::try_from(row).unwrap_or(0);
         if (start..start + thumb).contains(&row) {
@@ -309,6 +403,17 @@ pub fn scrollbar(buf: &mut Buffer, area: Rect, palette: &Palette, offset: usize,
             put(buf, x, y, '│', border);
         }
     }
+    let bar = Bar {
+        scrolls,
+        up: first,
+        down: last,
+        thumb: u16::try_from(thumb).unwrap_or(1),
+        start: u16::try_from(start).unwrap_or(0),
+        offset,
+        visible,
+        most,
+    };
+    register(Rect::new(x, first, 1, last - first + 1), Hit::Bar(bar));
 }
 
 /// What a click on the screen means.
@@ -333,9 +438,8 @@ pub enum Hit {
     Item(usize),
     /// The log panel, and the farthest the wheel scrolls it.
     Log(usize),
-    /// A row of the log's scrollbar: the scroll a click or a drag there
-    /// puts, and the farthest the wheel scrolls.
-    LogTo(usize, usize),
+    /// A scrollbar.
+    Bar(Bar),
 }
 
 thread_local! {

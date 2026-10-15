@@ -7,7 +7,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 
-use super::chrome::{Control, Hit, Sides, frame, register, scrollbar, text_style};
+use super::chrome::{Control, Hit, Scrolls, Sides, frame, register, scrollbar, text_style};
 use super::draw::{SPINNER, cut, message_box, wrap, write};
 use super::setup::{SetupBox, Stage, Tone};
 use super::state::App;
@@ -134,7 +134,7 @@ pub(super) fn setup_box(buf: &mut Buffer, area: Rect, app: &App, setup: &SetupBo
                 };
                 write(buf, inner.x + 1, y, inner.width.saturating_sub(2), line, style);
             }
-            scrollbar(buf, area, palette, scroll, height, all.len());
+            scrollbar(buf, area, palette, Scrolls::SetupReview, scroll, height, all.len());
         }
         Stage::Running {
             lines,
@@ -373,7 +373,7 @@ fn draw_tree(buf: &mut Buffer, area: Rect, app: &App, setup: &SetupBox) {
         }
     }
     let bar = Rect::new(area.x, area.y.saturating_sub(1), area.width + 1, area.height + 2);
-    scrollbar(buf, bar, palette, offset, height, rows.len());
+    scrollbar(buf, bar, palette, Scrolls::SetupTree, offset, height, rows.len());
 }
 
 fn draw_details(buf: &mut Buffer, area: Rect, app: &App, setup: &SetupBox) {
@@ -411,7 +411,7 @@ fn draw_details(buf: &mut Buffer, area: Rect, app: &App, setup: &SetupBox) {
         }
     }
     let bar = Rect::new(area.x, area.y.saturating_sub(1), area.width, area.height + 2);
-    scrollbar(buf, bar, palette, scroll, height, lines.len());
+    scrollbar(buf, bar, palette, Scrolls::SetupDetails, scroll, height, lines.len());
 }
 
 /// Every group with its count, the shown one raised; a click shows one.
