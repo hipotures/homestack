@@ -827,7 +827,14 @@ impl SetupBox {
                 entries.len()
             );
             self.add(None, &group.id, true, vec![(text, Tone::Plain)]);
-            for (index, entry) in entries.iter().enumerate() {
+            // The numbers are the catalog's (`repo=N`); the repositories the
+            // workspace has come first, the others in the catalog's order
+            // (the owner, 2026-10-15).
+            let mut order: Vec<(usize, &Entry)> = entries.iter().enumerate().collect();
+            if group.id == "repo" {
+                order.sort_by_key(|(_, entry)| !truthy(&self.state_item(&entry.id)["exists"]));
+            }
+            for (index, entry) in order {
                 if !self.branch_visible(&entry.id) {
                     continue;
                 }

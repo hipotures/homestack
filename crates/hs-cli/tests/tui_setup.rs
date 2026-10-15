@@ -1833,3 +1833,31 @@ fn the_details_mark_the_files_that_differ() {
     assert!(details.contains("* differs from what HomeStack writes; applying replaces the whole file"));
     assert_eq!(setup.row_state("bash").unwrap().0, "! differs");
 }
+
+/// The repositories the workspace has come first; the others keep the
+/// catalog's order, and every one its catalog number.
+#[test]
+fn repositories_on_the_workspace_come_first() {
+    let Boxed { mut setup, _home } = state_box(json!({"items": {
+        "owner/second": {"state": "configured", "ready": true, "exists": true},
+        "owner/fourth": {"state": "present", "ready": false, "exists": true},
+    }}));
+    for name in ["first", "second", "third", "fourth"] {
+        let id = format!("owner/{name}");
+        setup.catalog.entries.push(Entry {
+            id: id.clone(),
+            group: "repo".to_owned(),
+            handler: "repository".to_owned(),
+            label: id.clone(),
+            description: "Repository".to_owned(),
+            params: Params::Repository { repository: id },
+            depends_on: Vec::new(),
+        });
+    }
+    setup.rebuild();
+    setup.show_section(section(&setup, "repo"));
+    let rows: Vec<String> = setup.rows().iter().skip(1).map(|row| row.id.clone()).collect();
+    assert_eq!(rows, ["owner/second", "owner/fourth", "owner/first", "owner/third"]);
+    assert!(label(&setup, "owner/second").contains("2. owner/second"));
+    assert!(label(&setup, "owner/first").contains("1. owner/first"));
+}
