@@ -643,3 +643,43 @@ fn a_click_chooses_a_part_of_home_size_and_the_wheel_steps_it() {
     fixture.app.mouse(mouse(MouseEventKind::ScrollDown, label, y));
     assert!(screen(&render(&fixture.app, 120, 36)).contains("2.1G  -2G+  -100M+"));
 }
+
+#[test]
+fn tab_goes_through_g_and_m_and_up_down_switch_them() {
+    let mut fixture = home_size_form(Some(2));
+    let chosen = |fixture: &tui_fixture::Fixture| {
+        let buf = render(&fixture.app, 120, 36);
+        let (x, y) = position(&buf, "Home size");
+        // The reversed cells: the chosen part; G's number after its -.
+        let line: Vec<char> = row(&buf, y).chars().collect();
+        let after = (usize::from(x)..line.len())
+            .find(|at| line[*at..].starts_with(&[' ', ' ', '-']))
+            .unwrap();
+        let start = u16::try_from(after + 3).unwrap();
+        let g = buf[(start, y)].modifier.contains(ratatui::style::Modifier::REVERSED);
+        let focused = buf[(x, y)].modifier.contains(ratatui::style::Modifier::BOLD);
+        (focused, if g { "G" } else { "M" })
+    };
+    assert_eq!(chosen(&fixture), (true, "G"));
+    press(&mut fixture.app, KeyCode::Tab);
+    assert_eq!(chosen(&fixture), (true, "M"));
+    press(&mut fixture.app, KeyCode::Right);
+    assert!(screen(&render(&fixture.app, 120, 36)).contains("2.1G  -2G+  -100M+"));
+    // ↑ ↓ switch round and stay in the field.
+    press(&mut fixture.app, KeyCode::Down);
+    assert_eq!(chosen(&fixture), (true, "G"));
+    press(&mut fixture.app, KeyCode::Down);
+    assert_eq!(chosen(&fixture), (true, "M"));
+    press(&mut fixture.app, KeyCode::Up);
+    assert_eq!(chosen(&fixture), (true, "G"));
+    // BackTab from G leaves for Storage; back in, it lands on M.
+    press(&mut fixture.app, KeyCode::BackTab);
+    assert!(!chosen(&fixture).0);
+    press(&mut fixture.app, KeyCode::Tab);
+    assert_eq!(chosen(&fixture), (true, "G"));
+    press(&mut fixture.app, KeyCode::Tab);
+    press(&mut fixture.app, KeyCode::Tab);
+    assert!(!chosen(&fixture).0, "Tab from M goes on to Pool");
+    press(&mut fixture.app, KeyCode::BackTab);
+    assert_eq!(chosen(&fixture), (true, "M"));
+}

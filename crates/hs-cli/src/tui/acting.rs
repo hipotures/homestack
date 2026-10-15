@@ -210,7 +210,7 @@ impl App {
                     Field::amount(
                         "Home size",
                         self.home_default,
-                        "← → or the wheel: the chosen part; space: G or M.",
+                        "← → or the wheel change it; ⇥ or ↑ ↓: G or M.",
                     ),
                 ]
             }
@@ -516,9 +516,23 @@ impl App {
 
     fn form_key(&self, action: &mut Action, form: &mut Form, code: KeyCode) -> Option<Request> {
         let count = form.fields.len();
+        let part = amount_part(form);
         match code {
-            KeyCode::Tab | KeyCode::Down => form.focus = (form.focus + 1) % count,
-            KeyCode::BackTab | KeyCode::Up => form.focus = (form.focus + count - 1) % count,
+            // An amount's G and M are places of their own for Tab and
+            // BackTab; ↑ ↓ switch between them round.
+            KeyCode::Tab if part == Some(Part::G) => set_part(form, Part::M),
+            KeyCode::BackTab if part == Some(Part::M) => set_part(form, Part::G),
+            KeyCode::Up | KeyCode::Down if part.is_some() => {
+                set_part(form, if part == Some(Part::G) { Part::M } else { Part::G });
+            }
+            KeyCode::Tab | KeyCode::Down => {
+                form.focus = (form.focus + 1) % count;
+                set_part(form, Part::G);
+            }
+            KeyCode::BackTab | KeyCode::Up => {
+                form.focus = (form.focus + count - 1) % count;
+                set_part(form, if code == KeyCode::BackTab { Part::M } else { Part::G });
+            }
             KeyCode::Left | KeyCode::Right | KeyCode::PageUp | KeyCode::PageDown
                 if matches!(
                     form.fields.get(form.focus),
@@ -688,4 +702,23 @@ fn step(input: &mut Input, up: bool, room: Option<u64>) {
         return;
     }
     (*g, *m, *set) = (new_g, new_m, true);
+}
+
+/// The chosen part of the focused field when it is an amount.
+fn amount_part(form: &Form) -> Option<Part> {
+    match form.fields.get(form.focus)?.input {
+        Input::Amount { part, .. } => Some(part),
+        _ => None,
+    }
+}
+
+/// Choose `chosen` of the focused field when it is an amount.
+fn set_part(form: &mut Form, chosen: Part) {
+    if let Some(Field {
+        input: Input::Amount { part, .. },
+        ..
+    }) = form.fields.get_mut(form.focus)
+    {
+        *part = chosen;
+    }
 }
