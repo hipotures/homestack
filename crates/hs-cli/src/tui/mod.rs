@@ -18,9 +18,49 @@ pub mod shell;
 pub mod state;
 pub mod theme;
 
-/// Plain `homestack` (no argument at all) on a terminal opens the TUI;
-/// anything else, or output that is not a terminal, is the CLI.
+pub const USAGE: &str = "usage: homestack tui [--ssh USER@HOST] [--server-domain DOMAIN]";
+
+/// Explicit install values for an interactive TUI invocation.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Options {
+    pub ssh: Option<String>,
+    pub server_domain: Option<String>,
+}
+
+impl Options {
+    pub fn parse(argv: &[String]) -> Result<Self, crate::AppError> {
+        if argv.first().is_some_and(|word| word != "tui") {
+            return Err(crate::AppError::new(USAGE));
+        }
+        let mut options = Self::default();
+        let mut args = argv.iter().skip(1);
+        while let Some(flag) = args.next() {
+            let slot = match flag.as_str() {
+                "--ssh" => &mut options.ssh,
+                "--server-domain" => &mut options.server_domain,
+                _ => return Err(crate::AppError::new(format!("Unknown TUI argument {flag}; {USAGE}"))),
+            };
+            let value = args
+                .next()
+                .filter(|value| !value.trim().is_empty() && !value.starts_with('-'))
+                .ok_or_else(|| crate::AppError::new(format!("{flag} needs a value; {USAGE}")))?;
+            if slot.is_some() {
+                return Err(crate::AppError::new(format!(
+                    "{flag} was given more than once; {USAGE}"
+                )));
+            }
+            *slot = Some(if flag == "--ssh" {
+                crate::root_ssh::target(value)?
+            } else {
+                value.trim().to_owned()
+            });
+        }
+        Ok(options)
+    }
+}
+
+/// Plain `homestack` opens the TUI on a terminal; `homestack tui` requests it explicitly.
 #[must_use]
 pub fn wants_tui(argv: &[String], stdin_tty: bool, stdout_tty: bool) -> bool {
-    argv.is_empty() && stdin_tty && stdout_tty
+    (argv.is_empty() && stdin_tty && stdout_tty) || argv.first().is_some_and(|word| word == "tui")
 }

@@ -50,6 +50,10 @@ fn main() -> ExitCode {
         return ExitCode::from(u8::try_from(code).unwrap_or(1));
     }
     let argv: Vec<String> = std::env::args().skip(1).collect();
+    if argv.len() == 2 && argv[0] == "tui" && matches!(argv[1].as_str(), "--help" | "-h") {
+        println!("{}", hs_cli::tui::USAGE);
+        return ExitCode::SUCCESS;
+    }
     let runtime = match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
         Ok(runtime) => runtime,
         Err(error) => {
@@ -58,10 +62,21 @@ fn main() -> ExitCode {
         }
     };
     if hs_cli::tui::wants_tui(&argv, std::io::stdin().is_terminal(), std::io::stdout().is_terminal()) {
+        let options = match hs_cli::tui::Options::parse(&argv) {
+            Ok(options) => options,
+            Err(error) => {
+                eprintln!("homestack: {error}");
+                return ExitCode::FAILURE;
+            }
+        };
+        if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
+            eprintln!("homestack: the TUI requires an interactive terminal");
+            return ExitCode::FAILURE;
+        }
         // Raw mode turns Ctrl+C into a key, so the TUI handles it itself.
         let code = runtime.block_on(async {
             let mut ctx = context();
-            match hs_cli::tui::run::run(&mut ctx).await {
+            match hs_cli::tui::run::run(&mut ctx, options).await {
                 Ok(code) => code,
                 Err(error) => {
                     eprintln!("homestack: {error}");

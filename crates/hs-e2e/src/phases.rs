@@ -127,7 +127,10 @@ pub async fn pause(dir: &Path, artifacts: &Path, report: &mut Value) -> Result<(
             ),
             shell_quote(&artifacts.display().to_string())
         );
-        eprintln!("Choose SSH and enter root@pve-e2e; the test client does not use the production profile.");
+        eprintln!(
+            "SSH root@pve-e2e and server domain {} are prefilled; the test client does not use the production profile.",
+            crate::domain::SEARCH
+        );
     }
     eprintln!("Inspect the VM, then resume on the runner host:");
     eprintln!(

@@ -58,6 +58,7 @@ pub struct Setup {
     /// Set by Esc while connecting: ssh is stopped.
     pub stop: Arc<AtomicBool>,
     pub server_image: Option<String>,
+    pub server_domain: Option<String>,
     /// The runtime the deployment and the last check run on.
     pub handle: tokio::runtime::Handle,
 }
@@ -203,6 +204,9 @@ fn connect(
         },
         Arc::clone(&setup.servers),
     )?;
+    if let Some(domain) = &setup.server_domain {
+        domain.clone_into(&mut session.draft_domain);
+    }
     let (found, first) = survey(setup, &mut session, tell);
     Ok((session, found, first))
 }

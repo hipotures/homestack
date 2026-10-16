@@ -45,7 +45,10 @@ pub(super) fn screen(buf: &mut Buffer, area: Rect, app: &App, install: &Install)
     };
     let sides = Sides {
         bottom_left: buttons(install),
-        bottom_right: vec![Control::plain(&counter)],
+        bottom_right: vec![
+            Control::named("F2", "copy", crossterm::event::KeyCode::F(2)),
+            Control::plain(&counter),
+        ],
         focused: true,
         ..Sides::default()
     };

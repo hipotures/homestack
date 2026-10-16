@@ -480,3 +480,16 @@ TARGET SELECTORS…`.
   back, a line of another day shows `MM-DD HH:MM:SS`, one of today the time
   only. Lines of before the date was written are read as they are.
 - The file is not trimmed.
+
+### Explicit install values and copying terminal text
+
+`homestack tui --ssh USER@HOST --server-domain DOMAIN` opens the install
+form with the given SSH target and server domain. Both remain editable; the
+initial domain is also used for the first plan, and rescans retain subsequent
+edits. Explicit install arguments open the form even when `client.toml` exists.
+The command requires an interactive terminal.
+
+**F2** enters copy mode on any screen: it freezes drawing and releases mouse
+capture so the terminal can select and copy text normally. **F2** or **Esc**
+returns to the current state. Background work continues while text is frozen.
+The install footer and the help list show the shortcut.

@@ -1252,6 +1252,7 @@ async fn the_tui_worker_installs_through_the_same_session_as_the_cli() {
         ssh_prefix: Vec::new(),
         stop: Arc::default(),
         server_image: None,
+        server_domain: Some("hs.example.net".to_owned()),
         handle: tokio::runtime::Handle::current(),
     };
     let (commands, receiver) = std::sync::mpsc::channel();
@@ -1277,6 +1278,7 @@ async fn the_tui_worker_installs_through_the_same_session_as_the_cli() {
         found.check
     );
     assert!(!found.settings.is_empty(), "nothing to choose: {found:?}");
+    assert_eq!(found.domain.as_deref(), Some("hs.example.net"));
     assert_eq!(cluster.changes(), 0, "connecting changed something");
 
     let answers: Vec<hs_cli::install_flow::Answer> = found
@@ -1400,6 +1402,7 @@ async fn a_rescan_offers_a_vm_taken_out_of_its_pool_and_keeps_the_choices() {
         ssh_prefix: Vec::new(),
         stop: Arc::default(),
         server_image: None,
+        server_domain: Some("hs.example.net".to_owned()),
         handle: tokio::runtime::Handle::current(),
     };
     let (commands, receiver) = std::sync::mpsc::channel();
@@ -1420,6 +1423,8 @@ async fn a_rescan_offers_a_vm_taken_out_of_its_pool_and_keeps_the_choices() {
         found.settings.iter().all(|setting| setting.title != "Back into pools"),
         "{found:?}"
     );
+
+    assert_eq!(found.domain.as_deref(), Some("hs.example.net"));
 
     // A workspace leaves its pool in Proxmox; the screen still has the
     // first read. Both disk storages ticked, a domain typed.

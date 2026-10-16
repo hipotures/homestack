@@ -140,7 +140,7 @@ impl std::fmt::Display for UsageError {
 impl std::error::Error for UsageError {}
 
 const USAGE: &str = "usage: homestack [-h] [--config CONFIG] [--json] [-y] \
-{discover,install,uninstall,create,refresh,resize,addkey,destroy,migrate,setup,repo,status,transport} ...";
+{discover,install,uninstall,create,refresh,resize,addkey,destroy,migrate,setup,repo,status,transport} ...\n       homestack tui [--ssh USER@HOST] [--server-domain DOMAIN]";
 
 fn usage_of(command: &str) -> String {
     let rest = match command {

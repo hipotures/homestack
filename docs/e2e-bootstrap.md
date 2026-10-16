@@ -243,11 +243,19 @@ inside that run's private `client/` directory. No production client files,
 tokens, DNS credentials or preferences are copied. The first launch opens the
 install screen without connecting to a configured HomeStack server.
 
-Select **SSH**, then enter **`root@pve-e2e`** in **Host**. The launcher's SSH
-wrapper uses only the run's generated configuration, identity and pinned host
-key; the real desktop's SSH config and agent are excluded. Other SSH aliases
+The launcher passes `tui --ssh root@pve-e2e --server-domain e2e.homestack.app`
+to the client. **SSH** and **Host `root@pve-e2e`** are prefilled on the access
+form; **Server domain `e2e.homestack.app`** is prefilled when the cluster is read.
+The values override earlier access defaults for this launch and remain editable.
+The launcher's SSH wrapper uses only the run's generated configuration,
+identity and pinned host key; the real desktop's SSH config and agent are excluded. Other SSH aliases
 fail, and Herdr is disabled to avoid using an existing production root shell.
 No `Include` in the desktop's `~/.ssh/config` is required for this client.
+
+Press **F2** on any TUI screen to enter copy mode. The display freezes and
+mouse capture is released, so the terminal can select text and copy it with
+its normal Copy shortcut. Press **F2** or **Esc** to resume the display.
+Background work continues; copy mode does not stop a deployment or the VM.
 
 Reopening the client for the same VM retains its test profile. VM cleanup
 removes that entire profile together with the VM keys and disks; logs and
@@ -285,6 +293,14 @@ desktop client configuration, deployment configuration, preferences and SSH
 files remained unchanged, and the controller stayed paused after TUI exit.
 Unit tests also verify rejected stale runs, SSH alias isolation and the
 blocked Herdr route. This does not verify a HomeStack container deployment.
+
+A live TUI check on 2026-10-16 verified that launch arguments prefill the SSH
+host and the server domain on the paused lab. F2 released terminal mouse
+capture, kept the display unchanged across timer ticks and ignored install
+actions until copy mode ended. Returning to the form allowed a read-only
+PVE connection, with `vmbr0` selected. Normal desktop client and SSH files
+were unchanged, and the VM stayed paused. A private PTY regression test
+also verifies that returning from copy mode needs no cursor-position query.
 
 
 ## What a successful run proves

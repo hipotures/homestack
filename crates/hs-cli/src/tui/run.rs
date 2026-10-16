@@ -57,6 +57,7 @@ enum Update {
 /// also after a panic.
 struct Screen {
     terminal: Terminal<CrosstermBackend<Stdout>>,
+    copying: bool,
 }
 
 impl Screen {
@@ -76,7 +77,37 @@ impl Screen {
         }));
         Ok(Self {
             terminal: Terminal::new(CrosstermBackend::new(stdout))?,
+            copying: false,
         })
+    }
+
+    /// Freeze the displayed text and let the terminal handle mouse selection.
+    fn toggle_copy(&mut self, app: &App) -> io::Result<()> {
+        if self.copying {
+            execute!(io::stdout(), crossterm::event::EnableMouseCapture)?;
+            self.copying = false;
+        } else {
+            self.terminal.draw(|frame| {
+                draw(frame, app);
+                let area = frame.area();
+                if area.height > 0 {
+                    frame.render_widget(
+                        ratatui::widgets::Paragraph::new(
+                            "Copy mode: select text with the mouse and use your terminal's Copy. F2 or Esc returns.",
+                        )
+                        .style(
+                            ratatui::style::Style::default()
+                                .fg(app.palette.accent)
+                                .bg(app.palette.background),
+                        ),
+                        ratatui::layout::Rect::new(area.x, area.bottom() - 1, area.width, 1),
+                    );
+                }
+            })?;
+            execute!(io::stdout(), crossterm::event::DisableMouseCapture)?;
+            self.copying = true;
+        }
+        Ok(())
     }
 }
 
@@ -530,6 +561,7 @@ struct Installing {
     stop: Arc<AtomicBool>,
     /// ssh's question waiting for its answer.
     pending: Option<crate::askpass::Question>,
+    server_domain: Option<String>,
 }
 
 impl Installing {
@@ -600,6 +632,7 @@ impl Installing {
             ssh_prefix: self.bridge.as_ref().map(Bridge::command_prefix).unwrap_or_default(),
             stop: Arc::clone(&self.stop),
             server_image: None,
+            server_domain: self.server_domain.clone(),
             handle: tokio::runtime::Handle::current(),
         };
         let (sender, receiver) = std::sync::mpsc::channel();
@@ -612,13 +645,22 @@ impl Installing {
 }
 
 /// Run the TUI until the user quits; the exit code.
-pub async fn run(ctx: &mut Context) -> Result<i32, AppError> {
+pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppError> {
     let path = Preferences::default_path(&ctx.home, ctx.config_home.as_deref());
     let no_color = std::env::var_os("NO_COLOR").is_some();
-    let (preferences, problem) = match Preferences::load(&path) {
+    let (mut preferences, problem) = match Preferences::load(&path) {
         Ok(preferences) => (preferences, None),
         Err(error) => (Preferences::fallback(&path), Some(error.0)),
     };
+    let explicit_install = options.ssh.is_some() || options.server_domain.is_some();
+    if let Some(host) = options.ssh {
+        preferences
+            .table
+            .insert("install_host".to_owned(), toml::Value::String(host));
+        preferences
+            .table
+            .insert("install_method".to_owned(), toml::Value::String("ssh".to_owned()));
+    }
     let mut app = App::new(preferences, no_color)?;
     let log_dir = config::default_path(&ctx.home, ctx.config_home.as_deref())
         .parent()
@@ -636,14 +678,21 @@ pub async fn run(ctx: &mut Context) -> Result<i32, AppError> {
     let (updates, mut received) = mpsc::unbounded_channel::<Update>();
     app.set_keys(public_keys(&ctx.home));
     let first_start = !config::default_path(&ctx.home, ctx.config_home.as_deref()).exists();
-    let mut connection = if first_start {
+    let mut connection = if first_start || explicit_install {
         if app.open_install(Mode::Install, true) == Some(Request::HerdrTabs) {
             match crate::root_herdr::tabs(ctx.system.as_ref()) {
                 Ok(tabs) => app.set_herdr_tabs(tabs.into_iter().map(|tab| (tab.name, tab.title)).collect()),
                 Err(error) => app.log(&clock.now(), &error.0),
             }
         }
-        app.log(&clock.now(), "no client.toml: the install screen");
+        app.log(
+            &clock.now(),
+            if first_start {
+                "no client.toml: the install screen"
+            } else {
+                "TUI install arguments: the install screen"
+            },
+        );
         Connection::none()
     } else {
         Connection::open(ctx, &updates).unwrap_or_else(|notice| {
@@ -651,7 +700,10 @@ pub async fn run(ctx: &mut Context) -> Result<i32, AppError> {
             Connection::none()
         })
     };
-    let mut installing = Installing::default();
+    let mut installing = Installing {
+        server_domain: options.server_domain,
+        ..Installing::default()
+    };
     let (keys, mut events) = mpsc::unbounded_channel::<Event>();
     let reader = Reader::start(keys);
     // While ssh has the terminal it is not in raw mode, and Ctrl+C before
@@ -674,15 +726,23 @@ pub async fn run(ctx: &mut Context) -> Result<i32, AppError> {
         app.clock = clock.now();
         app.today = clock.today();
         details.update(app.details_target(), connection.client.as_ref());
-        screen
-            .terminal
-            .draw(|frame| draw(frame, &app))
-            .map_err(|error| AppError::new(format!("Cannot draw: {error}")))?;
+        if !screen.copying {
+            screen
+                .terminal
+                .draw(|frame| draw(frame, &app))
+                .map_err(|error| AppError::new(format!("Cannot draw: {error}")))?;
+        }
         tokio::select! {
             Some(event) = events.recv() => {
                 let request = match event {
-                    Event::Key(key) if key.kind == KeyEventKind::Press => app.key(key),
-                    Event::Mouse(mouse) => app.mouse(mouse),
+                    Event::Key(key) if key.kind == KeyEventKind::Press
+                        && (key.code == event::KeyCode::F(2) || (screen.copying && key.code == event::KeyCode::Esc)) => {
+                        screen.toggle_copy(&app).map_err(|error| AppError::new(format!("Cannot change copy mode: {error}")))?;
+                        None
+                    }
+                    Event::Key(key) if key.kind == KeyEventKind::Press && (!screen.copying ||
+                        (key.modifiers.contains(event::KeyModifiers::CONTROL) && matches!(key.code, event::KeyCode::Char('c' | 'q')))) => app.key(key),
+                    Event::Mouse(mouse) if !screen.copying => app.mouse(mouse),
                     _ => None,
                 };
                 if let Some(request) = request {

@@ -67,6 +67,7 @@ fn prepare(dir: &Path, program: &Path, ssh: &Path) -> Result<Command> {
     paths.extend(std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()));
     let mut command = Command::new(program);
     command
+        .args(["tui", "--ssh", "root@pve-e2e", "--server-domain", crate::domain::SEARCH])
         .env("HOME", root.join("home"))
         .env("XDG_CONFIG_HOME", root.join("config"))
         .env("XDG_STATE_HOME", root.join("state"))
@@ -115,7 +116,10 @@ pub fn launch(artifacts: &Path) -> Result<()> {
     let mut command = prepare(&dir, &program, &executable("ssh")?)?;
     eprintln!("E2E client profile: {}", dir.join("client").display());
     eprintln!("Production client configuration and SSH agent are excluded.");
-    eprintln!("In the installer choose SSH and enter root@pve-e2e. Herdr is disabled.");
+    eprintln!(
+        "Installer defaults: SSH root@pve-e2e; server domain {}. Herdr is disabled.",
+        crate::domain::SEARCH
+    );
     eprintln!("This profile and its credentials are removed with the VM. Keep the controller paused.");
     Err(command.exec().into())
 }
@@ -137,8 +141,18 @@ mod tests {
     #[test]
     fn client_uses_an_empty_profile_without_inherited_credentials() -> Result<()> {
         let dir = fixture()?;
-        let mut command = prepare(dir.path(), Path::new("/bin/sh"), Path::new("/usr/bin/ssh"))?;
-        let output = command.args(["-c", "printf '%s\\n' \"$HOME\" \"$XDG_CONFIG_HOME\" \"$XDG_STATE_HOME\" \"$XDG_CACHE_HOME\"; test -z \"${SSH_AUTH_SOCK-}\"; test ! -e \"$XDG_CONFIG_HOME/homestack/client.toml\""]).output()?;
+        let program = dir.path().join("client-program");
+        write(
+            &program,
+            "#!/bin/sh\nprintf '%s\\n' \"$HOME\" \"$XDG_CONFIG_HOME\" \"$XDG_STATE_HOME\" \"$XDG_CACHE_HOME\"\ntest -z \"${SSH_AUTH_SOCK-}\"\ntest ! -e \"$XDG_CONFIG_HOME/homestack/client.toml\"\n",
+            0o700,
+        )?;
+        let mut command = prepare(dir.path(), &program, Path::new("/usr/bin/ssh"))?;
+        assert_eq!(
+            command.get_args().collect::<Vec<_>>(),
+            ["tui", "--ssh", "root@pve-e2e", "--server-domain", "e2e.homestack.app"]
+        );
+        let output = command.output()?;
         assert!(output.status.success());
         let expected = ["home", "config", "state", "cache"]
             .map(|name| format!("{}\n", dir.path().join("client").join(name).display()))
