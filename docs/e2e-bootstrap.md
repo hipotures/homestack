@@ -99,6 +99,14 @@ pauses; final forced process cleanup runs after a timeout or interruption.
 There is no automatic software-emulation
 fallback and no option to target an existing VM or Proxmox installation.
 
+Kernel and PVE package installation show separate **Package download** and
+**Package install** progress bars, with the actual percentage and current
+action reported by [APT's status stream](https://sources.debian.org/src/apt/3.0.3/doc/progress-reporting.md).
+The percentage covers that package operation; reboot, service readiness and
+TLS installation have their own messages. Terminal output redraws the bar;
+redirected output prints periodic lines. Complete package output, status
+messages and errors remain in `install-kernel.log` and `install-pve.log`.
+
 
 ## Installation phases and manual inspection
 
@@ -349,9 +357,10 @@ files remained available for the next run. Full fixture cleanup was refused
 while the active controller held its lock. An independent inspection timeout
 also removed the VM while retaining these fixtures.
 
-All seventeen E2E unit tests and twenty-three deployment unit/integration tests
+All nineteen E2E unit tests and twenty-three deployment unit/integration tests
 passed, including fixture ownership, exclusive locking, scoped cache reset,
-image-cache reuse/repair and failed-download preservation, failure preservation
+image-cache reuse/repair and failed-download preservation, APT status parsing
+and installer output/error preservation, failure preservation
 and inspection time being excluded from the active
 deadline. Clippy and formatting checks passed. Tests requiring local sockets
 run outside the restricted tool sandbox; live production-cluster tests remain

@@ -163,21 +163,7 @@ impl Vm {
     }
 
     pub async fn logged_ssh(&self, script: &str, limit: Duration, log: &Path) -> Result<()> {
-        let file = File::options().create(true).append(true).open(log)?;
-        let mut child = self.ssh_command().stdout(file.try_clone()?).stderr(file).spawn()?;
-        let mut stdin = child.stdin.take().ok_or("SSH stdin is unavailable")?;
-        let status = tokio::time::timeout(limit, async {
-            use tokio::io::AsyncWriteExt;
-            stdin.write_all(script.as_bytes()).await?;
-            stdin.shutdown().await?;
-            drop(stdin);
-            child.wait().await
-        })
-        .await??;
-        if !status.success() {
-            return Err(format!("guest command failed ({status}); see {}", log.display()).into());
-        }
-        Ok(())
+        crate::install::run(self.ssh_command(), script, limit, log).await
     }
 
     pub async fn checked_ssh(&self, script: &str, limit: Duration, log: &Path) -> Result<Vec<u8>> {

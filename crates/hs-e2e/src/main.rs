@@ -2,6 +2,7 @@
 
 mod domain;
 mod image;
+mod install;
 mod phases;
 mod proxy;
 mod seed;
@@ -442,6 +443,7 @@ async fn run(
                 &artifacts.join("install-kernel.log"),
             )
             .await?;
+            eprintln!("Proxmox kernel installed. Rebooting the VM...");
             vm.checked_ssh(
                 "systemctl reboot --no-block\n",
                 Duration::from_secs(15),
@@ -462,6 +464,7 @@ async fn run(
                 &artifacts.join("install-pve.log"),
             )
             .await?;
+            eprintln!("PVE packages installed. Rebooting the VM...");
             let before = vm.wait_ssh(None).await?;
             vm.checked_ssh(
                 "systemctl reboot --no-block\n",
@@ -470,6 +473,7 @@ async fn run(
             )
             .await?;
             report["boot_id"] = json!(vm.wait_ssh(Some(&before)).await?);
+            eprintln!("Waiting for Proxmox services...");
             vm.checked_ssh(
                 WAIT_PVE,
                 Duration::from_secs(120),
@@ -486,6 +490,7 @@ async fn run(
             if !result.status.success() {
                 return Err("cannot configure the temporary PVE web login".into());
             }
+            eprintln!("Installing the cached public TLS certificate...");
             fixture.install(vm).await?;
             report["web_url"] = json!(web_url(vm, hostname));
             report["web_trust"] = json!("public CA; normal browser/system roots");
@@ -662,10 +667,11 @@ fn show_access(dir: &Path, vm: &vm::Vm, options: &Options, hostname: &str, passw
 
 const KERNEL_INSTALL: &str = r#"
 export DEBIAN_FRONTEND=noninteractive
+export LC_ALL=C
 test "$(id -u)" = 0
 test "$(hostname --ip-address)" = 10.0.2.15
-apt-get update
-apt-get -y --no-install-recommends install proxmox-default-kernel
+apt-get -o APT::Status-Fd=3 update
+apt-get -o APT::Status-Fd=3 -o Dpkg::Use-Pty=0 -y --no-install-recommends install proxmox-default-kernel
 "#;
 
 const WAIT_PVE: &str = r#"
@@ -680,9 +686,10 @@ exit 1
 
 const PVE_INSTALL: &str = r#"
 export DEBIAN_FRONTEND=noninteractive
+export LC_ALL=C
 case "$(uname -r)" in *-pve) ;; *) echo 'Not running a PVE kernel' >&2; exit 1 ;; esac
 echo 'postfix postfix/main_mailer_type select Local only' | debconf-set-selections
-apt-get -y --no-install-recommends install proxmox-ve postfix open-iscsi chrony
+apt-get -o APT::Status-Fd=3 -o Dpkg::Use-Pty=0 -y --no-install-recommends install proxmox-ve postfix open-iscsi chrony
 rm -f /etc/apt/sources.list.d/pve-enterprise.list /etc/apt/sources.list.d/pve-enterprise.sources /etc/apt/sources.list.d/ceph.sources
 apt-get clean
 "#;
