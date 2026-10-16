@@ -93,13 +93,16 @@ impl Servers for RealServers {
     }
 }
 
-/// The image of this build: `<version>-<commit>`, when the commit is known.
+/// The image of this build: `<major>.<minor>.<patch>-<commit>`, the patch
+/// counted by `build.rs` as the CI counts it, when the commit is known.
 #[must_use]
 pub fn default_image() -> Option<String> {
     let commit = option_env!("HOMESTACK_COMMIT").filter(|commit| commit.len() >= 12)?;
+    let patch = option_env!("HOMESTACK_PATCH").unwrap_or(env!("CARGO_PKG_VERSION_PATCH"));
     Some(format!(
-        "{IMAGE_REPOSITORY}:{}-{}",
-        env!("CARGO_PKG_VERSION"),
+        "{IMAGE_REPOSITORY}:{}.{}.{patch}-{}",
+        env!("CARGO_PKG_VERSION_MAJOR"),
+        env!("CARGO_PKG_VERSION_MINOR"),
         &commit[..12]
     ))
 }

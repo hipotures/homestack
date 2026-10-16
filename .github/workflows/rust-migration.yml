@@ -31,8 +31,10 @@ jobs:
         run: scripts/check.sh
 
   # The node image for homestack-deploy:
-  # ghcr.io/hipotures/homestack-server:<version>-<commit>, public, on every
+  # ghcr.io/hipotures/homestack-server:<major>.<minor>.<patch>-<commit>, public, on every
   # push to rust-migration (deploy/image/Containerfile).
+  # The patch is the number of commits since `version` last changed in
+  # Cargo.toml (crates/hs-cli/build.rs counts the same).
   image:
     # Built at once, beside the checks: a deployment names the commit's
     # image, and the checks still say whether the commit is good.
@@ -44,11 +46,15 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: Image tag
         id: tag
         run: |
-          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
-          echo "tag=${version}-${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
+          version=$(sed -n 's/^version = "\([0-9]*\.[0-9]*\)\..*"$/\1/p' Cargo.toml | head -1)
+          since=$(git log -1 --format=%H -G '^version = ' -- Cargo.toml)
+          patch=$(git rev-list --count "$since..HEAD")
+          echo "tag=${version}.${patch}-${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
       - name: Install Rust 1.99.0 for musl
         run: |
           sudo apt-get install -y --no-install-recommends musl-tools
