@@ -124,6 +124,15 @@ pub async fn pause(dir: &Path, artifacts: &Path, report: &mut Value, timeout: Du
         report["phase"],
         timeout.as_secs()
     );
+    if dir.join("ssh_config").is_file() {
+        eprintln!("Open the isolated HomeStack TUI in another terminal on the runner host:");
+        eprintln!(
+            "  {} client --artifacts {}",
+            shell_quote(&std::env::current_exe()?.display().to_string()),
+            shell_quote(&artifacts.display().to_string())
+        );
+        eprintln!("Choose SSH and enter root@pve-e2e; the test client does not use the production profile.");
+    }
     eprintln!("Inspect the VM, then resume on the runner host:");
     eprintln!(
         "  homestack-e2e resume --artifacts {}",

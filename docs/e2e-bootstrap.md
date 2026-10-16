@@ -217,6 +217,54 @@ ssh -F /path/printed/by/the/runner/ssh_config pve-e2e
 That configuration uses the run's private key and pinned host identity. It is
 independent of the user's SSH agent, keys and existing Proxmox configuration.
 
+## Manual HomeStack TUI in the lab
+
+Plain `cargo run -p hs-cli` starts the normal desktop client. It reads the
+desktop's existing `client.toml` and immediately polls the configured servers,
+which may be production. Use the E2E launcher to inspect the lab instead.
+
+Build both executables, start the runner with `--pause-after verify` and keep
+the controller paused. In another terminal on the runner host, use the
+`client --artifacts` command printed at the pause. For the `inspection` run
+above:
+
+```sh
+cargo build --locked -p hs-cli -p hs-e2e
+cargo run --locked -p hs-e2e -- client --artifacts target/e2e/inspection
+```
+
+The launcher requires a paused run, its SSH credentials and a reachable
+inspection socket. It opens the real `homestack` executable beside
+`homestack-e2e`, with a separate `HOME` and XDG configuration, state and cache
+inside that run's private `client/` directory. No production client files,
+tokens, DNS credentials or preferences are copied. The first launch opens the
+install screen without connecting to a configured HomeStack server.
+
+Select **SSH**, then enter **`root@pve-e2e`** in **Host**. The launcher's SSH
+wrapper uses only the run's generated configuration, identity and pinned host
+key; the real desktop's SSH config and agent are excluded. Other SSH aliases
+fail, and Herdr is disabled to avoid using an existing production root shell.
+No `Include` in the desktop's `~/.ssh/config` is required for this client.
+
+Reopening the client for the same VM retains its test profile. VM cleanup
+removes that entire profile together with the VM keys and disks; logs and
+reports in the artifact directory remain. Closing the TUI leaves the paused
+controller and VM running. Resume, pause expiry, Ctrl-C or SIGTERM on the
+controller remove the VM as usual.
+
+This launcher enables manual TUI connection and inspection; the bootstrap
+still does not prepare HomeStack deployment. Container networking, registry
+access and a reachable HomeStack HTTPS endpoint are separate required work.
+
+Validated against the paused disposable PVE 9.2.21 VM: with production XDG
+paths deliberately inherited, the real TUI opened the install screen,
+connected to `root@pve-e2e` and read the single-node inventory. It made no
+HomeStack status requests and did not apply an installation. The normal
+desktop client configuration, deployment configuration, preferences and SSH
+files remained unchanged, and the controller stayed paused after TUI exit.
+Unit tests also verify rejected stale runs, SSH alias isolation and the
+blocked Herdr route. This does not verify a HomeStack container deployment.
+
 
 ## What a successful run proves
 
