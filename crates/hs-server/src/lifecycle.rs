@@ -6,7 +6,8 @@
 //!
 //! `POST /v1/plans` with `{"operation": "workspace.create", "parameters":
 //! {"vmid": 240, "name": "hst-a", "home_size": "20G", "storage": "..."}}`
-//! (`home_size` and `storage` optional), or `{"operation":
+//! (`home_size`, `storage`, `node` and `pool` optional; `pool` is the
+//! server's pool or the test pool, `homestack-test`), or `{"operation":
 //! "workspace.destroy", "parameters": {"vmid": 240}}`. The job's result is
 //! the plan with what the client needs for its local steps and the event,
 //! `workspace.created` or `workspace.destroyed`.
@@ -45,6 +46,7 @@ use std::sync::Arc;
 
 use hs_core::CoreError;
 use hs_core::addkey::{AddkeyRequest, add_key, plan_addkey};
+use hs_core::inventory::TEST_POOL;
 use hs_core::lifecycle::{
     CreateRequest, LifecycleTiming, create_workspace, destroy_workspace, plan_create, plan_destroy, plan_power,
     power_workspace,
@@ -98,6 +100,8 @@ struct CreateParameters {
     home_size: Option<String>,
     storage: Option<String>,
     node: Option<String>,
+    /// The instance's pool when absent, or the test pool.
+    pool: Option<String>,
 }
 
 struct Create {
@@ -112,8 +116,20 @@ impl Operation for Create {
     fn plan<'a>(&'a self, ctx: &'a OpContext, parameters: &'a Value) -> BoxFuture<'a, Result<Planned, OpFailure>> {
         Box::pin(async move {
             let parameters: CreateParameters = serde_json::from_value(parameters.clone()).map_err(|_| {
-                OpFailure::invalid("workspace.create takes vmid and name, and optionally home_size, storage and node.")
+                OpFailure::invalid(
+                    "workspace.create takes vmid and name, and optionally home_size, storage, node and pool.",
+                )
             })?;
+            let pool = match parameters.pool {
+                None => ctx.pools.workspaces.as_str(),
+                Some(pool) if pool == ctx.pools.workspaces => ctx.pools.workspaces.as_str(),
+                Some(pool) if pool == TEST_POOL => TEST_POOL,
+                Some(_) => {
+                    return Err(OpFailure::invalid(
+                        "workspace.create makes workspaces only in the server's pool or the test pool.",
+                    ));
+                }
+            };
             let request = CreateRequest {
                 vmid: parameters.vmid,
                 name: parameters.name,
@@ -121,7 +137,7 @@ impl Operation for Create {
                 storage: parameters.storage,
                 node: parameters.node,
             };
-            let summary = plan_create(ctx.pve.as_ref(), config(ctx)?, &ctx.pools.workspaces, &request).await?;
+            let summary = plan_create(ctx.pve.as_ref(), config(ctx)?, pool, &request).await?;
             Ok(Planned {
                 targets: vec![request.vmid],
                 summary,

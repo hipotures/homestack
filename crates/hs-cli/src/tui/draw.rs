@@ -1238,7 +1238,7 @@ fn action_box(buf: &mut Buffer, area: Rect, app: &App, action: &Action) {
                 lines.push((format!("{:<11}{value}", field.label), style));
                 // What the pool gives, shown and not edited.
                 if action.kind == Kind::New && field.label == "Pool" {
-                    let vmid = app.free_vmid();
+                    let vmid = app.free_vmid(&app.chosen_pool(form));
                     let ip = vmid.and_then(|vmid| app.address_of(vmid));
                     let shown = |value: Option<String>| value.unwrap_or_else(|| "—".to_owned());
                     lines.push((

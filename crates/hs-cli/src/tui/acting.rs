@@ -13,8 +13,12 @@ use crate::app::valid_name;
 
 const DEFAULT: &str = "default";
 const EXISTING_KEYS: &str = "the keys already in sshkeys";
-/// The VMIDs of the workspaces' default pool, the only pool for now.
-const POOL_VMIDS: (u32, u32) = (101_010, 101_199);
+/// The pools of workspaces and their VMIDs (`decisions.md`, addressing):
+/// the workspaces first, the default, then the test workspaces.
+const WORKSPACE_POOLS: [(&str, (u32, u32)); 2] = [
+    ("homestack", (101_010, 101_199)),
+    ("homestack-test", (101_200, 101_254)),
+];
 
 impl App {
     /// The desktop's public keys, offered by add key.
@@ -35,19 +39,64 @@ impl App {
         storages
     }
 
-    /// The pools a new workspace can go to: the server's workspace pool,
-    /// the default (its name once `/v1/capabilities` told it).
-    fn pools(&self) -> Vec<String> {
-        vec![
-            self.pool
-                .as_ref()
-                .map_or_else(|| DEFAULT.to_owned(), |pool| format!("{DEFAULT}: {pool}")),
-        ]
+    /// The pools a new workspace can go to, as the status lists them: their
+    /// IDs and names (comments in lower case); the server's pool alone when
+    /// it lists neither.
+    fn pools(&self) -> Vec<(String, String)> {
+        let groups = self.groups();
+        let listed: Vec<(String, String)> = WORKSPACE_POOLS
+            .iter()
+            .filter_map(|(id, _)| groups.iter().find(|(pool, _)| pool == id).cloned())
+            .collect();
+        if listed.is_empty() {
+            let pool = self.server_pool().to_owned();
+            return vec![(pool.clone(), pool)];
+        }
+        listed
     }
 
-    /// The VMID a new workspace gets: the first of the pool's range that no
-    /// VM or container of the HomeStack pools has.
-    pub(super) fn free_vmid(&self) -> Option<u32> {
+    /// The pool the server makes workspaces in when it is not told one.
+    fn server_pool(&self) -> &str {
+        self.pool.as_deref().unwrap_or(WORKSPACE_POOLS[0].0)
+    }
+
+    /// The pool the form chooses first: the group shown when it is one of
+    /// `pools`, else the workspaces.
+    fn first_pool(&self, pools: &[(String, String)]) -> usize {
+        let at = |id: &str| pools.iter().position(|(pool, _)| pool == id);
+        self.group
+            .as_deref()
+            .and_then(at)
+            .or_else(|| at(WORKSPACE_POOLS[0].0))
+            .unwrap_or(0)
+    }
+
+    /// The ID of the pool the new form has chosen.
+    pub(super) fn chosen_pool(&self, form: &Form) -> String {
+        let name = form
+            .fields
+            .iter()
+            .find(|field| field.label == "Pool")
+            .map(super::action::Field::value)
+            .unwrap_or_default();
+        self.pools()
+            .into_iter()
+            .find(|(_, pool_name)| *pool_name == name)
+            .map_or_else(|| self.server_pool().to_owned(), |(id, _)| id)
+    }
+
+    /// The VMIDs of `pool`; a pool without a range of its own has the
+    /// workspaces'.
+    fn pool_vmids(pool: &str) -> (u32, u32) {
+        WORKSPACE_POOLS
+            .iter()
+            .find(|(id, _)| *id == pool)
+            .map_or(WORKSPACE_POOLS[0].1, |(_, vmids)| *vmids)
+    }
+
+    /// The VMID a new workspace in `pool` gets: the first of the pool's
+    /// range that no VM or container of the HomeStack pools has.
+    pub(super) fn free_vmid(&self, pool: &str) -> Option<u32> {
         let used: Vec<u32> = self
             .status
             .iter()
@@ -60,7 +109,8 @@ impl App {
                     .chain(status.gold.as_ref().map(|gold| gold.vmid))
             })
             .collect();
-        (POOL_VMIDS.0..=POOL_VMIDS.1).find(|vmid| !used.contains(vmid))
+        let (first, last) = Self::pool_vmids(pool);
+        (first..=last).find(|vmid| !used.contains(vmid))
     }
 
     /// The address of `vmid` (`.101.10` for 101010) under the first two
@@ -186,12 +236,18 @@ impl App {
                 let storage_node = self.gold_node().unwrap_or_default();
                 let mut storages = vec![format!("{DEFAULT}: {}", self.storages_on(&storage_node).join(", "))];
                 storages.extend(self.storages_on(&storage_node));
+                let pools = self.pools();
+                let first = self.first_pool(&pools);
+                let mut pool = Field::choice(
+                    "Pool",
+                    pools.into_iter().map(|(_, name)| name).collect(),
+                    "The workspace's VMID and address follow from its pool; ← → to choose.",
+                );
+                if let Input::Choice { index, .. } = &mut pool.input {
+                    *index = first;
+                }
                 vec![
-                    Field::choice(
-                        "Pool",
-                        self.pools(),
-                        "The workspace's VMID and address follow from its pool.",
-                    ),
+                    pool,
                     Field::text(
                         "Name",
                         "",
@@ -285,11 +341,10 @@ impl App {
         let mut key_file = None;
         let parameters: Value = match action.kind {
             Kind::New => {
-                let Some(id) = self.free_vmid() else {
-                    return Err(format!(
-                        "No VMID of the pool is free ({}-{}).",
-                        POOL_VMIDS.0, POOL_VMIDS.1
-                    ));
+                let pool = self.chosen_pool(form);
+                let Some(id) = self.free_vmid(&pool) else {
+                    let (first, last) = Self::pool_vmids(&pool);
+                    return Err(format!("No VMID of the pool is free ({first}-{last})."));
                 };
                 let name = value("Name");
                 if !valid_name(&name) {
@@ -298,6 +353,9 @@ impl App {
                     ));
                 }
                 let mut parameters = json!({"vmid": id, "name": name});
+                if pool != self.server_pool() {
+                    parameters["pool"] = json!(pool);
+                }
                 for (label, key) in [("Node", "node"), ("Storage", "storage")] {
                     let chosen = value(label);
                     if !chosen.starts_with(DEFAULT) && !chosen.is_empty() {

@@ -227,6 +227,42 @@ async fn create_on_another_node_clones_then_migrates() -> TestResult {
     Ok(())
 }
 
+/// `pool` names the server's pool or the test pool; no other.
+#[tokio::test]
+async fn create_goes_to_the_servers_pool_or_the_test_pool() -> TestResult {
+    let server = start().await?;
+    let (status, plan) = server
+        .plan(
+            "workspace.create",
+            json!({"vmid": 240, "name": "hst-api", "pool": "homestack"}),
+        )
+        .await?;
+    assert_eq!(status, StatusCode::CREATED, "{plan}");
+    assert_eq!(plan["summary"]["pool"], "homestack", "{plan}");
+
+    // The simulated cluster has no test pool: the plan is refused for it.
+    let (status, body) = server
+        .plan(
+            "workspace.create",
+            json!({"vmid": 241, "name": "hst-test", "pool": "homestack-test"}),
+        )
+        .await?;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert!(
+        body.to_string().contains("pool homestack-test does not exist"),
+        "{body}"
+    );
+
+    let (status, body) = server
+        .plan(
+            "workspace.create",
+            json!({"vmid": 242, "name": "hst-gold", "pool": "homestack-gold"}),
+        )
+        .await?;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    Ok(())
+}
+
 #[tokio::test]
 async fn apply_needs_the_configuration_version() -> TestResult {
     let server = start().await?;

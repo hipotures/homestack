@@ -194,9 +194,9 @@ fn new_opens_a_form_and_its_values_go_to_the_plan() {
     assert_eq!(press(&mut fixture.app, KeyCode::Char('n')), None);
     let text = screen(&render(&fixture.app, 120, 36));
     assert!(text.contains("┐new workspace┌") && text.contains("┐form┌"), "{text}");
-    // The pool is chosen; its first free VMID and that VMID's address are
+    // Without the pools in the status, the server's; its first free VMID and that VMID's address are
     // only shown.
-    assert!(text.contains("Pool       ‹ default ›"), "{text}");
+    assert!(text.contains("Pool       ‹ homestack ›"), "{text}");
     assert!(text.contains("VMID       101010"), "{text}");
     assert!(text.contains("IP         10.0.101.10"), "{text}");
     assert!(!text.contains("[ 101010"), "{text}");
@@ -529,13 +529,61 @@ fn the_focused_button_of_a_plan_is_an_accent_bar() {
     assert_eq!(buf[(x + 1, y)].bg, palette.focus, "cancel has it now");
 }
 
-#[test]
-fn new_shows_the_servers_pool_as_the_default() {
+/// The app with the pools of an install, each by its comment.
+fn app_with_pools() -> tui_fixture::Fixture {
     let mut fixture = app();
+    let mut status = tui_fixture::status();
+    status["pools"] = json!([
+        {"id": "homestack", "comment": "Workspaces"},
+        {"id": "homestack-gold", "comment": "Gold"},
+        {"id": "homestack-test", "comment": "Test Workspaces"},
+    ]);
+    fixture.app.set_status(&status);
     fixture.app.pool = Some("homestack".to_owned());
+    fixture
+}
+
+#[test]
+fn new_takes_the_pool_of_the_group_shown_by_its_name() {
+    // All, and a group no workspace goes to: the workspaces.
+    for group in [None, Some("homestack-gold")] {
+        let mut fixture = app_with_pools();
+        fixture.app.group = group.map(str::to_owned);
+        press(&mut fixture.app, KeyCode::Char('n'));
+        let text = screen(&render(&fixture.app, 120, 36));
+        assert!(text.contains("Pool       ‹ workspaces ›"), "{group:?}: {text}");
+        assert!(text.contains("VMID       101010"), "{group:?}: {text}");
+    }
+
+    // Test workspaces: their VMIDs and addresses, and the pool is sent.
+    let mut fixture = app_with_pools();
+    fixture.app.group = Some("homestack-test".to_owned());
     press(&mut fixture.app, KeyCode::Char('n'));
     let text = screen(&render(&fixture.app, 120, 36));
-    assert!(text.contains("Pool       ‹ default: homestack ›"), "{text}");
+    assert!(text.contains("Pool       ‹ test workspaces ›"), "{text}");
+    assert!(text.contains("VMID       101200"), "{text}");
+    assert!(text.contains("IP         10.0.101.200"), "{text}");
+    press(&mut fixture.app, KeyCode::Tab);
+    type_text(&mut fixture.app, "lab-new");
+    let start = started(press(&mut fixture.app, KeyCode::Enter));
+    assert_eq!(
+        start.parameters,
+        json!({"vmid": 101200, "name": "lab-new", "pool": "homestack-test"})
+    );
+}
+
+#[test]
+fn new_pool_choice_changes_the_vmid_and_address() {
+    let mut fixture = app_with_pools();
+    press(&mut fixture.app, KeyCode::Char('n'));
+    press(&mut fixture.app, KeyCode::Right);
+    let text = screen(&render(&fixture.app, 120, 36));
+    assert!(text.contains("Pool       ‹ test workspaces ›"), "{text}");
+    assert!(text.contains("VMID       101200"), "{text}");
+    press(&mut fixture.app, KeyCode::Right);
+    let text = screen(&render(&fixture.app, 120, 36));
+    assert!(text.contains("Pool       ‹ workspaces ›"), "{text}");
+    assert!(text.contains("IP         10.0.101.10"), "{text}");
 }
 
 /// The new form with the focus on Home size (the fifth field).
