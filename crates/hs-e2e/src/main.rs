@@ -21,7 +21,7 @@ use serde_json::{Value, json};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
-const USAGE: &str = "homestack-e2e run [--memory-mib N] [--cpus N] [--disk-gib N]\n                  [--timeout-seconds N] [--message TEXT] [--artifacts DIRECTORY]\n                  [--pause-after PHASE[,PHASE...]] [--pause-on-failure]\n                  [--pause-timeout-seconds N] [--web-bind IPV4] [--web-port PORT]\n                  [--fixtures DIRECTORY] [--spaceship-file FILE]\n                  [--local-dns IPV4] [--tsig-file FILE]\n                  [--runner-ssh DESTINATION] [--runner-ssh-port PORT]\nhomestack-e2e resume --artifacts DIRECTORY\nhomestack-e2e client --artifacts DIRECTORY\nhomestack-e2e cleanup --all [--fixtures DIRECTORY] [--spaceship-file FILE] [--tsig-file FILE]\n\nPhases: preflight, domain, image, boot, kernel, proxmox, network, verify, shutdown; cleanup always runs.\nDefaults: 1 vCPU, 2048 MiB RAM, 12 GiB sparse disk, 1800 active seconds.\nInspection pauses default to 3600 seconds and require an explicit resume.\nThe panel uses pve.e2e.homestack.app with a public Let's Encrypt certificate.\nDNS and certificate fixtures persist until cleanup --all.\nThe web forward binds to 127.0.0.1 on a free port unless explicitly configured.\nDownloads Debian 13 qcow2, installs Proxmox, verifies SSH, HTTPS and web login,\npowers off, and deletes all temporary VM data. No host network changes.\nRequires Linux x86_64, /dev/kvm, qemu-system-x86_64, qemu-img,\nssh, ssh-keygen, mkfs.vfat, mcopy and openssl; dig/nsupdate for local DNS.\nNo host root privileges required.";
+const USAGE: &str = "homestack-e2e run [--memory-mib N] [--cpus N] [--disk-gib N]\n                  [--timeout-seconds N] [--message TEXT] [--artifacts DIRECTORY]\n                  [--pause-after PHASE[,PHASE...]] [--pause-on-failure]\n                  [--web-bind IPV4] [--web-port PORT]\n                  [--fixtures DIRECTORY] [--spaceship-file FILE]\n                  [--local-dns IPV4] [--tsig-file FILE]\n                  [--runner-ssh DESTINATION] [--runner-ssh-port PORT]\nhomestack-e2e resume --artifacts DIRECTORY\nhomestack-e2e client --artifacts DIRECTORY\nhomestack-e2e cleanup --all [--fixtures DIRECTORY] [--spaceship-file FILE] [--tsig-file FILE]\n\nPhases: preflight, domain, image, boot, kernel, proxmox, network, verify, shutdown; cleanup always runs.\nDefaults: 1 vCPU, 2048 MiB RAM, 12 GiB sparse disk, 1800 active seconds.\nInspection pauses have no time limit and require an explicit resume.\nThe panel uses pve.e2e.homestack.app with a public Let's Encrypt certificate.\nDNS and certificate fixtures persist until cleanup --all.\nThe web forward binds to 127.0.0.1 on a free port unless explicitly configured.\nDownloads Debian 13 qcow2, installs Proxmox, verifies SSH, HTTPS and web login,\npowers off, and deletes all temporary VM data. No host network changes.\nRequires Linux x86_64, /dev/kvm, qemu-system-x86_64, qemu-img,\nssh, ssh-keygen, mkfs.vfat, mcopy and openssl; dig/nsupdate for local DNS.\nNo host root privileges required.";
 
 struct Options {
     memory: u32,
@@ -32,7 +32,6 @@ struct Options {
     artifacts: PathBuf,
     pause_after: Vec<String>,
     pause_on_failure: bool,
-    pause_timeout: u64,
     web_bind: Ipv4Addr,
     web_port: u16,
     fixtures: PathBuf,
@@ -62,7 +61,6 @@ impl Options {
             artifacts: PathBuf::from("target/e2e").join(run_id),
             pause_after: Vec::new(),
             pause_on_failure: false,
-            pause_timeout: 3600,
             web_bind: Ipv4Addr::LOCALHOST,
             web_port: 0,
             fixtures: std::env::var_os("XDG_STATE_HOME")
@@ -108,7 +106,6 @@ impl Options {
                         }
                     }
                 }
-                "--pause-timeout-seconds" => options.pause_timeout = value.parse()?,
                 "--web-bind" => options.web_bind = value.parse()?,
                 "--web-port" => options.web_port = value.parse()?,
                 "--fixtures" => options.fixtures = PathBuf::from(value),
@@ -136,9 +133,10 @@ impl Options {
             || !(1..=8).contains(&options.cpus)
             || !(12..=64).contains(&options.disk)
             || !(60..=7200).contains(&options.timeout)
-            || !(1..=86400).contains(&options.pause_timeout)
         {
-            return Err("resource limits: memory 2048–16384 MiB, CPUs 1–8, disk 12–64 GiB, installation 60–7200 s, pause 1–86400 s".into());
+            return Err(
+                "resource limits: memory 2048–16384 MiB, CPUs 1–8, disk 12–64 GiB, installation 60–7200 s".into(),
+            );
         }
         if options.web_bind.is_unspecified() || options.web_bind.is_multicast() || options.web_bind.is_broadcast() {
             return Err("--web-bind must name a specific local unicast IPv4 address".into());
@@ -780,7 +778,6 @@ mod tests {
         assert_eq!(options.web_port, 8006);
         assert!(Options::parse(&args(&["run", "--pause-after", "cleanup"]), "test").is_err());
         assert!(Options::parse(&args(&["run", "--web-bind", "0.0.0.0"]), "test").is_err());
-        assert!(Options::parse(&args(&["run", "--pause-timeout-seconds", "0"]), "test").is_err());
         Ok(())
     }
 

@@ -22,6 +22,9 @@ tempfile = "3.27.0"
 tokio = { version = "1.53.2", features = ["rt-multi-thread", "macros", "time", "net", "process", "signal", "io-util", "io-std"] }
 uuid = { version = "1.28.0", features = ["v4"] }
 
+[dev-dependencies]
+tokio = { version = "1.53.2", features = ["test-util"] }
+
 [[bin]]
 name = "homestack-e2e"
 path = "src/main.rs"

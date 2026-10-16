@@ -157,11 +157,13 @@ or restart the installation. A failed phase pauses when `--pause-on-failure`
 is selected. Resuming that failure continues to cleanup and preserves the
 original failed result. A later attempt starts a fresh VM.
 
-Each pause has its own deadline, 3600 seconds by default, configurable with
-`--pause-timeout-seconds` (1–86400). Inspection time does not consume the active
-installation budget set by `--timeout-seconds`. A pause deadline, Ctrl-C or
-SIGTERM triggers cleanup. Keep the controller running during inspection.
+Inspection pauses have **no time limit**. The VM stays available until you
+explicitly resume or stop the controller. Inspection time does not consume the
+active installation budget set by `--timeout-seconds`. Ctrl-C or SIGTERM on
+the controller triggers cleanup. Keep the controller running during inspection.
 Socket files are also removed on cancellation. Cleanup itself cannot be paused.
+A controller that was already running before an executable rebuild continues
+using its loaded code, including any inspection timer from that older build.
 
 ## Browser and SSH access
 
@@ -250,8 +252,8 @@ No `Include` in the desktop's `~/.ssh/config` is required for this client.
 Reopening the client for the same VM retains its test profile. VM cleanup
 removes that entire profile together with the VM keys and disks; logs and
 reports in the artifact directory remain. Closing the TUI leaves the paused
-controller and VM running. Resume, pause expiry, Ctrl-C or SIGTERM on the
-controller remove the VM as usual.
+controller and VM running. Explicit resume continues the remaining lifecycle,
+which ends in VM cleanup; Ctrl-C or SIGTERM on the controller also removes the VM.
 
 This launcher enables manual TUI connection and inspection; the bootstrap
 prepares an internal bridge but does not deploy HomeStack. Registry access
@@ -393,8 +395,8 @@ redirects, credentials, query strings, other destinations and CONNECT tunnels.
 The guest has no general Internet or host LAN
 access. See [QEMU's restricted user networking](https://www.qemu.org/docs/master/system/invocation.html).
 
-On an error, deadline, Ctrl-C or SIGTERM, the controller terminates and reaps
-its QEMU child before removing its private files. Graceful shutdown and final
+On an error, active installation deadline, Ctrl-C or SIGTERM, the controller
+terminates and reaps its QEMU child before removing its private files. Graceful shutdown and final
 cleanup have separate results; a forced kill is not reported as a successful
 graceful poweroff. Logs and `report.json` remain in the artifact directory.
 SSH keys, API tokens, the initialization disk and VM disks are not artifacts.
@@ -449,8 +451,8 @@ chain and installed PVE fingerprint matched. A complete fresh VM run then
 passed with `certificate_reused = true`, real HTTPS/PAM login and node inventory,
 `graceful_shutdown = true` and complete VM removal; DNS, account and certificate
 files remained available for the next run. Full fixture cleanup was refused
-while the active controller held its lock. An independent inspection timeout
-also removed the VM while retaining these fixtures.
+while the active controller held its lock. Inspection has no timer and does
+not remove the VM because of elapsed time.
 
 A fresh lifecycle on 2026-10-16 passed the new `network` phase and paused after
 `verify`. The real isolated TUI discovered `vmbr0` and selected it as
@@ -465,7 +467,7 @@ All twenty-five E2E unit tests and twenty-three deployment unit/integration test
 passed, including fixture ownership, exclusive locking, scoped cache reset,
 image-cache reuse/repair and failed-download preservation, APT status parsing
 and installer output/error preservation, failure preservation
-and inspection time being excluded from the active
-deadline. Clippy and formatting checks passed. Tests requiring local sockets
-run outside the restricted tool sandbox; live production-cluster tests remain
+and inspection remaining paused after two simulated days until manual resume,
+without consuming the active installation deadline. Clippy and formatting
+checks passed. Tests requiring local sockets run outside the restricted tool sandbox; live production-cluster tests remain
 opt-in and were not run for this bootstrap change.

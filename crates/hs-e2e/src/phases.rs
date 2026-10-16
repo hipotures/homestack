@@ -1,4 +1,4 @@
-//! Explicit installation phases and bounded inspection over a private socket.
+//! Explicit installation phases and manual inspection over a private socket.
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -79,15 +79,7 @@ impl<'a> Progress<'a> {
         save_report(self.artifacts, report)?;
         let inspect = (outcome.is_err() && self.options.pause_on_failure)
             || (outcome.is_ok() && self.options.pause_after.iter().any(|name| name == phase));
-        if inspect
-            && let Err(error) = pause(
-                self.dir,
-                self.artifacts,
-                report,
-                Duration::from_secs(self.options.pause_timeout),
-            )
-            .await
-        {
+        if inspect && let Err(error) = pause(self.dir, self.artifacts, report).await {
             return Err(match outcome {
                 Ok(_) => error,
                 Err(original) => format!(
@@ -110,20 +102,18 @@ impl Drop for SocketGuard {
     }
 }
 
-pub async fn pause(dir: &Path, artifacts: &Path, report: &mut Value, timeout: Duration) -> Result<()> {
+pub async fn pause(dir: &Path, artifacts: &Path, report: &mut Value) -> Result<()> {
     let path = dir.join("inspection.sock");
     let listener = UnixListener::bind(&path)?;
     let _guard = SocketGuard(path.clone());
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
     report["status"] = json!("paused");
     report["control_socket"] = json!(path);
-    report["pause"] =
-        json!({"phase": report["phase"], "started_at_ms": now_ms(), "timeout_seconds": timeout.as_secs()});
+    report["pause"] = json!({"phase": report["phase"], "started_at_ms": now_ms()});
     save_report(artifacts, report)?;
     eprintln!(
-        "Paused after phase {} for up to {} seconds.",
-        report["phase"],
-        timeout.as_secs()
+        "Paused after phase {} until you resume. No inspection time limit.",
+        report["phase"]
     );
     if dir.join("ssh_config").is_file() {
         eprintln!("Open the isolated HomeStack TUI in another terminal on the runner host:");
@@ -145,21 +135,16 @@ pub async fn pause(dir: &Path, artifacts: &Path, report: &mut Value, timeout: Du
         shell_quote(&artifacts.display().to_string())
     );
     eprintln!("Ctrl-C or SIGTERM removes the VM. Inspection time does not consume the installation deadline.");
-    tokio::time::timeout(timeout, async {
-        loop {
-            let (mut stream, _) = listener.accept().await?;
-            if matches!(
-                tokio::time::timeout(Duration::from_secs(3), stream.read_u8()).await,
-                Ok(Ok(b'R'))
-            ) {
-                stream.write_all(b"K").await?;
-                break;
-            }
+    loop {
+        let (mut stream, _) = listener.accept().await?;
+        if matches!(
+            tokio::time::timeout(Duration::from_secs(3), stream.read_u8()).await,
+            Ok(Ok(b'R'))
+        ) {
+            stream.write_all(b"K").await?;
+            break;
         }
-        Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
-    })
-    .await
-    .map_err(|_| "inspection deadline exceeded; removing the VM")??;
+    }
     report["status"] = json!("running");
     report["control_socket"] = Value::Null;
     report["pause"]["resumed_at_ms"] = json!(now_ms());
@@ -202,7 +187,7 @@ mod tests {
         let dir = tempfile::tempdir()?;
         let artifacts = tempfile::tempdir()?;
         let mut report = json!({"phase": "boot", "phases": {}});
-        let paused = pause(dir.path(), artifacts.path(), &mut report, Duration::from_secs(2));
+        let paused = pause(dir.path(), artifacts.path(), &mut report);
         let resume = async {
             for _ in 0..100 {
                 if artifacts.path().join("report.json").exists() {
@@ -221,16 +206,32 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
-    async fn inspection_deadline_keeps_failure_visible_and_removes_socket() -> Result<()> {
+    #[tokio::test(start_paused = true)]
+    async fn inspection_waits_for_manual_resume_after_days() -> Result<()> {
         let dir = tempfile::tempdir()?;
         let artifacts = tempfile::tempdir()?;
-        let mut report = json!({"phase": "proxmox", "phase_status": "failed"});
+        let task_dir = dir.path().to_owned();
+        let task_artifacts = artifacts.path().to_owned();
+        let paused = tokio::spawn(async move {
+            let mut report = json!({"phase": "proxmox", "phase_status": "failed"});
+            pause(&task_dir, &task_artifacts, &mut report).await?;
+            Ok::<_, Box<dyn std::error::Error + Send + Sync>>(report)
+        });
+        tokio::task::yield_now().await;
+        assert!(dir.path().join("inspection.sock").exists());
+        tokio::time::advance(Duration::from_secs(2 * 24 * 60 * 60)).await;
+        tokio::task::yield_now().await;
         assert!(
-            pause(dir.path(), artifacts.path(), &mut report, Duration::from_millis(5))
-                .await
-                .is_err()
+            !paused.is_finished(),
+            "inspection must not expire without manual resume"
         );
+        let report: Value = serde_json::from_slice(&std::fs::read(artifacts.path().join("report.json"))?)?;
+        assert_eq!(report["status"], "paused");
+        assert_eq!(report["phase_status"], "failed");
+        assert!(report["pause"].get("timeout_seconds").is_none());
+        super::resume(artifacts.path()).await?;
+        let report = paused.await??;
+        assert_eq!(report["status"], "running");
         assert_eq!(report["phase_status"], "failed");
         assert!(!dir.path().join("inspection.sock").exists());
         Ok(())
