@@ -1,0 +1,56 @@
+version = 1
+
+[node]
+name = "@NODE@"
+
+[control]
+node = "@NODE@"
+
+[storage_layouts]
+@LAYOUT@ = ["local"]
+
+[root]
+disk = "scsi0"
+
+[home]
+disk = "scsi1"
+default_size = "1G"
+
+[network]
+prefix = "10.77.0"
+cidr = 24
+gateway = "10.77.0.1"
+dns = ["10.77.0.1"]
+
+[cloud_init]
+snippet_storage = "local"
+snippet_dir = "/var/lib/vz/snippets"
+
+[user]
+name = "user"
+uid = 1000
+gid = 1000
+
+[workspace_ssh]
+user = "user"
+identity_files = ["~/.ssh/e2e-workspace"]
+identities_only = true
+log_level = "FATAL"
+
+[repo]
+checkout_root = "~/DEV"
+sort = "recent"
+
+[display]
+storage_unit = "GiB"
+storage_decimals = 0
+
+[sounds]
+enabled = false
+
+[transport]
+type = "herdr"
+
+[transport.herdr]
+workspace = "E2E"
+tab = "pve-e2e"

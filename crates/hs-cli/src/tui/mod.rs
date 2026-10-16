@@ -18,13 +18,14 @@ pub mod shell;
 pub mod state;
 pub mod theme;
 
-pub const USAGE: &str = "usage: homestack tui [--ssh USER@HOST] [--server-domain DOMAIN]";
+pub const USAGE: &str = "usage: homestack tui [--ssh USER@HOST] [--server-domain DOMAIN] [--server-image IMAGE]";
 
 /// Explicit install values for an interactive TUI invocation.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Options {
     pub ssh: Option<String>,
     pub server_domain: Option<String>,
+    pub server_image: Option<String>,
 }
 
 impl Options {
@@ -38,6 +39,7 @@ impl Options {
             let slot = match flag.as_str() {
                 "--ssh" => &mut options.ssh,
                 "--server-domain" => &mut options.server_domain,
+                "--server-image" => &mut options.server_image,
                 _ => return Err(crate::AppError::new(format!("Unknown TUI argument {flag}; {USAGE}"))),
             };
             let value = args

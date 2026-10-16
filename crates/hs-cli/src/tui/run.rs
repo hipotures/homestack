@@ -562,6 +562,7 @@ struct Installing {
     /// ssh's question waiting for its answer.
     pending: Option<crate::askpass::Question>,
     server_domain: Option<String>,
+    server_image: Option<String>,
 }
 
 impl Installing {
@@ -631,7 +632,7 @@ impl Installing {
             sounds,
             ssh_prefix: self.bridge.as_ref().map(Bridge::command_prefix).unwrap_or_default(),
             stop: Arc::clone(&self.stop),
-            server_image: None,
+            server_image: self.server_image.clone(),
             server_domain: self.server_domain.clone(),
             handle: tokio::runtime::Handle::current(),
         };
@@ -702,6 +703,7 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
     };
     let mut installing = Installing {
         server_domain: options.server_domain,
+        server_image: options.server_image,
         ..Installing::default()
     };
     let (keys, mut events) = mpsc::unbounded_channel::<Event>();

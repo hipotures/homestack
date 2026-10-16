@@ -19,6 +19,7 @@ use tokio::process::Command;
 use crate::Result;
 
 pub const HOST: &str = "pve.e2e.homestack.app";
+pub const NODE: &str = "pve1";
 pub const SEARCH: &str = "e2e.homestack.app";
 const ZONE: &str = "homestack.app";
 const SUB: &str = "pve.e2e";
@@ -446,7 +447,7 @@ fn address_missing(records: &[Value], address: Ipv4Addr) -> Result<bool> {
     Err(format!("{HOST} already has conflicting DNS records; refusing to overwrite them").into())
 }
 
-async fn tool(program: &str, args: &[&str]) -> Result<Vec<u8>> {
+pub(crate) async fn tool(program: &str, args: &[&str]) -> Result<Vec<u8>> {
     let output = tokio::time::timeout(
         Duration::from_secs(30),
         Command::new(program)

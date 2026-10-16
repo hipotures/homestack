@@ -8,11 +8,20 @@ fn args(words: &[&str]) -> Vec<String> {
 
 #[test]
 fn explicit_tui_values_select_ssh_and_the_server_domain() -> Result<(), Box<dyn std::error::Error>> {
-    let argv = args(&["tui", "--ssh", "pve-e2e", "--server-domain", "e2e.homestack.app"]);
+    let argv = args(&[
+        "tui",
+        "--ssh",
+        "pve-e2e",
+        "--server-domain",
+        "e2e.homestack.app",
+        "--server-image",
+        "ghcr.io/test/server:tag",
+    ]);
     assert!(wants_tui(&argv, true, true));
     assert!(wants_tui(&argv, false, false));
     let options = Options::parse(&argv)?;
     assert_eq!(options.ssh.as_deref(), Some("root@pve-e2e"));
+    assert_eq!(options.server_image.as_deref(), Some("ghcr.io/test/server:tag"));
     assert_eq!(options.server_domain.as_deref(), Some("e2e.homestack.app"));
     assert_eq!(Options::parse(&[])?, Options::default());
     Ok(())

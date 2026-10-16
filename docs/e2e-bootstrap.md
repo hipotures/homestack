@@ -2,12 +2,16 @@
 
 `hs-e2e` implements the first executable part of the
 [isolated E2E laboratory design](isolated-e2e-lab.md): download a Debian qcow2,
-initialize a VM, install Proxmox, verify it, power it off and delete it.
-It does not install HomeStack or create Gold/workspace guests yet.
+initialize a VM, install Proxmox, prepare the HomeStack install inputs, verify
+the lab, power it off and delete it. The HomeStack container installation is
+confirmed manually in the real TUI; Gold/workspace fixtures remain later work.
 
 The runner prepares `pve.e2e.homestack.app` through the existing Spaceship and
 ACME implementation in `hs-deploy`. It installs a public Let's Encrypt
-certificate in PVE and retains DNS and certificate fixtures across runs.
+certificate in PVE and prepares `api1.e2e.homestack.app` at `10.77.0.101`.
+The HomeStack phase obtains or reuses `*.e2e.homestack.app`, installs it in
+PVE for both its browser alias and internal node name, and prepares a separate
+client profile. DNS and certificate fixtures persist across runs.
 Normal cleanup removes the VM; `cleanup --all` also resets owned fixtures.
 
 ## Run
@@ -44,7 +48,7 @@ PATH="$PWD/target/e2e-tools/bin:$PATH" cargo run --locked -p hs-e2e -- run \
 ```
 
 This network has a private `homestack.app` zone on the router. The
-`--local-dns` option creates the exact E2E A record there using
+`--local-dns` option creates the exact PVE and API E2E A records there using
 `~/.config/homestack/dns-tsig.key` (override with `--tsig-file FILE`), while
 Spaceship serves the public A record and ACME TXT challenge. It does not edit
 other names in either zone. Networks without a private zone omit this option.
@@ -96,8 +100,8 @@ Optional limits are `--memory-mib`, `--cpus`, `--disk-gib` and
 `--timeout-seconds`. The defaults are the smallest accepted resource allocation.
 The active run deadline defaults to 1800 seconds, excluding selected inspection
 pauses; final forced process cleanup runs after a timeout or interruption.
-There is no automatic software-emulation
-fallback and no option to target an existing VM or Proxmox installation.
+There is no software emulation. A run always creates its own VM; `prepare`
+can only update the runner's own live, paused lab.
 
 Kernel and PVE package installation show separate **Package download** and
 **Package install** progress bars, with the actual percentage and current
@@ -122,6 +126,7 @@ to `report.json` before the next phase starts:
 | `kernel` | Proxmox kernel installed and the VM rebooted |
 | `proxmox` | PVE services installed and rebooted; public certificate installed and temporary web credentials printed |
 | `network` | Internal `vmbr0` bridge configured at `10.77.0.1/24`, persisted in the guest network configuration and verified through PVE |
+| `homestack` | API DNS, cached public wildcard TLS, isolated install configuration and workspace key, internal DNS, restricted OCI access and a published server image in the native PVE cache; no container created |
 | `verify` | PVE kernel, exposed nested KVM, HTTPS API, web page, password login and authenticated node inventory checked |
 | `shutdown` | VM powered off; private files still exist until cleanup |
 | `cleanup` | QEMU reaped and private disks, keys and web credentials removed |
@@ -130,7 +135,7 @@ Request pauses only where manual inspection is useful:
 
 ```sh
 cargo run --locked -p hs-e2e -- run \
-  --pause-after boot,kernel,proxmox,network,verify \
+  --pause-after boot,kernel,proxmox,network,homestack,verify \
   --pause-on-failure \
   --artifacts target/e2e/inspection
 ```
@@ -236,15 +241,17 @@ cargo build --locked -p hs-cli -p hs-e2e
 cargo run --locked -p hs-e2e -- client --artifacts target/e2e/inspection
 ```
 
-The launcher requires a paused run, its SSH credentials and a reachable
-inspection socket. It opens the real `homestack` executable beside
+The launcher requires a paused run after HomeStack preparation, its SSH
+credentials and a reachable inspection socket. It opens the real `homestack` executable beside
 `homestack-e2e`, with a separate `HOME` and XDG configuration, state and cache
 inside that run's private `client/` directory. No production client files,
 tokens, DNS credentials or preferences are copied. The first launch opens the
 install screen without connecting to a configured HomeStack server.
 
-The launcher passes `tui --ssh root@pve-e2e --server-domain e2e.homestack.app`
-to the client. **SSH** and **Host `root@pve-e2e`** are prefilled on the access
+For an uninstalled lab, the launcher passes
+`tui --ssh root@pve-e2e --server-domain e2e.homestack.app --server-image <published-image>`
+to the client. After installation it opens the normal TUI with that run's
+`client.toml`; the production desktop profile remains excluded. **SSH** and **Host `root@pve-e2e`** are prefilled on the access
 form; **Server domain `e2e.homestack.app`** is prefilled when the cluster is read.
 The values override earlier access defaults for this launch and remain editable.
 The launcher's SSH wrapper uses only the run's generated configuration,
@@ -263,9 +270,55 @@ reports in the artifact directory remain. Closing the TUI leaves the paused
 controller and VM running. Explicit resume continues the remaining lifecycle,
 which ends in VM cleanup; Ctrl-C or SIGTERM on the controller also removes the VM.
 
-This launcher enables manual TUI connection and inspection; the bootstrap
-prepares an internal bridge but does not deploy HomeStack. Registry access
-and a reachable HomeStack HTTPS endpoint are separate required work.
+The `homestack` phase prepares the real installation without applying it:
+
+- A fresh, validated `config.toml` describes the actual numeric node `pve1`,
+  storage `local`, bridge `vmbr0`, gateway/DNS `10.77.0.1` and workspace user
+  `user` (UID/GID 1000). No production configuration is copied. A dedicated
+  workspace SSH key is generated under the private client home.
+- `api1.e2e.homestack.app` resolves to **`10.77.0.101`**, so the real installer
+  derives **CT 101**. The public and optional split-DNS records have their own
+  ownership journal in `<fixtures>/service/`.
+- The public **`*.e2e.homestack.app`** certificate and its account are cached
+  in `<fixtures>/service/acme/`. Only the certificate and key are copied into
+  the private client profile and PVE. Spaceship credentials remain on the
+  runner. A valid cached certificate makes the installer proceed without
+  requesting a DNS API key or issuing another ACME order.
+- An internal DNS service on `10.77.0.1` resolves the API and PVE names for
+  containers. The server reaches PVE as `pve1.e2e.homestack.app:8006`. The
+  installer accepts a wildcard SAN by deriving the numeric node's name and
+  still verifies its TLS hostname and trust chain.
+- The newest published server image is pinned in `service.json` and pulled
+  into PVE's native OCI archive cache through `skopeo`. Repeated preparation
+  reuses that archive. No HomeStack container is created during preparation.
+
+For an already paused lab, the same preparation can be run explicitly:
+
+```sh
+./target/debug/homestack-e2e prepare --artifacts target/e2e/inspection \
+  --local-dns 192.168.100.1
+```
+
+The command verifies the live inspection socket and VM initialization UUID
+before changing anything inside it. Its log is `service-preparation.log`;
+non-secret inputs and the selected image are in `service-preparation.json`.
+Reopening the TUI is required to load a newly prepared profile.
+
+The client owns an SSH SOCKS tunnel to the VM. Its HTTP(S) proxy environment
+routes PVE and HomeStack API calls through SSH, using the internal DNS names
+and normal public-CA TLS verification. A second, loopback-only SSH forward
+lets the PVE OCI worker reach a registry proxy on the runner. The registry
+proxy accepts CONNECT only to `ghcr.io:443` and
+`pkg-containers.githubusercontent.com:443`, resolves once and rejects private,
+loopback and reserved IPs. It does not terminate or weaken registry TLS.
+The image catalog is fetched directly by the runner. Both forwards end when
+the client exits; losing the SSH tunnel also stops the client. The VM stays
+running in its inspection pause. A second client for the same API fixture is
+rejected while the first holds its lock.
+
+The API's private address is reached by the client through this tunnel. A
+normal browser has no route to `10.77.0.101`; the PVE browser panel keeps its
+reported loopback forward and domain URL.
 The Rust installer supports installation before Gold exists. Select the
 server's bridge independently in the form; no Gold is fabricated for this
 step. Gold is required later for workspace creation and refresh.
@@ -281,8 +334,9 @@ The bridge has no external ports, IPv4 forwarding is disabled and IPv6 is
 disabled on the bridge. Container veths and VM taps may attach to it; a
 hardware NIC attached to it fails verification. It allows guests to reach
 each other and services on the test Proxmox. It provides no Internet or LAN
-egress, DHCP, public guest DNS records or browser forwarding to HomeStack.
-Those require later lab phases. Its configuration disappears with the outer
+egress or DHCP. The HomeStack phase adds only the explicit API DNS record
+and the tunnels described above; arbitrary guest DNS/egress and browser
+forwarding to HomeStack remain later work. Its configuration disappears with the outer
 VM; no bridge, route or firewall rule is created on the runner host.
 
 Validated against the paused disposable PVE 9.2.21 VM: with production XDG
@@ -318,8 +372,9 @@ also verifies that returning from copy mode needs no cursor-position query.
    JSON initialization data. Supply them through a NoCloud `CIDATA` FAT disk.
    Password authentication is disabled. Pin the guest SSH host key before
    connecting, rather than accepting a network-discovered key. Set the guest's
-   short hostname, FQDN and resolver search domain explicitly so PVE generates
-   the intended `pve.e2e.homestack.app` node identity.
+   short hostname `pve1`, browser FQDN `pve.e2e.homestack.app` and resolver
+   search domain explicitly. The numeric node name matches HomeStack's
+   storage-layout naming; the browser alias remains stable.
 4. Start QEMU with KVM, host CPU features and local-only SSH/PVE port forwards.
    Wait for SSH and successful Cloud-Init, then read the initialization data
    from the guest and compare it with the requested values.
@@ -353,8 +408,9 @@ Persistent fixtures live in `$XDG_STATE_HOME/homestack-e2e` (default
 directory. A file lock is held for the entire run, including inspection and
 cleanup. The private manifest records exact owned DNS values before mutation.
 Conflicting A, AAAA or CNAME records are rejected. Existing matching public
-records are reused without claiming ownership. Only the explicit PVE SAN is
-issued; production certificates and their cache are not reused or changed.
+records are reused without claiming ownership. Certificates cover only the
+explicit PVE name and the E2E wildcard described above; production certificates
+and their cache are not reused or changed.
 
 Each run checks DNS independently of certificate reuse. A certificate is reused
 when its explicit SAN and expiry leave at least 30 days, its key matches and
@@ -408,8 +464,10 @@ fetches Debian content over verified HTTPS and uses Proxmox's
 APT verifies signed indexes and package hashes using the Proxmox key fetched
 over HTTPS. TLS certificate checks are never disabled. The proxy refuses
 redirects, credentials, query strings, other destinations and CONNECT tunnels.
-The guest has no general Internet or host LAN
-access. See [QEMU's restricted user networking](https://www.qemu.org/docs/master/system/invocation.html).
+A separate registry proxy is available during HomeStack preparation and
+through the active client's loopback SSH reverse forward, with the two exact
+GHCR destinations described above. The guest has no general Internet or host
+LAN access. See [QEMU's restricted user networking](https://www.qemu.org/docs/master/system/invocation.html).
 
 On an error, active installation deadline, Ctrl-C or SIGTERM, the controller
 terminates and reaps its QEMU child before removing its private files. Graceful shutdown and final
@@ -479,11 +537,32 @@ APT proxy was blocked. Its namespace and veth ports were removed after the
 probe; this check did not deploy a HomeStack container. Reapplying the bridge
 configuration to an existing lab also succeeded.
 
-All twenty-five E2E unit tests and twenty-three deployment unit/integration tests
-passed, including fixture ownership, exclusive locking, scoped cache reset,
+The workspace test run passed **1005 tests**, with 30 opt-in tests ignored,
+including fixture ownership, exclusive locking, scoped cache reset,
 image-cache reuse/repair and failed-download preservation, APT status parsing
 and installer output/error preservation, failure preservation
 and inspection remaining paused after two simulated days until manual resume,
 without consuming the active installation deadline. Clippy and formatting
-checks passed. Tests requiring local sockets run outside the restricted tool sandbox; live production-cluster tests remain
-opt-in and were not run for this bootstrap change.
+checks passed. Tests requiring local sockets run outside the restricted tool
+sandbox; live production-cluster tests remain opt-in and were not run for
+this bootstrap change.
+
+HomeStack preparation was verified on 2026-10-16 against the actual lab:
+the native PVE OCI worker downloaded the published server image and a second
+preparation reused its archive. Public and split DNS resolved the API name to
+`10.77.0.101`; the dedicated wildcard certificate was publicly trusted and
+subsequent preparation created no ACME order. The real installer reached
+**Review with zero blocking problems**, with SSH host, domain and bridge
+prefilled and Gold absent. It stopped before applying the installation.
+A real Rust deployment-client status request also authenticated to PVE through
+the SOCKS tunnel with normal hostname and public-CA verification. The temporary
+lab token was removed, no container was created, desktop configuration stayed
+unchanged and the user's VM remained paused.
+
+A separate fresh VM then passed every phase from Debian boot through
+`homestack`, verification, graceful shutdown and complete VM removal with the
+default 1 vCPU, 2048 MiB RAM and 12 GiB disk. It reused existing DNS and valid
+E2E certificates, generated a complete isolated profile for `pve1` and pulled
+the published OCI image through the restricted registry tunnel. Its copied
+certificate caches had no DNS ownership and were reset afterward; the original
+fixtures and the user's paused VM remained available.

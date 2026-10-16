@@ -14,7 +14,7 @@ use crate::Result;
 
 pub struct Proxy {
     pub port: u16,
-    task: JoinHandle<()>,
+    pub(crate) task: JoinHandle<()>,
 }
 
 impl Drop for Proxy {

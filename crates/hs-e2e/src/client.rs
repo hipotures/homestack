@@ -1,14 +1,28 @@
 //! Run the real TUI with a disposable desktop profile and the lab's SSH key.
 
+use std::io::IsTerminal;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::os::unix::net::UnixStream;
-use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use serde_json::Value;
 
 use crate::{Result, phases::shell_quote};
+
+struct TerminalGuard;
+
+impl Drop for TerminalGuard {
+    fn drop(&mut self) {
+        let _ = crossterm::terminal::disable_raw_mode();
+        let _ = crossterm::execute!(
+            std::io::stdout(),
+            crossterm::event::DisableMouseCapture,
+            crossterm::terminal::LeaveAlternateScreen,
+            crossterm::cursor::Show
+        );
+    }
+}
 
 fn ssh_quote(path: &Path) -> String {
     format!(
@@ -29,7 +43,7 @@ fn write(path: &Path, text: &str, mode: u32) -> Result<()> {
     Ok(())
 }
 
-fn prepare(dir: &Path, program: &Path, ssh: &Path) -> Result<Command> {
+fn prepare(dir: &Path, program: &Path, ssh: &Path, image: &str) -> Result<Command> {
     let root = dir.join("client");
     for name in ["home", "config", "state", "cache", "bin"] {
         let path = root.join(name);
@@ -66,8 +80,12 @@ fn prepare(dir: &Path, program: &Path, ssh: &Path) -> Result<Command> {
     let mut paths = vec![root.join("bin")];
     paths.extend(std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()));
     let mut command = Command::new(program);
+    command.arg("tui");
+    if !root.join("config/homestack/client.toml").is_file() {
+        command.args(["--ssh", "root@pve-e2e", "--server-domain", crate::domain::SEARCH]);
+    }
     command
-        .args(["tui", "--ssh", "root@pve-e2e", "--server-domain", crate::domain::SEARCH])
+        .args(["--server-image", image])
         .env("HOME", root.join("home"))
         .env("XDG_CONFIG_HOME", root.join("config"))
         .env("XDG_STATE_HOME", root.join("state"))
@@ -89,7 +107,7 @@ fn executable(name: &str) -> Result<PathBuf> {
         .ok_or_else(|| format!("missing host tool {name}").into())
 }
 
-pub fn launch(artifacts: &Path) -> Result<()> {
+pub async fn launch(artifacts: &Path) -> Result<()> {
     let report: Value = serde_json::from_slice(&std::fs::read(artifacts.join("report.json"))?)?;
     if report["status"] != "paused" {
         return Err("the selected run is not paused; start a VM with --pause-after verify".into());
@@ -113,7 +131,44 @@ pub fn launch(artifacts: &Path) -> Result<()> {
     {
         return Err("build the client first: cargo build --locked -p hs-cli -p hs-e2e".into());
     }
-    let mut command = prepare(&dir, &program, &executable("ssh")?)?;
+    let metadata: Value = serde_json::from_slice(&std::fs::read(dir.join("service.json")).map_err(
+        |_| "HomeStack install inputs are missing; run homestack-e2e prepare --artifacts <this run> first",
+    )?)?;
+    if metadata["run_id"] != report["run_id"] {
+        return Err("service settings belong to another run".into());
+    }
+    let image = metadata["image"]
+        .as_str()
+        .ok_or("service settings have no server image")?;
+    let mut command = prepare(&dir, &program, &executable("ssh")?, image)?;
+    let fixture = Path::new(
+        metadata["fixture_directory"]
+            .as_str()
+            .ok_or("service settings have no fixture directory")?,
+    );
+    let fixture_lock = std::fs::File::options()
+        .read(true)
+        .write(true)
+        .open(fixture.join("fixture.lock"))?;
+    fixture_lock
+        .try_lock()
+        .map_err(|_| "the HomeStack E2E API fixture is in use by another client")?;
+    let registry = crate::registry_proxy::start().await?;
+    let mut tunnel = crate::tunnel::Tunnel::start(&dir, registry.port).await?;
+    let proxy = format!("socks5h://127.0.0.1:{}", tunnel.port);
+    for key in [
+        "HTTPS_PROXY",
+        "https_proxy",
+        "ALL_PROXY",
+        "all_proxy",
+        "HTTP_PROXY",
+        "http_proxy",
+    ] {
+        command.env(key, &proxy);
+    }
+    for key in ["NO_PROXY", "no_proxy"] {
+        command.env(key, "ghcr.io,pkg-containers.githubusercontent.com");
+    }
     eprintln!("E2E client profile: {}", dir.join("client").display());
     eprintln!("Production client configuration and SSH agent are excluded.");
     eprintln!(
@@ -121,7 +176,28 @@ pub fn launch(artifacts: &Path) -> Result<()> {
         crate::domain::SEARCH
     );
     eprintln!("This profile and its credentials are removed with the VM. Keep the controller paused.");
-    Err(command.exec().into())
+    eprintln!("HTTPS uses the lab SSH SOCKS tunnel; TLS hostname and public-CA checks stay enabled.");
+    let _terminal = if std::io::stdin().is_terminal() && std::io::stdout().is_terminal() {
+        crossterm::terminal::enable_raw_mode()?;
+        Some(TerminalGuard)
+    } else {
+        None
+    };
+    let mut child = tokio::process::Command::from(command).kill_on_drop(true).spawn()?;
+    let status = tokio::select! {
+        status = child.wait() => status,
+        _ = tunnel.wait() => {
+            child.start_kill()?;
+            child.wait().await?;
+            return Err("the lab SSH tunnel closed; the E2E client has stopped".into());
+        }
+    };
+    tunnel.stop().await?;
+    if status?.success() {
+        Ok(())
+    } else {
+        Err("the isolated HomeStack client exited unsuccessfully".into())
+    }
 }
 
 #[cfg(test)]
@@ -147,10 +223,23 @@ mod tests {
             "#!/bin/sh\nprintf '%s\\n' \"$HOME\" \"$XDG_CONFIG_HOME\" \"$XDG_STATE_HOME\" \"$XDG_CACHE_HOME\"\ntest -z \"${SSH_AUTH_SOCK-}\"\ntest ! -e \"$XDG_CONFIG_HOME/homestack/client.toml\"\n",
             0o700,
         )?;
-        let mut command = prepare(dir.path(), &program, Path::new("/usr/bin/ssh"))?;
+        let mut command = prepare(
+            dir.path(),
+            &program,
+            Path::new("/usr/bin/ssh"),
+            "ghcr.io/test/server:test",
+        )?;
         assert_eq!(
             command.get_args().collect::<Vec<_>>(),
-            ["tui", "--ssh", "root@pve-e2e", "--server-domain", "e2e.homestack.app"]
+            [
+                "tui",
+                "--ssh",
+                "root@pve-e2e",
+                "--server-domain",
+                "e2e.homestack.app",
+                "--server-image",
+                "ghcr.io/test/server:test"
+            ]
         );
         let output = command.output()?;
         assert!(output.status.success());
@@ -169,7 +258,16 @@ mod tests {
         let client_config = dir.path().join("client/config/homestack");
         std::fs::create_dir(&client_config)?;
         std::fs::write(client_config.join("client.toml"), "lab-only")?;
-        prepare(dir.path(), Path::new("/bin/true"), Path::new("/usr/bin/ssh"))?;
+        let reopened = prepare(
+            dir.path(),
+            Path::new("/bin/true"),
+            Path::new("/usr/bin/ssh"),
+            "ghcr.io/test/server:test",
+        )?;
+        assert_eq!(
+            reopened.get_args().collect::<Vec<_>>(),
+            ["tui", "--server-image", "ghcr.io/test/server:test"]
+        );
         assert_eq!(std::fs::read_to_string(client_config.join("client.toml"))?, "lab-only");
         let root = dir.path().to_owned();
         dir.close()?;
@@ -181,7 +279,7 @@ mod tests {
     fn ssh_uses_the_lab_config_and_herdr_cannot_reach_production() -> Result<()> {
         let dir = fixture()?;
         let ssh = executable("ssh")?;
-        prepare(dir.path(), Path::new("/bin/true"), &ssh)?;
+        prepare(dir.path(), Path::new("/bin/true"), &ssh, "ghcr.io/test/server:test")?;
         for target in ["root@pve-e2e", "root@production.invalid"] {
             let output = Command::new(dir.path().join("client/bin/ssh"))
                 .args(["-G", target])
@@ -220,18 +318,26 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn stale_runs_never_start_a_client_or_use_the_desktop_profile() -> Result<()> {
+    #[tokio::test]
+    async fn stale_runs_never_start_a_client_or_use_the_desktop_profile() -> Result<()> {
         let artifacts = tempfile::tempdir()?;
         let dir = fixture()?;
         let mut report = serde_json::json!({"status": "passed", "temporary_directory": dir.path()});
         std::fs::write(artifacts.path().join("report.json"), serde_json::to_vec(&report)?)?;
-        assert!(launch(artifacts.path()).is_err_and(|error| error.to_string().contains("not paused")));
+        assert!(
+            launch(artifacts.path())
+                .await
+                .is_err_and(|error| error.to_string().contains("not paused"))
+        );
         report["status"] = serde_json::json!("paused");
         std::fs::write(artifacts.path().join("report.json"), serde_json::to_vec(&report)?)?;
-        assert!(launch(artifacts.path()).is_err_and(|error| error.to_string().contains("no VM SSH credentials")));
+        assert!(
+            launch(artifacts.path())
+                .await
+                .is_err_and(|error| error.to_string().contains("no VM SSH credentials"))
+        );
         std::fs::write(dir.path().join("identity"), "unused")?;
-        assert!(launch(artifacts.path()).is_err());
+        assert!(launch(artifacts.path()).await.is_err());
         assert!(!dir.path().join("client").exists());
         Ok(())
     }

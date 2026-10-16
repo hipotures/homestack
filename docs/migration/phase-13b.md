@@ -483,7 +483,7 @@ TARGET SELECTORS…`.
 
 ### Explicit install values and copying terminal text
 
-`homestack tui --ssh USER@HOST --server-domain DOMAIN` opens the install
+`homestack tui --ssh USER@HOST --server-domain DOMAIN [--server-image IMAGE]` opens the install
 form with the given SSH target and server domain. Both remain editable; the
 initial domain is also used for the first plan, and rescans retain subsequent
 edits. Explicit install arguments open the form even when `client.toml` exists.

@@ -81,9 +81,10 @@ pub async fn create(dir: &Path, data: &Value, hostname: &str, artifacts: &Path) 
 
 fn user_data(data: &Value, hostname: &str, identity: &str, private: &str, public: &str, key: &[u8]) -> Result<Value> {
     Ok(json!({
-        "hostname": hostname.split('.').next().ok_or("missing hostname")?,
+        "hostname": crate::domain::NODE,
         "fqdn": hostname,
         "preserve_hostname": false,
+        "prefer_fqdn_over_hostname": false,
         "manage_etc_hosts": false,
         "disable_root": false,
         "ssh_pwauth": false,
@@ -93,12 +94,12 @@ fn user_data(data: &Value, hostname: &str, identity: &str, private: &str, public
         "package_update": false,
         "package_upgrade": false,
         "apt": {"preserve_sources_list": true},
-        "runcmd": [["systemctl", "restart", "systemd-resolved"]],
+        "runcmd": [["ssh-keygen", "-A"], ["systemctl", "restart", "systemd-resolved"]],
         "write_files": [
             {"path": "/etc/ssh/sshd_config.d/00-homestack-e2e.conf", "permissions": "0600", "content": "PasswordAuthentication no\nKbdInteractiveAuthentication no\nPermitRootLogin prohibit-password\n"},
             {"path": "/etc/systemd/resolved.conf.d/homestack-e2e.conf", "content": format!("[Resolve]\nDomains={}\n", crate::domain::SEARCH)},
             {"path": "/etc/homestack-e2e.json", "permissions": "0600", "content": serde_json::to_string(data)?},
-            {"path": "/etc/hosts", "content": format!("127.0.0.1 localhost\n10.0.2.15 {hostname} {}\n", hostname.split('.').next().ok_or("missing hostname")?)},
+            {"path": "/etc/hosts", "content": format!("127.0.0.1 localhost\n10.0.2.15 {hostname} {}\n", crate::domain::NODE)},
             {"path": "/usr/share/keyrings/proxmox-archive-keyring.gpg", "encoding": "b64", "content": base64::engine::general_purpose::STANDARD.encode(key)},
             {"path": "/etc/apt/apt.conf.d/80homestack-e2e", "content": "Acquire::http::Proxy \"http://10.0.2.100:3128/\";\nAcquire::Retries \"2\";\n"},
             {"path": "/etc/apt/sources.list.d/debian.sources", "content": "Types: deb\nURIs: http://deb.debian.org/debian\nSuites: trixie trixie-updates\nComponents: main\nSigned-By: /usr/share/keyrings/debian-archive-keyring.gpg\n\nTypes: deb\nURIs: http://security.debian.org/debian-security\nSuites: trixie-security\nComponents: main\nSigned-By: /usr/share/keyrings/debian-archive-keyring.gpg\n"},
@@ -132,7 +133,7 @@ mod tests {
         assert_eq!(serde_json::from_str::<Value>(content)?, data);
         assert_eq!(seed["users"][0]["lock_passwd"], true);
         assert_eq!(seed["ssh_pwauth"], false);
-        assert_eq!(seed["hostname"], "pve");
+        assert_eq!(seed["hostname"], crate::domain::NODE);
         assert_eq!(seed["fqdn"], crate::domain::HOST);
         Ok(())
     }

@@ -8,7 +8,11 @@ mod install;
 mod network;
 mod phases;
 mod proxy;
+mod registry_proxy;
 mod seed;
+mod service;
+mod service_fixture;
+mod tunnel;
 mod vm;
 
 use std::net::{Ipv4Addr, SocketAddr};
@@ -21,7 +25,7 @@ use serde_json::{Value, json};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
-const USAGE: &str = "homestack-e2e run [--memory-mib N] [--cpus N] [--disk-gib N]\n                  [--timeout-seconds N] [--message TEXT] [--artifacts DIRECTORY]\n                  [--pause-after PHASE[,PHASE...]] [--pause-on-failure]\n                  [--web-bind IPV4] [--web-port PORT]\n                  [--fixtures DIRECTORY] [--spaceship-file FILE]\n                  [--local-dns IPV4] [--tsig-file FILE]\n                  [--runner-ssh DESTINATION] [--runner-ssh-port PORT]\nhomestack-e2e resume --artifacts DIRECTORY\nhomestack-e2e client --artifacts DIRECTORY\nhomestack-e2e cleanup --all [--fixtures DIRECTORY] [--spaceship-file FILE] [--tsig-file FILE]\n\nPhases: preflight, domain, image, boot, kernel, proxmox, network, verify, shutdown; cleanup always runs.\nDefaults: 1 vCPU, 2048 MiB RAM, 12 GiB sparse disk, 1800 active seconds.\nInspection pauses have no time limit and require an explicit resume.\nThe panel uses pve.e2e.homestack.app with a public Let's Encrypt certificate.\nDNS and certificate fixtures persist until cleanup --all.\nThe web forward binds to 127.0.0.1 on a free port unless explicitly configured.\nDownloads Debian 13 qcow2, installs Proxmox, verifies SSH, HTTPS and web login,\npowers off, and deletes all temporary VM data. No host network changes.\nRequires Linux x86_64, /dev/kvm, qemu-system-x86_64, qemu-img,\nssh, ssh-keygen, mkfs.vfat, mcopy and openssl; dig/nsupdate for local DNS.\nNo host root privileges required.";
+const USAGE: &str = "homestack-e2e run [--memory-mib N] [--cpus N] [--disk-gib N]\n                  [--timeout-seconds N] [--message TEXT] [--artifacts DIRECTORY]\n                  [--pause-after PHASE[,PHASE...]] [--pause-on-failure]\n                  [--web-bind IPV4] [--web-port PORT]\n                  [--fixtures DIRECTORY] [--spaceship-file FILE]\n                  [--local-dns IPV4] [--tsig-file FILE]\n                  [--runner-ssh DESTINATION] [--runner-ssh-port PORT]\nhomestack-e2e resume --artifacts DIRECTORY\nhomestack-e2e client --artifacts DIRECTORY\nhomestack-e2e prepare --artifacts DIRECTORY [--local-dns IPV4] [--spaceship-file FILE] [--tsig-file FILE]\nhomestack-e2e cleanup --all [--fixtures DIRECTORY] [--spaceship-file FILE] [--tsig-file FILE]\n\nPhases: preflight, domain, image, boot, kernel, proxmox, network, homestack, verify, shutdown; cleanup always runs.\nDefaults: 1 vCPU, 2048 MiB RAM, 12 GiB sparse disk, 1800 active seconds.\nInspection pauses have no time limit and require an explicit resume.\nThe panel uses pve.e2e.homestack.app with a public Let's Encrypt certificate.\nDNS and certificate fixtures persist until cleanup --all.\nThe web forward binds to 127.0.0.1 on a free port unless explicitly configured.\nDownloads Debian 13 qcow2, installs Proxmox, verifies SSH, HTTPS and web login,\npowers off, and deletes all temporary VM data. No host network changes.\nRequires Linux x86_64, /dev/kvm, qemu-system-x86_64, qemu-img,\nssh, ssh-keygen, mkfs.vfat, mcopy and openssl; dig/nsupdate for local DNS.\nNo host root privileges required.";
 
 struct Options {
     memory: u32,
@@ -162,7 +166,43 @@ async fn execute() -> Result<()> {
         if args.len() != 3 || args[1] != "--artifacts" {
             return Err("usage: homestack-e2e client --artifacts DIRECTORY".into());
         }
-        return client::launch(Path::new(&args[2]));
+        return tokio::select! {
+            result = client::launch(Path::new(&args[2])) => result,
+            _ = interrupted() => Err("E2E client interrupted; the VM remains running".into()),
+        };
+    }
+    if args.first().is_some_and(|arg| arg == "prepare") {
+        for pair in args[1..].chunks(2) {
+            if !matches!(
+                pair[0].as_str(),
+                "--artifacts" | "--local-dns" | "--spaceship-file" | "--tsig-file"
+            ) {
+                return Err(format!("unknown prepare argument {}", pair[0]).into());
+            }
+        }
+        if !args.iter().any(|arg| arg == "--artifacts") {
+            return Err("prepare requires --artifacts DIRECTORY".into());
+        }
+        let mut preparation = args.clone();
+        preparation[0] = "run".into();
+        let mut options = Options::parse(&preparation, "prepare")?;
+        let report: Value = serde_json::from_slice(&std::fs::read(options.artifacts.join("report.json"))?)?;
+        if report["status"] != "paused" {
+            return Err("prepare requires a live paused run".into());
+        }
+        let dir = Path::new(
+            report["temporary_directory"]
+                .as_str()
+                .ok_or("run has no private directory")?,
+        );
+        drop(std::os::unix::net::UnixStream::connect(dir.join("inspection.sock"))?);
+        options.fixtures = PathBuf::from(
+            report["domain"]["directory"]
+                .as_str()
+                .ok_or("run has no fixture directory")?,
+        );
+        service::prepare(&options, dir, &options.artifacts, &report).await?;
+        return Ok(());
     }
     if args.first().map(String::as_str) == Some("resume") {
         if args.len() != 3 || args[1] != "--artifacts" {
@@ -192,6 +232,11 @@ async fn execute() -> Result<()> {
     let mut options = Options::parse(&args, &run_id)?;
     let mut fixture = domain::Fixture::open(&options.fixtures, &options.spaceship_file, &options.tsig_file)?;
     if args[0] == "cleanup" {
+        if options.fixtures.join("service/manifest.json").is_file() {
+            service_fixture::Fixture::open(&options.fixtures, &options.spaceship_file, &options.tsig_file)?
+                .reset()
+                .await?;
+        }
         return fixture.reset().await;
     }
     access::configure(&mut options);
@@ -532,6 +577,12 @@ async fn run(
             eprintln!("Preparing isolated vmbr0 for containers and VMs (10.77.0.1/24)...");
             report["network"] = network::configure(vm, artifacts).await?;
             eprintln!("Guest bridge ready: vmbr0, 10.77.0.1/24; no external ports or IP forwarding.");
+            Ok(())
+        })
+        .await?;
+    progress
+        .execute("homestack", report, async |report| {
+            report["service"] = service::prepare(options, dir, artifacts, report).await?;
             Ok(())
         })
         .await?;

@@ -10,7 +10,7 @@ use tokio::net::{UnixListener, UnixStream};
 
 use crate::{Result, save_report};
 
-pub const NAMES: [&str; 9] = [
+pub const NAMES: [&str; 10] = [
     "preflight",
     "domain",
     "image",
@@ -18,6 +18,7 @@ pub const NAMES: [&str; 9] = [
     "kernel",
     "proxmox",
     "network",
+    "homestack",
     "verify",
     "shutdown",
 ];
@@ -115,7 +116,7 @@ pub async fn pause(dir: &Path, artifacts: &Path, report: &mut Value) -> Result<(
         "Paused after phase {} until you resume. No inspection time limit.",
         report["phase"]
     );
-    if dir.join("ssh_config").is_file() {
+    if dir.join("service.json").is_file() {
         eprintln!("Open the isolated HomeStack TUI in another terminal on the runner host:");
         eprintln!(
             "  {} client --artifacts {}",

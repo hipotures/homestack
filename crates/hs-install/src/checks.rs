@@ -444,6 +444,20 @@ pub fn check_tags(root: &mut dyn Root, settings: &Settings, found: &mut Findings
     }
 }
 
+fn api_name(node: &str, names: &[String]) -> Option<String> {
+    names
+        .iter()
+        .find(|name| name.starts_with(&format!("{node}.")) && !name.contains('*'))
+        .cloned()
+        .or_else(|| {
+            names.iter().find_map(|name| {
+                name.strip_prefix("*.")
+                    .filter(|suffix| !suffix.is_empty() && !suffix.contains('*'))
+                    .map(|suffix| format!("{node}.{suffix}"))
+            })
+        })
+}
+
 pub fn check_certificates(root: &mut dyn Root, state: &State, found: &mut Findings) {
     for node in state.topology.nodes.iter().filter(|node| node.online) {
         let Ok(info) = get(root, &format!("/nodes/{}/certificates/info", node.name), "") else {
@@ -473,7 +487,7 @@ pub fn check_certificates(root: &mut dyn Root, state: &State, found: &mut Findin
             "pve-ssl.pem"
         };
         let names = names_of(file);
-        let Some(name) = names.iter().find(|name| name.starts_with(&format!("{}.", node.name))) else {
+        let Some(name) = api_name(&node.name, &names) else {
             let shown = if names.is_empty() {
                 "none".to_owned()
             } else {
@@ -494,7 +508,7 @@ pub fn check_certificates(root: &mut dyn Root, state: &State, found: &mut Findin
         let verified = root.run(&format!(
             "openssl s_client -connect {}:8006 -servername {n} -verify_hostname {n} -verify_return_error -brief < /dev/null > /dev/null 2>&1",
             quote(address),
-            n = quote(name)
+            n = quote(&name)
         ));
         if verified.is_ok_and(|output| output.code == 0) {
             found
@@ -506,7 +520,7 @@ pub fn check_certificates(root: &mut dyn Root, state: &State, found: &mut Findin
                 node.name
             ));
         }
-        let resolves = root.run(&format!("getent hosts {} > /dev/null 2>&1", quote(name)));
+        let resolves = root.run(&format!("getent hosts {} > /dev/null 2>&1", quote(&name)));
         if !resolves.is_ok_and(|output| output.code == 0) {
             found.warnings.push(format!(
                 "{}: {name} does not resolve on {}; the server needs it in its DNS or /etc/hosts",
@@ -602,4 +616,24 @@ pub fn all_questions(state: &State, settings: &Settings) -> Vec<Question> {
         questions.push(question);
     }
     questions
+}
+
+#[cfg(test)]
+mod tests {
+    use super::api_name;
+
+    #[test]
+    fn node_api_names_follow_explicit_or_single_label_wildcard_sans() {
+        let names = |names: &[&str]| names.iter().map(|name| (*name).to_owned()).collect::<Vec<_>>();
+        assert_eq!(
+            api_name("pve1", &names(&["*.e2e.example.net"])).as_deref(),
+            Some("pve1.e2e.example.net")
+        );
+        assert_eq!(
+            api_name("pve1", &names(&["*.example.net", "pve1.internal.example.net"])).as_deref(),
+            Some("pve1.internal.example.net")
+        );
+        assert!(api_name("pve1", &names(&["pve.example.net", "pve2.example.net"])).is_none());
+        assert!(api_name("pve1", &names(&["*.*.example.net", "pve*.example.net", "*."])).is_none());
+    }
 }
