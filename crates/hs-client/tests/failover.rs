@@ -132,6 +132,45 @@ async fn no_instance_answering_is_reported() -> Result<(), Error> {
 }
 
 #[tokio::test]
+async fn connection_failures_include_the_cause_without_credentials() -> Result<(), Error> {
+    let client = client(vec![closed_port()?])?;
+    let Err(error) = client.get("/health/live").await else {
+        return Err("a closed port must fail".into());
+    };
+    let message = error.to_string();
+    assert!(message.contains("connection failure"), "{message}");
+    assert!(message.to_lowercase().contains("refused"), "{message}");
+    assert!(!message.contains(TOKEN));
+    Ok(())
+}
+
+#[tokio::test]
+async fn request_timeouts_are_distinguished_from_connection_failures() -> Result<(), Error> {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let address = listener.local_addr()?;
+    let server = tokio::spawn(async move {
+        let (connection, _) = listener.accept().await?;
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        drop(connection);
+        Ok::<(), std::io::Error>(())
+    });
+    let endpoint = Endpoint::from(format!("http://{address}").parse::<url::Url>()?);
+    let mut config = ClientConfig::new(vec![endpoint], TOKEN.to_owned());
+    config.request_timeout = Duration::from_millis(100);
+    let client = Client::new(config)?;
+    let result = client.get("/health/live").await;
+    server.abort();
+    let Err(error) = result else {
+        return Err("an unanswered request must time out".into());
+    };
+    let message = error.to_string();
+    assert!(message.contains("request timeout"), "{message}");
+    assert!(message.contains("timed out"), "{message}");
+    assert!(!message.contains(TOKEN));
+    Ok(())
+}
+
+#[tokio::test]
 async fn a_plan_and_its_job_stay_on_one_instance() -> Result<(), Error> {
     let a_down = Arc::new(AtomicBool::new(false));
     let a = instance("a", Arc::clone(&a_down)).await?;

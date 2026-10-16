@@ -112,6 +112,24 @@ enum Reply {
     Down(String),
 }
 
+fn transport_error(error: reqwest::Error) -> String {
+    let kind = match (error.is_timeout(), error.is_connect()) {
+        (true, true) => "connect timeout",
+        (true, false) => "request timeout",
+        (false, true) => "connection failure",
+        (false, false) => "transport failure",
+    };
+    let error = error.without_url();
+    let mut text = format!("{kind}: {error}");
+    let mut source = std::error::Error::source(&error);
+    while let Some(cause) = source {
+        text.push_str(": ");
+        text.push_str(&cause.to_string());
+        source = cause.source();
+    }
+    text
+}
+
 struct Instance {
     url: Url,
     http: reqwest::Client,
@@ -188,12 +206,12 @@ impl Client {
         };
         let response = match request.send().await {
             Ok(response) => response,
-            Err(error) => return Reply::Down(error.to_string()),
+            Err(error) => return Reply::Down(transport_error(error)),
         };
         let status = response.status();
         let text = match response.text().await {
             Ok(text) => text,
-            Err(error) => return Reply::Down(error.to_string()),
+            Err(error) => return Reply::Down(transport_error(error)),
         };
         let value: Value = if text.is_empty() {
             Value::Null

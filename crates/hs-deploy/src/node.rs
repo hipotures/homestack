@@ -3,7 +3,7 @@
 //! template storage, the container made from it in pool
 //! `homestack-service`, its environment, start, stop and removal.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use hs_core::pve::Pve;
 use hs_core::tasks::{NoObserver, TaskWait, wait_task};
@@ -130,13 +130,19 @@ pub async fn container(pve: &impl Pve, ctid: u32) -> Result<Option<Container>, S
 pub async fn destroy(pve: &impl Pve, found: &Container, ctid: u32, say: &impl Fn(&str)) -> Result<(), String> {
     let node = &found.node;
     if found.status == "running" {
+        let started = Instant::now();
         say(&format!("  stopping CT {ctid} on {node}"));
         let upid = pve
             .post(&format!("/nodes/{node}/lxc/{ctid}/status/stop"), &[])
             .await
             .map_err(|e| format!("stop CT {ctid}: {e}"))?;
         wait(pve, &upid, &format!("stop CT {ctid}")).await?;
+        say(&format!(
+            "  CT {ctid} on {node}: stop completed in {} ms",
+            started.elapsed().as_millis()
+        ));
     }
+    let started = Instant::now();
     say(&format!("  destroying CT {ctid} on {node}"));
     let upid = pve
         .delete(
@@ -145,7 +151,12 @@ pub async fn destroy(pve: &impl Pve, found: &Container, ctid: u32, say: &impl Fn
         )
         .await
         .map_err(|e| format!("destroy CT {ctid}: {e}"))?;
-    wait(pve, &upid, &format!("destroy CT {ctid}")).await
+    wait(pve, &upid, &format!("destroy CT {ctid}")).await?;
+    say(&format!(
+        "  CT {ctid} on {node}: destroy completed in {} ms",
+        started.elapsed().as_millis()
+    ));
+    Ok(())
 }
 
 /// What a new container gets.
@@ -199,7 +210,7 @@ pub async fn create(pve: &impl Pve, spec: &NewContainer<'_>, say: &impl Fn(&str)
         .await
         .map_err(|e| format!("create CT {}: {e}", spec.ctid))?;
     wait(pve, &upid, &format!("create CT {}", spec.ctid)).await?;
-    ensure_tag(pve, spec.node, spec.ctid).await?;
+    ensure_tag(pve, spec.node, spec.ctid, say).await?;
     Ok(())
 }
 
@@ -289,11 +300,14 @@ pub async fn power(pve: &impl Pve, node: &str, ctid: u32, action: &str) -> Resul
 
 /// Give container `ctid` [`SERVER_TAG`], its other tags kept; whether it
 /// lacked it (a container made before the tag).
-pub async fn ensure_tag(pve: &impl Pve, node: &str, ctid: u32) -> Result<bool, String> {
+pub async fn ensure_tag(pve: &impl Pve, node: &str, ctid: u32, say: &impl Fn(&str)) -> Result<bool, String> {
     let config = pve
         .get(&format!("/nodes/{node}/lxc/{ctid}/config"), &[])
         .await
         .map_err(|e| format!("CT {ctid} config: {e}"))?;
+    if let Some(net0) = config["net0"].as_str() {
+        say(&format!("  CT {ctid} on {node}: current net0={net0}"));
+    }
     let mut tags: Vec<&str> = config["tags"]
         .as_str()
         .unwrap_or_default()
@@ -332,11 +346,22 @@ pub async fn made_from(pve: &impl Pve, node: &str, ctid: u32) -> Result<Option<S
 
 /// Whether container `ctid` was made with `description` (its server, image
 /// and certificate) and `net0`: then only its configuration is sent again.
-pub async fn unchanged(pve: &impl Pve, node: &str, ctid: u32, description: &str, net0: &str) -> Result<bool, String> {
+pub async fn unchanged(
+    pve: &impl Pve,
+    node: &str,
+    ctid: u32,
+    description: &str,
+    net0: &str,
+    say: &impl Fn(&str),
+) -> Result<bool, String> {
     let config = pve
         .get(&format!("/nodes/{node}/lxc/{ctid}/config"), &[])
         .await
         .map_err(|e| format!("CT {ctid} config: {e}"))?;
+    let current_net0 = config["net0"].as_str().unwrap_or_default();
+    say(&format!(
+        "  CT {ctid} on {node}: current net0={current_net0}; expected net0={net0}"
+    ));
     let same = |key: &str, value: &str| config[key].as_str().map(str::trim_end) == Some(value.trim_end());
     Ok(same("description", description) && same("net0", net0))
 }

@@ -192,17 +192,21 @@ async fn a_container_with_the_same_image_certificate_and_address_is_kept() -> Re
         net0: net0.to_owned(),
         ..FakePve::default()
     };
-    assert!(node::unchanged(&pve, "pve1", 2097, description, net0).await?);
+    let quiet = |_: &str| {};
+    assert!(node::unchanged(&pve, "pve1", 2097, description, net0, &quiet).await?);
     let newer = description.replace("image i:1", "image i:2");
-    assert!(!node::unchanged(&pve, "pve1", 2097, &newer, net0).await?, "a new image");
+    assert!(
+        !node::unchanged(&pve, "pve1", 2097, &newer, net0, &quiet).await?,
+        "a new image"
+    );
     let renewed = description.replace("1700000000", "1800000000");
     assert!(
-        !node::unchanged(&pve, "pve1", 2097, &renewed, net0).await?,
+        !node::unchanged(&pve, "pve1", 2097, &renewed, net0, &quiet).await?,
         "a new certificate"
     );
     let moved = net0.replace("192.0.2.97", "192.0.2.98");
     assert!(
-        !node::unchanged(&pve, "pve1", 2097, description, &moved).await?,
+        !node::unchanged(&pve, "pve1", 2097, description, &moved, &quiet).await?,
         "a new address"
     );
     assert!(pve.calls().is_empty(), "only read");
@@ -215,7 +219,8 @@ async fn a_container_made_before_the_tag_gets_it_and_keeps_its_others() -> Resul
         tags: "backup".to_owned(),
         ..FakePve::default()
     };
-    assert!(node::ensure_tag(&pve, "pve1", 2097).await?);
+    let quiet = |_: &str| {};
+    assert!(node::ensure_tag(&pve, "pve1", 2097, &quiet).await?);
     assert_eq!(
         pve.calls(),
         ["PUT /nodes/pve1/lxc/2097/config tags=backup;homestack-server&digest=d1"]
@@ -225,7 +230,33 @@ async fn a_container_made_before_the_tag_gets_it_and_keeps_its_others() -> Resul
         tags: "homestack-server".to_owned(),
         ..FakePve::default()
     };
-    assert!(!node::ensure_tag(&tagged, "pve1", 2097).await?);
+    assert!(!node::ensure_tag(&tagged, "pve1", 2097, &quiet).await?);
     assert!(tagged.calls().is_empty(), "only read");
+    Ok(())
+}
+
+#[tokio::test]
+async fn network_diagnostics_include_the_mac_but_not_environment_or_description() -> Result<(), String> {
+    let net0 = "name=eth0,bridge=vmbr0,hwaddr=02:00:00:00:00:01,ip=192.0.2.97/24,gw=192.0.2.1";
+    let secret = "dummy-private-key-not-for-logging";
+    let pve = FakePve {
+        net0: net0.to_owned(),
+        env: format!("HOMESTACK_TLS_KEY_B64={secret}"),
+        description: secret.to_owned(),
+        ..FakePve::default()
+    };
+    let lines = Mutex::new(Vec::new());
+    let say = |line: &str| {
+        if let Ok(mut lines) = lines.lock() {
+            lines.push(line.to_owned());
+        }
+    };
+    assert!(node::unchanged(&pve, "pve1", 2097, secret, net0, &say).await?);
+    node::ensure_tag(&pve, "pve1", 2097, &say).await?;
+    let log = lines.lock().map_err(|_| "log poisoned")?.join("\n");
+    assert!(log.contains("CT 2097 on pve1: current net0="));
+    assert!(log.contains("hwaddr=02:00:00:00:00:01"));
+    assert!(log.contains("expected net0="));
+    assert!(!log.contains(secret) && !log.contains("HOMESTACK_TLS_KEY_B64"));
     Ok(())
 }

@@ -1,7 +1,8 @@
 //! The commands of `homestack-deploy` (`docs/migration/phase-11.md`, 2.3).
 
+use std::future::Future;
 use std::net::SocketAddr;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use base64::Engine;
 use hs_client::{Client, ClientConfig, Endpoint};
@@ -84,15 +85,73 @@ fn certificate(config: &DeployConfig) -> Result<acme::Stored, String> {
     Ok(stored)
 }
 
-async fn wait_health(client: &Client, limit: Duration) -> Result<(), String> {
+async fn timed<T>(
+    instance: &str,
+    stage: &str,
+    say: &impl Fn(&str),
+    work: impl Future<Output = Result<T, String>>,
+) -> Result<T, String> {
+    let started = Instant::now();
+    say(&format!("  {instance}: {stage} started"));
+    let result = work.await;
+    let outcome = if result.is_ok() { "completed" } else { "failed" };
+    say(&format!(
+        "  {instance}: {stage} {outcome} in {} ms",
+        started.elapsed().as_millis()
+    ));
+    result
+}
+
+fn health_error(error: &hs_client::ClientError) -> String {
+    match error {
+        hs_client::ClientError::Api { status, code, .. } => format!("HTTP {status}, code={code}"),
+        _ => error.to_string(),
+    }
+}
+
+async fn wait_health(
+    client: &Client,
+    instance: &str,
+    phase: &str,
+    limit: Duration,
+    say: &impl Fn(&str),
+) -> Result<(), String> {
+    let started = Instant::now();
     let deadline = tokio::time::Instant::now() + limit;
+    let mut attempt = 0_u64;
+    say(&format!(
+        "  {instance}: HTTPS health {phase} started (GET /health/live, limit {} ms, retry 2000 ms)",
+        limit.as_millis()
+    ));
     loop {
+        attempt += 1;
+        let probe_started = Instant::now();
+        say(&format!(
+            "  {instance}: HTTPS health {phase} attempt {attempt} started (elapsed {} ms)",
+            started.elapsed().as_millis()
+        ));
         match client.get_on(0, "/health/live").await {
-            Ok(_) => return Ok(()),
-            Err(error) if tokio::time::Instant::now() >= deadline => {
-                return Err(format!("no answer over TLS within {} s: {error}", limit.as_secs()));
+            Ok(_) => {
+                say(&format!(
+                    "  {instance}: HTTPS health {phase} attempt {attempt} succeeded after {} ms (elapsed {} ms)",
+                    probe_started.elapsed().as_millis(),
+                    started.elapsed().as_millis()
+                ));
+                return Ok(());
             }
-            Err(_) => tokio::time::sleep(Duration::from_secs(2)).await,
+            Err(error) => {
+                let reason = health_error(&error);
+                say(&format!(
+                    "  {instance}: HTTPS health {phase} attempt {attempt} failed after {} ms (elapsed {} ms): {reason}",
+                    probe_started.elapsed().as_millis(),
+                    started.elapsed().as_millis()
+                ));
+                if tokio::time::Instant::now() >= deadline {
+                    return Err(format!("no answer over TLS within {} s: {reason}", limit.as_secs()));
+                }
+                say(&format!("  {instance}: HTTPS health {phase} retrying in 2000 ms"));
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            }
         }
     }
 }
@@ -156,6 +215,7 @@ pub async fn apply(config: &DeployConfig, only: &[String], say: &impl Fn(&str)) 
     PveToken::parse(&pve_token).map_err(|e| format!("{}: {e}", config.server.pve_token_file.display()))?;
     let server_toml = std::fs::read_to_string(&config.server.config_file)
         .map_err(|e| format!("{}: {}", config.server.config_file.display(), e.kind()))?;
+    say("using the stored TLS certificate; apply does not request or renew a certificate");
     let hash: String = Sha256::digest(api_token.as_bytes())
         .iter()
         .map(|b| format!("{b:02x}"))
@@ -183,6 +243,7 @@ pub async fn apply(config: &DeployConfig, only: &[String], say: &impl Fn(&str)) 
     .map(|b| format!("{b:02x}"))
     .collect();
     for instance in selected {
+        let started = Instant::now();
         say(&format!(
             "{}: CT {} on {} ({}, {})",
             instance.name, instance.ctid, instance.node, instance.address, instance.storage
@@ -198,20 +259,37 @@ pub async fn apply(config: &DeployConfig, only: &[String], say: &impl Fn(&str)) 
         if let Some(found) = node::container(&pve, instance.ctid).await? {
             let same = found.node == instance.node
                 && found.status == "running"
-                && node::unchanged(&pve, &instance.node, instance.ctid, &description, &net0).await?;
+                && node::unchanged(&pve, &instance.node, instance.ctid, &description, &net0, say).await?;
             if same {
                 say("  the same image, certificate and address: only the configuration is sent");
-                if node::ensure_tag(&pve, &instance.node, instance.ctid).await? {
+                if node::ensure_tag(&pve, &instance.node, instance.ctid, say).await? {
                     say(&format!("  tagged {}", node::SERVER_TAG));
                 }
                 let client = instances_client(config, &[instance], &api_token)?;
-                wait_health(&client, HEALTH_LIMIT).await?;
+                wait_health(&client, &instance.name, "existing container", HEALTH_LIMIT, say).await?;
                 configure(&client, instance, &pve_token, &server_toml, say).await?;
+                say(&format!(
+                    "  {}: instance apply completed in {} ms",
+                    instance.name,
+                    started.elapsed().as_millis()
+                ));
                 continue;
             }
-            node::destroy(&pve, &found, instance.ctid, say).await?;
+            timed(
+                &instance.name,
+                "stop and destroy",
+                say,
+                node::destroy(&pve, &found, instance.ctid, say),
+            )
+            .await?;
         }
-        let ostemplate = node::ensure_image(&pve, &instance.node, &config.template_storage, &config.image, say).await?;
+        let ostemplate = timed(
+            &instance.name,
+            "ensure image",
+            say,
+            node::ensure_image(&pve, &instance.node, &config.template_storage, &config.image, say),
+        )
+        .await?;
         let spec = NewContainer {
             node: &instance.node,
             ctid: instance.ctid,
@@ -226,7 +304,13 @@ pub async fn apply(config: &DeployConfig, only: &[String], say: &impl Fn(&str)) 
             nameserver: config.nameserver.map(|ip| ip.to_string()),
             description,
         };
-        node::create(&pve, &spec, say).await?;
+        timed(
+            &instance.name,
+            "create container and tag",
+            say,
+            node::create(&pve, &spec, say),
+        )
+        .await?;
         let env = [
             ("HOMESTACK_INSTANCE", instance.name.clone()),
             ("HOMESTACK_API_TOKEN_SHA256", hash.clone()),
@@ -237,17 +321,41 @@ pub async fn apply(config: &DeployConfig, only: &[String], say: &impl Fn(&str)) 
             (TLS_VARIABLES[1], b64(&stored.key)),
         ]
         .map(|(key, value)| (key.to_owned(), value));
-        node::set_env(&pve, &instance.node, instance.ctid, &env, &[]).await?;
+        timed(
+            &instance.name,
+            "set bootstrap environment",
+            say,
+            node::set_env(&pve, &instance.node, instance.ctid, &env, &[]),
+        )
+        .await?;
         say("  starting");
-        node::power(&pve, &instance.node, instance.ctid, "start").await?;
+        timed(
+            &instance.name,
+            "Proxmox start task",
+            say,
+            node::power(&pve, &instance.node, instance.ctid, "start"),
+        )
+        .await?;
         let client = instances_client(config, &[instance], &api_token)?;
-        wait_health(&client, HEALTH_LIMIT).await?;
+        wait_health(&client, &instance.name, "after start", HEALTH_LIMIT, say).await?;
         say("  answers over TLS; removing the certificate from the container's configuration");
-        node::set_env(&pve, &instance.node, instance.ctid, &[], &TLS_VARIABLES).await?;
+        timed(
+            &instance.name,
+            "remove TLS bootstrap environment",
+            say,
+            node::set_env(&pve, &instance.node, instance.ctid, &[], &TLS_VARIABLES),
+        )
+        .await?;
         if node::env_pending(&pve, &instance.node, instance.ctid).await? {
             say("  the change waits for a restart; restarting");
-            node::power(&pve, &instance.node, instance.ctid, "reboot").await?;
-            wait_health(&client, HEALTH_LIMIT).await?;
+            timed(
+                &instance.name,
+                "Proxmox reboot task",
+                say,
+                node::power(&pve, &instance.node, instance.ctid, "reboot"),
+            )
+            .await?;
+            wait_health(&client, &instance.name, "after reboot", HEALTH_LIMIT, say).await?;
         }
         let keys = node::env_keys(&pve, &instance.node, instance.ctid).await?;
         if keys.iter().any(|key| TLS_VARIABLES.contains(&key.as_str())) {
@@ -257,8 +365,19 @@ pub async fn apply(config: &DeployConfig, only: &[String], say: &impl Fn(&str)) 
             ));
         }
         configure(&client, instance, &pve_token, &server_toml, say).await?;
+        say(&format!(
+            "  {}: instance apply completed in {} ms",
+            instance.name,
+            started.elapsed().as_millis()
+        ));
     }
-    check_versions(config, &api_token, say).await
+    timed(
+        "deployment",
+        "configuration consistency check",
+        say,
+        check_versions(config, &api_token, say),
+    )
+    .await
 }
 
 /// The image each instance's container was made from, by instance name;
@@ -282,7 +401,11 @@ pub async fn check_versions(config: &DeployConfig, api_token: &str, say: &impl F
     let client = instances_client(config, &all, api_token)?;
     let mut versions = std::collections::BTreeSet::new();
     let mut problems = Vec::new();
-    for (url, version) in client.config_versions().await {
+    for (index, url) in client.urls().enumerate() {
+        let version = timed(url.as_str(), "GET /v1/config/version", say, async {
+            client.config_version_on(index).await.map_err(|error| error.to_string())
+        })
+        .await;
         match version {
             Ok(Some(version)) => {
                 say(&format!("{url}: configuration {}", &version[..12.min(version.len())]));
@@ -369,14 +492,117 @@ async fn configure(
     server_toml: &str,
     say: &impl Fn(&str),
 ) -> Result<(), String> {
-    client
-        .put_text_on(0, "/v1/secrets/pve-token", pve_token, "text/plain")
-        .await
-        .map_err(|e| format!("{}: Proxmox token: {e}", instance.name))?;
-    let version = client
-        .configure_on(0, server_toml)
-        .await
-        .map_err(|e| format!("{}: server.toml: {e}", instance.name))?;
+    timed(&instance.name, "upload PVE token", say, async {
+        client
+            .put_text_on(0, "/v1/secrets/pve-token", pve_token, "text/plain")
+            .await
+            .map_err(|error| format!("{}: Proxmox token: {error}", instance.name))
+    })
+    .await?;
+    let version = timed(&instance.name, "upload server.toml", say, async {
+        client
+            .configure_on(0, server_toml)
+            .await
+            .map_err(|error| format!("{}: server.toml: {error}", instance.name))
+    })
+    .await?;
     say(&format!("  ready, configuration {}", &version[..12.min(version.len())]));
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::RefCell;
+    use std::io::{Read, Write};
+
+    use super::*;
+
+    type Error = Box<dyn std::error::Error>;
+
+    fn health_client(
+        responses: Vec<(u16, &'static str)>,
+    ) -> Result<(Client, std::thread::JoinHandle<std::io::Result<()>>), Error> {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+        let address = listener.local_addr()?;
+        let server = std::thread::spawn(move || {
+            for (status, body) in responses {
+                let (mut connection, _) = listener.accept()?;
+                connection.set_read_timeout(Some(Duration::from_secs(5)))?;
+                let mut request = Vec::new();
+                while !request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
+                    let mut buffer = [0; 1024];
+                    let count = connection.read(&mut buffer)?;
+                    if count == 0 {
+                        return Err(std::io::Error::from(std::io::ErrorKind::UnexpectedEof));
+                    }
+                    request.extend_from_slice(&buffer[..count]);
+                }
+                write!(
+                    connection,
+                    "HTTP/1.1 {status} Response\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )?;
+            }
+            Ok(())
+        });
+        let endpoint = Endpoint::from(format!("http://{address}").parse::<url::Url>()?);
+        let mut config = ClientConfig::new(vec![endpoint], "dummy-client-token-not-for-logging".to_owned());
+        config.request_timeout = Duration::from_secs(1);
+        Ok((Client::new(config)?, server))
+    }
+
+    #[tokio::test]
+    async fn stage_timing_reports_success_and_failure_without_payloads() -> Result<(), String> {
+        let lines = RefCell::new(Vec::new());
+        let say = |line: &str| lines.borrow_mut().push(line.to_owned());
+        assert_eq!(timed("api1", "start", &say, async { Ok(7) }).await?, 7);
+        let secret = "dummy-private-key-not-for-logging";
+        let result: Result<(), String> = timed("api1", "bootstrap", &say, async { Err(secret.to_owned()) }).await;
+        assert_eq!(result, Err(secret.to_owned()));
+        let log = lines.into_inner().join("\n");
+        assert!(log.contains("api1: start started"));
+        assert!(log.contains("api1: start completed in ") && log.contains(" ms"));
+        assert!(log.contains("api1: bootstrap failed in "));
+        assert!(!log.contains(secret));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn health_attempts_report_failure_retry_success_and_elapsed_time() -> Result<(), Error> {
+        let (client, server) = health_client(vec![
+            (
+                503,
+                r#"{"error":{"code":"warming_up","message":"dummy-private-key-not-for-logging"}}"#,
+            ),
+            (200, r#"{"status":"ok"}"#),
+        ])?;
+        let lines = RefCell::new(Vec::new());
+        let say = |line: &str| lines.borrow_mut().push(line.to_owned());
+        wait_health(&client, "api1", "after start", Duration::from_secs(10), &say).await?;
+        server.join().map_err(|_| "health fixture panicked")??;
+        let log = lines.into_inner().join("\n");
+        assert!(log.contains("api1: HTTPS health after start attempt 1 started"));
+        assert!(log.contains("attempt 1 failed after "));
+        assert!(log.contains("HTTP 503, code=warming_up"));
+        assert!(log.contains("retrying in 2000 ms"));
+        assert!(log.contains("attempt 2 succeeded after "));
+        assert!(log.contains("(elapsed "));
+        assert!(!log.contains("dummy-private-key-not-for-logging"));
+        assert!(!log.contains("dummy-client-token-not-for-logging"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn health_deadline_failure_is_logged_without_another_attempt() -> Result<(), Error> {
+        let (client, server) = health_client(vec![(503, "null")])?;
+        let lines = RefCell::new(Vec::new());
+        let say = |line: &str| lines.borrow_mut().push(line.to_owned());
+        let result = wait_health(&client, "api3", "after reboot", Duration::ZERO, &say).await;
+        server.join().map_err(|_| "health fixture panicked")??;
+        assert!(result.is_err());
+        let log = lines.into_inner().join("\n");
+        assert!(log.contains("api3: HTTPS health after reboot attempt 1 failed after "));
+        assert!(!log.contains("attempt 2") && !log.contains("retrying"));
+        Ok(())
+    }
 }

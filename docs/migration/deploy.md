@@ -300,6 +300,16 @@ then checks that every instance reports the same `GET /v1/config/version`.
 Only the deploy token and root see a container's configuration while the
 certificate is in it.
 
+Deployment diagnostics report stage durations in milliseconds, each HTTPS
+health attempt's duration, cumulative wait, retry and transport failure
+cause, and the current network settings including the MAC before and
+after recreation. They distinguish the initial start from the restart
+that removes the TLS bootstrap environment. These messages go to the CLI
+output and, during TUI reinstall, `~/.config/homestack/tui.log`. A successful
+HTTPS health attempt measures the complete request, not just the TLS
+handshake. Certificate contents, private keys and tokens are not logged.
+The diagnostics do not change deployment order, timeouts or retry delays.
+
 A client (`crates/hs-client`) lists every instance. A read goes to the
 first instance that answers, starting from the one that answered last; a
 plan, its apply and its job stay on the instance that made the plan, and
