@@ -111,6 +111,15 @@ TLS installation have their own messages. Terminal output redraws the bar;
 redirected output prints periodic lines. Complete package output, status
 messages and errors remain in `install-kernel.log` and `install-pve.log`.
 
+The APT proxy makes at most three attempts for a validated GET/HEAD request
+when the upstream connection fails or returns HTTP 408, 429, 500, 502, 503 or
+504. It waits one second before the second attempt and two seconds before
+the third, printing the URL, attempt number and complete error cause chain.
+Permanent HTTP errors and redirects are not retried. These retries happen
+before forwarding response headers; interrupted response bodies remain APT's
+responsibility through its configured acquisition retries. Signed-index and
+package-hash verification remain enabled.
+
 
 ## Installation phases and manual inspection
 
@@ -503,6 +512,17 @@ cargo fmt --all --check
 
 Normal Cargo tests do not download images, boot VMs or contact Proxmox. The
 real lifecycle runs only through the explicit `run` command.
+APT proxy regression tests use local HTTP servers to interrupt connections,
+return temporary failures, check recovery for GET and HEAD, and verify that
+persistent failures stop after three attempts. They also check that permanent
+errors, redirects, rejected destinations and unsupported methods do not enter
+the retry loop. An explicit network probe exercises the real proxy against
+the official signed Proxmox repository index:
+
+```sh
+cargo test --locked -p hs-e2e official_repository_is_reachable_through_the_proxy -- --ignored --nocapture
+```
+
 An opt-in image-cache check downloads/verifies the current Debian image twice
 without starting a VM or accessing DNS credentials:
 
