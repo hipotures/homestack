@@ -129,7 +129,7 @@ impl Fixture {
 
     pub async fn prepare(&mut self, address: Ipv4Addr, local_dns: Option<Ipv4Addr>) -> Result<Value> {
         self.cleanup_challenge().await?;
-        eprintln!("Preparing {HOST} at Spaceship...");
+        eprintln!("Checking existing DNS records at Spaceship and the cached certificate for {HOST}...");
         if self.journal.public_address.is_some_and(|owned| owned != address) {
             return Err("fixture address changed; reset it with cleanup --all first".into());
         }
@@ -140,9 +140,9 @@ impl Fixture {
             self.journal.public_address = Some(address);
             self.save()?;
             self.spaceship().add_address(ZONE, SUB, address).await?;
-            eprintln!("Created public DNS: {HOST} -> {address}");
+            eprintln!("Public DNS [CREATED]: added missing record {HOST} -> {address}");
         } else {
-            eprintln!("Reusing public DNS: {HOST} -> {address}");
+            eprintln!("Public DNS [EXISTING, UNCHANGED]: {HOST} -> {address}");
         }
         if let Some(server) = local_dns {
             self.prepare_local(server, address).await?;
@@ -163,13 +163,19 @@ impl Fixture {
         let cached = acme::stored(&acme_dir)?;
         let reused = cached.as_ref().is_some_and(|stored| usable(stored, now));
         let stored = if reused {
-            eprintln!("Reusing the public certificate; no ACME order or challenge.");
             cached.ok_or("cached certificate disappeared")?
         } else {
-            eprintln!("Obtaining a public Let's Encrypt certificate using DNS-01...");
+            eprintln!(
+                "Certificate [REQUESTING NEW]: no reusable cached certificate; requesting Let's Encrypt via DNS-01..."
+            );
             self.issue(&acme_dir).await?
         };
         let fingerprint = self.validate_certificate().await?;
+        if reused {
+            eprintln!("Certificate [REUSED]: existing cached certificate verified; no new ACME order or challenge.");
+        } else {
+            eprintln!("Certificate [CREATED]: newly issued certificate verified and saved in cache.");
+        }
         self.verify_resolution(address).await?;
         Ok(
             json!({"hostname": HOST, "address": address.to_string(), "dns_created": create,
@@ -253,7 +259,7 @@ impl Fixture {
         }
         let addresses = self.local_addresses(server).await?;
         if addresses == vec![address.to_string()] {
-            eprintln!("Reusing local DNS at {server}: {HOST} -> {address}");
+            eprintln!("Local DNS [EXISTING, UNCHANGED] at {server}: {HOST} -> {address}");
             return Ok(());
         }
         if !addresses.is_empty() {
@@ -267,7 +273,7 @@ impl Fixture {
         if self.local_addresses(server).await? != vec![address.to_string()] {
             return Err("local E2E DNS update did not become visible".into());
         }
-        eprintln!("Created local DNS at {server}: {HOST} -> {address}");
+        eprintln!("Local DNS [CREATED] at {server}: added missing record {HOST} -> {address}");
         Ok(())
     }
 

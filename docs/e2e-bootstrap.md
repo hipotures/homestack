@@ -278,6 +278,13 @@ order or challenge. A missing record is repaired without replacing a valid
 certificate. Temporary DNS-01 values are removed after issuance or failure;
 a failed cleanup leaves a durable journal for the next run to retry.
 
+The domain phase prints explicit outcomes: DNS `[EXISTING, UNCHANGED]` means
+the matching record was already configured and was not modified; `[CREATED]`
+means a missing record was added. Certificate `[REUSED]` confirms the existing
+cached certificate passed verification without a new ACME order or challenge.
+`[REQUESTING NEW]` announces issuance; `[CREATED]` confirms the new certificate
+was issued, verified and cached.
+
 To deliberately reset the fixture after all controllers have stopped:
 
 ```sh
