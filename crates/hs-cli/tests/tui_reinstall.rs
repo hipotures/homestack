@@ -12,7 +12,7 @@ use hs_cli::tui::draw::render;
 use hs_cli::tui::reinstall::{Image, Images, Server};
 use hs_cli::tui::state::{App, Request};
 use serde_json::json;
-use tui_fixture::{app, press, screen};
+use tui_fixture::{app, position, press, screen};
 
 const REPOSITORY: &str = "ghcr.io/hipotures/homestack-server";
 
@@ -128,8 +128,16 @@ fn space_marks_servers_and_enter_on_a_marked_one_takes_them_all() {
     press(&mut fixture.app, KeyCode::Char(' '));
     select(&mut fixture.app, 102_003);
     press(&mut fixture.app, KeyCode::Char(' '));
-    let text = screen(&render(&fixture.app, 140, 40));
-    assert_eq!(text.matches('✓').count(), 2, "{text}");
+    // Marked lines are lighter, from the first cell; the others are not.
+    select(&mut fixture.app, 102_002);
+    let buf = render(&fixture.app, 140, 40);
+    let selection = fixture.app.palette.selection;
+    for (name, marked) in [("api1", true), ("api2", false), ("api3", true)] {
+        let (x, y) = position(&buf, name);
+        assert_eq!(buf[(x, y)].bg == selection, marked, "{name}");
+        assert_eq!(buf[(x - 9, y)].bg == selection, marked, "{name}: the whole line");
+    }
+    assert!(!screen(&buf).contains('✓'));
 
     // Unmarked: only itself.
     select(&mut fixture.app, 102_002);

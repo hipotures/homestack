@@ -758,6 +758,12 @@ fn workspaces(buf: &mut Buffer, area: Rect, app: &App, mut controls: Vec<Control
             if palette.no_color {
                 style = style.add_modifier(Modifier::REVERSED);
             }
+        } else if app.marked.contains(&entry.vmid) {
+            // A marked server: the whole line lighter.
+            style = style.bg(palette.selection).add_modifier(Modifier::BOLD);
+            if palette.no_color {
+                style = style.add_modifier(Modifier::UNDERLINED);
+            }
         }
         let mut shown = (*entry).clone();
         if let Some(action) = app.action.as_ref().filter(|action| {
@@ -772,17 +778,6 @@ fn workspaces(buf: &mut Buffer, area: Rect, app: &App, mut controls: Vec<Control
         for (at, tag) in entry.tags.iter().take(MAX_TAGS).enumerate() {
             let x = list.x + 1 + u16::try_from(at).unwrap_or(0);
             write(buf, x, y, 1, "■", style.fg(tag_color(palette, tag)));
-        }
-        // A marked server: a tick before its squares.
-        if app.marked.contains(&entry.vmid) {
-            write(
-                buf,
-                list.x,
-                y,
-                1,
-                "✓",
-                style.fg(palette.ok).add_modifier(Modifier::BOLD),
-            );
         }
         // The state dot in its colour.
         if let Some(at) = line.find(['●', '○', '◐']) {
