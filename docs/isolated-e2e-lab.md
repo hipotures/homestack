@@ -4,6 +4,11 @@
 **Date:** 2026-10-16
 **Repository baseline:** `9f239ee` on `rust-migration`.
 
+The initial download/boot/install/verify/remove implementation is documented in
+[Disposable Proxmox bootstrap](e2e-bootstrap.md). It currently uses direct QEMU
+and latest repository inputs; the remaining laboratory lifecycle and test
+catalogue below are still a proposal.
+
 ## 1. Objective and decisions
 
 Build an automated laboratory that creates **one disposable Proxmox VE node**,
