@@ -77,7 +77,9 @@ impl Vm {
         )?;
         std::fs::set_permissions(dir.join("ssh_config"), std::fs::Permissions::from_mode(0o600))?;
         let stderr = File::create(artifacts.join("qemu.log"))?;
-        let executable = std::env::current_exe()?;
+        // Rebuilding a running controller adds " (deleted)" to /proc/self/exe.
+        // Helpers execute the current binary installed beside that process.
+        let executable = std::env::current_exe()?.with_file_name("homestack-e2e");
         if executable.to_string_lossy().contains(',') {
             return Err("controller executable path must not contain commas (QEMU argument syntax)".into());
         }

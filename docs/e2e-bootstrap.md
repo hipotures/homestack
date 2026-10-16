@@ -121,6 +121,7 @@ to `report.json` before the next phase starts:
 | `boot` | Debian booted, Cloud-Init and initialization checked; SSH and restricted APT networking work |
 | `kernel` | Proxmox kernel installed and the VM rebooted |
 | `proxmox` | PVE services installed and rebooted; public certificate installed and temporary web credentials printed |
+| `network` | Internal `vmbr0` bridge configured at `10.77.0.1/24`, persisted in the guest network configuration and verified through PVE |
 | `verify` | PVE kernel, exposed nested KVM, HTTPS API, web page, password login and authenticated node inventory checked |
 | `shutdown` | VM powered off; private files still exist until cleanup |
 | `cleanup` | QEMU reaped and private disks, keys and web credentials removed |
@@ -129,7 +130,7 @@ Request pauses only where manual inspection is useful:
 
 ```sh
 cargo run --locked -p hs-e2e -- run \
-  --pause-after boot,kernel,proxmox,verify \
+  --pause-after boot,kernel,proxmox,network,verify \
   --pause-on-failure \
   --artifacts target/e2e/inspection
 ```
@@ -253,15 +254,26 @@ controller and VM running. Resume, pause expiry, Ctrl-C or SIGTERM on the
 controller remove the VM as usual.
 
 This launcher enables manual TUI connection and inspection; the bootstrap
-still does not prepare HomeStack deployment. Container networking, registry
-access and a reachable HomeStack HTTPS endpoint are separate required work.
+prepares an internal bridge but does not deploy HomeStack. Registry access
+and a reachable HomeStack HTTPS endpoint are separate required work.
 The Rust installer supports installation before Gold exists. Select the
 server's bridge independently in the form; no Gold is fabricated for this
 step. Gold is required later for workspace creation and refresh.
-The current bootstrap has only its QEMU user-network NIC, with no container
-bridge. A read-only install-plan check on the disposable PVE confirmed that
-missing Gold produces a warning and the missing bridge produces the remaining
-network error. No installation was applied and the controller stayed paused.
+The `network` phase creates **`vmbr0`** inside the disposable Proxmox VM, with
+address **`10.77.0.1/24`**. Choose it in **Server network bridge**; press **F5**
+in the installer's settings after changing the lab network. Configuration is
+written to the guest's `/etc/network/interfaces`, enabled with `ifup vmbr0`
+and verified against the PVE network inventory. The management NIC retains
+its existing SSH and HTTPS access. An existing, unowned `vmbr0` is refused.
+The report stores the observed bridge configuration under `network`.
+
+The bridge has no external ports, IPv4 forwarding is disabled and IPv6 is
+disabled on the bridge. Container veths and VM taps may attach to it; a
+hardware NIC attached to it fails verification. It allows guests to reach
+each other and services on the test Proxmox. It provides no Internet or LAN
+egress, DHCP, public guest DNS records or browser forwarding to HomeStack.
+Those require later lab phases. Its configuration disappears with the outer
+VM; no bridge, route or firewall rule is created on the runner host.
 
 Validated against the paused disposable PVE 9.2.21 VM: with production XDG
 paths deliberately inherited, the real TUI opened the install screen,
@@ -440,7 +452,16 @@ files remained available for the next run. Full fixture cleanup was refused
 while the active controller held its lock. An independent inspection timeout
 also removed the VM while retaining these fixtures.
 
-All twenty-one E2E unit tests and twenty-three deployment unit/integration tests
+A fresh lifecycle on 2026-10-16 passed the new `network` phase and paused after
+`verify`. The real isolated TUI discovered `vmbr0` and selected it as
+**Server network bridge** without requiring Gold. A temporary guest network
+namespace connected through the bridge to PVE HTTPS, verified the public
+certificate and received HTTP 200. Forwarding from that namespace to the outer
+APT proxy was blocked. Its namespace and veth ports were removed after the
+probe; this check did not deploy a HomeStack container. Reapplying the bridge
+configuration to an existing lab also succeeded.
+
+All twenty-five E2E unit tests and twenty-three deployment unit/integration tests
 passed, including fixture ownership, exclusive locking, scoped cache reset,
 image-cache reuse/repair and failed-download preservation, APT status parsing
 and installer output/error preservation, failure preservation

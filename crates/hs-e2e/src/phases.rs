@@ -10,13 +10,14 @@ use tokio::net::{UnixListener, UnixStream};
 
 use crate::{Result, save_report};
 
-pub const NAMES: [&str; 8] = [
+pub const NAMES: [&str; 9] = [
     "preflight",
     "domain",
     "image",
     "boot",
     "kernel",
     "proxmox",
+    "network",
     "verify",
     "shutdown",
 ];
@@ -128,7 +129,12 @@ pub async fn pause(dir: &Path, artifacts: &Path, report: &mut Value, timeout: Du
         eprintln!("Open the isolated HomeStack TUI in another terminal on the runner host:");
         eprintln!(
             "  {} client --artifacts {}",
-            shell_quote(&std::env::current_exe()?.display().to_string()),
+            shell_quote(
+                &std::env::current_exe()?
+                    .with_file_name("homestack-e2e")
+                    .display()
+                    .to_string()
+            ),
             shell_quote(&artifacts.display().to_string())
         );
         eprintln!("Choose SSH and enter root@pve-e2e; the test client does not use the production profile.");
