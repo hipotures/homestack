@@ -40,6 +40,13 @@ PATH="$PWD/target/e2e-tools/bin:$PATH" cargo run --locked -p hs-e2e -- run
 That ignored cache is a local tool installation, not part of a fresh checkout.
 The controller downloads the guest image; it does not install host packages.
 
+The runner may execute on a separate Linux server or in a development workspace
+managed by a production HomeStack installation. That workspace must expose
+usable `/dev/kvm` and enough nested virtualization for this topology. The
+production Proxmox and its guests are never test targets. Keep the HomeStack
+client and browser on the desktop if desired; inspection does not require
+running the controller there.
+
 Supply a message to verify custom initialization data:
 
 ```sh
@@ -59,9 +66,104 @@ This avoids placing virtual disks in a potentially RAM-backed `/tmp`.
 
 Optional limits are `--memory-mib`, `--cpus`, `--disk-gib` and
 `--timeout-seconds`. The defaults are the smallest accepted resource allocation.
-The run deadline defaults to 1800 seconds; final forced process cleanup runs
-after a timeout or interruption. There is no automatic software-emulation
+The active run deadline defaults to 1800 seconds, excluding selected inspection
+pauses; final forced process cleanup runs after a timeout or interruption.
+There is no automatic software-emulation
 fallback and no option to target an existing VM or Proxmox installation.
+
+
+## Installation phases and manual inspection
+
+Normal runs remain automatic. Every phase writes its status, timings and error
+to `report.json` before the next phase starts:
+
+| Phase | Available state after success |
+|---|---|
+| `preflight` | KVM and host tools checked; no VM yet |
+| `image` | Download verified and sparse disk prepared; no VM yet |
+| `boot` | Debian booted, Cloud-Init and initialization checked; SSH and restricted APT networking work |
+| `kernel` | Proxmox kernel installed and the VM rebooted |
+| `proxmox` | PVE services installed and rebooted; temporary web credentials and public CA available |
+| `verify` | PVE kernel, exposed nested KVM, HTTPS API, web page, password login and authenticated node inventory checked |
+| `shutdown` | VM powered off; private files still exist until cleanup |
+| `cleanup` | QEMU reaped and private disks, keys and web credentials removed |
+
+Request pauses only where manual inspection is useful:
+
+```sh
+cargo run --locked -p hs-e2e -- run \
+  --pause-after boot,kernel,proxmox,verify \
+  --pause-on-failure \
+  --artifacts target/e2e/inspection
+```
+
+Each successful selected phase pauses **before the next phase**. A paused VM
+continues running. The runner prints an SSH command and the private
+`access.json` path once the VM has started; after PVE installation that file
+contains the panel URL, login `root@pam`, generated password and CA location.
+In the web form, use username `root` and realm **Linux PAM**.
+The password is not printed to logs or stored in artifacts. Its file is mode
+`0600` inside the private run directory and is removed during cleanup. SSH
+password and keyboard-interactive login stay disabled.
+
+Resume from another terminal on the **runner host**:
+
+```sh
+cargo run --locked -p hs-e2e -- resume --artifacts target/e2e/inspection
+```
+
+Resume uses a private Unix socket; it does not adopt a VM, signal a stored PID
+or restart the installation. A failed phase pauses when `--pause-on-failure`
+is selected. Resuming that failure continues to cleanup and preserves the
+original failed result. A later attempt starts a fresh VM.
+
+Each pause has its own deadline, 3600 seconds by default, configurable with
+`--pause-timeout-seconds` (1–86400). Inspection time does not consume the active
+installation budget set by `--timeout-seconds`. A pause deadline, Ctrl-C or
+SIGTERM triggers cleanup. Keep the controller running during inspection.
+Socket files are also removed on cancellation. Cleanup itself cannot be paused.
+
+## Browser and SSH access
+
+The panel URL defaults to `https://127.0.0.1:<reported-port>` **on the runner
+host**, forwarding to PVE's TCP 8006. The public PVE CA is saved as
+`pve-ca.pem` in artifacts and the private run directory. Trust that CA in a
+dedicated browser profile to verify the default localhost/127.0.0.1 name;
+the runner does not change browser or system trust. Browser CA trust and web
+password authentication are separate from the pinned SSH host key.
+This increment still uses PVE's own CA; the persistent public domain and
+Let's Encrypt integration remain the separate design linked above.
+
+For a remote runner, open a tunnel from the desktop using the host's ordinary
+SSH account and the port printed by the runner, for example:
+
+```sh
+ssh -N -L 18006:127.0.0.1:REPORTED_PORT USER@RUNNER_HOST
+```
+
+Then open `https://127.0.0.1:18006` in the desktop browser. Read the private
+access file on the runner for the temporary web password and transfer only the
+public CA for browser trust. With a nested HomeStack workspace, the tunnel
+terminates at the workspace running this controller. Its host address and
+authentication belong to the existing desktop SSH configuration.
+
+For direct access over a reachable host interface, explicitly set
+`--web-bind 192.168.1.20 --web-port 18006`, replacing the address with one
+assigned to the runner. Bind defaults stay on loopback; no host firewall rules,
+physical bridges or routes are changed. The VM certificate does not
+automatically cover the host's LAN address: access by the certificate's FQDN
+with matching DNS/hosts resolution, or use the loopback SSH tunnel. The
+temporary SSH forward always stays on `127.0.0.1`.
+
+For a shell inside the disposable VM, run the printed command on the runner:
+
+```sh
+ssh -F /path/printed/by/the/runner/ssh_config pve-e2e
+```
+
+That configuration uses the run's private key and pinned host identity. It is
+independent of the user's SSH agent, keys and existing Proxmox configuration.
+
 
 ## What a successful run proves
 
@@ -87,7 +189,11 @@ fallback and no option to target an existing VM or Proxmox installation.
 6. Verify the running `-pve` kernel, exposed nested KVM device, active PVE
    services and preserved initialization data. Obtain the PVE CA through the
    pinned SSH connection and verify the real HTTPS `/api2/json/version` API
-   with an ephemeral guest-local API token. TLS verification stays enabled.
+   with an ephemeral guest-local API token. Check that the real web page is
+   served, log in through `/api2/json/access/ticket` with the generated
+   password, and read the single-node inventory using its session cookie.
+   Passwords, API token secrets and session tickets are not artifacts.
+   TLS verification stays enabled.
 7. Request `systemctl poweroff`, wait for successful QEMU exit, reap the process
    and remove the entire private directory: base image, overlay, initialization
    disk, keys and other temporary files. Confirm removal in the report.
@@ -101,8 +207,9 @@ the eventual regression laboratory.
 
 This initial runner uses QEMU directly. It creates no libvirt domain, physical
 bridge, TAP device, host firewall rule or host package installation. Its user
-network has `restrict=on` and IPv6 disabled. SSH and PVE forwarding bind only
-to `127.0.0.1` on automatically selected ports.
+network has `restrict=on` and IPv6 disabled. SSH forwarding binds only to
+`127.0.0.1` on an automatically selected port. PVE forwarding defaults to the
+same policy; only an explicit `--web-bind` or `--web-port` changes its endpoint.
 
 The only guest-initiated forwarding rule goes to a local read-only APT proxy.
 It permits GET/HEAD requests under the Debian and Proxmox repository paths on
@@ -142,5 +249,16 @@ Validation on 2026-10-16 passed with 1 vCPU, 2048 MiB RAM and a 12 GiB sparse
 disk: Proxmox API version `9.2.21`, release `9.2`, kernel `7.0.14-24-pve`,
 verified HTTPS, graceful shutdown and complete VM removal. A separate live
 SIGTERM test verified boot, pinned SSH, initialization data and cleanup using
-the final disk-backed working directory. The five local tests, Clippy and
-workspace compilation also passed.
+the disk-backed working directory.
+
+The phased lifecycle also passed on 2026-10-16: pause/resume after `boot`,
+`kernel`, `proxmox` and `verify`, then graceful shutdown and complete removal.
+Independent checks verified guest APT networking, pinned SSH, the HTTPS panel
+through its `127.0.0.1` forward, four static JS/CSS assets, real PAM password
+login and node inventory using the returned session cookie. A separate fresh
+boot verified key-only SSH and complete cleanup after SIGTERM during a pause,
+including socket removal. A deliberate preflight failure paused for inspection
+and retained its original failure after resume and cleanup.
+
+All ten local tests passed, including failure preservation and inspection time
+being excluded from the active deadline. Clippy and formatting checks passed.

@@ -1,5 +1,7 @@
 use std::fs::File;
 use std::io::Write;
+use std::net::Ipv4Addr;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Stdio};
 use std::time::Duration;
@@ -41,17 +43,39 @@ pub struct Vm {
 }
 
 impl Vm {
-    pub fn start(dir: &Path, artifacts: &Path, memory: u32, cpus: u32, proxy_port: u16) -> Result<Self> {
-        let ssh_port = crate::proxy::unused_port()?;
-        let mut api_port = crate::proxy::unused_port()?;
+    pub fn start(dir: &Path, artifacts: &Path, options: &crate::Options, proxy_port: u16) -> Result<Self> {
+        let ssh_port = crate::proxy::unused_port(Ipv4Addr::LOCALHOST)?;
+        let mut api_port = if options.web_port == 0 {
+            crate::proxy::unused_port(options.web_bind)?
+        } else {
+            options.web_port
+        };
         while api_port == ssh_port {
-            api_port = crate::proxy::unused_port()?;
+            if options.web_port != 0 {
+                return Err("web and SSH forwarding ports collide".into());
+            }
+            api_port = crate::proxy::unused_port(options.web_bind)?;
         }
         let public = std::fs::read_to_string(dir.join("host-key.pub"))?;
         std::fs::write(
             dir.join("known_hosts"),
             format!("[127.0.0.1]:{ssh_port} {}\n", public.trim()),
         )?;
+        let config_quote = |path: &Path| {
+            format!(
+                "\"{}\"",
+                path.display().to_string().replace('\\', "\\\\").replace('"', "\\\"")
+            )
+        };
+        std::fs::write(
+            dir.join("ssh_config"),
+            format!(
+                "Host pve-e2e\n  HostName 127.0.0.1\n  Port {ssh_port}\n  User root\n  IdentityFile {}\n  UserKnownHostsFile {}\n  GlobalKnownHostsFile /dev/null\n  StrictHostKeyChecking yes\n  IdentitiesOnly yes\n  IdentityAgent none\n  PasswordAuthentication no\n",
+                config_quote(&dir.join("identity")),
+                config_quote(&dir.join("known_hosts"))
+            ),
+        )?;
+        std::fs::set_permissions(dir.join("ssh_config"), std::fs::Permissions::from_mode(0o600))?;
         let stderr = File::create(artifacts.join("qemu.log"))?;
         let executable = std::env::current_exe()?;
         if executable.to_string_lossy().contains(',') {
@@ -62,11 +86,11 @@ impl Vm {
             executable.display().to_string().replace('\'', "'\"'\"'")
         );
         let child = std::process::Command::new("qemu-system-x86_64")
-            .args(["-accel", "kvm", "-cpu", "host", "-smp", &cpus.to_string(), "-m", &memory.to_string(),
+            .args(["-accel", "kvm", "-cpu", "host", "-smp", &options.cpus.to_string(), "-m", &options.memory.to_string(),
                 "-display", "none", "-monitor", "none", "-serial", &format!("file:{}", artifacts.join("serial.log").display()),
                 "-drive", &format!("file={},format=qcow2,if=virtio", dir.join("disk.qcow2").display()),
                 "-drive", &format!("file={},format=raw,if=virtio,readonly=on", dir.join("seed.img").display()),
-                "-nic", &format!("user,model=virtio-net-pci,restrict=on,ipv6=off,domainname=e2e.test,dnssearch=e2e.test,hostfwd=tcp:127.0.0.1:{ssh_port}-:22,hostfwd=tcp:127.0.0.1:{api_port}-:8006,guestfwd=tcp:10.0.2.100:3128-cmd:{proxy_command}")])
+                "-nic", &format!("user,model=virtio-net-pci,restrict=on,ipv6=off,domainname=e2e.test,dnssearch=e2e.test,hostfwd=tcp:127.0.0.1:{ssh_port}-:22,hostfwd=tcp:{}:{api_port}-:8006,guestfwd=tcp:10.0.2.100:3128-cmd:{proxy_command}", options.web_bind)])
             .stdin(Stdio::null()).stdout(Stdio::null()).stderr(stderr).spawn()?;
         Ok(Self {
             child,

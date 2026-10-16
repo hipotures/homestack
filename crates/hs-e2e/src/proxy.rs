@@ -107,8 +107,8 @@ async fn forward(State(client): State<reqwest::Client>, request: Request) -> Res
     }
 }
 
-pub fn unused_port() -> Result<u16> {
-    Ok(std::net::TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))?
+pub fn unused_port(address: Ipv4Addr) -> Result<u16> {
+    Ok(std::net::TcpListener::bind(SocketAddr::from((address, 0)))?
         .local_addr()?
         .port())
 }

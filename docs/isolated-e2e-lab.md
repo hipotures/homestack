@@ -6,8 +6,9 @@
 
 The initial download/boot/install/verify/remove implementation is documented in
 [Disposable Proxmox bootstrap](e2e-bootstrap.md). It currently uses direct QEMU
-and latest repository inputs. Persistent DNS/certificate reuse, full fixture
-cleanup and the remaining laboratory lifecycle and test catalogue below are
+and latest repository inputs, with explicit installation phases, bounded manual
+inspection pauses and local or tunneled browser access. Persistent DNS/certificate
+reuse, full fixture cleanup and the remaining laboratory lifecycle and test catalogue below are
 still a proposal; the current binary has no public DNS or ACME integration.
 
 ## 1. Objective and decisions

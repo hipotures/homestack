@@ -35,7 +35,7 @@ Running and configuring the server (`server.toml`, made from an existing `config
 
 Design for a disposable single-node Proxmox laboratory with real installation, Gold preparation, destructive E2E scenarios and an extensible test catalogue: [Isolated E2E laboratory](docs/isolated-e2e-lab.md).
 
-The first executable stage downloads Debian qcow2, installs and verifies Proxmox in a disposable 1-vCPU/2-GiB KVM VM, then powers it off and deletes it: [E2E bootstrap](docs/e2e-bootstrap.md).
+The executable bootstrap downloads Debian qcow2, installs and verifies Proxmox in a disposable 1-vCPU/2-GiB KVM VM, then powers it off and deletes it. Explicit installation phases support inspection pauses, pinned SSH, temporary web login and browser access from a local or remote desktop: [E2E bootstrap](docs/e2e-bootstrap.md).
 
 The Rust client (`crates/hs-cli`, binary `homestack`) runs `status`, `transport`, `discover`, `create`, `refresh`, `resize`, `addkey`, `destroy` and `migrate` through the server, with the same confirmations, `--json` output and exit codes as the Python CLI, and keeps the desktop's SSH config, a `known_hosts` file per workspace and `identity_files` itself. `install` and `uninstall` are Rust too (root on a node once, over SSH or a Herdr pane; [docs/migration/phase-13c.md](docs/migration/phase-13c.md)). `setup` and `repo` are still Python's. It reads `~/.config/homestack/client.toml` (from `hs-config split --server-url https://...`); its `[server]` section names the instances (HTTPS only), the client token file (default `~/.config/homestack/api-token`, mode 0600) and an optional CA file. Details: [docs/migration/phase-13.md](docs/migration/phase-13.md).
 

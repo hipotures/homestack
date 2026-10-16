@@ -95,6 +95,7 @@ fn user_data(data: &Value, hostname: &str, identity: &str, private: &str, public
         "apt": {"preserve_sources_list": true},
         "runcmd": [["systemctl", "restart", "systemd-resolved"]],
         "write_files": [
+            {"path": "/etc/ssh/sshd_config.d/00-homestack-e2e.conf", "permissions": "0600", "content": "PasswordAuthentication no\nKbdInteractiveAuthentication no\nPermitRootLogin prohibit-password\n"},
             {"path": "/etc/systemd/resolved.conf.d/homestack-e2e.conf", "content": "[Resolve]\nDomains=e2e.test\n"},
             {"path": "/etc/homestack-e2e.json", "permissions": "0600", "content": serde_json::to_string(data)?},
             {"path": "/etc/hosts", "content": format!("127.0.0.1 localhost\n10.0.2.15 {hostname} {}\n", hostname.split('.').next().ok_or("missing hostname")?)},
