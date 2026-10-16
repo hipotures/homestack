@@ -28,10 +28,12 @@ Run every check (Rust 1.99 and uv required):
 
 ```bash
 scripts/check.sh            # without a cluster
-scripts/check.sh --live     # also against the real cluster, read-only
+scripts/check.sh --live     # also runs destructive live gates on configured test resources
 ```
 
 Running and configuring the server (`server.toml`, made from an existing `config.toml` with `cargo run -p hs-config -- split`): [docs/migration/deploy.md](docs/migration/deploy.md). API contract: [docs/openapi.json](docs/openapi.json).
+
+Design for a disposable single-node Proxmox laboratory with real installation, Gold preparation, destructive E2E scenarios and an extensible test catalogue: [Isolated E2E laboratory](docs/isolated-e2e-lab.md).
 
 The Rust client (`crates/hs-cli`, binary `homestack`) runs `status`, `transport`, `discover`, `create`, `refresh`, `resize`, `addkey`, `destroy` and `migrate` through the server, with the same confirmations, `--json` output and exit codes as the Python CLI, and keeps the desktop's SSH config, a `known_hosts` file per workspace and `identity_files` itself. `install` and `uninstall` are Rust too (root on a node once, over SSH or a Herdr pane; [docs/migration/phase-13c.md](docs/migration/phase-13c.md)). `setup` and `repo` are still Python's. It reads `~/.config/homestack/client.toml` (from `hs-config split --server-url https://...`); its `[server]` section names the instances (HTTPS only), the client token file (default `~/.config/homestack/api-token`, mode 0600) and an optional CA file. Details: [docs/migration/phase-13.md](docs/migration/phase-13.md).
 
