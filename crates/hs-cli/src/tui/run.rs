@@ -14,7 +14,7 @@ use ratatui::backend::CrosstermBackend;
 use serde_json::Value;
 use tokio::sync::mpsc;
 
-use super::action::{Decision, Desktop, Progress, work};
+use super::action::{Decision, Desktop, Kind, Progress, work};
 use super::draw::draw;
 use super::install::{AskView, Mode};
 use super::installing::{self, Command, Setup};
@@ -50,6 +50,8 @@ enum Update {
     Action(Progress),
     /// The server's workspace pool and default home size (MiB).
     Defaults(Option<String>, Option<u64>),
+    /// The images of the reinstall box of these containers.
+    Images(Vec<u32>, Result<super::reinstall::Images, String>),
 }
 
 /// The terminal in raw mode on the alternate screen; put back on drop,
@@ -466,6 +468,7 @@ fn start(request: &Request, client: Option<&Arc<Client>>, ctx: &Context, updates
         | Request::Decide(_)
         | Request::Reload
         | Request::Ssh(_)
+        | Request::Images(_)
         | Request::Setup(_)
         | Request::SetupAsk(_)
         | Request::Install(_)
@@ -702,6 +705,31 @@ pub async fn run(ctx: &mut Context) -> Result<i32, AppError> {
                         return Ok(0);
                     }
                     match request {
+                        Request::Act(start) if start.kind == Kind::Reinstall => {
+                            let (sender, mut decisions) = mpsc::unbounded_channel();
+                            decide = Some(sender);
+                            let updates = updates.clone();
+                            let deploy_toml = deploy_toml(ctx);
+                            tokio::spawn(async move {
+                                let told = updates.clone();
+                                let tell = move |progress: Progress| {
+                                    let _ = told.send(Update::Action(progress));
+                                };
+                                let say = move |line: &str| {
+                                    let _ = updates.send(Update::Log(line.trim().to_owned()));
+                                };
+                                super::reinstall::work(deploy_toml, start, &mut decisions, &tell, &say).await;
+                            });
+                        }
+                        Request::Images(targets) => {
+                            let updates = updates.clone();
+                            let deploy_toml = deploy_toml(ctx);
+                            let offset = clock.offset;
+                            tokio::spawn(async move {
+                                let images = super::reinstall::read(&deploy_toml, &targets, offset).await;
+                                let _ = updates.send(Update::Images(targets, images));
+                            });
+                        }
                         Request::Act(start) => {
                             if let (Some(client), Some(desktop)) = (connection.client.clone(), connection.desktop.clone()) {
                                 let (sender, mut decisions) = mpsc::unbounded_channel();
@@ -879,6 +907,7 @@ pub async fn run(ctx: &mut Context) -> Result<i32, AppError> {
                     app.set_status(&status);
                 }
                 Update::Servers(servers) => app.set_servers(servers),
+                Update::Images(targets, images) => app.set_images(&targets, images),
                 Update::Defaults(pool, home) => {
                     app.pool = pool;
                     app.home_default = home;
@@ -922,6 +951,10 @@ pub async fn run(ctx: &mut Context) -> Result<i32, AppError> {
                 Update::Action(progress) => {
                     if let Progress::Done { ok, lines } = &progress {
                         let title = app.action.as_ref().map(super::action::Action::title).unwrap_or_default();
+                        // The marked servers are done with.
+                        if *ok && app.action.as_ref().is_some_and(|action| action.kind == Kind::Reinstall) {
+                            app.marked.clear();
+                        }
                         let outcome = if *ok { "done" } else { "failed" };
                         let first = lines.first().cloned().unwrap_or_default();
                         app.log(&clock.now(), &format!("{title}: {outcome}; {first}"));
@@ -982,4 +1015,9 @@ impl SetupWorker {
             std::thread::sleep(Duration::from_millis(100));
         }
     }
+}
+
+/// `deploy.toml`, next to `client.toml`.
+fn deploy_toml(ctx: &Context) -> std::path::PathBuf {
+    config::default_path(&ctx.home, ctx.config_home.as_deref()).with_file_name("deploy.toml")
 }

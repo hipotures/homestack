@@ -261,6 +261,21 @@ pub async fn apply(config: &DeployConfig, only: &[String], say: &impl Fn(&str)) 
     check_versions(config, &api_token, say).await
 }
 
+/// The image each instance's container was made from, by instance name;
+/// `None` for a missing container or one `apply` did not make.
+pub async fn images(config: &DeployConfig) -> Result<Vec<(String, Option<String>)>, String> {
+    let pve = deploy_client(config)?;
+    let mut found = Vec::new();
+    for instance in &config.instances {
+        let image = match node::container(&pve, instance.ctid).await? {
+            Some(container) => node::made_from(&pve, &container.node, instance.ctid).await?,
+            None => None,
+        };
+        found.push((instance.name.clone(), image));
+    }
+    Ok(found)
+}
+
 /// Every instance holds the same configuration version.
 pub async fn check_versions(config: &DeployConfig, api_token: &str, say: &impl Fn(&str)) -> Result<(), String> {
     let all: Vec<&InstanceSpec> = config.instances.iter().collect();

@@ -40,6 +40,8 @@ pub enum Request {
     SetupAsk(super::setup::Ask),
     /// Give the terminal to ssh on the running workspace (step 4).
     Ssh(u32),
+    /// Read the images of these server containers and the registry's.
+    Images(Vec<u32>),
     Quit,
 }
 
@@ -204,6 +206,10 @@ pub struct App {
     pub pool: Option<String>,
     /// The server's default home size in MiB (`/v1/config`), for new.
     pub home_default: Option<u64>,
+    /// The server containers marked with Space, for one reinstall.
+    pub marked: std::collections::BTreeSet<u32>,
+    /// What the reinstall box shows, once read.
+    pub images: Option<Result<super::reinstall::Images, String>>,
 }
 
 impl App {
@@ -253,6 +259,8 @@ impl App {
             keys: Vec::new(),
             pool: None,
             home_default: None,
+            marked: std::collections::BTreeSet::new(),
+            images: None,
             setup: None,
             before_setup: None,
         })
@@ -1004,6 +1012,15 @@ impl App {
         {
             action.hidden = false;
             return None;
+        }
+        // On a server container: Space marks it, Enter reinstalls it (or
+        // every marked one).
+        if key.code == KeyCode::Char(' ') {
+            self.toggle_mark();
+            return None;
+        }
+        if key.code == KeyCode::Enter {
+            return self.open_reinstall();
         }
         match key.code {
             KeyCode::Char('q') => return Some(Request::Quit),

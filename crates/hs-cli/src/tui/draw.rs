@@ -449,6 +449,13 @@ fn workspace_actions(app: &App) -> Vec<Control> {
     let selected = app.selected_entry();
     let running = selected.is_some_and(|entry| entry.status == "running");
     let free = selected.is_some() && app.action.is_none() && app.setup.is_none();
+    if selected.is_some_and(super::acting::is_server) {
+        return vec![
+            Control::key("&info"),
+            Control::named("␣", "mark", KeyCode::Char(' ')),
+            Control::named("↵", "reinstall", KeyCode::Enter).enabled(free),
+        ];
+    }
     vec![
         Control::key("&info").enabled(selected.is_some()),
         Control::key("&ssh").enabled(running),
@@ -753,11 +760,9 @@ fn workspaces(buf: &mut Buffer, area: Rect, app: &App, mut controls: Vec<Control
             }
         }
         let mut shown = (*entry).clone();
-        if let Some(action) = app
-            .action
-            .as_ref()
-            .filter(|action| action.running() && action.vmid == Some(entry.vmid))
-        {
+        if let Some(action) = app.action.as_ref().filter(|action| {
+            action.running() && (action.vmid == Some(entry.vmid) || action.targets.contains(&entry.vmid))
+        }) {
             shown.status = format!("◐ {}", action.kind.word());
         }
         let line = list_line(&columns, |column| (column.value)(&shown));
@@ -767,6 +772,17 @@ fn workspaces(buf: &mut Buffer, area: Rect, app: &App, mut controls: Vec<Control
         for (at, tag) in entry.tags.iter().take(MAX_TAGS).enumerate() {
             let x = list.x + 1 + u16::try_from(at).unwrap_or(0);
             write(buf, x, y, 1, "■", style.fg(tag_color(palette, tag)));
+        }
+        // A marked server: a tick before its squares.
+        if app.marked.contains(&entry.vmid) {
+            write(
+                buf,
+                list.x,
+                y,
+                1,
+                "✓",
+                style.fg(palette.ok).add_modifier(Modifier::BOLD),
+            );
         }
         // The state dot in its colour.
         if let Some(at) = line.find(['●', '○', '◐']) {
@@ -1037,7 +1053,7 @@ fn list_item(palette: &Palette, label: &str, chosen: bool) -> (String, Style) {
     }
 }
 
-const HELP: [&str; 19] = [
+const HELP: [&str; 22] = [
     "1 2 3 4     show or hide workspaces, cluster, storage, log",
     "0           the standard view: every panel and node, no filter",
     "v           next view (auto, 1, 2)",
@@ -1053,6 +1069,9 @@ const HELP: [&str; 19] = [
     "n new   r refresh   z resize   k add key   g migrate   d destroy",
     "In the box: tab next field, ← → choose, ↵ plan, ↵ or a apply,",
     "esc cancel (while it runs esc hides the box; ↵ shows it).",
+    "",
+    "On a server (containers): ␣ mark or unmark it; ↵ reinstall it,",
+    "or every marked one when it is marked, from a published image.",
     "",
     "Setup: tab next group, ␣ toggle, 0 branch, / filter, ← → close or",
     "open, ↵ review, F5 reread state, Ctrl+R catalog; green ready, red overwrite.",
@@ -1103,6 +1122,51 @@ pub(super) fn wrap(line: &str, width: usize) -> Vec<String> {
 
 /// The box of an action (mockups 12–14): its stages in the top border, its
 /// buttons in the bottom border.
+/// The reinstall form under its choice: the image each server was made
+/// from, and the images published lately, the chosen one marked.
+fn reinstall_lines(app: &App, chosen: usize, text: Style, muted: Style, lines: &mut Vec<(String, Style)>) {
+    let images = match &app.images {
+        None => return lines.push(("reading the images…".to_owned(), muted)),
+        Some(Err(error)) => return lines.push((error.clone(), text.fg(app.palette.error))),
+        Some(Ok(images)) => images,
+    };
+    lines.push((String::new(), text));
+    lines.push(("Now".to_owned(), muted));
+    for server in &images.servers {
+        let now = server.image.as_ref().map_or_else(
+            || "not made by homestack-deploy".to_owned(),
+            |image| format!("{}  {}", image.tag(), image.made),
+        );
+        lines.push((format!("{:<11}{now}", server.name), text));
+    }
+    lines.push((String::new(), text));
+    lines.push(("Published".to_owned(), muted));
+    for (index, image) in images.published.iter().enumerate() {
+        let on: Vec<&str> = images
+            .servers
+            .iter()
+            .filter(|server| server.image.as_ref().is_some_and(|now| now.image == image.image))
+            .map(|server| server.name.as_str())
+            .collect();
+        let newer = images.servers.iter().any(|server| images.newer(image, server));
+        let note = if !on.is_empty() {
+            format!("  now on {}", on.join(", "))
+        } else if newer {
+            "  new".to_owned()
+        } else {
+            String::new()
+        };
+        let (marker, style) = if index == chosen {
+            ("› ", text.add_modifier(Modifier::BOLD))
+        } else if newer {
+            ("  ", text)
+        } else {
+            ("  ", muted)
+        };
+        lines.push((format!("{marker}{}  {}{note}", image.tag(), image.made), style));
+    }
+}
+
 fn action_box(buf: &mut Buffer, area: Rect, app: &App, action: &Action) {
     use super::action::{Input, Kind, Part, PlanFocus, Stage, StepState};
     let palette = &app.palette;
@@ -1246,6 +1310,9 @@ fn action_box(buf: &mut Buffer, area: Rect, app: &App, action: &Action) {
                         muted,
                     ));
                     lines.push((format!("{:<11}{}", "IP", shown(ip.map(|ip| ip.to_string()))), muted));
+                }
+                if action.kind == Kind::Reinstall {
+                    reinstall_lines(app, field.index(), text, muted, &mut lines);
                 }
             }
             lines.push((String::new(), text));

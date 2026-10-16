@@ -9,6 +9,7 @@ mod draw_setup;
 pub mod install;
 pub mod installing;
 pub mod layout;
+pub mod reinstall;
 pub mod run;
 pub mod setup;
 pub mod setup_work;

@@ -315,6 +315,21 @@ pub async fn ensure_tag(pve: &impl Pve, node: &str, ctid: u32) -> Result<bool, S
     Ok(true)
 }
 
+/// The image container `ctid` was made from: the `image` line of the
+/// description `apply` writes.
+pub async fn made_from(pve: &impl Pve, node: &str, ctid: u32) -> Result<Option<String>, String> {
+    let config = pve
+        .get(&format!("/nodes/{node}/lxc/{ctid}/config"), &[])
+        .await
+        .map_err(|e| format!("CT {ctid} config: {e}"))?;
+    Ok(config["description"]
+        .as_str()
+        .unwrap_or_default()
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("image "))
+        .map(|image| image.trim().to_owned()))
+}
+
 /// Whether container `ctid` was made with `description` (its server, image
 /// and certificate) and `net0`: then only its configuration is sent again.
 pub async fn unchanged(pve: &impl Pve, node: &str, ctid: u32, description: &str, net0: &str) -> Result<bool, String> {

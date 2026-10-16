@@ -3,11 +3,13 @@
 //! moves through plan, run and result.
 
 use crossterm::event::KeyCode;
+use hs_model::status::StatusEntry;
 use serde_json::{Value, json};
 
 use super::action::{
     Action, Decision, Field, Form, Input, Kind, M_MAX, M_STEP, MIB_PER_GIB, Part, PlanFocus, Progress, Stage, Start,
 };
+use super::reinstall::Images;
 use super::state::{App, Request};
 use crate::app::valid_name;
 
@@ -291,7 +293,7 @@ impl App {
                     Field::choice("Storage", storages, "The storage on the target node."),
                 ]
             }
-            Kind::Refresh | Kind::Destroy | Kind::Start | Kind::Stop => Vec::new(),
+            Kind::Refresh | Kind::Destroy | Kind::Start | Kind::Stop | Kind::Reinstall => Vec::new(),
         };
         let mut action = Action {
             kind,
@@ -299,6 +301,7 @@ impl App {
             name,
             stage: Stage::Asking,
             hidden: false,
+            targets: Vec::new(),
         };
         if fields.is_empty() {
             let start = Start {
@@ -396,6 +399,7 @@ impl App {
                 json!({"vmid": vmid, "target_node": node, "target_storage": storage})
             }
             Kind::Refresh | Kind::Destroy | Kind::Start | Kind::Stop => json!({"vmid": vmid}),
+            Kind::Reinstall => self.reinstall_parameters(form)?,
         };
         Ok(Start {
             kind: action.kind,
@@ -403,6 +407,130 @@ impl App {
             parameters,
             key_file,
         })
+    }
+
+    /// Enter on a server container: the reinstall box for it, or for every
+    /// marked one when it is marked; the images are read first.
+    pub(super) fn open_reinstall(&mut self) -> Option<Request> {
+        let entry = self.selected_entry().filter(|entry| is_server(entry))?.clone();
+        if let Some(action) = &self.action {
+            let line = format!("one action at a time: {} is still open", action.title());
+            self.log("", &line);
+            return None;
+        }
+        let mut servers: Vec<(u32, String)> = if self.marked.contains(&entry.vmid) {
+            self.status
+                .iter()
+                .flat_map(|status| status.gold.iter().chain(&status.workspaces).chain(&status.others))
+                .filter(|other| self.marked.contains(&other.vmid) && is_server(other))
+                .map(|other| (other.vmid, other.name.clone().unwrap_or_default()))
+                .collect()
+        } else {
+            vec![(entry.vmid, entry.name.clone().unwrap_or_default())]
+        };
+        servers.sort_unstable();
+        servers.dedup();
+        let targets: Vec<u32> = servers.iter().map(|(vmid, _)| *vmid).collect();
+        let names: Vec<String> = servers.into_iter().map(|(_, name)| name).collect();
+        self.images = None;
+        self.action = Some(Action {
+            kind: Kind::Reinstall,
+            vmid: None,
+            name: names.join(", "),
+            stage: Stage::Form(Form {
+                fields: vec![Field::choice(
+                    "Image",
+                    Vec::new(),
+                    "← → choose the image; ↵ shows what is done.",
+                )],
+                focus: 0,
+                error: None,
+            }),
+            hidden: false,
+            targets: targets.clone(),
+        });
+        Some(Request::Images(targets))
+    }
+
+    /// The images for the reinstall box of `targets`: its choice, newest
+    /// first.
+    pub fn set_images(&mut self, targets: &[u32], images: Result<Images, String>) {
+        let Some(action) = self
+            .action
+            .as_mut()
+            .filter(|action| action.kind == Kind::Reinstall && action.targets == targets)
+        else {
+            return;
+        };
+        if let (Stage::Form(form), Ok(images)) = (&mut action.stage, &images)
+            && let Some(Field {
+                input: Input::Choice { options, index },
+                ..
+            }) = form.fields.first_mut()
+        {
+            *options = images
+                .published
+                .iter()
+                .map(|image| format!("{}  {}", image.tag(), image.made))
+                .collect();
+            *index = 0;
+        }
+        self.images = Some(images);
+    }
+
+    /// What reinstall sends: the image, the servers and the plan's lines.
+    fn reinstall_parameters(&self, form: &Form) -> Result<Value, String> {
+        let images = match &self.images {
+            None => return Err("The images are still being read.".to_owned()),
+            Some(Err(error)) => return Err(error.clone()),
+            Some(Ok(images)) => images,
+        };
+        let index = form.fields.first().map_or(0, Field::index);
+        let image = images
+            .published
+            .get(index)
+            .ok_or_else(|| "The registry lists no image.".to_owned())?;
+        let mut plan = vec![
+            format!("Reinstall from {}", image.tag()),
+            format!("made {}", image.made),
+            String::new(),
+        ];
+        let width = images
+            .servers
+            .iter()
+            .map(|server| server.name.chars().count())
+            .max()
+            .unwrap_or(0);
+        for server in &images.servers {
+            let now = server
+                .image
+                .as_ref()
+                .map_or_else(|| "not made by homestack-deploy".to_owned(), |now| now.tag().to_owned());
+            plan.push(format!(
+                "{:<width$}  CT {}  {now} → {}",
+                server.name,
+                server.vmid,
+                image.tag()
+            ));
+        }
+        plan.push(String::new());
+        plan.push("One at a time, each container is stopped, destroyed and made".to_owned());
+        plan.push("again from the image, with its address, certificate and".to_owned());
+        plan.push("configuration; one with this image already is only configured.".to_owned());
+        let names: Vec<&str> = images.servers.iter().map(|server| server.name.as_str()).collect();
+        Ok(json!({"image": image.image, "servers": names, "plan": plan}))
+    }
+
+    /// Space on a server container: mark it, or unmark it.
+    pub(super) fn toggle_mark(&mut self) {
+        if let Some(vmid) = self
+            .selected_entry()
+            .filter(|entry| is_server(entry))
+            .map(|entry| entry.vmid)
+            && !self.marked.remove(&vmid)
+        {
+            self.marked.insert(vmid);
+        }
     }
 
     /// A choice moved: the storages follow the node.
@@ -766,4 +894,12 @@ fn set_part(form: &mut Form, chosen: Part) {
     {
         *part = chosen;
     }
+}
+
+/// A HomeStack server: a container in the servers' pool or tagged as one.
+#[must_use]
+pub fn is_server(entry: &StatusEntry) -> bool {
+    entry.role == "CT"
+        && (entry.pool.as_deref() == Some(crate::servers::SERVICE_POOL)
+            || entry.tags.iter().any(|tag| tag == "homestack-server"))
 }
