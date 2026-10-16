@@ -5,6 +5,12 @@
 initialize a VM, install Proxmox, verify it, power it off and delete it.
 It does not install HomeStack or create Gold/workspace guests yet.
 
+The [planned DNS/TLS lifecycle](isolated-e2e-lab.md#persistent-dns-and-certificate-fixture)
+uses `e2e.homestack.app`, retains owned DNS records and cached public
+certificates across runs, and adds an explicit `cleanup --all` fixture reset.
+That lifecycle is not implemented here: this bootstrap makes no public DNS or
+ACME calls, uses the VM's own PVE CA, and removes all of its private VM data.
+
 ## Run
 
 Use a Linux x86_64 host with accessible `/dev/kvm`, nested virtualization enabled,

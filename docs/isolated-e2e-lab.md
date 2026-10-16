@@ -6,16 +6,19 @@
 
 The initial download/boot/install/verify/remove implementation is documented in
 [Disposable Proxmox bootstrap](e2e-bootstrap.md). It currently uses direct QEMU
-and latest repository inputs; the remaining laboratory lifecycle and test
-catalogue below are still a proposal.
+and latest repository inputs. Persistent DNS/certificate reuse, full fixture
+cleanup and the remaining laboratory lifecycle and test catalogue below are
+still a proposal; the current binary has no public DNS or ACME integration.
 
 ## 1. Objective and decisions
 
 Build an automated laboratory that creates **one disposable Proxmox VE node**,
 prepares Gold VMs, installs HomeStack, exercises real VMs and LXC containers,
 injects destructive failures, verifies the resulting state, and removes the
-entire laboratory. No existing cluster, Gold, workspace, credentials or user
-data are inputs.
+disposable laboratory. No existing cluster, Gold, workspace or user data are
+inputs. The user-authorized DNS access for `e2e.homestack.app` is a controller
+prerequisite; E2E DNS records and publicly trusted certificates persist between
+runs. Testing HomeStack must not require issuing a certificate on every run.
 
 The architecture must remain inexpensive to change as HomeStack evolves.
 Laboratory provisioning, product installation and feature scenarios are separate
@@ -28,10 +31,12 @@ The initial decisions are:
 | Area | Decision |
 |---|---|
 | Execution host | Dedicated Linux host with KVM/libvirt; no production workloads |
-| Proxmox | One nested, disposable PVE VM at a time, installed automatically from a locked ISO |
+| Proxmox | One nested, disposable PVE VM at a time, installed on Debian from an official qcow2 |
 | Controller | Runs outside PVE, on the execution host; survives destruction of the tested node |
 | Workloads | Actual QEMU/KVM VMs and unprivileged PVE LXC containers |
 | Isolation | Private virtual networks, local test services, disposable disk files and fresh credentials |
+| Domain and TLS | Persistent E2E DNS records and cached public certificates for PVE and HomeStack; controller-managed DNS-01 only when issuance is needed |
+| Cleanup scope | Automatic removal of per-run resources; explicit `cleanup --all` also removes owned persistent E2E fixtures |
 | Test entry points | Built product binaries, HTTPS API, and selected terminal UI flows |
 | Independent checks | Direct PVE reads, guest SSH, filesystem checks and host inventory |
 | Recovery | Restore a stopped laboratory checkpoint or rebuild; no automatic product rollback |
@@ -110,7 +115,9 @@ and unprivileged containers remain enabled.
 
 This contains mistakes and destructive infrastructure tests. It is not a
 guarantee against a hypervisor escape; only trusted source revisions run on this
-host, and the host holds no production secrets.
+host. DNS credentials stay with the trusted provisioning process, outside PVE
+and its guests; credentials for production PVE or HomeStack services are never
+inputs.
 
 ### Initial capacity
 
@@ -141,8 +148,23 @@ Create two libvirt networks without a physical uplink or a forwarding element:
 
 The workload bridge inside PVE has no PVE management address. The controller can
 reach both networks directly. PVE and guests use fixed lab addresses and the
-local resolver; names end in `<run-id>.e2e.test`. Subnets are selected after
-checking L0's routes, VPNs and existing networks for overlap.
+local resolver. Stable service names are `pve.e2e.homestack.app`,
+`api1.e2e.homestack.app` and, when needed, `api2.e2e.homestack.app`. A wildcard
+for `*.e2e.homestack.app` covers these names, but not the namespace apex or
+names with additional labels. Give the PVE node the short hostname `pve` and
+its own certificate with the explicit SAN `pve.e2e.homestack.app`: the current
+installer discovers PVE endpoints from an explicit `<node>.<domain>` name in
+the certificate, not from a wildcard. Use the wildcard certificate for the
+HomeStack service instances. The run journal still carries a unique identity;
+DNS names are not resource ownership evidence. Subnets are selected after
+checking L0's routes, VPNs and existing networks for overlap. Local resolver
+entries always reflect the current run's addresses, even when public DNS and
+the certificate are reused.
+
+Public DNS-01 validation does not require the PVE panel or HomeStack to be
+publicly reachable. Keep lab addresses private; the controller reaches the DNS
+provider and ACME service from outside the isolated guest networks. See
+[Let's Encrypt DNS-01](https://letsencrypt.org/docs/challenge-types/#dns-01-challenge).
 
 An isolated libvirt network still permits traffic to its host, as the
 [libvirt network documentation](https://libvirt.org/formatnetwork.html#isolated-network-config)
@@ -168,9 +190,17 @@ PVE trust store. Registry push access is restricted to the build process.
 
 ### Credentials
 
-Every run creates its own root bootstrap SSH key, workspace keys, PVE tokens,
-client bearer token and test certificate authority. No desktop SSH agent,
-personal configuration, DNS provider key or production token is inherited.
+Every run creates its own root bootstrap SSH key, workspace keys, PVE tokens
+and client bearer token. The cached E2E TLS certificates and their private keys
+are the intentional exception: install them into this run's services, then
+remove those copies with the VM. Keep the persistent originals outside run
+directories.
+No desktop SSH agent, personal configuration, DNS provider key or production
+PVE/HomeStack token is inherited by PVE or guests. The controller may use the
+authorized DNS provider credentials solely for E2E provisioning. Prefer a key
+limited to this namespace or delegated ACME validation records; never copy it
+into the disposable environment.
+
 Run product commands in a private home and XDG directory, with an explicit
 environment allowlist and dedicated SSH configuration and `known_hosts` files.
 Do not overwrite the invoking user's home environment.
@@ -178,17 +208,82 @@ Do not overwrite the invoking user's home environment.
 Verify the initial PVE SSH identity and PVE CA through the trusted L0 console
 or another provisioning channel bound to the exact VM UUID; do not discover
 trust by accepting an arbitrary network endpoint. Verify HTTPS certificates and
-SSH host keys throughout the suite. Keep CA signing keys outside PVE. Private
-files use mode `0600`, their directories `0700`, and disappear during cleanup.
+SSH host keys throughout the suite. Verify the installed public certificate's
+hostname and trust chain after provisioning. Private files use mode `0600` and
+their directories `0700`. Per-run private files disappear during ordinary
+cleanup; persistent certificate/account material follows the fixture lifecycle
+below. It must not be included in artifacts or ordinary HomeStack client homes.
 Automated SSH tests use synthetic software keys; hardware key behavior is a
 separate coverage limitation.
 
+### Persistent DNS and certificate fixture
+
+`homestack.app` is already registered. Provisioning means ensuring the required
+E2E DNS records exist, not purchasing or registering a domain. Keep a separate,
+controller-owned persistent directory containing the E2E ACME account, cached
+PVE and HomeStack certificate chains/private keys, and an ownership manifest
+for created DNS records. It survives normal runs and is excluded from artifact
+collection.
+Use the host-wide lock for both runs and fixture cleanup so stable service
+names, DNS reconciliation and certificate renewal cannot race.
+
+Before creating PVE, reconcile the fixture:
+
+1. Read the manifest and compare the required DNS records with the provider's
+   actual values. Reuse matching entries. Create missing records and update
+   changed entries only when their recorded ownership is verified. A matching
+   pre-existing record may be used, but is not adopted for deletion; a
+   conflicting unowned record is an infrastructure error.
+2. Inspect each cached certificate and key: they must match, cover the service
+   names, chain to a public root trusted by the client, and remain valid beyond
+   the run deadline and the renewal margin. Use the existing ordinary ACME
+   certificate policy; DNS existence alone is not evidence of usable TLS.
+3. If the certificate is usable, make no ACME order or validation challenge.
+   Do not rewrite correct DNS records. Check DNS and certificate state
+   independently: missing DNS can be repaired without replacing a usable
+   certificate, and an expiring certificate can be renewed without recreating
+   service DNS records.
+4. If issuance is required, perform real DNS-01 only for the missing or expiring
+   certificate: `pve.e2e.homestack.app` uses
+   `_acme-challenge.pve.e2e.homestack.app`, and `*.e2e.homestack.app` uses
+   `_acme-challenge.e2e.homestack.app`. Record each intended TXT value before
+   mutation, wait for public validation, and store the verified certificate/key
+   atomically. Remove only this operation's TXT values after success or failure;
+   challenge TXT values are not persistent fixtures.
+   Keep durable ownership information if DNS cleanup fails.
+5. Record whether DNS was reused, created or updated, whether each certificate
+   was reused or issued, and its public fingerprint, names and expiry. Report
+   infrastructure preparation separately from HomeStack scenario results.
+
+A missing or unusable fixture is prepared once before product tests. A DNS or
+ACME failure at this stage is an infrastructure failure, not a HomeStack
+regression. A usable cached fixture requires no ACME connection. Avoid making
+production issuance a scenario repeated by every `smoke`, `full` or
+`destructive` run; the goal is to test HomeStack with actual trusted HTTPS.
+Repeated issuance also consumes shared
+[CA rate limits](https://letsencrypt.org/docs/rate-limits/), which a new E2E
+subdomain does not isolate from its registered parent domain.
+
+Default cleanup retains the manifest, persistent DNS records, ACME account and
+certificates/keys. An explicit `cleanup --all` acquires the same lock, refuses an
+active run, reconciles any abandoned run first, then deletes only exact
+E2E-owned DNS record IDs/values and local persistent fixture material. Preserve
+the manifest until DNS deletion succeeds so an interrupted cleanup can retry.
+Do not delete the registered domain, unrelated DNS records, externally supplied
+provider credentials or shared production ACME account data. Use a dedicated
+E2E ACME cache/account rather than the production application's cache.
+
+The next run after full cleanup prepares the DNS fixture and requests new
+certificates. Clearing DNS or a local cache does not revoke an already issued
+certificate, erase public issuance history or reset CA rate limits. Full
+cleanup is a deliberate fixture reset, not a mandatory final step of each test.
+
 ### Guard before mutation
 
-The controller never accepts a user-supplied PVE endpoint, an existing domain
-to adopt, or an unrestricted libvirt URI. It creates a run identity and derives
-its target from a locally recorded libvirt UUID, disk paths, virtual NICs,
-addresses and console-established certificate identity.
+The controller never accepts a user-supplied PVE endpoint, an existing libvirt
+domain to adopt, or an unrestricted libvirt URI. It creates a run identity and
+derives its target from a locally recorded libvirt UUID, disk paths, virtual
+NICs, addresses and console-established certificate identity.
 
 Before enabling product mutation, verify:
 
@@ -210,30 +305,32 @@ installer; it never receives the controller's administrative connection.
 
 ## 5. Complete run lifecycle
 
-The initial version always performs a fresh PVE installation for each run.
+The laboratory always performs a fresh PVE installation for each run.
 There is no shared PVE or preinstalled HomeStack image cache. Reuse within a
-run uses stopped checkpoints; immutable ISO, package and cloud-image downloads
-may be shared by content hash.
+run uses stopped checkpoints; immutable package and cloud-image downloads may
+be shared by content hash. Persistent DNS/TLS fixtures are independent of the
+VM lifecycle: reusing them never reuses a running node or HomeStack instance.
 
 | Stage | Action | Required evidence |
 |---|---|---|
 | 1. Admit | Acquire lock, allocate run directory and journal, check capacity and nested KVM | Host checks and recorded resource ownership |
 | 2. Build | Build CLI, deploy tool and server image from the same source revision | Source SHA, dirty-tree status, binary hashes and OCI digest |
-| 3. Provision PVE | Prepare unattended ISO, create guarded networks, disks and NICs, install and boot PVE | Installer console, installed package versions and working PVE API |
-| 4. Verify boundary | Set up local names, time, trust and storage; verify isolation and nested KVM | Passing identity and isolation checks and a booted L2 guest |
-| 5. Prepare Gold | Import locked cloud image, configure guest contract, boot and verify | PVE configuration, successful guest boot and independent contract checks |
-| 6. Install HomeStack | Run the real installer and deployment binaries | Real roles, pools, tokens, snippets, LXC and client configuration |
-| 7. Test | Restore the declared baseline, arrange resources, act and assert | Product results plus independent state evidence |
-| 8. Collect | Export sanitized evidence after each scenario and on failure | Per-scenario report and logs outside PVE |
-| 9. Destroy | Remove run-owned L0 resources, even if PVE is unavailable | Verified absence of domain, writable disks, networks and temporary secrets |
-| 10. Report | Publish test and cleanup results | Machine-readable report and nonzero status on failure |
+| 3. Prepare external fixtures | Ensure owned E2E DNS records and reuse or obtain a trusted certificate | Recorded reuse/creation, certificate fingerprint and expiry; challenge cleanup |
+| 4. Provision PVE | Initialize an official Debian qcow2 with Cloud-Init, create guarded networks/disks/NICs, install PVE packages and reboot | Provisioning logs, installed package versions and working PVE API |
+| 5. Verify boundary | Set up local names, time and storage; install the cached PVE certificate; verify isolation and nested KVM | Passing hostname/TLS/identity and isolation checks and a booted L2 guest |
+| 6. Prepare Gold | Import locked cloud image, configure guest contract, boot and verify | PVE configuration, successful guest boot and independent contract checks |
+| 7. Install HomeStack | Run the real installer and deployment binaries with the cached E2E certificate | Real roles, pools, tokens, snippets, LXC and client configuration; no new ACME order |
+| 8. Test | Restore the declared baseline, arrange resources, act and assert | Product results plus independent state evidence |
+| 9. Collect | Export sanitized evidence after each scenario and on failure | Per-scenario report and logs outside PVE |
+| 10. Destroy | Remove per-run L0 resources, even if PVE is unavailable; retain persistent DNS/TLS fixtures | Verified absence of the VM, writable disks, networks and temporary secrets; explicit retained fixture inventory |
+| 11. Report | Publish test and cleanup results | Machine-readable report and nonzero status on failure |
 
-PVE supports unattended installation with an answer file and a prepared ISO;
-use that mechanism rather than automating GUI clicks. See the
-[official installation source](https://github.com/proxmox/pve-docs/blob/master/pve-installation.adoc#unattended-installation).
-Validate the answer file with the assistant matching the locked ISO. Select
-the disposable system disk by its assigned identity, not a broad disk glob.
-Detach installation media after provisioning; it contains temporary credentials.
+Use the [Debian qcow2 bootstrap](e2e-bootstrap.md) as the installation path.
+Initialize SSH identity, hostname and resolver through Cloud-Init, then install
+the PVE kernel/services and verify the rebooted kernel. The cached certificate
+configures PVE's HTTPS service; Debian does not need a separate OS certificate.
+Do not automate GUI clicks or introduce a second ISO installation path. Detach
+the initialization media after provisioning; it contains temporary credentials.
 
 Create local directory storage for snippets/templates, LVM-thin storage for
 normal VM/container disks, and a separate bounded storage device for capacity
@@ -264,30 +361,37 @@ partitioned root/home, LVM, LUKS or a deliberately invalid guest contract.
 The controller selects only the fixtures required by the selected scenarios.
 It must not download mutable images or build every variant for a smoke run.
 
-### A required product change: local certificate input
+### Installing HomeStack with the cached certificate
 
 At the baseline revision, [`servers.rs`](../crates/hs-cli/src/servers.rs)
 discovers a public DNS provider and drives ACME. The
 [deployment configuration](../crates/hs-deploy/src/config.rs) requires an OVH or
 Spaceship configuration even when `apply` uses a stored certificate.
-This prevents a fully isolated test of the complete installer as currently
-implemented. Local certificate support is an implementation prerequisite,
-not an existing feature of this repository.
+The existing [`acme` code](../crates/hs-deploy/src/acme.rs) can load a cached
+wildcard certificate, and [`deploy.rs`](../crates/hs-deploy/src/deploy.rs) reuses
+one that meets the renewal margin. Ordinary `apply` does not request or renew a
+certificate. Reuse that real product path with `domain = "e2e.homestack.app"`
+and a dedicated persistent ACME directory; a new local-CA installer mode is not
+a prerequisite for this design.
 
-Add one explicit, supported certificate input: a PEM certificate, private key
-and trust CA supplied by the caller. In this mode the installer and deployer
-must not discover a public DNS provider, require its credentials, or contact
-ACME. Validate name coverage, key matching and expiry, and preserve normal TLS
-verification. Use the same deployment and HTTPS bootstrap path afterwards.
-The existing ACME path remains available for actual public certificate issuance;
-update configuration directly rather than introducing legacy parsing fallbacks.
-The final option names are determined when implementing this product change.
+Run the real installer/deployer on the trusted controller. Give it explicit
+E2E configuration and the existing supported DNS-provider input there. Keep
+product runtime homes and tokens private to each run, while resolving the ACME
+directory to the persistent fixture. Do not copy provider or ACME account keys
+into PVE or a server container. The server receives only its TLS certificate
+and private key through the actual deployment mechanism.
 
-The lab then uses local DNS and a fresh certificate for its own names. It does
-not fake DNS-provider responses, store dummy provider keys, replace the installer
-with a test implementation, or use `--no-servers` to claim a complete install.
-Real public ACME/DNS issuance remains a separately reported external integration
-test, outside the default isolated suite.
+Installation scenarios start with a prepared fixture and assert that the
+certificate fingerprint is preserved and no DNS mutation or ACME issuance is
+performed. Read-only DNS discovery is permitted. Changes needed to meet that
+contract belong in the current installer/deployer reuse path, not a parallel
+test installer. The suite does not fake DNS-provider responses, store dummy
+provider keys or use `--no-servers` to claim a complete install.
+
+Exercise DNS creation, reuse, repair, certificate renewal and full fixture
+cleanup as separately selected infrastructure checks, on provisioning changes
+or explicit invocation. Repeated ACME workflow development uses staging;
+normal HomeStack scenarios consume the cached publicly trusted certificate.
 
 ## 6. Baselines, checkpoints and cleanup
 
@@ -323,10 +427,17 @@ its dependents with an explicit reason and prevents a green result.
    an outer reset.
 2. **Run cleanup:** always remove the exact L0 domain, overlay/checkpoint disks,
    installation media, networks, fixture processes, firewall rules, private
-   home and secrets recorded in the run journal. This requires no working PVE.
+   home and per-run secrets recorded in the run journal. This requires no
+   working PVE and retains persistent DNS/TLS fixtures. Neither a failed test
+   nor a controller crash changes this cleanup scope.
 3. **Independent watchdog:** a host service outside the test process observes
    the run lease and deadline. It handles killed controllers, cancelled CI jobs
    and host reboot recovery, using the journal to resume idempotent cleanup.
+
+`cleanup --all` additionally follows the persistent fixture manifest described
+above. A scenario or watchdog must never implicitly escalate ordinary cleanup
+to a persistent fixture reset. Keep persistent certificate state outside the
+run paths that recursive deletion and disk checkpoints can reach.
 
 Register an intended resource in the L0 journal before creating it, then record
 its actual UUID/path after success. Write the journal atomically and durably.
@@ -347,14 +458,15 @@ quarantined from new jobs until reconciliation succeeds.
 
 ## 7. Extensible implementation without a test framework of its own
 
-Use one Rust crate and explicit modules. The layout below is proposed, not
-present in the repository today:
+Use one Rust crate and explicit modules. The layout below is the proposed
+complete structure; the initial bootstrap already implements only part of it:
 
 ```text
 crates/hs-e2e/
   src/main.rs                 # select scenarios, run, report
   src/lab.rs                  # libvirt lifecycle, identity guard, reset
   src/journal.rs              # ownership and cleanup records
+  src/domain.rs               # persistent E2E DNS/TLS fixture and explicit reset
   src/fixtures.rs             # baseline and resource builders
   src/product.rs              # current CLI/API install and feature operations
   src/probe.rs                # independent PVE and guest observations
@@ -365,7 +477,7 @@ crates/hs-e2e/
   src/scenarios/workspace.rs
   src/scenarios/deployment.rs
   src/scenarios/destruction.rs
-e2e/inputs.lock.toml           # current ISO/image/package/tool input hashes
+e2e/inputs.lock.toml           # current image/package/tool input hashes
 ```
 
 ### Module contracts
@@ -373,6 +485,7 @@ e2e/inputs.lock.toml           # current ISO/image/package/tool input hashes
 | Module | Owns | Must not own |
 |---|---|---|
 | Lab | Creation, target identity, networks, outer disks, reset, final destruction | Workspace behavior or product success assertions |
+| Domain | Persistent DNS/TLS preparation, recorded reuse/renewal, explicit fixture reset | Per-scenario issuance, guest fault actions or deleting unowned DNS records |
 | Fixtures | Reusable preparation of concrete starting states | Hidden execution of the feature being tested |
 | Product | Current installer/deployer/CLI/API calls and decoding their outputs | Privileged repair, host resource destruction or independent expected results |
 | Probe | PVE inventory and direct guest/filesystem checks | Calling product internals to calculate what success should mean |
@@ -433,14 +546,15 @@ report and never silently counted as passed.
 ## 8. Scenario catalogue and assertions
 
 `full` includes `smoke`; `destructive` includes `full` plus disruption scenarios.
-All three profiles create a new PVE VM from the locked ISO. Tests within a
+All three profiles create a new PVE VM from the locked Debian qcow2 and PVE
+package inputs, while reusing the prepared DNS/TLS fixture. Tests within a
 profile run sequentially and restore their baselines independently.
 
 | ID / area | Profile | Action and required observations |
 |---|---|---|
 | `lab.cold-install` | smoke | Install PVE, boot a nested KVM guest, verify boundaries and local service access |
 | `gold.build-and-readiness` | smoke | Build Gold from the locked image, verify guest contract, then verify product readiness with Gold running and stopped |
-| `install.complete` | smoke | Run the full CLI installer with local PEM input; inspect real pools, roles, ACLs, snippets, server LXC, TLS and usable generated client config |
+| `install.complete` | smoke | Run the full CLI installer with the cached E2E certificate; inspect real pools, roles, ACLs, snippets, server LXC, TLS and usable client config; no new DNS mutation or ACME order |
 | `workspace.lifecycle` | smoke | CLI plan, create, boot, status and destroy; verify Cloud-Init, QGA, SSH, root/home mounts and absence of leaked disks |
 | `workspace.refresh` | smoke | Write home canaries and a disposable root marker, refresh; home remains intact, root comes from Gold, host keys and local client files reconcile |
 | `gold.invalid` | full | Remove one required guest capability or break a PVE prerequisite at a time; readiness/installation refuses before the prohibited mutation |
@@ -466,7 +580,7 @@ profile run sequentially and restore their baselines independently.
 | `fault.qga-cloudinit` | destructive | Stop QGA, break Cloud-Init or remove a required vendor snippet; error identifies the failed stage and preserves home data |
 | `fault.capacity` | destructive | Exhaust only the bounded fault storage; task fails within deadline without host exhaustion or sentinel damage |
 | `fault.registry-or-network` | destructive | Deny a registry pull or one service network path; deployment reports failure; a deliberate later reapply can recreate a missing server |
-| `fault.node-loss` | destructive | Reboot, power off or delete PVE from L0 during work; controller reports interruption, exports available evidence and removes all outer resources |
+| `fault.node-loss` | destructive | Reboot, power off or delete PVE from L0 during work; controller reports interruption, exports available evidence and removes all per-run outer resources |
 | `lab.controller-loss` | destructive | A trusted external harness kills the controller or cancels its job; watchdog removes the lab, including after a simulated host-service restart |
 
 The deployment repeat, collision and batch cases should expose the open issues
@@ -520,12 +634,18 @@ database is an input.
 
 ### Reproducibility
 
-Commit an input lock file with the exact PVE ISO and checksum, guest image and
-checksum, package snapshot identity, toolchain, controller dependencies and
-fixture service images/digests. The baseline currently requires PVE 9.2 or
-later in [`checks.rs`](../crates/hs-install/src/checks.rs); choose an available
-exact supported ISO when implementing the lab and record installed package
-versions. Do not resolve `latest` or upgrade packages during a scenario.
+Commit an input lock file with the Debian qcow2 URL/checksum, Gold image and
+checksum, Debian/PVE package snapshot identities, toolchain, controller
+dependencies and fixture service images/digests. The baseline currently
+requires PVE 9.2 or later in
+[`checks.rs`](../crates/hs-install/src/checks.rs); pin a supported package set
+for the regression suite and record installed package versions. The initial
+bootstrap still deliberately downloads latest inputs. Resolve or refresh those
+inputs before scenarios, never during one.
+
+The persistent certificates are renewable external fixtures, not locked build
+inputs. Record their fingerprints, expiry and reuse/issuance decisions per run.
+Renewal must not change the product revision or recreate otherwise valid DNS.
 
 Build the CLI and server image from the same tested checkout. Record its commit
 and whether it contains local changes. Publish the image to the local registry
@@ -554,9 +674,12 @@ homes or disk images as normal CI artifacts. Keep sanitized evidence for 14
 days initially. Retained disks remain restricted on L0 and obey the shorter
 failure-retention deadline.
 
-Emit JSON and JUnit, with separate test and cleanup results. Distinguish
-`passed`, `failed`, `blocked` and `out_of_scope`. Distinguish infrastructure
-setup failure from product assertion failure. A required blocked scenario,
+Emit JSON and JUnit, with separate test and cleanup results. Include separate
+DNS/TLS preparation and retained-fixture inventory: deliberate fixture retention
+is not a resource leak. Full cleanup reports DNS removal and local cache removal
+separately, preserving partial-failure evidence and the ownership manifest.
+Distinguish `passed`, `failed`, `blocked` and `out_of_scope`. Distinguish
+infrastructure setup failure from product assertion failure. A required blocked scenario,
 missing evidence, exceeded deadline or incomplete cleanup makes the run fail.
 
 ### Execution policy
@@ -568,10 +691,15 @@ cargo run --locked -p hs-e2e -- run --profile smoke
 cargo run --locked -p hs-e2e -- run --profile full
 cargo run --locked -p hs-e2e -- run --profile destructive
 cargo run --locked -p hs-e2e -- run --scenario workspace.refresh
+cargo run --locked -p hs-e2e -- cleanup --all
 ```
 
 Do not add a free-form endpoint flag. Scenario selection still provisions and
-destroys a lab. Normal `cargo test --workspace` never provisions infrastructure.
+destroys a lab, retaining DNS/TLS fixtures. The proposed `cleanup --all` is an
+explicit reset of E2E-owned persistent state as well as abandoned run resources;
+it is not appended to normal CI runs. None of these proposed profile/reset
+options is implemented by the initial bootstrap. Normal `cargo test --workspace`
+never provisions infrastructure.
 Python fixture tooling, if needed, uses `uv run`/`uv sync` or `uv pip`, never
 plain `pip`.
 
@@ -592,8 +720,8 @@ automatically; preserve its result and allow a separately identified rerun.
 
 | Step | Deliverable | Exit condition |
 |---|---|---|
-| 1. Isolated shell | L0 setup, controller journal, ISO installer, network guards and watchdog | PVE and an L2 guest boot; controller/node kill leaves no outer resources; blocked routes are demonstrated |
-| 2. Product prerequisites | Local PEM certificate input and reproducible local OCI/image/package supply | Real full installer requires no public account, verifies TLS, and installs the exact revision |
+| 1. Isolated shell | L0 setup, controller journal, Debian qcow2/PVE bootstrap, network guards and watchdog | PVE and an L2 guest boot; controller/node kill leaves no per-run outer resources; blocked routes are demonstrated |
+| 2. Persistent prerequisites | Owned DNS/certificate fixture, installer certificate reuse and reproducible local OCI/image/package supply | A second fresh run issues no certificate or DNS mutation when fixtures match; missing DNS is repaired without reissuing valid TLS; explicit full cleanup removes only owned fixtures |
 | 3. First complete journey | Gold builder, actual install, create, refresh and destroy | Guest data and independent inventory checks pass twice in fresh runs; cleanup passes |
 | 4. Maintainable catalogue | Baselines, fixture handles, explicit scenario registration, reports | A new feature scenario can be added without editing L0 provisioning or final cleanup |
 | 5. Current function coverage | Resize layouts, keys, uninstall/reinstall, deployment regressions, PTY and local setup | Required `full` scenarios pass; unsupported external integrations are clearly listed |
@@ -601,9 +729,15 @@ automatically; preserve its result and allow a separately identified rerun.
 
 The laboratory is accepted when:
 
-- A clean checkout plus locked input downloads and the dedicated L0 host are
-  enough to run it; no prepared PVE, Gold, personal files or production accounts
-  are required.
+- A clean checkout, input downloads, the dedicated L0 host and authorized E2E
+  DNS access are enough to run it; no prepared PVE, Gold, personal application
+  data or production PVE/HomeStack account is required.
+- DNS/TLS preparation is reused across fresh VMs. A usable cached certificate
+  causes no ACME request; matching DNS causes no provider mutation. Names,
+  key matching, trust chain and remaining validity are checked before reuse.
+- Ordinary cleanup removes all per-run resources while explicitly retaining
+  the DNS/TLS fixture. `cleanup --all` removes only recorded E2E DNS records and
+  local fixture material; the next run recreates the missing prerequisites.
 - A run creates exactly one tested PVE node and real nested VMs/containers,
   including a freshly built Gold and a genuinely installed HomeStack service.
 - Destruction can target any resource inside that node, and destruction of the
@@ -626,10 +760,12 @@ Ceph. Those need a later, explicitly requested multi-node topology; two server
 containers on one PVE node do not provide that evidence.
 
 Nested KVM does not validate physical passthrough, real device failure or
-bare-metal performance. Public certificate issuance, external service logins,
-third-party application installers and physical FIDO interactions are outside
-the default isolated suite and must remain visible in its coverage report.
+bare-metal performance. DNS and public certificate issuance are real external
+prerequisites, prepared only when necessary; product test profiles do not claim
+to retest issuance or domain registration. External service logins, third-party
+application installers and physical FIDO interactions are outside the default
+suite and must remain visible in its coverage report.
 
-The execution host still needs to be selected and checked for nested KVM and
-capacity before implementation can be exercised. There is no authorization or
-instruction in this document to change the user's existing cluster.
+The execution host needs the nested KVM and capacity checks before running the
+full suite. Authorization to use DNS for `e2e.homestack.app` does not authorize
+changes to the user's existing cluster or unrelated DNS records.
