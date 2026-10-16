@@ -227,18 +227,24 @@ independent of the user's SSH agent, keys and existing Proxmox configuration.
 
 ## Manual HomeStack TUI in the lab
 
-Plain `cargo run -p hs-cli` starts the normal desktop client. It reads the
-desktop's existing `client.toml` and immediately polls the configured servers,
-which may be production. Use the E2E launcher to inspect the lab instead.
+Plain `cargo run -p hs-cli` opens profile `default`, using the desktop's
+existing configuration. Open the isolated lab with `homestack --profil e2e`.
+See [Client profiles](client-profiles.md) for storage and SSH isolation.
 
 Build both executables, start the runner with `--pause-after verify` and keep
-the controller paused. In another terminal on the runner host, use the
-`client --artifacts` command printed at the pause. For the `inspection` run
-above:
+the controller paused. The pause registers profile `e2e` automatically and
+prints the client command. In another terminal on the runner host:
 
 ```sh
 cargo build --locked -p hs-cli -p hs-e2e
-cargo run --locked -p hs-e2e -- client --artifacts target/e2e/inspection
+./target/debug/homestack --profil e2e
+```
+
+An already running controller built before profile support can be registered once
+without restarting its VM:
+
+```sh
+./target/debug/homestack-e2e profile --artifacts target/e2e/inspection
 ```
 
 The launcher requires a paused run after HomeStack preparation, its SSH
@@ -264,9 +270,11 @@ mouse capture is released, so the terminal can select text and copy it with
 its normal Copy shortcut. Press **F2** or **Esc** to resume the display.
 Background work continues; copy mode does not stop a deployment or the VM.
 
-Reopening the client for the same VM retains its test profile. VM cleanup
-removes that entire profile together with the VM keys and disks; logs and
-reports in the artifact directory remain. Closing the TUI leaves the paused
+Reopening `homestack --profil e2e` for the same VM retains its test profile. VM cleanup
+removes its private client data together with the VM keys and disks. The named
+reference contains only an artifact path and run ID; opening a stopped run fails,
+and a subsequent paused run replaces the reference. There is no fallback to
+`default`. Historical logs and reports in the artifact directory remain. Closing the TUI leaves the paused
 controller and VM running. Explicit resume continues the remaining lifecycle,
 which ends in VM cleanup; Ctrl-C or SIGTERM on the controller also removes the VM.
 

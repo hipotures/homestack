@@ -25,7 +25,7 @@ use serde_json::{Value, json};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
-const USAGE: &str = "homestack-e2e run [--memory-mib N] [--cpus N] [--disk-gib N]\n                  [--timeout-seconds N] [--message TEXT] [--artifacts DIRECTORY]\n                  [--pause-after PHASE[,PHASE...]] [--pause-on-failure]\n                  [--web-bind IPV4] [--web-port PORT]\n                  [--fixtures DIRECTORY] [--spaceship-file FILE]\n                  [--local-dns IPV4] [--tsig-file FILE]\n                  [--runner-ssh DESTINATION] [--runner-ssh-port PORT]\nhomestack-e2e resume --artifacts DIRECTORY\nhomestack-e2e client --artifacts DIRECTORY\nhomestack-e2e prepare --artifacts DIRECTORY [--local-dns IPV4] [--spaceship-file FILE] [--tsig-file FILE]\nhomestack-e2e cleanup --all [--fixtures DIRECTORY] [--spaceship-file FILE] [--tsig-file FILE]\n\nPhases: preflight, domain, image, boot, kernel, proxmox, network, homestack, verify, shutdown; cleanup always runs.\nDefaults: 1 vCPU, 2048 MiB RAM, 12 GiB sparse disk, 1800 active seconds.\nInspection pauses have no time limit and require an explicit resume.\nThe panel uses pve.e2e.homestack.app with a public Let's Encrypt certificate.\nDNS and certificate fixtures persist until cleanup --all.\nThe web forward binds to 127.0.0.1 on a free port unless explicitly configured.\nDownloads Debian 13 qcow2, installs Proxmox, verifies SSH, HTTPS and web login,\npowers off, and deletes all temporary VM data. No host network changes.\nRequires Linux x86_64, /dev/kvm, qemu-system-x86_64, qemu-img,\nssh, ssh-keygen, mkfs.vfat, mcopy and openssl; dig/nsupdate for local DNS.\nNo host root privileges required.";
+const USAGE: &str = "homestack-e2e run [--memory-mib N] [--cpus N] [--disk-gib N]\n                  [--timeout-seconds N] [--message TEXT] [--artifacts DIRECTORY]\n                  [--pause-after PHASE[,PHASE...]] [--pause-on-failure]\n                  [--web-bind IPV4] [--web-port PORT]\n                  [--fixtures DIRECTORY] [--spaceship-file FILE]\n                  [--local-dns IPV4] [--tsig-file FILE]\n                  [--runner-ssh DESTINATION] [--runner-ssh-port PORT]\nhomestack-e2e resume --artifacts DIRECTORY\nhomestack-e2e profile --artifacts DIRECTORY (register an already paused lab as profile e2e)\nhomestack --profil e2e [COMMAND]\nhomestack-e2e prepare --artifacts DIRECTORY [--local-dns IPV4] [--spaceship-file FILE] [--tsig-file FILE]\nhomestack-e2e cleanup --all [--fixtures DIRECTORY] [--spaceship-file FILE] [--tsig-file FILE]\n\nPhases: preflight, domain, image, boot, kernel, proxmox, network, homestack, verify, shutdown; cleanup always runs.\nDefaults: 1 vCPU, 2048 MiB RAM, 12 GiB sparse disk, 1800 active seconds.\nInspection pauses have no time limit and require an explicit resume.\nThe panel uses pve.e2e.homestack.app with a public Let's Encrypt certificate.\nDNS and certificate fixtures persist until cleanup --all.\nThe web forward binds to 127.0.0.1 on a free port unless explicitly configured.\nDownloads Debian 13 qcow2, installs Proxmox, verifies SSH, HTTPS and web login,\npowers off, and deletes all temporary VM data. No host network changes.\nRequires Linux x86_64, /dev/kvm, qemu-system-x86_64, qemu-img,\nssh, ssh-keygen, mkfs.vfat, mcopy and openssl; dig/nsupdate for local DNS.\nNo host root privileges required.";
 
 struct Options {
     memory: u32,
@@ -162,12 +162,20 @@ async fn main() -> ExitCode {
 
 async fn execute() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    if args.first().map(String::as_str) == Some("client") {
+    if args.first().is_some_and(|arg| arg == "profile") {
         if args.len() != 3 || args[1] != "--artifacts" {
-            return Err("usage: homestack-e2e client --artifacts DIRECTORY".into());
+            return Err("usage: homestack-e2e profile --artifacts DIRECTORY".into());
+        }
+        client::register(Path::new(&args[2]))?;
+        eprintln!("Profile e2e registered. Open it with homestack --profil e2e.");
+        return Ok(());
+    }
+    if args.first().map(String::as_str) == Some("client") {
+        if args.len() < 4 || args[1] != "--profile" || args[2] != "e2e" || args[3] != "--" {
+            return Err("open the client with homestack --profil e2e [COMMAND]".into());
         }
         return tokio::select! {
-            result = client::launch(Path::new(&args[2])) => result,
+            result = client::launch_profile(&args[4..]) => result,
             _ = interrupted() => Err("E2E client interrupted; the VM remains running".into()),
         };
     }

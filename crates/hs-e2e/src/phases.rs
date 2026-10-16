@@ -117,17 +117,21 @@ pub async fn pause(dir: &Path, artifacts: &Path, report: &mut Value) -> Result<(
         report["phase"]
     );
     if dir.join("service.json").is_file() {
-        eprintln!("Open the isolated HomeStack TUI in another terminal on the runner host:");
-        eprintln!(
-            "  {} client --artifacts {}",
-            shell_quote(
-                &std::env::current_exe()?
-                    .with_file_name("homestack-e2e")
-                    .display()
-                    .to_string()
-            ),
-            shell_quote(&artifacts.display().to_string())
-        );
+        match crate::client::register(artifacts) {
+            Ok(()) => {
+                eprintln!("Open profile e2e in another terminal on the runner host:");
+                eprintln!(
+                    "  {} --profil e2e",
+                    shell_quote(
+                        &std::env::current_exe()?
+                            .with_file_name("homestack")
+                            .display()
+                            .to_string()
+                    )
+                );
+            }
+            Err(error) => eprintln!("Cannot register profile e2e: {error}. The lab remains paused."),
+        }
         eprintln!(
             "SSH root@pve-e2e and server domain {} are prefilled; the test client does not use the production profile.",
             crate::domain::SEARCH

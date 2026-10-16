@@ -49,7 +49,32 @@ fn main() -> ExitCode {
         let code = hs_cli::askpass::client(std::path::Path::new(&socket), hint.as_deref(), &prompt);
         return ExitCode::from(u8::try_from(code).unwrap_or(1));
     }
-    let argv: Vec<String> = std::env::args().skip(1).collect();
+    let raw: Vec<String> = std::env::args().skip(1).collect();
+    let (profile, argv) = match hs_cli::profile::selection(&raw) {
+        Ok(selection) => selection,
+        Err(error) => {
+            eprintln!("homestack: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    if argv == ["profiles"] {
+        return match hs_cli::profile::list() {
+            Ok(list) => {
+                print!("{list}");
+                ExitCode::SUCCESS
+            }
+            Err(error) => {
+                eprintln!("homestack: {error}");
+                ExitCode::FAILURE
+            }
+        };
+    }
+    if profile != hs_config::profiles::DEFAULT
+        && let Err(error) = hs_cli::profile::enter(&profile, &argv)
+    {
+        eprintln!("homestack: {error}");
+        return ExitCode::FAILURE;
+    }
     if argv.len() == 2 && argv[0] == "tui" && matches!(argv[1].as_str(), "--help" | "-h") {
         println!("{}", hs_cli::tui::USAGE);
         return ExitCode::SUCCESS;

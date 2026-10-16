@@ -15,6 +15,14 @@ pub fn config_directory(home: &Path) -> PathBuf {
     home.join(".ssh").join("config.d").join("homestack")
 }
 
+fn ssh_path(path: &str) -> String {
+    if path.chars().any(|c| c.is_whitespace() || matches!(c, '"' | '\\' | '#')) {
+        format!("\"{}\"", path.replace('\\', "\\\\").replace('"', "\\\""))
+    } else {
+        path.to_owned()
+    }
+}
+
 /// The lines of a workspace's SSH config.
 ///
 /// With keys of one kind (or unnamed ones) every `IdentityFile` is listed.
@@ -23,8 +31,13 @@ pub fn config_directory(home: &Path) -> PathBuf {
 /// handle, so the files are chosen by which kind is connected, in the order
 /// of `fido_devices`.
 #[must_use]
-pub fn local_ssh_lines(ssh: &WorkspaceSsh, vmid: u32, name: &str, ip: &str) -> Vec<String> {
-    let files = &ssh.identity_files;
+pub fn local_ssh_lines(home: &Path, ssh: &WorkspaceSsh, vmid: u32, name: &str, ip: &str) -> Vec<String> {
+    // OpenSSH expands ~ using passwd, independently of the child's HOME.
+    let files: Vec<String> = ssh
+        .identity_files
+        .iter()
+        .map(|file| crate::expand_home(file, home).display().to_string())
+        .collect();
     let mut kinds: Vec<&str> = Vec::new();
     for kind in files.iter().filter_map(|path| fido::kind_of(path)) {
         if !kinds.contains(&kind) {
@@ -40,10 +53,13 @@ pub fn local_ssh_lines(ssh: &WorkspaceSsh, vmid: u32, name: &str, ip: &str) -> V
         format!("    IdentitiesOnly {}", if ssh.identities_only { "yes" } else { "no" }),
         format!("    LogLevel {}", ssh.log_level),
         "    StrictHostKeyChecking accept-new".to_owned(),
-        format!("    UserKnownHostsFile ~/.ssh/config.d/homestack/known_hosts/vm{vmid}"),
+        format!(
+            "    UserKnownHostsFile {}",
+            ssh_path(&known_hosts_file(home, vmid).display().to_string())
+        ),
     ];
     if kinds.len() < 2 {
-        lines.extend(files.iter().map(|path| format!("    IdentityFile {path}")));
+        lines.extend(files.iter().map(|path| format!("    IdentityFile {}", ssh_path(path))));
         lines.extend(tail);
         return lines;
     }
@@ -62,7 +78,7 @@ pub fn local_ssh_lines(ssh: &WorkspaceSsh, vmid: u32, name: &str, ip: &str) -> V
         files
             .iter()
             .filter(|path| fido::kind_of(path).is_none())
-            .map(|path| format!("    IdentityFile {path}")),
+            .map(|path| format!("    IdentityFile {}", ssh_path(path))),
     );
     lines.extend(tail);
     lines.push(String::new());
@@ -95,7 +111,7 @@ pub fn local_ssh_lines(ssh: &WorkspaceSsh, vmid: u32, name: &str, ip: &str) -> V
             files
                 .iter()
                 .filter(|path| fido::kind_of(path) == Some(kind))
-                .map(|path| format!("    IdentityFile {path}")),
+                .map(|path| format!("    IdentityFile {}", ssh_path(path))),
         );
         earlier.push(kind);
     }
@@ -126,7 +142,7 @@ pub fn write_local_ssh_config_with(
 ) -> Result<PathBuf, AppError> {
     let directory = config_directory(home);
     let target = directory.join(format!("vm{vmid}-{name}.conf"));
-    let content = local_ssh_lines(ssh, vmid, name, ip).join("\n") + "\n";
+    let content = local_ssh_lines(home, ssh, vmid, name, ip).join("\n") + "\n";
     let failed = |error: std::io::Error| {
         AppError::new(format!(
             "Could not write local SSH config {}: {error}",

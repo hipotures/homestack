@@ -16,6 +16,7 @@ pub mod install_flow;
 pub mod installer;
 pub mod local_ssh;
 pub mod master;
+pub mod profile;
 pub mod root_herdr;
 pub mod root_ssh;
 pub mod servers;

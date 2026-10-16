@@ -43,7 +43,7 @@ fn write(path: &Path, text: &str, mode: u32) -> Result<()> {
     Ok(())
 }
 
-fn prepare(dir: &Path, program: &Path, ssh: &Path, image: &str) -> Result<Command> {
+fn prepare(dir: &Path, program: &Path, ssh: &Path, image: &str, argv: &[String]) -> Result<Command> {
     let root = dir.join("client");
     for name in ["home", "config", "state", "cache", "bin"] {
         let path = root.join(name);
@@ -80,12 +80,26 @@ fn prepare(dir: &Path, program: &Path, ssh: &Path, image: &str) -> Result<Comman
     let mut paths = vec![root.join("bin")];
     paths.extend(std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()));
     let mut command = Command::new(program);
-    command.arg("tui");
-    if !root.join("config/homestack/client.toml").is_file() {
-        command.args(["--ssh", "root@pve-e2e", "--server-domain", crate::domain::SEARCH]);
+    if argv.iter().any(|word| matches!(word.as_str(), "--help" | "-h")) {
+        command.args(argv);
+    } else if argv.is_empty() || argv.first().is_some_and(|word| word == "tui") {
+        command.arg("tui").args(argv.iter().skip(1));
+        if !root.join("config/homestack/client.toml").is_file() {
+            if !argv.iter().any(|word| word == "--ssh") {
+                command.args(["--ssh", "root@pve-e2e"]);
+            }
+            if !argv.iter().any(|word| word == "--server-domain") {
+                command.args(["--server-domain", crate::domain::SEARCH]);
+            }
+        }
+        if !argv.iter().any(|word| word == "--server-image") {
+            command.args(["--server-image", image]);
+        }
+    } else {
+        command.args(argv);
     }
     command
-        .args(["--server-image", image])
+        .env("HOMESTACK_ACTIVE_PROFILE", "e2e")
         .env("HOME", root.join("home"))
         .env("XDG_CONFIG_HOME", root.join("config"))
         .env("XDG_STATE_HOME", root.join("state"))
@@ -107,10 +121,68 @@ fn executable(name: &str) -> Result<PathBuf> {
         .ok_or_else(|| format!("missing host tool {name}").into())
 }
 
-pub async fn launch(artifacts: &Path) -> Result<()> {
+fn paused_run(artifacts: &Path) -> Result<Value> {
     let report: Value = serde_json::from_slice(&std::fs::read(artifacts.join("report.json"))?)?;
     if report["status"] != "paused" {
         return Err("the selected run is not paused; start a VM with --pause-after verify".into());
+    }
+    Ok(report)
+}
+
+/// Bind the human-readable name to a live run without copying its secrets.
+pub fn register(artifacts: &Path) -> Result<()> {
+    register_at(&hs_config::profiles::environment_base()?, artifacts)
+}
+
+fn register_at(base: &Path, artifacts: &Path) -> Result<()> {
+    use hs_config::profiles::{self, E2eRun};
+    let artifacts = artifacts.canonicalize()?;
+    let report = paused_run(&artifacts)?;
+    let run_id = uuid::Uuid::parse_str(report["run_id"].as_str().ok_or("run has no ID")?)?.to_string();
+    let dir = Path::new(
+        report["temporary_directory"]
+            .as_str()
+            .ok_or("run has no temporary directory")?,
+    );
+    if !dir.join("service.json").is_file() || !dir.join("identity").is_file() {
+        return Err("the lab is not prepared; pause after verify before registering profile e2e".into());
+    }
+    drop(UnixStream::connect(dir.join("inspection.sock"))?);
+    profiles::private_directory(&base.join("profiles"))?;
+    let root = profiles::directory(base, profiles::E2E)?;
+    profiles::private_directory(&root)?;
+    if root.join("run.toml").exists() {
+        let previous = E2eRun::read(&root)?;
+        if previous.run_id != run_id
+            && let Ok(report) = paused_run(&previous.artifacts)
+            && let Some(dir) = report["temporary_directory"].as_str()
+            && UnixStream::connect(Path::new(dir).join("inspection.sock")).is_ok()
+        {
+            return Err(
+                "profile e2e is already bound to another paused lab; close that lab before starting another".into(),
+            );
+        }
+    }
+    E2eRun { artifacts, run_id }.save(&root)?;
+    Ok(())
+}
+
+pub async fn launch_profile(argv: &[String]) -> Result<()> {
+    let root = hs_config::profiles::directory(&hs_config::profiles::environment_base()?, "e2e")?;
+    let run = hs_config::profiles::E2eRun::read(&root)?;
+    launch(&run.artifacts, &run.run_id, argv).await
+}
+
+async fn launch(artifacts: &Path, run_id: &str, argv: &[String]) -> Result<()> {
+    let report = paused_run(artifacts)?;
+    if report["run_id"] != run_id {
+        return Err("profile e2e refers to another run; register the active paused lab again".into());
+    }
+    if argv
+        .iter()
+        .any(|word| word == "--config" || word.starts_with("--config="))
+    {
+        return Err("--config cannot override profile e2e".into());
     }
     let dir = PathBuf::from(
         report["temporary_directory"]
@@ -140,7 +212,7 @@ pub async fn launch(artifacts: &Path) -> Result<()> {
     let image = metadata["image"]
         .as_str()
         .ok_or("service settings have no server image")?;
-    let mut command = prepare(&dir, &program, &executable("ssh")?, image)?;
+    let mut command = prepare(&dir, &program, &executable("ssh")?, image, argv)?;
     let fixture = Path::new(
         metadata["fixture_directory"]
             .as_str()
@@ -228,6 +300,7 @@ mod tests {
             &program,
             Path::new("/usr/bin/ssh"),
             "ghcr.io/test/server:test",
+            &[],
         )?;
         assert_eq!(
             command.get_args().collect::<Vec<_>>(),
@@ -263,6 +336,7 @@ mod tests {
             Path::new("/bin/true"),
             Path::new("/usr/bin/ssh"),
             "ghcr.io/test/server:test",
+            &[],
         )?;
         assert_eq!(
             reopened.get_args().collect::<Vec<_>>(),
@@ -279,7 +353,13 @@ mod tests {
     fn ssh_uses_the_lab_config_and_herdr_cannot_reach_production() -> Result<()> {
         let dir = fixture()?;
         let ssh = executable("ssh")?;
-        prepare(dir.path(), Path::new("/bin/true"), &ssh, "ghcr.io/test/server:test")?;
+        prepare(
+            dir.path(),
+            Path::new("/bin/true"),
+            &ssh,
+            "ghcr.io/test/server:test",
+            &[],
+        )?;
         for target in ["root@pve-e2e", "root@production.invalid"] {
             let output = Command::new(dir.path().join("client/bin/ssh"))
                 .args(["-G", target])
@@ -322,23 +402,94 @@ mod tests {
     async fn stale_runs_never_start_a_client_or_use_the_desktop_profile() -> Result<()> {
         let artifacts = tempfile::tempdir()?;
         let dir = fixture()?;
-        let mut report = serde_json::json!({"status": "passed", "temporary_directory": dir.path()});
+        let mut report =
+            serde_json::json!({"status": "passed", "temporary_directory": dir.path(), "run_id": "test-run"});
         std::fs::write(artifacts.path().join("report.json"), serde_json::to_vec(&report)?)?;
         assert!(
-            launch(artifacts.path())
+            launch(artifacts.path(), "test-run", &[])
                 .await
                 .is_err_and(|error| error.to_string().contains("not paused"))
         );
         report["status"] = serde_json::json!("paused");
         std::fs::write(artifacts.path().join("report.json"), serde_json::to_vec(&report)?)?;
         assert!(
-            launch(artifacts.path())
+            launch(artifacts.path(), "test-run", &[])
                 .await
                 .is_err_and(|error| error.to_string().contains("no VM SSH credentials"))
         );
         std::fs::write(dir.path().join("identity"), "unused")?;
-        assert!(launch(artifacts.path()).await.is_err());
+        assert!(launch(artifacts.path(), "test-run", &[]).await.is_err());
         assert!(!dir.path().join("client").exists());
+        Ok(())
+    }
+
+    #[test]
+    fn profile_registration_never_replaces_another_live_lab() -> Result<()> {
+        let base = tempfile::tempdir()?;
+        let first = tempfile::tempdir()?;
+        let second = tempfile::tempdir()?;
+        let first_vm = fixture()?;
+        let second_vm = fixture()?;
+        let first_id = uuid::Uuid::new_v4().to_string();
+        let second_id = uuid::Uuid::new_v4().to_string();
+        let mut sockets = Vec::new();
+        for (artifacts, vm, id) in [(&first, &first_vm, &first_id), (&second, &second_vm, &second_id)] {
+            write(&vm.path().join("identity"), "lab key sentinel", 0o600)?;
+            write(&vm.path().join("service.json"), "{}", 0o600)?;
+            sockets.push(std::os::unix::net::UnixListener::bind(
+                vm.path().join("inspection.sock"),
+            )?);
+            let report = serde_json::json!({"status": "paused", "temporary_directory": vm.path(), "run_id": id});
+            std::fs::write(artifacts.path().join("report.json"), serde_json::to_vec(&report)?)?;
+        }
+        register_at(base.path(), first.path())?;
+        register_at(base.path(), first.path())?;
+        let profile = hs_config::profiles::directory(base.path(), "e2e")?;
+        assert_eq!(hs_config::profiles::E2eRun::read(&profile)?.run_id, first_id);
+        assert!(
+            register_at(base.path(), second.path())
+                .is_err_and(|error| error.to_string().contains("another paused lab"))
+        );
+        assert_eq!(hs_config::profiles::E2eRun::read(&profile)?.run_id, first_id);
+        // A stopped run may be replaced. The previous VM's credentials are not copied.
+        std::fs::write(first.path().join("report.json"), "{\"status\":\"passed\"}")?;
+        register_at(base.path(), second.path())?;
+        assert_eq!(hs_config::profiles::E2eRun::read(&profile)?.run_id, second_id);
+        assert_eq!(std::fs::read_dir(&profile)?.count(), 1);
+        assert_eq!(
+            std::fs::metadata(profile.join("run.toml"))?.permissions().mode() & 0o777,
+            0o600
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_replaced_report_cannot_redirect_the_named_client() -> Result<()> {
+        let artifacts = tempfile::tempdir()?;
+        std::fs::write(
+            artifacts.path().join("report.json"),
+            "{\"status\":\"paused\",\"run_id\":\"another-run\"}",
+        )?;
+        assert!(
+            launch(artifacts.path(), "original-run", &[])
+                .await
+                .is_err_and(|error| error.to_string().contains("another run"))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn named_profile_forwards_cli_commands_without_opening_the_installer() -> Result<()> {
+        let dir = fixture()?;
+        let args = vec!["--json".to_owned(), "status".to_owned()];
+        let command = prepare(
+            dir.path(),
+            Path::new("/bin/true"),
+            Path::new("/usr/bin/ssh"),
+            "image:test",
+            &args,
+        )?;
+        assert_eq!(command.get_args().collect::<Vec<_>>(), ["--json", "status"]);
         Ok(())
     }
 }

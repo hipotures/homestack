@@ -663,6 +663,7 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
             .insert("install_method".to_owned(), toml::Value::String("ssh".to_owned()));
     }
     let mut app = App::new(preferences, no_color)?;
+    app.profile = std::env::var("HOMESTACK_ACTIVE_PROFILE").unwrap_or_else(|_| "default".to_owned());
     let log_dir = config::default_path(&ctx.home, ctx.config_home.as_deref())
         .parent()
         .map_or_else(|| ctx.home.clone(), std::path::Path::to_path_buf);

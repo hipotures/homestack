@@ -169,6 +169,7 @@ fn read_tail(path: &std::path::Path, most: u64) -> Option<String> {
 
 #[derive(Debug, Clone)]
 pub struct App {
+    pub profile: String,
     pub preferences: Preferences,
     pub palette: Palette,
     no_color: bool,
@@ -255,6 +256,7 @@ impl App {
             .filter(|value| *value < VIEWS.len())
             .unwrap_or(0);
         Ok(Self {
+            profile: "default".to_owned(),
             preferences,
             palette,
             no_color,

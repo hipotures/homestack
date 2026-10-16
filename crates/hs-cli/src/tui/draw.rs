@@ -133,6 +133,7 @@ fn draw_into(buf: &mut Buffer, area: Rect, app: &App) {
         4
     };
     let menu = vec![
+        Control::plain(&format!("profile: {}", app.profile)),
         Control::key("&menu"),
         Control::key(&format!("&view {}", VIEWS[app.view].0)),
     ];

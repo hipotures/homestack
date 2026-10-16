@@ -226,7 +226,11 @@ fn help(config: &Path) -> String {
             "--json",
             "Return JSON. Commands requiring confirmation return the resolved plan without --yes.",
         ),
-        ("--config PATH", "Client configuration file."),
+        (
+            "--profile NAME, --profil NAME",
+            "Desktop profile (default when omitted); use profiles to list storage paths.",
+        ),
+        ("--config PATH", "Client configuration file in the default profile."),
         ("-h, --help", "Show this help screen."),
     ];
     let width = rows

@@ -13,6 +13,15 @@ use hs_cli::tui::theme::Palette;
 use tui_fixture::{app, details, position, press, row, screen};
 
 #[test]
+fn the_selected_profile_is_visible_in_the_main_screen_and_installer() {
+    let mut fixture = app();
+    fixture.app.profile = "e2e".to_owned();
+    assert!(screen(&render(&fixture.app, 120, 36)).contains("profile: e2e"));
+    fixture.app.open_install(hs_cli::tui::install::Mode::Install, true);
+    assert!(screen(&render(&fixture.app, 120, 36)).contains("HomeStack install [e2e]"));
+}
+
+#[test]
 fn a_terminal_below_80_by_24_shows_only_the_size_notice() {
     let fixture = app();
     let buf = render(&fixture.app, 70, 20);
@@ -28,7 +37,10 @@ fn at_80_by_24_the_cluster_and_the_workspaces_are_drawn_in_btop_borders() {
     let fixture = app();
     let buf = render(&fixture.app, 80, 24);
     let text = screen(&buf);
-    assert!(row(&buf, 0).starts_with("╭─┐²cluster┌┐menu┌┐view auto┌"), "{text}");
+    assert!(
+        row(&buf, 0).starts_with("╭─┐²cluster┌┐profile: default┌┐menu┌┐view auto┌"),
+        "{text}"
+    );
     assert!(row(&buf, 3).starts_with("╭─┐¹‹ all ›┌┐filter┌"), "{text}");
     assert!(!text.contains("³storage") && !text.contains("⁴log"), "{text}");
     for name in ["dev-main", "rust-builder", "notes", "pve1", "10.0.0.21"] {
@@ -124,7 +136,10 @@ fn a_digit_hides_its_panel_and_the_menu_moves_to_the_first_panel_shown() {
     press(&mut fixture.app, KeyCode::Char('2'));
     let buf = render(&fixture.app, 120, 36);
     let top = row(&buf, 0);
-    assert!(top.starts_with("╭─┐¹‹ all ›┌┐menu┌┐view auto┌┐filter┌"), "{top}");
+    assert!(
+        top.starts_with("╭─┐¹‹ all ›┌┐profile: default┌┐menu┌┐view auto┌┐filter┌"),
+        "{top}"
+    );
     press(&mut fixture.app, KeyCode::Char('2'));
     let buf = render(&fixture.app, 120, 36);
     assert!(row(&buf, 0).starts_with("╭─┐²cluster┌"));

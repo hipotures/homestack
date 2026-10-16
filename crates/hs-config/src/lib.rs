@@ -9,4 +9,5 @@
 pub mod client;
 pub mod legacy;
 pub mod paths;
+pub mod profiles;
 pub mod split;

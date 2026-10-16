@@ -458,7 +458,7 @@ async fn create_result_uses_local_ssh_alias() -> TestResult {
         known.parent().is_some_and(Path::is_dir),
         "the directory the config names"
     );
-    assert!(std::fs::read_to_string(&conf)?.contains("UserKnownHostsFile ~/.ssh/config.d/homestack/known_hosts/vm240"));
+    assert!(std::fs::read_to_string(&conf)?.contains(&format!("UserKnownHostsFile {}", known.display())));
     // ssh makes the file on the first connection.
     std::fs::write(&known, "192.0.2.240 ssh-ed25519 AAAA\n")?;
 

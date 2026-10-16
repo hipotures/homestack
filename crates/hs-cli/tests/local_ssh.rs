@@ -43,7 +43,9 @@ fn writes_exact_config_for_vm_200_and_vm_201_with_mode_0600() -> TestResult {
         assert_eq!(
             std::fs::read_to_string(&path)?,
             format!(
-                "Host {name} vm{vmid}\n    HostName {ip}\n    User user\n    IdentityFile ~/.ssh/example-hardware-key\n    IdentitiesOnly yes\n    LogLevel FATAL\n    StrictHostKeyChecking accept-new\n    UserKnownHostsFile ~/.ssh/config.d/homestack/known_hosts/vm{vmid}\n"
+                "Host {name} vm{vmid}\n    HostName {ip}\n    User user\n    IdentityFile {}/.ssh/example-hardware-key\n    IdentitiesOnly yes\n    LogLevel FATAL\n    StrictHostKeyChecking accept-new\n    UserKnownHostsFile {}/.ssh/config.d/homestack/known_hosts/vm{vmid}\n",
+                home.path().display(),
+                home.path().display()
             )
         );
         assert_eq!(std::fs::metadata(&path)?.permissions().mode() & 0o777, 0o600);
@@ -65,7 +67,11 @@ fn uses_workspace_ssh_config_instead_of_hardcoded_keys() -> TestResult {
     let path = local_ssh::write_local_ssh_config(home.path(), &custom, 202, "custom", "192.0.2.202")?;
     assert_eq!(
         std::fs::read_to_string(path)?,
-        "Host custom vm202\n    HostName 192.0.2.202\n    User user\n    IdentityFile ~/.ssh/custom-key-a\n    IdentityFile /keys/custom-key-b\n    IdentitiesOnly no\n    LogLevel ERROR\n    StrictHostKeyChecking accept-new\n    UserKnownHostsFile ~/.ssh/config.d/homestack/known_hosts/vm202\n"
+        format!(
+            "Host custom vm202\n    HostName 192.0.2.202\n    User user\n    IdentityFile {}/.ssh/custom-key-a\n    IdentityFile /keys/custom-key-b\n    IdentitiesOnly no\n    LogLevel ERROR\n    StrictHostKeyChecking accept-new\n    UserKnownHostsFile {}/.ssh/config.d/homestack/known_hosts/vm202\n",
+            home.path().display(),
+            home.path().display()
+        )
     );
     Ok(())
 }
@@ -270,22 +276,29 @@ fn identity_in_another_section_or_multiline_array_is_not_touched() -> TestResult
 /// Port of `LocalTests::test_ssh_config_lists_plain_keys_unchanged_and_picks_by_connected_key_otherwise`.
 #[test]
 fn ssh_config_lists_plain_keys_unchanged_and_picks_by_connected_key_otherwise() {
-    let plain = local_ssh::local_ssh_lines(&settings(&["~/.ssh/k1", "~/.ssh/k2"]), 5, "n", "192.0.2.5");
+    let plain = local_ssh::local_ssh_lines(
+        Path::new("/profile"),
+        &settings(&["~/.ssh/k1", "~/.ssh/k2"]),
+        5,
+        "n",
+        "192.0.2.5",
+    );
     assert_eq!(
         plain,
         strings(&[
             "Host n vm5",
             "    HostName 192.0.2.5",
             "    User user",
-            "    IdentityFile ~/.ssh/k1",
-            "    IdentityFile ~/.ssh/k2",
+            "    IdentityFile /profile/.ssh/k1",
+            "    IdentityFile /profile/.ssh/k2",
             "    IdentitiesOnly yes",
             "    LogLevel FATAL",
             "    StrictHostKeyChecking accept-new",
-            "    UserKnownHostsFile ~/.ssh/config.d/homestack/known_hosts/vm5"
+            "    UserKnownHostsFile /profile/.ssh/config.d/homestack/known_hosts/vm5"
         ])
     );
     let mixed = local_ssh::local_ssh_lines(
+        Path::new("/profile"),
         &settings(&[
             "~/.ssh/id_ed25519_sk_yubikey1",
             "~/.ssh/id_ed25519_sk_yubikey2",
@@ -330,7 +343,10 @@ fn sync_updates_the_config_and_writes_this_vms_ssh_file() -> TestResult {
     assert_eq!(result["identity_files_changed"], true);
     assert!(std::fs::read_to_string(&path)?.contains("id_ecdsa_sk_trezor_vm"));
     let written = std::fs::read_to_string(config_dir(home.path()).join("vm206-cpu.conf"))?;
-    assert!(written.contains("IdentityFile ~/.ssh/id_ecdsa_sk_trezor_vm"));
+    assert!(written.contains(&format!(
+        "IdentityFile {}/.ssh/id_ecdsa_sk_trezor_vm",
+        home.path().display()
+    )));
     assert!(written.contains("Match originalhost cpu,vm206"));
     Ok(())
 }
