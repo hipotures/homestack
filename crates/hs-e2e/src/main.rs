@@ -1,5 +1,6 @@
 //! Minimal disposable PVE bootstrap. This does not run the HomeStack catalogue.
 
+mod domain;
 mod image;
 mod phases;
 mod proxy;
@@ -16,7 +17,7 @@ use serde_json::{Value, json};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
-const USAGE: &str = "homestack-e2e run [--memory-mib N] [--cpus N] [--disk-gib N]\n                  [--timeout-seconds N] [--message TEXT] [--artifacts DIRECTORY]\n                  [--pause-after PHASE[,PHASE...]] [--pause-on-failure]\n                  [--pause-timeout-seconds N] [--web-bind IPV4] [--web-port PORT]\nhomestack-e2e resume --artifacts DIRECTORY\n\nPhases: preflight, image, boot, kernel, proxmox, verify, shutdown; cleanup always runs.\nDefaults: 1 vCPU, 2048 MiB RAM, 12 GiB sparse disk, 1800 active seconds.\nInspection pauses default to 3600 seconds and require an explicit resume.\nThe web panel binds to 127.0.0.1 on a free port unless explicitly configured.\nDownloads Debian 13 qcow2, installs Proxmox, verifies SSH, HTTPS and web login,\npowers off, and deletes all temporary VM data. No host network changes.\nRequires Linux x86_64, /dev/kvm, qemu-system-x86_64, qemu-img,\nssh, ssh-keygen, mkfs.vfat and mcopy. No host root privileges required.";
+const USAGE: &str = "homestack-e2e run [--memory-mib N] [--cpus N] [--disk-gib N]\n                  [--timeout-seconds N] [--message TEXT] [--artifacts DIRECTORY]\n                  [--pause-after PHASE[,PHASE...]] [--pause-on-failure]\n                  [--pause-timeout-seconds N] [--web-bind IPV4] [--web-port PORT]\n                  [--fixtures DIRECTORY] [--spaceship-file FILE]\n                  [--local-dns IPV4] [--tsig-file FILE]\nhomestack-e2e resume --artifacts DIRECTORY\nhomestack-e2e cleanup --all [--fixtures DIRECTORY] [--spaceship-file FILE] [--tsig-file FILE]\n\nPhases: preflight, domain, image, boot, kernel, proxmox, verify, shutdown; cleanup always runs.\nDefaults: 1 vCPU, 2048 MiB RAM, 12 GiB sparse disk, 1800 active seconds.\nInspection pauses default to 3600 seconds and require an explicit resume.\nThe panel uses pve.e2e.homestack.app with a public Let's Encrypt certificate.\nDNS and certificate fixtures persist until cleanup --all.\nThe web forward binds to 127.0.0.1 on a free port unless explicitly configured.\nDownloads Debian 13 qcow2, installs Proxmox, verifies SSH, HTTPS and web login,\npowers off, and deletes all temporary VM data. No host network changes.\nRequires Linux x86_64, /dev/kvm, qemu-system-x86_64, qemu-img,\nssh, ssh-keygen, mkfs.vfat, mcopy and openssl; dig/nsupdate for local DNS.\nNo host root privileges required.";
 
 struct Options {
     memory: u32,
@@ -30,13 +31,22 @@ struct Options {
     pause_timeout: u64,
     web_bind: Ipv4Addr,
     web_port: u16,
+    fixtures: PathBuf,
+    spaceship_file: PathBuf,
+    local_dns: Option<Ipv4Addr>,
+    tsig_file: PathBuf,
 }
 
 impl Options {
     fn parse(args: &[String], run_id: &str) -> Result<Self> {
-        if args.first().map(String::as_str) != Some("run") {
+        let cleanup = args.first().map(String::as_str) == Some("cleanup");
+        if args.first().map(String::as_str) != Some("run") && !cleanup {
             return Err("expected 'run'; use --help".into());
         }
+        let home = PathBuf::from(std::env::var_os("HOME").ok_or("HOME is not set")?);
+        let config = std::env::var_os("XDG_CONFIG_HOME")
+            .map_or_else(|| home.join(".config"), PathBuf::from)
+            .join("homestack");
         let mut options = Self {
             memory: 2048,
             cpus: 1,
@@ -49,9 +59,23 @@ impl Options {
             pause_timeout: 3600,
             web_bind: Ipv4Addr::LOCALHOST,
             web_port: 0,
+            fixtures: std::env::var_os("XDG_STATE_HOME")
+                .map_or_else(|| home.join(".local/state"), PathBuf::from)
+                .join("homestack-e2e"),
+            spaceship_file: config.join("spaceship-dns"),
+            local_dns: None,
+            tsig_file: config.join("dns-tsig.key"),
         };
+        let mut all = false;
         let mut rest = args[1..].iter();
         while let Some(flag) = rest.next() {
+            if cleanup && flag == "--all" {
+                all = true;
+                continue;
+            }
+            if cleanup && !matches!(flag.as_str(), "--fixtures" | "--spaceship-file" | "--tsig-file") {
+                return Err(format!("unknown cleanup argument {flag}").into());
+            }
             if flag == "--pause-on-failure" {
                 options.pause_on_failure = true;
                 continue;
@@ -79,8 +103,15 @@ impl Options {
                 "--pause-timeout-seconds" => options.pause_timeout = value.parse()?,
                 "--web-bind" => options.web_bind = value.parse()?,
                 "--web-port" => options.web_port = value.parse()?,
+                "--fixtures" => options.fixtures = PathBuf::from(value),
+                "--spaceship-file" => options.spaceship_file = PathBuf::from(value),
+                "--local-dns" => options.local_dns = Some(value.parse()?),
+                "--tsig-file" => options.tsig_file = PathBuf::from(value),
                 _ => return Err(format!("unknown argument {flag}").into()),
             }
+        }
+        if cleanup && !all {
+            return Err("cleanup requires --all; normal run cleanup retains DNS and certificates".into());
         }
         if !(2048..=16384).contains(&options.memory)
             || !(1..=8).contains(&options.cpus)
@@ -136,6 +167,10 @@ async fn execute() -> Result<()> {
     }
     let run_id = uuid::Uuid::new_v4().to_string();
     let options = Options::parse(&args, &run_id)?;
+    let mut fixture = domain::Fixture::open(&options.fixtures, &options.spaceship_file, &options.tsig_file)?;
+    if args[0] == "cleanup" {
+        return fixture.reset().await;
+    }
     if let Some(parent) = options.artifacts.parent().filter(|p| !p.as_os_str().is_empty()) {
         std::fs::create_dir_all(parent)?;
     }
@@ -162,7 +197,7 @@ async fn execute() -> Result<()> {
     save_report(&artifacts, &report)?;
     eprintln!("Run {run_id}; artifacts: {}", artifacts.display());
     let outcome = tokio::select! {
-        result = run(&options, &run_id, &private_path, &artifacts, &mut running, &mut report) => result,
+        result = run(&options, &run_id, &private_path, &artifacts, &mut running, &mut report, &mut fixture) => result,
         _ = interrupted() => Err("run interrupted; removing the VM".into()),
     };
     if let Some(phase) = report["phase"].as_str().map(str::to_owned)
@@ -196,6 +231,12 @@ async fn execute() -> Result<()> {
     if cleanup.is_ok() && !removed {
         cleanup = Err("temporary VM directory remains after cleanup".into());
     }
+    if let Err(error) = fixture.cleanup_challenge().await {
+        eprintln!("ACME challenge cleanup failed; the persistent journal retains it for retry: {error}");
+        if cleanup.is_ok() {
+            cleanup = Err(error);
+        }
+    }
     report["graceful_shutdown"] = json!(graceful);
     report["cleanup"] = json!({"passed": cleanup.is_ok() && removed, "temporary_directory_removed": removed,
         "error": cleanup.as_ref().err().map(|error| describe(error.as_ref()))});
@@ -205,6 +246,7 @@ async fn execute() -> Result<()> {
         "failed"
     });
     report["error"] = json!(outcome.as_ref().err().map(|error| describe(error.as_ref())));
+    report["retained_fixture_directory"] = json!(options.fixtures);
     phases::finish(&mut report, "cleanup", &cleanup, cleanup_started.elapsed());
     save_report(&artifacts, &report)?;
     outcome?;
@@ -243,6 +285,7 @@ async fn interrupted() {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run(
     options: &Options,
     run_id: &str,
@@ -250,9 +293,10 @@ async fn run(
     artifacts: &Path,
     slot: &mut Option<vm::Vm>,
     report: &mut Value,
+    fixture: &mut domain::Fixture,
 ) -> Result<()> {
     let mut progress = phases::Progress::new(options, dir, artifacts);
-    let hostname = format!("hse2e-{}.e2e.test", &run_id[..8]);
+    let hostname = domain::HOST;
     let data = json!({"run_id": run_id, "hostname": hostname, "message": options.message});
     let password = uuid::Uuid::new_v4().simple().to_string();
     progress
@@ -271,9 +315,17 @@ async fn run(
                 "ssh-keygen",
                 "mkfs.vfat",
                 "mcopy",
+                "openssl",
             ] {
                 if !std::env::split_paths(&path).any(|dir| dir.join(program).is_file()) {
                     return Err(format!("missing host tool {program}; see docs/e2e-bootstrap.md").into());
+                }
+            }
+            if options.local_dns.is_some() {
+                for program in ["dig", "nsupdate"] {
+                    if !std::env::split_paths(&path).any(|dir| dir.join(program).is_file()) {
+                        return Err(format!("missing local DNS tool {program}").into());
+                    }
                 }
             }
             for (program, flag) in [
@@ -286,6 +338,12 @@ async fn run(
             }
             std::net::TcpListener::bind((options.web_bind, options.web_port))
                 .map_err(|error| format!("PVE web forwarding address is unavailable: {error}"))?;
+            Ok(())
+        })
+        .await?;
+    progress
+        .execute("domain", report, async |report| {
+            report["domain"] = fixture.prepare(options.web_bind, options.local_dns).await?;
             Ok(())
         })
         .await?;
@@ -332,7 +390,7 @@ async fn run(
         })
         .await?;
     let proxy = progress.execute("boot", report, async |report| {
-            seed::create(dir, &data, &hostname, artifacts).await?;
+            seed::create(dir, &data, hostname, artifacts).await?;
             let proxy = proxy::start().await?;
             eprintln!(
                 "Starting KVM VM: {} vCPU, {} MiB RAM, {} GiB sparse disk...",
@@ -342,10 +400,10 @@ async fn run(
             let vm = slot.as_mut().ok_or("VM handle is unavailable")?;
             report["ssh_port"] = json!(vm.ssh_port);
             report["api_port"] = json!(vm.api_port);
-            save_access(dir, vm, options, &hostname, &password, false)?;
+            save_access(dir, vm, options, hostname, &password, false)?;
             report["access_file"] = json!(dir.join("access.json"));
             report["ssh_config"] = json!(dir.join("ssh_config"));
-            show_access(dir, vm, options, &hostname, false);
+            show_access(dir, vm, options, hostname, &password, false);
             save_report(artifacts, report)?;
             vm.wait_ssh(None).await?;
             vm.checked_ssh(
@@ -366,7 +424,7 @@ async fn run(
             }
             report["initialization_verified"] = json!(true);
             vm.checked_ssh(
-                "hostname --fqdn\ncat /etc/resolv.conf\ngrep -Eq '^search[[:space:]]+e2e\\.test([[:space:]]|$)' /etc/resolv.conf\n",
+                "hostname --fqdn\ncat /etc/resolv.conf\ngrep -Eq '^search[[:space:]]+e2e\\.homestack\\.app([[:space:]]|$)' /etc/resolv.conf\n",
                 Duration::from_secs(15),
                 &artifacts.join("guest-network.log"),
             )
@@ -428,18 +486,11 @@ async fn run(
             if !result.status.success() {
                 return Err("cannot configure the temporary PVE web login".into());
             }
-            let ca = vm
-                .checked_ssh(
-                    "cat /etc/pve/pve-root-ca.pem\n",
-                    Duration::from_secs(15),
-                    &artifacts.join("pve-ca.pem"),
-                )
-                .await?;
-            std::fs::write(dir.join("pve-ca.pem"), ca)?;
-            report["web_url"] = json!(web_url(vm, options, &hostname));
-            report["web_ca"] = json!(artifacts.join("pve-ca.pem"));
-            save_access(dir, vm, options, &hostname, &password, true)?;
-            show_access(dir, vm, options, &hostname, true);
+            fixture.install(vm).await?;
+            report["web_url"] = json!(web_url(vm, hostname));
+            report["web_trust"] = json!("public CA; normal browser/system roots");
+            save_access(dir, vm, options, hostname, &password, true)?;
+            show_access(dir, vm, options, hostname, &password, true);
             Ok(())
         })
         .await?;
@@ -468,15 +519,8 @@ async fn run(
             if serde_json::from_slice::<Value>(&observed)? != data {
                 return Err("initialization data changed after installing PVE".into());
             }
-            let ca = vm
-                .checked_ssh(
-                    "cat /etc/pve/pve-root-ca.pem\n",
-                    Duration::from_secs(15),
-                    &artifacts.join("pve-ca.pem"),
-                )
-                .await?;
             vm.checked_ssh(
-                "cat /etc/pve/local/pve-ssl.pem\n",
+                "cat /etc/pve/local/pveproxy-ssl.pem\n",
                 Duration::from_secs(15),
                 &artifacts.join("pve-certificate.pem"),
             )
@@ -495,8 +539,7 @@ async fn run(
             let secret = token["value"].as_str().ok_or("PVE token response has no secret")?;
             let client = reqwest::Client::builder()
                 .no_proxy()
-                .add_root_certificate(reqwest::Certificate::from_pem(&ca)?)
-                .resolve(&hostname, SocketAddr::from((options.web_bind, vm.api_port)))
+                .resolve(hostname, SocketAddr::from((options.web_bind, vm.api_port)))
                 .connect_timeout(Duration::from_secs(10))
                 .timeout(Duration::from_secs(20))
                 .build()?;
@@ -550,7 +593,7 @@ async fn run(
                 return Err("web login cannot read the disposable node inventory".into());
             }
             report["web_login_verified"] = json!(true);
-            report["web_url"] = json!(web_url(vm, options, &hostname));
+            report["web_url"] = json!(web_url(vm, hostname));
             save_report(artifacts, report)?;
             Ok(())
         }).await?;
@@ -564,13 +607,8 @@ async fn run(
     Ok(())
 }
 
-fn web_url(vm: &vm::Vm, options: &Options, hostname: &str) -> String {
-    let host = if options.web_bind == Ipv4Addr::LOCALHOST {
-        "127.0.0.1"
-    } else {
-        hostname
-    };
-    format!("https://{host}:{}", vm.api_port)
+fn web_url(vm: &vm::Vm, hostname: &str) -> String {
+    format!("https://{hostname}:{}", vm.api_port)
 }
 
 fn save_access(
@@ -583,10 +621,10 @@ fn save_access(
 ) -> Result<()> {
     let path = dir.join("access.json");
     let access = json!({
-        "web_url": web_url(vm, options, hostname), "web_bind": options.web_bind.to_string(),
+        "web_url": web_url(vm, hostname), "web_bind": options.web_bind.to_string(),
         "web_username": "root@pam", "web_password": password, "web_ready": web_ready,
         "ssh_config": dir.join("ssh_config"), "ssh_port": vm.ssh_port,
-        "pve_ca": dir.join("pve-ca.pem"),
+        "web_trust": "public CA",
     });
     use std::io::Write;
     let mut file = std::fs::OpenOptions::new()
@@ -599,28 +637,25 @@ fn save_access(
     Ok(())
 }
 
-fn show_access(dir: &Path, vm: &vm::Vm, options: &Options, hostname: &str, web_ready: bool) {
+fn show_access(dir: &Path, vm: &vm::Vm, options: &Options, hostname: &str, password: &str, web_ready: bool) {
     eprintln!(
         "SSH on the runner host: ssh -F {} pve-e2e",
         phases::shell_quote(&dir.join("ssh_config").display().to_string())
     );
     eprintln!("Private access details: {}", dir.join("access.json").display());
     if web_ready {
-        eprintln!("PVE web panel: {}", web_url(vm, options, hostname));
-        if options.web_bind != Ipv4Addr::LOCALHOST {
-            eprintln!("Resolve {hostname} to {} on the browser's computer.", options.web_bind);
-        }
-        eprintln!(
-            "Login: root; realm: Linux PAM (root@pam). Password is in the private access file. SSH password login stays disabled."
-        );
-        eprintln!("Browser trust: use this run's PVE CA; it is not installed into your browser automatically.");
+        eprintln!("PVE web panel: {}", web_url(vm, hostname));
+        eprintln!("Login: root");
+        eprintln!("Realm: Linux PAM");
+        eprintln!("Password: {password}");
+        eprintln!("Browser trust: public Let's Encrypt certificate; use the domain in the URL.");
         if options.web_bind.is_loopback() {
             eprintln!("For a remote runner, forward the panel through SSH from your client computer:");
             eprintln!(
                 "  ssh -N -L 18006:{}:{} USER@RUNNER_HOST",
                 options.web_bind, vm.api_port
             );
-            eprintln!("Then open https://127.0.0.1:18006 on your client computer.");
+            eprintln!("Then open https://{hostname}:18006 on your client computer.");
         }
     }
 }
@@ -688,6 +723,17 @@ mod tests {
         assert!(Options::parse(&args(&["run", "--pause-after", "cleanup"]), "test").is_err());
         assert!(Options::parse(&args(&["run", "--web-bind", "0.0.0.0"]), "test").is_err());
         assert!(Options::parse(&args(&["run", "--pause-timeout-seconds", "0"]), "test").is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn fixture_reset_requires_an_explicit_cleanup_command() -> Result<()> {
+        let args = |args: &[&str]| args.iter().map(|value| (*value).to_owned()).collect::<Vec<_>>();
+        assert!(Options::parse(&args(&["cleanup"]), "test").is_err());
+        assert!(Options::parse(&args(&["run", "--all"]), "test").is_err());
+        assert!(Options::parse(&args(&["cleanup", "--all", "--web-bind", "127.0.0.1"]), "test").is_err());
+        let options = Options::parse(&args(&["cleanup", "--all", "--fixtures", "/tmp/e2e-fixture"]), "test")?;
+        assert_eq!(options.fixtures, PathBuf::from("/tmp/e2e-fixture"));
         Ok(())
     }
 }

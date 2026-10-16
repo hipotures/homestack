@@ -67,6 +67,10 @@ pub struct SpaceshipClient {
 impl SpaceshipClient {
     pub fn new(credentials: SpaceshipCredentials) -> Result<Self, String> {
         let http = reqwest::Client::builder()
+            .no_proxy()
+            .https_only(true)
+            .redirect(reqwest::redirect::Policy::none())
+            .user_agent("homestack/0.1.0")
             .timeout(std::time::Duration::from_secs(30))
             .build()
             .map_err(|error| error.to_string())?;
@@ -78,8 +82,7 @@ impl SpaceshipClient {
         let response = self
             .http
             .request(method.clone(), format!("{API}{path}"))
-            .header("X-API-Key", &self.credentials.key)
-            .header("X-API-Secret", &self.credentials.secret)
+            .headers(self.headers()?)
             .header("Content-Type", "application/json")
             .body(body.to_string())
             .send()
@@ -101,6 +104,71 @@ impl SpaceshipClient {
     /// Remove TXT `sub` with `value` from `zone`.
     pub async fn remove_txt(&self, zone: &str, sub: &str, value: &str) -> Result<(), String> {
         self.call(reqwest::Method::DELETE, zone, &remove_body(sub, value)).await
+    }
+
+    /// List all records, including zones larger than one API page.
+    pub async fn records(&self, zone: &str) -> Result<Vec<Value>, String> {
+        let mut records = Vec::new();
+        loop {
+            let page: Value = self
+                .http
+                .get(format!("{API}/dns/records/{zone}?take=500&skip={}", records.len()))
+                .headers(self.headers()?)
+                .send()
+                .await
+                .map_err(|e| format!("Spaceship records: {e}"))?
+                .error_for_status()
+                .map_err(|e| format!("Spaceship records: {e}"))?
+                .json()
+                .await
+                .map_err(|e| format!("Spaceship records: {e}"))?;
+            let items = page["items"].as_array().ok_or("Spaceship records: missing items")?;
+            let total = page["total"].as_u64().ok_or("Spaceship records: missing total")?;
+            records.extend(items.iter().cloned());
+            if records.len() as u64 >= total {
+                return Ok(records);
+            }
+            if items.is_empty() {
+                return Err("Spaceship records: empty page before total".into());
+            }
+        }
+    }
+
+    fn headers(&self) -> Result<reqwest::header::HeaderMap, String> {
+        let mut headers = reqwest::header::HeaderMap::new();
+        for (name, value) in [
+            ("X-API-Key", &self.credentials.key),
+            ("X-API-Secret", &self.credentials.secret),
+        ] {
+            let mut value =
+                reqwest::header::HeaderValue::from_str(value).map_err(|_| format!("invalid Spaceship {name}"))?;
+            value.set_sensitive(true);
+            headers.insert(
+                reqwest::header::HeaderName::from_bytes(name.as_bytes()).map_err(|e| e.to_string())?,
+                value,
+            );
+        }
+        Ok(headers)
+    }
+
+    /// Add an A record without replacing conflicting records.
+    pub async fn add_address(&self, zone: &str, sub: &str, address: std::net::Ipv4Addr) -> Result<(), String> {
+        self.call(
+            reqwest::Method::PUT,
+            zone,
+            &json!({"force": false, "items": [{"type": "A", "name": sub, "address": address.to_string(), "ttl": 600}]}),
+        )
+        .await
+    }
+
+    /// Delete only this exact A record.
+    pub async fn remove_address(&self, zone: &str, sub: &str, address: std::net::Ipv4Addr) -> Result<(), String> {
+        self.call(
+            reqwest::Method::DELETE,
+            zone,
+            &json!([{"type": "A", "name": sub, "address": address.to_string()}]),
+        )
+        .await
     }
 }
 

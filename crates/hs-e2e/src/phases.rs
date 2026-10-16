@@ -10,7 +10,16 @@ use tokio::net::{UnixListener, UnixStream};
 
 use crate::{Result, save_report};
 
-pub const NAMES: [&str; 7] = ["preflight", "image", "boot", "kernel", "proxmox", "verify", "shutdown"];
+pub const NAMES: [&str; 8] = [
+    "preflight",
+    "domain",
+    "image",
+    "boot",
+    "kernel",
+    "proxmox",
+    "verify",
+    "shutdown",
+];
 
 pub fn now_ms() -> u128 {
     SystemTime::now()

@@ -96,7 +96,7 @@ fn user_data(data: &Value, hostname: &str, identity: &str, private: &str, public
         "runcmd": [["systemctl", "restart", "systemd-resolved"]],
         "write_files": [
             {"path": "/etc/ssh/sshd_config.d/00-homestack-e2e.conf", "permissions": "0600", "content": "PasswordAuthentication no\nKbdInteractiveAuthentication no\nPermitRootLogin prohibit-password\n"},
-            {"path": "/etc/systemd/resolved.conf.d/homestack-e2e.conf", "content": "[Resolve]\nDomains=e2e.test\n"},
+            {"path": "/etc/systemd/resolved.conf.d/homestack-e2e.conf", "content": format!("[Resolve]\nDomains={}\n", crate::domain::SEARCH)},
             {"path": "/etc/homestack-e2e.json", "permissions": "0600", "content": serde_json::to_string(data)?},
             {"path": "/etc/hosts", "content": format!("127.0.0.1 localhost\n10.0.2.15 {hostname} {}\n", hostname.split('.').next().ok_or("missing hostname")?)},
             {"path": "/usr/share/keyrings/proxmox-archive-keyring.gpg", "encoding": "b64", "content": base64::engine::general_purpose::STANDARD.encode(key)},
@@ -114,7 +114,14 @@ mod tests {
     #[test]
     fn initialization_data_is_json_not_interpolated_shell() -> Result<()> {
         let data = json!({"run_id": "id", "message": "quote\"\n$(touch /bad)"});
-        let seed = user_data(&data, "test.e2e.test", "ssh-ed25519 test", "private", "public", b"key")?;
+        let seed = user_data(
+            &data,
+            crate::domain::HOST,
+            "ssh-ed25519 test",
+            "private",
+            "public",
+            b"key",
+        )?;
         let file = seed["write_files"]
             .as_array()
             .ok_or("missing files")?
@@ -125,8 +132,8 @@ mod tests {
         assert_eq!(serde_json::from_str::<Value>(content)?, data);
         assert_eq!(seed["users"][0]["lock_passwd"], true);
         assert_eq!(seed["ssh_pwauth"], false);
-        assert_eq!(seed["hostname"], "test");
-        assert_eq!(seed["fqdn"], "test.e2e.test");
+        assert_eq!(seed["hostname"], "pve");
+        assert_eq!(seed["fqdn"], crate::domain::HOST);
         Ok(())
     }
 }

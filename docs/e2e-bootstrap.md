@@ -5,11 +5,10 @@
 initialize a VM, install Proxmox, verify it, power it off and delete it.
 It does not install HomeStack or create Gold/workspace guests yet.
 
-The [planned DNS/TLS lifecycle](isolated-e2e-lab.md#persistent-dns-and-certificate-fixture)
-uses `e2e.homestack.app`, retains owned DNS records and cached public
-certificates across runs, and adds an explicit `cleanup --all` fixture reset.
-That lifecycle is not implemented here: this bootstrap makes no public DNS or
-ACME calls, uses the VM's own PVE CA, and removes all of its private VM data.
+The runner prepares `pve.e2e.homestack.app` through the existing Spaceship and
+ACME implementation in `hs-deploy`. It installs a public Let's Encrypt
+certificate in PVE and retains DNS and certificate fixtures across runs.
+Normal cleanup removes the VM; `cleanup --all` also resets owned fixtures.
 
 ## Run
 
@@ -18,7 +17,8 @@ and these commands on `PATH`:
 
 - `qemu-system-x86_64` and `qemu-img`;
 - `ssh` and `ssh-keygen`;
-- `mkfs.vfat` from dosfstools and `mcopy` from mtools.
+- `mkfs.vfat` from dosfstools and `mcopy` from mtools;
+- `openssl`; also `dig` and `nsupdate` when using local split DNS.
 
 QEMU also needs its normal firmware and user-networking dependencies. For
 example, on Debian/Ubuntu the packages are `qemu-system-x86`, `qemu-utils`,
@@ -31,11 +31,23 @@ From the repository root:
 cargo run --locked -p hs-e2e -- run
 ```
 
+The existing Spaceship credentials are read from
+`$XDG_CONFIG_HOME/homestack/spaceship-dns` (default
+`~/.config/homestack/spaceship-dns`). Override with `--spaceship-file FILE`.
+Credentials remain on the controller and are never copied into the guest.
+
 For the locally extracted QEMU cache used to validate this workspace:
 
 ```sh
-PATH="$PWD/target/e2e-tools/bin:$PATH" cargo run --locked -p hs-e2e -- run
+PATH="$PWD/target/e2e-tools/bin:$PATH" cargo run --locked -p hs-e2e -- run \
+  --local-dns 192.168.100.1 --pause-after verify
 ```
+
+This network has a private `homestack.app` zone on the router. The
+`--local-dns` option creates the exact E2E A record there using
+`~/.config/homestack/dns-tsig.key` (override with `--tsig-file FILE`), while
+Spaceship serves the public A record and ACME TXT challenge. It does not edit
+other names in either zone. Networks without a private zone omit this option.
 
 That ignored cache is a local tool installation, not part of a fresh checkout.
 The controller downloads the guest image; it does not install host packages.
@@ -83,10 +95,11 @@ to `report.json` before the next phase starts:
 | Phase | Available state after success |
 |---|---|
 | `preflight` | KVM and host tools checked; no VM yet |
+| `domain` | E2E DNS and publicly trusted certificate prepared or reused; no VM yet |
 | `image` | Download verified and sparse disk prepared; no VM yet |
 | `boot` | Debian booted, Cloud-Init and initialization checked; SSH and restricted APT networking work |
 | `kernel` | Proxmox kernel installed and the VM rebooted |
-| `proxmox` | PVE services installed and rebooted; temporary web credentials and public CA available |
+| `proxmox` | PVE services installed and rebooted; public certificate installed and temporary web credentials printed |
 | `verify` | PVE kernel, exposed nested KVM, HTTPS API, web page, password login and authenticated node inventory checked |
 | `shutdown` | VM powered off; private files still exist until cleanup |
 | `cleanup` | QEMU reaped and private disks, keys and web credentials removed |
@@ -103,10 +116,12 @@ cargo run --locked -p hs-e2e -- run \
 Each successful selected phase pauses **before the next phase**. A paused VM
 continues running. The runner prints an SSH command and the private
 `access.json` path once the VM has started; after PVE installation that file
-contains the panel URL, login `root@pam`, generated password and CA location.
-In the web form, use username `root` and realm **Linux PAM**.
-The password is not printed to logs or stored in artifacts. Its file is mode
-`0600` inside the private run directory and is removed during cleanup. SSH
+contains the panel URL, login `root@pam`, generated password and SSH details.
+The runner also prints the panel URL, username `root`, realm **Linux PAM** and
+the generated password directly to the terminal after PVE installation. The
+password is not added to `report.json` or the runner's artifact files; capturing
+the terminal output also captures this temporary password. Its private file is
+mode `0600` inside the run directory and is removed during cleanup. SSH
 password and keyboard-interactive login stay disabled.
 
 Resume from another terminal on the **runner host**:
@@ -128,14 +143,13 @@ Socket files are also removed on cancellation. Cleanup itself cannot be paused.
 
 ## Browser and SSH access
 
-The panel URL defaults to `https://127.0.0.1:<reported-port>` **on the runner
-host**, forwarding to PVE's TCP 8006. The public PVE CA is saved as
-`pve-ca.pem` in artifacts and the private run directory. Trust that CA in a
-dedicated browser profile to verify the default localhost/127.0.0.1 name;
-the runner does not change browser or system trust. Browser CA trust and web
-password authentication are separate from the pinned SSH host key.
-This increment still uses PVE's own CA; the persistent public domain and
-Let's Encrypt integration remain the separate design linked above.
+The panel URL is `https://pve.e2e.homestack.app:<reported-port>`, forwarding
+to PVE's TCP 8006. With the default loopback binding, DNS points the hostname
+to `127.0.0.1`. Open the printed domain URL: normal browser trust verifies the
+public certificate without importing a private CA. PVE's internal cluster CA
+remains separate. The runner prints username `root`, realm **Linux PAM** and
+the temporary password. PVE requires its login form; passwords are not placed
+in URLs.
 
 For a remote runner, open a tunnel from the desktop using the host's ordinary
 SSH account and the port printed by the runner, for example:
@@ -144,18 +158,17 @@ SSH account and the port printed by the runner, for example:
 ssh -N -L 18006:127.0.0.1:REPORTED_PORT USER@RUNNER_HOST
 ```
 
-Then open `https://127.0.0.1:18006` in the desktop browser. Read the private
-access file on the runner for the temporary web password and transfer only the
-public CA for browser trust. With a nested HomeStack workspace, the tunnel
+Then open `https://pve.e2e.homestack.app:18006` in the desktop browser, where
+that hostname must also resolve to loopback. With a nested HomeStack workspace, the tunnel
 terminates at the workspace running this controller. Its host address and
 authentication belong to the existing desktop SSH configuration.
 
 For direct access over a reachable host interface, explicitly set
 `--web-bind 192.168.1.20 --web-port 18006`, replacing the address with one
 assigned to the runner. Bind defaults stay on loopback; no host firewall rules,
-physical bridges or routes are changed. The VM certificate does not
-automatically cover the host's LAN address: access by the certificate's FQDN
-with matching DNS/hosts resolution, or use the loopback SSH tunnel. The
+physical bridges or routes are changed. DNS then points the same hostname to
+the selected interface; open the domain URL. Changing an existing fixture's
+address requires an explicit `cleanup --all` reset first. The
 temporary SSH forward always stays on `127.0.0.1`.
 
 For a shell inside the disposable VM, run the printed command on the runner:
@@ -177,12 +190,12 @@ independent of the user's SSH agent, keys and existing Proxmox configuration.
    including a publication change during download, fails the run.
 2. Inspect the image format and reject external backing files. Create a private
    writable qcow2 overlay; the downloaded base stays read-only.
-3. Generate per-run client and server SSH keys, a hostname, an instance ID and
+3. Generate per-run client and server SSH keys, an instance ID and
    JSON initialization data. Supply them through a NoCloud `CIDATA` FAT disk.
    Password authentication is disabled. Pin the guest SSH host key before
    connecting, rather than accepting a network-discovered key. Set the guest's
    short hostname, FQDN and resolver search domain explicitly so PVE generates
-   a certificate for the intended `e2e.test` name.
+   the intended `pve.e2e.homestack.app` node identity.
 4. Start QEMU with KVM, host CPU features and local-only SSH/PVE port forwards.
    Wait for SSH and successful Cloud-Init, then read the initialization data
    from the guest and compare it with the requested values.
@@ -190,9 +203,10 @@ independent of the user's SSH agent, keys and existing Proxmox configuration.
    reboot and confirm a new boot ID. Install Proxmox VE services and reboot
    once more. Package installation runs only inside the disposable VM.
 6. Verify the running `-pve` kernel, exposed nested KVM device, active PVE
-   services and preserved initialization data. Obtain the PVE CA through the
-   pinned SSH connection and verify the real HTTPS `/api2/json/version` API
-   with an ephemeral guest-local API token. Check that the real web page is
+   services and preserved initialization data. Install the cached public
+   certificate through pinned SSH using `pvenode cert set`, then verify the
+   real HTTPS `/api2/json/version` API using normal public roots and an
+   ephemeral guest-local API token. Check that the real web page is
    served, log in through `/api2/json/access/ticket` with the generated
    password, and read the single-node inventory using its session cookie.
    Passwords, API token secrets and session tickets are not artifacts.
@@ -207,6 +221,42 @@ latest inputs; it is not yet the fully locked dependency model proposed for
 the eventual regression laboratory.
 
 ## Network and cleanup boundary
+
+Persistent fixtures live in `$XDG_STATE_HOME/homestack-e2e` (default
+`~/.local/state/homestack-e2e`); `--fixtures DIRECTORY` selects another dedicated
+directory. A file lock is held for the entire run, including inspection and
+cleanup. The private manifest records exact owned DNS values before mutation.
+Conflicting A, AAAA or CNAME records are rejected. Existing matching public
+records are reused without claiming ownership. Only the explicit PVE SAN is
+issued; production certificates and their cache are not reused or changed.
+
+Each run checks DNS independently of certificate reuse. A certificate is reused
+when its explicit SAN and expiry leave at least 30 days, its key matches and
+its chain passes normal system trust validation. This creates no new ACME
+order or challenge. A missing record is repaired without replacing a valid
+certificate. Temporary DNS-01 values are removed after issuance or failure;
+a failed cleanup leaves a durable journal for the next run to retry.
+
+To deliberately reset the fixture after all controllers have stopped:
+
+```sh
+cargo run --locked -p hs-e2e -- cleanup --all
+```
+
+Supply the same `--fixtures` and credential path overrides, if used for `run`.
+The manifest supplies the owned local DNS server; local cleanup also uses the
+TSIG key. Reset deletes only exact owned public/local A and challenge TXT
+values and known ACME cache files. It preserves unrelated records, the domain
+registration, provider credentials and TSIG key. The next run provisions the
+fixture again. A live controller's lock prevents reset during inspection.
+
+The runner verifies system DNS resolution before boot. Split DNS, router
+rebinding protection or a cached negative reply can prevent browser access;
+configure the E2E name on the client resolver as needed. If a name lookup fails,
+the runner attempts a bounded refresh through `resolvectl` when available,
+without changing resolver settings. On a separate client,
+`resolvectl query --cache=no pve.e2e.homestack.app` refreshes this name through
+systemd-resolved without changing DNS configuration.
 
 This initial runner uses QEMU directly. It creates no libvirt domain, physical
 bridge, TAP device, host firewall rule or host package installation. Its user
@@ -232,7 +282,7 @@ graceful poweroff. Logs and `report.json` remain in the artifact directory.
 SSH keys, API tokens, the initialization disk and VM disks are not artifacts.
 
 SIGKILL, host power loss and a killed controller's orphan recovery are not
-handled by this first increment. The independent watchdog and durable ownership
+handled by this first increment. The independent watchdog and durable VM ownership
 journal in the larger design remain required before unattended destructive
 testing. A successful check of `/dev/kvm` inside PVE also does not yet prove
 that a nested guest boots; that is a later scenario.
@@ -240,8 +290,8 @@ that a nested guest boots; that is a later scenario.
 ## Local checks
 
 ```sh
-cargo test --locked -p hs-e2e
-cargo clippy --locked -p hs-e2e --all-targets -- -D warnings
+cargo test --locked -p hs-e2e -p hs-deploy
+cargo clippy --locked -p hs-e2e -p hs-deploy --all-targets -- -D warnings
 cargo fmt --all --check
 ```
 
@@ -263,5 +313,19 @@ boot verified key-only SSH and complete cleanup after SIGTERM during a pause,
 including socket removal. A deliberate preflight failure paused for inspection
 and retained its original failure after resume and cleanup.
 
-All ten local tests passed, including failure preservation and inspection time
-being excluded from the active deadline. Clippy and formatting checks passed.
+Public TLS validation on 2026-10-16 created only the E2E A records at Spaceship
+and the local TSIG-managed zone, obtained an exact PVE certificate through
+DNS-01 and removed its challenge TXT value. The certificate's normal trust
+chain and installed PVE fingerprint matched. A complete fresh VM run then
+passed with `certificate_reused = true`, real HTTPS/PAM login and node inventory,
+`graceful_shutdown = true` and complete VM removal; DNS, account and certificate
+files remained available for the next run. Full fixture cleanup was refused
+while the active controller held its lock. An independent inspection timeout
+also removed the VM while retaining these fixtures.
+
+All fifteen E2E unit tests and twenty-three deployment unit/integration tests
+passed, including fixture ownership, exclusive locking, scoped cache reset,
+failure preservation and inspection time being excluded from the active
+deadline. Clippy and formatting checks passed. Tests requiring local sockets
+run outside the restricted tool sandbox; live production-cluster tests remain
+opt-in and were not run for this bootstrap change.

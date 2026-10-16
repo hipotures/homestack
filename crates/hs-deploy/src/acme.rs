@@ -102,7 +102,8 @@ fn write_private(path: &Path, text: &str) -> Result<(), String> {
     std::fs::rename(&temporary, path).map_err(fail)
 }
 
-async fn account(directory: &str, dir: &Path) -> Result<Account, String> {
+/// Load or create an account in a dedicated private ACME directory.
+pub async fn account(directory: &str, dir: &Path) -> Result<Account, String> {
     let (account_path, _, _) = paths(dir);
     let builder = Account::builder().map_err(|e| e.to_string())?;
     if let Ok(text) = std::fs::read_to_string(&account_path) {
@@ -130,7 +131,13 @@ async fn account(directory: &str, dir: &Path) -> Result<Account, String> {
 /// Wait until every authoritative name server of `zone` answers `name`
 /// with a TXT record holding `value` (the local DNS may hold another zone
 /// of the same name, so the public servers are asked directly).
-async fn wait_for_txt(dns: &DnsApi, zone: &str, name: &str, value: &str, say: &impl Fn(&str)) -> Result<(), String> {
+pub async fn wait_for_txt(
+    dns: &DnsApi,
+    zone: &str,
+    name: &str,
+    value: &str,
+    say: &impl Fn(&str),
+) -> Result<(), String> {
     let mut servers = Vec::new();
     for host in dns.name_servers(zone).await? {
         let addresses = tokio::net::lookup_host((host.as_str(), 53))
@@ -243,7 +250,8 @@ pub async fn obtain(
     result
 }
 
-async fn finish(order: &mut instant_acme::Order, dir: &Path) -> Result<Stored, String> {
+/// Finalize a ready order and save its certificate and private key.
+pub async fn finish(order: &mut instant_acme::Order, dir: &Path) -> Result<Stored, String> {
     let policy = RetryPolicy::new()
         .timeout(Duration::from_secs(300))
         .initial_delay(Duration::from_secs(2));

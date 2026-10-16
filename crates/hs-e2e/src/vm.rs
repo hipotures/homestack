@@ -90,7 +90,7 @@ impl Vm {
                 "-display", "none", "-monitor", "none", "-serial", &format!("file:{}", artifacts.join("serial.log").display()),
                 "-drive", &format!("file={},format=qcow2,if=virtio", dir.join("disk.qcow2").display()),
                 "-drive", &format!("file={},format=raw,if=virtio,readonly=on", dir.join("seed.img").display()),
-                "-nic", &format!("user,model=virtio-net-pci,restrict=on,ipv6=off,domainname=e2e.test,dnssearch=e2e.test,hostfwd=tcp:127.0.0.1:{ssh_port}-:22,hostfwd=tcp:{}:{api_port}-:8006,guestfwd=tcp:10.0.2.100:3128-cmd:{proxy_command}", options.web_bind)])
+                "-nic", &format!("user,model=virtio-net-pci,restrict=on,ipv6=off,domainname={0},dnssearch={0},hostfwd=tcp:127.0.0.1:{ssh_port}-:22,hostfwd=tcp:{1}:{api_port}-:8006,guestfwd=tcp:10.0.2.100:3128-cmd:{proxy_command}", crate::domain::SEARCH, options.web_bind)])
             .stdin(Stdio::null()).stdout(Stdio::null()).stderr(stderr).spawn()?;
         Ok(Self {
             child,

@@ -219,6 +219,12 @@ separate coverage limitation.
 
 ### Persistent DNS and certificate fixture
 
+The [bootstrap runner](e2e-bootstrap.md) implements the PVE part of this
+lifecycle: Spaceship DNS-01, an exact `pve.e2e.homestack.app` certificate,
+persistent reuse, optional TSIG updates for local split DNS, a locked ownership
+manifest, challenge cleanup and `cleanup --all`. HomeStack wildcard issuance
+and abandoned VM recovery remain part of the larger laboratory design.
+
 `homestack.app` is already registered. Provisioning means ensuring the required
 E2E DNS records exist, not purchasing or registering a domain. Keep a separate,
 controller-owned persistent directory containing the E2E ACME account, cached
