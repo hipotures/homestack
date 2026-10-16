@@ -452,7 +452,7 @@ fn workspace_actions(app: &App) -> Vec<Control> {
     if selected.is_some_and(super::acting::is_server) {
         return vec![
             Control::key("&info"),
-            Control::named("␣", "mark", KeyCode::Char(' ')),
+            Control::named("␣", "select", KeyCode::Char(' ')),
             Control::named("↵", "reinstall", KeyCode::Enter).enabled(free),
         ];
     }
@@ -559,6 +559,18 @@ fn details_box(buf: &mut Buffer, area: Rect, app: &App, entry: &StatusEntry, pac
     }
 }
 
+/// How many servers are selected with Space, in every group and on every
+/// node; `None` for none.
+fn selected_count(app: &App) -> Option<usize> {
+    let count = app
+        .status
+        .iter()
+        .flat_map(|status| status.gold.iter().chain(&status.workspaces).chain(&status.others))
+        .filter(|entry| app.marked.contains(&entry.vmid))
+        .count();
+    (count > 0).then_some(count)
+}
+
 fn workspaces(buf: &mut Buffer, area: Rect, app: &App, mut controls: Vec<Control>) {
     let palette = &app.palette;
     // The setup takes the panel itself: one frame, as btop's panels.
@@ -588,7 +600,11 @@ fn workspaces(buf: &mut Buffer, area: Rect, app: &App, mut controls: Vec<Control
             Control::key("&new").enabled(app.status.is_some() && app.action.is_none()),
         ],
         bottom_left: workspace_actions(app),
-        bottom_right: vec![Control::plain(&format!("{position}/{}", rows.len()))],
+        bottom_right: selected_count(app)
+            .map(|count| Control::plain(&format!("{count} selected")))
+            .into_iter()
+            .chain([Control::plain(&format!("{position}/{}", rows.len()))])
+            .collect(),
         focused: false,
     };
     let inner = frame(buf, area, palette, &sides);
@@ -1065,8 +1081,8 @@ const HELP: [&str; 22] = [
     "In the box: tab next field, ← → choose, ↵ plan, ↵ or a apply,",
     "esc cancel (while it runs esc hides the box; ↵ shows it).",
     "",
-    "On a server (containers): ␣ mark or unmark it; ↵ reinstall it,",
-    "or every marked one when it is marked, from a published image.",
+    "On a server (containers): ␣ select or unselect it; ↵ reinstall it,",
+    "or every selected one when it is selected, from a published image.",
     "",
     "Setup: tab next group, ␣ toggle, 0 branch, / filter, ← → close or",
     "open, ↵ review, F5 reread state, Ctrl+R catalog; green ready, red overwrite.",

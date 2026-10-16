@@ -138,6 +138,11 @@ fn space_marks_servers_and_enter_on_a_marked_one_takes_them_all() {
         assert_eq!(buf[(x - 9, y)].bg == selection, marked, "{name}: the whole line");
     }
     assert!(!screen(&buf).contains('✓'));
+    // The count on the frame, in another group too.
+    assert!(screen(&buf).contains("┘2 selected└┘2/3└"), "{}", screen(&buf));
+    fixture.app.group = Some("homestack".to_owned());
+    assert!(screen(&render(&fixture.app, 140, 40)).contains("┘2 selected└"));
+    fixture.app.group = Some("homestack-service".to_owned());
 
     // Unmarked: only itself.
     select(&mut fixture.app, 102_002);
@@ -179,6 +184,10 @@ fn space_marks_servers_and_enter_on_a_marked_one_takes_them_all() {
     fixture.app.action = None;
     press(&mut fixture.app, KeyCode::Char(' '));
     assert_eq!(fixture.app.marked.iter().copied().collect::<Vec<_>>(), [102_003]);
+    assert!(screen(&render(&fixture.app, 140, 40)).contains("┘1 selected└"));
+    select(&mut fixture.app, 102_003);
+    press(&mut fixture.app, KeyCode::Char(' '));
+    assert!(!screen(&render(&fixture.app, 140, 40)).contains("selected└"));
 }
 
 #[test]
