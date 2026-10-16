@@ -1,5 +1,6 @@
 //! Minimal disposable PVE bootstrap. This does not run the HomeStack catalogue.
 
+mod access;
 mod domain;
 mod image;
 mod install;
@@ -18,7 +19,7 @@ use serde_json::{Value, json};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
-const USAGE: &str = "homestack-e2e run [--memory-mib N] [--cpus N] [--disk-gib N]\n                  [--timeout-seconds N] [--message TEXT] [--artifacts DIRECTORY]\n                  [--pause-after PHASE[,PHASE...]] [--pause-on-failure]\n                  [--pause-timeout-seconds N] [--web-bind IPV4] [--web-port PORT]\n                  [--fixtures DIRECTORY] [--spaceship-file FILE]\n                  [--local-dns IPV4] [--tsig-file FILE]\nhomestack-e2e resume --artifacts DIRECTORY\nhomestack-e2e cleanup --all [--fixtures DIRECTORY] [--spaceship-file FILE] [--tsig-file FILE]\n\nPhases: preflight, domain, image, boot, kernel, proxmox, verify, shutdown; cleanup always runs.\nDefaults: 1 vCPU, 2048 MiB RAM, 12 GiB sparse disk, 1800 active seconds.\nInspection pauses default to 3600 seconds and require an explicit resume.\nThe panel uses pve.e2e.homestack.app with a public Let's Encrypt certificate.\nDNS and certificate fixtures persist until cleanup --all.\nThe web forward binds to 127.0.0.1 on a free port unless explicitly configured.\nDownloads Debian 13 qcow2, installs Proxmox, verifies SSH, HTTPS and web login,\npowers off, and deletes all temporary VM data. No host network changes.\nRequires Linux x86_64, /dev/kvm, qemu-system-x86_64, qemu-img,\nssh, ssh-keygen, mkfs.vfat, mcopy and openssl; dig/nsupdate for local DNS.\nNo host root privileges required.";
+const USAGE: &str = "homestack-e2e run [--memory-mib N] [--cpus N] [--disk-gib N]\n                  [--timeout-seconds N] [--message TEXT] [--artifacts DIRECTORY]\n                  [--pause-after PHASE[,PHASE...]] [--pause-on-failure]\n                  [--pause-timeout-seconds N] [--web-bind IPV4] [--web-port PORT]\n                  [--fixtures DIRECTORY] [--spaceship-file FILE]\n                  [--local-dns IPV4] [--tsig-file FILE]\n                  [--runner-ssh DESTINATION] [--runner-ssh-port PORT]\nhomestack-e2e resume --artifacts DIRECTORY\nhomestack-e2e cleanup --all [--fixtures DIRECTORY] [--spaceship-file FILE] [--tsig-file FILE]\n\nPhases: preflight, domain, image, boot, kernel, proxmox, verify, shutdown; cleanup always runs.\nDefaults: 1 vCPU, 2048 MiB RAM, 12 GiB sparse disk, 1800 active seconds.\nInspection pauses default to 3600 seconds and require an explicit resume.\nThe panel uses pve.e2e.homestack.app with a public Let's Encrypt certificate.\nDNS and certificate fixtures persist until cleanup --all.\nThe web forward binds to 127.0.0.1 on a free port unless explicitly configured.\nDownloads Debian 13 qcow2, installs Proxmox, verifies SSH, HTTPS and web login,\npowers off, and deletes all temporary VM data. No host network changes.\nRequires Linux x86_64, /dev/kvm, qemu-system-x86_64, qemu-img,\nssh, ssh-keygen, mkfs.vfat, mcopy and openssl; dig/nsupdate for local DNS.\nNo host root privileges required.";
 
 struct Options {
     memory: u32,
@@ -36,6 +37,8 @@ struct Options {
     spaceship_file: PathBuf,
     local_dns: Option<Ipv4Addr>,
     tsig_file: PathBuf,
+    runner_ssh: Option<String>,
+    runner_ssh_port: Option<u16>,
 }
 
 impl Options {
@@ -66,6 +69,8 @@ impl Options {
             spaceship_file: config.join("spaceship-dns"),
             local_dns: None,
             tsig_file: config.join("dns-tsig.key"),
+            runner_ssh: None,
+            runner_ssh_port: None,
         };
         let mut all = false;
         let mut rest = args[1..].iter();
@@ -108,6 +113,17 @@ impl Options {
                 "--spaceship-file" => options.spaceship_file = PathBuf::from(value),
                 "--local-dns" => options.local_dns = Some(value.parse()?),
                 "--tsig-file" => options.tsig_file = PathBuf::from(value),
+                "--runner-ssh" => {
+                    access::validate_destination(value)?;
+                    options.runner_ssh = Some(value.clone());
+                }
+                "--runner-ssh-port" => {
+                    let port: u16 = value.parse()?;
+                    if port == 0 {
+                        return Err("--runner-ssh-port must be nonzero".into());
+                    }
+                    options.runner_ssh_port = Some(port);
+                }
                 _ => return Err(format!("unknown argument {flag}").into()),
             }
         }
@@ -167,10 +183,14 @@ async fn execute() -> Result<()> {
         return Ok(());
     }
     let run_id = uuid::Uuid::new_v4().to_string();
-    let options = Options::parse(&args, &run_id)?;
+    let mut options = Options::parse(&args, &run_id)?;
     let mut fixture = domain::Fixture::open(&options.fixtures, &options.spaceship_file, &options.tsig_file)?;
     if args[0] == "cleanup" {
         return fixture.reset().await;
+    }
+    access::configure(&mut options);
+    if options.runner_ssh.is_none() && options.runner_ssh_port.is_some() {
+        return Err("--runner-ssh-port requires --runner-ssh or an SSH session".into());
     }
     if let Some(parent) = options.artifacts.parent().filter(|p| !p.as_os_str().is_empty()) {
         std::fs::create_dir_all(parent)?;
@@ -492,6 +512,7 @@ async fn run(
             }
             eprintln!("Installing the cached public TLS certificate...");
             fixture.install(vm).await?;
+            fixture.verify_resolution(options.web_bind).await?;
             report["web_url"] = json!(web_url(vm, hostname));
             report["web_trust"] = json!("public CA; normal browser/system roots");
             save_access(dir, vm, options, hostname, &password, true)?;
@@ -583,10 +604,17 @@ async fn run(
             report["proxmox"] = version["data"].clone();
             save_report(artifacts, report)?;
             let base = format!("https://{hostname}:{}", vm.api_port);
-            let page = client.get(format!("{base}/")).send().await?.error_for_status()?.text().await?;
+            // Check the same DNS path used by the browser, without sending
+            // credentials. Administrative requests remain pinned to this VM.
+            fixture.verify_resolution(options.web_bind).await?;
+            let browser = reqwest::Client::builder().no_proxy()
+                .redirect(reqwest::redirect::Policy::none())
+                .connect_timeout(Duration::from_secs(10)).timeout(Duration::from_secs(20)).build()?;
+            let page = browser.get(format!("{base}/")).send().await?.error_for_status()?.text().await?;
             if !page.contains("Proxmox") || !page.contains("pve2") {
                 return Err("PVE web panel HTML is missing".into());
             }
+            report["web_dns_verified"] = json!(true);
             let login: Value = client.post(format!("{base}/api2/json/access/ticket"))
                 .form(&[("username", "root@pam"), ("password", password.as_str())])
                 .send().await?.error_for_status()?.json().await?;
@@ -625,11 +653,14 @@ fn save_access(
     web_ready: bool,
 ) -> Result<()> {
     let path = dir.join("access.json");
+    let tunnel = access::tunnel(options, vm.api_port);
     let access = json!({
         "web_url": web_url(vm, hostname), "web_bind": options.web_bind.to_string(),
         "web_username": "root@pam", "web_password": password, "web_ready": web_ready,
         "ssh_config": dir.join("ssh_config"), "ssh_port": vm.ssh_port,
         "web_trust": "public CA",
+        "remote_tunnel_command": tunnel,
+        "remote_web_url": tunnel.as_ref().map(|_| format!("https://{hostname}:18006")),
     });
     use std::io::Write;
     let mut file = std::fs::OpenOptions::new()
@@ -649,18 +680,20 @@ fn show_access(dir: &Path, vm: &vm::Vm, options: &Options, hostname: &str, passw
     );
     eprintln!("Private access details: {}", dir.join("access.json").display());
     if web_ready {
-        eprintln!("PVE web panel: {}", web_url(vm, hostname));
+        if options.web_bind.is_loopback() {
+            eprintln!("PVE web panel on this computer: {}", web_url(vm, hostname));
+            eprintln!("Open this URL directly when the browser runs on the runner computer.");
+        } else {
+            eprintln!("PVE web panel: {}", web_url(vm, hostname));
+        }
         eprintln!("Login: root");
         eprintln!("Realm: Linux PAM");
         eprintln!("Password: {password}");
         eprintln!("Browser trust: public Let's Encrypt certificate; use the domain in the URL.");
-        if options.web_bind.is_loopback() {
-            eprintln!("For a remote runner, forward the panel through SSH from your client computer:");
-            eprintln!(
-                "  ssh -N -L 18006:{}:{} USER@RUNNER_HOST",
-                options.web_bind, vm.api_port
-            );
-            eprintln!("Then open https://{hostname}:18006 on your client computer.");
+        if let Some(tunnel) = access::tunnel(options, vm.api_port) {
+            eprintln!("From another computer, run this tunnel on the browser's computer:");
+            eprintln!("  {tunnel}");
+            eprintln!("Then open https://{hostname}:18006 in that computer's browser.");
         }
     }
 }

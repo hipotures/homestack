@@ -303,32 +303,28 @@ impl Fixture {
         Ok(())
     }
 
-    async fn verify_resolution(&self, address: Ipv4Addr) -> Result<()> {
+    pub async fn verify_resolution(&self, address: Ipv4Addr) -> Result<()> {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
-        let mut refresh = true;
         loop {
+            // NXDOMAIN is cached under ANY. Refreshing only A can leave that
+            // old negative entry behind, hiding the name again after its A TTL.
+            let _ = tokio::time::timeout(
+                Duration::from_secs(10),
+                Command::new("resolvectl")
+                    .args(["query", "--cache=no", "--type=ANY", HOST])
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .kill_on_drop(true)
+                    .status(),
+            )
+            .await;
             let addresses = tokio::net::lookup_host((HOST, 0)).await;
             if addresses.is_ok_and(|mut entries| entries.any(|entry| entry.ip() == address)) {
                 return Ok(());
             }
-            if refresh {
-                refresh = false;
-                // Refresh this name after provisioning; a previous NXDOMAIN may
-                // otherwise hide the new record for hours. No resolver settings change.
-                let _ = tokio::time::timeout(
-                    Duration::from_secs(10),
-                    Command::new("resolvectl")
-                        .args(["query", "--cache=no", HOST])
-                        .stdin(Stdio::null())
-                        .stdout(Stdio::null())
-                        .stderr(Stdio::null())
-                        .kill_on_drop(true)
-                        .status(),
-                )
-                .await;
-            }
             if tokio::time::Instant::now() >= deadline {
-                return Err(format!("system DNS does not resolve {HOST} to {address}; check split DNS, rebinding protection and negative caches (for systemd-resolved: resolvectl query --cache=no {HOST})").into());
+                return Err(format!("system DNS does not resolve {HOST} to {address}; check split DNS, rebinding protection and negative caches (for systemd-resolved: resolvectl query --cache=no --type=ANY {HOST})").into());
             }
             tokio::time::sleep(Duration::from_secs(2)).await;
         }

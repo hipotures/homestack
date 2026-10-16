@@ -172,14 +172,30 @@ remains separate. The runner prints username `root`, realm **Linux PAM** and
 the temporary password. PVE requires its login form; passwords are not placed
 in URLs.
 
-For a remote runner, open a tunnel from the desktop using the host's ordinary
-SSH account and the port printed by the runner, for example:
+When the browser runs on the same computer as the controller, open the printed
+panel URL directly. No SSH tunnel is needed. A local run prints that direct
+instruction and does not suggest a tunnel back to itself.
+
+For a remote runner started over SSH, the controller derives the actual
+username, server address and SSH port from the invoking SSH session. It prints
+a complete tunnel command for the desktop, with `ExitOnForwardFailure=yes`.
+For an unattended runner, or to use an existing client SSH alias, set the
+destination explicitly. For this workspace's runner:
 
 ```sh
-ssh -N -L 18006:127.0.0.1:REPORTED_PORT USER@RUNNER_HOST
+PATH="$PWD/target/e2e-tools/bin:$PATH" \
+cargo run --locked -p hs-e2e -- run \
+  --local-dns 192.168.100.1 --pause-after verify \
+  --runner-ssh user@192.168.1.100
 ```
 
-Then open `https://pve.e2e.homestack.app:18006` in the desktop browser, where
+Use `--runner-ssh-port` for a nonstandard SSH port; an explicit SSH alias uses
+the client's configured port when no override is given. The generated command
+contains the real PVE forward port and is also saved in `access.json` as
+`remote_tunnel_command`, together with `remote_web_url`.
+
+Run the printed tunnel on the desktop. Then open
+`https://pve.e2e.homestack.app:18006` in the desktop browser, where
 that hostname must also resolve to loopback. With a nested HomeStack workspace, the tunnel
 terminates at the workspace running this controller. Its host address and
 authentication belong to the existing desktop SSH configuration.
@@ -233,7 +249,9 @@ independent of the user's SSH agent, keys and existing Proxmox configuration.
    served, log in through `/api2/json/access/ticket` with the generated
    password, and read the single-node inventory using its session cookie.
    Passwords, API token secrets and session tickets are not artifacts.
-   TLS verification stays enabled.
+   TLS verification stays enabled. The browser page is also fetched using
+   normal system DNS, without a resolver override; `web_dns_verified` records
+   that check. Administrative requests stay pinned to the disposable VM.
 7. Request `systemctl poweroff`, wait for successful QEMU exit, reap the process
    and remove the entire private directory: base image, overlay, initialization
    disk, keys and other temporary files. Confirm removal in the report.
@@ -273,13 +291,16 @@ values and known ACME cache files. It preserves unrelated records, the domain
 registration, provider credentials and TSIG key. The next run provisions the
 fixture again. A live controller's lock prevents reset during inspection.
 
-The runner verifies system DNS resolution before boot. Split DNS, router
+The runner verifies system DNS resolution before boot and again before
+printing panel access and checking the browser page. Split DNS, router
 rebinding protection or a cached negative reply can prevent browser access;
-configure the E2E name on the client resolver as needed. If a name lookup fails,
-the runner attempts a bounded refresh through `resolvectl` when available,
-without changing resolver settings. On a separate client,
-`resolvectl query --cache=no pve.e2e.homestack.app` refreshes this name through
-systemd-resolved without changing DNS configuration.
+configure the E2E name on the client resolver as needed. The runner attempts a
+bounded refresh through `resolvectl` when available, without changing resolver
+settings. It requests type `ANY` because
+[systemd-resolved stores NXDOMAIN](https://github.com/systemd/systemd/blob/main/src/resolve/resolved-dns-cache.c)
+under that key: refreshing only a positive A entry can leave the old negative
+entry behind, causing failure again after the A record expires. On a separate
+client, use `resolvectl query --cache=no --type=ANY pve.e2e.homestack.app`.
 
 This initial runner uses QEMU directly. It creates no libvirt domain, physical
 bridge, TAP device, host firewall rule or host package installation. Its user
@@ -357,7 +378,7 @@ files remained available for the next run. Full fixture cleanup was refused
 while the active controller held its lock. An independent inspection timeout
 also removed the VM while retaining these fixtures.
 
-All nineteen E2E unit tests and twenty-three deployment unit/integration tests
+All twenty-one E2E unit tests and twenty-three deployment unit/integration tests
 passed, including fixture ownership, exclusive locking, scoped cache reset,
 image-cache reuse/repair and failed-download preservation, APT status parsing
 and installer output/error preservation, failure preservation
