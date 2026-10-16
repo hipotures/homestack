@@ -207,7 +207,10 @@ fn new_opens_a_form_and_its_values_go_to_the_plan() {
     type_text(&mut fixture.app, "lab-new");
     let start = started(press(&mut fixture.app, KeyCode::Enter));
     assert_eq!(start.kind, Kind::New);
-    assert_eq!(start.parameters, json!({"vmid": 101010, "name": "lab-new"}));
+    assert_eq!(
+        start.parameters,
+        json!({"vmid": 101010, "name": "lab-new", "node": "pve1", "storage": "local-zfs"})
+    );
 }
 
 #[test]
@@ -229,12 +232,20 @@ fn a_node_and_storage_chosen_in_the_form_are_sent() {
     press(&mut fixture.app, KeyCode::Tab);
     type_text(&mut fixture.app, "lab-new");
     press(&mut fixture.app, KeyCode::Tab);
-    // Node: default, pve1, pve2, pve3.
-    press(&mut fixture.app, KeyCode::Right);
+    // Node: pve1, pve2, pve3, the first chosen.
+    let text = screen(&render(&fixture.app, 120, 36));
+    assert!(
+        text.contains("Node       ‹ pve1 ›") && text.contains("Storage    ‹ local-zfs ›"),
+        "{text}"
+    );
     press(&mut fixture.app, KeyCode::Right);
     press(&mut fixture.app, KeyCode::Tab);
-    // Storage: default, then the storages of pve2.
+    // Storage: the storages of pve2, the first chosen; none of them twice.
+    let text = screen(&render(&fixture.app, 120, 36));
+    assert!(text.contains("Storage    ‹ local-lvm ›"), "{text}");
     press(&mut fixture.app, KeyCode::Right);
+    let text = screen(&render(&fixture.app, 120, 36));
+    assert!(text.contains("Storage    ‹ local-lvm ›"), "{text}");
     press(&mut fixture.app, KeyCode::Tab);
     // Home size: one G above the server's default.
     press(&mut fixture.app, KeyCode::Right);
@@ -470,7 +481,7 @@ fn a_click_focuses_a_field_and_a_click_on_its_arrow_changes_the_choice() {
     let arrow = u16::try_from(line.chars().position(|c| c == '›').unwrap()).unwrap();
     fixture.app.mouse(click(arrow, y));
     let text = screen(&render(&fixture.app, 120, 36));
-    assert!(text.contains("‹ pve1 ›"), "the next node: {text}");
+    assert!(text.contains("‹ pve2 ›"), "the next node: {text}");
 }
 
 #[test]
@@ -568,7 +579,7 @@ fn new_takes_the_pool_of_the_group_shown_by_its_name() {
     let start = started(press(&mut fixture.app, KeyCode::Enter));
     assert_eq!(
         start.parameters,
-        json!({"vmid": 101200, "name": "lab-new", "pool": "homestack-test"})
+        json!({"vmid": 101200, "name": "lab-new", "pool": "homestack-test", "node": "pve1", "storage": "local-zfs"})
     );
 }
 
@@ -605,7 +616,10 @@ fn home_size_starts_at_the_default_and_is_sent_only_when_changed() {
     let text = screen(&render(&fixture.app, 120, 36));
     assert!(text.contains("Home size  64G  -64G+  -0M+"), "{text}");
     let start = started(press(&mut fixture.app, KeyCode::Enter));
-    assert_eq!(start.parameters, json!({"vmid": 101010, "name": "lab-new"}));
+    assert_eq!(
+        start.parameters,
+        json!({"vmid": 101010, "name": "lab-new", "node": "pve1", "storage": "local-zfs"})
+    );
 
     let mut fixture = home_size_form(None);
     let text = screen(&render(&fixture.app, 120, 36));

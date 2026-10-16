@@ -11,7 +11,6 @@ use super::action::{
 use super::state::{App, Request};
 use crate::app::valid_name;
 
-const DEFAULT: &str = "default";
 const EXISTING_KEYS: &str = "the keys already in sshkeys";
 /// The pools of workspaces and their VMIDs (`decisions.md`, addressing):
 /// the workspaces first, the default, then the test workspaces.
@@ -130,15 +129,15 @@ impl App {
         Some(std::net::Ipv4Addr::new(first, second, third, fourth))
     }
 
-    /// The MiB free on the storage the form makes the home on (the
-    /// default: the first of the node's, as the server picks it).
+    /// The MiB free on the storage the form makes the home on (without a
+    /// node or storage in the form, the server's: Gold's node and its first).
     pub(super) fn home_room(&self, form: &Form) -> Option<u64> {
         let chosen = |label: &str| {
             form.fields
                 .iter()
                 .find(|field| field.label == label)
                 .map(super::action::Field::value)
-                .filter(|value| !value.starts_with(DEFAULT))
+                .filter(|value| !value.is_empty())
         };
         let node = chosen("Node").or_else(|| self.gold_node())?;
         let storage = chosen("Storage").or_else(|| self.storages_on(&node).into_iter().next())?;
@@ -230,12 +229,8 @@ impl App {
         let name = entry.as_ref().and_then(|entry| entry.name.clone()).unwrap_or_default();
         let fields = match kind {
             Kind::New => {
-                let gold = self.gold_node().unwrap_or_default();
-                let mut nodes = vec![format!("{DEFAULT}: {gold}")];
-                nodes.extend(self.nodes());
-                let storage_node = self.gold_node().unwrap_or_default();
-                let mut storages = vec![format!("{DEFAULT}: {}", self.storages_on(&storage_node).join(", "))];
-                storages.extend(self.storages_on(&storage_node));
+                let nodes = self.nodes();
+                let storages = nodes.first().map(|node| self.storages_on(node)).unwrap_or_default();
                 let pools = self.pools();
                 let first = self.first_pool(&pools);
                 let mut pool = Field::choice(
@@ -253,11 +248,7 @@ impl App {
                         "",
                         "A letter first, then letters, digits, '.' or '-'; it is also the SSH alias.",
                     ),
-                    Field::choice(
-                        "Node",
-                        nodes,
-                        "Where the VM is made (default: the node of Gold); ← → or a click on ‹ › to choose.",
-                    ),
+                    Field::choice("Node", nodes, "Where the VM is made; ← → or a click on ‹ › to choose."),
                     Field::choice(
                         "Storage",
                         storages,
@@ -358,7 +349,7 @@ impl App {
                 }
                 for (label, key) in [("Node", "node"), ("Storage", "storage")] {
                     let chosen = value(label);
-                    if !chosen.starts_with(DEFAULT) && !chosen.is_empty() {
+                    if !chosen.is_empty() {
                         parameters[key] = json!(chosen);
                     }
                 }
@@ -435,16 +426,12 @@ impl App {
             .find(|field| field.label == "Node")
             .map(super::action::Field::value)
             .unwrap_or_default();
-        let node = if node.starts_with(DEFAULT) {
+        let node = if node.is_empty() {
             self.gold_node().unwrap_or_default()
         } else {
             node
         };
-        let mut storages = Vec::new();
-        if kind == Kind::New {
-            storages.push(format!("{DEFAULT}: {}", self.storages_on(&node).join(", ")));
-        }
-        storages.extend(self.storages_on(&node));
+        let storages = self.storages_on(&node);
         if let Some(field) = form.fields.iter_mut().find(|field| field.label == "Storage")
             && let Input::Choice { options, index } = &mut field.input
             && *options != storages
