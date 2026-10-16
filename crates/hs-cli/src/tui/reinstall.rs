@@ -206,24 +206,41 @@ pub async fn work(
     };
     config.image.clone_from(&image);
     let tag = image.rsplit_once(':').map_or(image.as_str(), |(_, tag)| tag).to_owned();
-    let mut steps: Vec<Step> = Vec::new();
-    for name in &servers {
-        steps.push(Step {
-            name: format!("{name}: reinstall from {tag}"),
-            state: StepState::Running,
-        });
-        progress(Progress::Steps(steps.clone()));
-        let said = |line: &str| say(line);
-        let outcome = hs_deploy::deploy::apply(&config, std::slice::from_ref(name), &said).await;
-        let state = if outcome.is_ok() {
-            StepState::Done
-        } else {
-            StepState::Failed
-        };
-        if let Some(step) = steps.last_mut() {
-            step.state = state;
+    // Every server from the start; the one under way shows what hs-deploy
+    // does now.
+    let steps = std::sync::Mutex::new(
+        servers
+            .iter()
+            .map(|name| Step {
+                name: format!("{name}: waiting"),
+                state: StepState::Waiting,
+            })
+            .collect::<Vec<Step>>(),
+    );
+    let set = |index: usize, state: StepState, doing: &str| {
+        if let Ok(mut steps) = steps.lock() {
+            if let Some(step) = steps.get_mut(index) {
+                step.state = state;
+                step.name = format!("{}: {doing}", servers[index]);
+            }
+            progress(Progress::Steps(steps.clone()));
         }
-        progress(Progress::Steps(steps.clone()));
+    };
+    for (index, name) in servers.iter().enumerate() {
+        set(index, StepState::Running, &format!("reinstall from {tag}"));
+        let said = |line: &str| {
+            say(line);
+            let doing = line.trim();
+            // The instance's own first line names it again.
+            if !doing.starts_with(&format!("{name}:")) {
+                set(index, StepState::Running, doing);
+            }
+        };
+        let outcome = hs_deploy::deploy::apply(&config, std::slice::from_ref(name), &said).await;
+        match &outcome {
+            Ok(()) => set(index, StepState::Done, &format!("reinstalled from {tag}")),
+            Err(_) => set(index, StepState::Failed, "failed"),
+        }
         if let Err(error) = outcome {
             let done: Vec<&String> = servers.iter().take_while(|server| *server != name).collect();
             let mut lines = vec![format!("{name}: {error}")];

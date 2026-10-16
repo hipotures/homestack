@@ -222,3 +222,38 @@ fn images_for_another_box_are_dropped_and_a_failure_is_shown() {
         "the form stays"
     );
 }
+
+#[test]
+fn the_run_shows_every_server_and_what_the_one_under_way_does() {
+    use hs_cli::tui::action::{Step, StepState};
+    let mut fixture = servers();
+    select(&mut fixture.app, 102_001);
+    press(&mut fixture.app, KeyCode::Enter);
+    fixture.app.set_images(&[102_001], Ok(images(&[(102_001, "api1")])));
+    press(&mut fixture.app, KeyCode::Enter);
+    fixture.app.progress(Progress::Plan {
+        lines: Vec::new(),
+        question: Kind::Reinstall.question(false).to_owned(),
+        blocked: None,
+        secret: None,
+    });
+    press(&mut fixture.app, KeyCode::Enter);
+    let step = |name: &str, state| Step {
+        name: name.to_owned(),
+        state,
+    };
+    fixture.app.progress(Progress::Steps(vec![
+        step("api1: reinstalled from 0.1.161-9cc8e058c0ae", StepState::Done),
+        step("api2: starting", StepState::Running),
+        step("api3: waiting", StepState::Waiting),
+    ]));
+    let text = screen(&render(&fixture.app, 140, 40));
+    for line in [
+        "✓ api1: reinstalled from 0.1.161-9cc8e058c0ae",
+        "◐ api2: starting",
+        "○ api3: waiting",
+        "1 of 3 steps done",
+    ] {
+        assert!(text.contains(line), "{line}: {text}");
+    }
+}

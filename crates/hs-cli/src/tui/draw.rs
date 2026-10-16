@@ -1370,6 +1370,7 @@ fn action_box(buf: &mut Buffer, area: Rect, app: &App, action: &Action) {
                     StepState::Done => "✓",
                     StepState::Failed => "✗",
                     StepState::Running => "◐",
+                    StepState::Waiting => "○",
                 };
 
                 push(&format!("{mark} {}", step.name), text, &mut lines);

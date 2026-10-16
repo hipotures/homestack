@@ -113,6 +113,8 @@ pub enum Decision {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StepState {
+    /// Not started yet (reinstall: the servers after the one under way).
+    Waiting,
     Running,
     Done,
     Failed,

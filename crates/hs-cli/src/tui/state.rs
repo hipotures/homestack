@@ -595,12 +595,13 @@ impl App {
     }
 
     fn select_at(&mut self, index: usize) -> Option<Request> {
-        let vmid = self.rows().get(index).map(|entry| entry.vmid)?;
+        let (vmid, container) = self.rows().get(index).map(|entry| (entry.vmid, entry.role == "CT"))?;
         if self.selected == Some(vmid) {
             return None;
         }
         self.selected = Some(vmid);
-        Some(Request::Details(vmid))
+        // A container is no workspace: the server has no details of it.
+        (!container).then_some(Request::Details(vmid))
     }
 
     fn move_by(&mut self, step: isize) -> Option<Request> {
@@ -1095,7 +1096,7 @@ impl App {
             // owner, 2026-10-15).
             KeyCode::Char('i') if self.selected.is_some() => {
                 self.info = !self.info;
-                if self.info {
+                if self.info && self.selected_entry().is_some_and(|entry| entry.role != "CT") {
                     return self.selected.map(Request::Details);
                 }
             }

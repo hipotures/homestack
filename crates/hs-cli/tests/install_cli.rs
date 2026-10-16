@@ -826,8 +826,14 @@ async fn the_servers_are_deployed_after_proxmox_and_the_install_ends_with_status
         ]
     );
     assert_eq!(config.domain, "hs.example.net");
+    // <major>.<minor>.<patch>-<commit>, the patch counted by build.rs.
+    let tag = config
+        .image
+        .strip_prefix("ghcr.io/hipotures/homestack-server:0.1.")
+        .unwrap_or_default();
+    let (patch, commit) = tag.split_once('-').unwrap_or_default();
     assert!(
-        config.image.starts_with("ghcr.io/hipotures/homestack-server:0.1.0-"),
+        !patch.is_empty() && patch.bytes().all(|b| b.is_ascii_digit()) && commit.len() == 12,
         "{}",
         config.image
     );
