@@ -6,6 +6,7 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use hs_model::status::{GlobalStatus, StatusEntry, WorkspaceStatus};
 use serde_json::Value;
+use std::time::{Duration, Instant};
 
 use super::layout::Shown;
 use super::theme::{Palette, Preferences, THEMES};
@@ -14,8 +15,6 @@ use crate::AppError;
 /// What the loop has to do after a key.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Request {
-    /// Read `/v1/workspaces/{vmid}`.
-    Details(u32),
     /// Menu › Check the servers (`homestack transport`).
     Transport,
     /// Menu › Check this desktop (`homestack discover`).
@@ -105,7 +104,36 @@ pub enum Overlay {
         title: String,
         lines: Vec<String>,
     },
+    /// An explicit action waiting for the selected VM's details.
+    ReadDetails {
+        vmid: u32,
+        action: DetailsAction,
+    },
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DetailsAction {
+    Ssh,
+    Resize,
+}
+
+impl DetailsAction {
+    pub fn word(self) -> &'static str {
+        match self {
+            Self::Ssh => "ssh",
+            Self::Resize => "resize",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct Details {
+    vmid: u32,
+    read_at: Instant,
+    result: Result<WorkspaceStatus, String>,
+}
+
+const DETAILS_TTL: Duration = Duration::from_secs(10);
 
 /// One line of the log panel.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -149,12 +177,12 @@ pub struct App {
     pub servers: Vec<(String, Option<String>)>,
     /// Set when no server answered: each URL with its reason.
     pub unreachable: Vec<(String, String)>,
-    pub details: Option<WorkspaceStatus>,
+    details: Option<Details>,
     pub shown: Shown,
     pub view: usize,
     /// The selected workspace.
     pub selected: Option<u32>,
-    /// Details split the list at narrow widths (Enter).
+    /// Show the selected VM's details (`i`).
     pub info: bool,
     pub filter: String,
     pub filtering: bool,
@@ -204,6 +232,8 @@ pub struct App {
     pub keys: Vec<String>,
     /// The server's workspace pool (`/v1/capabilities`), for new.
     pub pool: Option<String>,
+    /// Gold's pool (`/v1/capabilities`), for detail reads.
+    pub gold_pool: Option<String>,
     /// The server's default home size in MiB (`/v1/config`), for new.
     pub home_default: Option<u64>,
     /// The server containers marked with Space, for one reinstall.
@@ -258,6 +288,7 @@ impl App {
             asking: None,
             keys: Vec::new(),
             pool: None,
+            gold_pool: None,
             home_default: None,
             marked: std::collections::BTreeSet::new(),
             images: None,
@@ -396,14 +427,119 @@ impl App {
         }
     }
 
-    /// The answer of `/v1/workspaces/{vmid}`; kept only for the selection.
-    pub fn set_details(&mut self, vmid: u32, details: &Value) {
+    /// The answer of `/v1/workspaces/{vmid}`; resume an action waiting for it.
+    pub fn set_details(&mut self, vmid: u32, result: Result<Value, String>) -> Option<Request> {
         if self.selected != Some(vmid) {
-            return;
+            return None;
         }
-        if let Ok(details) = serde_json::from_value::<WorkspaceStatus>(details.clone()) {
-            self.details = Some(details);
+        let result = result.and_then(|value| {
+            let details: WorkspaceStatus = serde_json::from_value(value)
+                .map_err(|error| format!("The server's details could not be read: {error}"))?;
+            if details.vmid != vmid {
+                return Err("The server returned details of another VM.".to_owned());
+            }
+            Ok(details)
+        });
+        self.details = Some(Details {
+            vmid,
+            read_at: Instant::now(),
+            result,
+        });
+        if let Some(Overlay::ReadDetails { vmid: waiting, action }) = self.overlay
+            && waiting == vmid
+        {
+            self.overlay = None;
+            if self.wait_for_details(action) {
+                return None;
+            }
+            return match action {
+                DetailsAction::Ssh => Some(Request::Ssh(vmid)),
+                DetailsAction::Resize => self.open_action('z'),
+            };
         }
+        None
+    }
+
+    /// An operation or a new connection invalidates both results and errors.
+    pub fn clear_details(&mut self) {
+        self.details = None;
+    }
+
+    pub fn details_fresh(&self, vmid: u32) -> bool {
+        self.details
+            .as_ref()
+            .is_some_and(|details| details.vmid == vmid && details.read_at.elapsed() < DETAILS_TTL)
+    }
+
+    /// Why the selected entry cannot have a detail read yet.
+    pub fn details_unavailable(&self, entry: &StatusEntry) -> Option<&'static str> {
+        if entry.role == "CT" {
+            return Some("Workspace details are unavailable for containers.");
+        }
+        let (Some(pool), Some(gold_pool)) = (&self.pool, &self.gold_pool) else {
+            return Some("Waiting for the server's pools…");
+        };
+        if entry
+            .pool
+            .as_ref()
+            .is_none_or(|entry_pool| entry_pool != pool && entry_pool != gold_pool)
+        {
+            return Some("Details are unavailable outside this server's pools.");
+        }
+        None
+    }
+
+    /// The current demand: explicit actions read immediately, visible info
+    /// waits until navigation settles. Fresh results (including errors) are reused.
+    pub fn details_target(&self) -> Option<(u32, bool)> {
+        if self.install.is_some() || self.setup.is_some() || self.notice.is_some() || !self.unreachable.is_empty() {
+            return None;
+        }
+        let entry = self.selected_entry()?;
+        let debounce = match self.overlay {
+            Some(Overlay::ReadDetails { vmid, .. }) if vmid == entry.vmid => false,
+            None if self.info && self.shown.workspaces && self.action.as_ref().is_none_or(|action| action.hidden) => {
+                true
+            }
+            _ => return None,
+        };
+        (self.details_unavailable(entry).is_none() && !self.details_fresh(entry.vmid)).then_some((entry.vmid, debounce))
+    }
+
+    pub fn details_error(&self) -> Option<&str> {
+        let vmid = self.selected?;
+        self.details
+            .as_ref()
+            .filter(|_| self.details_fresh(vmid))?
+            .result
+            .as_ref()
+            .err()
+            .map(String::as_str)
+    }
+
+    /// Return true while loading, or after showing why the action cannot read details.
+    pub(super) fn wait_for_details(&mut self, action: DetailsAction) -> bool {
+        let Some(entry) = self.selected_entry() else {
+            return true;
+        };
+        let vmid = entry.vmid;
+        // Capabilities can still be loading when the user starts an action.
+        let pools_known = self.pool.is_some() && self.gold_pool.is_some();
+        let unavailable = (pools_known || entry.role == "CT")
+            .then(|| self.details_unavailable(entry))
+            .flatten();
+        if let Some(reason) = unavailable.or_else(|| self.details_error()) {
+            self.overlay = Some(Overlay::Report {
+                title: format!("{} {vmid}", action.word()),
+                lines: vec![reason.to_owned()],
+            });
+            return true;
+        }
+        if self.details_fresh(vmid) {
+            return false;
+        }
+        self.overlay = Some(Overlay::ReadDetails { vmid, action });
+        true
     }
 
     /// The last lines of `tui.log` from the earlier runs, muted, under a
@@ -579,9 +715,16 @@ impl App {
     /// The details of the selection, when they were read.
     #[must_use]
     pub fn selected_details(&self) -> Option<&WorkspaceStatus> {
+        let entry = self.selected_entry()?;
+        if self.details_unavailable(entry).is_some() {
+            return None;
+        }
         self.details
             .as_ref()
-            .filter(|details| Some(details.vmid) == self.selected)
+            .filter(|details| details.vmid == entry.vmid)?
+            .result
+            .as_ref()
+            .ok()
     }
 
     /// Drop a selection the list no longer shows.
@@ -591,23 +734,22 @@ impl App {
         if self.selected_index().is_none() {
             self.selected = self.rows().first().map(|entry| entry.vmid);
             self.info = false;
+            if matches!(self.overlay, Some(Overlay::ReadDetails { .. })) {
+                self.overlay = None;
+            }
         }
     }
 
-    fn select_at(&mut self, index: usize) -> Option<Request> {
-        let (vmid, container) = self.rows().get(index).map(|entry| (entry.vmid, entry.role == "CT"))?;
-        if self.selected == Some(vmid) {
-            return None;
+    fn select_at(&mut self, index: usize) {
+        if let Some(entry) = self.rows().get(index) {
+            self.selected = Some(entry.vmid);
         }
-        self.selected = Some(vmid);
-        // A container is no workspace: the server has no details of it.
-        (!container).then_some(Request::Details(vmid))
     }
 
-    fn move_by(&mut self, step: isize) -> Option<Request> {
+    fn move_by(&mut self, step: isize) {
         let count = self.rows().len();
         if count == 0 {
-            return None;
+            return;
         }
         let index = match self.selected_index() {
             None => 0,
@@ -685,7 +827,11 @@ impl App {
                     .log_cursor
                     .map(|at| at.clamp(offset, offset + bar.visible.max(1) - 1));
             }
-            Scrolls::List => return row(self.selected_index()).and_then(|index| self.select_at(index)),
+            Scrolls::List => {
+                if let Some(index) = row(self.selected_index()) {
+                    self.select_at(index);
+                }
+            }
             Scrolls::Action => {
                 if let Some(action) = self.action.as_mut()
                     && let super::action::Stage::Plan { scroll, .. } = &mut action.stage
@@ -871,7 +1017,8 @@ impl App {
                 if !inside {
                     return None;
                 }
-                self.select_at(offset + usize::from(event.row - first))
+                self.select_at(offset + usize::from(event.row - first));
+                None
             }
             MouseEventKind::ScrollDown | MouseEventKind::ScrollUp
                 if self.setup.is_some()
@@ -901,8 +1048,14 @@ impl App {
             }
             MouseEventKind::ScrollDown if in_box => press(self, KeyCode::Down),
             MouseEventKind::ScrollUp if in_box => press(self, KeyCode::Up),
-            MouseEventKind::ScrollDown => self.move_by(1),
-            MouseEventKind::ScrollUp => self.move_by(-1),
+            MouseEventKind::ScrollDown => {
+                self.move_by(1);
+                None
+            }
+            MouseEventKind::ScrollUp => {
+                self.move_by(-1);
+                None
+            }
             _ => None,
         }
     }
@@ -1086,19 +1239,16 @@ impl App {
                     self.keep_selection();
                 }
             }
-            KeyCode::Down => return self.move_by(1),
-            KeyCode::Up => return self.move_by(-1),
-            KeyCode::PageDown => return self.move_by(10),
-            KeyCode::PageUp => return self.move_by(-10),
-            KeyCode::Home => return self.select_at(0),
-            KeyCode::End => return self.select_at(self.rows().len().saturating_sub(1)),
+            KeyCode::Down => self.move_by(1),
+            KeyCode::Up => self.move_by(-1),
+            KeyCode::PageDown => self.move_by(10),
+            KeyCode::PageUp => self.move_by(-10),
+            KeyCode::Home => self.select_at(0),
+            KeyCode::End => self.select_at(self.rows().len().saturating_sub(1)),
             // The details box opens on i only (as info), at every width (the
             // owner, 2026-10-15).
             KeyCode::Char('i') if self.selected.is_some() => {
                 self.info = !self.info;
-                if self.info && self.selected_entry().is_some_and(|entry| entry.role != "CT") {
-                    return self.selected.map(Request::Details);
-                }
             }
             _ => {}
         }
@@ -1193,7 +1343,7 @@ impl App {
                 }
                 _ => self.overlay = Some(Overlay::Themes { index, previous }),
             },
-            Overlay::Help | Overlay::Report { .. } => match code {
+            Overlay::Help | Overlay::Report { .. } | Overlay::ReadDetails { .. } => match code {
                 KeyCode::Esc | KeyCode::Enter => {}
                 KeyCode::Char('m') => self.overlay = Some(Overlay::Menu { index: 0 }),
                 KeyCode::Char('q') => return Some(Request::Quit),
@@ -1201,5 +1351,24 @@ impl App {
             },
         }
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+
+    use super::*;
+
+    #[test]
+    fn cached_errors_expire_after_ten_seconds_and_apply_only_to_their_vm() {
+        let preferences = Preferences::fallback(std::path::Path::new("/unused/tui.toml"));
+        let mut app = App::new(preferences, false).unwrap();
+        app.selected = Some(201);
+        app.set_details(201, Err("guest unavailable".to_owned()));
+        assert!(app.details_fresh(201));
+        assert!(!app.details_fresh(202));
+        app.details.as_mut().unwrap().read_at -= DETAILS_TTL;
+        assert!(!app.details_fresh(201));
     }
 }

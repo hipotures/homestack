@@ -229,6 +229,9 @@ impl App {
         }
         let vmid = entry.as_ref().map(|entry| entry.vmid);
         let name = entry.as_ref().and_then(|entry| entry.name.clone()).unwrap_or_default();
+        if kind == Kind::Resize && self.wait_for_details(super::state::DetailsAction::Resize) {
+            return None;
+        }
         let fields = match kind {
             Kind::New => {
                 let nodes = self.nodes();

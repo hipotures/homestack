@@ -499,7 +499,11 @@ fn detail_pairs(app: &App, entry: &StatusEntry) -> Vec<(&'static str, String)> {
         None => {
             pairs.push(("address", entry.ip.clone().unwrap_or_else(|| "—".to_owned())));
             pairs.push(("root", entry.root_storage.clone().unwrap_or_else(|| "—".to_owned())));
-            pairs.push(("", "reading the details…".to_owned()));
+            let message = app
+                .details_unavailable(entry)
+                .or_else(|| app.details_error())
+                .unwrap_or("reading the details…");
+            pairs.push(("", message.to_owned()));
         }
     }
     pairs
@@ -1015,6 +1019,16 @@ fn draw_overlay(buf: &mut Buffer, area: Rect, app: &App, overlay: &Overlay) {
                 .map(|line| (line, text))
                 .collect(),
             vec![Control::key("close esc")],
+        ),
+        Overlay::ReadDetails { vmid, action } => (
+            action.word(),
+            vec![(
+                app.selected_entry()
+                    .and_then(|entry| app.details_unavailable(entry))
+                    .map_or_else(|| format!("Reading details of VM {vmid}…"), str::to_owned),
+                text,
+            )],
+            vec![Control::key("cancel esc")],
         ),
     };
     let width = lines

@@ -34,7 +34,6 @@ enum Update {
     Status(String, Value),
     Servers(Vec<(String, Option<String>)>),
     Unreachable(Vec<(String, String)>),
-    Details(u32, Value),
     Report(String, Vec<String>),
     Log(String),
     /// What the install worker tells.
@@ -48,8 +47,8 @@ enum Update {
     Setup(Option<u32>, super::setup_work::Event),
     /// The running action's progress.
     Action(Progress),
-    /// The server's workspace pool and default home size (MiB).
-    Defaults(Option<String>, Option<u64>),
+    /// The server's workspace and Gold pools, and default home size (MiB).
+    Defaults(Option<String>, Option<String>, Option<u64>),
     /// The images of the reinstall box of these containers.
     Images(Vec<u32>, Result<super::reinstall::Images, String>),
 }
@@ -305,6 +304,7 @@ async fn read_defaults(client: &Client, updates: &mpsc::UnboundedSender<Update>,
         return false;
     };
     let pool = capabilities["installation"]["pool"].as_str().map(str::to_owned);
+    let gold_pool = capabilities["installation"]["gold_pool"].as_str().map(str::to_owned);
     let home = match client.get_from("/v1/config").await {
         Ok((_, stored)) => stored
             .as_str()
@@ -313,7 +313,7 @@ async fn read_defaults(client: &Client, updates: &mpsc::UnboundedSender<Update>,
         Err(_) => None,
     };
     if !stop.load(Ordering::SeqCst) {
-        let _ = updates.send(Update::Defaults(pool, home));
+        let _ = updates.send(Update::Defaults(pool, gold_pool, home));
     }
     true
 }
@@ -433,19 +433,6 @@ fn start(request: &Request, client: Option<&Arc<Client>>, ctx: &Context, updates
     };
     let updates = updates.clone();
     match request {
-        Request::Details(vmid) => {
-            let vmid = *vmid;
-            tokio::spawn(async move {
-                match client.get(&format!("/v1/workspaces/{vmid}")).await {
-                    Ok(details) => {
-                        let _ = updates.send(Update::Details(vmid, details));
-                    }
-                    Err(error) => {
-                        let _ = updates.send(Update::Log(format!("details of {vmid}: {}", client_error(error).0)));
-                    }
-                }
-            });
-        }
         Request::Transport => {
             tokio::spawn(async move {
                 let lines = match transport_report(&client).await {
@@ -682,9 +669,11 @@ pub async fn run(ctx: &mut Context) -> Result<i32, AppError> {
     let mut setup_workers: std::collections::HashMap<Option<u32>, SetupWorker> = std::collections::HashMap::new();
     // The target of the open box; another target's worker cannot speak to it.
     let mut setup_open: Option<Option<u32>> = None;
+    let mut details = super::details::Loader::default();
     loop {
         app.clock = clock.now();
         app.today = clock.today();
+        details.update(app.details_target(), connection.client.as_ref());
         screen
             .terminal
             .draw(|frame| draw(frame, &app))
@@ -749,6 +738,8 @@ pub async fn run(ctx: &mut Context) -> Result<i32, AppError> {
                             }
                         }
                         Request::Reload => {
+                            details.cancel();
+                            app.clear_details();
                             if let Some(client) = connection.client.clone() {
                                 let updates = updates.clone();
                                 let stop = Arc::clone(&connection.stop);
@@ -851,26 +842,7 @@ pub async fn run(ctx: &mut Context) -> Result<i32, AppError> {
                             }
                         }
                         Request::Ssh(vmid) => {
-                            let name = app
-                                .selected_entry()
-                                .and_then(|entry| entry.name.clone())
-                                .unwrap_or_else(|| vmid.to_string());
-                            let login = app
-                                .selected_details()
-                                .and_then(|details| details.ssh.user.clone());
-                            match super::shell::target(&ctx.home, vmid, login.as_deref()) {
-                                Some(target) => {
-                                    app.log(&clock.now(), &format!("ssh {target} ({name})"));
-                                    let code = tokio::task::block_in_place(|| {
-                                        hand_over(&mut screen, &reader, &target, &name)
-                                    });
-                                    app.log(&clock.now(), &super::shell::outcome(&target, code));
-                                }
-                                None => app.log(
-                                    &clock.now(),
-                                    &format!("ssh {name}: no SSH entry on this desktop and no address yet"),
-                                ),
-                            }
+                            open_ssh(&mut app, vmid, &ctx.home, &mut screen, &reader);
                         }
                         Request::HerdrTabs => match crate::root_herdr::tabs(ctx.system.as_ref()) {
                             Ok(tabs) => app.set_herdr_tabs(
@@ -879,6 +851,11 @@ pub async fn run(ctx: &mut Context) -> Result<i32, AppError> {
                             Err(error) => app.log(&clock.now(), &error.0),
                         },
                         Request::Installed => {
+                            details.cancel();
+                            app.clear_details();
+                            app.status = None;
+                            app.pool = None;
+                            app.gold_pool = None;
                             installing.send(Command::Cancel, &mut app, ctx, &updates);
                             connection.stop.store(true, Ordering::SeqCst);
                             connected = None;
@@ -908,8 +885,9 @@ pub async fn run(ctx: &mut Context) -> Result<i32, AppError> {
                 }
                 Update::Servers(servers) => app.set_servers(servers),
                 Update::Images(targets, images) => app.set_images(&targets, images),
-                Update::Defaults(pool, home) => {
+                Update::Defaults(pool, gold_pool, home) => {
                     app.pool = pool;
+                    app.gold_pool = gold_pool;
                     app.home_default = home;
                 }
                 Update::Unreachable(servers) => {
@@ -918,7 +896,6 @@ pub async fn run(ctx: &mut Context) -> Result<i32, AppError> {
                     }
                     app.set_unreachable(servers);
                 }
-                Update::Details(vmid, details) => app.set_details(vmid, &details),
                 Update::Report(title, lines) => {
                     if matches!(app.overlay, Some(Overlay::Report { .. })) {
                         app.overlay = Some(Overlay::Report { title, lines });
@@ -950,6 +927,8 @@ pub async fn run(ctx: &mut Context) -> Result<i32, AppError> {
                 Update::Setup(_, event) => app.setup_event(event),
                 Update::Action(progress) => {
                     if let Progress::Done { ok, lines } = &progress {
+                        details.cancel();
+                        app.clear_details();
                         let title = app.action.as_ref().map(super::action::Action::title).unwrap_or_default();
                         // The marked servers are done with.
                         if *ok && app.action.as_ref().is_some_and(|action| action.kind == Kind::Reinstall) {
@@ -966,6 +945,11 @@ pub async fn run(ctx: &mut Context) -> Result<i32, AppError> {
                         }
                     }
                     app.progress(progress);
+                }
+            },
+            (vmid, result) = details.receive() => {
+                if let Some(Request::Ssh(vmid)) = app.set_details(vmid, result) {
+                    open_ssh(&mut app, vmid, &ctx.home, &mut screen, &reader);
                 }
             },
             _ = tick.tick() => app.tick(),
@@ -985,6 +969,21 @@ pub async fn run(ctx: &mut Context) -> Result<i32, AppError> {
             }
         }
     }
+}
+
+/// Resolve SSH only when requested; a desktop entry needs no server read.
+fn open_ssh(app: &mut App, vmid: u32, home: &std::path::Path, screen: &mut Screen, reader: &Reader) {
+    let Some(target) = super::shell::prepare(app, home, vmid) else {
+        return;
+    };
+    let name = app
+        .selected_entry()
+        .and_then(|entry| entry.name.clone())
+        .unwrap_or_else(|| vmid.to_string());
+    let time = app.clock.clone();
+    app.log(&time, &format!("ssh {target} ({name})"));
+    let code = tokio::task::block_in_place(|| hand_over(screen, reader, &target, &name));
+    app.log(&time, &super::shell::outcome(&target, code));
 }
 
 /// The public keys in `~/.ssh`, as `~/.ssh/NAME.pub`, sorted.

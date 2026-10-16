@@ -3,7 +3,31 @@
 
 use std::path::Path;
 
+use super::state::{App, DetailsAction};
 use crate::local_ssh;
+
+/// Resolve an explicit SSH request, loading server details only without a local entry.
+pub fn prepare(app: &mut App, home: &Path, vmid: u32) -> Option<String> {
+    if app.selected != Some(vmid) {
+        return None;
+    }
+    if let Some(local) = target(home, vmid, None) {
+        return Some(local);
+    }
+    if app.wait_for_details(DetailsAction::Ssh) {
+        return None;
+    }
+    let login = app.selected_details().and_then(|details| details.ssh.user.as_deref());
+    let target = target(home, vmid, login);
+    if target.is_none() {
+        let time = app.clock.clone();
+        app.log(
+            &time,
+            &format!("ssh {vmid}: no SSH entry on this desktop and no address yet"),
+        );
+    }
+    target
+}
 
 /// What `ssh` is given to log in to workspace `vmid`: its desktop entry
 /// `vm<VMID>` when the desktop has one (its keys and its `known_hosts`),

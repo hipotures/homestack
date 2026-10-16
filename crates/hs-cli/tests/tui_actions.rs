@@ -261,6 +261,8 @@ fn resize_sends_the_chosen_disk_and_size() {
     let mut fixture = app();
     select(&mut fixture.app, 201);
     assert_eq!(press(&mut fixture.app, KeyCode::Char('z')), None);
+    assert_eq!(fixture.app.details_target(), Some((201, false)));
+    fixture.app.set_details(201, Ok(tui_fixture::details()));
     let text = screen(&render(&fixture.app, 120, 36));
     assert!(
         text.contains("┐resize 201 dev-main┌") && text.contains("‹ home ›"),
@@ -345,6 +347,7 @@ fn a_luks_passphrase_is_typed_hidden_in_the_plan() {
     let mut fixture = app();
     select(&mut fixture.app, 201);
     press(&mut fixture.app, KeyCode::Char('z'));
+    fixture.app.set_details(201, Ok(tui_fixture::details()));
     press(&mut fixture.app, KeyCode::Tab);
     // From the 64G home: three times 10 GiB and twice 1 GiB.
     for code in [
@@ -380,6 +383,7 @@ fn a_plan_that_changes_nothing_has_no_apply() {
     let mut fixture = app();
     select(&mut fixture.app, 201);
     press(&mut fixture.app, KeyCode::Char('z'));
+    fixture.app.set_details(201, Ok(tui_fixture::details()));
     press(&mut fixture.app, KeyCode::Tab);
     press(&mut fixture.app, KeyCode::Right);
     started(press(&mut fixture.app, KeyCode::Enter));
@@ -488,7 +492,7 @@ fn a_click_focuses_a_field_and_a_click_on_its_arrow_changes_the_choice() {
 fn resize_starts_at_the_disk_s_size_only_grows_and_needs_a_change() {
     let mut fixture = app();
     select(&mut fixture.app, 201);
-    fixture.app.set_details(201, &tui_fixture::details());
+    fixture.app.set_details(201, Ok(tui_fixture::details()));
     press(&mut fixture.app, KeyCode::Char('z'));
     press(&mut fixture.app, KeyCode::Down);
     let text = screen(&render(&fixture.app, 120, 36));

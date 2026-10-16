@@ -39,7 +39,7 @@ hs-core = { version = "0.1.0", path = "../hs-core" }
 hs-pve = { version = "0.1.0", path = "../hs-pve" }
 hs-server = { version = "0.1.0", path = "../hs-server" }
 pve-sim = { version = "0.1.0", path = "../pve-sim" }
-tokio = { version = "1.53.2", features = ["rt-multi-thread", "macros", "net"] }
+tokio = { version = "1.53.2", features = ["rt-multi-thread", "macros", "net", "test-util"] }
 
 [[bin]]
 name = "homestack"

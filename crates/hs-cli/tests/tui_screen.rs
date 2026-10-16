@@ -61,9 +61,12 @@ fn the_first_row_is_selected_and_down_moves_the_selection() {
     // Gold is the first row of all.
     let (x, y) = position(&buf, "hs-gold");
     assert_eq!(buf[(x, y)].bg, palette.focus);
-    assert_eq!(press(&mut fixture.app, KeyCode::Down), Some(Request::Details(201)));
-    assert_eq!(press(&mut fixture.app, KeyCode::Down), Some(Request::Details(202)));
-    assert_eq!(press(&mut fixture.app, KeyCode::Up), Some(Request::Details(201)));
+    assert_eq!(press(&mut fixture.app, KeyCode::Down), None);
+    assert_eq!(fixture.app.selected, Some(201));
+    assert_eq!(press(&mut fixture.app, KeyCode::Down), None);
+    assert_eq!(fixture.app.selected, Some(202));
+    assert_eq!(press(&mut fixture.app, KeyCode::Up), None);
+    assert_eq!(fixture.app.details_target(), None);
     let buf = render(&fixture.app, 80, 24);
     assert!(row(&buf, 23).contains("┘2/13└"), "{}", screen(&buf));
     let palette = Palette::named("HomeStack", false).unwrap();
@@ -77,7 +80,7 @@ fn the_first_row_is_selected_and_down_moves_the_selection() {
 fn info_at_80_columns_splits_the_list_and_shows_its_scrollbar() {
     let mut fixture = app();
     press(&mut fixture.app, KeyCode::Down);
-    fixture.app.set_details(201, &details());
+    fixture.app.set_details(201, Ok(details()));
     press(&mut fixture.app, KeyCode::Char('i'));
     let buf = render(&fixture.app, 80, 24);
     let text = screen(&buf);
@@ -97,7 +100,7 @@ fn info_at_80_columns_splits_the_list_and_shows_its_scrollbar() {
 fn at_120_by_36_all_panels_and_the_details_box_are_drawn() {
     let mut fixture = app();
     press(&mut fixture.app, KeyCode::Down);
-    fixture.app.set_details(201, &details());
+    fixture.app.set_details(201, Ok(details()));
     // The details box opens on i only.
     assert!(!screen(&render(&fixture.app, 120, 36)).contains("┐201 dev-main┌"));
     press(&mut fixture.app, KeyCode::Char('i'));
@@ -407,14 +410,17 @@ fn a_click_on_a_workspace_selects_it_and_the_wheel_moves_the_selection() {
         row: y,
         modifiers: KeyModifiers::NONE,
     };
-    assert_eq!(fixture.app.mouse(click), Some(Request::Details(202)));
+    assert_eq!(fixture.app.mouse(click), None);
+    assert_eq!(fixture.app.selected, Some(202));
     let wheel = MouseEvent {
         kind: MouseEventKind::ScrollDown,
         column: x,
         row: y,
         modifiers: KeyModifiers::NONE,
     };
-    assert_eq!(fixture.app.mouse(wheel), Some(Request::Details(203)));
+    assert_eq!(fixture.app.mouse(wheel), None);
+    assert_eq!(fixture.app.selected, Some(203));
+    assert_eq!(fixture.app.details_target(), None);
 }
 
 #[test]
@@ -562,7 +568,7 @@ fn the_log_scrolls_back_by_its_scrollbar_and_the_wheel() {
 fn the_list_s_scrollbar_is_held_and_dragged_and_the_selection_follows() {
     use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
     let mut fixture = app();
-    fixture.app.set_details(201, &details());
+    fixture.app.set_details(201, Ok(details()));
     press(&mut fixture.app, KeyCode::Char('i'));
     let event = |kind, column, row| MouseEvent {
         kind,
@@ -583,7 +589,8 @@ fn the_list_s_scrollbar_is_held_and_dragged_and_the_selection_follows() {
     let request = fixture
         .app
         .mouse(event(MouseEventKind::Drag(MouseButton::Left), 70, down_y));
-    assert_eq!(request, Some(Request::Details(last)));
+    assert_eq!(request, None);
+    assert_eq!(fixture.app.details_target(), Some((last, true)));
     assert_eq!(fixture.app.selected, Some(last));
     // Back up to the top: the selection moves to the last row then shown.
     fixture.app.mouse(event(MouseEventKind::Drag(MouseButton::Left), 70, 0));

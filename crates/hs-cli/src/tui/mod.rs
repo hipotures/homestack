@@ -3,6 +3,7 @@
 pub mod acting;
 pub mod action;
 pub mod chrome;
+mod details;
 pub mod draw;
 mod draw_install;
 mod draw_setup;

@@ -12,6 +12,7 @@ const GIB: u64 = 1 << 30;
 pub fn workspace(vmid: u32, name: &str, node: &str, running: bool, home_gib: u64, free: f64) -> Value {
     json!({
         "vmid": vmid, "role": "WS", "name": name,
+        "pool": "homestack",
         "status": if running { "running" } else { "stopped" },
         "node": node, "node_status": "online",
         "ip": if running { json!(format!("10.0.0.{}", vmid - 180)) } else { Value::Null },
@@ -50,7 +51,7 @@ pub fn status() -> Value {
     json!({
         "gold": {"vmid": 112, "role": "GOLD", "name": "hs-gold", "status": "stopped", "node": "pve1",
                  "node_status": "online", "ip": null, "root_storage": "local-lvm", "home": null,
-                 "role_tag_ok": true, "warning": null},
+                 "role_tag_ok": true, "warning": null, "pool": "homestack-gold"},
         "workspaces": workspaces,
         "summary": {
             "workspace_count": 12, "running": 8, "stopped": 4,
@@ -97,6 +98,8 @@ pub fn app() -> Fixture {
     let preferences = Preferences::load(&dir.path().join("tui.toml")).unwrap();
     let mut app = App::new(preferences, false).unwrap();
     app.set_status(&status());
+    app.pool = Some("homestack".to_owned());
+    app.gold_pool = Some("homestack-gold".to_owned());
     app.set_servers(vec![
         ("https://api1.hs.example.net/".to_owned(), None),
         ("https://api2.hs.example.net/".to_owned(), None),
