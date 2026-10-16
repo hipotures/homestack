@@ -50,7 +50,20 @@ Spaceship serves the public A record and ACME TXT challenge. It does not edit
 other names in either zone. Networks without a private zone omit this option.
 
 That ignored cache is a local tool installation, not part of a fresh checkout.
-The controller downloads the guest image; it does not install host packages.
+The controller caches the guest image; it does not install host packages.
+On every run it fetches the current Debian `SHA512SUMS` manifest over HTTPS
+and hashes the complete cached file. A matching image is reused without
+downloading it again. A missing, outdated or corrupt image is downloaded to a
+temporary file and replaces the cache atomically only after successful hash
+verification. Failed or interrupted downloads preserve the previous cache.
+The cache keeps one current image in
+`$XDG_CACHE_HOME/homestack-e2e/images` (default
+`~/.cache/homestack-e2e/images`). A file lock serializes access. Every VM gets
+its own base-image copy, so cache replacement or removal cannot affect a
+running VM. Normal cleanup and the DNS/TLS `cleanup --all` reset retain this
+download cache; remove its qcow2 file explicitly to force another download.
+The report records `image.cache_hit`, `image.image_bytes` and
+`image.downloaded_bytes` (zero when reused).
 During image download, the terminal shows a progress bar, percentage, MiB
 downloaded/total and average MiB/s. Without a reported size it shows bytes and
 speed; redirected output uses periodic lines instead of terminal redraws.
@@ -96,7 +109,7 @@ to `report.json` before the next phase starts:
 |---|---|
 | `preflight` | KVM and host tools checked; no VM yet |
 | `domain` | E2E DNS and publicly trusted certificate prepared or reused; no VM yet |
-| `image` | Download verified and sparse disk prepared; no VM yet |
+| `image` | Latest manifest checked, cached/downloaded image verified and sparse disk prepared; no VM yet |
 | `boot` | Debian booted, Cloud-Init and initialization checked; SSH and restricted APT networking work |
 | `kernel` | Proxmox kernel installed and the VM rebooted |
 | `proxmox` | PVE services installed and rebooted; public certificate installed and temporary web credentials printed |
@@ -183,11 +196,13 @@ independent of the user's SSH agent, keys and existing Proxmox configuration.
 
 ## What a successful run proves
 
-1. Download the current official
+1. Fetch the checksum manifest for the current official
    [Debian 13 genericcloud amd64 qcow2](https://cloud.debian.org/images/cloud/trixie/latest/)
-   and check its SHA-512 against the publisher's manifest fetched over HTTPS.
-   Record the actual hash and byte count in the report. A checksum mismatch,
-   including a publication change during download, fails the run.
+   and verify the cached image's SHA-512 against it. Download the image only
+   when the cache is missing or does not match. Record the actual hash, image
+   size, downloaded bytes and cache reuse in the report. A downloaded checksum
+   mismatch, including a publication change during download, fails the run
+   without replacing the previous cached image.
 2. Inspect the image format and reject external backing files. Create a private
    writable qcow2 overlay; the downloaded base stays read-only.
 3. Generate per-run client and server SSH keys, an instance ID and
@@ -297,6 +312,17 @@ cargo fmt --all --check
 
 Normal Cargo tests do not download images, boot VMs or contact Proxmox. The
 real lifecycle runs only through the explicit `run` command.
+An opt-in image-cache check downloads/verifies the current Debian image twice
+without starting a VM or accessing DNS credentials:
+
+```sh
+cargo test --locked -p hs-e2e live_debian_image_is_reused_after_checksum_verification -- --ignored --nocapture
+```
+
+The live cache check passed on 2026-10-16: the first fetch downloaded
+341,180,416 bytes, the second fetched a fresh manifest, verified the same
+SHA-512 and downloaded zero image bytes. Both private copies were removed;
+the verified read-only cache remained.
 
 Validation on 2026-10-16 passed with 1 vCPU, 2048 MiB RAM and a 12 GiB sparse
 disk: Proxmox API version `9.2.21`, release `9.2`, kernel `7.0.14-24-pve`,
@@ -323,9 +349,10 @@ files remained available for the next run. Full fixture cleanup was refused
 while the active controller held its lock. An independent inspection timeout
 also removed the VM while retaining these fixtures.
 
-All fifteen E2E unit tests and twenty-three deployment unit/integration tests
+All seventeen E2E unit tests and twenty-three deployment unit/integration tests
 passed, including fixture ownership, exclusive locking, scoped cache reset,
-failure preservation and inspection time being excluded from the active
+image-cache reuse/repair and failed-download preservation, failure preservation
+and inspection time being excluded from the active
 deadline. Clippy and formatting checks passed. Tests requiring local sockets
 run outside the restricted tool sandbox; live production-cluster tests remain
 opt-in and were not run for this bootstrap change.

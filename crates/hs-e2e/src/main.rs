@@ -349,7 +349,7 @@ async fn run(
         .await?;
     progress
         .execute("image", report, async |report| {
-            eprintln!("Downloading latest Debian 13 qcow2 and verifying SHA-512...");
+            eprintln!("Checking latest Debian 13 qcow2 and verifying SHA-512...");
             report["image"] = serde_json::to_value(image::download(&dir.join("base.qcow2")).await?)?;
             save_report(artifacts, report)?;
             let info = vm::command(
