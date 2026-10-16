@@ -249,4 +249,82 @@ else:
         assert!(!state.exists());
         Ok(())
     }
+
+    #[tokio::test]
+    #[ignore = "requires dnsmasq and Python 3 on the host"]
+    async fn isolated_dns_covers_a_and_aaaa() -> Result<()> {
+        let network = include_str!("service-network.sh");
+        let config = network
+            .split_once("<<'DNS'\n")
+            .and_then(|(_, rest)| rest.split_once("\nDNS\n"))
+            .map(|(config, _)| config)
+            .ok_or("bootstrap DNS configuration is missing")?;
+        let check = network
+            .split_once("<<'DNSCHECK'\n")
+            .and_then(|(_, rest)| rest.split_once("\nDNSCHECK\n"))
+            .map(|(check, _)| check)
+            .ok_or("bootstrap DNS check is missing")?;
+        let dir = tempfile::tempdir()?;
+        // Exercise the previous failure as well as the corrected config.
+        // Both runs use the actual bootstrap's DNS configuration and check.
+        for local in [false, true] {
+            let port = crate::proxy::unused_port(std::net::Ipv4Addr::LOCALHOST)?;
+            let mut config = config
+                .replace("interface=vmbr0\n", "")
+                .replace("listen-address=10.77.0.1", "listen-address=127.0.0.1");
+            if !local {
+                config = config.replace("local=/e2e.homestack.app/\n", "");
+            }
+            let path = dir.path().join("dns.conf");
+            std::fs::write(&path, config)?;
+            let mut daemon = Command::new("dnsmasq")
+                .args(["--no-daemon", "--pid-file=", &format!("--port={port}")])
+                .arg(format!("--conf-file={}", path.display()))
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .kill_on_drop(true)
+                .spawn()?;
+            let result = async {
+                let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+                loop {
+                    if daemon.try_wait()?.is_some() {
+                        return Err("test dnsmasq stopped before accepting queries".into());
+                    }
+                    if tokio::net::TcpStream::connect((std::net::Ipv4Addr::LOCALHOST, port))
+                        .await
+                        .is_ok()
+                    {
+                        break;
+                    }
+                    if tokio::time::Instant::now() >= deadline {
+                        return Err("test dnsmasq did not become ready".into());
+                    }
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                }
+                let mut child = Command::new("python3")
+                    .args(["-", "127.0.0.1", &port.to_string()])
+                    .stdin(Stdio::piped())
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .kill_on_drop(true)
+                    .spawn()?;
+                let mut stdin = child.stdin.take().ok_or("missing DNS check input")?;
+                stdin.write_all(check.as_bytes()).await?;
+                drop(stdin);
+                let output = child.wait_with_output().await?;
+                if output.status.success() != local {
+                    return Err(format!(
+                        "DNS check with local={local}: {}",
+                        String::from_utf8_lossy(&output.stderr)
+                    )
+                    .into());
+                }
+                Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
+            }
+            .await;
+            daemon.kill().await?;
+            result?;
+        }
+        Ok(())
+    }
 }

@@ -288,6 +288,10 @@ The `homestack` phase prepares the real installation without applying it:
   containers. The server reaches PVE as `pve1.e2e.homestack.app:8006`. The
   installer accepts a wildcard SAN by deriving the numeric node's name and
   still verifies its TLS hostname and trust chain.
+  The E2E zone is local to dnsmasq: IPv4-only names return successful empty
+  AAAA answers. Returning REFUSED for AAAA makes Alpine's musl resolver reject
+  the name despite a valid A record. Bootstrap checks both query types for
+  all three service names before continuing.
 - The newest published server image is pinned in `service.json` and pulled
   into PVE's native OCI archive cache through `skopeo`. Repeated preparation
   reuses that archive. No HomeStack container is created during preparation.
@@ -566,3 +570,25 @@ E2E certificates, generated a complete isolated profile for `pve1` and pulled
 the published OCI image through the restricted registry tunnel. Its copied
 certificate caches had no DNS ownership and were reset afterward; the original
 fixtures and the user's paused VM remained available.
+
+The first real manual container deployment on 2026-10-16 exposed an internal
+DNS failure after successful HTTPS health checks and configuration upload:
+dnsmasq answered A but refused AAAA, preventing the Alpine server from resolving
+its PVE endpoint. Declaring `local=/e2e.homestack.app/` fixed both the running
+lab and future bootstraps. The actual `homestack --json status` then succeeded
+through the client, deployed CT 101 and PVE, with normal public TLS validation;
+the existing container was retained. Reopening the real E2E TUI loaded its
+installed profile and displayed node `pve1`; desktop configuration stayed
+unchanged and the lab remained paused. Gold remained unset.
+
+An opt-in regression test launches a separate dnsmasq on a random loopback
+port and runs the bootstrap's actual DNS check against both configurations.
+It must reject the old configuration and accept the corrected one:
+
+```sh
+cargo test --locked -p hs-e2e isolated_dns_covers_a_and_aaaa -- --ignored --nocapture
+```
+
+This check requires `dnsmasq` and Python 3 on the test host. It does not edit
+the host resolver, use provider credentials or change any VM. It passed on
+2026-10-16, alongside all 30 regular E2E tests, Clippy and formatting checks.

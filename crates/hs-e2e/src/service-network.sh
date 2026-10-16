@@ -10,6 +10,7 @@ cat > /etc/homestack-e2e/dns.conf <<'DNS'
 no-resolv
 no-poll
 no-hosts
+local=/e2e.homestack.app/
 bind-interfaces
 interface=vmbr0
 listen-address=10.77.0.1
@@ -48,5 +49,28 @@ systemctl daemon-reload
 systemctl enable --now homestack-e2e-dns.service
 systemctl restart homestack-e2e-dns.service pvedaemon
 systemctl is-active --quiet homestack-e2e-dns.service pvedaemon
+python3 - 10.77.0.1 53 <<'DNSCHECK'
+import socket
+import struct
+import sys
+
+# musl resolves A and AAAA together. REFUSED for AAAA makes an IPv4-only
+# name unusable even when its A record is correct.
+with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as dns:
+    dns.settimeout(2)
+    dns.connect((sys.argv[1], int(sys.argv[2])))
+    for name in ("pve.e2e.homestack.app", "pve1.e2e.homestack.app", "api1.e2e.homestack.app"):
+        question = b"".join(bytes([len(label)]) + label.encode() for label in name.split(".")) + b"\0"
+        for kind in (1, 28):
+            query = struct.pack("!6H", kind, 0x100, 1, 0, 0, 0) + question + struct.pack("!HH", kind, 1)
+            dns.send(query)
+            reply = dns.recv(4096)
+            identifier, flags, questions, answers, _, _ = struct.unpack("!6H", reply[:12])
+            if identifier != kind or not flags & 0x8000 or flags & 0xF or questions != 1:
+                raise RuntimeError(f"E2E DNS failed for {name}, type {kind}: {reply[:12].hex()}")
+            if answers != (1 if kind == 1 else 0):
+                raise RuntimeError(f"E2E DNS returned unexpected answers for {name}, type {kind}")
+print("E2E DNS verified: IPv4 records and empty successful IPv6 answers")
+DNSCHECK
 test "$(sysctl -n net.ipv4.ip_forward)" = 0
 hostname -s
