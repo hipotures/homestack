@@ -117,6 +117,23 @@ pub fn parse_tags(value: Option<&str>) -> BTreeSet<String> {
         .collect()
 }
 
+/// The tags of a `tags` value in their order, each once.
+#[must_use]
+pub fn tag_list(value: Option<&str>) -> Vec<String> {
+    let mut tags: Vec<String> = Vec::new();
+    for tag in value
+        .unwrap_or_default()
+        .split(';')
+        .map(str::trim)
+        .filter(|tag| !tag.is_empty())
+    {
+        if !tags.iter().any(|known| known == tag) {
+            tags.push(tag.to_owned());
+        }
+    }
+    tags
+}
+
 #[must_use]
 pub fn has_tag(value: Option<&str>, tag: &str) -> bool {
     parse_tags(value).contains(tag)

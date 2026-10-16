@@ -306,9 +306,16 @@ struct Column {
     value: fn(&StatusEntry) -> String,
 }
 
-/// The list's columns for `width` cells; NAME as wide as `name_width`, the
+/// The list's columns for `width` cells: first, without a heading, a square
+/// for each of up to `tag_width` tags; NAME as wide as `name_width`, the
 /// longest name, and never narrower than its 12.
-fn columns(width: usize, name_width: usize) -> Vec<Column> {
+fn columns(width: usize, tag_width: usize, name_width: usize) -> Vec<Column> {
+    let tags = Column {
+        heading: "",
+        width: tag_width,
+        right: false,
+        value: |entry| "■".repeat(entry.tags.len().min(MAX_TAGS)),
+    };
     let all = [
         Column {
             heading: "VMID",
@@ -385,6 +392,10 @@ fn columns(width: usize, name_width: usize) -> Vec<Column> {
     // narrower, when at least 9 cells are left (an address, cut with "…").
     let mut used = 0;
     let mut chosen = Vec::new();
+    if tag_width > 0 {
+        used += tag_width + 1;
+        chosen.push(tags);
+    }
     for mut column in all {
         if used + column.width < width {
             used += column.width + 1;
@@ -399,6 +410,25 @@ fn columns(width: usize, name_width: usize) -> Vec<Column> {
         break;
     }
     chosen
+}
+
+/// The most tags a row shows a square for.
+const MAX_TAGS: usize = 5;
+
+/// The colour of a tag's square: HomeStack's own in the theme's colours,
+/// any other muted.
+fn tag_color(palette: &Palette, tag: &str) -> Color {
+    if palette.no_color {
+        return Color::Reset;
+    }
+    match tag {
+        "homestack-gold" => palette.warning,
+        "homestack-ws" => palette.accent,
+        "homestack-alien" => Color::Rgb(187, 154, 247),
+        "homestack-server" => palette.value,
+        "homestack-lock" => palette.error,
+        _ => palette.muted,
+    }
 }
 
 fn list_line(columns: &[Column], cell: impl Fn(&Column) -> String) -> String {
@@ -673,7 +703,14 @@ fn workspaces(buf: &mut Buffer, area: Rect, app: &App, mut controls: Vec<Control
         .map(|name| name.chars().count())
         .max()
         .unwrap_or(0);
-    let columns = columns(usize::from(list.width), name_width);
+    let tag_width = app
+        .status
+        .iter()
+        .flat_map(|status| status.gold.iter().chain(&status.workspaces).chain(&status.others))
+        .map(|entry| entry.tags.len().min(MAX_TAGS))
+        .max()
+        .unwrap_or(0);
+    let columns = columns(usize::from(list.width), tag_width, name_width);
     write(
         buf,
         list.x,
@@ -726,6 +763,11 @@ fn workspaces(buf: &mut Buffer, area: Rect, app: &App, mut controls: Vec<Control
         let line = list_line(&columns, |column| (column.value)(&shown));
         let line = format!("{line:<width$}", width = usize::from(list.width));
         write(buf, list.x, y, list.width, &line, style);
+        // The tags' squares in their colours, from the first column.
+        for (at, tag) in entry.tags.iter().take(MAX_TAGS).enumerate() {
+            let x = list.x + 1 + u16::try_from(at).unwrap_or(0);
+            write(buf, x, y, 1, "■", style.fg(tag_color(palette, tag)));
+        }
         // The state dot in its colour.
         if let Some(at) = line.find(['●', '○', '◐']) {
             let x = list.x + u16::try_from(line[..at].chars().count()).unwrap_or(0);

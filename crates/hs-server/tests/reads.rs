@@ -99,6 +99,12 @@ async fn status_names_the_pools_lists_their_other_vms_and_narrows_to_a_pool_or_n
     assert_eq!(body["pools"][2]["comment"], "Test Workspaces");
     assert_eq!(body["gold"]["pool"], "homestack-gold");
     assert_eq!(body["workspaces"][0]["pool"], "homestack");
+    assert!(
+        body["workspaces"][0]["tags"]
+            .as_array()
+            .is_some_and(|tags| tags.iter().any(|tag| tag == "homestack-ws")),
+        "{body}"
+    );
     // VM 207 has no workspace tag: it is one of the others of its pool.
     assert_eq!(body["others"][0]["vmid"], 207, "{body}");
     assert_eq!(body["others"][0]["pool"], "homestack-test");
@@ -110,10 +116,10 @@ async fn status_names_the_pools_lists_their_other_vms_and_narrows_to_a_pool_or_n
     assert_eq!(body["others"].as_array().map(Vec::len), Some(1));
     let (_, body, _) = get(&server, "/v1/status?pool=homestack&node=pve-example-1").await?;
     assert!(
-        body["workspaces"]
-            .as_array()
-            .is_some_and(|list| !list.is_empty()
-                && list.iter().all(|entry| entry["pool"] == "homestack" && entry["node"] == "pve-example-1")),
+        body["workspaces"].as_array().is_some_and(|list| !list.is_empty()
+            && list
+                .iter()
+                .all(|entry| entry["pool"] == "homestack" && entry["node"] == "pve-example-1")),
         "{body}"
     );
     assert_eq!(body["summary"]["workspace_count"], 7, "the summary stays the cluster's");

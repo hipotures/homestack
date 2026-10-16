@@ -41,6 +41,9 @@ pub struct StatusEntry {
     /// The pool it is in; `null` for none.
     #[serde(default)]
     pub pool: Option<String>,
+    /// Its Proxmox tags, in their order.
+    #[serde(default)]
+    pub tags: Vec<String>,
     /// `network.prefix.<vmid>` for VMIDs 2–254.
     pub ip: Option<String>,
     pub root_storage: Option<String>,

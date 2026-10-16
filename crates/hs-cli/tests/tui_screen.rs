@@ -809,5 +809,28 @@ fn a_long_name_is_shown_whole() {
     status["workspaces"][0]["name"] = serde_json::json!("tklivetracker");
     fixture.app.set_status(&status);
     let text = screen(&render(&fixture.app, 120, 36));
-    assert!(text.contains("tklivetracker ") && !text.contains("tklivetrack…"), "{text}");
+    assert!(
+        text.contains("tklivetracker ") && !text.contains("tklivetrack…"),
+        "{text}"
+    );
+}
+
+#[test]
+fn each_tag_is_a_square_in_its_colour_before_the_vmid() {
+    let mut fixture = app();
+    let mut status = tui_fixture::status();
+    status["gold"]["tags"] = serde_json::json!(["homestack-gold"]);
+    status["workspaces"][0]["tags"] = serde_json::json!(["homestack-lock", "homestack-ws", "mine"]);
+    fixture.app.set_status(&status);
+    let buf = render(&fixture.app, 120, 36);
+    let palette = Palette::named("HomeStack", false).unwrap();
+    let (x, y) = position(&buf, "201 ");
+    let line = row(&buf, y);
+    let squares: String = line.chars().skip(usize::from(x) - 4).take(3).collect();
+    assert_eq!(squares, "■■■", "{line}");
+    let colours: Vec<_> = (0..3).map(|at| buf[(x - 4 + at, y)].fg).collect();
+    assert_eq!(colours, [palette.error, palette.accent, palette.muted]);
+    let (x, y) = position(&buf, "112 ");
+    assert_eq!(buf[(x - 4, y)].fg, palette.warning, "{}", row(&buf, y));
+    assert!(screen(&buf).contains("VMID"), "the column has no heading of its own");
 }

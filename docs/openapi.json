@@ -2777,6 +2777,13 @@
             "type": "string",
             "description": "Proxmox status (`running`, `stopped`, `unknown` on an offline node)."
           },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Its Proxmox tags, in their order."
+          },
           "vmid": {
             "type": "integer",
             "format": "int32",
