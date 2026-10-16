@@ -75,6 +75,44 @@ async fn global_status_reports_the_cluster() -> TestResult {
 }
 
 #[tokio::test]
+async fn server_status_and_configuration_work_before_gold_is_selected() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let mut spec = cluster()?;
+    spec.vms.retain(|vm| vm.vmid != 100);
+    for pool in &mut spec.pools {
+        pool.vms.retain(|vmid| *vmid != 100);
+    }
+    let sim = PveSim::start(spec).await?;
+    let python = std::fs::read_to_string(repo().join("python/config.example.toml"))?;
+    let mut config = hs_config::legacy::read(&python)?.server;
+    config.gold_vmid = None;
+    std::fs::write(dir.path().join("server.toml"), config.to_toml())?;
+    let server = Server::start(&sim, &[sim.base_url()], SERVER_TOKEN, dir.path()).await?;
+    let (status, body, _) = get(&server, "/v1/status").await?;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body["gold"].is_null());
+    assert!(
+        body["warnings"]
+            .as_array()
+            .is_some_and(|warnings| warnings.iter().any(|warning| warning
+                .as_str()
+                .is_some_and(|text| text.contains("Gold is not configured"))))
+    );
+    let (status, body, _) = get(&server, "/v1/capabilities").await?;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    for name in ["create", "refresh", "gold_readiness"] {
+        let capability = body["operations"]
+            .as_array()
+            .and_then(|items| items.iter().find(|item| item["operation"] == name))
+            .ok_or("missing capability")?;
+        assert_eq!(capability["available"], false, "{capability}");
+    }
+    let (status, _, _) = get(&server, "/v1/config/version").await?;
+    assert_eq!(status, StatusCode::OK);
+    Ok(())
+}
+
+#[tokio::test]
 async fn status_names_the_pools_lists_their_other_vms_and_narrows_to_a_pool_or_node() -> TestResult {
     let dir = tempfile::tempdir()?;
     let mut spec = cluster()?;

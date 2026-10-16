@@ -84,6 +84,8 @@ pub struct State {
     pub tokens: BTreeMap<String, bool>,
     /// Members (VM ids) of the HomeStack pools that exist.
     pub pools: BTreeMap<String, Vec<String>>,
+    /// Bridges present on every online node, populated for installation only.
+    pub bridges: BTreeSet<String>,
 }
 
 fn list(value: &str, separators: &[char]) -> Vec<String> {
@@ -213,7 +215,27 @@ impl State {
             user_exists,
             tokens,
             pools,
+            bridges: BTreeSet::new(),
         })
+    }
+
+    pub fn read_bridges(&mut self, root: &mut dyn Root) -> Result<(), InstallError> {
+        let mut common: Option<BTreeSet<String>> = None;
+        for node in self.topology.nodes.iter().filter(|node| node.online) {
+            let network = get(root, &format!("/nodes/{}/network", node.name), "")?;
+            let bridges: BTreeSet<String> = array(network)
+                .into_iter()
+                .filter(|item| matches!(text(item.get("type")).to_lowercase().as_str(), "bridge" | "ovsbridge"))
+                .map(|item| text(item.get("iface")))
+                .filter(|name| !name.is_empty())
+                .collect();
+            common = Some(match common {
+                None => bridges,
+                Some(known) => known.intersection(&bridges).cloned().collect(),
+            });
+        }
+        self.bridges = common.unwrap_or_default();
+        Ok(())
     }
 
     /// The `qemu` configuration of a VM, as the node that holds it reports it.

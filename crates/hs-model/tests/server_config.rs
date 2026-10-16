@@ -55,7 +55,7 @@ fn rejected(text: &str) -> ConfigError {
 fn the_example_loads_with_the_values_python_derives() -> Result<(), ConfigError> {
     let config = Config::parse(EXAMPLE)?;
     assert_eq!(config.node.as_str(), "pve-example-1");
-    assert_eq!(config.gold_vmid, 100);
+    assert_eq!(config.gold_vmid, Some(100));
     assert_eq!(config.active_layout(), ["example-storage"]);
     assert_eq!(config.default_storage(), "example-storage");
     assert_eq!(config.root_disk, "scsi0");
@@ -216,4 +216,14 @@ fn unknown_keys_are_named_only_when_they_look_like_keys() {
     assert_eq!(error.field, "runtime");
     let error = rejected(&format!("\"<script>\" = 1\n{EXAMPLE}"));
     assert!(!error.message.contains("<script>"), "{error}");
+}
+
+#[test]
+fn gold_can_be_configured_after_installation() -> Result<(), Box<dyn std::error::Error>> {
+    let config = Config::parse(&edited("gold_vmid = 100\n", ""))?;
+    assert_eq!(config.gold_vmid, None);
+    let text = config.to_toml();
+    assert!(!text.contains("gold_vmid"));
+    assert_eq!(Config::parse(&text)?, config);
+    Ok(())
 }

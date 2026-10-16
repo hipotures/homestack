@@ -297,7 +297,12 @@ async fn gold_vm(
         Some(text) => text
             .parse::<u32>()
             .map_err(|_| ApiError::new(ErrorCode::ValidationFailed, "Invalid VMID."))?,
-        None => configuration(state)?.config.gold_vmid,
+        None => configuration(state)?.config.gold_vmid.ok_or_else(|| {
+            ApiError::new(
+                ErrorCode::ValidationFailed,
+                "Gold is not configured; select a Gold VM first.",
+            )
+        })?,
     };
     let resources = cluster_vm_resources(state.pve()?.as_ref())
         .await

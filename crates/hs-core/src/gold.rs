@@ -18,6 +18,15 @@ use crate::inventory::{
 use crate::keys::{unquote, validate_authorized_keys};
 use crate::pve::Pve;
 
+/// Gold is needed by cloning operations, not by server installation or status.
+pub(crate) fn configured_gold(config: &hs_model::config::Config) -> Result<u32, CoreError> {
+    config.gold_vmid.ok_or_else(|| {
+        CoreError::Refused(
+            "Gold is not configured; select a Gold VM before creating or refreshing workspaces".to_owned(),
+        )
+    })
+}
+
 fn check(scope: &str, name: &str, status: &str, detail: impl Into<String>, requirement: &str) -> GoldCheck {
     GoldCheck {
         scope: scope.to_owned(),

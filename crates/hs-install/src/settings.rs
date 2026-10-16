@@ -33,6 +33,8 @@ pub struct Settings {
     pub service_storages: Vec<String>,
     /// Storage of the server image (content `vztmpl`).
     pub template_storage: Option<String>,
+    /// The bridge used by the server containers, independently of Gold.
+    pub bridge: Option<String>,
     /// Gold; the only VM tagged `homestack-gold` when not given.
     pub gold: Option<u32>,
     /// Guests in no pool put back in the pool their tag names

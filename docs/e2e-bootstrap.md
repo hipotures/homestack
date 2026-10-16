@@ -255,6 +255,13 @@ controller remove the VM as usual.
 This launcher enables manual TUI connection and inspection; the bootstrap
 still does not prepare HomeStack deployment. Container networking, registry
 access and a reachable HomeStack HTTPS endpoint are separate required work.
+The Rust installer supports installation before Gold exists. Select the
+server's bridge independently in the form; no Gold is fabricated for this
+step. Gold is required later for workspace creation and refresh.
+The current bootstrap has only its QEMU user-network NIC, with no container
+bridge. A read-only install-plan check on the disposable PVE confirmed that
+missing Gold produces a warning and the missing bridge produces the remaining
+network error. No installation was applied and the controller stayed paused.
 
 Validated against the paused disposable PVE 9.2.21 VM: with production XDG
 paths deliberately inherited, the real TUI opened the install screen,

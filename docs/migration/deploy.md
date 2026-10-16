@@ -179,7 +179,11 @@ The server's instance settings name the pools:
 | `HOMESTACK_PVE_GOLD_POOL` | Gold's pool, default `homestack-gold` |
 
 `GET /v1/capabilities` checks the privileges on these pools and reports in
-`installation` whether both pools exist and Gold is in its pool; the
+`installation` whether both pools exist and, when Gold is configured, whether
+it is in its pool. The Rust installer permits installation before Gold is
+prepared; it selects the server bridge independently and omits an unset
+`node.gold_vmid` from the configuration. Status remains available, while create
+and refresh require Gold. The
 snippets it cannot see (`unknown`), `homestack-pve.sh status` checks them.
 
 ## Cloud-Init vendor snippets

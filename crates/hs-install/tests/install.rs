@@ -621,10 +621,6 @@ fn checks_stop_the_install_before_any_change() {
     stops(&fake, &settings, &["storage missing does not exist"]);
 
     let fake = Fake::new(&["pve1"]);
-    fake.replace("vms.tsv", "homestack-gold", "");
-    stops(&fake, &standard(false), &["No VM is tagged homestack-gold"]);
-
-    let fake = Fake::new(&["pve1"]);
     fake.write("pools.tsv", "other\t101\tsomeone else\n");
     stops(&fake, &standard(false), &["Gold 101 is in pool other"]);
 
@@ -848,35 +844,68 @@ fn missing(run: &common::Run) -> Vec<hs_install::Question> {
 }
 
 #[test]
-fn gold_is_a_question_when_it_is_not_one_tagged_vm() {
-    // Several tagged.
+fn gold_is_optional_when_none_or_several_are_detected() {
     let fake = Fake::new(&["pve1"]);
     fake.append(
         "vms.tsv",
         "111\tpve1\tgold-backup\thomestack-gold\tvirtio=BC:24:11:00:00:09,bridge=vmbr0\t\n",
     );
-    let run = fake.install(&standard(false));
-    let questions = missing(&run);
-    assert_eq!(questions.len(), 1);
-    assert_eq!(questions[0].option, "--gold");
-    let values: Vec<&str> = questions[0].choices.iter().map(|c| c.value.as_str()).collect();
-    assert_eq!(values, ["101", "111"]);
-    let flat = run.out.split_whitespace().collect::<Vec<_>>().join(" ");
-    assert!(flat.contains("Several VMs are tagged homestack-gold"), "{}", run.out);
-    assert!(
-        questions[0].choices[1].detail.contains("gold-backup") && questions[0].choices[1].detail.contains("pve1"),
-        "{:?}",
-        questions[0].choices[1]
-    );
-    // None tagged: every QEMU VM.
+    let run = fake.run(Command::Install, &standard(false), false);
+    let plan = run.plan.expect("Gold ambiguity does not prevent installation");
+    assert_eq!(plan.cluster.gold, None);
+    assert!(plan.warnings.iter().any(|line| line.contains("Several VMs")));
+    let questions = form_questions(&fake, &standard(false));
+    let gold = questions.iter().find(|q| q.option == "--gold").unwrap();
+    assert!(gold.note.contains("Optional"));
+    assert!(gold.defaults.is_empty());
+
     let fake = Fake::new(&["pve1"]);
-    fake.replace("vms.tsv", "homestack-gold", "");
+    fake.write("vms.tsv", "");
     let run = fake.install(&standard(false));
-    let questions = missing(&run);
-    let values: Vec<&str> = questions[0].choices.iter().map(|c| c.value.as_str()).collect();
-    assert_eq!(values, ["100", "101"]);
-    let flat = run.out.split_whitespace().collect::<Vec<_>>().join(" ");
-    assert!(flat.contains("No VM is tagged homestack-gold"), "{}", run.out);
+    assert!(run.ok, "{}", run.out);
+    assert!(run.out.contains("Gold is not configured"), "{}", run.out);
+    assert!(!fake.read("calls.log").contains("pvesh set"));
+    assert!(!fake.read("pools.tsv").contains("\t101"));
+    assert!(!fake.homestack_acl().iter().any(|line| line.starts_with("/vms/")));
+    let again = fake.run(Command::Install, &standard(false), false).plan.unwrap();
+    assert!(again.steps.is_empty(), "{:?}", again.steps);
+    assert_eq!(again.cluster.bridge, "vmbr0");
+    fake.append(
+        "vms.tsv",
+        "101\tpve1\ths-gold\t\tvirtio=BC:24:11:00:00:01,bridge=vmbr0\t\n",
+    );
+    let later = fake.install(&standard(false));
+    assert!(later.ok, "{}", later.out);
+    assert!(fake.read("pools.tsv").contains("homestack-gold\t101"));
+    assert!(fake.read("vms.tsv").contains("homestack-gold"));
+}
+
+#[test]
+fn bridge_selection_works_without_gold_and_rejects_absent_bridges() {
+    let fake = Fake::new(&["pve1", "pve2"]);
+    fake.write("vms.tsv", "");
+    for node in ["pve1", "pve2"] {
+        fake.write(
+            &format!("network-{node}.json"),
+            r#"[{"iface":"vmbr0","type":"bridge"},{"iface":"vmbr1","type":"OVSBridge"}]"#,
+        );
+    }
+    let run = fake.run(Command::Install, &standard(false), false);
+    assert_eq!(missing(&run)[0].option, "--bridge");
+    let settings = Settings {
+        bridge: Some("vmbr1".into()),
+        ..standard(false)
+    };
+    let plan = fake.run(Command::Install, &settings, false).plan.unwrap();
+    assert_eq!(plan.cluster.gold, None);
+    assert_eq!(plan.cluster.bridge, "vmbr1");
+    assert!(
+        plan.steps
+            .iter()
+            .any(|step| step.command_line().contains("/sdn/zones/localnetwork/vmbr1"))
+    );
+    fake.write("network-pve2.json", r#"[{"iface":"vmbr0","type":"bridge"}]"#);
+    stops(&fake, &settings, &["Bridge vmbr1 is not present on every online node"]);
 }
 
 #[test]
@@ -1064,7 +1093,7 @@ fn only_what_can_be_chosen_is_offered_and_a_single_possibility_is_taken() {
     assert_eq!(plan.settings.snippet_storage.as_deref(), Some("local"));
     assert_eq!(plan.settings.service_storages, ["local-lvm"]);
     assert_eq!(plan.settings.template_storage.as_deref(), Some("local"));
-    assert_eq!(plan.taken.len(), 3, "{:?}", plan.taken);
+    assert_eq!(plan.taken.len(), 4, "{:?}", plan.taken);
     assert_eq!(plan.gold.as_deref(), Some("101 gold (pve1)"));
 }
 

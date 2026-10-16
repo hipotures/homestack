@@ -56,7 +56,7 @@ pub struct Privilege {
 #[serde(deny_unknown_fields)]
 pub struct OperationCapability {
     pub operation: Operation,
-    /// `missing` is empty.
+    /// Required privileges are granted and Gold is configured when the operation needs it.
     pub available: bool,
     /// Every privilege the operation needs, sorted by path and name.
     pub required: Vec<Privilege>,

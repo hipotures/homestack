@@ -675,6 +675,7 @@ pub async fn plan_refresh(
     vmid: u32,
     force: bool,
 ) -> Result<Value, CoreError> {
+    let gold = crate::gold::configured_gold(cfg)?;
     require_pool(pve, vmid, pool).await?;
     let resource = cluster_vm_resources(pve)
         .await?
@@ -740,7 +741,6 @@ pub async fn plan_refresh(
     }
     let root_storage = info.root_storage.clone().unwrap_or_default();
     resolve_homestack_storage(cfg, &info.node, Some(&root_storage))?;
-    let gold = cfg.gold_vmid;
     let gold_resource = cluster_vm_resources(pve)
         .await?
         .into_iter()
@@ -796,6 +796,7 @@ pub async fn refresh_workspace(
     timing: &LifecycleTiming,
     observer: &impl Observer,
 ) -> Result<Value, CoreError> {
+    crate::gold::configured_gold(cfg)?;
     let vmid = vmid_of(plan)?;
     let node = text(plan, "node")?;
     require_pool(pve, vmid, pool).await?;

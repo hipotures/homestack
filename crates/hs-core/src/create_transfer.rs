@@ -227,7 +227,7 @@ pub(crate) async fn validate_cross_node_create(
         )));
     }
 
-    let source_metadata = capture_gold_metadata(cfg.gold_vmid, gold_cfg, &cfg.root_disk)?;
+    let source_metadata = capture_gold_metadata(crate::gold::configured_gold(cfg)?, gold_cfg, &cfg.root_disk)?;
     let target_storage = resolve_homestack_storage(cfg, target_node, requested_storage)?;
     let inventory = node_storages(pve, target_node).await?;
     require_storage(&inventory, &target_storage, "images")?;
@@ -271,10 +271,11 @@ pub(crate) async fn validate_cross_node_create(
 /// `_revalidate_stream_source`: Gold read and captured again must match the
 /// plan.
 pub(crate) async fn revalidate_source(pve: &impl Pve, cfg: &Config, plan: &Value) -> Result<(), CoreError> {
+    let gold = crate::gold::configured_gold(cfg)?;
     let source_node = text(plan, "source_node")?;
-    let gold_cfg = vm_config(pve, source_node, cfg.gold_vmid).await?;
-    require_gold_tag(cfg.gold_vmid, &gold_cfg)?;
-    let metadata = capture_gold_metadata(cfg.gold_vmid, &gold_cfg, &cfg.root_disk)?;
+    let gold_cfg = vm_config(pve, source_node, gold).await?;
+    require_gold_tag(gold, &gold_cfg)?;
+    let metadata = capture_gold_metadata(gold, &gold_cfg, &cfg.root_disk)?;
     if plan.get("source_metadata") != Some(&metadata) {
         return Err(CoreError::Refused(
             "Gold VM source configuration changed after create confirmation; re-run create and review the new plan"

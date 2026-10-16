@@ -39,7 +39,7 @@ pub fn status_resources<'r>(resources: &'r [StatusResource], cfg: &Config) -> Ve
     resources
         .iter()
         .filter(|item| {
-            item.vmid == cfg.gold_vmid
+            Some(item.vmid) == cfg.gold_vmid
                 || has_tag(item.tags.as_deref(), WORKSPACE_TAG)
                 || has_tag(item.tags.as_deref(), ALIEN_WORKSPACE_TAG)
         })
@@ -400,9 +400,15 @@ pub async fn global_status(pve: &impl Pve, cfg: &Config) -> Result<GlobalStatus,
     let configs = &inventory.configs;
     let mut warnings = Vec::new();
 
-    let gold = match inventory.resources.iter().find(|r| r.vmid == cfg.gold_vmid) {
+    let gold = match cfg
+        .gold_vmid
+        .and_then(|vmid| inventory.resources.iter().find(|r| r.vmid == vmid))
+    {
         None => {
-            warnings.push(format!("Configured Gold VM {} does not exist.", cfg.gold_vmid));
+            warnings.push(match cfg.gold_vmid {
+                Some(vmid) => format!("Configured Gold VM {vmid} does not exist."),
+                None => "Gold is not configured; creating and refreshing workspaces is unavailable.".to_owned(),
+            });
             None
         }
         Some(resource) => {
@@ -412,25 +418,25 @@ pub async fn global_status(pve: &impl Pve, cfg: &Config) -> Result<GlobalStatus,
                 resource.node.clone()
             };
             let empty = VmConfig::new();
-            let gold_cfg = configs.get(&cfg.gold_vmid).unwrap_or(&empty);
+            let gold_cfg = configs.get(&resource.vmid).unwrap_or(&empty);
             let tags = parse_tags(non_empty(gold_cfg.get("tags")).or(resource.tags.as_deref()));
             let role_tag_ok = tags.contains(GOLD_TAG) && !tags.contains(ALIEN_WORKSPACE_TAG);
             let warning = (!role_tag_ok).then(|| {
                 if tags.contains(ALIEN_WORKSPACE_TAG) {
                     format!(
                         "Configured Gold VM {} has forbidden tag '{ALIEN_WORKSPACE_TAG}'.",
-                        cfg.gold_vmid
+                        resource.vmid
                     )
                 } else {
                     format!(
                         "Configured Gold VM {} is missing required tag '{GOLD_TAG}'.",
-                        cfg.gold_vmid
+                        resource.vmid
                     )
                 }
             });
             warnings.extend(warning.clone());
             Some(StatusEntry {
-                vmid: cfg.gold_vmid,
+                vmid: resource.vmid,
                 role: "GOLD".to_owned(),
                 name: resource
                     .name
@@ -443,7 +449,7 @@ pub async fn global_status(pve: &impl Pve, cfg: &Config) -> Result<GlobalStatus,
                 pool: resource.pool.clone(),
                 tags: tag_list(non_empty(gold_cfg.get("tags")).or(resource.tags.as_deref())),
                 node: gold_node,
-                ip: expected_ip(cfg, cfg.gold_vmid),
+                ip: expected_ip(cfg, resource.vmid),
                 root_storage: disk_storage(gold_cfg.get(&cfg.root_disk).map(String::as_str)),
                 home: None,
                 role_tag_ok,
@@ -456,7 +462,7 @@ pub async fn global_status(pve: &impl Pve, cfg: &Config) -> Result<GlobalStatus,
     let (mut total_home, mut known_used, mut known_free, mut known_count, mut missing) =
         (0_u64, 0_u64, 0_u64, 0_u64, 0_u64);
     let managed = status_resources(&inventory.resources, cfg);
-    for item in managed.iter().filter(|item| item.vmid != cfg.gold_vmid) {
+    for item in managed.iter().filter(|item| Some(item.vmid) != cfg.gold_vmid) {
         let empty = VmConfig::new();
         let vm_cfg = configs.get(&item.vmid).unwrap_or(&empty);
         let node_info = nodes.get(&item.node);
@@ -524,7 +530,7 @@ pub async fn global_status(pve: &impl Pve, cfg: &Config) -> Result<GlobalStatus,
     }
 
     // The other guests of the pools the token sees: more Golds, containers.
-    let listed: BTreeSet<u32> = managed.iter().map(|item| item.vmid).chain([cfg.gold_vmid]).collect();
+    let listed: BTreeSet<u32> = managed.iter().map(|item| item.vmid).chain(cfg.gold_vmid).collect();
     let containers = cluster_container_resources(pve).await.unwrap_or_default();
     let guests = inventory
         .resources
@@ -727,7 +733,7 @@ pub async fn workspace_status_of(
     let vm_cfg = vm_config(pve, &node, vmid).await?;
     let name = vm_cfg.get("name").cloned().unwrap_or_default();
     let tags = parse_tags(vm_cfg.get("tags").map(String::as_str));
-    let (role, role_tag_ok, role_warning) = if vmid == cfg.gold_vmid {
+    let (role, role_tag_ok, role_warning) = if Some(vmid) == cfg.gold_vmid {
         let ok = tags.contains(GOLD_TAG) && !tags.contains(ALIEN_WORKSPACE_TAG);
         let warning = (!ok).then(|| {
             if tags.contains(ALIEN_WORKSPACE_TAG) {
@@ -885,10 +891,9 @@ pub async fn resolve_existing_workspace(
     cfg: &Config,
     vmid: u32,
 ) -> Result<ExistingWorkspace, CoreError> {
-    if vmid == cfg.gold_vmid {
+    if Some(vmid) == cfg.gold_vmid {
         return Err(CoreError::Refused(format!(
-            "Refusing lifecycle operation on Gold VM {}",
-            cfg.gold_vmid
+            "Refusing lifecycle operation on Gold VM {vmid}"
         )));
     }
     let resource = cluster_vm_resources(pve)

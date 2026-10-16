@@ -71,6 +71,7 @@ impl Setup {
             service_storages: Vec::new(),
             template_storage: None,
             gold: None,
+            bridge: None,
             adopt: Vec::new(),
             token_dir: self.token_dir.clone(),
         }

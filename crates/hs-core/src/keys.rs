@@ -125,7 +125,7 @@ pub struct WorkspaceKeys {
 
 /// `get_workspace_authorized_keys`: every request goes to Gold's node.
 pub async fn workspace_authorized_keys(pve: &impl Pve, cfg: &Config) -> Result<WorkspaceKeys, CoreError> {
-    let gold = cfg.gold_vmid;
+    let gold = crate::gold::configured_gold(cfg)?;
     let resource = cluster_vm_resources(pve)
         .await?
         .into_iter()

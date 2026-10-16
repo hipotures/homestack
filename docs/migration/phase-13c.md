@@ -175,11 +175,17 @@ install screen is the interactive way. What follows is kept as history.
   (Enter keeps the marked defaults) and the summary ends with `Install? [y/n]`.
   Without a terminal the missing options are printed with their defaults
   (`--json`: a `missing` array with `defaults`), exit code 1.
-- **Gold:** the default Gold is the VM named `hs-gold`; the installer tags the
+- **Gold is optional:** install the server before preparing a base VM. With
+  no unambiguous Gold, the installer warns and continues without tagging or
+  adding any VM to the Gold pool. `server.toml` omits `node.gold_vmid`;
+  status remains available, while create and refresh stay unavailable until
+  Gold is configured. A selected Gold is still validated. The default Gold
+  is the VM named `hs-gold`; the installer tags the
   Gold it uses `homestack-gold` (other tags kept) and puts it in pool
   `homestack-gold`, both as steps of the plan. Order: `--gold`; the only VM
   tagged `homestack-gold`; the only QEMU VM named `hs-gold` (other tagged VMs
-  are named in a warning and left alone); otherwise a step. A Gold tagged
+  are named in a warning and left alone); otherwise installation proceeds
+  without Gold, and the optional form field offers the QEMU VMs. A Gold tagged
   `homestack-ws` or `homestack-alien` is refused. Uninstall takes Gold out of
   the pool and leaves its tag.
 - **Autodiscovery (owner, 2026-10-15).** A guest in no pool whose tags name
@@ -244,7 +250,7 @@ draft; `--server-domain` on the command line). Everything else is found:
 | instances | one per online node that has a chosen server-disk storage: `api1`, `api2`, ... in the order of the nodes |
 | address | the desktop's DNS answer for `apiN.<domain>`; a name that does not resolve is a problem (Install cannot be pressed) |
 | network | `[network]` of the server configuration (`cidr`, `gateway`, the first `dns`); an address outside the gateway's network (`gateway` and `cidr`) is a problem (2026-10-14; it was a text match on `prefix`) |
-| bridge | Gold's `net0` |
+| bridge | existing bridges common to every online node; selected in **Server network bridge** or with `--bridge NAME`, taken automatically when only one exists; a selected Gold must use the same bridge |
 | CTID | the last two octets of the address, the third times 1000 plus the fourth (`192.168.102.1` is CT 102001; owner's decision of 2026-10-14). The container of `homestack-service` with that number and host name is replaced; that number held by anything else, the host name on another number, or a number under 100 is a problem |
 | root disk | the first chosen server-disk storage on that node |
 | Proxmox endpoints | `https://<name on the node's API certificate>:8006` |
@@ -274,6 +280,7 @@ servers, `client.toml`, files kept aside), `Context::servers` (`RealServers`:
 the system resolver, `hs_deploy::deploy::cert` then `apply`), the commit of
 the build from `crates/hs-cli/build.rs`, `app::status_of` for the last
 check. `server.toml` is the old file's server part with `[node] gold_vmid`
-set to the installed Gold. The deployment's progress is shown as it comes.
+set to the selected Gold, or omitted when Gold is not configured. The
+deployment's progress is shown as it comes.
 Tests: 7 new in `install_cli.rs` (the whole way to a real `status` against a
 server on the simulator), 3 in `form.rs` (the typed setting).

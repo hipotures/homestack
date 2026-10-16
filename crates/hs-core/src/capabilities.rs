@@ -217,9 +217,11 @@ pub fn requirements(operation: Operation, config: &Config, pool: &str) -> Vec<Pr
     for privilege in needs.pool {
         add(&pool, privilege);
     }
-    let gold = format!("/vms/{}", config.gold_vmid);
-    for privilege in needs.gold {
-        add(&gold, privilege);
+    if let Some(vmid) = config.gold_vmid {
+        let gold = format!("/vms/{vmid}");
+        for privilege in needs.gold {
+            add(&gold, privilege);
+        }
     }
     let all_storages: BTreeSet<&String> = config.storage_layouts.values().flatten().collect();
     if needs.audit_storages {
@@ -268,7 +270,7 @@ pub fn evaluate(config: &Config, pool: &str, granted: impl Fn(&str, &str) -> boo
                 .collect();
             OperationCapability {
                 operation,
-                available: missing.is_empty(),
+                available: missing.is_empty() && (needs(operation).gold.is_empty() || config.gold_vmid.is_some()),
                 required,
                 missing,
             }
@@ -317,36 +319,37 @@ pub async fn installation(pve: &impl Pve, config: &Config, pool: &str, gold_pool
                     )
                 });
             }
-            let gold = config.gold_vmid;
-            checks.push(if exists(gold_pool) {
-                match pve.get("/pools", &[("poolid", gold_pool)]).await {
-                    Result::Ok(found) => {
-                        let member = found
-                            .as_array()
-                            .into_iter()
-                            .flatten()
-                            .filter_map(|p| p.get("members").and_then(Value::as_array))
-                            .flatten()
-                            .any(|m| m.get("vmid").and_then(Value::as_u64) == Some(u64::from(gold)));
-                        if member {
-                            check(GoldInPool, Ok, format!("Gold {gold} is in pool {gold_pool}"))
-                        } else {
-                            check(
-                                GoldInPool,
-                                Missing,
-                                format!("Gold {gold} is not in pool {gold_pool}; {INSTALL}"),
-                            )
+            if let Some(gold) = config.gold_vmid {
+                checks.push(if exists(gold_pool) {
+                    match pve.get("/pools", &[("poolid", gold_pool)]).await {
+                        Result::Ok(found) => {
+                            let member = found
+                                .as_array()
+                                .into_iter()
+                                .flatten()
+                                .filter_map(|p| p.get("members").and_then(Value::as_array))
+                                .flatten()
+                                .any(|m| m.get("vmid").and_then(Value::as_u64) == Some(u64::from(gold)));
+                            if member {
+                                check(GoldInPool, Ok, format!("Gold {gold} is in pool {gold_pool}"))
+                            } else {
+                                check(
+                                    GoldInPool,
+                                    Missing,
+                                    format!("Gold {gold} is not in pool {gold_pool}; {INSTALL}"),
+                                )
+                            }
                         }
+                        Err(error) => check(GoldInPool, Unknown, format!("Cannot read pool {gold_pool}: {error}")),
                     }
-                    Err(error) => check(GoldInPool, Unknown, format!("Cannot read pool {gold_pool}: {error}")),
-                }
-            } else {
-                check(
-                    GoldInPool,
-                    Missing,
-                    format!("Gold {gold} is not in pool {gold_pool}; {INSTALL}"),
-                )
-            });
+                } else {
+                    check(
+                        GoldInPool,
+                        Missing,
+                        format!("Gold {gold} is not in pool {gold_pool}; {INSTALL}"),
+                    )
+                });
+            }
         }
     }
     checks.push(check(

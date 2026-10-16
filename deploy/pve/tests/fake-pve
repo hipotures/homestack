@@ -172,6 +172,12 @@ pvesh_main() {
             node_online "$node" || die "hostname lookup '$node' failed - no route to host"
             if [[ -f $HS_FAKE/version-$node ]]; then cat "$HS_FAKE/version-$node"; else echo '{"version":"9.2.21","release":"9.2"}'; fi
             ;;
+        /nodes/*/network)
+            local node=${path#/nodes/}
+            node=${node%/network}
+            node_online "$node" || die "hostname lookup '$node' failed - no route to host"
+            if [[ -f $HS_FAKE/network-$node.json ]]; then cat "$HS_FAKE/network-$node.json"; else echo '[{"iface":"vmbr0","type":"bridge"}]'; fi
+            ;;
         /nodes/*/qemu/*/config)
             local rest=${path#/nodes/}
             vm_config "${rest%%/*}" "$(cut -d/ -f3 <<< "$rest")"

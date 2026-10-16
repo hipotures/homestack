@@ -131,6 +131,14 @@ pub fn resolve(state: &State, settings: &Settings) -> (Settings, Vec<String>) {
     if resolved.template_storage.is_none() {
         resolved.template_storage = only("vztmpl", "Server image");
     }
+    if resolved.bridge.is_none()
+        && let Some(bridge) = state.bridges.iter().next().filter(|_| state.bridges.len() == 1)
+    {
+        resolved.bridge = Some(bridge.clone());
+        taken.push(format!(
+            "Server bridge: {bridge} (the only bridge present on every online node)"
+        ));
+    }
     (resolved, taken)
 }
 
@@ -236,6 +244,47 @@ pub fn check_storages(state: &State, settings: &Settings, found: &mut Findings) 
     }
 }
 
+fn bridge_question(state: &State) -> Question {
+    Question {
+        option: "--bridge",
+        title: "Server network bridge".to_owned(),
+        note: "The existing bridge used by the HomeStack containers; it must be present on every online node. This is selected independently of Gold.".to_owned(),
+        multiple: false,
+        choices: state.bridges.iter().map(|name| Choice { value: name.clone(), detail: "bridge on every online node".to_owned() }).collect(),
+        defaults: if state.bridges.len() == 1 { vec![0] } else { Vec::new() },
+    }
+}
+
+pub fn check_bridge(root: &mut dyn Root, state: &State, settings: &Settings, found: &mut Findings) {
+    let Some(bridge) = &settings.bridge else {
+        if state.bridges.is_empty() {
+            found.errors.push("No network bridge is present on every online node; create a bridge for the HomeStack containers first.".to_owned());
+        } else {
+            found.questions.push(bridge_question(state));
+        }
+        return;
+    };
+    if !state.bridges.contains(bridge) {
+        found
+            .errors
+            .push(format!("Bridge {bridge} is not present on every online node"));
+        return;
+    }
+    let zone = get(root, "/cluster/sdn/vnets", "")
+        .ok()
+        .and_then(|vnets| {
+            vnets.as_array().and_then(|items| {
+                items
+                    .iter()
+                    .find(|item| text(item.get("vnet")) == *bridge)
+                    .map(|item| text(item.get("zone")))
+            })
+        })
+        .filter(|zone| !zone.is_empty())
+        .unwrap_or_else(|| "localnetwork".to_owned());
+    found.sdn_path = format!("/sdn/zones/{zone}/{bridge}");
+}
+
 /// The VMs that pass `only`, as choices for Gold: id, name, node, state.
 fn vm_choices(state: &State, only: impl Fn(&Vm) -> bool) -> Vec<Choice> {
     state
@@ -251,8 +300,7 @@ fn vm_choices(state: &State, only: impl Fn(&Vm) -> bool) -> Vec<Choice> {
         .collect()
 }
 
-/// Gold: the one given, or the only VM tagged `homestack-gold`; otherwise a
-/// question with the candidates.
+/// Gold is optional. Use the explicit selection or an unambiguous detected Gold.
 pub fn find_gold(state: &State, settings: &Settings, found: &mut Findings) -> Option<u32> {
     if let Some(vmid) = settings.gold {
         if state.vms.contains_key(&vmid) {
@@ -298,30 +346,10 @@ pub fn find_gold(state: &State, settings: &Settings, found: &mut Findings) -> Op
         }
         return Some(*one);
     }
-    let (note, choices) = match tagged.as_slice() {
-        [one] => return Some(*one),
-        [] => (
-            format!(
-                "The prepared base VM that every workspace is cloned from; the installer tags it homestack-gold and puts it in the pool {}. No VM is tagged homestack-gold yet; these are the QEMU VMs (prepare Gold first, see the README).",
-                gold_pool(settings.test)
-            ),
-            vm_choices(state, |vm| vm.kind == "qemu" && !vm.template),
-        ),
-        _ => (
-            format!(
-                "The prepared base VM that every workspace is cloned from; the installer tags it homestack-gold and puts it in the pool {}. Several VMs are tagged homestack-gold.",
-                gold_pool(settings.test)
-            ),
-            vm_choices(state, |vm| has_tag(vm, "homestack-gold") && of_part(vm)),
-        ),
-    };
-    found.questions.push(Question {
-        option: "--gold",
-        title: "Gold VM".to_owned(),
-        note,
-        multiple: false,
-        choices,
-        defaults: Vec::new(),
+    found.warnings.push(if tagged.is_empty() {
+        "Gold is not configured; install HomeStack now and select a Gold VM before creating or refreshing workspaces.".to_owned()
+    } else {
+        "Several VMs are tagged homestack-gold; no Gold was selected. Select one before creating or refreshing workspaces.".to_owned()
     });
     None
 }
@@ -366,19 +394,13 @@ pub fn check_gold(root: &mut dyn Root, state: &State, settings: &Settings, found
         found.errors.push(format!("Gold {gold}'s net0 has no bridge"));
         return;
     }
-    let zone = get(root, "/cluster/sdn/vnets", "")
-        .ok()
-        .and_then(|vnets| {
-            vnets.as_array().and_then(|items| {
-                items
-                    .iter()
-                    .find(|item| text(item.get("vnet")) == bridge)
-                    .map(|item| text(item.get("zone")))
-            })
-        })
-        .filter(|zone| !zone.is_empty())
-        .unwrap_or_else(|| "localnetwork".to_owned());
-    found.sdn_path = format!("/sdn/zones/{zone}/{bridge}");
+    if let Some(selected) = &settings.bridge
+        && *selected != bridge
+    {
+        found.errors.push(format!(
+            "Gold {gold} uses bridge {bridge}, but the selected server bridge is {selected}"
+        ));
+    }
 }
 
 pub fn check_tags(root: &mut dyn Root, settings: &Settings, found: &mut Findings) {
@@ -555,6 +577,9 @@ pub fn all_questions(state: &State, settings: &Settings) -> Vec<Question> {
             defaults: ticked,
         });
     }
+    if settings.bridge.is_none() {
+        questions.push(bridge_question(state));
+    }
     if settings.gold.is_none() {
         let chosen = find_gold(state, settings, &mut found);
         let choices = vm_choices(state, |vm| vm.kind == "qemu" && !vm.template);
@@ -565,7 +590,7 @@ pub fn all_questions(state: &State, settings: &Settings) -> Vec<Question> {
         questions.push(Question {
             option: "--gold",
             title: "Gold VM".to_owned(),
-            note: format!("The prepared base VM that every workspace is cloned from; the installer tags it homestack-gold and puts it in the pool {}.", gold_pool(settings.test)),
+            note: format!("Optional. Install without Gold and configure it later, before creating or refreshing workspaces. A selected base VM is tagged homestack-gold and put in pool {}.", gold_pool(settings.test)),
             multiple: false,
             choices,
             defaults,

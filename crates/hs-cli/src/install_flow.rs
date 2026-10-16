@@ -314,6 +314,7 @@ pub fn answered(settings: &Settings, questions: &[hs_install::Question], answers
             "--snippet-storage" => settings.snippet_storage = values.into_iter().next(),
             "--service-storages" => settings.service_storages = values,
             "--template-storage" => settings.template_storage = values.into_iter().next(),
+            "--bridge" => settings.bridge = values.into_iter().next(),
             "--gold" => settings.gold = values.first().and_then(|vmid| vmid.parse().ok()),
             "--adopt" => settings.adopt = values.iter().filter_map(|vmid| vmid.parse().ok()).collect(),
             _ => {}

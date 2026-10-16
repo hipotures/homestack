@@ -72,6 +72,7 @@ fn settings(ctx: &Context, args: &Args, install: &InstallArgs) -> Settings {
         service_storages: install.service_storages.clone(),
         template_storage: install.template_storage.clone(),
         gold: install.gold,
+        bridge: install.bridge.clone(),
         adopt: install.adopt.clone(),
         token_dir: expand_home(&token_dir.display().to_string(), &ctx.home),
     }

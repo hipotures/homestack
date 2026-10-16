@@ -163,7 +163,7 @@ impl Boot<'_> {
     /// 1 GiB home disk, and start it.
     async fn boot(&self, format: HomeFormat) -> Result<(), Error> {
         let (pve, node, id) = (self.pve, self.node.as_str(), self.vmid.to_string());
-        let gold = self.cfg.gold_vmid.to_string();
+        let gold = self.cfg.gold_vmid.ok_or("Gold is not configured")?.to_string();
         let upid = pve
             .post_value(
                 &["nodes", node, "qemu", &gold, "clone"],
@@ -268,7 +268,7 @@ async fn live_native_cloud_init_boots_a_workspace() -> Result<(), Error> {
     let node = cluster_vm_resources(&pve)
         .await?
         .into_iter()
-        .find(|vm| vm.vmid == cfg.gold_vmid)
+        .find(|vm| Some(vm.vmid) == cfg.gold_vmid)
         .map(|vm| vm.node)
         .ok_or("Gold is not in the cluster")?;
     let storage = resolve_homestack_storage(&cfg, &node, None)?;

@@ -148,10 +148,9 @@ async fn resolve(
         .as_u64()
         .and_then(|vmid| u32::try_from(vmid).ok())
         .ok_or_else(|| AppError::new(format!("VMID {text} does not exist")))?;
-    if vmid == server.gold_vmid {
+    if Some(vmid) == server.gold_vmid {
         return Err(AppError::new(format!(
-            "Refusing repository operation on Gold VM {}",
-            server.gold_vmid
+            "Refusing repository operation on Gold VM {vmid}"
         )));
     }
     let tags: Vec<&str> = found["tags"]

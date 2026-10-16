@@ -50,7 +50,7 @@ Checks run in this order; the first failure raises `AppError`:
     default for root and home.
 15. `[root] disk` and `[home] disk` non-empty after stripping ("[root] disk and
     [home] disk must be non-empty", one message for either) and different.
-16. Remaining required values: `gold_vmid`, `home.default_size`,
+16. Remaining required values: `home.default_size`,
     `network.prefix/cidr/gateway`, `cloud_init.snippet_storage/snippet_dir`,
     `user.uid/gid`, converted with `int()` or `str()`.
 
@@ -230,3 +230,14 @@ Ports and their Rust tests are in `parity/manifest.toml`. Port notes:
    them when the Python client talks to the server.
 4. The cross-check `[workspace_ssh] user` = `[user] name` now spans two files;
    the client should compare its user with `GET /v1/config` (phase 12/13).
+
+## Optional Gold after server installation
+
+The Rust configuration permits an absent `node.gold_vmid`. The server can be
+installed and queried before a base VM is prepared; create and refresh refuse
+to run until Gold is configured. An explicitly supplied VMID still needs to
+be an integer in the Proxmox range. Canonical serialization omits an unset
+Gold instead of writing a placeholder VMID. This deliberately differs from
+the legacy Python requirement. The shared parity corpus records
+this deliberate difference; Rust configuration and API tests cover the new
+contract.

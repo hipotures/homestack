@@ -285,7 +285,7 @@ async fn run_rust_function(
         ["workspace-keys", rest @ ..] => {
             let mut config = config.clone();
             if let [gold] = rest {
-                config.gold_vmid = gold.parse()?;
+                config.gold_vmid = Some(gold.parse()?);
             }
             Ok(match hs_core::keys::workspace_authorized_keys(&pve, &config).await {
                 Ok(found) => serde_json::json!({ "ok": true, "keys": found.keys, "source": found.source }),

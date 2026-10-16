@@ -108,7 +108,7 @@ pub struct Cluster {
     pub storages: BTreeMap<String, (Vec<String>, Vec<String>)>,
     /// Every guest: id -> (name, `qemu` or `lxc`, pool).
     pub guests: BTreeMap<u32, (String, String, String)>,
-    /// The bridge of Gold's `net0`.
+    /// The selected server bridge.
     pub bridge: String,
     /// Node -> the name on its API certificate.
     pub api_names: BTreeMap<String, String>,
@@ -742,7 +742,10 @@ pub fn make_plan(
     command: Command,
     settings: &Settings,
 ) -> Result<Plan, InstallError> {
-    let state = State::load(root, &access.topology)?;
+    let mut state = State::load(root, &access.topology)?;
+    if command == Command::Install {
+        state.read_bridges(root)?;
+    }
     // An option with only one possible value is not asked for.
     let (resolved, taken) = if command == Command::Install {
         checks::resolve(&state, settings)
@@ -774,6 +777,7 @@ pub fn make_plan(
         Command::Install => {
             checks::check_versions(root, &state, &mut found);
             checks::check_storages(&state, settings, &mut found);
+            checks::check_bridge(root, &state, settings, &mut found);
             checks::check_gold(root, &state, settings, &mut found);
             checks::check_tags(root, settings, &mut found);
             checks::check_certificates(root, &state, &mut found);
@@ -930,7 +934,8 @@ pub fn questions(
     access: &Access,
     settings: &Settings,
 ) -> Result<Vec<crate::Question>, InstallError> {
-    let state = State::load(root, &access.topology)?;
+    let mut state = State::load(root, &access.topology)?;
+    state.read_bridges(root)?;
     Ok(checks::all_questions(&state, settings))
 }
 

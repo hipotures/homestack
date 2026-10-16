@@ -1357,17 +1357,26 @@ async fn a_proxmox_template_is_no_gold_to_choose() {
     )
     .await;
     let out = json.json();
-    let gold = out["missing"]
-        .as_array()
-        .and_then(|missing| missing.iter().find(|question| question["option"] == "--gold"))
-        .cloned()
-        .unwrap_or_else(|| panic!("no --gold question: {out}"));
-    let values: Vec<&str> = gold["choices"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter_map(|choice| choice["value"].as_str())
-        .collect();
+    assert!(out["missing"].is_null(), "{out}");
+    assert!(
+        out["plan"]["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|line| line.as_str().unwrap_or_default().contains("Gold is not configured"))
+    );
+    let mut root = hs_cli::root_ssh::SshRoot::open(
+        Arc::new(cluster.system()),
+        &cluster.home,
+        "root@pve1",
+        None,
+        &hs_cli::touch::Sounds::disabled(),
+    )
+    .unwrap();
+    let access = hs_install::probe(&mut root).unwrap();
+    let questions = hs_install::questions(&mut root, &access, &hs_install::Settings::default()).unwrap();
+    let gold = questions.iter().find(|question| question.option == "--gold").unwrap();
+    let values: Vec<&str> = gold.choices.iter().map(|choice| choice.value.as_str()).collect();
     assert_eq!(values, ["101", "102"], "{out}");
     assert_eq!(cluster.changes(), 0);
 }
@@ -1442,4 +1451,40 @@ async fn a_rescan_offers_a_vm_taken_out_of_its_pool_and_keeps_the_choices() {
     assert_eq!(found.domain.as_deref(), Some("typed.example.net"));
     assert_eq!(cluster.changes(), 0, "rescanning changed something");
     commands.send(Command::Cancel).unwrap();
+}
+
+#[tokio::test]
+async fn installation_deploys_the_server_before_gold_exists() {
+    let cluster = Cluster::new(&["pve1"]);
+    cluster.write("vms.tsv", "");
+    desktop_files(&cluster);
+    let (url, ca_pem, _sim) = status_server().await;
+    let ca = cluster.token_dir().join("server-ca.pem");
+    std::fs::write(&ca, ca_pem).expect("ca");
+    let servers = Arc::new(FakeServers {
+        reach: Some((url, ca.display().to_string())),
+        ..FakeServers::resolving(&[("api1.hs.example.net", "192.0.2.97")])
+    });
+    let done = run_with(
+        &cluster,
+        &server_argv(&["--server-domain", "hs.example.net", "--yes"]),
+        &[],
+        false,
+        Arc::clone(&servers),
+    )
+    .await;
+    assert_eq!(done.code, 0, "{}\n{}", done.console.out(), done.console.err());
+    let config_text = std::fs::read_to_string(cluster.token_dir().join("server.toml")).expect("server config");
+    assert_eq!(
+        hs_model::config::Config::parse(&config_text)
+            .expect("valid config")
+            .gold_vmid,
+        None
+    );
+    assert!(!config_text.contains("gold_vmid"));
+    let deployed = servers.deployed();
+    assert_eq!(deployed.len(), 1);
+    assert_eq!(deployed[0].bridge, "vmbr0");
+    assert!(cluster.token_dir().join("client.toml").is_file());
+    assert!(cluster.read("vms.tsv").is_empty(), "installation fabricated a Gold VM");
 }

@@ -2482,7 +2482,7 @@
         "properties": {
           "available": {
             "type": "boolean",
-            "description": "`missing` is empty."
+            "description": "Required privileges are granted and Gold is configured when the operation needs it."
           },
           "missing": {
             "type": "array",

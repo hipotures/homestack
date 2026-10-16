@@ -299,9 +299,7 @@ pub fn plan_servers(
         Ok(text) => match hs_config::legacy::read(&text) {
             Err(error) => out.problems.push(format!("{}: {error}", files.short(&old_path))),
             Ok(mut read) => {
-                if let Some(gold) = plan.cluster.gold {
-                    read.server.gold_vmid = gold;
-                }
+                read.server.gold_vmid = plan.cluster.gold;
                 // The workspace disks go where the form says, not where the
                 // old file did: per node, the chosen storages on it.
                 read.server.storage_layouts = layouts(plan, &mut out.warnings);
@@ -324,7 +322,8 @@ pub fn plan_servers(
         return out;
     };
     if plan.cluster.bridge.is_empty() {
-        out.problems.push("Gold's bridge is unknown".to_owned());
+        out.problems
+            .push("The server network bridge is not selected".to_owned());
     }
 
     // The instances: one per online node with a server-disk storage, each

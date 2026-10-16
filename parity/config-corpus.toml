@@ -263,9 +263,11 @@ set = { "home.disk" = "" }
 expect = "root.disk"
 
 [[case]]
-name = "Gold VMID missing"
+name = "Gold VMID may be configured after installation"
 remove = ["node.gold_vmid"]
-expect = "node.gold_vmid"
+expect = "accepted"
+python = "node.gold_vmid"
+reason = "The Rust server supports installation before Gold is selected; the legacy Python client still requires its VMID"
 
 [[case]]
 name = "default home size missing"

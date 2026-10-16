@@ -327,6 +327,7 @@ pub async fn plan_create(
     pool: &str,
     request: &CreateRequest,
 ) -> Result<Value, CoreError> {
+    let gold = crate::gold::configured_gold(cfg)?;
     let vmid = request.vmid;
     let name = request.name.as_str();
     validate_name(name)?;
@@ -346,7 +347,6 @@ pub async fn plan_create(
     let label = home_label(vmid)?;
 
     let resources = cluster_vm_resources(pve).await?;
-    let gold = cfg.gold_vmid;
     let gold_resource = resources
         .iter()
         .find(|r| r.vmid == gold)
@@ -462,6 +462,7 @@ pub async fn create_workspace(
     timing: &LifecycleTiming,
     observer: &impl Observer,
 ) -> Result<Value, CoreError> {
+    crate::gold::configured_gold(cfg)?;
     let vmid = vmid_of(plan)?;
     let name = text(plan, "name")?;
     if plan.get("source_metadata").is_some() {
@@ -565,7 +566,7 @@ async fn create_steps(
 
     let step = "Full clone";
     step_started(observer, step);
-    let gold = cfg.gold_vmid.to_string();
+    let gold = crate::gold::configured_gold(cfg)?.to_string();
     let cloned = post_task(
         pve,
         &format!("/nodes/{source}/qemu/{gold}/clone"),

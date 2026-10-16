@@ -39,7 +39,8 @@ const VMID_RANGE: std::ops::RangeInclusive<i64> = 100..=999_999_999;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Config {
     pub node: NodeName,
-    pub gold_vmid: u32,
+    /// The base VM may be configured after the server is installed.
+    pub gold_vmid: Option<u32>,
     /// `homestack-storage-<N>` to storage IDs; node `...N` uses layout N.
     pub storage_layouts: BTreeMap<String, Vec<String>>,
     pub root_disk: String,
@@ -217,17 +218,21 @@ impl Config {
             ));
         }
 
-        let gold_vmid = need_int(doc, "node", "gold_vmid")?;
-        let gold_vmid = VMID_RANGE
-            .contains(&gold_vmid)
-            .then(|| u32::try_from(gold_vmid).ok())
-            .flatten()
-            .ok_or_else(|| {
-                ConfigError::new(
-                    "node.gold_vmid",
-                    "[node] gold_vmid must be a Proxmox VMID between 100 and 999999999",
-                )
-            })?;
+        let gold_vmid = section(doc, "node")?
+            .and_then(|node| node.get("gold_vmid"))
+            .map(|value| {
+                value
+                    .as_integer()
+                    .filter(|vmid| VMID_RANGE.contains(vmid))
+                    .and_then(|vmid| u32::try_from(vmid).ok())
+                    .ok_or_else(|| {
+                        ConfigError::new(
+                            "node.gold_vmid",
+                            "[node] gold_vmid must be a Proxmox VMID between 100 and 999999999",
+                        )
+                    })
+            })
+            .transpose()?;
         let default_home_size = need_string(doc, "home", "default_size")?.to_owned();
 
         let prefix = need_string(doc, "network", "prefix")?.to_owned();
@@ -308,10 +313,11 @@ impl Config {
             String::new(),
             "[node]".to_owned(),
             format!("name = {}", toml_string(self.node.as_str())),
-            format!("gold_vmid = {}", self.gold_vmid),
-            String::new(),
-            "[storage_layouts]".to_owned(),
         ];
+        if let Some(vmid) = self.gold_vmid {
+            lines.push(format!("gold_vmid = {vmid}"));
+        }
+        lines.extend([String::new(), "[storage_layouts]".to_owned()]);
         for (layout, storages) in &self.storage_layouts {
             lines.push(format!("{layout} = {}", toml_array(storages)));
         }
