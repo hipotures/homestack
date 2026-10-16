@@ -39,6 +39,9 @@ PATH="$PWD/target/e2e-tools/bin:$PATH" cargo run --locked -p hs-e2e -- run
 
 That ignored cache is a local tool installation, not part of a fresh checkout.
 The controller downloads the guest image; it does not install host packages.
+During image download, the terminal shows a progress bar, percentage, MiB
+downloaded/total and average MiB/s. Without a reported size it shows bytes and
+speed; redirected output uses periodic lines instead of terminal redraws.
 
 The runner may execute on a separate Linux server or in a development workspace
 managed by a production HomeStack installation. That workspace must expose
