@@ -10,7 +10,7 @@ use tokio::net::{UnixListener, UnixStream};
 
 use crate::{Result, save_report};
 
-pub const NAMES: [&str; 10] = [
+pub const NAMES: [&str; 11] = [
     "preflight",
     "domain",
     "image",
@@ -18,6 +18,7 @@ pub const NAMES: [&str; 10] = [
     "kernel",
     "proxmox",
     "network",
+    "gold",
     "homestack",
     "verify",
     "shutdown",

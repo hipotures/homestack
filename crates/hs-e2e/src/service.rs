@@ -62,35 +62,14 @@ pub fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
-pub async fn prepare(options: &Options, dir: &Path, artifacts: &Path, report: &Value) -> Result<Value> {
-    let run_id = uuid::Uuid::parse_str(report["run_id"].as_str().ok_or("run has no ID")?)?;
-    let log = artifacts.join("service-preparation.log");
-    let guard = format!(
-        "python3 -c 'import json; assert json.load(open(\"/etc/homestack-e2e.json\"))[\"run_id\"] == \"{run_id}\"'\nhostname -s\n"
-    );
-    let node = String::from_utf8(checked_ssh(dir, &guard, &log).await?)?
-        .trim()
-        .to_owned();
-    let layout = hs_model::config::active_layout_name(&hs_model::NodeName::parse(&node)?)?;
-    let config = include_str!("service-config.toml")
-        .replace("@NODE@", &node)
-        .replace("@LAYOUT@", &layout);
-    let _ = hs_config::legacy::read(&config)?;
-    let mut fixture = Fixture::open(&options.fixtures, &options.spaceship_file, &options.tsig_file)?;
-    eprintln!("Preparing HomeStack API DNS and a public wildcard certificate...");
-    let outcome = fixture.prepare(options.local_dns).await;
-    let cleanup = fixture.cleanup_challenge().await;
-    let stored = outcome?;
-    cleanup?;
-    eprintln!("Preparing internal DNS and the Proxmox OCI image tools...");
-    crate::install::run(
-        ssh(dir),
-        include_str!("service-network.sh"),
-        Duration::from_secs(600),
-        &log,
-    )
-    .await?;
-    let profile = dir.join("client/config/homestack");
+pub fn configuration(node: &str) -> Result<String> {
+    let layout = hs_model::config::active_layout_name(&hs_model::NodeName::parse(node)?)?;
+    Ok(include_str!("service-config.toml")
+        .replace("@NODE@", node)
+        .replace("@LAYOUT@", &layout))
+}
+
+pub async fn workspace_keys(dir: &Path) -> Result<()> {
     let keys = dir.join("client/home/.ssh");
     std::fs::create_dir_all(&keys)?;
     std::fs::set_permissions(&keys, std::fs::Permissions::from_mode(0o700))?;
@@ -112,8 +91,48 @@ pub async fn prepare(options: &Options, dir: &Path, artifacts: &Path, report: &V
             return Err("cannot generate the isolated workspace SSH key".into());
         }
     }
+    Ok(())
+}
+
+pub async fn prepare(options: &Options, dir: &Path, artifacts: &Path, report: &Value) -> Result<Value> {
+    let run_id = uuid::Uuid::parse_str(report["run_id"].as_str().ok_or("run has no ID")?)?;
+    let log = artifacts.join("service-preparation.log");
+    let guard = format!(
+        "python3 -c 'import json; assert json.load(open(\"/etc/homestack-e2e.json\"))[\"run_id\"] == \"{run_id}\"'\nhostname -s\n"
+    );
+    let node = String::from_utf8(checked_ssh(dir, &guard, &log).await?)?
+        .trim()
+        .to_owned();
+    let config = configuration(&node)?;
+    let _ = hs_config::legacy::read(&config)?;
+    let mut fixture = Fixture::open(&options.fixtures, &options.spaceship_file, &options.tsig_file)?;
+    eprintln!("Preparing HomeStack API DNS and a public wildcard certificate...");
+    let outcome = fixture.prepare(options.local_dns).await;
+    let cleanup = fixture.cleanup_challenge().await;
+    let stored = outcome?;
+    cleanup?;
+    eprintln!("Preparing internal DNS and the Proxmox OCI image tools...");
+    crate::install::run(
+        ssh(dir),
+        include_str!("service-network.sh"),
+        Duration::from_secs(600),
+        &log,
+    )
+    .await?;
+    let profile = dir.join("client/config/homestack");
+    workspace_keys(dir).await?;
     if !profile.join("config.toml").exists() {
         write_private(&profile.join("config.toml"), config.as_bytes())?;
+    }
+    let path = profile.join("config.toml");
+    let mut document: toml::Table = std::fs::read_to_string(&path)?.parse()?;
+    if document["node"].get("gold_vmid").and_then(toml::Value::as_integer) != Some(100) {
+        document
+            .get_mut("node")
+            .and_then(toml::Value::as_table_mut)
+            .ok_or("the E2E configuration has no node table")?
+            .insert("gold_vmid".into(), toml::Value::Integer(100));
+        write_private(&path, toml::to_string(&document)?.as_bytes())?;
     }
     let old = hs_config::legacy::read(&std::fs::read_to_string(profile.join("config.toml"))?)?;
     if old.server.network.gateway != "10.77.0.1"
@@ -188,12 +207,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn lab_config_is_complete_without_gold_or_production_settings() -> Result<()> {
+    fn lab_config_selects_the_reference_gold_without_production_settings() -> Result<()> {
         let config = include_str!("service-config.toml")
             .replace("@NODE@", "pve1")
             .replace("@LAYOUT@", "homestack-storage-1");
         let parsed = hs_config::legacy::read(&config)?;
-        assert_eq!(parsed.server.gold_vmid, None);
+        assert_eq!(parsed.server.gold_vmid, Some(100));
         assert_eq!(parsed.server.network.gateway, "10.77.0.1");
         assert!(parsed.client.server.is_none());
         assert_eq!(parsed.client.workspace_ssh.identity_files, ["~/.ssh/e2e-workspace"]);

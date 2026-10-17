@@ -15,7 +15,6 @@
 //! | `blkid` label | the ext4 superblock of the mounted device |
 //! | `id`, `awk /etc/passwd` | `/etc/passwd` |
 //! | `test -s .../authorized_keys` | the file is readable and not empty |
-//! | `command -v sudo` | a `sudo` file on the `PATH` |
 //! | `cloud-id` | `/run/cloud-init/cloud-id` |
 //!
 //! The order of the checks and their messages are Python's;
@@ -101,7 +100,6 @@ pub enum VerifyFailure {
     RegularUsers {
         found: Vec<String>,
     },
-    Sudo,
 }
 
 impl VerifyFailure {
@@ -134,7 +132,6 @@ impl VerifyFailure {
                     found.join(", ")
                 }
             ),
-            Self::Sudo => "sudo is installed in the workspace".to_owned(),
         };
         format!("Verification failed: {detail}")
     }
@@ -151,7 +148,6 @@ impl VerifyFailure {
             Self::UserKeysMissing => "persistent user authorized_keys is missing".to_owned(),
             Self::RootKeysMissing => "root authorized_keys is missing".to_owned(),
             Self::RegularUsers { .. } => "unexpected regular user accounts".to_owned(),
-            Self::Sudo => "sudo is installed in the workspace".to_owned(),
         };
         format!("Refresh verification failed: {detail}")
     }
@@ -303,10 +299,6 @@ pub async fn verify_guest(
     let user = &expected.user;
     if regular != [format!("{}:{}:{}", user.name, user.uid, user.gid)] {
         return Ok(Err(VerifyFailure::RegularUsers { found: regular }));
-    }
-
-    if find_program(pve, node, vmid, "sudo").await?.is_some() {
-        return Ok(Err(VerifyFailure::Sudo));
     }
 
     let cloud_id = read_text(pve, node, vmid, "/run/cloud-init/cloud-id")

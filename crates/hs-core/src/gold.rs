@@ -1,10 +1,10 @@
 //! Gold readiness (`gold.check_gold_readiness`): the Proxmox part (mapping
 //! E1) and, when Gold runs, the guest contract (E2).
 //!
-//! The checks, their order, names and details are Python's. The guest
-//! contract runs Python's shell commands through `exec`, which needs
+//! The guest contract runs read-only shell commands through `exec`, which needs
 //! `VM.GuestAgent.Unrestricted` on Gold (decisions.md); without it the
 //! contract is reported as skipped. A stopped Gold is never started.
+//! Sudo may be installed; the workspace account must have no sudo privileges.
 
 use hs_model::config::User;
 use hs_model::status::{GoldCheck, GoldReadiness};
@@ -152,10 +152,17 @@ const GUEST_SKIPS: [(&str, &str, &str); 6] = [
     ("guest", "Required guest tools", "required"),
     ("guest", "Workspace account", "required"),
     ("security", "Regular user policy", "required"),
-    ("security", "No sudo", "required"),
+    ("security", "No sudo privileges", "required"),
     ("security", "Root authorized_keys", "required"),
     ("security", "Workspace public-key source", "required"),
 ];
+
+fn sudo_policy_command(user: &str) -> String {
+    let user = shell_quote(user);
+    format!(
+        "if ! command -v sudo >/dev/null 2>&1; then echo DENIED; else policy=$(LC_ALL=C sudo -n -l -U {user} 2>&1); case \"$policy\" in \"User \"{user}\" is not allowed to run sudo on \"*.) echo DENIED;; *) echo UNVERIFIED;; esac; fi"
+    )
+}
 const OPTIONAL_SKIPS: [(&str, &str, &str); 2] = [
     ("guest", "rsync for Setup Files", "optional"),
     ("guest", "git/ssh-keygen for homestack repo", "optional"),
@@ -294,18 +301,16 @@ async fn guest_contract(
             regular.join(", ")
         },
     ));
-    let sudo = guest_value(
-        pve,
-        node,
-        vmid,
-        "if command -v sudo >/dev/null 2>&1; then echo PRESENT; else echo ABSENT; fi",
-    )
-    .await?;
+    let sudo = guest_value(pve, node, vmid, &sudo_policy_command(&user.name)).await?;
     checks.push(verdict(
         "security",
-        "No sudo",
-        sudo == "ABSENT",
-        if sudo == "ABSENT" { "not installed" } else { "installed" },
+        "No sudo privileges",
+        sudo == "DENIED",
+        if sudo == "DENIED" {
+            "no permitted sudo commands"
+        } else {
+            "sudo privileges present or policy could not be verified"
+        },
     ));
     let root_keys = guest_value(
         pve,
@@ -528,6 +533,37 @@ fn readiness(vmid: u32, node: &str, power_state: String, checks: Vec<GoldCheck>)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sudo_policy_allows_the_package_and_rejects_privileges_and_errors() -> Result<(), Box<dyn std::error::Error>> {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = tempfile::tempdir()?;
+        let executable = directory.path().join("sudo");
+        for (response, exit, expected) in [
+            ("User user is not allowed to run sudo on gold.", 0, "DENIED"),
+            ("User user is not allowed to run sudo on gold.", 1, "DENIED"),
+            (
+                "User user may run the following commands on gold: (ALL) ALL",
+                0,
+                "UNVERIFIED",
+            ),
+            ("sudo: a password is required", 1, "UNVERIFIED"),
+            ("sudo: parse error in /etc/sudoers", 1, "UNVERIFIED"),
+        ] {
+            std::fs::write(
+                &executable,
+                format!("#!/bin/sh\nprintf '%s\\n' '{}'\nexit {exit}\n", response),
+            )?;
+            std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700))?;
+            let output = std::process::Command::new("/bin/sh")
+                .args(["-c", &sudo_policy_command("user")])
+                .env("PATH", directory.path())
+                .output()?;
+            assert!(output.status.success());
+            assert_eq!(String::from_utf8(output.stdout)?.trim(), expected);
+        }
+        Ok(())
+    }
 
     #[test]
     fn macs_and_boot_order() {

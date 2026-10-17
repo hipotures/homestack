@@ -1014,8 +1014,10 @@ dependencies = [
  "base64 0.23.1",
  "crossterm",
  "hs-config",
+ "hs-core",
  "hs-deploy",
  "hs-model",
+ "hs-pve",
  "hyper",
  "hyper-util",
  "instant-acme",
@@ -1026,6 +1028,7 @@ dependencies = [
  "sha2",
  "tempfile",
  "tokio",
+ "toml",
  "uuid",
 ]
 

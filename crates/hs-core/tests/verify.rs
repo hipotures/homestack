@@ -79,10 +79,20 @@ async fn a_healthy_guest_passes_and_reports_cloud_id_and_keys() -> TestResult {
 }
 
 #[tokio::test]
+async fn installed_sudo_does_not_block_workspace_verification() -> TestResult {
+    let sim = cluster().await?;
+    let pve = client(&sim, SERVER_TOKEN)?;
+    let result = verify_guest(&pve, NODE, 223, &expected(223), &quick()).await?;
+    assert!(result.is_ok(), "{result:?}");
+    assert!(sim.ops().iter().all(|op| !op.to_string().starts_with("guest_exec")));
+    Ok(())
+}
+
+#[tokio::test]
 async fn every_broken_step_has_pythons_create_and_refresh_message() -> TestResult {
     let sim = cluster().await?;
     let pve = client(&sim, SERVER_TOKEN)?;
-    let cases: [(u32, &str, &str); 9] = [
+    let cases: [(u32, &str, &str); 8] = [
         (
             221,
             "Verification failed: hostname is 'ubuntu', expected 'ws221'",
@@ -92,11 +102,6 @@ async fn every_broken_step_has_pythons_create_and_refresh_message() -> TestResul
             222,
             "Verification failed: user authorized_keys is missing",
             "Refresh verification failed: persistent user authorized_keys is missing",
-        ),
-        (
-            223,
-            "Verification failed: sudo is installed in the workspace",
-            "Refresh verification failed: sudo is installed in the workspace",
         ),
         (
             224,

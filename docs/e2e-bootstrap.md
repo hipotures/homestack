@@ -4,7 +4,8 @@
 [isolated E2E laboratory design](isolated-e2e-lab.md): download a Debian qcow2,
 initialize a VM, install Proxmox, prepare the HomeStack install inputs, verify
 the lab, power it off and delete it. The HomeStack container installation is
-confirmed manually in the real TUI; Gold/workspace fixtures remain later work.
+confirmed manually in the real TUI. The runner automatically prepares and validates
+a Debian reference Gold; workspace lifecycle scenarios remain later work.
 
 The runner prepares `pve.e2e.homestack.app` through the existing Spaceship and
 ACME implementation in `hs-deploy`. It installs a public Let's Encrypt
@@ -20,7 +21,7 @@ Use a Linux x86_64 host with accessible `/dev/kvm`, nested virtualization enable
 and these commands on `PATH`:
 
 - `qemu-system-x86_64` and `qemu-img`;
-- `ssh` and `ssh-keygen`;
+- `ssh`, `ssh-keygen` and `scp`;
 - `mkfs.vfat` from dosfstools and `mcopy` from mtools;
 - `openssl`, Python 3.9 or newer with `os.pidfd_open`, and `ip` from iproute2;
 - `dig` and `nsupdate` when using local split DNS.
@@ -88,10 +89,9 @@ cargo run --locked -p hs-e2e -- run \
   --artifacts target/e2e/my-bootstrap
 ```
 
-The artifact directory must not exist. Default resources are **1 vCPU, 2048 MiB
-RAM and a 12 GiB sparse virtual disk**. RAM is the
-[Proxmox baseline for its OS and services](https://www.proxmox.com/en/products/proxmox-virtual-environment/requirements);
-it does not include capacity for additional guests. The disk consumes host
+The artifact directory must not exist. Default resources are **1 vCPU, 4096 MiB
+RAM and a 12 GiB sparse virtual disk**. The 4 GiB minimum includes room for PVE and the reference Gold preparation.
+It is not capacity for arbitrary additional workloads. The disk consumes host
 space as data is written. Provision several GiB of actual free temporary disk
 space for the image and installation. Private VM files live under
 `target/e2e-work/`, separately from artifacts, and are removed after the run.
@@ -122,6 +122,47 @@ responsibility through its configured acquisition retries. Signed-index and
 package-hash verification remain enabled.
 
 
+## Automatic reference Gold
+
+Every normal run includes the `gold` phase. It reuses the already downloaded,
+SHA-512-verified Debian 13 qcow2; it does not download another image or depend
+on an ISO installation in the browser console. The fixture uses VMID 100,
+`vmbr0`, static address `10.77.0.100/24`, one vCPU, 768 MiB RAM and an 8 GiB
+sparse root disk. It has a Cloud-Init drive, `homestack-gold` tag/pool and the
+Proxmox agent channel enabled before its first boot.
+
+Cloud-Init creates root key access and the isolated `user` account (1000:1000).
+The runner installs QEMU Guest Agent, Cloud-Init, NetworkManager, netplan,
+Python/YAML, SSH, filesystem utilities, rsync, git and sudo, and enables
+the required services. Sudo stays installed; the workspace account receives no
+sudo privileges. These are the reference fixture's package requirements;
+guest networking remains independent of distribution and repository choices.
+Netplan uses NetworkManager; the old networkd service/socket are disabled and
+its wait-online unit is masked, so boot does not wait for the replaced backend.
+The current HomeStack guest contract requires systemd and NetworkManager, so
+an arbitrary Alpine ISO installation is not this reference Gold.
+
+The runner cold-starts Gold, checks its changed boot identity, and invokes the
+actual `hs-core` Gold readiness checks with a temporary, lab-only PVE API token.
+Every required live check must pass, including a responding agent. Failed or
+skipped agent checks never mean ready. The result is `gold-readiness.json`;
+package progress and details are in `gold-install.log` and `gold.log`.
+The token response and private SSH material are not written to artifacts.
+
+After verification, Gold is cleaned with `cloud-init clean --logs --machine-id`
+and gracefully stopped. Its temporary custom seed is detached and removed.
+Proxmox `sshkeys` retains the generated workspace public key, so cloning does
+not require booting Gold to retrieve keys. `verify` checks its finalized
+ownership, PVE configuration and stopped state again. Gold is intended for
+cloning at this point, rather than being a running workspace.
+
+An occupied, unowned VMID 100 is refused; the runner never replaces a user's
+VM or container. Retrying preparation may resume only a fixture carrying this
+run's exact ownership marker. Normal outer-VM cleanup removes Gold together
+with its disks, temporary keys and guest configuration. It is recreated by the
+next E2E run. An already paused lab can receive the same fixture through
+`homestack-e2e prepare --artifacts DIRECTORY`; no outer-VM restart is needed.
+
 ## Installation phases and manual inspection
 
 Normal runs remain automatic. Every phase writes its status, timings and error
@@ -136,7 +177,8 @@ to `report.json` before the next phase starts:
 | `kernel` | Proxmox kernel installed and the VM rebooted |
 | `proxmox` | PVE services installed and rebooted; public certificate installed and temporary web credentials printed |
 | `network` | Persistent `vmbr0` at `10.77.0.1/24`, DHCP, DNS and filtered public Internet; DHCP lease and public HTTPS verified from a temporary guest namespace |
-| `homestack` | API DNS, cached public wildcard TLS, isolated install configuration and workspace key, internal DNS, restricted OCI access and a published server image in the native PVE cache; no container created |
+| `gold` | Debian reference Gold 100 created, agent and full HomeStack contract checked after a cold start, then finalized and stopped |
+| `homestack` | API DNS, cached public wildcard TLS, isolated install configuration selecting Gold 100, internal DNS, restricted OCI access and a published server image in the native PVE cache; no container created |
 | `verify` | PVE kernel, exposed nested KVM, HTTPS API, web page, password login and authenticated node inventory checked |
 | `shutdown` | VM powered off; private files still exist until cleanup |
 | `cleanup` | QEMU reaped and private disks, keys and web credentials removed |
@@ -145,7 +187,7 @@ Request pauses only where manual inspection is useful:
 
 ```sh
 cargo run --locked -p hs-e2e -- run \
-  --pause-after boot,kernel,proxmox,network,homestack,verify \
+  --pause-after boot,kernel,proxmox,network,gold,homestack,verify \
   --pause-on-failure \
   --artifacts target/e2e/inspection
 ```
@@ -293,7 +335,8 @@ The `homestack` phase prepares the real installation without applying it:
 - A fresh, validated `config.toml` describes the actual numeric node `pve1`,
   storage `local`, bridge `vmbr0`, gateway/DNS `10.77.0.1` and workspace user
   `user` (UID/GID 1000). No production configuration is copied. A dedicated
-  workspace SSH key is generated under the private client home.
+  workspace SSH key is generated under the private client home. The prepared
+  configuration selects the verified reference Gold VM 100.
 - `api1.e2e.homestack.app` resolves to **`10.77.0.101`**, so the real installer
   derives **CT 101**. The public and optional split-DNS records have their own
   ownership journal in `<fixtures>/service/`.
@@ -365,8 +408,9 @@ The API's private address is reached by the client through this tunnel. A
 normal browser has no route to `10.77.0.101`; the PVE browser panel keeps its
 reported loopback forward and domain URL.
 The Rust installer supports installation before Gold exists. Select the
-server's bridge independently in the form; no Gold is fabricated for this
-step. Gold is required later for workspace creation and refresh.
+server's bridge independently in the form. E2E prepares a reference Gold in its
+own phase before the installer; the product installer still supports installation
+without Gold outside this fixture.
 The `network` phase creates **`vmbr0`** inside the disposable Proxmox VM, with
 address **`10.77.0.1/24`**. Choose it in **Server network bridge**; press **F5**
 in the installer's settings after changing the lab network. Configuration is

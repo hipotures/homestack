@@ -2,6 +2,7 @@ version = 1
 
 [node]
 name = "@NODE@"
+gold_vmid = 100
 
 [control]
 node = "@NODE@"

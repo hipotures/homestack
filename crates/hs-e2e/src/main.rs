@@ -3,6 +3,7 @@
 mod access;
 mod client;
 mod domain;
+mod gold;
 mod image;
 mod install;
 mod internet;
@@ -26,7 +27,7 @@ use serde_json::{Value, json};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
-const USAGE: &str = "homestack-e2e run [--memory-mib N] [--cpus N] [--disk-gib N]\n                  [--timeout-seconds N] [--message TEXT] [--artifacts DIRECTORY]\n                  [--pause-after PHASE[,PHASE...]] [--pause-on-failure]\n                  [--web-bind IPV4] [--web-port PORT]\n                  [--fixtures DIRECTORY] [--spaceship-file FILE]\n                  [--local-dns IPV4] [--tsig-file FILE]\n                  [--runner-ssh DESTINATION] [--runner-ssh-port PORT]\nhomestack-e2e resume --artifacts DIRECTORY\nhomestack-e2e profile --artifacts DIRECTORY (register an already paused lab as profile e2e)\nhomestack --profil e2e [COMMAND]\nhomestack-e2e prepare --artifacts DIRECTORY [--local-dns IPV4] [--spaceship-file FILE] [--tsig-file FILE]\nhomestack-e2e cleanup --all [--fixtures DIRECTORY] [--spaceship-file FILE] [--tsig-file FILE]\n\nPhases: preflight, domain, image, boot, kernel, proxmox, network, homestack, verify, shutdown; cleanup always runs.\nDefaults: 1 vCPU, 2048 MiB RAM, 12 GiB sparse disk, 1800 active seconds.\nInspection pauses have no time limit and require an explicit resume.\nThe panel uses pve.e2e.homestack.app with a public Let's Encrypt certificate.\nDNS and certificate fixtures persist until cleanup --all.\nThe web forward binds to 127.0.0.1 on a free port unless explicitly configured.\nDownloads Debian 13 qcow2, installs Proxmox, verifies SSH, HTTPS and web login,\npowers off, and deletes all temporary VM data. No host network changes.\nRequires Linux x86_64, /dev/kvm, qemu-system-x86_64, qemu-img,\nssh, ssh-keygen, mkfs.vfat, mcopy, openssl, python3 and ip; dig/nsupdate for local DNS.\nNo host root privileges required.";
+const USAGE: &str = "homestack-e2e run [--memory-mib N] [--cpus N] [--disk-gib N]\n                  [--timeout-seconds N] [--message TEXT] [--artifacts DIRECTORY]\n                  [--pause-after PHASE[,PHASE...]] [--pause-on-failure]\n                  [--web-bind IPV4] [--web-port PORT]\n                  [--fixtures DIRECTORY] [--spaceship-file FILE]\n                  [--local-dns IPV4] [--tsig-file FILE]\n                  [--runner-ssh DESTINATION] [--runner-ssh-port PORT]\nhomestack-e2e resume --artifacts DIRECTORY\nhomestack-e2e profile --artifacts DIRECTORY (register an already paused lab as profile e2e)\nhomestack --profil e2e [COMMAND]\nhomestack-e2e prepare --artifacts DIRECTORY [--local-dns IPV4] [--spaceship-file FILE] [--tsig-file FILE]\nhomestack-e2e cleanup --all [--fixtures DIRECTORY] [--spaceship-file FILE] [--tsig-file FILE]\n\nPhases: preflight, domain, image, boot, kernel, proxmox, network, gold, homestack, verify, shutdown; cleanup always runs.\nDefaults: 1 vCPU, 4096 MiB RAM, 12 GiB sparse disk, 1800 active seconds.\nInspection pauses have no time limit and require an explicit resume.\nThe panel uses pve.e2e.homestack.app with a public Let's Encrypt certificate.\nDNS and certificate fixtures persist until cleanup --all.\nThe web forward binds to 127.0.0.1 on a free port unless explicitly configured.\nDownloads Debian 13 qcow2, installs Proxmox, verifies SSH, HTTPS and web login,\npowers off, and deletes all temporary VM data. No host network changes.\nRequires Linux x86_64, /dev/kvm, qemu-system-x86_64, qemu-img,\nssh, ssh-keygen, scp, mkfs.vfat, mcopy, openssl, python3 and ip; dig/nsupdate for local DNS.\nNo host root privileges required.";
 
 struct Options {
     memory: u32,
@@ -58,7 +59,7 @@ impl Options {
             .map_or_else(|| home.join(".config"), PathBuf::from)
             .join("homestack");
         let mut options = Self {
-            memory: 2048,
+            memory: 4096,
             cpus: 1,
             disk: 12,
             timeout: 1800,
@@ -134,13 +135,13 @@ impl Options {
         if cleanup && !all {
             return Err("cleanup requires --all; normal run cleanup retains DNS and certificates".into());
         }
-        if !(2048..=16384).contains(&options.memory)
+        if !(4096..=16384).contains(&options.memory)
             || !(1..=8).contains(&options.cpus)
             || !(12..=64).contains(&options.disk)
             || !(60..=7200).contains(&options.timeout)
         {
             return Err(
-                "resource limits: memory 2048–16384 MiB, CPUs 1–8, disk 12–64 GiB, installation 60–7200 s".into(),
+                "resource limits: memory 4096–16384 MiB, CPUs 1–8, disk 12–64 GiB, installation 60–7200 s".into(),
             );
         }
         if options.web_bind.is_unspecified() || options.web_bind.is_multicast() || options.web_bind.is_broadcast() {
@@ -210,6 +211,7 @@ async fn execute() -> Result<()> {
                 .as_str()
                 .ok_or("run has no fixture directory")?,
         );
+        gold::prepare(dir, &options.artifacts, &report).await?;
         service::prepare(&options, dir, &options.artifacts, &report).await?;
         return Ok(());
     }
@@ -394,6 +396,7 @@ async fn run(
                 "qemu-img",
                 "ssh",
                 "ssh-keygen",
+                "scp",
                 "mkfs.vfat",
                 "mcopy",
                 "openssl",
@@ -608,6 +611,14 @@ async fn run(
         })
         .await?;
     progress
+        .execute("gold", report, async |report| {
+            eprintln!("Preparing the reference Debian Gold VM and verifying its guest contract...");
+            report["gold"] = gold::prepare(dir, artifacts, report).await?;
+            eprintln!("Gold 100 ready: agent verified after cold start; finalized and stopped for cloning.");
+            Ok(())
+        })
+        .await?;
+    progress
         .execute("homestack", report, async |report| {
             report["service"] = service::prepare(options, dir, artifacts, report).await?;
             Ok(())
@@ -616,6 +627,7 @@ async fn run(
     progress.execute("verify", report, async |report| {
             let vm = slot.as_mut().ok_or("VM handle is unavailable")?;
             report["network"] = network::verify(vm, artifacts).await?;
+            report["gold"] = gold::verify(dir, artifacts, report).await?;
             eprintln!("Verifying the PVE kernel, nested KVM and HTTPS API...");
             let kernel = vm
                 .checked_ssh(
@@ -831,7 +843,7 @@ mod tests {
     #[test]
     fn default_resources_are_small_and_pve_suitable() -> Result<()> {
         let options = Options::parse(&["run".into()], "test")?;
-        assert_eq!((options.cpus, options.memory, options.disk), (1, 2048, 12));
+        assert_eq!((options.cpus, options.memory, options.disk), (1, 4096, 12));
         assert!(Options::parse(&["run".into(), "--memory-mib".into(), "512".into()], "test").is_err());
         assert!(Options::parse(&["run".into(), "--endpoint".into(), "production".into()], "test").is_err());
         Ok(())

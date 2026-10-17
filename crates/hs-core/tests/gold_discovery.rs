@@ -104,7 +104,7 @@ const RSYNC: &str = "if command -v rsync >/dev/null 2>&1; then echo PRESENT; els
 const REPO_TOOLS: &str = r#"for c in git ssh-keygen; do command -v "$c" >/dev/null 2>&1 || printf "%s\n" "$c"; done"#;
 const ACCOUNT: &str = "getent passwd user || true";
 const REGULAR: &str = r#"awk -F: '$3 >= 1000 && $3 < 65534 {print $1 ":" $3 ":" $4}' /etc/passwd"#;
-const SUDO: &str = "if command -v sudo >/dev/null 2>&1; then echo PRESENT; else echo ABSENT; fi";
+const SUDO: &str = "if ! command -v sudo >/dev/null 2>&1; then echo DENIED; else policy=$(LC_ALL=C sudo -n -l -U user 2>&1); case \"$policy\" in \"User \"user\" is not allowed to run sudo on \"*.) echo DENIED;; *) echo UNVERIFIED;; esac; fi";
 const ROOT_KEYS: &str = "test -s /root/.ssh/authorized_keys && echo OK || echo MISSING";
 // Not in Python: what the vendor snippet needs (decision 1 = A, phase 4b).
 const VENDOR_TOOLS: &str = r#"for c in netplan udevadm NetworkManager python3; do command -v "$c" >/dev/null 2>&1 || printf "%s\n" "$c"; done"#;
@@ -117,10 +117,10 @@ fn out(text: &str) -> Value {
 /// A running Gold whose guest answers like the `guest_value` of the
 /// Python tests, with `rsync` answering `rsync`.
 fn running_gold(rsync: &str) -> FakePve {
-    running_gold_with(rsync, "", "OK")
+    running_gold_with(rsync, "", "OK", "DENIED\n")
 }
 
-fn running_gold_with(rsync: &str, vendor_missing: &str, yaml: &str) -> FakePve {
+fn running_gold_with(rsync: &str, vendor_missing: &str, yaml: &str, sudo: &str) -> FakePve {
     FakePve::new()
         .with("GET /nodes/example-node-1/qemu/101/config", gold_config())
         .with(
@@ -139,10 +139,25 @@ fn running_gold_with(rsync: &str, vendor_missing: &str, yaml: &str) -> FakePve {
             out("user:x:1000:1000::/home/user:/bin/bash\n"),
         )
         .with_exec("example-node-1", 101, REGULAR, 5, out("user:1000:1000\n"))
-        .with_exec("example-node-1", 101, SUDO, 6, out("ABSENT\n"))
+        .with_exec("example-node-1", 101, SUDO, 6, out(sudo))
         .with_exec("example-node-1", 101, ROOT_KEYS, 7, out("OK\n"))
         .with_exec("example-node-1", 101, VENDOR_TOOLS, 8, out(vendor_missing))
         .with_exec("example-node-1", 101, PYTHON_YAML, 9, out(&format!("{yaml}\n")))
+}
+
+#[test]
+fn sudo_privileges_or_unverified_policy_block_gold() {
+    for policy in ["UNVERIFIED\n", "", "GRANTED\n"] {
+        let pve = running_gold_with("PRESENT", "", "OK", policy);
+        let result = readiness(&pve);
+        assert!(!result.ok);
+        assert!(
+            result
+                .checks
+                .iter()
+                .any(|check| check.name == "No sudo privileges" && check.status == "fail")
+        );
+    }
 }
 
 fn optional_failures(result: &hs_model::status::GoldReadiness) -> Vec<&str> {
@@ -178,7 +193,7 @@ fn running_gold_checks_guest_contract() {
             ("git/ssh-keygen for homestack repo", "pass"),
             ("Workspace account", "pass"),
             ("Regular user policy", "pass"),
-            ("No sudo", "pass"),
+            ("No sudo privileges", "pass"),
             ("Root authorized_keys", "pass"),
             ("Workspace public-key source", "pass"),
             ("Cloud-Init vendor snippet tools", "pass"),
@@ -191,7 +206,7 @@ fn running_gold_checks_guest_contract() {
 /// without them boots a workspace with no network or no home.
 #[test]
 fn gold_without_the_vendor_snippet_tools_is_not_ready() {
-    let result = readiness(&running_gold_with("PRESENT", "netplan\n", "MISSING"));
+    let result = readiness(&running_gold_with("PRESENT", "netplan\n", "MISSING", "DENIED\n"));
     assert!(!result.ok);
     let check = result
         .checks

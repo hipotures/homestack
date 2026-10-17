@@ -35,7 +35,7 @@ Running and configuring the server (`server.toml`, made from an existing `config
 
 Design for a disposable single-node Proxmox laboratory with real installation, Gold preparation, destructive E2E scenarios and an extensible test catalogue: [Isolated E2E laboratory](docs/isolated-e2e-lab.md).
 
-The executable bootstrap downloads Debian qcow2, installs and verifies Proxmox in a disposable 1-vCPU/2-GiB KVM VM, then powers it off and deletes it. Explicit installation phases support inspection pauses, pinned SSH, temporary web login and browser access from a local or remote desktop: [E2E bootstrap](docs/e2e-bootstrap.md).
+The executable bootstrap downloads Debian qcow2, installs and verifies Proxmox in a disposable 1-vCPU/4-GiB KVM VM, automatically prepares and validates a Debian Gold VM, then powers the lab off and deletes it. Explicit installation phases support inspection pauses, pinned SSH, temporary web login and browser access from a local or remote desktop: [E2E bootstrap](docs/e2e-bootstrap.md).
 
 The Rust client (`crates/hs-cli`, binary `homestack`) runs `status`, `transport`, `discover`, `create`, `refresh`, `resize`, `addkey`, `destroy` and `migrate` through the server, with the same confirmations, `--json` output and exit codes as the Python CLI, and keeps the desktop's SSH config, a `known_hosts` file per workspace and `identity_files` itself. `install` and `uninstall` are Rust too (root on a node once, over SSH or a Herdr pane; [docs/migration/phase-13c.md](docs/migration/phase-13c.md)). `setup` and `repo` are still Python's. It reads `~/.config/homestack/client.toml` (from `hs-config split --server-url https://...`); its `[server]` section names the instances (HTTPS only), the client token file (default `~/.config/homestack/api-token`, mode 0600) and an optional CA file. Details: [docs/migration/phase-13.md](docs/migration/phase-13.md).
 
@@ -188,7 +188,7 @@ root
 user  UID 1000  GID 1000
 ```
 
-The workspace account must not have root escalation. The intended HomeStack security model has no `sudo` package in Gold or workspaces. There must be no additional regular user accounts with UID 1000-65533. System/service accounts are unaffected by this rule.
+The workspace account must not have root escalation. The `sudo` package may remain installed, but the workspace account must have no permitted sudo commands. There must be no additional regular user accounts with UID 1000-65533. System/service accounts are unaffected by this rule.
 
 Root must have a usable `/root/.ssh/authorized_keys`. Workspace public keys are taken first from the Proxmox `sshkeys` setting and, when Gold is running with QEMU Guest Agent available, may fall back to `/home/<USER>/.ssh/authorized_keys`. Only public keys belong in Gold or Proxmox configuration; private hardware-key material remains on the trusted desktop.
 
@@ -219,7 +219,7 @@ Gold's root may contain any system-wide packages and configuration that should r
 
 Gold readiness is a required, checkpointed installer stage. Transport selection, Gold selection, and workspace-account values are saved before it runs. If the check fails, fix the Gold VM and rerun the same installer command; those completed stages are loaded from the draft and are not asked again.
 
-Gold is optional during installation. Select the server network bridge independently; creating and refreshing workspaces require a configured Gold later. When a Gold is selected, `homestack install` performs a non-destructive readiness check. Required checks validate the PVE role tag, root/data-disk layout, `net0`, Cloud-Init drive, QEMU Guest Agent option, and boot order. If Gold is running, required guest and security checks also cover QEMU Guest Agent access, the mandatory guest tools, the configured user/UID/GID, the no-`sudo` policy, regular-user policy, root SSH keys, and a workspace public-key source. `rsync` is an optional capability needed for Setup Files; `git` and `ssh-keygen` are optional capabilities needed only for `homestack repo`.
+Gold is optional during installation. Select the server network bridge independently; creating and refreshing workspaces require a configured Gold later. When a Gold is selected, `homestack install` performs a non-destructive readiness check. Required checks validate the PVE role tag, root/data-disk layout, `net0`, Cloud-Init drive, QEMU Guest Agent option, and boot order. If Gold is running, required guest and security checks also cover QEMU Guest Agent access, the mandatory guest tools, the configured user/UID/GID, the no-sudo-privileges policy, regular-user policy, root SSH keys, and a workspace public-key source. `rsync` is an optional capability needed for Setup Files; `git` and `ssh-keygen` are optional capabilities needed only for `homestack repo`.
 
 The installer never starts Gold just to inspect it. A stopped Gold can therefore pass the PVE-side contract when it has valid Proxmox `sshkeys`, but the installer reports guest checks as not inspected. Runtime `create` and `refresh` verification still fail closed if the resulting workspace violates the account, SSH, persistent-home, or guest requirements.
 
