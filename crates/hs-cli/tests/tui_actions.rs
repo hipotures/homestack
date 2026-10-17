@@ -214,6 +214,45 @@ fn new_opens_a_form_and_its_values_go_to_the_plan() {
 }
 
 #[test]
+fn new_uses_the_e2e_subnet_and_skips_gold_and_the_server() {
+    let mut fixture = app();
+    fixture.app.network = Some(hs_model::config::Network {
+        prefix: "10.77.0".to_owned(),
+        cidr: 24,
+        gateway: "10.77.0.1".to_owned(),
+        dns: vec!["10.77.0.1".to_owned()],
+    });
+    let mut status = tui_fixture::status();
+    status["gold"]["vmid"] = json!(100);
+    status["gold"]["ip"] = json!("10.77.0.100");
+    status["workspaces"] = json!([]);
+    status["others"] = json!([{"vmid": 101, "role": "SERVER", "name": "api1", "status": "running",
+        "node": "pve1", "node_status": "online", "ip": "10.77.0.101", "root_storage": null,
+        "home": null, "role_tag_ok": true, "warning": null}]);
+    fixture.app.set_status(&status);
+    press(&mut fixture.app, KeyCode::Char('n'));
+    let text = screen(&render(&fixture.app, 120, 36));
+    assert!(text.contains("VMID       102"), "{text}");
+    assert!(text.contains("IP         10.77.0.102"), "{text}");
+    press(&mut fixture.app, KeyCode::Tab);
+    type_text(&mut fixture.app, "lab-new");
+    let start = started(press(&mut fixture.app, KeyCode::Enter));
+    assert_eq!(start.parameters["vmid"], 102);
+}
+
+#[test]
+fn new_waits_for_the_server_network_instead_of_inventing_an_address() {
+    let mut fixture = app();
+    fixture.app.network = None;
+    press(&mut fixture.app, KeyCode::Char('n'));
+    press(&mut fixture.app, KeyCode::Tab);
+    type_text(&mut fixture.app, "lab-new");
+    assert_eq!(press(&mut fixture.app, KeyCode::Enter), None);
+    let text = screen(&render(&fixture.app, 120, 36));
+    assert!(text.contains("server network is not available yet"), "{text}");
+}
+
+#[test]
 fn the_form_refuses_a_bad_name_before_asking_the_server() {
     let mut fixture = app();
     press(&mut fixture.app, KeyCode::Char('n'));

@@ -11,6 +11,15 @@ fn the_vmid_is_the_last_two_octets() {
     assert_eq!(vmid_of(Ipv4Addr::new(10, 0, 0, 5)), 5);
 }
 
+#[test]
+fn short_vmids_must_also_be_usable_in_the_configured_subnet() {
+    use hs_model::address::address_of;
+    assert_eq!(address_of(100, &network(25)), Some(Ipv4Addr::new(192, 168, 100, 100)));
+    assert_eq!(address_of(127, &network(25)), None);
+    assert_eq!(address_of(128, &network(25)), None);
+    assert_eq!(address_of(200, &network(25)), None);
+}
+
 fn network(cidr: u8) -> hs_model::config::Network {
     hs_model::config::Network {
         prefix: "192.168.100".to_owned(),

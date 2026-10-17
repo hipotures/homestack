@@ -47,8 +47,8 @@ enum Update {
     Setup(Option<u32>, super::setup_work::Event),
     /// The running action's progress.
     Action(Progress),
-    /// The server's workspace and Gold pools, and default home size (MiB).
-    Defaults(Option<String>, Option<String>, Option<u64>),
+    /// The server's pools, default home size (MiB) and workspace network.
+    Defaults(Option<String>, Option<String>, Option<u64>, hs_model::config::Network),
     /// The images of the reinstall box of these containers.
     Images(Vec<u32>, Result<super::reinstall::Images, String>),
 }
@@ -328,23 +328,27 @@ async fn read_status(client: &Client, updates: &mpsc::UnboundedSender<Update>, s
     }
 }
 
-/// Read what a new workspace gets by default: the server's workspace pool
-/// and its home size; false when no server answered.
+/// Read the pools, home size and network for a new workspace; retry if the
+/// server configuration is not available.
 async fn read_defaults(client: &Client, updates: &mpsc::UnboundedSender<Update>, stop: &AtomicBool) -> bool {
     let Ok((_, capabilities)) = client.get_from("/v1/capabilities").await else {
         return false;
     };
     let pool = capabilities["installation"]["pool"].as_str().map(str::to_owned);
     let gold_pool = capabilities["installation"]["gold_pool"].as_str().map(str::to_owned);
-    let home = match client.get_from("/v1/config").await {
+    let config = match client.get_from("/v1/config").await {
         Ok((_, stored)) => stored
             .as_str()
-            .and_then(|text| text.parse::<toml::Table>().ok())
-            .and_then(|table| table.get("home")?.get("default_size")?.as_str().and_then(mib_of)),
+            .and_then(|text| hs_model::config::Config::parse(text).ok()),
         Err(_) => None,
     };
+    let Some(config) = config else {
+        return false;
+    };
+    let home = mib_of(&config.default_home_size);
+    let network = config.network;
     if !stop.load(Ordering::SeqCst) {
-        let _ = updates.send(Update::Defaults(pool, gold_pool, home));
+        let _ = updates.send(Update::Defaults(pool, gold_pool, home, network));
     }
     true
 }
@@ -948,10 +952,11 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
                 }
                 Update::Servers(servers) => app.set_servers(servers),
                 Update::Images(targets, images) => app.set_images(&targets, images),
-                Update::Defaults(pool, gold_pool, home) => {
+                Update::Defaults(pool, gold_pool, home, network) => {
                     app.pool = pool;
                     app.gold_pool = gold_pool;
                     app.home_default = home;
+                    app.network = Some(network);
                 }
                 Update::Unreachable(servers) => {
                     if connected.take().is_some() || app.unreachable.is_empty() {

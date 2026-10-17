@@ -20,6 +20,7 @@ hyper = { version = "1.12.0", features = ["server", "http1"] }
 hyper-util = { version = "0.1.21", features = ["tokio"] }
 instant-acme = { version = "0.8.5", features = ["rcgen", "x509-parser"] }
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "json", "stream", "form"] }
+rustix = { version = "1.1.5", features = ["termios"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 sha2 = "0.11.0"

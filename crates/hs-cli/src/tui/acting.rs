@@ -14,12 +14,8 @@ use super::state::{App, Request};
 use crate::app::valid_name;
 
 const EXISTING_KEYS: &str = "the keys already in sshkeys";
-/// The pools of workspaces and their VMIDs (`decisions.md`, addressing):
-/// the workspaces first, the default, then the test workspaces.
-const WORKSPACE_POOLS: [(&str, (u32, u32)); 2] = [
-    ("homestack", (101_010, 101_199)),
-    ("homestack-test", (101_200, 101_254)),
-];
+/// The pools' final address octets; their subnet comes from server configuration.
+const WORKSPACE_POOLS: [(&str, (u32, u32)); 2] = [("homestack", (10, 199)), ("homestack-test", (200, 254))];
 
 impl App {
     /// The desktop's public keys, offered by add key.
@@ -86,13 +82,19 @@ impl App {
             .map_or_else(|| self.server_pool().to_owned(), |(id, _)| id)
     }
 
-    /// The VMIDs of `pool`; a pool without a range of its own has the
-    /// workspaces'.
-    fn pool_vmids(pool: &str) -> (u32, u32) {
-        WORKSPACE_POOLS
+    /// Use the first workload /24 after the network's first /24 when there
+    /// is room; a /24 or smaller uses its own third octet.
+    fn pool_vmids(&self, pool: &str) -> Option<(u32, u32)> {
+        let network = self.network.as_ref()?;
+        let gateway: std::net::Ipv4Addr = network.gateway.parse().ok()?;
+        let mask = u32::MAX.checked_shl(32 - u32::from(network.cidr)).unwrap_or(0);
+        let start = std::net::Ipv4Addr::from(u32::from(gateway) & mask);
+        let third = u32::from(start.octets()[2]) + u32::from(network.cidr < 24);
+        let (first, last) = WORKSPACE_POOLS
             .iter()
             .find(|(id, _)| *id == pool)
-            .map_or(WORKSPACE_POOLS[0].1, |(_, vmids)| *vmids)
+            .map_or(WORKSPACE_POOLS[0].1, |(_, octets)| *octets);
+        Some(((third * 1000 + first).max(100), third * 1000 + last))
     }
 
     /// The VMID a new workspace in `pool` gets: the first of the pool's
@@ -110,25 +112,23 @@ impl App {
                     .chain(status.gold.as_ref().map(|gold| gold.vmid))
             })
             .collect();
-        let (first, last) = Self::pool_vmids(pool);
-        (first..=last).find(|vmid| !used.contains(vmid))
+        let (first, last) = self.pool_vmids(pool)?;
+        let occupied: Vec<_> = used.iter().filter_map(|vmid| self.address_of(*vmid)).collect();
+        (first..=last).find(|vmid| {
+            !used.contains(vmid)
+                && self.address_of(*vmid).is_some_and(|address| {
+                    !occupied.contains(&address)
+                        && self
+                            .network
+                            .as_ref()
+                            .is_some_and(|network| address.to_string() != network.gateway)
+                })
+        })
     }
 
-    /// The address of `vmid` (`.101.10` for 101010) under the first two
-    /// octets of the addresses the server gives Gold and the workspaces.
+    /// Use the same configured address mapping as server-side validation.
     pub(super) fn address_of(&self, vmid: u32) -> Option<std::net::Ipv4Addr> {
-        let status = self.status.as_ref()?;
-        let known: std::net::Ipv4Addr = status
-            .gold
-            .iter()
-            .chain(&status.workspaces)
-            .find_map(|entry| entry.ip.as_deref()?.split('/').next()?.parse().ok())?;
-        let [first, second, _, _] = known.octets();
-        let third = u8::try_from(vmid / 1000).ok()?;
-        let fourth = u8::try_from(vmid % 1000)
-            .ok()
-            .filter(|fourth| (1..=254).contains(fourth))?;
-        Some(std::net::Ipv4Addr::new(first, second, third, fourth))
+        hs_model::address::address_of(vmid, self.network.as_ref()?)
     }
 
     /// The MiB free on the storage the form makes the home on (without a
@@ -340,8 +340,14 @@ impl App {
             Kind::New => {
                 let pool = self.chosen_pool(form);
                 let Some(id) = self.free_vmid(&pool) else {
-                    let (first, last) = Self::pool_vmids(&pool);
-                    return Err(format!("No VMID of the pool is free ({first}-{last})."));
+                    return Err(match self.pool_vmids(&pool) {
+                        Some((first, last)) => {
+                            format!("No free VMID has a usable address in the pool's range ({first}-{last}).")
+                        }
+                        None => {
+                            "The server network is not available yet; wait for its configuration to load.".to_owned()
+                        }
+                    });
                 };
                 let name = value("Name");
                 if !valid_name(&name) {

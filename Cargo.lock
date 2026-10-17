@@ -1020,6 +1020,7 @@ dependencies = [
  "hyper-util",
  "instant-acme",
  "reqwest",
+ "rustix",
  "serde",
  "serde_json",
  "sha2",

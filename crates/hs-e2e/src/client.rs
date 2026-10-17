@@ -10,11 +10,26 @@ use serde_json::Value;
 
 use crate::{Result, phases::shell_quote};
 
-struct TerminalGuard;
+struct TerminalGuard {
+    settings: rustix::termios::Termios,
+}
+
+impl TerminalGuard {
+    fn capture() -> Result<Option<Self>> {
+        if std::io::stdin().is_terminal() && std::io::stdout().is_terminal() {
+            Ok(Some(Self {
+                settings: rustix::termios::tcgetattr(std::io::stdin())?,
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+}
 
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
         let _ = crossterm::terminal::disable_raw_mode();
+        let _ = rustix::termios::tcsetattr(std::io::stdin(), rustix::termios::OptionalActions::Now, &self.settings);
         let _ = crossterm::execute!(
             std::io::stdout(),
             crossterm::event::DisableMouseCapture,
@@ -54,11 +69,20 @@ fn prepare(dir: &Path, program: &Path, ssh: &Path, image: &str, argv: &[String])
     // OpenSSH reads the passwd database's home, not $HOME. An explicit -F
     // also prevents reading the real desktop's SSH config and Include files.
     let config = root.join("ssh_config");
+    let guests = root.join("home/.ssh/config.d/homestack");
+    std::fs::create_dir_all(&guests)?;
+    write(&root.join("guest-connect.py"), include_str!("guest-connect.py"), 0o600)?;
     write(
         &config,
         &format!(
-            "Host pve-e2e\n  ProxyCommand none\nInclude {}\nHost *\n  ProxyCommand /bin/false\n",
-            ssh_quote(&dir.join("ssh_config"))
+            "Host pve-e2e\n  ProxyCommand none\nHost *\nInclude {}\nHost *\nInclude {}\nHost 10.77.0.*\n  IdentityFile {}\nHost *\n  ProxyCommand python3 {} {} {} %h %p\n  IdentityAgent none\n  IdentitiesOnly yes\n  StrictHostKeyChecking accept-new\n  UserKnownHostsFile {}\n  GlobalKnownHostsFile /dev/null\n  ConnectTimeout 10\n",
+            ssh_quote(&guests.join("*.conf")),
+            ssh_quote(&dir.join("ssh_config")),
+            ssh_quote(&root.join("home/.ssh/e2e-workspace")),
+            ssh_quote(&root.join("guest-connect.py")),
+            ssh_quote(dir),
+            ssh_quote(ssh),
+            ssh_quote(&root.join("known_hosts")),
         ),
         0o600,
     )?;
@@ -249,12 +273,8 @@ async fn launch(artifacts: &Path, run_id: &str, argv: &[String]) -> Result<()> {
     );
     eprintln!("This profile and its credentials are removed with the VM. Keep the controller paused.");
     eprintln!("HTTPS uses the lab SSH SOCKS tunnel; TLS hostname and public-CA checks stay enabled.");
-    let _terminal = if std::io::stdin().is_terminal() && std::io::stdout().is_terminal() {
-        crossterm::terminal::enable_raw_mode()?;
-        Some(TerminalGuard)
-    } else {
-        None
-    };
+    // The TUI owns raw mode; its SSH handover must restore a canonical terminal.
+    let _terminal = TerminalGuard::capture()?;
     let mut child = tokio::process::Command::from(command).kill_on_drop(true).spawn()?;
     let status = tokio::select! {
         status = child.wait() => status,
@@ -275,6 +295,57 @@ async fn launch(artifacts: &Path, run_id: &str, argv: &[String]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "helper executed by terminal_guard_preserves_child_input_and_restores_settings"]
+    fn terminal_guard_child() -> Result<()> {
+        let _guard = TerminalGuard::capture()?.ok_or("missing test terminal")?;
+        let original = rustix::termios::tcgetattr(std::io::stdin())?;
+        assert!(original.local_modes.contains(rustix::termios::LocalModes::ICANON));
+        println!("CANONICAL_READY");
+        let mut line = String::new();
+        std::io::stdin().read_line(&mut line)?;
+        assert_eq!(line, "resume\n");
+        // A killed TUI can leave raw mode behind; the parent must still restore it.
+        let mut raw = original;
+        raw.make_raw();
+        rustix::termios::tcsetattr(std::io::stdin(), rustix::termios::OptionalActions::Now, &raw)?;
+        Ok(())
+    }
+
+    #[test]
+    fn terminal_guard_preserves_child_input_and_restores_settings() -> Result<()> {
+        let script = r#"
+import os, pty, select, subprocess, sys, termios, time
+master, slave = pty.openpty()
+try:
+    original = termios.tcgetattr(slave)
+    process = subprocess.Popen([sys.argv[1], '--exact', 'client::tests::terminal_guard_child', '--ignored', '--nocapture'],
+                               stdin=slave, stdout=slave, stderr=slave)
+    try:
+        output = b''
+        deadline = time.monotonic() + 10
+        while b'CANONICAL_READY' not in output:
+            assert time.monotonic() < deadline and process.poll() is None, output
+            if select.select([master], [], [], .1)[0]: output += os.read(master, 65536)
+        assert termios.tcgetattr(slave) == original, 'wrapper changed child input mode'
+        os.write(master, b'resume\n')
+        assert process.wait(timeout=10) == 0
+        assert termios.tcgetattr(slave) == original, 'terminal settings were not restored'
+    finally:
+        if process.poll() is None: process.kill()
+        process.wait()
+finally:
+    os.close(master)
+    os.close(slave)
+"#;
+        let result = Command::new("python3")
+            .args(["-c", script])
+            .arg(std::env::current_exe()?)
+            .output()?;
+        assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
+        Ok(())
+    }
 
     fn fixture() -> Result<tempfile::TempDir> {
         let dir = tempfile::tempdir()?;
@@ -387,7 +458,7 @@ mod tests {
                     );
                 }
             } else {
-                assert!(config.lines().any(|line| line == "proxycommand /bin/false"), "{config}");
+                assert!(config.contains("guest-connect.py"), "{config}");
             }
         }
         let output = Command::new(dir.path().join("client/bin/herdr"))
@@ -395,6 +466,62 @@ mod tests {
             .output()?;
         assert!(!output.status.success());
         assert!(String::from_utf8(output.stderr)?.contains("Herdr is disabled"));
+        Ok(())
+    }
+
+    #[test]
+    fn guest_ssh_reads_private_aliases_and_rejects_destinations_outside_the_lab() -> Result<()> {
+        let dir = fixture()?;
+        let ssh = executable("ssh")?;
+        prepare(dir.path(), Path::new("/bin/true"), &ssh, "test", &[])?;
+        let root = dir.path().join("client");
+        let guest = root.join("home/.ssh/config.d/homestack/vm100-gold.conf");
+        write(
+            &guest,
+            "Host vm100\n  HostName 10.77.0.68\n  User root\n  IdentityFile /test/gold-key\n  StrictHostKeyChecking yes\n",
+            0o600,
+        )?;
+        let resolved = Command::new(root.join("bin/ssh")).args(["-G", "vm100"]).output()?;
+        assert!(resolved.status.success());
+        let config = String::from_utf8(resolved.stdout)?;
+        for expected in [
+            "hostname 10.77.0.68",
+            "user root",
+            "identityfile /test/gold-key",
+            "stricthostkeychecking true",
+        ] {
+            assert!(config.lines().any(|line| line == expected), "{config}");
+        }
+        assert!(config.contains("guest-connect.py"), "{config}");
+        let fake = dir.path().join("fake-ssh");
+        write(&fake, "#!/bin/sh\nprintf '%s\\n' \"$@\"\n", 0o700)?;
+        let connect = |host: &str, port: &str| {
+            Command::new("python3")
+                .arg(root.join("guest-connect.py"))
+                .arg(dir.path())
+                .arg(&fake)
+                .args([host, port])
+                .output()
+        };
+        let allowed = connect("10.77.0.68", "22")?;
+        assert!(allowed.status.success());
+        assert!(String::from_utf8(allowed.stdout)?.ends_with("-W\n10.77.0.68:22\npve-e2e\n"));
+        for (host, port) in [
+            ("production.invalid", "22"),
+            ("127.0.0.1", "22"),
+            ("192.168.1.1", "22"),
+            ("10.77.1.68", "22"),
+            ("1.1.1.1", "22"),
+            ("::1", "22"),
+            ("10.77.0.0", "22"),
+            ("10.77.0.255", "22"),
+            ("10.77.0.68", "-1"),
+            ("10.77.0.68", "65536"),
+        ] {
+            let rejected = connect(host, port)?;
+            assert!(!rejected.status.success(), "accepted {host}:{port}");
+            assert!(rejected.stdout.is_empty(), "SSH ran for {host}:{port}");
+        }
         Ok(())
     }
 

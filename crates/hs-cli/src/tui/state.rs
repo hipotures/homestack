@@ -237,6 +237,8 @@ pub struct App {
     pub gold_pool: Option<String>,
     /// The server's default home size in MiB (`/v1/config`), for new.
     pub home_default: Option<u64>,
+    /// The server's configured workspace network (`/v1/config`).
+    pub network: Option<hs_model::config::Network>,
     /// The server containers marked with Space, for one reinstall.
     pub marked: std::collections::BTreeSet<u32>,
     /// What the reinstall box shows, once read.
@@ -292,6 +294,7 @@ impl App {
             pool: None,
             gold_pool: None,
             home_default: None,
+            network: None,
             marked: std::collections::BTreeSet::new(),
             images: None,
             setup: None,

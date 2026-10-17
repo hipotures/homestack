@@ -338,6 +338,29 @@ the client exits; losing the SSH tunnel also stops the client. The VM stays
 running in its inspection pause. A second client for the same API fixture is
 rejected while the first holds its lock.
 
+The E2E SSH wrapper reads workspace entries only from its private home.
+Guest connections use a validated jump through this run's pinned PVE SSH
+connection: only IPv4 addresses in `10.77.0.0/24` are accepted. Desktop SSH
+configuration, the production agent and destinations outside the lab stay
+excluded. Guest host keys and workspace identities live in the disposable
+profile. A manually prepared Gold can have an explicit `vm<VMID>` entry with
+its actual DHCP address, root identity and pinned host key; the TUI uses that
+entry instead of an assumed workspace user/address.
+
+The launcher saves terminal settings without enabling raw mode before the
+TUI starts. The TUI owns raw mode and restores canonical input during SSH
+handover, so Enter works after a failed connection. The launcher restores the
+saved settings if the TUI exits or is terminated after a tunnel failure.
+
+New-workspace VMIDs and displayed addresses come from the server's configured
+network, using the same address mapper as server validation. Networks wider
+than /24 use their second /24 for workloads; a /24 or narrower uses its own
+third octet. The workspace/test pool suffix ranges are 10–199 and 200–254,
+subject to Proxmox's minimum VMID 100, subnet usability, the gateway and occupied
+VMIDs/addresses. In the default lab, Gold 100 and API 101 therefore leave
+VMID 102 (`10.77.0.102`) as the first workspace. The form waits for the server
+configuration rather than inferring a subnet from existing guests.
+
 The API's private address is reached by the client through this tunnel. A
 normal browser has no route to `10.77.0.101`; the PVE browser panel keeps its
 reported loopback forward and domain URL.

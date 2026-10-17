@@ -100,6 +100,12 @@ pub fn app() -> Fixture {
     app.set_status(&status());
     app.pool = Some("homestack".to_owned());
     app.gold_pool = Some("homestack-gold".to_owned());
+    app.network = Some(hs_model::config::Network {
+        prefix: "10.0.100".to_owned(),
+        cidr: 22,
+        gateway: "10.0.100.1".to_owned(),
+        dns: vec!["10.0.100.1".to_owned()],
+    });
     app.set_servers(vec![
         ("https://api1.hs.example.net/".to_owned(), None),
         ("https://api2.hs.example.net/".to_owned(), None),
