@@ -805,11 +805,12 @@ impl<'a> Cli<'a> {
 
 /// `addkey`'s plan: the panel and the numbered steps (Python `cli.main`).
 pub fn addkey_plan(plan: &Value, style: &Style) -> String {
-    let key = if let Some(keys) = plan["added_keys"].as_array() {
-        keys.iter()
-            .map(|key| format!("{} ({})", view::text(&key["comment"]), view::text(&key["type"])))
-            .collect::<Vec<_>>()
-            .join(", ")
+    let key = if plan["key"].is_object() {
+        format!(
+            "{} ({})",
+            view::text(&plan["key"]["comment"]),
+            view::text(&plan["key"]["type"])
+        )
     } else {
         format!("existing keys: {}", view::text(&plan["label"]))
     };

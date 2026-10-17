@@ -266,23 +266,13 @@ pub async fn work(
     progress: &(dyn Fn(Progress) + Send + Sync),
 ) {
     let kind = start.kind;
-    let mut parameters = start.parameters.clone();
-    let mut private_shown = Vec::new();
-    let mut public_keys = Vec::new();
-    for file in &start.key_files {
-        let path = expand_home(file, &desktop.home);
-        match std::fs::read_to_string(&path) {
-            Ok(text) => public_keys.push(text.trim().to_owned()),
-            Err(error) => return failed(progress, format!("Could not read the public key {file}: {error}")),
+    if kind == Kind::Addkey && !start.key_files.is_empty() {
+        if let Err(message) = add_selected_keys(client, desktop, &start, decisions, progress).await {
+            failed(progress, message);
         }
-        match identity::private_key_for(&desktop.home, Path::new(file)) {
-            Ok((_, shown)) => private_shown.push(shown),
-            Err(error) => return failed(progress, error.0),
-        }
+        return;
     }
-    if !public_keys.is_empty() {
-        parameters["key"] = json!(public_keys.join("\n"));
-    }
+    let parameters = start.parameters.clone();
     let session = match client.plan(kind.operation(), parameters.clone()).await {
         Ok(session) => session,
         Err(error) => return failed(progress, client_error(error).0),
@@ -345,7 +335,7 @@ pub async fn work(
                 return failed(progress, message);
             }
             let name = view::text(&result["name"]);
-            app::after_addkey(home, &desktop.loaded, vmid, &private_shown, &mut result)
+            app::after_addkey(home, &desktop.loaded, vmid, &[], &mut result)
                 .map(|()| app::addkey_result_text(vmid, &name, &result, &style))
         }
     };
@@ -356,6 +346,132 @@ pub async fn work(
         }),
         Err(error) => failed(progress, error.0),
     }
+}
+
+/// Review every selected file before applying keys one at a time through the
+/// standard single-key API. Replan after each job so later keys preserve earlier ones.
+async fn add_selected_keys(
+    client: &Client,
+    desktop: &Desktop,
+    start: &Start,
+    decisions: &mut mpsc::UnboundedReceiver<Decision>,
+    progress: &(dyn Fn(Progress) + Send + Sync),
+) -> Result<(), String> {
+    let mut requests = Vec::new();
+    let mut private_keys = Vec::new();
+    for file in &start.key_files {
+        let text = std::fs::read_to_string(expand_home(file, &desktop.home))
+            .map_err(|error| format!("Could not read the public key {file}: {error}"))?;
+        private_keys.push(
+            identity::private_key_for(&desktop.home, Path::new(file))
+                .map_err(|error| error.0)?
+                .1,
+        );
+        let mut parameters = start.parameters.clone();
+        parameters["key"] = json!(text.trim());
+        parameters["restart"] = json!(false);
+        requests.push(parameters);
+    }
+    let mut summaries = Vec::new();
+    let mut lines = vec![format!("Add {} selected public keys", requests.len()), String::new()];
+    for parameters in &requests {
+        let session = client
+            .plan("workspace.addkey", parameters.clone())
+            .await
+            .map_err(|error| client_error(error).0)?;
+        let summary = session.plan["summary"].clone();
+        lines.extend(unframe(&app::addkey_plan(&summary, &plain())));
+        lines.push(String::new());
+        summaries.push(summary);
+    }
+    lines.push("Keys are added one at a time. If a key fails, completed additions stay in place.".to_owned());
+    progress(Progress::Plan {
+        lines,
+        question: Kind::Addkey.question(false).to_owned(),
+        blocked: None,
+        secret: None,
+    });
+    match decisions.recv().await {
+        Some(Decision::Apply(_)) => {}
+        Some(_) => {
+            progress(Progress::Done {
+                ok: true,
+                lines: vec!["Cancelled. No changes were made.".to_owned()],
+            });
+            return Ok(());
+        }
+        None => return Ok(()),
+    }
+    let vmid = start.vmid.ok_or_else(|| "No workspace selected".to_owned())?;
+    let mut labels = Vec::new();
+    let mut pending_restart = false;
+    let mut result = Value::Null;
+    for (index, parameters) in requests.into_iter().enumerate() {
+        let applied = async {
+            let session = client
+                .plan("workspace.addkey", parameters)
+                .await
+                .map_err(|error| client_error(error).0)?;
+            for field in ["vmid", "name", "node", "pool", "status", "ip", "user"] {
+                if session.plan["summary"][field] != summaries[index][field] {
+                    return Err(format!(
+                        "The workspace's {field} changed after review; review the selection again."
+                    ));
+                }
+            }
+            app::run_job(&session, None, desktop.poll, |_, job| {
+                let mut steps = steps(job);
+                for step in &mut steps {
+                    step.name = format!("Key {}/{}: {}", index + 1, start.key_files.len(), step.name);
+                }
+                progress(Progress::Steps(steps));
+            })
+            .await
+            .map_err(|error| error.0)
+        }
+        .await;
+        let mut current = applied.map_err(|message| {
+            format!(
+                "Could not add {}: {message}\nCompleted keys: {}. Remaining keys were not attempted.",
+                start.key_files[index],
+                if labels.is_empty() {
+                    "none".to_owned()
+                } else {
+                    labels.join(", ")
+                }
+            )
+        })?;
+        pending_restart |= current["pending_restart"] == true;
+        labels.push(view::text(&current["key"]));
+        app::after_addkey(
+            &desktop.home,
+            &desktop.loaded,
+            vmid,
+            &private_keys[..=index],
+            &mut current,
+        )
+        .map_err(|error| error.0)?;
+        result = current;
+    }
+    result["key"] = json!(labels.join(", "));
+    result["pending_restart"] = json!(pending_restart);
+    restart_if_asked(
+        client,
+        desktop,
+        vmid,
+        &start.parameters,
+        &mut result,
+        decisions,
+        progress,
+    )
+    .await?;
+    app::after_addkey(&desktop.home, &desktop.loaded, vmid, &private_keys, &mut result).map_err(|error| error.0)?;
+    let name = view::text(&result["name"]);
+    progress(Progress::Done {
+        ok: true,
+        lines: unframe(&app::addkey_result_text(vmid, &name, &result, &plain())),
+    });
+    Ok(())
 }
 
 /// `addkey` on a running VM: the key waits for a restart; ask, and restart

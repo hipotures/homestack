@@ -193,7 +193,7 @@ async fn invalid_parameters_and_refusals_when_planning() -> TestResult {
         json!({"key": TREZOR}),
         json!({"vmid": 200, "key": TREZOR, "force": true}),
         json!({"vmid": 200, "key": "not a key"}),
-        json!({"vmid": 200, "key": format!("{TREZOR}\nssh-ed25519 AAAA")}),
+        json!({"vmid": 200, "key": format!("{TREZOR}\n{TREZOR}")}),
     ] {
         let (status, body) = server.plan(parameters.clone()).await?;
         assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{parameters}: {body}");

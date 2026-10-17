@@ -48,6 +48,19 @@ uid = 1000
 gid = 1000
 "#;
 
+const SELECTED_KEYS: [(&str, &str); 4] = [
+    (
+        "blue",
+        "sk-ssh-ed25519@openssh.com AAAAGnNrLXNzaC1lZDI1NTE5QG9wZW5zc2guY29tAAAAIGFiY2RlZmdoaWprbG1ub3BxcnN0dXZ3eHl6MDEyMzQ1 yubikey-blue",
+    ),
+    (
+        "backup",
+        "sk-ecdsa-sha2-nistp256@openssh.com AAAAInNrLWVjZHNhLXNoYTItbmlzdHAyNTZAb3BlbnNzaC5jb20AAAAIbmlzdHAyNTYAAABBBHRyZXpvcg== backup key",
+    ),
+    ("third", "ssh-ed25519 AAAATHIRD third-key"),
+    ("fourth", "ssh-ed25519 AAAAFOURTH fourth-key"),
+];
+
 struct Desk {
     sim: PveSim,
     home: tempfile::TempDir,
@@ -261,20 +274,11 @@ async fn a_refused_plan_ends_with_the_servers_message() -> Result<(), Error> {
 }
 
 #[tokio::test]
-async fn selected_keys_use_one_plan_and_update_all_local_identities() -> Result<(), Error> {
+async fn four_selected_keys_use_one_confirmation_with_the_single_key_api() -> Result<(), Error> {
     let desk = desk().await?;
     let (ok, text) = done(&desk.act(create(240, "hst-keys"), &[Decision::Apply(None)]).await);
     assert!(ok, "{text}");
-    let keys = [
-        (
-            "blue",
-            "sk-ssh-ed25519@openssh.com AAAAGnNrLXNzaC1lZDI1NTE5QG9wZW5zc2guY29tAAAAIGFiY2RlZmdoaWprbG1ub3BxcnN0dXZ3eHl6MDEyMzQ1 yubikey-blue",
-        ),
-        (
-            "backup",
-            "sk-ecdsa-sha2-nistp256@openssh.com AAAAInNrLWVjZHNhLXNoYTItbmlzdHAyNTZAb3BlbnNzaC5jb20AAAAIbmlzdHAyNTYAAABBBHRyZXpvcg== backup key",
-        ),
-    ];
+    let keys = SELECTED_KEYS;
     for (name, public) in keys {
         private_file(
             &desk.home.path().join(format!(".ssh/{name}")),
@@ -326,6 +330,18 @@ async fn selected_keys_use_one_plan_and_update_all_local_identities() -> Result<
             .iter()
             .any(|op| op.contains("/status/reboot") || op.contains("/status/shutdown"))
     );
+    let mut config = PveClientConfig::new(vec![desk.sim.base_url().parse()?], PveToken::parse(PVE_TOKEN)?);
+    config.extra_ca_pem = Some(desk.sim.ca_pem().to_owned());
+    let pve = hs_pve::PveClient::new(config)?;
+    for path in ["/root/.ssh/authorized_keys", "/home/developer/.ssh/authorized_keys"] {
+        let text = hs_core::guest::read_text(&pve, "pve-example-1", 240, path)
+            .await?
+            .unwrap_or_default();
+        for (_, key) in keys {
+            assert_eq!(text.lines().filter(|line| *line == key).count(), 1, "{text}");
+        }
+    }
+
     Ok(())
 }
 
@@ -351,5 +367,88 @@ async fn missing_private_key_in_a_selection_fails_before_any_remote_change() -> 
     assert!(!ok && text.contains("private key file"), "{text}");
     assert!(!progress.iter().any(|item| matches!(item, Progress::Plan { .. })));
     assert!(desk.changes().is_empty());
+    Ok(())
+}
+
+async fn prepared_selection(desk: &Desk) -> Result<Start, Error> {
+    let (ok, text) = done(&desk.act(create(240, "hst-selection"), &[Decision::Apply(None)]).await);
+    assert!(ok, "{text}");
+    for (name, public) in SELECTED_KEYS {
+        private_file(
+            &desk.home.path().join(format!(".ssh/{name}")),
+            "test identity placeholder",
+        )?;
+        private_file(&desk.home.path().join(format!(".ssh/{name}.pub")), public)?;
+    }
+    desk.sim.clear_ops();
+    Ok(Start {
+        kind: Kind::Addkey,
+        vmid: Some(240),
+        parameters: json!({"vmid":240,"restart":false}),
+        key_files: SELECTED_KEYS
+            .iter()
+            .map(|(name, _)| format!("~/.ssh/{name}.pub"))
+            .collect(),
+    })
+}
+
+#[tokio::test]
+async fn an_invalid_fourth_key_stops_the_selection_before_any_key_is_added() -> Result<(), Error> {
+    let desk = desk().await?;
+    let start = prepared_selection(&desk).await?;
+    private_file(&desk.home.path().join(".ssh/fourth.pub"), "not a public key")?;
+    let progress = desk.act(start, &[Decision::Apply(None)]).await;
+    assert!(!done(&progress).0);
+    assert!(!progress.iter().any(|item| matches!(item, Progress::Plan { .. })));
+    assert!(desk.changes().is_empty(), "{:?}", desk.changes());
+    Ok(())
+}
+
+#[tokio::test]
+async fn failure_on_the_second_key_keeps_the_first_usable_and_stops_the_remaining_keys() -> Result<(), Error> {
+    let desk = desk().await?;
+    let start = prepared_selection(&desk).await?;
+    desk.sim.inject_fault(pve_sim::scenario::FaultSpec {
+        op: "post{path=/nodes/pve-example-1/qemu/240/config}".to_owned(),
+        occurrence: 2,
+        status: 500,
+        message: "second key write failed".to_owned(),
+        applied: false,
+        hang: false,
+        task: None,
+    })?;
+    let progress = desk.act(start, &[Decision::Apply(None)]).await;
+    let (ok, text) = done(&progress);
+    assert!(!ok, "{text}");
+    assert!(text.contains("Completed keys: yubikey-blue"), "{text}");
+    assert!(text.contains("Remaining keys were not attempted"), "{text}");
+    let desktop = desk.desktop();
+    assert!(
+        desktop
+            .loaded
+            .client
+            .workspace_ssh
+            .identity_files
+            .contains(&"~/.ssh/blue".to_owned())
+    );
+    assert!(
+        !desktop
+            .loaded
+            .client
+            .workspace_ssh
+            .identity_files
+            .contains(&"~/.ssh/third".to_owned())
+    );
+    let mut config = PveClientConfig::new(vec![desk.sim.base_url().parse()?], PveToken::parse(PVE_TOKEN)?);
+    config.extra_ca_pem = Some(desk.sim.ca_pem().to_owned());
+    let pve = hs_pve::PveClient::new(config)?;
+    let text = hs_core::guest::read_text(&pve, "pve-example-1", 240, "/home/developer/.ssh/authorized_keys")
+        .await?
+        .unwrap_or_default();
+    assert!(text.contains(SELECTED_KEYS[0].1), "{text}");
+    assert!(
+        !text.contains(SELECTED_KEYS[2].1) && !text.contains(SELECTED_KEYS[3].1),
+        "{text}"
+    );
     Ok(())
 }
