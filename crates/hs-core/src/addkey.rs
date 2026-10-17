@@ -70,7 +70,7 @@ const CLOUD_INIT_POLL: Duration = Duration::from_secs(2);
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AddkeyRequest {
     pub vmid: u32,
-    /// One public key with a comment; without it the keys already in the
+    /// Public keys with comments; without them the keys already in the
     /// VM's `sshkeys` are applied (Python: `addkey VMID` without `--key`).
     pub key: Option<String>,
     /// Restart a running VM afterwards (Python's question at the end).
@@ -175,7 +175,20 @@ pub async fn plan_addkey(
     request: &AddkeyRequest,
 ) -> Result<Value, CoreError> {
     let vmid = request.vmid;
-    let key = request.key.as_deref().map(read_public_key).transpose()?;
+    let requested = request
+        .key
+        .as_deref()
+        .map(|text| {
+            let records = parse_authorized_key_records(text)?;
+            if records.is_empty() {
+                return Err(CoreError::Invalid("Select at least one public key".to_owned()));
+            }
+            records
+                .iter()
+                .map(|record| read_public_key(&format!("{} {}", record.identity, record.comment)))
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .transpose()?;
     require_pool(pve, vmid, pool).await?;
     let info = resolve_existing_workspace(pve, cfg, vmid).await?;
     let (ip, _, _) = parse_ipconfig0(info.vm_config.get("ipconfig0").map(String::as_str).unwrap_or_default())?;
@@ -188,8 +201,17 @@ pub async fn plan_addkey(
         )));
     };
     let current = info.vm_config.get("sshkeys").map(String::as_str).unwrap_or_default();
-    let (keys, present) = match &key {
-        Some(key) => merge_sshkeys(current, key),
+    let (keys, present) = match &requested {
+        Some(requested) => {
+            let mut keys = sshkeys_lines(current);
+            let mut present = true;
+            for key in requested {
+                let (merged, exists) = merge_sshkeys(&keys.join("\n"), key);
+                keys = merged;
+                present &= exists;
+            }
+            (keys, present)
+        }
         None => {
             let keys = sshkeys_lines(current);
             if keys.is_empty() {
@@ -200,21 +222,26 @@ pub async fn plan_addkey(
             (keys, true)
         }
     };
-    let label = key.as_ref().map_or_else(
+    let label = requested.as_ref().map_or_else(
         || {
             keys.iter()
                 .map(|line| line.split_whitespace().last().unwrap_or_default())
                 .collect::<Vec<_>>()
                 .join(", ")
         },
-        |key| key.comment.clone(),
+        |keys| {
+            keys.iter()
+                .map(|key| key.comment.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        },
     );
     let user = &cfg.user.name;
     let running = info.status == "running";
     let mut steps = vec![
-        match &key {
-            Some(_) if present => "Add the key to the Proxmox sshkeys of the VM (already there)".to_owned(),
-            Some(_) => "Add the key to the Proxmox sshkeys of the VM".to_owned(),
+        match &requested {
+            Some(_) if present => "Add the selected keys to the Proxmox sshkeys of the VM (already there)".to_owned(),
+            Some(_) => "Add the selected keys to the Proxmox sshkeys of the VM".to_owned(),
             None => format!("Keep the Proxmox sshkeys as they are: {label}"),
         },
         if keep_snippet {
@@ -254,12 +281,12 @@ pub async fn plan_addkey(
         "status": info.status,
         "ip": ip,
         "user": user,
-        "key": key.as_ref().map(|key| json!({
+        "added_keys": requested.as_ref().map(|keys| keys.iter().map(|key| json!({
             "comment": key.comment,
             "type": key.key_type,
             "line": key.line,
             "blob": key.blob,
-        })),
+        })).collect::<Vec<_>>()),
         "label": label,
         "key_already_in_sshkeys": present,
         "keep_snippet": keep_snippet,

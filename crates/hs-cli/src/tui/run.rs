@@ -185,8 +185,7 @@ fn hand_over(screen: &mut Screen, reader: &Reader, target: &str, name: &str) -> 
     reader.pause();
     restore();
     println!("{}", super::shell::banner(target, name));
-    let code = std::process::Command::new("ssh")
-        .arg(target)
+    let code = super::shell::command(target)
         .status()
         .ok()
         .map(|status| status.code().unwrap_or(-1));
@@ -914,7 +913,7 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
                             }
                         }
                         Request::Ssh(vmid) => {
-                            open_ssh(&mut app, vmid, &ctx.home, &mut screen, &reader);
+                            open_ssh(&mut app, vmid, &mut screen, &reader);
                         }
                         Request::HerdrTabs => match crate::root_herdr::tabs(ctx.system.as_ref()) {
                             Ok(tabs) => app.set_herdr_tabs(
@@ -1021,9 +1020,7 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
                 }
             },
             (vmid, result) = details.receive() => {
-                if let Some(Request::Ssh(vmid)) = app.set_details(vmid, result) {
-                    open_ssh(&mut app, vmid, &ctx.home, &mut screen, &reader);
-                }
+                let _ = app.set_details(vmid, result);
             },
             _ = tick.tick() => app.tick(),
             _ = fast.tick(), if (app.status.is_none() && app.unreachable.is_empty())
@@ -1044,9 +1041,9 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
     }
 }
 
-/// Resolve SSH only when requested; a desktop entry needs no server read.
-fn open_ssh(app: &mut App, vmid: u32, home: &std::path::Path, screen: &mut Screen, reader: &Reader) {
-    let Some(target) = super::shell::prepare(app, home, vmid) else {
+/// Open the selected VM through its desktop SSH alias.
+fn open_ssh(app: &mut App, vmid: u32, screen: &mut Screen, reader: &Reader) {
+    let Some(target) = super::shell::prepare(app, vmid) else {
         return;
     };
     let name = app
@@ -1060,7 +1057,7 @@ fn open_ssh(app: &mut App, vmid: u32, home: &std::path::Path, screen: &mut Scree
 }
 
 /// The public keys in `~/.ssh`, as `~/.ssh/NAME.pub`, sorted.
-fn public_keys(home: &std::path::Path) -> Vec<String> {
+fn public_keys(home: &std::path::Path) -> Vec<super::action::KeyFile> {
     let Ok(entries) = std::fs::read_dir(home.join(".ssh")) else {
         return Vec::new();
     };
@@ -1071,7 +1068,20 @@ fn public_keys(home: &std::path::Path) -> Vec<String> {
         .map(|name| format!("~/.ssh/{name}"))
         .collect();
     keys.sort();
-    keys
+    keys.into_iter()
+        .map(|path| {
+            let text = std::fs::read_to_string(crate::expand_home(&path, home)).unwrap_or_default();
+            let name = text.split_whitespace().skip(2).collect::<Vec<_>>().join(" ");
+            super::action::KeyFile {
+                name: if name.is_empty() {
+                    "Unnamed key".to_owned()
+                } else {
+                    name
+                },
+                path,
+            }
+        })
+        .collect()
 }
 
 impl SetupWorker {
@@ -1092,4 +1102,25 @@ impl SetupWorker {
 /// `deploy.toml`, next to `client.toml`.
 fn deploy_toml(ctx: &Context) -> std::path::PathBuf {
     config::default_path(&ctx.home, ctx.config_home.as_deref()).with_file_name("deploy.toml")
+}
+
+#[cfg(test)]
+mod public_key_tests {
+    #[test]
+    fn key_choices_show_public_comments_and_keep_distinct_file_paths() -> Result<(), Box<dyn std::error::Error>> {
+        let home = tempfile::tempdir()?;
+        let ssh = home.path().join(".ssh");
+        std::fs::create_dir(&ssh)?;
+        std::fs::write(ssh.join("a.pub"), "ssh-ed25519 AAAA yubikey-blue\n")?;
+        std::fs::write(ssh.join("b.pub"), "ssh-ed25519 AAAA backup key with spaces\n")?;
+        std::fs::write(ssh.join("c.pub"), "ssh-ed25519 AAAA\n")?;
+        std::fs::write(ssh.join("a"), "private content must never become a label")?;
+        let keys = super::public_keys(home.path());
+        assert_eq!(keys.len(), 3);
+        assert_eq!(keys[0].name, "yubikey-blue");
+        assert_eq!(keys[0].path, "~/.ssh/a.pub");
+        assert_eq!(keys[1].name, "backup key with spaces");
+        assert_eq!(keys[2].name, "Unnamed key");
+        Ok(())
+    }
 }

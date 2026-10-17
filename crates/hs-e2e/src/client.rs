@@ -197,6 +197,16 @@ pub async fn launch_profile(argv: &[String]) -> Result<()> {
     launch(&run.artifacts, &run.run_id, argv).await
 }
 
+fn gold_ssh_wrapper(helper: &Path, artifacts: &Path, ssh: &Path, config: &Path) -> String {
+    format!(
+        "#!/bin/sh\nif [ \"$#\" -eq 3 ] && [ \"$1\" = -o ] && [ \"$2\" = PreferredAuthentications=publickey ] && [ \"$3\" = root@gold-e2e ]; then\n  exec {} gold-shell --artifacts {}\nfi\nexec {} -F {} \"$@\"\n",
+        shell_quote(&helper.display().to_string()),
+        shell_quote(&artifacts.display().to_string()),
+        shell_quote(&ssh.display().to_string()),
+        shell_quote(&config.display().to_string()),
+    )
+}
+
 async fn launch(artifacts: &Path, run_id: &str, argv: &[String]) -> Result<()> {
     let report = paused_run(artifacts)?;
     if report["run_id"] != run_id {
@@ -240,12 +250,11 @@ async fn launch(artifacts: &Path, run_id: &str, argv: &[String]) -> Result<()> {
     if dir.join("gold.json").is_file() {
         write(
             &dir.join("client/bin/ssh"),
-            &format!(
-                "#!/bin/sh\nif [ \"$#\" -eq 1 ] && [ \"$1\" = root@gold-e2e ]; then\n  exec {} gold-shell --artifacts {}\nfi\nexec {} -F {} \"$@\"\n",
-                shell_quote(&std::env::current_exe()?.display().to_string()),
-                shell_quote(&artifacts.canonicalize()?.display().to_string()),
-                shell_quote(&executable("ssh")?.display().to_string()),
-                shell_quote(&dir.join("client/ssh_config").display().to_string()),
+            &gold_ssh_wrapper(
+                &std::env::current_exe()?,
+                &artifacts.canonicalize()?,
+                &executable("ssh")?,
+                &dir.join("client/ssh_config"),
             ),
             0o700,
         )?;
@@ -314,6 +323,36 @@ async fn launch(artifacts: &Path, run_id: &str, argv: &[String]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn public_key_only_gold_ssh_still_opens_the_managed_inspection_session() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let helper = directory.path().join("gold helper");
+        let ssh = directory.path().join("real ssh");
+        write(&helper, "#!/bin/sh\nprintf 'GOLD\\n'\nprintf '%s\\n' \"$@\"\n", 0o700)?;
+        write(&ssh, "#!/bin/sh\nprintf 'SSH\\n'\nprintf '%s\\n' \"$@\"\n", 0o700)?;
+        let wrapper = directory.path().join("ssh");
+        let config = directory.path().join("ssh config");
+        write(
+            &wrapper,
+            &gold_ssh_wrapper(&helper, directory.path(), &ssh, &config),
+            0o700,
+        )?;
+        for (target, expected) in [("root@gold-e2e", "GOLD\n"), ("test1", "SSH\n")] {
+            let result = Command::new(&wrapper)
+                .args(["-o", "PreferredAuthentications=publickey", target])
+                .output()?;
+            assert!(result.status.success());
+            let output = String::from_utf8(result.stdout)?;
+            assert!(output.starts_with(expected), "{output}");
+            if target == "test1" {
+                assert!(output.contains("PreferredAuthentications=publickey\ntest1\n"));
+            } else {
+                assert!(output.contains("gold-shell\n--artifacts\n"));
+            }
+        }
+        Ok(())
+    }
 
     #[test]
     #[ignore = "helper executed by terminal_guard_preserves_child_input_and_restores_settings"]

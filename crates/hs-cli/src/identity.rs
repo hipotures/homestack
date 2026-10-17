@@ -135,20 +135,23 @@ pub fn sync_local_ssh(
     home: &Path,
     config: &Path,
     ssh: &WorkspaceSsh,
-    private_key: &str,
+    private_keys: &[String],
     vmid: u32,
     name: &str,
     ip: &str,
 ) -> Result<Value, AppError> {
-    let changed = register_identity(home, config, private_key)?;
+    let mut changed = false;
     let mut updated = ssh.clone();
-    let wanted = expand_home(private_key, home);
-    if !updated
-        .identity_files
-        .iter()
-        .any(|item| expand_home(item, home) == wanted)
-    {
-        updated.identity_files.push(private_key.to_owned());
+    for private_key in private_keys {
+        changed |= register_identity(home, config, private_key)?;
+        let wanted = expand_home(private_key, home);
+        if !updated
+            .identity_files
+            .iter()
+            .any(|item| expand_home(item, home) == wanted)
+        {
+            updated.identity_files.push(private_key.to_owned());
+        }
     }
     let path = local_ssh::write_local_ssh_config(home, &updated, vmid, name, ip)?;
     Ok(json!({"identity_files_changed": changed, "ssh_config": path.display().to_string()}))

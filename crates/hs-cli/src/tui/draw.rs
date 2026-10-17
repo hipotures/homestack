@@ -1227,6 +1227,11 @@ fn action_box(buf: &mut Buffer, area: Rect, app: &App, action: &Action) {
     }
     let raised = |control: Control, on: bool| if on { control.chosen() } else { control };
     let bottom_left = match &action.stage {
+        Stage::Form(_) if action.kind == Kind::Addkey => vec![
+            Control::key("select space"),
+            Control::key("plan ↵"),
+            Control::key("cancel esc"),
+        ],
         Stage::Form(_) => vec![
             Control::key("next ⇥"),
             Control::key("plan ↵"),
@@ -1266,6 +1271,7 @@ fn action_box(buf: &mut Buffer, area: Rect, app: &App, action: &Action) {
     let mut lines: Vec<(String, Style)> = Vec::new();
     // Which line is which field of a form, for the mouse.
     let mut field_rows: Vec<(usize, usize)> = Vec::new();
+    let mut key_footer = Vec::new();
     // The amounts of a form: where their parts are, for the mouse and
     // the colours.
     let mut amounts: Vec<AmountRow> = Vec::new();
@@ -1281,6 +1287,9 @@ fn action_box(buf: &mut Buffer, area: Rect, app: &App, action: &Action) {
             for (index, field) in form.fields.iter().enumerate() {
                 let focused = index == form.focus;
                 let value = match &field.input {
+                    Input::Check { checked, caption, .. } => {
+                        format!("[{}] {caption}", if *checked { "x" } else { " " })
+                    }
                     Input::Text(value) => {
                         let cursor = if focused { "▏" } else { " " };
                         format!(
@@ -1333,7 +1342,14 @@ fn action_box(buf: &mut Buffer, area: Rect, app: &App, action: &Action) {
                     style = style.bg(palette.selection).add_modifier(Modifier::BOLD);
                 }
                 field_rows.push((lines.len(), index));
-                lines.push((format!("{:<11}{value}", field.label), style));
+                lines.push((
+                    if action.kind == Kind::Addkey {
+                        value
+                    } else {
+                        format!("{:<11}{value}", field.label)
+                    },
+                    style,
+                ));
                 // What the pool gives, shown and not edited.
                 if action.kind == Kind::New && field.label == "Pool" {
                     let vmid = app.free_vmid(&app.chosen_pool(form));
@@ -1349,12 +1365,31 @@ fn action_box(buf: &mut Buffer, area: Rect, app: &App, action: &Action) {
                     reinstall_lines(app, field.index(), text, muted, &mut lines);
                 }
             }
-            lines.push((String::new(), text));
-            if let Some(field) = form.fields.get(form.focus) {
-                push(&field.note, muted, &mut lines);
-            }
-            if let Some(error) = &form.error {
-                push(error, text.fg(palette.error), &mut lines);
+            if action.kind == Kind::Addkey {
+                let selected = form
+                    .fields
+                    .iter()
+                    .filter(
+                        |field| matches!(&field.input, Input::Check { checked: true, value, .. } if !value.is_empty()),
+                    )
+                    .count();
+                key_footer.push((format!("{selected} public keys selected"), muted));
+                if let Some(field) = form.fields.get(form.focus) {
+                    push(&field.note, muted, &mut key_footer);
+                }
+                if let Some(error) = &form.error {
+                    push(error, text.fg(palette.error), &mut key_footer);
+                }
+                let visible = usize::from(inner.height).saturating_sub(key_footer.len());
+                scroll = form.focus.saturating_add(2).saturating_sub(visible);
+            } else {
+                lines.push((String::new(), text));
+                if let Some(field) = form.fields.get(form.focus) {
+                    push(&field.note, muted, &mut lines);
+                }
+                if let Some(error) = &form.error {
+                    push(error, text.fg(palette.error), &mut lines);
+                }
             }
         }
         Stage::Asking => lines.push(("asking the server for the plan…".to_owned(), muted)),
@@ -1420,7 +1455,7 @@ fn action_box(buf: &mut Buffer, area: Rect, app: &App, action: &Action) {
             }
         }
     }
-    let height = usize::from(inner.height);
+    let height = usize::from(inner.height).saturating_sub(key_footer.len());
     let scroll = scroll.min(lines.len().saturating_sub(height));
     for (line, field) in &field_rows {
         if *line < scroll || *line >= scroll + height {
@@ -1429,7 +1464,7 @@ fn action_box(buf: &mut Buffer, area: Rect, app: &App, action: &Action) {
         let y = inner.y + u16::try_from(line - scroll).unwrap_or(0);
         super::chrome::register(
             Rect::new(inner.x, y, inner.width, 1),
-            super::chrome::Hit::Field(*field, None),
+            super::chrome::Hit::Field(*field, (action.kind == Kind::Addkey).then_some(KeyCode::Char(' '))),
         );
         let text = &lines[*line].0;
         for (mark, key) in [('‹', KeyCode::Left), ('›', KeyCode::Right)] {
@@ -1494,6 +1529,10 @@ fn action_box(buf: &mut Buffer, area: Rect, app: &App, action: &Action) {
                 }
             }
         }
+    }
+    for (row, (line, style)) in key_footer.iter().enumerate() {
+        let y = inner.y + u16::try_from(height + row).unwrap_or(0);
+        write(buf, inner.x + 1, y, inner.width.saturating_sub(2), line, *style);
     }
     scrollbar(buf, area, palette, Scrolls::Action, scroll, height, lines.len());
 }

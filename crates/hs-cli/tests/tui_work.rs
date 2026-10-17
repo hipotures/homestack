@@ -164,7 +164,7 @@ fn create(vmid: u32, name: &str) -> Start {
         kind: Kind::New,
         vmid: None,
         parameters: json!({"vmid": vmid, "name": name}),
-        key_file: None,
+        key_files: Vec::new(),
     }
 }
 
@@ -173,7 +173,7 @@ fn destroy(vmid: u32) -> Start {
         kind: Kind::Destroy,
         vmid: Some(vmid),
         parameters: json!({"vmid": vmid}),
-        key_file: None,
+        key_files: Vec::new(),
     }
 }
 
@@ -257,5 +257,99 @@ async fn a_refused_plan_ends_with_the_servers_message() -> Result<(), Error> {
     assert!(!ok);
     assert!(!text.is_empty(), "{progress:?}");
     assert!(desk.changes().is_empty(), "{:?}", desk.changes());
+    Ok(())
+}
+
+#[tokio::test]
+async fn selected_keys_use_one_plan_and_update_all_local_identities() -> Result<(), Error> {
+    let desk = desk().await?;
+    let (ok, text) = done(&desk.act(create(240, "hst-keys"), &[Decision::Apply(None)]).await);
+    assert!(ok, "{text}");
+    let keys = [
+        (
+            "blue",
+            "sk-ssh-ed25519@openssh.com AAAAGnNrLXNzaC1lZDI1NTE5QG9wZW5zc2guY29tAAAAIGFiY2RlZmdoaWprbG1ub3BxcnN0dXZ3eHl6MDEyMzQ1 yubikey-blue",
+        ),
+        (
+            "backup",
+            "sk-ecdsa-sha2-nistp256@openssh.com AAAAInNrLWVjZHNhLXNoYTItbmlzdHAyNTZAb3BlbnNzaC5jb20AAAAIbmlzdHAyNTYAAABBBHRyZXpvcg== backup key",
+        ),
+    ];
+    for (name, public) in keys {
+        private_file(
+            &desk.home.path().join(format!(".ssh/{name}")),
+            "test private key placeholder",
+        )?;
+        private_file(&desk.home.path().join(format!(".ssh/{name}.pub")), public)?;
+    }
+    let start = Start {
+        kind: Kind::Addkey,
+        vmid: Some(240),
+        parameters: json!({"vmid":240, "restart":false}),
+        key_files: keys.iter().map(|(name, _)| format!("~/.ssh/{name}.pub")).collect(),
+    };
+    desk.sim.clear_ops();
+    let cancelled = desk.act(start.clone(), &[Decision::Cancel]).await;
+    assert!(done(&cancelled).0);
+    assert!(desk.changes().is_empty(), "{:?}", desk.changes());
+    let progress = desk.act(start, &[Decision::Apply(None)]).await;
+    let (ok, text) = done(&progress);
+    assert!(ok, "{text}");
+    assert_eq!(
+        progress
+            .iter()
+            .filter(|item| matches!(item, Progress::Plan { .. }))
+            .count(),
+        1
+    );
+    let Some(Progress::Plan { lines, .. }) = progress.first() else {
+        panic!("{progress:?}")
+    };
+    let plan = lines.join("\n");
+    assert!(plan.contains("yubikey-blue") && plan.contains("backup key"), "{plan}");
+    let desktop = desk.desktop();
+    let config = std::fs::read_to_string(desk.home.path().join(".ssh/config.d/homestack/vm240-hst-keys.conf"))?;
+    for (name, _) in keys {
+        assert!(
+            desktop
+                .loaded
+                .client
+                .workspace_ssh
+                .identity_files
+                .contains(&format!("~/.ssh/{name}"))
+        );
+        assert!(config.contains(&format!("/.ssh/{name}")), "{config}");
+    }
+    assert!(
+        !desk
+            .changes()
+            .iter()
+            .any(|op| op.contains("/status/reboot") || op.contains("/status/shutdown"))
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn missing_private_key_in_a_selection_fails_before_any_remote_change() -> Result<(), Error> {
+    let desk = desk().await?;
+    private_file(
+        &desk.home.path().join(".ssh/only-public.pub"),
+        "ssh-ed25519 AAAA public-only",
+    )?;
+    let progress = desk
+        .act(
+            Start {
+                kind: Kind::Addkey,
+                vmid: Some(240),
+                parameters: json!({"vmid":240}),
+                key_files: vec!["~/.ssh/only-public.pub".to_owned()],
+            },
+            &[Decision::Apply(None)],
+        )
+        .await;
+    let (ok, text) = done(&progress);
+    assert!(!ok && text.contains("private key file"), "{text}");
+    assert!(!progress.iter().any(|item| matches!(item, Progress::Plan { .. })));
+    assert!(desk.changes().is_empty());
     Ok(())
 }

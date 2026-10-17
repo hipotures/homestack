@@ -113,14 +113,12 @@ pub enum Overlay {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DetailsAction {
-    Ssh,
     Resize,
 }
 
 impl DetailsAction {
     pub fn word(self) -> &'static str {
         match self {
-            Self::Ssh => "ssh",
             Self::Resize => "resize",
         }
     }
@@ -232,7 +230,7 @@ pub struct App {
     /// for its width); they come back when it closes.
     pub before_setup: Option<Shown>,
     /// The desktop's public keys for add key (`~/.ssh/….pub`).
-    pub keys: Vec<String>,
+    pub keys: Vec<super::action::KeyFile>,
     /// The server's workspace pool (`/v1/capabilities`), for new.
     pub pool: Option<String>,
     /// Gold's pool (`/v1/capabilities`), for detail reads.
@@ -461,7 +459,6 @@ impl App {
                 return None;
             }
             return match action {
-                DetailsAction::Ssh => Some(Request::Ssh(vmid)),
                 DetailsAction::Resize => self.open_action('z'),
             };
         }

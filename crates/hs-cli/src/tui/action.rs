@@ -78,7 +78,7 @@ impl Kind {
             Self::Refresh if recover => "Recover this interrupted workspace refresh?",
             Self::Refresh => "Refresh this workspace root?",
             Self::Resize => "Resize this workspace disk?",
-            Self::Addkey => "Prepare this key? The VM is not restarted without a separate question.",
+            Self::Addkey => "Prepare these keys? The VM is not restarted without a separate question.",
             Self::Migrate => "Migrate this workspace?",
             Self::Destroy => "Permanently destroy this workspace INCLUDING its persistent home?",
             Self::Start => "Start this workspace?",
@@ -98,7 +98,7 @@ pub struct Start {
     /// The plan's parameters, as the CLI sends them.
     pub parameters: Value,
     /// `addkey`: the public key file chosen (`~/.ssh/….pub`).
-    pub key_file: Option<String>,
+    pub key_files: Vec<String>,
 }
 
 /// The user's answer.
@@ -267,17 +267,21 @@ pub async fn work(
 ) {
     let kind = start.kind;
     let mut parameters = start.parameters.clone();
-    let mut private_shown = None;
-    if let Some(file) = &start.key_file {
+    let mut private_shown = Vec::new();
+    let mut public_keys = Vec::new();
+    for file in &start.key_files {
         let path = expand_home(file, &desktop.home);
         match std::fs::read_to_string(&path) {
-            Ok(text) => parameters["key"] = json!(text.trim()),
+            Ok(text) => public_keys.push(text.trim().to_owned()),
             Err(error) => return failed(progress, format!("Could not read the public key {file}: {error}")),
         }
         match identity::private_key_for(&desktop.home, Path::new(file)) {
-            Ok((_, shown)) => private_shown = Some(shown),
+            Ok((_, shown)) => private_shown.push(shown),
             Err(error) => return failed(progress, error.0),
         }
+    }
+    if !public_keys.is_empty() {
+        parameters["key"] = json!(public_keys.join("\n"));
     }
     let session = match client.plan(kind.operation(), parameters.clone()).await {
         Ok(session) => session,
@@ -341,7 +345,7 @@ pub async fn work(
                 return failed(progress, message);
             }
             let name = view::text(&result["name"]);
-            app::after_addkey(home, &desktop.loaded, vmid, private_shown.as_deref(), &mut result)
+            app::after_addkey(home, &desktop.loaded, vmid, &private_shown, &mut result)
                 .map(|()| app::addkey_result_text(vmid, &name, &result, &style))
         }
     };
@@ -395,9 +399,21 @@ async fn restart_if_asked(
     Ok(())
 }
 
+/// A desktop public key, named by its comment and identified by its file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeyFile {
+    pub path: String,
+    pub name: String,
+}
+
 /// One field of a form.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Input {
+    Check {
+        checked: bool,
+        value: String,
+        caption: String,
+    },
     Text(String),
     Choice {
         options: Vec<String>,
@@ -504,6 +520,7 @@ impl Field {
     #[must_use]
     pub fn value(&self) -> String {
         match &self.input {
+            Input::Check { value, .. } => value.clone(),
             Input::Text(text) => text.trim().to_owned(),
             Input::Choice { options, index } => options.get(*index).cloned().unwrap_or_default(),
             Input::Size { gib, .. } => format!("{gib}G"),
@@ -516,7 +533,7 @@ impl Field {
     #[must_use]
     pub fn index(&self) -> usize {
         match &self.input {
-            Input::Text(_) | Input::Size { .. } | Input::Amount { .. } => 0,
+            Input::Check { .. } | Input::Text(_) | Input::Size { .. } | Input::Amount { .. } => 0,
             Input::Choice { index, .. } => *index,
         }
     }

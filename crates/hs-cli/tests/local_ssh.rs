@@ -335,7 +335,7 @@ fn sync_updates_the_config_and_writes_this_vms_ssh_file() -> TestResult {
         home.path(),
         &path,
         &settings(&["~/.ssh/id_ed25519_sk_yubikey1"]),
-        "~/.ssh/id_ecdsa_sk_trezor_vm",
+        &["~/.ssh/id_ecdsa_sk_trezor_vm".to_owned(), "~/.ssh/key-third".to_owned()],
         206,
         "cpu",
         "192.0.2.206",
@@ -347,6 +347,8 @@ fn sync_updates_the_config_and_writes_this_vms_ssh_file() -> TestResult {
         "IdentityFile {}/.ssh/id_ecdsa_sk_trezor_vm",
         home.path().display()
     )));
+    assert!(written.contains("/.ssh/key-third"));
+    assert!(std::fs::read_to_string(&path)?.contains("key-third"));
     assert!(written.contains("Match originalhost cpu,vm206"));
     Ok(())
 }

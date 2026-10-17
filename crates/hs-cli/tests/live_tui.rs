@@ -158,7 +158,7 @@ fn start(kind: Kind, parameters: serde_json::Value) -> Start {
         kind,
         vmid: (kind != Kind::New).then_some(VMID),
         parameters,
-        key_file: None,
+        key_files: Vec::new(),
     }
 }
 

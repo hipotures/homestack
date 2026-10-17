@@ -51,52 +51,77 @@ fn stopped_lab_gold_opens_its_managed_root_shell_from_the_application() {
     fixture.app.lab_gold_vmid = Some(112);
     select(&mut fixture.app, 112);
     assert_eq!(press(&mut fixture.app, KeyCode::Char('s')), Some(Request::Ssh(112)));
-    let home = tempfile::tempdir().unwrap();
-    assert_eq!(
-        shell::prepare(&mut fixture.app, home.path(), 112).as_deref(),
-        Some("root@gold-e2e")
-    );
+    assert_eq!(shell::prepare(&mut fixture.app, 112).as_deref(), Some("root@gold-e2e"));
     assert!(fixture.app.overlay.is_none());
     position(&render(&fixture.app, 120, 36), "ssh root");
 }
 
 #[test]
-fn running_gold_uses_root_with_its_local_keys_instead_of_the_workspace_account() {
+fn running_gold_uses_root_and_its_ssh_alias() {
     let mut fixture = app();
     fixture.app.status.as_mut().unwrap().gold.as_mut().unwrap().status = "running".to_owned();
     select(&mut fixture.app, 112);
-    let home = tempfile::tempdir().unwrap();
-    let directory = home.path().join(".ssh/config.d/homestack");
-    std::fs::create_dir_all(&directory).unwrap();
-    std::fs::write(directory.join("vm112-gold.conf"), "Host gold vm112\n").unwrap();
-    assert_eq!(
-        shell::prepare(&mut fixture.app, home.path(), 112).as_deref(),
-        Some("root@vm112")
-    );
+    assert_eq!(shell::prepare(&mut fixture.app, 112).as_deref(), Some("root@hs-gold"));
 }
 
 #[test]
-fn the_desktops_entry_is_used_when_it_exists() {
-    let home = tempfile::tempdir().unwrap();
-    let directory = home.path().join(".ssh/config.d/homestack");
-    std::fs::create_dir_all(&directory).unwrap();
-    std::fs::write(directory.join("vm101010-dev.conf"), "Host dev vm101010\n").unwrap();
-    assert_eq!(
-        shell::target(home.path(), 101_010, Some("ssh user@192.168.101.10")).as_deref(),
-        Some("vm101010")
-    );
-    // Another workspace's entry does not count.
-    assert_eq!(
-        shell::target(home.path(), 10_101, Some("ssh user@192.168.100.101")).as_deref(),
-        Some("user@192.168.100.101")
-    );
+fn production_workspace_uses_its_name_without_managed_files_or_an_api_detail_read() {
+    let mut fixture = app();
+    fixture.app.status.as_mut().unwrap().workspaces[0].name = Some("rt".to_owned());
+    select(&mut fixture.app, 201);
+    assert_eq!(shell::prepare(&mut fixture.app, 201).as_deref(), Some("rt"));
+    assert_eq!(fixture.app.details_target(), None);
+    assert!(fixture.app.overlay.is_none());
 }
 
 #[test]
-fn without_an_entry_or_an_address_there_is_nothing_to_run() {
+fn a_custom_ssh_filename_keeps_openssh_host_and_identity_rules() {
     let home = tempfile::tempdir().unwrap();
-    assert_eq!(shell::target(home.path(), 204, None), None);
-    assert_eq!(shell::target(home.path(), 204, Some("ssh ")), None);
+    let directory = home.path().join("config.d");
+    std::fs::create_dir(&directory).unwrap();
+    std::fs::write(
+        home.path().join("config"),
+        format!("Include {}/config.d/*.conf\n", home.path().display()),
+    )
+    .unwrap();
+    std::fs::write(directory.join("rt.conf"), "Host rt\n  HostName 192.0.2.114\n  User developer\n  IdentitiesOnly yes\nMatch originalhost rt\n  IdentityFile /test/rt-security-key\n").unwrap();
+    let mut fixture = app();
+    fixture.app.status.as_mut().unwrap().workspaces[0].name = Some("rt".to_owned());
+    select(&mut fixture.app, 201);
+    let target = shell::prepare(&mut fixture.app, 201).unwrap();
+    let output = std::process::Command::new("ssh")
+        .args(["-G", "-F"])
+        .arg(home.path().join("config"))
+        .args(["-o", "CanonicalizeHostname=no", &target])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let effective = String::from_utf8(output.stdout).unwrap();
+    for expected in [
+        "hostname 192.0.2.114",
+        "user developer",
+        "identitiesonly yes",
+        "identityfile /test/rt-security-key",
+    ] {
+        assert!(effective.lines().any(|line| line == expected), "{effective}");
+    }
+}
+
+#[test]
+fn a_missing_or_invalid_alias_never_becomes_an_ip_login() {
+    for name in [
+        None,
+        Some(""),
+        Some("-oProxyCommand=anything"),
+        Some("user@192.168.100.114"),
+        Some("192.168.100.114"),
+    ] {
+        let mut fixture = app();
+        fixture.app.status.as_mut().unwrap().workspaces[0].name = name.map(str::to_owned);
+        select(&mut fixture.app, 201);
+        assert_eq!(shell::prepare(&mut fixture.app, 201), None);
+        assert_eq!(fixture.app.details_target(), None);
+    }
 }
 
 #[test]
@@ -105,4 +130,14 @@ fn the_log_says_how_ssh_ended() {
     assert_eq!(shell::outcome("vm204", Some(255)), "ssh vm204: could not connect (255)");
     assert_eq!(shell::outcome("vm204", Some(130)), "ssh vm204: ended with 130");
     assert_eq!(shell::outcome("vm204", None), "ssh vm204: could not run ssh");
+}
+
+#[test]
+fn ssh_uses_only_public_key_authentication_with_the_alias() {
+    let command = shell::command("rt");
+    assert_eq!(command.get_program(), "ssh");
+    assert_eq!(
+        command.get_args().collect::<Vec<_>>(),
+        ["-o", "PreferredAuthentications=publickey", "rt"]
+    );
 }

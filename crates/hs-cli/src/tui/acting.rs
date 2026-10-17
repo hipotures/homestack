@@ -13,13 +13,13 @@ use super::reinstall::Images;
 use super::state::{App, Request};
 use crate::app::valid_name;
 
-const EXISTING_KEYS: &str = "the keys already in sshkeys";
+const EXISTING_KEYS: &str = "Apply the keys already configured in the VM";
 /// The pools' final address octets; their subnet comes from server configuration.
 const WORKSPACE_POOLS: [(&str, (u32, u32)); 2] = [("homestack", (10, 199)), ("homestack-test", (200, 254))];
 
 impl App {
     /// The desktop's public keys, offered by add key.
-    pub fn set_keys(&mut self, keys: Vec<String>) {
+    pub fn set_keys(&mut self, keys: Vec<super::action::KeyFile>) {
         self.keys = keys;
     }
 
@@ -279,13 +279,25 @@ impl App {
                 ),
             ],
             Kind::Addkey => {
-                let mut keys = vec![EXISTING_KEYS.to_owned()];
-                keys.extend(self.keys.iter().cloned());
-                vec![Field::choice(
-                    "Key",
-                    keys,
-                    "One public key file with a comment, or the keys already in sshkeys.",
-                )]
+                let mut fields = vec![Field {
+                    label: "",
+                    input: Input::Check {
+                        checked: true,
+                        value: String::new(),
+                        caption: EXISTING_KEYS.to_owned(),
+                    },
+                    note: "↑ ↓ move · Space or click selects · Enter reviews all selected keys.".to_owned(),
+                }];
+                fields.extend(self.keys.iter().map(|key| Field {
+                    label: "",
+                    input: Input::Check {
+                        checked: false,
+                        value: key.path.clone(),
+                        caption: format!("{}  ({})", key.name, key.path),
+                    },
+                    note: "↑ ↓ move · Space or click selects · Enter reviews all selected keys.".to_owned(),
+                }));
+                fields
             }
             Kind::Migrate => {
                 let here = entry.as_ref().map(|entry| entry.node.clone()).unwrap_or_default();
@@ -311,7 +323,7 @@ impl App {
                 kind,
                 vmid,
                 parameters: json!({"vmid": vmid}),
-                key_file: None,
+                key_files: Vec::new(),
             };
             self.action = Some(action);
             return Some(Request::Act(start));
@@ -335,7 +347,7 @@ impl App {
                 .unwrap_or_default()
         };
         let vmid = action.vmid;
-        let mut key_file = None;
+        let mut key_files = Vec::new();
         let parameters: Value = match action.kind {
             Kind::New => {
                 let pool = self.chosen_pool(form);
@@ -393,10 +405,19 @@ impl App {
                 json!({"vmid": vmid, key: size})
             }
             Kind::Addkey => {
-                let chosen = value("Key");
-                if chosen != EXISTING_KEYS {
-                    key_file = Some(chosen);
+                let selected: Vec<_> = form
+                    .fields
+                    .iter()
+                    .filter(|field| matches!(field.input, Input::Check { checked: true, .. }))
+                    .collect();
+                if selected.is_empty() {
+                    return Err("Select at least one key, or apply the VM's configured keys.".to_owned());
                 }
+                key_files = selected
+                    .iter()
+                    .map(|field| field.value())
+                    .filter(|path| !path.is_empty())
+                    .collect();
                 json!({"vmid": vmid, "restart": false})
             }
             Kind::Migrate => {
@@ -414,7 +435,7 @@ impl App {
             kind: action.kind,
             vmid,
             parameters,
-            key_file,
+            key_files,
         })
     }
 
@@ -700,6 +721,26 @@ impl App {
         let count = form.fields.len();
         let part = amount_part(form);
         match code {
+            KeyCode::Char(' ') if action.kind == Kind::Addkey => {
+                if let Some(Field {
+                    input: Input::Check { checked, .. },
+                    ..
+                }) = form.fields.get_mut(form.focus)
+                {
+                    *checked = !*checked;
+                    if *checked {
+                        for (index, field) in form.fields.iter_mut().enumerate() {
+                            if index != form.focus
+                                && (index == 0 || form.focus == 0)
+                                && let Input::Check { checked, .. } = &mut field.input
+                            {
+                                *checked = false;
+                            }
+                        }
+                    }
+                    form.error = None;
+                }
+            }
             // An amount's G and M are places of their own for Tab and
             // BackTab; ↑ ↓ switch between them round.
             KeyCode::Tab if part == Some(Part::G) => set_part(form, Part::M),

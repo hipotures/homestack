@@ -340,14 +340,26 @@ fn migrate_offers_the_other_nodes_and_their_storages() {
 #[test]
 fn addkey_offers_the_desktops_public_keys_and_the_existing_ones() {
     let mut fixture = app();
-    fixture.app.set_keys(vec!["~/.ssh/id_ed25519.pub".to_owned()]);
+    fixture.app.set_keys(vec![
+        hs_cli::tui::action::KeyFile {
+            path: "~/.ssh/id_ed25519.pub".to_owned(),
+            name: "yubikey-blue".to_owned(),
+        },
+        hs_cli::tui::action::KeyFile {
+            path: "~/.ssh/second.pub".to_owned(),
+            name: "backup key".to_owned(),
+        },
+    ]);
     select(&mut fixture.app, 201);
     press(&mut fixture.app, KeyCode::Char('k'));
     let text = screen(&render(&fixture.app, 120, 36));
-    assert!(text.contains("the keys already in sshkeys"), "{text}");
+    assert!(
+        text.contains("[x] Apply the keys already configured in the VM"),
+        "{text}"
+    );
     let start = started(press(&mut fixture.app, KeyCode::Enter));
     assert_eq!(start.parameters, json!({"vmid": 201, "restart": false}));
-    assert_eq!(start.key_file, None);
+    assert!(start.key_files.is_empty());
     fixture.app.progress(Progress::Done {
         ok: true,
         lines: vec![],
@@ -355,9 +367,17 @@ fn addkey_offers_the_desktops_public_keys_and_the_existing_ones() {
     press(&mut fixture.app, KeyCode::Enter);
 
     press(&mut fixture.app, KeyCode::Char('k'));
-    press(&mut fixture.app, KeyCode::Right);
+    press(&mut fixture.app, KeyCode::Down);
+    press(&mut fixture.app, KeyCode::Char(' '));
+    press(&mut fixture.app, KeyCode::Down);
+    press(&mut fixture.app, KeyCode::Char(' '));
+    let text = screen(&render(&fixture.app, 160, 36));
+    assert!(text.contains("[x] yubikey-blue  (~/.ssh/id_ed25519.pub)"), "{text}");
+    assert!(text.contains("[x] backup key  (~/.ssh/second.pub)"), "{text}");
+    assert!(text.contains("[ ] Apply the keys already configured"), "{text}");
+    assert!(text.contains("2 public keys selected"), "{text}");
     let start = started(press(&mut fixture.app, KeyCode::Enter));
-    assert_eq!(start.key_file.as_deref(), Some("~/.ssh/id_ed25519.pub"));
+    assert_eq!(start.key_files, ["~/.ssh/id_ed25519.pub", "~/.ssh/second.pub"]);
 }
 
 #[test]
@@ -787,4 +807,54 @@ fn tab_goes_through_g_and_m_and_up_down_switch_them() {
     assert!(!chosen(&fixture).0, "Tab from M goes on to Pool");
     press(&mut fixture.app, KeyCode::BackTab);
     assert_eq!(chosen(&fixture), (true, "M"));
+}
+
+#[test]
+fn key_checkboxes_reject_empty_selection_and_scroll_to_focus() {
+    let mut fixture = app();
+    fixture.app.set_keys(
+        (0..30)
+            .map(|at| hs_cli::tui::action::KeyFile {
+                path: format!("~/.ssh/key-{at}.pub"),
+                name: format!("Security key {at}"),
+            })
+            .collect(),
+    );
+    select(&mut fixture.app, 201);
+    press(&mut fixture.app, KeyCode::Char('k'));
+    press(&mut fixture.app, KeyCode::Char(' '));
+    assert_eq!(press(&mut fixture.app, KeyCode::Enter), None);
+    assert!(screen(&render(&fixture.app, 120, 36)).contains("Select at least one key"));
+    for _ in 0..30 {
+        press(&mut fixture.app, KeyCode::Down);
+    }
+    press(&mut fixture.app, KeyCode::Char(' '));
+    let buf = render(&fixture.app, 120, 36);
+    assert!(screen(&buf).contains("[x] Security key 29"));
+    let start = started(press(&mut fixture.app, KeyCode::Enter));
+    assert_eq!(start.key_files, ["~/.ssh/key-29.pub"]);
+}
+
+#[test]
+fn clicking_a_key_row_toggles_its_checkbox() {
+    use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+    let mut fixture = app();
+    fixture.app.set_keys(vec![hs_cli::tui::action::KeyFile {
+        path: "~/.ssh/security.pub".to_owned(),
+        name: "yubikey-blue".to_owned(),
+    }]);
+    select(&mut fixture.app, 201);
+    press(&mut fixture.app, KeyCode::Char('k'));
+    let buf = render(&fixture.app, 120, 36);
+    let (x, y) = position(&buf, "[ ] yubikey-blue");
+    let click = MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: x,
+        row: y,
+        modifiers: KeyModifiers::NONE,
+    };
+    fixture.app.mouse(click);
+    assert!(screen(&render(&fixture.app, 120, 36)).contains("[x] yubikey-blue"));
+    fixture.app.mouse(click);
+    assert!(screen(&render(&fixture.app, 120, 36)).contains("[ ] yubikey-blue"));
 }

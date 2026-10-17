@@ -697,12 +697,12 @@ impl<'a> Cli<'a> {
 
     async fn addkey(&mut self, target: &str, key: Option<&str>, restart: bool) -> Result<Code, AppError> {
         let mut parameters = Map::new();
-        let mut private_shown = None;
+        let mut private_shown = Vec::new();
         if let Some(key) = key {
             let path = expand_home(key, &self.ctx.home);
             let text = std::fs::read_to_string(&path)
                 .map_err(|error| AppError::new(format!("Could not read the public key {key}: {error}")))?;
-            private_shown = Some(identity::private_key_for(&self.ctx.home, Path::new(key))?.1);
+            private_shown.push(identity::private_key_for(&self.ctx.home, Path::new(key))?.1);
             parameters.insert("key".to_owned(), json!(text.trim()));
         }
         let vmid = self.resolve(target).await?;
@@ -741,7 +741,7 @@ impl<'a> Cli<'a> {
                 }
             }
         }
-        after_addkey(&self.ctx.home, self.loaded, vmid, private_shown.as_deref(), &mut result)?;
+        after_addkey(&self.ctx.home, self.loaded, vmid, &private_shown, &mut result)?;
         if self.args.json {
             self.emit(&result);
         } else {
@@ -805,12 +805,11 @@ impl<'a> Cli<'a> {
 
 /// `addkey`'s plan: the panel and the numbered steps (Python `cli.main`).
 pub fn addkey_plan(plan: &Value, style: &Style) -> String {
-    let key = if plan["key"].is_object() {
-        format!(
-            "{} ({})",
-            view::text(&plan["key"]["comment"]),
-            view::text(&plan["key"]["type"])
-        )
+    let key = if let Some(keys) = plan["added_keys"].as_array() {
+        keys.iter()
+            .map(|key| format!("{} ({})", view::text(&key["comment"]), view::text(&key["type"])))
+            .collect::<Vec<_>>()
+            .join(", ")
     } else {
         format!("existing keys: {}", view::text(&plan["label"]))
     };
@@ -1111,7 +1110,7 @@ pub fn after_addkey(
     home: &Path,
     loaded: &Loaded,
     vmid: u32,
-    private_shown: Option<&str>,
+    private_shown: &[String],
     result: &mut Value,
 ) -> Result<(), AppError> {
     let removed = if result["restarted"] == true {
@@ -1120,14 +1119,14 @@ pub fn after_addkey(
         Vec::new()
     };
     result["known_hosts_removed"] = json!(removed);
-    if let Some(shown) = private_shown {
+    if !private_shown.is_empty() {
         let name = view::text(&result["name"]);
         let ip = view::text(&result["ip"]);
         let local = identity::sync_local_ssh(
             home,
             &loaded.path,
             &loaded.client.workspace_ssh,
-            shown,
+            private_shown,
             vmid,
             &name,
             &ip,

@@ -312,7 +312,7 @@ async fn plan_names_the_key_and_every_step() -> TestResult {
     let (sim, pve, _admin) = cluster().await?;
     let planned = plan(&pve, &request(200, Some(TREZOR), false)).await?;
     assert_eq!(
-        (&planned["name"], &planned["ip"], &planned["key"]["comment"]),
+        (&planned["name"], &planned["ip"], &planned["added_keys"][0]["comment"]),
         (&json!("alpha"), &json!("192.0.2.200"), &json!("trezor-vm"))
     );
     assert_eq!(planned["keys"], json!([YUBIKEY, TREZOR]));
@@ -540,7 +540,7 @@ async fn cloud_init_error_and_missing_key_are_reported() -> TestResult {
 async fn without_a_key_the_existing_sshkeys_are_applied() -> TestResult {
     let (sim, pve, admin) = cluster().await?;
     let planned = plan(&pve, &request(208, None, false)).await?;
-    assert_eq!(planned["key"], Value::Null);
+    assert_eq!(planned["added_keys"], Value::Null);
     assert_eq!(
         (&planned["label"], &planned["keys"]),
         (&json!("yubikey1, trezor-vm"), &json!([YUBIKEY, TREZOR]))
@@ -680,5 +680,33 @@ async fn execution_refuses_a_changed_power_state() -> TestResult {
     let error = apply(&pve, &planned).await.err().ok_or("applied")?;
     assert!(error.to_string().contains("generate a new plan"), "{error}");
     assert_eq!(changes(&sim), Vec::<String>::new());
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_batch_preserves_existing_keys_and_installs_every_selection_once() -> TestResult {
+    let (_sim, pve, admin) = cluster().await?;
+    let batch = format!("{TREZOR}\n{YUBIKEY}\n{TREZOR}\n");
+    let planned = plan(&pve, &request(200, Some(&batch), false)).await?;
+    assert_eq!(planned["keys"], json!([YUBIKEY, TREZOR]));
+    let result = apply(&pve, &planned).await?;
+    assert_eq!(result["verified"], true);
+    assert_eq!(result["restarted"], false);
+    for path in ["/root/.ssh/authorized_keys", "/home/developer/.ssh/authorized_keys"] {
+        let text = file(&admin, 200, path).await?;
+        for key in [YUBIKEY, TREZOR] {
+            assert_eq!(text.lines().filter(|line| *line == key).count(), 1, "{text}");
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn an_invalid_key_in_a_batch_rejects_the_whole_plan() -> TestResult {
+    let (sim, pve, _admin) = cluster().await?;
+    let unnamed = YUBIKEY.split_whitespace().take(2).collect::<Vec<_>>().join(" ");
+    let batch = format!("{TREZOR}\n{unnamed}");
+    assert!(plan(&pve, &request(200, Some(&batch), false)).await.is_err());
+    assert!(changes(&sim).is_empty());
     Ok(())
 }

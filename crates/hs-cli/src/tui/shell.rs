@@ -1,10 +1,7 @@
 //! The ssh button (phase 13b, step 4): the TUI gives the terminal to `ssh`
 //! and takes it back when ssh ends.
 
-use std::path::Path;
-
-use super::state::{App, DetailsAction};
-use crate::local_ssh;
+use super::state::App;
 
 #[must_use]
 pub fn is_gold(app: &App, vmid: u32) -> bool {
@@ -23,8 +20,8 @@ pub fn available(app: &App, vmid: u32) -> bool {
     })
 }
 
-/// Resolve an explicit SSH request, loading server details only without a local entry.
-pub fn prepare(app: &mut App, home: &Path, vmid: u32) -> Option<String> {
+/// Use the VM name as its SSH alias, preserving the desktop's Host/Match rules.
+pub fn prepare(app: &mut App, vmid: u32) -> Option<String> {
     if app.selected != Some(vmid) {
         return None;
     }
@@ -32,43 +29,27 @@ pub fn prepare(app: &mut App, home: &Path, vmid: u32) -> Option<String> {
     if gold && app.lab_gold_vmid == Some(vmid) {
         return Some("root@gold-e2e".to_owned());
     }
-    if let Some(local) = target(home, vmid, None) {
-        return Some(if gold { format!("root@{local}") } else { local });
+    let name = app
+        .selected_entry()
+        .and_then(|entry| entry.name.as_deref())
+        .filter(|name| crate::app::valid_name(name));
+    if let Some(name) = name {
+        return Some(if gold { format!("root@{name}") } else { name.to_owned() });
     }
-    if app.wait_for_details(DetailsAction::Ssh) {
-        return None;
-    }
-    let login = app.selected_details().and_then(|details| {
-        if gold {
-            details.ssh.root.as_deref()
-        } else {
-            details.ssh.user.as_deref()
-        }
-    });
-    let target = target(home, vmid, login);
-    if target.is_none() {
-        let time = app.clock.clone();
-        app.log(
-            &time,
-            &format!("ssh {vmid}: no SSH entry on this desktop and no address yet"),
-        );
-    }
-    target
+    let time = app.clock.clone();
+    app.log(
+        &time,
+        &format!("ssh {vmid}: the VM has no valid name to use as an SSH alias"),
+    );
+    None
 }
 
-/// What `ssh` is given to log in to workspace `vmid`: its desktop entry
-/// `vm<VMID>` when the desktop has one (its keys and its `known_hosts`),
-/// else the user login the server reports (`ssh USER@IP`), else nothing.
+/// Workspace access uses keys; an unavailable authenticator must not prompt for a password.
 #[must_use]
-pub fn target(home: &Path, vmid: u32, login: Option<&str>) -> Option<String> {
-    if local_ssh::has_config(home, vmid) {
-        return Some(format!("vm{vmid}"));
-    }
-    login
-        .and_then(|login| login.strip_prefix("ssh "))
-        .map(str::trim)
-        .filter(|target| !target.is_empty())
-        .map(str::to_owned)
+pub fn command(target: &str) -> std::process::Command {
+    let mut command = std::process::Command::new("ssh");
+    command.args(["-o", "PreferredAuthentications=publickey", target]);
+    command
 }
 
 /// The line written above ssh's own output, on the normal screen.

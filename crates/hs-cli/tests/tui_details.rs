@@ -4,11 +4,7 @@
 mod tui_fixture;
 
 use crossterm::event::KeyCode;
-use hs_cli::tui::{
-    draw::render,
-    shell,
-    state::{Overlay, Request},
-};
+use hs_cli::tui::{draw::render, shell, state::Overlay};
 use serde_json::json;
 use tui_fixture::{app, details, press, screen};
 
@@ -144,34 +140,12 @@ fn resize_read_failure_shows_the_error_instead_of_a_default_size() {
 }
 
 #[test]
-fn ssh_loads_its_target_without_opening_info() {
+fn ssh_uses_the_workspace_alias_without_loading_details() {
     let mut fixture = app();
-    let home = tempfile::tempdir().unwrap();
     press(&mut fixture.app, KeyCode::Down);
-    assert_eq!(shell::prepare(&mut fixture.app, home.path(), 201), None);
-    assert_eq!(fixture.app.details_target(), Some((201, false)));
-    assert_eq!(fixture.app.set_details(201, Ok(details())), Some(Request::Ssh(201)));
-    assert_eq!(
-        shell::prepare(&mut fixture.app, home.path(), 201).as_deref(),
-        Some("dev-main")
-    );
+    assert_eq!(shell::prepare(&mut fixture.app, 201).as_deref(), Some("dev-main"));
+    assert_eq!(fixture.app.details_target(), None);
     assert!(!fixture.app.info);
-    assert_eq!(fixture.app.details_target(), None);
-}
-
-#[test]
-fn a_local_ssh_entry_needs_no_detail_read() {
-    let mut fixture = app();
-    let home = tempfile::tempdir().unwrap();
-    let directory = home.path().join(".ssh/config.d/homestack");
-    std::fs::create_dir_all(&directory).unwrap();
-    std::fs::write(directory.join("vm201-dev.conf"), "Host dev vm201\n").unwrap();
-    press(&mut fixture.app, KeyCode::Down);
-    assert_eq!(
-        shell::prepare(&mut fixture.app, home.path(), 201).as_deref(),
-        Some("vm201")
-    );
-    assert_eq!(fixture.app.details_target(), None);
     assert!(fixture.app.overlay.is_none());
 }
 
