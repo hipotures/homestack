@@ -27,6 +27,10 @@
 # TUI's actions (plan, Apply, the job's steps), and a Cancel first.
 set -euo pipefail
 
+if [[ ${HOMESTACK_BUILD_WRAPPER:-} != 1 ]]; then
+    exec python3 "$(dirname "$0")/cargo.py" --check "$@"
+fi
+
 usage() {
     sed -n '2,/^set -euo/{/^#/p}' "$0" | sed 's/^# \{0,1\}//'
     exit 2
@@ -65,6 +69,9 @@ if [[ -n $phase ]]; then
     cargo test -p hs-parity --locked --test scenarios --test config_corpus
     exit 0
 fi
+
+step "build cleanup boundaries"
+python3 -m unittest discover -s scripts/tests
 
 step "cargo fmt"
 cargo fmt --all --check

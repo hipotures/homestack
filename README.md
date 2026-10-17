@@ -31,6 +31,24 @@ scripts/check.sh            # without a cluster
 scripts/check.sh --live     # also runs destructive live gates on configured test resources
 ```
 
+Local builds and tests can discard disposable output automatically after success:
+
+```bash
+python3 scripts/cargo.py build --locked -p hs-cli --bin homestack
+python3 scripts/cargo.py test --locked -p hs-cli
+```
+
+`scripts/check.sh` uses the same cleanup after the entire suite succeeds. Failed or
+interrupted commands retain their output for diagnosis. Cleanup removes hashed
+executables from `target/debug/deps` and `target/debug/examples`, plus incremental
+state; it preserves top-level applications, dependency libraries, release output,
+E2E disks, logs, credentials and downloaded images. Subsequent tests may need to
+relink their executables. Local dev/test profiles use reduced debug information
+and disable incremental compilation to prevent its cache from growing. Plain
+`cargo` commands bypass automatic cleanup. Use the wrapper consistently; its lock
+serializes wrapped commands and cleanup. Do not run unwrapped Cargo tests in
+parallel with it, because Cargo releases its build lock before executing tests.
+
 Running and configuring the server (`server.toml`, made from an existing `config.toml` with `cargo run -p hs-config -- split`): [docs/migration/deploy.md](docs/migration/deploy.md). API contract: [docs/openapi.json](docs/openapi.json).
 
 Design for a disposable single-node Proxmox laboratory with real installation, Gold preparation, destructive E2E scenarios and an extensible test catalogue: [Isolated E2E laboratory](docs/isolated-e2e-lab.md).
