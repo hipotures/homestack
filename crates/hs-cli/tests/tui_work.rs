@@ -452,3 +452,292 @@ async fn failure_on_the_second_key_keeps_the_first_usable_and_stops_the_remainin
     );
     Ok(())
 }
+
+struct AlienSsh {
+    remote: std::path::PathBuf,
+    calls: Mutex<Vec<Vec<String>>>,
+    fail: bool,
+    change_alias: bool,
+}
+impl hs_cli::system::System for AlienSsh {
+    fn which(&self, name: &str) -> Option<String> {
+        Some(name.to_owned())
+    }
+    fn monotonic(&self) -> f64 {
+        0.0
+    }
+    fn run(&self, argv: &[String]) -> std::io::Result<hs_cli::system::Output> {
+        self.run_input(argv, "")
+    }
+    fn run_master(&self, _: &[String]) -> std::io::Result<hs_cli::system::Output> {
+        Err(std::io::Error::other("No SSH master should be opened"))
+    }
+    fn run_input(&self, argv: &[String], input: &str) -> std::io::Result<hs_cli::system::Output> {
+        use std::io::Write;
+        use std::process::{Command, Stdio};
+        self.calls.lock().unwrap().push(argv.to_vec());
+        assert_eq!(argv[0], "ssh");
+        if argv.get(1).is_some_and(|arg| arg == "-G") {
+            assert_eq!(argv[2], "alien-workspace");
+            return Ok(hs_cli::system::Output::stdout(
+                if self.change_alias && self.calls.lock().unwrap().len() > 1 {
+                    "user developer\nhostname 192.0.2.161\n"
+                } else {
+                    "user developer\nhostname 192.0.2.160\n"
+                },
+            ));
+        }
+        assert_eq!(&argv[argv.len() - 2..], ["alien-workspace", "sh -s"]);
+        assert!(argv.contains(&"ControlPath=none".to_owned()));
+        assert!(!argv.iter().any(|arg| arg.contains("StrictHostKeyChecking=no")));
+        if self.fail {
+            return Ok(hs_cli::system::Output::failed(255, "Public key authentication failed"));
+        }
+        let mut child = Command::new("sh")
+            .arg("-s")
+            .env("HOME", &self.remote)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?;
+        child.stdin.take().unwrap().write_all(input.as_bytes())?;
+        let output = child.wait_with_output()?;
+        Ok(hs_cli::system::Output {
+            code: output.status.code().unwrap_or(-1),
+            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        })
+    }
+}
+
+fn alien_selection(desk: &Desk) -> Result<Start, Error> {
+    for (name, key) in [
+        ("blue", "ssh-ed25519 AQID blue"),
+        ("backup", "ssh-ed25519 BAUG backup's $(false) key"),
+    ] {
+        private_file(&desk.home.path().join(format!(".ssh/{name}")), "identity placeholder")?;
+        private_file(&desk.home.path().join(format!(".ssh/{name}.pub")), key)?;
+    }
+    Ok(Start {
+        kind: Kind::Addkey,
+        vmid: Some(160),
+        parameters: json!({"vmid":160,"alien_ssh":"alien-workspace"}),
+        key_files: vec!["~/.ssh/blue.pub".to_owned(), "~/.ssh/backup.pub".to_owned()],
+    })
+}
+
+#[tokio::test]
+async fn alien_key_copy_uses_ssh_only_and_preserves_existing_restricted_keys() -> Result<(), Error> {
+    use hs_cli::tui::alien_keys;
+    let desk = desk().await?;
+    let remote = tempfile::tempdir()?;
+    let ssh = remote.path().join(".ssh");
+    std::fs::create_dir(&ssh)?;
+    let original = "command=\"echo restricted\" ssh-ed25519 AQID restricted-key\nssh-ed25519 BwgJ existing-key";
+    std::fs::write(ssh.join("authorized_keys"), original)?;
+    let system = Arc::new(AlienSsh {
+        remote: remote.path().to_owned(),
+        calls: Mutex::new(Vec::new()),
+        fail: false,
+        change_alias: false,
+    });
+    let start = alien_selection(&desk)?;
+    for _ in 0..2 {
+        let (send, mut receive) = mpsc::unbounded_channel();
+        send.send(Decision::Apply(None))?;
+        let mut seen = Vec::new();
+        let seen = Mutex::new(&mut seen);
+        alien_keys::work(
+            &desk.client,
+            &desk.desktop(),
+            start.clone(),
+            vec![],
+            system.clone(),
+            &mut receive,
+            &|item| seen.lock().unwrap().push(item),
+        )
+        .await?;
+        assert!(desk.changes().is_empty(), "{:?}", desk.changes());
+    }
+    let text = std::fs::read_to_string(ssh.join("authorized_keys"))?;
+    assert!(text.starts_with(original), "{text}");
+    assert_eq!(text.matches("AQID").count(), 1, "{text}");
+    assert_eq!(text.matches("BAUG").count(), 1, "{text}");
+    assert!(text.contains("backup's $(false) key"), "{text}");
+    assert_eq!(
+        std::fs::metadata(ssh.join("authorized_keys"))?.permissions().mode() & 0o777,
+        0o600
+    );
+    assert_eq!(std::fs::metadata(&ssh)?.permissions().mode() & 0o777, 0o700);
+    assert!(
+        desk.desktop()
+            .loaded
+            .client
+            .workspace_ssh
+            .identity_files
+            .contains(&"~/.ssh/backup".to_owned())
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn alien_key_copy_cancel_and_authentication_failure_do_not_write_keys() -> Result<(), Error> {
+    let desk = desk().await?;
+    let remote = tempfile::tempdir()?;
+    let system = Arc::new(AlienSsh {
+        remote: remote.path().to_owned(),
+        calls: Mutex::new(Vec::new()),
+        fail: true,
+        change_alias: false,
+    });
+    let start = alien_selection(&desk)?;
+    let (send, mut receive) = mpsc::unbounded_channel();
+    send.send(Decision::Cancel)?;
+    hs_cli::tui::alien_keys::work(
+        &desk.client,
+        &desk.desktop(),
+        start.clone(),
+        vec![],
+        system.clone(),
+        &mut receive,
+        &|_| {},
+    )
+    .await?;
+    assert_eq!(system.calls.lock().unwrap().len(), 1);
+    let (send, mut receive) = mpsc::unbounded_channel();
+    send.send(Decision::Apply(None))?;
+    let error = hs_cli::tui::alien_keys::work(
+        &desk.client,
+        &desk.desktop(),
+        start,
+        vec![],
+        system.clone(),
+        &mut receive,
+        &|_| {},
+    )
+    .await
+    .unwrap_err();
+    assert!(error.contains("Public key authentication failed"), "{error}");
+    assert!(!remote.path().join(".ssh").exists());
+    assert!(
+        !desk
+            .desktop()
+            .loaded
+            .client
+            .workspace_ssh
+            .identity_files
+            .contains(&"~/.ssh/backup".to_owned())
+    );
+    assert!(desk.changes().is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn alien_key_copy_rechecks_power_after_confirmation() -> Result<(), Error> {
+    let desk = desk().await?;
+    let remote = tempfile::tempdir()?;
+    let system = Arc::new(AlienSsh {
+        remote: remote.path().to_owned(),
+        calls: Mutex::new(Vec::new()),
+        fail: false,
+        change_alias: false,
+    });
+    let start = alien_selection(&desk)?;
+    let (send, mut receive) = mpsc::unbounded_channel();
+    let (reviewed, mut reviews) = mpsc::unbounded_channel();
+    let desktop = desk.desktop();
+    let tell = |item| {
+        if matches!(item, Progress::Plan { .. }) {
+            let _ = reviewed.send(());
+        }
+    };
+    let worker = hs_cli::tui::alien_keys::work(
+        &desk.client,
+        &desktop,
+        start,
+        vec![],
+        system.clone(),
+        &mut receive,
+        &tell,
+    );
+    let control = async {
+        reviews.recv().await.unwrap();
+        let mut cfg = PveClientConfig::new(
+            vec![desk.sim.base_url().parse().unwrap()],
+            PveToken::parse(PVE_TOKEN).unwrap(),
+        );
+        cfg.extra_ca_pem = Some(desk.sim.ca_pem().to_owned());
+        hs_pve::PveClient::new(cfg)
+            .unwrap()
+            .post_value(&["nodes", "pve-example-1", "qemu", "160", "status", "stop"], &[])
+            .await
+            .unwrap();
+        send.send(Decision::Apply(None)).unwrap();
+    };
+    let (result, ()) = tokio::join!(worker, control);
+    assert!(result.unwrap_err().contains("must still be a running alien VM"));
+    assert_eq!(system.calls.lock().unwrap().len(), 1);
+    assert!(!remote.path().join(".ssh").exists());
+    Ok(())
+}
+
+#[tokio::test]
+async fn alien_key_copy_refuses_a_symlink_without_touching_its_target() -> Result<(), Error> {
+    let desk = desk().await?;
+    let remote = tempfile::tempdir()?;
+    let outside = tempfile::NamedTempFile::new()?;
+    std::fs::write(outside.path(), "original target\n")?;
+    std::fs::create_dir(remote.path().join(".ssh"))?;
+    std::os::unix::fs::symlink(outside.path(), remote.path().join(".ssh/authorized_keys"))?;
+    let system = Arc::new(AlienSsh {
+        remote: remote.path().to_owned(),
+        calls: Mutex::new(Vec::new()),
+        fail: false,
+        change_alias: false,
+    });
+    let (send, mut receive) = mpsc::unbounded_channel();
+    send.send(Decision::Apply(None))?;
+    let error = hs_cli::tui::alien_keys::work(
+        &desk.client,
+        &desk.desktop(),
+        alien_selection(&desk)?,
+        vec![],
+        system,
+        &mut receive,
+        &|_| {},
+    )
+    .await
+    .unwrap_err();
+    assert!(error.contains("Refusing a symlink"), "{error}");
+    assert_eq!(std::fs::read_to_string(outside.path())?, "original target\n");
+    Ok(())
+}
+
+#[tokio::test]
+async fn alien_key_copy_stops_when_the_alias_changes_after_review() -> Result<(), Error> {
+    let desk = desk().await?;
+    let remote = tempfile::tempdir()?;
+    let system = Arc::new(AlienSsh {
+        remote: remote.path().to_owned(),
+        calls: Mutex::new(Vec::new()),
+        fail: false,
+        change_alias: true,
+    });
+    let (send, mut receive) = mpsc::unbounded_channel();
+    send.send(Decision::Apply(None))?;
+    let error = hs_cli::tui::alien_keys::work(
+        &desk.client,
+        &desk.desktop(),
+        alien_selection(&desk)?,
+        vec![],
+        system.clone(),
+        &mut receive,
+        &|_| {},
+    )
+    .await
+    .unwrap_err();
+    assert!(error.contains("SSH alias configuration changed"), "{error}");
+    assert_eq!(system.calls.lock().unwrap().len(), 2);
+    assert!(!remote.path().join(".ssh").exists());
+    Ok(())
+}

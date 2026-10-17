@@ -227,6 +227,14 @@ impl App {
         if kind != Kind::New && entry.is_none() {
             return None;
         }
+        if kind == Kind::Addkey
+            && entry
+                .as_ref()
+                .is_some_and(|entry| entry.role == "ALIEN" && entry.status != "running")
+        {
+            self.log("", "Add key over SSH requires the alien VM to be running.");
+            return None;
+        }
         let vmid = entry.as_ref().map(|entry| entry.vmid);
         let name = entry.as_ref().and_then(|entry| entry.name.clone()).unwrap_or_default();
         if kind == Kind::Resize && self.wait_for_details(super::state::DetailsAction::Resize) {
@@ -288,6 +296,9 @@ impl App {
                     },
                     note: "↑ ↓ move · Space or click selects · Enter reviews all selected keys.".to_owned(),
                 }];
+                if entry.as_ref().is_some_and(|entry| entry.role == "ALIEN") {
+                    fields.clear();
+                }
                 fields.extend(self.keys.iter().map(|key| Field {
                     label: "",
                     input: Input::Check {
@@ -297,6 +308,13 @@ impl App {
                     },
                     note: "↑ ↓ move · Space or click selects · Enter reviews all selected keys.".to_owned(),
                 }));
+                if fields.is_empty() {
+                    self.log(
+                        "",
+                        "No public key files found in ~/.ssh; add a public key file before copying keys.",
+                    );
+                    return None;
+                }
                 fields
             }
             Kind::Migrate => {
@@ -418,7 +436,20 @@ impl App {
                     .map(|field| field.value())
                     .filter(|path| !path.is_empty())
                     .collect();
-                json!({"vmid": vmid, "restart": false})
+                if self.selected_entry().is_some_and(|entry| entry.role == "ALIEN") {
+                    let entry = self.selected_entry().ok_or("No alien VM selected")?;
+                    if entry.status != "running" {
+                        return Err("Add key over SSH requires the alien VM to be running.".to_owned());
+                    }
+                    let alias = entry
+                        .name
+                        .as_deref()
+                        .filter(|name| valid_name(name))
+                        .ok_or("The alien VM has no valid SSH alias")?;
+                    json!({"vmid":vmid,"alien_ssh":alias})
+                } else {
+                    json!({"vmid": vmid, "restart": false})
+                }
             }
             Kind::Migrate => {
                 let node = value("Node");
@@ -722,6 +753,10 @@ impl App {
         let part = amount_part(form);
         match code {
             KeyCode::Char(' ') if action.kind == Kind::Addkey => {
+                let existing_option = form
+                    .fields
+                    .first()
+                    .is_some_and(|field| matches!(&field.input, Input::Check { value, .. } if value.is_empty()));
                 if let Some(Field {
                     input: Input::Check { checked, .. },
                     ..
@@ -730,7 +765,8 @@ impl App {
                     *checked = !*checked;
                     if *checked {
                         for (index, field) in form.fields.iter_mut().enumerate() {
-                            if index != form.focus
+                            if existing_option
+                                && index != form.focus
                                 && (index == 0 || form.focus == 0)
                                 && let Input::Check { checked, .. } = &mut field.input
                             {

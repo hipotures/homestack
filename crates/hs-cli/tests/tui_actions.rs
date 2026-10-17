@@ -858,3 +858,36 @@ fn clicking_a_key_row_toggles_its_checkbox() {
     fixture.app.mouse(click);
     assert!(screen(&render(&fixture.app, 120, 36)).contains("[ ] yubikey-blue"));
 }
+
+#[test]
+fn alien_keys_use_ssh_with_multiple_checkboxes_and_require_a_running_vm() {
+    let mut fixture = app();
+    let mut status = tui_fixture::status();
+    status["workspaces"][0]["role"] = json!("ALIEN");
+    fixture.app.set_status(&status);
+    fixture.app.set_keys(vec![
+        hs_cli::tui::action::KeyFile {
+            name: "blue".to_owned(),
+            path: "~/.ssh/blue.pub".to_owned(),
+        },
+        hs_cli::tui::action::KeyFile {
+            name: "backup".to_owned(),
+            path: "~/.ssh/backup.pub".to_owned(),
+        },
+    ]);
+    select(&mut fixture.app, 201);
+    press(&mut fixture.app, KeyCode::Char('k'));
+    assert!(!screen(&render(&fixture.app, 120, 36)).contains("Apply the keys already configured"));
+    press(&mut fixture.app, KeyCode::Char(' '));
+    press(&mut fixture.app, KeyCode::Down);
+    press(&mut fixture.app, KeyCode::Char(' '));
+    let start = started(press(&mut fixture.app, KeyCode::Enter));
+    assert_eq!(start.parameters, json!({"vmid":201,"alien_ssh":"dev-main"}));
+    assert_eq!(start.key_files, ["~/.ssh/blue.pub", "~/.ssh/backup.pub"]);
+    fixture.app.action = None;
+    status["workspaces"][0]["status"] = json!("stopped");
+    fixture.app.set_status(&status);
+    select(&mut fixture.app, 201);
+    assert_eq!(press(&mut fixture.app, KeyCode::Char('k')), None);
+    assert!(fixture.app.action.is_none());
+}

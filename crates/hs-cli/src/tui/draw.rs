@@ -471,7 +471,7 @@ fn workspace_actions(app: &App) -> Vec<Control> {
         Control::key("s&etup").enabled(running && free),
         Control::key("&refresh").enabled(free),
         Control::key("resi&ze").enabled(free),
-        Control::key("add&key").enabled(free),
+        Control::key("add&key").enabled(free && (!selected.is_some_and(|entry| entry.role == "ALIEN") || running)),
         Control::key("mi&grate").enabled(free),
         Control::key("&destroy").enabled(free),
     ]

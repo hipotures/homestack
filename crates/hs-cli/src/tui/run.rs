@@ -790,6 +790,25 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
                                 let _ = updates.send(Update::Images(targets, images));
                             });
                         }
+                        Request::Act(start) if start.kind == Kind::Addkey && start.parameters["alien_ssh"].is_string() => {
+                            if let (Some(client), Some(desktop)) = (connection.client.clone(), connection.desktop.clone()) {
+                                let ssh_prefix = installing.bridge(&mut app, &updates);
+                                if ssh_prefix.is_empty() {
+                                    app.progress(Progress::Done { ok: false, lines: vec!["Could not start SSH authentication prompts.".to_owned()] });
+                                    continue;
+                                }
+                                let system = Arc::clone(&ctx.system);
+                                let (sender, mut decisions) = mpsc::unbounded_channel();
+                                decide = Some(sender);
+                                let updates = updates.clone();
+                                tokio::spawn(async move {
+                                    let tell = move |progress: Progress| { let _ = updates.send(Update::Action(progress)); };
+                                    if let Err(message) = super::alien_keys::work(&client, &desktop, start, ssh_prefix, system, &mut decisions, &tell).await {
+                                        tell(Progress::Done { ok: false, lines: message.lines().map(str::to_owned).collect() });
+                                    }
+                                });
+                            }
+                        }
                         Request::Act(start) => {
                             if let (Some(client), Some(desktop)) = (connection.client.clone(), connection.desktop.clone()) {
                                 let (sender, mut decisions) = mpsc::unbounded_channel();

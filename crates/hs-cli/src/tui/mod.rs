@@ -2,6 +2,7 @@
 
 pub mod acting;
 pub mod action;
+pub mod alien_keys;
 pub mod chrome;
 mod details;
 pub mod draw;
