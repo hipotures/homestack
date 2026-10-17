@@ -35,8 +35,9 @@ def create(data):
     snippets = pathlib.Path('/var/lib/vz/snippets')
     snippets.mkdir(parents=True, exist_ok=True)
     seed = snippets / ('hs-e2e-gold-' + data['run_id'] + '.yaml')
-    seed.write_text('#cloud-config\n' + json.dumps(data['cloud_config']))
+    seed.touch(mode=0o600, exist_ok=True)
     seed.chmod(0o600)
+    seed.write_text('#cloud-config\n' + json.dumps(data['cloud_config']))
     metadata = snippets / ('hs-e2e-gold-' + data['run_id'] + '-meta.yaml')
     metadata.write_text(json.dumps({'instance-id': data['instance_id'], 'local-hostname': 'gold-e2e'}))
     metadata.chmod(0o600)
@@ -56,7 +57,7 @@ def create(data):
     cloud = [] if 'cloudinit' in config.get('ide2', '') else ['--ide2', 'local:cloudinit']
     run('qm', 'set', '100', '--scsi0', disk + ',discard=on', *cloud,
         '--boot', 'order=scsi0', '--ipconfig0', 'ip=10.77.0.100/24,gw=10.77.0.1',
-        '--nameserver', '10.77.0.1', '--ciuser', 'root', '--sshkeys', str(keyfile),
+        '--nameserver', '10.77.0.1', '--ciuser', 'root', '--ciupgrade', '0', '--sshkeys', str(keyfile),
         '--cicustom', 'user=local:snippets/' + seed.name + ',meta=local:snippets/' + metadata.name)
     run('qm', 'cloudinit', 'update', '100')
     if ',size=8G' not in current_config()['scsi0']:

@@ -156,12 +156,26 @@ not require booting Gold to retrieve keys. `verify` checks its finalized
 ownership, PVE configuration and stopped state again. Gold is intended for
 cloning at this point, rather than being a running workspace.
 
+For administrative access, select Gold in the application's resource list and
+choose **SSH root** (`s`). In profile `e2e`, this also works while Gold is stopped:
+the application starts it, obtains its current host key through the pinned PVE
+connection and opens root SSH in the terminal. Logging out returns to the TUI;
+if this action started Gold, it cleans Cloud-Init and gracefully stops Gold again
+for cloning. There is no command to copy or password to enter. Workspaces keep
+their normal user login.
+
 An occupied, unowned VMID 100 is refused; the runner never replaces a user's
 VM or container. Retrying preparation may resume only a fixture carrying this
 run's exact ownership marker. Normal outer-VM cleanup removes Gold together
 with its disks, temporary keys and guest configuration. It is recreated by the
 next E2E run. An already paused lab can receive the same fixture through
 `homestack-e2e prepare --artifacts DIRECTORY`; no outer-VM restart is needed.
+
+Validation on 2026-10-17 passed the full automatic bootstrap, Gold readiness,
+shutdown and cleanup with the default 1 vCPU, 4096 MiB RAM and 12 GiB outer disk.
+The Gold root SSH handler also passed two successive start/login/logout/stop
+cycles against the real lab, with sudo retained. Client tests cover the TUI
+action for stopped lab Gold and root selection for running Gold.
 
 ## Installation phases and manual inspection
 

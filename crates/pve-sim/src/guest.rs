@@ -425,6 +425,13 @@ fn exec_checks(guest: &GuestSpec, shell: &str) -> Option<ExecResult> {
             .collect();
         return Some(ExecResult::ok(lines));
     }
+    if shell.starts_with("if ! command -v sudo >/dev/null 2>&1;") && shell.contains("sudo -n -l -U ") {
+        return Some(ExecResult::line(if guest.has_command("sudo") && guest.sudo_allowed {
+            "UNVERIFIED"
+        } else {
+            "DENIED"
+        }));
+    }
     if let Some(name) = between(
         shell,
         "if command -v ",
@@ -551,6 +558,7 @@ mod tests {
             ],
             users: vec![UserEntry::Name("user".to_owned())],
             commands: Vec::new(),
+            sudo_allowed: false,
             files: std::collections::BTreeMap::new(),
             cloud_id: None,
             blocks: Vec::new(),

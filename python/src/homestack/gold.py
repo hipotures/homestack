@@ -239,7 +239,7 @@ def check_gold_readiness(
             ("guest", "Required guest tools"),
             ("guest", "Workspace account"),
             ("security", "Regular user policy"),
-            ("security", "No sudo"),
+            ("security", "No sudo privileges"),
             ("security", "Root authorized_keys"),
         ):
             checks.append(
@@ -292,7 +292,7 @@ def check_gold_readiness(
             ("guest", "Required guest tools"),
             ("guest", "Workspace account"),
             ("security", "Regular user policy"),
-            ("security", "No sudo"),
+            ("security", "No sudo privileges"),
             ("security", "Root authorized_keys"),
             ("security", "Workspace public-key source"),
         ):
@@ -432,14 +432,14 @@ def check_gold_readiness(
         cfg,
         node,
         vmid,
-        "if command -v sudo >/dev/null 2>&1; then echo PRESENT; else echo ABSENT; fi",
+        f'if ! command -v sudo >/dev/null 2>&1; then echo DENIED; else policy=$(LC_ALL=C sudo -n -l -U {shlex.quote(cfg.user_name)} 2>&1); case "$policy" in "User "{shlex.quote(cfg.user_name)}" is not allowed to run sudo on "*.) echo DENIED;; *) echo UNVERIFIED;; esac; fi',
         check=False,
     )
     add(
         "security",
-        "No sudo",
-        sudo_state == "ABSENT",
-        "not installed" if sudo_state == "ABSENT" else "installed",
+        "No sudo privileges",
+        sudo_state == "DENIED",
+        "no permitted sudo commands" if sudo_state == "DENIED" else "sudo privileges present or policy could not be verified",
     )
 
     update("Check Gold SSH public-key sources", 5)

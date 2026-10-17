@@ -459,7 +459,14 @@ fn workspace_actions(app: &App) -> Vec<Control> {
     }
     vec![
         Control::key("&info").enabled(selected.is_some()),
-        Control::key("&ssh").enabled(running),
+        Control::key(
+            if selected.is_some_and(|entry| super::shell::is_gold(app, entry.vmid)) {
+                "&ssh root"
+            } else {
+                "&ssh"
+            },
+        )
+        .enabled(selected.is_some_and(|entry| super::shell::available(app, entry.vmid))),
         Control::key(if running { "s&top" } else { "s&tart" }).enabled(free),
         Control::key("s&etup").enabled(running && free),
         Control::key("&refresh").enabled(free),

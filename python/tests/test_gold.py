@@ -89,7 +89,7 @@ class GoldReadinessTests(unittest.TestCase):
             if command.startswith("awk -F:"):
                 return "user:1000:1000"
             if "command -v sudo" in command:
-                return "ABSENT"
+                return "DENIED"
             if command.startswith("test -s /root"):
                 return "OK"
             raise AssertionError(command)
@@ -126,7 +126,7 @@ class GoldReadinessTests(unittest.TestCase):
             if command.startswith("awk -F:"):
                 return "user:1000:1000"
             if "command -v sudo" in command:
-                return "ABSENT"
+                return "DENIED"
             if command.startswith("test -s /root"):
                 return "OK"
             raise AssertionError(command)

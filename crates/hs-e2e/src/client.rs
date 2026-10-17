@@ -237,6 +237,22 @@ async fn launch(artifacts: &Path, run_id: &str, argv: &[String]) -> Result<()> {
         .as_str()
         .ok_or("service settings have no server image")?;
     let mut command = prepare(&dir, &program, &executable("ssh")?, image, argv)?;
+    if dir.join("gold.json").is_file() {
+        write(
+            &dir.join("client/bin/ssh"),
+            &format!(
+                "#!/bin/sh\nif [ \"$#\" -eq 1 ] && [ \"$1\" = root@gold-e2e ]; then\n  exec {} gold-shell --artifacts {}\nfi\nexec {} -F {} \"$@\"\n",
+                shell_quote(&std::env::current_exe()?.display().to_string()),
+                shell_quote(&artifacts.canonicalize()?.display().to_string()),
+                shell_quote(&executable("ssh")?.display().to_string()),
+                shell_quote(&dir.join("client/ssh_config").display().to_string()),
+            ),
+            0o700,
+        )?;
+        command.env("HOMESTACK_E2E_GOLD_VMID", "100");
+    } else {
+        command.env_remove("HOMESTACK_E2E_GOLD_VMID");
+    }
     let fixture = Path::new(
         metadata["fixture_directory"]
             .as_str()
@@ -272,6 +288,9 @@ async fn launch(artifacts: &Path, run_id: &str, argv: &[String]) -> Result<()> {
         crate::domain::SEARCH
     );
     eprintln!("This profile and its credentials are removed with the VM. Keep the controller paused.");
+    if dir.join("gold.json").is_file() {
+        eprintln!("In the TUI, select Gold and SSH root: a stopped Gold starts for inspection and stops on logout.");
+    }
     eprintln!("HTTPS uses the lab SSH SOCKS tunnel; TLS hostname and public-CA checks stay enabled.");
     // The TUI owns raw mode; its SSH handover must restore a canonical terminal.
     let _terminal = TerminalGuard::capture()?;

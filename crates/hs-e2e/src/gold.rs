@@ -344,6 +344,82 @@ pub async fn verify(dir: &Path, artifacts: &Path, report: &Value) -> Result<Valu
     Ok(metadata)
 }
 
+/// The application's SSH action owns startup and restores a stopped Gold on logout.
+pub async fn shell(artifacts: &Path) -> Result<()> {
+    let report: Value = serde_json::from_slice(&std::fs::read(artifacts.join("report.json"))?)?;
+    if report["status"] != "paused" {
+        return Err("the E2E controller must remain paused during Gold inspection".into());
+    }
+    let run_id = uuid::Uuid::parse_str(report["run_id"].as_str().ok_or("missing run ID")?)?.to_string();
+    let dir = Path::new(report["temporary_directory"].as_str().ok_or("missing lab directory")?);
+    use std::os::unix::fs::OpenOptionsExt;
+    let lock = std::fs::File::options()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .mode(0o600)
+        .open(dir.join("gold-shell.lock"))?;
+    lock.try_lock()
+        .map_err(|_| "Gold is already being inspected by another SSH session")?;
+    drop(std::os::unix::net::UnixStream::connect(dir.join("inspection.sock"))?);
+    let metadata: Value = serde_json::from_slice(&std::fs::read(dir.join("gold.json"))?)?;
+    if metadata["run_id"] != run_id || metadata["vmid"] != VMID || metadata["finalized"] != true {
+        return Err("Gold inspection requires this run's finalized reference Gold".into());
+    }
+    eprintln!("Opening the lab Gold as root; a stopped Gold will start and return to stopped on logout...");
+    let cloud = cloud_config(
+        &run_id,
+        &std::fs::read_to_string(dir.join("client/home/.ssh/e2e-workspace.pub"))?,
+        &std::fs::read_to_string(dir.join("gold-host-key"))?,
+        &std::fs::read_to_string(dir.join("gold-host-key.pub"))?,
+    );
+    let data = base64::engine::general_purpose::STANDARD
+        .encode(serde_json::to_vec(&json!({"run_id": run_id, "cloud_config": cloud}))?);
+    let script = format!(
+        "python3 - <<'INSPECT'\nimport base64,json\ndata=json.loads(base64.b64decode('{data}'))\n{}\nINSPECT\n",
+        include_str!("gold-shell.py")
+    );
+    let result = service::checked_ssh(dir, &script, &artifacts.join("gold-shell.log")).await?;
+    let result: Value = serde_json::from_slice(&result)?;
+    let key = result["key"].as_str().ok_or("Gold did not return its host key")?;
+    service::write_private(
+        &dir.join("gold-known_hosts"),
+        format!("gold-e2e-{run_id} {key}\n").as_bytes(),
+    )?;
+    let status = Command::new("ssh")
+        .args(["-F", &dir.join("ssh_config").display().to_string(), "gold-e2e"])
+        .kill_on_drop(true)
+        .status()
+        .await?;
+    if result["started"] == true {
+        eprintln!("Finalizing Gold and restoring its stopped state for cloning...");
+        let shutdown = output(
+            guest_ssh(dir),
+            "cloud-init status --wait\ncloud-init clean --logs --machine-id\nsystemctl poweroff --no-block\n",
+            Duration::from_secs(30),
+        )
+        .await?;
+        if !shutdown.status.success() {
+            return Err("Gold finalization failed after SSH; the VM remains available for inspection".into());
+        }
+        wait_stopped(dir, &run_id, artifacts).await?;
+        service::checked_ssh(
+            dir,
+            &format!(
+                "{}qm set 100 --delete cicustom\nrm -f /var/lib/vz/snippets/hs-e2e-gold-{run_id}-inspect.yaml\n",
+                guard(&run_id)
+            ),
+            &artifacts.join("gold-shell.log"),
+        )
+        .await?;
+    }
+    if !status.success() {
+        return Err(format!("Gold SSH ended with {status}").into());
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -351,12 +427,14 @@ mod tests {
     #[test]
     fn provisioning_refuses_unrelated_runs_vms_and_containers() -> Result<()> {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-        let result = std::process::Command::new("python3")
-            .arg(root.join("gold-test.py"))
-            .arg(root.join("gold-create.py"))
-            .env("PYTHONDONTWRITEBYTECODE", "1")
-            .output()?;
-        assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
+        for script in ["gold-create.py", "gold-shell.py"] {
+            let result = std::process::Command::new("python3")
+                .arg(root.join("gold-test.py"))
+                .arg(root.join(script))
+                .env("PYTHONDONTWRITEBYTECODE", "1")
+                .output()?;
+            assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
+        }
         Ok(())
     }
 

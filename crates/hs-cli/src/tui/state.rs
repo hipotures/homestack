@@ -170,6 +170,8 @@ fn read_tail(path: &std::path::Path, most: u64) -> Option<String> {
 #[derive(Debug, Clone)]
 pub struct App {
     pub profile: String,
+    /// The isolated lab's Gold shell can also start its stopped source VM.
+    pub lab_gold_vmid: Option<u32>,
     pub preferences: Preferences,
     pub palette: Palette,
     no_color: bool,
@@ -258,6 +260,7 @@ impl App {
             .filter(|value| *value < VIEWS.len())
             .unwrap_or(0);
         Ok(Self {
+            lab_gold_vmid: None,
             profile: "default".to_owned(),
             preferences,
             palette,
@@ -1163,7 +1166,7 @@ impl App {
         if key.code == KeyCode::Char('s') {
             return self
                 .selected_entry()
-                .filter(|entry| entry.status == "running")
+                .filter(|entry| super::shell::available(self, entry.vmid))
                 .map(|entry| Request::Ssh(entry.vmid));
         }
         if key.code == KeyCode::Enter

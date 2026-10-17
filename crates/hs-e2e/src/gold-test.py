@@ -23,7 +23,7 @@ class Ownership(unittest.TestCase):
                 return json.dumps({'description': 'another-run'})
             raise AssertionError('Unrelated guest reached a mutation: ' + repr(args))
         with patch('builtins.open', return_value=io.StringIO(json.dumps({'run_id': marker}))), \
-             patch.object(gold, 'run', side_effect=run), patch.object(gold.pathlib, 'Path') as paths:
+             patch.object(gold.subprocess, 'check_output', side_effect=lambda argv, **kwargs: run(*argv)), patch.object(gold.pathlib, 'Path') as paths:
             def path(name):
                 from unittest.mock import Mock
                 result = Mock()
@@ -32,7 +32,7 @@ class Ownership(unittest.TestCase):
                 return result
             paths.side_effect = path
             with self.assertRaises((AssertionError, RuntimeError)):
-                gold.create({'run_id': 'this-run', 'owner': 'this-run:gold'})
+                (getattr(gold, 'create', None) or gold.prepare)({'run_id': 'this-run', 'owner': 'this-run:gold'})
         return calls
 
     def test_wrong_run_never_calls_proxmox(self):

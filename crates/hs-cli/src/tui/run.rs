@@ -668,6 +668,11 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
     }
     let mut app = App::new(preferences, no_color)?;
     app.profile = std::env::var("HOMESTACK_ACTIVE_PROFILE").unwrap_or_else(|_| "default".to_owned());
+    if app.profile == "e2e" {
+        app.lab_gold_vmid = std::env::var("HOMESTACK_E2E_GOLD_VMID")
+            .ok()
+            .and_then(|id| id.parse().ok());
+    }
     let log_dir = config::default_path(&ctx.home, ctx.config_home.as_deref())
         .parent()
         .map_or_else(|| ctx.home.clone(), std::path::Path::to_path_buf);

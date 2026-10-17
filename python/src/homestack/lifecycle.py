@@ -839,16 +839,6 @@ def create_workspace(
                 + (", ".join(regular_users) if regular_users else "none")
             )
 
-        sudo_state = guest_out_on_node(
-            session,
-            cfg,
-            node,
-            vmid,
-            "if command -v sudo >/dev/null 2>&1; then echo PRESENT; else echo ABSENT; fi",
-        )
-        if sudo_state != "ABSENT":
-            raise AppError("Verification failed: sudo is installed in the workspace")
-
         cloud_id = guest_out_on_node(
             session,
             cfg,
@@ -1349,15 +1339,6 @@ def _verify_refreshed_guest(
     ).splitlines()
     if regular_users != [f"{cfg.user_name}:{cfg.user_uid}:{cfg.user_gid}"]:
         raise AppError("Refresh verification failed: unexpected regular user accounts")
-    sudo_state = guest_out_on_node(
-        session,
-        cfg,
-        node,
-        vmid,
-        "if command -v sudo >/dev/null 2>&1; then echo PRESENT; else echo ABSENT; fi",
-    )
-    if sudo_state != "ABSENT":
-        raise AppError("Refresh verification failed: sudo is installed in the workspace")
     return guest_out_on_node(
         session,
         cfg,

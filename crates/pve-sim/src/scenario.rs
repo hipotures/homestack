@@ -345,6 +345,9 @@ pub struct GuestSpec {
     /// import `yaml`.
     #[serde(default = "default_commands")]
     pub commands: Vec<String>,
+    /// Whether the workspace account has any sudo permissions.
+    #[serde(default)]
+    pub sudo_allowed: bool,
     /// Further files by absolute path (e.g. `authorized_keys`).
     #[serde(default)]
     pub files: BTreeMap<String, String>,
@@ -357,7 +360,7 @@ pub struct GuestSpec {
     pub blocks: Vec<BlockSpec>,
 }
 
-/// The programs of a guest that meets the Gold contract (no `sudo`), and
+/// The programs of a guest that meets the Gold contract, and
 /// what the vendor snippet needs (`python3-yaml` stands for Python's `yaml`
 /// module).
 fn default_commands() -> Vec<String> {

@@ -164,6 +164,12 @@ async fn main() -> ExitCode {
 
 async fn execute() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().is_some_and(|arg| arg == "gold-shell") {
+        if args.len() != 3 || args[1] != "--artifacts" {
+            return Err("Gold shell must be opened through the E2E application's SSH action".into());
+        }
+        return gold::shell(Path::new(&args[2])).await;
+    }
     if args.first().is_some_and(|arg| arg == "profile") {
         if args.len() != 3 || args[1] != "--artifacts" {
             return Err("usage: homestack-e2e profile --artifacts DIRECTORY".into());

@@ -46,6 +46,36 @@ fn a_stopped_workspace_has_no_ssh() {
 }
 
 #[test]
+fn stopped_lab_gold_opens_its_managed_root_shell_from_the_application() {
+    let mut fixture = app();
+    fixture.app.lab_gold_vmid = Some(112);
+    select(&mut fixture.app, 112);
+    assert_eq!(press(&mut fixture.app, KeyCode::Char('s')), Some(Request::Ssh(112)));
+    let home = tempfile::tempdir().unwrap();
+    assert_eq!(
+        shell::prepare(&mut fixture.app, home.path(), 112).as_deref(),
+        Some("root@gold-e2e")
+    );
+    assert!(fixture.app.overlay.is_none());
+    position(&render(&fixture.app, 120, 36), "ssh root");
+}
+
+#[test]
+fn running_gold_uses_root_with_its_local_keys_instead_of_the_workspace_account() {
+    let mut fixture = app();
+    fixture.app.status.as_mut().unwrap().gold.as_mut().unwrap().status = "running".to_owned();
+    select(&mut fixture.app, 112);
+    let home = tempfile::tempdir().unwrap();
+    let directory = home.path().join(".ssh/config.d/homestack");
+    std::fs::create_dir_all(&directory).unwrap();
+    std::fs::write(directory.join("vm112-gold.conf"), "Host gold vm112\n").unwrap();
+    assert_eq!(
+        shell::prepare(&mut fixture.app, home.path(), 112).as_deref(),
+        Some("root@vm112")
+    );
+}
+
+#[test]
 fn the_desktops_entry_is_used_when_it_exists() {
     let home = tempfile::tempdir().unwrap();
     let directory = home.path().join(".ssh/config.d/homestack");

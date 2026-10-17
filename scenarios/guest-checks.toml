@@ -53,7 +53,7 @@ expect.body = { ok = false, error = "Refresh verification failed: persistent use
 python = ["@verify-refresh", "223"]
 rust = "@verify-refresh 223"
 normalize = "guest-verify"
-expect.body = { ok = false, error = "Refresh verification failed: sudo is installed in the workspace" }
+expect.body = { ok = true, cloud_id = "nocloud" }
 
 [[parity]]
 python = ["@verify-refresh", "224"]
@@ -123,6 +123,7 @@ net0 = "virtio=BC:24:11:00:01:02,bridge=vmbr0"
 scsi0 = "example-storage:vm-102-disk-0,size=16G"
 [pve.vms.guest]
 hostname = "gold2"
+sudo_allowed = true
 users = ["root", "developer", "guest"]
 commands = ["cloud-init", "cloud-id", "sshd", "lsblk", "blkid", "mkfs.ext4", "mount", "mountpoint", "systemctl", "systemd-escape", "install", "ssh-keygen", "sudo"]
 files = { "/home/developer/.ssh/authorized_keys" = "rsa AAAA old-format\n" }
@@ -196,7 +197,7 @@ size = 20957446144
 used = 338767872
 avail = 20601901056
 
-# sudo installed.
+# sudo installed; package presence must not block verification.
 [[pve.vms]]
 vmid = 223
 node = "pve-example-1"
