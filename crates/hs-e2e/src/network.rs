@@ -8,11 +8,18 @@ use serde_json::Value;
 use crate::{Result, vm::Vm};
 
 pub const CONFIGURE: &str = include_str!("network.sh");
+pub const SERVICES: &str = include_str!("network-services.sh");
+
+pub fn services_script() -> String {
+    SERVICES
+        .replace("@INTERNET_LINK@", include_str!("internet-link.py"))
+        .replace("@NETWORK_CHECK@", include_str!("network-check.py"))
+}
 
 const VERIFY: &str = r#"
 set -eu
 test -d /sys/class/net/vmbr0/bridge
-test "$(sysctl -n net.ipv4.ip_forward)" = 0
+test "$(sysctl -n net.ipv4.ip_forward)" = 1
 test "$(sysctl -n net.ipv6.conf.vmbr0.disable_ipv6)" = 1
 # Container veths and VM taps are allowed; hardware ports must stay outside.
 for port in /sys/class/net/vmbr0/brif/*; do
@@ -42,17 +49,40 @@ fn bridge(inventory: &Value) -> Result<Value> {
     Ok(bridge.clone())
 }
 
-pub async fn configure(vm: &Vm, artifacts: &Path) -> Result<Value> {
+pub async fn configure(vm: &Vm, artifacts: &Path, dir: &Path) -> Result<(Value, crate::internet::Internet)> {
     vm.checked_ssh(CONFIGURE, Duration::from_secs(60), &artifacts.join("guest-network.log"))
         .await?;
-    verify(vm, artifacts).await
+    vm.logged_ssh(
+        &services_script(),
+        Duration::from_secs(240),
+        &artifacts.join("guest-network.log"),
+    )
+    .await?;
+    let internet = crate::internet::Internet::start(dir, artifacts).await?;
+    let network = verify(vm, artifacts).await?;
+    Ok((network, internet))
 }
 
 pub async fn verify(vm: &Vm, artifacts: &Path) -> Result<Value> {
     let output = vm
         .checked_ssh(VERIFY, Duration::from_secs(30), &artifacts.join("guest-network.log"))
         .await?;
-    bridge(&serde_json::from_slice(&output)?)
+    vm.checked_ssh(
+        "for attempt in $(seq 1 50); do test -e /sys/class/net/hsewan0 && ip -4 route show default | grep -q hsewan0 && exit 0; sleep 0.2; done; exit 1\n",
+        Duration::from_secs(15),
+        &artifacts.join("guest-network.log"),
+    )
+    .await?;
+    let mut network = bridge(&serde_json::from_slice(&output)?)?;
+    let check = vm
+        .checked_ssh(
+            "python3 /usr/local/lib/homestack-e2e/network-check.py\n",
+            Duration::from_secs(45),
+            &artifacts.join("guest-network.log"),
+        )
+        .await?;
+    network["dhcp_probe"] = serde_json::from_slice(&check)?;
+    Ok(network)
 }
 
 #[cfg(test)]

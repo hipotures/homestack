@@ -4,12 +4,14 @@
 **Date:** 2026-10-16
 **Repository baseline:** `9f239ee` on `rust-migration`.
 
-The initial download/boot/install/verify/remove implementation is documented in
-[Disposable Proxmox bootstrap](e2e-bootstrap.md). It currently uses direct QEMU
-and latest repository inputs, with explicit installation phases, bounded manual
-inspection pauses and local or tunneled browser access. Persistent DNS/certificate
-reuse, full fixture cleanup and the remaining laboratory lifecycle and test catalogue below are
-still a proposal; the current binary has no public DNS or ACME integration.
+The implemented bootstrap is documented in [Disposable Proxmox bootstrap](e2e-bootstrap.md).
+That document is authoritative for the current direct-QEMU topology, indefinite
+inspection pauses, persistent DNS/TLS fixtures, profiles, DHCP/DNS and filtered
+public IPv4 Internet access. The broader scenario catalogue and libvirt topology
+below remain a design proposal. The initial proposal's repository-only guest
+egress policy is superseded: Gold guests use ordinary public repositories,
+without per-distribution mirrors, while an external boundary blocks direct
+access to the runner and private networks.
 
 ## 1. Objective and decisions
 
@@ -173,8 +175,9 @@ explains. Therefore L0 firewall rules are mandatory: allow only established
 responses and the specific fixture DNS, NTP, mirror and registry ports from lab
 interfaces. Permit the HomeStack service containers to reach only this run's
 PVE management address on TCP 8006, with the return route through L0. Deny
-other host services, all forwarding to external networks and other crossings
-between workload and management. Apply the rules to IPv4, IPv6 and bridged
+other host services, forwarding to private external networks and other crossings
+between workload and management. Permit public Internet egress only through the
+externally enforced boundary described below. Apply the rules to IPv4, IPv6 and bridged
 traffic; disable IPv6 on lab interfaces in v1 if it is not covered by the rules.
 Do not use default libvirt NAT as an isolation boundary.
 
@@ -183,11 +186,14 @@ the externally enforced interface boundary, not addresses or rules inside PVE.
 The fixture services expose read-only content on lab addresses; their management
 interfaces are not reachable from either lab network.
 
-Downloads happen on L0 before the run. A local read-only package mirror and a
-real OCI registry supply locked packages and images to PVE and guests. Guests
-have no general Internet access. The registry serves the actual HomeStack image
-built from the revision under test, over TLS. Its CA is installed in the lab
-PVE trust store. Registry push access is restricted to the build process.
+Guest networking must support DHCP, DNS and ordinary public Internet access
+independently of the installed distribution or software. Do not maintain lists
+of distribution repositories or rewrite guest mirrors. Enforce the private/host
+network boundary outside PVE; public Internet access must not grant access to
+L0 services or private production networks. The current rootless implementation
+and its precise limits are described in [the bootstrap guide](e2e-bootstrap.md).
+Reproducible scenarios may pin package and image versions, but pinning is a test
+fixture concern rather than a guest-network restriction.
 
 ### Credentials
 

@@ -22,7 +22,8 @@ and these commands on `PATH`:
 - `qemu-system-x86_64` and `qemu-img`;
 - `ssh` and `ssh-keygen`;
 - `mkfs.vfat` from dosfstools and `mcopy` from mtools;
-- `openssl`; also `dig` and `nsupdate` when using local split DNS.
+- `openssl`, Python 3.9 or newer with `os.pidfd_open`, and `ip` from iproute2;
+- `dig` and `nsupdate` when using local split DNS.
 
 QEMU also needs its normal firmware and user-networking dependencies. For
 example, on Debian/Ubuntu the packages are `qemu-system-x86`, `qemu-utils`,
@@ -134,7 +135,7 @@ to `report.json` before the next phase starts:
 | `boot` | Debian booted, Cloud-Init and initialization checked; SSH and restricted APT networking work |
 | `kernel` | Proxmox kernel installed and the VM rebooted |
 | `proxmox` | PVE services installed and rebooted; public certificate installed and temporary web credentials printed |
-| `network` | Internal `vmbr0` bridge configured at `10.77.0.1/24`, persisted in the guest network configuration and verified through PVE |
+| `network` | Persistent `vmbr0` at `10.77.0.1/24`, DHCP, DNS and filtered public Internet; DHCP lease and public HTTPS verified from a temporary guest namespace |
 | `homestack` | API DNS, cached public wildcard TLS, isolated install configuration and workspace key, internal DNS, restricted OCI access and a published server image in the native PVE cache; no container created |
 | `verify` | PVE kernel, exposed nested KVM, HTTPS API, web page, password login and authenticated node inventory checked |
 | `shutdown` | VM powered off; private files still exist until cleanup |
@@ -351,14 +352,50 @@ and verified against the PVE network inventory. The management NIC retains
 its existing SSH and HTTPS access. An existing, unowned `vmbr0` is refused.
 The report stores the observed bridge configuration under `network`.
 
-The bridge has no external ports, IPv4 forwarding is disabled and IPv6 is
-disabled on the bridge. Container veths and VM taps may attach to it; a
-hardware NIC attached to it fails verification. It allows guests to reach
-each other and services on the test Proxmox. It provides no Internet or LAN
-egress or DHCP. The HomeStack phase adds only the explicit API DNS record
-and the tunnels described above; arbitrary guest DNS/egress and browser
-forwarding to HomeStack remain later work. Its configuration disappears with the outer
-VM; no bridge, route or firewall rule is created on the runner host.
+Attach a Gold VM or container to `vmbr0` and select DHCP in the guest.
+The lab supplies addresses **`10.77.0.50`–`10.77.0.99/24`**, gateway and DNS
+**`10.77.0.1`**, and one-hour leases. The API's static `10.77.0.101` stays
+outside that pool. The internal resolver answers the E2E service names and
+forwards other names. Guests have normal public IPv4 Internet access: their
+own repositories, mirrors, package managers and registry clients work without
+per-distribution configuration or a repository list. IPv6 is disabled in this
+first implementation. Network access alone does not satisfy HomeStack's Gold
+requirements or provide nested GPU passthrough.
+
+The bridge has no physical ports. IPv4 forwarding and a dedicated nftables
+NAT table exist only inside the disposable PVE VM. Its private `hsewan0` TAP
+connects through pinned SSH to an Ethernet filter on the runner and then to
+QEMU's user-space NAT. The NAT process uses `-machine none`: it runs no guest
+CPU or disk. No bridge, TAP, route or firewall rule is created on the runner.
+The management NIC retains restricted QEMU networking and is never bridged to
+the workload network.
+
+The filter runs **outside PVE**. It rejects private, loopback, link-local,
+CGNAT, multicast and reserved IPv4 destinations, the runner's addresses and
+non-default IPv4 routes captured at startup, IPv6, VLAN frames and IPv4 source
+routing/options. The only private destination exception is TCP/UDP port 53 on
+QEMU's virtual DNS resolver. Changing routes or firewall rules as root inside
+PVE cannot bypass that filter. Public Internet access includes public services;
+it cannot distinguish a public production API from any other public API. Lab
+clients and guests receive only E2E credentials, never production tokens or an
+inherited SSH agent.
+
+The controller owns the gateway and SSH processes. Closing its input, killing
+the controller, a failed helper, or normal cleanup stops and reaps them. The
+nonpersistent TAP disappears when its helper closes. Inspection pauses keep
+the uplink alive without a time limit. `internet.log` records gateway failures;
+`guest-network.log` records DHCP/DNS setup and the real lease-to-HTTPS probe.
+The report includes its observed address, gateway and DNS in
+`network.dhcp_probe`. Bootstrapping APT and pulling the prepared HomeStack image
+retain their existing dedicated proxies.
+
+Validated on the paused lab with an official Alpine minirootfs: BusyBox
+`udhcpc` obtained a lease, the default HTTPS repositories remained unchanged,
+and `apk update` plus installation of `qemu-guest-agent` and `openssh-server`
+succeeded. The temporary probe namespace and filesystem were removed. Packet
+boundary tests cover private/host routes, source spoofing, malformed packets,
+IPv6/VLAN encapsulation and the virtual DNS exception. Process tests cover EOF,
+controller death, child failure and termination cleanup.
 
 Validated against the paused disposable PVE 9.2.21 VM: with production XDG
 paths deliberately inherited, the real TUI opened the install screen,

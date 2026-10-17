@@ -5,6 +5,7 @@ mod client;
 mod domain;
 mod image;
 mod install;
+mod internet;
 mod network;
 mod phases;
 mod proxy;
@@ -25,7 +26,7 @@ use serde_json::{Value, json};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
-const USAGE: &str = "homestack-e2e run [--memory-mib N] [--cpus N] [--disk-gib N]\n                  [--timeout-seconds N] [--message TEXT] [--artifacts DIRECTORY]\n                  [--pause-after PHASE[,PHASE...]] [--pause-on-failure]\n                  [--web-bind IPV4] [--web-port PORT]\n                  [--fixtures DIRECTORY] [--spaceship-file FILE]\n                  [--local-dns IPV4] [--tsig-file FILE]\n                  [--runner-ssh DESTINATION] [--runner-ssh-port PORT]\nhomestack-e2e resume --artifacts DIRECTORY\nhomestack-e2e profile --artifacts DIRECTORY (register an already paused lab as profile e2e)\nhomestack --profil e2e [COMMAND]\nhomestack-e2e prepare --artifacts DIRECTORY [--local-dns IPV4] [--spaceship-file FILE] [--tsig-file FILE]\nhomestack-e2e cleanup --all [--fixtures DIRECTORY] [--spaceship-file FILE] [--tsig-file FILE]\n\nPhases: preflight, domain, image, boot, kernel, proxmox, network, homestack, verify, shutdown; cleanup always runs.\nDefaults: 1 vCPU, 2048 MiB RAM, 12 GiB sparse disk, 1800 active seconds.\nInspection pauses have no time limit and require an explicit resume.\nThe panel uses pve.e2e.homestack.app with a public Let's Encrypt certificate.\nDNS and certificate fixtures persist until cleanup --all.\nThe web forward binds to 127.0.0.1 on a free port unless explicitly configured.\nDownloads Debian 13 qcow2, installs Proxmox, verifies SSH, HTTPS and web login,\npowers off, and deletes all temporary VM data. No host network changes.\nRequires Linux x86_64, /dev/kvm, qemu-system-x86_64, qemu-img,\nssh, ssh-keygen, mkfs.vfat, mcopy and openssl; dig/nsupdate for local DNS.\nNo host root privileges required.";
+const USAGE: &str = "homestack-e2e run [--memory-mib N] [--cpus N] [--disk-gib N]\n                  [--timeout-seconds N] [--message TEXT] [--artifacts DIRECTORY]\n                  [--pause-after PHASE[,PHASE...]] [--pause-on-failure]\n                  [--web-bind IPV4] [--web-port PORT]\n                  [--fixtures DIRECTORY] [--spaceship-file FILE]\n                  [--local-dns IPV4] [--tsig-file FILE]\n                  [--runner-ssh DESTINATION] [--runner-ssh-port PORT]\nhomestack-e2e resume --artifacts DIRECTORY\nhomestack-e2e profile --artifacts DIRECTORY (register an already paused lab as profile e2e)\nhomestack --profil e2e [COMMAND]\nhomestack-e2e prepare --artifacts DIRECTORY [--local-dns IPV4] [--spaceship-file FILE] [--tsig-file FILE]\nhomestack-e2e cleanup --all [--fixtures DIRECTORY] [--spaceship-file FILE] [--tsig-file FILE]\n\nPhases: preflight, domain, image, boot, kernel, proxmox, network, homestack, verify, shutdown; cleanup always runs.\nDefaults: 1 vCPU, 2048 MiB RAM, 12 GiB sparse disk, 1800 active seconds.\nInspection pauses have no time limit and require an explicit resume.\nThe panel uses pve.e2e.homestack.app with a public Let's Encrypt certificate.\nDNS and certificate fixtures persist until cleanup --all.\nThe web forward binds to 127.0.0.1 on a free port unless explicitly configured.\nDownloads Debian 13 qcow2, installs Proxmox, verifies SSH, HTTPS and web login,\npowers off, and deletes all temporary VM data. No host network changes.\nRequires Linux x86_64, /dev/kvm, qemu-system-x86_64, qemu-img,\nssh, ssh-keygen, mkfs.vfat, mcopy, openssl, python3 and ip; dig/nsupdate for local DNS.\nNo host root privileges required.";
 
 struct Options {
     memory: u32,
@@ -396,6 +397,8 @@ async fn run(
                 "mkfs.vfat",
                 "mcopy",
                 "openssl",
+                "python3",
+                "ip",
             ] {
                 if !std::env::split_paths(&path).any(|dir| dir.join(program).is_file()) {
                     return Err(format!("missing host tool {program}; see docs/e2e-bootstrap.md").into());
@@ -416,6 +419,16 @@ async fn run(
             ] {
                 vm::command(program, &[flag], artifacts, "host preflight").await?;
             }
+            vm::command(
+                "python3",
+                &[
+                    "-c",
+                    "import os; assert hasattr(os, 'pidfd_open'), 'Python 3.9+ with os.pidfd_open is required'",
+                ],
+                artifacts,
+                "host preflight",
+            )
+            .await?;
             std::net::TcpListener::bind((options.web_bind, options.web_port))
                 .map_err(|error| format!("PVE web forwarding address is unavailable: {error}"))?;
             Ok(())
@@ -579,12 +592,18 @@ async fn run(
             Ok(())
         })
         .await?;
+    let mut internet = None;
     progress
         .execute("network", report, async |report| {
             let vm = slot.as_mut().ok_or("VM handle is unavailable")?;
             eprintln!("Preparing isolated vmbr0 for containers and VMs (10.77.0.1/24)...");
-            report["network"] = network::configure(vm, artifacts).await?;
-            eprintln!("Guest bridge ready: vmbr0, 10.77.0.1/24; no external ports or IP forwarding.");
+            let (network, gateway) = network::configure(vm, artifacts, dir).await?;
+            internet = Some(gateway);
+            report["network"] = network;
+            eprintln!("Guest network ready: vmbr0, 10.77.0.1/24; DHCP 10.77.0.50-99, DNS 10.77.0.1.");
+            eprintln!(
+                "Guest Internet ready: all public IPv4 destinations; host, private networks and metadata endpoints are blocked outside PVE."
+            );
             Ok(())
         })
         .await?;
@@ -711,6 +730,9 @@ async fn run(
             slot.as_mut().ok_or("VM handle is unavailable")?.poweroff().await
         })
         .await?;
+    if let Some(mut internet) = internet {
+        internet.stop().await?;
+    }
     drop(proxy);
     Ok(())
 }

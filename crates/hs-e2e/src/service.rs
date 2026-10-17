@@ -253,7 +253,7 @@ else:
     #[tokio::test]
     #[ignore = "requires dnsmasq and Python 3 on the host"]
     async fn isolated_dns_covers_a_and_aaaa() -> Result<()> {
-        let network = include_str!("service-network.sh");
+        let network = include_str!("network-services.sh");
         let config = network
             .split_once("<<'DNS'\n")
             .and_then(|(_, rest)| rest.split_once("\nDNS\n"))
@@ -269,6 +269,18 @@ else:
         // Both runs use the actual bootstrap's DNS configuration and check.
         for local in [false, true] {
             let port = crate::proxy::unused_port(std::net::Ipv4Addr::LOCALHOST)?;
+            let config = config
+                .lines()
+                .filter(|line| {
+                    !line.starts_with("dhcp-")
+                        && !line.starts_with("user=")
+                        && !line.starts_with("group=")
+                        && !line.starts_with("server=")
+                        && *line != "log-dhcp"
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+                + "\n";
             let mut config = config
                 .replace("interface=vmbr0\n", "")
                 .replace("listen-address=10.77.0.1", "listen-address=127.0.0.1");
