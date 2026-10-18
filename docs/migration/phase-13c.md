@@ -1,7 +1,8 @@
 # Phase 13c: `homestack install` and `homestack uninstall`
 
-Status: configuration collection is implemented in the TUI (section 9);
-the complete live install/uninstall gate remains to be verified.
+Status: functionally complete and accepted by the owner on 2026-10-18
+after repeated E2E installation and uninstallation cycles. Remaining UI
+cleanup and parity accounting are tracked separately below.
 This file is written before the code (PLAN.md 1.1) and
 updated as the phase goes; the report at the end says what was done and
 what differs.
@@ -339,9 +340,9 @@ separate update menu request and text editing at 80 by 24.
 - [ ] Verify vendor snippet cleanup with snippet storage supplied; the
   observed TUI uninstall left both vendor snippets because no snippet
   storage was passed to the uninstall plan.
-- [ ] Verify the complete clean-cluster install/uninstall gate through both
-  SSH and Herdr, including removal of HomeStack state and preservation of
-  unrelated guests.
+- [x] Owner accepted phase 13c after repeated E2E install/uninstall cycles
+  (2026-10-18). This acceptance closes the functional phase; the specific
+  directly observed runs and cleanup limitations remain recorded below.
 - [ ] Audit and resolve the 29 remaining phase-13c `todo` entries in the
   parity manifest against current behavior and regression coverage.
 
@@ -360,3 +361,12 @@ roles, ACLs or pools. Gold 100 and API container 101 were still running.
 `homestack-vendor-create.yaml` and `homestack-vendor-keep.yaml` remained;
 this run does not close the complete cleanup gate. The subsequent
 "no server answers" message is expected after server token revocation.
+
+Owner acceptance (2026-10-18): repeated E2E install/uninstall cycles worked;
+phase 13c is closed functionally. The missing-client-file notice shown when
+returning from a successful uninstall is a separate UI follow-up: offer the
+installer instead of a filesystem diagnostic. This follow-up has not yet
+been implemented. The 29 parity `todo` entries still require an evidence-based
+audit before phase 15; functional acceptance does not automatically mark
+those tests as ported or excluded. Vendor snippet cleanup remains the
+explicit follow-up recorded above.
