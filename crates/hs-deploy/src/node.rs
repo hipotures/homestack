@@ -344,6 +344,29 @@ pub async fn made_from(pve: &impl Pve, node: &str, ctid: u32) -> Result<Option<S
         .map(|image| image.trim().to_owned()))
 }
 
+/// Whether `actual` (from Proxmox `/nodes/{node}/lxc/{ctid}/config`) has the
+/// same managed network settings as `expected`, ignoring key order and
+/// Proxmox-generated properties (`hwaddr`, `type`, `host-managed`).
+#[must_use]
+pub fn same_net(actual: &str, expected: &str) -> bool {
+    fn parse(text: &str) -> Option<std::collections::BTreeMap<&str, &str>> {
+        const GENERATED: [&str; 3] = ["hwaddr", "type", "host-managed"];
+        let mut map = std::collections::BTreeMap::new();
+        for part in text.split(',').map(str::trim).filter(|part| !part.is_empty()) {
+            let (key, value) = part.split_once('=')?;
+            let key = key.trim();
+            if !GENERATED.contains(&key) {
+                map.insert(key, value.trim());
+            }
+        }
+        Some(map)
+    }
+    match (parse(actual), parse(expected)) {
+        (Some(actual), Some(expected)) => !expected.is_empty() && actual == expected,
+        _ => false,
+    }
+}
+
 /// Whether container `ctid` was made with `description` (its server, image
 /// and certificate) and `net0`: then only its configuration is sent again.
 pub async fn unchanged(
@@ -362,8 +385,8 @@ pub async fn unchanged(
     say(&format!(
         "  CT {ctid} on {node}: current net0={current_net0}; expected net0={net0}"
     ));
-    let same = |key: &str, value: &str| config[key].as_str().map(str::trim_end) == Some(value.trim_end());
-    Ok(same("description", description) && same("net0", net0))
+    let same_description = config["description"].as_str().map(str::trim_end) == Some(description.trim_end());
+    Ok(same_description && same_net(current_net0, net0))
 }
 
 #[cfg(test)]
@@ -391,5 +414,27 @@ mod tests {
             "PATH=/usr/bin:/bin\0HOMESTACK_INSTANCE=api1"
         );
         assert_eq!(parse_env("A=1=2"), vec![("A".to_owned(), "1=2".to_owned())]);
+    }
+
+    #[test]
+    fn net0_comparison_ignores_proxmox_generated_fields_and_key_order() {
+        let expected = "name=eth0,bridge=vmbr0,ip=10.10.10.214/24,gw=10.10.10.1";
+        let normalized =
+            "name=eth0,bridge=vmbr0,gw=10.10.10.1,hwaddr=BC:24:11:2E:C1:09,ip=10.10.10.214/24,type=veth,host-managed=1";
+        assert!(same_net(normalized, expected));
+        assert!(same_net(expected, expected));
+        assert!(!same_net(
+            "name=eth0,bridge=vmbr0,gw=10.10.10.1,hwaddr=BC:24:11:2E:C1:09,ip=10.10.10.215/24,type=veth",
+            expected
+        ));
+        assert!(!same_net(
+            "name=eth0,bridge=vmbr1,gw=10.10.10.1,ip=10.10.10.214/24",
+            expected
+        ));
+        assert!(!same_net(
+            "name=eth0,bridge=vmbr0,gw=10.10.10.1,ip=10.10.10.214/24,tag=100",
+            expected
+        ));
+        assert!(!same_net("", expected));
     }
 }

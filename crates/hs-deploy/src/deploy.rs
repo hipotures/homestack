@@ -242,7 +242,7 @@ pub async fn apply(config: &DeployConfig, only: &[String], say: &impl Fn(&str)) 
     .take(6)
     .map(|b| format!("{b:02x}"))
     .collect();
-    for instance in selected {
+    for &instance in &selected {
         let started = Instant::now();
         say(&format!(
             "{}: CT {} on {} ({}, {})",
@@ -375,7 +375,7 @@ pub async fn apply(config: &DeployConfig, only: &[String], say: &impl Fn(&str)) 
         "deployment",
         "configuration consistency check",
         say,
-        check_versions(config, &api_token, say),
+        check_versions_for(config, &selected, &api_token, say),
     )
     .await
 }
@@ -395,10 +395,36 @@ pub async fn images(config: &DeployConfig) -> Result<Vec<(String, Option<String>
     Ok(found)
 }
 
+/// Every instance in `only` (or all when empty) holds the same configuration version.
+pub async fn check_selected_versions(
+    config: &DeployConfig,
+    only: &[String],
+    say: &impl Fn(&str),
+) -> Result<(), String> {
+    let selected = config.selected(only)?;
+    let api_token = read_secret(&config.server.api_token_file)?;
+    timed(
+        "deployment",
+        "configuration consistency check",
+        say,
+        check_versions_for(config, &selected, &api_token, say),
+    )
+    .await
+}
+
 /// Every instance holds the same configuration version.
 pub async fn check_versions(config: &DeployConfig, api_token: &str, say: &impl Fn(&str)) -> Result<(), String> {
     let all: Vec<&InstanceSpec> = config.instances.iter().collect();
-    let client = instances_client(config, &all, api_token)?;
+    check_versions_for(config, &all, api_token, say).await
+}
+
+async fn check_versions_for(
+    config: &DeployConfig,
+    instances: &[&InstanceSpec],
+    api_token: &str,
+    say: &impl Fn(&str),
+) -> Result<(), String> {
+    let client = instances_client(config, instances, api_token)?;
     let mut versions = std::collections::BTreeSet::new();
     let mut problems = Vec::new();
     for (index, url) in client.urls().enumerate() {
@@ -421,7 +447,9 @@ pub async fn check_versions(config: &DeployConfig, api_token: &str, say: &impl F
     if versions.len() != 1 {
         return Err(format!("the instances hold {} configuration versions", versions.len()));
     }
-    say("all instances hold the same configuration");
+    if instances.len() > 1 {
+        say("all instances hold the same configuration");
+    }
     Ok(())
 }
 
@@ -484,7 +512,8 @@ pub async fn remove(config: &DeployConfig, only: &[String], say: &impl Fn(&str))
     Ok(())
 }
 
-/// Send the Proxmox token and `server.toml` to one instance.
+/// Send the Proxmox token and `server.toml` to one instance and verify its
+/// active configuration version immediately before proceeding to the next node.
 async fn configure(
     client: &Client,
     instance: &InstanceSpec,
@@ -506,6 +535,21 @@ async fn configure(
             .map_err(|error| format!("{}: server.toml: {error}", instance.name))
     })
     .await?;
+    let reported = timed(&instance.name, "verify configuration version", say, async {
+        client
+            .config_version_on(0)
+            .await
+            .map_err(|error| format!("{}: config version: {error}", instance.name))
+    })
+    .await?;
+    if reported.as_deref() != Some(version.as_str()) {
+        return Err(format!(
+            "{}: reported configuration {:?} does not match uploaded {}",
+            instance.name,
+            reported,
+            &version[..12.min(version.len())]
+        ));
+    }
     say(&format!("  ready, configuration {}", &version[..12.min(version.len())]));
     Ok(())
 }
@@ -603,6 +647,54 @@ mod tests {
         let log = lines.into_inner().join("\n");
         assert!(log.contains("api3: HTTPS health after reboot attempt 1 failed after "));
         assert!(!log.contains("attempt 2") && !log.contains("retrying"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn configure_verifies_reported_version_immediately_on_instance() -> Result<(), Error> {
+        let instance = InstanceSpec {
+            name: "api1".to_owned(),
+            node: "pve1".to_owned(),
+            ctid: 99_951,
+            address: "127.0.0.1".parse()?,
+            storage: "local-lvm".to_owned(),
+        };
+        let (client, server) = health_client(vec![
+            (200, r#"{"status":"ok"}"#),
+            (200, r#"{"config_version":null}"#),
+            (200, r#"{"config_version":"ee82a4dfb6bc0011"}"#),
+            (200, r#"{"config_version":"ee82a4dfb6bc0011"}"#),
+        ])?;
+        let lines = RefCell::new(Vec::new());
+        let say = |line: &str| lines.borrow_mut().push(line.to_owned());
+        configure(&client, &instance, "root@pam!api=secret", "domain = 'x'\n", &say).await?;
+        server.join().map_err(|_| "configure fixture panicked")??;
+        let log = lines.into_inner().join("\n");
+        assert!(log.contains("api1: verify configuration version completed"));
+        assert!(log.contains("ready, configuration ee82a4dfb6bc"));
+
+        let (mismatch_client, mismatch_server) = health_client(vec![
+            (200, r#"{"status":"ok"}"#),
+            (200, r#"{"config_version":null}"#),
+            (200, r#"{"config_version":"ee82a4dfb6bc0011"}"#),
+            (200, r#"{"config_version":"0000000000000000"}"#),
+        ])?;
+        let Err(err) = configure(
+            &mismatch_client,
+            &instance,
+            "root@pam!api=secret",
+            "domain = 'x'\n",
+            &|_| {},
+        )
+        .await
+        else {
+            return Err("mismatched reported version must fail immediately".into());
+        };
+        mismatch_server.join().map_err(|_| "mismatch fixture panicked")??;
+        assert!(
+            err.contains("reported configuration") && err.contains("does not match"),
+            "{err}"
+        );
         Ok(())
     }
 }

@@ -228,6 +228,15 @@ pub async fn work(
             return failed(lines);
         }
     }
+    if servers.len() > 1
+        && let Err(error) = hs_deploy::deploy::check_selected_versions(&config, &servers, &|line| say(line)).await
+    {
+        return failed(vec![
+            error,
+            format!("Reinstalled before check: {}.", servers.join(", ")),
+            "deploy.toml is unchanged.".to_owned(),
+        ]);
+    }
     let mut lines = vec![format!("Reinstalled from {tag}: {}.", servers.join(", "))];
     match keep_image(&deploy_toml, &image) {
         Ok(()) => lines.push(format!("{} names this image now.", deploy_toml.display())),

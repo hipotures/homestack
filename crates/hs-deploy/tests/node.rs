@@ -187,9 +187,11 @@ async fn old_server_images_are_listed_not_others() -> Result<(), String> {
 async fn a_container_with_the_same_image_certificate_and_address_is_kept() -> Result<(), String> {
     let description = "HomeStack server api1.example.net\nimage i:1\ncertificate 1700000000\nmade by homestack-deploy";
     let net0 = "name=eth0,bridge=vmbr0,ip=192.0.2.97/24,gw=192.0.2.1";
+    let proxmox_net0 =
+        "name=eth0,bridge=vmbr0,gw=192.0.2.1,hwaddr=BC:24:11:2E:C1:09,ip=192.0.2.97/24,type=veth,host-managed=1";
     let pve = FakePve {
         description: description.to_owned(),
-        net0: net0.to_owned(),
+        net0: proxmox_net0.to_owned(),
         ..FakePve::default()
     };
     let quiet = |_: &str| {};

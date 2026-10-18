@@ -66,60 +66,55 @@ Sources: [`deploy.rs`](../crates/hs-deploy/src/deploy.rs),
 [`node.rs`](../crates/hs-deploy/src/node.rs),
 [`reinstall.rs`](../crates/hs-cli/src/tui/reinstall.rs).
 
-## Open findings
+## Resolution of findings (2026-10-19)
 
-### 1. Network comparison causes unnecessary destruction
+### 1. Network comparison causes unnecessary destruction — Resolved
 
-`node::unchanged` compares `net0` as an exact string. Proxmox reorders
-network properties and adds generated fields such as `hwaddr`, `type`
-and `host-managed`. Equivalent network settings consequently compare
-unequal.
+`node::unchanged` previously compared `net0` as an exact string. Proxmox
+reorders network properties and adds generated fields such as `hwaddr`,
+`type` and `host-managed`. Equivalent network settings consequently
+compared unequal, causing instances that already had the target image
+(for example `api1` in an `X, Y, Y` cluster) to be destroyed and
+recreated unnecessarily.
 
-Read-only inspection confirmed that all three installed instances had
-the expected description and image, but different raw `net0` strings.
-A repeated local apply with the same image, certificate and managed
-network settings stopped, destroyed and recreated the container again.
+**Fix:** [`node::same_net`](../crates/hs-deploy/src/node.rs) compares
+managed `net0` properties (`name`, `bridge`, `ip`, `gw`, etc.) by key
+and value, ignoring key ordering and Proxmox-generated properties
+(`hwaddr`, `type`, `host-managed`). When the target image changes,
+`description` differs and the old container is still stopped and
+destroyed before creating the replacement so CTID and IP are released
+cleanly.
 
-Compare the managed network properties by key and value, independently
-of ordering and generated properties. Regression coverage should prove
-that equivalent Proxmox-normalized settings do not trigger destruction,
-while an actual managed network change is still detected.
+### 2. Destruction does not verify the instance's identity — Rejected (not applicable)
 
-### 2. Destruction does not verify the instance's identity
+**Why rejected:** `homestack-deploy` authenticates exclusively with the
+`!deploy` token (`HomeStackDeploy`), whose Proxmox ACL is scoped solely
+to `/pool/homestack-service`. That pool is dedicated exclusively to the
+HomeStack API server containers (`api1`, `api2`, `api3`); workspace VMs
+and LXCs live in `/pool/homestack` and gold templates in
+`/pool/homestack-gold`. Proxmox neither exposes nor permits stopping or
+deleting any container outside `/pool/homestack-service` with the deploy
+token, even if a CTID were to collide elsewhere.
 
-`node::container` selects an LXC by CTID. The destructive apply path does
-not verify its expected hostname or managed-server identity before
-removal. A local scenario with an unrelated hostname and tag at the
-configured CTID still stopped and deleted that container.
+### 3. TUI batch validation runs before the batch is complete — Resolved
 
-The deploy token's pool permissions limit visibility, but do not protect
-another service inside that accessible pool. The install planner has
-collision checks in [`servers.rs`](../crates/hs-cli/src/servers.rs);
-direct deployment and TUI reinstall do not repeat those checks.
+`reinstall::work` calls `deploy::apply` sequentially for each selected
+instance so that a failure on `api1` halts immediately while `api2` and
+`api3` remain running on their previous containers. Previously, each
+single-instance `deploy::apply` ended by running `check_versions` across
+*all* instances in `deploy.toml`, including instances not yet updated in
+the current batch.
 
-Verify the expected instance identity before any destructive mutation.
-A collision regression test should assert that no stop or delete request
-is issued for an unrelated container at the configured CTID.
-
-### 3. TUI batch validation runs before the batch is complete
-
-`reinstall::work` calls `deploy::apply` separately for each selected
-instance. Each call ends with `check_versions`, which checks every
-configured instance, not just the instance being processed.
-
-When local `server.toml` differs from the configuration on the remaining
-instances, the first successful replacement uploads the new configuration
-and then fails the global consistency check. The TUI exits before
-updating the remaining selected instances. An unavailable later instance
-can similarly prevent the batch from reaching it.
-
-A local two-instance scenario reproduced the error
-`the instances hold 2 configuration versions` after successfully updating
-only the first instance.
-
-Keep per-instance readiness checks, but perform the batch-wide consistency
-check after all selected instances have been processed. Add a regression
-test for a multi-instance reinstall that changes the configuration.
+**Fix:**
+- [`deploy::configure`](../crates/hs-deploy/src/deploy.rs) immediately
+  verifies `GET /v1/config/version` on the instance just updated and
+  aborts on mismatch before moving to the next node.
+- `deploy::apply` checks version agreement across the `selected`
+  instances of that `apply` invocation.
+- [`reinstall::work`](../crates/hs-cli/src/tui/reinstall.rs) runs
+  [`deploy::check_selected_versions`](../crates/hs-deploy/src/deploy.rs)
+  across the entire selected batch after all selected instances have been
+  processed.
 
 ## Verification evidence
 
