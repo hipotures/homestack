@@ -542,7 +542,11 @@ async fn gold_power_refuses_templates_and_wrong_or_locked_roles() -> TestResult 
         ("template", "1"),
     ] {
         let mut spec = ClusterSpec::from_scenario(CLUSTER)?;
-        let gold = spec.vms.iter_mut().find(|vm| vm.vmid == 101).unwrap();
+        let gold = spec
+            .vms
+            .iter_mut()
+            .find(|vm| vm.vmid == 101)
+            .ok_or("fixture has no Gold VM")?;
         gold.config.insert(key.into(), value.into());
         let sim = PveSim::start(spec).await?;
         let pve = client(&sim, TOKEN)?;
