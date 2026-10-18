@@ -14,12 +14,13 @@ use hs_core::lifecycle::{LifecycleTiming, plan_destroy};
 use hs_core::migrate::{
     MigrateRequest, MigrationTracker, migrate_workspace, migration_volume_key, migration_volume_plan, plan_migrate,
 };
+use hs_core::pve::Pve;
 use hs_core::resize::{ResizeRequest, plan_resize};
 use hs_core::tasks::{NoObserver, Observer};
 use hs_core::verify::VerifyTimeouts;
 use hs_model::config::Config;
 use hs_model::jobs::JobEvent;
-use hs_pve::{PveClient, PveClientConfig, PveToken};
+use hs_pve::{PveClient, PveClientConfig, PveError, PveToken};
 use pve_sim::scenario::FaultSpec;
 use pve_sim::{ClusterSpec, PveSim};
 use serde_json::{Value, json};
@@ -122,7 +123,7 @@ fn fault(op: &str) -> FaultSpec {
     }
 }
 
-async fn plan(pve: &PveClient, request: &MigrateRequest) -> Result<Value, CoreError> {
+async fn plan(pve: &impl Pve, request: &MigrateRequest) -> Result<Value, CoreError> {
     plan_migrate(
         pve,
         &config().map_err(|e| CoreError::Invalid(e.to_string()))?,
@@ -132,7 +133,7 @@ async fn plan(pve: &PveClient, request: &MigrateRequest) -> Result<Value, CoreEr
     .await
 }
 
-async fn apply(pve: &PveClient, plan: &Value, observer: &impl Observer) -> Result<Value, CoreError> {
+async fn apply(pve: &impl Pve, plan: &Value, observer: &impl Observer) -> Result<Value, CoreError> {
     migrate_workspace(
         pve,
         &config().map_err(|e| CoreError::Invalid(e.to_string()))?,
@@ -339,6 +340,73 @@ async fn execution_rejects_alien_before_shutdown() -> TestResult {
 }
 
 // --- MigrationPowerStateTests -----------------------------------------------------
+
+struct StalePowerInventory<'a>(&'a PveClient);
+
+impl Pve for StalePowerInventory<'_> {
+    async fn get(&self, path: &str, query: &[(&str, &str)]) -> Result<Value, PveError> {
+        let mut result = Pve::get(self.0, path, query).await?;
+        if path == "/cluster/resources" {
+            for resource in result
+                .as_array_mut()
+                .ok_or_else(|| PveError::Response("expected cluster resource array".to_owned()))?
+            {
+                if resource["vmid"] == 201 {
+                    resource["status"] = json!("running");
+                }
+            }
+        }
+        Ok(result)
+    }
+
+    async fn post(&self, path: &str, form: &[(&str, &str)]) -> Result<Value, PveError> {
+        Pve::post(self.0, path, form).await
+    }
+
+    async fn put(&self, path: &str, form: &[(&str, &str)]) -> Result<Value, PveError> {
+        Pve::put(self.0, path, form).await
+    }
+
+    async fn delete(&self, path: &str, query: &[(&str, &str)]) -> Result<Value, PveError> {
+        Pve::delete(self.0, path, query).await
+    }
+}
+
+#[tokio::test]
+async fn stale_running_inventory_does_not_restart_a_stopped_workspace() -> TestResult {
+    let (sim, pve) = cluster().await?;
+    let stale = StalePowerInventory(&pve);
+    let plan = plan(&stale, &request(201, TARGET, None)).await?;
+    assert_eq!(plan["status"], "stopped");
+    let result = apply(&stale, &plan, &NoObserver).await?;
+    assert_eq!(result["status"], "stopped");
+    assert!(
+        !ops(&sim)
+            .iter()
+            .any(|op| op.contains("/status/start") || op.contains("/status/shutdown"))
+    );
+    assert_eq!(placed(&pve, 201).await?, (TARGET.to_owned(), "stopped".to_owned()));
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_power_state_change_after_planning_is_refused_without_changes() -> TestResult {
+    let (sim, pve) = cluster().await?;
+    let plan = plan(&pve, &request(200, TARGET, None)).await?;
+    let admin = client(&sim, ADMIN)?;
+    admin
+        .post_value(&["nodes", SOURCE, "qemu", "200", "status", "stop"], &[])
+        .await?;
+    sim.clear_ops();
+    let error = apply(&pve, &plan, &NoObserver)
+        .await
+        .err()
+        .ok_or("expected a power state refusal")?;
+    assert!(error.to_string().contains("power state changed"), "{error}");
+    assert!(changes(&sim).is_empty());
+    assert_eq!(placed(&pve, 200).await?, (SOURCE.to_owned(), "stopped".to_owned()));
+    Ok(())
+}
 
 #[tokio::test]
 async fn stopped_workspace_stays_stopped_after_migration() -> TestResult {

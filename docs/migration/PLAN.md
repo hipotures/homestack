@@ -416,9 +416,11 @@ Implementation and verification: [phase-17.md](phase-17.md).
 - Migration reads Proxmox's local disk inventory and compares the aggregate virtual disk size with target storage capacity during planning and immediately before shutdown.
 - At the owner's request, creation uses the same storage admission check for the Gold clone plus new home. Cross-node creation checks the temporary clone on the source as well as the final destination.
 - Insufficient or unreadable capacity refuses the operation before shutdown or cloning. The simulator/API regression suites and scoped clippy passed.
-- The isolated live refusal check passed: oversized creation refused in planning; a valid plan refused at apply after capacity decreased; no VM/disk allocated and cleanup verified. See [the result artifact](phase-17-results.json). The existing E2E lab has one node; the owner's other cluster is production and is not used for tests.
+- The isolated live refusal check passed: oversized creation refused in planning; a valid plan refused at apply after capacity decreased; no VM/disk allocated and cleanup verified. See [the creation result artifact](phase-17-results.json).
+- The shared E2E flow supports `--nodes 1|3` (default one), using the same `e2e` profile. A fresh three-node cluster passed bootstrap and quorum verification. Nine live checks covered node discovery, migration capacity refusals, stable confirmation despite admissible free-space changes, running migrations across all three nodes, stopped migrations and preserved home data. See [the cluster result artifact](../e2e-cluster-results.json). No production cluster was used.
+- Live testing also fixed stale cluster-inventory power state and volatile free-space values invalidating confirmation digests. Current power state is read directly; required allocation remains signed, and actual capacity is checked again before mutation.
 
-**Gate:** simulator refusal without shutdown or disk allocation; isolated live refusal; successful live migration with sufficient capacity. The cross-node live regression has not been repeated with this change; phase 8 records the earlier successful migration.
+**Gate: passed.** Simulator refusal without shutdown or disk allocation; isolated live creation/migration refusals; successful cross-node migration with sufficient capacity and preserved power state/data; fixture cleanup verified.
 
 ---
 

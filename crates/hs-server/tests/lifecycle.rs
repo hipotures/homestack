@@ -424,3 +424,47 @@ async fn oversized_create_refuses_before_allocating_a_vm() -> TestResult {
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn unrelated_free_space_changes_do_not_invalidate_creation() -> TestResult {
+    let server = start().await?;
+    let (status, plan) = server
+        .plan("workspace.create", json!({"vmid":240,"name":"hst-space-change"}))
+        .await?;
+    assert_eq!(status, StatusCode::CREATED, "{plan}");
+    let available = plan["summary"]["capacity"]["target"]["available_bytes"]
+        .as_u64()
+        .ok_or("no available bytes")?;
+    server._sim.set_storage_available(
+        "pve-example-1",
+        "local-lvm",
+        available.checked_sub(4096).ok_or("no free space")?,
+    )?;
+    let (status, job) = server.apply(&plan, Some(&server.version)).await?;
+    assert_eq!(status, StatusCode::ACCEPTED, "{job}");
+    let job = server.finished(&job).await?;
+    assert_eq!(job["state"], "succeeded", "{job}");
+    Ok(())
+}
+
+#[tokio::test]
+async fn reduced_capacity_still_refuses_creation_apply_before_allocation() -> TestResult {
+    let server = start().await?;
+    let (status, plan) = server
+        .plan("workspace.create", json!({"vmid":240,"name":"hst-space-change"}))
+        .await?;
+    assert_eq!(status, StatusCode::CREATED, "{plan}");
+    server._sim.set_storage_available("pve-example-1", "local-lvm", 1)?;
+    server._sim.clear_ops();
+    let (status, body) = server.apply(&plan, Some(&server.version)).await?;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["error"]["code"], "operation_refused");
+    assert!(
+        server
+            ._sim
+            .ops()
+            .iter()
+            .all(|op| op.name == "get" || op.name == "guest_ping")
+    );
+    Ok(())
+}

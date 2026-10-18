@@ -43,7 +43,9 @@ pub async fn create(dir: &Path, data: &Value, hostname: &str, artifacts: &Path) 
     )?;
     std::fs::write(
         dir.join("meta-data"),
-        serde_json::to_vec(&json!({"instance-id": data["run_id"], "local-hostname": hostname}))?,
+        serde_json::to_vec(
+            &json!({"instance-id": format!("{}-{}", data["run_id"].as_str().ok_or("missing run ID")?, data["node"].as_str().ok_or("missing node name")?), "local-hostname": hostname}),
+        )?,
     )?;
     for name in ["user-data", "meta-data"] {
         std::fs::set_permissions(dir.join(name), std::fs::Permissions::from_mode(0o600))?;
@@ -81,7 +83,7 @@ pub async fn create(dir: &Path, data: &Value, hostname: &str, artifacts: &Path) 
 
 fn user_data(data: &Value, hostname: &str, identity: &str, private: &str, public: &str, key: &[u8]) -> Result<Value> {
     Ok(json!({
-        "hostname": crate::domain::NODE,
+        "hostname": data["node"],
         "fqdn": hostname,
         "preserve_hostname": false,
         "prefer_fqdn_over_hostname": false,
@@ -96,10 +98,10 @@ fn user_data(data: &Value, hostname: &str, identity: &str, private: &str, public
         "apt": {"preserve_sources_list": true},
         "runcmd": [["ssh-keygen", "-A"], ["systemctl", "restart", "systemd-resolved"]],
         "write_files": [
-            {"path": "/etc/ssh/sshd_config.d/00-homestack-e2e.conf", "permissions": "0600", "content": "PasswordAuthentication no\nKbdInteractiveAuthentication no\nPermitRootLogin prohibit-password\n"},
+            {"path": "/etc/ssh/sshd_config.d/00-homestack-e2e.conf", "permissions": "0600", "content": "PasswordAuthentication no\nKbdInteractiveAuthentication no\nPermitRootLogin prohibit-password\nGatewayPorts clientspecified\n"},
             {"path": "/etc/systemd/resolved.conf.d/homestack-e2e.conf", "content": format!("[Resolve]\nDomains={}\n", crate::domain::SEARCH)},
             {"path": "/etc/homestack-e2e.json", "permissions": "0600", "content": serde_json::to_string(data)?},
-            {"path": "/etc/hosts", "content": format!("127.0.0.1 localhost\n10.0.2.15 {hostname} {}\n", crate::domain::NODE)},
+            {"path": "/etc/hosts", "content": format!("127.0.0.1 localhost\n10.0.2.15 {hostname} {}\n", data["node"].as_str().ok_or("missing node name")?)},
             {"path": "/usr/share/keyrings/proxmox-archive-keyring.gpg", "encoding": "b64", "content": base64::engine::general_purpose::STANDARD.encode(key)},
             {"path": "/etc/apt/apt.conf.d/80homestack-e2e", "content": "Acquire::http::Proxy \"http://10.0.2.100:3128/\";\nAcquire::Retries \"2\";\n"},
             {"path": "/etc/apt/sources.list.d/debian.sources", "content": "Types: deb\nURIs: http://deb.debian.org/debian\nSuites: trixie trixie-updates\nComponents: main\nSigned-By: /usr/share/keyrings/debian-archive-keyring.gpg\n\nTypes: deb\nURIs: http://security.debian.org/debian-security\nSuites: trixie-security\nComponents: main\nSigned-By: /usr/share/keyrings/debian-archive-keyring.gpg\n"},
@@ -114,7 +116,7 @@ mod tests {
 
     #[test]
     fn initialization_data_is_json_not_interpolated_shell() -> Result<()> {
-        let data = json!({"run_id": "id", "message": "quote\"\n$(touch /bad)"});
+        let data = json!({"run_id": "id", "node": "pve1", "message": "quote\"\n$(touch /bad)"});
         let seed = user_data(
             &data,
             crate::domain::HOST,

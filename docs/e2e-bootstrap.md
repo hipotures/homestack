@@ -2,10 +2,10 @@
 
 `hs-e2e` implements the first executable part of the
 [isolated E2E laboratory design](isolated-e2e-lab.md): download a Debian qcow2,
-initialize a VM, install Proxmox, prepare the HomeStack install inputs, verify
+initialize one or three VMs, install Proxmox, prepare the HomeStack install inputs, verify
 the lab, power it off and delete it. The HomeStack container installation is
 confirmed manually in the real TUI. The runner automatically prepares and validates
-a Debian reference Gold; workspace lifecycle scenarios remain later work.
+a Debian reference Gold; explicit workspace scenarios run against the paused lab as described below.
 
 The runner prepares `pve.e2e.homestack.app` through the existing Spaceship and
 ACME implementation in `hs-deploy`. It installs a public Let's Encrypt
@@ -13,7 +13,7 @@ certificate in PVE and prepares `api1.e2e.homestack.app` at `10.77.0.101`.
 The HomeStack phase obtains or reuses `*.e2e.homestack.app`, installs it in
 PVE for both its browser alias and internal node name, and prepares a separate
 client profile. DNS and certificate fixtures persist across runs.
-Normal cleanup removes the VM; `cleanup --all` also resets owned fixtures.
+Normal cleanup removes every node, the private backbone and their disks/credentials; `cleanup --all` also resets owned fixtures.
 
 ## Run
 
@@ -36,6 +36,20 @@ From the repository root:
 ```sh
 cargo run --locked -p hs-e2e -- run
 ```
+
+Select the topology with `--nodes 1|3`; the default is one node. Resource flags apply **per node**. A three-node run with defaults reserves 12 GiB RAM and three vCPUs. Use `--disk-gib 24` in either topology for full-clone workspace tests; migration tests also need that capacity on every destination:
+
+```sh
+PATH="$PWD/target/e2e-tools/bin:$PATH" cargo run --locked -p hs-e2e -- run \
+  --nodes 3 --disk-gib 24 --timeout-seconds 7200 \
+  --local-dns 192.168.100.1 --pause-after verify --pause-on-failure
+```
+
+Both topologies use profile `e2e`, the same phases and the same cleanup. Change the option on the next run; close the current paused lab first. This creates a fresh disposable topology rather than changing a running cluster in place. The report's `nodes` array records names, private addresses, per-node SSH/API forwards and disk directories. Installation preparation discovers the complete inventory and generates every node's storage layout, DNS entries, public wildcard TLS and OCI image cache.
+
+In three-node mode, `pve1`, `pve2` and `pve3` share a rootless QEMU Ethernet backbone carried only by private Unix sockets. Each node has an independent writable overlay over the same verified read-only Debian image, plus its own seed, host key and pinned SSH identity. The private bridge addresses are `10.77.0.1`, `.2` and `.3`; workload addresses and their gateway remain unchanged. Only pve1 provides DHCP, DNS and the filtered Internet gateway. The existing browser URL reaches pve1's panel, whose authenticated inventory contains all three online nodes. No host bridge, TAP interface or host routing change is required.
+
+Use `ssh -F <run-directory>/ssh_config pve-e2e` for the primary node, or aliases `pve-e2e-pve2` and `pve-e2e-pve3` for peers. The normal E2E client inherits these pinned connections and routes API requests through its existing SOCKS tunnel. `prepare --artifacts ...` reads the selected run's node inventory automatically.
 
 The existing Spaceship credentials are read from
 `$XDG_CONFIG_HOME/homestack/spaceship-dns` (default
@@ -188,13 +202,14 @@ to `report.json` before the next phase starts:
 | `domain` | E2E DNS and publicly trusted certificate prepared or reused; no VM yet |
 | `image` | Latest manifest checked, cached/downloaded image verified and sparse disk prepared; no VM yet |
 | `boot` | Debian booted, Cloud-Init and initialization checked; SSH and restricted APT networking work |
-| `kernel` | Proxmox kernel installed and the VM rebooted |
-| `proxmox` | PVE services installed and rebooted; public certificate installed and temporary web credentials printed |
+| `kernel` | Proxmox kernel installed and every selected node rebooted |
+| `proxmox` | PVE services installed and rebooted on every node; public certificate installed and temporary web credentials printed |
 | `network` | Persistent `vmbr0` at `10.77.0.1/24`, DHCP, DNS and filtered public Internet; DHCP lease and public HTTPS verified from a temporary guest namespace |
+| `cluster` | One standalone node, or three online cluster members with quorum on the isolated backbone |
 | `gold` | Debian reference Gold 100 created, agent and full HomeStack contract checked after a cold start, then finalized and stopped |
 | `homestack` | API DNS, cached public wildcard TLS, isolated install configuration selecting Gold 100, internal DNS, restricted OCI access and a published server image in the native PVE cache; no container created |
 | `verify` | PVE kernel, exposed nested KVM, HTTPS API, web page, password login and authenticated node inventory checked |
-| `shutdown` | VM powered off; private files still exist until cleanup |
+| `shutdown` | Every node powered off; private files still exist until cleanup |
 | `cleanup` | QEMU reaped and private disks, keys and web credentials removed |
 
 Request pauses only where manual inspection is useful:
@@ -517,27 +532,30 @@ also verifies that returning from copy mode needs no cursor-position query.
    mismatch, including a publication change during download, fails the run
    without replacing the previous cached image.
 2. Inspect the image format and reject external backing files. Create a private
-   writable qcow2 overlay; the downloaded base stays read-only.
-3. Generate per-run client and server SSH keys, an instance ID and
+   writable qcow2 overlay for each selected node; the downloaded base stays read-only.
+3. Generate per-node client and server SSH keys, an instance ID and
    JSON initialization data. Supply them through a NoCloud `CIDATA` FAT disk.
    Password authentication is disabled. Pin the guest SSH host key before
    connecting, rather than accepting a network-discovered key. Set the guest's
    short hostname `pve1`, browser FQDN `pve.e2e.homestack.app` and resolver
    search domain explicitly. The numeric node name matches HomeStack's
    storage-layout naming; the browser alias remains stable.
-4. Start QEMU with KVM, host CPU features and local-only SSH/PVE port forwards.
+4. Start each QEMU with KVM, host CPU features and local-only SSH/PVE port forwards.
+   Three-node mode also starts the private Ethernet backbone.
    Wait for SSH and successful Cloud-Init, then read the initialization data
    from the guest and compare it with the requested values.
 5. Install the Proxmox kernel from its signed no-subscription APT repository,
    reboot and confirm a new boot ID. Install Proxmox VE services and reboot
-   once more. Package installation runs only inside the disposable VM.
+   once more. Package installation runs only inside the disposable VMs.
+   Configure their persistent isolated bridges; in three-node mode create the
+   cluster and verify quorum before Gold preparation.
 6. Verify the running `-pve` kernel, exposed nested KVM device, active PVE
    services and preserved initialization data. Install the cached public
    certificate through pinned SSH using `pvenode cert set`, then verify the
    real HTTPS `/api2/json/version` API using normal public roots and an
    ephemeral guest-local API token. Check that the real web page is
    served, log in through `/api2/json/access/ticket` with the generated
-   password, and read the single-node inventory using its session cookie.
+   password, and read the complete selected node inventory using its session cookie.
    Passwords, API token secrets and session tickets are not artifacts.
    TLS verification stays enabled. The browser page is also fetched using
    normal system DNS, without a resolver override; `web_dns_verified` records
@@ -749,3 +767,11 @@ cargo test --locked -p hs-e2e isolated_dns_covers_a_and_aaaa -- --ignored --noca
 This check requires `dnsmasq` and Python 3 on the test host. It does not edit
 the host resolver, use provider credentials or change any VM. It passed on
 2026-10-16, alongside all 30 regular E2E tests, Clippy and formatting checks.
+
+## Cross-node verification
+
+With profile `e2e` paused after verification, `python3 scripts/e2e-migrate.py --output /tmp/homestack-migrate-run` creates one full disposable workspace in `homestack-test`, verifies migration capacity refusals without shutdown, then moves it across every node and back. It checks running and stopped migrations and persistent home data, then removes the workspace, temporary capacity storage and scoped credentials. It requires the detected three-node inventory; it does not silently report a skipped one-node test as success.
+
+The user can inspect the same cluster after automated scenario cleanup. Keep the controller paused until that inspection is finished. Resuming proceeds to graceful shutdown and removes the complete topology. SIGINT/SIGTERM also trigger full cleanup, including a partially prepared cluster.
+
+The [recorded cluster verification](e2e-cluster-results.json) covers a fresh three-node bootstrap, nine migration/capacity/inventory checks, preserved Gold configuration and interrupted-run cleanup for both topologies. [Phase 17](migration/phase-17.md) records the migration power-state and plan-digest regressions found by these live checks.

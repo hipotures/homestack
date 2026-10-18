@@ -5,6 +5,10 @@
 **Repository baseline:** `9f239ee` on `rust-migration`.
 
 The implemented bootstrap is documented in [Disposable Proxmox bootstrap](e2e-bootstrap.md).
+It supports `--nodes 1|3` in the same `e2e` profile, defaulting to one node.
+Three-node mode uses an isolated rootless Ethernet backbone and real Proxmox
+cluster membership; the one-node limits in the original proposal below describe
+its initial scope.
 That document is authoritative for the current direct-QEMU topology, indefinite
 inspection pauses, persistent DNS/TLS fixtures, profiles, DHCP/DNS and filtered
 public IPv4 Internet access. The broader scenario catalogue and libvirt topology

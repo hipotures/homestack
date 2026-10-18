@@ -2,6 +2,7 @@
 
 mod access;
 mod client;
+mod cluster;
 mod domain;
 mod gold;
 mod image;
@@ -27,9 +28,10 @@ use serde_json::{Value, json};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
-const USAGE: &str = "homestack-e2e run [--memory-mib N] [--cpus N] [--disk-gib N]\n                  [--timeout-seconds N] [--message TEXT] [--artifacts DIRECTORY]\n                  [--pause-after PHASE[,PHASE]] [--pause-on-failure]\n                  [--web-bind IPV4] [--web-port PORT]\n                  [--fixtures DIRECTORY] [--spaceship-file FILE]\n                  [--local-dns IPV4] [--tsig-file FILE]\n                  [--runner-ssh DESTINATION] [--runner-ssh-port PORT]\nhomestack-e2e resume --artifacts DIRECTORY\nhomestack-e2e profile --artifacts DIRECTORY (register an already paused lab as profile e2e)\nhomestack --profil e2e [COMMAND]\nhomestack-e2e prepare --artifacts DIRECTORY [--local-dns IPV4] [--spaceship-file FILE] [--tsig-file FILE]\nhomestack-e2e cleanup --all [--fixtures DIRECTORY] [--spaceship-file FILE] [--tsig-file FILE]\n\nPhases: preflight, domain, image, boot, kernel, proxmox, network, gold, homestack, verify, shutdown; cleanup always runs.\nDefaults: 1 vCPU, 4096 MiB RAM, 12 GiB sparse disk, 1800 active seconds.\nInspection pauses have no time limit and require an explicit resume.\nThe panel uses pve.e2e.homestack.app with a public Let's Encrypt certificate.\nDNS and certificate fixtures persist until cleanup --all.\nThe web forward binds to 127.0.0.1 on a free port unless explicitly configured.\nDownloads Debian 13 qcow2, installs Proxmox, verifies SSH, HTTPS and web login,\npowers off, and deletes all temporary VM data. No host network changes.\nRequires Linux x86_64, /dev/kvm, qemu-system-x86_64, qemu-img,\nssh, ssh-keygen, scp, mkfs.vfat, mcopy, openssl, python3 and ip; dig/nsupdate for local DNS.\nNo host root privileges required.";
+const USAGE: &str = "homestack-e2e run [--nodes 1|3] [--memory-mib N] [--cpus N] [--disk-gib N]\n                  [--timeout-seconds N] [--message TEXT] [--artifacts DIRECTORY]\n                  [--pause-after PHASE[,PHASE]] [--pause-on-failure]\n                  [--web-bind IPV4] [--web-port PORT]\n                  [--fixtures DIRECTORY] [--spaceship-file FILE]\n                  [--local-dns IPV4] [--tsig-file FILE]\n                  [--runner-ssh DESTINATION] [--runner-ssh-port PORT]\nhomestack-e2e resume --artifacts DIRECTORY\nhomestack-e2e profile --artifacts DIRECTORY (register an already paused lab as profile e2e)\nhomestack --profil e2e [COMMAND]\nhomestack-e2e prepare --artifacts DIRECTORY [--local-dns IPV4] [--spaceship-file FILE] [--tsig-file FILE]\nhomestack-e2e cleanup --all [--fixtures DIRECTORY] [--spaceship-file FILE] [--tsig-file FILE]\n\nPhases: preflight, domain, image, boot, kernel, proxmox, network, cluster, gold, homestack, verify, shutdown; cleanup always runs.\nDefaults: 1 node; per node: 1 vCPU, 4096 MiB RAM, 12 GiB sparse disk; 1800 active seconds.\nInspection pauses have no time limit and require an explicit resume.\nThe panel uses pve.e2e.homestack.app with a public Let's Encrypt certificate.\nDNS and certificate fixtures persist until cleanup --all.\nThe web forward binds to 127.0.0.1 on a free port unless explicitly configured.\nDownloads Debian 13 qcow2, installs Proxmox, verifies SSH, HTTPS and web login,\npowers off, and deletes all temporary VM data. No host network changes.\nRequires Linux x86_64, /dev/kvm, qemu-system-x86_64, qemu-img,\nssh, ssh-keygen, scp, mkfs.vfat, mcopy, openssl, python3 and ip; dig/nsupdate for local DNS.\nNo host root privileges required.";
 
 struct Options {
+    nodes: u8,
     memory: u32,
     cpus: u32,
     disk: u32,
@@ -59,6 +61,7 @@ impl Options {
             .map_or_else(|| home.join(".config"), PathBuf::from)
             .join("homestack");
         let mut options = Self {
+            nodes: 1,
             memory: 4096,
             cpus: 1,
             disk: 12,
@@ -94,6 +97,7 @@ impl Options {
             }
             let value = rest.next().ok_or_else(|| format!("{flag} needs a value"))?;
             match flag.as_str() {
+                "--nodes" => options.nodes = value.parse()?,
                 "--memory-mib" => options.memory = value.parse()?,
                 "--cpus" => options.cpus = value.parse()?,
                 "--disk-gib" => options.disk = value.parse()?,
@@ -134,6 +138,9 @@ impl Options {
         }
         if cleanup && !all {
             return Err("cleanup requires --all; normal run cleanup retains DNS and certificates".into());
+        }
+        if !matches!(options.nodes, 1 | 3) {
+            return Err("--nodes must be 1 or 3".into());
         }
         if !(4096..=16384).contains(&options.memory)
             || !(1..=8).contains(&options.cpus)
@@ -276,10 +283,10 @@ async fn execute() -> Result<()> {
         .prefix("hs-e2e-")
         .tempdir_in(work_root.canonicalize()?)?;
     let private_path = private.path().to_owned();
-    let mut running = None;
+    let mut running = Vec::new();
     let mut report = json!({
-        "run_id": run_id, "status": "running", "scope": "debian-qcow2-to-proxmox",
-        "resources": {"cpus": options.cpus, "memory_mib": options.memory, "disk_gib": options.disk},
+        "run_id": run_id, "controller_pid": std::process::id(), "status": "running", "scope": "debian-qcow2-to-proxmox",
+        "resources": {"nodes": options.nodes, "cpus": options.cpus, "memory_mib": options.memory, "disk_gib": options.disk, "total_memory_mib": u32::from(options.nodes)*options.memory, "total_cpus": u32::from(options.nodes)*options.cpus},
         "artifacts": artifacts, "temporary_directory": private_path,
         "phases": {}, "web_bind": options.web_bind.to_string(),
     });
@@ -301,11 +308,13 @@ async fn execute() -> Result<()> {
     report["control_socket"] = Value::Null;
     save_report(&artifacts, &report)?;
     let cleanup_started = tokio::time::Instant::now();
-    let graceful = running.as_ref().is_some_and(|vm: &vm::Vm| vm.shutdown_confirmed);
-    let termination = match running.as_mut() {
-        Some(vm) => vm.terminate(),
-        None => Ok(()),
-    };
+    let graceful = !running.is_empty() && running.iter().all(|vm: &vm::Vm| vm.shutdown_confirmed);
+    let mut termination = Ok(());
+    for vm in running.iter_mut().rev() {
+        if let Err(error) = vm.terminate() {
+            termination = Err(error);
+        }
+    }
     drop(running);
     // Reap QEMU before unlinking its disks or the seed containing private keys.
     let mut cleanup = match termination {
@@ -380,13 +389,13 @@ async fn run(
     run_id: &str,
     dir: &Path,
     artifacts: &Path,
-    slot: &mut Option<vm::Vm>,
+    slot: &mut Vec<vm::Vm>,
     report: &mut Value,
     fixture: &mut domain::Fixture,
 ) -> Result<()> {
     let mut progress = phases::Progress::new(options, dir, artifacts);
     let hostname = domain::HOST;
-    let data = json!({"run_id": run_id, "hostname": hostname, "message": options.message});
+    let data = json!({"run_id": run_id, "node": "pve1", "hostname": hostname, "message": options.message});
     let password = uuid::Uuid::new_v4().simple().to_string();
     progress
         .execute("preflight", report, async |_| {
@@ -471,35 +480,54 @@ async fn run(
                 return Err("download is not a standalone qcow2 fitting the requested disk".into());
             }
             std::fs::set_permissions(dir.join("base.qcow2"), std::fs::Permissions::from_mode(0o400))?;
-            vm::command(
-                "qemu-img",
-                &[
-                    "create",
-                    "-f",
-                    "qcow2",
-                    "-F",
-                    "qcow2",
-                    "-b",
-                    &dir.join("base.qcow2").display().to_string(),
-                    &dir.join("disk.qcow2").display().to_string(),
-                    &format!("{}G", options.disk),
-                ],
-                artifacts,
-                "overlay creation",
-            )
-            .await?;
+            for index in 1..=options.nodes {
+                let node_dir = cluster::directory(dir, index);
+                let node_artifacts = cluster::directory(artifacts, index);
+                std::fs::create_dir_all(&node_dir)?;
+                std::fs::create_dir_all(&node_artifacts)?;
+                vm::command(
+                    "qemu-img",
+                    &[
+                        "create",
+                        "-f",
+                        "qcow2",
+                        "-F",
+                        "qcow2",
+                        "-b",
+                        &dir.join("base.qcow2").display().to_string(),
+                        &node_dir.join("disk.qcow2").display().to_string(),
+                        &format!("{}G", options.disk),
+                    ],
+                    artifacts,
+                    "overlay creation",
+                )
+                .await?;
+            }
             Ok(())
         })
         .await?;
     let proxy = progress.execute("boot", report, async |report| {
-            seed::create(dir, &data, hostname, artifacts).await?;
             let proxy = proxy::start().await?;
-            eprintln!(
-                "Starting KVM VM: {} vCPU, {} MiB RAM, {} GiB sparse disk",
-                options.cpus, options.memory, options.disk
-            );
-            *slot = Some(vm::Vm::start(dir, artifacts, options, proxy.port)?);
-            let vm = slot.as_mut().ok_or("VM handle is unavailable")?;
+            report["nodes"] = json!([]);
+            let backbone = cluster::Backbone::start(dir, artifacts, options.nodes).await?;
+            for index in 1..=options.nodes {
+                let node_dir = cluster::directory(dir, index);
+                let node_artifacts = cluster::directory(artifacts, index);
+                let name = if index == 1 { domain::NODE.to_owned() } else { format!("pve{index}") };
+                let fqdn = if index == 1 { hostname.to_owned() } else { format!("{name}.{}", domain::SEARCH) };
+                let node_data = json!({"run_id":run_id,"node":name,"hostname":fqdn,"message":options.message});
+                seed::create(&node_dir, &node_data, &fqdn, &node_artifacts).await?;
+                slot.push(vm::Vm::start(&node_dir, &node_artifacts, options, proxy.port, index,
+                                       backbone.as_ref().map(|_| dir.join(format!("backbone-{index}.sock"))).as_deref())?);
+                let vm = slot.last().ok_or("VM handle is unavailable")?;
+                report["nodes"].as_array_mut().ok_or("invalid node inventory")?.push(json!({
+                    "name":name,"address":format!("10.77.0.{index}"),"directory":node_dir,
+                    "artifacts":node_artifacts,"ssh_port":vm.ssh_port,"api_port":vm.api_port,"qemu_pid":vm.pid()}));
+            }
+            // The backbone lives in the primary VM handle so cancellation also reaps it.
+            slot.first_mut().ok_or("VM handle is unavailable")?.backbone = backbone;
+            cluster::write_ssh_inventory(dir, report)?;
+            let vm = slot.first_mut().ok_or("VM handle is unavailable")?;
             report["ssh_port"] = json!(vm.ssh_port);
             report["api_port"] = json!(vm.api_port);
             save_access(dir, vm, options, hostname, &password, false)?;
@@ -531,66 +559,34 @@ async fn run(
                 &artifacts.join("guest-network.log"),
             )
             .await?;
+            for vm in slot.iter_mut().skip(1) {
+                vm.wait_ssh(None).await?;
+                vm.checked_ssh("cloud-init status --wait --long\n", Duration::from_secs(240),
+                               &vm.artifacts.join("cloud-init.log")).await?;
+            }
             Ok(proxy)
         }).await?;
     progress
         .execute("kernel", report, async |_| {
-            let vm = slot.as_mut().ok_or("VM handle is unavailable")?;
-            let boot = vm.wait_ssh(None).await?;
-            eprintln!("SSH and initialization data verified. Installing the Proxmox kernel");
-            vm.logged_ssh(
-                KERNEL_INSTALL,
-                Duration::from_secs(900),
-                &artifacts.join("install-kernel.log"),
-            )
-            .await?;
-            eprintln!("Proxmox kernel installed. Rebooting the VM");
-            vm.checked_ssh(
-                "systemctl reboot --no-block\n",
-                Duration::from_secs(15),
-                &artifacts.join("reboot.log"),
-            )
-            .await?;
-            vm.wait_ssh(Some(&boot)).await?;
+            cluster::install_all(slot, true).await?;
             Ok(())
         })
         .await?;
     progress
         .execute("proxmox", report, async |report| {
-            let vm = slot.as_mut().ok_or("VM handle is unavailable")?;
-            eprintln!("Installing Proxmox VE services");
-            vm.logged_ssh(
-                PVE_INSTALL,
-                Duration::from_secs(900),
-                &artifacts.join("install-pve.log"),
-            )
-            .await?;
-            eprintln!("PVE packages installed. Rebooting the VM");
-            let before = vm.wait_ssh(None).await?;
-            vm.checked_ssh(
-                "systemctl reboot --no-block\n",
-                Duration::from_secs(15),
-                &artifacts.join("reboot.log"),
-            )
-            .await?;
-            report["boot_id"] = json!(vm.wait_ssh(Some(&before)).await?);
-            eprintln!("Waiting for Proxmox services");
-            vm.checked_ssh(
-                WAIT_PVE,
-                Duration::from_secs(120),
-                &artifacts.join("proxmox-readiness.log"),
-            )
-            .await?;
-            // SSH remains key-only; this password is for the temporary PAM web login.
-            let result = vm
-                .ssh(
-                    &format!("printf '%s\\n' 'root:{password}' | chpasswd\n"),
-                    Duration::from_secs(15),
-                )
-                .await?;
-            if !result.status.success() {
-                return Err("cannot configure the temporary PVE web login".into());
+            cluster::install_all(slot, false).await?;
+            for vm in slot.iter_mut() {
+                let result = vm
+                    .ssh(
+                        &format!("printf '%s\\n' 'root:{password}' | chpasswd\n"),
+                        Duration::from_secs(15),
+                    )
+                    .await?;
+                if !result.status.success() {
+                    return Err("cannot configure temporary PVE web login".into());
+                }
             }
+            let vm = slot.first_mut().ok_or("VM handle is unavailable")?;
             eprintln!("Installing the cached public TLS certificate");
             fixture.install(vm).await?;
             fixture.verify_resolution(options.web_bind).await?;
@@ -604,7 +600,7 @@ async fn run(
     let mut internet = None;
     progress
         .execute("network", report, async |report| {
-            let vm = slot.as_mut().ok_or("VM handle is unavailable")?;
+            let vm = slot.first_mut().ok_or("VM handle is unavailable")?;
             eprintln!("Preparing isolated vmbr0 for containers and VMs (10.77.0.1/24)");
             let (network, gateway) = network::configure(vm, artifacts, dir).await?;
             internet = Some(gateway);
@@ -613,6 +609,12 @@ async fn run(
             eprintln!(
                 "Guest Internet ready: all public IPv4 destinations; host, private networks and metadata endpoints are blocked outside PVE."
             );
+            Ok(())
+        })
+        .await?;
+    progress
+        .execute("cluster", report, async |report| {
+            report["cluster"] = cluster::configure(slot, run_id, &password).await?;
             Ok(())
         })
         .await?;
@@ -631,7 +633,8 @@ async fn run(
         })
         .await?;
     progress.execute("verify", report, async |report| {
-            let vm = slot.as_mut().ok_or("VM handle is unavailable")?;
+            report["cluster_nodes"] = cluster::verify(slot, run_id).await?;
+            let vm = slot.first_mut().ok_or("VM handle is unavailable")?;
             report["network"] = network::verify(vm, artifacts).await?;
             report["gold"] = gold::verify(dir, artifacts, report).await?;
             eprintln!("Verifying the PVE kernel, nested KVM and HTTPS API");
@@ -734,9 +737,10 @@ async fn run(
             let nodes: Value = client.get(format!("{base}/api2/json/nodes"))
                 .header("Cookie", format!("PVEAuthCookie={ticket}"))
                 .send().await?.error_for_status()?.json().await?;
-            if !nodes["data"].as_array().is_some_and(|nodes| nodes.len() == 1) {
+            if !nodes["data"].as_array().is_some_and(|nodes| nodes.len() == usize::from(options.nodes) && nodes.iter().all(|node| node["status"] == "online")) {
                 return Err("web login cannot read the disposable node inventory".into());
             }
+            report["cluster_nodes"] = nodes["data"].clone();
             report["web_login_verified"] = json!(true);
             report["web_url"] = json!(web_url(vm, hostname));
             save_report(artifacts, report)?;
@@ -745,7 +749,10 @@ async fn run(
     progress
         .execute("shutdown", report, async |_| {
             eprintln!("PVE verified. Requesting graceful poweroff");
-            slot.as_mut().ok_or("VM handle is unavailable")?.poweroff().await
+            for vm in slot.iter_mut().rev() {
+                vm.poweroff().await?;
+            }
+            Ok(())
         })
         .await?;
     if let Some(mut internet) = internet {
@@ -849,7 +856,17 @@ mod tests {
     #[test]
     fn default_resources_are_small_and_pve_suitable() -> Result<()> {
         let options = Options::parse(&["run".into()], "test")?;
-        assert_eq!((options.cpus, options.memory, options.disk), (1, 4096, 12));
+        assert_eq!(
+            (options.nodes, options.cpus, options.memory, options.disk),
+            (1, 1, 4096, 12)
+        );
+        assert_eq!(
+            Options::parse(&["run".into(), "--nodes".into(), "3".into()], "test")?.nodes,
+            3
+        );
+        for count in ["0", "2", "4"] {
+            assert!(Options::parse(&["run".into(), "--nodes".into(), count.into()], "test").is_err());
+        }
         assert!(Options::parse(&["run".into(), "--memory-mib".into(), "512".into()], "test").is_err());
         assert!(Options::parse(&["run".into(), "--endpoint".into(), "production".into()], "test").is_err());
         Ok(())

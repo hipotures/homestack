@@ -1,0 +1,295 @@
+{
+  "recorded_at_utc": "2026-10-18T22:23:53.173746+00:00",
+  "scope": "isolated disposable E2E lab; no production cluster",
+  "run_id": "fa32fcd5-c652-4b2b-b581-9b69b88dde07",
+  "report": "target/e2e/cluster-three-live-5/report.json",
+  "resources": {
+    "cpus": 1,
+    "disk_gib": 24,
+    "memory_mib": 4096,
+    "nodes": 3,
+    "total_cpus": 3,
+    "total_memory_mib": 12288
+  },
+  "lab_state": "paused after successful verification for user inspection",
+  "nodes": [
+    {
+      "node": "pve1",
+      "status": "online"
+    },
+    {
+      "node": "pve2",
+      "status": "online"
+    },
+    {
+      "node": "pve3",
+      "status": "online"
+    }
+  ],
+  "quorum_verified_on_each_node": true,
+  "web_dns_verified": true,
+  "web_login_verified": true,
+  "bootstrap_phases": {
+    "boot": "passed",
+    "cluster": "passed",
+    "domain": "passed",
+    "gold": "passed",
+    "homestack": "passed",
+    "image": "passed",
+    "kernel": "passed",
+    "network": "passed",
+    "preflight": "passed",
+    "proxmox": "passed",
+    "verify": "passed"
+  },
+  "verification": {
+    "hs_e2e_unit_tests_passed": 47,
+    "hs_e2e_unit_tests_ignored": 4,
+    "core_migration_tests_passed": 23,
+    "server_migration_tests_passed": 6,
+    "server_unit_tests_passed": 6,
+    "server_job_tests_passed": 5,
+    "server_lifecycle_tests_passed": 11,
+    "clippy": "passed",
+    "rustfmt": "passed"
+  },
+  "migration_cases": [
+    {
+      "case": "homestack-node-inventory",
+      "status": "passed",
+      "nodes": [
+        {
+          "node": "pve1",
+          "status": "online",
+          "online": true
+        },
+        {
+          "node": "pve2",
+          "status": "online",
+          "online": true
+        },
+        {
+          "node": "pve3",
+          "status": "online",
+          "online": true
+        }
+      ]
+    },
+    {
+      "case": "capacity-plan",
+      "status": "passed",
+      "message": "Not enough free space on target storage hst-migrate-fa32fcd5 on pve2: requires 9667870720 bytes, available 67108864 bytes"
+    },
+    {
+      "case": "capacity-apply",
+      "status": "passed",
+      "message": "Not enough free space on target storage hst-migrate-fa32fcd5 on pve2: requires 9667870720 bytes, available 1048576 bytes",
+      "digest_stable_while_admissible": true
+    },
+    {
+      "case": "migration",
+      "status": "passed",
+      "node": "pve2",
+      "power_state": "running",
+      "home_marker_verified": true,
+      "task_kinds": [
+        "qmshutdown",
+        "qmigrate",
+        "qmstart"
+      ]
+    },
+    {
+      "case": "migration",
+      "status": "passed",
+      "node": "pve3",
+      "power_state": "running",
+      "home_marker_verified": true,
+      "task_kinds": [
+        "qmshutdown",
+        "qmigrate",
+        "qmstart"
+      ]
+    },
+    {
+      "case": "migration",
+      "status": "passed",
+      "node": "pve1",
+      "power_state": "running",
+      "home_marker_verified": true,
+      "task_kinds": [
+        "qmshutdown",
+        "qmigrate",
+        "qmstart"
+      ]
+    },
+    {
+      "case": "migration",
+      "status": "passed",
+      "node": "pve2",
+      "power_state": "stopped",
+      "home_marker_verified": false,
+      "task_kinds": [
+        "qmigrate"
+      ]
+    },
+    {
+      "case": "migration",
+      "status": "passed",
+      "node": "pve1",
+      "power_state": "stopped",
+      "home_marker_verified": false,
+      "task_kinds": [
+        "qmigrate"
+      ]
+    },
+    {
+      "case": "stopped-marker",
+      "status": "passed"
+    }
+  ],
+  "scenario_cleanup": {
+    "preserved": {
+      "/nodes/pve1/qemu/100/config": {
+        "before_sha256": "44412dfd0482e5d0c598d46f858312a00b56acd4f757c405b29536e67c298c25",
+        "after_sha256": "44412dfd0482e5d0c598d46f858312a00b56acd4f757c405b29536e67c298c25"
+      }
+    },
+    "remaining_fixture_vmids": [],
+    "retained_base": false,
+    "errors": []
+  },
+  "migration_storage_cleanup": {
+    "errors": []
+  },
+  "interrupted_lab_cleanup": [
+    {
+      "nodes": 1,
+      "report": "target/e2e/cluster-cleanup-1-1/report.json",
+      "cleanup": {
+        "error": null,
+        "passed": true,
+        "temporary_directory_removed": true
+      }
+    },
+    {
+      "nodes": 3,
+      "report": "target/e2e/cluster-cleanup-3-1/report.json",
+      "cleanup": {
+        "error": null,
+        "passed": true,
+        "temporary_directory_removed": true
+      }
+    },
+    {
+      "nodes": 3,
+      "report": "target/e2e/cluster-three-live-4/report.json",
+      "cleanup": {
+        "error": null,
+        "passed": true,
+        "temporary_directory_removed": true
+      }
+    }
+  ],
+  "sha256": {
+    "crates/hs-core/src/capacity.rs": "62914772395c52abef9c7183777dab2dbdd2a7969dc338ed5ce54459c70ea1de",
+    "crates/hs-core/src/migrate.rs": "b3b076a61d984bc74529d6997f6b318c69d84f10727e8c9984f35d864467a25b",
+    "crates/hs-core/tests/migrate.rs": "9488042a438d082c59a77c83287b512b7a1a84ad3d975e1f69d062792e905ea8",
+    "crates/hs-e2e/src/access.rs": "a69917b3eb2a991fccb74c67a129f19d02f13c4e67f7aca8705b604b872aac0a",
+    "crates/hs-e2e/src/client.rs": "f51f628002ecf6b9459d7ebcb7210331b68aa432ea15ef7ee7c543e0e28bb630",
+    "crates/hs-e2e/src/cluster-join.py": "da2e9149532d94858077f0fa823c94537c07c50260e214de9b346e6b50c155a5",
+    "crates/hs-e2e/src/cluster.rs": "06f45f3a8dda31b7c9508f47e13e26fcdc73389ae127663ff99cd77a67e96d96",
+    "crates/hs-e2e/src/domain.rs": "7762513b984571ff4b3f335fe2660a002b86d4f196f73df6aeec50fda4866717",
+    "crates/hs-e2e/src/gold-create.py": "3bf472fa21fc7b9cd9fbc5b774f731207d5b0a126c3311dce8e4478cf1fa0eb1",
+    "crates/hs-e2e/src/gold-guest.sh": "154a9645a94df51a9970a57c0770ad280b98f80831771f1051dedbb7fdc24073",
+    "crates/hs-e2e/src/gold-shell.py": "f4e9539b6c1c2cd39b2f3e5608a6c34576c93159243fe57f8b7499404d2d9cf7",
+    "crates/hs-e2e/src/gold-test.py": "386d9410aa7bbef83745be0dc3e9aa6705b60b8736548447b97d7b0370d55729",
+    "crates/hs-e2e/src/gold.rs": "d98cb1f72e4e09cf700b7f89c5ae45b7a285a94591adbb39d08d42496acc4b42",
+    "crates/hs-e2e/src/guest-connect.py": "dad5a96c6549e2dd7a739288af933b060c4975f39c3551f9d62c3a248d7926a6",
+    "crates/hs-e2e/src/image.rs": "ed2948326a170b40f96bd82eda4e96a2083daad8dc6713333ccf87067e3733fc",
+    "crates/hs-e2e/src/install.rs": "5147efb7a43da30ab5f31ad98e1ca71f23e9239703c91cd06a537a7069473e80",
+    "crates/hs-e2e/src/internet-gateway.py": "3defeb27aa2c0200bbfe00e8d5a2cb2f7a22147eabeea07896e7997ab26a47a9",
+    "crates/hs-e2e/src/internet-link.py": "498c3dcb8ed221c0f9eeab889275ed85758079905bc6344ab19212959310c59a",
+    "crates/hs-e2e/src/internet-test.py": "b91ce7b11ff6a4eeebdb1b69ef03a75b0b5ecff2795f1a69ce34c3e9002cb3d0",
+    "crates/hs-e2e/src/internet.rs": "8292113bef663d0f4cadd1496b5f95d721d79bba94d6c3f7093666d93d97bfde",
+    "crates/hs-e2e/src/main.rs": "61c02daff7c920224645991260c62e4fa83a958f72077b314916f947b1c3f7e5",
+    "crates/hs-e2e/src/network-check.py": "15883ed5e4fe61765fb4eda6c617606c35d1527a4256672015a62635b55c02a2",
+    "crates/hs-e2e/src/network-services.sh": "4f4092313020c758a4e70de69486a602bd3778c4ee48697df868cc5ef4aadc0e",
+    "crates/hs-e2e/src/network.rs": "05489b693fb591afa6645ef2b52647fca011163603d223f50d04ab8d60c564bf",
+    "crates/hs-e2e/src/network.sh": "2360b283b030f287d83329ded87ee91865d16f4b8c4cfd707398cc9cf68ebe6c",
+    "crates/hs-e2e/src/phases.rs": "1692bf66376ab4d27a911785f819296f4f6719b15208cab968f389e90508c1d3",
+    "crates/hs-e2e/src/proxy.rs": "4bf1502f5d445bab2760230822aa1188ce991ab3dd4f893b0ffe5245f5ef3468",
+    "crates/hs-e2e/src/registry_proxy.rs": "a104f1475c5d8099617f9f0be3833cd23e8a73fe69bfb8e9c89997b53d6e0553",
+    "crates/hs-e2e/src/seed.rs": "4f0de8555d7e8c575bef4f36f05ea22b55587733f340b7a0b80d848db9598115",
+    "crates/hs-e2e/src/service-image.py": "31d7774adb3a9465be20d313b8e7137064238f4d9eee8129ea0ad594b8c18496",
+    "crates/hs-e2e/src/service-network.sh": "6f2bf591b8c7fb58988b5721c2882f2e13c08b467a2002d4e23ea4602d67da63",
+    "crates/hs-e2e/src/service.rs": "00cbe81d164d4f2d44dff5cc668c77cde6709c85825f5a167c86fc86e4286380",
+    "crates/hs-e2e/src/service_fixture.rs": "e0042af5608dbd9ffb6381baa4a9ac326bf4aed4e354770b579c4d5aae78cb96",
+    "crates/hs-e2e/src/tunnel.rs": "1900f3ab8ca852b492222223600cc0ececab1b65bc0216c945dbca83c9356773",
+    "crates/hs-e2e/src/vm.rs": "0cdaab81de53098234a90018ee0f8bf4b40c935e6ab182afcdc39e5f35c1359e",
+    "crates/hs-server/src/operations.rs": "56b53acea3003c2631fa2e9af4e9b7a9e6d90db0ef968300146159bdf8d8808f",
+    "crates/hs-server/tests/lifecycle.rs": "506e3b316747a311976124efb1ab471d31290c7ce89a9a0bb22ea53c16901790",
+    "crates/hs-server/tests/migrate.rs": "dd2056ea761709f86c8741381062a5d55d3b54344ba880e73a2dc51b647c42b2",
+    "scripts/e2e-migrate.py": "5f3d2c96d4067226a8c478b0495c57f8de3ad4fe12d5ec9fc2ecf93b8edaa21d",
+    "target/debug/homestack-e2e": "75035ede03dfb43fe59a7a77fef79e578574a0b8a47919ae721cf4cfadfadb60",
+    "target/debug/homestack-server": "2ec08bde5de4a42651558112d6ddc82d4a0878cb0d1cbf8d44f161ff9e678958"
+  },
+  "final_checks": {
+    "cluster_nodes_online_pve1": true,
+    "cluster_nodes_online_pve2": true,
+    "cluster_nodes_online_pve3": true,
+    "controller_paused_after_verify": true,
+    "fixture_vm_cleanup_clean": true,
+    "gold_config_hash_preserved": true,
+    "migration_cleanup_clean": true,
+    "no_fixture_vms": true,
+    "no_orphan_local_volumes": true,
+    "quorum_on_all_nodes": true,
+    "selected_profile_run_binding": true,
+    "temporary_pool_absent": true,
+    "temporary_role_absent": true,
+    "temporary_storage_absent": true,
+    "temporary_storage_acl_absent": true,
+    "temporary_tmpfs_and_directory_absent": true,
+    "temporary_token_absent": true,
+    "three_node_storage_layouts": true
+  },
+  "final_quorum": {
+    "pve1": {
+      "expected_votes": "3",
+      "quorate": "Yes"
+    },
+    "pve2": {
+      "expected_votes": "3",
+      "quorate": "Yes"
+    },
+    "pve3": {
+      "expected_votes": "3",
+      "quorate": "Yes"
+    }
+  },
+  "user_profile_storage_layouts": {
+    "actual": {
+      "homestack-storage-1": [
+        "local"
+      ],
+      "homestack-storage-2": [
+        "local"
+      ],
+      "homestack-storage-3": [
+        "local"
+      ]
+    },
+    "expected": {
+      "homestack-storage-1": [
+        "local"
+      ],
+      "homestack-storage-2": [
+        "local"
+      ],
+      "homestack-storage-3": [
+        "local"
+      ]
+    },
+    "source": "/home/user/DEV/homestack-rust/target/e2e-work/hs-e2e-kNzNx3/client/config/homestack/config.toml"
+  }
+}

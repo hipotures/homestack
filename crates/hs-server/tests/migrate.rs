@@ -114,6 +114,10 @@ impl Running {
     async fn run(&self, parameters: Value) -> Result<Value, Error> {
         let (status, plan) = self.plan(parameters).await?;
         assert_eq!(status, StatusCode::CREATED, "{plan}");
+        self.apply(&plan).await
+    }
+
+    async fn apply(&self, plan: &Value) -> Result<Value, Error> {
         let id = plan["id"].as_str().ok_or("no plan id")?;
         let (status, job) = send(
             reqwest::Client::new()
@@ -204,6 +208,55 @@ async fn insufficient_capacity_refuses_the_plan_without_shutting_down() -> TestR
             .unwrap_or_default()
             .contains("Not enough free space")
     );
+    assert!(
+        !server
+            ._sim
+            .ops()
+            .iter()
+            .any(|op| op.name != "get" && op.name != "guest_ping")
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn unrelated_free_space_changes_do_not_invalidate_migration() -> TestResult {
+    let server = start().await?;
+    let (status, plan) = server.plan(json!({"vmid":201,"target_node":"pve-example-2"})).await?;
+    assert_eq!(status, StatusCode::CREATED, "{plan}");
+    let available = plan["summary"]["capacity"]["available_bytes"]
+        .as_u64()
+        .ok_or("no available bytes")?;
+    server._sim.set_storage_available(
+        "pve-example-2",
+        "local-lvm",
+        available.checked_sub(4096).ok_or("no free space")?,
+    )?;
+    let job = server.apply(&plan).await?;
+    assert_eq!(job["state"], "succeeded", "{job}");
+    assert_eq!(job["result"]["status"], "stopped");
+    Ok(())
+}
+
+#[tokio::test]
+async fn reduced_capacity_still_refuses_apply_before_any_changes() -> TestResult {
+    let server = start().await?;
+    let (status, plan) = server.plan(json!({"vmid":201,"target_node":"pve-example-2"})).await?;
+    assert_eq!(status, StatusCode::CREATED, "{plan}");
+    server._sim.set_storage_available("pve-example-2", "local-lvm", 1)?;
+    server._sim.clear_ops();
+    let (status, body) = send(
+        reqwest::Client::new()
+            .post(format!(
+                "{}/v1/plans/{}/apply",
+                server.base,
+                plan["id"].as_str().ok_or("no plan id")?
+            ))
+            .header("homestack-config-version", &server.version)
+            .json(&json!({"digest":plan["digest"]})),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["error"]["code"], "operation_refused");
     assert!(
         !server
             ._sim

@@ -34,6 +34,7 @@ log-dhcp
 host-record=pve.e2e.homestack.app,10.77.0.1
 host-record=pve1.e2e.homestack.app,10.77.0.1
 host-record=api1.e2e.homestack.app,10.77.0.101
+@CLUSTER_DNS@
 DNS
 cat > /etc/systemd/system/homestack-e2e-dns.service <<'UNIT'
 [Unit]
@@ -63,6 +64,7 @@ cat > /etc/homestack-e2e/internet.nft <<'NFT'
 table ip homestack_e2e {
     chain forward {
         type filter hook forward priority 0; policy accept;
+        iifname "vmbr0" oifname "vmbr0" accept
         iifname "vmbr0" oifname "hsewan0" accept
         iifname "hsewan0" oifname "vmbr0" ct state established,related accept
         iifname "vmbr0" drop

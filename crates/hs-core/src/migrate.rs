@@ -335,6 +335,16 @@ async fn require_migration_capacity(
     crate::capacity::require_space(pve, target, storage, required).await
 }
 
+async fn power_state(pve: &impl Pve, node: &str, vmid: u32) -> Result<String, CoreError> {
+    let status = vm_status(pve, node, vmid).await;
+    if !matches!(status.as_str(), "running" | "stopped") {
+        return Err(CoreError::Refused(format!(
+            "Cannot determine current power state of VM {vmid}"
+        )));
+    }
+    Ok(status)
+}
+
 /// `build_migrate_plan` for a workspace of `pool`.
 pub async fn plan_migrate(
     pve: &impl Pve,
@@ -375,6 +385,8 @@ pub async fn plan_migrate(
         )));
     }
     let capacity = require_migration_capacity(pve, &info.node, &target, vmid, &target_storage).await?;
+    // Cluster inventory can lag behind a completed stop or start operation.
+    let status = power_state(pve, &info.node, vmid).await?;
     Ok(json!({
         "command": "migrate",
         "capacity": capacity,
@@ -384,7 +396,7 @@ pub async fn plan_migrate(
         "source_node": info.node,
         "target_node": target,
         "target_storage": target_storage,
-        "status": info.status,
+        "status": status,
         "home_disk": cfg.home_disk,
         "home_label": info.home_label,
         "home_volume": info.home_volume,
@@ -440,6 +452,11 @@ pub async fn migrate_workspace(
     if plan.get("home_volume").and_then(Value::as_str) != Some(info.home_volume.as_str()) {
         return Err(CoreError::Refused(
             "Workspace home volume changed after migrate confirmation; generate a new plan".to_owned(),
+        ));
+    }
+    if power_state(pve, planned.source, vmid).await? != text(plan, "status")? {
+        return Err(CoreError::Refused(
+            "Workspace power state changed after migrate confirmation; generate a new plan".to_owned(),
         ));
     }
 

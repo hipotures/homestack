@@ -35,7 +35,7 @@ impl Tunnel {
                 "-D",
                 &format!("127.0.0.1:{port}"),
                 "-R",
-                &format!("127.0.0.1:3129:127.0.0.1:{registry_port}"),
+                &format!("10.77.0.1:3129:127.0.0.1:{registry_port}"),
                 "pve-e2e",
             ])
             .stdin(Stdio::null())

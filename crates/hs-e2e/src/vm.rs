@@ -36,16 +36,27 @@ pub async fn command(program: &str, args: &[&str], artifacts: &Path, label: &str
 
 pub struct Vm {
     child: Child,
-    dir: PathBuf,
+    pub dir: PathBuf,
+    pub artifacts: PathBuf,
+    pub index: u8,
+    pub clustered: bool,
+    pub backbone: Option<crate::cluster::Backbone>,
     pub ssh_port: u16,
     pub api_port: u16,
     pub shutdown_confirmed: bool,
 }
 
 impl Vm {
-    pub fn start(dir: &Path, artifacts: &Path, options: &crate::Options, proxy_port: u16) -> Result<Self> {
+    pub fn start(
+        dir: &Path,
+        artifacts: &Path,
+        options: &crate::Options,
+        proxy_port: u16,
+        index: u8,
+        backbone: Option<&Path>,
+    ) -> Result<Self> {
         let ssh_port = crate::proxy::unused_port(Ipv4Addr::LOCALHOST)?;
-        let mut api_port = if options.web_port == 0 {
+        let mut api_port = if index != 1 || options.web_port == 0 {
             crate::proxy::unused_port(options.web_bind)?
         } else {
             options.web_port
@@ -87,20 +98,41 @@ impl Vm {
             "'{}' proxy-connect {proxy_port}",
             executable.display().to_string().replace('\'', "'\"'\"'")
         );
-        let child = std::process::Command::new("qemu-system-x86_64")
+        let mut command = std::process::Command::new("qemu-system-x86_64");
+        command
             .args(["-accel", "kvm", "-cpu", "host", "-smp", &options.cpus.to_string(), "-m", &options.memory.to_string(),
                 "-display", "none", "-monitor", "none", "-serial", &format!("file:{}", artifacts.join("serial.log").display()),
                 "-drive", &format!("file={},format=qcow2,if=virtio", dir.join("disk.qcow2").display()),
                 "-drive", &format!("file={},format=raw,if=virtio,readonly=on", dir.join("seed.img").display()),
-                "-nic", &format!("user,model=virtio-net-pci,restrict=on,ipv6=off,domainname={0},dnssearch={0},hostfwd=tcp:127.0.0.1:{ssh_port}-:22,hostfwd=tcp:{1}:{api_port}-:8006,guestfwd=tcp:10.0.2.100:3128-cmd:{proxy_command}", crate::domain::SEARCH, options.web_bind)])
-            .stdin(Stdio::null()).stdout(Stdio::null()).stderr(stderr).spawn()?;
+                "-nic", &format!("user,model=virtio-net-pci,restrict=on,ipv6=off,domainname={0},dnssearch={0},hostfwd=tcp:127.0.0.1:{ssh_port}-:22,hostfwd=tcp:{1}:{api_port}-:8006,guestfwd=tcp:10.0.2.100:3128-cmd:{proxy_command}", crate::domain::SEARCH, options.web_bind)]);
+        if let Some(wire) = backbone {
+            command.args([
+                "-netdev",
+                &format!("stream,id=cluster,addr.type=unix,addr.path={}", wire.display()),
+                "-device",
+                &format!("virtio-net-pci,netdev=cluster,mac=52:54:00:77:00:{index:02x}"),
+            ]);
+        }
+        let child = command
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(stderr)
+            .spawn()?;
         Ok(Self {
             child,
             dir: dir.to_owned(),
+            artifacts: artifacts.to_owned(),
+            index,
+            clustered: backbone.is_some(),
+            backbone: None,
             ssh_port,
             api_port,
             shutdown_confirmed: false,
         })
+    }
+
+    pub fn pid(&self) -> u32 {
+        self.child.id()
     }
 
     pub fn running(&mut self) -> Result<bool> {
@@ -252,6 +284,10 @@ mod tests {
         let vm = Vm {
             child,
             dir: dir.path().to_owned(),
+            artifacts: dir.path().to_owned(),
+            index: 1,
+            clustered: false,
+            backbone: None,
             ssh_port: 0,
             api_port: 0,
             shutdown_confirmed: false,

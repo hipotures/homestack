@@ -103,7 +103,20 @@ pub async fn prepare(options: &Options, dir: &Path, artifacts: &Path, report: &V
     let node = String::from_utf8(checked_ssh(dir, &guard, &log).await?)?
         .trim()
         .to_owned();
-    let config = configuration(&node)?;
+    let mut config: toml::Table = configuration(&node)?.parse()?;
+    let nodes = report["nodes"].as_array().ok_or("run has no node inventory")?;
+    let layouts = config
+        .get_mut("storage_layouts")
+        .and_then(toml::Value::as_table_mut)
+        .ok_or("missing storage layouts")?;
+    for entry in nodes {
+        let name = hs_model::NodeName::parse(entry["name"].as_str().ok_or("missing node name")?)?;
+        layouts.insert(
+            hs_model::config::active_layout_name(&name)?,
+            toml::Value::Array(vec!["local".into()]),
+        );
+    }
+    let config = toml::to_string(&config)?;
     let _ = hs_config::legacy::read(&config)?;
     let mut fixture = Fixture::open(&options.fixtures, &options.spaceship_file, &options.tsig_file)?;
     eprintln!("Preparing HomeStack API DNS and a public wildcard certificate");
@@ -112,13 +125,11 @@ pub async fn prepare(options: &Options, dir: &Path, artifacts: &Path, report: &V
     let stored = outcome?;
     cleanup?;
     eprintln!("Preparing internal DNS and the Proxmox OCI image tools");
-    crate::install::run(
-        ssh(dir),
-        include_str!("service-network.sh"),
-        Duration::from_secs(600),
-        &log,
-    )
-    .await?;
+    for entry in nodes {
+        let node_dir = Path::new(entry["directory"].as_str().ok_or("missing node directory")?);
+        let script = include_str!("service-network.sh").replace("@NODE_COUNT@", &nodes.len().to_string());
+        crate::install::run(ssh(node_dir), &script, Duration::from_secs(600), &log).await?;
+    }
     let profile = dir.join("client/config/homestack");
     workspace_keys(dir).await?;
     if !profile.join("config.toml").exists() {
@@ -163,7 +174,10 @@ pub async fn prepare(options: &Options, dir: &Path, artifacts: &Path, report: &V
         encode(&stored.cert),
         encode(&stored.key)
     );
-    checked_ssh(dir, &tls, &log).await?;
+    for entry in nodes {
+        let node_dir = Path::new(entry["directory"].as_str().ok_or("missing node directory")?);
+        checked_ssh(node_dir, &tls, &log).await?;
+    }
     let image = if let Ok(bytes) = std::fs::read(dir.join("service.json")) {
         let previous: Value = serde_json::from_slice(&bytes)?;
         if previous["run_id"] != run_id.to_string() {
@@ -187,13 +201,17 @@ pub async fn prepare(options: &Options, dir: &Path, artifacts: &Path, report: &V
     let registry = crate::registry_proxy::start().await?;
     let mut tunnel = crate::tunnel::Tunnel::start(dir, registry.port).await?;
     eprintln!("Checking the native Proxmox OCI image cache for {image}");
-    let script = format!(
-        "export HTTPS_PROXY=http://127.0.0.1:3129 https_proxy=http://127.0.0.1:3129\npython3 - {} {} {} <<'PULL'\n{pull}\nPULL\n",
-        crate::phases::shell_quote(&image),
-        crate::phases::shell_quote(&node),
-        crate::phases::shell_quote(&volume)
-    );
-    let result = crate::install::run(ssh(dir), &script, Duration::from_secs(950), &log).await;
+    let result = async {
+        for entry in nodes {
+            let node_dir = Path::new(entry["directory"].as_str().ok_or("missing node directory")?);
+            let node = entry["name"].as_str().ok_or("missing node name")?;
+            let script = format!(
+                "export HTTPS_PROXY=http://10.77.0.1:3129 https_proxy=http://10.77.0.1:3129\npython3 - {} {} {} <<'PULL'\n{pull}\nPULL\n",
+                crate::phases::shell_quote(&image), crate::phases::shell_quote(node), crate::phases::shell_quote(&volume));
+            crate::install::run(ssh(node_dir), &script, Duration::from_secs(950), &log).await?;
+        }
+        Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
+    }.await;
     tunnel.stop().await?;
     result?;
     let metadata = json!({"run_id": run_id.to_string(), "image": image, "hostname": crate::service_fixture::HOST,
