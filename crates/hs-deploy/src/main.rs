@@ -3,7 +3,7 @@
 //!
 //! ```text
 //! homestack-deploy [--config FILE] cert [--force] [--push]
-//! homestack-deploy [--config FILE] apply [--only NAME]...
+//! homestack-deploy [--config FILE] apply [--tag TAG] [--only NAME]...
 //! homestack-deploy [--config FILE] status [--only NAME]...
 //! homestack-deploy [--config FILE] remove [--only NAME]... --yes
 //! ```
@@ -14,18 +14,20 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use hs_deploy::config::DeployConfig;
+use hs_deploy::config::{DeployConfig, save_image};
 use hs_deploy::deploy;
 
 const USAGE: &str = "usage: homestack-deploy [--config FILE] cert [--force] [--push]
-       homestack-deploy [--config FILE] apply [--only NAME] (repeatable)
+       homestack-deploy [--config FILE] apply [--tag TAG] [--only NAME] (repeatable)
        homestack-deploy [--config FILE] status [--only NAME] (repeatable)
        homestack-deploy [--config FILE] remove [--only NAME] (repeatable) --yes";
 
+#[derive(Debug, PartialEq, Eq)]
 struct Args {
     config: PathBuf,
     command: String,
     only: Vec<String>,
+    tag: Option<String>,
     force: bool,
     push: bool,
     yes: bool,
@@ -37,6 +39,7 @@ fn parse(args: &[String]) -> Result<Args, String> {
         config: home.join(".config/homestack/deploy.toml"),
         command: String::new(),
         only: Vec::new(),
+        tag: None,
         force: false,
         push: false,
         yes: false,
@@ -48,6 +51,13 @@ fn parse(args: &[String]) -> Result<Args, String> {
             "--only" => parsed
                 .only
                 .push(rest.next().ok_or("--only needs an instance name")?.clone()),
+            "--tag" | "--image" => {
+                let value = rest.next().ok_or_else(|| format!("{arg} needs a tag"))?;
+                if value.trim().is_empty() || value.chars().any(char::is_whitespace) {
+                    return Err(format!("invalid image tag {value:?}"));
+                }
+                parsed.tag = Some(value.clone());
+            }
             "--force" => parsed.force = true,
             "--push" => parsed.push = true,
             "--yes" => parsed.yes = true,
@@ -57,6 +67,9 @@ fn parse(args: &[String]) -> Result<Args, String> {
     }
     if parsed.command.is_empty() {
         return Err("expected a command".to_owned());
+    }
+    if parsed.tag.is_some() && parsed.command != "apply" {
+        return Err("--tag is only for apply".to_owned());
     }
     Ok(parsed)
 }
@@ -75,17 +88,36 @@ async fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let config = match DeployConfig::load(&args.config) {
+    let mut config = match DeployConfig::load(&args.config) {
         Ok(config) => config,
         Err(message) => {
             eprintln!("homestack-deploy: {message}");
             return ExitCode::from(1);
         }
     };
+    if let Some(tag) = &args.tag
+        && let Err(message) = config.with_tag(tag)
+    {
+        eprintln!("homestack-deploy: {message}");
+        return ExitCode::from(1);
+    }
     let say = |line: &str| println!("{line}");
     let result = match args.command.as_str() {
         "cert" => deploy::cert(&config, args.force, args.push, &say).await,
-        "apply" => deploy::apply(&config, &args.only, &say).await,
+        "apply" => {
+            let outcome = deploy::apply(&config, &args.only, &say).await;
+            if outcome.is_ok() && args.tag.is_some() {
+                match save_image(&args.config, &config.image) {
+                    Ok(()) => {
+                        say(&format!("{}: image is {} now", args.config.display(), config.image));
+                        Ok(())
+                    }
+                    Err(error) => Err(format!("deploy.toml could not be changed: {error}")),
+                }
+            } else {
+                outcome
+            }
+        }
         "status" => deploy::status(&config, &args.only, &say).await,
         "remove" if !args.yes => Err("remove destroys the containers; add --yes".to_owned()),
         "remove" => deploy::remove(&config, &args.only, &say).await,
@@ -97,5 +129,38 @@ async fn main() -> ExitCode {
             eprintln!("homestack-deploy: {message}");
             ExitCode::from(1)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn words(list: &[&str]) -> Vec<String> {
+        list.iter().map(|word| (*word).to_owned()).collect()
+    }
+
+    #[test]
+    fn parse_accepts_tag_on_apply_and_refuses_it_elsewhere() -> Result<(), String> {
+        let parsed = parse(&words(&[
+            "--config",
+            "/tmp/deploy.toml",
+            "apply",
+            "--tag",
+            "0.1.214-c71ef134237d",
+            "--only",
+            "api1",
+        ]))?;
+        assert_eq!(parsed.command, "apply");
+        assert_eq!(parsed.tag.as_deref(), Some("0.1.214-c71ef134237d"));
+        assert_eq!(parsed.only, ["api1"]);
+
+        let alias = parse(&words(&["apply", "--image", "0.1.214-c71ef134237d"]))?;
+        assert_eq!(alias.tag.as_deref(), Some("0.1.214-c71ef134237d"));
+
+        assert!(parse(&words(&["apply", "--tag"])).is_err());
+        assert!(parse(&words(&["apply", "--tag", ""])).is_err());
+        assert!(parse(&words(&["status", "--tag", "0.1.0-abc"])).is_err());
+        Ok(())
     }
 }

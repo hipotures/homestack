@@ -134,31 +134,7 @@ pub async fn read(deploy_toml: &Path, vmids: &[u32], offset: i64) -> Result<Imag
 
 /// Set `image` in `deploy.toml`, keeping the rest of the file as it is.
 fn keep_image(path: &Path, image: &str) -> Result<(), String> {
-    use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
-    let fail = |e: std::io::Error| format!("{}: {}", path.display(), e.kind());
-    let text = std::fs::read_to_string(path).map_err(fail)?;
-    let mut document: toml_edit::DocumentMut = text.parse().map_err(|e| format!("{}: {e}", path.display()))?;
-    match document.get_mut("image").and_then(toml_edit::Item::as_value_mut) {
-        // The comment after it stays.
-        Some(value) => {
-            let decor = value.decor().clone();
-            *value = image.into();
-            *value.decor_mut() = decor;
-        }
-        None => document["image"] = toml_edit::value(image),
-    }
-    let fresh = path.with_extension("toml.new");
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600)
-        .open(&fresh)
-        .map_err(fail)?;
-    file.write_all(document.to_string().as_bytes()).map_err(fail)?;
-    file.sync_all().map_err(fail)?;
-    std::fs::rename(&fresh, path).map_err(fail)
+    hs_deploy::config::save_image(path, image)
 }
 
 fn strings(value: &Value) -> Vec<String> {

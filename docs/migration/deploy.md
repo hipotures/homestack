@@ -272,6 +272,7 @@ What it needs, once:
 ```
 cargo run -p hs-deploy -- --config deploy.toml cert      # *.domain from Let's Encrypt (DNS-01 at OVH)
 cargo run -p hs-deploy -- --config deploy.toml apply     # every instance, one at a time
+cargo run -p hs-deploy -- --config deploy.toml apply --tag 0.1.0-0123456789ab
 cargo run -p hs-deploy -- --config deploy.toml status
 cargo run -p hs-deploy -- --config deploy.toml cert --push   # renew (< 30 days left) and load it everywhere
 cargo run -p hs-deploy -- --config deploy.toml remove --yes

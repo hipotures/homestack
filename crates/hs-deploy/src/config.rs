@@ -272,6 +272,53 @@ impl DeployConfig {
         }
         found
     }
+    /// Replace the image tag (or the full `REGISTRY/PATH:TAG` reference).
+    pub fn with_tag(&mut self, tag: &str) -> Result<(), String> {
+        if tag.trim().is_empty() || tag.chars().any(char::is_whitespace) {
+            return Err(format!("invalid image tag {tag:?}"));
+        }
+        let image = if tag.contains(':') {
+            tag.to_owned()
+        } else {
+            let (repository, _) = self
+                .image
+                .rsplit_once(':')
+                .ok_or_else(|| format!("image {:?} needs a tag (REGISTRY/PATH:TAG)", self.image))?;
+            format!("{repository}:{tag}")
+        };
+        crate::node::image_file(&image)?;
+        self.image = image;
+        Ok(())
+    }
+}
+
+/// Set `image` in `deploy.toml`, keeping the rest of the file as it is.
+pub fn save_image(path: &Path, image: &str) -> Result<(), String> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let fail = |e: std::io::Error| format!("{}: {}", path.display(), e.kind());
+    let text = std::fs::read_to_string(path).map_err(fail)?;
+    let mut document: toml_edit::DocumentMut = text.parse().map_err(|e| format!("{}: {e}", path.display()))?;
+    match document.get_mut("image").and_then(toml_edit::Item::as_value_mut) {
+        // The comment after it stays.
+        Some(value) => {
+            let decor = value.decor().clone();
+            *value = image.into();
+            *value.decor_mut() = decor;
+        }
+        None => document["image"] = toml_edit::value(image),
+    }
+    let fresh = path.with_extension("toml.new");
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(&fresh)
+        .map_err(fail)?;
+    file.write_all(document.to_string().as_bytes()).map_err(fail)?;
+    file.sync_all().map_err(fail)?;
+    std::fs::rename(&fresh, path).map_err(fail)
 }
 
 fn home() -> PathBuf {
@@ -376,6 +423,35 @@ storage = "local-zfs"
         assert!(DeployConfig::parse(&both).is_err_and(|e| e.contains("only one of")));
         let neither = EXAMPLE.replacen("ovh_file = \"ovh-dns\"\n", "", 1);
         assert!(DeployConfig::parse(&neither).is_err_and(|e| e.contains("ovh_file or spaceship_file")));
+        Ok(())
+    }
+
+    #[test]
+    fn with_tag_replaces_the_tag_or_full_image_and_refuses_bad_tags() -> Result<(), String> {
+        let mut config = DeployConfig::parse(EXAMPLE)?;
+        config.with_tag("0.1.214-c71ef134237d")?;
+        assert_eq!(config.image, "ghcr.io/hipotures/homestack-server:0.1.214-c71ef134237d");
+        config.with_tag("registry.example.net/other/server:1.2.3")?;
+        assert_eq!(config.image, "registry.example.net/other/server:1.2.3");
+        for bad in ["", "   ", "bad/tag", "registry:5000/no-tag", "with space"] {
+            assert!(config.with_tag(bad).is_err(), "{bad:?}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn save_image_rewrites_only_the_image_entry() -> Result<(), Box<dyn std::error::Error>> {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("deploy.toml");
+        std::fs::write(
+            &path,
+            "# header\nimage = \"r/p:old\" # comment\ndomain = \"hs.example.net\"\n",
+        )?;
+        save_image(&path, "r/p:new")?;
+        assert_eq!(
+            std::fs::read_to_string(&path)?,
+            "# header\nimage = \"r/p:new\" # comment\ndomain = \"hs.example.net\"\n"
+        );
         Ok(())
     }
 }
