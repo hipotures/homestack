@@ -319,3 +319,31 @@ worker, entering the network and guest account, rescanning without losing
 the typed values, refusal before mutation when settings are incomplete,
 native configuration output, final status, first/reinstall titles, the
 separate update menu request and text editing at 80 by 24.
+
+
+## 10. Completion checklist (2026-10-18)
+
+- [x] First-install settings form works without an initial `config.toml`;
+  covered by the installer worker regression test.
+- [x] Collect root/home disk slots, default home size, network and guest
+  account settings; validate them before changing Proxmox.
+- [x] Offer Gold, storage and bridge choices from cluster discovery.
+- [x] Offer optional local workspace SSH identities, preserve the selection
+  across rescans and save it in client configuration.
+- [x] Keep form answers in the draft and preserve edits during rescans.
+- [x] Distinguish first setup, reinstallation and API container updates.
+- [x] Generate native client/server configuration and deploy the API;
+  installation through Herdr was exercised in the isolated E2E lab.
+- [ ] Verify the complete clean-cluster install/uninstall gate through both
+  SSH and Herdr, including removal of HomeStack state and preservation of
+  unrelated guests.
+- [ ] Audit and resolve the 29 remaining phase-13c `todo` entries in the
+  parity manifest against current behavior and regression coverage.
+
+Related phase-13b verification: manual Gold power uses the configured Gold
+pool. The isolated E2E API was updated to image
+`0.1.202-a00222404973`, its Gold role was reconciled, and VM 100 was started
+and gracefully stopped through the API. The final state was stopped. A stop
+issued immediately after boot timed out; retrying once the guest was ready
+succeeded. No forced stop was used. Simulator tests cover Gold power, role
+and pool restrictions, template/lock refusal, and workspace protection.

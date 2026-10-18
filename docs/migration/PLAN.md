@@ -354,6 +354,11 @@ Bez poola, zawężonego tokenu i zapisanych decyzji 9 i 10 agent nie zaczyna faz
 
 ### Faza 13c: instalator i deinstalator w Rust
 
+**Status (2026-10-18):** the first-install configuration form, optional SSH
+identity selection, separate reinstallation/API updates and native configuration
+output are implemented. See the [completion checklist](phase-13c.md#10-completion-checklist-2026-10-18)
+for verified scope and remaining gates. Phase 13c is not closed yet.
+
 **Dodana 2026-10-13 decyzją właściciela** (wcześniej F1 nie miał fazy, testy czekały w fazie 13). **Rozszerzona tego samego dnia:** `homestack install` i `homestack uninstall` w kliencie Rust zastępują ręczne kopiowanie i uruchamianie `deploy/pve/homestack-pve.sh` na nodzie.
 
 **Zakres:**
