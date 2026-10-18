@@ -49,7 +49,7 @@ use hs_core::addkey::{AddkeyRequest, add_key, plan_addkey};
 use hs_core::inventory::TEST_POOL;
 use hs_core::lifecycle::{
     CreateRequest, LifecycleTiming, create_workspace, destroy_workspace, plan_create, plan_destroy, plan_power,
-    power_workspace,
+    power_vm,
 };
 use hs_core::migrate::{MigrateRequest, migrate_workspace, plan_migrate};
 use hs_core::refresh::{plan_refresh, refresh_workspace};
@@ -447,7 +447,7 @@ impl Operation for Addkey {
     }
 }
 
-/// `workspace.start` and `workspace.stop`: `{"vmid": 240}` (owner,
+/// `vm.start` and `vm.stop`: `{"vmid": 240}` (owner,
 /// 2026-10-14). Events `workspace.started` and `workspace.stopped`.
 struct Power {
     timing: LifecycleTiming,
@@ -456,21 +456,18 @@ struct Power {
 
 impl Operation for Power {
     fn name(&self) -> &'static str {
-        if self.start {
-            "workspace.start"
-        } else {
-            "workspace.stop"
-        }
+        if self.start { "vm.start" } else { "vm.stop" }
     }
 
     fn plan<'a>(&'a self, ctx: &'a OpContext, parameters: &'a Value) -> BoxFuture<'a, Result<Planned, OpFailure>> {
         Box::pin(async move {
             let parameters: DestroyParameters = serde_json::from_value(parameters.clone())
-                .map_err(|_| OpFailure::invalid("workspace.start and workspace.stop take vmid."))?;
+                .map_err(|_| OpFailure::invalid("vm.start and vm.stop take vmid."))?;
             let summary = plan_power(
                 ctx.pve.as_ref(),
                 config(ctx)?,
                 &ctx.pools.workspaces,
+                &ctx.pools.gold,
                 parameters.vmid,
                 self.start,
             )
@@ -494,10 +491,11 @@ impl Operation for Power {
     ) -> BoxFuture<'a, Result<Value, OpFailure>> {
         Box::pin(async move {
             vmid_of(&planned.summary)?;
-            Ok(power_workspace(
+            Ok(power_vm(
                 ctx.pve.as_ref(),
                 config(ctx)?,
                 &ctx.pools.workspaces,
+                &ctx.pools.gold,
                 &planned.summary,
                 &self.timing,
                 job,

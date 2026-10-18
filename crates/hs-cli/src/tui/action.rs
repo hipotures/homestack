@@ -42,8 +42,8 @@ impl Kind {
             Self::Addkey => "workspace.addkey",
             Self::Migrate => "workspace.migrate",
             Self::Destroy => "workspace.destroy",
-            Self::Start => "workspace.start",
-            Self::Stop => "workspace.stop",
+            Self::Start => "vm.start",
+            Self::Stop => "vm.stop",
             Self::Reinstall => "server.reinstall",
         }
     }
@@ -289,7 +289,16 @@ pub async fn work(
         .is_some_and(|names| names.iter().any(|name| name == "luks_passphrase"));
     progress(Progress::Plan {
         lines: unframe(&plan_text(kind, &summary)),
-        question: kind.question(recover).to_owned(),
+        question: if summary["role"] == "GOLD" && matches!(kind, Kind::Start | Kind::Stop) {
+            if kind == Kind::Start {
+                "Start Gold?"
+            } else {
+                "Shut down Gold? It is never forced."
+            }
+        } else {
+            kind.question(recover)
+        }
+        .to_owned(),
         blocked,
         secret: needs_passphrase.then(|| format!("LUKS passphrase for VM {}", view::text(&summary["vmid"]))),
     });
@@ -746,7 +755,8 @@ fn power_text(summary: &Value) -> String {
         _ => "Stop",
     };
     format!(
-        "{word} workspace\nVMID   : {}\nName   : {}\nNode   : {}\nState  : {}\n",
+        "{word} {}\nVMID   : {}\nName   : {}\nNode   : {}\nState  : {}\n",
+        if summary["role"] == "GOLD" { "Gold" } else { "workspace" },
         view::text(&summary["vmid"]),
         view::text(&summary["name"]),
         view::text(&summary["node"]),

@@ -380,3 +380,17 @@ async fn refresh_runs_as_a_job_with_its_steps() -> TestResult {
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn gold_power_runs_through_the_vm_operations() -> TestResult {
+    let server = start().await?;
+    for (operation, event) in [("vm.stop", "gold.stopped"), ("vm.start", "gold.started")] {
+        let job = server.run(operation, json!({"vmid": 101})).await?;
+        assert_eq!(job["state"], "succeeded", "{job}");
+        assert_eq!(job["result"]["event"], event, "{job}");
+        assert_eq!(job["result"]["pool"], "homestack-gold");
+    }
+    let (status, _) = server.plan("workspace.destroy", json!({"vmid": 101})).await?;
+    assert_eq!(status, StatusCode::CONFLICT);
+    Ok(())
+}

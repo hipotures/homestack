@@ -114,7 +114,7 @@ token gets:
 |---|---|
 | `/nodes`, `/storage`, `/sdn` | `PVEAuditor` (nodes, storages, networks; no VM) |
 | `/pool/homestack` (server), `/pool/homestack-test` (both) | `HomeStack`: `Pool.Audit`, `VM.Allocate`, `VM.Audit`, `VM.Config.Cloudinit`, `VM.Config.Disk`, `VM.Config.Options`, `VM.GuestAgent.Audit`, `VM.GuestAgent.FileRead`, `VM.GuestAgent.Unrestricted`, `VM.Migrate`, `VM.PowerMgmt` |
-| `/pool/homestack-gold` (server), `/pool/homestack-test` (both) | `HomeStackGold`: `Pool.Audit`, `VM.Audit`, `VM.Clone`, `VM.GuestAgent.Audit`, `VM.GuestAgent.FileRead`, `VM.GuestAgent.Unrestricted` |
+| `/pool/homestack-gold` (server), `/pool/homestack-test` (both) | `HomeStackGold`: `Pool.Audit`, `VM.Audit`, `VM.Clone`, `VM.Config.Options`, `VM.PowerMgmt`, `VM.GuestAgent.Audit`, `VM.GuestAgent.FileRead`, `VM.GuestAgent.Unrestricted` |
 | `/pool/homestack-service` (server) | `HomeStackDeploy`, as the deploy token has it there |
 | `/storage/<id>`, each layout storage and the snippet storage | `HomeStackStorage`: `Datastore.AllocateSpace`, `Datastore.Audit` |
 | `/sdn/zones/<zone>/<bridge>` of Gold's `net0` | `PVESDNUser` |

@@ -922,29 +922,67 @@ pub async fn destroy_workspace(
     Ok(Value::Object(result))
 }
 
-/// `workspace.start` and `workspace.stop` (owner, 2026-10-14; Python had
-/// neither): the plan names the workspace, its node and its state now.
-pub async fn plan_power(pve: &impl Pve, cfg: &Config, pool: &str, vmid: u32, start: bool) -> Result<Value, CoreError> {
-    require_pool(pve, vmid, pool).await?;
-    let info = resolve_existing_workspace(pve, cfg, vmid).await?;
-    Ok(json!({
-        "command": if start { "start" } else { "stop" },
-        "vmid": vmid,
-        "name": info.name,
-        "node": info.node,
-        "pool": pool,
-        "status": info.status,
-        "ip": derive_ip(cfg, vmid).ok(),
-    }))
-}
-
-/// Start or stop the workspace of `plan`. A stop shuts the guest down and
-/// never forces it, as every operation does; a workspace already in the
-/// wanted state is left alone.
-pub async fn power_workspace(
+/// `vm.start` and `vm.stop` (owner, 2026-10-14; Python had
+/// neither): the plan names the VM, its role, node and current state.
+pub async fn plan_power(
     pve: &impl Pve,
     cfg: &Config,
     pool: &str,
+    gold_pool: &str,
+    vmid: u32,
+    start: bool,
+) -> Result<Value, CoreError> {
+    let gold = cfg.gold_vmid == Some(vmid);
+    let pool = if gold { gold_pool } else { pool };
+    require_pool(pve, vmid, pool).await?;
+    let (name, node, status) = if gold {
+        let resource = cluster_vm_resources(pve)
+            .await?
+            .into_iter()
+            .find(|vm| vm.vmid == vmid)
+            .ok_or_else(|| CoreError::NotFound(format!("Gold VM {vmid} does not exist")))?;
+        let config = vm_config(pve, &resource.node, vmid).await?;
+        let tags = config.get("tags").map(String::as_str);
+        if !has_tag(tags, GOLD_TAG)
+            || has_tag(tags, WORKSPACE_TAG)
+            || has_tag(tags, ALIEN_WORKSPACE_TAG)
+            || has_tag(tags, REFRESH_LOCK_TAG)
+        {
+            return Err(CoreError::Refused(format!(
+                "Gold VM {vmid} has invalid role or lock tags"
+            )));
+        }
+        if config.get("template").is_some_and(|value| value == "1") {
+            return Err(CoreError::Refused(format!(
+                "Gold VM {vmid} is a template and cannot be powered on or off"
+            )));
+        }
+        let status = vm_status(pve, &resource.node, vmid).await;
+        (resource.name, resource.node, status)
+    } else {
+        let info = resolve_existing_workspace(pve, cfg, vmid).await?;
+        (Some(info.name), info.node, info.status)
+    };
+    Ok(json!({
+        "command": if start { "start" } else { "stop" },
+        "vmid": vmid,
+        "name": name,
+        "node": node,
+        "pool": pool,
+        "status": status,
+        "role": if gold { "GOLD" } else { "WS" },
+        "ip": if gold { None } else { derive_ip(cfg, vmid).ok() },
+    }))
+}
+
+/// Start or stop the workspace or configured Gold of `plan`. A stop shuts
+/// the guest down without forcing it; a VM already in the
+/// wanted state is left alone.
+pub async fn power_vm(
+    pve: &impl Pve,
+    cfg: &Config,
+    pool: &str,
+    gold_pool: &str,
     plan: &Value,
     timing: &LifecycleTiming,
     observer: &impl Observer,
@@ -952,8 +990,12 @@ pub async fn power_workspace(
     let vmid = vmid_of(plan)?;
     let node = text(plan, "node")?;
     let start = plan.get("command").and_then(Value::as_str) == Some("start");
-    require_pool(pve, vmid, pool).await?;
-    resolve_existing_workspace(pve, cfg, vmid).await?;
+    let current = plan_power(pve, cfg, pool, gold_pool, vmid, start).await?;
+    if current["node"] != plan["node"] || current["role"] != plan["role"] || current["pool"] != plan["pool"] {
+        return Err(CoreError::Refused(
+            "VM identity or placement changed after power confirmation; generate a new plan".to_owned(),
+        ));
+    }
     let step = if start { "Start" } else { "Shutdown" };
     step_started(observer, step);
     let done = if start {
@@ -971,10 +1013,11 @@ pub async fn power_workspace(
     result.insert("status".to_owned(), json!(vm_status(pve, node, vmid).await));
     result.insert(
         "event".to_owned(),
-        json!(if start {
-            "workspace.started"
-        } else {
-            "workspace.stopped"
+        json!(match (current["role"].as_str(), start) {
+            (Some("GOLD"), true) => "gold.started",
+            (Some("GOLD"), false) => "gold.stopped",
+            (_, true) => "workspace.started",
+            (_, false) => "workspace.stopped",
         }),
     );
     Ok(Value::Object(result))

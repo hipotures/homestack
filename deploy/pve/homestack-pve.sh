@@ -49,7 +49,7 @@ readonly POOL_SERVICE=homestack-service DEPLOY_TOKEN=deploy
 readonly MIN_MAJOR=9 MIN_MINOR=2
 declare -Ar ROLE_PRIVS=(
     [HomeStack]='Pool.Audit,VM.Allocate,VM.Audit,VM.Config.Cloudinit,VM.Config.Disk,VM.Config.Options,VM.GuestAgent.Audit,VM.GuestAgent.FileRead,VM.GuestAgent.Unrestricted,VM.Migrate,VM.PowerMgmt'
-    [HomeStackGold]='Pool.Audit,VM.Audit,VM.Clone,VM.GuestAgent.Audit,VM.GuestAgent.FileRead,VM.GuestAgent.Unrestricted'
+    [HomeStackGold]='Pool.Audit,VM.Audit,VM.Clone,VM.Config.Options,VM.GuestAgent.Audit,VM.GuestAgent.FileRead,VM.GuestAgent.Unrestricted,VM.PowerMgmt'
     [HomeStackStorage]='Datastore.AllocateSpace,Datastore.Audit'
     [HomeStackDeploy]='Pool.Audit,VM.Allocate,VM.Audit,VM.Config.CPU,VM.Config.Disk,VM.Config.Memory,VM.Config.Network,VM.Config.Options,VM.PowerMgmt'
     [HomeStackDeployNodes]='Sys.AccessNetwork'

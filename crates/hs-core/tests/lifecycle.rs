@@ -469,34 +469,89 @@ fn a_large_vmid_gets_the_address_of_its_last_two_octets() -> Result<(), Error> {
 /// refused before any change.
 #[tokio::test]
 async fn a_workspace_is_stopped_and_started_and_one_outside_the_pool_refused() -> TestResult {
-    use hs_core::lifecycle::{plan_power, power_workspace};
+    use hs_core::lifecycle::{plan_power, power_vm};
     let (sim, pve) = cluster("").await?;
     let cfg = config()?;
     let plan = plan_create(&pve, &cfg, POOL, &request(240, "hst-power")).await?;
     create_workspace(&pve, &cfg, &plan, &quick(), &NoObserver).await?;
 
-    let plan = plan_power(&pve, &cfg, POOL, 240, false).await?;
+    let plan = plan_power(&pve, &cfg, POOL, "homestack-gold", 240, false).await?;
     assert_eq!(
         (plan["command"].as_str(), plan["status"].as_str()),
         (Some("stop"), Some("running"))
     );
-    let result = power_workspace(&pve, &cfg, POOL, &plan, &quick(), &NoObserver).await?;
+    let result = power_vm(&pve, &cfg, POOL, "homestack-gold", &plan, &quick(), &NoObserver).await?;
     assert_eq!(result["event"], "workspace.stopped");
     assert_eq!(result["status"], "stopped");
 
-    let plan = plan_power(&pve, &cfg, POOL, 240, true).await?;
-    let result = power_workspace(&pve, &cfg, POOL, &plan, &quick(), &NoObserver).await?;
+    let plan = plan_power(&pve, &cfg, POOL, "homestack-gold", 240, true).await?;
+    let result = power_vm(&pve, &cfg, POOL, "homestack-gold", &plan, &quick(), &NoObserver).await?;
     assert_eq!(result["event"], "workspace.started");
     assert_eq!(result["status"], "running");
 
     let before = sim.ops().len();
     assert!(matches!(
-        plan_power(&pve, &cfg, POOL, 150, false).await,
+        plan_power(&pve, &cfg, POOL, "homestack-gold", 150, false).await,
         Err(CoreError::OutsidePool(_))
     ));
     assert!(
         sim.ops()[before..].iter().all(|op| op.to_string().starts_with("get{")),
         "nothing changed outside the pool"
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn configured_gold_has_manual_power_in_its_own_pool() -> TestResult {
+    use hs_core::lifecycle::{plan_power, power_vm};
+    let (_sim, pve) = cluster("").await?;
+    let cfg = config()?;
+    for (start, event, status) in [(false, "gold.stopped", "stopped"), (true, "gold.started", "running")] {
+        let plan = plan_power(&pve, &cfg, POOL, "homestack-gold", 101, start).await?;
+        assert_eq!(plan["role"], "GOLD");
+        assert_eq!(plan["pool"], "homestack-gold");
+        let result = power_vm(&pve, &cfg, POOL, "homestack-gold", &plan, &quick(), &NoObserver).await?;
+        assert_eq!(result["event"], event);
+        assert_eq!(result["status"], status);
+    }
+    assert!(plan_power(&pve, &cfg, POOL, "wrong-pool", 101, true).await.is_err());
+    let mut other = cfg.clone();
+    other.gold_vmid = Some(150);
+    assert!(
+        plan_power(&pve, &other, POOL, "homestack-gold", 101, true)
+            .await
+            .is_err()
+    );
+    let mut stale = plan_power(&pve, &cfg, POOL, "homestack-gold", 101, true).await?;
+    stale["node"] = "different-node".into();
+    assert!(
+        power_vm(&pve, &cfg, POOL, "homestack-gold", &stale, &quick(), &NoObserver)
+            .await
+            .is_err()
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn gold_power_refuses_templates_and_wrong_or_locked_roles() -> TestResult {
+    use hs_core::lifecycle::plan_power;
+    for (key, value) in [
+        ("tags", "homestack-ws"),
+        ("tags", "homestack-gold;homestack-ws"),
+        ("tags", "homestack-gold;homestack-lock"),
+        ("template", "1"),
+    ] {
+        let mut spec = ClusterSpec::from_scenario(CLUSTER)?;
+        let gold = spec.vms.iter_mut().find(|vm| vm.vmid == 101).unwrap();
+        gold.config.insert(key.into(), value.into());
+        let sim = PveSim::start(spec).await?;
+        let pve = client(&sim, TOKEN)?;
+        assert!(
+            plan_power(&pve, &config()?, POOL, "homestack-gold", 101, true)
+                .await
+                .is_err(),
+            "{key}={value}"
+        );
+    }
     Ok(())
 }

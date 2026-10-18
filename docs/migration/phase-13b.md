@@ -337,11 +337,14 @@ Rendering into ratatui's `TestBackend`, as MyPowers does, with a fake status:
 
 ## 8. Step 4: start/stop and ssh
 
-- **start/stop** (`t`): new server operations `workspace.start` and
-  `workspace.stop` (`{"vmid": N}`, events `workspace.started` and
+- **start/stop** (`t`): new server operations `vm.start` and
+  `vm.stop` (`{"vmid": N}`, events `workspace.started` and
   `workspace.stopped`; `hs_core::lifecycle::plan_power` and
-  `power_workspace`), shown as the other actions: plan › run. They need the
-  servers deployed from this code.
+  `power_vm`), shown as the other actions: plan › run. They need the
+  servers deployed from this code. The configured Gold can also be powered
+  manually in its Gold pool, with `VM.PowerMgmt` and `VM.Config.Options`
+  (operation leases) on the Gold role; its
+  events are `gold.started` and `gold.stopped`. Inspection never starts it.
 - **ssh** (`s`, owner 2026-10-14: decided once the TUI was built): on a
   running workspace the TUI gives its terminal to `ssh` and takes it back
   when ssh ends (`tui/shell.rs`, `run.rs` `hand_over`).

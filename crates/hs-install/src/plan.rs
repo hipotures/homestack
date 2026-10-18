@@ -26,7 +26,7 @@ const ROLES: [(&str, &str); 6] = [
     ),
     (
         "HomeStackGold",
-        "Pool.Audit,VM.Audit,VM.Clone,VM.GuestAgent.Audit,VM.GuestAgent.FileRead,VM.GuestAgent.Unrestricted",
+        "Pool.Audit,VM.Audit,VM.Clone,VM.Config.Options,VM.GuestAgent.Audit,VM.GuestAgent.FileRead,VM.GuestAgent.Unrestricted,VM.PowerMgmt",
     ),
     ("HomeStackStorage", "Datastore.AllocateSpace,Datastore.Audit"),
     (

@@ -513,11 +513,20 @@ fn t_stops_a_running_workspace_and_starts_a_stopped_one() {
     select(&mut fixture.app, 201);
     let start = started(press(&mut fixture.app, KeyCode::Char('t')));
     assert_eq!((start.kind, start.vmid), (Kind::Stop, Some(201)));
-    assert_eq!(start.kind.operation(), "workspace.stop");
+    assert_eq!(start.kind.operation(), "vm.stop");
     fixture.app.action = None;
     select(&mut fixture.app, 203);
     let start = started(press(&mut fixture.app, KeyCode::Char('t')));
-    assert_eq!((start.kind, start.kind.operation()), (Kind::Start, "workspace.start"));
+    assert_eq!((start.kind, start.kind.operation()), (Kind::Start, "vm.start"));
+}
+
+#[test]
+fn t_starts_the_selected_gold() {
+    let mut fixture = app();
+    select(&mut fixture.app, 112);
+    let start = started(press(&mut fixture.app, KeyCode::Char('t')));
+    assert_eq!(start.kind.operation(), "vm.start");
+    assert_eq!(start.parameters, json!({"vmid": 112}));
 }
 
 #[test]
