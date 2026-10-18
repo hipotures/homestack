@@ -1,11 +1,9 @@
+# Minimal installation input for the isolated lab, with its reference Gold.
 version = 1
 
 [node]
 name = "@NODE@"
 gold_vmid = 100
-
-[control]
-node = "@NODE@"
 
 [storage_layouts]
 @LAYOUT@ = ["local"]
@@ -37,17 +35,6 @@ user = "user"
 identity_files = ["~/.ssh/e2e-workspace"]
 identities_only = true
 log_level = "FATAL"
-
-[repo]
-checkout_root = "~/DEV"
-sort = "recent"
-
-[display]
-storage_unit = "GiB"
-storage_decimals = 0
-
-[sounds]
-enabled = false
 
 [transport]
 type = "herdr"

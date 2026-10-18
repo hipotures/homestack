@@ -351,6 +351,11 @@ The `homestack` phase prepares the real installation without applying it:
   `user` (UID/GID 1000). No production configuration is copied. A dedicated
   workspace SSH key is generated under the private client home. The prepared
   configuration selects the verified reference Gold VM 100.
+  Its minimal template is `crates/hs-e2e/src/service-config.toml`; optional
+  control, repo, display, sounds and setup sections are omitted. Preparation
+  writes it to `<temporary_directory>/client/config/homestack/config.toml`
+  only when that file does not exist. Start a fresh lab to test the minimal
+  input; reopening an existing profile retains its earlier configuration.
 - `api1.e2e.homestack.app` resolves to **`10.77.0.101`**, so the real installer
   derives **CT 101**. The public and optional split-DNS records have their own
   ownership journal in `<fixtures>/service/`.
