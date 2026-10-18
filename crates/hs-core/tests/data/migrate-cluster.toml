@@ -6,7 +6,7 @@
 # 201  Stopped.
 # 202  Running, with an unused0 reference.
 # 203  Running, a 2T home: local-lvm on pve-example-2 has 1T free, so the
-#      migration task fails there.
+#      migration planning refuses it before shutdown.
 # 160  Alien workspace in the pool.
 # 150  A workspace outside the pool.
 #

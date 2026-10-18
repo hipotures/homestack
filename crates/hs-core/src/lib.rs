@@ -7,6 +7,7 @@
 
 pub mod addkey;
 pub mod capabilities;
+mod capacity;
 pub mod cloudinit;
 pub mod create_transfer;
 pub mod discovery;

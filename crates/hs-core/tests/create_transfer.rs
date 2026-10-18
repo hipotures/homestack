@@ -597,3 +597,40 @@ async fn invalid_clone_disk_ownership_prevents_cleanup_deletion() -> TestResult 
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn cross_node_create_checks_temporary_source_and_final_target_capacity() -> TestResult {
+    let (sim, pve) = cluster().await?;
+    let cfg = config()?;
+    let clone_bytes = 16 * 1024_u64.pow(3) + 4 * 1024 * 1024;
+    sim.set_storage_available(GOLD_NODE, "local-lvm", clone_bytes - 1)?;
+    let error = plan_create(&pve, &cfg, POOL, &request(Some(TARGET)))
+        .await
+        .err()
+        .ok_or("expected refusal")?;
+    assert!(
+        error.to_string().contains(&format!("local-lvm on {GOLD_NODE}")),
+        "{error}"
+    );
+    assert!(sim.ops().iter().all(|op| op.name == "get"));
+    sim.set_storage_available(GOLD_NODE, "local-lvm", clone_bytes)?;
+    sim.set_storage_available(TARGET, "fast", clone_bytes)?;
+    let error = plan_create(&pve, &cfg, POOL, &request(Some(TARGET)))
+        .await
+        .err()
+        .ok_or("expected refusal")?;
+    assert!(error.to_string().contains(&format!("fast on {TARGET}")), "{error}");
+    assert!(sim.ops().iter().all(|op| op.name == "get"));
+    sim.set_storage_available(TARGET, "fast", clone_bytes + 20 * 1024_u64.pow(3))?;
+    let plan = plan_create(&pve, &cfg, POOL, &request(Some(TARGET))).await?;
+    assert_eq!(plan["capacity"]["source_clone"]["required_bytes"], clone_bytes);
+    sim.set_storage_available(GOLD_NODE, "local-lvm", 0)?;
+    sim.clear_ops();
+    let error = create_workspace(&pve, &cfg, &plan, &quick(), &NoObserver)
+        .await
+        .err()
+        .ok_or("expected refusal")?;
+    assert!(error.to_string().contains("available 0 bytes"), "{error}");
+    assert!(sim.ops().iter().all(|op| op.name == "get"));
+    Ok(())
+}

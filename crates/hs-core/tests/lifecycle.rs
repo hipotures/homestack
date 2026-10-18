@@ -559,3 +559,33 @@ async fn gold_power_refuses_templates_and_wrong_or_locked_roles() -> TestResult 
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn create_capacity_includes_clone_and_home_before_any_allocation() -> TestResult {
+    let (sim, pve) = cluster("").await?;
+    let required = (16 + 20) * 1024_u64.pow(3) + 4 * 1024 * 1024;
+    sim.set_storage_available(NODE, "local-lvm", required - 1)?;
+    let error = plan_create(&pve, &config()?, POOL, &request(200, "test1"))
+        .await
+        .err()
+        .ok_or("expected refusal")?;
+    assert!(
+        error.to_string().contains(&format!("requires {required} bytes")),
+        "{error}"
+    );
+    assert!(sim.ops().iter().all(|op| op.name == "get" || op.name == "guest_ping"));
+    assert!(traces(&sim, 200).await?.is_empty());
+    sim.set_storage_available(NODE, "local-lvm", required)?;
+    let plan = plan_create(&pve, &config()?, POOL, &request(200, "test1")).await?;
+    assert_eq!(plan["capacity"]["target"]["required_bytes"], required);
+    sim.set_storage_available(NODE, "local-lvm", 0)?;
+    sim.clear_ops();
+    let error = create_workspace(&pve, &config()?, &plan, &quick(), &NoObserver)
+        .await
+        .err()
+        .ok_or("expected refusal")?;
+    assert!(error.to_string().contains("available 0 bytes"), "{error}");
+    assert!(sim.ops().iter().all(|op| op.name == "get" || op.name == "guest_ping"));
+    assert!(traces(&sim, 200).await?.is_empty());
+    Ok(())
+}

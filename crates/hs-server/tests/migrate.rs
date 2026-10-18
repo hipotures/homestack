@@ -190,15 +190,51 @@ async fn invalid_parameters_and_refusals_when_planning() -> TestResult {
 }
 
 #[tokio::test]
-async fn a_failed_migration_restarts_the_vm_and_fails_the_job() -> TestResult {
+async fn insufficient_capacity_refuses_the_plan_without_shutting_down() -> TestResult {
     let server = start().await?;
-    let job = server.run(json!({"vmid": 203, "target_node": "pve-example-2"})).await?;
-    assert_eq!(job["state"], "failed", "{job}");
-    let message = job["error"]["message"].as_str().unwrap_or_default();
+    server._sim.clear_ops();
+    let (status, body) = server
+        .plan(json!({"vmid": 203, "target_node": "pve-example-2"}))
+        .await?;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["error"]["code"], "operation_refused");
     assert!(
-        message.ends_with("\nRecovery: VM 203 was restarted automatically on pve-example-1."),
-        "{message}"
+        body["error"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("Not enough free space")
     );
-    assert_eq!(names(&job, "tasks", "kind"), ["qmshutdown", "qmigrate", "qmstart"]);
+    assert!(
+        !server
+            ._sim
+            .ops()
+            .iter()
+            .any(|op| op.name != "get" && op.name != "guest_ping")
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_failed_migration_still_recovers_after_capacity_admission() -> TestResult {
+    let server = start().await?;
+    server._sim.inject_fault(pve_sim::scenario::FaultSpec {
+        op: "post{path=/nodes/pve-example-1/qemu/200/migrate}".to_owned(),
+        occurrence: 1,
+        status: 500,
+        message: "injected migration failure".to_owned(),
+        applied: false,
+        hang: false,
+        task: None,
+    })?;
+    let job = server.run(json!({"vmid":200,"target_node":"pve-example-2"})).await?;
+    assert_eq!(job["state"], "failed", "{job}");
+    assert!(
+        job["error"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .ends_with("Recovery: VM 200 was restarted automatically on pve-example-1."),
+        "{job}"
+    );
+    assert_eq!(names(&job, "tasks", "kind"), ["qmshutdown", "qmstart"]);
     Ok(())
 }

@@ -199,6 +199,8 @@ on the source is tested on the simulator), and pve1 with `worker-roots`.
 
 ## 6. Open questions
 
+The capacity gap below is resolved by [phase 17](phase-17.md): planning and execution now refuse insufficient target space before shutdown. This section records the original phase 8 behavior.
+
 - The plan offers no check of free space on the target storage; Proxmox
   fails the task after the shutdown and the VM is started again on the
   source. Python does the same. `GET /qemu/{vmid}/migrate?target=...`

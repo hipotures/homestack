@@ -12,7 +12,7 @@
 //! down starts it again on the source node when it is still there.
 //! `docs/migration/phase-8.md` lists what differs from Python.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use hs_model::NodeName;
@@ -276,6 +276,65 @@ fn take<'a>(rest: &mut &'a str, accept: impl Fn(char) -> bool) -> Option<&'a str
     Some(taken)
 }
 
+/// Check the disks Proxmox will move against the target's available bytes.
+/// Source storage content reports virtual capacity even for sparse images;
+/// missing sizes must never silently turn into a zero-byte requirement.
+async fn require_migration_capacity(
+    pve: &impl Pve,
+    source: &str,
+    target: &str,
+    vmid: u32,
+    storage: &str,
+) -> Result<Value, CoreError> {
+    let preflight = pve
+        .get(&format!("/nodes/{source}/qemu/{vmid}/migrate"), &[("target", target)])
+        .await?;
+    let disks = preflight["local_disks"]
+        .as_array()
+        .ok_or_else(|| CoreError::Refused("Proxmox migration preflight did not return local disks".to_owned()))?;
+    let mut contents = BTreeMap::new();
+    let mut seen = BTreeSet::new();
+    let mut required = 0_u64;
+    for disk in disks {
+        let volume = disk["volid"].as_str().ok_or_else(|| {
+            CoreError::Refused("Proxmox migration preflight returned a disk without a volume ID".to_owned())
+        })?;
+        if !seen.insert(volume) {
+            continue;
+        }
+        let flag = |key: &str| disk[key] == true || disk[key] == 1;
+        if flag("cdrom") && !flag("is_cloudinit") {
+            return Err(CoreError::Refused(format!(
+                "VM {vmid} has local CD-ROM {volume}; detach it before migration"
+            )));
+        }
+        let (source_storage, _) = volume
+            .split_once(':')
+            .ok_or_else(|| CoreError::Refused(format!("Cannot determine storage for migration disk {volume}")))?;
+        if !contents.contains_key(source_storage) {
+            let content = pve
+                .get(
+                    &format!("/nodes/{source}/storage/{source_storage}/content"),
+                    &[("content", "images")],
+                )
+                .await?;
+            contents.insert(source_storage.to_owned(), content);
+        }
+        let size = contents[source_storage]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|item| item["volid"].as_str() == Some(volume))
+            .and_then(|item| item["size"].as_u64())
+            .filter(|size| *size > 0)
+            .ok_or_else(|| CoreError::Refused(format!("Cannot determine migration disk size for {volume}")))?;
+        required = required
+            .checked_add(size)
+            .ok_or_else(|| CoreError::Refused("Migration disk sizes exceed the supported byte range".to_owned()))?;
+    }
+    crate::capacity::require_space(pve, target, storage, required).await
+}
+
 /// `build_migrate_plan` for a workspace of `pool`.
 pub async fn plan_migrate(
     pve: &impl Pve,
@@ -315,8 +374,10 @@ pub async fn plan_migrate(
             py_repr(Some(&target))
         )));
     }
+    let capacity = require_migration_capacity(pve, &info.node, &target, vmid, &target_storage).await?;
     Ok(json!({
         "command": "migrate",
+        "capacity": capacity,
         "vmid": vmid,
         "name": info.name,
         "pool": pool,
@@ -382,6 +443,7 @@ pub async fn migrate_workspace(
         ));
     }
 
+    require_migration_capacity(pve, planned.source, planned.target, vmid, planned.storage).await?;
     let mut source_stopped = false;
     let outcome = migrate_steps(pve, cfg, &planned, timing, observer, &mut source_stopped).await;
     let status = match outcome {

@@ -323,6 +323,45 @@ pub struct CreateRequest {
     pub node: Option<String>,
 }
 
+/// Check admission capacity for every full-clone disk and the new home.
+/// A cross-node create first allocates the clone on Gold's node.
+async fn require_create_capacity(pve: &impl Pve, cfg: &Config, plan: &Value) -> Result<Value, CoreError> {
+    let source = text(plan, "source_node")?;
+    let target = text(plan, "node")?;
+    let storage = text(plan, "root_storage")?;
+    let gold = crate::gold::configured_gold(cfg)?;
+    let gold_cfg = vm_config(pve, source, gold).await?;
+    require_gold_tag(gold, &gold_cfg)?;
+    let mut clone_bytes = 0_u64;
+    for disk in crate::migrate::migration_volume_plan(&gold_cfg, cfg) {
+        // Proxmox regenerates a fixed 4 MiB Cloud-Init drive. Gold's config
+        // can omit its size, unlike the data, EFI and TPM disks.
+        let size = disk["size_bytes"]
+            .as_u64()
+            .or_else(|| (disk["role"] == "cloud-init").then_some(4 * 1024 * 1024))
+            .filter(|size| *size > 0)
+            .ok_or_else(|| {
+                CoreError::Refused(format!("Cannot determine Gold clone disk size for {}", disk["volume"]))
+            })?;
+        clone_bytes = clone_bytes
+            .checked_add(size)
+            .ok_or_else(|| CoreError::Refused("Gold clone disk sizes exceed the supported byte range".to_owned()))?;
+    }
+    let home_bytes = number(plan, "home_size_mib")?
+        .checked_mul(1024 * 1024)
+        .ok_or_else(|| CoreError::Refused("Requested home size exceeds the supported byte range".to_owned()))?;
+    let total = clone_bytes
+        .checked_add(home_bytes)
+        .ok_or_else(|| CoreError::Refused("Create disk sizes exceed the supported byte range".to_owned()))?;
+    let target_capacity = crate::capacity::require_space(pve, target, storage, total).await?;
+    let mut capacity = json!({"target": target_capacity});
+    if source != target {
+        let clone_storage = text(plan, "clone_storage")?;
+        capacity["source_clone"] = crate::capacity::require_space(pve, source, clone_storage, clone_bytes).await?;
+    }
+    Ok(capacity)
+}
+
 /// `build_create_plan` on Gold's node, cloning into `pool`.
 pub async fn plan_create(
     pve: &impl Pve,
@@ -431,6 +470,7 @@ pub async fn plan_create(
         plan["clone_storage"] = json!(resolve_homestack_storage(cfg, node, None)?);
         plan["source_metadata"] = transfer.source_metadata;
     }
+    plan["capacity"] = require_create_capacity(pve, cfg, &plan).await?;
     Ok(plan)
 }
 
@@ -471,6 +511,7 @@ pub async fn create_workspace(
     if plan.get("source_metadata").is_some() {
         revalidate_source(pve, cfg, plan).await?;
     }
+    require_create_capacity(pve, cfg, plan).await?;
     let mut progress = Progress::default();
     match create_steps(pve, cfg, plan, timing, observer, &mut progress).await {
         Ok(result) => Ok(result),

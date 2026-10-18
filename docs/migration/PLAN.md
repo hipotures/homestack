@@ -409,14 +409,16 @@ Zlecone przez właściciela 2026-10-13. W fazie 7 LUKS, LVM i Btrfs sprawdzono t
 
 **Bramka:** `--live`: każdy wygenerowany układ przechodzi powyższe kroki, a VM testowe są potem usunięte.
 
-### Faza 17: `migrate` sprawdza miejsce przed wyłączeniem VM (po całej implementacji)
+### Phase 17: disk capacity before migration shutdown or VM creation
 
-Zlecone przez właściciela 2026-10-13, z otwartego pytania fazy 8 (`phase-8.md`, sekcja 6).
+Implementation and verification: [phase-17.md](phase-17.md).
 
-- **Problem:** plan `migrate` nie sprawdza wolnego miejsca na docelowym storage. Python też tego nie robi. Przy braku miejsca Proxmox przerywa zadanie `qmigrate` dopiero po wyłączeniu VM, a serwer uruchamia ją z powrotem na nodzie źródłowym.
-- **Do zrobienia:** sprawdzić miejsce już w planie, przed wyłączeniem VM. Na przykład przez `GET /nodes/{node}/qemu/{vmid}/migrate?target=…` (lista lokalnych dysków i ograniczeń, mapowanie B6) i wolne miejsce storage docelowego. Brak miejsca kończy się odmową bez żadnej zmiany. To świadoma różnica wobec Pythona, zapisana w raporcie fazy.
+- Migration reads Proxmox's local disk inventory and compares the aggregate virtual disk size with target storage capacity during planning and immediately before shutdown.
+- At the owner's request, creation uses the same storage admission check for the Gold clone plus new home. Cross-node creation checks the temporary clone on the source as well as the final destination.
+- Insufficient or unreadable capacity refuses the operation before shutdown or cloning. The simulator/API regression suites and scoped clippy passed.
+- The isolated live refusal check passed: oversized creation refused in planning; a valid plan refused at apply after capacity decreased; no VM/disk allocated and cleanup verified. See [the result artifact](phase-17-results.json). The existing E2E lab has one node; the owner's other cluster is production and is not used for tests.
 
-**Bramka:** symulator: odmowa w planie, bez wyłączenia VM; `--live`: migracja VM testowej na storage z wystarczającym miejscem nadal przechodzi.
+**Gate:** simulator refusal without shutdown or disk allocation; isolated live refusal; successful live migration with sufficient capacity. The cross-node live regression has not been repeated with this change; phase 8 records the earlier successful migration.
 
 ---
 

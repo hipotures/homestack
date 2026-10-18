@@ -1,0 +1,46 @@
+{
+  "status": "passed",
+  "lab_run_id": "b2e4128c-29f4-4c56-9e9b-20e0352513c1",
+  "checks": {
+    "oversized_plan_refused": "Not enough free space on target storage hst-capacity-b2e4128c on pve1: requires 77313605632 bytes, available 17179869184 bytes",
+    "sufficient_capacity_plan": {
+      "target": {
+        "available_bytes": 17179869184,
+        "required_bytes": 8862564352
+      }
+    },
+    "capacity_changed_apply": {
+      "status": 409,
+      "error": {
+        "code": "operation_refused",
+        "message": "Not enough free space on target storage hst-capacity-b2e4128c on pve1: requires 8862564352 bytes, available 1048576 bytes",
+        "retryable": false
+      },
+      "job_created": false
+    },
+    "vm_allocated": false,
+    "disk_content_allocated": false
+  },
+  "server_binary_sha256": "39517c069618e7d3c894d487efb030224a2c6b5566b6011d5d57507ee8f1c0eb",
+  "source_sha256": {
+    "crates/hs-core/src/capacity.rs": "62914772395c52abef9c7183777dab2dbdd2a7969dc338ed5ce54459c70ea1de",
+    "crates/hs-core/src/migrate.rs": "864ed987732be3187d8216da73b67f279bc74dadb98cf418cc105d6e275856ba",
+    "crates/hs-core/src/lifecycle.rs": "e4c2e48d96c54c34fdfc6785a1e6402188003f38f32e9132736c5638178dc51e"
+  },
+  "cleanup": {
+    "preserved": {
+      "/nodes/pve1/qemu/100/config": {
+        "before_sha256": "5e84ecfbc1525862312ead642c5e9e2c0b46b18db547d72221114201bd49360c",
+        "after_sha256": "5e84ecfbc1525862312ead642c5e9e2c0b46b18db547d72221114201bd49360c"
+      },
+      "/nodes/pve1/lxc/101/config": {
+        "before_sha256": "d2e2f26d93fa0e4ea49bbf8639b3fff6690a650e0368635b71191b2528d4178f",
+        "after_sha256": "d2e2f26d93fa0e4ea49bbf8639b3fff6690a650e0368635b71191b2528d4178f"
+      }
+    },
+    "remaining_fixture_vmids": [],
+    "retained_base": false,
+    "errors": []
+  },
+  "cross_node_live_migration_repeated": false
+}

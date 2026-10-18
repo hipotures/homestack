@@ -501,23 +501,24 @@ async fn a_changed_workspace_is_refused_before_the_shutdown() -> TestResult {
 #[tokio::test]
 async fn a_failed_migration_starts_the_vm_again_on_the_source() -> TestResult {
     let (sim, pve) = cluster().await?;
-    let plan = plan(&pve, &request(203, TARGET, None)).await?;
+    let plan = plan(&pve, &request(200, TARGET, None)).await?;
+    sim.inject_fault(fault(&format!("post{{path=/nodes/{SOURCE}/qemu/200/migrate}}")))?;
     let error = apply(&pve, &plan, &NoObserver)
         .await
         .err()
         .ok_or("expected an error")?
         .to_string();
-    assert!(error.contains("not enough free space"), "{error}");
+    assert!(error.contains("injected failure"), "{error}");
     assert!(
-        error.ends_with("\nRecovery: VM 203 was restarted automatically on pve-example-1."),
+        error.ends_with("\nRecovery: VM 200 was restarted automatically on pve-example-1."),
         "{error}"
     );
-    assert_eq!(placed(&pve, 203).await?, (SOURCE.to_owned(), "running".to_owned()));
+    assert_eq!(placed(&pve, 200).await?, (SOURCE.to_owned(), "running".to_owned()));
     let calls = changes(&sim);
     assert!(
         calls
             .iter()
-            .any(|op| op.contains(&format!("/nodes/{SOURCE}/qemu/203/status/start"))),
+            .any(|op| op.contains(&format!("/nodes/{SOURCE}/qemu/200/status/start"))),
         "{calls:?}"
     );
     Ok(())
@@ -526,19 +527,20 @@ async fn a_failed_migration_starts_the_vm_again_on_the_source() -> TestResult {
 #[tokio::test]
 async fn a_failed_restart_on_the_source_is_reported() -> TestResult {
     let (sim, pve) = cluster().await?;
-    let plan = plan(&pve, &request(203, TARGET, None)).await?;
-    sim.inject_fault(fault(&format!("post{{path=/nodes/{SOURCE}/qemu/203/status/start}}")))?;
+    let plan = plan(&pve, &request(200, TARGET, None)).await?;
+    sim.inject_fault(fault(&format!("post{{path=/nodes/{SOURCE}/qemu/200/migrate}}")))?;
+    sim.inject_fault(fault(&format!("post{{path=/nodes/{SOURCE}/qemu/200/status/start}}")))?;
     let error = apply(&pve, &plan, &NoObserver)
         .await
         .err()
         .ok_or("expected an error")?
         .to_string();
-    assert!(error.contains("not enough free space"), "{error}");
+    assert!(error.contains("injected failure"), "{error}");
     assert!(
-        error.contains("\nRecovery: VM 203 is still on pve-example-1, but automatic restart failed: "),
+        error.contains("\nRecovery: VM 200 is still on pve-example-1, but automatic restart failed: "),
         "{error}"
     );
-    assert_eq!(placed(&pve, 203).await?, (SOURCE.to_owned(), "stopped".to_owned()));
+    assert_eq!(placed(&pve, 200).await?, (SOURCE.to_owned(), "stopped".to_owned()));
     Ok(())
 }
 
@@ -562,5 +564,109 @@ async fn a_failure_on_the_target_leaves_the_vm_there() -> TestResult {
             .any(|op| op.contains(&format!("/nodes/{SOURCE}/qemu/200/status/start"))),
         "{calls:?}"
     );
+    Ok(())
+}
+
+// Phase 17: capacity refusals must happen before shutting the source down.
+
+#[tokio::test]
+async fn insufficient_capacity_is_refused_during_planning_without_changes() -> TestResult {
+    let (sim, pve) = cluster().await?;
+    let before = vm_config(&pve, SOURCE, 203).await?;
+    sim.clear_ops();
+    let error = plan(&pve, &request(203, TARGET, None))
+        .await
+        .err()
+        .ok_or("expected refusal")?;
+    assert!(matches!(error, CoreError::Refused(_)), "{error}");
+    assert!(error.to_string().contains("Not enough free space"), "{error}");
+    assert!(changes(&sim).is_empty(), "{:?}", changes(&sim));
+    assert_eq!(placed(&pve, 203).await?, (SOURCE.to_owned(), "running".to_owned()));
+    assert_eq!(vm_config(&pve, SOURCE, 203).await?, before);
+    Ok(())
+}
+
+#[tokio::test]
+async fn capacity_counts_all_disks_and_accepts_the_exact_total() -> TestResult {
+    let (sim, pve) = cluster().await?;
+    let required = 36 * GIB + 4 * 1024 * 1024;
+    sim.set_storage_available(TARGET, "fast", required - 1)?;
+    let error = plan(&pve, &request(200, TARGET, Some("fast")))
+        .await
+        .err()
+        .ok_or("expected refusal")?;
+    assert!(
+        error.to_string().contains(&format!("requires {required} bytes")),
+        "{error}"
+    );
+    assert!(changes(&sim).is_empty());
+    sim.set_storage_available(TARGET, "fast", required)?;
+    let planned = plan(&pve, &request(200, TARGET, Some("fast"))).await?;
+    assert_eq!(
+        planned["capacity"],
+        json!({"required_bytes":required,"available_bytes":required})
+    );
+    apply(&pve, &planned, &NoObserver).await?;
+    assert_eq!(placed(&pve, 200).await?, (TARGET.to_owned(), "running".to_owned()));
+    Ok(())
+}
+
+#[tokio::test]
+async fn capacity_is_checked_again_after_confirmation_before_shutdown() -> TestResult {
+    let (sim, pve) = cluster().await?;
+    let planned = plan(&pve, &request(200, TARGET, Some("fast"))).await?;
+    sim.set_storage_available(TARGET, "fast", 0)?;
+    sim.clear_ops();
+    let error = apply(&pve, &planned, &NoObserver)
+        .await
+        .err()
+        .ok_or("expected refusal")?;
+    assert!(error.to_string().contains("available 0 bytes"), "{error}");
+    assert!(changes(&sim).is_empty(), "{:?}", changes(&sim));
+    assert_eq!(placed(&pve, 200).await?, (SOURCE.to_owned(), "running".to_owned()));
+    Ok(())
+}
+
+#[tokio::test]
+async fn an_unreadable_capacity_is_not_permission_to_shutdown() -> TestResult {
+    let (sim, pve) = cluster().await?;
+    let planned = plan(&pve, &request(200, TARGET, None)).await?;
+    sim.inject_fault(fault(&format!("get{{path=/nodes/{TARGET}/storage/local-lvm/status}}")))?;
+    sim.clear_ops();
+    assert!(apply(&pve, &planned, &NoObserver).await.is_err());
+    assert!(changes(&sim).is_empty());
+    assert_eq!(placed(&pve, 200).await?, (SOURCE.to_owned(), "running".to_owned()));
+    Ok(())
+}
+
+#[tokio::test]
+async fn missing_disk_sizes_are_refused_and_shared_disks_are_not_counted() -> TestResult {
+    let mut spec = ClusterSpec::from_scenario(CLUSTER)?;
+    spec.volumes.retain(|v| v.volid != "local-lvm:vm-200-cloudinit");
+    let sim = PveSim::start(spec).await?;
+    let pve = client(&sim, TOKEN)?;
+    let error = plan(&pve, &request(200, TARGET, None))
+        .await
+        .err()
+        .ok_or("expected refusal")?;
+    assert!(
+        error.to_string().contains("Cannot determine migration disk size"),
+        "{error}"
+    );
+    assert!(changes(&sim).is_empty());
+
+    let mut spec = ClusterSpec::from_scenario(CLUSTER)?;
+    let vm = spec.vms.iter_mut().find(|vm| vm.vmid == 200).ok_or("missing VM")?;
+    let root = vm
+        .config
+        .get("scsi0")
+        .and_then(|value| value.as_str())
+        .ok_or("missing root")?;
+    vm.config.insert("scsi0".to_owned(), format!("{root},shared=1").into());
+    let sim = PveSim::start(spec).await?;
+    let pve = client(&sim, TOKEN)?;
+    let planned = plan(&pve, &request(200, TARGET, None)).await?;
+    assert_eq!(planned["capacity"]["required_bytes"], 20 * GIB + 4 * 1024 * 1024);
+    assert!(changes(&sim).is_empty());
     Ok(())
 }

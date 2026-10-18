@@ -45,7 +45,10 @@ pub fn router(state: Shared) -> Router {
         .route("/nodes/{node}/storage/{storage}/content/{volume}", delete(volume_free))
         .route("/nodes/{node}/qemu/{vmid}", delete(vm_destroy))
         .route("/nodes/{node}/qemu/{vmid}/clone", post(vm_clone))
-        .route("/nodes/{node}/qemu/{vmid}/migrate", post(vm_migrate))
+        .route(
+            "/nodes/{node}/qemu/{vmid}/migrate",
+            get(vm_migrate_preflight).post(vm_migrate),
+        )
         .route(
             "/nodes/{node}/qemu/{vmid}/config",
             get(vm_config).put(vm_config_update).post(vm_config_post),
@@ -1937,6 +1940,55 @@ async fn vm_clone(
         spec.vms.push(newid);
     }
     task(&mut state, &node_name, "qmclone", source, &token.id)
+}
+
+/// Read-only migration disk inventory. Shared volumes do not move.
+async fn vm_migrate_preflight(
+    State(state): State<Shared>,
+    request_token: Option<axum::Extension<TokenSpec>>,
+    Path((node, vmid)): Path<(String, String)>,
+) -> Response {
+    let state = lock(&state);
+    let token = token(request_token);
+    let vm = match reach_vm(&state, token.as_ref(), &node, &vmid, &["VM.Migrate"]) {
+        Ok(vm) => vm,
+        Err(failure) => return failure.into_response(),
+    };
+    let mut seen = std::collections::BTreeSet::new();
+    let disks: Vec<Value> = vm
+        .config
+        .iter()
+        .filter_map(|(key, value)| {
+            if !is_disk_key(key) {
+                return None;
+            }
+            let volume = config_volume(value)?;
+            let value = value.as_str()?;
+            let (storage, _) = volume.split_once(':')?;
+            if !seen.insert(volume)
+                || value.split(',').any(|option| option == "shared=1")
+                || state.storages.iter().any(|s| s.storage == storage && s.shared)
+            {
+                return None;
+            }
+            let mut disk = json!({
+                "volid": volume,
+                "cdrom": u8::from(value.split(',').any(|option| option == "media=cdrom")),
+                "is_cloudinit": u8::from(volume.contains("cloudinit")),
+                "is_unused": u8::from(key.starts_with("unused")),
+            });
+            if let Some(size) = state
+                .volumes
+                .iter()
+                .find(|v| v.node == vm.node && v.volid == volume)
+                .map(|v| v.size)
+            {
+                disk["size"] = json!(size);
+            }
+            Some(disk)
+        })
+        .collect();
+    data(json!({"running": u8::from(vm.status == VmState::Running), "local_disks": disks, "local_resources": []}))
 }
 
 /// `POST /nodes/{node}/qemu/{vmid}/migrate`, offline, with `target`,

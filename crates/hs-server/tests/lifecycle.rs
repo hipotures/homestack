@@ -394,3 +394,33 @@ async fn gold_power_runs_through_the_vm_operations() -> TestResult {
     assert_eq!(status, StatusCode::CONFLICT);
     Ok(())
 }
+
+#[tokio::test]
+async fn oversized_create_refuses_before_allocating_a_vm() -> TestResult {
+    let server = start().await?;
+    server._sim.clear_ops();
+    let (status, body) = server
+        .plan(
+            "workspace.create",
+            json!({
+                "vmid": 240, "name": "hst-too-large", "home_size": "2T"
+            }),
+        )
+        .await?;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["error"]["code"], "operation_refused");
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("Not enough free space")
+    );
+    assert!(
+        server
+            ._sim
+            .ops()
+            .iter()
+            .all(|op| op.name == "get" || op.name == "guest_ping")
+    );
+    Ok(())
+}

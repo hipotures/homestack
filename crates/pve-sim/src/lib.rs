@@ -112,6 +112,20 @@ impl PveSim {
         self.lock().inject_fault(fault).map_err(SimError::Scenario)
     }
 
+    /// Change free storage space to model another allocation between plan and apply.
+    pub fn set_storage_available(&self, node: &str, storage: &str, available: u64) -> Result<(), SimError> {
+        let mut state = self.lock();
+        let item = state
+            .nodes
+            .values_mut()
+            .find(|n| n.name.as_str() == node)
+            .and_then(|n| n.storages.iter_mut().find(|s| s.storage == storage))
+            .ok_or_else(|| SimError::Scenario(format!("Storage {storage} is not on node {node}")))?;
+        item.avail = available;
+        item.used = item.total.saturating_sub(available);
+        Ok(())
+    }
+
     /// Leave the deletion of `key` of VM `vmid` pending, as a config change
     /// cut off between writing and applying it does (`force`: physical).
     pub fn set_pending_delete(&self, vmid: u32, key: &str, force: bool) -> Result<(), SimError> {
