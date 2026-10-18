@@ -836,6 +836,43 @@ fn a_herdr_access_that_connected_is_chosen_again_with_its_tab() {
 }
 
 #[test]
+fn herdr_tab_filter_defaults_to_pve_and_can_be_edited_live() {
+    let mut fixture = app();
+    fixture.app.open_install(Mode::Install, false);
+    assert_eq!(press(&mut fixture.app, KeyCode::Right), Some(Request::HerdrTabs));
+    fixture.app.set_herdr_tabs(vec![
+        ("PVE/pve1".to_owned(), "root@pve1:~#".to_owned()),
+        ("PVE/pve2".to_owned(), "root@pve2:~#".to_owned()),
+        ("ROOT/1".to_owned(), "root@pve3:~#".to_owned()),
+    ]);
+    let text = screen(&render(&fixture.app, 120, 36));
+    assert!(text.contains("Filter") && text.contains("PVE/pve1"), "{text}");
+    assert!(!text.contains("ROOT/1"), "default pve filter hides ROOT/1:\n{text}");
+
+    for _ in 0..3 {
+        press(&mut fixture.app, KeyCode::Backspace);
+    }
+    let text = screen(&render(&fixture.app, 120, 36));
+    assert!(
+        text.contains("PVE/pve1") && text.contains("ROOT/1"),
+        "empty filter shows all tabs:\n{text}"
+    );
+
+    type_text(&mut fixture.app, "root");
+    let text = screen(&render(&fixture.app, 120, 36));
+    assert!(
+        text.contains("‹ ROOT/1  root@pve3:~# ›") && !text.contains("PVE/pve1"),
+        "{text}"
+    );
+    match press(&mut fixture.app, KeyCode::Enter) {
+        Some(Request::Install(Command::Connect { method, target })) => {
+            assert_eq!((method, target.as_str()), (Method::Herdr, "ROOT/1"));
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
 fn installer_texts_do_not_use_ellipsis() {
     let mut fixture = app();
     fixture.app.open_install(Mode::Install, true);

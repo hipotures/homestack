@@ -246,11 +246,30 @@ fn matching_is_exact() {
 }
 
 #[test]
-fn only_the_pve_tabs_are_offered_with_their_prompt() {
+fn single_pane_tabs_are_offered_with_their_prompt_and_filtered_by_mask() {
     let fake = Fake::standard();
     let tabs = root_herdr::tabs(fake.as_ref()).expect("tabs");
     let shown: Vec<(&str, &str)> = tabs.iter().map(|tab| (tab.name.as_str(), tab.title.as_str())).collect();
-    // ROOT/1 has no "pve" in its name; the last line, not the terminal
-    // title, says who is logged in.
-    assert_eq!(shown, [("PVE/pve1", "root@pve1:~#"), ("PVE/pve2", "root@pve1:~#")]);
+    // Single-pane tabs across workspaces are returned with their last line
+    // (prompt), while multi-pane tabs are omitted.
+    assert_eq!(
+        shown,
+        [
+            ("PVE/pve1", "root@pve1:~#"),
+            ("PVE/pve2", "root@pve1:~#"),
+            ("ROOT/1", "root@pve1:~#"),
+        ]
+    );
+    let default_filtered: Vec<&str> = tabs
+        .iter()
+        .filter(|tab| root_herdr::matches_tab(&tab.name, root_herdr::DEFAULT_TAB_FILTER))
+        .map(|tab| tab.name.as_str())
+        .collect();
+    assert_eq!(default_filtered, ["PVE/pve1", "PVE/pve2"]);
+    let root_filtered: Vec<&str> = tabs
+        .iter()
+        .filter(|tab| root_herdr::matches_tab(&tab.name, "root"))
+        .map(|tab| tab.name.as_str())
+        .collect();
+    assert_eq!(root_filtered, ["ROOT/1"]);
 }

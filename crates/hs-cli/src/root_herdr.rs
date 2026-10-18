@@ -359,9 +359,15 @@ pub struct Tab {
     pub title: String,
 }
 
-/// What a tab's name must contain to be offered (case does not matter).
-/// Fixed for now; to be a setting (see `docs/TODO.md`).
-const TAB_MASK: &str = "pve";
+/// The default mask for Herdr tab names (`WORKSPACE/TAB`, case-insensitive).
+pub const DEFAULT_TAB_FILTER: &str = "pve";
+
+/// Whether a Herdr tab `name` (`WORKSPACE/TAB`) matches `filter` (case-insensitive substring).
+#[must_use]
+pub fn matches_tab(name: &str, filter: &str) -> bool {
+    let mask = filter.trim().to_lowercase();
+    mask.is_empty() || name.to_lowercase().contains(&mask)
+}
 
 /// The last line of `pane` that is not empty; `None` when it cannot be read.
 fn last_line(system: &dyn System, pane: &str) -> Option<String> {
@@ -379,7 +385,7 @@ fn last_line(system: &dyn System, pane: &str) -> Option<String> {
     )
 }
 
-/// Every tab that has exactly one pane and `pve` in its name.
+/// Every tab that has exactly one pane, with its `WORKSPACE/TAB` name and prompt/title.
 pub fn tabs(system: &dyn System) -> Result<Vec<Tab>, AppError> {
     let workspaces = herdr_json(system, &["workspace", "list"])?;
     let tabs = herdr_json(system, &["tab", "list"])?;
@@ -400,9 +406,6 @@ pub fn tabs(system: &dyn System) -> Result<Vec<Tab>, AppError> {
         let tab_id = text(tab, "tab_id");
         let in_tab: Vec<&Value> = all_panes.iter().filter(|pane| text(pane, "tab_id") == tab_id).collect();
         let name = format!("{}/{}", label_of(&text(tab, "workspace_id")), text(tab, "label"));
-        if !name.to_lowercase().contains(TAB_MASK) {
-            continue;
-        }
         if let [pane] = in_tab.as_slice() {
             let title = last_line(system, &text(pane, "pane_id"))
                 .filter(|line| !line.is_empty())

@@ -212,6 +212,12 @@ pub struct Install {
     /// Herdr tabs: name and title.
     pub tabs: Vec<(String, String)>,
     pub tab: usize,
+    /// Case-insensitive substring filter for Herdr `WORKSPACE/TAB` names (defaults to `pve`).
+    pub tab_filter: String,
+    /// Where typing goes in `tab_filter`, in characters.
+    pub tab_caret: usize,
+    /// Whether the user has edited `tab_filter` in this session.
+    pub tab_filter_edited: bool,
     /// Access: 2 the method (first), 0 the host (or tab).
     pub field: usize,
     /// What is being waited for.
@@ -253,6 +259,8 @@ impl Install {
     }
     #[must_use]
     pub fn new(mode: Mode, first_start: bool) -> Self {
+        let tab_filter = crate::root_herdr::DEFAULT_TAB_FILTER.to_owned();
+        let tab_caret = tab_filter.chars().count();
         Self {
             mode,
             stage: Stage::Access,
@@ -262,6 +270,9 @@ impl Install {
             caret: 0,
             tabs: Vec::new(),
             tab: 0,
+            tab_filter,
+            tab_caret,
+            tab_filter_edited: false,
             field: 2,
             busy: None,
             error: None,
@@ -307,6 +318,43 @@ impl Install {
         self.settings.len() + usize::from(self.domain.is_some())
     }
 
+    /// The Herdr tabs matching `tab_filter`.
+    #[must_use]
+    pub fn matching_tabs(&self) -> Vec<&(String, String)> {
+        self.tabs
+            .iter()
+            .filter(|(name, _)| crate::root_herdr::matches_tab(name, &self.tab_filter))
+            .collect()
+    }
+
+    /// The currently selected Herdr tab among `matching_tabs`.
+    #[must_use]
+    pub fn selected_tab(&self) -> Option<&(String, String)> {
+        self.matching_tabs().get(self.tab).copied()
+    }
+
+    /// Populate available Herdr tabs and select `kept` if present.
+    pub fn set_tabs(&mut self, tabs: Vec<(String, String)>, kept: Option<&str>) {
+        self.tabs = tabs;
+        if let Some(kept) = kept
+            && self.tabs.iter().any(|(name, _)| name == kept)
+            && !crate::root_herdr::matches_tab(kept, &self.tab_filter)
+        {
+            self.tab_filter.clear();
+            self.tab_caret = 0;
+        } else if !self.tab_filter_edited
+            && !self.tab_filter.is_empty()
+            && !self.tabs.is_empty()
+            && self.matching_tabs().is_empty()
+        {
+            self.tab_filter.clear();
+            self.tab_caret = 0;
+        }
+        self.tab = kept
+            .and_then(|kept| self.matching_tabs().iter().position(|(name, _)| name == kept))
+            .unwrap_or(0);
+    }
+
     /// The access target: the host, or the chosen Herdr tab.
     fn target(&self) -> Option<String> {
         match self.method {
@@ -314,7 +362,7 @@ impl Install {
                 let host = self.host.trim();
                 (!host.is_empty()).then(|| host.to_owned())
             }
-            Method::Herdr => self.tabs.get(self.tab).map(|(name, _)| name.clone()),
+            Method::Herdr => self.selected_tab().map(|(name, _)| name.clone()),
         }
     }
 
@@ -441,9 +489,22 @@ impl Install {
             }
             // The host (or tab) and the method.
             KeyCode::Tab | KeyCode::BackTab => self.field = if self.field == 0 { 2 } else { 0 },
-            // Method is the row above the host.
-            KeyCode::Up => self.field = 2,
-            KeyCode::Down => self.field = 0,
+            // Method is the row above the host/pane.
+            KeyCode::Up => {
+                if self.method == Method::Herdr && self.field == 0 && self.tab > 0 {
+                    self.tab -= 1;
+                } else {
+                    self.field = 2;
+                }
+            }
+            KeyCode::Down => {
+                if self.method == Method::Herdr && self.field == 0 {
+                    let last = self.matching_tabs().len().saturating_sub(1);
+                    self.tab = (self.tab + 1).min(last);
+                } else {
+                    self.field = 0;
+                }
+            }
             KeyCode::Enter => {
                 let Some(target) = self.target() else {
                     self.error = Some(match self.method {
@@ -472,12 +533,45 @@ impl Install {
                 }
             }
             KeyCode::Left | KeyCode::Right if self.method == Method::Herdr && self.field == 0 => {
-                let count = self.tabs.len().max(1);
+                let count = self.matching_tabs().len().max(1);
                 self.tab = if matches!(code, KeyCode::Right | KeyCode::Down) {
                     (self.tab + 1) % count
                 } else {
                     (self.tab + count - 1) % count
                 };
+            }
+            KeyCode::Char(c) if self.method == Method::Herdr => {
+                self.field = 0;
+                self.tab_filter_edited = true;
+                let at = Self::char_byte_at(&self.tab_filter, self.tab_caret);
+                self.tab_filter.insert(at, c);
+                self.tab_caret += 1;
+                self.tab = 0;
+            }
+            KeyCode::Backspace if self.method == Method::Herdr => {
+                self.field = 0;
+                self.tab_filter_edited = true;
+                if self.tab_caret > 0 {
+                    self.tab_caret -= 1;
+                    let at = Self::char_byte_at(&self.tab_filter, self.tab_caret);
+                    self.tab_filter.remove(at);
+                    self.tab = 0;
+                }
+            }
+            KeyCode::Delete if self.method == Method::Herdr => {
+                self.field = 0;
+                self.tab_filter_edited = true;
+                if self.tab_caret < self.tab_filter.chars().count() {
+                    let at = Self::char_byte_at(&self.tab_filter, self.tab_caret);
+                    self.tab_filter.remove(at);
+                    self.tab = 0;
+                }
+            }
+            KeyCode::Home if self.method == Method::Herdr && self.field == 0 => {
+                self.tab_caret = 0;
+            }
+            KeyCode::End if self.method == Method::Herdr && self.field == 0 => {
+                self.tab_caret = self.tab_filter.chars().count();
             }
             KeyCode::Char(c) if self.field == 0 && self.method == Method::Ssh => {
                 let at = self.byte_at(self.caret);
@@ -510,12 +604,14 @@ impl Install {
         (false, None)
     }
 
+    /// The byte index of character `index` of `text`.
+    fn char_byte_at(text: &str, index: usize) -> usize {
+        text.char_indices().nth(index).map_or(text.len(), |(at, _)| at)
+    }
+
     /// The byte index of character `index` of the host.
     fn byte_at(&self, index: usize) -> usize {
-        self.host
-            .char_indices()
-            .nth(index)
-            .map_or(self.host.len(), |(at, _)| at)
+        Self::char_byte_at(&self.host, index)
     }
 
     fn after_check(&mut self) -> Option<Request> {

@@ -347,6 +347,10 @@ impl App {
             host.clone_into(&mut install.host);
             install.caret = install.host.chars().count();
         }
+        if let Some(filter) = kept("install_tab_filter") {
+            filter.clone_into(&mut install.tab_filter);
+            install.tab_caret = install.tab_filter.chars().count();
+        }
         let herdr = kept("install_method") == Some("herdr");
         if herdr {
             install.method = super::install::Method::Herdr;
@@ -400,10 +404,7 @@ impl App {
     pub fn set_herdr_tabs(&mut self, tabs: Vec<(String, String)>) {
         if let Some(install) = self.install.as_mut() {
             let kept = self.preferences.table.get("install_tab").and_then(toml::Value::as_str);
-            install.tab = kept
-                .and_then(|kept| tabs.iter().position(|(name, _)| name == kept))
-                .unwrap_or(0);
-            install.tabs = tabs;
+            install.set_tabs(tabs, kept);
         }
     }
 
@@ -786,9 +787,13 @@ impl App {
                 "ssh"
             }
             super::install::Method::Herdr => {
-                if let Some((name, _)) = install.tabs.get(install.tab) {
+                if let Some((name, _)) = install.selected_tab() {
                     table.insert("install_tab".to_owned(), toml::Value::String(name.clone()));
                 }
+                table.insert(
+                    "install_tab_filter".to_owned(),
+                    toml::Value::String(install.tab_filter.clone()),
+                );
                 "herdr"
             }
         };

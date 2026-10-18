@@ -253,8 +253,34 @@ fn access(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
             );
         }
         Method::Herdr => {
+            write(buf, x, y, 10, "Filter", text);
+            let cursor = if install.field == 0 { "▏" } else { " " };
+            let before: String = install.tab_filter.chars().take(install.tab_caret).collect();
+            let after: String = install.tab_filter.chars().skip(install.tab_caret).collect();
+            let filter_box = format!(
+                "[ {before}{cursor}{after}{} ]",
+                " ".repeat(20usize.saturating_sub(install.tab_filter.chars().count()))
+            );
+            write(
+                buf,
+                x + 10,
+                y,
+                width.saturating_sub(10),
+                &filter_box,
+                if install.field == 0 { focus } else { text },
+            );
+            write(
+                buf,
+                x + 36,
+                y,
+                width.saturating_sub(36),
+                "type to filter WORKSPACE/TAB (empty shows all)",
+                muted,
+            );
+            y += 2;
             write(buf, x, y, 10, "Pane", text);
-            let line = install.tabs.get(install.tab).map_or_else(
+            let matching = install.matching_tabs();
+            let line = matching.get(install.tab).map_or_else(
                 || "‹ no matching Herdr tabs ›".to_owned(),
                 |(name, title)| format!("‹ {name}  {title} ›"),
             );
@@ -269,14 +295,41 @@ fn access(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
             write(
                 buf,
                 x + 10,
-                y + 2,
+                y + 1,
                 width.saturating_sub(10),
                 "A Herdr tab whose shell is root on a node, at its prompt.",
                 muted,
             );
+            y += 3;
+            let room = inner.bottom().saturating_sub(y + 2) as usize;
+            if room > 0 && !matching.is_empty() {
+                let start = install
+                    .tab
+                    .saturating_sub(room / 2)
+                    .min(matching.len().saturating_sub(room));
+                for (offset, (name, title)) in matching.iter().skip(start).take(room).enumerate() {
+                    let index = start + offset;
+                    let picked = index == install.tab;
+                    let mark = if picked { "›" } else { " " };
+                    let row_style = if picked && install.field == 0 {
+                        focus
+                    } else if picked {
+                        text
+                    } else {
+                        muted
+                    };
+                    let entry = format!("{mark} {name:<18}  {title}");
+                    write(buf, x + 10, y, width.saturating_sub(10), &entry, row_style);
+                    y += 1;
+                }
+            }
         }
     }
-    y += 4;
+    if install.method == Method::Ssh {
+        y += 4;
+    } else {
+        y += 1;
+    }
     if let Some(error) = &install.error {
         paragraph(buf, inner, y, error, text.fg(palette.error));
     }
