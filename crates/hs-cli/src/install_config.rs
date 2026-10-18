@@ -7,6 +7,8 @@ use toml::{Table, Value};
 
 use crate::AppError;
 
+pub const KEY_OPTION: &str = "--workspace-keys";
+
 const FIELDS: &[(&str, &str, &str, &str, &str)] = &[
     ("config-root-disk", "root", "disk", "Root disk slot", "scsi0"),
     ("config-home-disk", "home", "disk", "Home disk slot", "scsi1"),
@@ -33,6 +35,62 @@ pub struct Input {
 }
 
 impl Input {
+    pub fn key_question(&self, home: &Path) -> Question {
+        let configured: Vec<String> = self
+            .document
+            .get("workspace_ssh")
+            .and_then(Value::as_table)
+            .and_then(|table| table.get("identity_files"))
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .map(str::to_owned)
+            .collect();
+        let mut choices: Vec<Choice> = configured
+            .iter()
+            .map(|value| Choice {
+                value: value.clone(),
+                detail: "Configured identity".to_owned(),
+            })
+            .collect();
+        let defaults = (0..choices.len()).collect();
+        for (public, name) in crate::identity::public_keys(home) {
+            let Ok((_, identity)) = crate::identity::private_key_for(home, Path::new(&public)) else {
+                continue;
+            };
+            if let Some(existing) = choices
+                .iter_mut()
+                .find(|choice| crate::expand_home(&choice.value, home) == crate::expand_home(&identity, home))
+            {
+                existing.detail = name;
+            } else {
+                choices.push(Choice {
+                    value: identity,
+                    detail: name,
+                });
+            }
+        }
+        Question {
+            option: KEY_OPTION, title: "Workspace SSH keys".to_owned(),
+            note: "Select local identities used to log in to workspaces. Private keys stay on this desktop. This selection does not upload keys to Gold.".to_owned(),
+            multiple: true, choices, defaults,
+        }
+    }
+
+    pub fn identities(&mut self, identities: Vec<String>) {
+        let table = self
+            .document
+            .entry("workspace_ssh")
+            .or_insert_with(|| Value::Table(Table::new()));
+        if let Some(table) = table.as_table_mut() {
+            table.insert(
+                "identity_files".into(),
+                Value::Array(identities.into_iter().map(Value::String).collect()),
+            );
+        }
+    }
+
     pub fn load(path: &Path) -> Result<Self, AppError> {
         let text = match std::fs::read_to_string(path) {
             Ok(text) => text,

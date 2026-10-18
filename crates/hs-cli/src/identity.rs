@@ -213,3 +213,31 @@ pub fn key_names(home: &Path, text: &str) -> Vec<String> {
     }
     names
 }
+
+/// Public keys in the desktop SSH directory, named by their comments.
+pub fn public_keys(home: &Path) -> Vec<(String, String)> {
+    let Ok(entries) = std::fs::read_dir(home.join(".ssh")) else {
+        return Vec::new();
+    };
+    let mut keys: Vec<String> = entries
+        .filter_map(Result::ok)
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .filter(|name| name.ends_with(".pub"))
+        .map(|name| format!("~/.ssh/{name}"))
+        .collect();
+    keys.sort();
+    keys.into_iter()
+        .map(|path| {
+            let text = std::fs::read_to_string(crate::expand_home(&path, home)).unwrap_or_default();
+            let name = text.split_whitespace().skip(2).collect::<Vec<_>>().join(" ");
+            (
+                path,
+                if name.is_empty() {
+                    "Unnamed key".to_owned()
+                } else {
+                    name
+                },
+            )
+        })
+        .collect()
+}

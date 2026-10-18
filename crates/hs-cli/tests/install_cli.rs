@@ -1225,6 +1225,10 @@ async fn first_install_collects_workspace_settings_without_an_input_file() {
     desktop_files(&cluster);
     let input_path = cluster.token_dir().join("config.toml");
     std::fs::remove_file(&input_path).expect("remove the seed configuration");
+    let ssh = cluster.home.join(".ssh");
+    std::fs::create_dir_all(&ssh).unwrap();
+    std::fs::write(ssh.join("install-key"), "private fixture").unwrap();
+    std::fs::write(ssh.join("install-key.pub"), "ssh-ed25519 AAAA installer-key\n").unwrap();
     // A workspace in no pool: the review names it.
     let vms = cluster.read("vms.tsv").replace("101\tpve1\t", "101\tpve3\t");
     cluster.write("vms.tsv", &format!("{vms}240\tpve1\tws-one\thomestack-ws\t\t\n"));
@@ -1306,6 +1310,9 @@ async fn first_install_collects_workspace_settings_without_an_input_file() {
                     _ => text.as_str(),
                 };
                 hs_cli::install_flow::Answer::Text(value.to_owned())
+            } else if setting.title == "Workspace SSH keys" {
+                assert_eq!(setting.choices.len(), 1);
+                hs_cli::install_flow::Answer::Picked(vec![0])
             } else {
                 hs_cli::install_flow::Answer::Picked(setting.picked.clone())
             }
@@ -1348,6 +1355,12 @@ async fn first_install_collects_workspace_settings_without_an_input_file() {
             .settings
             .iter()
             .any(|setting| setting.title == "Workspace user" && setting.text.as_deref() == Some("engineer"))
+    );
+    assert!(
+        rescanned
+            .settings
+            .iter()
+            .any(|setting| setting.title == "Workspace SSH keys" && setting.picked == [0])
     );
     assert!(!input_path.exists(), "rescanning wrote install settings");
     commands
@@ -1399,7 +1412,7 @@ async fn first_install_collects_workspace_settings_without_an_input_file() {
     assert!(client_path.exists(), "client.toml was not written");
     let client = hs_config::client::ClientConfig::parse(&std::fs::read_to_string(&client_path).unwrap()).unwrap();
     assert_eq!(client.workspace_ssh.user, "engineer");
-    assert!(client.workspace_ssh.identity_files.is_empty());
+    assert_eq!(client.workspace_ssh.identity_files, ["~/.ssh/install-key"]);
     let server =
         hs_model::config::Config::parse(&std::fs::read_to_string(cluster.token_dir().join("server.toml")).unwrap())
             .unwrap();

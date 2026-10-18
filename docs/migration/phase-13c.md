@@ -294,7 +294,10 @@ size, workspace IP prefix, network prefix length, gateway, DNS servers,
 guest user name/UID/GID and snippet directory. Network addresses and guest
 user name start empty without a seed; technical disk defaults and numeric
 IDs are shown for confirmation. Gold, storage, bridge and domain use the
-existing choices. Workspace identities are optional.
+existing choices. The optional Workspace SSH keys selector lists local public
+keys with a matching private identity, preserves configured identities and
+saves the selection to the client configuration. It does not upload keys
+to Gold.
 
 `config.toml` is optional initial input. Answers are kept in the private
 draft, preserved by F5, validated in the review, and saved only after

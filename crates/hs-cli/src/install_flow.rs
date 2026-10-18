@@ -109,6 +109,7 @@ impl Session {
         };
         if want_servers {
             questions.extend(input.questions());
+            questions.push(input.key_question(&files.home));
         }
         let kept = load_draft(&draft_path(&settings));
         apply_draft(&mut questions, &kept);
@@ -150,6 +151,7 @@ impl Session {
         let mut questions = hs_install::questions(self.root.as_mut(), &self.access, &self.settings).map_err(failure)?;
         if self.want_servers {
             questions.extend(self.input.questions());
+            questions.push(self.input.key_question(&self.files.home));
         }
         for question in &mut questions {
             if crate::install_config::is_text(question) {
@@ -217,6 +219,18 @@ impl Session {
     /// the review of it. Nothing is changed.
     pub fn review(&mut self, answers: &[Answer], domain: Option<&str>) -> Review {
         for (question, answer) in self.questions.iter().zip(answers) {
+            if question.option == crate::install_config::KEY_OPTION {
+                if let Answer::Picked(picked) = answer {
+                    self.input.identities(
+                        picked
+                            .iter()
+                            .filter_map(|index| question.choices.get(*index))
+                            .map(|choice| choice.value.clone())
+                            .collect(),
+                    );
+                }
+                continue;
+            }
             if let Answer::Text(text) = answer {
                 self.input.answer(question.option, text);
             }

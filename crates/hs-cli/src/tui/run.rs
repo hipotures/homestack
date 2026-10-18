@@ -1105,29 +1105,9 @@ fn open_ssh(app: &mut App, vmid: u32, screen: &mut Screen, reader: &Reader) {
 
 /// The public keys in `~/.ssh`, as `~/.ssh/NAME.pub`, sorted.
 fn public_keys(home: &std::path::Path) -> Vec<super::action::KeyFile> {
-    let Ok(entries) = std::fs::read_dir(home.join(".ssh")) else {
-        return Vec::new();
-    };
-    let mut keys: Vec<String> = entries
-        .filter_map(Result::ok)
-        .filter_map(|entry| entry.file_name().into_string().ok())
-        .filter(|name| name.ends_with(".pub"))
-        .map(|name| format!("~/.ssh/{name}"))
-        .collect();
-    keys.sort();
-    keys.into_iter()
-        .map(|path| {
-            let text = std::fs::read_to_string(crate::expand_home(&path, home)).unwrap_or_default();
-            let name = text.split_whitespace().skip(2).collect::<Vec<_>>().join(" ");
-            super::action::KeyFile {
-                name: if name.is_empty() {
-                    "Unnamed key".to_owned()
-                } else {
-                    name
-                },
-                path,
-            }
-        })
+    crate::identity::public_keys(home)
+        .into_iter()
+        .map(|(path, name)| super::action::KeyFile { path, name })
         .collect()
 }
 
