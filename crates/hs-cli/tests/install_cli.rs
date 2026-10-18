@@ -687,9 +687,7 @@ impl Servers for FakeServers {
 /// the client token, the OVH key.
 fn desktop_files(cluster: &Cluster) {
     let dir = cluster.token_dir();
-    let example =
-        std::fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../python/config.example.toml"))
-            .expect("example configuration");
+    let example = include_str!("../../../config.minimal.toml");
     std::fs::write(dir.join("config.toml"), example).expect("config.toml");
     for (name, text) in [("api-token", API_TOKEN), ("ovh-dns", "OVH_AK=a\nOVH_AS=b\nOVH_CK=c\n")] {
         std::fs::write(dir.join(name), text).expect("file");

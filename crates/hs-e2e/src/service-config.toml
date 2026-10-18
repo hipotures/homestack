@@ -1,4 +1,4 @@
-# Minimal installation input for the isolated lab, with its reference Gold.
+# Required installation fields plus the lab's reference Gold and SSH key.
 version = 1
 
 [node]
