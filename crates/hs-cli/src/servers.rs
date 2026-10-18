@@ -350,14 +350,18 @@ pub fn plan_servers(
             ));
             continue;
         }
-        let is_server = |kind: &str, pool: &str| kind == "lxc" && pool == SERVICE_POOL;
+        // Adoption has already validated the guest's HomeStack server tag.
+        // Deployment follows the pool changes in this same confirmed plan.
+        let is_server = |id: u32, kind: &str, pool: &str| {
+            kind == "lxc" && (pool == SERVICE_POOL || pool.is_empty() && settings.adopt.contains(&id))
+        };
         let mut replaced = "";
         for (id, (guest, kind, pool)) in &plan.cluster.guests {
-            if *id == ctid && *guest == name && is_server(kind, pool) {
+            if *id == ctid && *guest == name && is_server(*id, kind, pool) {
                 replaced = "  (replaced)";
             } else if *id == ctid {
                 out.problems.push(format!("CT {ctid} for {fqdn} is taken by {guest}"));
-            } else if *guest == name && is_server(kind, pool) {
+            } else if *guest == name && is_server(*id, kind, pool) {
                 out.problems.push(format!(
                     "{name} is CT {id}, but its address gives CT {ctid}: remove CT {id} first \
                      (homestack-deploy --config <deploy.toml> remove --only {name} --yes)"

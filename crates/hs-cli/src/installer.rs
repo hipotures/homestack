@@ -454,6 +454,15 @@ fn finish(
         .map(|done| done.token_files.iter().map(|file| file.display().to_string()).collect())
         .unwrap_or_default();
     let code = i32::from(!plan.node_errors.is_empty());
+    let client_path = install_flow::client_path(args.config.as_deref(), &ctx.home, ctx.config_home.as_deref());
+    if let Some(archived) = install_flow::retire_client(plan, &client_path)?
+        && !args.json
+    {
+        ctx.console.out(&format!(
+            "Inactive client configuration kept as {}\n",
+            archived.display()
+        ));
+    }
     if args.json {
         emit(
             ctx,

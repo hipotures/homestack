@@ -342,6 +342,26 @@ pub async fn deploy(
     Ok(())
 }
 
+/// Retire the active connection after a successful production uninstall.
+/// Saved settings, deployment files and credentials remain available.
+pub fn retire_client(plan: &Plan, path: &Path) -> Result<Option<PathBuf>, AppError> {
+    if plan.command != Install::Uninstall || plan.settings.test || !plan.node_errors.is_empty() {
+        return Ok(None);
+    }
+    let mut name = path.file_name().unwrap_or_default().to_os_string();
+    name.push(".uninstalled");
+    let archived = path.with_file_name(name);
+    match std::fs::rename(path, &archived) {
+        Ok(()) => Ok(Some(archived)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(AppError::new(format!(
+            "Cannot retire {} after uninstall: {}",
+            path.display(),
+            error.kind()
+        ))),
+    }
+}
+
 /// Where `client.toml` is: `--config`, or the default.
 #[must_use]
 pub fn client_path(given: Option<&Path>, home: &Path, config_home: Option<&Path>) -> PathBuf {

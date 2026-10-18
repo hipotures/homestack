@@ -403,6 +403,11 @@ fn apply(
         lines.push(format!("error: {error}"));
     }
     if setup.mode == Mode::Uninstall {
+        match install_flow::retire_client(plan, &setup.client_path) {
+            Ok(Some(path)) => lines.push(format!("Inactive client configuration kept as {}", path.display())),
+            Ok(None) => {}
+            Err(error) => return (false, vec![error.0]),
+        }
         lines.insert(0, "HomeStack is removed from Proxmox.".to_owned());
         return (plan.node_errors.is_empty(), lines);
     }

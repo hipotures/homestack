@@ -50,6 +50,14 @@ saves the installation settings, `server.toml`, `deploy.toml` and `client.toml`
 inside the selected profile. Typed answers are retained in the installation
 draft and survive a cluster rescan.
 
+After a successful production uninstall, the active `client.toml` is archived
+as `client.toml.uninstalled`. Reopening that profile starts the installer;
+installation settings and deployment files remain available. A failed or
+cancelled uninstall leaves the active client configuration intact. An API
+connection failure alone does not change installation state.
+A retained tagged API container can be selected for adoption into the service
+pool and reused by the same installation plan.
+
 An installed profile opens its normal status view. Menu **Reinstall HomeStack**
 opens the full installation form with its saved settings. Menu **Update API
 containers** uses the instances, credentials and network in `deploy.toml`,

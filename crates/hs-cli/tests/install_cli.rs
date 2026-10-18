@@ -422,6 +422,11 @@ async fn uninstall_removes_homestack_and_keeps_the_desktop_files() {
         run(&cluster, &install_argv(&access, &["--yes"]), &[], false).await.code,
         0
     );
+    let active = cluster.token_dir().join("client.toml");
+    std::fs::write(&active, "saved connection").unwrap();
+    let cancelled = run(&cluster, &["uninstall", "--ssh", "root@pve1", "--json"], &[], false).await;
+    assert_eq!(cancelled.code, 3);
+    assert!(active.exists(), "an unconfirmed uninstall retired the client");
     let gone = run(
         &cluster,
         &[
@@ -440,6 +445,11 @@ async fn uninstall_removes_homestack_and_keeps_the_desktop_files() {
     assert_eq!(gone.code, 0, "{}", gone.console.out());
     assert!(!cluster.read("users").contains("homestack"));
     assert!(cluster.read("tokens.tsv").is_empty());
+    assert!(!active.exists(), "reopening would still connect to the uninstalled API");
+    assert_eq!(
+        std::fs::read_to_string(cluster.token_dir().join("client.toml.uninstalled")).unwrap(),
+        "saved connection"
+    );
     assert!(
         cluster.token_dir().join("pve-token").exists(),
         "a desktop file was removed"
@@ -1066,6 +1076,53 @@ async fn the_server_on_its_number_is_replaced_and_a_status_that_fails_fails_the_
     let out = format!("{}{}", done.console.out(), done.console.err());
     assert!(out.contains("homestack status"), "{out}");
     assert!(cluster.token_dir().join("client.toml").exists());
+}
+
+#[tokio::test]
+async fn reinstall_accepts_a_tagged_api_container_selected_for_pool_adoption() {
+    let cluster = Cluster::new(&["pve1"]);
+    desktop_files(&cluster);
+    let vms = cluster.read("vms.tsv");
+    cluster.write(
+        "vms.tsv",
+        &format!("{vms}2097\tpve1\tapi1\thomestack-server\t\t\tlxc\n240\tpve1\tws-kept\thomestack-ws\t\t\n"),
+    );
+    let (url, ca_pem, _sim) = status_server().await;
+    let ca = cluster.token_dir().join("server-ca.pem");
+    std::fs::write(&ca, ca_pem).unwrap();
+    let servers = Arc::new(FakeServers {
+        reach: Some((url, ca.display().to_string())),
+        ..FakeServers::resolving(&[("api1.hs.example.net", "192.0.2.97")])
+    });
+    // The saved server is recognized by its tag but remains protected
+    // until the owner selects it for adoption into this installation.
+    let refused = run_with(
+        &cluster,
+        &server_argv(&["--server-domain", "hs.example.net", "--adopt", "240", "--yes"]),
+        &[],
+        false,
+        Arc::clone(&servers),
+    )
+    .await;
+    assert_ne!(refused.code, 0);
+    assert_eq!(cluster.changes(), 0);
+    assert!(servers.deployed().is_empty());
+    assert!(
+        format!("{}{}", refused.console.out(), refused.console.err())
+            .contains("CT 2097 for api1.hs.example.net is taken by api1")
+    );
+    let done = run_with(
+        &cluster,
+        &server_argv(&["--server-domain", "hs.example.net", "--adopt", "2097", "--yes"]),
+        &[],
+        false,
+        Arc::clone(&servers),
+    )
+    .await;
+    assert_eq!(done.code, 0, "{}\n{}", done.console.out(), done.console.err());
+    assert_eq!(servers.deployed().len(), 1);
+    assert!(cluster.read("pools.tsv").contains("2097"));
+    assert!(cluster.token_dir().join("client.toml").is_file());
 }
 
 #[tokio::test]
