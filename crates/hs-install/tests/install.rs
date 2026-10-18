@@ -860,7 +860,16 @@ fn gold_is_optional_when_none_or_several_are_detected() {
     assert!(gold.defaults.is_empty());
 
     let fake = Fake::new(&["pve1"]);
-    fake.write("vms.tsv", "");
+    fake.write(
+        "vms.tsv",
+        "100\tpve1\tdesktop\t\tvirtio=BC:24:11:00:00:01,bridge=vmbr0\t\n",
+    );
+    let questions = form_questions(&fake, &standard(false));
+    let gold = questions.iter().find(|question| question.option == "--gold").unwrap();
+    assert!(
+        gold.defaults.is_empty(),
+        "an unrelated desktop VM became the default Gold"
+    );
     let run = fake.install(&standard(false));
     assert!(run.ok, "{}", run.out);
     assert!(run.out.contains("Gold is not configured"), "{}", run.out);
@@ -1133,4 +1142,13 @@ fn block_storages_are_ticked_at_first_and_local_for_single_files() {
         "{text}"
     );
     assert!(text.lines().all(|l| l.chars().count() <= 100), "{text}");
+}
+
+#[test]
+fn install_discovery_is_read_only() {
+    let fake = Fake::new(&["pve1", "pve2"]);
+    let questions = form_questions(&fake, &Settings::default());
+    assert!(!questions.is_empty());
+    assert_eq!(fake.changes(), 0, "{}", fake.read("calls.log"));
+    assert!(fake.read("users").lines().all(|user| user != "homestack@pve"));
 }

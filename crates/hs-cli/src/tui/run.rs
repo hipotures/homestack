@@ -480,7 +480,7 @@ fn start(request: &Request, client: Option<&Arc<Client>>, ctx: &Context, updates
             let system = Arc::clone(&ctx.system);
             let home = ctx.home.clone();
             tokio::spawn(async move {
-                let report = discovery_report(&client, system.as_ref(), &home).await;
+                let report = discovery_report(Some(&client), system.as_ref(), &home).await;
                 let _ = updates.send(Update::Report("this desktop".to_owned(), discovery_lines(&report)));
             });
         }

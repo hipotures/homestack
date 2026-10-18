@@ -283,7 +283,17 @@ async fn execute(args: &Args, ctx: &mut Context, running: &Running) -> Result<Co
         .config
         .clone()
         .unwrap_or_else(|| config::default_path(&ctx.home, ctx.config_home.as_deref()));
-    let loaded = config::load(&expand_home(&path.display().to_string(), &ctx.home))?;
+    let path = expand_home(&path.display().to_string(), &ctx.home);
+    if args.command == Command::Discover && !path.exists() {
+        let report = discovery_report(None, ctx.system.as_ref(), &ctx.home).await;
+        if args.json {
+            emit(ctx, &report);
+        } else {
+            ctx.console.out(&view::discovery_report(&report, &ctx.style));
+        }
+        return Ok(0);
+    }
+    let loaded = config::load(&path)?;
     let client = Client::new(loaded.client_config(&ctx.home)?).map_err(client_error)?;
     let mut cli = Cli {
         args,
@@ -495,7 +505,7 @@ impl<'a> Cli<'a> {
     }
 
     async fn discover(&mut self) -> Result<Code, AppError> {
-        let report = discovery_report(self.client, self.ctx.system.as_ref(), &self.ctx.home).await;
+        let report = discovery_report(Some(self.client), self.ctx.system.as_ref(), &self.ctx.home).await;
         let ok = report["ok"] == true;
         if self.args.json {
             self.emit(&report);
@@ -963,14 +973,14 @@ pub async fn transport_report(client: &Client) -> Result<Value, AppError> {
 
 /// What `homestack discover` reports: the local tools and keys, and what
 /// the server finds in Proxmox.
-pub async fn discovery_report(client: &Client, system: &dyn System, home: &Path) -> Value {
+pub async fn discovery_report(client: Option<&Client>, system: &dyn System, home: &Path) -> Value {
     let mut commands = Map::new();
     for name in ["ssh", "ssh-keygen", "fido2-token", "bwrap"] {
         commands.insert(name.to_owned(), json!(system.which(name).is_some()));
     }
     let mut report = json!({
-        "ok": false,
-        "config_used": true,
+        "ok": client.is_none(),
+        "config_used": client.is_some(),
         "read_only": true,
         "local": {
             "commands": commands,
@@ -979,6 +989,7 @@ pub async fn discovery_report(client: &Client, system: &dyn System, home: &Path)
         "server": null,
         "errors": [],
     });
+    let Some(client) = client else { return report };
     match client.get_from("/v1/discovery").await {
         Ok((url, discovery)) => {
             report["server"] = json!({"url": url.as_str(), "discovery": discovery});

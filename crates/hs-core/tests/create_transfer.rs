@@ -532,3 +532,68 @@ async fn targets_without_the_bridge_or_the_storage_are_refused() -> TestResult {
     ));
     Ok(())
 }
+
+/// Simulate a disk attachment changing between migration and cleanup.
+struct ForeignDisk<'a> {
+    client: &'a PveClient,
+    slot: &'static str,
+}
+
+impl hs_core::pve::Pve for ForeignDisk<'_> {
+    async fn get(&self, path: &str, query: &[(&str, &str)]) -> Result<Value, hs_pve::PveError> {
+        let mut response = hs_core::pve::Pve::get(self.client, path, query).await?;
+        if path == format!("/nodes/{TARGET}/qemu/200/config") {
+            response[self.slot] = json!("fast:vm-999-unrelated,size=16G");
+        }
+        Ok(response)
+    }
+
+    async fn post(&self, path: &str, form: &[(&str, &str)]) -> Result<Value, hs_pve::PveError> {
+        hs_core::pve::Pve::post(self.client, path, form).await
+    }
+
+    async fn put(&self, path: &str, form: &[(&str, &str)]) -> Result<Value, hs_pve::PveError> {
+        hs_core::pve::Pve::put(self.client, path, form).await
+    }
+
+    async fn delete(&self, path: &str, query: &[(&str, &str)]) -> Result<Value, hs_pve::PveError> {
+        hs_core::pve::Pve::delete(self.client, path, query).await
+    }
+}
+
+#[tokio::test]
+async fn invalid_clone_disk_ownership_prevents_cleanup_deletion() -> TestResult {
+    for slot in ["scsi0", "unused0"] {
+        let (sim, client) = cluster().await?;
+        let cfg = config()?;
+        let plan = plan_create(&client, &cfg, POOL, &request(Some(TARGET))).await?;
+        if slot == "unused0" {
+            sim.inject_fault(fault(
+                &format!("post{{path=/nodes/{TARGET}/storage/fast/content}}"),
+                None,
+            ))?;
+        }
+        let pve = ForeignDisk { client: &client, slot };
+        let error = create_workspace(&pve, &cfg, &plan, &quick(), &NoObserver)
+            .await
+            .err()
+            .ok_or("creation unexpectedly succeeded")?;
+        assert!(
+            error.to_string().contains("ownership; cleanup skipped"),
+            "{slot}: {error}"
+        );
+        let operations = ops(&sim);
+        assert!(
+            !operations
+                .iter()
+                .any(|op| op.starts_with("delete{") && op.contains("/qemu/200")),
+            "{operations:?}"
+        );
+        assert!(
+            !operations.iter().any(|op| op.contains("/status/start")),
+            "{operations:?}"
+        );
+        assert!(traces(&sim).await?.iter().any(|trace| trace.starts_with("VM 200")));
+    }
+    Ok(())
+}

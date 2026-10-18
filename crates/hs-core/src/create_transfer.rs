@@ -25,7 +25,7 @@ use crate::pve::Pve;
 use crate::tasks::Observer;
 
 /// `diskN`, `efidiskN` or `tpmstateN`: the slots whose volumes move.
-fn is_volume_slot(slot: &str) -> bool {
+pub(crate) fn is_volume_slot(slot: &str) -> bool {
     is_disk_slot(slot)
         || ["efidisk", "tpmstate"].iter().any(|prefix| {
             slot.strip_prefix(prefix)
@@ -291,7 +291,7 @@ fn volume_storage(value: &str) -> Option<&str> {
 }
 
 /// `_volume_belongs_to_vm`
-fn volume_belongs_to_vm(volume: &str, vmid: u32) -> bool {
+pub(crate) fn volume_belongs_to_vm(volume: &str, vmid: u32) -> bool {
     let id = vmid.to_string();
     // `(?:^|/)(<vmid>)/` on the whole volume.
     let parts: Vec<&str> = volume.split('/').collect();

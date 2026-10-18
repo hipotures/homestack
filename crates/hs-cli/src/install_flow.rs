@@ -178,17 +178,20 @@ impl Session {
                 .filter_map(|index| old.choices.get(*index))
                 .map(|choice| choice.value.as_str())
                 .collect();
-            let new_ticked = question.option == hs_install::discover::OPTION;
-            question.defaults = question
-                .choices
+            question.defaults = kept
                 .iter()
-                .enumerate()
-                .filter(|(_, choice)| {
-                    kept.contains(&choice.value.as_str())
-                        || new_ticked && !old.choices.iter().any(|known| known.value == choice.value)
-                })
-                .map(|(index, _)| index)
+                .filter_map(|value| question.choices.iter().position(|choice| choice.value == *value))
                 .collect();
+            if question.option == hs_install::discover::OPTION {
+                question.defaults.extend(
+                    question
+                        .choices
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, choice)| !old.choices.iter().any(|known| known.value == choice.value))
+                        .map(|(index, _)| index),
+                );
+            }
         }
         self.questions = questions;
         if let Some(domain) = domain {
@@ -639,16 +642,12 @@ pub fn apply_draft(questions: &mut [hs_install::Question], draft: &std::collecti
             }
             continue;
         }
-        let picked: Vec<usize> = question
-            .choices
+        // Keep click order (the first storage is the layout default), and
+        // distinguish an explicitly empty selection from no saved answer.
+        question.defaults = values
             .iter()
-            .enumerate()
-            .filter(|(_, choice)| values.contains(&choice.value))
-            .map(|(index, _)| index)
+            .filter_map(|value| question.choices.iter().position(|choice| &choice.value == value))
             .collect();
-        if !picked.is_empty() {
-            question.defaults = picked;
-        }
     }
 }
 

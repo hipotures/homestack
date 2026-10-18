@@ -17,12 +17,15 @@ use hs_model::jobs::JobEvent;
 use serde_json::{Map, Value, json};
 
 use crate::cloudinit::{HomeFormat, cloud_init_settings};
-use crate::create_transfer::{migrate_clone, revalidate_source, validate_cross_node_create, verify_migrated_clone};
+use crate::create_transfer::{
+    is_volume_slot, migrate_clone, revalidate_source, validate_cross_node_create, verify_migrated_clone,
+    volume_belongs_to_vm,
+};
 use crate::error::CoreError;
 use crate::gold::extract_mac;
 use crate::inventory::{
     ALIEN_WORKSPACE_TAG, GOLD_TAG, REFRESH_LOCK_TAG, TEST_TAG, VmConfig, WORKSPACE_TAG, cluster_vm_maps,
-    cluster_vm_resources, disk_option, has_tag, home_label, parse_disk_size_gb, parse_tags, py_repr,
+    cluster_vm_resources, disk_option, disk_volume, has_tag, home_label, parse_disk_size_gb, parse_tags, py_repr,
     resolve_homestack_storage, text_or_none, vm_config, vm_status, workspace_tags,
 };
 use crate::keys::{parse_authorized_key_records, workspace_authorized_keys};
@@ -477,7 +480,7 @@ pub async fn create_workspace(
             }
             let mut cleanup = Vec::new();
             if progress.cloned
-                && let Err(failure) = remove_failed_clone(pve, vmid, name, timing, observer).await
+                && let Err(failure) = remove_failed_clone(pve, vmid, name, text(plan, "pool")?, timing, observer).await
             {
                 cleanup.push(format!("VM cleanup failed: {failure}"));
             }
@@ -500,18 +503,34 @@ async fn remove_failed_clone(
     pve: &impl Pve,
     vmid: u32,
     name: &str,
+    pool: &str,
     timing: &LifecycleTiming,
     observer: &impl Observer,
 ) -> Result<(), CoreError> {
     let Some(resource) = cluster_vm_resources(pve).await?.into_iter().find(|r| r.vmid == vmid) else {
         return Ok(());
     };
+    require_pool(pve, vmid, pool).await?;
     let node = resource.node.as_str();
     let vm_cfg = vm_config(pve, node, vmid).await?;
     if vm_cfg.get("name").map(String::as_str) != Some(name) {
         return Err(CoreError::Failed(format!(
             "VM {vmid} is not the clone named {name}; left alone"
         )));
+    }
+    for (slot, value) in &vm_cfg {
+        let unused = slot
+            .strip_prefix("unused")
+            .is_some_and(|index| !index.is_empty() && index.bytes().all(|byte| byte.is_ascii_digit()));
+        if !is_volume_slot(slot) && !unused {
+            continue;
+        }
+        let volume = disk_volume(value);
+        if !matches!(volume, "" | "none") && !volume_belongs_to_vm(volume, vmid) {
+            return Err(CoreError::Failed(format!(
+                "VM {vmid} volume {volume} does not have target VM ownership; cleanup skipped"
+            )));
+        }
     }
     let status = vm_status(pve, node, vmid).await;
     if status != "stopped" {

@@ -178,3 +178,14 @@ fails (the simulator covers it).
 ## 6. Open questions
 
 None.
+
+
+## 7. Remaining execution-test audit (2026-10-18)
+
+The four outstanding `CreateExecutionTests` entries are now accounted for.
+Binary pipeline preservation is excluded because decision 3=A uses Proxmox
+clone/migration tasks, with no SSH archive stream. Ordering and failure
+cleanup map to the simulator tests of cloning and migration. A new regression
+covers foreign attached or unused volumes: failed-clone cleanup must refuse
+deletion unless both pool membership and disk ownership are verified.
+See [the audit report](parity-todo-audit.md) for individual mappings.

@@ -343,8 +343,8 @@ separate update menu request and text editing at 80 by 24.
 - [x] Owner accepted phase 13c after repeated E2E install/uninstall cycles
   (2026-10-18). This acceptance closes the functional phase; the specific
   directly observed runs and cleanup limitations remain recorded below.
-- [ ] Audit and resolve the 29 remaining phase-13c `todo` entries in the
-  parity manifest against current behavior and regression coverage.
+- [x] Audit and resolve all remaining phase-13c parity entries against
+  current behavior and regression coverage; see [the audit report](parity-todo-audit.md).
 
 Related phase-13b verification: manual Gold power uses the configured Gold
 pool. The isolated E2E API was updated to image
@@ -378,3 +378,13 @@ machine-readable punctuation. Installer rendering and worker progress events
 are checked by Rust tests; the progress-description parity entry is now
 ported. The manifest has 28 remaining phase-13c TODO entries and four in
 phase 10 (32 total).
+
+Remaining parity audit completed (2026-10-18): all 32 outstanding entries
+across phases 13c and 10 are accounted for in
+[parity-todo-audit.md](parity-todo-audit.md). Twenty-four entries map to
+behavioral Rust tests and eight explicitly exclude removed mechanisms or
+owner-approved behavior changes. The audit also repaired selection ordering,
+empty draft answers, local discovery before configuration, and failed-clone
+cleanup ownership checks. There are no remaining manifest TODO entries.
+This does not claim that the previously recorded UI/snippet follow-ups or
+phase-15 removal of Python have been completed.

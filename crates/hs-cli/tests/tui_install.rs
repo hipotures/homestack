@@ -859,3 +859,16 @@ fn installer_texts_do_not_use_ellipsis() {
     press(&mut fixture.app, KeyCode::Enter);
     check(&fixture.app);
 }
+
+#[test]
+fn storage_selection_preserves_click_order() {
+    let mut fixture = checked(Mode::Install);
+    press(&mut fixture.app, KeyCode::Tab);
+    press(&mut fixture.app, KeyCode::Char(' '));
+    press(&mut fixture.app, KeyCode::Down);
+    press(&mut fixture.app, KeyCode::Char(' '));
+    press(&mut fixture.app, KeyCode::Up);
+    press(&mut fixture.app, KeyCode::Char(' '));
+    let install = fixture.app.install.as_ref().unwrap();
+    assert_eq!(install.settings[0].picked, [1, 0]);
+}

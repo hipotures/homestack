@@ -329,6 +329,18 @@ async fn a_plan_without_confirmation_is_shown_and_changes_nothing() {
     );
     assert!(out.contains("Interactive confirmation requires a TTY"), "{out}");
     assert_eq!(cluster.changes(), 0);
+    for name in [
+        "config.toml",
+        "client.toml",
+        "server.toml",
+        "pve-token",
+        "pve-token-deploy",
+    ] {
+        assert!(
+            !cluster.token_dir().join(name).exists(),
+            "unconfirmed install wrote {name}"
+        );
+    }
 }
 
 #[tokio::test]
@@ -380,6 +392,8 @@ async fn yes_installs_over_ssh_and_the_secrets_land_on_the_desktop() {
 #[tokio::test]
 async fn the_question_is_asked_on_a_terminal_and_no_changes_nothing() {
     let cluster = Cluster::new(&["pve1"]);
+    let existing = cluster.token_dir().join("client.toml");
+    std::fs::write(&existing, "existing client sentinel").unwrap();
     let declined = run(&cluster, &install_argv(&["--ssh", "root@pve1"], &[]), &["n"], true).await;
     assert_eq!(declined.code, 0);
     assert!(
@@ -389,6 +403,7 @@ async fn the_question_is_asked_on_a_terminal_and_no_changes_nothing() {
     );
     assert_eq!(declined.console.questions().len(), 1);
     assert_eq!(cluster.changes(), 0);
+    assert_eq!(std::fs::read_to_string(&existing).unwrap(), "existing client sentinel");
 
     let accepted = run(&cluster, &install_argv(&["--ssh", "root@pve1"], &[]), &["y"], true).await;
     assert_eq!(accepted.code, 0, "{}", accepted.console.out());
@@ -1643,4 +1658,81 @@ async fn installation_deploys_the_server_before_gold_exists() {
     assert_eq!(deployed[0].bridge, "vmbr0");
     assert!(cluster.token_dir().join("client.toml").is_file());
     assert!(cluster.read("vms.tsv").is_empty(), "installation fabricated a Gold VM");
+}
+
+#[tokio::test]
+async fn discover_without_client_configuration_is_read_only() {
+    let cluster = Cluster::new(&["pve1"]);
+    let result = run(&cluster, &["discover", "--json"], &[], false).await;
+    assert_eq!(result.code, 0, "{}", result.console.out());
+    assert_eq!(result.json()["config_used"], false);
+    assert_eq!(result.json()["read_only"], true);
+    assert!(result.json()["server"].is_null());
+    assert_eq!(cluster.changes(), 0);
+    assert!(!cluster.token_dir().join("client.toml").exists());
+    let normal = run(&cluster, &["status", "--json"], &[], false).await;
+    assert_ne!(normal.code, 0);
+    assert!(
+        normal.json()["error"]
+            .as_str()
+            .is_some_and(|message| message.contains("not found"))
+    );
+}
+
+#[test]
+fn a_new_install_session_automatically_resumes_saved_answers() {
+    use hs_cli::install_flow::Session;
+    use hs_cli::root_ssh::SshRoot;
+    use hs_cli::servers::Files;
+    let cluster = Cluster::new(&["pve1"]);
+    two_disk_storages(&cluster);
+    let settings = hs_install::Settings {
+        token_dir: cluster.token_dir(),
+        ..Default::default()
+    };
+    let start = || {
+        let root = SshRoot::open(
+            Arc::new(cluster.system()),
+            &cluster.home,
+            "root@pve1",
+            None,
+            &hs_cli::touch::Sounds::disabled(),
+        )
+        .unwrap();
+        Session::start(
+            Box::new(root),
+            hs_install::Command::Install,
+            settings.clone(),
+            false,
+            None,
+            Files {
+                dir: cluster.token_dir(),
+                home: cluster.home.clone(),
+            },
+            Arc::new(FakeServers::default()),
+        )
+        .unwrap()
+    };
+    let mut first = start();
+    let mut answers: Vec<_> = first.questions.iter().map(hs_cli::install_config::defaults).collect();
+    let storage = first.questions.iter().position(|q| q.option == "--storages").unwrap();
+    assert_eq!(first.questions[storage].choices.len(), 2);
+    answers[storage] = hs_cli::install_flow::Answer::Picked(vec![1, 0]);
+    first.rescan(&answers, Some("lab.example.net")).unwrap();
+    assert_eq!(first.questions[storage].defaults, [1, 0]);
+    first.keep(&answers, Some("lab.example.net"));
+    drop(first);
+    let resumed = start();
+    assert_eq!(
+        resumed
+            .questions
+            .iter()
+            .find(|q| q.option == "--storages")
+            .unwrap()
+            .defaults,
+        [1, 0]
+    );
+    assert_eq!(resumed.draft_domain, "lab.example.net");
+    assert_eq!(cluster.changes(), 0);
+    assert!(!cluster.token_dir().join("client.toml").exists());
 }

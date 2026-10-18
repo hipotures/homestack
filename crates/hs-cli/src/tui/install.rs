@@ -115,7 +115,6 @@ impl Setting {
                 self.picked.remove(at);
             } else {
                 self.picked.push(index);
-                self.picked.sort_unstable();
             }
         } else {
             self.picked = vec![index];
