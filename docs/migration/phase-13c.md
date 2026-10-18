@@ -334,6 +334,11 @@ separate update menu request and text editing at 80 by 24.
 - [x] Distinguish first setup, reinstallation and API container updates.
 - [x] Generate native client/server configuration and deploy the API;
   installation through Herdr was exercised in the isolated E2E lab.
+- [x] E2E uninstall through SSH removes the HomeStack user, tokens, roles,
+  ACLs and pools while preserving Gold 100 and API container 101.
+- [ ] Verify vendor snippet cleanup with snippet storage supplied; the
+  observed TUI uninstall left both vendor snippets because no snippet
+  storage was passed to the uninstall plan.
 - [ ] Verify the complete clean-cluster install/uninstall gate through both
   SSH and Herdr, including removal of HomeStack state and preservation of
   unrelated guests.
@@ -347,3 +352,11 @@ and gracefully stopped through the API. The final state was stopped. A stop
 issued immediately after boot timed out; retrying once the guest was ready
 succeeded. No forced stop was used. Simulator tests cover Gold power, role
 and pool restrictions, template/lock refusal, and workspace protection.
+
+E2E uninstall evidence: run `b2e4128c-29f4-4c56-9e9b-20e0352513c1`,
+2026-10-18 at 11:15:48 local log time, `root@pve-e2e` over SSH,
+39 changes completed. A read-only cluster check found no HomeStack users,
+roles, ACLs or pools. Gold 100 and API container 101 were still running.
+`homestack-vendor-create.yaml` and `homestack-vendor-keep.yaml` remained;
+this run does not close the complete cleanup gate. The subsequent
+"no server answers" message is expected after server token revocation.
