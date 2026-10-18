@@ -389,6 +389,8 @@ The remaining parity audit is complete; see [the audit report](parity-todo-audit
 
 ### Faza 16: `resize` na różnych układach dysków (po całej implementacji)
 
+**Complete:** all 20 live E2E cases passed (14 resize cases including interruption/recovery, six refusals without changes). Fixture cleanup passed and existing Gold/API configuration hashes were preserved. See [phase-16.md](phase-16.md) and [the result artifact](phase-16-results.json). The generator is `scripts/e2e-resize.py`.
+
 Zlecone przez właściciela 2026-10-13. W fazie 7 LUKS, LVM i Btrfs sprawdzono tylko na symulatorze, bo testowa Gold ma zwykły ext4 na partycji.
 
 - **Generator układów dysków:** skrypt albo narzędzie, które w poolu testowym (VMID 240–249) przygotowuje VM z różnymi układami root i home. Co najmniej:
