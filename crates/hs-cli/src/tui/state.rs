@@ -342,12 +342,13 @@ impl App {
     pub fn open_install(&mut self, mode: super::install::Mode, first_start: bool) -> Option<Request> {
         self.overlay = None;
         let mut install = super::install::Install::new(mode, first_start);
+        install.herdr_available = self.profile == "default";
         let kept = |key: &str| self.preferences.table.get(key).and_then(toml::Value::as_str);
         if let Some(host) = kept("install_host") {
             host.clone_into(&mut install.host);
             install.caret = install.host.chars().count();
         }
-        let herdr = kept("install_method") == Some("herdr");
+        let herdr = install.herdr_available && kept("install_method") == Some("herdr");
         if herdr {
             install.method = super::install::Method::Herdr;
         }

@@ -693,7 +693,12 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
         if app.open_install(Mode::Install, first_start) == Some(Request::HerdrTabs) {
             match crate::root_herdr::tabs(ctx.system.as_ref()) {
                 Ok(tabs) => app.set_herdr_tabs(tabs.into_iter().map(|tab| (tab.name, tab.title)).collect()),
-                Err(error) => app.log(&clock.now(), &error.0),
+                Err(error) => {
+                    if let Some(install) = app.install.as_mut() {
+                        install.error = Some(error.0.clone());
+                    }
+                    app.log(&clock.now(), &error.0);
+                }
             }
         }
         app.log(
@@ -958,7 +963,10 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
                             Ok(tabs) => app.set_herdr_tabs(
                                 tabs.into_iter().map(|tab| (tab.name, tab.title)).collect(),
                             ),
-                            Err(error) => app.log(&clock.now(), &error.0),
+                            Err(error) => {
+                                if let Some(install) = app.install.as_mut() { install.error = Some(error.0.clone()); }
+                                app.log(&clock.now(), &error.0);
+                            }
                         },
                         Request::Installed => {
                             details.cancel();

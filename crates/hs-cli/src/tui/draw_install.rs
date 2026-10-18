@@ -205,6 +205,7 @@ fn access(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
     let width = inner.width.saturating_sub(4);
     write(buf, x, y, 10, "Method", text);
     let method = match install.method {
+        Method::Ssh if !install.herdr_available => "SSH",
         Method::Ssh => "‹ SSH ›",
         Method::Herdr => "‹ Herdr pane ›",
     };
@@ -221,7 +222,11 @@ fn access(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
         x + 28,
         y,
         width.saturating_sub(28),
-        "↑ then ← →: SSH or a Herdr pane",
+        if install.herdr_available {
+            "↑ then ← →: SSH or a Herdr pane"
+        } else {
+            "SSH only in this isolated profile"
+        },
         muted,
     );
     y += 2;
@@ -255,7 +260,7 @@ fn access(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
         Method::Herdr => {
             write(buf, x, y, 10, "Pane", text);
             let line = install.tabs.get(install.tab).map_or_else(
-                || "‹ no Herdr tab yet ›".to_owned(),
+                || "‹ no matching Herdr tabs ›".to_owned(),
                 |(name, title)| format!("‹ {name}  {title} ›"),
             );
             write(

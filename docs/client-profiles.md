@@ -70,7 +70,9 @@ global known-hosts file. Workspace entries contain absolute key and host-key
 paths because OpenSSH expands `~` independently of the child's `HOME`.
 Put explicitly chosen keys and host entries in the profile's `home/.ssh/`.
 Herdr is disabled in named profiles because existing desktop root panes are
-not scoped to a HomeStack profile.
+not scoped to a HomeStack profile. Their install and uninstall screens offer
+SSH only, including when earlier preferences name Herdr. In the default
+profile, a failed Herdr tab lookup is shown directly on the access screen.
 
 `--config` cannot override a named profile. Edit that profile's files instead.
 A missing or invalid configuration produces an error or the first-install
