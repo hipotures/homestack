@@ -1,0 +1,45 @@
+# Copy to ~/.config/homestack/config.toml and adjust for your cluster.
+# Installation replaces Gold and storage layouts with the selected values.
+version = 1
+
+[node]
+name = "pve1"
+
+[storage_layouts]
+homestack-storage-1 = ["local-lvm"]
+
+[root]
+disk = "scsi0"
+
+[home]
+disk = "scsi1"
+default_size = "20G"
+
+[network]
+prefix = "192.0.2"
+cidr = 24
+gateway = "192.0.2.1"
+dns = ["192.0.2.53"]
+
+[cloud_init]
+snippet_storage = "local"
+snippet_dir = "/var/lib/vz/snippets"
+
+[user]
+name = "developer"
+uid = 1000
+gid = 1000
+
+[workspace_ssh]
+user = "developer"
+identity_files = ["~/.ssh/id_ed25519_sk"]
+identities_only = true
+log_level = "FATAL"
+
+# Required by the legacy parser; installation uses its selected SSH/Herdr access.
+[transport]
+type = "herdr"
+
+[transport.herdr]
+workspace = "PVE"
+tab = "pve1"
