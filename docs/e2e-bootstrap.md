@@ -328,7 +328,8 @@ form; **Server domain `e2e.homestack.app`** is prefilled when the cluster is rea
 The values override earlier access defaults for this launch and remain editable.
 The launcher's SSH wrapper uses only the run's generated configuration,
 identity and pinned host key; the real desktop's SSH config and agent are excluded. Other SSH aliases
-fail, and Herdr is disabled to avoid using an existing production root shell.
+fail. Herdr remains selectable: it uses the desktop's running Herdr session,
+and the owner chooses the tab containing the desired Proxmox root shell.
 No `Include` in the desktop's `~/.ssh/config` is required for this client.
 
 Press **F2** on any TUI screen to enter copy mode. The display freezes and
@@ -493,8 +494,9 @@ connected to `root@pve-e2e` and read the single-node inventory. It made no
 HomeStack status requests and did not apply an installation. The normal
 desktop client configuration, deployment configuration, preferences and SSH
 files remained unchanged, and the controller stayed paused after TUI exit.
-Unit tests also verify rejected stale runs, SSH alias isolation and the
-blocked Herdr route. This does not verify a HomeStack container deployment.
+Unit tests also verify rejected stale runs, SSH alias isolation and access
+to the desktop Herdr session from the profile. This does not verify a
+HomeStack container deployment.
 
 A live TUI check on 2026-10-16 verified that launch arguments prefill the SSH
 host and the server domain on the paused lab. F2 released terminal mouse

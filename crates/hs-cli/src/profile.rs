@@ -103,17 +103,20 @@ pub fn prepare(root: &Path, program: &Path, ssh: &Path, argv: &[String], name: &
             ssh_quote(&home.join(".ssh/known_hosts")),
         ).as_bytes())?;
     }
-    for (file, text) in [
-        (
-            "ssh",
-            format!("#!/bin/sh\nexec {} -F {} \"$@\"\n", quote(ssh), quote(&config)),
-        ),
-        (
-            "herdr",
-            "#!/bin/sh\nprintf '%s\\n' 'Herdr is disabled in named profiles; use profile-specific SSH.' >&2\nexit 1\n"
-                .to_owned(),
-        ),
-    ] {
+    let mut wrappers = vec![(
+        "ssh",
+        format!("#!/bin/sh\nexec {} -F {} \"$@\"\n", quote(ssh), quote(&config)),
+    )];
+    if let Some(wrapper) = profiles::desktop_herdr_wrapper() {
+        wrappers.push(("herdr", wrapper));
+    } else {
+        match std::fs::remove_file(root.join("bin/herdr")) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+    }
+    for (file, text) in wrappers {
         let path = root.join("bin").join(file);
         // Recreate wrappers rather than retaining stale executable paths.
         if path.is_symlink() {

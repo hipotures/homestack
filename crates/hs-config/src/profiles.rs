@@ -7,6 +7,30 @@ use std::path::{Path, PathBuf};
 pub const DEFAULT: &str = "default";
 pub const E2E: &str = "e2e";
 
+/// Use the desktop's running Herdr session while HomeStack keeps its own profile.
+pub fn herdr_wrapper(executable: &Path, home: &Path, config_home: &Path) -> String {
+    let quote = |path: &Path| format!("'{}'", path.to_string_lossy().replace('\'', "'\"'\"'"));
+    format!(
+        "#!/bin/sh\nexport HOME={}\nexport XDG_CONFIG_HOME={}\nexec {} \"$@\"\n",
+        quote(home),
+        quote(config_home),
+        quote(executable)
+    )
+}
+
+/// Capture the desktop command before a launcher changes HOME and PATH.
+pub fn desktop_herdr_wrapper() -> Option<String> {
+    let executable = std::env::split_paths(&std::env::var_os("PATH")?)
+        .map(|path| path.join("herdr"))
+        .find(|path| {
+            path.metadata()
+                .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
+        })?;
+    let home = std::env::var_os("HOME").map(PathBuf::from)?;
+    let config_home = std::env::var_os("XDG_CONFIG_HOME").map_or_else(|| home.join(".config"), PathBuf::from);
+    Some(herdr_wrapper(&executable, &home, &config_home))
+}
+
 pub fn validate(name: &str) -> io::Result<()> {
     if name.is_empty()
         || name.len() > 64

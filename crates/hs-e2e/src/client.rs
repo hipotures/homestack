@@ -95,12 +95,15 @@ fn prepare(dir: &Path, program: &Path, ssh: &Path, image: &str, argv: &[String])
         ),
         0o700,
     )?;
-    // A production Herdr root shell must not be offered as a second route.
-    write(
-        &root.join("bin/herdr"),
-        "#!/bin/sh\nprintf '%s\\n' 'Herdr is disabled in the E2E client; use SSH root@pve-e2e.' >&2\nexit 1\n",
-        0o700,
-    )?;
+    if let Some(wrapper) = hs_config::profiles::desktop_herdr_wrapper() {
+        write(&root.join("bin/herdr"), &wrapper, 0o700)?;
+    } else {
+        match std::fs::remove_file(root.join("bin/herdr")) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
     let mut paths = vec![root.join("bin")];
     paths.extend(std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()));
     let mut command = Command::new(program);
@@ -293,7 +296,7 @@ async fn launch(artifacts: &Path, run_id: &str, argv: &[String]) -> Result<()> {
     eprintln!("E2E client profile: {}", dir.join("client").display());
     eprintln!("Production client configuration and SSH agent are excluded.");
     eprintln!(
-        "Installer defaults: SSH root@pve-e2e; server domain {}. Herdr is disabled.",
+        "Installer defaults: SSH root@pve-e2e; server domain {}. Herdr is available through the desktop session.",
         crate::domain::SEARCH
     );
     eprintln!("This profile and its credentials are removed with the VM. Keep the controller paused.");
@@ -479,7 +482,7 @@ finally:
     }
 
     #[test]
-    fn ssh_uses_the_lab_config_and_herdr_cannot_reach_production() -> Result<()> {
+    fn ssh_uses_the_lab_config_and_herdr_remains_available() -> Result<()> {
         let dir = fixture()?;
         let ssh = executable("ssh")?;
         prepare(
@@ -519,11 +522,11 @@ finally:
                 assert!(config.contains("guest-connect.py"), "{config}");
             }
         }
-        let output = Command::new(dir.path().join("client/bin/herdr"))
-            .args(["workspace", "list"])
-            .output()?;
-        assert!(!output.status.success());
-        assert!(String::from_utf8(output.stderr)?.contains("Herdr is disabled"));
+        if hs_config::profiles::desktop_herdr_wrapper().is_some() {
+            let wrapper = std::fs::read_to_string(dir.path().join("client/bin/herdr"))?;
+            assert!(!wrapper.contains("Herdr is disabled"));
+            assert!(wrapper.contains("export HOME=") && wrapper.contains("export XDG_CONFIG_HOME="));
+        }
         Ok(())
     }
 

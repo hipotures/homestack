@@ -207,8 +207,6 @@ pub struct Install {
     /// Opened because there is no `client.toml`: Esc quits.
     pub first_start: bool,
     pub method: Method,
-    /// Named profiles disable access to the desktop's Herdr root shells.
-    pub herdr_available: bool,
     pub host: String,
     /// Where typing goes in `host`, in characters.
     pub caret: usize,
@@ -261,7 +259,6 @@ impl Install {
             stage: Stage::Access,
             first_start,
             method: Method::Ssh,
-            herdr_available: true,
             host: String::new(),
             caret: 0,
             tabs: Vec::new(),
@@ -466,7 +463,7 @@ impl Install {
                     })),
                 );
             }
-            KeyCode::Left | KeyCode::Right if self.field == 2 && self.herdr_available => {
+            KeyCode::Left | KeyCode::Right if self.field == 2 => {
                 self.method = match self.method {
                     Method::Ssh => Method::Herdr,
                     Method::Herdr => Method::Ssh,

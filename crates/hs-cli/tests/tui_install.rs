@@ -123,8 +123,8 @@ fn first_install_reinstall_and_api_updates_are_distinct() {
 }
 
 #[test]
-fn isolated_profiles_offer_only_ssh_even_with_a_saved_herdr_method() {
-    for profile in ["e2e", "p2p"] {
+fn every_profile_can_choose_a_herdr_pane() {
+    for profile in ["default", "e2e", "p2p"] {
         let mut fixture = app();
         fixture.app.profile = profile.to_owned();
         fixture
@@ -132,17 +132,20 @@ fn isolated_profiles_offer_only_ssh_even_with_a_saved_herdr_method() {
             .preferences
             .table
             .insert("install_method".to_owned(), "herdr".into());
-        assert_eq!(fixture.app.open_install(Mode::Install, true), None);
-        let install = fixture.app.install.as_ref().unwrap();
-        assert_eq!(install.method, Method::Ssh);
-        assert!(!install.herdr_available);
-        assert_eq!(press(&mut fixture.app, KeyCode::Right), None);
-        assert_eq!(fixture.app.install.as_ref().unwrap().method, Method::Ssh);
+        assert_eq!(fixture.app.open_install(Mode::Install, true), Some(Request::HerdrTabs));
+        assert_eq!(fixture.app.install.as_ref().unwrap().method, Method::Herdr);
+        fixture
+            .app
+            .set_herdr_tabs(vec![("PVE/pve-e2e".to_owned(), "root@pve-e2e:~#".to_owned())]);
         let text = screen(&render(&fixture.app, 120, 36));
-        assert!(text.contains("SSH only in this isolated profile"), "{text}");
-        assert!(
-            !text.contains("Herdr pane") && !text.contains("no matching Herdr tabs"),
-            "{text}"
+        assert!(text.contains("Herdr pane") && text.contains("PVE/pve-e2e"), "{text}");
+        press(&mut fixture.app, KeyCode::Down);
+        assert_eq!(
+            press(&mut fixture.app, KeyCode::Enter),
+            Some(Request::Install(Command::Connect {
+                method: Method::Herdr,
+                target: "PVE/pve-e2e".to_owned(),
+            }))
         );
     }
 }

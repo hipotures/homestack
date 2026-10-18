@@ -37,7 +37,7 @@ Other persistent profiles have a private root under
 | `home/.ssh/` | Profile SSH keys and configuration, workspace configs and host keys |
 | `state/` | Setup catalog snapshots and other XDG state |
 | `cache/` | XDG cache |
-| `bin/` | SSH wrapper and disabled Herdr entry point |
+| `bin/` | Profile SSH wrapper and desktop Herdr entry point |
 
 Opening a new name such as `p2p` creates empty private directories and starts
 the installer. It does not copy another profile's endpoints, tokens or keys.
@@ -69,10 +69,11 @@ it does not inherit the desktop's config, default private keys, agent or
 global known-hosts file. Workspace entries contain absolute key and host-key
 paths because OpenSSH expands `~` independently of the child's `HOME`.
 Put explicitly chosen keys and host entries in the profile's `home/.ssh/`.
-Herdr is disabled in named profiles because existing desktop root panes are
-not scoped to a HomeStack profile. Their install and uninstall screens offer
-SSH only, including when earlier preferences name Herdr. In the default
-profile, a failed Herdr tab lookup is shown directly on the access screen.
+Herdr remains available in every profile. Its entry point uses the desktop's
+existing Herdr configuration and running session while HomeStack keeps the
+profile's own configuration, tokens and SSH files. The install and uninstall
+screens let the owner choose SSH or a Herdr pane. A failed Herdr tab lookup
+is shown directly on the access screen.
 
 `--config` cannot override a named profile. Edit that profile's files instead.
 A missing or invalid configuration produces an error or the first-install

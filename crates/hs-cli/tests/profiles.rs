@@ -143,7 +143,11 @@ fn ssh_keys_known_hosts_and_cleanup_are_scoped_to_each_profile() -> Result {
             assert!(ssh.lines().any(|line| line == expected), "missing {expected}: {ssh}");
         }
         assert!(!ssh.contains("identityfile ~/.ssh/id_"));
-        assert!(Command::new(root.join("bin/herdr")).output()?.status.code() == Some(1));
+        if hs_config::profiles::desktop_herdr_wrapper().is_some() {
+            let wrapper = std::fs::read_to_string(root.join("bin/herdr"))?;
+            assert!(!wrapper.contains("Herdr is disabled"));
+            assert!(wrapper.contains("export HOME=") && wrapper.contains("export XDG_CONFIG_HOME="));
+        }
         std::fs::write(local_ssh::known_hosts_file(&home, 200), name)?;
     }
     let p2p = storage.path().join("p2p/home");
