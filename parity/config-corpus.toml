@@ -205,7 +205,16 @@ expect = "workspace_ssh.user"
 [[case]]
 name = "no identity files"
 set = { "workspace_ssh.identity_files" = [] }
-expect = "workspace_ssh.identity_files"
+expect = "accepted"
+python = "workspace_ssh.identity_files"
+reason = "Owner decision: workspace identities may be selected after installation starts; an empty list is valid in Rust"
+
+[[case]]
+name = "identity files omitted"
+remove = ["workspace_ssh.identity_files"]
+expect = "accepted"
+python = "workspace_ssh.identity_files"
+reason = "Owner decision: an install input does not need preselected workspace identities"
 
 [[case]]
 name = "identity file with a space"

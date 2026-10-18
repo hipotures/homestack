@@ -32,7 +32,6 @@ gid = 1000
 
 [workspace_ssh]
 user = "developer"
-identity_files = ["~/.ssh/id_ed25519_sk"]
 identities_only = true
 log_level = "FATAL"
 

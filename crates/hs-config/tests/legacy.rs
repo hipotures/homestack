@@ -111,14 +111,6 @@ fn workspace_ssh_validation_matches_ssh_config_contract() {
             "workspace_ssh.user",
         ),
         (
-            "empty identities",
-            edited(
-                "identity_files = [\n    \"~/.ssh/example-hardware-key\"\n]",
-                "identity_files = []",
-            ),
-            "workspace_ssh.identity_files",
-        ),
-        (
             "whitespace identity",
             edited("~/.ssh/example-hardware-key", "~/.ssh/example hardware key"),
             "workspace_ssh.identity_files",

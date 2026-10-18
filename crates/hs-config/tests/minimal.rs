@@ -17,6 +17,7 @@ fn minimal_install_input_splits_without_gold_or_optional_sections() -> Result<()
     assert_eq!(client.display.storage_unit, "GiB");
     assert!(client.setup.is_none());
     assert!(client.sounds.is_none());
+    assert!(client.workspace_ssh.identity_files.is_empty());
     Ok(())
 }
 
@@ -59,18 +60,38 @@ fn removing_any_minimal_field_is_rejected() -> Result<(), Box<dyn std::error::Er
 }
 
 #[test]
-fn workspace_key_name_is_arbitrary_but_empty_list_is_rejected() -> Result<(), Box<dyn std::error::Error>> {
-    let text = MINIMAL.replace("~/.ssh/id_ed25519_sk", "/nonexistent/arbitrary-workspace-key");
+fn workspace_keys_are_optional_and_explicit_entries_are_validated() -> Result<(), Box<dyn std::error::Error>> {
+    let with_keys =
+        |value: &str| MINIMAL.replace("[workspace_ssh]", &format!("[workspace_ssh]\nidentity_files = {value}"));
+    let text = with_keys("[\"/nonexistent/arbitrary-workspace-key\"]");
     let config = legacy::read(&text)?;
     assert_eq!(
         config.client.workspace_ssh.identity_files,
         ["/nonexistent/arbitrary-workspace-key"]
     );
-    let text = MINIMAL.replace("[\"~/.ssh/id_ed25519_sk\"]", "[]");
-    assert_eq!(
-        legacy::read(&text).err().ok_or("accepted empty identity list")?.field,
-        "workspace_ssh.identity_files"
+    assert!(
+        legacy::read(&with_keys("[]"))?
+            .client
+            .workspace_ssh
+            .identity_files
+            .is_empty()
     );
+    for value in [
+        "42",
+        "\"key\"",
+        "[42]",
+        "[\"\"]",
+        "[\"key with spaces\"]",
+        "[\"key\", \"key\"]",
+    ] {
+        assert_eq!(
+            legacy::read(&with_keys(value))
+                .err()
+                .ok_or("accepted invalid identity files")?
+                .field,
+            "workspace_ssh.identity_files"
+        );
+    }
     Ok(())
 }
 

@@ -36,6 +36,7 @@ pub struct ClientConfig {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkspaceSsh {
     pub user: String,
+    /// Explicitly selected workspace keys; empty until keys are selected.
     pub identity_files: Vec<String>,
     pub identities_only: bool,
     /// Upper case, one of `LOG_LEVELS`.
@@ -401,12 +402,11 @@ fn workspace_ssh(doc: &Table) -> Result<WorkspaceSsh, ConfigError> {
         .to_owned();
 
     let identity_error = |message: &str| ConfigError::new("workspace_ssh.identity_files", message);
-    let raw_files = match table.get("identity_files") {
-        Some(Value::Array(items)) if !items.is_empty() => items,
+    let raw_files: &[Value] = match table.get("identity_files") {
+        None => &[],
+        Some(Value::Array(items)) => items,
         _ => {
-            return Err(identity_error(
-                "[workspace_ssh] identity_files must be a non-empty array",
-            ));
+            return Err(identity_error("[workspace_ssh] identity_files must be an array"));
         }
     };
     let mut identity_files: Vec<String> = Vec::with_capacity(raw_files.len());

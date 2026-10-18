@@ -1,4 +1,4 @@
-# Required installation fields plus the lab's reference Gold and SSH key.
+# Required installation fields plus the lab's reference Gold.
 version = 1
 
 [node]
@@ -32,7 +32,6 @@ gid = 1000
 
 [workspace_ssh]
 user = "user"
-identity_files = ["~/.ssh/e2e-workspace"]
 identities_only = true
 log_level = "FATAL"
 

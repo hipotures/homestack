@@ -354,8 +354,9 @@ The `homestack` phase prepares the real installation without applying it:
   Its template is `crates/hs-e2e/src/service-config.toml`; optional control,
   repo, display, sounds and setup sections are omitted. It additionally
   selects Gold 100 for this lab; Gold is not required by the parser.
-  The workspace key path identifies the key generated for this lab, not a
-  universally required filename. Preparation
+  The template omits `identity_files`; after generating the lab's workspace
+  key, preparation records that actual key in the runtime configuration.
+  No preselected workspace identity is required by the installer. Preparation
   writes it to `<temporary_directory>/client/config/homestack/config.toml`
   only when that file does not exist. Start a fresh lab to test the minimal
   input; reopening an existing profile retains its earlier configuration.

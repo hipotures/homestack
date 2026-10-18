@@ -122,7 +122,18 @@ pub async fn prepare(options: &Options, dir: &Path, artifacts: &Path, report: &V
     let profile = dir.join("client/config/homestack");
     workspace_keys(dir).await?;
     if !profile.join("config.toml").exists() {
-        write_private(&profile.join("config.toml"), config.as_bytes())?;
+        // The input needs no preselected key. Record the actual key only
+        // after the lab has generated it for workspace SSH connections.
+        let mut prepared: toml::Table = config.parse()?;
+        prepared
+            .get_mut("workspace_ssh")
+            .and_then(toml::Value::as_table_mut)
+            .ok_or("the E2E configuration has no workspace SSH table")?
+            .insert(
+                "identity_files".into(),
+                toml::Value::Array(vec!["~/.ssh/e2e-workspace".into()]),
+            );
+        write_private(&profile.join("config.toml"), toml::to_string(&prepared)?.as_bytes())?;
     }
     let path = profile.join("config.toml");
     let mut document: toml::Table = std::fs::read_to_string(&path)?.parse()?;
@@ -215,7 +226,7 @@ mod tests {
         assert_eq!(parsed.server.gold_vmid, Some(100));
         assert_eq!(parsed.server.network.gateway, "10.77.0.1");
         assert!(parsed.client.server.is_none());
-        assert_eq!(parsed.client.workspace_ssh.identity_files, ["~/.ssh/e2e-workspace"]);
+        assert!(parsed.client.workspace_ssh.identity_files.is_empty());
         Ok(())
     }
 
