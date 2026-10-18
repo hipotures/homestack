@@ -9,7 +9,7 @@
 //! `compare` applies one rule of `parity/normalize.toml` to two outputs and
 //! fails, listing where they differ, unless they agree.
 //!
-//! `PYTHON_IDS` is the output of `python -m homestack_parity.list_tests`,
+//! `PYTHON_IDS` is the frozen original test list in `parity/fixtures/python-test-ids.txt`,
 //! `RUST_TEST_LIST` the output of `cargo test -- --list --format terse`.
 
 use std::process::ExitCode;

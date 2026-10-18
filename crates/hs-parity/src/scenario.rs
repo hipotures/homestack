@@ -1,7 +1,7 @@
 //! Scenario files in `scenarios/`.
 //!
 //! The `[pve]` table is the simulated cluster (read by `pve-sim`); the rest
-//! says how to run both implementations and what to expect.
+//! identifies a frozen reference, the Rust request and the expected result.
 
 use std::path::PathBuf;
 
@@ -27,31 +27,23 @@ pub struct Meta {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HomeStack {
-    /// Python config file, relative to the repository root.
+    /// Installation input, relative to the repository root.
     pub config: PathBuf,
-    /// Token the Python run uses; defaults to `root@pam!parity`.
-    #[serde(default = "default_python_token")]
-    pub python_token: String,
     /// Token the Rust server uses; defaults to `homestack@pve!server`.
     #[serde(default = "default_server_token")]
     pub server_token: String,
-}
-
-fn default_python_token() -> String {
-    "root@pam!parity".to_owned()
 }
 
 fn default_server_token() -> String {
     "homestack@pve!server".to_owned()
 }
 
-/// One request run through both implementations.
+/// One Rust request compared with its frozen reference.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Parity {
-    /// `homestack` arguments (without `--config`), or `["@NAME"]` for a
-    /// function of `parity/python/homestack_parity/func_driver.py`.
-    pub python: Vec<String>,
+    /// Frozen Python output and operations, relative to the repository root.
+    pub reference: PathBuf,
     /// Server request as `METHOD /path`, `@NAME ARGS` for a server
     /// function without a route, or `cli ARGS` for the Rust client's
     /// `homestack ARGS` against the server (`crates/hs-parity/tests/scenarios.rs`).

@@ -1,0 +1,31 @@
+{
+  "ops": [
+    "get{path=/cluster/resources,type=vm}",
+    "get{path=/nodes/pve-example-1/qemu/223/config}",
+    "guest_ping{vmid=223}",
+    "guest_exec{cmd=command -v cloud-init >/dev/null 2>&1 && timeout 180 cloud-init status --wait >/dev/null 2>&1 || true,vmid=223}",
+    "guest_exec_status{vmid=223}",
+    "guest_exec{cmd=hostname,vmid=223}",
+    "guest_exec_status{vmid=223}",
+    "guest_exec{cmd=ip -4 -o addr show dev eth0,vmid=223}",
+    "guest_exec_status{vmid=223}",
+    "guest_exec{cmd=findmnt -n -o SOURCE%2CFSTYPE%2CTARGET /home/developer,vmid=223}",
+    "guest_exec_status{vmid=223}",
+    "guest_exec{cmd=findmnt -n -o SOURCE /home/developer | xargs -r blkid -s LABEL -o value,vmid=223}",
+    "guest_exec_status{vmid=223}",
+    "guest_exec{cmd=id developer,vmid=223}",
+    "guest_exec_status{vmid=223}",
+    "guest_exec{cmd=test -s /home/developer/.ssh/authorized_keys && echo OK || echo MISSING,vmid=223}",
+    "guest_exec_status{vmid=223}",
+    "guest_exec{cmd=test -s /root/.ssh/authorized_keys && echo OK || echo MISSING,vmid=223}",
+    "guest_exec_status{vmid=223}",
+    "guest_exec{cmd=awk -F: '$3 >%3D 1000 && $3 < 65534 %7Bprint $1 \":\" $3 \":\" $4%7D' /etc/passwd,vmid=223}",
+    "guest_exec_status{vmid=223}",
+    "guest_exec{cmd=command -v cloud-id >/dev/null 2>&1 && cloud-id || true,vmid=223}",
+    "guest_exec_status{vmid=223}"
+  ],
+  "output": {
+    "cloud_id": "nocloud",
+    "ok": true
+  }
+}

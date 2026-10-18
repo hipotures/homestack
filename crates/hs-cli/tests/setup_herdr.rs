@@ -258,9 +258,10 @@ fn changed_state(installed: bool) -> Value {
 
 #[test]
 fn default_and_example_catalog_put_herdr_after_claude() {
-    let text =
-        std::fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../python/config.example.toml"))
-            .unwrap();
+    let text = std::fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../parity/fixtures/config.example.toml"),
+    )
+    .unwrap();
     let example = parse_setup(hs_config::legacy::read(&text).unwrap().client.setup.as_ref().unwrap()).unwrap();
     for setup in [
         SetupConfig::default(),

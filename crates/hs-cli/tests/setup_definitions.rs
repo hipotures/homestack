@@ -13,7 +13,8 @@ use setup_fixture::entry;
 use toml::{Table, Value};
 
 fn example_text() -> String {
-    std::fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../python/config.example.toml")).unwrap()
+    std::fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../parity/fixtures/config.example.toml"))
+        .unwrap()
 }
 
 /// `[setup]` of a Python `config.toml`, as the client keeps it.

@@ -34,9 +34,9 @@ fn cluster() -> Result<ClusterSpec, Box<dyn std::error::Error>> {
     Ok(spec)
 }
 
-/// A server with the server part of `python/config.example.toml`.
+/// A server with the server part of `parity/fixtures/config.example.toml`.
 async fn configured(sim: &PveSim, token: &str, dir: &Path) -> Result<Server, common::Error> {
-    let python = std::fs::read_to_string(repo().join("python/config.example.toml"))?;
+    let python = std::fs::read_to_string(repo().join("parity/fixtures/config.example.toml"))?;
     std::fs::write(dir.join("server.toml"), hs_config::split::split(&python)?.server_toml)?;
     Server::start(sim, &[sim.base_url()], token, dir).await
 }
@@ -83,7 +83,7 @@ async fn server_status_and_configuration_work_before_gold_is_selected() -> TestR
         pool.vms.retain(|vmid| *vmid != 100);
     }
     let sim = PveSim::start(spec).await?;
-    let python = std::fs::read_to_string(repo().join("python/config.example.toml"))?;
+    let python = std::fs::read_to_string(repo().join("parity/fixtures/config.example.toml"))?;
     let mut config = hs_config::legacy::read(&python)?.server;
     config.gold_vmid = None;
     std::fs::write(dir.path().join("server.toml"), config.to_toml())?;

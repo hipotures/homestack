@@ -69,9 +69,10 @@ fn example_settings(home: &Path) -> Settings {
 }
 
 fn example_settings_from(home: &Path, edit: impl FnOnce(String) -> String) -> Settings {
-    let text =
-        std::fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../python/config.example.toml"))
-            .unwrap();
+    let text = std::fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../parity/fixtures/config.example.toml"),
+    )
+    .unwrap();
     let legacy = hs_config::legacy::read(&edit(text)).unwrap();
     let mut cfg = settings(home);
     cfg.setup = parse_setup(legacy.client.setup.as_ref().unwrap()).unwrap();

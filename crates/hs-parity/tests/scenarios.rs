@@ -1,20 +1,9 @@
-//! L3 parity: every scenario in `scenarios/` through both
-//! implementations against the same simulated cluster.
-//!
-//! Python runs the real CLI on `FixtureTransport` (needs `uv`); Rust runs the
-//! server in-process. For each scenario this checks that
-//!
-//! - the Python command translation agrees with what the simulator saw,
-//! - both implementations issued the same operations, apart from those the
-//!   normalization rule drops,
-//! - their outputs are equal after the scenario's normalization rule,
-//! - both match the scenario's expectations.
-//!
+//! Simulator regression tests against frozen outputs and operations from the final Python CLI.
 //! Set `HOMESTACK_PHASE` to run only the scenarios of one phase.
 
 use std::path::{Path, PathBuf};
 
-use hs_parity::normalize::Rules;
+use hs_parity::normalize::{Rules, differences};
 use hs_parity::scenario::{Parity, Scenario};
 use hs_pve::{PveClientConfig, PveToken};
 use hs_server::{ApiToken, ServerConfig};
@@ -39,81 +28,18 @@ fn scenario_files() -> Result<Vec<PathBuf>, std::io::Error> {
     Ok(files)
 }
 
-struct PythonRun {
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Reference {
     output: Value,
-    recorded_ops: Vec<String>,
-}
-
-async fn run_python(
-    scenario: &Scenario,
-    sim: &PveSim,
-    args: &[String],
-) -> Result<PythonRun, Box<dyn std::error::Error>> {
-    let root = repo_root();
-    let dir = tempfile::tempdir()?;
-    let ca = dir.path().join("ca.pem");
-    let token = dir.path().join("token");
-    let record = dir.path().join("record.json");
-    std::fs::write(&ca, sim.ca_pem())?;
-    std::fs::write(&token, scenario.token(&scenario.homestack.python_token)?)?;
-    let config = root.join(&scenario.homestack.config);
-    let function = args.first().and_then(|first| first.strip_prefix('@'));
-    let mut command = tokio::process::Command::new("uv");
-    command
-        .current_dir(root.join("python"))
-        .env("PYTHONPATH", root.join("parity/python"))
-        .env_remove("VIRTUAL_ENV")
-        .args(["run", "--quiet", "python", "-m"])
-        .arg(if function.is_some() {
-            "homestack_parity.func_driver"
-        } else {
-            "homestack_parity.cli_driver"
-        })
-        .arg("--sim-url")
-        .arg(sim.base_url())
-        .arg("--ca-file")
-        .arg(&ca)
-        .arg("--token-file")
-        .arg(&token)
-        .arg("--record-out")
-        .arg(&record);
-    match function {
-        Some(name) => command
-            .arg("--config")
-            .arg(&config)
-            .arg("--")
-            .arg(name)
-            .args(args.iter().skip(1)),
-        None => command.arg("--").arg("--config").arg(&config).args(args),
-    };
-    let output = command.output().await?;
-    if !output.status.success() {
-        return Err(format!(
-            "Python run failed ({}):\n{}\n{}",
-            output.status,
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        )
-        .into());
-    }
-    let recorded: Value = serde_json::from_str(&std::fs::read_to_string(&record)?)?;
-    let recorded_ops = recorded["ops"]
-        .as_array()
-        .ok_or("record has no ops")?
-        .iter()
-        .filter_map(|op| op.as_str().map(str::to_owned))
-        .collect();
-    Ok(PythonRun {
-        output: serde_json::from_slice(&output.stdout)?,
-        recorded_ops,
-    })
+    ops: Vec<String>,
 }
 
 async fn run_rust(scenario: &Scenario, sim: &PveSim, request: &str) -> Result<Value, Box<dyn std::error::Error>> {
     let token = PveToken::parse(&scenario.token(&scenario.homestack.server_token)?)?;
     let mut pve = PveClientConfig::new(vec![sim.base_url().parse()?], token);
     pve.extra_ca_pem = Some(sim.ca_pem().to_owned());
-    // The server gets the server part of the scenario's Python configuration.
+    // The server gets the server part of the scenario's installation input.
     let python_config = std::fs::read_to_string(repo_root().join(&scenario.homestack.config))?;
     let server_toml = hs_config::split::split(&python_config)?.server_toml;
     if let Some(function) = request.strip_prefix('@') {
@@ -174,7 +100,7 @@ impl hs_cli::system::Console for Captured {
 }
 
 /// `homestack ARGS` of the Rust client (phase 13) against the server behind
-/// HTTPS, with the client part of the scenario's Python configuration.
+/// HTTPS, with the client part of the scenario's installation input.
 async fn run_rust_cli(
     pve: PveClientConfig,
     python_config: &str,
@@ -303,45 +229,36 @@ fn op_strings(sim: &PveSim) -> Vec<String> {
 async fn check(path: &Path, rules: &Rules) -> Result<usize, Box<dyn std::error::Error>> {
     let scenario = Scenario::parse(&std::fs::read_to_string(path)?)?;
     let sim = PveSim::start(scenario.pve.clone()).await?;
+    let mut failures = Vec::new();
     for (index, parity) in scenario.parity.iter().enumerate() {
         let name = format!("{} #{} ({})", scenario.meta.name, index + 1, parity.rust);
-        check_one(&scenario, &sim, parity, rules)
-            .await
-            .map_err(|error| format!("{name}: {error}"))?;
+        if let Err(error) = check_one(&scenario, &sim, parity, rules).await {
+            failures.push(format!("{name}: {error}"));
+        }
     }
     sim.shutdown().await;
+    if !failures.is_empty() {
+        return Err(failures.join("\n").into());
+    }
     Ok(scenario.parity.len())
 }
 
 async fn check_one(scenario: &Scenario, sim: &PveSim, parity: &Parity, rules: &Rules) -> TestResult {
     let rule = rules.get(&parity.normalize)?;
-    sim.clear_ops();
-    let python = run_python(scenario, sim, &parity.python).await?;
-    let python_ops = op_strings(sim);
+    let reference: Reference = serde_json::from_str(&std::fs::read_to_string(repo_root().join(&parity.reference))?)?;
     sim.clear_ops();
     let rust = run_rust(scenario, sim, &parity.rust).await?;
     let rust_ops = op_strings(sim);
 
-    if python.recorded_ops != python_ops {
-        return Err(format!(
-            "Python command translation disagrees with the simulator:\n  translated {:?}\n  simulator  {:?}",
-            python.recorded_ops, python_ops
-        )
-        .into());
+    let (reference_kept, rust_kept) = (rule.python_ops(&reference.ops), rule.rust_ops(&rust_ops));
+    if reference_kept != rust_kept {
+        return Err(format!("operations differ:\n  reference {reference_kept:#?}\n  Rust {rust_kept:#?}").into());
     }
-    let (python_kept, rust_kept) = (rule.python_ops(&python_ops), rule.rust_ops(&rust_ops));
-    if python_kept != rust_kept {
-        return Err(format!("operations differ:\n  Python {python_kept:#?}\n  Rust   {rust_kept:#?}").into());
-    }
-    let python_body = rule.python(&python.output)?;
+    let reference_body = rule.python(&reference.output)?;
     let rust_body = rule.rust(&rust);
-    if python_body != rust_body {
-        return Err(format!(
-            "normalized outputs differ:\n  Python {}\n  Rust   {}",
-            serde_json::to_string_pretty(&python_body)?,
-            serde_json::to_string_pretty(&rust_body)?
-        )
-        .into());
+    let found = differences(&reference_body, &rust_body, 20);
+    if !found.is_empty() {
+        return Err(format!("normalized outputs differ: {}", found.join("; ")).into());
     }
     if !parity.expect.ops.is_empty() && rust_ops != parity.expect.ops {
         return Err(format!("unexpected operations: {rust_ops:?}").into());
@@ -356,7 +273,7 @@ async fn check_one(scenario: &Scenario, sim: &PveSim, parity: &Parity, rules: &R
 
 #[tokio::test]
 #[ignore = "slow (owner, 2026-10-15): run with cargo test -- --ignored"]
-async fn python_and_rust_agree_on_every_scenario() -> TestResult {
+async fn frozen_python_and_rust_agree_on_every_scenario() -> TestResult {
     let rules: Rules = toml::from_str(&std::fs::read_to_string(repo_root().join("parity/normalize.toml"))?)?;
     rules.validate()?;
     let phase = std::env::var("HOMESTACK_PHASE").ok();

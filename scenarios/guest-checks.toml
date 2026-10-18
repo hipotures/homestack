@@ -19,62 +19,62 @@ phase = "3"
 description = "Gold guest contract and guest verification"
 
 [homestack]
-config = "python/config.example.toml"
+config = "parity/fixtures/config.example.toml"
 
 [[parity]]
-python = ["@gold-readiness"]
+reference = "parity/fixtures/scenarios/guest-checks-1.json"
 rust = "GET /v1/gold/readiness"
 normalize = "gold-readiness"
 
 [[parity]]
-python = ["@gold-readiness", "102"]
+reference = "parity/fixtures/scenarios/guest-checks-2.json"
 rust = "GET /v1/gold/readiness?vmid=102"
 normalize = "gold-readiness"
 
 [[parity]]
-python = ["@verify-refresh", "220"]
+reference = "parity/fixtures/scenarios/guest-checks-3.json"
 rust = "@verify-refresh 220"
 normalize = "guest-verify"
 expect.body = { ok = true, cloud_id = "nocloud" }
 
 [[parity]]
-python = ["@verify-refresh", "221"]
+reference = "parity/fixtures/scenarios/guest-checks-4.json"
 rust = "@verify-refresh 221"
 normalize = "guest-verify"
 expect.body = { ok = false, error = "Refresh verification failed: workspace hostname is incorrect" }
 
 [[parity]]
-python = ["@verify-refresh", "222"]
+reference = "parity/fixtures/scenarios/guest-checks-5.json"
 rust = "@verify-refresh 222"
 normalize = "guest-verify"
 expect.body = { ok = false, error = "Refresh verification failed: persistent user authorized_keys is missing" }
 
 [[parity]]
-python = ["@verify-refresh", "223"]
+reference = "parity/fixtures/scenarios/guest-checks-6.json"
 rust = "@verify-refresh 223"
 normalize = "guest-verify"
 expect.body = { ok = true, cloud_id = "nocloud" }
 
 [[parity]]
-python = ["@verify-refresh", "224"]
+reference = "parity/fixtures/scenarios/guest-checks-7.json"
 rust = "@verify-refresh 224"
 normalize = "guest-verify"
 expect.body = { ok = false, error = "Refresh verification failed: unexpected regular user accounts" }
 
 [[parity]]
-python = ["@verify-refresh", "225"]
+reference = "parity/fixtures/scenarios/guest-checks-8.json"
 rust = "@verify-refresh 225"
 normalize = "guest-verify"
 expect.body = { ok = false, error = "Refresh verification failed: eth0 does not have 192.0.2.225/24" }
 
 [[parity]]
-python = ["@verify-refresh", "227"]
+reference = "parity/fixtures/scenarios/guest-checks-9.json"
 rust = "@verify-refresh 227"
 normalize = "guest-verify"
 expect.body = { ok = false, error = "Refresh verification failed: home label is 'HS_HOME_999'" }
 
 [[parity]]
-python = ["@verify-refresh", "228"]
+reference = "parity/fixtures/scenarios/guest-checks-10.json"
 rust = "@verify-refresh 228"
 normalize = "guest-verify"
 expect.body = { ok = false, error = "Refresh verification failed: root authorized_keys is missing" }

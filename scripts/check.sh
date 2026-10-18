@@ -1,15 +1,13 @@
 #!/usr/bin/env bash
-# Every check of the Rust migration (docs/migration/PLAN.md, section 2).
+# HomeStack checks (docs/migration/PLAN.md, section 2).
 #
 #   scripts/check.sh            L1-L3, no cluster
 #   scripts/check.sh --live     also L4 against the real cluster
 #   scripts/check.sh --phase N  only the tests and scenarios of phase N
 #
 # --live needs HOMESTACK_LIVE_TOKEN_FILE and HOMESTACK_LIVE_PVE_ENDPOINTS
-# (see crates/hs-server/tests/live.rs), docker for the image check, the
-# Python CLI's own config and transport for the comparisons
-# (scripts/live-compare-*.sh), and HOMESTACK_LIVE_TEST_TOKEN_FILE for the
-# changes in the test pool (crates/hs-server/tests/live_jobs.rs,
+# (see crates/hs-server/tests/live.rs), docker for the image check, and
+# HOMESTACK_LIVE_TEST_TOKEN_FILE for changes in the test pool (crates/hs-server/tests/live_jobs.rs,
 # live_cloudinit.rs, live_lifecycle.rs, live_refresh.rs, live_resize.rs,
 # live_migrate.rs, live_addkey.rs, live_create_node.rs), the only live checks
 # that change the cluster; the boot also needs the vendor snippets of this
@@ -51,9 +49,6 @@ done
 root=$(cd "$(dirname "$0")/.." && pwd)
 cd "$root"
 unset VIRTUAL_ENV
-export PYTHONPATH="$root/parity/python"
-# Python is the uv project in python/; it is removed in the last phase.
-uv_() { uv --directory "$root/python" "$@"; }
 step() { printf '\n== %s\n' "$*"; }
 
 if [[ -n $phase ]]; then
@@ -87,18 +82,11 @@ uvx --from shellcheck-py==0.10.0.1 shellcheck -x deploy/pve/homestack-pve.sh dep
     deploy/pve/tests/run.sh deploy/pve/tests/fake-pve scripts/live-probe-import-from.sh
 deploy/pve/tests/run.sh
 
-step "Python parity tools"
-uv_ run --quiet python -m unittest discover -s "$root/parity/python/tests" -t "$root/parity/python"
-
-step "Python test suite (the reference behaviour)"
-uv_ run --quiet python -m unittest discover -s tests
-
 step "test manifest (L1)"
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
-uv_ run --quiet python -m homestack_parity.list_tests tests > "$work/python-ids"
 cargo test --workspace --locked -q -- --list --format terse > "$work/rust-tests" 2>/dev/null
-cargo run -q -p hs-parity -- manifest-check "$root/parity/manifest.toml" "$work/python-ids" "$work/rust-tests"
+cargo run -q -p hs-parity -- manifest-check "$root/parity/manifest.toml" "$root/parity/fixtures/python-test-ids.txt" "$work/rust-tests"
 
 if ((live)); then
     : "${HOMESTACK_LIVE_TOKEN_FILE:?--live needs HOMESTACK_LIVE_TOKEN_FILE}"
@@ -108,11 +96,6 @@ if ((live)); then
     cargo test -p hs-server --locked --test live -- --ignored --test-threads=1
     step "live cluster (L4): server image"
     "$root/scripts/live-container.sh"
-    # live-compare-status.sh is not run: Python's status reads every workspace
-    # of the owner, which the live checks may not touch (2026-10-13), and the
-    # server's token sees only the HomeStack pools.
-    step "live cluster (L4): Python Gold readiness against the server"
-    "$root/scripts/live-compare-gold.sh"
     step "live cluster (L4): jobs in the test pool"
     cargo test -p hs-server --locked --test live_jobs -- --ignored --nocapture
     step "live cluster (L4): native Cloud-Init boot in the test pool"

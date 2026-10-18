@@ -1,0 +1,21 @@
+{
+  "ops": [
+    "get{path=/cluster/resources,type=vm}",
+    "get{path=/nodes/pve-example-1/qemu/227/config}",
+    "guest_ping{vmid=227}",
+    "guest_exec{cmd=command -v cloud-init >/dev/null 2>&1 && timeout 180 cloud-init status --wait >/dev/null 2>&1 || true,vmid=227}",
+    "guest_exec_status{vmid=227}",
+    "guest_exec{cmd=hostname,vmid=227}",
+    "guest_exec_status{vmid=227}",
+    "guest_exec{cmd=ip -4 -o addr show dev eth0,vmid=227}",
+    "guest_exec_status{vmid=227}",
+    "guest_exec{cmd=findmnt -n -o SOURCE%2CFSTYPE%2CTARGET /home/developer,vmid=227}",
+    "guest_exec_status{vmid=227}",
+    "guest_exec{cmd=findmnt -n -o SOURCE /home/developer | xargs -r blkid -s LABEL -o value,vmid=227}",
+    "guest_exec_status{vmid=227}"
+  ],
+  "output": {
+    "error": "Refresh verification failed: home label is 'HS_HOME_999'",
+    "ok": false
+  }
+}

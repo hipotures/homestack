@@ -1,4 +1,4 @@
-name: Rust migration
+name: Rust checks
 
 on:
   push:
@@ -17,11 +17,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Install uv
-        run: python -m pip install uv
-      - name: Install locked Python dependencies
-        working-directory: python
-        run: uv sync --locked
+      - uses: astral-sh/setup-uv@v6
       - name: Install Rust 1.99.0
         run: |
           rustup toolchain install 1.99.0 --profile minimal --component clippy,rustfmt
@@ -29,6 +25,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2.9.2
       - name: L1-L3 checks
         run: scripts/check.sh
+      - name: Check commit whitespace
+        run: git show --format= --check HEAD
 
   # The node image for homestack-deploy:
   # ghcr.io/hipotures/homestack-server:<major>.<minor>.<patch>-<commit>, public, on every
@@ -67,7 +65,7 @@ jobs:
         env:
           RUSTFLAGS: "-C target-feature=+crt-static"
         run: |
-          cargo build --release --locked --target x86_64-unknown-linux-musl -p hs-server --bin homestack-server
+          python3 scripts/cargo.py build --release --locked --target x86_64-unknown-linux-musl -p hs-server --bin homestack-server
           ! readelf -l target/x86_64-unknown-linux-musl/release/homestack-server | grep -q INTERP
           mkdir -p image
           cp target/x86_64-unknown-linux-musl/release/homestack-server image/

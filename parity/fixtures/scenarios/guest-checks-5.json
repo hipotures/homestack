@@ -1,0 +1,25 @@
+{
+  "ops": [
+    "get{path=/cluster/resources,type=vm}",
+    "get{path=/nodes/pve-example-1/qemu/222/config}",
+    "guest_ping{vmid=222}",
+    "guest_exec{cmd=command -v cloud-init >/dev/null 2>&1 && timeout 180 cloud-init status --wait >/dev/null 2>&1 || true,vmid=222}",
+    "guest_exec_status{vmid=222}",
+    "guest_exec{cmd=hostname,vmid=222}",
+    "guest_exec_status{vmid=222}",
+    "guest_exec{cmd=ip -4 -o addr show dev eth0,vmid=222}",
+    "guest_exec_status{vmid=222}",
+    "guest_exec{cmd=findmnt -n -o SOURCE%2CFSTYPE%2CTARGET /home/developer,vmid=222}",
+    "guest_exec_status{vmid=222}",
+    "guest_exec{cmd=findmnt -n -o SOURCE /home/developer | xargs -r blkid -s LABEL -o value,vmid=222}",
+    "guest_exec_status{vmid=222}",
+    "guest_exec{cmd=id developer,vmid=222}",
+    "guest_exec_status{vmid=222}",
+    "guest_exec{cmd=test -s /home/developer/.ssh/authorized_keys && echo OK || echo MISSING,vmid=222}",
+    "guest_exec_status{vmid=222}"
+  ],
+  "output": {
+    "error": "Refresh verification failed: persistent user authorized_keys is missing",
+    "ok": false
+  }
+}

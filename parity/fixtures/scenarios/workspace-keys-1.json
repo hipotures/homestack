@@ -1,0 +1,11 @@
+{
+  "ops": [
+    "get{path=/cluster/resources,type=vm}",
+    "get{path=/nodes/pve-example-2/qemu/100/config}"
+  ],
+  "output": {
+    "keys": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITEST developer@desktop\n",
+    "ok": true,
+    "source": "Gold VM 100:qm sshkeys"
+  }
+}

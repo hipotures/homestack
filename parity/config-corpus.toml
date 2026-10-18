@@ -3,15 +3,14 @@
 # Every case edits the base file: `set` replaces values (dotted paths),
 # `remove` deletes them, `append` adds raw text at the end and `text` replaces
 # the whole document. crates/hs-parity/tests/config_corpus.rs runs each case
-# through Python's config.load_config (parity/python/homestack_parity/config_check.py)
-# and Rust's hs-config legacy reader.
+# against frozen Python verdicts and the Rust installation-input reader.
 #
 # `expect` is the Rust verdict: "accepted" or the field the error is about.
-# Python must give the same verdict unless the case says `python = ...` and
+# The frozen Python verdict agrees unless the case says `python = ...` and
 # gives the `reason` for the difference (docs/migration/phase-1.md).
 
 phase = "1"
-base = "python/config.example.toml"
+base = "parity/fixtures/config.example.toml"
 
 [[case]]
 name = "the example"

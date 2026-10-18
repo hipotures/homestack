@@ -1,0 +1,85 @@
+{
+  "ops": [
+    "get{path=/cluster/resources,type=vm}",
+    "get{path=/nodes/pve-example-1/qemu/200/config}",
+    "guest_ping{vmid=200}",
+    "guest_exec{cmd=hostname,vmid=200}",
+    "guest_exec_status{vmid=200}",
+    "guest_exec{cmd=ip -4 -o addr show dev eth0 2>/dev/null | awk '%7Bprint $4%7D' | head -n1,vmid=200}",
+    "guest_exec_status{vmid=200}",
+    "guest_exec{cmd=findmnt -n -o SOURCE%2CFSTYPE%2CTARGET /home/developer 2>/dev/null || true,vmid=200}",
+    "guest_exec_status{vmid=200}",
+    "guest_exec{cmd=findmnt -n -o SOURCE /home/developer 2>/dev/null | xargs -r blkid -s LABEL -o value,vmid=200}",
+    "guest_exec_status{vmid=200}",
+    "guest_exec{cmd=if getent passwd ubuntu >/dev/null 2>&1; then echo true; else echo false; fi,vmid=200}",
+    "guest_exec_status{vmid=200}"
+  ],
+  "output": {
+    "actual_hostname": "test1",
+    "actual_ip": "192.0.2.200/24",
+    "command": "status",
+    "config": "/home/user/DEV/homestack-rust/crates/hs-parity/../../python/config.example.toml",
+    "configured_ip": "192.0.2.200",
+    "execution": {
+      "sim": "https://localhost:42805",
+      "type": "fixture"
+    },
+    "home_disk": "scsi1",
+    "home_identity_ok": true,
+    "home_label": "HS_HOME_200",
+    "home_mount": "/dev/sdb ext4 /home/developer",
+    "home_mount_ok": true,
+    "home_serial": "HS_HOME_200",
+    "home_size_gb": 20.0,
+    "home_storage": "example-storage",
+    "mounted_home_label": "HS_HOME_200",
+    "name": "test1",
+    "node": "pve-example-1",
+    "ok": true,
+    "qga": true,
+    "role": "WS",
+    "role_tag_ok": true,
+    "role_warning": null,
+    "root_storage": "example-storage",
+    "ssh": {
+      "root": "ssh root@192.0.2.200",
+      "user": "ssh developer@192.0.2.200"
+    },
+    "status": "running",
+    "tags": [
+      "homestack-ws"
+    ],
+    "ubuntu_user_present": false,
+    "vmid": 200,
+    "volumes": [
+      {
+        "role": "cloud-init",
+        "size": "4M",
+        "slot": "ide0",
+        "storage": "example-storage",
+        "volume": "example-storage:vm-200-cloudinit"
+      },
+      {
+        "role": "root",
+        "size": "16G",
+        "slot": "scsi0",
+        "storage": "example-storage",
+        "volume": "example-storage:vm-200-hs-root-default"
+      },
+      {
+        "role": "home",
+        "size": "20G",
+        "slot": "scsi1",
+        "storage": "example-storage",
+        "volume": "example-storage:vm-200-hs-home-developer"
+      },
+      {
+        "role": "unused",
+        "size": null,
+        "slot": "unused0",
+        "storage": "example-storage",
+        "volume": "example-storage:vm-200-disk-9"
+      }
+    ]
+  }
+}

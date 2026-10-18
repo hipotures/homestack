@@ -7,7 +7,7 @@ use std::process::{Command, Output};
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
 fn example() -> Result<String, std::io::Error> {
-    std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../python/config.example.toml"))
+    std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../parity/fixtures/config.example.toml"))
 }
 
 fn hs_config(args: &[&str], home: &Path) -> Result<Output, std::io::Error> {

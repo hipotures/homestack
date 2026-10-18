@@ -1,173 +1,83 @@
 # HomeStack
 
-HomeStack is an installable Python application for managing disposable Proxmox VE workspace roots while keeping each workspace home directory on a separate persistent disk. It runs on a trusted desktop and currently reaches Proxmox through an already authenticated root SSH shell in Herdr.
+HomeStack manages disposable Proxmox VE workspace roots while keeping each workspace home on a separate persistent disk. The Rust desktop client talks to HomeStack API servers, which use scoped Proxmox API tokens.
 
-## Installation
+## Build and run
 
-HomeStack requires Python 3.12 or newer and [uv](https://docs.astral.sh/uv/). The Python application lives in `python/`; install the locked environment there:
+Build with Rust 1.99 or newer. Python 3 is needed for the repository's build wrapper; there is no Python CLI to install.
 
-```bash
-cd python
-uv sync
-```
-
-Run either entry point:
-
-```bash
-uv run homestack --help
-uv run python -m homestack --help
-```
-
-The desktop also needs `herdr` and `ssh`. File transfers additionally require `rsync`. GitHub repository provisioning additionally requires an authenticated `gh` CLI on the trusted desktop. Proxmox nodes need `qm`, `pvesh`, `pvesm`, `perl`, `base64`, `ssh`, and `scp`.
-
-## Rust server (migration in progress)
-
-HomeStack is being moved to a Rust service that talks to the Proxmox REST API with an API token, followed by a Rust client. The Python application stays the reference behaviour until the migration ends. The plan, the Proxmox API mapping, decisions and phase reports are in [docs/migration](docs/migration/PLAN.md). The Rust workspace is the repository root (`crates/`); the Python application moved to `python/` and is removed when the migration ends.
-
-Run every check (Rust 1.99 and uv required):
-
-```bash
-scripts/check.sh            # without a cluster
-scripts/check.sh --live     # also runs destructive live gates on configured test resources
-```
-
-Local builds and tests can discard disposable output automatically after success:
-
-```bash
+```sh
 python3 scripts/cargo.py build --locked -p hs-cli --bin homestack
-python3 scripts/cargo.py test --locked -p hs-cli
+./target/debug/homestack
 ```
 
-`scripts/check.sh` uses the same cleanup after the entire suite succeeds. Failed or
-interrupted commands retain their output for diagnosis. Cleanup removes hashed
-executables from `target/debug/deps` and `target/debug/examples`, plus incremental
-state; it preserves top-level applications, dependency libraries, release output,
-E2E disks, logs, credentials and downloaded images. Subsequent tests may need to
-relink their executables. Local dev/test profiles use reduced debug information
-and disable incremental compilation to prevent its cache from growing. Plain
-`cargo` commands bypass automatic cleanup. Use the wrapper consistently; its lock
-serializes wrapped commands and cleanup. Do not run unwrapped Cargo tests in
-parallel with it, because Cargo releases its build lock before executing tests.
+Install the binary in your `PATH` to use the `homestack` commands below. The desktop also needs OpenSSH; Herdr is optional for installation access and workspace tabs. File transfers use `rsync`. Repository provisioning uses an authenticated `gh` CLI on the desktop. Workspace setup and backup retain their Python programs inside the VM.
 
-Run `./target/debug/homestack` for the first installation: its TUI collects the
-workspace network, user and disk settings without requiring `config.toml`.
-An installed profile opens status; use Menu > Reinstall HomeStack for the full
-installer, or Menu > Update API containers to change server images using the
-saved deployment without root access. See [Client profiles](docs/client-profiles.md).
-Manual server deployment: [docs/migration/deploy.md](docs/migration/deploy.md).
-API contract: [docs/openapi.json](docs/openapi.json).
+## First installation and profiles
 
-Design for a disposable single-node Proxmox laboratory with real installation, Gold preparation, destructive E2E scenarios and an extensible test catalogue: [Isolated E2E laboratory](docs/isolated-e2e-lab.md).
+Start `homestack` or `homestack install` without an existing configuration. Choose root access to a Proxmox node through SSH or a Herdr pane, inspect the discovered resources, then select Gold, storage, network, workspace account, home size and SSH identities. Review the plan before Install applies it. Interrupted installation answers are saved separately from active configuration and restored on re-entry.
 
-The executable bootstrap downloads Debian qcow2, installs and verifies Proxmox in a disposable 1-vCPU/4-GiB KVM VM, automatically prepares and validates a Debian Gold VM, then powers the lab off and deletes it. Explicit installation phases support inspection pauses, pinned SSH, temporary web login and browser access from a local or remote desktop: [E2E bootstrap](docs/e2e-bootstrap.md).
+`config.minimal.toml` is an optional installation seed. It is not an active client configuration. The installer creates `client.toml`, server configuration and credentials after confirmation. Workspace SSH identity files are selected in the installer; no particular desktop key path is required in a seed.
 
-The Rust client (`crates/hs-cli`, binary `homestack`) runs `status`, `transport`, `discover`, `create`, `refresh`, `resize`, `addkey`, `destroy` and `migrate` through the server, with the same confirmations, `--json` output and exit codes as the Python CLI, and keeps the desktop's SSH config, a `known_hosts` file per workspace and `identity_files` itself. `install` and `uninstall` are Rust too (root on a node once, over SSH or a Herdr pane; [docs/migration/phase-13c.md](docs/migration/phase-13c.md)). `setup` and `repo` are still Python's. It reads `~/.config/homestack/client.toml` (from `hs-config split --server-url https://...`); its `[server]` section names the instances (HTTPS only), the client token file (default `~/.config/homestack/api-token`, mode 0600) and an optional CA file. Details: [docs/migration/phase-13.md](docs/migration/phase-13.md).
-
-## Configuration
-
-Inspect the local Herdr/Proxmox environment without reading a HomeStack config or changing Proxmox resources:
-
-```bash
-uv run homestack discover
-uv run homestack discover --json
+```sh
+homestack discover --json
+homestack install
+homestack --profil e2e
+homestack profiles
 ```
 
-Create or reconfigure the runtime config with the interactive installer:
+The default profile stores configuration below `~/.config/homestack` (or `$XDG_CONFIG_HOME/homestack`). Named profiles have independent credentials, SSH state and preferences. Use `--config PATH` to select an explicit client configuration outside a named profile. See [Client profiles](docs/client-profiles.md).
 
-```bash
-uv run homestack install
-```
+An installed profile opens cluster status. Menu > Reinstall HomeStack opens the full installer; Menu > Update API containers updates server images using the saved deployment. A failed connection is reported without assuming that the installation has disappeared.
 
-HomeStack reserves one Herdr workspace named exactly `PVE` for Proxmox administration. Put one or more tabs in that workspace, with each usable tab containing exactly one pane running an interactive root SSH session to a Proxmox node and left at that node's root shell prompt. Naming tabs after their nodes, for example `pve1`, `pve2`, and `pve3`, is recommended. Other Herdr workspaces are outside HomeStack's discovery scope and are not probed.
+## Connections and trust
 
-The installer uses this dedicated `PVE` workspace for read-only discovery, selects a verified root Herdr session, then asks only for configuration choices that cannot be discovered safely. A first-time installation is checkpointed stage by stage into the requested config path as an explicit install draft. After each completed stage the selected values are atomically saved; if a later stage fails, is interrupted, or needs manual preparation (for example Gold readiness), rerunning `homestack install` with the same `--config` path offers to continue and skips completed stages. The draft is deliberately not accepted by normal runtime commands and becomes a normal configuration only after final validation and confirmation. Restarting from scratch is explicit. Reconfiguring an already valid runtime config keeps the old config intact until the replacement is fully validated.
+Root access is needed once for Proxmox account, role, pool and token installation. Normal workspace operations go through the HTTPS API servers and scoped tokens. Workspace SSH and setup use the desktop's selected identities and verified host keys.
 
-Desktop connection profiles are selected with `homestack --profil NAME` (also `--profile NAME`). Without a selector, the client uses `default`. `homestack --profil e2e` opens the active isolated lab; `homestack --profil p2p` creates or opens a separate desktop profile. Run `homestack profiles` to list storage locations. Configuration, credentials, SSH state, preferences and caches of named profiles are independent. See [Client profiles](docs/client-profiles.md).
+For Herdr installation access, select a pane with an authenticated root shell at a Proxmox node's prompt. SSH installation access is also supported. The access screen verifies the chosen connection before resource discovery.
 
-The installer discovers workspace network profiles from existing HomeStack VMs and read-only PVE network/DNS data on the Gold VM's inherited bridge, lets the user choose when more than one profile is available, and asks only for missing network fields. Hardware-backed SSH identities are selected by number instead of being repeated as a long comma-separated path default.
+Configure generated workspace SSH entries in `[workspace_ssh]`; its user matches the workspace account in `[user]`. `identity_files` contains the desktop private-key paths selected during installation. Optional `fido_devices` limits the security-key kinds visible to SSH; this needs `bwrap` and `fido2-token`. Credentials and machine-specific configuration belong outside the repository.
 
-Manual configuration from `config.example.toml` remains available when needed.
-
-The default is `~/.config/homestack/config.toml`, or `$XDG_CONFIG_HOME/homestack/config.toml` when `XDG_CONFIG_HOME` is set. Override it for any invocation with `--config PATH`:
-
-```bash
-uv run homestack --config /path/to/config.toml status
-```
-
-Only the neutral example belongs in this repository. A real `config.toml` and private setup file paths, credentials, node names, addresses, storage IDs, Herdr names, and SSH identity paths must remain outside it.
-
-Configure the generated workspace SSH entry in `[workspace_ssh]`: `user` must match `[user] name`, `identity_files` lists the desktop's hardware-backed private-key paths, `identities_only` controls OpenSSH's `IdentitiesOnly`, and `log_level` selects a supported OpenSSH log level. HomeStack writes these configured values without hardcoded key paths and does not add password or implicit key fallback authentication. Optionally, `fido_devices` (for example `["yubikey", "trezor"]`) lists the kinds of FIDO security key the workspace connection may use, in priority order: OpenSSH asks every attached key in USB order, so a locked second key can ask for a PIN before the key that owns the login is tried. HomeStack runs the connection in a bubblewrap (`bwrap`) mount namespace that shows ssh only the first listed kind that is connected (the others stay hidden, and the keys on the server are unchanged); it needs `bwrap` and `fido2-token`. Inside that sandbox root-owned files look like they belong to `nobody`, so ssh reads only your own `~/.ssh/config` there (or nothing if it does not exist) instead of the system-wide ssh configuration. Names are `yubikey`, `trezor` or a USB id (`1050`, `1050:0407`). When none of the listed keys is connected HomeStack stops with a short message instead of the raw ssh error. Without the setting every attached key stays visible and setup prints a hint when more than one kind is connected.
-
-While HomeStack waits for a hardware-key touch (the workspace SSH connection and Herdr desktop registration), it plays a cue after one second, repeats it every 8 seconds, then plays a failure cue if the attempt ends unconfirmed (OpenSSH gives up after about 30 seconds) and a success cue when the touch is confirmed. A connection that needs no touch stays silent. Configure or disable the cues in the optional `[sounds]` table (`enabled`, `player`, `wait`, `ok`, `fail`, `repeat_seconds`; see `config.example.toml`). Without a sound player HomeStack rings the terminal bell. Touches that happen inside the Herdr pane to the Proxmox node cannot be detected by HomeStack and stay silent.
-
-The selected remote backend is explicit:
-
-```toml
-[transport]
-type = "herdr"
-
-[transport.herdr]
-workspace = "PVE"
-tab = "pve1"
-debug = true
-```
-
-Herdr is the only implemented backend. A small transport factory owns backend setup and verification, while the transport protocol exposes remote execution and generic execution metadata. Lifecycle, status, and Proxmox operations do not depend on Herdr pane internals, so another backend can be added later without rewriting their orchestration. Direct SSH is intentionally not implemented.
-
-## Trust and transport model
-
-HomeStack remains a trusted-desktop tool. Bootstrap discovery inspects only the Herdr workspace named `PVE`; it does not execute probes in unrelated Herdr workspaces. After configuration, HomeStack drives one already authenticated SSH root shell in the configured Herdr workspace, tab, and pane. Before remote work it verifies that:
-
-- the configured workspace and tab each match exactly once;
-- the tab has exactly one pane;
-- the foreground process is SSH to the configured control node;
-- the terminal is at the expected root prompt;
-- an end-to-end probe returns the expected hostname and UID 0.
-
-Commands run in an isolated child shell with an explicit timeout and unique begin/end envelopes, so a remote `exit` cannot close the long-lived SSH shell and every completed command has an exit marker. `debug = true` retains command output in Herdr scrollback; `false` clears it after parsing. HomeStack stores no Proxmox token or private credential on a PVE host and never adds password, fallback-key, or `sudo` authentication paths.
-
-The configured control node is only the transport entry point. Operations tied to a VM or local storage are explicitly routed to the node that owns that resource, including when it differs from the control node.
+Server deployment: [Deployment](docs/migration/deploy.md). API contract: [OpenAPI](docs/openapi.json). Isolated testing: [E2E bootstrap](docs/e2e-bootstrap.md) and [laboratory design](docs/isolated-e2e-lab.md).
 
 ## Commands
 
 ```bash
-uv run homestack discover
-uv run homestack install
-uv run homestack transport
-uv run homestack create 200 example-workspace
-uv run homestack create 200 example-workspace --home-size 20G
-uv run homestack create 200 example-workspace --storage example-storage
-uv run homestack create 200 example-workspace --node pve-example-2 --storage example-storage --home-size 500G
-uv run homestack refresh 200
-uv run homestack resize 200 --root-size 32G
-uv run homestack resize 200 --home-size 500G
-uv run homestack addkey 200 --key ~/.ssh/id_ecdsa_sk_trezor_vm.pub
-uv run homestack addkey 200
-uv run homestack migrate 200 pve-example-2 --target-storage example-storage
-uv run homestack repo example-workspace
-uv run homestack repo example-workspace owner/repository
-uv run homestack destroy 200
-uv run homestack status
-uv run homestack status 200
+homestack discover
+homestack install
+homestack transport
+homestack create 200 example-workspace
+homestack create 200 example-workspace --home-size 20G
+homestack create 200 example-workspace --storage example-storage
+homestack create 200 example-workspace --node pve-example-2 --storage example-storage --home-size 500G
+homestack refresh 200
+homestack resize 200 --root-size 32G
+homestack resize 200 --home-size 500G
+homestack addkey 200 --key ~/.ssh/id_ecdsa_sk_trezor_vm.pub
+homestack addkey 200
+homestack migrate 200 pve-example-2 --target-storage example-storage
+homestack repo example-workspace
+homestack repo example-workspace owner/repository
+homestack destroy 200
+homestack status
+homestack status 200
 ```
 
 Lifecycle targets may be a numeric VMID or exact workspace name. `create`, `refresh`, `resize`, `migrate`, and `destroy` resolve and display a plan before confirmation. Use `--yes` to accept a plan and `--json` for machine-readable plans/results.
 
 `resize` accepts one disk per invocation: `--root-size` or `--home-size`, specified as an absolute total disk size such as `32G` or `1T`. It grows the Proxmox disk and mounted ext4 or single-device Btrfs filesystem online, including a partition, LUKS mapping and LVM layers when present. Btrfs subvolumes are resolved to their backing device before resizing. The standard two-disk root/home layout is supported; the selected partition must be last on its disk. LVM requires a dedicated volume group with one physical volume and one ordinary linear logical volume; the logical volume grows into all available space in that group. Shrinking, thin pools, RAID and shared/multi-volume groups are rejected before disk growth.
 
-The VM must be running with a working QEMU Guest Agent, `python3` and the filesystem tool (`resize2fs` or `btrfs`). Layer-specific tools (`growpart`, `cryptsetup`, and LVM utilities) are checked before execution. For LUKS, HomeStack reads the matching `/etc/crypttab` entry. A configured regular key file is validated and used entirely inside the guest. If no key file is configured, interactive execution prompts for a passphrase without echo and sends it through root SSH stdin, never through command arguments or QGA logs. This mode requires root SSH access and verifies the SSH guest boot ID against QGA before accepting the passphrase. `--json` or execution without a terminal stops before disk growth when a passphrase is required. A missing or invalid configured key file is reported, rather than silently switching authentication methods.
+The VM must be running with a working QEMU Guest Agent and the filesystem tool (`resize2fs` or `btrfs`). Layer-specific tools (`growpart`, `cryptsetup`, and LVM utilities) are checked before execution. For LUKS, HomeStack reads the matching `/etc/crypttab` entry. A configured regular key file is validated and used entirely inside the guest. If no key file is configured, interactive execution asks for a passphrase without echo. The client sends it in the HTTPS apply request, and the server passes it to `cryptsetup` through guest-agent standard input, never command arguments. Noninteractive execution requiring a passphrase stops before disk growth. A missing or invalid configured key file is reported without switching authentication methods.
 
 Repeating the same target size completes interrupted growth, including LUKS/LVM/filesystem stages, without further enlarging the virtual disk. `homestack-lock` blocks only `refresh` and does not prevent `resize`. A later refresh replaces root with the Gold disk again; use the lock to protect customized roots.
 
 In the Rust TUI, **Add key** lists public keys with checkboxes. Each row shows the key's comment (its name) and `.pub` file. Use ↑/↓ to move, Space or click to select several keys, and Enter to review and apply the entire selection once. The client reviews the whole selection once, then adds each key through the standard single-key API and registers its matching private key locally. No server update is required. If one addition fails, completed additions remain and the client stops before the remaining keys. For native workspaces, the separate “Apply the keys already configured in the VM” option repairs access without selecting a new file. For a running `homestack-alien` VM, Add key instead copies the selected public keys over its SSH alias into the login account’s `~/.ssh/authorized_keys`; existing keys and restrictions are preserved. SSH can ask for an existing password or key through the TUI. This path does not change Cloud-Init, VM tags or power state and does not require a server update.
 
-`addkey` adds one SSH public key (a `.pub` file with exactly one key and a comment) to a workspace through Proxmox Cloud-Init, without touching the root disk or the persistent home. It shows its plan first. It adds the key to the VM's Proxmox `sshkeys`; sets `allow_format=0` in the HomeStack vendor snippet so the rerun cannot rewrite `authorized_keys` or the home permissions; replaces one `ensure-keys` step that appends missing keys to root's and the workspace user's `authorized_keys` (nothing is ever removed); writes a new `instance-id` so Cloud-Init runs once more; runs `qm cloudinit update`; and, for a running VM, shuts it down and starts it, waits for Cloud-Init to report `done`, removes the workspace's own local `known_hosts` file (a new instance generates new SSH host keys; see Workspace SSH below), and checks that the key is in both `authorized_keys` files. A stopped VM stays stopped and applies the key on its next start. A restart is never done without asking: after the key is prepared, a final question (default no) decides, and `--yes` alone never restarts a VM; use `--restart` to restart without the question. Without `--key`, `addkey test1` applies the keys already in the VM's Proxmox `sshkeys` (for example to recreate a deleted `authorized_keys`); a missing `authorized_keys` file or `.ssh` directory is created with private modes. After a new key, the private key is added to `identity_files` in the HomeStack config and this VM's local ssh config is rewritten (YubiKey first, Trezor when no YubiKey is connected). If a step fails before the restart, the vendor and meta snippets are put back. Removing or replacing keys is not part of `addkey`.
+`addkey` adds one SSH public key (a `.pub` file with exactly one key and a comment) to a workspace through Proxmox Cloud-Init, without touching the root disk or the persistent home. It shows its plan first. It adds the key to the VM's Proxmox `sshkeys`; sets `allow_format=0` in the HomeStack vendor snippet so the rerun cannot rewrite `authorized_keys` or the home permissions; replaces one `ensure-keys` step that appends missing keys to root's and the workspace user's `authorized_keys` (nothing is ever removed); writes a new `instance-id` so Cloud-Init runs once more; updates Cloud-Init through the Proxmox API; and, for a running VM, shuts it down and starts it, waits for Cloud-Init to report `done`, removes the workspace's own local `known_hosts` file (a new instance generates new SSH host keys; see Workspace SSH below), and checks that the key is in both `authorized_keys` files. A stopped VM stays stopped and applies the key on its next start. A restart is never done without asking: after the key is prepared, a final question (default no) decides, and `--yes` alone never restarts a VM; use `--restart` to restart without the question. Without `--key`, `addkey test1` applies the keys already in the VM's Proxmox `sshkeys` (for example to recreate a deleted `authorized_keys`); a missing `authorized_keys` file or `.ssh` directory is created with private modes. After a new key, the private key is added to `identity_files` in the HomeStack config and this VM's local ssh config is rewritten (YubiKey first, Trezor when no YubiKey is connected). If a step fails before the restart, the vendor and meta snippets are put back. Removing or replacing keys is not part of `addkey`.
 
-`create --node NODE` selects the workspace's destination. Omitting `--node`, or selecting the configured Gold node, uses the existing local full clone. `[node].name` continues to identify the Gold node; `[control].node` remains the SSH entry point. `--storage` selects an allowed storage on the destination for both root and home. Without it, HomeStack selects the first storage in that node's configured `storage_layouts` list.
+`create --node NODE` selects the workspace destination; omitting it uses Gold's node. `--storage` selects an allowed storage on the destination for root and home; otherwise HomeStack selects the first configured storage for that node.
 
-For another node, HomeStack streams an uncompressed Gold backup through the control node's existing SSH connections into Proxmox's native restore operation (`qm create --archive -`) on the destination. This uses the same restore engine as `qmrestore`, with configuration overrides to create a writable VM even when Gold is a template. It does not save a backup archive or allocate a temporary root copy on the source. The persistent home disk is allocated only on the destination, after the restore succeeds, so a 500G home does not require 500G on the Gold node. Snapshot backup mode preserves Gold's running/stopped state; backup fleecing is disabled to avoid a source-side disk cache. The destination remains stopped until HomeStack has configured its identity, home, and Cloud-Init. The plan and JSON result identify both the source and destination nodes.
-
-Cross-node creation requires `vzdump` on the Gold node and Bash on the control node, as well as the usual Proxmox tools. The destination must have the configured image and snippet storage and the network bridges used by Gold. Required disks must be included in Gold backups. `refresh` still requires the workspace to be on the configured Gold node; this option does not add cross-node refresh.
+For another node, the server creates a full clone on Gold's node, then migrates the stopped clone and its disks to the destination through the Proxmox API. It verifies the migrated disks and network configuration before allocating the persistent home and preparing Cloud-Init. Both nodes must be online and provide the required storage and bridges. Gold is not modified by this transfer. Failed-clone cleanup requires proof that the VM and its disks belong to the target operation; an unrecognized VM or foreign disk is left intact.
 
 ## Preparing a Gold VM
 
@@ -243,7 +153,7 @@ Gold's root may contain any system-wide packages and configuration that should r
 
 ### Installer readiness check
 
-Gold readiness is a required, checkpointed installer stage. Transport selection, Gold selection, and workspace-account values are saved before it runs. If the check fails, fix the Gold VM and rerun the same installer command; those completed stages are loaded from the draft and are not asked again.
+The installer checks a selected Gold before applying the plan. Installation answers are saved separately, so after preparing Gold you can reopen the installer and review the saved choices. Resource checks run again against the current cluster state.
 
 Gold is optional during installation. Select the server network bridge independently; creating and refreshing workspaces require a configured Gold later. When a Gold is selected, `homestack install` performs a non-destructive readiness check. Required checks validate the PVE role tag, root/data-disk layout, `net0`, Cloud-Init drive, QEMU Guest Agent option, and boot order. If Gold is running, required guest and security checks also cover QEMU Guest Agent access, the mandatory guest tools, the configured user/UID/GID, the no-sudo-privileges policy, regular-user policy, root SSH keys, and a workspace public-key source. `rsync` is an optional capability needed for Setup Files; `git` and `ssh-keygen` are optional capabilities needed only for `homestack repo`.
 
@@ -253,14 +163,14 @@ The installer never starts Gold just to inspect it. A stopped Gold can therefore
 
 - Gold is the configured `gold_vmid` and must have the exact `homestack-gold` tag.
 - Workspaces have the exact `homestack-ws` role tag.
-- Existing VMs created outside HomeStack can use the standalone `homestack-alien` role tag. Set it in Proxmox under VM → Options → Tags; replace `homestack-ws` if present, and do not combine it with `homestack-gold`. For example, tag `rt` with `homestack-alien`, then run `uv run homestack setup rt`. This role allows setup (applications, files, shell profiles, configuration, repositories and backup) and standalone repository operations without a Gold disk layout. It keeps the configured workspace username, UID/GID, `/home/<USER>`, hostname and writable home requirements, and uses the usual configured SSH keys and VMID-derived IP. It does not require a separate ext4 home mount or an `HS_HOME_<VMID>` label. Prepare missing system prerequisites yourself. HomeStack refuses lifecycle operations on alien VMs, including refresh/recovery, resize, destroy and migration; manage their disks and VM lifecycle in Proxmox. Status lists them as `ALIEN` and excludes their homes from managed-home storage totals.
+- Existing VMs created outside HomeStack can use the standalone `homestack-alien` role tag. Set it in Proxmox under VM → Options → Tags; replace `homestack-ws` if present, and do not combine it with `homestack-gold`. For example, tag `rt` with `homestack-alien`, then run `homestack setup rt`. This role allows setup (applications, files, shell profiles, configuration, repositories and backup) and standalone repository operations without a Gold disk layout. It keeps the configured workspace username, UID/GID, `/home/<USER>`, hostname and writable home requirements, and uses the usual configured SSH keys and VMID-derived IP. It does not require a separate ext4 home mount or an `HS_HOME_<VMID>` label. Prepare missing system prerequisites yourself. HomeStack refuses lifecycle operations on alien VMs, including refresh/recovery, resize, destroy and migration; manage their disks and VM lifecycle in Proxmox. Status lists them as `ALIEN` and excludes their homes from managed-home storage totals.
 - Add the optional `homestack-lock` tag alongside `homestack-ws` in Proxmox to block `refresh`. Remove it from the VM to allow root replacement again; `--yes` does not bypass the lock. The tag is checked during planning, before execution, and again before switching roots. Explicit refresh recovery is also blocked while tagged; automatic rollback of an already-started failed refresh remains allowed to restore the original root. Other workspace operations are unaffected.
 - `scsi0` is the disposable root; `scsi1` is persistent home. The configured root and home slots must always be different.
 - Persistent home is ext4 with label `HS_HOME_<VMID>`.
 - Persistent-home volumes are named `vm-<VMID>-hs-home-<USER>`. A newly created root is named `vm-<VMID>-hs-root-default`; a refreshed root may retain the collision-free name allocated by Proxmox during staging.
 - Create placement and migration targets must belong to the node's configured `storage_layouts` list.
 - Refresh stages a new root while the old root remains recoverable, keeps home attached, boots and verifies the guest, and deletes the old root only after verification succeeds. A workspace that was stopped is temporarily booted for verification and stopped again afterward.
-- Refresh writes an atomic transaction journal beside the Cloud-Init snippets. On failure it rolls back to the original root; if recovery itself is interrupted, the next `refresh` detects the journal and offers recovery instead of starting another replacement.
+- Refresh stores its transaction journal in the VM description through the Proxmox API, using configuration digests to guard updates. On failure it rolls back to the original root; if recovery itself is interrupted, the next `refresh` detects the journal and offers recovery instead of starting another replacement.
 - Migration is offline, copies cloud-init snippets before shutdown, preserves home, and restores the previous power state.
 - Cleanup removes only verified HomeStack volumes and exact stale references; unrelated `unusedN` entries and volumes are untouched.
 - Destroy re-resolves the workspace role and persistent-home identity before deleting the VM and attached home.
@@ -285,9 +195,7 @@ HomeStack parses every source document and reparses the merged candidate before 
 
 An application may declare `[setup.items.validation]`: `type = "exit-code"` requires exit 0; `type = "json-path"` reads the JSON report at the literal `path` and accepts values listed in `accepted`. The validator runs once after all selected files are patched, when the application was installed/updated or configuration actually changed. Config-only no-ops and status inspection do not run it. Applications without a validator still receive document validation; omitting `validation` or setting it to `false` means no external validator. On validation failure, only that application's structured files changed by this operation are restored from the snapshot, before any successful state is recorded. An update-only compatibility failure is reported without automatic repair.
 
-Structured values and application validators come exclusively from the runtime HomeStack configuration (`~/.config/homestack/config.toml`, or the selected `--config` file). The built-in Codex installer has neither. Extend it with `[[setup.items]]` and `id = "codex"`, then declare its validation and config-file tables as shown in `config.example.toml`. If that ID already exists in your file, add the tables to that entry instead of duplicating it. The example is documentation, not an implicit runtime source. Adding, changing, or removing managed options requires only editing this runtime configuration; new nested values appear automatically in Setup. Removing a declaration stops managing that value and does not delete it from the workspace file.
-
-The example Codex configuration uses `codex doctor --json` and checks `checks.config.load.status`, accepting `ok` and `warning` even if unrelated doctor checks fail. It declares `approvals_reviewer = "user"`, `approval_policy = "never"`, `sandbox_mode = "danger-full-access"`, the status line and colors, and the multi-agent/context-management flags for `~/.codex/config.toml`. Model, reasoning effort, projects, MCP, and desktop policy settings are not imported or implicitly managed.
+Structured values and application validators come exclusively from the runtime HomeStack configuration (`~/.config/homestack/client.toml`, or the selected `--config` file). The built-in Codex installer has neither. Extend it with `[[setup.items]]` and `id = "codex"`, then declare its validation and config-file tables using the TOML structure below. If that ID already exists in your file, add the tables to that entry instead of duplicating it. The example is documentation, not an implicit runtime source. Adding, changing, or removing managed options requires only editing this runtime configuration; new nested values appear automatically in Setup. Removing a declaration stops managing that value and does not delete it from the workspace file.
 
 The stable selector `app=codex` includes the application and all its declared configuration leaves. A single leaf can be selected with the same app selector namespace, for example `app=codex:config:/tui/status_line_use_colors`. Key segments use JSON Pointer escaping (`~0` for `~`, `~1` for `/`), then percent-encoding for selector delimiters. Reuse the IDs shown by `setup list`. The catalog, review, and details pane show full desired values, including long arrays.
 
@@ -299,30 +207,30 @@ One SSH ControlMaster connection is established and reused for guest checks, dir
 
 ```bash
 # Desktop catalog discovery: no Herdr or guest SSH connection.
-uv run homestack setup list
-uv run homestack setup list --json
+homestack setup list
+homestack setup list --json
 
 # Read-only live state inspection of one workspace.
-uv run homestack setup status hermes
-uv run homestack setup status hermes --json
+homestack setup status hermes
+homestack setup status hermes --json
 
 # Full-screen selection. One SSH ControlMaster is authenticated before the TUI
 # and remains open until setup exits.
-uv run homestack setup hermes
+homestack setup hermes
 
 # Numeric selections refer to the last displayed compatible catalog.
 # Check the actual indices in your listing; these numbers are illustrative.
-uv run homestack setup hermes f=1 e=1 a=1,2
+homestack setup hermes f=1 e=1 a=1,2
 
 # Use the catalog identifier printed by setup list for concurrent sessions.
-uv run homestack setup hermes env=1 app=1 --catalog CATALOG_ID --dry-run
+homestack setup hermes env=1 app=1 --catalog CATALOG_ID --dry-run
 
 # Stable IDs are preferable for scripts; repository identity is explicit.
-uv run homestack setup hermes env=bash app=codex,opencode --yes
-uv run homestack setup hermes repo=hipotures/homestack --yes
-uv run homestack setup hermes backup=bk --yes
-uv run homestack setup 200 env=bash app=codex --dry-run
-uv run homestack setup hermes env=bash app=codex --yes --non-interactive --json
+homestack setup hermes env=bash app=codex,opencode --yes
+homestack setup hermes repo=hipotures/homestack --yes
+homestack setup hermes backup=bk --yes
+homestack setup 200 env=bash app=codex --dry-run
+homestack setup hermes env=bash app=codex --yes --non-interactive --json
 ```
 
 The groups are **Files** (`files`, `f`), **Environment** (`env`, `e`), **Applications** (`app`, `a`), **Credentials** (`cred`, `c`), **Backup** (`backup`, `b`), and **Repositories** (`repo`, `r`). Select comma-separated one-based indices or stable IDs. `0` or `all` selects the entire explicitly named category and cannot be mixed with other values. Omitted groups select nothing. Repeating an equivalent assignment deduplicates it; conflicting repeated assignments, unknown IDs and invalid indices are errors. `--yes` accepts only the HomeStack plan; it neither selects actions nor answers installer questions.
@@ -417,7 +325,7 @@ Guest `python3` and `findmnt` support identity/path/atomic-write verification. F
 To install BK for the current local user instead of a workspace, use the same Setup category:
 
 ```bash
-uv run homestack setup --local backup=bk
+homestack setup --local backup=bk
 ```
 
 Local Setup installs `~/.local/bin/bk` and the `backup.service` / `backup.timer` units under `~/.config/systemd/user/`, then enables the nightly user timer. It also creates `~/.config/bk/backup.yaml` if absent, with the default destination `~/backup` and the configuration itself as its first protected source. Existing configuration is never replaced by Setup. It uses the existing Setup preflight, operation snapshots and state registry. It does not connect to PVE or SSH, generate retrieval keys, or modify `authorized_keys`. Run `bk edit` to select sources. Enabling the persistent timer may trigger a backup. System Python must already provide Rich, SQLite and curses; `file`, `git` and a working user systemd manager are also required. No packages are installed automatically.
@@ -483,8 +391,8 @@ checkout_root = "~/DEV"
 Run either form:
 
 ```bash
-uv run homestack repo WORKSPACE
-uv run homestack repo WORKSPACE OWNER/REPO
+homestack repo WORKSPACE
+homestack repo WORKSPACE OWNER/REPO
 ```
 
 Without an explicit repository, HomeStack resolves the workspace first and uses `[repo] owner` plus the actual workspace name: `homestack repo WORKSPACE` means `OWNER/WORKSPACE`. This also applies to numeric VMID targets, so `homestack repo 200` uses the resolved workspace name rather than `OWNER/200`. An explicit `OWNER/REPO` overrides this default. If neither an explicit repository nor `[repo] owner` is available, the command fails without making changes. The command first inspects the workspace and GitHub state, then offers `Exit`, `Setup`, or `Rotate key`.
@@ -497,12 +405,17 @@ Rotate key replaces only the repository deploy key. It removes the matching GitH
 
 ## Status
 
-Global status discovers tagged workspaces cluster-wide, checks configured storage capacity, and inventories only HomeStack-named detached volumes on storage IDs allowed by `storage_layouts`. It reads the Proxmox cluster-node state first: node-specific VM and storage queries are skipped for nodes reported offline, and their offline state is shown instead of producing proxy SSH connection warnings. Lifecycle preflight remains fail-closed when an operation requires another node. Detailed status includes VM, network, guest-agent, persistent-home, SSH readiness, and configured volume information. Presentation and human-readable formatting live in `ui.py`; `--json` returns the underlying result structures.
+Global status discovers tagged workspaces cluster-wide, checks configured storage capacity, and inventories only HomeStack-named detached volumes on storage IDs allowed by `storage_layouts`. It reads the Proxmox cluster-node state first: node-specific VM and storage queries are skipped for nodes reported offline, and their offline state is shown instead of producing proxy SSH connection warnings. Lifecycle preflight remains fail-closed when an operation requires another node. Detailed status includes VM, network, guest-agent, persistent-home, SSH readiness, and configured volume information. Presentation and human-readable formatting live in the Rust client; `--json` returns the underlying result structures.
 
 ## Development
 
-The Python project in `python/` uses a standard `src/` package layout. Run the complete suite from `python/` with:
-
-```bash
-uv run python -m unittest discover -s tests -v
+```sh
+scripts/check.sh
+python3 scripts/cargo.py test --locked -p hs-cli
 ```
+
+The checks run Rust tests, simulator regression tests against frozen reference outputs, Clippy, formatting and deployment-script checks. `scripts/check.sh --live` additionally uses explicitly configured test resources and changes those resources. See [Deployment](docs/migration/deploy.md) for prerequisites.
+
+The build wrapper serializes commands and removes disposable hashed executables and incremental state after successful verification. It preserves top-level applications, dependency libraries, release output and E2E data. Failed commands retain their artifacts. Do not remove `target/` or run unwrapped Cargo tests alongside wrapped commands.
+
+The completed migration audit and historical implementation decisions are in [the migration plan](docs/migration/PLAN.md). Frozen Python reference data is documented in [parity/README.md](parity/README.md); no tests execute the retired CLI.

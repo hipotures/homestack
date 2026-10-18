@@ -164,12 +164,11 @@ fn workspace(home: &Path, memory: &Memory, timer: &Timer, commands: &Rc<RefCell<
 }
 
 #[test]
-fn the_bk_assets_are_python_s_byte_for_byte() {
-    let python = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../python/src/homestack/assets/backup");
+fn the_bk_assets_match_the_final_python_reference() {
+    let hashes: Value =
+        serde_json::from_str(include_str!("../../../parity/fixtures/guest-assets-sha256.json")).unwrap();
     for (asset, name) in ASSETS.iter().zip(["bk.py", "backup.service", "backup.timer"]) {
-        if let Ok(bytes) = std::fs::read(python.join(name)) {
-            assert_eq!(asset.content, bytes.as_slice(), "{name}");
-        }
+        assert_eq!(sha256_hex(asset.content), hashes[name], "{name}");
     }
 }
 

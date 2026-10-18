@@ -24,9 +24,10 @@ use serde_json::{Value, json};
 use setup_fixture::{TestWorkspace, run_guest, settings, target};
 
 fn example_settings(home: &Path) -> Settings {
-    let text =
-        std::fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../python/config.example.toml"))
-            .unwrap();
+    let text = std::fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../parity/fixtures/config.example.toml"),
+    )
+    .unwrap();
     let legacy = hs_config::legacy::read(&text).unwrap();
     let mut cfg = settings(home);
     cfg.setup = parse_setup(legacy.client.setup.as_ref().unwrap()).unwrap();

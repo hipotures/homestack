@@ -20,9 +20,18 @@ reason = "No difference: the server returns what the Python function returns."
 [[rule]]
 id = "status-global"
 python_drop = ["ok", "command", "scope", "config", "execution", "summary.storage_unit", "summary.storage_decimals"]
-python_ops_drop = ["guest_exec{*", "guest_exec_status{*"]
-rust_ops_drop = ["get{path=/nodes/*/qemu/*/agent/*", "get{path=/access/permissions,*"]
+rust_drop = ["others", "pools", "gold.pool", "gold.tags", "workspaces.*.pool", "workspaces.*.tags"]
+python_ops_drop = ["get{path=/cluster/resources,type=vm}", "guest_exec{*", "guest_exec_status{*"]
+rust_ops_drop = ["get{path=/cluster/resources,type=vm}", "get{path=/pools}", "get{path=/nodes/*/qemu/*/agent/*", "get{path=/access/permissions,*"]
 reason = """
+Phase 15: Rust additionally reads cluster resources and pools to inventory
+pool members and scope status. Cluster inventory calls are omitted on both
+sides and the extra Rust pool read is omitted here; native status tests
+assert pool scope and membership. VM configuration, guest and storage calls
+remain compared in order. Rust's added `others`, `pools` and per-entry
+`pool`/`tags` metadata has no Python counterpart; it is omitted from this
+historical comparison and asserted by native server status tests.
+
 `ok`, `command` and `scope` describe the CLI result, `config` and
 `execution` the desktop's config file and Herdr session; the HTTP status and
 the route say the same on the server. Storage display settings belong to
@@ -80,7 +89,7 @@ extends = "status-global"
 relative_tolerance = { "workspaces.*.home.used_bytes" = 0.05, "workspaces.*.home.free_bytes" = 0.05, "summary.homes.used_bytes" = 0.05, "summary.homes.free_bytes" = 0.05, "summary.storage_layouts.*.used_bytes" = 0.05, "summary.storage_layouts.*.available_bytes" = 0.05, "summary.root_storage.used_bytes" = 0.05, "summary.root_storage.available_bytes" = 0.05 }
 absolute_tolerance = { "workspaces.*.home.free_percent" = 1.0, "summary.homes.free_percent" = 1.0, "summary.storage_layouts.*.percent" = 1.0, "summary.root_storage.percent" = 1.0 }
 reason = """
-scripts/live-compare-status.sh on the real cluster. As status-global, plus:
+Historical live status comparison (retired in phase 15). As status-global, plus:
 the two implementations read a running cluster a few seconds apart, so
 guests and storages may have written a little in between (byte counts within
 5 %, percentages within 1 point). Since the production install (phase 5,
@@ -133,10 +142,18 @@ number by the two extra commands.
 [[rule]]
 id = "cli-status-global"
 python_drop = ["config", "execution"]
-rust_drop = ["config", "execution"]
-python_ops_drop = ["guest_exec{*", "guest_exec_status{*"]
-rust_ops_drop = ["get{path=/nodes/*/qemu/*/agent/*", "get{path=/access/permissions,*"]
+rust_drop = ["others", "pools", "gold.pool", "gold.tags", "workspaces.*.pool", "workspaces.*.tags", "config", "execution"]
+python_ops_drop = ["get{path=/cluster/resources,type=vm}", "guest_exec{*", "guest_exec_status{*"]
+rust_ops_drop = ["get{path=/cluster/resources,type=vm}", "get{path=/pools}", "get{path=/nodes/*/qemu/*/agent/*", "get{path=/access/permissions,*"]
 reason = """
+Phase 15: Rust additionally reads cluster resources and pools to inventory
+pool members and scope status. Cluster inventory calls are omitted on both
+sides and the extra Rust pool read is omitted here; native status tests
+assert pool scope and membership. VM configuration, guest and storage calls
+remain compared in order. Rust's added `others`, `pools` and per-entry
+`pool`/`tags` metadata has no Python counterpart; it is omitted from this
+historical comparison and asserted by native server status tests.
+
 Phase 13: `homestack status --json` of the Rust client against the server,
 compared with the Python CLI as a whole, `ok`, `command`, `scope` and the
 display settings of `[display]` included. `config` is the client's file

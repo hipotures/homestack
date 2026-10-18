@@ -1,0 +1,142 @@
+{
+  "ops": [
+    "get{path=/cluster/resources,type=vm}",
+    "get{path=/nodes/pve-example-1/qemu/100/config}",
+    "get{path=/nodes/pve-example-1/qemu/100/status/current}"
+  ],
+  "output": {
+    "checks": [
+      {
+        "detail": "requires homestack-gold without homestack-ws or homestack-alien",
+        "name": "Role tag",
+        "requirement": "required",
+        "scope": "PVE",
+        "status": "pass"
+      },
+      {
+        "detail": "scsi0",
+        "name": "Disposable root",
+        "requirement": "required",
+        "scope": "PVE",
+        "status": "pass"
+      },
+      {
+        "detail": "none",
+        "name": "Extra data disks",
+        "requirement": "required",
+        "scope": "PVE",
+        "status": "pass"
+      },
+      {
+        "detail": "net0 BC:24:11:00:01:00",
+        "name": "Primary NIC",
+        "requirement": "required",
+        "scope": "PVE",
+        "status": "pass"
+      },
+      {
+        "detail": "none",
+        "name": "Extra NICs",
+        "requirement": "required",
+        "scope": "PVE",
+        "status": "pass"
+      },
+      {
+        "detail": "ide2",
+        "name": "Cloud-Init drive",
+        "requirement": "required",
+        "scope": "PVE",
+        "status": "pass"
+      },
+      {
+        "detail": "1",
+        "name": "QEMU Guest Agent option",
+        "requirement": "required",
+        "scope": "PVE",
+        "status": "pass"
+      },
+      {
+        "detail": "order=scsi0;ide2;net0",
+        "name": "Boot order",
+        "requirement": "required",
+        "scope": "PVE",
+        "status": "pass"
+      },
+      {
+        "detail": "stopped",
+        "name": "Power state",
+        "requirement": "required",
+        "scope": "PVE",
+        "status": "pass"
+      },
+      {
+        "detail": "1 public key(s) in Proxmox sshkeys; required while Gold is stopped",
+        "name": "Workspace public-key source",
+        "requirement": "required",
+        "scope": "PVE",
+        "status": "pass"
+      },
+      {
+        "detail": "not inspected because Gold is stopped",
+        "name": "QEMU Guest Agent response",
+        "requirement": "required",
+        "scope": "guest",
+        "status": "skip"
+      },
+      {
+        "detail": "not inspected because Gold is stopped",
+        "name": "Required guest tools",
+        "requirement": "required",
+        "scope": "guest",
+        "status": "skip"
+      },
+      {
+        "detail": "not inspected because Gold is stopped",
+        "name": "Workspace account",
+        "requirement": "required",
+        "scope": "guest",
+        "status": "skip"
+      },
+      {
+        "detail": "not inspected because Gold is stopped",
+        "name": "Regular user policy",
+        "requirement": "required",
+        "scope": "security",
+        "status": "skip"
+      },
+      {
+        "detail": "not inspected because Gold is stopped",
+        "name": "No sudo privileges",
+        "requirement": "required",
+        "scope": "security",
+        "status": "skip"
+      },
+      {
+        "detail": "not inspected because Gold is stopped",
+        "name": "Root authorized_keys",
+        "requirement": "required",
+        "scope": "security",
+        "status": "skip"
+      },
+      {
+        "detail": "not inspected because Gold is stopped",
+        "name": "rsync for Setup Files",
+        "requirement": "optional",
+        "scope": "guest",
+        "status": "skip"
+      },
+      {
+        "detail": "not inspected because Gold is stopped",
+        "name": "git/ssh-keygen for homestack repo",
+        "requirement": "optional",
+        "scope": "guest",
+        "status": "skip"
+      }
+    ],
+    "guest_checked": false,
+    "node": "pve-example-1",
+    "ok": true,
+    "power_state": "stopped",
+    "vmid": 100
+  }
+}

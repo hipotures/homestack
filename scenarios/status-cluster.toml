@@ -16,65 +16,65 @@ phase = "2"
 description = "Global and per-VM status, storage, orphans, discovery, networks and Gold readiness"
 
 [homestack]
-config = "python/config.example.toml"
+config = "parity/fixtures/config.example.toml"
 
 [[parity]]
-python = ["status", "--json"]
+reference = "parity/fixtures/scenarios/status-cluster-1.json"
 rust = "GET /v1/status"
 normalize = "status-global"
 
 [[parity]]
-python = ["status", "200", "--json"]
+reference = "parity/fixtures/scenarios/status-cluster-2.json"
 rust = "GET /v1/workspaces/200"
 normalize = "status-workspace"
 
 [[parity]]
-python = ["status", "test1", "--json"]
+reference = "parity/fixtures/scenarios/status-cluster-3.json"
 rust = "GET /v1/workspaces/test1"
 normalize = "status-workspace"
 
 [[parity]]
-python = ["status", "201", "--json"]
+reference = "parity/fixtures/scenarios/status-cluster-4.json"
 rust = "GET /v1/workspaces/201"
 normalize = "status-workspace"
 
 [[parity]]
-python = ["status", "202", "--json"]
+reference = "parity/fixtures/scenarios/status-cluster-5.json"
 rust = "GET /v1/workspaces/202"
 normalize = "status-workspace"
 
 [[parity]]
-python = ["status", "205", "--json"]
+reference = "parity/fixtures/scenarios/status-cluster-6.json"
 rust = "GET /v1/workspaces/205"
 normalize = "status-workspace"
 
 [[parity]]
-python = ["status", "alien1", "--json"]
+reference = "parity/fixtures/scenarios/status-cluster-7.json"
 rust = "GET /v1/workspaces/alien1"
 normalize = "status-workspace"
 
 [[parity]]
-python = ["status", "--json"]
+reference = "parity/fixtures/scenarios/status-cluster-8.json"
 rust = "GET /v1/storage"
 normalize = "storage-from-status"
 
 [[parity]]
-python = ["status", "--json"]
+reference = "parity/fixtures/scenarios/status-cluster-9.json"
 rust = "GET /v1/orphans"
 normalize = "orphans-from-status"
 
 [[parity]]
-python = ["@discovery"]
+reference = "parity/fixtures/scenarios/status-cluster-10.json"
 rust = "GET /v1/discovery"
 normalize = "same"
 
 [[parity]]
-python = ["@networks"]
+reference = "parity/fixtures/scenarios/status-cluster-11.json"
 rust = "GET /v1/networks"
 normalize = "same"
 
 [[parity]]
-python = ["@gold-readiness"]
+reference = "parity/fixtures/scenarios/status-cluster-12.json"
 rust = "GET /v1/gold/readiness"
 normalize = "gold-readiness"
 
@@ -82,22 +82,22 @@ normalize = "gold-readiness"
 # server behind HTTPS (`cli ARGS` runs `homestack ARGS` in-process).
 
 [[parity]]
-python = ["status", "--json"]
+reference = "parity/fixtures/scenarios/status-cluster-13.json"
 rust = "cli status --json"
 normalize = "cli-status-global"
 
 [[parity]]
-python = ["status", "test1", "--json"]
+reference = "parity/fixtures/scenarios/status-cluster-14.json"
 rust = "cli status test1 --json"
 normalize = "cli-status-workspace"
 
 [[parity]]
-python = ["status", "205", "--json"]
+reference = "parity/fixtures/scenarios/status-cluster-15.json"
 rust = "cli status 205 --json"
 normalize = "cli-status-workspace"
 
 [[parity]]
-python = ["status", "239", "--json"]
+reference = "parity/fixtures/scenarios/status-cluster-16.json"
 rust = "cli status 239 --json"
 normalize = "same"
 

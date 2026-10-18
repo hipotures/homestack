@@ -11,19 +11,9 @@ name{key1=value1,key2=value2}
 - Parameters are sorted by key and written as `key=value`, separated by commas,
   without quoting. In values, `%`, `,`, `=`, `{` and `}` are written `%25`,
   `%2C`, `%3D`, `%7B` and `%7D`, so a shell command fits in one parameter.
-- The same text is produced by `pve-sim` (`crates/pve-sim/src/ops.rs`)
-  for every authenticated API call it serves, and by the Python translator
-  (`parity/python/homestack_parity/ops.py`) for every shell command
-  HomeStack runs.
+- `pve-sim` (`crates/pve-sim/src/ops.rs`) produces this text for each authenticated API call. Frozen Python references contain the same canonical operations, captured and checked before the CLI was removed.
 
-Routing does not change an operation. A command HomeStack sends to another node
-through `ssh -o BatchMode=yes root@<node> '...'` translates to the same
-operation as the command run locally, because the API proxies
-`/nodes/{node}/...` itself (mapping T2).
-
-A command without a translation raises `UnsupportedCommand` in Python; the run
-fails instead of skipping the call. Each phase adds the operations its
-functions need.
+The historical shell-command column below explains the original mapping. Regression tests compare the Rust API calls with saved operations; no command translator or Python CLI runs.
 
 ## Operations
 

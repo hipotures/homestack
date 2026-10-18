@@ -9,7 +9,7 @@ mod setup_fixture;
 
 use std::os::unix::fs::MetadataExt;
 use std::os::unix::fs::PermissionsExt;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 
 use hs_cli::setup::guest::PROGRAM;
@@ -41,12 +41,10 @@ fn inode(path: &Path) -> u64 {
 }
 
 #[test]
-fn the_guest_program_is_python_s_byte_for_byte() {
-    let python = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../python/src/homestack/setup_guest.py");
-    // Python's tree goes in the last phase; until then both are the same.
-    if let Ok(text) = std::fs::read_to_string(python) {
-        assert_eq!(PROGRAM, text);
-    }
+fn the_guest_program_matches_the_final_python_reference() {
+    let hashes: Value =
+        serde_json::from_str(include_str!("../../../parity/fixtures/guest-assets-sha256.json")).unwrap();
+    assert_eq!(hs_cli::setup::sha256_hex(PROGRAM.as_bytes()), hashes["setup_guest.py"]);
 }
 
 #[test]

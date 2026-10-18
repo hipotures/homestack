@@ -1,0 +1,17 @@
+{
+  "ops": [
+    "get{path=/cluster/resources,type=vm}",
+    "get{path=/nodes/pve-example-2/qemu/104/config}",
+    "get{path=/nodes/pve-example-2/qemu/104/status/current}",
+    "guest_ping{vmid=104}",
+    "guest_exec{cmd=test -s /home/developer/.ssh/authorized_keys && cat /home/developer/.ssh/authorized_keys,vmid=104}",
+    "guest_exec_status{vmid=104}",
+    "guest_exec{cmd=test -s /root/.ssh/authorized_keys && cat /root/.ssh/authorized_keys,vmid=104}",
+    "guest_exec_status{vmid=104}"
+  ],
+  "output": {
+    "keys": "ssh-ed25519 AAAAROOT root@gold\n",
+    "ok": true,
+    "source": "Gold VM 104:/root/.ssh/authorized_keys"
+  }
+}

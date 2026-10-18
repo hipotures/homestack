@@ -17,7 +17,7 @@ section, and works exactly as it does now:
 ## The program on the workspace
 
 `guest/setup_guest.py` is Python's `setup_guest.py`, byte for byte (a test
-compares the two while `python/` exists). It runs on the workspace, not on
+now checks its frozen reference hash after phase 15). It runs on the workspace, not on
 the desktop: the client streams it with its payload to `python3 -`, as
 Python does, so its behaviour on the workspace cannot differ. Its own tests
 run it the same way on this desktop (`tests/setup_guest.rs`). `bk.py` and

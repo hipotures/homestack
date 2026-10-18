@@ -12,46 +12,46 @@ phase = "4"
 description = "Workspace keys from Gold"
 
 [homestack]
-config = "python/config.example.toml"
+config = "parity/fixtures/config.example.toml"
 
 [[parity]]
-python = ["@workspace-keys"]
+reference = "parity/fixtures/scenarios/workspace-keys-1.json"
 rust = "@workspace-keys"
 normalize = "workspace-keys"
 expect.body = { ok = true, keys = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITEST developer@desktop\n", source = "Gold VM 100:qm sshkeys" }
 
 [[parity]]
-python = ["@workspace-keys", "103"]
+reference = "parity/fixtures/scenarios/workspace-keys-2.json"
 rust = "@workspace-keys 103"
 normalize = "workspace-keys"
 expect.body = { ok = true, keys = "ssh-ed25519 AAAAUSER developer@desktop\nsk-ssh-ed25519@openssh.com AAAASK developer@key\n", source = "Gold VM 103:/home/developer/.ssh/authorized_keys" }
 
 [[parity]]
-python = ["@workspace-keys", "104"]
+reference = "parity/fixtures/scenarios/workspace-keys-3.json"
 rust = "@workspace-keys 104"
 normalize = "workspace-keys"
 expect.body = { ok = true, keys = "ssh-ed25519 AAAAROOT root@gold\n", source = "Gold VM 104:/root/.ssh/authorized_keys" }
 
 [[parity]]
-python = ["@workspace-keys", "102"]
+reference = "parity/fixtures/scenarios/workspace-keys-4.json"
 rust = "@workspace-keys 102"
 normalize = "workspace-keys"
 expect.body = { ok = false, error = "Gold VM 102 has no usable public keys in its Proxmox sshkeys setting, /home/developer/.ssh/authorized_keys, or /root/.ssh/authorized_keys" }
 
 [[parity]]
-python = ["@workspace-keys", "105"]
+reference = "parity/fixtures/scenarios/workspace-keys-5.json"
 rust = "@workspace-keys 105"
 normalize = "workspace-keys"
 expect.body = { ok = false, error = "Gold VM 105 is stopped and its Proxmox sshkeys setting does not contain usable public keys." }
 
 [[parity]]
-python = ["@workspace-keys", "106"]
+reference = "parity/fixtures/scenarios/workspace-keys-6.json"
 rust = "@workspace-keys 106"
 normalize = "workspace-keys"
 expect.body = { ok = false, error = "Gold VM 106 QEMU Guest Agent is not available" }
 
 [[parity]]
-python = ["@workspace-keys", "199"]
+reference = "parity/fixtures/scenarios/workspace-keys-7.json"
 rust = "@workspace-keys 199"
 normalize = "workspace-keys"
 expect.body = { ok = false, error = "Gold VM 199 does not exist" }

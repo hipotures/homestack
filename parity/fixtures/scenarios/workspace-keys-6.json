@@ -1,0 +1,12 @@
+{
+  "ops": [
+    "get{path=/cluster/resources,type=vm}",
+    "get{path=/nodes/pve-example-2/qemu/106/config}",
+    "get{path=/nodes/pve-example-2/qemu/106/status/current}",
+    "guest_ping{vmid=106}"
+  ],
+  "output": {
+    "error": "Gold VM 106 QEMU Guest Agent is not available",
+    "ok": false
+  }
+}

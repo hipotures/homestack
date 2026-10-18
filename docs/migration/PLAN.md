@@ -3,7 +3,7 @@
 **Data:** 2026-10-12
 **Podstawa:** `docs/migration/api-mapping.md` (ID funkcji A1–I2, warianty 7.x i decyzje z sekcji 10) oraz `hipotures/homestack` `main` @ `c09636b`.
 **Cel:** serwer usług w Rust, który rozmawia z Proxmoxem przez REST API, a potem klient w Rust. Python zostaje wzorcem zachowania do samego końca.
-**Miejsce w repo:** ten plik jako `docs/migration/PLAN.md`. Workspace Rust jest w korzeniu repo `homestack` (`Cargo.toml`, `crates/`); Python przeniesiony do `python/` i usuwany w fazie 15.
+**Miejsce w repo:** ten plik jako `docs/migration/PLAN.md`. The Rust workspace is at the repository root (`Cargo.toml`, `crates/`). The retired Python CLI is preserved in Git history; phase 15 replaces executable comparisons with frozen references.
 
 ---
 
@@ -65,7 +65,7 @@ CI (GitHub Actions) uruchamia L1–L3 przy każdym pushu. L4 nigdy nie działa w
 
 ### 2.1 L1: testy przeniesione 1:1
 
-- Python ma 594 testy w `python/tests/`. Plik `parity/manifest.toml` wymienia każdy z nich (`tests/test_lifecycle.py::Klasa::test_x`) i przypisuje mu test w Rust, status (`todo`, `ported`, `excluded`) oraz fazę.
+- The original 593 Python test IDs are frozen in `parity/fixtures/python-test-ids.txt`. `parity/manifest.toml` maps each to Rust tests or a reasoned exclusion; no `todo` entry remains after phase 15.
 - Skrypt w `check.sh` sprawdza, że manifest obejmuje wszystkie testy Pythona i że każdy wpis `ported` wskazuje istniejący, zaliczony test Rust.
 - `excluded` wymaga powodu, np. „dotyczy TUI”, „dotyczy Herdr, transport znika”.
 - Testy Pythona sprawdzają dziś listę poleceń shella (`FakeSession.commands`). W Rust te same asercje dotyczą listy wywołań API w symulatorze, po przetłumaczeniu na wspólny słownik operacji (2.3).
@@ -384,8 +384,8 @@ The remaining parity audit is complete; see [the audit report](parity-todo-audit
 ### Faza 15: wyłączenie Pythona
 
 - [x] No `todo` entries in the test manifest; remaining-entry audit recorded in [parity-todo-audit.md](parity-todo-audit.md).
-- Python CLI usunięty albo zarchiwizowany, testy zgodności zastąpione plikami wzorcowymi zapisanymi z ostatniej wersji Pythona.
-- README i dokumentacja tylko dla wersji Rust.
+- [x] Python CLI removed; parity tests use frozen outputs, operation traces, configuration verdicts and original test IDs captured before removal. See [phase-15.md](phase-15.md).
+- [x] README, regression-test documentation and CI describe the Rust application. Earlier phase reports remain historical evidence.
 
 ### Faza 16: `resize` na różnych układach dysków (po całej implementacji)
 
@@ -426,7 +426,7 @@ Zlecone przez właściciela 2026-10-13, z otwartego pytania fazy 8 (`phase-8.md`
 | `docs/migration/api-mapping.md` | mapowanie funkcji HomeStacka na API Proxmoxa (dokument mapowania) |
 | `docs/migration/decisions.md` | decyzje z sekcji 10 dokumentu mapowania i wyniki prób (np. `import-from`) |
 | `docs/migration/phase-N.md` | analiza zachowań, raport fazy |
-| `parity/manifest.toml` | mapa 594 testów Pythona na testy Rust |
+| `parity/manifest.toml` | mapping of 593 original Python tests to Rust tests |
 | `parity/ops.md` | słownik operacji |
 | `parity/normalize.toml` | dozwolone różnice z uzasadnieniem |
 | `scenarios/` | scenariusze dla `pve-sim` i testów zgodności |

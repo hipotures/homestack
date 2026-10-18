@@ -1,0 +1,25 @@
+{
+  "ops": [
+    "get{path=/cluster/resources,type=vm}",
+    "get{path=/nodes/pve-example-1/qemu/100/config}",
+    "get{path=/nodes/pve-example-1/dns}",
+    "get{path=/nodes/pve-example-1/qemu/200/config}",
+    "get{path=/nodes/pve-example-1/qemu/201/config}",
+    "get{path=/nodes/pve-example-1/qemu/202/config}",
+    "get{path=/nodes/pve-example-1/qemu/203/config}",
+    "get{path=/nodes/pve-example-2/qemu/204/config}",
+    "get{path=/nodes/pve-example-1/qemu/205/config}",
+    "get{path=/nodes/pve-example-1/network}"
+  ],
+  "output": [
+    {
+      "bridge": "vmbr0",
+      "cidr": "192.0.2.0/24",
+      "dns_servers": [
+        "192.0.2.53"
+      ],
+      "gateway": "192.0.2.1",
+      "source": "HomeStack workspace VM 200"
+    }
+  ]
+}

@@ -12,7 +12,7 @@ use hs_model::config::{Config, ConfigError};
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
 fn example_path() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../python/config.example.toml")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../parity/fixtures/config.example.toml")
 }
 
 fn example() -> String {

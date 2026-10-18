@@ -1,0 +1,17 @@
+{
+  "ops": [
+    "get{path=/cluster/resources,type=vm}",
+    "get{path=/nodes/pve-example-1/qemu/225/config}",
+    "guest_ping{vmid=225}",
+    "guest_exec{cmd=command -v cloud-init >/dev/null 2>&1 && timeout 180 cloud-init status --wait >/dev/null 2>&1 || true,vmid=225}",
+    "guest_exec_status{vmid=225}",
+    "guest_exec{cmd=hostname,vmid=225}",
+    "guest_exec_status{vmid=225}",
+    "guest_exec{cmd=ip -4 -o addr show dev eth0,vmid=225}",
+    "guest_exec_status{vmid=225}"
+  ],
+  "output": {
+    "error": "Refresh verification failed: eth0 does not have 192.0.2.225/24",
+    "ok": false
+  }
+}
