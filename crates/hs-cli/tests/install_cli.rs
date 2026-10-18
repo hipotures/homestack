@@ -1267,7 +1267,9 @@ fn next_event(events: &std::sync::mpsc::Receiver<hs_cli::tui::install::Event>) -
             .recv_timeout(Duration::from_secs(30))
             .expect("an event from the worker")
         {
-            hs_cli::tui::install::Event::Busy(_) => {}
+            hs_cli::tui::install::Event::Busy(text) => {
+                assert!(!text.contains("...") && !text.contains('\u{2026}'), "{text}");
+            }
             event => return event,
         }
     }

@@ -58,7 +58,7 @@ impl DownloadProgress {
                 format!(
                     "Download [{}{}] {:5.1}% {mib:.1}/{:.1} MiB {speed:.1} MiB/s",
                     "=".repeat(filled),
-                    ".".repeat(24 - filled),
+                    "-".repeat(24 - filled),
                     fraction * 100.0,
                     total as f64 / (1024.0 * 1024.0),
                 )
@@ -159,7 +159,7 @@ async fn cached_image(client: &reqwest::Client, path: &Path, cache: &Path, direc
         }
         Ok(metadata) if metadata.len() > MAX_IMAGE_BYTES => None,
         Ok(_) => {
-            eprintln!("Checking cached Debian image SHA-512...");
+            eprintln!("Checking cached Debian image SHA-512");
             let (actual, size) = file_digest(&cached).await?;
             (actual == expected).then_some(size)
         }
@@ -172,7 +172,7 @@ async fn cached_image(client: &reqwest::Client, path: &Path, cache: &Path, direc
         eprintln!("Reusing verified cached Debian image: {}", cached.display());
         size
     } else {
-        eprintln!("Downloading latest Debian image; cache is missing, outdated or corrupt...");
+        eprintln!("Downloading latest Debian image; cache is missing, outdated or corrupt");
         fetch_image(client, &url, &expected, cache, &cached).await?
     };
     // Keep QEMU's backing file private to the run: replacing or clearing the

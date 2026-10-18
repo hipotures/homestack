@@ -28,7 +28,7 @@ pub fn load(path: &Path) -> Result<Loaded, AppError> {
     let text = std::fs::read_to_string(path).map_err(|error| {
         if error.kind() == std::io::ErrorKind::NotFound {
             AppError::new(format!(
-                "Configuration file {} was not found. Create it with `hs-config split --server-url https://...` \
+                "Configuration file {} was not found. Create it with `hs-config split --server-url https://api.example.net` \
 or write it by hand (docs/migration/phase-13.md).",
                 path.display()
             ))
@@ -49,7 +49,7 @@ impl Loaded {
     pub fn server(&self) -> Result<&Server, AppError> {
         self.client.server.as_ref().ok_or_else(|| {
             AppError::new(format!(
-                "Missing [server] in {}: add urls = [\"https://...\"] (the HomeStack server instances).",
+                "Missing [server] in {}: add urls = [\"https://api.example.net\"] (the HomeStack server instances).",
                 self.path.display()
             ))
         })

@@ -332,7 +332,7 @@ impl Install {
             return None;
         }
         self.cancelling = true;
-        self.busy = Some("Cancelling…".to_owned());
+        self.busy = Some("Cancelling".to_owned());
         Some(Request::Install(Command::Cancel))
     }
 
@@ -454,7 +454,7 @@ impl Install {
                     return (false, None);
                 };
                 self.error = None;
-                self.busy = Some(format!("Connecting to {target}…"));
+                self.busy = Some(format!("Connecting to {target}"));
                 return (
                     false,
                     Some(Request::Install(Command::Connect {
@@ -529,7 +529,7 @@ impl Install {
                 self.stage = Stage::Review;
                 self.reviewed = false;
                 self.remove_focused = false;
-                self.busy = Some("Reading what would be removed…".to_owned());
+                self.busy = Some("Reading what would be removed".to_owned());
                 Some(Request::Install(Command::Review {
                     answers: Vec::new(),
                     domain: None,
@@ -587,7 +587,7 @@ impl Install {
             KeyCode::Enter => {
                 self.stage = Stage::Review;
                 self.reviewed = false;
-                self.busy = Some("Reading the plan…".to_owned());
+                self.busy = Some("Reading the plan".to_owned());
                 return (
                     false,
                     Some(Request::Install(Command::Review {
@@ -600,7 +600,7 @@ impl Install {
             // (a VM taken out of its pool) is offered, the choices kept.
             KeyCode::F(5) => {
                 self.chooser = false;
-                self.busy = Some("Rescanning the cluster…".to_owned());
+                self.busy = Some("Rescanning the cluster".to_owned());
                 return (
                     false,
                     Some(Request::Install(Command::Rescan {

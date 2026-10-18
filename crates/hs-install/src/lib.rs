@@ -92,10 +92,7 @@ pub fn describe_missing(questions: &[Question]) -> String {
             .max()
             .unwrap_or(0);
         for (index, choice) in question.choices.iter().enumerate() {
-            let mut detail: String = choice.detail.chars().take(WIDTH).collect();
-            if choice.detail.chars().count() > WIDTH {
-                detail.push_str("...");
-            }
+            let detail: String = choice.detail.chars().take(WIDTH).collect();
             let marker = if question.defaults.contains(&index) {
                 "  (default)"
             } else {

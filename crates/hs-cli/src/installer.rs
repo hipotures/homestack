@@ -39,12 +39,12 @@ fn sounds(ctx: &Context, args: &Args) -> Sounds {
 fn open_root(args: &Args, install: &InstallArgs, ctx: &mut Context) -> Result<Box<dyn Root>, AppError> {
     if let Some(name) = &install.herdr {
         ctx.console
-            .err(&format!("Looking for the Herdr tab or pane {name:?}...\n"));
+            .err(&format!("Looking for the Herdr tab or pane {name:?}\n"));
         return Ok(Box::new(HerdrRoot::open(ctx.system.clone(), name)?));
     }
     let target = install.ssh.clone().unwrap_or_default();
     ctx.console.err(&format!(
-        "Opening root SSH to {target} (touch the security key if it blinks)...\n"
+        "Opening root SSH to {target} (touch the security key if it blinks)\n"
     ));
     let sounds = sounds(ctx, args);
     Ok(Box::new(SshRoot::open(

@@ -47,14 +47,9 @@ pub(super) fn write(buf: &mut Buffer, x: u16, y: u16, width: u16, text: &str, st
     used
 }
 
-/// `text` cut to `width` characters, with "…" when cut.
+/// `text` cut to the available number of characters.
 pub(super) fn cut(text: &str, width: usize) -> String {
-    if text.chars().count() <= width {
-        return text.to_owned();
-    }
-    let mut short: String = text.chars().take(width.saturating_sub(1)).collect();
-    short.push('…');
-    short
+    text.chars().take(width).collect()
 }
 
 fn pad(text: &str, width: usize) -> String {
@@ -510,7 +505,7 @@ fn detail_pairs(app: &App, entry: &StatusEntry) -> Vec<(&'static str, String)> {
             let message = app
                 .details_unavailable(entry)
                 .or_else(|| app.details_error())
-                .unwrap_or("reading the details…");
+                .unwrap_or("reading the details");
             pairs.push(("", message.to_owned()));
         }
     }
@@ -626,7 +621,7 @@ fn workspaces(buf: &mut Buffer, area: Rect, app: &App, mut controls: Vec<Control
         // A moving bar and the time in the middle of the panel, so the start
         // is never a still screen.
         let seconds = f64::from(app.waiting) / 10.0;
-        let words = format!("Reading the status from the servers…  {seconds:.1} s");
+        let words = format!("Reading the status from the servers  {seconds:.1} s");
         let width = 30_usize;
         let block = 6_usize;
         let at = usize::try_from(app.waiting).unwrap_or(0) % (width + block);
@@ -693,7 +688,7 @@ fn workspaces(buf: &mut Buffer, area: Rect, app: &App, mut controls: Vec<Control
         return;
     }
     if app.status.is_none() {
-        write(buf, inner.x + 1, inner.y, inner.width, "Reading the status…", muted);
+        write(buf, inner.x + 1, inner.y, inner.width, "Reading the status", muted);
         return;
     }
     let mut list = inner;
@@ -1033,7 +1028,7 @@ fn draw_overlay(buf: &mut Buffer, area: Rect, app: &App, overlay: &Overlay) {
             vec![(
                 app.selected_entry()
                     .and_then(|entry| app.details_unavailable(entry))
-                    .map_or_else(|| format!("Reading details of VM {vmid}…"), str::to_owned),
+                    .map_or_else(|| format!("Reading details of VM {vmid}"), str::to_owned),
                 text,
             )],
             vec![Control::key("cancel esc")],
@@ -1160,7 +1155,7 @@ pub(super) fn wrap(line: &str, width: usize) -> Vec<String> {
 /// from, and the images published lately, the chosen one marked.
 fn reinstall_lines(app: &App, chosen: usize, text: Style, muted: Style, lines: &mut Vec<(String, Style)>) {
     let images = match &app.images {
-        None => return lines.push(("reading the images…".to_owned(), muted)),
+        None => return lines.push(("reading the images".to_owned(), muted)),
         Some(Err(error)) => return lines.push((error.clone(), text.fg(app.palette.error))),
         Some(Ok(images)) => images,
     };
@@ -1392,7 +1387,7 @@ fn action_box(buf: &mut Buffer, area: Rect, app: &App, action: &Action) {
                 }
             }
         }
-        Stage::Asking => lines.push(("asking the server for the plan…".to_owned(), muted)),
+        Stage::Asking => lines.push(("asking the server for the plan".to_owned(), muted)),
         Stage::Plan {
             lines: plan,
             question,
@@ -1436,7 +1431,7 @@ fn action_box(buf: &mut Buffer, area: Rect, app: &App, action: &Action) {
             let done = steps.iter().filter(|step| step.state == StepState::Done).count();
             lines.push((String::new(), text));
             let label = if steps.is_empty() {
-                "starting…".to_owned()
+                "starting".to_owned()
             } else {
                 format!("{done} of {} steps done", steps.len())
             };

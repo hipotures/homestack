@@ -175,7 +175,7 @@ impl Fixture {
                 stored
             }
             _ => {
-                eprintln!("HomeStack certificate [REQUESTING NEW]: *.{SEARCH} via DNS-01...");
+                eprintln!("HomeStack certificate [REQUESTING NEW]: *.{SEARCH} via DNS-01");
                 self.issue(&dir).await?
             }
         };

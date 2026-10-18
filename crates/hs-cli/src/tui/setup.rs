@@ -218,8 +218,7 @@ fn compact_value(value: &toml::Value) -> String {
     if rendered.chars().count() <= 96 {
         rendered
     } else {
-        let cut: String = rendered.chars().take(95).collect();
-        format!("{cut}…")
+        rendered.chars().take(96).collect()
     }
 }
 
@@ -1204,7 +1203,7 @@ impl SetupBox {
                 if sha.is_empty() {
                     "unknown".to_owned()
                 } else {
-                    format!("{}…", sha.chars().take(16).collect::<String>())
+                    sha.to_owned()
                 }
             ));
             if truthy(&file["birthtime_ns"]) {
@@ -1950,7 +1949,7 @@ impl super::state::App {
             name: entry.name.clone().unwrap_or_default(),
             ..Target::default()
         };
-        self.open_setup_box(SetupBox::loading(Settings::default(), target, "Starting setup…"));
+        self.open_setup_box(SetupBox::loading(Settings::default(), target, "Starting setup"));
         Some(super::state::Request::Setup(Some(entry.vmid)))
     }
 

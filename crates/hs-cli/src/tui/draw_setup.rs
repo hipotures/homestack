@@ -198,7 +198,7 @@ fn running(
                 "  Touch your YubiKey/security key if it flashes.".to_owned(),
                 text.add_modifier(Modifier::BOLD),
             ),
-            ("  Connecting desktop Herdr…".to_owned(), text.fg(palette.muted)),
+            ("  Connecting desktop Herdr".to_owned(), text.fg(palette.muted)),
         ];
         for (line, style) in rows {
             write(buf, inner.x + 1, top, inner.width.saturating_sub(2), &line, style);
@@ -206,7 +206,7 @@ fn running(
         }
         top += 1;
     } else if !finished {
-        let step = lines.last().cloned().unwrap_or_else(|| "Preparing setup…".to_owned());
+        let step = lines.last().cloned().unwrap_or_else(|| "Preparing setup".to_owned());
         write(
             buf,
             inner.x + 1,

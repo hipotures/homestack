@@ -626,7 +626,7 @@ fn run(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
         );
     }
     if install.lines.is_empty() {
-        write(buf, x, inner.y + 1, width, "Starting…", text.fg(palette.focus));
+        write(buf, x, inner.y + 1, width, "Starting", text.fg(palette.focus));
     }
 }
 

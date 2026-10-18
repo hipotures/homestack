@@ -130,7 +130,7 @@ impl Fixture {
 
     pub async fn prepare(&mut self, address: Ipv4Addr, local_dns: Option<Ipv4Addr>) -> Result<Value> {
         self.cleanup_challenge().await?;
-        eprintln!("Checking existing DNS records at Spaceship and the cached certificate for {HOST}...");
+        eprintln!("Checking existing DNS records at Spaceship and the cached certificate for {HOST}");
         if self.journal.public_address.is_some_and(|owned| owned != address) {
             return Err("fixture address changed; reset it with cleanup --all first".into());
         }
@@ -167,7 +167,7 @@ impl Fixture {
             cached.ok_or("cached certificate disappeared")?
         } else {
             eprintln!(
-                "Certificate [REQUESTING NEW]: no reusable cached certificate; requesting Let's Encrypt via DNS-01..."
+                "Certificate [REQUESTING NEW]: no reusable cached certificate; requesting Let's Encrypt via DNS-01"
             );
             self.issue(&acme_dir).await?
         };

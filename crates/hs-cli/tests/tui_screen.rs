@@ -403,7 +403,7 @@ fn before_the_first_status_the_list_says_it_is_reading() {
     let preferences = hs_cli::tui::theme::Preferences::load(&dir.path().join("tui.toml")).unwrap();
     let app = hs_cli::tui::state::App::new(preferences, false).unwrap();
     let text = screen(&render(&app, 120, 36));
-    assert!(text.contains("Reading the status from the servers…  0.0 s"), "{text}");
+    assert!(text.contains("Reading the status from the servers  0.0 s"), "{text}");
     let mut later = app.clone();
     later.waiting = 12;
     let text = screen(&render(&later, 120, 36));
@@ -831,10 +831,7 @@ fn a_long_name_is_shown_whole() {
     status["workspaces"][0]["name"] = serde_json::json!("tklivetracker");
     fixture.app.set_status(&status);
     let text = screen(&render(&fixture.app, 120, 36));
-    assert!(
-        text.contains("tklivetracker ") && !text.contains("tklivetrack…"),
-        "{text}"
-    );
+    assert!(text.contains("tklivetracker ") && !text.contains('\u{2026}'), "{text}");
 }
 
 #[test]

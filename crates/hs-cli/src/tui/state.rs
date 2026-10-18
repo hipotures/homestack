@@ -485,7 +485,7 @@ impl App {
             return Some("Workspace details are unavailable for containers.");
         }
         let (Some(pool), Some(gold_pool)) = (&self.pool, &self.gold_pool) else {
-            return Some("Waiting for the server's pools…");
+            return Some("Waiting for the server's pools");
         };
         if entry
             .pool
@@ -1280,14 +1280,14 @@ impl App {
                     0 => {
                         self.overlay = Some(Overlay::Report {
                             title: "servers".to_owned(),
-                            lines: vec!["Asking every server…".to_owned()],
+                            lines: vec!["Asking every server".to_owned()],
                         });
                         return Some(Request::Transport);
                     }
                     1 => {
                         self.overlay = Some(Overlay::Report {
                             title: "this desktop".to_owned(),
-                            lines: vec!["Checking this desktop…".to_owned()],
+                            lines: vec!["Checking this desktop".to_owned()],
                         });
                         return Some(Request::Discover);
                     }
@@ -1318,7 +1318,7 @@ impl App {
                                 local: true,
                                 ..crate::setup::Target::default()
                             },
-                            "Reading this desktop…",
+                            "Reading this desktop",
                         ));
                         return Some(Request::Setup(None));
                     }

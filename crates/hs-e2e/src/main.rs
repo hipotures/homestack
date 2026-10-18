@@ -27,7 +27,7 @@ use serde_json::{Value, json};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
-const USAGE: &str = "homestack-e2e run [--memory-mib N] [--cpus N] [--disk-gib N]\n                  [--timeout-seconds N] [--message TEXT] [--artifacts DIRECTORY]\n                  [--pause-after PHASE[,PHASE...]] [--pause-on-failure]\n                  [--web-bind IPV4] [--web-port PORT]\n                  [--fixtures DIRECTORY] [--spaceship-file FILE]\n                  [--local-dns IPV4] [--tsig-file FILE]\n                  [--runner-ssh DESTINATION] [--runner-ssh-port PORT]\nhomestack-e2e resume --artifacts DIRECTORY\nhomestack-e2e profile --artifacts DIRECTORY (register an already paused lab as profile e2e)\nhomestack --profil e2e [COMMAND]\nhomestack-e2e prepare --artifacts DIRECTORY [--local-dns IPV4] [--spaceship-file FILE] [--tsig-file FILE]\nhomestack-e2e cleanup --all [--fixtures DIRECTORY] [--spaceship-file FILE] [--tsig-file FILE]\n\nPhases: preflight, domain, image, boot, kernel, proxmox, network, gold, homestack, verify, shutdown; cleanup always runs.\nDefaults: 1 vCPU, 4096 MiB RAM, 12 GiB sparse disk, 1800 active seconds.\nInspection pauses have no time limit and require an explicit resume.\nThe panel uses pve.e2e.homestack.app with a public Let's Encrypt certificate.\nDNS and certificate fixtures persist until cleanup --all.\nThe web forward binds to 127.0.0.1 on a free port unless explicitly configured.\nDownloads Debian 13 qcow2, installs Proxmox, verifies SSH, HTTPS and web login,\npowers off, and deletes all temporary VM data. No host network changes.\nRequires Linux x86_64, /dev/kvm, qemu-system-x86_64, qemu-img,\nssh, ssh-keygen, scp, mkfs.vfat, mcopy, openssl, python3 and ip; dig/nsupdate for local DNS.\nNo host root privileges required.";
+const USAGE: &str = "homestack-e2e run [--memory-mib N] [--cpus N] [--disk-gib N]\n                  [--timeout-seconds N] [--message TEXT] [--artifacts DIRECTORY]\n                  [--pause-after PHASE[,PHASE]] [--pause-on-failure]\n                  [--web-bind IPV4] [--web-port PORT]\n                  [--fixtures DIRECTORY] [--spaceship-file FILE]\n                  [--local-dns IPV4] [--tsig-file FILE]\n                  [--runner-ssh DESTINATION] [--runner-ssh-port PORT]\nhomestack-e2e resume --artifacts DIRECTORY\nhomestack-e2e profile --artifacts DIRECTORY (register an already paused lab as profile e2e)\nhomestack --profil e2e [COMMAND]\nhomestack-e2e prepare --artifacts DIRECTORY [--local-dns IPV4] [--spaceship-file FILE] [--tsig-file FILE]\nhomestack-e2e cleanup --all [--fixtures DIRECTORY] [--spaceship-file FILE] [--tsig-file FILE]\n\nPhases: preflight, domain, image, boot, kernel, proxmox, network, gold, homestack, verify, shutdown; cleanup always runs.\nDefaults: 1 vCPU, 4096 MiB RAM, 12 GiB sparse disk, 1800 active seconds.\nInspection pauses have no time limit and require an explicit resume.\nThe panel uses pve.e2e.homestack.app with a public Let's Encrypt certificate.\nDNS and certificate fixtures persist until cleanup --all.\nThe web forward binds to 127.0.0.1 on a free port unless explicitly configured.\nDownloads Debian 13 qcow2, installs Proxmox, verifies SSH, HTTPS and web login,\npowers off, and deletes all temporary VM data. No host network changes.\nRequires Linux x86_64, /dev/kvm, qemu-system-x86_64, qemu-img,\nssh, ssh-keygen, scp, mkfs.vfat, mcopy, openssl, python3 and ip; dig/nsupdate for local DNS.\nNo host root privileges required.";
 
 struct Options {
     memory: u32,
@@ -295,7 +295,7 @@ async fn execute() -> Result<()> {
         report["phases"][&phase]["status"] = json!("failed");
         report["phases"][&phase]["error"] = json!("run interrupted");
     }
-    eprintln!("Removing temporary VM resources...");
+    eprintln!("Removing temporary VM resources");
     phases::begin(&mut report, "cleanup");
     report["status"] = json!("running");
     report["control_socket"] = Value::Null;
@@ -390,7 +390,7 @@ async fn run(
     let password = uuid::Uuid::new_v4().simple().to_string();
     progress
         .execute("preflight", report, async |_| {
-            eprintln!("Checking KVM and host tools...");
+            eprintln!("Checking KVM and host tools");
             std::fs::OpenOptions::new()
                 .read(true)
                 .write(true)
@@ -451,7 +451,7 @@ async fn run(
         .await?;
     progress
         .execute("image", report, async |report| {
-            eprintln!("Checking latest Debian 13 qcow2 and verifying SHA-512...");
+            eprintln!("Checking latest Debian 13 qcow2 and verifying SHA-512");
             report["image"] = serde_json::to_value(image::download(&dir.join("base.qcow2")).await?)?;
             save_report(artifacts, report)?;
             let info = vm::command(
@@ -495,7 +495,7 @@ async fn run(
             seed::create(dir, &data, hostname, artifacts).await?;
             let proxy = proxy::start().await?;
             eprintln!(
-                "Starting KVM VM: {} vCPU, {} MiB RAM, {} GiB sparse disk...",
+                "Starting KVM VM: {} vCPU, {} MiB RAM, {} GiB sparse disk",
                 options.cpus, options.memory, options.disk
             );
             *slot = Some(vm::Vm::start(dir, artifacts, options, proxy.port)?);
@@ -537,14 +537,14 @@ async fn run(
         .execute("kernel", report, async |_| {
             let vm = slot.as_mut().ok_or("VM handle is unavailable")?;
             let boot = vm.wait_ssh(None).await?;
-            eprintln!("SSH and initialization data verified. Installing the Proxmox kernel...");
+            eprintln!("SSH and initialization data verified. Installing the Proxmox kernel");
             vm.logged_ssh(
                 KERNEL_INSTALL,
                 Duration::from_secs(900),
                 &artifacts.join("install-kernel.log"),
             )
             .await?;
-            eprintln!("Proxmox kernel installed. Rebooting the VM...");
+            eprintln!("Proxmox kernel installed. Rebooting the VM");
             vm.checked_ssh(
                 "systemctl reboot --no-block\n",
                 Duration::from_secs(15),
@@ -558,14 +558,14 @@ async fn run(
     progress
         .execute("proxmox", report, async |report| {
             let vm = slot.as_mut().ok_or("VM handle is unavailable")?;
-            eprintln!("Installing Proxmox VE services...");
+            eprintln!("Installing Proxmox VE services");
             vm.logged_ssh(
                 PVE_INSTALL,
                 Duration::from_secs(900),
                 &artifacts.join("install-pve.log"),
             )
             .await?;
-            eprintln!("PVE packages installed. Rebooting the VM...");
+            eprintln!("PVE packages installed. Rebooting the VM");
             let before = vm.wait_ssh(None).await?;
             vm.checked_ssh(
                 "systemctl reboot --no-block\n",
@@ -574,7 +574,7 @@ async fn run(
             )
             .await?;
             report["boot_id"] = json!(vm.wait_ssh(Some(&before)).await?);
-            eprintln!("Waiting for Proxmox services...");
+            eprintln!("Waiting for Proxmox services");
             vm.checked_ssh(
                 WAIT_PVE,
                 Duration::from_secs(120),
@@ -591,7 +591,7 @@ async fn run(
             if !result.status.success() {
                 return Err("cannot configure the temporary PVE web login".into());
             }
-            eprintln!("Installing the cached public TLS certificate...");
+            eprintln!("Installing the cached public TLS certificate");
             fixture.install(vm).await?;
             fixture.verify_resolution(options.web_bind).await?;
             report["web_url"] = json!(web_url(vm, hostname));
@@ -605,7 +605,7 @@ async fn run(
     progress
         .execute("network", report, async |report| {
             let vm = slot.as_mut().ok_or("VM handle is unavailable")?;
-            eprintln!("Preparing isolated vmbr0 for containers and VMs (10.77.0.1/24)...");
+            eprintln!("Preparing isolated vmbr0 for containers and VMs (10.77.0.1/24)");
             let (network, gateway) = network::configure(vm, artifacts, dir).await?;
             internet = Some(gateway);
             report["network"] = network;
@@ -618,7 +618,7 @@ async fn run(
         .await?;
     progress
         .execute("gold", report, async |report| {
-            eprintln!("Preparing the reference Debian Gold VM and verifying its guest contract...");
+            eprintln!("Preparing the reference Debian Gold VM and verifying its guest contract");
             report["gold"] = gold::prepare(dir, artifacts, report).await?;
             eprintln!("Gold 100 ready: agent verified after cold start; finalized and stopped for cloning.");
             Ok(())
@@ -634,7 +634,7 @@ async fn run(
             let vm = slot.as_mut().ok_or("VM handle is unavailable")?;
             report["network"] = network::verify(vm, artifacts).await?;
             report["gold"] = gold::verify(dir, artifacts, report).await?;
-            eprintln!("Verifying the PVE kernel, nested KVM and HTTPS API...");
+            eprintln!("Verifying the PVE kernel, nested KVM and HTTPS API");
             let kernel = vm
                 .checked_ssh(
                     "uname -r\nif grep -qw vmx /proc/cpuinfo; then modprobe kvm_intel; else modprobe kvm_amd; fi\ntest -c /dev/kvm\nsshd -T | grep -qx 'passwordauthentication no'\nsshd -T | grep -qx 'kbdinteractiveauthentication no'\n",
@@ -744,7 +744,7 @@ async fn run(
         }).await?;
     progress
         .execute("shutdown", report, async |_| {
-            eprintln!("PVE verified. Requesting graceful poweroff...");
+            eprintln!("PVE verified. Requesting graceful poweroff");
             slot.as_mut().ok_or("VM handle is unavailable")?.poweroff().await
         })
         .await?;

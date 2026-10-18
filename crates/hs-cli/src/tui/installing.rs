@@ -138,7 +138,7 @@ fn work(setup: &Setup, commands: &Receiver<Command>, tell: &(dyn Fn(Event) + Sen
             },
             Command::Rescan { answers, domain } => {
                 let Some(session) = session.as_mut() else { continue };
-                tell(Event::Busy("Rescanning the cluster…".to_owned()));
+                tell(Event::Busy("Rescanning the cluster".to_owned()));
                 match session.rescan(&answers, domain.as_deref()) {
                     Ok(()) => {
                         let (found, first) = survey(setup, session, tell);
@@ -159,7 +159,7 @@ fn work(setup: &Setup, commands: &Receiver<Command>, tell: &(dyn Fn(Event) + Sen
                         review
                     }
                     None => {
-                        tell(Event::Busy("Reading the cluster and planning…".to_owned()));
+                        tell(Event::Busy("Reading the cluster and planning".to_owned()));
                         review(setup, session, &answers, domain.as_deref())
                     }
                 };
@@ -188,10 +188,10 @@ fn connect(
     tell: &(dyn Fn(Event) + Send + Sync),
 ) -> Result<(Session, Found, Option<Kept>), AppError> {
     tell(Event::Busy(format!(
-        "Connecting to {target}… (touch your key or give its PIN if it asks)"
+        "Connecting to {target} (touch your key or give its PIN if it asks)"
     )));
     let root = setup.open(method, target)?;
-    tell(Event::Busy("Connected; reading the cluster…".to_owned()));
+    tell(Event::Busy("Connected; reading the cluster".to_owned()));
     let mut session = Session::start(
         root,
         setup.command(),
@@ -229,7 +229,7 @@ fn survey(setup: &Setup, session: &mut Session, tell: &(dyn Fn(Event) + Send + S
         Mode::Install => {
             let answers: Vec<Answer> = session.questions.iter().map(crate::install_config::defaults).collect();
             let domain = session.draft_domain.clone();
-            tell(Event::Busy("Planning with the last choices…".to_owned()));
+            tell(Event::Busy("Planning with the last choices".to_owned()));
             let review = session.review(&answers, Some(domain.as_str()));
             check.extend(install_check(&review));
             first = Some((answers, Some(domain), review));

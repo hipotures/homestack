@@ -99,7 +99,7 @@ pub fn parse_authorized_key_records(text: &str) -> Result<Vec<KeyRecord>, CoreEr
             }
             let comment = rest.trim().to_owned();
             let label = if comment.is_empty() {
-                format!("{key_type} {}…", blob.chars().take(12).collect::<String>())
+                format!("{key_type} {}", blob.chars().take(12).collect::<String>())
             } else {
                 comment.clone()
             };

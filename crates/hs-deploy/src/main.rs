@@ -18,9 +18,9 @@ use hs_deploy::config::DeployConfig;
 use hs_deploy::deploy;
 
 const USAGE: &str = "usage: homestack-deploy [--config FILE] cert [--force] [--push]
-       homestack-deploy [--config FILE] apply [--only NAME]...
-       homestack-deploy [--config FILE] status [--only NAME]...
-       homestack-deploy [--config FILE] remove [--only NAME]... --yes";
+       homestack-deploy [--config FILE] apply [--only NAME] (repeatable)
+       homestack-deploy [--config FILE] status [--only NAME] (repeatable)
+       homestack-deploy [--config FILE] remove [--only NAME] (repeatable) --yes";
 
 struct Args {
     config: PathBuf,

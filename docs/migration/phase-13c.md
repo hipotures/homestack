@@ -370,3 +370,11 @@ been implemented. The 29 parity `todo` entries still require an evidence-based
 audit before phase 15; functional acceptance does not automatically mark
 those tests as ported or excluded. Vendor snippet cleanup remains the
 explicit follow-up recorded above.
+
+Copy audit (2026-10-18): removed ellipses from application-owned UI text,
+CLI help/errors, setup, E2E messages and display truncation. Git range syntax,
+YAML document markers and matching third-party package output retain their
+machine-readable punctuation. Installer rendering and worker progress events
+are checked by Rust tests; the progress-description parity entry is now
+ported. The manifest has 28 remaining phase-13c TODO entries and four in
+phase 10 (32 total).

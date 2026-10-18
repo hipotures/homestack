@@ -1574,7 +1574,7 @@ fn run_startup(fail_connection: bool, fail_inspection: bool) -> (Vec<String>, Re
         cfg,
         target(),
         &catalog,
-        "Connecting/authenticating SSH (touch your security key if prompted)…",
+        "Connecting/authenticating SSH (touch your security key if prompted)",
         move |_, _| {
             if fail_connection {
                 return Err(AppError::new("Authentication failed"));
@@ -1607,9 +1607,9 @@ fn connected_spinner_during_inspection_and_stopped_before_tui() {
     assert_eq!(
         phases,
         [
-            "Connecting/authenticating SSH (touch your security key if prompted)…",
+            "Connecting/authenticating SSH (touch your security key if prompted)",
             "connected",
-            "SSH connected; inspecting workspace…",
+            "SSH connected; inspecting workspace",
             "closed"
         ]
     );
@@ -1801,10 +1801,10 @@ fn the_touch_names_the_key_and_the_start_is_a_small_box() {
 
     let mut fixture = tui_fixture::app();
     let app = &mut fixture.app;
-    app.open_setup_box(SetupBox::loading(Settings::default(), target(), "Resolving workspace…"));
+    app.open_setup_box(SetupBox::loading(Settings::default(), target(), "Resolving workspace"));
     let text = screen(&render(app, 120, 36));
     assert!(text.contains("connecting"), "{text}");
-    let (x, _) = position(&render(app, 120, 36), "Resolving workspace…");
+    let (x, _) = position(&render(app, 120, 36), "Resolving workspace");
     assert!(x > 20, "{text}");
 }
 
@@ -1816,7 +1816,7 @@ fn the_touch_box_replaces_the_connecting_box() {
     app.open_setup_box(SetupBox::loading(
         Settings::default(),
         target(),
-        "Connecting/authenticating SSH…",
+        "Connecting/authenticating SSH",
     ));
     assert!(screen(&render(app, 120, 36)).contains("connecting"));
     app.ask(hs_cli::tui::install::AskView::new(

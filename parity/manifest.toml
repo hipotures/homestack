@@ -208,7 +208,7 @@ tests = [
   { python = "tests/test_install.py::InstallDraftResumeTests::test_config_restore_rejects_obsolete_sync_stage", phase = "13c", status = "todo" },
   { python = "tests/test_install.py::InstallDraftResumeTests::test_draft_round_trip_restores_completed_values_without_placeholder_leakage", phase = "13c", status = "todo" },
   { python = "tests/test_install.py::InstallDraftResumeTests::test_resume_action_defaults_to_continue", phase = "13c", status = "todo" },
-  { python = "tests/test_install.py::InstallerProgressTests::test_progress_descriptions_do_not_use_ellipsis", phase = "13c", status = "todo" },
+  { python = "tests/test_install.py::InstallerProgressTests::test_progress_descriptions_do_not_use_ellipsis", phase = "13c", status = "ported", rust = ["installer_texts_do_not_use_ellipsis"] },
   { python = "tests/test_install.py::InstallerProgressTests::test_verified_transport_progress_keeps_session_open_until_context_exit", phase = "0", status = "excluded", reason = "Herdr transport: replaced by the Proxmox API client (mapping T1)" },
   { python = "tests/test_install.py::InstallerTransportDiscoveryTests::test_multiple_detected_sessions_require_selection", phase = "0", status = "excluded", reason = "Herdr transport: replaced by the Proxmox API client (mapping T1)" },
   { python = "tests/test_install.py::InstallerTransportDiscoveryTests::test_single_detected_session_populates_transport_without_placeholder_defaults", phase = "0", status = "excluded", reason = "Herdr transport: replaced by the Proxmox API client (mapping T1)" },

@@ -6,3 +6,10 @@
 - Do not run unwrapped Cargo builds or tests concurrently with wrapped commands. The wrapper serializes its commands and cleanup; Cargo itself releases its build lock before running tests.
 - Successful wrapped commands remove disposable hashed executables and incremental state while preserving top-level applications, dependency libraries and E2E data. Failed or interrupted commands retain their artifacts for diagnosis.
 - Do not replace this cleanup with `cargo clean` or removal of `target/`: that directory also contains running E2E labs, credentials, fixtures and diagnostic reports.
+
+# Quiet verification
+
+- Delegate build, test and lint execution to the project-local `test_runner` agent defined in `.codex/agents/test_runner.toml`.
+- Use `gpt-6-luna` with reasoning effort `high` for that agent.
+- Keep command output in task-specific files under `/tmp`; do not stream complete logs into the conversation.
+- The verification agent returns only `UDANY` or `NIEUDANY`. Inspect its log privately when a failure needs diagnosis.

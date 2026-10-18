@@ -140,11 +140,11 @@ fn help(config: &Path) -> String {
             "Read-only check of the local tools and keys and of what the server finds in Proxmox.",
         ),
         (
-            "homestack install (--ssh USER@HOST | --herdr NAME) ...",
+            "homestack install (--ssh USER@HOST | --herdr NAME) [OPTIONS]",
             "Install HomeStack: root on a node once for the Proxmox part, then a server on every node, client.toml, and homestack status at the end.",
         ),
         (
-            "homestack uninstall (--ssh USER@HOST | --herdr NAME) ...",
+            "homestack uninstall (--ssh USER@HOST | --herdr NAME) [OPTIONS]",
             "Remove HomeStack from Proxmox; never a VM, a container or a volume.",
         ),
         (
@@ -172,7 +172,7 @@ fn help(config: &Path) -> String {
             "Offline-migrate root, persistent home and cloud-init disk.",
         ),
         (
-            "homestack setup ...",
+            "homestack setup [OPTIONS]",
             "Workspace setup; still in the Python client (phase 14).",
         ),
         (

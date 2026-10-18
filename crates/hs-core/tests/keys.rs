@@ -228,7 +228,7 @@ fn parse_records_label_by_comment_or_blob() {
                 key_type: "sk-ssh-ed25519@openssh.com".to_owned(),
                 blob: "AAAAGnNrLXNzaC1lZDI1".to_owned(),
                 comment: String::new(),
-                label: "sk-ssh-ed25519@openssh.com AAAAGnNrLXNz…".to_owned(),
+                label: "sk-ssh-ed25519@openssh.com AAAAGnNrLXNz".to_owned(),
                 identity: "sk-ssh-ed25519@openssh.com AAAAGnNrLXNzaC1lZDI1".to_owned(),
             },
         ])

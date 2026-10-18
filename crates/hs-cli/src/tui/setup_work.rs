@@ -175,9 +175,9 @@ pub fn startup(
         workspace,
     };
     tell(Event::Loading(if session.target.local {
-        "Inspecting this desktop…".to_owned()
+        "Inspecting this desktop".to_owned()
     } else {
-        "SSH connected; inspecting workspace…".to_owned()
+        "SSH connected; inspecting workspace".to_owned()
     }));
     let state = inspect(&mut session)?;
     Ok((session, state))
@@ -192,7 +192,7 @@ fn open(start: &Start, tell: &Tell) -> Result<(Session, Catalog, Value), AppErro
             (local_target_of(&settings), load_catalog(&settings, None))
         }
         Some(vmid) => {
-            tell(Event::Loading("Resolving workspace…".to_owned()));
+            tell(Event::Loading("Resolving workspace".to_owned()));
             let client = start
                 .client
                 .as_ref()
@@ -200,7 +200,7 @@ fn open(start: &Start, tell: &Tell) -> Result<(Session, Catalog, Value), AppErro
             let target = start
                 .handle
                 .block_on(resolve_target(client, &mut settings, &vmid.to_string()))?;
-            tell(Event::Loading("Loading setup catalog…".to_owned()));
+            tell(Event::Loading("Loading setup catalog".to_owned()));
             (target, catalog_with_repositories(start.system.as_ref(), &settings))
         }
     };
@@ -209,7 +209,7 @@ fn open(start: &Start, tell: &Tell) -> Result<(Session, Catalog, Value), AppErro
     let connecting = if target.local {
         String::new()
     } else {
-        format!("Connecting/authenticating SSH (touch your {key} if prompted)…")
+        format!("Connecting/authenticating SSH (touch your {key} if prompted)")
     };
     let connect = |settings: &Settings, target: &Target| -> Result<Box<dyn Workspace>, AppError> {
         if target.local {

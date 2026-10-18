@@ -86,7 +86,7 @@ impl Progress {
         let line = format!(
             "{stage} [{}{}] {percent:5.1}% {message}",
             "=".repeat(filled),
-            ".".repeat(24 - filled)
+            "-".repeat(24 - filled)
         );
         let mut stderr = std::io::stderr().lock();
         if self.terminal {

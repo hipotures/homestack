@@ -1444,7 +1444,7 @@ def _selector_header(context: Path, state: SelectorState, width: int) -> str:
     context_width = available - fixed
     context_text = display_path(context)
     if len(context_text) > context_width:
-        context_text = context_text[: max(0, context_width - 1)] + "…"
+        context_text = context_text[: max(0, context_width)]
     return f"{left}   {context_text:<{context_width}}   {count}"
 
 

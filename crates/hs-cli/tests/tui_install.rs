@@ -726,7 +726,7 @@ fn the_connection_is_a_box_with_a_spinner_and_esc_cancels_it() {
     type_text(&mut fixture.app, "root@pve2");
     press(&mut fixture.app, KeyCode::Enter);
     fixture.app.install_event(Event::Busy(
-        "Connecting to root@pve2… (touch your key or give its PIN if it asks)".to_owned(),
+        "Connecting to root@pve2 (touch your key or give its PIN if it asks)".to_owned(),
     ));
     let text = screen(&render(&fixture.app, 120, 36));
     assert!(
@@ -744,7 +744,7 @@ fn the_connection_is_a_box_with_a_spinner_and_esc_cancels_it() {
     // What the stopped worker says last brings the access back, quietly.
     fixture
         .app
-        .install_event(Event::Busy("Connected; reading the cluster…".to_owned()));
+        .install_event(Event::Busy("Connected; reading the cluster".to_owned()));
     fixture
         .app
         .install_event(Event::Failed("Connection cancelled.".to_owned()));
@@ -833,4 +833,29 @@ fn a_herdr_access_that_connected_is_chosen_again_with_its_tab() {
     fixture.app.set_herdr_tabs(tabs);
     let install = fixture.app.install.as_ref().unwrap();
     assert_eq!((install.method, install.tab), (Method::Herdr, 1));
+}
+
+#[test]
+fn installer_texts_do_not_use_ellipsis() {
+    let mut fixture = app();
+    fixture.app.open_install(Mode::Install, true);
+    fixture.app.install.as_mut().unwrap().host = "root@pve2".to_owned();
+    let check = |app: &App| {
+        let text = screen(&render(app, 120, 36));
+        assert!(!text.contains("...") && !text.contains('\u{2026}'), "{text}");
+    };
+    check(&fixture.app);
+    press(&mut fixture.app, KeyCode::Enter);
+    check(&fixture.app);
+    fixture.app.install_event(Event::Connected(found()));
+    check(&fixture.app);
+    press(&mut fixture.app, KeyCode::Enter);
+    check(&fixture.app);
+    press(&mut fixture.app, KeyCode::F(5));
+    check(&fixture.app);
+    fixture.app.install_event(Event::Connected(found()));
+    check(&fixture.app);
+    press(&mut fixture.app, KeyCode::Enter);
+    press(&mut fixture.app, KeyCode::Enter);
+    check(&fixture.app);
 }

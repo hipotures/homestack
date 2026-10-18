@@ -140,7 +140,7 @@ impl std::fmt::Display for UsageError {
 impl std::error::Error for UsageError {}
 
 const USAGE: &str = "usage: homestack [-h] [--profile NAME | --profil NAME] [--config CONFIG] [--json] [-y] \
-{discover,install,uninstall,create,refresh,resize,addkey,destroy,migrate,setup,repo,status,transport} ...\n       homestack tui [--ssh USER@HOST] [--server-domain DOMAIN] [--server-image IMAGE]";
+{discover,install,uninstall,create,refresh,resize,addkey,destroy,migrate,setup,repo,status,transport} [OPTIONS]\n       homestack tui [--ssh USER@HOST] [--server-domain DOMAIN] [--server-image IMAGE]";
 
 fn usage_of(command: &str) -> String {
     let rest = match command {
@@ -155,9 +155,7 @@ fn usage_of(command: &str) -> String {
         "uninstall" => {
             "[--ssh USER@HOST | --herdr NAME] [--identity FILE] [--test] [--snippet-storage ID] [--gold VMID] [--token-dir DIR] [--json] [-y]"
         }
-        "setup" => {
-            "[--local] [--json] [-y] [--catalog CATALOG] [--dry-run] [--non-interactive] [target] [selectors ...]"
-        }
+        "setup" => "[--local] [--json] [-y] [--catalog CATALOG] [--dry-run] [--non-interactive] [target] [SELECTORS]",
         "repo" => "TARGET [REPOSITORY] [--json]",
         "status" => "[TARGET] [--json]",
         _ => "[--json]",

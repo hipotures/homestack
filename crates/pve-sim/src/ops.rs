@@ -93,7 +93,7 @@ fn unescape(value: &str) -> Option<String> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error("invalid operation {0:?}: expected name{{key=value,...}}")]
+#[error("invalid operation {0:?}: expected name{{key=value}} with comma-separated keys")]
 pub struct OpParseError(String);
 
 impl FromStr for Op {

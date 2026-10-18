@@ -21,7 +21,7 @@ use hs_config::paths::default_config_path;
 use hs_config::split::split_with_server;
 use hs_model::config::{Config, config_version};
 
-const USAGE: &str = "usage: hs-config split [--config FILE] [--server-out FILE] [--client-out FILE] [--server-url URL]...\n       hs-config check FILE";
+const USAGE: &str = "usage: hs-config split [--config FILE] [--server-out FILE] [--client-out FILE] [--server-url URL] (repeatable)\n       hs-config check FILE";
 
 enum Failure {
     Usage(String),

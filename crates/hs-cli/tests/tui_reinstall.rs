@@ -90,7 +90,7 @@ fn enter_on_a_server_reads_the_images_and_shows_them() {
     );
     let text = screen(&render(&fixture.app, 140, 40));
     assert!(
-        text.contains("update API api2") && text.contains("reading the images…"),
+        text.contains("update API api2") && text.contains("reading the images"),
         "{text}"
     );
 

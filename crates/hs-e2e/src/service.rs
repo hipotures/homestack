@@ -106,12 +106,12 @@ pub async fn prepare(options: &Options, dir: &Path, artifacts: &Path, report: &V
     let config = configuration(&node)?;
     let _ = hs_config::legacy::read(&config)?;
     let mut fixture = Fixture::open(&options.fixtures, &options.spaceship_file, &options.tsig_file)?;
-    eprintln!("Preparing HomeStack API DNS and a public wildcard certificate...");
+    eprintln!("Preparing HomeStack API DNS and a public wildcard certificate");
     let outcome = fixture.prepare(options.local_dns).await;
     let cleanup = fixture.cleanup_challenge().await;
     let stored = outcome?;
     cleanup?;
-    eprintln!("Preparing internal DNS and the Proxmox OCI image tools...");
+    eprintln!("Preparing internal DNS and the Proxmox OCI image tools");
     crate::install::run(
         ssh(dir),
         include_str!("service-network.sh"),
@@ -174,7 +174,7 @@ pub async fn prepare(options: &Options, dir: &Path, artifacts: &Path, report: &V
             .ok_or("service settings have no image")?
             .to_owned()
     } else {
-        eprintln!("Selecting the newest published HomeStack server image...");
+        eprintln!("Selecting the newest published HomeStack server image");
         hs_deploy::registry::recent("ghcr.io/hipotures/homestack-server:latest", 10, &[])
             .await?
             .into_iter()
@@ -186,7 +186,7 @@ pub async fn prepare(options: &Options, dir: &Path, artifacts: &Path, report: &V
     let pull = include_str!("service-image.py");
     let registry = crate::registry_proxy::start().await?;
     let mut tunnel = crate::tunnel::Tunnel::start(dir, registry.port).await?;
-    eprintln!("Checking the native Proxmox OCI image cache for {image}...");
+    eprintln!("Checking the native Proxmox OCI image cache for {image}");
     let script = format!(
         "export HTTPS_PROXY=http://127.0.0.1:3129 https_proxy=http://127.0.0.1:3129\npython3 - {} {} {} <<'PULL'\n{pull}\nPULL\n",
         crate::phases::shell_quote(&image),

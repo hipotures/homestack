@@ -239,7 +239,7 @@ pub async fn prepare(dir: &Path, artifacts: &Path, report: &Value) -> Result<Val
         wait_stopped(dir, &run_id, artifacts).await?;
     }
     let source = format!("/var/tmp/hs-e2e-gold-{run_id}.qcow2");
-    eprintln!("Copying the already verified Debian image into PVE for Gold 100...");
+    eprintln!("Copying the already verified Debian image into PVE for Gold 100");
     crate::vm::command(
         "scp",
         &[
@@ -265,7 +265,7 @@ pub async fn prepare(dir: &Path, artifacts: &Path, report: &Value) -> Result<Val
     );
     service::checked_ssh(dir, &create, &artifacts.join("gold.log")).await?;
     let first_boot = wait_ssh(dir).await?;
-    eprintln!("Installing Gold guest tools, account policy and QEMU Guest Agent...");
+    eprintln!("Installing Gold guest tools, account policy and QEMU Guest Agent");
     crate::install::run(
         guest_ssh(dir),
         include_str!("gold-guest.sh"),
@@ -273,7 +273,7 @@ pub async fn prepare(dir: &Path, artifacts: &Path, report: &Value) -> Result<Val
         &artifacts.join("gold-install.log"),
     )
     .await?;
-    eprintln!("Cold-starting Gold to verify agent autostart and persistent networking...");
+    eprintln!("Cold-starting Gold to verify agent autostart and persistent networking");
     let shutdown = output(
         guest_ssh(dir),
         "systemctl poweroff --no-block\n",
@@ -367,7 +367,7 @@ pub async fn shell(artifacts: &Path) -> Result<()> {
     if metadata["run_id"] != run_id || metadata["vmid"] != VMID || metadata["finalized"] != true {
         return Err("Gold inspection requires this run's finalized reference Gold".into());
     }
-    eprintln!("Opening the lab Gold as root; a stopped Gold will start and return to stopped on logout...");
+    eprintln!("Opening the lab Gold as root; a stopped Gold will start and return to stopped on logout");
     let cloud = cloud_config(
         &run_id,
         &std::fs::read_to_string(dir.join("client/home/.ssh/e2e-workspace.pub"))?,
@@ -393,7 +393,7 @@ pub async fn shell(artifacts: &Path) -> Result<()> {
         .status()
         .await?;
     if result["started"] == true {
-        eprintln!("Finalizing Gold and restoring its stopped state for cloning...");
+        eprintln!("Finalizing Gold and restoring its stopped state for cloning");
         let shutdown = output(
             guest_ssh(dir),
             "cloud-init status --wait\ncloud-init clean --logs --machine-id\nsystemctl poweroff --no-block\n",
