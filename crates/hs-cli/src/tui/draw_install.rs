@@ -65,7 +65,7 @@ pub(super) fn screen(buf: &mut Buffer, area: Rect, app: &App, install: &Install)
         x,
         main.y,
         room.saturating_sub(x),
-        &format!("{} [{}]", install.mode.title(), app.profile),
+        &format!("{} [{}]", install.title(), app.profile),
         title_style,
     );
     x += write(buf, x, main.y, room.saturating_sub(x), " ─", border);
@@ -357,24 +357,28 @@ fn settings(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
     let label_width = if narrow { 17 } else { longest(|row| &row.0) + 2 };
     let wanted = u16::try_from(2 + label_width + longest(|row| &row.1) + 2).unwrap_or(u16::MAX);
     let left = if narrow { 28 } else { wanted.clamp(40, inner.width / 2) };
-    for (row, (title, value)) in rows.iter().enumerate() {
+    let visible = usize::from(inner.height.saturating_sub(5)).max(1);
+    let start = (install.row + 1).saturating_sub(visible);
+    for (row, (title, value)) in rows.iter().enumerate().skip(start).take(visible) {
         let chosen = row == install.row;
         let mark = if chosen { "▶ " } else { "  " };
         let line = format!("{mark}{:<label_width$}{}", cut(title, label_width - 1), value);
         write(
             buf,
             x,
-            at(inner.y, row + 1),
+            at(inner.y, row - start + 1),
             left - 1,
             &cut(&line, usize::from(left - 1)),
             if chosen && !install.chooser { focus } else { text },
         );
         super::chrome::register(
-            Rect::new(x, at(inner.y, row + 1), left - 1, 1),
+            Rect::new(x, at(inner.y, row - start + 1), left - 1, 1),
             super::chrome::Hit::Setting(row),
         );
     }
-    if let Some(found) = &install.found {
+    if rows.len() + 10 < usize::from(inner.height)
+        && let Some(found) = &install.found
+    {
         let how = found.root.split(" · ").next().unwrap_or_default();
         let line = format!("  Root access  {how}");
         write(
@@ -391,12 +395,16 @@ fn settings(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
         ("↑ ↓", "a setting"),
         ("Tab", "into its box and out"),
         ("Space", "tick in the box"),
-        ("letters", "the server domain"),
+        ("letters", "edit a text setting"),
         ("Enter", "review"),
         ("F5", "rescan cluster"),
         ("?", "help: what each one is"),
     ];
-    for (row, (key, what)) in help.iter().enumerate() {
+    for (row, (key, what)) in help
+        .iter()
+        .enumerate()
+        .take(usize::from(inner.height).saturating_sub(rows.len() + 5))
+    {
         let line = format!("{key:<9}{what}");
         write(
             buf,
@@ -444,6 +452,29 @@ fn settings(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
     let Some(setting) = install.settings.get(install.row) else {
         return;
     };
+    if let Some(value) = &setting.text {
+        let rect = fit(48, 4);
+        let box_inner = frame(
+            buf,
+            rect,
+            palette,
+            &Sides {
+                top_left: vec![Control::plain(&setting.title)],
+                focused: true,
+                ..Sides::default()
+            },
+        );
+        write(
+            buf,
+            box_inner.x + 2,
+            at(box_inner.y, 1),
+            box_inner.width.saturating_sub(4),
+            &format!("[ {value}▏ ]"),
+            focus,
+        );
+        paragraph(buf, box_inner, at(box_inner.y, 3), &setting.note, muted);
+        return;
+    }
     // The choices only; what a setting is for is in the help. The value and
     // the words of its detail in columns as wide as their longest entry (a
     // long VM name moves nothing).

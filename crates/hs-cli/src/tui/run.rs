@@ -495,7 +495,8 @@ fn start(request: &Request, client: Option<&Arc<Client>>, ctx: &Context, updates
         | Request::Install(_)
         | Request::Answer(_)
         | Request::HerdrTabs
-        | Request::Installed => {}
+        | Request::Installed
+        | Request::UpdateApi => {}
     }
 }
 
@@ -689,7 +690,7 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
     app.set_keys(public_keys(&ctx.home));
     let first_start = !config::default_path(&ctx.home, ctx.config_home.as_deref()).exists();
     let mut connection = if first_start || explicit_install {
-        if app.open_install(Mode::Install, true) == Some(Request::HerdrTabs) {
+        if app.open_install(Mode::Install, first_start) == Some(Request::HerdrTabs) {
             match crate::root_herdr::tabs(ctx.system.as_ref()) {
                 Ok(tabs) => app.set_herdr_tabs(tabs.into_iter().map(|tab| (tab.name, tab.title)).collect()),
                 Err(error) => app.log(&clock.now(), &error.0),
@@ -780,6 +781,25 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
                                 };
                                 super::reinstall::work(deploy_toml, start, &mut decisions, &tell, &say).await;
                             });
+                        }
+                        Request::UpdateApi => {
+                            let path = deploy_toml(ctx);
+                            match hs_deploy::config::DeployConfig::load(&path) {
+                                Ok(config) => {
+                                    let servers = config.instances.iter().map(|instance| (instance.ctid, instance.name.clone())).collect();
+                                    if let Some(Request::Images(targets)) = app.open_api_updates(servers) {
+                                        let updates = updates.clone();
+                                        let offset = clock.offset;
+                                        tokio::spawn(async move {
+                                            let images = super::reinstall::read(&path, &targets, offset).await;
+                                            let _ = updates.send(Update::Images(targets, images));
+                                        });
+                                    }
+                                }
+                                Err(error) => app.overlay = Some(Overlay::Report {
+                                    title: "Update API containers".to_owned(), lines: vec![error],
+                                }),
+                            }
                         }
                         Request::Images(targets) => {
                             let updates = updates.clone();

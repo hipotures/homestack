@@ -454,7 +454,7 @@ fn workspace_actions(app: &App) -> Vec<Control> {
         return vec![
             Control::key("&info"),
             Control::named("␣", "select", KeyCode::Char(' ')),
-            Control::named("↵", "reinstall", KeyCode::Enter).enabled(free),
+            Control::named("↵", "update API", KeyCode::Enter).enabled(free),
         ];
     }
     vec![
@@ -687,7 +687,7 @@ fn workspaces(buf: &mut Buffer, area: Rect, app: &App, mut controls: Vec<Control
             inner.x + 2,
             y + 1,
             inner.width.saturating_sub(4),
-            "It tries again by itself. Menu › Install or reconfigure deploys the servers again.",
+            "It tries again by itself. Menu › Update API containers updates the saved deployment.",
             muted,
         );
         return;
@@ -1104,7 +1104,7 @@ const HELP: [&str; 23] = [
     "In the box: tab next field, ← → choose, ↵ plan, ↵ or a apply,",
     "esc cancel (while it runs esc hides the box; ↵ shows it).",
     "",
-    "On a server (containers): ␣ select or unselect it; ↵ reinstall it,",
+    "On a server (containers): ␣ select or unselect it; ↵ update its image,",
     "or every selected one when it is selected, from a published image.",
     "",
     "Setup: tab next group, ␣ toggle, 0 branch, / filter, ← → close or",
@@ -1591,7 +1591,7 @@ pub fn unreachable_lines(text: &str) -> Vec<String> {
         lines.push(format!("✗ {host}  {}", short_reason(reason)));
     }
     lines.push(String::new());
-    lines.push("Menu › Install or reconfigure deploys the servers again.".to_owned());
+    lines.push("Menu › Update API containers updates the saved deployment.".to_owned());
     lines
 }
 

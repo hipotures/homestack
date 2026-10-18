@@ -227,11 +227,7 @@ fn survey(setup: &Setup, session: &mut Session, tell: &(dyn Fn(Event) + Send + S
     ];
     match setup.mode {
         Mode::Install => {
-            let answers: Vec<Answer> = session
-                .questions
-                .iter()
-                .map(|question| Answer::Picked(question.defaults.clone()))
-                .collect();
+            let answers: Vec<Answer> = session.questions.iter().map(crate::install_config::defaults).collect();
             let domain = session.draft_domain.clone();
             tell(Event::Busy("Planning with the last choices…".to_owned()));
             let review = session.review(&answers, Some(domain.as_str()));
@@ -270,6 +266,12 @@ fn survey(setup: &Setup, session: &mut Session, tell: &(dyn Fn(Event) + Send + S
                 .map(|choice| (choice.value.clone(), choice.detail.clone()))
                 .collect(),
             picked: question.defaults.clone(),
+            text: crate::install_config::is_text(question).then(|| {
+                question
+                    .choices
+                    .first()
+                    .map_or_else(String::new, |choice| choice.value.clone())
+            }),
         })
         .collect();
     let found = Found {

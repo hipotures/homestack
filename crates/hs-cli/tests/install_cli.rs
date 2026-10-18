@@ -1006,7 +1006,7 @@ async fn a_domain_whose_dns_is_elsewhere_stops_before_any_change() {
 }
 
 #[tokio::test]
-async fn without_the_old_configuration_the_install_stops_before_any_change() {
+async fn without_workspace_settings_the_install_stops_before_any_change() {
     let cluster = Cluster::new(&["pve1"]);
     let servers = Arc::new(FakeServers::resolving(&[("api1.hs.example.net", "192.0.2.97")]));
     let refused = run_with(
@@ -1019,7 +1019,7 @@ async fn without_the_old_configuration_the_install_stops_before_any_change() {
     .await;
     assert_eq!(refused.code, 1);
     let out = format!("{}{}", refused.console.out(), refused.console.err());
-    assert!(out.contains("config.toml"), "{out}");
+    assert!(out.contains("Installation settings") && out.contains("dns"), "{out}");
     assert_eq!(cluster.changes(), 0);
 }
 
@@ -1217,15 +1217,16 @@ fn next_event(events: &std::sync::mpsc::Receiver<hs_cli::tui::install::Event>) -
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "slow (owner, 2026-10-15): run with cargo test -- --ignored"]
-async fn the_tui_worker_installs_through_the_same_session_as_the_cli() {
+async fn first_install_collects_workspace_settings_without_an_input_file() {
     use hs_cli::tui::install::{Event, Method, Mode};
     use hs_cli::tui::installing::{self, Command, Setup};
 
     let cluster = Cluster::new(&["pve1", "pve2", "pve3"]);
     desktop_files(&cluster);
+    let input_path = cluster.token_dir().join("config.toml");
+    std::fs::remove_file(&input_path).expect("remove the seed configuration");
     // A workspace in no pool: the review names it.
-    let vms = cluster.read("vms.tsv");
+    let vms = cluster.read("vms.tsv").replace("101\tpve1\t", "101\tpve3\t");
     cluster.write("vms.tsv", &format!("{vms}240\tpve1\tws-one\thomestack-ws\t\t\n"));
     let (url, ca_pem, _sim) = status_server().await;
     let ca = cluster.token_dir().join("server-ca.pem");
@@ -1279,11 +1280,76 @@ async fn the_tui_worker_installs_through_the_same_session_as_the_cli() {
     assert_eq!(found.domain.as_deref(), Some("hs.example.net"));
     assert_eq!(cluster.changes(), 0, "connecting changed something");
 
+    assert!(!input_path.exists(), "connecting wrote install settings");
+    assert!(
+        found
+            .settings
+            .iter()
+            .any(|setting| setting.title == "Workspace user" && setting.text.as_deref() == Some(""))
+    );
+    assert!(
+        found
+            .settings
+            .iter()
+            .any(|setting| setting.title == "DNS servers" && setting.text.as_deref() == Some(""))
+    );
     let answers: Vec<hs_cli::install_flow::Answer> = found
         .settings
         .iter()
-        .map(|setting| hs_cli::install_flow::Answer::Picked(setting.picked.clone()))
+        .map(|setting| {
+            if let Some(text) = &setting.text {
+                let value = match setting.title.as_str() {
+                    "Workspace IP prefix" => "192.0.2",
+                    "Network gateway" => "192.0.2.1",
+                    "DNS servers" => "192.0.2.53",
+                    "Workspace user" => "engineer",
+                    _ => text.as_str(),
+                };
+                hs_cli::install_flow::Answer::Text(value.to_owned())
+            } else {
+                hs_cli::install_flow::Answer::Picked(setting.picked.clone())
+            }
+        })
         .collect();
+    let mut invalid_answers = answers.clone();
+    let home_row = found
+        .settings
+        .iter()
+        .position(|setting| setting.title == "Default home size")
+        .unwrap();
+    invalid_answers[home_row] = hs_cli::install_flow::Answer::Text("invalid".to_owned());
+    commands
+        .send(Command::Review {
+            answers: invalid_answers,
+            domain: Some("hs.example.net".to_owned()),
+        })
+        .unwrap();
+    match next_event(&events) {
+        Event::Reviewed { problems, .. } => assert!(
+            problems.iter().any(|problem| problem.contains("Default home size")),
+            "{problems:?}"
+        ),
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(cluster.changes(), 0, "invalid settings changed Proxmox");
+    assert!(!input_path.exists(), "invalid settings wrote the installation config");
+    commands
+        .send(Command::Rescan {
+            answers: answers.clone(),
+            domain: Some("hs.example.net".to_owned()),
+        })
+        .unwrap();
+    let rescanned = match next_event(&events) {
+        Event::Connected(found) => found,
+        other => panic!("{other:?}"),
+    };
+    assert!(
+        rescanned
+            .settings
+            .iter()
+            .any(|setting| setting.title == "Workspace user" && setting.text.as_deref() == Some("engineer"))
+    );
+    assert!(!input_path.exists(), "rescanning wrote install settings");
     commands
         .send(Command::Review {
             answers,
@@ -1331,6 +1397,21 @@ async fn the_tui_worker_installs_through_the_same_session_as_the_cli() {
     assert!(cluster.read("users").contains("homestack@pve"));
     assert_eq!(servers.deployed().len(), 1);
     assert!(client_path.exists(), "client.toml was not written");
+    let client = hs_config::client::ClientConfig::parse(&std::fs::read_to_string(&client_path).unwrap()).unwrap();
+    assert_eq!(client.workspace_ssh.user, "engineer");
+    assert!(client.workspace_ssh.identity_files.is_empty());
+    let server =
+        hs_model::config::Config::parse(&std::fs::read_to_string(cluster.token_dir().join("server.toml")).unwrap())
+            .unwrap();
+    assert_eq!(server.user.name, "engineer");
+    assert_eq!(
+        server.node.as_str(),
+        "pve3",
+        "the configured node must host the selected Gold"
+    );
+    assert_eq!(server.network.gateway, "192.0.2.1");
+    assert!(input_path.exists(), "confirmed configuration was not saved");
+    assert!(!std::fs::read_to_string(input_path).unwrap().contains("[transport]"));
     assert!(
         result
             .iter()

@@ -1,7 +1,13 @@
 # Minimum installation input audit
 
-The current full server installation reads `config.toml` through
-`hs_config::legacy::read`. The smallest tested input is
+The TUI installer now collects the configuration in its settings form and
+does not require an input file. First installation asks for missing values;
+reinstallation starts with the saved answers. It builds and validates native
+server and client configuration without calling `hs_config::legacy::read`.
+See [Client profiles](../client-profiles.md) for the current flow.
+
+The following audit describes the legacy reader retained for Python parity.
+Its smallest tested input is
 [`config.minimal.toml`](../../config.minimal.toml). It has 21 leaf values;
 removing any one of them makes that reader reject it.
 
@@ -20,10 +26,10 @@ removing any one of them makes that reader reject it.
 | `transport.herdr` | Nonempty `workspace`, `tab` |
 
 `identity_files`, `gold_vmid`, `control`, `repo`, `display`, `sounds` and `setup` can be
-omitted. The installer fills Gold and storage layouts from its own choices.
-Nevertheless, the reader validates the initial node and layout before the
-installer replaces those values. The old transport fields are also still
-mandatory even when installation reaches root over SSH.
+omitted. These requirements apply to the legacy reader only. The installer
+derives node, Gold, storage layouts and snippet storage from its cluster
+choices; workspace SSH user follows the configured guest user. The obsolete
+transport fields are not needed or written by the installer.
 
 The workspace identity filename is arbitrary. Parsing succeeds with
 `/nonexistent/arbitrary-workspace-key`; it neither opens the key nor checks

@@ -1,6 +1,8 @@
 # Phase 13c: `homestack install` and `homestack uninstall`
 
-Status: in progress (steps 1 and 2 done, step 2 not yet live: see sections 6 and 8). This file is written before the code (PLAN.md 1.1) and
+Status: configuration collection is implemented in the TUI (section 9);
+the complete live install/uninstall gate remains to be verified.
+This file is written before the code (PLAN.md 1.1) and
 updated as the phase goes; the report at the end says what was done and
 what differs.
 
@@ -284,3 +286,33 @@ set to the selected Gold, or omitted when Gold is not configured. The
 deployment's progress is shown as it comes.
 Tests: 7 new in `install_cli.rs` (the whole way to a real `status` against a
 server on the simulator), 3 in `form.rs` (the typed setting).
+
+## 9. First installation, reinstallation and API updates
+
+The TUI settings form now includes root and home disk slots, default home
+size, workspace IP prefix, network prefix length, gateway, DNS servers,
+guest user name/UID/GID and snippet directory. Network addresses and guest
+user name start empty without a seed; technical disk defaults and numeric
+IDs are shown for confirmation. Gold, storage, bridge and domain use the
+existing choices. Workspace identities are optional.
+
+`config.toml` is optional initial input. Answers are kept in the private
+draft, preserved by F5, validated in the review, and saved only after
+confirmation. The deployment builds native server and client configuration;
+it does not call the Python-era config reader or require Herdr fields.
+The guest user is also the generated workspace SSH user.
+
+Without a client configuration the screen identifies a first setup. An
+installed profile opens its status view; Menu > Reinstall HomeStack opens
+the full form with saved values. Menu > Update API containers uses only
+the saved deployment and deploy token, offers published images, then updates
+the selected instances. It does not repeat root access or Proxmox account
+installation and does not require a running HomeStack API to read the saved
+instance list. Enter on a server still selects that instance, or the marked
+instances, for the image update.
+
+Regression tests cover installing from an absent seed file through the TUI
+worker, entering the network and guest account, rescanning without losing
+the typed values, refusal before mutation when settings are incomplete,
+native configuration output, final status, first/reinstall titles, the
+separate update menu request and text editing at 80 by 24.

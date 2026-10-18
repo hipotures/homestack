@@ -19,14 +19,6 @@ pub enum Mode {
 }
 
 impl Mode {
-    #[must_use]
-    pub fn title(self) -> &'static str {
-        match self {
-            Self::Install => "HomeStack install",
-            Self::Uninstall => "HomeStack uninstall",
-        }
-    }
-
     /// The steps in the top border.
     #[must_use]
     pub fn steps(self) -> &'static [&'static str] {
@@ -81,12 +73,16 @@ pub struct Setting {
     pub multiple: bool,
     pub choices: Vec<(String, String)>,
     pub picked: Vec<usize>,
+    pub text: Option<String>,
 }
 
 impl Setting {
     /// The value in the list: what is chosen, a VMID with its name.
     #[must_use]
     pub fn value(&self) -> String {
+        if let Some(text) = &self.text {
+            return text.clone();
+        }
         // A VMID with the VM's name (the detail's first word), a storage as
         // it is.
         let shown: Vec<String> = self
@@ -249,6 +245,13 @@ pub struct Install {
 }
 
 impl Install {
+    pub fn title(&self) -> &'static str {
+        match self.mode {
+            Mode::Install if self.first_start => "HomeStack install: first setup",
+            Mode::Install => "HomeStack reinstall",
+            Mode::Uninstall => "HomeStack uninstall",
+        }
+    }
     #[must_use]
     pub fn new(mode: Mode, first_start: bool) -> Self {
         Self {
@@ -539,7 +542,12 @@ impl Install {
     fn answers(&self) -> Vec<Answer> {
         self.settings
             .iter()
-            .map(|setting| Answer::Picked(setting.picked.clone()))
+            .map(|setting| {
+                setting.text.as_ref().map_or_else(
+                    || Answer::Picked(setting.picked.clone()),
+                    |text| Answer::Text(text.clone()),
+                )
+            })
             .collect()
     }
 
@@ -554,6 +562,24 @@ impl Install {
             return (false, None);
         }
         let on_domain = self.domain.is_some() && self.row == self.settings.len();
+        if let Some(text) = self
+            .settings
+            .get_mut(self.row)
+            .and_then(|setting| setting.text.as_mut())
+        {
+            match code {
+                KeyCode::Char(c) => {
+                    text.push(c);
+                    return (false, None);
+                }
+                KeyCode::Backspace => {
+                    text.pop();
+                    return (false, None);
+                }
+                KeyCode::Tab | KeyCode::BackTab => return (false, None),
+                _ => {}
+            }
+        }
         match code {
             KeyCode::Esc if !self.chooser => self.stage = Stage::Check,
             KeyCode::Esc => self.chooser = false,

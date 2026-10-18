@@ -90,7 +90,7 @@ fn enter_on_a_server_reads_the_images_and_shows_them() {
     );
     let text = screen(&render(&fixture.app, 140, 40));
     assert!(
-        text.contains("reinstall api2") && text.contains("reading the images…"),
+        text.contains("update API api2") && text.contains("reading the images…"),
         "{text}"
     );
 
@@ -173,7 +173,7 @@ fn space_marks_servers_and_enter_on_a_marked_one_takes_them_all() {
         secret: None,
     });
     let text = screen(&render(&fixture.app, 140, 40));
-    assert!(text.contains("Reinstall these servers?"), "{text}");
+    assert!(text.contains("Update these API containers?"), "{text}");
     press(&mut fixture.app, KeyCode::Enter);
     press(&mut fixture.app, KeyCode::Esc);
     let text = screen(&render(&fixture.app, 140, 40));

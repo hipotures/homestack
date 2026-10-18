@@ -3,9 +3,9 @@
 //! node, made through the Proxmox API with the deploy token
 //! (`hs-deploy`), then `client.toml`, and `homestack status` at the end.
 //!
-//! Everything but the domain is found: the instances from the cluster, their
-//! addresses from this desktop's DNS, the network from the server
-//! configuration, the endpoints from the nodes' API certificates. What is
+//! The form supplies the workspace configuration and domain. Instances come
+//! from the cluster, their addresses from this desktop's DNS, and endpoints
+//! from the nodes' API certificates. What is
 //! missing is a problem shown in the confirmation, before any change.
 
 use std::collections::BTreeMap;
@@ -116,8 +116,8 @@ pub struct ServerPlan {
     pub deploy_toml: String,
     /// The server configuration, uploaded to every instance.
     pub server_toml: String,
-    /// The old configuration, for `client.toml`.
-    pub old_config: String,
+    /// Confirmed installation settings, also used to generate `client.toml`.
+    pub install_config: String,
     /// One line per instance and what else is done, for the confirmation.
     pub lines: Vec<String>,
     /// What keeps the install from starting.
@@ -137,7 +137,7 @@ pub struct Files {
 
 impl Files {
     #[must_use]
-    pub fn old_config(&self) -> PathBuf {
+    pub fn install_config(&self) -> PathBuf {
         self.dir.join("config.toml")
     }
     #[must_use]
@@ -243,12 +243,13 @@ pub fn plan_servers(
     image: Option<&str>,
     files: &Files,
     servers: &dyn Servers,
+    input: Result<String, String>,
 ) -> ServerPlan {
     let mut out = ServerPlan {
         config: None,
         deploy_toml: String::new(),
         server_toml: String::new(),
-        old_config: String::new(),
+        install_config: String::new(),
         lines: Vec::new(),
         problems: Vec::new(),
         warnings: Vec::new(),
@@ -288,26 +289,14 @@ pub fn plan_servers(
         }
     };
 
-    // The server configuration comes from the old one, with this Gold.
-    let old_path = files.old_config();
     let mut network = None;
-    match std::fs::read_to_string(&old_path) {
-        Err(_) => out.problems.push(format!(
-            "the server configuration is made from {}, which cannot be read",
-            files.short(&old_path)
-        )),
-        Ok(text) => match hs_config::legacy::read(&text) {
-            Err(error) => out.problems.push(format!("{}: {error}", files.short(&old_path))),
-            Ok(mut read) => {
-                read.server.gold_vmid = plan.cluster.gold;
-                // The workspace disks go where the form says, not where the
-                // old file did: per node, the chosen storages on it.
-                read.server.storage_layouts = layouts(plan, &mut out.warnings);
-                network = Some(read.server.network.clone());
-                out.server_toml = read.server.to_toml();
-                out.old_config = text;
-            }
-        },
+    match input.and_then(|text| prepare_input(plan, &text, &mut out.warnings)) {
+        Ok((server, text)) => {
+            network = Some(server.network.clone());
+            out.server_toml = server.to_toml();
+            out.install_config = text;
+        }
+        Err(error) => out.problems.push(format!("Installation settings: {error}")),
     }
 
     let image = image.map(str::to_owned).or_else(default_image);
@@ -479,21 +468,114 @@ image = {}\ndomain = {}\ntemplate_storage = {}\npool = {}\nbridge = {}\ncidr = {
     out
 }
 
-/// `client.toml`: the old configuration's client part, with the servers.
+fn prepare_input(
+    plan: &Plan,
+    text: &str,
+    warnings: &mut Vec<String>,
+) -> Result<(hs_model::config::Config, String), String> {
+    use toml::{Table, Value};
+    let mut document: Table = text
+        .parse()
+        .map_err(|_| "invalid installation configuration".to_owned())?;
+    document.insert("version".into(), Value::Integer(1));
+    document.remove("transport");
+    document.remove("control");
+    let node = plan
+        .cluster
+        .gold_node
+        .as_ref()
+        .or_else(|| plan.cluster.nodes.first())
+        .ok_or("No online node for the server configuration")?;
+    let mut node_table = Table::new();
+    node_table.insert("name".into(), Value::String(node.clone()));
+    if let Some(gold) = plan.cluster.gold {
+        node_table.insert("gold_vmid".into(), Value::Integer(i64::from(gold)));
+    }
+    document.insert("node".into(), Value::Table(node_table));
+    document.insert(
+        "storage_layouts".into(),
+        Value::Table(
+            layouts(plan, warnings)
+                .into_iter()
+                .map(|(name, ids)| (name, Value::Array(ids.into_iter().map(Value::String).collect())))
+                .collect(),
+        ),
+    );
+    let snippets = document
+        .entry("cloud_init")
+        .or_insert_with(|| Value::Table(Table::new()))
+        .as_table_mut()
+        .ok_or("Invalid Cloud-Init settings")?;
+    snippets.insert(
+        "snippet_storage".into(),
+        Value::String(plan.settings.snippet_storage.clone().ok_or("Choose snippet storage")?),
+    );
+    let server = hs_model::config::Config::from_sections(&document).map_err(|error| error.to_string())?;
+    let size = server.default_home_size.trim().to_ascii_uppercase();
+    let number = size
+        .get(..size.len().saturating_sub(1))
+        .filter(|number| !number.starts_with('0') && number.bytes().all(|byte| byte.is_ascii_digit()))
+        .and_then(|number| number.parse::<u64>().ok())
+        .filter(|number| *number > 0);
+    let factor = match size.as_bytes().last() {
+        Some(b'M') => Some(1),
+        Some(b'G') => Some(1024),
+        Some(b'T') => Some(1024 * 1024),
+        _ => None,
+    };
+    if number
+        .zip(factor)
+        .and_then(|(number, factor)| number.checked_mul(factor))
+        .is_none()
+    {
+        return Err("Default home size must be a positive integer with M, G or T, for example 20G".to_owned());
+    }
+    if server.network.prefix.parse::<std::net::Ipv4Addr>().is_ok()
+        || format!("{}.0", server.network.prefix)
+            .parse::<std::net::Ipv4Addr>()
+            .is_err()
+    {
+        return Err("Workspace IP prefix must contain three IPv4 octets".to_owned());
+    }
+    if server.network.gateway.parse::<std::net::Ipv4Addr>().is_err()
+        || server
+            .network
+            .dns
+            .iter()
+            .any(|dns| dns.parse::<std::net::IpAddr>().is_err())
+    {
+        return Err("Enter valid network gateway and DNS addresses".to_owned());
+    }
+    let ssh = document
+        .entry("workspace_ssh")
+        .or_insert_with(|| Value::Table(Table::new()))
+        .as_table_mut()
+        .ok_or("Invalid workspace SSH settings")?;
+    ssh.insert("user".into(), Value::String(server.user.name.clone()));
+    ssh.entry("identities_only").or_insert(Value::Boolean(true));
+    ssh.entry("log_level").or_insert(Value::String("FATAL".to_owned()));
+    hs_config::client::ClientConfig::from_sections(&document).map_err(|error| error.to_string())?;
+    let text = toml::to_string(&document).map_err(|error| error.to_string())?;
+    Ok((server, text))
+}
+
+/// `client.toml`: the confirmed client settings and deployed server endpoints.
 pub fn client_toml(
-    old_config: &str,
+    install_config: &str,
     urls: &[String],
     ca_file: Option<String>,
     token_file: &str,
 ) -> Result<String, String> {
-    let mut read = hs_config::legacy::read(old_config).map_err(|error| error.to_string())?;
-    read.client.server = Some(hs_config::client::Server {
+    let document: toml::Table = install_config
+        .parse()
+        .map_err(|_| "invalid installation configuration".to_owned())?;
+    let mut client = hs_config::client::ClientConfig::from_sections(&document).map_err(|error| error.to_string())?;
+    client.server = Some(hs_config::client::Server {
         urls: urls.to_vec(),
         token_file: token_file.to_owned(),
         ca_file,
     });
-    let text = read
-        .client
+    let text = client
         .to_toml()
         .map_err(|_| "[setup] and [sounds] cannot be written back as TOML".to_owned())?;
     hs_config::client::ClientConfig::parse(&text).map_err(|error| error.to_string())?;

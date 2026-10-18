@@ -479,7 +479,7 @@ impl App {
             self.log("", &line);
             return None;
         }
-        let mut servers: Vec<(u32, String)> = if self.marked.contains(&entry.vmid) {
+        let servers: Vec<(u32, String)> = if self.marked.contains(&entry.vmid) {
             self.status
                 .iter()
                 .flat_map(|status| status.gold.iter().chain(&status.workspaces).chain(&status.others))
@@ -489,6 +489,15 @@ impl App {
         } else {
             vec![(entry.vmid, entry.name.clone().unwrap_or_default())]
         };
+        self.open_api_updates(servers)
+    }
+
+    /// Update the API containers named by the saved deployment.
+    pub fn open_api_updates(&mut self, mut servers: Vec<(u32, String)>) -> Option<Request> {
+        if self.action.is_some() || self.setup.is_some() {
+            return None;
+        }
+        self.overlay = None;
         servers.sort_unstable();
         servers.dedup();
         let targets: Vec<u32> = servers.iter().map(|(vmid, _)| *vmid).collect();
@@ -552,7 +561,7 @@ impl App {
             .get(index)
             .ok_or_else(|| "The registry lists no image.".to_owned())?;
         let mut plan = vec![
-            format!("Reinstall from {}", image.tag()),
+            format!("Update API containers from {}", image.tag()),
             format!("made {}", image.made),
             String::new(),
         ];

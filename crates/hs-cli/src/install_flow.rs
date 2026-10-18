@@ -63,6 +63,7 @@ pub struct Session {
     pub want_servers: bool,
     pub server_image: Option<String>,
     pub files: Files,
+    input: crate::install_config::Input,
     servers: Arc<dyn Servers>,
 }
 
@@ -96,11 +97,19 @@ impl Session {
     ) -> Result<Self, AppError> {
         let access = hs_install::probe(root.as_mut()).map_err(failure)?;
         let access_line = access_line(root.as_ref(), &access);
+        let input = if want_servers {
+            crate::install_config::Input::load(&files.install_config())?
+        } else {
+            crate::install_config::Input::default()
+        };
         let mut questions = if command == Install::Install {
             hs_install::questions(root.as_mut(), &access, &settings).map_err(failure)?
         } else {
             Vec::new()
         };
+        if want_servers {
+            questions.extend(input.questions());
+        }
         let kept = load_draft(&draft_path(&settings));
         apply_draft(&mut questions, &kept);
         // Without one in the draft, the domain the servers were deployed
@@ -123,6 +132,7 @@ impl Session {
             want_servers,
             server_image,
             files,
+            input,
             servers,
         })
     }
@@ -138,7 +148,21 @@ impl Session {
     /// tags comes ticked, as on the first read. `domain` is the one typed.
     pub fn rescan(&mut self, answers: &[Answer], domain: Option<&str>) -> Result<(), AppError> {
         let mut questions = hs_install::questions(self.root.as_mut(), &self.access, &self.settings).map_err(failure)?;
+        if self.want_servers {
+            questions.extend(self.input.questions());
+        }
         for question in &mut questions {
+            if crate::install_config::is_text(question) {
+                if let Some((_, Answer::Text(value))) = self
+                    .questions
+                    .iter()
+                    .zip(answers)
+                    .find(|(old, _)| old.option == question.option)
+                {
+                    question.choices[0].value.clone_from(value);
+                }
+                continue;
+            }
             let Some((old, Answer::Picked(picked))) = self
                 .questions
                 .iter()
@@ -185,12 +209,18 @@ impl Session {
             self.server_image.as_deref(),
             &self.files,
             self.servers.as_ref(),
+            self.input.text(),
         )
     }
 
     /// The plan of the answers to [`Session::questions`] and `domain`, and
     /// the review of it. Nothing is changed.
     pub fn review(&mut self, answers: &[Answer], domain: Option<&str>) -> Review {
+        for (question, answer) in self.questions.iter().zip(answers) {
+            if let Answer::Text(text) = answer {
+                self.input.answer(question.option, text);
+            }
+        }
         let chosen = answered(&self.settings, &self.questions, answers);
         let domain = domain.filter(|domain| !domain.is_empty()).map(str::to_owned);
         match self.plan(&chosen) {
@@ -258,6 +288,12 @@ pub async fn deploy(
             "The servers cannot be deployed: the deployment is incomplete",
         ));
     };
+    if let Some(kept) = write_private(&files.install_config(), &server_plan.install_config).map_err(AppError::new)? {
+        say(&format!(
+            "the previous install configuration is kept as {}",
+            kept.display()
+        ));
+    }
     if ensure_api_token(&files.api_token()).map_err(AppError::new)? {
         say(&format!(
             "new client token in {}",
@@ -283,7 +319,7 @@ pub async fn deploy(
     })?;
     let (urls, ca_file) = servers.client_server(config);
     let token_file = tilde(&files.api_token(), &files.home);
-    let text = crate::servers::client_toml(&server_plan.old_config, &urls, ca_file, &token_file)
+    let text = crate::servers::client_toml(&server_plan.install_config, &urls, ca_file, &token_file)
         .map_err(|error| AppError::new(format!("client.toml: {error}")))?;
     if let Some(kept) = write_private(client_path, &text).map_err(AppError::new)? {
         say(&format!("the old client.toml is kept as {}", kept.display()));
@@ -502,6 +538,28 @@ pub fn summary_of(access_line: &str, plan: &Plan, home: &std::path::Path) -> Sum
 
 /// The confirmation's section of the servers, and their problems.
 pub fn servers_section(summary: &mut Summary, servers: &ServerPlan) {
+    if let Ok(config) = hs_model::config::Config::parse(&servers.server_toml) {
+        summary.sections.push((
+            "Workspace configuration".to_owned(),
+            vec![
+                format!(
+                    "User: {} (UID {}, GID {})",
+                    config.user.name, config.user.uid, config.user.gid
+                ),
+                format!(
+                    "Network: {}.VMID/{}, gateway {}, DNS {}",
+                    config.network.prefix,
+                    config.network.cidr,
+                    config.network.gateway,
+                    config.network.dns.join(", ")
+                ),
+                format!(
+                    "Root: {}; home: {}, default {}",
+                    config.root_disk, config.home_disk, config.default_home_size
+                ),
+            ],
+        ));
+    }
     let mut lines = servers.lines.clone();
     lines.extend(servers.warnings.iter().map(|warning| format!("warning: {warning}")));
     summary.sections.push(("Servers".to_owned(), lines));
@@ -541,6 +599,12 @@ pub fn apply_draft(questions: &mut [hs_install::Question], draft: &std::collecti
         let Some(values) = draft.get(question.option.trim_start_matches('-')) else {
             continue;
         };
+        if crate::install_config::is_text(question) {
+            if let (Some(choice), Some(value)) = (question.choices.first_mut(), values.first()) {
+                choice.value.clone_from(value);
+            }
+            continue;
+        }
         let picked: Vec<usize> = question
             .choices
             .iter()
@@ -576,16 +640,18 @@ pub fn save_draft(
     use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
     let mut table = toml::Table::new();
     for (question, answer) in questions.iter().zip(answers) {
-        let Answer::Picked(picked) = answer else { continue };
         // What goes back in a pool is found anew each time.
         if question.option == hs_install::discover::OPTION {
             continue;
         }
-        let values: Vec<toml::Value> = picked
-            .iter()
-            .filter_map(|index| question.choices.get(*index))
-            .map(|choice| toml::Value::String(choice.value.clone()))
-            .collect();
+        let values: Vec<toml::Value> = match answer {
+            Answer::Picked(picked) => picked
+                .iter()
+                .filter_map(|index| question.choices.get(*index))
+                .map(|choice| toml::Value::String(choice.value.clone()))
+                .collect(),
+            Answer::Text(text) => vec![toml::Value::String(text.clone())],
+        };
         table.insert(
             question.option.trim_start_matches('-').to_owned(),
             toml::Value::Array(values),

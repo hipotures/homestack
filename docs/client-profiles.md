@@ -41,6 +41,24 @@ Other persistent profiles have a private root under
 
 Opening a new name such as `p2p` creates empty private directories and starts
 the installer. It does not copy another profile's endpoints, tokens or keys.
+The first installation asks for the workspace network, user name and numeric
+UID/GID, root and home disk slots, default home size and snippet directory,
+alongside the existing cluster resource choices. No `config.toml` is required
+before starting. A supplied `config.toml` only supplies initial answers.
+The review validates the answers before any cluster change; confirmation
+saves the installation settings, `server.toml`, `deploy.toml` and `client.toml`
+inside the selected profile. Typed answers are retained in the installation
+draft and survive a cluster rescan.
+
+An installed profile opens its normal status view. Menu **Reinstall HomeStack**
+opens the full installation form with its saved settings. Menu **Update API
+containers** uses the instances, credentials and network in `deploy.toml`,
+asks for an image and confirmation, and updates the containers without root
+access or repeating Proxmox account, role and pool installation. This action
+also works when the HomeStack API is unreachable, provided the saved Proxmox
+deployment is reachable. Enter on a server row updates that container, or the
+marked containers.
+
 The directories have mode `0700`; generated secrets and configuration have
 mode `0600`. Names use lowercase ASCII letters, digits, `_` and `-`, start
 with a letter or digit, and contain at most 64 characters.

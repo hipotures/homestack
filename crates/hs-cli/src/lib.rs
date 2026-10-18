@@ -12,6 +12,7 @@ pub mod askpass;
 pub mod config;
 pub mod fido;
 pub mod identity;
+pub mod install_config;
 pub mod install_flow;
 pub mod installer;
 pub mod local_ssh;

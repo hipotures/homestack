@@ -49,7 +49,13 @@ and disable incremental compilation to prevent its cache from growing. Plain
 serializes wrapped commands and cleanup. Do not run unwrapped Cargo tests in
 parallel with it, because Cargo releases its build lock before executing tests.
 
-Running and configuring the server (`server.toml`, made from an existing `config.toml` with `cargo run -p hs-config -- split`): [docs/migration/deploy.md](docs/migration/deploy.md). API contract: [docs/openapi.json](docs/openapi.json).
+Run `./target/debug/homestack` for the first installation: its TUI collects the
+workspace network, user and disk settings without requiring `config.toml`.
+An installed profile opens status; use Menu > Reinstall HomeStack for the full
+installer, or Menu > Update API containers to change server images using the
+saved deployment without root access. See [Client profiles](docs/client-profiles.md).
+Manual server deployment: [docs/migration/deploy.md](docs/migration/deploy.md).
+API contract: [docs/openapi.json](docs/openapi.json).
 
 Design for a disposable single-node Proxmox laboratory with real installation, Gold preparation, destructive E2E scenarios and an extensible test catalogue: [Isolated E2E laboratory](docs/isolated-e2e-lab.md).
 

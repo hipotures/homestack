@@ -113,6 +113,8 @@ pub struct Cluster {
     /// Node -> the name on its API certificate.
     pub api_names: BTreeMap<String, String>,
     pub gold: Option<u32>,
+    /// The node hosting the selected Gold, for workspace clone operations.
+    pub gold_node: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -907,6 +909,10 @@ pub fn make_plan(
         bridge: found.sdn_path.rsplit('/').next().unwrap_or_default().to_owned(),
         api_names: found.api_names,
         gold: found.gold,
+        gold_node: found
+            .gold
+            .and_then(|vmid| state.vms.get(&vmid))
+            .map(|vm| vm.node.clone()),
     };
     Ok(Plan {
         command,

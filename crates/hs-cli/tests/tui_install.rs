@@ -43,6 +43,7 @@ fn found() -> Found {
         ],
         settings: vec![
             Setting {
+                text: None,
                 title: "Workspace disks".to_owned(),
                 note: "Where workspace VM disks are made.".to_owned(),
                 multiple: true,
@@ -53,6 +54,7 @@ fn found() -> Found {
                 picked: vec![0],
             },
             Setting {
+                text: None,
                 title: "Gold VM".to_owned(),
                 note: "The VM workspaces are cloned from.".to_owned(),
                 multiple: false,
@@ -104,8 +106,61 @@ fn without_client_toml_the_install_screen_opens_at_access() {
 }
 
 #[test]
+fn first_install_reinstall_and_api_updates_are_distinct() {
+    let mut fixture = app();
+    fixture.app.open_install(Mode::Install, true);
+    assert!(screen(&render(&fixture.app, 120, 36)).contains("first setup"));
+    fixture.app.open_install(Mode::Install, false);
+    assert!(screen(&render(&fixture.app, 120, 36)).contains("HomeStack reinstall"));
+    fixture.app.install = None;
+    fixture.app.status = None;
+    press(&mut fixture.app, KeyCode::Char('m'));
+    for _ in 0..MENU.iter().position(|label| *label == "Update API containers").unwrap() {
+        press(&mut fixture.app, KeyCode::Down);
+    }
+    assert_eq!(press(&mut fixture.app, KeyCode::Enter), Some(Request::UpdateApi));
+    assert!(fixture.app.install.is_none(), "an API update opened root access");
+}
+
+#[test]
+fn workspace_text_fields_can_be_edited_and_scrolled_on_a_small_terminal() {
+    let mut fixture = checked(Mode::Install);
+    let questions = hs_cli::install_config::Input::load(&fixture._dir.path().join("absent.toml"))
+        .unwrap()
+        .questions();
+    let mut detected = found();
+    detected.settings.extend(questions.iter().map(|question| Setting {
+        title: question.title.clone(),
+        note: question.note.clone(),
+        multiple: false,
+        choices: Vec::new(),
+        picked: Vec::new(),
+        text: Some(question.choices[0].value.clone()),
+    }));
+    fixture.app.install_event(Event::Connected(detected));
+    let row = fixture
+        .app
+        .install
+        .as_ref()
+        .unwrap()
+        .settings
+        .iter()
+        .position(|setting| setting.title == "Workspace user")
+        .unwrap();
+    fixture.app.install.as_mut().unwrap().row = row;
+    type_text(&mut fixture.app, "engineer");
+    let text = screen(&render(&fixture.app, 80, 24));
+    assert!(text.contains("Workspace user") && text.contains("engineer"), "{text}");
+    let request = press(&mut fixture.app, KeyCode::Enter).unwrap();
+    let Request::Install(Command::Review { answers, .. }) = request else {
+        panic!("{request:?}")
+    };
+    assert_eq!(answers[row], Answer::Text("engineer".to_owned()));
+}
+
+#[test]
 fn the_menu_opens_install_and_uninstall_and_esc_goes_back() {
-    assert!(MENU.contains(&"Install or reconfigure"), "{MENU:?}");
+    assert!(MENU.contains(&"Reinstall HomeStack"), "{MENU:?}");
     assert!(MENU.contains(&"Uninstall"), "{MENU:?}");
     let mut fixture = app();
     press(&mut fixture.app, KeyCode::Char('m'));

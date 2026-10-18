@@ -41,6 +41,8 @@ pub enum Request {
     Ssh(u32),
     /// Read the images of these server containers and the registry's.
     Images(Vec<u32>),
+    /// Update existing API instances from the saved deployment, without root.
+    UpdateApi,
     Quit,
 }
 
@@ -76,14 +78,15 @@ pub const VIEWS: [(&str, Shown); 3] = [
 ];
 
 /// The items of the menu, in order.
-pub const MENU: [&str; 8] = [
+pub const MENU: [&str; 9] = [
     "Check the servers",
     "Check this desktop",
-    "Install or reconfigure",
+    "Reinstall HomeStack",
     "Uninstall",
     "Theme",
     "Help: every key",
     "Set up this desktop (backup)",
+    "Update API containers",
     "Quit",
 ];
 
@@ -1319,6 +1322,7 @@ impl App {
                         ));
                         return Some(Request::Setup(None));
                     }
+                    7 => return Some(Request::UpdateApi),
                     _ => return Some(Request::Quit),
                 },
                 KeyCode::Char('q') => return Some(Request::Quit),

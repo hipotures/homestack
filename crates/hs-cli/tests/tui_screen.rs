@@ -18,7 +18,7 @@ fn the_selected_profile_is_visible_in_the_main_screen_and_installer() {
     fixture.app.profile = "e2e".to_owned();
     assert!(screen(&render(&fixture.app, 120, 36)).contains("profile: e2e"));
     fixture.app.open_install(hs_cli::tui::install::Mode::Install, true);
-    assert!(screen(&render(&fixture.app, 120, 36)).contains("HomeStack install [e2e]"));
+    assert!(screen(&render(&fixture.app, 120, 36)).contains("HomeStack install: first setup [e2e]"));
 }
 
 #[test]
