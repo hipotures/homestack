@@ -133,10 +133,10 @@ fn homestack() -> Palette {
         focus: Color::Rgb(122, 162, 247),
         accent: Color::Rgb(122, 162, 247),
         value: Color::Rgb(94, 212, 180),
-        ok: Color::Rgb(94, 212, 180),
+        ok: Color::Rgb(53, 114, 101),
         info: Color::Rgb(125, 207, 255),
-        warning: Color::Rgb(224, 190, 110),
-        error: Color::Rgb(240, 98, 112),
+        warning: Color::Rgb(118, 103, 66),
+        error: Color::Rgb(126, 57, 67),
         hotkey: Color::Rgb(240, 98, 112),
         selection: Color::Rgb(30, 38, 56),
     }
