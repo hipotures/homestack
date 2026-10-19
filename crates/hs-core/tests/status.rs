@@ -619,3 +619,156 @@ fn offline_shared_storage_uses_online_node_and_failed_backups_are_unknown() {
     assert!(backups.is_empty());
     assert!(!warnings.is_empty());
 }
+
+fn multi_gold_orphan_inventory() -> hs_core::status::Inventory {
+    let resources = [101, 111, 200]
+        .into_iter()
+        .map(|vmid| StatusResource {
+            vmid,
+            node: "example-node-1".to_owned(),
+            name: Some(if vmid == 200 {
+                "test1".to_owned()
+            } else {
+                format!("gold-{vmid}")
+            }),
+            status: Some("stopped".to_owned()),
+            tags: Some("homestack-gold".to_owned()),
+            pool: Some(
+                if vmid == 200 {
+                    "homestack-test"
+                } else {
+                    "homestack-gold"
+                }
+                .to_owned(),
+            ),
+        })
+        .collect();
+    hs_core::status::Inventory {
+        resources,
+        nodes: vec![node("example-node-1", true)],
+        configs: std::collections::BTreeMap::from([(
+            101,
+            hs_core::inventory::VmConfig::from([(
+                "scsi0".to_owned(),
+                "example-storage-a:vm-101-disk-0,size=16G".to_owned(),
+            )]),
+        )]),
+    }
+}
+
+fn multi_gold_orphan_pve() -> FakePve {
+    FakePve::new()
+        .with(
+            "GET /nodes/example-node-1/qemu/111/config",
+            json!({
+                "tags": "homestack-gold", "scsi0": "example-storage-a:vm-250-hs-root-default,size=16G"
+            }),
+        )
+        .with(
+            "GET /nodes/example-node-1/qemu/200/config",
+            json!({
+                "name": "test1", "tags": "homestack-gold",
+                "scsi0": "example-storage-a:vm-200-hs-root-default,size=16G",
+                "scsi1": "example-storage-a:vm-200-hs-home-user,size=20G",
+                "unused0": "example-storage-a:vm-200-hs-home-old"
+            }),
+        )
+        .with(
+            "GET /nodes/example-node-1/storage",
+            json!([
+                {"storage": "example-storage-a", "content": "images", "enabled": 1, "active": 1}
+            ]),
+        )
+        .with(
+            "GET /nodes/example-node-1/storage/example-storage-a/content?content=images",
+            json!([
+                {"volid": "example-storage-a:vm-200-hs-root-default", "size": 16},
+                {"volid": "example-storage-a:vm-200-hs-home-user", "size": 20},
+                {"volid": "example-storage-a:vm-200-hs-home-old", "size": 20},
+                {"volid": "example-storage-a:vm-250-hs-root-default", "size": 16},
+                {"volid": "example-storage-a:vm-299-hs-root-default", "size": 16}
+            ]),
+        )
+}
+
+#[test]
+fn orphan_scan_checks_all_golds_across_pools_and_preserves_config_references() {
+    let pve = multi_gold_orphan_pve();
+    let inventory = multi_gold_orphan_inventory();
+    let (volumes, warnings, complete) = block_on(inventory.scan_orphans(&pve, &test_config()));
+    assert!(complete, "{warnings:?}");
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(volids(&volumes), ["example-storage-a:vm-299-hs-root-default"]);
+    assert_eq!(
+        pve.calls()
+            .iter()
+            .filter(|call| call.ends_with("/qemu/111/config"))
+            .count(),
+        1
+    );
+    assert_eq!(
+        pve.calls()
+            .iter()
+            .filter(|call| call.ends_with("/qemu/200/config"))
+            .count(),
+        1
+    );
+    assert!(
+        !pve.calls().iter().any(|call| call.ends_with("/qemu/101/config")),
+        "Reuse cached primary Gold config"
+    );
+}
+
+#[test]
+fn unreadable_gold_config_makes_orphan_results_unconfirmed() {
+    let pve = FakePve::new()
+        .failing("GET /nodes/example-node-1/qemu/111/config", 403, "configuration denied")
+        .with(
+            "GET /nodes/example-node-1/qemu/200/config",
+            json!({
+                "scsi0": "example-storage-a:vm-200-hs-root-default,size=16G"
+            }),
+        )
+        .with(
+            "GET /nodes/example-node-1/storage",
+            json!([
+                {"storage": "example-storage-a", "content": "images", "enabled": 1, "active": 1}
+            ]),
+        )
+        .with(
+            "GET /nodes/example-node-1/storage/example-storage-a/content?content=images",
+            json!([
+                {"volid": "example-storage-a:vm-111-hs-root-default", "size": 16},
+                {"volid": "example-storage-a:vm-299-hs-root-default", "size": 16}
+            ]),
+        );
+    let (volumes, warnings, complete) = block_on(multi_gold_orphan_inventory().scan_orphans(&pve, &test_config()));
+    assert!(
+        volumes.is_empty(),
+        "Unreadable configs may reference even another VMID's volume"
+    );
+    assert!(!complete);
+    assert!(
+        warnings
+            .iter()
+            .any(|warning| warning.contains("VM 111") && warning.contains("configuration denied")),
+        "{warnings:?}"
+    );
+}
+
+#[test]
+fn offline_gold_disks_are_not_reported_as_orphans() {
+    let pve = multi_gold_orphan_pve();
+    let mut inventory = multi_gold_orphan_inventory();
+    for resource in &mut inventory.resources {
+        if resource.vmid == 200 {
+            resource.node = "example-node-2".to_owned();
+        }
+    }
+    inventory.nodes.push(node("example-node-2", false));
+    let (volumes, warnings, complete) = block_on(inventory.scan_orphans(&pve, &test_config()));
+    assert!(!complete);
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(volids(&volumes), ["example-storage-a:vm-299-hs-root-default"]);
+    assert!(!pve.calls().iter().any(|call| call.ends_with("/qemu/200/config")));
+}

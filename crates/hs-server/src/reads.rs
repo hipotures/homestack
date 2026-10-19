@@ -13,9 +13,7 @@ use hs_core::CoreError;
 use hs_core::discovery::{discovery as read_discovery, workspace_networks};
 use hs_core::gold::gold_readiness as read_gold_readiness;
 use hs_core::inventory::{cluster_node_statuses, cluster_vm_resources, storage_ids_for_node};
-use hs_core::status::{
-    Inventory, global_status, orphaned_volumes, resolve_workspace_target, storage_capacities, workspace_status_of,
-};
+use hs_core::status::{Inventory, global_status, resolve_workspace_target, storage_capacities, workspace_status_of};
 use hs_model::ErrorCode;
 use hs_model::config::Config;
 use hs_model::status::{
@@ -259,7 +257,7 @@ pub async fn storage(State(state): State<AppState>) -> Result<Json<Vec<LayoutCap
     Ok(Json(layouts))
 }
 
-/// HomeStack volumes no VM uses.
+/// HomeStack volumes not referenced by any readable visible VM configuration.
 #[utoipa::path(
     get,
     path = "/v1/orphans",
@@ -280,8 +278,7 @@ pub async fn orphans(State(state): State<AppState>) -> Result<Json<Orphans>, Api
     let inventory = Inventory::read(pve, &stored.config)
         .await
         .map_err(|e| core_error(e, "No such resource."))?;
-    let (volumes, mut warnings, complete) =
-        orphaned_volumes(pve, &stored.config, &inventory.attached_volumes(), &inventory.nodes).await;
+    let (volumes, mut warnings, complete) = inventory.scan_orphans(pve, &stored.config).await;
     let gaps = listing_gaps(&state, &stored.config, &inventory.nodes).await?;
     let complete = complete && gaps.is_empty();
     warnings.extend(gaps);

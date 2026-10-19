@@ -20,11 +20,10 @@ use serde_json::{Map, Value};
 use crate::error::CoreError;
 pub use crate::inventory::StatusResource;
 use crate::inventory::{
-    ALIEN_WORKSPACE_TAG, GOLD_TAG, VmConfig, WORKSPACE_TAG, attached_disk_volumes, cluster_container_resources,
-    cluster_node_statuses, cluster_quorum, cluster_vm_maps, cluster_vm_resources, disk_option, disk_storage,
-    disk_volume, has_tag, home_label, integer_value, layout_name_for_node, parse_disk_size_gb, parse_tags, py_repr,
-    py_str, storage_ids_for_node, tag_list, truthy, u64_value, vm_config, vm_status, vm_volume_inventory,
-    volume_identity,
+    ALIEN_WORKSPACE_TAG, GOLD_TAG, VmConfig, WORKSPACE_TAG, cluster_container_resources, cluster_node_statuses,
+    cluster_quorum, cluster_vm_maps, cluster_vm_resources, disk_option, disk_storage, disk_volume, has_tag, home_label,
+    integer_value, layout_name_for_node, parse_disk_size_gb, parse_tags, py_repr, py_str, storage_ids_for_node,
+    tag_list, truthy, u64_value, vm_config, vm_status, vm_volume_inventory, volume_identity,
 };
 use crate::pve::Pve;
 
@@ -489,8 +488,8 @@ async fn managed_configs(
     Ok(configs)
 }
 
-/// The attached volumes of the managed VMs and the cluster state needed to
-/// scan for detached ones (the first steps of `global_status`).
+/// Cached managed VM configurations and cluster resources. Orphan scanning
+/// verifies the remaining visible VMs independently of workspace selection.
 pub struct Inventory {
     pub resources: Vec<StatusResource>,
     pub nodes: Vec<NodeState>,
@@ -511,9 +510,45 @@ impl Inventory {
         })
     }
 
-    #[must_use]
-    pub fn attached_volumes(&self) -> BTreeSet<String> {
-        self.configs.values().flat_map(attached_disk_volumes).collect()
+    /// Check disk references of every visible VM, including additional Golds
+    /// and VMs in other HomeStack pools, before classifying orphan volumes.
+    pub async fn scan_orphans(&self, pve: &impl Pve, cfg: &Config) -> (Vec<OrphanVolume>, Vec<String>, bool) {
+        let mut referenced: BTreeSet<String> = self
+            .configs
+            .values()
+            .flat_map(|config| vm_volume_inventory(config, cfg).into_iter().map(|entry| entry.volume))
+            .collect();
+        let mut warnings = Vec::new();
+        let mut offline = BTreeSet::new();
+        for resource in &self.resources {
+            let online = self.nodes.iter().any(|node| node.node == resource.node && node.online);
+            if !online {
+                offline.insert(resource.vmid);
+                continue;
+            }
+            if self.configs.contains_key(&resource.vmid) {
+                continue;
+            }
+            match vm_config(pve, &resource.node, resource.vmid).await {
+                Ok(config) => {
+                    referenced.extend(vm_volume_inventory(&config, cfg).into_iter().map(|entry| entry.volume))
+                }
+                Err(error) => warnings.push(format!(
+                    "Cannot verify volume references of VM {} on {}: {error}",
+                    resource.vmid, resource.node
+                )),
+            }
+        }
+        let references_complete = warnings.is_empty();
+        let (mut volumes, storage_warnings, complete) = orphaned_volumes(pve, cfg, &referenced, &self.nodes).await;
+        warnings.extend(storage_warnings);
+        if !references_complete {
+            // An unreadable VM may reference any candidate, regardless of the
+            // VMID embedded in the volume name after a move or reattachment.
+            volumes.clear();
+        }
+        volumes.retain(|volume| !offline.contains(&volume.vmid));
+        (volumes, warnings, complete && references_complete && offline.is_empty())
     }
 }
 
@@ -720,8 +755,7 @@ pub async fn global_status(pve: &impl Pve, cfg: &Config) -> Result<GlobalStatus,
     others.sort_by_key(|entry| entry.vmid);
     let pools = crate::inventory::pools(pve).await;
 
-    let (orphans, orphan_warnings, orphan_complete) =
-        orphaned_volumes(pve, cfg, &inventory.attached_volumes(), &inventory.nodes).await;
+    let (orphans, orphan_warnings, orphan_complete) = inventory.scan_orphans(pve, cfg).await;
     if !orphans.is_empty() {
         let list: Vec<&str> = orphans.iter().map(|o| o.volid.as_str()).collect();
         warnings.push(format!("Detached HomeStack volumes: {}", list.join(", ")));

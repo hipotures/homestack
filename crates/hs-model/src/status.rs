@@ -221,7 +221,7 @@ pub struct HomesSummary {
     pub missing_count: u64,
 }
 
-/// A HomeStack volume (`vm-<vmid>-hs-(root|home)-<name>`) no VM uses.
+/// A HomeStack volume (`vm-<vmid>-hs-(root|home)-<name>`) no visible VM references.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct OrphanVolume {
     pub volid: String,

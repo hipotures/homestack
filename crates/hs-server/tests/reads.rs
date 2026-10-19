@@ -47,6 +47,50 @@ async fn get(server: &Server, path: &str) -> Result<(StatusCode, Value, reqwest:
 }
 
 #[tokio::test]
+async fn additional_gold_disks_are_not_orphans_in_either_read_endpoint() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let mut spec = cluster()?;
+    let gold = spec
+        .vms
+        .iter_mut()
+        .find(|vm| vm.vmid == 207)
+        .ok_or("missing fixture VM")?;
+    gold.config
+        .insert("name".to_owned(), toml::Value::String("test1".to_owned()));
+    gold.config
+        .insert("tags".to_owned(), toml::Value::String("homestack-gold".to_owned()));
+    gold.config.insert(
+        "scsi0".to_owned(),
+        toml::Value::String("example-storage:vm-210-hs-root-default,size=16G".to_owned()),
+    );
+    gold.config.insert(
+        "scsi1".to_owned(),
+        toml::Value::String("example-storage:vm-209-hs-home-developer,size=20G".to_owned()),
+    );
+    spec.pools.push(pve_sim::scenario::PoolSpec {
+        poolid: "homestack-test".to_owned(),
+        comment: "Test Golds".to_owned(),
+        vms: vec![207],
+    });
+    let sim = PveSim::start(spec).await?;
+    let server = configured(&sim, SERVER_TOKEN, dir.path()).await?;
+    let (status, body, _) = get(&server, "/v1/status").await?;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["gold"]["vmid"], 100, "The selected Gold is unchanged");
+    assert_eq!(body["summary"]["orphaned_volumes"], json!([]), "{body}");
+    assert!(
+        body["others"].as_array().is_some_and(|entries| entries
+            .iter()
+            .any(|entry| entry["vmid"] == 207 && entry["role"] == "GOLD")),
+        "{body}"
+    );
+    let (status, body, _) = get(&server, "/v1/orphans").await?;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["volumes"], json!([]), "{body}");
+    Ok(())
+}
+
+#[tokio::test]
 async fn extended_storage_is_independent_of_basic_status() -> TestResult {
     let dir = tempfile::tempdir()?;
     let sim = PveSim::start(cluster()?).await?;

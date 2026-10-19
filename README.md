@@ -117,6 +117,9 @@ volumes, and backup ages. On narrow terminals, content columns use a fixed legen
 `I` images, `R` rootdir, `B` backup, `O` iso, `S` snippets, `T` vztmpl; `*` marks
 shared storage. Used capacity becomes red at 85%. Refreshes keep the previous data
 visible, sort content and node lists, and ignore results that only reorder items.
+The orphan scan checks disk references of all visible VMs, including every Gold
+across pools and `unusedN` entries. An unreadable VM configuration leaves the
+scan incomplete and prevents unverified candidates from being reported as orphans.
 
 ---
 
