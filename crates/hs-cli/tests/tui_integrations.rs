@@ -411,3 +411,114 @@ fn leaving_form_remembers_local_dns_target_even_without_valid_credentials() {
     assert_eq!(reloaded.values[4], "192.0.2.53");
     assert!(!dir.path().join("integrations/dns-tsig.key").exists());
 }
+
+#[test]
+fn passing_test_saves_credentials_and_disables_save_until_another_edit() {
+    use hs_cli::tui::{draw::render, integrations::TestReport};
+    let dir = tempfile::tempdir().unwrap();
+    let mut editor = Editor::open(dir.path(), 1).unwrap();
+    editor.paste("verified-key");
+    editor.select(1);
+    editor.paste("verified-secret");
+    editor.select(2);
+    editor.paste("example.test");
+    let id = editor.begin_test().unwrap();
+    assert!(editor.has_changes());
+    let report = TestReport::completed(&editor, Ok("Credentials accepted".to_owned()), 100);
+    let mut app = App::new(Preferences::fallback(&dir.path().join("tui.toml")), false).unwrap();
+    app.overlay = Some(Overlay::Integration(Box::new(editor)));
+    app.integration_test_result(id, report);
+    let loaded = Editor::open(dir.path(), 1).unwrap();
+    assert_eq!(loaded.values[0], "verified-key");
+    assert_eq!(loaded.values[1], "verified-secret");
+    assert_eq!(loaded.zone(), "example.test");
+    assert_eq!(
+        std::fs::metadata(&loaded.path).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    let Some(Overlay::Integration(editor)) = app.overlay.as_ref() else {
+        panic!("Expected editor");
+    };
+    assert!(!editor.has_changes());
+    assert!(editor.message.is_empty());
+    app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    let save_colour = |app: &App| {
+        let buffer = render(app, 120, 36);
+        for y in 0..36 {
+            let row: String = (0..120).map(|x| buffer[(x, y)].symbol()).collect();
+            if let Some(byte) = row.find("F5 Save") {
+                let x = u16::try_from(row[..byte].chars().count()).unwrap();
+                return buffer[(x, y)].fg;
+            }
+        }
+        panic!("Save control missing");
+    };
+    assert_eq!(save_colour(&app), app.palette.muted);
+    app.key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+    assert_eq!(save_colour(&app), app.palette.hotkey);
+    let Some(Overlay::Integration(editor)) = app.overlay.as_ref() else {
+        panic!("Expected editor");
+    };
+    assert!(editor.has_changes());
+}
+
+#[test]
+fn failed_and_stale_tests_do_not_save_draft_credentials() {
+    use hs_cli::tui::integrations::TestReport;
+    for stale in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let mut editor = Editor::open(dir.path(), 1).unwrap();
+        editor.paste("draft-key");
+        editor.select(1);
+        editor.paste("draft-secret");
+        editor.select(2);
+        editor.paste("example.test");
+        let id = editor.begin_test().unwrap();
+        let report = TestReport::completed(
+            &editor,
+            if stale {
+                Ok("Accepted".to_owned())
+            } else {
+                Err("HTTP 403 Forbidden".to_owned())
+            },
+            100,
+        );
+        if stale {
+            editor.paste(".changed");
+        }
+        let mut app = App::new(Preferences::fallback(&dir.path().join("tui.toml")), false).unwrap();
+        app.overlay = Some(Overlay::Integration(Box::new(editor)));
+        app.integration_test_result(id, report);
+        assert!(!dir.path().join("integrations/spaceship-dns").exists());
+        let Some(Overlay::Integration(editor)) = app.overlay.as_ref() else {
+            panic!("Expected editor");
+        };
+        assert!(editor.has_changes());
+        assert_eq!(editor.report_open, !stale);
+    }
+}
+
+#[test]
+fn passing_test_reports_save_failure_and_keeps_changes_pending() {
+    use hs_cli::tui::integrations::TestReport;
+    let dir = tempfile::tempdir().unwrap();
+    let mut editor = Editor::open(dir.path(), 1).unwrap();
+    editor.paste("draft-key");
+    editor.select(1);
+    editor.paste("draft-secret");
+    editor.select(2);
+    editor.paste("example.test");
+    let id = editor.begin_test().unwrap();
+    std::fs::create_dir(&editor.path).unwrap();
+    let report = TestReport::completed(&editor, Ok("Accepted".to_owned()), 100);
+    let mut app = App::new(Preferences::fallback(&dir.path().join("tui.toml")), false).unwrap();
+    app.overlay = Some(Overlay::Integration(Box::new(editor)));
+    app.integration_test_result(id, report);
+    let Some(Overlay::Integration(editor)) = app.overlay.as_ref() else {
+        panic!("Expected editor");
+    };
+    assert!(editor.has_changes());
+    assert!(editor.message.contains("automatic save failed"));
+    assert!(editor.report_open);
+    assert!(!editor.message.contains("draft-secret"));
+}

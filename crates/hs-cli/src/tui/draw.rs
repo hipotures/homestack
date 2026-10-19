@@ -1724,7 +1724,7 @@ fn draw_integration(buf: &mut Buffer, area: Rect, app: &App, editor: &super::int
                 KeyCode::F(4),
             )],
             bottom_left: vec![
-                Control::named("F5", "Save", KeyCode::F(5)),
+                Control::named("F5", "Save", KeyCode::F(5)).enabled(editor.has_changes()),
                 Control::named("F6", if editor.testing { "Testing…" } else { "Test" }, KeyCode::F(6)),
                 Control::named("F7", "Report", KeyCode::F(7)).enabled(editor.report.is_some()),
                 Control::named("Esc", "Back", KeyCode::Esc),
@@ -1816,7 +1816,7 @@ fn draw_integration(buf: &mut Buffer, area: Rect, app: &App, editor: &super::int
         );
     }
     let message = if editor.message.is_empty() {
-        "Ctrl+U clear field · Home/End · ←/→ move cursor"
+        "Successful tests save automatically · Ctrl+U clear field"
     } else {
         &editor.message
     };
@@ -1859,6 +1859,19 @@ fn draw_integration_report(buf: &mut Buffer, area: Rect, app: &App, editor: &sup
         (format!("Zone: {}", report.zone), text),
         (format!("Endpoint / server: {}", report.target), text),
         (format!("Duration: {} ms", report.duration_ms), text),
+        (
+            if editor.has_changes() {
+                "Configuration: unsaved changes"
+            } else {
+                "Configuration: saved"
+            }
+            .to_owned(),
+            text.fg(if editor.has_changes() {
+                palette.warning
+            } else {
+                palette.ok
+            }),
+        ),
         (String::new(), text),
         ("Details".to_owned(), text.add_modifier(Modifier::BOLD)),
         (report.detail.clone(), text),

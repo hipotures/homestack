@@ -11,7 +11,11 @@ HomeStack stores integration files under `$XDG_CONFIG_HOME/homestack/integration
 Credential files and integration settings are written atomically with mode `0600`.
 Reports contain the UTC completion time, tested zone and endpoint, outcome,
 duration and details with credentials redacted. Test targets are remembered when
-starting a test or leaving its form; F5 explicitly saves credentials.
+starting a test or leaving its form. A successful test automatically saves the
+credentials it verified, provided the form has not changed while the test was
+running. Failed or stale tests never save credentials. F5 saves pending changes
+manually and is disabled when the form matches the saved configuration. Save
+failures appear in the report and leave pending changes available to retry.
 
 Settings > Integrations groups OVH, Spaceship and Local DNS under DNS. Pangolin
 appears under Remote Access as Planned and has no configuration or connection

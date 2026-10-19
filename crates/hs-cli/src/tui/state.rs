@@ -1413,7 +1413,13 @@ impl App {
         if let Some(Overlay::Integration(editor)) = self.overlay.as_mut() {
             if editor.testing && editor.test_id == id {
                 editor.testing = false;
-                editor.message = saved.err().unwrap_or_default();
+                let mut errors: Vec<String> = saved.err().into_iter().collect();
+                if report.passed
+                    && let Err(error) = editor.save()
+                {
+                    errors.push(format!("Connection verified, but automatic save failed: {error}"));
+                }
+                editor.message = errors.join("; ");
                 editor.report = Some(report);
                 editor.report_open = true;
                 editor.report_scroll = 0;

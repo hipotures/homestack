@@ -122,7 +122,7 @@ pub struct Editor {
     pub report_open: bool,
     pub report_scroll: usize,
     original: String,
-    dirty: bool,
+    saved_values: Vec<String>,
     confirm_discard: bool,
 }
 
@@ -183,7 +183,7 @@ impl Editor {
             report: None,
             report_open: false,
             report_scroll: 0,
-            dirty: false,
+            saved_values: Vec::new(),
             confirm_discard: false,
         };
         editor.values = if provider == 2 {
@@ -234,6 +234,7 @@ impl Editor {
                     .to_owned(),
             );
         }
+        editor.saved_values = editor.values.clone();
         editor.cursor = editor.values[0].chars().count();
         Ok(editor)
     }
@@ -258,13 +259,14 @@ impl Editor {
     }
 
     fn changed(&mut self) {
-        if self.focus < self.credential_labels().len() {
-            self.dirty = true;
-        }
         self.testing = false;
         self.test_id = 0;
         self.confirm_discard = false;
         self.message.clear();
+    }
+
+    pub fn has_changes(&self) -> bool {
+        self.values != self.saved_values
     }
 
     pub fn on_test_button(&self) -> bool {
@@ -295,14 +297,14 @@ impl Editor {
             return false;
         }
         match key.code {
-            KeyCode::Esc if !self.dirty || self.confirm_discard => return true,
+            KeyCode::Esc if !self.has_changes() || self.confirm_discard => return true,
             KeyCode::Esc => {
                 self.visible = false;
                 self.confirm_discard = true;
                 self.message = "Unsaved changes. Esc again to discard; F5 to save.".to_owned();
             }
             KeyCode::F(4) => self.visible = !self.visible,
-            KeyCode::F(5) => {
+            KeyCode::F(5) if self.has_changes() => {
                 self.visible = false;
                 self.message = match self.save() {
                     Ok(()) => "Saved".to_owned(),
@@ -543,7 +545,7 @@ impl Editor {
     }
 
     /// Remember non-secret test targets independently of saving credentials.
-    fn save_targets(&self) -> Result<(), String> {
+    fn save_targets(&mut self) -> Result<(), String> {
         let parent = self.path.parent().ok_or("Invalid credentials path")?;
         let mut tests = read_settings(parent)?;
         let mut target = tests
@@ -556,7 +558,10 @@ impl Editor {
             target.insert("server".to_owned(), toml::Value::String(self.values[4].clone()));
         }
         tests.insert(PROVIDERS[self.provider].1.to_owned(), toml::Value::Table(target));
-        write_settings(parent, &tests)
+        write_settings(parent, &tests)?;
+        let first = self.credential_labels().len();
+        self.saved_values[first..].clone_from_slice(&self.values[first..]);
+        Ok(())
     }
 
     pub fn save(&mut self) -> Result<(), String> {
@@ -575,7 +580,7 @@ impl Editor {
         };
         write().map_err(|_| "Cannot save credentials file".to_owned())?;
         self.original = text;
-        self.dirty = false;
+        self.saved_values = self.values.clone();
         self.confirm_discard = false;
         Ok(())
     }
