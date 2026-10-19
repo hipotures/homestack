@@ -29,10 +29,8 @@ pub enum Look {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Control {
     pub text: String,
-    /// The character index of the key letter.
-    pub key: Option<usize>,
-    /// How many characters from `key` are the key (`TAB`, `ESC`); 0 is one.
-    pub key_len: usize,
+    /// Character indices highlighted as the control's hotkey.
+    pub hotkeys: Vec<usize>,
     /// The key a click on a named key stands for.
     pub code: Option<crossterm::event::KeyCode>,
     /// The panel digit, drawn as a superscript before the text.
@@ -53,26 +51,26 @@ impl Control {
         }
     }
 
-    /// A control whose key follows `&`: `re&size` is resize with s.
+    /// Highlight characters following `&`; the first is the key letter.
     #[must_use]
     pub fn key(markup: &str) -> Self {
         let mut text = String::new();
-        let mut key = None;
+        let mut hotkeys = Vec::new();
         let mut marked = false;
         for c in markup.chars() {
-            if c == '&' && !marked && key.is_none() {
+            if c == '&' && !marked {
                 marked = true;
                 continue;
             }
             if marked {
-                key = Some(text.chars().count());
+                hotkeys.push(text.chars().count());
                 marked = false;
             }
             text.push(c);
         }
         Self {
             text,
-            key,
+            hotkeys,
             ..Self::default()
         }
     }
@@ -83,8 +81,7 @@ impl Control {
     pub fn named(name: &str, action: &str, code: crossterm::event::KeyCode) -> Self {
         Self {
             text: format!("{name} {action}"),
-            key: Some(0),
-            key_len: name.chars().count(),
+            hotkeys: (0..name.chars().count()).collect(),
             code: Some(code),
             ..Self::default()
         }
@@ -127,8 +124,9 @@ impl Control {
     /// The key letter, lower case.
     #[must_use]
     pub fn key_char(&self) -> Option<char> {
-        self.key
-            .and_then(|at| self.text.chars().nth(at))
+        self.hotkeys
+            .first()
+            .and_then(|at| self.text.chars().nth(*at))
             .map(|c| c.to_ascii_lowercase())
     }
 
@@ -237,9 +235,7 @@ fn draw_control(
         at += 1;
     }
     for (index, c) in control.text.chars().enumerate() {
-        let in_key = control
-            .key
-            .is_some_and(|key| index >= key && index < key + control.key_len.max(1));
+        let in_key = control.hotkeys.contains(&index);
         let chosen = if in_key { key_style } else { style };
         put(buf, at, y, c, chosen);
         at += 1;

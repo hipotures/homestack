@@ -1704,6 +1704,26 @@ fn key_e_opens_the_setup_of_a_running_workspace() {
     assert!(app.setup.is_none());
 }
 
+#[test]
+fn enter_and_its_button_open_setup_only_for_a_running_vm() {
+    let mut fixture = tui_fixture::app();
+    let app = &mut fixture.app;
+    app.selected = Some(201);
+    assert_eq!(app_key(app, KeyCode::Enter), Some(Request::Setup(Some(201))));
+    assert!(matches!(open(app).stage, Stage::Loading { .. }));
+    app_key(app, KeyCode::Esc);
+    let buf = render(app, 120, 36);
+    assert_eq!(click(app, position(&buf, "enter")), Some(Request::Setup(Some(201))));
+    app_key(app, KeyCode::Esc);
+    app.selected = Some(203);
+    assert_eq!(app_key(app, KeyCode::Enter), None);
+    assert!(app.setup.is_none());
+    let buf = render(app, 120, 36);
+    let (x, y) = position(&buf, "enter");
+    assert_eq!(buf[(x, y)].fg, app.palette.muted);
+    assert_eq!(buf[(x + 3, y)].fg, app.palette.muted);
+}
+
 /// Default groups are the sections, walked with Tab; each shows its items.
 #[test]
 fn every_group_is_a_section() {

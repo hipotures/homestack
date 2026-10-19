@@ -1439,7 +1439,11 @@ impl App {
                 return None;
             }
             if key.code == KeyCode::Enter {
-                return self.open_reinstall();
+                return if self.selected_entry().is_some_and(super::acting::is_server) {
+                    self.open_reinstall()
+                } else {
+                    self.open_setup()
+                };
             }
         }
         match key.code {

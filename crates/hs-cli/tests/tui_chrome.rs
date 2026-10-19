@@ -77,6 +77,41 @@ fn the_hotkey_letter_and_the_panel_digit_have_the_hotkey_colour() {
 }
 
 #[test]
+fn enter_can_highlight_both_e_letters_and_keep_the_enter_key_for_clicks() {
+    use crossterm::event::KeyCode;
+    use hs_cli::tui::chrome::control_key;
+
+    let palette = palette();
+    let control = Control {
+        code: Some(KeyCode::Enter),
+        ..Control::key("&ent&er")
+    };
+    assert_eq!(control.text, "enter");
+    assert_eq!(control.key_char(), Some('e'));
+    assert_eq!(control_key(&control), Some(KeyCode::Enter));
+    let mut buf = Buffer::empty(Rect::new(0, 0, 20, 4));
+    let area = buf.area;
+    frame(
+        &mut buf,
+        area,
+        &palette,
+        &Sides {
+            bottom_left: vec![control],
+            ..Sides::default()
+        },
+    );
+    let x = find(&buf, 3, "enter");
+    for offset in 0..5 {
+        let expected = if offset == 0 || offset == 3 {
+            palette.hotkey
+        } else {
+            palette.foreground
+        };
+        assert_eq!(buf[(x + offset, 3)].fg, expected);
+    }
+}
+
+#[test]
 fn a_muted_control_is_muted_also_on_its_key_and_a_raised_one_has_the_focus_colour() {
     let palette = palette();
     let mut buf = Buffer::empty(Rect::new(0, 0, 50, 5));

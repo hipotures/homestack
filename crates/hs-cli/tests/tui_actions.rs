@@ -56,9 +56,11 @@ fn the_actions_light_up_when_a_workspace_is_selected() {
         let (x, y) = position(&buf, label);
         assert_eq!(buf[(x + 1, y)].fg, palette.foreground, "{label}");
     }
-    // 201 runs: setup too (step 5); its key is the e.
-    let (x, y) = position(&buf, "setup");
-    assert_eq!(buf[(x, y)].fg, palette.foreground);
+    // 201 runs: Enter opens setup; both e letters highlight the shortcut.
+    let (x, y) = position(&buf, "enter");
+    assert_eq!(buf[(x, y)].fg, palette.hotkey);
+    assert_eq!(buf[(x + 1, y)].fg, palette.foreground);
+    assert_eq!(buf[(x + 3, y)].fg, palette.hotkey);
 }
 
 #[test]

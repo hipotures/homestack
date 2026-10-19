@@ -580,7 +580,11 @@ fn workspace_actions(app: &App) -> Vec<Control> {
         )
         .enabled(selected.is_some_and(|entry| super::shell::available(app, entry.vmid))),
         Control::key(if running { "s&top" } else { "s&tart" }).enabled(free),
-        Control::key("s&etup").enabled(running && free),
+        Control {
+            code: Some(KeyCode::Enter),
+            ..Control::key("&ent&er")
+        }
+        .enabled(running && free),
         Control::key("&refresh").enabled(free),
         Control::key("resi&ze").enabled(free),
         Control::key("add&key").enabled(free && (!selected.is_some_and(|entry| entry.role == "ALIEN") || running)),
@@ -1658,7 +1662,7 @@ const HELP: [&str; 25] = [
     "q           quit immediately",
     "",
     "On the selected workspace:",
-    "s ssh (log out to come back)   t start or stop   e setup",
+    "s ssh (log out to come back)   t start or stop   enter or e setup",
     "n new   r refresh   z resize   k add key   g migrate   d destroy",
     "In the box: tab next field, ← → choose, ↵ plan, ↵ or a apply,",
     "esc cancel (while it runs esc hides the box; ↵ shows it).",

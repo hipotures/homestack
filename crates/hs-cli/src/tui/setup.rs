@@ -1937,7 +1937,7 @@ impl super::state::App {
         self.setup = Some(setup);
     }
 
-    /// `e` on a running workspace: the setup box, connecting first.
+    /// Enter or `e` on a running workspace: the setup box, connecting first.
     pub(super) fn open_setup(&mut self) -> Option<super::state::Request> {
         if let Some(action) = &self.action {
             let line = format!("one action at a time: {} is still open", action.title());

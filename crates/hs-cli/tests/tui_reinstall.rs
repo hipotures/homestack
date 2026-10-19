@@ -179,13 +179,14 @@ fn space_marks_servers_and_enter_on_a_marked_one_takes_them_all() {
 }
 
 #[test]
-fn space_and_enter_do_nothing_on_a_workspace() {
+fn space_does_not_mark_a_workspace_and_enter_opens_its_setup() {
     let mut fixture = app();
     select(&mut fixture.app, 201);
     press(&mut fixture.app, KeyCode::Char(' '));
     assert!(fixture.app.marked.is_empty());
-    assert_eq!(press(&mut fixture.app, KeyCode::Enter), None);
+    assert_eq!(press(&mut fixture.app, KeyCode::Enter), Some(Request::Setup(Some(201))));
     assert!(fixture.app.action.is_none());
+    assert!(fixture.app.setup.is_some());
 }
 
 #[test]
