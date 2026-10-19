@@ -482,7 +482,7 @@ fn f10_opens_settings_under_the_cluster_header() {
         press(&mut fixture.app, KeyCode::Down);
     }
     let text = screen(&render(&fixture.app, 120, 36));
-    for item in ["OVH", "Spaceship", "Local DNS (TSIG)", "Not configured"] {
+    for item in ["OVH", "Spaceship", "Local DNS (TSIG)", "Missing"] {
         assert!(text.contains(item), "{item}: {text}");
     }
     press(&mut fixture.app, KeyCode::Esc);

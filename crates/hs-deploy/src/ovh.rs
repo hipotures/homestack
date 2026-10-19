@@ -147,6 +147,17 @@ impl OvhClient {
         Ok(serde_json::from_str(&text).unwrap_or(Value::Null))
     }
 
+    /// Authenticate and verify read access to a DNS zone without modifying it.
+    pub async fn check_zone(&self, zone: &str) -> Result<(), String> {
+        let response = self
+            .call(reqwest::Method::GET, &format!("/domain/zone/{zone}"), None)
+            .await?;
+        if !response.is_object() {
+            return Err("Invalid OVH zone response".to_owned());
+        }
+        Ok(())
+    }
+
     /// Add a TXT record `sub` in `zone` and apply the zone; the record's id.
     pub async fn add_txt(&self, zone: &str, sub: &str, value: &str) -> Result<u64, String> {
         let record = self

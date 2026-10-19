@@ -12,6 +12,9 @@ pub const PROVIDERS: [(&str, &str); 3] = [
 const OVH: &[&str] = &["OVH_AK", "OVH_AS", "OVH_CK", "OVH_END_POINT"];
 const SPACESHIP: &[&str] = &["SPACESHIP_API_KEY", "SPACESHIP_API_SECRET"];
 const TSIG: &[&str] = &["Key name", "Algorithm", "Secret"];
+const TEST_ZONE: &str = "Test zone";
+const TEST_SERVER: &str = "DNS server (IP)";
+static NEXT_TEST: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 #[derive(Clone, PartialEq)]
 pub struct Editor {
@@ -22,6 +25,8 @@ pub struct Editor {
     pub cursor: usize,
     pub visible: bool,
     pub message: String,
+    pub test_id: u64,
+    pub testing: bool,
     original: String,
     dirty: bool,
     confirm_discard: bool,
@@ -37,11 +42,28 @@ impl std::fmt::Debug for Editor {
 }
 
 impl Editor {
-    pub fn labels(&self) -> &'static [&'static str] {
+    fn credential_labels(&self) -> &'static [&'static str] {
         match self.provider {
             0 => OVH,
             1 => SPACESHIP,
             _ => TSIG,
+        }
+    }
+
+    pub fn labels(&self) -> Vec<&'static str> {
+        let mut labels = self.credential_labels().to_vec();
+        labels.push(TEST_ZONE);
+        if self.provider == 2 {
+            labels.push(TEST_SERVER);
+        }
+        labels
+    }
+
+    pub fn is_secret(&self, at: usize) -> bool {
+        match self.provider {
+            0 => at < 3,
+            1 => at < 2,
+            _ => at == 2,
         }
     }
 
@@ -61,6 +83,8 @@ impl Editor {
             visible: false,
             message: String::new(),
             original,
+            test_id: 0,
+            testing: false,
             dirty: false,
             confirm_discard: false,
         };
@@ -72,7 +96,7 @@ impl Editor {
             }
         } else {
             editor
-                .labels()
+                .credential_labels()
                 .iter()
                 .map(|key| {
                     editor
@@ -91,6 +115,28 @@ impl Editor {
                 })
                 .collect()
         };
+        let preferences =
+            super::theme::Preferences::load(&dir.join("tui.toml")).map_err(|_| "Cannot read test settings")?;
+        let target = preferences
+            .table
+            .get("integration_tests")
+            .and_then(|value| value.get(PROVIDERS[provider].1));
+        editor.values.push(
+            target
+                .and_then(|value| value.get("zone"))
+                .and_then(toml::Value::as_str)
+                .unwrap_or_default()
+                .to_owned(),
+        );
+        if provider == 2 {
+            editor.values.push(
+                target
+                    .and_then(|value| value.get("server"))
+                    .and_then(toml::Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned(),
+            );
+        }
         editor.cursor = editor.values[0].chars().count();
         Ok(editor)
     }
@@ -113,6 +159,8 @@ impl Editor {
 
     fn changed(&mut self) {
         self.dirty = true;
+        self.testing = false;
+        self.test_id = 0;
         self.confirm_discard = false;
         self.message.clear();
     }
@@ -168,7 +216,7 @@ impl Editor {
     }
 
     pub fn validate(&self) -> Result<(), String> {
-        for (label, value) in self.labels().iter().zip(&self.values) {
+        for (label, value) in self.credential_labels().iter().zip(&self.values) {
             if value.is_empty() {
                 return Err(format!("{label} is required"));
             }
@@ -204,16 +252,16 @@ impl Editor {
             );
         }
         // Preserve comments and unrelated entries; replace every occurrence of edited keys.
-        let mut seen = vec![false; self.values.len()];
+        let mut seen = vec![false; self.credential_labels().len()];
         let mut lines = Vec::new();
         for line in self.original.lines() {
             if let Some(at) = line
                 .trim()
                 .split_once('=')
-                .and_then(|(name, _)| self.labels().iter().position(|key| *key == name.trim()))
+                .and_then(|(name, _)| self.credential_labels().iter().position(|key| *key == name.trim()))
             {
                 if !seen[at] {
-                    lines.push(format!("{}=\"{}\"", self.labels()[at], self.values[at]));
+                    lines.push(format!("{}=\"{}\"", self.credential_labels()[at], self.values[at]));
                 }
                 seen[at] = true;
             } else {
@@ -222,16 +270,152 @@ impl Editor {
         }
         for (at, present) in seen.iter().enumerate() {
             if !present {
-                lines.push(format!("{}=\"{}\"", self.labels()[at], self.values[at]));
+                lines.push(format!("{}=\"{}\"", self.credential_labels()[at], self.values[at]));
             }
         }
         format!("{}\n", lines.join("\n"))
+    }
+
+    pub fn zone(&self) -> &str {
+        &self.values[self.credential_labels().len()]
+    }
+
+    pub fn begin_test(&mut self) -> Option<u64> {
+        if self.testing {
+            return None;
+        }
+        self.visible = false;
+        if let Err(error) = self.validate_test() {
+            self.message = error;
+            return None;
+        }
+        self.test_id = NEXT_TEST.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.testing = true;
+        self.message = "Testing authentication and zone access…".to_owned();
+        Some(self.test_id)
+    }
+
+    fn validate_test(&self) -> Result<(), String> {
+        self.validate()?;
+        let zone = self.zone().trim_end_matches('.');
+        if zone.is_empty()
+            || zone.len() > 253
+            || !zone.split('.').all(|label| {
+                !label.is_empty()
+                    && label.len() <= 63
+                    && !label.starts_with('-')
+                    && !label.ends_with('-')
+                    && label.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-')
+            })
+        {
+            return Err("Enter a DNS zone to test".to_owned());
+        }
+        if self.provider == 2 && self.values[4].parse::<std::net::IpAddr>().is_err() {
+            return Err("Enter the authoritative DNS server IP address".to_owned());
+        }
+        Ok(())
+    }
+
+    pub async fn test_connection(&self) -> Result<String, String> {
+        self.validate_test()?;
+        let check = async {
+            match self.provider {
+                0 => {
+                    let credentials = hs_deploy::ovh::OvhCredentials::parse(&self.serialize())
+                        .map_err(|_| "Invalid OVH credentials")?;
+                    let client = hs_deploy::ovh::OvhClient::connect(credentials)
+                        .await
+                        .map_err(|_| "OVH connection failed (network, TLS or endpoint)")?;
+                    client
+                        .check_zone(self.zone().trim_end_matches('.'))
+                        .await
+                        .map_err(|_| "OVH test failed: check credentials, zone and read permissions")?;
+                }
+                1 => {
+                    let credentials = hs_deploy::spaceship::SpaceshipCredentials::parse(&self.serialize())
+                        .map_err(|_| "Invalid Spaceship credentials")?;
+                    let client = hs_deploy::spaceship::SpaceshipClient::new(credentials)
+                        .map_err(|_| "Cannot create Spaceship client")?;
+                    client
+                        .check_zone(self.zone().trim_end_matches('.'))
+                        .await
+                        .map_err(|_| "Spaceship test failed: check network, credentials, zone and read permissions")?;
+                }
+                _ => {
+                    let editor = self.clone();
+                    tokio::task::spawn_blocking(move || editor.test_tsig())
+                        .await
+                        .map_err(|_| "DNS test interrupted")??;
+                }
+            }
+            Ok("Connected · authentication and zone read access verified".to_owned())
+        };
+        tokio::time::timeout(std::time::Duration::from_secs(15), check)
+            .await
+            .map_err(|_| "Connection test timed out".to_owned())?
+    }
+
+    fn test_tsig(&self) -> Result<(), String> {
+        let mut key = tempfile::NamedTempFile::new().map_err(|_| "Cannot prepare TSIG test")?;
+        key.write_all(self.serialize().as_bytes())
+            .map_err(|_| "Cannot prepare TSIG test")?;
+        let output = std::process::Command::new("dig")
+            .arg("-r")
+            .arg("-k")
+            .arg(key.path())
+            .arg(format!("@{}", self.values[4]))
+            .arg(self.zone())
+            .args([
+                "SOA",
+                "+norecurse",
+                "+tcp",
+                "+time=5",
+                "+tries=1",
+                "+noall",
+                "+comments",
+                "+answer",
+                "+additional",
+            ])
+            .stdin(std::process::Stdio::null())
+            .output()
+            .map_err(|error| {
+                if error.kind() == std::io::ErrorKind::NotFound {
+                    "Install dig to test TSIG connections"
+                } else {
+                    "Cannot run DNS test"
+                }
+            })?;
+        verify_tsig_response(
+            output.status.success(),
+            &String::from_utf8_lossy(&output.stdout),
+            &String::from_utf8_lossy(&output.stderr),
+        )
     }
 
     pub fn save(&mut self) -> Result<(), String> {
         self.validate()?;
         let parent = self.path.parent().ok_or("Invalid credentials path")?;
         let text = self.serialize();
+        let mut preferences =
+            super::theme::Preferences::load(&parent.join("tui.toml")).map_err(|_| "Cannot read test settings")?;
+        let mut tests = preferences
+            .table
+            .get("integration_tests")
+            .and_then(toml::Value::as_table)
+            .cloned()
+            .unwrap_or_default();
+        let mut target = toml::Table::new();
+        target.insert("zone".to_owned(), toml::Value::String(self.zone().to_owned()));
+        if self.provider == 2 {
+            target.insert("server".to_owned(), toml::Value::String(self.values[4].clone()));
+        }
+        tests.insert(PROVIDERS[self.provider].1.to_owned(), toml::Value::Table(target));
+        preferences
+            .table
+            .insert("integration_tests".to_owned(), toml::Value::Table(tests));
+        preferences
+            .write(&preferences.table)
+            .map_err(|_| "Cannot save test settings")?;
         let write = || -> std::io::Result<()> {
             std::fs::create_dir_all(parent)?;
             let mut file = tempfile::NamedTempFile::new_in(parent)?;
@@ -309,4 +493,35 @@ fn parse_tsig(text: &str) -> Result<Vec<String>, String> {
         return Err(error());
     }
     Ok(vec![tokens[1].clone(), tokens[4].clone(), tokens[7].clone()])
+}
+
+/// Require a verified signature and an authoritative SOA answer, not just a reachable DNS server.
+pub fn verify_tsig_response(success: bool, stdout: &str, stderr: &str) -> Result<(), String> {
+    if !success
+        || !stderr.trim().is_empty()
+        || stdout.to_ascii_lowercase().contains("couldn't verify")
+        || stdout.contains("BADKEY")
+        || stdout.contains("BADSIG")
+        || stdout.contains("BADTIME")
+        || !stdout.contains("status: NOERROR")
+    {
+        return Err("DNS test failed: check server, zone, TSIG key and permissions".to_owned());
+    }
+    let authoritative = stdout
+        .lines()
+        .filter_map(|line| line.split_once("flags:"))
+        .any(|(_, flags)| {
+            flags
+                .split(';')
+                .next()
+                .is_some_and(|flags| flags.split_whitespace().any(|flag| flag == "aa"))
+        });
+    let soa = stdout
+        .lines()
+        .filter(|line| !line.starts_with(';'))
+        .any(|line| line.split_whitespace().any(|word| word == "SOA"));
+    if !stdout.contains("TSIG PSEUDOSECTION") || !authoritative || !soa {
+        return Err("DNS server did not return a signed authoritative SOA answer".to_owned());
+    }
+    Ok(())
 }

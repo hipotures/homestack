@@ -32,6 +32,7 @@ const REFRESH: Duration = Duration::from_secs(10);
 /// What a background task brings back.
 enum Update {
     Startup(&'static str),
+    IntegrationTest(u64, Result<String, String>),
     Status(String, Value),
     StatusRejected(String),
     ApiUpdates(u64, Result<super::reinstall::Images, String>),
@@ -500,6 +501,7 @@ fn start(request: &Request, client: Option<&Arc<Client>>, ctx: &Context, updates
             });
         }
         Request::Quit
+        | Request::TestIntegration(_, _)
         | Request::CopyJson
         | Request::Act(_)
         | Request::Decide(_)
@@ -850,6 +852,13 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
                         return Ok(0);
                     }
                     match request {
+                        Request::TestIntegration(id, editor) => {
+                            let sender = updates.clone();
+                            tokio::spawn(async move {
+                                let result = editor.test_connection().await;
+                                let _ = sender.send(Update::IntegrationTest(id, result));
+                            });
+                        }
                         Request::CopyJson => {
                             let size = screen.terminal.size().map_err(|error| AppError::new(format!("Cannot read terminal size: {error}")))?;
                             let result = app.displayed_json(ratatui::layout::Rect::new(0, 0, size.width, size.height))
@@ -1097,6 +1106,7 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
                 }
             }
             Some(update) = received.recv() => match update {
+                Update::IntegrationTest(id, result) => app.integration_test_result(id, result),
                 Update::Startup(message) => app.startup_message = Some(message),
                 Update::Status(url, status) => {
                     let host = host(&url).split('.').next().unwrap_or_default().to_owned();

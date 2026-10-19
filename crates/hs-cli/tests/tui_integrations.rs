@@ -98,3 +98,128 @@ fn rendered_secrets_are_masked_and_long_keys_use_the_panel_width() {
     assert!(shown.contains("Hide"));
     assert!(shown.contains("ABCDEFGH"));
 }
+
+#[test]
+fn tsig_test_requires_a_valid_signature_and_authoritative_answer() {
+    use hs_cli::tui::integrations::verify_tsig_response;
+    let answer = ";; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 1\n;; flags: qr aa; QUERY: 1, ANSWER: 1\nexample.test. 60 IN SOA ns.example.test. admin.example.test. 1 2 3 4 5\n;; TSIG PSEUDOSECTION:\nkey. 0 ANY TSIG hmac-sha256. 1 300 32 signature 1 NOERROR 0\n";
+    assert!(verify_tsig_response(true, answer, "").is_ok());
+    for bad in [
+        answer.replace("TSIG PSEUDOSECTION", "UNSIGNED"),
+        answer.replace("qr aa;", "qr rd;"),
+        answer.replace(" SOA ", " TXT "),
+        answer.replace("status: NOERROR", "status: REFUSED"),
+        answer.replace("signature", "BADSIG"),
+        format!("{answer};; Couldn't verify signature: tsig verify failure\n"),
+    ] {
+        assert!(verify_tsig_response(true, &bad, "").is_err());
+    }
+    assert!(verify_tsig_response(true, answer, "Couldn't verify signature").is_err());
+    assert!(verify_tsig_response(false, answer, "").is_err());
+}
+
+#[test]
+fn test_targets_round_trip_without_entering_credentials_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut editor = Editor::open(dir.path(), 1).unwrap();
+    editor.values = vec!["key".to_owned(), "secret".to_owned(), "example.test".to_owned()];
+    editor.save().unwrap();
+    let loaded = Editor::open(dir.path(), 1).unwrap();
+    assert_eq!(loaded.zone(), "example.test");
+    let credentials = std::fs::read_to_string(dir.path().join("spaceship-dns")).unwrap();
+    assert!(!credentials.contains("example.test"));
+    let preferences = std::fs::read_to_string(dir.path().join("tui.toml")).unwrap();
+    assert!(preferences.contains("example.test"));
+    assert!(!preferences.contains("secret"));
+}
+
+#[test]
+fn testing_uses_drafts_and_ignores_results_after_edits_or_reopening() {
+    use hs_cli::tui::state::Request;
+    let dir = tempfile::tempdir().unwrap();
+    let mut editor = Editor::open(dir.path(), 1).unwrap();
+    editor.values = vec![
+        "draft-key".to_owned(),
+        "draft-secret".to_owned(),
+        "example.test".to_owned(),
+    ];
+    let mut app = App::new(Preferences::fallback(&dir.path().join("tui.toml")), false).unwrap();
+    app.overlay = Some(Overlay::Integration(Box::new(editor)));
+    let request = app.key(KeyEvent::new(KeyCode::F(6), KeyModifiers::NONE)).unwrap();
+    let Request::TestIntegration(id, draft) = request else {
+        panic!("Expected connection test");
+    };
+    assert_eq!(draft.values[0], "draft-key");
+    assert!(!dir.path().join("spaceship-dns").exists());
+    assert!(app.key(KeyEvent::new(KeyCode::F(6), KeyModifiers::NONE)).is_none());
+    app.key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+    app.integration_test_result(id, Ok("Stale result".to_owned()));
+    let Some(Overlay::Integration(editor)) = app.overlay.as_ref() else {
+        panic!("Expected editor");
+    };
+    assert!(!editor.message.contains("Stale"));
+    app.overlay = Some(Overlay::Integration(Box::new(Editor::open(dir.path(), 1).unwrap())));
+    app.integration_test_result(id, Ok("Stale result".to_owned()));
+    let Some(Overlay::Integration(editor)) = app.overlay.as_ref() else {
+        panic!("Expected editor");
+    };
+    assert!(!editor.message.contains("Stale"));
+}
+
+#[tokio::test]
+async fn invalid_targets_fail_before_network_access() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut editor = Editor::open(dir.path(), 1).unwrap();
+    editor.values = vec!["key".to_owned(), "secret".to_owned(), "../invalid".to_owned()];
+    assert!(editor.begin_test().is_none());
+    assert!(editor.test_connection().await.is_err());
+}
+
+#[tokio::test]
+async fn ovh_zone_check_authenticates_a_read_request_and_rejects_denied_access() {
+    use axum::{
+        Router,
+        extract::State,
+        http::{HeaderMap, StatusCode},
+        response::IntoResponse,
+        routing::get,
+    };
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+    let denied = Arc::new(AtomicBool::new(false));
+    let router = Router::new()
+        .route("/auth/time", get(|| async { axum::Json(1_700_000_000_i64) }))
+        .route(
+            "/domain/zone/example.test",
+            get(|State(denied): State<Arc<AtomicBool>>, headers: HeaderMap| async move {
+                assert_eq!(headers["X-Ovh-Application"], "test-ak");
+                assert_eq!(headers["X-Ovh-Consumer"], "test-ck");
+                assert!(headers["X-Ovh-Signature"].to_str().unwrap().starts_with("$1$"));
+                if denied.load(Ordering::Relaxed) {
+                    StatusCode::FORBIDDEN.into_response()
+                } else {
+                    axum::Json(serde_json::json!({"zone": "example.test"})).into_response()
+                }
+            }),
+        )
+        .with_state(Arc::clone(&denied));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, router).await.unwrap();
+    });
+    let client = hs_deploy::ovh::OvhClient::connect(hs_deploy::ovh::OvhCredentials {
+        application_key: "test-ak".to_owned(),
+        application_secret: "test-as".to_owned(),
+        consumer_key: "test-ck".to_owned(),
+        endpoint: format!("http://{address}"),
+    })
+    .await
+    .unwrap();
+    assert!(client.check_zone("example.test").await.is_ok());
+    denied.store(true, Ordering::Relaxed);
+    assert!(client.check_zone("example.test").await.is_err());
+    server.abort();
+}

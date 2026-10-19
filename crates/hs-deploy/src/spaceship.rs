@@ -106,6 +106,25 @@ impl SpaceshipClient {
         self.call(reqwest::Method::DELETE, zone, &remove_body(sub, value)).await
     }
 
+    /// Authenticate and verify read access using a single-record page.
+    pub async fn check_zone(&self, zone: &str) -> Result<(), String> {
+        let page: Value = self
+            .http
+            .get(format!("{API}/dns/records/{zone}?take=1&skip=0"))
+            .headers(self.headers()?)
+            .send()
+            .await
+            .and_then(reqwest::Response::error_for_status)
+            .map_err(|error| error.to_string())?
+            .json()
+            .await
+            .map_err(|error| error.to_string())?;
+        if !page["items"].is_array() || !page["total"].is_u64() {
+            return Err("Invalid Spaceship DNS response".to_owned());
+        }
+        Ok(())
+    }
+
     /// List all records, including zones larger than one API page.
     pub async fn records(&self, zone: &str) -> Result<Vec<Value>, String> {
         let mut records = Vec::new();

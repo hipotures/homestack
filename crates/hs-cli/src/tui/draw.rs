@@ -1622,25 +1622,16 @@ fn draw_settings(buf: &mut Buffer, area: Rect, app: &App, section: usize, themes
             lines.push(line("Log", "live", None));
         }
         _ => {
-            lines.push(vec![("DNS credentials".to_owned(), heading)]);
             let dir = app.preferences.path.parent().unwrap_or(std::path::Path::new("."));
             for (at, (name, file)) in super::integrations::PROVIDERS.iter().enumerate() {
                 let status = match super::integrations::Editor::open(dir, at) {
-                    Ok(_) if !dir.join(file).exists() => "Not configured",
-                    Ok(editor) if editor.validate().is_ok() => "Configured",
-                    _ => "Needs attention",
+                    Ok(_) if !dir.join(file).exists() => "Missing",
+                    Ok(editor) if editor.validate().is_ok() => "Saved",
+                    _ => "Incomplete",
                 };
                 let chosen = matches!(app.overlay, Some(Overlay::Integrations { index }) if index == at);
-                let (item, style) = unfocused_item(palette, name, chosen, true);
-                lines.push(vec![(item, style)]);
-                lines.push(vec![(
-                    format!("  {status}"),
-                    if status == "Configured" {
-                        text.fg(palette.ok)
-                    } else {
-                        muted
-                    },
-                )]);
+                let (item, style) = unfocused_item(palette, &format!("{name:<18}"), chosen, true);
+                lines.push(vec![(item, style), (status.to_owned(), muted)]);
             }
         }
     }
@@ -1650,11 +1641,8 @@ fn draw_settings(buf: &mut Buffer, area: Rect, app: &App, section: usize, themes
             break;
         }
         spans(buf, x, y, width, parts);
-        if section == 3 && (first + 1..first + 7).contains(&row) {
-            super::chrome::register(
-                Rect::new(x, y, width, 1),
-                super::chrome::Hit::Integration((row - first - 1) / 2),
-            );
+        if section == 3 && (first..first + 3).contains(&row) {
+            super::chrome::register(Rect::new(x, y, width, 1), super::chrome::Hit::Integration(row - first));
         }
         if section == APPEARANCE && (first..first + THEMES.len()).contains(&row) {
             super::chrome::register(Rect::new(x, y, width, 1), super::chrome::Hit::Theme(row - first));
@@ -1697,6 +1685,7 @@ fn draw_integration(buf: &mut Buffer, area: Rect, app: &App, editor: &super::int
             )],
             bottom_left: vec![
                 Control::named("F5", "Save", KeyCode::F(5)),
+                Control::named("F6", if editor.testing { "Testing…" } else { "Test" }, KeyCode::F(6)),
                 Control::named("Esc", "Back", KeyCode::Esc),
             ],
             bottom_right: vec![Control::named("Tab", "Field", KeyCode::Tab)],
@@ -1727,7 +1716,7 @@ fn draw_integration(buf: &mut Buffer, area: Rect, app: &App, editor: &super::int
         let label = format!("{}{}", if selected { "▸ " } else { "  " }, editor.labels()[at]);
         write(buf, x, y, width, &label, style);
         let value = &editor.values[at];
-        let mut chars: Vec<char> = if editor.visible {
+        let mut chars: Vec<char> = if editor.visible || !editor.is_secret(at) {
             value.chars().collect()
         } else {
             vec!['*'; value.chars().count()]

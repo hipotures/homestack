@@ -45,6 +45,7 @@ pub enum Request {
     UpdateApi,
     /// Copy the already loaded API responses to the terminal's clipboard.
     CopyJson,
+    TestIntegration(u64, Box<super::integrations::Editor>),
     Quit,
 }
 
@@ -1407,6 +1408,16 @@ impl App {
         }
     }
 
+    pub fn integration_test_result(&mut self, id: u64, result: Result<String, String>) {
+        if let Some(Overlay::Integration(editor)) = self.overlay.as_mut()
+            && editor.testing
+            && editor.test_id == id
+        {
+            editor.testing = false;
+            editor.message = result.unwrap_or_else(|error| error);
+        }
+    }
+
     /// Handle one key.
     pub fn key(&mut self, key: KeyEvent) -> Option<Request> {
         // Ctrl+C and Ctrl+Q leave at once, wherever the user is (Ctrl+Q: the
@@ -1441,6 +1452,19 @@ impl App {
             return request;
         }
         if let Some(Overlay::Integration(editor)) = self.overlay.as_mut() {
+            if key.code == KeyCode::F(6) {
+                return editor
+                    .begin_test()
+                    .map(|id| Request::TestIntegration(id, editor.clone()));
+            }
+            if key.code == KeyCode::F(5) {
+                // Saving test targets updates tui.toml; keep later preference writes current.
+                editor.key(key);
+                if let Ok(preferences) = Preferences::load(&self.preferences.path) {
+                    self.preferences.table = preferences.table;
+                }
+                return None;
+            }
             if editor.key(key) {
                 self.overlay = Some(Overlay::Integrations { index: editor.provider });
             }
