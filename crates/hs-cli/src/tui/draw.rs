@@ -1533,7 +1533,7 @@ pub(super) fn centered(area: Rect, width: u16, height: u16) -> Rect {
     )
 }
 
-/// The settings (a mockup, but for the theme in Appearance): a box over the
+/// The settings: a box over the
 /// space under the cluster panel, whose header stays. Left the sections,
 /// right the chosen one; `themes` is the chosen theme while it is picked.
 fn draw_settings(buf: &mut Buffer, area: Rect, app: &App, section: usize, themes: Option<usize>) {
@@ -1541,11 +1541,7 @@ fn draw_settings(buf: &mut Buffer, area: Rect, app: &App, section: usize, themes
     let palette = &app.palette;
     let text = text_style(palette);
     let muted = text.fg(palette.muted);
-    let under = arrange(area, app.shown)
-        .cluster
-        .map(|cluster| Rect::new(area.x, cluster.bottom(), area.width, area.bottom().saturating_sub(cluster.bottom())))
-        .filter(|rect| rect.height >= 12)
-        .unwrap_or(area);
+    let under = settings_area(area, app);
     let bottom = if themes.is_some() {
         vec![
             Control::key("preview ↑↓"),
@@ -1564,6 +1560,7 @@ fn draw_settings(buf: &mut Buffer, area: Rect, app: &App, section: usize, themes
         under,
         palette,
         &Sides {
+            top_left: vec![Control::plain("settings")],
             bottom_left: bottom,
             focused: true,
             ..Sides::default()
@@ -1605,7 +1602,10 @@ fn draw_settings(buf: &mut Buffer, area: Rect, app: &App, section: usize, themes
             for (at, name) in THEMES.iter().enumerate() {
                 // Not picking yet: the theme in use is the one marked.
                 let marked = picking.unwrap_or_else(|| {
-                    THEMES.iter().position(|theme| *theme == app.preferences.theme).unwrap_or(0)
+                    THEMES
+                        .iter()
+                        .position(|theme| *theme == app.preferences.theme)
+                        .unwrap_or(0)
                 });
                 let (item, style) = unfocused_item(palette, name, at == marked, picking.is_some());
                 lines.push(vec![(item, style)]);
@@ -1621,14 +1621,26 @@ fn draw_settings(buf: &mut Buffer, area: Rect, app: &App, section: usize, themes
             lines.push(line("Log", "live", None));
         }
         _ => {
-            lines.push(vec![("DNS".to_owned(), heading)]);
-            lines.push(line("OVH", "Configured", Some(true)));
-            lines.push(line("Spaceship", "Configured", Some(true)));
-            lines.push(Vec::new());
-            lines.push(vec![("Remote Access".to_owned(), heading)]);
-            lines.push(line("Pangolin", "Not configured", Some(false)));
-            lines.push(Vec::new());
-            lines.push(vec![("+ Add integration".to_owned(), text.fg(palette.focus))]);
+            lines.push(vec![("DNS credentials".to_owned(), heading)]);
+            let dir = app.preferences.path.parent().unwrap_or(std::path::Path::new("."));
+            for (at, (name, file)) in super::integrations::PROVIDERS.iter().enumerate() {
+                let status = match super::integrations::Editor::open(dir, at) {
+                    Ok(_) if !dir.join(file).exists() => "Not configured",
+                    Ok(editor) if editor.validate().is_ok() => "Configured",
+                    _ => "Needs attention",
+                };
+                let chosen = matches!(app.overlay, Some(Overlay::Integrations { index }) if index == at);
+                let (item, style) = unfocused_item(palette, name, chosen, true);
+                lines.push(vec![(item, style)]);
+                lines.push(vec![(
+                    format!("  {status}"),
+                    if status == "Configured" {
+                        text.fg(palette.ok)
+                    } else {
+                        muted
+                    },
+                )]);
+            }
         }
     }
     for (row, parts) in lines.iter().enumerate() {
@@ -1637,15 +1649,123 @@ fn draw_settings(buf: &mut Buffer, area: Rect, app: &App, section: usize, themes
             break;
         }
         spans(buf, x, y, width, parts);
+        if section == 3 && (first + 1..first + 7).contains(&row) {
+            super::chrome::register(
+                Rect::new(x, y, width, 1),
+                super::chrome::Hit::Integration((row - first - 1) / 2),
+            );
+        }
         if section == APPEARANCE && (first..first + THEMES.len()).contains(&row) {
             super::chrome::register(Rect::new(x, y, width, 1), super::chrome::Hit::Theme(row - first));
         }
     }
 }
 
+fn settings_area(area: Rect, app: &App) -> Rect {
+    arrange(area, app.shown)
+        .cluster
+        .map(|cluster| {
+            Rect::new(
+                area.x,
+                cluster.bottom(),
+                area.width,
+                area.bottom().saturating_sub(cluster.bottom()),
+            )
+        })
+        .filter(|rect| rect.height >= 12)
+        .unwrap_or(area)
+}
+
+fn draw_integration(buf: &mut Buffer, area: Rect, app: &App, editor: &super::integrations::Editor) {
+    use crossterm::event::KeyCode;
+    let palette = &app.palette;
+    let text = text_style(palette);
+    let inner = frame(
+        buf,
+        settings_area(area, app),
+        palette,
+        &Sides {
+            top_left: vec![
+                Control::plain("settings"),
+                Control::plain(super::integrations::PROVIDERS[editor.provider].0),
+            ],
+            top_right: vec![Control::named(
+                "F4",
+                if editor.visible { "Hide" } else { "Show" },
+                KeyCode::F(4),
+            )],
+            bottom_left: vec![
+                Control::named("F5", "Save", KeyCode::F(5)),
+                Control::named("Esc", "Back", KeyCode::Esc),
+            ],
+            bottom_right: vec![Control::named("Tab", "Field", KeyCode::Tab)],
+            focused: true,
+        },
+    );
+    if inner.width < 4 || inner.height < 5 {
+        return;
+    }
+    let x = inner.x + 1;
+    let width = inner.width - 2;
+    write(
+        buf,
+        x,
+        inner.y,
+        width,
+        super::integrations::PROVIDERS[editor.provider].1,
+        text.fg(palette.muted),
+    );
+    // Put values below their labels, using the entire panel width. Two rows per
+    // key reveal long credentials; the focused viewport follows the cursor.
+    let count = usize::from((inner.height.saturating_sub(3) / 3).max(1)).min(editor.values.len());
+    let first = editor.focus.saturating_sub(count - 1);
+    for at in first..(first + count).min(editor.values.len()) {
+        let y = inner.y + 1 + u16::try_from((at - first) * 3).unwrap_or(0);
+        let selected = at == editor.focus;
+        let style = if selected { text.fg(palette.focus) } else { text };
+        let label = format!("{}{}", if selected { "▸ " } else { "  " }, editor.labels()[at]);
+        write(buf, x, y, width, &label, style);
+        let value = &editor.values[at];
+        let mut chars: Vec<char> = if editor.visible {
+            value.chars().collect()
+        } else {
+            vec!['*'; value.chars().count()]
+        };
+        let capacity = usize::from(width) * 2;
+        let start = if selected {
+            editor.cursor.saturating_sub(capacity - 1)
+        } else {
+            0
+        };
+        chars.push(' ');
+        for (offset, c) in chars.iter().skip(start).take(capacity).enumerate() {
+            let cy = y + 1 + u16::try_from(offset / usize::from(width)).unwrap_or(0);
+            if cy >= inner.bottom().saturating_sub(1) {
+                break;
+            }
+            let cx = x + u16::try_from(offset % usize::from(width)).unwrap_or(0);
+            let cell_style = if selected && start + offset == editor.cursor {
+                style.add_modifier(Modifier::REVERSED)
+            } else {
+                style
+            };
+            write(buf, cx, cy, 1, &c.to_string(), cell_style);
+        }
+        super::chrome::register(Rect::new(x, y, width, 3), super::chrome::Hit::IntegrationField(at));
+    }
+    let message = if editor.message.is_empty() {
+        "Ctrl+U clear field · Home/End · ←/→ move cursor"
+    } else {
+        &editor.message
+    };
+    write(buf, x, inner.bottom() - 1, width, message, text.fg(palette.muted));
+}
+
 fn draw_overlay(buf: &mut Buffer, area: Rect, app: &App, overlay: &Overlay) {
     match overlay {
         Overlay::Settings { section } => return draw_settings(buf, area, app, *section, None),
+        Overlay::Integrations { .. } => return draw_settings(buf, area, app, 3, None),
+        Overlay::Integration(editor) => return draw_integration(buf, area, app, editor),
         Overlay::Themes { index, .. } => return draw_settings(buf, area, app, APPEARANCE, Some(*index)),
         _ => {}
     }
@@ -1670,7 +1790,9 @@ fn draw_overlay(buf: &mut Buffer, area: Rect, app: &App, overlay: &Overlay) {
                 Control::key("close esc"),
             ],
         ),
-        Overlay::Settings { .. } | Overlay::Themes { .. } => return,
+        Overlay::Settings { .. } | Overlay::Themes { .. } | Overlay::Integrations { .. } | Overlay::Integration(_) => {
+            return;
+        }
         Overlay::Help => (
             "help",
             HELP.iter().map(|line| ((*line).to_owned(), text)).collect(),

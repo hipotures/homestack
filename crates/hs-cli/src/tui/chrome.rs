@@ -446,6 +446,8 @@ pub enum Hit {
     Item(usize),
     /// A theme in the Appearance section of the settings.
     Theme(usize),
+    Integration(usize),
+    IntegrationField(usize),
     /// The log panel: the farthest it scrolls, the rows it shows and the
     /// line under the pointer (lines back from the newest; `None` below
     /// the last).

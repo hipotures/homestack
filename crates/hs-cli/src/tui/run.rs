@@ -119,6 +119,7 @@ fn restore() {
     let _ = terminal::disable_raw_mode();
     let _ = execute!(
         io::stdout(),
+        crossterm::event::DisableBracketedPaste,
         crossterm::event::DisableMouseCapture,
         terminal::LeaveAlternateScreen,
         crossterm::cursor::Show
@@ -759,6 +760,7 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
     let mut storage_loading = false;
     let mut storage_visible = false;
     let mut storage_next = std::time::Instant::now();
+    let mut integration_paste = false;
     loop {
         app.clock = clock.now();
         app.today = clock.today();
@@ -806,6 +808,16 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
             });
         }
         storage_visible = visible;
+        let editing_credentials = matches!(app.overlay, Some(super::state::Overlay::Integration(_)));
+        if editing_credentials != integration_paste {
+            if editing_credentials {
+                execute!(io::stdout(), crossterm::event::EnableBracketedPaste)
+            } else {
+                execute!(io::stdout(), crossterm::event::DisableBracketedPaste)
+            }
+            .map_err(|error| AppError::new(format!("Cannot change paste mode: {error}")))?;
+            integration_paste = editing_credentials;
+        }
         if !screen.copying {
             screen
                 .terminal
@@ -823,6 +835,10 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
                     Event::Key(key) if key.kind == KeyEventKind::Press && (!screen.copying ||
                         (key.modifiers.contains(event::KeyModifiers::CONTROL) && matches!(key.code, event::KeyCode::Char('c' | 'q')))) => app.key(key),
                     Event::Mouse(mouse) if !screen.copying => app.mouse(mouse),
+                    Event::Paste(text) if !screen.copying => {
+                        if let Some(super::state::Overlay::Integration(editor)) = app.overlay.as_mut() { editor.paste(&text); }
+                        None
+                    }
                     _ => None,
                 };
                 if let Some(request) = request {

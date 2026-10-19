@@ -110,8 +110,7 @@ pub const MENU: [&str; 9] = [
     "Quit",
 ];
 
-/// The sections of the settings box, in order (a mockup for now, except
-/// Appearance, which holds the theme).
+/// The sections of the settings box, in order.
 pub const SETTINGS: [&str; 4] = ["General", "Appearance", "Refresh", "Integrations"];
 /// The section of [`SETTINGS`] that holds the theme.
 pub const APPEARANCE: usize = 1;
@@ -127,6 +126,10 @@ pub enum Overlay {
     Settings {
         section: usize,
     },
+    Integrations {
+        index: usize,
+    },
+    Integration(Box<super::integrations::Editor>),
     /// The theme list in the Appearance section; `previous` comes back with Esc.
     Themes {
         index: usize,
@@ -1264,6 +1267,16 @@ impl App {
                         }
                         return None;
                     }
+                    Some(Hit::Integration(item)) => {
+                        self.overlay = Some(Overlay::Integrations { index: item });
+                        return press(self, KeyCode::Enter);
+                    }
+                    Some(Hit::IntegrationField(field)) => {
+                        if let Some(Overlay::Integration(editor)) = self.overlay.as_mut() {
+                            editor.select(field);
+                        }
+                        return None;
+                    }
                     Some(Hit::Theme(item)) => {
                         let previous = match self.overlay.take() {
                             Some(Overlay::Themes { previous, .. }) => previous,
@@ -1282,6 +1295,12 @@ impl App {
                             Some(Overlay::Menu { index }) => *index = item,
                             // A section of the settings is chosen; Appearance
                             // opens at once, its theme list being all it has.
+                            Some(Overlay::Integrations { .. }) => {
+                                self.overlay = Some(Overlay::Settings {
+                                    section: item.min(SETTINGS.len() - 1),
+                                });
+                                return None;
+                            }
                             Some(Overlay::Settings { section }) => {
                                 *section = item.min(SETTINGS.len() - 1);
                                 return if *section == APPEARANCE {
@@ -1420,6 +1439,12 @@ impl App {
                 self.log(&time, &format!("install step: {after:?}"));
             }
             return request;
+        }
+        if let Some(Overlay::Integration(editor)) = self.overlay.as_mut() {
+            if editor.key(key) {
+                self.overlay = Some(Overlay::Integrations { index: editor.provider });
+            }
+            return None;
         }
         if let Some(overlay) = self.overlay.take() {
             return self.overlay_key(overlay, key.code);
@@ -1685,9 +1710,38 @@ impl App {
                         previous: Box::new(self.palette.clone()),
                     });
                 }
+                KeyCode::Enter | KeyCode::Right if section == 3 => {
+                    self.overlay = Some(Overlay::Integrations { index: 0 });
+                }
                 KeyCode::Esc => self.overlay = Some(Overlay::Menu { index: 4 }),
                 _ => self.overlay = Some(Overlay::Settings { section }),
             },
+            Overlay::Integration(_) => self.overlay = Some(overlay),
+            Overlay::Integrations { mut index } => {
+                match code {
+                    KeyCode::Down => index = (index + 1) % 3,
+                    KeyCode::Up => index = (index + 2) % 3,
+                    KeyCode::Esc | KeyCode::Left => {
+                        self.overlay = Some(Overlay::Settings { section: 3 });
+                        return None;
+                    }
+                    KeyCode::Enter | KeyCode::Right => {
+                        let dir = self.preferences.path.parent().unwrap_or(std::path::Path::new("."));
+                        match super::integrations::Editor::open(dir, index) {
+                            Ok(editor) => self.overlay = Some(Overlay::Integration(Box::new(editor))),
+                            Err(error) => {
+                                self.overlay = Some(Overlay::Report {
+                                    title: "Integration".to_owned(),
+                                    lines: vec![error],
+                                })
+                            }
+                        }
+                        return None;
+                    }
+                    _ => {}
+                }
+                self.overlay = Some(Overlay::Integrations { index });
+            }
             Overlay::Themes { index, previous } => match code {
                 KeyCode::Down | KeyCode::Up => {
                     let index = if code == KeyCode::Down {
