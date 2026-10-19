@@ -38,11 +38,11 @@ pub struct TaskWait {
 }
 
 impl TaskWait {
-    /// One status read per second, as long as `timeout`.
+    /// Four status reads per second, as long as `timeout`.
     #[must_use]
     pub const fn up_to(timeout: Duration) -> Self {
         Self {
-            poll: Duration::from_secs(1),
+            poll: Duration::from_millis(250),
             timeout,
         }
     }

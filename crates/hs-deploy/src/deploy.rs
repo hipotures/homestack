@@ -17,6 +17,11 @@ use crate::node::{self, NewContainer};
 
 /// How long a new instance may take to answer over TLS.
 const HEALTH_LIMIT: Duration = Duration::from_secs(180);
+/// Pause between two `/health/live` probes while waiting for an instance.
+const HEALTH_RETRY: Duration = Duration::from_millis(250);
+/// Initial warm-up window during which transient `/health/live` failures are
+/// not logged unless the overall deadline has already expired.
+const HEALTH_QUIET: Duration = Duration::from_secs(3);
 /// Variables that carry the certificate; removed once the server stored it.
 const TLS_VARIABLES: [&str; 2] = ["HOMESTACK_TLS_CERT_B64", "HOMESTACK_TLS_KEY_B64"];
 
@@ -116,20 +121,35 @@ async fn wait_health(
     limit: Duration,
     say: &impl Fn(&str),
 ) -> Result<(), String> {
+    wait_health_with(client, instance, phase, limit, HEALTH_QUIET, HEALTH_RETRY, say).await
+}
+
+async fn wait_health_with(
+    client: &Client,
+    instance: &str,
+    phase: &str,
+    limit: Duration,
+    quiet: Duration,
+    retry: Duration,
+    say: &impl Fn(&str),
+) -> Result<(), String> {
     let started = Instant::now();
     let deadline = tokio::time::Instant::now() + limit;
     let mut attempt = 0_u64;
     say(&format!(
-        "  {instance}: HTTPS health {phase} started (GET /health/live, limit {} ms, retry 2000 ms)",
-        limit.as_millis()
+        "  {instance}: HTTPS health {phase} started (GET /health/live, limit {} ms, retry {} ms)",
+        limit.as_millis(),
+        retry.as_millis()
     ));
     loop {
         attempt += 1;
         let probe_started = Instant::now();
-        say(&format!(
-            "  {instance}: HTTPS health {phase} attempt {attempt} started (elapsed {} ms)",
-            started.elapsed().as_millis()
-        ));
+        if started.elapsed() >= quiet {
+            say(&format!(
+                "  {instance}: HTTPS health {phase} attempt {attempt} started (elapsed {} ms)",
+                started.elapsed().as_millis()
+            ));
+        }
         match client.get_on(0, "/health/live").await {
             Ok(_) => {
                 say(&format!(
@@ -141,16 +161,25 @@ async fn wait_health(
             }
             Err(error) => {
                 let reason = health_error(&error);
-                say(&format!(
-                    "  {instance}: HTTPS health {phase} attempt {attempt} failed after {} ms (elapsed {} ms): {reason}",
-                    probe_started.elapsed().as_millis(),
-                    started.elapsed().as_millis()
-                ));
-                if tokio::time::Instant::now() >= deadline {
+                let elapsed = started.elapsed();
+                let expired = tokio::time::Instant::now() >= deadline;
+                if elapsed >= quiet || expired {
+                    say(&format!(
+                        "  {instance}: HTTPS health {phase} attempt {attempt} failed after {} ms (elapsed {} ms): {reason}",
+                        probe_started.elapsed().as_millis(),
+                        elapsed.as_millis()
+                    ));
+                }
+                if expired {
                     return Err(format!("no answer over TLS within {} s: {reason}", limit.as_secs()));
                 }
-                say(&format!("  {instance}: HTTPS health {phase} retrying in 2000 ms"));
-                tokio::time::sleep(Duration::from_secs(2)).await;
+                if elapsed >= quiet {
+                    say(&format!(
+                        "  {instance}: HTTPS health {phase} retrying in {} ms",
+                        retry.as_millis()
+                    ));
+                }
+                tokio::time::sleep(retry).await;
             }
         }
     }
@@ -616,6 +645,23 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn health_attempts_stay_quiet_during_initial_warmup_window() -> Result<(), Error> {
+        let (client, server) = health_client(vec![(503, "null"), (200, r#"{"status":"ok"}"#)])?;
+        let lines = RefCell::new(Vec::new());
+        let say = |line: &str| lines.borrow_mut().push(line.to_owned());
+        wait_health(&client, "api1", "after start", Duration::from_secs(10), &say).await?;
+        server.join().map_err(|_| "health fixture panicked")??;
+        let log = lines.into_inner().join("\n");
+        assert!(
+            log.contains("api1: HTTPS health after start started (GET /health/live, limit 10000 ms, retry 250 ms)")
+        );
+        assert!(!log.contains("failed"), "{log}");
+        assert!(!log.contains("retrying"), "{log}");
+        assert!(log.contains("attempt 2 succeeded after "), "{log}");
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn health_attempts_report_failure_retry_success_and_elapsed_time() -> Result<(), Error> {
         let (client, server) = health_client(vec![
             (
@@ -626,13 +672,22 @@ mod tests {
         ])?;
         let lines = RefCell::new(Vec::new());
         let say = |line: &str| lines.borrow_mut().push(line.to_owned());
-        wait_health(&client, "api1", "after start", Duration::from_secs(10), &say).await?;
+        wait_health_with(
+            &client,
+            "api1",
+            "after start",
+            Duration::from_secs(10),
+            Duration::ZERO,
+            HEALTH_RETRY,
+            &say,
+        )
+        .await?;
         server.join().map_err(|_| "health fixture panicked")??;
         let log = lines.into_inner().join("\n");
         assert!(log.contains("api1: HTTPS health after start attempt 1 started"));
         assert!(log.contains("attempt 1 failed after "));
         assert!(log.contains("HTTP 503, code=warming_up"));
-        assert!(log.contains("retrying in 2000 ms"));
+        assert!(log.contains("retrying in 250 ms"));
         assert!(log.contains("attempt 2 succeeded after "));
         assert!(log.contains("(elapsed "));
         assert!(!log.contains("dummy-private-key-not-for-logging"));
