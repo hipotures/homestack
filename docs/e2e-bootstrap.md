@@ -40,7 +40,7 @@ cargo run --locked -p hs-e2e -- run
 Select the topology with `--nodes 1|3`; the default is one node. Resource flags apply **per node**. A three-node run with defaults reserves 12 GiB RAM and three vCPUs. Use `--disk-gib 24` in either topology for full-clone workspace tests; migration tests also need that capacity on every destination:
 
 ```sh
-PATH="$PWD/target/e2e-tools/bin:$PATH" cargo run --locked -p hs-e2e -- run \
+cargo run --locked -p hs-e2e -- run \
   --nodes 3 --disk-gib 24 --timeout-seconds 7200 \
   --local-dns 192.168.100.1 --pause-after verify --pause-on-failure
 ```
@@ -56,10 +56,10 @@ The existing Spaceship credentials are read from
 `~/.config/homestack/spaceship-dns`). Override with `--spaceship-file FILE`.
 Credentials remain on the controller and are never copied into the guest.
 
-For the locally extracted QEMU cache used to validate this workspace:
+On this workspace, start the lab with:
 
 ```sh
-PATH="$PWD/target/e2e-tools/bin:$PATH" cargo run --locked -p hs-e2e -- run \
+cargo run --locked -p hs-e2e -- run \
   --local-dns 192.168.100.1 --pause-after verify
 ```
 
@@ -69,8 +69,14 @@ This network has a private `homestack.app` zone on the router. The
 Spaceship serves the public A record and ACME TXT challenge. It does not edit
 other names in either zone. Networks without a private zone omit this option.
 
-That ignored cache is a local tool installation, not part of a fresh checkout.
-The controller caches the guest image; it does not install host packages.
+When QEMU is missing on Arch Linux or CachyOS, the runner automatically resolves
+the host package dependencies, downloads them over HTTPS, verifies their SHA-256
+checksums against the local package database and extracts them into
+`$XDG_CACHE_HOME/homestack-e2e/tools` (default `~/.cache/homestack-e2e/tools`).
+No root installation or manually prepared PATH is needed. Subsequent runs reuse
+that cache. Other host tools listed above must be installed; on other distributions,
+QEMU must also be available on PATH. KVM access is always required.
+The controller also caches the guest image; it does not install host packages.
 On every run it fetches the current Debian `SHA512SUMS` manifest over HTTPS
 and hashes the complete cached file. A matching image is reused without
 downloading it again. A missing, outdated or corrupt image is downloaded to a
@@ -100,7 +106,7 @@ Supply a message to verify custom initialization data:
 ```sh
 cargo run --locked -p hs-e2e -- run \
   --message "Disposable PVE lifecycle check" \
-  --artifacts target/e2e/my-bootstrap
+  --artifacts $HOME/.local/state/homestack-e2e/runs/my-bootstrap
 ```
 
 The artifact directory must not exist. Default resources are **1 vCPU, 4096 MiB
@@ -108,7 +114,11 @@ RAM and a 12 GiB sparse virtual disk**. The 4 GiB minimum includes room for PVE 
 It is not capacity for arbitrary additional workloads. The disk consumes host
 space as data is written. Provision several GiB of actual free temporary disk
 space for the image and installation. Private VM files live under
-`target/e2e-work/`, separately from artifacts, and are removed after the run.
+`$XDG_STATE_HOME/homestack-e2e/work/` (default
+`~/.local/state/homestack-e2e/work/`), separately from artifacts, and are removed
+after the run. Reports default to `homestack-e2e/runs/RUN_ID/` under the same
+state root. Active lab data is outside Cargo build output. Normal cleanup also
+removes the profile reference when it belongs to the removed lab.
 This avoids placing virtual disks in a potentially RAM-backed `/tmp`.
 
 Optional limits are `--memory-mib`, `--cpus`, `--disk-gib` and
@@ -218,7 +228,7 @@ Request pauses only where manual inspection is useful:
 cargo run --locked -p hs-e2e -- run \
   --pause-after boot,kernel,proxmox,network,gold,homestack,verify \
   --pause-on-failure \
-  --artifacts target/e2e/inspection
+  --artifacts $HOME/.local/state/homestack-e2e/runs/inspection
 ```
 
 Each successful selected phase pauses **before the next phase**. A paused VM
@@ -235,7 +245,7 @@ password and keyboard-interactive login stay disabled.
 Resume from another terminal on the **runner host**:
 
 ```sh
-cargo run --locked -p hs-e2e -- resume --artifacts target/e2e/inspection
+cargo run --locked -p hs-e2e -- resume --artifacts $HOME/.local/state/homestack-e2e/runs/inspection
 ```
 
 Resume uses a private Unix socket; it does not adopt a VM, signal a stored PID
@@ -272,7 +282,6 @@ For an unattended runner, or to use an existing client SSH alias, set the
 destination explicitly. For this workspace's runner:
 
 ```sh
-PATH="$PWD/target/e2e-tools/bin:$PATH" \
 cargo run --locked -p hs-e2e -- run \
   --local-dns 192.168.100.1 --pause-after verify \
   --runner-ssh user@192.168.1.100
@@ -325,7 +334,7 @@ An already running controller built before profile support can be registered onc
 without restarting its VM:
 
 ```sh
-./target/debug/homestack-e2e profile --artifacts target/e2e/inspection
+./target/debug/homestack-e2e profile --artifacts $HOME/.local/state/homestack-e2e/runs/inspection
 ```
 
 The launcher requires a paused run after HomeStack preparation, its SSH
@@ -399,7 +408,7 @@ The `homestack` phase prepares the real installation without applying it:
 For an already paused lab, the same preparation can be run explicitly:
 
 ```sh
-./target/debug/homestack-e2e prepare --artifacts target/e2e/inspection \
+./target/debug/homestack-e2e prepare --artifacts $HOME/.local/state/homestack-e2e/runs/inspection \
   --local-dns 192.168.100.1
 ```
 

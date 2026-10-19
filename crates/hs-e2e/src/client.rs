@@ -149,7 +149,13 @@ fn executable(name: &str) -> Result<PathBuf> {
 }
 
 fn paused_run(artifacts: &Path) -> Result<Value> {
-    let report: Value = serde_json::from_slice(&std::fs::read(artifacts.join("report.json"))?)?;
+    let bytes = std::fs::read(artifacts.join("report.json")).map_err(|error| {
+        format!(
+            "Cannot open E2E run at {}: {error}. Start a new lab with homestack-e2e run --pause-after verify; the profile is registered automatically after preparation",
+            artifacts.display()
+        )
+    })?;
+    let report: Value = serde_json::from_slice(&bytes)?;
     if report["status"] != "paused" {
         return Err("the selected run is not paused; start a VM with --pause-after verify".into());
     }
@@ -159,6 +165,22 @@ fn paused_run(artifacts: &Path) -> Result<Value> {
 /// Bind the human-readable name to a live run without copying its secrets.
 pub fn register(artifacts: &Path) -> Result<()> {
     register_at(&hs_config::profiles::environment_base()?, artifacts)
+}
+
+/// Remove only this run's reference when its temporary VM has been removed.
+pub fn unregister(run_id: &str) -> Result<()> {
+    unregister_at(&hs_config::profiles::environment_base()?, run_id)
+}
+
+fn unregister_at(base: &Path, run_id: &str) -> Result<()> {
+    let root = hs_config::profiles::directory(base, "e2e")?;
+    if !root.join("run.toml").exists() {
+        return Ok(());
+    }
+    if hs_config::profiles::E2eRun::read(&root)?.run_id == run_id {
+        std::fs::remove_file(root.join("run.toml"))?;
+    }
+    Ok(())
 }
 
 fn register_at(base: &Path, artifacts: &Path) -> Result<()> {
@@ -608,6 +630,24 @@ finally:
         std::fs::write(dir.path().join("identity"), "unused")?;
         assert!(launch(artifacts.path(), "test-run", &[]).await.is_err());
         assert!(!dir.path().join("client").exists());
+        Ok(())
+    }
+
+    #[test]
+    fn cleanup_removes_only_its_own_profile_reference() -> Result<()> {
+        let base = tempfile::tempdir()?;
+        let profile = hs_config::profiles::directory(base.path(), "e2e")?;
+        hs_config::profiles::private_directory(&profile)?;
+        hs_config::profiles::E2eRun {
+            artifacts: base.path().join("artifacts"),
+            run_id: "new-run".into(),
+        }
+        .save(&profile)?;
+        unregister_at(base.path(), "old-run")?;
+        assert_eq!(hs_config::profiles::E2eRun::read(&profile)?.run_id, "new-run");
+        unregister_at(base.path(), "new-run")?;
+        assert!(!profile.join("run.toml").exists());
+        unregister_at(base.path(), "new-run")?;
         Ok(())
     }
 

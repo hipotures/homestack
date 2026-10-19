@@ -5,6 +5,7 @@ mod client;
 mod cluster;
 mod domain;
 mod gold;
+mod host_tools;
 mod image;
 mod install;
 mod internet;
@@ -27,6 +28,14 @@ use std::time::Duration;
 use serde_json::{Value, json};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
+
+fn state_root() -> Result<PathBuf> {
+    Ok(std::env::var_os("XDG_STATE_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/state")))
+        .ok_or("HOME is not set")?
+        .join("homestack-e2e"))
+}
 
 const USAGE: &str = "homestack-e2e run [--nodes 1|3] [--memory-mib N] [--cpus N] [--disk-gib N]\n                  [--timeout-seconds N] [--message TEXT] [--artifacts DIRECTORY]\n                  [--pause-after PHASE[,PHASE]] [--pause-on-failure]\n                  [--web-bind IPV4] [--web-port PORT]\n                  [--fixtures DIRECTORY] [--spaceship-file FILE]\n                  [--local-dns IPV4] [--tsig-file FILE]\n                  [--runner-ssh DESTINATION] [--runner-ssh-port PORT]\nhomestack-e2e resume --artifacts DIRECTORY\nhomestack-e2e profile --artifacts DIRECTORY (register an already paused lab as profile e2e)\nhomestack --profil e2e [COMMAND]\nhomestack-e2e prepare --artifacts DIRECTORY [--local-dns IPV4] [--spaceship-file FILE] [--tsig-file FILE]\nhomestack-e2e cleanup --all [--fixtures DIRECTORY] [--spaceship-file FILE] [--tsig-file FILE]\n\nPhases: preflight, domain, image, boot, kernel, proxmox, network, cluster, gold, homestack, verify, shutdown; cleanup always runs.\nDefaults: 1 node; per node: 1 vCPU, 4096 MiB RAM, 12 GiB sparse disk; 1800 active seconds.\nInspection pauses have no time limit and require an explicit resume.\nThe panel uses pve.e2e.homestack.app with a public Let's Encrypt certificate.\nDNS and certificate fixtures persist until cleanup --all.\nThe web forward binds to 127.0.0.1 on a free port unless explicitly configured.\nDownloads Debian 13 qcow2, installs Proxmox, verifies SSH, HTTPS and web login,\npowers off, and deletes all temporary VM data. No host network changes.\nRequires Linux x86_64, /dev/kvm, qemu-system-x86_64, qemu-img,\nssh, ssh-keygen, scp, mkfs.vfat, mcopy, openssl, python3 and ip; dig/nsupdate for local DNS.\nNo host root privileges required.";
 
@@ -67,7 +76,7 @@ impl Options {
             disk: 12,
             timeout: 1800,
             message: "HomeStack disposable PVE bootstrap".into(),
-            artifacts: PathBuf::from("target/e2e").join(run_id),
+            artifacts: state_root()?.join("runs").join(run_id),
             pause_after: Vec::new(),
             pause_on_failure: false,
             web_bind: Ipv4Addr::LOCALHOST,
@@ -254,6 +263,9 @@ async fn execute() -> Result<()> {
     }
     let run_id = uuid::Uuid::new_v4().to_string();
     let mut options = Options::parse(&args, &run_id)?;
+    if args[0] == "run" {
+        host_tools::ensure(&args).await?;
+    }
     let mut fixture = domain::Fixture::open(&options.fixtures, &options.spaceship_file, &options.tsig_file)?;
     if args[0] == "cleanup" {
         if options.fixtures.join("service/manifest.json").is_file() {
@@ -277,7 +289,7 @@ async fn execute() -> Result<()> {
         return Err("artifact directory must not contain commas (QEMU argument syntax)".into());
     }
     // Keep disk images off /tmp, which is often RAM-backed on small hosts.
-    let work_root = PathBuf::from("target/e2e-work");
+    let work_root = state_root()?.join("work");
     std::fs::create_dir_all(&work_root)?;
     let private = tempfile::Builder::new()
         .prefix("hs-e2e-")
@@ -326,6 +338,9 @@ async fn execute() -> Result<()> {
         }
     };
     let removed = !private_path.exists();
+    if removed && let Err(error) = client::unregister(run_id.as_str()) {
+        cleanup = Err(error);
+    }
     if cleanup.is_ok() && !removed {
         cleanup = Err("temporary VM directory remains after cleanup".into());
     }

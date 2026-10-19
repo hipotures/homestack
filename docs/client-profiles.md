@@ -115,16 +115,21 @@ SOCKS tunnel. Closing the client leaves the paused VM running.
 An already running controller can be registered once without restarting it:
 
 ```sh
-./target/debug/homestack-e2e profile --artifacts target/e2e/RUN_ID
+./target/debug/homestack-e2e profile --artifacts $HOME/.local/state/homestack-e2e/runs/RUN_ID
 ./target/debug/homestack --profil e2e
 ```
 
 `e2e` requires a matching paused run and a reachable control socket. A missing,
 stopped or replaced run produces an error before connecting. It never becomes
 an empty generic profile and never opens `default`. Another live paused lab
-cannot replace the binding. After the old lab stops, the next prepared paused
-run can replace it. The existing stopped-run reference is harmless metadata
-and remains available for identifying its artifacts.
+cannot replace the binding. Normal cleanup removes the binding for the stopped
+lab; the next prepared paused run registers its own reference. Reports remain
+available for identifying completed runs.
 
 The two executables must be installed beside each other on the runner. Remote
 access and the VM lifecycle remain described in [E2E bootstrap](e2e-bootstrap.md).
+
+E2E run reports and temporary VM data live under `$XDG_STATE_HOME/homestack-e2e/`
+(default `~/.local/state/homestack-e2e/`), outside Cargo build output. The runner
+removes temporary VM data and its own profile reference during cleanup. A new run
+prepares a fresh lab and registers the profile again after preparation.
