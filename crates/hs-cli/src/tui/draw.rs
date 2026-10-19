@@ -1623,11 +1623,12 @@ fn draw_settings(buf: &mut Buffer, area: Rect, app: &App, section: usize, themes
             lines.push(line("Log", "live", None));
         }
         _ => {
+            lines.push(vec![("DNS".to_owned(), heading)]);
             let dir = app.preferences.path.parent().unwrap_or(std::path::Path::new("."));
             for (at, (name, file)) in super::integrations::PROVIDERS.iter().enumerate() {
                 let editor = super::integrations::Editor::open(dir, at);
                 let status = match &editor {
-                    Ok(_) if !dir.join(file).exists() => "Missing",
+                    Ok(_) if !dir.join("integrations").join(file).exists() => "Missing",
                     Ok(editor) if editor.validate().is_ok() => "Saved",
                     _ => "Incomplete",
                 };
@@ -1655,6 +1656,11 @@ fn draw_settings(buf: &mut Buffer, area: Rect, app: &App, section: usize, themes
                 }
                 lines.push(parts);
             }
+            lines.push(Vec::new());
+            lines.push(vec![("Remote Access".to_owned(), heading)]);
+            let chosen = matches!(app.overlay, Some(Overlay::Integrations { index: 3 }));
+            let (item, style) = unfocused_item(palette, &format!("{:<18}", "Pangolin"), chosen, true);
+            lines.push(vec![(item, style), ("Planned".to_owned(), muted)]);
         }
     }
     for (row, parts) in lines.iter().enumerate() {
@@ -1663,8 +1669,17 @@ fn draw_settings(buf: &mut Buffer, area: Rect, app: &App, section: usize, themes
             break;
         }
         spans(buf, x, y, width, parts);
-        if section == 3 && (first..first + 3).contains(&row) {
-            super::chrome::register(Rect::new(x, y, width, 1), super::chrome::Hit::Integration(row - first));
+        if section == 3 {
+            let provider = if (first + 1..first + 4).contains(&row) {
+                Some(row - first - 1)
+            } else if row == first + 6 {
+                Some(3)
+            } else {
+                None
+            };
+            if let Some(provider) = provider {
+                super::chrome::register(Rect::new(x, y, width, 1), super::chrome::Hit::Integration(provider));
+            }
         }
         if section == APPEARANCE && (first..first + THEMES.len()).contains(&row) {
             super::chrome::register(Rect::new(x, y, width, 1), super::chrome::Hit::Theme(row - first));
@@ -1728,7 +1743,7 @@ fn draw_integration(buf: &mut Buffer, area: Rect, app: &App, editor: &super::int
         x,
         inner.y,
         width,
-        super::integrations::PROVIDERS[editor.provider].1,
+        &format!("integrations/{}", super::integrations::PROVIDERS[editor.provider].1),
         text.fg(palette.muted),
     );
     // Put values below their labels, using the entire panel width. Two rows per

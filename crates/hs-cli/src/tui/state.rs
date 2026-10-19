@@ -1409,7 +1409,7 @@ impl App {
     }
 
     pub fn integration_test_result(&mut self, id: u64, report: super::integrations::TestReport) {
-        let saved = report.save(&mut self.preferences);
+        let saved = report.save(self.preferences.path.parent().unwrap_or(std::path::Path::new(".")));
         if let Some(Overlay::Integration(editor)) = self.overlay.as_mut() {
             if editor.testing && editor.test_id == id {
                 editor.testing = false;
@@ -1478,26 +1478,14 @@ impl App {
                 || (editor.on_test_button() && matches!(key.code, KeyCode::Enter | KeyCode::Char(' ')))
             {
                 let id = editor.begin_test();
-                if let Ok(preferences) = Preferences::load(&self.preferences.path) {
-                    self.preferences.table = preferences.table;
-                }
                 return id.map(|id| Request::TestIntegration(id, editor.clone()));
             }
             if key.code == KeyCode::F(5) {
-                // Saving test targets updates tui.toml; keep later preference writes current.
                 editor.key(key);
-                if let Ok(preferences) = Preferences::load(&self.preferences.path) {
-                    self.preferences.table = preferences.table;
-                }
                 return None;
             }
             let close = editor.key(key);
             let provider = editor.provider;
-            if key.code == KeyCode::Esc
-                && let Ok(preferences) = Preferences::load(&self.preferences.path)
-            {
-                self.preferences.table = preferences.table;
-            }
             if close {
                 self.overlay = Some(Overlay::Integrations { index: provider });
             }
@@ -1778,10 +1766,14 @@ impl App {
             Overlay::Integration(_) => self.overlay = Some(overlay),
             Overlay::Integrations { mut index } => {
                 match code {
-                    KeyCode::Down => index = (index + 1) % 3,
-                    KeyCode::Up => index = (index + 2) % 3,
+                    KeyCode::Down => index = (index + 1) % 4,
+                    KeyCode::Up => index = (index + 3) % 4,
                     KeyCode::Esc | KeyCode::Left => {
                         self.overlay = Some(Overlay::Settings { section: 3 });
+                        return None;
+                    }
+                    KeyCode::Enter | KeyCode::Right if index == 3 => {
+                        self.overlay = Some(Overlay::Integrations { index });
                         return None;
                     }
                     KeyCode::Enter | KeyCode::Right => {

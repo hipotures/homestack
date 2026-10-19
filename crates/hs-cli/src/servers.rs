@@ -147,11 +147,11 @@ impl Files {
     }
     #[must_use]
     pub fn ovh(&self) -> PathBuf {
-        self.dir.join("ovh-dns")
+        self.dir.join("integrations/ovh-dns")
     }
     #[must_use]
     pub fn spaceship(&self) -> PathBuf {
-        self.dir.join("spaceship-dns")
+        self.dir.join("integrations/spaceship-dns")
     }
     #[must_use]
     pub fn acme(&self) -> PathBuf {

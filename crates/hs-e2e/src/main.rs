@@ -84,9 +84,9 @@ impl Options {
             fixtures: std::env::var_os("XDG_STATE_HOME")
                 .map_or_else(|| home.join(".local/state"), PathBuf::from)
                 .join("homestack-e2e"),
-            spaceship_file: config.join("spaceship-dns"),
+            spaceship_file: config.join("integrations/spaceship-dns"),
             local_dns: None,
-            tsig_file: config.join("dns-tsig.key"),
+            tsig_file: config.join("integrations/dns-tsig.key"),
             runner_ssh: None,
             runner_ssh_port: None,
         };

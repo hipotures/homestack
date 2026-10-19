@@ -345,7 +345,7 @@ pool = "homestack"
 config_file = "/etc/homestack/server.toml"
 api_token_file = "api-token"
 [acme]
-ovh_file = "ovh-dns"
+ovh_file = "integrations/ovh-dns"
 zone = "example.net"
 dir = "acme"
 [[instances]]
@@ -407,21 +407,29 @@ storage = "local-zfs"
     #[test]
     fn the_dns_api_is_ovh_or_spaceship_and_only_one() -> Result<(), String> {
         let ovh = DeployConfig::parse(EXAMPLE)?;
-        assert_eq!(ovh.acme.ovh_file.as_deref(), Some(Path::new("ovh-dns")));
+        assert_eq!(ovh.acme.ovh_file.as_deref(), Some(Path::new("integrations/ovh-dns")));
         assert_eq!(ovh.acme.spaceship_file, None);
 
-        let text = EXAMPLE.replacen("ovh_file = \"ovh-dns\"", "spaceship_file = \"spaceship-dns\"", 1);
+        let text = EXAMPLE.replacen(
+            "ovh_file = \"integrations/ovh-dns\"",
+            "spaceship_file = \"integrations/spaceship-dns\"",
+            1,
+        );
         let mut spaceship = DeployConfig::parse(&text)?;
         spaceship.resolve_paths(Path::new("/conf"), Path::new("/home/u"));
         assert_eq!(spaceship.acme.ovh_file, None);
         assert_eq!(
             spaceship.acme.spaceship_file.as_deref(),
-            Some(Path::new("/conf/spaceship-dns"))
+            Some(Path::new("/conf/integrations/spaceship-dns"))
         );
 
-        let both = EXAMPLE.replacen("ovh_file = \"ovh-dns\"", "ovh_file = \"o\"\nspaceship_file = \"s\"", 1);
+        let both = EXAMPLE.replacen(
+            "ovh_file = \"integrations/ovh-dns\"",
+            "ovh_file = \"o\"\nspaceship_file = \"s\"",
+            1,
+        );
         assert!(DeployConfig::parse(&both).is_err_and(|e| e.contains("only one of")));
-        let neither = EXAMPLE.replacen("ovh_file = \"ovh-dns\"\n", "", 1);
+        let neither = EXAMPLE.replacen("ovh_file = \"integrations/ovh-dns\"\n", "", 1);
         assert!(DeployConfig::parse(&neither).is_err_and(|e| e.contains("ovh_file or spaceship_file")));
         Ok(())
     }

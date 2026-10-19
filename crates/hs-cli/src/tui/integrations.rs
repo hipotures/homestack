@@ -16,6 +16,27 @@ const TEST_ZONE: &str = "Test zone";
 const TEST_SERVER: &str = "DNS server (IP)";
 static NEXT_TEST: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
+/// Non-secret provider targets and reports live beside the credential files.
+fn read_settings(dir: &Path) -> Result<toml::Table, String> {
+    match std::fs::read_to_string(dir.join("settings.toml")) {
+        Ok(text) => toml::from_str(&text).map_err(|_| "Invalid integration settings".to_owned()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(toml::Table::new()),
+        Err(_) => Err("Cannot read integration settings".to_owned()),
+    }
+}
+
+fn write_settings(dir: &Path, table: &toml::Table) -> Result<(), String> {
+    let write = || -> Result<(), Box<dyn std::error::Error>> {
+        std::fs::create_dir_all(dir)?;
+        let mut file = tempfile::NamedTempFile::new_in(dir)?;
+        file.write_all(toml::to_string_pretty(table)?.as_bytes())?;
+        file.as_file().sync_all()?;
+        file.persist(dir.join("settings.toml"))?;
+        Ok(())
+    };
+    write().map_err(|_| "Cannot save integration settings".to_owned())
+}
+
 /// Persisted metadata contains no credentials or raw provider responses.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TestReport {
@@ -59,14 +80,10 @@ impl TestReport {
         })
     }
 
-    pub fn save(&self, preferences: &mut super::theme::Preferences) -> Result<(), String> {
-        let mut table = preferences.table.clone();
-        let tests = table
-            .entry("integration_tests")
-            .or_insert_with(|| toml::Value::Table(toml::Table::new()))
-            .as_table_mut()
-            .ok_or("Invalid integration test settings")?;
-        let provider = tests
+    pub fn save(&self, config_dir: &Path) -> Result<(), String> {
+        let dir = config_dir.join("integrations");
+        let mut table = read_settings(&dir)?;
+        let provider = table
             .entry(PROVIDERS[self.provider].1)
             .or_insert_with(|| toml::Value::Table(toml::Table::new()))
             .as_table_mut()
@@ -86,11 +103,7 @@ impl TestReport {
             toml::Value::Integer(i64::try_from(self.duration_ms).unwrap_or(i64::MAX)),
         );
         provider.insert("last_test".to_owned(), toml::Value::Table(report));
-        preferences
-            .write(&table)
-            .map_err(|_| "Cannot save the connection test report".to_owned())?;
-        preferences.table = table;
-        Ok(())
+        write_settings(&dir, &table)
     }
 }
 
@@ -149,7 +162,8 @@ impl Editor {
     }
 
     pub fn open(dir: &Path, provider: usize) -> Result<Self, String> {
-        let path = dir.join(PROVIDERS[provider].1);
+        let integration_dir = dir.join("integrations");
+        let path = integration_dir.join(PROVIDERS[provider].1);
         let original = match std::fs::read_to_string(&path) {
             Ok(text) => text,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
@@ -199,12 +213,8 @@ impl Editor {
                 })
                 .collect()
         };
-        let preferences =
-            super::theme::Preferences::load(&dir.join("tui.toml")).map_err(|_| "Cannot read test settings")?;
-        let target = preferences
-            .table
-            .get("integration_tests")
-            .and_then(|value| value.get(PROVIDERS[provider].1));
+        let settings = read_settings(&integration_dir)?;
+        let target = settings.get(PROVIDERS[provider].1);
         editor.report = target
             .and_then(|value| value.get("last_test"))
             .and_then(|value| TestReport::from_table(provider, value));
@@ -535,14 +545,7 @@ impl Editor {
     /// Remember non-secret test targets independently of saving credentials.
     fn save_targets(&self) -> Result<(), String> {
         let parent = self.path.parent().ok_or("Invalid credentials path")?;
-        let mut preferences =
-            super::theme::Preferences::load(&parent.join("tui.toml")).map_err(|_| "Cannot read test settings")?;
-        let mut tests = preferences
-            .table
-            .get("integration_tests")
-            .and_then(toml::Value::as_table)
-            .cloned()
-            .unwrap_or_default();
+        let mut tests = read_settings(parent)?;
         let mut target = tests
             .get(PROVIDERS[self.provider].1)
             .and_then(toml::Value::as_table)
@@ -553,13 +556,7 @@ impl Editor {
             target.insert("server".to_owned(), toml::Value::String(self.values[4].clone()));
         }
         tests.insert(PROVIDERS[self.provider].1.to_owned(), toml::Value::Table(target));
-        preferences
-            .table
-            .insert("integration_tests".to_owned(), toml::Value::Table(tests));
-        preferences
-            .write(&preferences.table)
-            .map_err(|_| "Cannot save test settings")?;
-        Ok(())
+        write_settings(parent, &tests)
     }
 
     pub fn save(&mut self) -> Result<(), String> {

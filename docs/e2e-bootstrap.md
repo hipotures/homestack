@@ -52,8 +52,8 @@ In three-node mode, `pve1`, `pve2` and `pve3` share a rootless QEMU Ethernet bac
 Use `ssh -F <run-directory>/ssh_config pve-e2e` for the primary node, or aliases `pve-e2e-pve2` and `pve-e2e-pve3` for peers. The normal E2E client inherits these pinned connections and routes API requests through its existing SOCKS tunnel. `prepare --artifacts ...` reads the selected run's node inventory automatically.
 
 The existing Spaceship credentials are read from
-`$XDG_CONFIG_HOME/homestack/spaceship-dns` (default
-`~/.config/homestack/spaceship-dns`). Override with `--spaceship-file FILE`.
+`$XDG_CONFIG_HOME/homestack/integrations/spaceship-dns` (default
+`~/.config/homestack/integrations/spaceship-dns`). Override with `--spaceship-file FILE`.
 Credentials remain on the controller and are never copied into the guest.
 
 On this workspace, start the lab with:
@@ -65,7 +65,7 @@ cargo run --locked -p hs-e2e -- run \
 
 This network has a private `homestack.app` zone on the router. The
 `--local-dns` option creates the exact PVE and API E2E A records there using
-`~/.config/homestack/dns-tsig.key` (override with `--tsig-file FILE`), while
+`~/.config/homestack/integrations/dns-tsig.key` (override with `--tsig-file FILE`), while
 Spaceship serves the public A record and ACME TXT challenge. It does not edit
 other names in either zone. Networks without a private zone omit this option.
 

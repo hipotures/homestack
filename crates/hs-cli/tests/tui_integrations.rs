@@ -14,7 +14,8 @@ fn press(editor: &mut Editor, code: KeyCode) -> bool {
 #[test]
 fn credentials_save_privately_without_losing_unrelated_entries() {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("spaceship-dns");
+    std::fs::create_dir(dir.path().join("integrations")).unwrap();
+    let path = dir.path().join("integrations/spaceship-dns");
     std::fs::write(
         &path,
         "# Keep this comment\nOTHER=value\nSPACESHIP_API_KEY=old\nSPACESHIP_API_SECRET=secret\n",
@@ -42,7 +43,8 @@ fn credentials_save_privately_without_losing_unrelated_entries() {
 #[test]
 fn bind_tsig_round_trips_and_unknown_syntax_is_not_overwritten() {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("dns-tsig.key");
+    std::fs::create_dir(dir.path().join("integrations")).unwrap();
+    let path = dir.path().join("integrations/dns-tsig.key");
     std::fs::write(
         &path,
         "// local DNS\nkey \"local.\" { algorithm hmac-sha256; secret \"c2VjcmV0\"; };\n",
@@ -60,11 +62,12 @@ fn bind_tsig_round_trips_and_unknown_syntax_is_not_overwritten() {
 #[test]
 fn validation_and_discard_never_write_partial_credentials() {
     let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join("integrations")).unwrap();
     let mut editor = Editor::open(dir.path(), 1).unwrap();
     editor.paste("draft");
     press(&mut editor, KeyCode::F(5));
     assert!(editor.message.contains("SPACESHIP_API_SECRET"));
-    assert!(!dir.path().join("spaceship-dns").exists());
+    assert!(!dir.path().join("integrations/spaceship-dns").exists());
     assert!(!press(&mut editor, KeyCode::Esc));
     assert!(press(&mut editor, KeyCode::Esc));
 }
@@ -73,6 +76,7 @@ fn validation_and_discard_never_write_partial_credentials() {
 fn rendered_secrets_are_masked_and_long_keys_use_the_panel_width() {
     use ratatui::{Terminal, backend::TestBackend};
     let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join("integrations")).unwrap();
     let mut editor = Editor::open(dir.path(), 1).unwrap();
     editor.paste(&"ABCDEFGH".repeat(30));
     let mut app = App::new(Preferences::fallback(&dir.path().join("tui.toml")), false).unwrap();
@@ -121,14 +125,15 @@ fn tsig_test_requires_a_valid_signature_and_authoritative_answer() {
 #[test]
 fn test_targets_round_trip_without_entering_credentials_files() {
     let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join("integrations")).unwrap();
     let mut editor = Editor::open(dir.path(), 1).unwrap();
     editor.values = vec!["key".to_owned(), "secret".to_owned(), "example.test".to_owned()];
     editor.save().unwrap();
     let loaded = Editor::open(dir.path(), 1).unwrap();
     assert_eq!(loaded.zone(), "example.test");
-    let credentials = std::fs::read_to_string(dir.path().join("spaceship-dns")).unwrap();
+    let credentials = std::fs::read_to_string(dir.path().join("integrations/spaceship-dns")).unwrap();
     assert!(!credentials.contains("example.test"));
-    let preferences = std::fs::read_to_string(dir.path().join("tui.toml")).unwrap();
+    let preferences = std::fs::read_to_string(dir.path().join("integrations/settings.toml")).unwrap();
     assert!(preferences.contains("example.test"));
     assert!(!preferences.contains("secret"));
 }
@@ -137,6 +142,7 @@ fn test_targets_round_trip_without_entering_credentials_files() {
 fn testing_uses_drafts_and_ignores_results_after_edits_or_reopening() {
     use hs_cli::tui::state::Request;
     let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join("integrations")).unwrap();
     let mut editor = Editor::open(dir.path(), 1).unwrap();
     editor.values = vec![
         "draft-key".to_owned(),
@@ -150,7 +156,7 @@ fn testing_uses_drafts_and_ignores_results_after_edits_or_reopening() {
         panic!("Expected connection test");
     };
     assert_eq!(draft.values[0], "draft-key");
-    assert!(!dir.path().join("spaceship-dns").exists());
+    assert!(!dir.path().join("integrations/spaceship-dns").exists());
     assert!(app.key(KeyEvent::new(KeyCode::F(6), KeyModifiers::NONE)).is_none());
     app.key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
     app.integration_test_result(
@@ -175,6 +181,7 @@ fn testing_uses_drafts_and_ignores_results_after_edits_or_reopening() {
 #[tokio::test]
 async fn invalid_targets_fail_before_network_access() {
     let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join("integrations")).unwrap();
     let mut editor = Editor::open(dir.path(), 1).unwrap();
     editor.values = vec!["key".to_owned(), "secret".to_owned(), "../invalid".to_owned()];
     assert!(editor.begin_test().is_none());
@@ -234,6 +241,7 @@ async fn ovh_zone_check_authenticates_a_read_request_and_rejects_denied_access()
 fn enter_after_zone_focuses_test_and_enter_activates_it() {
     use hs_cli::tui::{draw::render, state::Request};
     let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join("integrations")).unwrap();
     let mut editor = Editor::open(dir.path(), 1).unwrap();
     editor.values = vec!["key".to_owned(), "secret".to_owned(), "example.test".to_owned()];
     editor.select(2);
@@ -264,6 +272,7 @@ fn enter_after_zone_focuses_test_and_enter_activates_it() {
 fn detailed_report_persists_target_date_failure_and_redacts_credentials() {
     use hs_cli::tui::{draw::render, integrations::TestReport};
     let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join("integrations")).unwrap();
     let mut editor = Editor::open(dir.path(), 0).unwrap();
     editor.values = vec![
         "application-key".to_owned(),
@@ -309,7 +318,7 @@ fn detailed_report_persists_target_date_failure_and_redacts_credentials() {
     loaded.values = editor.values.clone();
     loaded.save().unwrap();
     assert_eq!(Editor::open(dir.path(), 0).unwrap().report, Some(report));
-    let saved = std::fs::read_to_string(dir.path().join("tui.toml")).unwrap();
+    let saved = std::fs::read_to_string(dir.path().join("integrations/settings.toml")).unwrap();
     for secret in &editor.values[..3] {
         assert!(!saved.contains(secret));
     }
@@ -319,7 +328,8 @@ fn detailed_report_persists_target_date_failure_and_redacts_credentials() {
 fn integration_list_shows_saved_test_outcomes_dates_and_zones() {
     use hs_cli::tui::{draw::render, integrations::TestReport};
     let dir = tempfile::tempdir().unwrap();
-    let mut preferences = Preferences::fallback(&dir.path().join("tui.toml"));
+    std::fs::create_dir(dir.path().join("integrations")).unwrap();
+    let preferences = Preferences::fallback(&dir.path().join("tui.toml"));
     for (provider, passed, zone) in [(0, false, "ovh.test"), (1, true, "spaceship.test")] {
         TestReport {
             provider,
@@ -330,7 +340,7 @@ fn integration_list_shows_saved_test_outcomes_dates_and_zones() {
             duration_ms: 100,
             detail: "Test result".to_owned(),
         }
-        .save(&mut preferences)
+        .save(dir.path())
         .unwrap();
     }
     let mut app = App::new(preferences, false).unwrap();
@@ -363,8 +373,9 @@ fn integration_list_shows_saved_test_outcomes_dates_and_zones() {
 #[test]
 fn testing_remembers_zone_before_completion_without_saving_draft_credentials() {
     let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join("integrations")).unwrap();
     let credentials = "SPACESHIP_API_KEY=original-key\nSPACESHIP_API_SECRET=original-secret\n";
-    std::fs::write(dir.path().join("spaceship-dns"), credentials).unwrap();
+    std::fs::write(dir.path().join("integrations/spaceship-dns"), credentials).unwrap();
     let mut editor = Editor::open(dir.path(), 1).unwrap();
     editor.values[0] = "draft-key".to_owned();
     editor.select(2);
@@ -380,7 +391,7 @@ fn testing_remembers_zone_before_completion_without_saving_draft_credentials() {
     assert_eq!(reloaded.zone(), "example.test");
     assert_eq!(reloaded.values[0], "original-key");
     assert_eq!(
-        std::fs::read_to_string(dir.path().join("spaceship-dns")).unwrap(),
+        std::fs::read_to_string(dir.path().join("integrations/spaceship-dns")).unwrap(),
         credentials
     );
 }
@@ -388,6 +399,7 @@ fn testing_remembers_zone_before_completion_without_saving_draft_credentials() {
 #[test]
 fn leaving_form_remembers_local_dns_target_even_without_valid_credentials() {
     let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join("integrations")).unwrap();
     let mut editor = Editor::open(dir.path(), 2).unwrap();
     editor.select(3);
     editor.paste("example.test");
@@ -397,5 +409,5 @@ fn leaving_form_remembers_local_dns_target_even_without_valid_credentials() {
     let reloaded = Editor::open(dir.path(), 2).unwrap();
     assert_eq!(reloaded.zone(), "example.test");
     assert_eq!(reloaded.values[4], "192.0.2.53");
-    assert!(!dir.path().join("dns-tsig.key").exists());
+    assert!(!dir.path().join("integrations/dns-tsig.key").exists());
 }

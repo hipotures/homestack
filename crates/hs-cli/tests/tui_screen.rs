@@ -482,7 +482,16 @@ fn f10_opens_settings_under_the_cluster_header() {
         press(&mut fixture.app, KeyCode::Down);
     }
     let text = screen(&render(&fixture.app, 120, 36));
-    for item in ["OVH", "Spaceship", "Local DNS (TSIG)", "Missing"] {
+    for item in [
+        "DNS",
+        "OVH",
+        "Spaceship",
+        "Local DNS (TSIG)",
+        "Missing",
+        "Remote Access",
+        "Pangolin",
+        "Planned",
+    ] {
         assert!(text.contains(item), "{item}: {text}");
     }
     press(&mut fixture.app, KeyCode::Enter);
@@ -492,6 +501,10 @@ fn f10_opens_settings_under_the_cluster_header() {
     let integration = position(&buf, "▶ Spaceship");
     assert_eq!(buf[section].fg, fixture.app.palette.muted);
     assert_eq!(buf[integration].fg, fixture.app.palette.focus);
+    press(&mut fixture.app, KeyCode::Down);
+    press(&mut fixture.app, KeyCode::Down);
+    press(&mut fixture.app, KeyCode::Enter);
+    assert_eq!(fixture.app.overlay, Some(Overlay::Integrations { index: 3 }));
     press(&mut fixture.app, KeyCode::Esc);
     let buf = render(&fixture.app, 120, 36);
     assert_eq!(buf[section].fg, fixture.app.palette.focus);

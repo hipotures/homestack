@@ -712,9 +712,13 @@ impl Servers for FakeServers {
 /// the client token, the OVH key.
 fn desktop_files(cluster: &Cluster) {
     let dir = cluster.token_dir();
+    std::fs::create_dir_all(dir.join("integrations")).expect("integrations directory");
     let example = include_str!("../../../config.minimal.toml");
     std::fs::write(dir.join("config.toml"), example).expect("config.toml");
-    for (name, text) in [("api-token", API_TOKEN), ("ovh-dns", "OVH_AK=a\nOVH_AS=b\nOVH_CK=c\n")] {
+    for (name, text) in [
+        ("api-token", API_TOKEN),
+        ("integrations/ovh-dns", "OVH_AK=a\nOVH_AS=b\nOVH_CK=c\n"),
+    ] {
         std::fs::write(dir.join(name), text).expect("file");
         std::fs::set_permissions(dir.join(name), std::fs::Permissions::from_mode(0o600)).expect("mode");
     }
@@ -881,7 +885,7 @@ async fn the_servers_are_deployed_after_proxmox_and_the_install_ends_with_status
     assert_eq!(config.server.api_token_file, dir.join("api-token"));
     assert_eq!(config.server.pool, "homestack");
     assert_eq!(config.acme.zone, "example.net");
-    assert_eq!(config.acme.ovh_file, Some(dir.join("ovh-dns")));
+    assert_eq!(config.acme.ovh_file, Some(dir.join("integrations/ovh-dns")));
     assert_eq!(config.acme.spaceship_file, None);
     assert_eq!(config.acme.dir, dir.join("acme"));
 
@@ -945,11 +949,15 @@ async fn a_domain_at_spaceship_gets_its_certificate_through_spaceship() {
     desktop_files(&cluster);
     let dir = cluster.token_dir();
     std::fs::write(
-        dir.join("spaceship-dns"),
+        dir.join("integrations/spaceship-dns"),
         "SPACESHIP_API_KEY=k\nSPACESHIP_API_SECRET=s\n",
     )
     .expect("key");
-    std::fs::set_permissions(dir.join("spaceship-dns"), std::fs::Permissions::from_mode(0o600)).expect("mode");
+    std::fs::set_permissions(
+        dir.join("integrations/spaceship-dns"),
+        std::fs::Permissions::from_mode(0o600),
+    )
+    .expect("mode");
     let servers = Arc::new(at_spaceship());
     let done = run_with(
         &cluster,
@@ -966,7 +974,7 @@ async fn a_domain_at_spaceship_gets_its_certificate_through_spaceship() {
     let config = &deployed[0];
     assert_eq!(config.domain, "homestack.example");
     assert_eq!(config.acme.zone, "homestack.example");
-    assert_eq!(config.acme.spaceship_file, Some(dir.join("spaceship-dns")));
+    assert_eq!(config.acme.spaceship_file, Some(dir.join("integrations/spaceship-dns")));
     assert_eq!(config.acme.ovh_file, None);
     assert_eq!(
         config.url(&config.instances[0]).expect("url").as_str(),

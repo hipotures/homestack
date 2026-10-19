@@ -22,7 +22,7 @@ config_file = "../../../hs-server/tests/data/live-server.toml"
 api_token_file = "~/.config/homestack/api-token-live"
 
 [acme]
-ovh_file = "~/.config/homestack/ovh-dns"
+ovh_file = "~/.config/homestack/integrations/ovh-dns"
 zone = "efez.net"
 dir = "~/.config/homestack/acme"
 
