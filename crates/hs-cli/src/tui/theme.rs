@@ -24,7 +24,7 @@ pub const THEMES: [&str; 7] = [
 ];
 
 /// The roles `[colors]` may override.
-pub const ROLES: [&str; 14] = [
+pub const ROLES: [&str; 15] = [
     "background",
     "surface",
     "foreground",
@@ -36,6 +36,7 @@ pub const ROLES: [&str; 14] = [
     "ok",
     "info",
     "warning",
+    "alert",
     "error",
     "hotkey",
     "selection",
@@ -65,6 +66,8 @@ pub struct Palette {
     /// Work in progress.
     pub info: Color,
     pub warning: Color,
+    /// An update or other notice that needs prominent emphasis.
+    pub alert: Color,
     pub error: Color,
     /// The key letter of a control, red as in btop.
     pub hotkey: Color,
@@ -111,6 +114,7 @@ impl Palette {
             "ok" => &mut self.ok,
             "info" => &mut self.info,
             "warning" => &mut self.warning,
+            "alert" => &mut self.alert,
             "error" => &mut self.error,
             "hotkey" => &mut self.hotkey,
             "selection" => &mut self.selection,
@@ -136,6 +140,7 @@ fn homestack() -> Palette {
         ok: Color::Rgb(53, 114, 101),
         info: Color::Rgb(125, 207, 255),
         warning: Color::Rgb(118, 103, 66),
+        alert: Color::Rgb(255, 215, 95),
         error: Color::Rgb(126, 57, 67),
         hotkey: Color::Rgb(240, 98, 112),
         selection: Color::Rgb(30, 38, 56),
@@ -157,6 +162,7 @@ fn from_ratcn(theme: &ratcn::Theme, ok: Color, info: Option<Color>) -> Palette {
         ok,
         info: info.unwrap_or(theme.primary),
         warning: theme.warning,
+        alert: theme.warning,
         error: theme.destructive,
         hotkey: theme.destructive,
         selection: theme.secondary,

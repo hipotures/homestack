@@ -8,7 +8,7 @@ use ratatui::layout::{Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
 
 use super::action::Action;
-use super::chrome::{Control, Hit, Scrolls, Sides, frame, register, scrollbar, text_style};
+use super::chrome::{Control, Hit, Scrolls, Sides, alert_style, frame, register, scrollbar, text_style};
 use super::layout::{MIN_HEIGHT, MIN_WIDTH, arrange};
 use super::state::{App, MENU, Overlay, VIEWS};
 use super::theme::{Palette, THEMES};
@@ -964,7 +964,7 @@ fn workspaces(buf: &mut Buffer, area: Rect, app: &App, mut controls: Vec<Control
                     y,
                     1,
                     "↑",
-                    style.fg(palette.warning),
+                    alert_style(palette, style),
                 );
             }
         }

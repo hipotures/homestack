@@ -177,6 +177,14 @@ pub fn text_style(palette: &Palette) -> Style {
     Style::default().fg(palette.foreground).bg(palette.background)
 }
 
+/// Prominent notices retain the row background and remain bold without color.
+#[must_use]
+pub fn alert_style(palette: &Palette, base: Style) -> Style {
+    base.fg(palette.alert)
+        .remove_modifier(Modifier::DIM)
+        .add_modifier(Modifier::BOLD)
+}
+
 fn put(buf: &mut Buffer, x: u16, y: u16, symbol: char, style: Style) {
     if buf.area.contains(ratatui::layout::Position { x, y }) {
         let cell = &mut buf[(x, y)];
