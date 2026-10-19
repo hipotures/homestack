@@ -284,16 +284,16 @@ impl Clock {
 }
 
 /// Every server's answer to `/v1/config/version`: the URL and why it did
-/// not answer.
+/// not answer or has no configuration yet.
 async fn health(client: &Client) -> Vec<(String, Option<String>)> {
     let urls: Vec<String> = client.urls().map(ToString::to_string).collect();
     let mut servers = Vec::new();
     for (index, url) in urls.into_iter().enumerate() {
-        let error = client
-            .config_version_on(index)
-            .await
-            .err()
-            .map(|error| client_error(error).0);
+        let error = match client.config_version_on(index).await {
+            Ok(Some(_)) => None,
+            Ok(None) => Some("The server has no configuration yet; upload one with PUT /v1/config.".to_owned()),
+            Err(error) => Some(client_error(error).0),
+        };
         servers.push((url, error));
     }
     servers

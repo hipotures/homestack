@@ -244,7 +244,10 @@ impl Client {
     }
 
     /// Send to the first instance that answers; the instance's index and
-    /// the body.
+    /// the body. Instances that are still unconfigured (`config_missing`,
+    /// `pve_token_missing`, e.g. during a container replacement) or cannot
+    /// reach Proxmox (`pve_unreachable`) are skipped in favor of a ready
+    /// instance when one is available.
     async fn first(
         &self,
         method: Method,
@@ -253,6 +256,7 @@ impl Client {
         headers: &[(&str, &str)],
     ) -> Result<(usize, Value), ClientError> {
         let mut down = Vec::new();
+        let mut unready: Option<ClientError> = None;
         let count = self.instances.len();
         let start = self.preferred.load(Ordering::Relaxed) % count;
         for index in (start..count).chain(0..start) {
@@ -261,12 +265,28 @@ impl Client {
                     self.preferred.store(index, Ordering::Relaxed);
                     return Ok((index, value));
                 }
+                Reply::Api(error)
+                    if matches!(
+                        error.code(),
+                        Some("config_missing" | "pve_token_missing" | "pve_unreachable")
+                    ) =>
+                {
+                    if let ClientError::Api { message, .. } = &error {
+                        down.push(format!("{}: {message}", self.instances[index].url));
+                    }
+                    if unready.is_none() {
+                        unready = Some(error);
+                    }
+                }
                 Reply::Api(error) => {
                     self.preferred.store(index, Ordering::Relaxed);
                     return Err(error);
                 }
                 Reply::Down(reason) => down.push(format!("{}: {reason}", self.instances[index].url)),
             }
+        }
+        if let Some(error) = unready {
+            return Err(error);
         }
         Err(ClientError::Unreachable(down.join("; ")))
     }

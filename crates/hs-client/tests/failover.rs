@@ -198,3 +198,31 @@ async fn a_plan_and_its_job_stay_on_one_instance() -> Result<(), Error> {
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn unconfigured_instance_is_skipped_for_a_ready_one() -> Result<(), Error> {
+    let unconfigured = Router::new().route(
+        "/v1/status",
+        get(|| async {
+            (
+                StatusCode::CONFLICT,
+                Json(json!({
+                    "schema_version": 1,
+                    "error": {
+                        "code": "config_missing",
+                        "message": "The server has no configuration yet; upload one with PUT /v1/config."
+                    }
+                })),
+            )
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let addr = listener.local_addr()?;
+    tokio::spawn(async move { axum::serve(listener, unconfigured).await });
+    let a = Endpoint::from(format!("http://{addr}").parse::<url::Url>()?);
+    let b = instance("b", Arc::new(AtomicBool::new(false))).await?;
+
+    let client = client(vec![a, b])?;
+    assert_eq!(client.get("/v1/status").await?["instance"], "b");
+    Ok(())
+}
