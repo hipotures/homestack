@@ -1013,6 +1013,10 @@ fn storage_line(layout: &LayoutCapacity, width: usize) -> (String, String) {
 }
 
 fn storage(buf: &mut Buffer, area: Rect, app: &App, mut controls: Vec<Control>) {
+    if matches!(app.view, 2 | 3) {
+        storage_details(buf, area, app, controls);
+        return;
+    }
     let palette = &app.palette;
     let layouts = app
         .status
@@ -1043,6 +1047,193 @@ fn storage(buf: &mut Buffer, area: Rect, app: &App, mut controls: Vec<Control>) 
         write(buf, inner.x, y + 1, inner.width, &second, text.fg(color));
         y += 2;
     }
+}
+
+/// Scrollable storage inventory used only by the dedicated views.
+fn storage_details(buf: &mut Buffer, area: Rect, app: &App, mut controls: Vec<Control>) {
+    let palette = &app.palette;
+    let text = text_style(palette);
+    let mut heading = vec![Control::panel(3, "storage")];
+    heading.append(&mut controls);
+    let inner = frame(
+        buf,
+        area,
+        palette,
+        &Sides {
+            top_left: heading,
+            bottom_right: vec![Control::plain("↑↓ PgUp/PgDn scroll")],
+            ..Sides::default()
+        },
+    );
+    let mut lines = Vec::new();
+    if let Some(status) = &app.status {
+        let summary = &status.summary;
+        lines.push((
+            format!(" Storage inventory ({})", summary.storages.len()),
+            text.fg(palette.accent),
+        ));
+        for storage in &summary.storages {
+            let capacity = &storage.capacity;
+            let percent = capacity.percent.map_or_else(|| "—".to_owned(), |p| format!("{p:.0}%"));
+            let color = if !storage.available {
+                palette.warning
+            } else {
+                match capacity.percent {
+                    Some(p) if p >= 85.0 => palette.error,
+                    Some(p) if p >= 75.0 => palette.warning,
+                    Some(_) => palette.ok,
+                    None => palette.muted,
+                }
+            };
+            lines.push((
+                format!(
+                    " {}  {}  {}{}  {}",
+                    storage.storage,
+                    storage.storage_type,
+                    storage.nodes.join(","),
+                    if storage.shared { " [shared]" } else { "" },
+                    if storage.available { "" } else { "[unavailable]" }
+                ),
+                text,
+            ));
+            lines.push((
+                format!(
+                    "   {}  used {}/{} ({percent})  free {}",
+                    storage.content,
+                    capacity.used_bytes.map_or_else(|| "—".to_owned(), size),
+                    capacity.total_bytes.map_or_else(|| "—".to_owned(), size),
+                    capacity.available_bytes.map_or_else(|| "—".to_owned(), size)
+                ),
+                text.fg(color),
+            ));
+        }
+        let homes = &summary.homes;
+        lines.push((String::new(), text));
+        lines.push((
+            format!(
+                " /home  limit {}  used {}  missing {}",
+                size(homes.quota_bytes),
+                homes.used_bytes.map_or_else(|| "—".to_owned(), size),
+                homes.missing_count
+            ),
+            text,
+        ));
+        lines.push((
+            format!(
+                " Orphan volumes ({}){}",
+                summary.orphaned_volumes.len(),
+                if summary.orphan_scan_complete {
+                    ""
+                } else {
+                    " — scan incomplete"
+                }
+            ),
+            text.fg(palette.accent),
+        ));
+        for volume in &summary.orphaned_volumes {
+            lines.push((
+                format!(
+                    " {}  {}  {}  {}",
+                    volume.volid,
+                    volume.size_bytes.map_or_else(|| "—".to_owned(), size),
+                    volume.storage,
+                    volume.node
+                ),
+                text.fg(palette.warning),
+            ));
+        }
+        lines.push((String::new(), text));
+        lines.push((
+            format!(
+                " Latest guest backups{}",
+                if summary.backup_scan_complete {
+                    ""
+                } else {
+                    " — scan incomplete"
+                }
+            ),
+            text.fg(palette.accent),
+        ));
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let mut guests: Vec<_> = status
+            .gold
+            .iter()
+            .chain(&status.workspaces)
+            .chain(&status.others)
+            .collect();
+        guests.sort_by_key(|guest| guest.vmid);
+        guests.dedup_by_key(|guest| guest.vmid);
+        for guest in guests {
+            let latest = summary.latest_backups.iter().find(|backup| backup.vmid == guest.vmid);
+            let value = latest.map_or_else(
+                || {
+                    if summary.backup_scan_complete {
+                        "no backup found".to_owned()
+                    } else {
+                        "unknown".to_owned()
+                    }
+                },
+                |backup| {
+                    let age = now.saturating_sub(backup.created_at);
+                    let age = if age >= 86400 {
+                        format!("{}d", age / 86400)
+                    } else if age >= 3600 {
+                        format!("{}h", age / 3600)
+                    } else {
+                        format!("{}m", age / 60)
+                    };
+                    format!(
+                        "{age} ago  {}{}",
+                        backup.storage,
+                        if summary.backup_scan_complete {
+                            ""
+                        } else {
+                            " (latest visible)"
+                        }
+                    )
+                },
+            );
+            lines.push((
+                format!(" {} {}  {value}", guest.vmid, guest.name.as_deref().unwrap_or("—")),
+                text,
+            ));
+        }
+    } else {
+        lines.push((" Waiting for storage inventory…".to_owned(), text));
+    }
+    // Keep long volume IDs and content lists readable in narrow terminals.
+    let lines: Vec<_> = lines
+        .into_iter()
+        .flat_map(|(line, style)| {
+            let chars: Vec<_> = line.chars().collect();
+            if chars.is_empty() {
+                return vec![(String::new(), style)];
+            }
+            chars
+                .chunks(usize::from(inner.width).max(1))
+                .map(|chunk| (chunk.iter().collect::<String>(), style))
+                .collect()
+        })
+        .collect();
+    let visible = usize::from(inner.height);
+    let most = lines.len().saturating_sub(visible);
+    let offset = app.storage_scroll.get().min(most);
+    app.storage_scroll.set(offset);
+    app.storage_scroll_max.set(most);
+    for (row, (line, style)) in lines.iter().skip(offset).take(visible).enumerate() {
+        write(
+            buf,
+            inner.x,
+            inner.y + u16::try_from(row).unwrap_or(0),
+            inner.width,
+            line,
+            *style,
+        );
+    }
+    scrollbar(buf, area, palette, Scrolls::Storage, offset, visible, lines.len());
 }
 
 pub(super) fn log(buf: &mut Buffer, area: Rect, app: &App, mut controls: Vec<Control>) {

@@ -220,6 +220,8 @@ pub struct App {
     pub lines: Vec<LogLine>,
     /// Lines the log is scrolled back from the newest.
     pub log_scroll: usize,
+    pub storage_scroll: std::cell::Cell<usize>,
+    pub storage_scroll_max: std::cell::Cell<usize>,
     /// The highlighted line of the log, lines back from the newest.
     pub log_cursor: Option<usize>,
     /// New lines that came above the view while the log was scrolled back:
@@ -302,6 +304,8 @@ impl App {
             overlay: None,
             lines: Vec::new(),
             log_scroll: 0,
+            storage_scroll: std::cell::Cell::new(0),
+            storage_scroll_max: std::cell::Cell::new(0),
             log_cursor: None,
             log_unread: 0,
             dragging: None,
@@ -872,6 +876,7 @@ impl App {
             }
         };
         match bar.scrolls {
+            Scrolls::Storage => self.storage_scroll.set(offset),
             // The highlight moves with the view, onto the nearest line shown.
             Scrolls::Log => {
                 self.log_scroll = offset;
@@ -1297,6 +1302,21 @@ impl App {
                     self.node = next.checked_sub(1);
                     self.keep_selection();
                 }
+            }
+            KeyCode::Down | KeyCode::Up | KeyCode::PageDown | KeyCode::PageUp | KeyCode::Home | KeyCode::End
+                if matches!(self.view, 2 | 3) =>
+            {
+                let current = self.storage_scroll.get();
+                let most = self.storage_scroll_max.get();
+                let next = match key.code {
+                    KeyCode::Down => current.saturating_add(1),
+                    KeyCode::Up => current.saturating_sub(1),
+                    KeyCode::PageDown => current.saturating_add(10),
+                    KeyCode::PageUp => current.saturating_sub(10),
+                    KeyCode::End => most,
+                    _ => 0,
+                };
+                self.storage_scroll.set(next.min(most));
             }
             KeyCode::Down if !self.shown.workspaces && self.shown.log => {
                 self.log_scroll = (self.log_scroll + 1).min(self.lines.len().saturating_sub(1));

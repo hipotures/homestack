@@ -12,8 +12,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use hs_model::config::Config;
 use hs_model::status::{
-    Capacity, GlobalStatus, HomeUsage, HomesSummary, LayoutCapacity, NodeState, OrphanVolume, SshCommands, StatusEntry,
-    StatusSummary, WorkspaceStatus,
+    Capacity, GlobalStatus, GuestBackup, HomeUsage, HomesSummary, LayoutCapacity, NodeState, OrphanVolume, SshCommands,
+    StatusEntry, StatusSummary, StorageStatus, WorkspaceStatus,
 };
 use serde_json::{Map, Value};
 
@@ -68,6 +68,129 @@ pub fn storage_capacity(name: &str, data: &Map<String, Value>) -> Capacity {
         available_bytes: available,
         percent,
     }
+}
+
+/// All configured storages, with shared capacity counted once and backup ages
+/// based on completed backup volumes rather than scheduled backup jobs.
+pub async fn storage_inventory(
+    pve: &impl Pve,
+    nodes: &[NodeState],
+) -> (Vec<StorageStatus>, Vec<GuestBackup>, bool, Vec<String>) {
+    let mut warnings = Vec::new();
+    let definitions = match crate::inventory::storage_definitions(pve).await {
+        Ok(definitions) => definitions,
+        Err(error) => {
+            return (
+                Vec::new(),
+                Vec::new(),
+                false,
+                vec![format!("Cannot read storage definitions: {error}")],
+            );
+        }
+    };
+    let mut inventories = BTreeMap::new();
+    for node in nodes.iter().filter(|node| node.online) {
+        match pve.get(&format!("/nodes/{}/storage", node.node), &[]).await {
+            Ok(Value::Array(items)) => {
+                inventories.insert(node.node.clone(), items);
+            }
+            result => warnings.push(format!("Cannot read storage inventory on {}: {result:?}", node.node)),
+        }
+    }
+    let mut storages: Vec<StorageStatus> = Vec::new();
+    let mut backups: BTreeMap<u32, GuestBackup> = BTreeMap::new();
+    let mut complete = true;
+    for definition in definitions {
+        let id = definition["storage"].as_str().unwrap_or_default();
+        let shared = truthy(definition.get("shared"));
+        let content = definition.get("content").and_then(Value::as_str).unwrap_or_default();
+        let backup = content.split(',').any(|kind| kind == "backup");
+        let assigned = definition.get("nodes").and_then(Value::as_str);
+        let mut scanned = false;
+        for node in nodes
+            .iter()
+            .filter(|node| assigned.is_none_or(|list| list.split(',').any(|name| name == node.node)))
+        {
+            let data = inventories
+                .get(&node.node)
+                .and_then(|items| items.iter().find(|item| item["storage"] == id))
+                .and_then(Value::as_object);
+            let available = data.is_some_and(|data| truthy(data.get("active")) && truthy(data.get("enabled")));
+            let capacity = storage_capacity(id, data.unwrap_or(&Map::new()));
+            if shared
+                && let Some(existing) = storages
+                    .iter_mut()
+                    .find(|storage| storage.shared && storage.storage == id)
+            {
+                existing.nodes.push(node.node.clone());
+                if available && !existing.available {
+                    existing.capacity = capacity;
+                    existing.available = true;
+                }
+            } else {
+                storages.push(StorageStatus {
+                    storage: id.to_owned(),
+                    storage_type: definition
+                        .get("type")
+                        .and_then(Value::as_str)
+                        .unwrap_or("unknown")
+                        .to_owned(),
+                    content: content.to_owned(),
+                    shared,
+                    nodes: vec![node.node.clone()],
+                    capacity,
+                    available,
+                });
+            }
+            if !backup || (shared && scanned) {
+                continue;
+            }
+            if !available {
+                if !shared {
+                    complete = false;
+                }
+                continue;
+            }
+            match pve
+                .get(
+                    &format!("/nodes/{}/storage/{id}/content", node.node),
+                    &[("content", "backup")],
+                )
+                .await
+            {
+                Ok(Value::Array(volumes)) => {
+                    scanned = true;
+                    for volume in volumes {
+                        let (Some(vmid), Some(created_at)) = (
+                            u64_value(volume.get("vmid")).and_then(|id| u32::try_from(id).ok()),
+                            u64_value(volume.get("ctime")),
+                        ) else {
+                            continue;
+                        };
+                        let candidate = GuestBackup {
+                            vmid,
+                            created_at,
+                            storage: id.to_owned(),
+                        };
+                        if backups.get(&vmid).is_none_or(|old| old.created_at < created_at) {
+                            backups.insert(vmid, candidate);
+                        }
+                    }
+                }
+                result => {
+                    if !shared {
+                        complete = false;
+                    }
+                    warnings.push(format!("Cannot read backups on {id} ({}): {result:?}", node.node));
+                }
+            }
+        }
+        if backup && !scanned {
+            complete = false;
+        }
+    }
+    storages.sort_by(|a, b| (&a.storage, &a.nodes).cmp(&(&b.storage, &b.nodes)));
+    (storages, backups.into_values().collect(), complete, warnings)
 }
 
 /// `homestack_storage_capacities`: every storage of every node's layout.
@@ -625,6 +748,10 @@ pub async fn global_status(pve: &impl Pve, cfg: &Config) -> Result<GlobalStatus,
             },
         );
 
+    let (storages, latest_backups, backup_scan_complete, inventory_warnings) =
+        storage_inventory(pve, &inventory.nodes).await;
+    warnings.extend(inventory_warnings);
+
     let managed_homes = workspaces.iter().filter(|w| w.role == "WS").count() as u64;
     let all_known = known_count == managed_homes && managed_homes > 0;
     #[allow(
@@ -642,6 +769,9 @@ pub async fn global_status(pve: &impl Pve, cfg: &Config) -> Result<GlobalStatus,
             stopped,
             root_storage,
             storage_layouts: layouts,
+            storages,
+            latest_backups,
+            backup_scan_complete,
             nodes: inventory.nodes.clone(),
             homes: HomesSummary {
                 used_bytes: (known_count > 0).then_some(known_used),

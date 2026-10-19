@@ -176,6 +176,7 @@ fn global_status_inspects_only_gold_and_tagged_workspaces() {
 #[test]
 fn global_status_marks_orphan_scan_incomplete_for_offline_storage_node() {
     let pve = FakePve::new()
+        .with("GET /storage", json!([]))
         .with("GET /cluster/resources?type=vm", json!([]))
         .with("GET /pools", json!([]))
         .with(
@@ -440,7 +441,7 @@ fn target_errors_match_python() {
 /// `StatusAlienTests::test_global_status_counts_only_native_homes_and_skips_alien_disk_warnings`
 #[test]
 fn global_status_counts_only_native_homes_and_skips_alien_disk_warnings() {
-    let pve = FakePve::new()
+    let pve = FakePve::new().with("GET /storage", json!([]))
         .with(
             "GET /cluster/resources?type=vm",
             json!([
@@ -526,4 +527,95 @@ fn per_vm_alien_status_has_no_home_identity_or_home_volume_role() {
     );
     assert!(status.volumes.iter().all(|v| v.role == "disk"));
     assert!(!status.qga);
+}
+
+#[test]
+#[allow(clippy::unwrap_used)]
+fn all_storages_are_listed_shared_once_and_latest_backup_wins() {
+    let pve = FakePve::new()
+        .with(
+            "GET /storage",
+            json!([
+                {"storage": "NFS1", "type": "nfs", "content": "images,backup,iso,snippets", "shared": 1},
+                {"storage": "local", "type": "dir", "content": "iso", "shared": 0},
+                {"storage": "backup-goodram120", "type": "pbs", "content": "backup", "nodes": "pve2"}
+            ]),
+        )
+        .with(
+            "GET /nodes/pve1/storage",
+            json!([
+                {"storage": "NFS1", "active": 1, "enabled": 1, "total": 100, "used": 50, "avail": 50},
+                {"storage": "local", "active": 1, "enabled": 1}
+            ]),
+        )
+        .with(
+            "GET /nodes/pve2/storage",
+            json!([
+                {"storage": "NFS1", "active": 1, "enabled": 1, "total": 100, "used": 50, "avail": 50},
+                {"storage": "local", "active": 1, "enabled": 1},
+                {"storage": "backup-goodram120", "active": 1, "enabled": 1, "total": 100, "used": 90, "avail": 10}
+            ]),
+        )
+        .with(
+            "GET /nodes/pve1/storage/NFS1/content?content=backup",
+            json!([
+                {"vmid": 200, "ctime": 100}, {"vmid": 200, "ctime": 200}, {"vmid": 201, "ctime": 50}
+            ]),
+        )
+        .with(
+            "GET /nodes/pve2/storage/backup-goodram120/content?content=backup",
+            json!([
+                {"vmid": 200, "ctime": 300}
+            ]),
+        );
+    let (storages, backups, complete, warnings) = block_on(hs_core::status::storage_inventory(
+        &pve,
+        &[node("pve1", true), node("pve2", true)],
+    ));
+    assert!(complete && warnings.is_empty(), "{warnings:?}");
+    assert_eq!(storages.len(), 4);
+    let shared = storages.iter().find(|s| s.storage == "NFS1").unwrap();
+    assert_eq!(shared.nodes, ["pve1", "pve2"]);
+    assert_eq!(shared.storage_type, "nfs");
+    assert!(shared.content.contains("snippets"));
+    assert_eq!(backups.len(), 2);
+    assert_eq!(backups[0].created_at, 300);
+    assert_eq!(backups[0].storage, "backup-goodram120");
+    assert_eq!(
+        storages
+            .iter()
+            .find(|s| s.storage == "backup-goodram120")
+            .unwrap()
+            .capacity
+            .percent,
+        Some(90.0)
+    );
+}
+
+#[test]
+fn offline_shared_storage_uses_online_node_and_failed_backups_are_unknown() {
+    let pve = FakePve::new()
+        .failing("GET /nodes/pve2/storage/NFS1/content?content=backup", 403, "denied")
+        .with(
+            "GET /storage",
+            json!([
+                {"storage": "NFS1", "type": "nfs", "content": "backup", "shared": 1}
+            ]),
+        )
+        .with(
+            "GET /nodes/pve2/storage",
+            json!([
+                {"storage": "NFS1", "active": 1, "enabled": 1, "total": 100, "used": 85, "avail": 15}
+            ]),
+        );
+    let (storages, backups, complete, warnings) = block_on(hs_core::status::storage_inventory(
+        &pve,
+        &[node("pve1", false), node("pve2", true)],
+    ));
+    assert_eq!(storages.len(), 1);
+    assert!(storages[0].available);
+    assert_eq!(storages[0].capacity.percent, Some(85.0));
+    assert!(!complete);
+    assert!(backups.is_empty());
+    assert!(!warnings.is_empty());
 }

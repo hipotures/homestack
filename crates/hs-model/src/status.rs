@@ -109,6 +109,10 @@ pub struct StatusSummary {
     /// Capacity of the configured node's default storage.
     pub root_storage: Capacity,
     pub storage_layouts: Vec<LayoutCapacity>,
+    pub storages: Vec<StorageStatus>,
+    pub latest_backups: Vec<GuestBackup>,
+    /// False when any backup inventory could not be read.
+    pub backup_scan_complete: bool,
     pub nodes: Vec<NodeState>,
     pub homes: HomesSummary,
     pub orphaned_volumes: Vec<OrphanVolume>,
@@ -138,6 +142,26 @@ pub struct Capacity {
     pub available_bytes: Option<u64>,
     /// Used share of the total.
     pub percent: Option<f64>,
+}
+
+/// A local storage on one node, or a shared storage listed once for all nodes.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct StorageStatus {
+    pub storage: String,
+    pub storage_type: String,
+    pub content: String,
+    pub shared: bool,
+    pub nodes: Vec<String>,
+    pub capacity: Capacity,
+    pub available: bool,
+}
+
+/// Newest backup actually present in the readable backup storage inventory.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct GuestBackup {
+    pub vmid: u32,
+    pub created_at: u64,
+    pub storage: String,
 }
 
 /// One storage of one `homestack-storage-<N>` layout.

@@ -54,6 +54,7 @@ pub fn status() -> Value {
                  "role_tag_ok": true, "warning": null, "pool": "homestack-gold"},
         "workspaces": workspaces,
         "summary": {
+            "storages": [], "latest_backups": [], "backup_scan_complete": true,
             "workspace_count": 12, "running": 8, "stopped": 4,
             "root_storage": {"name": "local-lvm", "total_bytes": null, "used_bytes": null,
                              "available_bytes": null, "percent": null},

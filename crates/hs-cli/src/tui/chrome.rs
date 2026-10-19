@@ -291,6 +291,7 @@ pub enum Scrolls {
     /// The workspaces list (the selection moves with it).
     List,
     Log,
+    Storage,
     /// The plan in the action box.
     Action,
     /// The setup tree (the highlight moves with it), its details, its review.
