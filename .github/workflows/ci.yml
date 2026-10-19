@@ -1,4 +1,4 @@
-name: Rust checks
+name: Checks and API release
 
 on:
   push:

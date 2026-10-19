@@ -1,7 +1,7 @@
 # The node image from a server binary built outside Docker (CI builds it
 # with its Rust cache, so an image takes about a minute, not ten). The
 # context is a directory holding homestack-server, Caddyfile and service/
-# (.github/workflows/rust-migration.yml); the result is the same as the
+# (.github/workflows/ci.yml); the result is the same as the
 # node target of the repository's Containerfile.
 FROM docker.io/library/alpine:3.24.2
 RUN apk add --no-cache ca-certificates caddy runit \
