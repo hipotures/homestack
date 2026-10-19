@@ -403,10 +403,9 @@ apt-get install -y rsync git
 
 - **Architecture & Operations:**
   - [Client profiles](docs/client-profiles.md)
-  - [Server deployment (`homestack-deploy`)](docs/migration/deploy.md)
   - [OpenAPI specification](docs/openapi.json)
   - [Isolated E2E bootstrap](docs/e2e-bootstrap.md) & [E2E laboratory design](docs/isolated-e2e-lab.md)
-  - [Migration plan](docs/migration/PLAN.md) & [Parity reference](parity/README.md)
+  - [Parity reference](parity/README.md)
 
 ### Running Checks & Tests
 
