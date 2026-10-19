@@ -153,13 +153,19 @@ fn testing_uses_drafts_and_ignores_results_after_edits_or_reopening() {
     assert!(!dir.path().join("spaceship-dns").exists());
     assert!(app.key(KeyEvent::new(KeyCode::F(6), KeyModifiers::NONE)).is_none());
     app.key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
-    app.integration_test_result(id, Ok("Stale result".to_owned()));
+    app.integration_test_result(
+        id,
+        hs_cli::tui::integrations::TestReport::completed(&draft, Ok("Stale result".to_owned()), 10),
+    );
     let Some(Overlay::Integration(editor)) = app.overlay.as_ref() else {
         panic!("Expected editor");
     };
     assert!(!editor.message.contains("Stale"));
     app.overlay = Some(Overlay::Integration(Box::new(Editor::open(dir.path(), 1).unwrap())));
-    app.integration_test_result(id, Ok("Stale result".to_owned()));
+    app.integration_test_result(
+        id,
+        hs_cli::tui::integrations::TestReport::completed(&draft, Ok("Stale result".to_owned()), 10),
+    );
     let Some(Overlay::Integration(editor)) = app.overlay.as_ref() else {
         panic!("Expected editor");
     };
@@ -222,4 +228,89 @@ async fn ovh_zone_check_authenticates_a_read_request_and_rejects_denied_access()
     denied.store(true, Ordering::Relaxed);
     assert!(client.check_zone("example.test").await.is_err());
     server.abort();
+}
+
+#[test]
+fn enter_after_zone_focuses_test_and_enter_activates_it() {
+    use hs_cli::tui::{draw::render, state::Request};
+    let dir = tempfile::tempdir().unwrap();
+    let mut editor = Editor::open(dir.path(), 1).unwrap();
+    editor.values = vec!["key".to_owned(), "secret".to_owned(), "example.test".to_owned()];
+    editor.select(2);
+    let mut app = App::new(Preferences::fallback(&dir.path().join("tui.toml")), false).unwrap();
+    app.overlay = Some(Overlay::Integration(Box::new(editor)));
+    assert!(app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)).is_none());
+    for (width, height) in [(80, 24), (120, 36)] {
+        let buffer = render(&app, width, height);
+        let text: String = buffer.content.iter().map(|cell| cell.symbol()).collect();
+        assert!(text.contains("▶ [ Test ]"));
+        assert!(text.contains("example.test"));
+    }
+    let Some(Overlay::Integration(editor)) = app.overlay.as_mut() else {
+        panic!("Expected editor");
+    };
+    assert!(editor.on_test_button());
+    editor.paste("ignored");
+    assert_eq!(editor.zone(), "example.test");
+    editor.key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::NONE));
+    assert_eq!(editor.focus, 2);
+    editor.key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    let request = app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(matches!(request, Some(Request::TestIntegration(_, _))));
+    assert!(app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)).is_none());
+}
+
+#[test]
+fn detailed_report_persists_target_date_failure_and_redacts_credentials() {
+    use hs_cli::tui::{draw::render, integrations::TestReport};
+    let dir = tempfile::tempdir().unwrap();
+    let mut editor = Editor::open(dir.path(), 0).unwrap();
+    editor.values = vec![
+        "application-key".to_owned(),
+        "application-secret".to_owned(),
+        "consumer-key".to_owned(),
+        "ovh-eu".to_owned(),
+        "example.test".to_owned(),
+    ];
+    let id = editor.begin_test().unwrap();
+    let report = TestReport::completed(&editor, Err("OVH GET /domain/zone/example.test: 403 Forbidden: application-key application-secret consumer-key: This call has not been granted".to_owned()), 234);
+    assert!(!report.passed);
+    assert!(!report.at.is_empty());
+    assert!(report.detail.contains("403 Forbidden"));
+    for secret in &editor.values[..3] {
+        assert!(!report.detail.contains(secret));
+    }
+    let mut app = App::new(Preferences::fallback(&dir.path().join("tui.toml")), false).unwrap();
+    app.overlay = Some(Overlay::Integration(Box::new(editor)));
+    app.integration_test_result(id, report.clone());
+    let Some(Overlay::Integration(editor)) = app.overlay.as_ref() else {
+        panic!("Expected editor");
+    };
+    assert!(editor.report_open);
+    let buffer = render(&app, 100, 36);
+    let text: String = buffer.content.iter().map(|cell| cell.symbol()).collect();
+    for expected in [
+        "FAIL",
+        "403 Forbidden",
+        "Date (UTC)",
+        "example.test",
+        "ovh-eu",
+        "234 ms",
+    ] {
+        assert!(text.contains(expected), "Missing {expected}");
+    }
+    app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    let Some(Overlay::Integration(editor)) = app.overlay.as_ref() else {
+        panic!("Expected editor");
+    };
+    assert!(!editor.report_open);
+    let mut loaded = Editor::open(dir.path(), 0).unwrap();
+    assert_eq!(loaded.report, Some(report.clone()));
+    loaded.values = editor.values.clone();
+    loaded.save().unwrap();
+    assert_eq!(Editor::open(dir.path(), 0).unwrap().report, Some(report));
+    let saved = std::fs::read_to_string(dir.path().join("tui.toml")).unwrap();
+    for secret in &editor.values[..3] {
+        assert!(!saved.contains(secret));
+    }
 }

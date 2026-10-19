@@ -1668,6 +1668,9 @@ fn settings_area(area: Rect, app: &App) -> Rect {
 
 fn draw_integration(buf: &mut Buffer, area: Rect, app: &App, editor: &super::integrations::Editor) {
     use crossterm::event::KeyCode;
+    if editor.report_open {
+        return draw_integration_report(buf, area, app, editor);
+    }
     let palette = &app.palette;
     let text = text_style(palette);
     let inner = frame(
@@ -1687,13 +1690,14 @@ fn draw_integration(buf: &mut Buffer, area: Rect, app: &App, editor: &super::int
             bottom_left: vec![
                 Control::named("F5", "Save", KeyCode::F(5)),
                 Control::named("F6", if editor.testing { "Testing…" } else { "Test" }, KeyCode::F(6)),
+                Control::named("F7", "Report", KeyCode::F(7)).enabled(editor.report.is_some()),
                 Control::named("Esc", "Back", KeyCode::Esc),
             ],
             bottom_right: vec![Control::named("Tab", "Field", KeyCode::Tab)],
             focused: true,
         },
     );
-    if inner.width < 4 || inner.height < 5 {
+    if inner.width < 4 || inner.height < 7 {
         return;
     }
     let x = inner.x + 1;
@@ -1708,8 +1712,8 @@ fn draw_integration(buf: &mut Buffer, area: Rect, app: &App, editor: &super::int
     );
     // Put values below their labels, using the entire panel width. Two rows per
     // key reveal long credentials; the focused viewport follows the cursor.
-    let count = usize::from((inner.height.saturating_sub(3) / 3).max(1)).min(editor.values.len());
-    let first = editor.focus.saturating_sub(count - 1);
+    let count = usize::from((inner.height.saturating_sub(5) / 3).max(1)).min(editor.values.len());
+    let first = editor.focus.min(editor.values.len() - 1).saturating_sub(count - 1);
     for at in first..(first + count).min(editor.values.len()) {
         let y = inner.y + 1 + u16::try_from((at - first) * 3).unwrap_or(0);
         let selected = at == editor.focus;
@@ -1744,12 +1748,120 @@ fn draw_integration(buf: &mut Buffer, area: Rect, app: &App, editor: &super::int
         }
         super::chrome::register(Rect::new(x, y, width, 3), super::chrome::Hit::IntegrationField(at));
     }
+    let button_y = inner.y + 2 + u16::try_from(count * 3).unwrap_or(0);
+    let (button, style) = list_item(
+        palette,
+        if editor.testing { "[ Testing… ]" } else { "[ Test ]" },
+        editor.on_test_button(),
+    );
+    write(buf, x, button_y, width, &button, style);
+    super::chrome::register(
+        Rect::new(x, button_y, width.min(16), 1),
+        super::chrome::Hit::Key(KeyCode::F(6)),
+    );
+    if let Some(report) = &editor.report {
+        let summary = format!(
+            "Last test: {} · {} · {}",
+            if report.passed { "PASS" } else { "FAIL" },
+            report.at,
+            report.zone
+        );
+        write(
+            buf,
+            x,
+            button_y + 1,
+            width,
+            &summary,
+            text.fg(if report.passed { palette.ok } else { palette.error }),
+        );
+        super::chrome::register(
+            Rect::new(x, button_y + 1, width, 1),
+            super::chrome::Hit::Key(KeyCode::F(7)),
+        );
+    }
     let message = if editor.message.is_empty() {
         "Ctrl+U clear field · Home/End · ←/→ move cursor"
     } else {
         &editor.message
     };
     write(buf, x, inner.bottom() - 1, width, message, text.fg(palette.muted));
+}
+
+fn draw_integration_report(buf: &mut Buffer, area: Rect, app: &App, editor: &super::integrations::Editor) {
+    use crossterm::event::KeyCode;
+    let Some(report) = &editor.report else {
+        return;
+    };
+    let palette = &app.palette;
+    let text = text_style(palette);
+    let inner = frame(
+        buf,
+        settings_area(area, app),
+        palette,
+        &Sides {
+            top_left: vec![
+                Control::plain("connection test"),
+                Control::plain(super::integrations::PROVIDERS[report.provider].0),
+            ],
+            bottom_left: vec![Control::named("Esc", "Back", KeyCode::Esc)],
+            bottom_right: vec![Control::named("↑↓", "Scroll", KeyCode::Down)],
+            focused: true,
+            ..Sides::default()
+        },
+    );
+    let width = usize::from(inner.width.saturating_sub(2)).max(1);
+    let mut lines = vec![
+        (
+            if report.passed {
+                "PASS · connection verified".to_owned()
+            } else {
+                "FAIL · connection test failed".to_owned()
+            },
+            text.fg(if report.passed { palette.ok } else { palette.error }),
+        ),
+        (format!("Date (UTC): {}", report.at), text),
+        (format!("Zone: {}", report.zone), text),
+        (format!("Endpoint / server: {}", report.target), text),
+        (format!("Duration: {} ms", report.duration_ms), text),
+        (String::new(), text),
+        ("Details".to_owned(), text.add_modifier(Modifier::BOLD)),
+        (report.detail.clone(), text),
+    ];
+    if report.provider == 0 && !report.passed {
+        lines.push((String::new(), text));
+        lines.push((format!("OVH: the consumer key needs GET /domain/zone/{}. Check the endpoint region, zone ownership and key permissions. HTTP 401/403 indicates rejected credentials or permissions; 404 indicates an unavailable zone.", report.zone), text));
+    }
+    lines.push((String::new(), text));
+    lines.push((
+        "This test checks authentication and read access. It does not verify permission to modify DNS records."
+            .to_owned(),
+        text.fg(palette.muted),
+    ));
+    if !editor.message.is_empty() {
+        lines.push((editor.message.clone(), text.fg(palette.error)));
+    }
+    let lines: Vec<(String, Style)> = lines
+        .into_iter()
+        .flat_map(|(line, style)| {
+            line.split('\n')
+                .flat_map(|paragraph| wrap(paragraph, width))
+                .map(|line| (line, style))
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    let scroll = editor
+        .report_scroll
+        .min(lines.len().saturating_sub(usize::from(inner.height)));
+    for (row, (line, style)) in lines.iter().skip(scroll).take(usize::from(inner.height)).enumerate() {
+        write(
+            buf,
+            inner.x + 1,
+            inner.y + u16::try_from(row).unwrap_or(0),
+            inner.width.saturating_sub(2),
+            line,
+            *style,
+        );
+    }
 }
 
 fn draw_overlay(buf: &mut Buffer, area: Rect, app: &App, overlay: &Overlay) {

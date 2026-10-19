@@ -16,6 +16,84 @@ const TEST_ZONE: &str = "Test zone";
 const TEST_SERVER: &str = "DNS server (IP)";
 static NEXT_TEST: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
+/// Persisted metadata contains no credentials or raw provider responses.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TestReport {
+    pub provider: usize,
+    pub at: String,
+    pub zone: String,
+    pub target: String,
+    pub passed: bool,
+    pub duration_ms: u64,
+    pub detail: String,
+}
+
+impl TestReport {
+    pub fn completed(editor: &Editor, result: Result<String, String>, duration_ms: u64) -> Self {
+        Self {
+            provider: editor.provider,
+            at: time::OffsetDateTime::now_utc()
+                .format(&time::format_description::well_known::Rfc3339)
+                .unwrap_or_default(),
+            zone: editor.zone().to_owned(),
+            target: match editor.provider {
+                0 => editor.values[3].clone(),
+                1 => "https://spaceship.dev/api/v1".to_owned(),
+                _ => editor.values[4].clone(),
+            },
+            passed: result.is_ok(),
+            duration_ms,
+            detail: editor.safe_error(&result.unwrap_or_else(|error| error)),
+        }
+    }
+
+    fn from_table(provider: usize, value: &toml::Value) -> Option<Self> {
+        Some(Self {
+            provider,
+            at: value.get("at")?.as_str()?.to_owned(),
+            zone: value.get("zone")?.as_str()?.to_owned(),
+            target: value.get("target")?.as_str()?.to_owned(),
+            passed: value.get("passed")?.as_bool()?,
+            duration_ms: u64::try_from(value.get("duration_ms")?.as_integer()?).ok()?,
+            detail: value.get("detail")?.as_str()?.to_owned(),
+        })
+    }
+
+    pub fn save(&self, preferences: &mut super::theme::Preferences) -> Result<(), String> {
+        let mut table = preferences.table.clone();
+        let tests = table
+            .entry("integration_tests")
+            .or_insert_with(|| toml::Value::Table(toml::Table::new()))
+            .as_table_mut()
+            .ok_or("Invalid integration test settings")?;
+        let provider = tests
+            .entry(PROVIDERS[self.provider].1)
+            .or_insert_with(|| toml::Value::Table(toml::Table::new()))
+            .as_table_mut()
+            .ok_or("Invalid provider test settings")?;
+        let mut report = toml::Table::new();
+        for (key, value) in [
+            ("at", &self.at),
+            ("zone", &self.zone),
+            ("target", &self.target),
+            ("detail", &self.detail),
+        ] {
+            report.insert(key.to_owned(), toml::Value::String(value.clone()));
+        }
+        report.insert("passed".to_owned(), toml::Value::Boolean(self.passed));
+        report.insert(
+            "duration_ms".to_owned(),
+            toml::Value::Integer(i64::try_from(self.duration_ms).unwrap_or(i64::MAX)),
+        );
+        provider.insert("last_test".to_owned(), toml::Value::Table(report));
+        preferences
+            .write(&table)
+            .map_err(|_| "Cannot save the connection test report".to_owned())?;
+        preferences.table = table;
+        Ok(())
+    }
+}
+
 #[derive(Clone, PartialEq)]
 pub struct Editor {
     pub provider: usize,
@@ -27,6 +105,9 @@ pub struct Editor {
     pub message: String,
     pub test_id: u64,
     pub testing: bool,
+    pub report: Option<TestReport>,
+    pub report_open: bool,
+    pub report_scroll: usize,
     original: String,
     dirty: bool,
     confirm_discard: bool,
@@ -85,6 +166,9 @@ impl Editor {
             original,
             test_id: 0,
             testing: false,
+            report: None,
+            report_open: false,
+            report_scroll: 0,
             dirty: false,
             confirm_discard: false,
         };
@@ -121,6 +205,9 @@ impl Editor {
             .table
             .get("integration_tests")
             .and_then(|value| value.get(PROVIDERS[provider].1));
+        editor.report = target
+            .and_then(|value| value.get("last_test"))
+            .and_then(|value| TestReport::from_table(provider, value));
         editor.values.push(
             target
                 .and_then(|value| value.get("zone"))
@@ -142,11 +229,14 @@ impl Editor {
     }
 
     pub fn select(&mut self, field: usize) {
-        self.focus = field.min(self.values.len() - 1);
-        self.cursor = self.values[self.focus].chars().count();
+        self.focus = field.min(self.values.len());
+        self.cursor = self.values.get(self.focus).map_or(0, |value| value.chars().count());
     }
 
     pub fn paste(&mut self, text: &str) {
+        if self.on_test_button() || self.report_open {
+            return;
+        }
         let clean: String = text.chars().filter(|c| !c.is_control()).collect();
         let byte = self.values[self.focus]
             .char_indices()
@@ -165,8 +255,27 @@ impl Editor {
         self.message.clear();
     }
 
+    pub fn on_test_button(&self) -> bool {
+        self.focus == self.values.len()
+    }
+
     /// Return true to leave. F4 toggles disclosure; F5 saves without exposing values.
     pub fn key(&mut self, key: KeyEvent) -> bool {
+        if self.on_test_button()
+            && !matches!(
+                key.code,
+                KeyCode::Esc
+                    | KeyCode::F(4)
+                    | KeyCode::F(5)
+                    | KeyCode::Tab
+                    | KeyCode::Down
+                    | KeyCode::Enter
+                    | KeyCode::BackTab
+                    | KeyCode::Up
+            )
+        {
+            return false;
+        }
         match key.code {
             KeyCode::Esc if !self.dirty || self.confirm_discard => return true,
             KeyCode::Esc => {
@@ -182,8 +291,8 @@ impl Editor {
                     Err(error) => error,
                 };
             }
-            KeyCode::Tab | KeyCode::Down | KeyCode::Enter => self.select((self.focus + 1) % self.values.len()),
-            KeyCode::BackTab | KeyCode::Up => self.select((self.focus + self.values.len() - 1) % self.values.len()),
+            KeyCode::Tab | KeyCode::Down | KeyCode::Enter => self.select((self.focus + 1) % (self.values.len() + 1)),
+            KeyCode::BackTab | KeyCode::Up => self.select((self.focus + self.values.len()) % (self.values.len() + 1)),
             KeyCode::Home => self.cursor = 0,
             KeyCode::End => self.cursor = self.values[self.focus].chars().count(),
             KeyCode::Left => self.cursor = self.cursor.saturating_sub(1),
@@ -276,6 +385,25 @@ impl Editor {
         format!("{}\n", lines.join("\n"))
     }
 
+    pub fn safe_error(&self, error: &str) -> String {
+        let mut text = error.to_owned();
+        let mut secrets: Vec<&str> = self
+            .values
+            .iter()
+            .enumerate()
+            .filter(|(at, value)| self.is_secret(*at) && !value.is_empty())
+            .map(|(_, value)| value.as_str())
+            .collect();
+        secrets.sort_by_key(|value| std::cmp::Reverse(value.len()));
+        for secret in secrets {
+            text = text.replace(secret, "[redacted]");
+        }
+        text.chars()
+            .filter(|c| !c.is_control() || *c == '\n')
+            .take(2000)
+            .collect()
+    }
+
     pub fn zone(&self) -> &str {
         &self.values[self.credential_labels().len()]
     }
@@ -325,11 +453,11 @@ impl Editor {
                         .map_err(|_| "Invalid OVH credentials")?;
                     let client = hs_deploy::ovh::OvhClient::connect(credentials)
                         .await
-                        .map_err(|_| "OVH connection failed (network, TLS or endpoint)")?;
+                        .map_err(|error| self.safe_error(&error))?;
                     client
                         .check_zone(self.zone().trim_end_matches('.'))
                         .await
-                        .map_err(|_| "OVH test failed: check credentials, zone and read permissions")?;
+                        .map_err(|error| self.safe_error(&error))?;
                 }
                 1 => {
                     let credentials = hs_deploy::spaceship::SpaceshipCredentials::parse(&self.serialize())
@@ -339,7 +467,7 @@ impl Editor {
                     client
                         .check_zone(self.zone().trim_end_matches('.'))
                         .await
-                        .map_err(|_| "Spaceship test failed: check network, credentials, zone and read permissions")?;
+                        .map_err(|error| self.safe_error(&error))?;
                 }
                 _ => {
                     let editor = self.clone();
@@ -348,7 +476,11 @@ impl Editor {
                         .map_err(|_| "DNS test interrupted")??;
                 }
             }
-            Ok("Connected · authentication and zone read access verified".to_owned())
+            Ok(match self.provider {
+                0 => format!("PASS · API connection and clock synchronization\nPASS · Signed GET /domain/zone/{}\nPASS · Credentials accepted and zone read access verified", self.zone()),
+                1 => format!("PASS · HTTPS API connection\nPASS · GET /dns/records/{}?take=1&skip=0\nPASS · Credentials accepted and zone read access verified", self.zone()),
+                _ => "PASS · DNS server connection\nPASS · TSIG response signature\nPASS · Authoritative SOA answer for the requested zone".to_owned(),
+            })
         };
         tokio::time::timeout(std::time::Duration::from_secs(15), check)
             .await
@@ -404,7 +536,11 @@ impl Editor {
             .and_then(toml::Value::as_table)
             .cloned()
             .unwrap_or_default();
-        let mut target = toml::Table::new();
+        let mut target = tests
+            .get(PROVIDERS[self.provider].1)
+            .and_then(toml::Value::as_table)
+            .cloned()
+            .unwrap_or_default();
         target.insert("zone".to_owned(), toml::Value::String(self.zone().to_owned()));
         if self.provider == 2 {
             target.insert("server".to_owned(), toml::Value::String(self.values[4].clone()));
@@ -497,6 +633,18 @@ fn parse_tsig(text: &str) -> Result<Vec<String>, String> {
 
 /// Require a verified signature and an authoritative SOA answer, not just a reachable DNS server.
 pub fn verify_tsig_response(success: bool, stdout: &str, stderr: &str) -> Result<(), String> {
+    for (code, reason) in [
+        ("BADKEY", "the server does not recognize the TSIG key name or algorithm"),
+        ("BADSIG", "the TSIG secret does not match the server"),
+        ("BADTIME", "the client and DNS server clocks differ"),
+    ] {
+        if stdout.contains(code) || stderr.contains(code) {
+            return Err(format!("TSIG {code}: {reason}"));
+        }
+    }
+    if stdout.contains("status: REFUSED") {
+        return Err("DNS REFUSED: check zone access and server permissions".to_owned());
+    }
     if !success
         || !stderr.trim().is_empty()
         || stdout.to_ascii_lowercase().contains("couldn't verify")

@@ -32,7 +32,7 @@ const REFRESH: Duration = Duration::from_secs(10);
 /// What a background task brings back.
 enum Update {
     Startup(&'static str),
-    IntegrationTest(u64, Result<String, String>),
+    IntegrationTest(u64, super::integrations::TestReport),
     Status(String, Value),
     StatusRejected(String),
     ApiUpdates(u64, Result<super::reinstall::Images, String>),
@@ -855,8 +855,10 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
                         Request::TestIntegration(id, editor) => {
                             let sender = updates.clone();
                             tokio::spawn(async move {
+                                let started = std::time::Instant::now();
                                 let result = editor.test_connection().await;
-                                let _ = sender.send(Update::IntegrationTest(id, result));
+                                let report = super::integrations::TestReport::completed(&editor, result, u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX));
+                                let _ = sender.send(Update::IntegrationTest(id, report));
                             });
                         }
                         Request::CopyJson => {

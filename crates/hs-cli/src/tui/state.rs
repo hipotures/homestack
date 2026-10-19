@@ -1408,13 +1408,18 @@ impl App {
         }
     }
 
-    pub fn integration_test_result(&mut self, id: u64, result: Result<String, String>) {
-        if let Some(Overlay::Integration(editor)) = self.overlay.as_mut()
-            && editor.testing
-            && editor.test_id == id
-        {
-            editor.testing = false;
-            editor.message = result.unwrap_or_else(|error| error);
+    pub fn integration_test_result(&mut self, id: u64, report: super::integrations::TestReport) {
+        let saved = report.save(&mut self.preferences);
+        if let Some(Overlay::Integration(editor)) = self.overlay.as_mut() {
+            if editor.testing && editor.test_id == id {
+                editor.testing = false;
+                editor.message = saved.err().unwrap_or_default();
+                editor.report = Some(report);
+                editor.report_open = true;
+                editor.report_scroll = 0;
+            } else if editor.provider == report.provider {
+                editor.report = Some(report);
+            }
         }
     }
 
@@ -1452,7 +1457,26 @@ impl App {
             return request;
         }
         if let Some(Overlay::Integration(editor)) = self.overlay.as_mut() {
-            if key.code == KeyCode::F(6) {
+            if editor.report_open {
+                match key.code {
+                    KeyCode::Esc | KeyCode::Enter | KeyCode::F(7) => editor.report_open = false,
+                    KeyCode::Down => editor.report_scroll = editor.report_scroll.saturating_add(1),
+                    KeyCode::PageDown => editor.report_scroll = editor.report_scroll.saturating_add(8),
+                    KeyCode::Up => editor.report_scroll = editor.report_scroll.saturating_sub(1),
+                    KeyCode::PageUp => editor.report_scroll = editor.report_scroll.saturating_sub(8),
+                    KeyCode::Home => editor.report_scroll = 0,
+                    _ => {}
+                }
+                return None;
+            }
+            if key.code == KeyCode::F(7) {
+                editor.report_open = editor.report.is_some();
+                editor.report_scroll = 0;
+                return None;
+            }
+            if key.code == KeyCode::F(6)
+                || (editor.on_test_button() && matches!(key.code, KeyCode::Enter | KeyCode::Char(' ')))
+            {
                 return editor
                     .begin_test()
                     .map(|id| Request::TestIntegration(id, editor.clone()));
