@@ -206,8 +206,8 @@ fn group_item_selectors_catalog_and_plan_are_first_class() {
     let home = tempfile::tempdir().unwrap();
     let cfg = settings(home.path());
     let groups: Vec<&str> = cfg.setup.groups.iter().map(|g| g.id.as_str()).collect();
-    assert_eq!(groups, ["files", "env", "app", "cred", "backup", "repo"]);
-    assert_eq!(cfg.setup.groups[4].label, "Backup");
+    assert_eq!(groups, ["app", "env", "repo", "cred", "files", "backup"]);
+    assert_eq!(cfg.setup.groups[5].label, "Backup");
     let entry = bk();
     assert_eq!((entry.group.as_str(), entry.handler.as_str()), ("backup", "backup"));
     assert_eq!(entry.params, Params::Backup);

@@ -255,9 +255,9 @@ const HERMES_NPM_CHECK: &str = "npm --version | node -e \"let v='';process.stdin
 pub fn default_groups() -> Vec<Group> {
     [
         (
-            "files",
-            "Files",
-            "Desktop files copied into persistent home; no deletes.",
+            "app",
+            "Applications",
+            "Explicit user-space installers; onboarding is separate.",
         ),
         (
             "env",
@@ -265,9 +265,9 @@ pub fn default_groups() -> Vec<Group> {
             "User shell profiles; login shell stays unchanged.",
         ),
         (
-            "app",
-            "Applications",
-            "Explicit user-space installers; onboarding is separate.",
+            "repo",
+            "Repositories",
+            "GitHub checkouts with workspace-local deploy keys.",
         ),
         (
             "cred",
@@ -275,14 +275,14 @@ pub fn default_groups() -> Vec<Group> {
             "Authentication files and keys copied from the trusted desktop.",
         ),
         (
+            "files",
+            "Files",
+            "Desktop files copied into persistent home; no deletes.",
+        ),
+        (
             "backup",
             "Backup",
             "Persistent-home BK backup tool and nightly user timer.",
-        ),
-        (
-            "repo",
-            "Repositories",
-            "GitHub checkouts with workspace-local deploy keys.",
         ),
     ]
     .into_iter()
