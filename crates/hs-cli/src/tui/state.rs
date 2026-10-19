@@ -196,6 +196,8 @@ pub struct App {
     no_color: bool,
     pub status: Option<GlobalStatus>,
     pub storage_overview: Option<Result<hs_model::status::StorageOverview, String>>,
+    pub api_updates: Option<Result<super::reinstall::Images, String>>,
+    pub api_updates_checking: bool,
     pub startup_message: Option<&'static str>,
     /// Every server: its URL and why it did not answer, if it did not.
     pub servers: Vec<(String, Option<String>)>,
@@ -290,6 +292,8 @@ impl App {
             no_color,
             status: None,
             storage_overview: None,
+            api_updates: None,
+            api_updates_checking: false,
             startup_message: None,
             servers: Vec::new(),
             unreachable: Vec::new(),
@@ -337,10 +341,107 @@ impl App {
         match serde_json::from_value::<GlobalStatus>(status.clone()) {
             Ok(status) => {
                 self.status = Some(status);
+                self.apply_api_updates();
                 self.unreachable.clear();
                 self.keep_selection();
             }
             Err(error) => self.log("", &format!("The server's status could not be read: {error}")),
+        }
+    }
+
+    /// The deployment and registry are read directly, independently of API status.
+    pub fn set_api_updates(&mut self, result: Result<super::reinstall::Images, String>) {
+        self.api_updates_checking = false;
+        let message = match &result {
+            Ok(images) => {
+                let updates: Vec<_> = images
+                    .servers
+                    .iter()
+                    .filter_map(|server| {
+                        images
+                            .update_for(server)
+                            .map(|image| format!("{} → {}", server.name, image.tag()))
+                    })
+                    .collect();
+                if updates.is_empty() {
+                    "API image check complete: no newer image found".to_owned()
+                } else {
+                    format!(
+                        "API update available: {}. Menu › Update API containers.",
+                        updates.join(", ")
+                    )
+                }
+            }
+            Err(error) => format!("Cannot check API image updates: {error}"),
+        };
+        self.api_updates = Some(result);
+        self.apply_api_updates();
+        let clock = self.clock.clone();
+        self.log(&clock, &message);
+    }
+
+    /// A compact indicator remains visible even if the main status is invalid.
+    #[must_use]
+    pub fn api_update_label(&self) -> Option<String> {
+        if self.api_updates_checking {
+            return Some("API …".to_owned());
+        }
+        match self.api_updates.as_ref()? {
+            Err(_) => Some("API ?".to_owned()),
+            Ok(images) => {
+                let count = images
+                    .servers
+                    .iter()
+                    .filter(|server| images.update_for(server).is_some())
+                    .count();
+                if count > 0 {
+                    Some(format!("API ↑{count}"))
+                } else if images
+                    .servers
+                    .iter()
+                    .any(|server| server.image.as_ref().is_none_or(|image| image.created.is_none()))
+                    || !images.published.iter().any(|image| image.created.is_some())
+                {
+                    Some("API ?".to_owned())
+                } else {
+                    None
+                }
+            }
+        }
+    }
+
+    fn apply_api_updates(&mut self) {
+        let (Some(status), Some(Ok(images))) = (&mut self.status, &self.api_updates) else {
+            return;
+        };
+        for entry in &mut status.others {
+            let Some(server) = images.servers.iter().find(|server| server.vmid == entry.vmid) else {
+                continue;
+            };
+            // A later status may already describe a container updated elsewhere.
+            if let (Some(reported), Some(installed)) = (&entry.image, &server.image)
+                && reported != &installed.image
+            {
+                continue;
+            }
+            let available = images.update_for(server).map(|image| image.image.clone());
+            let known = server.image.as_ref().is_some_and(|image| image.created.is_some())
+                && images.published.iter().any(|image| image.created.is_some());
+            entry.image_update = Some(hs_model::status::ImageUpdate {
+                state: if available.is_some() {
+                    hs_model::status::ImageUpdateState::Available
+                } else if known {
+                    hs_model::status::ImageUpdateState::UpToDate
+                } else {
+                    hs_model::status::ImageUpdateState::Unknown
+                },
+                available,
+                checked_at: None,
+                error: (!known).then(|| "Installed or published image metadata is unavailable".to_owned()),
+            });
+            if let Some(image) = &server.image {
+                entry.image = Some(image.image.clone());
+            }
         }
     }
 

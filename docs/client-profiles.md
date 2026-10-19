@@ -58,6 +58,12 @@ connection failure alone does not change installation state.
 A retained tagged API container can be selected for adoption into the service
 pool and reused by the same installation plan.
 
+At startup, the client checks API container images directly through the saved
+Proxmox deployment and image registry. This check runs alongside the main status
+read and does not depend on the API server's hourly image cache. The panel border
+shows `API ↑N` when N containers have an update, or `API ?` when the check cannot
+be completed; the log gives details. Checking never starts a deployment.
+
 An installed profile opens its normal status view. Menu **Reinstall HomeStack**
 opens the full installation form with its saved settings. Menu **Update API
 containers** uses the instances, credentials and network in `deploy.toml`,

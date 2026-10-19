@@ -51,14 +51,39 @@ pub struct Images {
 }
 
 impl Images {
-    /// Whether `image` is newer than what `server` runs.
+    /// Newest published image for an installed API container.
+    #[must_use]
+    pub fn update_for(&self, server: &Server) -> Option<&Image> {
+        let version = |image: &Image| {
+            hs_core::registry::split(&image.image).and_then(|(_, _, tag)| hs_core::registry::version(tag))
+        };
+        self.published
+            .iter()
+            .filter(|image| self.newer(image, server))
+            .max_by(|a, b| version(a).cmp(&version(b)).then_with(|| a.created.cmp(&b.created)))
+    }
+
+    /// Compare publication versions first; timestamps order builds of the same version.
     #[must_use]
     pub fn newer(&self, image: &Image, server: &Server) -> bool {
-        match (
-            &image.created,
-            server.image.as_ref().and_then(|now| now.created.as_ref()),
-        ) {
-            (Some(offered), Some(now)) => offered > now,
+        let Some(current) = &server.image else { return false };
+        let (Some((host, path, tag)), Some((current_host, current_path, current_tag))) = (
+            hs_core::registry::split(&image.image),
+            hs_core::registry::split(&current.image),
+        ) else {
+            return false;
+        };
+        if (host, path) != (current_host, current_path) {
+            return false;
+        }
+        if let (Some(offered), Some(installed)) =
+            (hs_core::registry::version(tag), hs_core::registry::version(current_tag))
+            && offered != installed
+        {
+            return offered > installed;
+        }
+        match (&image.created, &current.created) {
+            (Some(offered), Some(installed)) => offered > installed,
             _ => false,
         }
     }

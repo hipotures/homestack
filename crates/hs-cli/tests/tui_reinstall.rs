@@ -299,3 +299,92 @@ fn container_details_show_installed_and_available_images_and_check_time() {
         assert!(text.contains(expected), "{text}");
     }
 }
+
+#[test]
+fn startup_update_notice_survives_missing_or_invalid_main_status() {
+    let mut fixture = app();
+    fixture.app.status = None;
+    fixture.app.set_api_updates(Ok(images(&[(102001, "api1")])));
+    fixture.app.set_notice(Some((
+        "Invalid server status".to_owned(),
+        vec!["Schema mismatch".to_owned()],
+    )));
+    assert_eq!(fixture.app.api_update_label().as_deref(), Some("API ↑1"));
+    let text = screen(&render(&fixture.app, 120, 36));
+    assert!(text.contains("API ↑1"), "{text}");
+    assert!(
+        fixture
+            .app
+            .lines
+            .iter()
+            .any(|line| line.text.contains("API update available: api1"))
+    );
+    assert!(fixture.app.action.is_none(), "Checking must never start a deployment");
+}
+
+#[test]
+fn fresh_startup_check_overrides_stale_server_update_cache() {
+    let mut fixture = servers();
+    let mut status = serde_json::to_value(fixture.app.status.as_ref().unwrap()).unwrap();
+    for entry in status["others"].as_array_mut().unwrap() {
+        entry["image_update"] = json!({"state": "up_to_date", "available": null, "checked_at": null, "error": null});
+    }
+    fixture
+        .app
+        .set_api_updates(Ok(images(&[(102001, "api1"), (102002, "api2"), (102003, "api3")])));
+    fixture.app.set_status(&status);
+    assert_eq!(fixture.app.api_update_label().as_deref(), Some("API ↑3"));
+    assert!(
+        fixture.app.status.as_ref().unwrap().others.iter().all(|entry| entry
+            .image_update
+            .as_ref()
+            .unwrap()
+            .available
+            .is_some())
+    );
+    let text = screen(&render(&fixture.app, 140, 40));
+    assert!(text.contains("API ↑3"), "{text}");
+    assert!(fixture.app.action.is_none());
+}
+
+#[test]
+fn failed_startup_check_is_reported_without_blocking_workspaces() {
+    let mut fixture = app();
+    fixture.app.api_updates_checking = true;
+    fixture.app.set_api_updates(Err("Registry unavailable".to_owned()));
+    assert!(!fixture.app.api_updates_checking);
+    assert_eq!(fixture.app.api_update_label().as_deref(), Some("API ?"));
+    let text = screen(&render(&fixture.app, 120, 36));
+    assert!(text.contains("dev-main") && text.contains("API ?"), "{text}");
+    assert!(
+        fixture
+            .app
+            .lines
+            .iter()
+            .any(|line| line.text.contains("Registry unavailable"))
+    );
+    assert!(fixture.app.action.is_none());
+}
+
+#[test]
+fn newer_build_is_detected_when_registry_timestamps_are_missing() {
+    let current = Image {
+        image: format!("{REPOSITORY}:0.1.100-123456abcdef"),
+        made: "—".to_owned(),
+        created: None,
+    };
+    let newer = Image {
+        image: format!("{REPOSITORY}:0.1.101-123456abcdef"),
+        made: "—".to_owned(),
+        created: None,
+    };
+    let images = Images {
+        servers: vec![Server {
+            vmid: 102001,
+            name: "api1".to_owned(),
+            image: Some(current),
+        }],
+        published: vec![newer],
+    };
+    assert!(images.update_for(&images.servers[0]).is_some());
+}

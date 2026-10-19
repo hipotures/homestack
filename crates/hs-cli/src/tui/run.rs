@@ -34,6 +34,7 @@ enum Update {
     Startup(&'static str),
     Status(String, Value),
     StatusRejected(String),
+    ApiUpdates(u64, Result<super::reinstall::Images, String>),
     Storage(Result<hs_model::status::StorageOverview, String>),
     Servers(Vec<(String, Option<String>)>),
     Unreachable(Vec<(String, String)>),
@@ -378,33 +379,6 @@ fn mib_of(size: &str) -> Option<u64> {
 /// Read the status and the servers' health now and every [`REFRESH`].
 fn spawn_refresh(client: Arc<Client>, updates: mpsc::UnboundedSender<Update>, stop: Arc<AtomicBool>) {
     tokio::spawn(async move {
-        let _ = updates.send(Update::Startup("Checking LXC image updates"));
-        let check = async {
-            loop {
-                if stop.load(Ordering::SeqCst) {
-                    return;
-                }
-                match client.get_from("/v1/images/check").await {
-                    Ok((_, progress)) if progress["checking"] == true => {
-                        tokio::time::sleep(Duration::from_millis(250)).await;
-                    }
-                    Ok(_) => return,
-                    Err(error) => {
-                        let _ = updates.send(Update::Log(format!(
-                            "Cannot read image check progress: {}",
-                            client_error(error).0
-                        )));
-                        return;
-                    }
-                }
-            }
-        };
-        if tokio::time::timeout(Duration::from_secs(8), check).await.is_err() {
-            let _ = updates.send(Update::Log("Image checks continue in the background".to_owned()));
-        }
-        if stop.load(Ordering::SeqCst) {
-            return;
-        }
         let _ = updates.send(Update::Startup("Reading the status from the servers"));
         let mut defaults_read = false;
         loop {
@@ -779,6 +753,8 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
     // The target of the open box; another target's worker cannot speak to it.
     let mut setup_open: Option<Option<u32>> = None;
     let mut details = super::details::Loader::default();
+    let mut api_check_started = false;
+    let mut api_check_generation = 0_u64;
     let mut storage_loading = false;
     let mut storage_visible = false;
     let mut storage_next = std::time::Instant::now();
@@ -786,6 +762,26 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
         app.clock = clock.now();
         app.today = clock.today();
         details.update(app.details_target(), connection.client.as_ref());
+        let deployment = deploy_toml(ctx);
+        if !api_check_started && app.install.is_none() && deployment.is_file() {
+            api_check_started = true;
+            api_check_generation += 1;
+            let generation = api_check_generation;
+            app.api_updates_checking = true;
+            let updates = updates.clone();
+            let offset = clock.offset;
+            tokio::spawn(async move {
+                let check = async {
+                    let config = hs_deploy::config::DeployConfig::load(&deployment)?;
+                    let targets: Vec<_> = config.instances.iter().map(|instance| instance.ctid).collect();
+                    super::reinstall::read(&deployment, &targets, offset).await
+                };
+                let result = tokio::time::timeout(Duration::from_secs(120), check)
+                    .await
+                    .unwrap_or_else(|_| Err("API image check timed out".to_owned()));
+                let _ = updates.send(Update::ApiUpdates(generation, result));
+            });
+        }
         let visible = matches!(app.view, 2 | 3);
         if visible
             && !storage_loading
@@ -1084,6 +1080,9 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
                     }
                     app.set_status(&status);
                 }
+                Update::ApiUpdates(generation, result) => {
+                    if generation == api_check_generation { app.set_api_updates(result); }
+                }
                 Update::StatusRejected(error) => {
                     app.startup_message = None;
                     app.log(&clock.now(), &error);
@@ -1145,6 +1144,7 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
                         // The marked servers are done with.
                         if *ok && app.action.as_ref().is_some_and(|action| action.kind == Kind::Reinstall) {
                             app.marked.clear();
+                            api_check_started = false;
                         }
                         let outcome = if *ok { "done" } else { "failed" };
                         let first = lines.first().cloned().unwrap_or_default();

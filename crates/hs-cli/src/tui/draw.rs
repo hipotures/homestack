@@ -127,11 +127,14 @@ fn draw_into(buf: &mut Buffer, area: Rect, app: &App) {
     } else {
         4
     };
-    let menu = vec![
+    let mut menu = vec![
         Control::plain(&format!("profile: {}", app.profile)),
         Control::key("&menu"),
         Control::key(&format!("&view {}", VIEWS[app.view].0)),
     ];
+    if let Some(label) = app.api_update_label() {
+        menu.push(Control::plain(&label));
+    }
     let host_controls = |digit: u8| if digit == host { menu.clone() } else { Vec::new() };
     if let Some(rect) = screen.cluster {
         cluster(buf, rect, app, host_controls(2));
