@@ -1643,12 +1643,13 @@ fn list_item(palette: &Palette, label: &str, chosen: bool) -> (String, Style) {
     }
 }
 
-const HELP: [&str; 24] = [
+const HELP: [&str; 25] = [
     "1 2 3 4     view 1 workspaces, 2 cluster+storage, 3 storage, 4 log (again: auto)",
     "0           the standard view: every panel and node, no filter",
     "v           next view (auto, 1, 2, 3, 4)",
     "m           menu",
     "F2          copy mode: select terminal text; F2 or Esc resumes the display",
+    "F3          copy loaded JSON data to clipboard (terminal OSC 52 support required)",
     "↑ ↓         select a workspace; PgUp PgDn Home End",
     "i           details of the selected workspace (again: hide them)",
     "← →         one node or all",

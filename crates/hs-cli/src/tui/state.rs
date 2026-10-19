@@ -43,6 +43,8 @@ pub enum Request {
     Images(Vec<u32>),
     /// Update existing API instances from the saved deployment, without root.
     UpdateApi,
+    /// Copy the already loaded API responses to the terminal's clipboard.
+    CopyJson,
     Quit,
 }
 
@@ -151,6 +153,7 @@ struct Details {
     vmid: u32,
     read_at: Instant,
     result: Result<WorkspaceStatus, String>,
+    json: Option<Value>,
 }
 
 const DETAILS_TTL: Duration = Duration::from_secs(10);
@@ -196,6 +199,8 @@ pub struct App {
     pub palette: Palette,
     no_color: bool,
     pub status: Option<GlobalStatus>,
+    status_json: Option<Value>,
+    storage_json: Option<Value>,
     pub storage_overview: Option<Result<hs_model::status::StorageOverview, String>>,
     pub api_updates: Option<Result<super::reinstall::Images, String>>,
     pub api_updates_checking: bool,
@@ -292,6 +297,8 @@ impl App {
             palette,
             no_color,
             status: None,
+            status_json: None,
+            storage_json: None,
             storage_overview: None,
             api_updates: None,
             api_updates_checking: false,
@@ -339,14 +346,70 @@ impl App {
 
     /// The answer of `/v1/status`.
     pub fn set_status(&mut self, status: &Value) {
+        let json = status;
         match serde_json::from_value::<GlobalStatus>(status.clone()) {
             Ok(status) => {
+                self.status_json = Some(json.clone());
                 self.status = Some(status);
                 self.apply_api_updates();
                 self.unreachable.clear();
                 self.keep_selection();
             }
             Err(error) => self.log("", &format!("The server's status could not be read: {error}")),
+        }
+    }
+
+    /// Preserve the API response before normalizing storage for display.
+    pub fn set_storage_json(&mut self, result: Result<Value, String>) -> bool {
+        self.storage_json = None;
+        let result = result.and_then(|json| {
+            let overview =
+                serde_json::from_value(json.clone()).map_err(|error| format!("Invalid storage data: {error}"))?;
+            self.storage_json = Some(json);
+            Ok(overview)
+        });
+        self.set_storage_overview(result)
+    }
+
+    /// Original responses behind the current view; never performs I/O.
+    pub fn displayed_json(&self, area: ratatui::layout::Rect) -> Option<Value> {
+        let screen = super::layout::arrange(area, self.shown);
+        if screen.too_small || self.install.is_some() {
+            return None;
+        }
+        let mut responses = serde_json::Map::new();
+        if (screen.workspaces.is_some() || screen.cluster.is_some() || screen.storage.is_some())
+            && let Some(status) = &self.status_json
+        {
+            responses.insert("/v1/status".to_owned(), status.clone());
+        }
+        if matches!(self.view, 2 | 3)
+            && screen.storage.is_some()
+            && let Some(storage) = &self.storage_json
+        {
+            responses.insert("/v1/storage/overview".to_owned(), storage.clone());
+        }
+        if self.info
+            && screen.workspaces.is_some()
+            && !self.action.as_ref().is_some_and(|action| !action.hidden)
+            && let Some(details) = &self.details
+            && self.selected == Some(details.vmid)
+            && let Some(json) = &details.json
+        {
+            responses.insert(format!("/v1/workspaces/{}", details.vmid), json.clone());
+        }
+        if screen.log.is_some() {
+            let logs = self.lines[self.lines.len().saturating_sub(100)..]
+                .iter()
+                .map(|line| serde_json::json!({"time": line.time, "text": line.text}))
+                .collect();
+            responses.insert("logs".to_owned(), Value::Array(logs));
+            return Some(Value::Object(responses));
+        }
+        match responses.len() {
+            0 => None,
+            1 => responses.into_values().next(),
+            _ => Some(Value::Object(responses)),
         }
     }
 
@@ -526,6 +589,9 @@ impl App {
     pub fn after_installed(&mut self, has_client_config: bool) -> Option<Request> {
         self.clear_details();
         self.status = None;
+        self.status_json = None;
+        self.storage_json = None;
+        self.storage_overview = None;
         self.servers.clear();
         self.unreachable.clear();
         self.pool = None;
@@ -621,6 +687,7 @@ impl App {
         if self.selected != Some(vmid) {
             return None;
         }
+        let json = result.as_ref().ok().cloned();
         let result = result.and_then(|value| {
             let details: WorkspaceStatus = serde_json::from_value(value)
                 .map_err(|error| format!("The server's details could not be read: {error}"))?;
@@ -632,6 +699,7 @@ impl App {
         self.details = Some(Details {
             vmid,
             read_at: Instant::now(),
+            json: result.is_ok().then_some(json).flatten(),
             result,
         });
         if let Some(Overlay::ReadDetails { vmid: waiting, action }) = self.overlay
@@ -1293,6 +1361,9 @@ impl App {
         // owner, 2026-10-15; not in the help).
         if key.modifiers.contains(KeyModifiers::CONTROL) && matches!(key.code, KeyCode::Char('c' | 'q')) {
             return Some(Request::Quit);
+        }
+        if key.code == KeyCode::F(3) {
+            return Some(Request::CopyJson);
         }
         if let Some(asking) = self.asking.as_mut() {
             let touch = asking.kind == crate::askpass::Kind::Touch;

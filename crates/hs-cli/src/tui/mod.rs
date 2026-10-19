@@ -4,6 +4,7 @@ pub mod acting;
 pub mod action;
 pub mod alien_keys;
 pub mod chrome;
+mod clipboard;
 mod details;
 pub mod draw;
 mod draw_install;

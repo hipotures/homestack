@@ -35,7 +35,7 @@ enum Update {
     Status(String, Value),
     StatusRejected(String),
     ApiUpdates(u64, Result<super::reinstall::Images, String>),
-    Storage(Result<hs_model::status::StorageOverview, String>),
+    Storage(Result<Value, String>),
     Servers(Vec<(String, Option<String>)>),
     Unreachable(Vec<(String, String)>),
     Report(String, Vec<String>),
@@ -499,6 +499,7 @@ fn start(request: &Request, client: Option<&Arc<Client>>, ctx: &Context, updates
             });
         }
         Request::Quit
+        | Request::CopyJson
         | Request::Act(_)
         | Request::Decide(_)
         | Request::Reload
@@ -796,9 +797,7 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
             let stop = Arc::clone(&connection.stop);
             tokio::spawn(async move {
                 let result = match client.get("/v1/storage/overview").await {
-                    Ok(value) => {
-                        serde_json::from_value(value).map_err(|error| format!("Invalid storage data: {error}"))
-                    }
+                    Ok(value) => Ok(value),
                     Err(error) => Err(client_error(error).0),
                 };
                 if !stop.load(Ordering::SeqCst) {
@@ -835,6 +834,18 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
                         return Ok(0);
                     }
                     match request {
+                        Request::CopyJson => {
+                            let size = screen.terminal.size().map_err(|error| AppError::new(format!("Cannot read terminal size: {error}")))?;
+                            let result = app.displayed_json(ratatui::layout::Rect::new(0, 0, size.width, size.height))
+                                .ok_or_else(|| "No API data loaded to copy".to_owned())
+                                .and_then(|json| serde_json::to_string_pretty(&json).map_err(|error| error.to_string()))
+                                .and_then(|text| super::clipboard::copy(&mut io::stdout(), &text).map_err(|error| error.to_string()));
+                            let message = match result {
+                                Ok(()) => "JSON sent to the terminal clipboard".to_owned(),
+                                Err(error) => format!("Cannot copy JSON: {error}"),
+                            };
+                            app.log(&clock.now(), &message);
+                        }
                         Request::Act(start) if start.kind == Kind::Reinstall => {
                             let (sender, mut decisions) = mpsc::unbounded_channel();
                             decide = Some(sender);
@@ -1090,7 +1101,7 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
                 Update::Storage(result) => {
                     storage_loading = false;
                     storage_next = std::time::Instant::now() + REFRESH;
-                    app.set_storage_overview(result);
+                    app.set_storage_json(result);
                 }
                 Update::Servers(servers) => app.set_servers(servers),
                 Update::Images(targets, images) => app.set_images(&targets, images),
