@@ -1534,6 +1534,11 @@ fn draw_overlay(buf: &mut Buffer, area: Rect, app: &App, overlay: &Overlay) {
     let text = text_style(palette);
     let muted = text.fg(palette.muted);
     let (title, lines, bottom): (&str, Vec<(String, Style)>, Vec<Control>) = match overlay {
+        Overlay::Quit => (
+            "quit",
+            vec![("Exit HomeStack?".to_owned(), text)],
+            vec![Control::key("quit ↵"), Control::key("cancel esc")],
+        ),
         Overlay::Menu { index } => (
             "menu",
             MENU.iter()
@@ -1638,7 +1643,7 @@ fn list_item(palette: &Palette, label: &str, chosen: bool) -> (String, Style) {
     }
 }
 
-const HELP: [&str; 23] = [
+const HELP: [&str; 24] = [
     "1 2 3 4     view 1 workspaces, 2 cluster+storage, 3 storage, 4 log (again: auto)",
     "0           the standard view: every panel and node, no filter",
     "v           next view (auto, 1, 2, 3, 4)",
@@ -1648,7 +1653,8 @@ const HELP: [&str; 23] = [
     "i           details of the selected workspace (again: hide them)",
     "← →         one node or all",
     "f           filter by name or VMID; ↵ keeps it, esc clears it",
-    "q  esc      quit (esc first clears the filter)",
+    "esc         close a box, return to view 0, then confirm quit (↵ yes, esc cancel)",
+    "q           quit immediately",
     "",
     "On the selected workspace:",
     "s ssh (log out to come back)   t start or stop   e setup",

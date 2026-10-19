@@ -648,9 +648,10 @@ fn the_red_letters_do_what_their_buttons_do() {
 }
 
 #[test]
-fn esc_on_the_main_screen_quits_and_m_opens_the_menu() {
+fn esc_on_the_main_screen_confirms_quit_and_m_opens_the_menu() {
     let mut fixture = app();
-    assert_eq!(press(&mut fixture.app, KeyCode::Esc), Some(Request::Quit));
+    assert_eq!(press(&mut fixture.app, KeyCode::Esc), None);
+    assert_eq!(press(&mut fixture.app, KeyCode::Esc), None);
     assert_eq!(press(&mut fixture.app, KeyCode::Char('m')), None);
     assert!(fixture.app.overlay.is_some(), "m opens the menu");
     assert_eq!(press(&mut fixture.app, KeyCode::Esc), None, "esc closes the menu first");

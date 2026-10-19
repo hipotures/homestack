@@ -8,7 +8,7 @@ mod tui_fixture;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use hs_cli::tui::draw::render;
-use hs_cli::tui::state::Request;
+use hs_cli::tui::state::{Overlay, Request, VIEWS};
 use hs_cli::tui::theme::Palette;
 use ratatui::style::Color;
 use tui_fixture::{app, details, position, press, row, screen};
@@ -309,9 +309,60 @@ fn the_filter_opens_in_the_border_and_keeps_matching_rows() {
     assert!(text.contains("web-lab") && text.contains("ml-lab"), "{text}");
     assert!(!text.contains("dev-main"), "{text}");
     assert!(text.contains("┘1/2└"), "{text}");
-    press(&mut fixture.app, KeyCode::Esc);
+    press(&mut fixture.app, KeyCode::Char('0'));
     let text = screen(&render(&fixture.app, 80, 24));
     assert!(text.contains("dev-main") && text.contains("/13└"), "{text}");
+}
+
+#[test]
+fn esc_returns_to_view_zero_before_confirming_quit() {
+    for view in '1'..='4' {
+        let mut fixture = app();
+        press(&mut fixture.app, KeyCode::Char(view));
+        press(&mut fixture.app, KeyCode::Char('m'));
+        assert_eq!(press(&mut fixture.app, KeyCode::Esc), None);
+        assert!(fixture.app.overlay.is_none());
+        assert_ne!(fixture.app.view, 0, "closing a box keeps the view");
+
+        assert_eq!(press(&mut fixture.app, KeyCode::Esc), None);
+        assert_eq!(fixture.app.view, 0);
+        assert_eq!(fixture.app.shown, VIEWS[0].1);
+        assert!(fixture.app.overlay.is_none());
+        let saved = std::fs::read_to_string(fixture._dir.path().join("tui.toml")).unwrap();
+        assert!(saved.contains("view = 0"), "{saved}");
+
+        assert_eq!(press(&mut fixture.app, KeyCode::Esc), None);
+        assert_eq!(fixture.app.overlay, Some(Overlay::Quit));
+        let text = screen(&render(&fixture.app, 80, 24));
+        for label in ["Exit HomeStack?", "quit ↵", "cancel esc"] {
+            assert!(text.contains(label), "{text}");
+        }
+        assert_eq!(press(&mut fixture.app, KeyCode::Char('1')), None);
+        assert_eq!(fixture.app.view, 0);
+        assert_eq!(fixture.app.overlay, Some(Overlay::Quit));
+        assert_eq!(press(&mut fixture.app, KeyCode::Esc), None);
+        assert!(fixture.app.overlay.is_none());
+        assert_eq!(press(&mut fixture.app, KeyCode::Esc), None);
+        assert_eq!(press(&mut fixture.app, KeyCode::Enter), Some(Request::Quit));
+    }
+}
+
+#[test]
+fn esc_cancels_filter_editing_then_confirms_quit_with_a_saved_filter() {
+    let mut fixture = app();
+    press(&mut fixture.app, KeyCode::Char('f'));
+    press(&mut fixture.app, KeyCode::Char('x'));
+    assert_eq!(press(&mut fixture.app, KeyCode::Esc), None);
+    assert!(fixture.app.filter.is_empty());
+    assert!(fixture.app.overlay.is_none());
+
+    press(&mut fixture.app, KeyCode::Char('f'));
+    press(&mut fixture.app, KeyCode::Char('x'));
+    press(&mut fixture.app, KeyCode::Enter);
+    assert_eq!(press(&mut fixture.app, KeyCode::Esc), None);
+    assert_eq!(fixture.app.overlay, Some(Overlay::Quit));
+    let ctrl_q = KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL);
+    assert_eq!(fixture.app.key(ctrl_q), Some(Request::Quit));
 }
 
 #[test]

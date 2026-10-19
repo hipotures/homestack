@@ -111,6 +111,7 @@ pub const MENU: [&str; 9] = [
 /// A box over the screen.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Overlay {
+    Quit,
     Menu {
         index: usize,
     },
@@ -1372,13 +1373,13 @@ impl App {
         }
         match key.code {
             KeyCode::Char('q') => return Some(Request::Quit),
-            KeyCode::Esc if !self.filter.is_empty() => {
-                self.filter.clear();
-                self.keep_selection();
-            }
             KeyCode::Char('m') => self.overlay = Some(Overlay::Menu { index: 0 }),
-            // Esc leaves, as q does (the owner, 2026-10-14).
-            KeyCode::Esc => return Some(Request::Quit),
+            KeyCode::Esc if self.view != 0 => {
+                self.view = 0;
+                self.shown = VIEWS[0].1;
+                self.save_view();
+            }
+            KeyCode::Esc => self.overlay = Some(Overlay::Quit),
             KeyCode::Char(digit @ '1'..='4') => {
                 let index = usize::try_from(digit.to_digit(10).unwrap_or(0)).unwrap_or(0);
                 let next = if self.view == index { 0 } else { index };
@@ -1495,6 +1496,11 @@ impl App {
 
     fn overlay_key(&mut self, overlay: Overlay, code: KeyCode) -> Option<Request> {
         match overlay {
+            Overlay::Quit => match code {
+                KeyCode::Enter => return Some(Request::Quit),
+                KeyCode::Esc => {}
+                _ => self.overlay = Some(Overlay::Quit),
+            },
             Overlay::Menu { index } => match code {
                 KeyCode::Down => {
                     self.overlay = Some(Overlay::Menu {
