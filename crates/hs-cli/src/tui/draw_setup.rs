@@ -423,8 +423,9 @@ fn group_bar(buf: &mut Buffer, inner: Rect, mut y: u16, app: &App, setup: &Setup
     let mut x = inner.x + 1;
     for (index, group) in setup.settings.setup.groups.iter().enumerate() {
         let (count, total) = setup.group_count(&group.id);
-        let label = format!(" {} {count}/{total} ", group.label);
-        let width = u16::try_from(label.chars().count()).unwrap_or(0);
+        let label = format!(" {} ", group.label);
+        let counter = format!("{count}/{total} ");
+        let width = u16::try_from(label.chars().count() + counter.chars().count()).unwrap_or(0);
         if x + width > right && x > inner.x + 1 {
             x = inner.x + 1;
             y += 1;
@@ -432,16 +433,30 @@ fn group_bar(buf: &mut Buffer, inner: Rect, mut y: u16, app: &App, setup: &Setup
         if y >= inner.bottom() {
             break;
         }
-        let style = if index == setup.section {
+        let active = index == setup.section;
+        let style = if active {
             text.fg(palette.background)
                 .bg(palette.focus)
                 .add_modifier(Modifier::BOLD)
-        } else if count > 0 {
+        } else {
             text.add_modifier(Modifier::BOLD)
+        };
+        let counter_style = if active || count > 0 {
+            style
         } else {
             text.fg(palette.muted)
         };
-        let used = write(buf, x, y, right.saturating_sub(x), &label, style);
+        let name_width = write(buf, x, y, right.saturating_sub(x), &label, style);
+        let counter_x = x + name_width;
+        let used = name_width
+            + write(
+                buf,
+                counter_x,
+                y,
+                right.saturating_sub(counter_x),
+                &counter,
+                counter_style,
+            );
         register(Rect::new(x, y, used, 1), Hit::SetupGroup(index));
         x += used + 1;
     }
