@@ -1881,6 +1881,55 @@ fn the_touch_box_replaces_the_connecting_box() {
     assert!(!text.contains("connecting"), "{text}");
 }
 
+#[test]
+fn connection_progress_and_authentication_keep_the_same_dialog_bounds() {
+    use hs_cli::askpass::Kind;
+    use hs_cli::tui::install::AskView;
+    use ratatui::layout::Rect;
+
+    fn bounds(buf: &Buffer, title: &str) -> Rect {
+        let (title_x, y) = position(buf, title);
+        let left = (0..title_x).rev().find(|x| buf[(*x, y)].symbol() == "╭").unwrap();
+        let right = (title_x..buf.area.width)
+            .find(|x| buf[(*x, y)].symbol() == "╮")
+            .unwrap();
+        let bottom = (y + 1..buf.area.height)
+            .find(|row| buf[(left, *row)].symbol() == "╰")
+            .unwrap();
+        Rect::new(left, y, right - left + 1, bottom - y + 1)
+    }
+
+    for (width, height) in [(80, 24), (120, 36), (180, 55)] {
+        let mut fixture = tui_fixture::app();
+        let app = &mut fixture.app;
+        app.open_setup_box(SetupBox::loading(Settings::default(), target(), "Resolving workspace"));
+        let expected = Rect::new((width - 72) / 2, (height - 12) / 2, 72, 12);
+        assert_eq!(bounds(&render(app, width, height), "connecting"), expected);
+        open_mut(app).stage = Stage::Loading {
+            message: "Connecting/authenticating SSH and waiting for the selected workspace to respond".to_owned(),
+        };
+        assert_eq!(bounds(&render(app, width, height), "connecting"), expected);
+        for (kind, prompt, title) in [
+            (
+                Kind::Touch,
+                "Confirm user presence for key ED25519-SK SHA256:test",
+                "security key",
+            ),
+            (Kind::Secret, "Enter PIN for security key:", "ssh"),
+            (Kind::HostKey, "Trust this host fingerprint?", "host key"),
+        ] {
+            app.ask(AskView::new(1, kind, prompt));
+            assert_eq!(bounds(&render(app, width, height), title), expected);
+            app.asking = None;
+        }
+        assert_eq!(bounds(&render(app, width, height), "connecting"), expected);
+        open_mut(app).stage = Stage::Failed {
+            lines: vec!["Authentication failed".to_owned()],
+        };
+        assert_eq!(bounds(&render(app, width, height), "setup failed"), expected);
+    }
+}
+
 /// The details mark the shell files that differ from what the setup writes.
 #[test]
 fn the_details_mark_the_files_that_differ() {

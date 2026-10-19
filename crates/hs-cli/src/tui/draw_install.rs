@@ -5,7 +5,7 @@ use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 
 use super::chrome::{Control, Scrolls, Sides, frame, scrollbar, text_style};
-use super::draw::{SPINNER, bar, centered, cut, log, message_box, wrap, write};
+use super::draw::{SPINNER, bar, centered, connection_rect, cut, log, message_box, wrap, write};
 use super::install::{AskView, Install, Method, Mode, Stage};
 use super::state::App;
 use crate::askpass::Kind;
@@ -110,13 +110,7 @@ pub(super) fn screen(buf: &mut Buffer, area: Rect, app: &App, install: &Install)
             if let Some(busy) = &install.busy {
                 let spinner = SPINNER[install.frame % SPINNER.len()];
                 let text = text_style(palette);
-                message_box(
-                    buf,
-                    inner,
-                    app,
-                    "rescan cluster",
-                    &[(format!("{spinner} {busy}"), text)],
-                );
+                message_box(buf, app, "rescan cluster", &[(format!("{spinner} {busy}"), text)]);
             }
         }
         Stage::Review => review(buf, inner, app, install),
@@ -340,10 +334,10 @@ fn access(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
         let mut lines: Vec<(String, Style)> = wrap(failed, 64).into_iter().map(|line| (line, style)).collect();
         lines.push((String::new(), text));
         lines.push(("ENTER or ESC closes.".to_owned(), muted));
-        message_box(buf, inner, app, "connection failed", &lines);
+        message_box(buf, app, "connection failed", &lines);
     } else if let Some(busy) = install.busy.as_ref().filter(|_| app.asking.is_none()) {
         let spinner = SPINNER[install.frame % SPINNER.len()];
-        message_box(buf, inner, app, "connecting", &[(format!("{spinner} {busy}"), text)]);
+        message_box(buf, app, "connecting", &[(format!("{spinner} {busy}"), text)]);
     }
 }
 
@@ -719,8 +713,8 @@ fn done(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
 pub(super) fn asking(buf: &mut Buffer, area: Rect, app: &App, asking: &AskView) {
     let palette = &app.palette;
     let text = text_style(palette);
-    let width: u16 = 60;
-    let inner_width = usize::from(width - 6);
+    let rect = connection_rect(area);
+    let inner_width = usize::from(rect.width.saturating_sub(6));
     let (title, mut lines, bottom): (&str, Vec<(String, Style)>, Vec<Control>) = match asking.kind {
         Kind::Touch => {
             let key = asking
@@ -799,8 +793,6 @@ pub(super) fn asking(buf: &mut Buffer, area: Rect, app: &App, asking: &AskView) 
         }
     };
     lines.insert(0, (String::new(), text));
-    let height = u16::try_from(lines.len() + 3).unwrap_or(u16::MAX);
-    let rect = centered(area, width, height);
     let inner = frame(
         buf,
         rect,

@@ -2161,16 +2161,19 @@ pub fn unreachable_lines(text: &str) -> Vec<String> {
 /// The spinner of what is being waited for.
 pub(super) const SPINNER: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 
-/// A small framed box in the middle of `area` with `lines`: the start of
-/// a connection and its failure (the setup's, the install's).
-pub(super) fn message_box(buf: &mut Buffer, area: Rect, app: &App, title: &str, lines: &[(String, Style)]) {
+/// One stable location and size for connection progress and SSH questions.
+pub(super) fn connection_rect(area: Rect) -> Rect {
+    centered(
+        area,
+        72.min(area.width.saturating_sub(4)),
+        12.min(area.height.saturating_sub(2)),
+    )
+}
+
+/// Connection progress and failures use the same frame as SSH questions.
+pub(super) fn message_box(buf: &mut Buffer, app: &App, title: &str, lines: &[(String, Style)]) {
     let palette = &app.palette;
-    let longest = lines.iter().map(|(line, _)| line.chars().count()).max().unwrap_or(0);
-    let width = u16::try_from(longest + 6)
-        .unwrap_or(u16::MAX)
-        .clamp(40, area.width.saturating_sub(4).max(10));
-    let height = u16::try_from(lines.len() + 4).unwrap_or(u16::MAX).min(area.height);
-    let rect = centered(area, width, height);
+    let rect = connection_rect(buf.area);
     let inner = frame(
         buf,
         rect,
@@ -2181,11 +2184,16 @@ pub(super) fn message_box(buf: &mut Buffer, area: Rect, app: &App, title: &str, 
             ..Sides::default()
         },
     );
-    for (row, (line, style)) in lines.iter().enumerate() {
+    let lines = lines.iter().flat_map(|(line, style)| {
+        wrap(line, usize::from(inner.width.saturating_sub(4)))
+            .into_iter()
+            .map(move |line| (line, *style))
+    });
+    for (row, (line, style)) in lines.enumerate() {
         let y = inner.y + 1 + u16::try_from(row).unwrap_or(0);
         if y >= inner.bottom() {
             break;
         }
-        write(buf, inner.x + 2, y, inner.width.saturating_sub(4), line, *style);
+        write(buf, inner.x + 2, y, inner.width.saturating_sub(4), &line, style);
     }
 }

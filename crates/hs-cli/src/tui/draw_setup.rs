@@ -118,7 +118,7 @@ pub(super) fn setup_box(buf: &mut Buffer, area: Rect, app: &App, setup: &SetupBo
             // The touch box replaces it while ssh asks: one box at a time.
             if app.asking.is_none() {
                 let lines = vec![(format!("{spinner} {message}"), text)];
-                message_box(buf, inner, app, "connecting", &lines);
+                message_box(buf, app, "connecting", &lines);
             }
         }
         Stage::Failed { lines } => {
@@ -126,7 +126,7 @@ pub(super) fn setup_box(buf: &mut Buffer, area: Rect, app: &App, setup: &SetupBo
             let mut shown: Vec<(String, Style)> = wrapped(lines, 64).into_iter().map(|line| (line, style)).collect();
             shown.push((String::new(), text));
             shown.push(("ENTER or ESC closes.".to_owned(), text.fg(palette.muted)));
-            message_box(buf, inner, app, "setup failed", &shown);
+            message_box(buf, app, "setup failed", &shown);
         }
         Stage::Review { lines, scroll, .. } => {
             let all = wrapped(lines, width);
