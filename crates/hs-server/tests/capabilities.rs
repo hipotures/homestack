@@ -43,6 +43,7 @@ config = { name = "gold", tags = "homestack-gold" }"#,
     let server = Server::start(&sim, &[sim.base_url()], PVE_TOKEN, dir).await?;
     let reply = server.put_config(SERVER_TOML, ("if-none-match", "*")).await?;
     assert_eq!(reply.status, StatusCode::OK, "{}", reply.text);
+    server.finish_startup(&sim).await?;
     Ok((sim, server))
 }
 
@@ -62,6 +63,7 @@ async fn capabilities_need_a_configuration() -> TestResult {
     let dir = tempfile::tempdir()?;
     let sim = PveSim::start(spec(AUDITOR)?).await?;
     let server = Server::start(&sim, &[sim.base_url()], PVE_TOKEN, dir.path()).await?;
+    server.finish_startup(&sim).await?;
     let (status, headers, body) = server.get("/v1/capabilities", Some(API_TOKEN)).await?;
     assert_eq!(status, StatusCode::CONFLICT);
     assert_error(&body, &headers, "config_missing", false);

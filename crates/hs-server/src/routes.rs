@@ -40,6 +40,7 @@ pub fn v1() -> Router<AppState> {
         )
         .route("/v1/config/version", get(config_version))
         .route("/v1/capabilities", get(capabilities))
+        .route("/v1/images/check", get(crate::image_updates::progress))
         .route("/v1/status", get(crate::reads::status))
         .route("/v1/workspaces/{target}", get(crate::reads::workspace))
         .route("/v1/storage", get(crate::reads::storage))

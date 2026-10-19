@@ -137,6 +137,9 @@ pub async fn status(
     let mut status = global_status(state.pve()?.as_ref(), &stored.config)
         .await
         .map_err(|e| core_error(e, "No such resource."))?;
+    for entry in &mut status.others {
+        state.image_updates.annotate(entry);
+    }
     let gaps = listing_gaps(&state, &stored.config, &status.summary.nodes).await?;
     if !gaps.is_empty() {
         status.summary.orphan_scan_complete = false;

@@ -138,6 +138,24 @@ impl Server {
         })
     }
 
+    /// Isolate endpoint assertions from the automatic startup inventory read.
+    pub async fn finish_startup(&self, sim: &PveSim) -> Result<(), Error> {
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                let (status, _, progress) = self.get("/v1/images/check", Some(API_TOKEN)).await?;
+                assert_eq!(status, StatusCode::OK);
+                if progress["checking"] == false {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+            Ok::<_, Error>(())
+        })
+        .await??;
+        sim.clear_ops();
+        Ok(())
+    }
+
     pub fn stop(self) {
         self.task.abort();
     }

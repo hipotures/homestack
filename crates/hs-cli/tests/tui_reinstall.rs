@@ -257,3 +257,45 @@ fn the_run_shows_every_server_and_what_the_one_under_way_does() {
         assert!(text.contains(line), "{line}: {text}");
     }
 }
+
+#[test]
+fn update_arrow_touches_the_name_and_stays_separate_from_a_six_digit_vmid() {
+    let mut fixture = servers();
+    let mut status = serde_json::to_value(fixture.app.status.as_ref().unwrap()).unwrap();
+    status["others"][0]["image_update"] = json!({
+        "state": "available", "available": format!("{REPOSITORY}:0.1.215-123456abcdef"),
+        "checked_at": "2026-10-19T10:00:00Z", "error": null
+    });
+    fixture.app.set_status(&status);
+    for width in [80, 120, 160] {
+        let buf = render(&fixture.app, width, 36);
+        let text = screen(&buf);
+        assert!(text.contains("102001 ↑api1"), "{text}");
+        assert!(text.contains("102002  api2"), "{text}");
+        let (first_x, _) = position(&buf, "api1");
+        let (second_x, _) = position(&buf, "api2");
+        assert_eq!(first_x, second_x);
+    }
+    status["others"][0]["image_update"]["available"] = serde_json::Value::Null;
+    status["others"][0]["image_update"]["state"] = json!("up_to_date");
+    fixture.app.set_status(&status);
+    assert!(!screen(&render(&fixture.app, 120, 36)).contains("↑api1"));
+}
+
+#[test]
+fn container_details_show_installed_and_available_images_and_check_time() {
+    let mut fixture = servers();
+    let mut status = serde_json::to_value(fixture.app.status.as_ref().unwrap()).unwrap();
+    status["others"][0]["image"] = json!(format!("{REPOSITORY}:0.1.214-123456abcdef"));
+    status["others"][0]["image_update"] = json!({
+        "state": "available", "available": format!("{REPOSITORY}:0.1.215-abcdef123456"),
+        "checked_at": "2026-10-19T10:00:00Z", "error": null
+    });
+    fixture.app.set_status(&status);
+    select(&mut fixture.app, 102_001);
+    fixture.app.info = true;
+    let text = screen(&render(&fixture.app, 160, 36));
+    for expected in ["0.1.214-123456abcdef", "0.1.215-abcdef123456", "2026-10-19 10:00 UTC"] {
+        assert!(text.contains(expected), "{text}");
+    }
+}

@@ -21,6 +21,7 @@ async fn a_new_server_has_no_configuration() -> TestResult {
     let dir = tempfile::tempdir()?;
     let sim = sim().await?;
     let server = Server::start(&sim, &[sim.base_url()], PVE_TOKEN, dir.path()).await?;
+    server.finish_startup(&sim).await?;
 
     let (status, headers, body) = server.get("/v1/config", Some(API_TOKEN)).await?;
     assert_eq!(status, StatusCode::NOT_FOUND);
@@ -41,6 +42,7 @@ async fn the_first_upload_needs_if_none_match_and_is_private() -> TestResult {
     let sim = sim().await?;
     let config_dir = dir.path().join("state/homestack");
     let server = Server::start_with(&sim, &[sim.base_url()], PVE_TOKEN, &config_dir.join("server.toml")).await?;
+    server.finish_startup(&sim).await?;
 
     let reply = server
         .send(Method::PUT, "/v1/config", Some(API_TOKEN), &[], Some(SERVER_TOML))

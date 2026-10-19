@@ -18,6 +18,7 @@ use utoipa::{Modify, OpenApi};
         crate::secrets::put_pve_token,
         crate::secrets::put_tls,
         crate::reads::status,
+        crate::image_updates::progress,
         crate::reads::workspace,
         crate::reads::storage,
         crate::reads::orphans,

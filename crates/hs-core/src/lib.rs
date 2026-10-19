@@ -22,6 +22,7 @@ pub mod migrate;
 pub mod power;
 pub mod pve;
 pub mod refresh;
+pub mod registry;
 pub mod resize;
 pub mod resize_guest;
 pub mod status;

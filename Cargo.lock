@@ -977,6 +977,7 @@ dependencies = [
  "hs-model",
  "hs-pve",
  "pve-sim",
+ "reqwest",
  "serde",
  "serde_json",
  "tempfile",

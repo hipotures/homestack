@@ -31,6 +31,7 @@ const REFRESH: Duration = Duration::from_secs(10);
 
 /// What a background task brings back.
 enum Update {
+    Startup(&'static str),
     Status(String, Value),
     Servers(Vec<(String, Option<String>)>),
     Unreachable(Vec<(String, String)>),
@@ -368,6 +369,34 @@ fn mib_of(size: &str) -> Option<u64> {
 /// Read the status and the servers' health now and every [`REFRESH`].
 fn spawn_refresh(client: Arc<Client>, updates: mpsc::UnboundedSender<Update>, stop: Arc<AtomicBool>) {
     tokio::spawn(async move {
+        let _ = updates.send(Update::Startup("Checking LXC image updates"));
+        let check = async {
+            loop {
+                if stop.load(Ordering::SeqCst) {
+                    return;
+                }
+                match client.get_from("/v1/images/check").await {
+                    Ok((_, progress)) if progress["checking"] == true => {
+                        tokio::time::sleep(Duration::from_millis(250)).await;
+                    }
+                    Ok(_) => return,
+                    Err(error) => {
+                        let _ = updates.send(Update::Log(format!(
+                            "Cannot read image check progress: {}",
+                            client_error(error).0
+                        )));
+                        return;
+                    }
+                }
+            }
+        };
+        if tokio::time::timeout(Duration::from_secs(8), check).await.is_err() {
+            let _ = updates.send(Update::Log("Image checks continue in the background".to_owned()));
+        }
+        if stop.load(Ordering::SeqCst) {
+            return;
+        }
+        let _ = updates.send(Update::Startup("Reading the status from the servers"));
         let mut defaults_read = false;
         loop {
             read_status(&client, &updates, &stop).await;
@@ -1006,6 +1035,7 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
                 }
             }
             Some(update) = received.recv() => match update {
+                Update::Startup(message) => app.startup_message = Some(message),
                 Update::Status(url, status) => {
                     let host = host(&url).split('.').next().unwrap_or_default().to_owned();
                     if connected.as_deref() != Some(host.as_str()) {

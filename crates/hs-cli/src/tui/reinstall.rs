@@ -98,7 +98,7 @@ pub async fn read(deploy_toml: &Path, vmids: &[u32], offset: i64) -> Result<Imag
         chosen.push((*vmid, instance.name.clone(), image));
     }
     let current: Vec<String> = chosen.iter().filter_map(|(_, _, image)| image.clone()).collect();
-    let published: Vec<Image> = hs_deploy::registry::recent(&config.image, OFFERED, &current)
+    let published: Vec<Image> = hs_core::registry::recent(&config.image, OFFERED, &current)
         .await?
         .into_iter()
         .map(|published| Image {

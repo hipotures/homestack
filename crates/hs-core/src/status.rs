@@ -455,6 +455,8 @@ pub async fn global_status(pve: &impl Pve, cfg: &Config) -> Result<GlobalStatus,
                 home: None,
                 role_tag_ok,
                 warning,
+                image: None,
+                image_update: None,
             })
         }
     };
@@ -525,6 +527,8 @@ pub async fn global_status(pve: &impl Pve, cfg: &Config) -> Result<GlobalStatus,
             ip: expected_ip(cfg, item.vmid),
             root_storage: disk_storage(vm_cfg.get(&cfg.root_disk).map(String::as_str)),
             home,
+            image: None,
+            image_update: None,
             role_tag_ok: !tags.contains(GOLD_TAG) && !(alien && tags.contains(WORKSPACE_TAG)),
             warning,
         });
@@ -545,12 +549,19 @@ pub async fn global_status(pve: &impl Pve, cfg: &Config) -> Result<GlobalStatus,
         }
         let node_info = nodes.get(&item.node);
         let online = node_info.is_some_and(|n| n.online);
-        let root_storage = if !online {
-            None
-        } else if container {
+        let container_config = if online && container {
             pve.get(&format!("/nodes/{}/lxc/{}/config", item.node, item.vmid), &[])
                 .await
                 .ok()
+        } else {
+            None
+        };
+        let image = container_config.as_ref().and_then(crate::registry::deployed_image);
+        let root_storage = if !online {
+            None
+        } else if container {
+            container_config
+                .as_ref()
                 .and_then(|config| disk_storage(config.get("rootfs").and_then(Value::as_str)))
         } else {
             vm_config(pve, &item.node, item.vmid)
@@ -579,6 +590,8 @@ pub async fn global_status(pve: &impl Pve, cfg: &Config) -> Result<GlobalStatus,
             home: None,
             role_tag_ok: true,
             warning: None,
+            image,
+            image_update: None,
         });
     }
     others.sort_by_key(|entry| entry.vmid);

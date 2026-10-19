@@ -51,6 +51,37 @@ pub struct StatusEntry {
     pub home: Option<HomeUsage>,
     pub role_tag_ok: bool,
     pub warning: Option<String>,
+    /// The OCI image recorded by HomeStack in the container description.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image_update: Option<ImageUpdate>,
+}
+
+/// Whether the server is currently discovering or checking container images.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct ImageCheckProgress {
+    pub checking: bool,
+}
+
+/// Cached registry check for a managed container's image.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct ImageUpdate {
+    pub state: ImageUpdateState,
+    pub available: Option<String>,
+    /// Last successful check, in RFC 3339 UTC.
+    pub checked_at: Option<String>,
+    /// A failed check preserves the last successful result.
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ImageUpdateState {
+    Checking,
+    UpToDate,
+    Available,
+    Unknown,
 }
 
 /// A pool and its comment (the name shown for it).

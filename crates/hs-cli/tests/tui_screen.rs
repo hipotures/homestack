@@ -993,3 +993,13 @@ fn each_tag_is_a_square_in_its_colour_before_the_vmid() {
     assert_eq!(buf[(x - 4, y)].fg, palette.warning, "{}", row(&buf, y));
     assert!(screen(&buf).contains("VMID"), "the column has no heading of its own");
 }
+
+#[test]
+fn startup_bar_reports_the_lxc_image_check_stage() {
+    let mut fixture = app();
+    fixture.app.status = None;
+    fixture.app.startup_message = Some("Checking LXC image updates");
+    let text = screen(&render(&fixture.app, 120, 36));
+    assert!(text.contains("Checking LXC image updates"), "{text}");
+    assert!(!text.contains("Reading the status from the servers"), "{text}");
+}

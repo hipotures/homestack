@@ -108,6 +108,7 @@ Use `--config PATH` to point at an explicit `client.toml` outside a named profil
 
 Inside the TUI (`Menu` / `m`):
 - **Reinstall HomeStack** opens the full installer with your saved settings pre-filled.
+- A yellow `↑` immediately before a container name means a newer HomeStack image is available. Servers check the image registry at startup and hourly; the startup bar reports image checking and continues after eight seconds if the check is still running.
 - **Update API containers** performs a rolling update of `homestack-server` LXC containers across cluster nodes using the saved deployment configuration.
 - **Uninstall HomeStack** removes HomeStack's Proxmox user, tokens, roles, ACLs, pools, and unused vendor Cloud-Init snippets, retires `client.toml` to `client.toml.uninstalled`, and returns cleanly to the first-time setup screen.
 

@@ -7,6 +7,7 @@
 mod auth;
 pub mod config_store;
 mod error;
+mod image_updates;
 mod jobs;
 pub mod lifecycle;
 mod openapi;
@@ -206,6 +207,7 @@ struct AppState {
     config: Arc<ConfigStore>,
     ops: Arc<OpsState>,
     instance: Arc<Instance>,
+    image_updates: Arc<image_updates::ImageUpdates>,
 }
 
 impl AppState {
@@ -248,7 +250,9 @@ pub fn app_with(config: ServerConfig, options: AppOptions) -> Result<Router, Sta
         config: Arc::new(store),
         ops: Arc::new(OpsState::new(options, instance.name.clone())),
         instance: Arc::new(instance),
+        image_updates: Arc::default(),
     };
+    image_updates::start(&state.pve, &state.image_updates);
     let v1 = routes::v1().route_layer(middleware::from_fn_with_state(state.clone(), auth::require_bearer));
     Ok(Router::new()
         .merge(routes::public())

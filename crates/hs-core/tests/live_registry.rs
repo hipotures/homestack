@@ -2,7 +2,7 @@
 
 #![allow(clippy::unwrap_used)]
 
-use hs_deploy::registry::recent;
+use hs_core::registry::recent;
 
 #[tokio::test]
 #[ignore = "reads ghcr.io"]

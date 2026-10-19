@@ -13,6 +13,7 @@ async fn liveness_needs_no_token_and_responses_are_not_cached() -> TestResult {
     let dir = tempfile::tempdir()?;
     let sim = PveSim::start(spec(r#""/" = ["Sys.Audit"]"#)?).await?;
     let server = Server::start(&sim, &[sim.base_url()], PVE_TOKEN, dir.path()).await?;
+    server.finish_startup(&sim).await?;
     let (status, headers, body) = server.get("/health/live", None).await?;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body, json!({"status": "ok"}));
@@ -29,6 +30,7 @@ async fn api_routes_require_the_bearer_token() -> TestResult {
     let dir = tempfile::tempdir()?;
     let sim = PveSim::start(spec(r#""/" = ["Sys.Audit"]"#)?).await?;
     let server = Server::start(&sim, &[sim.base_url()], PVE_TOKEN, dir.path()).await?;
+    server.finish_startup(&sim).await?;
     for token in [None, Some("wrong-token-wrong-token-wrong-token-xx")] {
         let (status, headers, body) = server.get("/v1/pve/version", token).await?;
         assert_eq!(status, StatusCode::UNAUTHORIZED);
@@ -79,6 +81,7 @@ async fn invalid_input_is_rejected_without_being_echoed() -> TestResult {
     let dir = tempfile::tempdir()?;
     let sim = PveSim::start(spec(r#""/" = ["Sys.Audit"]"#)?).await?;
     let server = Server::start(&sim, &[sim.base_url()], PVE_TOKEN, dir.path()).await?;
+    server.finish_startup(&sim).await?;
     let (status, headers, body) = server
         .get("/v1/pve/nodes/evil_name%3Cscript%3E/status", Some(API_TOKEN))
         .await?;
@@ -165,5 +168,37 @@ fn checked_in_openapi_document_is_current() -> TestResult {
         checked_in == generated,
         "docs/openapi.json is out of date; run `UPDATE_OPENAPI=1 cargo test -p hs-server --test api checked_in_openapi`"
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn image_checks_start_without_a_status_request_and_progress_is_cached() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let sim = PveSim::start(spec(r#""/" = ["Sys.Audit"]"#)?).await?;
+    let server = Server::start(&sim, &[sim.base_url()], PVE_TOKEN, dir.path()).await?;
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let (status, _, progress) = server.get("/v1/images/check", Some(API_TOKEN)).await?;
+            assert_eq!(status, StatusCode::OK);
+            if progress["checking"] == false {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        Ok::<_, Box<dyn std::error::Error>>(())
+    })
+    .await??;
+    assert!(
+        sim.ops()
+            .iter()
+            .any(|op| op.params.get("path").is_some_and(|path| path == "/cluster/resources"))
+    );
+    sim.clear_ops();
+    let (status, _, progress) = server.get("/v1/images/check", Some(API_TOKEN)).await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(progress, json!({"checking": false}));
+    assert!(sim.ops().is_empty(), "progress requests must only read the cache");
+    let (status, _, _) = server.get("/v1/images/check", None).await?;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
     Ok(())
 }

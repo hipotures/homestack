@@ -80,6 +80,7 @@ mod tests {
                 crate::DEFAULT_INSTANCE.to_owned(),
             )),
             instance: Arc::new(crate::Instance::default()),
+            image_updates: Arc::default(),
         };
         let app = Router::new()
             .route(

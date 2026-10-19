@@ -463,6 +463,31 @@
         ]
       }
     },
+    "/v1/images/check": {
+      "get": {
+        "tags": [
+          "status"
+        ],
+        "summary": "Progress is served from memory so startup need not repeat inventory reads.",
+        "operationId": "progress",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImageCheckProgress"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/v1/jobs": {
       "get": {
         "tags": [
@@ -2056,6 +2081,59 @@
           }
         }
       },
+      "ImageCheckProgress": {
+        "type": "object",
+        "description": "Whether the server is currently discovering or checking container images.",
+        "required": [
+          "checking"
+        ],
+        "properties": {
+          "checking": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ImageUpdate": {
+        "type": "object",
+        "description": "Cached registry check for a managed container's image.",
+        "required": [
+          "state"
+        ],
+        "properties": {
+          "available": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "checked_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Last successful check, in RFC 3339 UTC."
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A failed check preserves the last successful result."
+          },
+          "state": {
+            "$ref": "#/components/schemas/ImageUpdateState"
+          }
+        }
+      },
+      "ImageUpdateState": {
+        "type": "string",
+        "enum": [
+          "checking",
+          "up_to_date",
+          "available",
+          "unknown"
+        ]
+      },
       "Installation": {
         "type": "object",
         "description": "The Proxmox objects of a HomeStack installation the server can check.",
@@ -2808,6 +2886,23 @@
               {
                 "$ref": "#/components/schemas/HomeUsage",
                 "description": "Home usage; `null` for Gold, alien VMs, a missing home or an offline node."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "image": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The OCI image recorded by HomeStack in the container description."
+          },
+          "image_update": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ImageUpdate"
               },
               {
                 "type": "null"

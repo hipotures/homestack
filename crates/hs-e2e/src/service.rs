@@ -189,7 +189,7 @@ pub async fn prepare(options: &Options, dir: &Path, artifacts: &Path, report: &V
             .to_owned()
     } else {
         eprintln!("Selecting the newest published HomeStack server image");
-        hs_deploy::registry::recent("ghcr.io/hipotures/homestack-server:latest", 10, &[])
+        hs_core::registry::recent("ghcr.io/hipotures/homestack-server:latest", 10, &[])
             .await?
             .into_iter()
             .next()

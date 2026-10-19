@@ -434,9 +434,9 @@ fn columns(width: usize, tag_width: usize, name_width: usize) -> Vec<Column> {
         },
         Column {
             heading: "NAME",
-            width: name_width.max(12),
+            width: name_width.max(12) + 1,
             right: false,
-            value: |entry| entry.name.clone().unwrap_or_default(),
+            value: |entry| format!(" {}", entry.name.as_deref().unwrap_or_default()),
         },
         Column {
             heading: "NODE",
@@ -511,7 +511,9 @@ fn columns(width: usize, tag_width: usize, name_width: usize) -> Vec<Column> {
             continue;
         }
         let left = width.saturating_sub(used + 1);
-        if left >= 9 {
+        // STATE only draws a dot, so keep it even in the narrow action list.
+        let minimum = if column.heading == "STATE" { 3 } else { 9 };
+        if left >= minimum {
             column.width = left;
             chosen.push(column);
         }
@@ -587,6 +589,32 @@ fn workspace_actions(app: &App) -> Vec<Control> {
 /// Label and value pairs of the selected workspace.
 fn detail_pairs(app: &App, entry: &StatusEntry) -> Vec<(&'static str, String)> {
     let mut pairs = vec![("", format!("{} on {}", entry.status, entry.node))];
+    if let Some(image) = &entry.image {
+        let tag = |image: &str| image.rsplit_once(':').map_or(image, |(_, tag)| tag).to_owned();
+        pairs.push(("address", entry.ip.clone().unwrap_or_else(|| "—".to_owned())));
+        pairs.push(("image", tag(image)));
+        if let Some(update) = &entry.image_update {
+            let state = match update.state {
+                hs_model::status::ImageUpdateState::Checking => "checking",
+                hs_model::status::ImageUpdateState::UpToDate => "up to date",
+                hs_model::status::ImageUpdateState::Available => "available",
+                hs_model::status::ImageUpdateState::Unknown => "unknown",
+            };
+            pairs.push((
+                "update",
+                update.available.as_deref().map_or_else(|| state.to_owned(), tag),
+            ));
+            if let Some(checked) = &update.checked_at {
+                let checked = super::reinstall::local_time(checked, 0)
+                    .map_or_else(|| checked.clone(), |time| format!("{time} UTC"));
+                pairs.push(("checked", checked));
+            }
+            if let Some(error) = &update.error {
+                pairs.push(("error", error.clone()));
+            }
+        }
+        return pairs;
+    }
     match app.selected_details() {
         Some(details) => {
             let address = details
@@ -733,7 +761,8 @@ fn workspaces(buf: &mut Buffer, area: Rect, app: &App, mut controls: Vec<Control
         // A moving bar and the time in the middle of the panel, so the start
         // is never a still screen.
         let seconds = f64::from(app.waiting) / 10.0;
-        let words = format!("Reading the status from the servers  {seconds:.1} s");
+        let message = app.startup_message.unwrap_or("Reading the status from the servers");
+        let words = format!("{message}  {seconds:.1} s");
         let width = 30_usize;
         let block = 6_usize;
         let at = usize::try_from(app.waiting).unwrap_or(0) % (width + block);
@@ -858,7 +887,13 @@ fn workspaces(buf: &mut Buffer, area: Rect, app: &App, mut controls: Vec<Control
         list.x,
         list.y,
         list.width,
-        &list_line(&columns, |column| column.heading.to_owned()),
+        &list_line(&columns, |column| {
+            if column.heading == "NAME" {
+                " NAME".to_owned()
+            } else {
+                column.heading.to_owned()
+            }
+        }),
         muted,
     );
     if rows.is_empty() {
@@ -909,6 +944,27 @@ fn workspaces(buf: &mut Buffer, area: Rect, app: &App, mut controls: Vec<Control
         let line = list_line(&columns, |column| (column.value)(&shown));
         let line = format!("{line:<width$}", width = usize::from(list.width));
         write(buf, list.x, y, list.width, &line, style);
+        if entry
+            .image_update
+            .as_ref()
+            .is_some_and(|update| update.available.is_some())
+        {
+            let name_x = columns
+                .iter()
+                .take_while(|column| column.heading != "NAME")
+                .map(|column| column.width + 1)
+                .sum::<usize>();
+            if columns.iter().any(|column| column.heading == "NAME") {
+                write(
+                    buf,
+                    list.x + 1 + u16::try_from(name_x).unwrap_or(0),
+                    y,
+                    1,
+                    "↑",
+                    style.fg(palette.warning),
+                );
+            }
+        }
         // The tags' squares in their colours, from the first column.
         for (at, tag) in entry.tags.iter().take(MAX_TAGS).enumerate() {
             let x = list.x + 1 + u16::try_from(at).unwrap_or(0);
