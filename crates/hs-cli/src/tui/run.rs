@@ -33,6 +33,8 @@ const REFRESH: Duration = Duration::from_secs(10);
 enum Update {
     Startup(&'static str),
     Status(String, Value),
+    StatusRejected(String),
+    Storage(Result<hs_model::status::StorageOverview, String>),
     Servers(Vec<(String, Option<String>)>),
     Unreachable(Vec<(String, String)>),
     Report(String, Vec<String>),
@@ -302,7 +304,7 @@ async fn health(client: &Client) -> Vec<(String, Option<String>)> {
 
 /// Read the status and the servers' health once; nothing is told once
 /// `stop` is set (a new client.toml replaced this client meanwhile).
-async fn read_status(client: &Client, updates: &mpsc::UnboundedSender<Update>, stop: &AtomicBool) {
+async fn read_status(client: &Client, updates: &mpsc::UnboundedSender<Update>, stop: &AtomicBool) -> bool {
     let servers = health(client).await;
     // The servers' dots at once; the status takes a few seconds more.
     if !stop.load(Ordering::SeqCst) {
@@ -310,10 +312,16 @@ async fn read_status(client: &Client, updates: &mpsc::UnboundedSender<Update>, s
     }
     let answer = client.get_from("/v1/status").await;
     if stop.load(Ordering::SeqCst) {
-        return;
+        return false;
     }
     match answer {
         Ok((url, status)) => {
+            if let Err(error) = serde_json::from_value::<hs_model::status::GlobalStatus>(status.clone()) {
+                let _ = updates.send(Update::StatusRejected(format!(
+                    "Invalid server status: {error}. Automatic reads stopped."
+                )));
+                return false;
+            }
             let _ = updates.send(Update::Servers(servers));
             let _ = updates.send(Update::Status(url.to_string(), status));
         }
@@ -326,6 +334,7 @@ async fn read_status(client: &Client, updates: &mpsc::UnboundedSender<Update>, s
             let _ = updates.send(Update::Unreachable(unreachable));
         }
     }
+    true
 }
 
 /// Read the pools, home size and network for a new workspace; retry if the
@@ -399,7 +408,9 @@ fn spawn_refresh(client: Arc<Client>, updates: mpsc::UnboundedSender<Update>, st
         let _ = updates.send(Update::Startup("Reading the status from the servers"));
         let mut defaults_read = false;
         loop {
-            read_status(&client, &updates, &stop).await;
+            if !read_status(&client, &updates, &stop).await {
+                return;
+            }
             if !defaults_read {
                 defaults_read = read_defaults(&client, &updates, &stop).await;
             }
@@ -768,10 +779,39 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
     // The target of the open box; another target's worker cannot speak to it.
     let mut setup_open: Option<Option<u32>> = None;
     let mut details = super::details::Loader::default();
+    let mut storage_loading = false;
+    let mut storage_visible = false;
+    let mut storage_next = std::time::Instant::now();
     loop {
         app.clock = clock.now();
         app.today = clock.today();
         details.update(app.details_target(), connection.client.as_ref());
+        let visible = matches!(app.view, 2 | 3);
+        if visible
+            && !storage_loading
+            && (!storage_visible
+                || (app.storage_overview.as_ref().is_some_and(Result::is_ok)
+                    && std::time::Instant::now() >= storage_next))
+            && let Some(client) = &connection.client
+        {
+            storage_loading = true;
+            app.storage_overview = None;
+            let client = Arc::clone(client);
+            let updates = updates.clone();
+            let stop = Arc::clone(&connection.stop);
+            tokio::spawn(async move {
+                let result = match client.get("/v1/storage/overview").await {
+                    Ok(value) => {
+                        serde_json::from_value(value).map_err(|error| format!("Invalid storage data: {error}"))
+                    }
+                    Err(error) => Err(client_error(error).0),
+                };
+                if !stop.load(Ordering::SeqCst) {
+                    let _ = updates.send(Update::Storage(result));
+                }
+            });
+        }
+        storage_visible = visible;
         if !screen.copying {
             screen
                 .terminal
@@ -1044,6 +1084,16 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
                     }
                     app.set_status(&status);
                 }
+                Update::StatusRejected(error) => {
+                    app.startup_message = None;
+                    app.log(&clock.now(), &error);
+                    app.set_notice(Some(("The server returned invalid status data".to_owned(), vec![error])));
+                }
+                Update::Storage(result) => {
+                    storage_loading = false;
+                    storage_next = std::time::Instant::now() + REFRESH;
+                    app.storage_overview = Some(result);
+                }
                 Update::Servers(servers) => app.set_servers(servers),
                 Update::Images(targets, images) => app.set_images(&targets, images),
                 Update::Defaults(pool, gold_pool, home, network) => {
@@ -1191,6 +1241,48 @@ mod public_key_tests {
         assert_eq!(keys[0].path, "~/.ssh/a.pub");
         assert_eq!(keys[1].name, "backup key with spaces");
         assert_eq!(keys[2].name, "Unnamed key");
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod status_read_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn malformed_status_stops_automatic_reads() -> Result<(), Box<dyn std::error::Error>> {
+        use axum::{Json, Router, routing::get};
+        use hs_client::ClientConfig;
+        use serde_json::json;
+        let router = Router::new()
+            .route(
+                "/v1/config/version",
+                get(|| async { Json(json!({"config_version": "test"})) }),
+            )
+            .route("/v1/status", get(|| async { Json(json!({"summary": {}})) }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let address = listener.local_addr()?;
+        let task = tokio::spawn(async move { axum::serve(listener, router).await });
+        let client = Client::new(ClientConfig::new(
+            vec![format!("http://{address}").parse::<url::Url>()?.into()],
+            "test".to_owned(),
+        ))?;
+        let (updates, mut received) = mpsc::unbounded_channel();
+        let keep_reading = read_status(&client, &updates, &AtomicBool::new(false)).await;
+        task.abort();
+        assert!(!keep_reading);
+        let mut errors = 0;
+        while let Ok(update) = received.try_recv() {
+            match update {
+                Update::StatusRejected(message) => {
+                    errors += 1;
+                    assert!(message.contains("Automatic reads stopped"));
+                }
+                Update::Status(_, _) => panic!("Invalid status was accepted"),
+                _ => {}
+            }
+        }
+        assert_eq!(errors, 1);
         Ok(())
     }
 }

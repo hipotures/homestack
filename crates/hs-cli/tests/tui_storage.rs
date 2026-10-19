@@ -11,7 +11,7 @@ use tui_fixture::{app, position, press, screen};
 fn dedicated_views_show_storage_details_and_default_stays_compact() {
     let mut fixture = app();
     let mut status = tui_fixture::status();
-    status["summary"]["storages"] = json!([
+    let storages = json!([
         {"storage": "NFS1", "storage_type": "nfs", "content": "images,backup,iso,snippets", "shared": true,
          "nodes": ["pve1", "pve2", "pve3"], "available": true,
          "capacity": {"name": "NFS1", "total_bytes": 100, "used_bytes": 85, "available_bytes": 15, "percent": 85.0}}
@@ -20,7 +20,12 @@ fn dedicated_views_show_storage_details_and_default_stays_compact() {
     status["summary"]["orphaned_volumes"] = json!([
         {"volid": "local:vm-299-hs-home-user", "vmid": 299, "role": "home", "name": "user", "size_bytes": 1073741824, "storage": "local", "node": "pve1"}
     ]);
-    status["summary"]["latest_backups"] = json!([{"vmid": 201, "created_at": 1, "storage": "NFS1"}]);
+    fixture.app.storage_overview = Some(Ok(serde_json::from_value(json!({
+        "storages": storages,
+        "latest_backups": [{"vmid": 201, "created_at": 1, "storage": "NFS1"}],
+        "backup_scan_complete": true, "warnings": []
+    }))
+    .unwrap()));
     fixture.app.status = Some(serde_json::from_value(status).unwrap());
     let compact = screen(&render(&fixture.app, 120, 36));
     assert!(!compact.contains("[shared]"));
@@ -47,6 +52,10 @@ fn dedicated_views_show_storage_details_and_default_stays_compact() {
 #[test]
 fn storage_scrolling_reaches_last_guest_and_home_returns_to_inventory() {
     let mut fixture = app();
+    fixture.app.storage_overview = Some(Ok(serde_json::from_value(json!({
+        "storages": [], "latest_backups": [], "backup_scan_complete": true, "warnings": []
+    }))
+    .unwrap()));
     let mut status = tui_fixture::status();
     status["summary"]["orphaned_volumes"] = json!([
         {"volid": "local:vm-299-hs-home-user", "vmid": 299, "role": "home", "name": "user", "size_bytes": 1073741824, "storage": "local", "node": "pve1"}
@@ -61,4 +70,23 @@ fn storage_scrolling_reaches_last_guest_and_home_returns_to_inventory() {
     press(&mut fixture.app, KeyCode::Home);
     assert_eq!(fixture.app.storage_scroll.get(), 0);
     assert!(screen(&render(&fixture.app, 80, 24)).contains("Storage inventory"));
+}
+
+#[test]
+fn basic_status_starts_without_extended_storage_and_storage_failure_is_local() {
+    let mut fixture = app();
+    fixture.app.status = None;
+    let status = tui_fixture::status();
+    assert!(status["summary"].get("storages").is_none());
+    fixture.app.set_status(&status);
+    assert!(fixture.app.status.is_some());
+    fixture.app.storage_overview = Some(Err("HTTP 404: endpoint unavailable".to_owned()));
+    let text = screen(&render(&fixture.app, 120, 36));
+    assert!(text.contains("dev-main"), "{text}");
+    assert!(!text.contains("endpoint unavailable"), "{text}");
+    press(&mut fixture.app, KeyCode::Char('3'));
+    let text = screen(&render(&fixture.app, 120, 36));
+    assert!(text.contains("Storage inventory unavailable"), "{text}");
+    assert!(text.contains("/home"), "{text}");
+    assert!(!text.contains("no backup found"), "{text}");
 }

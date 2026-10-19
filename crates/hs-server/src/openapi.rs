@@ -21,6 +21,7 @@ use utoipa::{Modify, OpenApi};
         crate::image_updates::progress,
         crate::reads::workspace,
         crate::reads::storage,
+        crate::reads::storage_overview,
         crate::reads::orphans,
         crate::reads::discovery,
         crate::reads::networks,

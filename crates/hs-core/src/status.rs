@@ -748,10 +748,6 @@ pub async fn global_status(pve: &impl Pve, cfg: &Config) -> Result<GlobalStatus,
             },
         );
 
-    let (storages, latest_backups, backup_scan_complete, inventory_warnings) =
-        storage_inventory(pve, &inventory.nodes).await;
-    warnings.extend(inventory_warnings);
-
     let managed_homes = workspaces.iter().filter(|w| w.role == "WS").count() as u64;
     let all_known = known_count == managed_homes && managed_homes > 0;
     #[allow(
@@ -769,9 +765,6 @@ pub async fn global_status(pve: &impl Pve, cfg: &Config) -> Result<GlobalStatus,
             stopped,
             root_storage,
             storage_layouts: layouts,
-            storages,
-            latest_backups,
-            backup_scan_complete,
             nodes: inventory.nodes.clone(),
             homes: HomesSummary {
                 used_bytes: (known_count > 0).then_some(known_used),

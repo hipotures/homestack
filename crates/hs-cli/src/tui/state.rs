@@ -195,6 +195,7 @@ pub struct App {
     pub palette: Palette,
     no_color: bool,
     pub status: Option<GlobalStatus>,
+    pub storage_overview: Option<Result<hs_model::status::StorageOverview, String>>,
     pub startup_message: Option<&'static str>,
     /// Every server: its URL and why it did not answer, if it did not.
     pub servers: Vec<(String, Option<String>)>,
@@ -288,6 +289,7 @@ impl App {
             palette,
             no_color,
             status: None,
+            storage_overview: None,
             startup_message: None,
             servers: Vec::new(),
             unreachable: Vec::new(),

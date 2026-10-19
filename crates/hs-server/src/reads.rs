@@ -101,6 +101,38 @@ async fn listing_gaps(state: &AppState, cfg: &Config, nodes: &[NodeState]) -> Re
     Ok(gaps)
 }
 
+/// Extended storage inventory, independent of the main status read.
+#[utoipa::path(
+    get,
+    path = "/v1/storage/overview",
+    tag = "status",
+    security(("bearer" = [])),
+    responses(
+        (status = 200, body = hs_model::status::StorageOverview),
+        (status = 401, body = hs_model::ErrorBody),
+        (status = 409, body = hs_model::ErrorBody),
+        (status = 502, body = hs_model::ErrorBody),
+        (status = 503, body = hs_model::ErrorBody),
+    )
+)]
+pub async fn storage_overview(
+    State(state): State<AppState>,
+) -> Result<Json<hs_model::status::StorageOverview>, ApiError> {
+    configuration(&state)?;
+    let client = state.pve()?;
+    let nodes = cluster_node_statuses(client.as_ref())
+        .await
+        .map_err(|e| core_error(e, "No such resource."))?;
+    let (storages, latest_backups, backup_scan_complete, warnings) =
+        hs_core::status::storage_inventory(client.as_ref(), &nodes).await;
+    Ok(Json(hs_model::status::StorageOverview {
+        storages,
+        latest_backups,
+        backup_scan_complete,
+        warnings,
+    }))
+}
+
 /// What `/v1/status` lists: everything, or only one pool, one node or both.
 #[derive(Deserialize, utoipa::IntoParams)]
 #[into_params(parameter_in = Query)]

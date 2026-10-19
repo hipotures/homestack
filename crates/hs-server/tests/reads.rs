@@ -47,6 +47,22 @@ async fn get(server: &Server, path: &str) -> Result<(StatusCode, Value, reqwest:
 }
 
 #[tokio::test]
+async fn extended_storage_is_independent_of_basic_status() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let sim = PveSim::start(cluster()?).await?;
+    let server = configured(&sim, SERVER_TOKEN, dir.path()).await?;
+    let (status, basic, _) = get(&server, "/v1/status").await?;
+    assert_eq!(status, StatusCode::OK);
+    assert!(basic["summary"].get("storages").is_none());
+    let (status, overview, _) = get(&server, "/v1/storage/overview").await?;
+    assert_eq!(status, StatusCode::OK, "{overview}");
+    assert!(overview["storages"].is_array());
+    assert!(overview["latest_backups"].is_array());
+    assert!(overview["backup_scan_complete"].is_boolean());
+    Ok(())
+}
+
+#[tokio::test]
 async fn global_status_reports_the_cluster() -> TestResult {
     let dir = tempfile::tempdir()?;
     let sim = PveSim::start(cluster()?).await?;

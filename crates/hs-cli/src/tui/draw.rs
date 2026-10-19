@@ -1068,44 +1068,64 @@ fn storage_details(buf: &mut Buffer, area: Rect, app: &App, mut controls: Vec<Co
     let mut lines = Vec::new();
     if let Some(status) = &app.status {
         let summary = &status.summary;
-        lines.push((
-            format!(" Storage inventory ({})", summary.storages.len()),
-            text.fg(palette.accent),
-        ));
-        for storage in &summary.storages {
-            let capacity = &storage.capacity;
-            let percent = capacity.percent.map_or_else(|| "—".to_owned(), |p| format!("{p:.0}%"));
-            let color = if !storage.available {
-                palette.warning
-            } else {
-                match capacity.percent {
-                    Some(p) if p >= 85.0 => palette.error,
-                    Some(p) if p >= 75.0 => palette.warning,
-                    Some(_) => palette.ok,
-                    None => palette.muted,
-                }
-            };
+        let overview = match &app.storage_overview {
+            Some(Ok(overview)) => Some(overview),
+            Some(Err(error)) => {
+                lines.push((
+                    format!(" Storage inventory unavailable: {error}"),
+                    text.fg(palette.warning),
+                ));
+                lines.push((" Leave and reopen this view to retry.".to_owned(), text));
+                None
+            }
+            None => {
+                lines.push((" Reading storage inventory…".to_owned(), text));
+                None
+            }
+        };
+        if let Some(overview) = overview {
             lines.push((
-                format!(
-                    " {}  {}  {}{}  {}",
-                    storage.storage,
-                    storage.storage_type,
-                    storage.nodes.join(","),
-                    if storage.shared { " [shared]" } else { "" },
-                    if storage.available { "" } else { "[unavailable]" }
-                ),
-                text,
+                format!(" Storage inventory ({})", overview.storages.len()),
+                text.fg(palette.accent),
             ));
-            lines.push((
-                format!(
-                    "   {}  used {}/{} ({percent})  free {}",
-                    storage.content,
-                    capacity.used_bytes.map_or_else(|| "—".to_owned(), size),
-                    capacity.total_bytes.map_or_else(|| "—".to_owned(), size),
-                    capacity.available_bytes.map_or_else(|| "—".to_owned(), size)
-                ),
-                text.fg(color),
-            ));
+            for storage in &overview.storages {
+                let capacity = &storage.capacity;
+                let percent = capacity.percent.map_or_else(|| "—".to_owned(), |p| format!("{p:.0}%"));
+                let color = if !storage.available {
+                    palette.warning
+                } else {
+                    match capacity.percent {
+                        Some(p) if p >= 85.0 => palette.error,
+                        Some(p) if p >= 75.0 => palette.warning,
+                        Some(_) => palette.ok,
+                        None => palette.muted,
+                    }
+                };
+                lines.push((
+                    format!(
+                        " {}  {}  {}{}  {}",
+                        storage.storage,
+                        storage.storage_type,
+                        storage.nodes.join(","),
+                        if storage.shared { " [shared]" } else { "" },
+                        if storage.available { "" } else { "[unavailable]" }
+                    ),
+                    text,
+                ));
+                lines.push((
+                    format!(
+                        "   {}  used {}/{} ({percent})  free {}",
+                        storage.content,
+                        capacity.used_bytes.map_or_else(|| "—".to_owned(), size),
+                        capacity.total_bytes.map_or_else(|| "—".to_owned(), size),
+                        capacity.available_bytes.map_or_else(|| "—".to_owned(), size)
+                    ),
+                    text.fg(color),
+                ));
+            }
+            for warning in &overview.warnings {
+                lines.push((format!(" {warning}"), text.fg(palette.warning)));
+            }
         }
         let homes = &summary.homes;
         lines.push((String::new(), text));
@@ -1142,64 +1162,66 @@ fn storage_details(buf: &mut Buffer, area: Rect, app: &App, mut controls: Vec<Co
                 text.fg(palette.warning),
             ));
         }
-        lines.push((String::new(), text));
-        lines.push((
-            format!(
-                " Latest guest backups{}",
-                if summary.backup_scan_complete {
-                    ""
-                } else {
-                    " — scan incomplete"
-                }
-            ),
-            text.fg(palette.accent),
-        ));
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-        let mut guests: Vec<_> = status
-            .gold
-            .iter()
-            .chain(&status.workspaces)
-            .chain(&status.others)
-            .collect();
-        guests.sort_by_key(|guest| guest.vmid);
-        guests.dedup_by_key(|guest| guest.vmid);
-        for guest in guests {
-            let latest = summary.latest_backups.iter().find(|backup| backup.vmid == guest.vmid);
-            let value = latest.map_or_else(
-                || {
-                    if summary.backup_scan_complete {
-                        "no backup found".to_owned()
-                    } else {
-                        "unknown".to_owned()
-                    }
-                },
-                |backup| {
-                    let age = now.saturating_sub(backup.created_at);
-                    let age = if age >= 86400 {
-                        format!("{}d", age / 86400)
-                    } else if age >= 3600 {
-                        format!("{}h", age / 3600)
-                    } else {
-                        format!("{}m", age / 60)
-                    };
-                    format!(
-                        "{age} ago  {}{}",
-                        backup.storage,
-                        if summary.backup_scan_complete {
-                            ""
-                        } else {
-                            " (latest visible)"
-                        }
-                    )
-                },
-            );
+        if let Some(overview) = overview {
+            lines.push((String::new(), text));
             lines.push((
-                format!(" {} {}  {value}", guest.vmid, guest.name.as_deref().unwrap_or("—")),
-                text,
+                format!(
+                    " Latest guest backups{}",
+                    if overview.backup_scan_complete {
+                        ""
+                    } else {
+                        " — scan incomplete"
+                    }
+                ),
+                text.fg(palette.accent),
             ));
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            let mut guests: Vec<_> = status
+                .gold
+                .iter()
+                .chain(&status.workspaces)
+                .chain(&status.others)
+                .collect();
+            guests.sort_by_key(|guest| guest.vmid);
+            guests.dedup_by_key(|guest| guest.vmid);
+            for guest in guests {
+                let latest = overview.latest_backups.iter().find(|backup| backup.vmid == guest.vmid);
+                let value = latest.map_or_else(
+                    || {
+                        if overview.backup_scan_complete {
+                            "no backup found".to_owned()
+                        } else {
+                            "unknown".to_owned()
+                        }
+                    },
+                    |backup| {
+                        let age = now.saturating_sub(backup.created_at);
+                        let age = if age >= 86400 {
+                            format!("{}d", age / 86400)
+                        } else if age >= 3600 {
+                            format!("{}h", age / 3600)
+                        } else {
+                            format!("{}m", age / 60)
+                        };
+                        format!(
+                            "{age} ago  {}{}",
+                            backup.storage,
+                            if overview.backup_scan_complete {
+                                ""
+                            } else {
+                                " (latest visible)"
+                            }
+                        )
+                    },
+                );
+                lines.push((
+                    format!(" {} {}  {value}", guest.vmid, guest.name.as_deref().unwrap_or("—")),
+                    text,
+                ));
+            }
         }
     } else {
         lines.push((" Waiting for storage inventory…".to_owned(), text));
