@@ -104,6 +104,7 @@ async fn workspace() -> Result<(PveSim, PveClient), Error> {
     let pve = client(&sim, TOKEN)?;
     let cfg = config()?;
     let request = CreateRequest {
+        gold_vmid: None,
         vmid: 200,
         name: "test1".to_owned(),
         home_size: None,

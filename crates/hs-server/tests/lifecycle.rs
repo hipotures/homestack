@@ -468,3 +468,34 @@ async fn reduced_capacity_still_refuses_creation_apply_before_allocation() -> Te
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn create_uses_the_selected_gold_for_planning_and_execution() -> TestResult {
+    let server = start_with(CLUSTER, &SERVER_TOML.replace("gold_vmid = 101", "gold_vmid = 999")).await?;
+    let job = server
+        .run(
+            "workspace.create",
+            json!({
+                "vmid": 240, "name": "selected-gold", "gold_vmid": 101
+            }),
+        )
+        .await?;
+    assert_eq!(job["state"], "succeeded", "{job}");
+    assert_eq!(job["result"]["gold_vmid"], 101);
+    Ok(())
+}
+
+#[tokio::test]
+async fn create_rejects_a_selected_vm_without_the_gold_tag() -> TestResult {
+    let server = start().await?;
+    let (status, plan) = server
+        .plan(
+            "workspace.create",
+            json!({
+                "vmid": 240, "name": "invalid-gold", "gold_vmid": 150
+            }),
+        )
+        .await?;
+    assert!(status.is_client_error(), "{plan}");
+    Ok(())
+}

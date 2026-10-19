@@ -88,6 +88,7 @@ fn quick() -> LifecycleTiming {
 
 fn request(node: Option<&str>) -> CreateRequest {
     CreateRequest {
+        gold_vmid: None,
         vmid: 200,
         name: "test1".to_owned(),
         home_size: None,
@@ -632,5 +633,22 @@ async fn cross_node_create_checks_temporary_source_and_final_target_capacity() -
         .ok_or("expected refusal")?;
     assert!(error.to_string().contains("available 0 bytes"), "{error}");
     assert!(sim.ops().iter().all(|op| op.name == "get"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn selected_gold_uses_its_actual_node_instead_of_the_configured_default() -> TestResult {
+    let (_sim, pve) = cluster().await?;
+    let mut cfg = config()?;
+    cfg.node = hs_model::NodeName::parse(TARGET)?;
+    cfg.gold_vmid = Some(999);
+    let mut request = request(None);
+    request.gold_vmid = Some(101);
+    let plan = plan_create(&pve, &cfg, POOL, &request).await?;
+    assert_eq!(plan["gold_vmid"], 101);
+    assert_eq!(plan["source_node"], GOLD_NODE);
+    assert_eq!(plan["node"], GOLD_NODE);
+    let result = create_workspace(&pve, &cfg, &plan, &quick(), &NoObserver).await?;
+    assert_eq!(result["gold_vmid"], 101);
     Ok(())
 }

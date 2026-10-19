@@ -87,6 +87,7 @@ fn quick() -> LifecycleTiming {
 
 fn request(vmid: u32, name: &str) -> CreateRequest {
     CreateRequest {
+        gold_vmid: None,
         vmid,
         name: name.to_owned(),
         home_size: None,

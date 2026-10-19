@@ -314,6 +314,8 @@ pub(crate) fn step_finished(observer: &impl Observer, name: &str, ok: bool) {
 /// What `create` is asked for.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CreateRequest {
+    /// The configured Gold when absent.
+    pub gold_vmid: Option<u32>,
     pub vmid: u32,
     pub name: String,
     /// `[home] default_size` when absent.
@@ -369,6 +371,18 @@ pub async fn plan_create(
     pool: &str,
     request: &CreateRequest,
 ) -> Result<Value, CoreError> {
+    let mut selected = cfg.clone();
+    if let Some(gold) = request.gold_vmid {
+        selected.gold_vmid = Some(gold);
+        let resources = cluster_vm_resources(pve).await?;
+        let source = resources
+            .iter()
+            .find(|resource| resource.vmid == gold)
+            .ok_or_else(|| CoreError::Refused(format!("Gold VM {gold} does not exist")))?;
+        selected.node = NodeName::parse(&source.node)
+            .map_err(|_| CoreError::Invalid("Gold has an invalid node name".to_owned()))?;
+    }
+    let cfg = &selected;
     let gold = crate::gold::configured_gold(cfg)?;
     let vmid = request.vmid;
     let name = request.name.as_str();
@@ -505,6 +519,12 @@ pub async fn create_workspace(
     timing: &LifecycleTiming,
     observer: &impl Observer,
 ) -> Result<Value, CoreError> {
+    let mut selected = cfg.clone();
+    selected.gold_vmid = Some(
+        u32::try_from(number(plan, "gold_vmid")?)
+            .map_err(|_| CoreError::Invalid("Invalid Gold VMID in create plan".to_owned()))?,
+    );
+    let cfg = &selected;
     crate::gold::configured_gold(cfg)?;
     let vmid = vmid_of(plan)?;
     let name = text(plan, "name")?;

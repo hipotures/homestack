@@ -6,7 +6,7 @@
 //!
 //! `POST /v1/plans` with `{"operation": "workspace.create", "parameters":
 //! {"vmid": 240, "name": "hst-a", "home_size": "20G", "storage": "..."}}`
-//! (`home_size`, `storage`, `node` and `pool` optional; `pool` is the
+//! (`gold_vmid`, `home_size`, `storage`, `node` and `pool` optional; `pool` is the
 //! server's pool or the test pool, `homestack-test`), or `{"operation":
 //! "workspace.destroy", "parameters": {"vmid": 240}}`. The job's result is
 //! the plan with what the client needs for its local steps and the event,
@@ -97,6 +97,7 @@ fn vmid_of(summary: &Value) -> Result<u32, OpFailure> {
 struct CreateParameters {
     vmid: u32,
     name: String,
+    gold_vmid: Option<u32>,
     home_size: Option<String>,
     storage: Option<String>,
     node: Option<String>,
@@ -117,7 +118,7 @@ impl Operation for Create {
         Box::pin(async move {
             let parameters: CreateParameters = serde_json::from_value(parameters.clone()).map_err(|_| {
                 OpFailure::invalid(
-                    "workspace.create takes vmid and name, and optionally home_size, storage, node and pool.",
+                    "workspace.create takes vmid and name, and optionally gold_vmid, home_size, storage, node and pool.",
                 )
             })?;
             let pool = match parameters.pool {
@@ -131,6 +132,7 @@ impl Operation for Create {
                 }
             };
             let request = CreateRequest {
+                gold_vmid: parameters.gold_vmid,
                 vmid: parameters.vmid,
                 name: parameters.name,
                 home_size: parameters.home_size,

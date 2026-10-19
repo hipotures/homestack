@@ -106,6 +106,7 @@ async fn live_create_and_destroy_twice_leave_nothing() -> Result<(), Error> {
             return Err(format!("VMID {vmid} is in use; refusing").into());
         }
         let request = CreateRequest {
+            gold_vmid: None,
             vmid,
             name: format!("hst-cycle{round}"),
             home_size: Some("1G".to_owned()),

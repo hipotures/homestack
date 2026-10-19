@@ -209,7 +209,7 @@ fn new_opens_a_form_and_its_values_go_to_the_plan() {
     assert_eq!(start.kind, Kind::New);
     assert_eq!(
         start.parameters,
-        json!({"vmid": 101010, "name": "lab-new", "node": "pve1", "storage": "local-zfs"})
+        json!({"vmid": 101010, "gold_vmid": 112, "name": "lab-new", "node": "pve1", "storage": "local-zfs"})
     );
 }
 
@@ -291,7 +291,7 @@ fn a_node_and_storage_chosen_in_the_form_are_sent() {
     let start = started(press(&mut fixture.app, KeyCode::Enter));
     assert_eq!(
         start.parameters,
-        json!({"vmid": 101010, "name": "lab-new", "node": "pve2", "storage": "local-lvm", "home_size": "64G"})
+        json!({"vmid": 101010, "gold_vmid": 112, "name": "lab-new", "node": "pve2", "storage": "local-lvm", "home_size": "64G"})
     );
 }
 
@@ -651,7 +651,7 @@ fn new_takes_the_pool_of_the_group_shown_by_its_name() {
     let start = started(press(&mut fixture.app, KeyCode::Enter));
     assert_eq!(
         start.parameters,
-        json!({"vmid": 101200, "name": "lab-new", "pool": "homestack-test", "node": "pve1", "storage": "local-zfs"})
+        json!({"vmid": 101200, "gold_vmid": 112, "name": "lab-new", "pool": "homestack-test", "node": "pve1", "storage": "local-zfs"})
     );
 }
 
@@ -690,7 +690,7 @@ fn home_size_starts_at_the_default_and_is_sent_only_when_changed() {
     let start = started(press(&mut fixture.app, KeyCode::Enter));
     assert_eq!(
         start.parameters,
-        json!({"vmid": 101010, "name": "lab-new", "node": "pve1", "storage": "local-zfs"})
+        json!({"vmid": 101010, "gold_vmid": 112, "name": "lab-new", "node": "pve1", "storage": "local-zfs"})
     );
 
     let mut fixture = home_size_form(None);
@@ -899,4 +899,32 @@ fn alien_keys_use_ssh_with_multiple_checkboxes_and_require_a_running_vm() {
     select(&mut fixture.app, 201);
     assert_eq!(press(&mut fixture.app, KeyCode::Char('k')), None);
     assert!(fixture.app.action.is_none());
+}
+
+#[test]
+fn new_selects_each_gold_and_sends_its_vmid() {
+    let mut fixture = app();
+    let mut status = tui_fixture::status();
+    let mut backup = status["gold"].clone();
+    backup["vmid"] = json!(111);
+    backup["name"] = json!("gold-backup");
+    let mut ubuntu = status["gold"].clone();
+    ubuntu["vmid"] = json!(101001);
+    ubuntu["name"] = json!("gold-ubuntu2604");
+    status["others"] = json!([backup, ubuntu]);
+    fixture.app.set_status(&status);
+    press(&mut fixture.app, KeyCode::Char('n'));
+    press(&mut fixture.app, KeyCode::Tab);
+    type_text(&mut fixture.app, "ubuntu-workspace");
+    press(&mut fixture.app, KeyCode::Up);
+    press(&mut fixture.app, KeyCode::Up);
+    for name in ["112 (hs-gold)", "111 (gold-backup)", "101001 (gold-ubuntu2604)"] {
+        let text = screen(&render(&fixture.app, 120, 36));
+        assert!(text.contains(name), "{text}");
+        if !name.starts_with("101001") {
+            press(&mut fixture.app, KeyCode::Right);
+        }
+    }
+    let start = started(press(&mut fixture.app, KeyCode::Enter));
+    assert_eq!(start.parameters["gold_vmid"], 101001);
 }

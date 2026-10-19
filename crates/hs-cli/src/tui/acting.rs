@@ -196,6 +196,15 @@ impl App {
         })
     }
 
+    /// The configured Gold first, then the other Gold VMs listed in status.
+    fn golds(&self) -> Vec<&StatusEntry> {
+        self.status
+            .iter()
+            .flat_map(|status| status.gold.iter().chain(&status.others))
+            .filter(|entry| entry.role == "GOLD")
+            .collect()
+    }
+
     fn gold_node(&self) -> Option<String> {
         self.status.as_ref()?.gold.as_ref().map(|gold| gold.node.clone())
     }
@@ -271,6 +280,14 @@ impl App {
                         "Home size",
                         self.home_default,
                         "← → or the wheel change it; ⇥ or ↑ ↓: G or M.",
+                    ),
+                    Field::choice(
+                        "Gold",
+                        self.golds()
+                            .iter()
+                            .map(|entry| format!("{} ({})", entry.vmid, entry.name.as_deref().unwrap_or("unnamed")))
+                            .collect(),
+                        "The source VM to clone; ← → or a click on ‹ › to choose.",
                     ),
                 ]
             }
@@ -385,7 +402,12 @@ impl App {
                         "Invalid name {name:?}: the first character is a letter, then letters, digits, '.' or '-'."
                     ));
                 }
-                let mut parameters = json!({"vmid": id, "name": name});
+                let gold_vmid = value("Gold")
+                    .split_whitespace()
+                    .next()
+                    .and_then(|vmid| vmid.parse::<u32>().ok())
+                    .ok_or("No Gold VM is available; add a Gold VM to the Gold pool.")?;
+                let mut parameters = json!({"vmid": id, "name": name, "gold_vmid": gold_vmid});
                 if pool != self.server_pool() {
                     parameters["pool"] = json!(pool);
                 }
