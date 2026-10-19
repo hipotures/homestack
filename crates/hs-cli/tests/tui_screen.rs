@@ -485,6 +485,16 @@ fn f10_opens_settings_under_the_cluster_header() {
     for item in ["OVH", "Spaceship", "Local DNS (TSIG)", "Missing"] {
         assert!(text.contains(item), "{item}: {text}");
     }
+    press(&mut fixture.app, KeyCode::Enter);
+    press(&mut fixture.app, KeyCode::Down);
+    let buf = render(&fixture.app, 120, 36);
+    let section = position(&buf, "▶ Integrations");
+    let integration = position(&buf, "▶ Spaceship");
+    assert_eq!(buf[section].fg, fixture.app.palette.muted);
+    assert_eq!(buf[integration].fg, fixture.app.palette.focus);
+    press(&mut fixture.app, KeyCode::Esc);
+    let buf = render(&fixture.app, 120, 36);
+    assert_eq!(buf[section].fg, fixture.app.palette.focus);
     press(&mut fixture.app, KeyCode::Esc);
     let text = screen(&render(&fixture.app, 120, 36));
     assert!(text.contains("Check the servers"), "{text}");

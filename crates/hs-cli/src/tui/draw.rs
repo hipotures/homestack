@@ -1543,6 +1543,7 @@ fn draw_settings(buf: &mut Buffer, area: Rect, app: &App, section: usize, themes
     let text = text_style(palette);
     let muted = text.fg(palette.muted);
     let under = settings_area(area, app);
+    let sections_focused = themes.is_none() && !matches!(app.overlay, Some(Overlay::Integrations { .. }));
     let bottom = if themes.is_some() {
         vec![
             Control::key("preview ↑↓"),
@@ -1573,8 +1574,8 @@ fn draw_settings(buf: &mut Buffer, area: Rect, app: &App, section: usize, themes
     }
     for (row, name) in SETTINGS.iter().enumerate() {
         let y = inner.y + 1 + u16::try_from(row).unwrap_or(0);
-        // The focus is in one list only: the sections, or the themes.
-        let (line, style) = unfocused_item(palette, name, row == section, themes.is_none());
+        // The focus belongs to the sections or the active section's list.
+        let (line, style) = unfocused_item(palette, name, row == section, sections_focused);
         write(buf, inner.x + 1, y, SECTIONS - 1, &line, style);
         if themes.is_none() {
             super::chrome::register(Rect::new(inner.x, y, SECTIONS, 1), super::chrome::Hit::Item(row));
