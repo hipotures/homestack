@@ -103,12 +103,18 @@ pub const MENU: [&str; 9] = [
     "Check this desktop",
     "Reinstall HomeStack",
     "Uninstall",
-    "Theme",
+    "Settings",
     "Help: every key",
     "Set up this desktop (backup)",
     "Update API containers",
     "Quit",
 ];
+
+/// The sections of the settings box, in order (a mockup for now, except
+/// Appearance, which holds the theme).
+pub const SETTINGS: [&str; 4] = ["General", "Appearance", "Refresh", "Integrations"];
+/// The section of [`SETTINGS`] that holds the theme.
+pub const APPEARANCE: usize = 1;
 
 /// A box over the screen.
 #[derive(Debug, Clone, PartialEq)]
@@ -117,7 +123,11 @@ pub enum Overlay {
     Menu {
         index: usize,
     },
-    /// The theme list; `previous` comes back with Esc.
+    /// The settings under the cluster panel; `section` is one of [`SETTINGS`].
+    Settings {
+        section: usize,
+    },
+    /// The theme list in the Appearance section; `previous` comes back with Esc.
     Themes {
         index: usize,
         previous: Box<Palette>,
@@ -1254,9 +1264,32 @@ impl App {
                         }
                         return None;
                     }
+                    Some(Hit::Theme(item)) => {
+                        let previous = match self.overlay.take() {
+                            Some(Overlay::Themes { previous, .. }) => previous,
+                            Some(Overlay::Settings { .. }) => Box::new(self.palette.clone()),
+                            other => {
+                                self.overlay = other;
+                                return None;
+                            }
+                        };
+                        self.overlay = Some(Overlay::Themes { index: item, previous });
+                        self.preview(item);
+                        return press(self, KeyCode::Enter);
+                    }
                     Some(Hit::Item(item)) => {
                         match &mut self.overlay {
                             Some(Overlay::Menu { index }) => *index = item,
+                            // A section of the settings is chosen; Appearance
+                            // opens at once, its theme list being all it has.
+                            Some(Overlay::Settings { section }) => {
+                                *section = item.min(SETTINGS.len() - 1);
+                                return if *section == APPEARANCE {
+                                    press(self, KeyCode::Enter)
+                                } else {
+                                    None
+                                };
+                            }
                             Some(Overlay::Themes { index, .. }) => *index = item,
                             _ => return None,
                         }
@@ -1610,13 +1643,7 @@ impl App {
                         };
                         return self.open_install(mode, false);
                     }
-                    4 => {
-                        let current = THEMES.iter().position(|name| *name == self.palette.name).unwrap_or(0);
-                        self.overlay = Some(Overlay::Themes {
-                            index: current,
-                            previous: Box::new(self.palette.clone()),
-                        });
-                    }
+                    4 => self.overlay = Some(Overlay::Settings { section: 0 }),
                     5 => self.overlay = Some(Overlay::Help),
                     6 => {
                         if self.action.is_some() || self.setup.is_some() {
@@ -1640,6 +1667,27 @@ impl App {
                 KeyCode::Esc | KeyCode::Char('m') => {}
                 _ => self.overlay = Some(Overlay::Menu { index }),
             },
+            Overlay::Settings { section } => match code {
+                KeyCode::Down => {
+                    self.overlay = Some(Overlay::Settings {
+                        section: (section + 1) % SETTINGS.len(),
+                    });
+                }
+                KeyCode::Up => {
+                    self.overlay = Some(Overlay::Settings {
+                        section: (section + SETTINGS.len() - 1) % SETTINGS.len(),
+                    });
+                }
+                KeyCode::Enter | KeyCode::Right if section == APPEARANCE => {
+                    let current = THEMES.iter().position(|name| *name == self.palette.name).unwrap_or(0);
+                    self.overlay = Some(Overlay::Themes {
+                        index: current,
+                        previous: Box::new(self.palette.clone()),
+                    });
+                }
+                KeyCode::Esc => self.overlay = Some(Overlay::Menu { index: 4 }),
+                _ => self.overlay = Some(Overlay::Settings { section }),
+            },
             Overlay::Themes { index, previous } => match code {
                 KeyCode::Down | KeyCode::Up => {
                     let index = if code == KeyCode::Down {
@@ -1656,10 +1704,11 @@ impl App {
                         self.palette = *previous;
                         self.log("", &error.0);
                     }
+                    self.overlay = Some(Overlay::Settings { section: APPEARANCE });
                 }
                 KeyCode::Esc => {
                     self.palette = *previous;
-                    self.overlay = Some(Overlay::Menu { index: 4 });
+                    self.overlay = Some(Overlay::Settings { section: APPEARANCE });
                 }
                 _ => self.overlay = Some(Overlay::Themes { index, previous }),
             },

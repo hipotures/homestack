@@ -403,7 +403,7 @@ fn the_menu_opens_with_m_and_closes_with_esc() {
     let mut fixture = app();
     press(&mut fixture.app, KeyCode::Char('m'));
     let text = screen(&render(&fixture.app, 120, 36));
-    for item in ["Check the servers", "Check this desktop", "Theme", "Help", "Quit"] {
+    for item in ["Check the servers", "Check this desktop", "Settings", "Help", "Quit"] {
         assert!(text.contains(item), "{item}: {text}");
     }
     press(&mut fixture.app, KeyCode::Esc);
@@ -422,15 +422,17 @@ fn the_menu_asks_for_the_server_and_desktop_checks() {
 }
 
 #[test]
-fn a_theme_chosen_in_the_menu_is_drawn_and_saved() {
+fn a_theme_chosen_in_settings_appearance_is_drawn_and_saved() {
     let mut fixture = app();
     press(&mut fixture.app, KeyCode::Char('m'));
     for _ in 0..10 {
-        if screen(&render(&fixture.app, 120, 36)).contains("▶ Theme") {
+        if screen(&render(&fixture.app, 120, 36)).contains("▶ Settings") {
             break;
         }
         press(&mut fixture.app, KeyCode::Down);
     }
+    press(&mut fixture.app, KeyCode::Enter);
+    press(&mut fixture.app, KeyCode::Down);
     press(&mut fixture.app, KeyCode::Enter);
     let text = screen(&render(&fixture.app, 120, 36));
     assert!(text.contains("Tokyo Night") && text.contains("Gruvbox"), "{text}");
@@ -452,17 +454,44 @@ fn esc_in_the_theme_list_puts_the_old_theme_back() {
     let mut fixture = app();
     press(&mut fixture.app, KeyCode::Char('m'));
     for _ in 0..10 {
-        if screen(&render(&fixture.app, 120, 36)).contains("▶ Theme") {
+        if screen(&render(&fixture.app, 120, 36)).contains("▶ Settings") {
             break;
         }
         press(&mut fixture.app, KeyCode::Down);
     }
     press(&mut fixture.app, KeyCode::Enter);
     press(&mut fixture.app, KeyCode::Down);
+    press(&mut fixture.app, KeyCode::Enter);
+    press(&mut fixture.app, KeyCode::Down);
     press(&mut fixture.app, KeyCode::Esc);
     let buf = render(&fixture.app, 120, 36);
     assert_eq!(buf[(5, 30)].bg, Palette::named("HomeStack", false).unwrap().background);
     assert!(!fixture._dir.path().join("tui.toml").exists());
+}
+
+#[test]
+fn settings_open_under_the_cluster_header_with_mock_sections() {
+    let mut fixture = app();
+    press(&mut fixture.app, KeyCode::Char('m'));
+    for _ in 0..4 {
+        press(&mut fixture.app, KeyCode::Down);
+    }
+    press(&mut fixture.app, KeyCode::Enter);
+    let text = screen(&render(&fixture.app, 120, 36));
+    for item in ["cluster", "General", "Appearance", "Refresh", "Integrations", "Profile"] {
+        assert!(text.contains(item), "{item}: {text}");
+    }
+    assert!(!text.contains("HomeStack ─ Settings"), "{text}");
+    for _ in 0..3 {
+        press(&mut fixture.app, KeyCode::Down);
+    }
+    let text = screen(&render(&fixture.app, 120, 36));
+    for item in ["Pangolin", "Not configured", "Add integration"] {
+        assert!(text.contains(item), "{item}: {text}");
+    }
+    press(&mut fixture.app, KeyCode::Esc);
+    let text = screen(&render(&fixture.app, 120, 36));
+    assert!(text.contains("Check the servers"), "{text}");
 }
 
 #[test]

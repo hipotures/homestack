@@ -444,6 +444,8 @@ pub enum Hit {
     Choice(usize),
     /// An item of a list in a box (the menu, the themes).
     Item(usize),
+    /// A theme in the Appearance section of the settings.
+    Theme(usize),
     /// The log panel: the farthest it scrolls, the rows it shows and the
     /// line under the pointer (lines back from the newest; `None` below
     /// the last).

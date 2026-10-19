@@ -10,7 +10,7 @@ use ratatui::style::{Color, Modifier, Style};
 use super::action::Action;
 use super::chrome::{Control, Hit, Scrolls, Sides, alert_style, frame, register, scrollbar, text_style};
 use super::layout::{MIN_HEIGHT, MIN_WIDTH, arrange};
-use super::state::{App, MENU, Overlay, VIEWS};
+use super::state::{APPEARANCE, App, MENU, Overlay, SETTINGS, VIEWS};
 use super::theme::{Palette, THEMES};
 
 /// The screen at `width` x `height`, for tests and snapshots.
@@ -1533,7 +1533,122 @@ pub(super) fn centered(area: Rect, width: u16, height: u16) -> Rect {
     )
 }
 
+/// The settings (a mockup, but for the theme in Appearance): a box over the
+/// space under the cluster panel, whose header stays. Left the sections,
+/// right the chosen one; `themes` is the chosen theme while it is picked.
+fn draw_settings(buf: &mut Buffer, area: Rect, app: &App, section: usize, themes: Option<usize>) {
+    const SECTIONS: u16 = 20;
+    let palette = &app.palette;
+    let text = text_style(palette);
+    let muted = text.fg(palette.muted);
+    let under = arrange(area, app.shown)
+        .cluster
+        .map(|cluster| Rect::new(area.x, cluster.bottom(), area.width, area.bottom().saturating_sub(cluster.bottom())))
+        .filter(|rect| rect.height >= 12)
+        .unwrap_or(area);
+    let bottom = if themes.is_some() {
+        vec![
+            Control::key("preview ↑↓"),
+            Control::key("save ↵"),
+            Control::key("back esc"),
+        ]
+    } else {
+        vec![
+            Control::key("select ↑↓"),
+            Control::key("open ↵"),
+            Control::key("back esc"),
+        ]
+    };
+    let inner = frame(
+        buf,
+        under,
+        palette,
+        &Sides {
+            bottom_left: bottom,
+            focused: true,
+            ..Sides::default()
+        },
+    );
+    let divider = inner.x + SECTIONS;
+    for y in inner.top()..inner.bottom() {
+        write(buf, divider, y, 1, "│", muted);
+    }
+    for (row, name) in SETTINGS.iter().enumerate() {
+        let y = inner.y + 1 + u16::try_from(row).unwrap_or(0);
+        // The focus is in one list only: the sections, or the themes.
+        let (line, style) = unfocused_item(palette, name, row == section, themes.is_none());
+        write(buf, inner.x + 1, y, SECTIONS - 1, &line, style);
+        if themes.is_none() {
+            super::chrome::register(Rect::new(inner.x, y, SECTIONS, 1), super::chrome::Hit::Item(row));
+        }
+    }
+    let x = divider + 3;
+    let width = inner.right().saturating_sub(x + 1);
+    let heading = text.add_modifier(Modifier::BOLD);
+    let rule = "─".repeat(usize::from(width.min(30)));
+    let line = |label: &str, value: &str, configured: Option<bool>| -> Vec<(String, Style)> {
+        let style = match configured {
+            Some(true) => text.fg(palette.ok),
+            Some(false) => muted,
+            None => text,
+        };
+        vec![(format!("  {label:<14}"), text), (value.to_owned(), style)]
+    };
+    let mut lines: Vec<Vec<(String, Style)>> = vec![
+        vec![(SETTINGS[section].to_owned(), heading)],
+        vec![(rule, muted)],
+        Vec::new(),
+    ];
+    let first = lines.len();
+    match (section, themes) {
+        (APPEARANCE, picking) => {
+            for (at, name) in THEMES.iter().enumerate() {
+                // Not picking yet: the theme in use is the one marked.
+                let marked = picking.unwrap_or_else(|| {
+                    THEMES.iter().position(|theme| *theme == app.preferences.theme).unwrap_or(0)
+                });
+                let (item, style) = unfocused_item(palette, name, at == marked, picking.is_some());
+                lines.push(vec![(item, style)]);
+            }
+        }
+        (0, _) => {
+            lines.push(line("Profile", &app.profile, None));
+            lines.push(line("Language", "English", None));
+            lines.push(line("Confirmations", "On", None));
+        }
+        (2, _) => {
+            lines.push(line("Status", "auto", None));
+            lines.push(line("Log", "live", None));
+        }
+        _ => {
+            lines.push(vec![("DNS".to_owned(), heading)]);
+            lines.push(line("OVH", "Configured", Some(true)));
+            lines.push(line("Spaceship", "Configured", Some(true)));
+            lines.push(Vec::new());
+            lines.push(vec![("Remote Access".to_owned(), heading)]);
+            lines.push(line("Pangolin", "Not configured", Some(false)));
+            lines.push(Vec::new());
+            lines.push(vec![("+ Add integration".to_owned(), text.fg(palette.focus))]);
+        }
+    }
+    for (row, parts) in lines.iter().enumerate() {
+        let y = inner.y + 1 + u16::try_from(row).unwrap_or(0);
+        if y >= inner.bottom() {
+            break;
+        }
+        spans(buf, x, y, width, parts);
+        if section == APPEARANCE && (first..first + THEMES.len()).contains(&row) {
+            super::chrome::register(Rect::new(x, y, width, 1), super::chrome::Hit::Theme(row - first));
+        }
+    }
+}
+
 fn draw_overlay(buf: &mut Buffer, area: Rect, app: &App, overlay: &Overlay) {
+    match overlay {
+        Overlay::Settings { section } => return draw_settings(buf, area, app, *section, None),
+        Overlay::Themes { index, .. } => return draw_settings(buf, area, app, APPEARANCE, Some(*index)),
+        _ => {}
+    }
     let palette = &app.palette;
     let text = text_style(palette);
     let muted = text.fg(palette.muted);
@@ -1555,26 +1670,7 @@ fn draw_overlay(buf: &mut Buffer, area: Rect, app: &App, overlay: &Overlay) {
                 Control::key("close esc"),
             ],
         ),
-        Overlay::Themes { index, .. } => (
-            "theme",
-            THEMES
-                .iter()
-                .enumerate()
-                .map(|(at, name)| {
-                    let label = if *name == app.preferences.theme {
-                        format!("{name}  (saved)")
-                    } else {
-                        (*name).to_owned()
-                    };
-                    list_item(palette, &label, at == *index)
-                })
-                .collect(),
-            vec![
-                Control::key("preview ↑↓"),
-                Control::key("save ↵"),
-                Control::key("back esc"),
-            ],
-        ),
+        Overlay::Settings { .. } | Overlay::Themes { .. } => return,
         Overlay::Help => (
             "help",
             HELP.iter().map(|line| ((*line).to_owned(), text)).collect(),
@@ -1627,12 +1723,23 @@ fn draw_overlay(buf: &mut Buffer, area: Rect, app: &App, overlay: &Overlay) {
     {
         let y = inner.y + 1 + u16::try_from(row).unwrap_or(0);
         write(buf, inner.x + 1, y, inner.width.saturating_sub(2), line, *style);
-        // The menu's and the themes' items are clicked.
-        if matches!(overlay, Overlay::Menu { .. } | Overlay::Themes { .. }) {
+        // The menu's items are clicked.
+        if matches!(overlay, Overlay::Menu { .. }) {
             super::chrome::register(Rect::new(inner.x, y, inner.width, 1), super::chrome::Hit::Item(row));
         }
     }
     let _ = muted;
+}
+
+/// A list item of a pair of lists: the chosen one keeps its marker but is
+/// muted while the focus is in the other list.
+fn unfocused_item(palette: &Palette, label: &str, chosen: bool, focused: bool) -> (String, Style) {
+    let (line, style) = list_item(palette, label, chosen);
+    if chosen && !focused {
+        (line, text_style(palette).fg(palette.muted))
+    } else {
+        (line, style)
+    }
 }
 
 fn list_item(palette: &Palette, label: &str, chosen: bool) -> (String, Style) {
