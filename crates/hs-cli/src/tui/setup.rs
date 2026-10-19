@@ -1910,7 +1910,7 @@ impl SetupBox {
             KeyCode::Right => self.set_open(&cursor, true),
             KeyCode::Char(' ') => self.toggle(&cursor, false),
             KeyCode::Char('0') => self.toggle(&cursor, true),
-            KeyCode::Char('/') => self.filtering = true,
+            KeyCode::Char('f') => self.filtering = true,
             KeyCode::Enter => self.review(),
             KeyCode::Esc => {
                 if !self.filter.is_empty() {

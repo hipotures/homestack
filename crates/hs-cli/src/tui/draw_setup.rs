@@ -41,9 +41,17 @@ pub(super) fn setup_box(buf: &mut Buffer, area: Rect, app: &App, setup: &SetupBo
         format!("setup {} {}", setup.target.vmid, setup.target.name)
     };
     let mut top_left = vec![Control::panel(1, &title)];
+    let tree = matches!(setup.stage, Stage::Tree);
+    if tree {
+        if setup.filtering || !setup.filter.is_empty() {
+            let cursor = if setup.filtering { "▏" } else { "" };
+            top_left.push(Control::plain(&format!("filter: {}{cursor}", setup.filter)));
+        } else {
+            top_left.push(Control::key("&filter"));
+        }
+    }
     top_left.append(&mut controls);
     let groups = setup.groups();
-    let tree = matches!(setup.stage, Stage::Tree);
     if !groups.is_empty() && !matches!(setup.stage, Stage::Loading { .. } | Stage::Failed { .. }) {
         let label = groups.get(setup.section).cloned().unwrap_or_default();
         let carousel = Control::plain(&format!("‹ {label} ›"));
@@ -65,7 +73,6 @@ pub(super) fn setup_box(buf: &mut Buffer, area: Rect, app: &App, setup: &SetupBo
             vec![
                 Control::named("SPACE", "toggle", KeyCode::Char(' ')),
                 Control::named("TAB", "group", KeyCode::Tab),
-                Control::named("/", "filter", KeyCode::Char('/')),
                 Control::named("F5", "reread", KeyCode::F(5)),
                 if pending { review.chosen() } else { review },
                 Control::named("ESC", "cancel", KeyCode::Esc),
@@ -234,7 +241,7 @@ fn running(
     }
 }
 
-/// The line of the target, the filter, the tree and the details.
+/// The line of the target, the groups, the tree and the details.
 fn tree_stage(buf: &mut Buffer, inner: Rect, app: &App, setup: &SetupBox) {
     let palette = &app.palette;
     let text = text_style(palette);
@@ -246,17 +253,6 @@ fn tree_stage(buf: &mut Buffer, inner: Rect, app: &App, setup: &SetupBox) {
         write(buf, inner.x + 1, y, inner.width.saturating_sub(2), line, muted);
         y += 1;
     }
-    let filter = if setup.filtering || !setup.filter.is_empty() {
-        let cursor = if setup.filtering { "▏" } else { "" };
-        (format!("Filter: {}{cursor}", setup.filter), text)
-    } else {
-        (
-            "Filter (/). Bulk selection affects visible matches only.".to_owned(),
-            muted,
-        )
-    };
-    write(buf, inner.x + 1, y, inner.width.saturating_sub(2), &filter.0, filter.1);
-    y += 1;
     y = group_bar(buf, inner, y, app, setup);
     y += 1;
     let notice_rows = u16::from(setup.notice.is_some());

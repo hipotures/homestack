@@ -152,7 +152,7 @@ fn typed(setup: &mut SetupBox, text: &str) {
 }
 
 fn set_filter(setup: &mut SetupBox, text: &str) {
-    key(setup, KeyCode::Char('/'));
+    key(setup, KeyCode::Char('f'));
     while !setup.filter.is_empty() {
         key(setup, KeyCode::Backspace);
     }
@@ -277,7 +277,7 @@ fn keyboard_parent_states_filter_scope_review_back_and_cancel() {
     assert!(matches!(setup.stage, Stage::Tree));
     assert_eq!(selected(&setup), expected);
     assert!(!setup.busy);
-    key(&mut setup, KeyCode::Char('/'));
+    key(&mut setup, KeyCode::Char('f'));
     key(&mut setup, KeyCode::Esc);
     assert!(setup.filter.is_empty());
     setup.show_section(section(&setup, "env"));
@@ -598,6 +598,37 @@ fn layout_resizes_without_losing_selection_or_fixed_controls() {
     assert!(open(app).target_label("").contains("192.0.2.200"));
 }
 
+#[test]
+fn setup_filter_uses_f_and_shows_its_value_in_the_border() {
+    for (width, height) in [(80, 24), (140, 42)] {
+        let Boxed { setup, _home } = default_box();
+        let (mut fixture, _keep) = tui(setup);
+        let app = &mut fixture.app;
+        let buf = render(app, width, height);
+        let filter_position = position(&buf, "filter");
+        assert_eq!(filter_position.1, position(&buf, "setup").1);
+        assert!(!screen(&buf).contains("Bulk selection affects visible matches only."));
+        click(app, filter_position);
+        assert!(open(app).filtering);
+        app_key(app, KeyCode::Char('f'));
+        assert_eq!(open(app).filter, "f", "f is literal text while editing");
+        let buf = render(app, width, height);
+        assert_eq!(position(&buf, "filter: f▏").1, filter_position.1);
+        app_key(app, KeyCode::Tab);
+        assert!(!open(app).filtering);
+        let buf = render(app, width, height);
+        assert_eq!(position(&buf, "filter: f").1, filter_position.1);
+        assert!(!screen(&buf).contains("filter: f▏"));
+        app_key(app, KeyCode::Char('f'));
+        assert!(open(app).filtering);
+        app_key(app, KeyCode::Esc);
+        assert!(open(app).filter.is_empty());
+        assert!(!open(app).filtering);
+        app_key(app, KeyCode::Char('/'));
+        assert!(!open(app).filtering, "the obsolete slash shortcut is removed");
+    }
+}
+
 /// Port of `test_repository_initial_collapse_short_labels_and_full_identity`
 /// (each group is a section: there is no group to collapse).
 #[test]
@@ -715,7 +746,7 @@ fn empty_selection_notifies_and_filter_enter_reviews() {
     assert_eq!(setup.notice.as_ref().unwrap().text, "No setup actions selected.");
     assert!(matches!(setup.stage, Stage::Tree));
     setup.selected.insert("codex".to_owned());
-    key(&mut setup, KeyCode::Char('/'));
+    key(&mut setup, KeyCode::Char('f'));
     key(&mut setup, KeyCode::Char('c'));
     key(&mut setup, KeyCode::Enter);
     assert_eq!(setup.filter, "c");
@@ -1884,6 +1915,6 @@ fn ctrl_q_quits_from_anywhere() {
     let Boxed { setup, _home } = default_box();
     let (mut fixture, _keep) = tui(setup);
     let app = &mut fixture.app;
-    app_key(app, KeyCode::Char('/'));
+    app_key(app, KeyCode::Char('f'));
     assert_eq!(app.key(ctrl_q), Some(Request::Quit));
 }
