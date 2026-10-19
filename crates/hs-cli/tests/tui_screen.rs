@@ -192,7 +192,7 @@ fn digits_switch_views_and_zero_restores_the_standard_view() {
     let buf = render(&fixture.app, 120, 36);
     let top = row(&buf, 0);
     assert!(
-        top.starts_with("╭─┐¹‹ all ›┌┐profile: default┌┐menu┌┐view 1┌┐filter┌"),
+        top.starts_with("╭─┐¹‹ all ›┌┐profile: default┌┐menu┌┐view 1┌┐F10 settings┌┐filter┌"),
         "{top}"
     );
     let text = screen(&buf);
@@ -470,13 +470,9 @@ fn esc_in_the_theme_list_puts_the_old_theme_back() {
 }
 
 #[test]
-fn settings_open_under_the_cluster_header_with_mock_sections() {
+fn f10_opens_settings_under_the_cluster_header() {
     let mut fixture = app();
-    press(&mut fixture.app, KeyCode::Char('m'));
-    for _ in 0..4 {
-        press(&mut fixture.app, KeyCode::Down);
-    }
-    press(&mut fixture.app, KeyCode::Enter);
+    press(&mut fixture.app, KeyCode::F(10));
     let text = screen(&render(&fixture.app, 120, 36));
     for item in ["cluster", "General", "Appearance", "Refresh", "Integrations", "Profile"] {
         assert!(text.contains(item), "{item}: {text}");
@@ -486,7 +482,7 @@ fn settings_open_under_the_cluster_header_with_mock_sections() {
         press(&mut fixture.app, KeyCode::Down);
     }
     let text = screen(&render(&fixture.app, 120, 36));
-    for item in ["Pangolin", "Not configured", "Add integration"] {
+    for item in ["OVH", "Spaceship", "Local DNS (TSIG)", "Not configured"] {
         assert!(text.contains(item), "{item}: {text}");
     }
     press(&mut fixture.app, KeyCode::Esc);

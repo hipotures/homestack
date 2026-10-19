@@ -1507,6 +1507,7 @@ impl App {
         match key.code {
             KeyCode::Char('q') => return Some(Request::Quit),
             KeyCode::Char('m') => self.overlay = Some(Overlay::Menu { index: 0 }),
+            KeyCode::F(10) => self.overlay = Some(Overlay::Settings { section: 0 }),
             KeyCode::Esc if self.view != 0 => {
                 self.view = 0;
                 self.shown = VIEWS[0].1;
@@ -1635,6 +1636,7 @@ impl App {
                 _ => self.overlay = Some(Overlay::Quit),
             },
             Overlay::Menu { index } => match code {
+                KeyCode::F(10) => self.overlay = Some(Overlay::Settings { section: 0 }),
                 KeyCode::Down => {
                     self.overlay = Some(Overlay::Menu {
                         index: (index + 1) % MENU.len(),

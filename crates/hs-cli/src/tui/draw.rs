@@ -131,6 +131,7 @@ fn draw_into(buf: &mut Buffer, area: Rect, app: &App) {
         Control::plain(&format!("profile: {}", app.profile)),
         Control::key("&menu"),
         Control::key(&format!("&view {}", VIEWS[app.view].0)),
+        Control::named("F10", "settings", crossterm::event::KeyCode::F(10)),
     ];
     if let Some(label) = app.api_update_label() {
         menu.push(Control::plain(&label));
@@ -1876,11 +1877,12 @@ fn list_item(palette: &Palette, label: &str, chosen: bool) -> (String, Style) {
     }
 }
 
-const HELP: [&str; 25] = [
+const HELP: [&str; 26] = [
     "1 2 3 4     view 1 workspaces, 2 cluster+storage, 3 storage, 4 log (again: auto)",
     "0           the standard view: every panel and node, no filter",
     "v           next view (auto, 1, 2, 3, 4)",
     "m           menu",
+    "F10         settings",
     "F2          copy mode: select terminal text; F2 or Esc resumes the display",
     "F3          copy loaded JSON data to clipboard (terminal OSC 52 support required)",
     "↑ ↓         select a workspace; PgUp PgDn Home End",
