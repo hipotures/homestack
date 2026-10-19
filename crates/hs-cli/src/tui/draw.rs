@@ -1625,14 +1625,35 @@ fn draw_settings(buf: &mut Buffer, area: Rect, app: &App, section: usize, themes
         _ => {
             let dir = app.preferences.path.parent().unwrap_or(std::path::Path::new("."));
             for (at, (name, file)) in super::integrations::PROVIDERS.iter().enumerate() {
-                let status = match super::integrations::Editor::open(dir, at) {
+                let editor = super::integrations::Editor::open(dir, at);
+                let status = match &editor {
                     Ok(_) if !dir.join(file).exists() => "Missing",
                     Ok(editor) if editor.validate().is_ok() => "Saved",
                     _ => "Incomplete",
                 };
                 let chosen = matches!(app.overlay, Some(Overlay::Integrations { index }) if index == at);
                 let (item, style) = unfocused_item(palette, &format!("{name:<18}"), chosen, true);
-                lines.push(vec![(item, style), (status.to_owned(), muted)]);
+                let mut parts = vec![(item, style)];
+                if let Some(report) = editor.as_ref().ok().and_then(|editor| editor.report.as_ref()) {
+                    let date = time::OffsetDateTime::parse(&report.at, &time::format_description::well_known::Rfc3339)
+                        .map(|date| {
+                            let date = date.to_offset(time::UtcOffset::UTC);
+                            format!("{} {:02}:{:02} UTC", date.date(), date.hour(), date.minute())
+                        })
+                        .unwrap_or_else(|_| report.at.clone());
+                    parts.push((
+                        if report.passed { "PASS" } else { "FAIL" }.to_owned(),
+                        text.fg(if report.passed { palette.ok } else { palette.error }),
+                    ));
+                    parts.push((format!("  {date}"), muted));
+                    let used: usize = parts.iter().map(|(text, _)| text.chars().count()).sum();
+                    if used + 2 + report.zone.chars().count() <= usize::from(width) {
+                        parts.push((format!("  {}", report.zone), muted));
+                    }
+                } else {
+                    parts.push((status.to_owned(), muted));
+                }
+                lines.push(parts);
             }
         }
     }

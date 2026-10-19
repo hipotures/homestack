@@ -314,3 +314,48 @@ fn detailed_report_persists_target_date_failure_and_redacts_credentials() {
         assert!(!saved.contains(secret));
     }
 }
+
+#[test]
+fn integration_list_shows_saved_test_outcomes_dates_and_zones() {
+    use hs_cli::tui::{draw::render, integrations::TestReport};
+    let dir = tempfile::tempdir().unwrap();
+    let mut preferences = Preferences::fallback(&dir.path().join("tui.toml"));
+    for (provider, passed, zone) in [(0, false, "ovh.test"), (1, true, "spaceship.test")] {
+        TestReport {
+            provider,
+            passed,
+            zone: zone.to_owned(),
+            at: "2026-10-19T12:34:56Z".to_owned(),
+            target: "test endpoint".to_owned(),
+            duration_ms: 100,
+            detail: "Test result".to_owned(),
+        }
+        .save(&mut preferences)
+        .unwrap();
+    }
+    let mut app = App::new(preferences, false).unwrap();
+    app.overlay = Some(Overlay::Integrations { index: 0 });
+    for (width, height) in [(80, 24), (120, 36)] {
+        let buffer = render(&app, width, height);
+        let rows: Vec<String> = (0..height)
+            .map(|y| (0..width).map(|x| buffer[(x, y)].symbol()).collect())
+            .collect();
+        let ovh = rows.iter().position(|row| row.contains("OVH")).unwrap();
+        let spaceship = rows.iter().position(|row| row.contains("Spaceship")).unwrap();
+        assert!(rows[ovh].contains("FAIL  2026-10-19 12:34 UTC"));
+        assert!(rows[spaceship].contains("PASS  2026-10-19 12:34 UTC"));
+        let fail_x = rows[ovh].chars().position(|c| c == 'F').unwrap();
+        assert_eq!(
+            buffer[(u16::try_from(fail_x).unwrap(), u16::try_from(ovh).unwrap())].fg,
+            app.palette.error
+        );
+        assert!(
+            rows.iter()
+                .any(|row| row.contains("Local DNS (TSIG)") && row.contains("Missing"))
+        );
+        if width == 120 {
+            assert!(rows[ovh].contains("ovh.test"));
+            assert!(rows[spaceship].contains("spaceship.test"));
+        }
+    }
+}
