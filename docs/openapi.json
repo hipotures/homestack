@@ -1675,6 +1675,29 @@
           }
         }
       },
+      "ClusterQuorum": {
+        "type": "object",
+        "description": "The `cluster` entry of `GET /cluster/status`.",
+        "required": [
+          "name",
+          "quorate",
+          "nodes"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "nodes": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Nodes the cluster has.",
+            "minimum": 0
+          },
+          "quorate": {
+            "type": "boolean"
+          }
+        }
+      },
       "ConfigUpdated": {
         "type": "object",
         "description": "Body of a successful `PUT /v1/config`.",
@@ -2406,13 +2429,62 @@
       },
       "NodeState": {
         "type": "object",
-        "description": "A cluster node and whether Proxmox reports it online.",
+        "description": "A cluster node and whether Proxmox reports it online, with the load\n`GET /nodes` reports for an online node.",
         "required": [
           "node",
           "status",
           "online"
         ],
         "properties": {
+          "cpu": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "CPU use, `0.0`–`1.0` of `maxcpu`."
+          },
+          "disk_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The node's root filesystem.",
+            "minimum": 0
+          },
+          "maxcpu": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "maxdisk_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "maxmem_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "mem_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
           "node": {
             "type": "string"
           },
@@ -2421,6 +2493,14 @@
           },
           "status": {
             "type": "string"
+          },
+          "uptime_seconds": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
           }
         }
       },
@@ -2829,6 +2909,17 @@
             "items": {
               "$ref": "#/components/schemas/OrphanVolume"
             }
+          },
+          "quorum": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ClusterQuorum",
+                "description": "The cluster's name and quorum (`GET /cluster/status`); absent on a\nstandalone node or when Proxmox denies the request."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "root_storage": {
             "$ref": "#/components/schemas/Capacity",

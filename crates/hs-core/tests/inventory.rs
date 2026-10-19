@@ -32,12 +32,14 @@ fn cluster_node_statuses_preserve_online_state() {
             NodeState {
                 node: "example-node-1".into(),
                 status: "online".into(),
-                online: true
+                online: true,
+                ..NodeState::default()
             },
             NodeState {
                 node: "example-node-2".into(),
                 status: "offline".into(),
-                online: false
+                online: false,
+                ..NodeState::default()
             },
         ])
     );

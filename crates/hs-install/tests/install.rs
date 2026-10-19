@@ -52,7 +52,9 @@ fn expect_pools(fake: &Fake, expected: &str) {
     assert_eq!(got, sorted_lines(expected), "pools differ");
 }
 
-const SINGLE_NODE_ACL: &str = "/nodes\ttoken\thomestack@pve!server\tPVEAuditor
+const SINGLE_NODE_ACL: &str = "/\ttoken\thomestack@pve!server\tHomeStackCluster
+/\tuser\thomestack@pve\tHomeStackCluster
+/nodes\ttoken\thomestack@pve!server\tPVEAuditor
 /nodes\ttoken\thomestack@pve!deploy\tPVEAuditor
 /nodes\ttoken\thomestack@pve!deploy\tHomeStackDeployNodes
 /nodes\tuser\thomestack@pve\tPVEAuditor
@@ -94,9 +96,9 @@ fn install_on_a_single_node() {
     expect_acl(&fake, SINGLE_NODE_ACL);
     expect_roles(&fake, ROLES_TARGET);
     assert!(
-        fake.homestack_acl()
-            .iter()
-            .all(|line| !line.starts_with("/\t") && !line.starts_with("/vms")),
+        fake.homestack_acl().iter().all(
+            |line| (!line.starts_with("/\t") || line.ends_with("\tHomeStackCluster")) && !line.starts_with("/vms")
+        ),
         "a token or the user can see VMs outside the HomeStack pools"
     );
     expect_pools(
@@ -216,7 +218,9 @@ fn adopt_the_hand_made_state_with_the_test_part() {
     assert!(run.ok, "{}", run.out);
     expect_acl(
         &fake,
-        "/\ttoken\thomestack@pve!server\tPVEAuditor
+        "/\ttoken\thomestack@pve!test\tHomeStackCluster
+/\tuser\thomestack@pve\tHomeStackCluster
+/\ttoken\thomestack@pve!server\tPVEAuditor
 /\tuser\thomestack@pve\tPVEAuditor
 /nodes\ttoken\thomestack@pve!deploy\tPVEAuditor
 /nodes\ttoken\thomestack@pve!deploy\tHomeStackDeployNodes

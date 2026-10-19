@@ -58,6 +58,7 @@ use utoipa::{Modify, OpenApi};
         hs_model::status::Capacity,
         hs_model::status::LayoutCapacity,
         hs_model::status::NodeState,
+        hs_model::status::ClusterQuorum,
         hs_model::status::HomesSummary,
         hs_model::status::OrphanVolume,
         hs_model::status::Orphans,

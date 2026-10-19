@@ -8,7 +8,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use hs_model::config::Config;
-use hs_model::status::{NodeState, VolumeEntry};
+use hs_model::status::{ClusterQuorum, NodeState, VolumeEntry};
 use serde_json::{Map, Value};
 
 use crate::error::CoreError;
@@ -363,10 +363,23 @@ pub async fn cluster_node_statuses(pve: &impl Pve) -> Result<Vec<NodeState>, Cor
                 .unwrap_or_else(|| "unknown".to_owned())
                 .trim()
                 .to_lowercase();
+            let online = status != "offline";
+            // An offline node's last numbers are stale: leave them out.
+            let metric = |key: &str| online.then(|| non_negative(item.get(key))).flatten();
             NodeState {
                 node: py_str(&item["node"]),
-                online: status != "offline",
+                online,
                 status,
+                cpu: online
+                    .then(|| item.get("cpu").and_then(Value::as_f64))
+                    .flatten()
+                    .filter(|cpu| cpu.is_finite() && *cpu >= 0.0),
+                maxcpu: metric("maxcpu").and_then(|n| u32::try_from(n).ok()),
+                mem_bytes: metric("mem"),
+                maxmem_bytes: metric("maxmem"),
+                disk_bytes: metric("disk"),
+                maxdisk_bytes: metric("maxdisk"),
+                uptime_seconds: metric("uptime"),
             }
         })
         .collect();
@@ -375,6 +388,24 @@ pub async fn cluster_node_statuses(pve: &impl Pve) -> Result<Vec<NodeState>, Cor
         return Err(CoreError::Unusable("Proxmox cluster returned no nodes".to_owned()));
     }
     Ok(nodes)
+}
+
+/// The `cluster` entry of `GET /cluster/status`: `None` on a standalone
+/// node, or when Proxmox does not answer it (the status goes on without it).
+pub async fn cluster_quorum(pve: &impl Pve) -> Option<ClusterQuorum> {
+    let Ok(Value::Array(items)) = pve.get("/cluster/status", &[]).await else {
+        return None;
+    };
+    let cluster = items
+        .iter()
+        .find(|item| item.get("type").and_then(Value::as_str) == Some("cluster"))?;
+    Some(ClusterQuorum {
+        name: text_or_none(cluster.get("name")).unwrap_or_default(),
+        quorate: integer_value(cluster.get("quorate")) == Some(1),
+        nodes: non_negative(cluster.get("nodes"))
+            .and_then(|n| u32::try_from(n).ok())
+            .unwrap_or(0),
+    })
 }
 
 /// The QEMU entries of `/cluster/resources?type=vm` in API order, with the

@@ -21,9 +21,10 @@ use crate::error::CoreError;
 pub use crate::inventory::StatusResource;
 use crate::inventory::{
     ALIEN_WORKSPACE_TAG, GOLD_TAG, VmConfig, WORKSPACE_TAG, attached_disk_volumes, cluster_container_resources,
-    cluster_node_statuses, cluster_vm_maps, cluster_vm_resources, disk_option, disk_storage, disk_volume, has_tag,
-    home_label, integer_value, layout_name_for_node, parse_disk_size_gb, parse_tags, py_repr, py_str,
-    storage_ids_for_node, tag_list, truthy, u64_value, vm_config, vm_status, vm_volume_inventory, volume_identity,
+    cluster_node_statuses, cluster_quorum, cluster_vm_maps, cluster_vm_resources, disk_option, disk_storage,
+    disk_volume, has_tag, home_label, integer_value, layout_name_for_node, parse_disk_size_gb, parse_tags, py_repr,
+    py_str, storage_ids_for_node, tag_list, truthy, u64_value, vm_config, vm_status, vm_volume_inventory,
+    volume_identity,
 };
 use crate::pve::Pve;
 
@@ -639,6 +640,7 @@ pub async fn global_status(pve: &impl Pve, cfg: &Config) -> Result<GlobalStatus,
             },
             orphaned_volumes: orphans,
             orphan_scan_complete: orphan_complete,
+            quorum: cluster_quorum(pve).await,
         },
         workspaces,
         others,

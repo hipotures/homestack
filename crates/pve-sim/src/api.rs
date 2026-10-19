@@ -32,6 +32,7 @@ pub fn router(state: Shared) -> Router {
         .route("/nodes", get(nodes))
         .route("/access/permissions", get(permissions))
         .route("/cluster/resources", get(cluster_resources))
+        .route("/cluster/status", get(cluster_status))
         .route("/storage", get(storage_definitions))
         .route("/pools", get(pools))
         .route("/nodes/{node}/network", get(node_network))
@@ -328,6 +329,38 @@ async fn nodes(State(state): State<Shared>) -> Response {
         })
         .collect();
     data(Value::Array(nodes))
+}
+
+/// `GET /cluster/status`: the cluster, quorate while a majority of its
+/// nodes is online, then its nodes.
+async fn cluster_status(State(state): State<Shared>, request_token: Option<axum::Extension<TokenSpec>>) -> Response {
+    let state = lock(&state);
+    if !token(request_token).is_some_and(|token| state.allows_any(&token, "/", &["Sys.Audit"])) {
+        return pve_error(403, "Permission check failed (/, Sys.Audit)\n");
+    }
+    let total = state.nodes.len();
+    let online = state
+        .nodes
+        .values()
+        .filter(|node| node.status == NodeState::Online)
+        .count();
+    let mut items = vec![json!({
+        "type": "cluster",
+        "id": "cluster",
+        "name": "pve-sim",
+        "nodes": total,
+        "quorate": u8::from(online * 2 > total),
+        "version": 1,
+    })];
+    items.extend(state.nodes.values().map(|node| {
+        json!({
+            "type": "node",
+            "id": format!("node/{}", node.name),
+            "name": node.name,
+            "online": u8::from(node.status == NodeState::Online),
+        })
+    }));
+    data(Value::Array(items))
 }
 
 /// Checks shared by every `/nodes/{node}/...` route: the privilege first,

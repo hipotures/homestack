@@ -114,6 +114,28 @@ async fn version_and_nodes_come_from_the_scenario() -> TestResult {
 }
 
 #[tokio::test]
+async fn cluster_status_requires_sys_audit_at_the_root() -> TestResult {
+    let mut cluster = spec()?;
+    cluster.tokens[1].acl = [("/nodes".to_owned(), vec!["Sys.Audit".to_owned()])]
+        .into_iter()
+        .collect();
+    let sim = PveSim::start(cluster).await?;
+    let (status, body) = get(&sim, Some(AUDIT_ONLY_VMS), "/cluster/status").await?;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(
+        serde_json::from_str::<Value>(&body)?,
+        json!({"data": null, "message": "Permission check failed (/, Sys.Audit)\n"})
+    );
+
+    let (status, body) = get(&sim, Some(TOKEN), "/cluster/status").await?;
+    assert_eq!(status, StatusCode::OK);
+    let body: Value = serde_json::from_str(&body)?;
+    assert_eq!(body["data"][0]["nodes"], 2);
+    assert_eq!(body["data"][0]["quorate"], 0, "one of two nodes has no majority");
+    Ok(())
+}
+
+#[tokio::test]
 async fn node_status_needs_sys_audit_on_the_node() -> TestResult {
     let sim = PveSim::start(spec()?).await?;
     let (status, body) = get(&sim, Some(AUDIT_ONLY_VMS), "/nodes/node-a/status").await?;

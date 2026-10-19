@@ -18,6 +18,7 @@ fn node(name: &str, online: bool) -> NodeState {
         node: name.into(),
         status: if online { "online" } else { "offline" }.into(),
         online,
+        ..NodeState::default()
     }
 }
 
@@ -179,7 +180,18 @@ fn global_status_marks_orphan_scan_incomplete_for_offline_storage_node() {
         .with("GET /pools", json!([]))
         .with(
             "GET /nodes",
-            json!([{"node": "example-node-1", "status": "online"}, {"node": "example-node-3", "status": "offline"}]),
+            json!([
+                {"node": "example-node-1", "status": "online", "cpu": 0.203, "maxcpu": 32,
+                 "mem": 945, "maxmem": 1000, "disk": 28, "maxdisk": 1000, "uptime": 1_691_472},
+                {"node": "example-node-3", "status": "offline", "cpu": 0.5, "uptime": 99},
+            ]),
+        )
+        .with(
+            "GET /cluster/status",
+            json!([
+                {"type": "cluster", "id": "cluster", "name": "homelab", "quorate": 1, "nodes": 2, "version": 3},
+                {"type": "node", "id": "node/example-node-1", "name": "example-node-1", "online": 1},
+            ]),
         )
         .with(
             "GET /nodes/example-node-1/storage",
@@ -206,6 +218,32 @@ fn global_status_marks_orphan_scan_incomplete_for_offline_storage_node() {
             .iter()
             .any(|w| w.to_lowercase().contains("orphan scan incomplete"))
     }));
+    // The load of an online node; an offline node's stale numbers are left out.
+    let nodes = status.map(|s| s.summary.nodes.clone()).unwrap_or_default();
+    assert_eq!(
+        nodes[0],
+        NodeState {
+            node: "example-node-1".into(),
+            status: "online".into(),
+            online: true,
+            cpu: Some(0.203),
+            maxcpu: Some(32),
+            mem_bytes: Some(945),
+            maxmem_bytes: Some(1000),
+            disk_bytes: Some(28),
+            maxdisk_bytes: Some(1000),
+            uptime_seconds: Some(1_691_472),
+        }
+    );
+    assert_eq!(nodes[1], node("example-node-3", false));
+    assert_eq!(
+        status.and_then(|s| s.summary.quorum.clone()),
+        Some(hs_model::status::ClusterQuorum {
+            name: "homelab".into(),
+            quorate: true,
+            nodes: 2,
+        })
+    );
 }
 
 /// `StorageCapacityStatusTests::test_reads_capacity_for_only_assigned_homestack_storages`
@@ -413,6 +451,10 @@ fn global_status_counts_only_native_homes_and_skips_alien_disk_warnings() {
         )
         .with("GET /pools", json!([]))
         .with("GET /nodes", json!([{"node": "example-node-1", "status": "online"}]))
+        .with(
+            "GET /cluster/status",
+            json!([{"type": "node", "id": "node/example-node-1", "name": "example-node-1", "online": 1}]),
+        )
         .with("GET /nodes/example-node-1/qemu/101/config", json!({"name": "gold", "tags": "homestack-gold", "scsi0": "example-storage-a:vm-101-root,size=16G"}))
         .with(
             "GET /nodes/example-node-1/qemu/200/config",
@@ -437,6 +479,7 @@ fn global_status_counts_only_native_homes_and_skips_alien_disk_warnings() {
     };
     let roles: Vec<&str> = status.workspaces.iter().map(|w| w.role.as_str()).collect();
     assert_eq!(roles, ["WS", "ALIEN"]);
+    assert_eq!(status.summary.quorum, None, "a standalone node has no cluster entry");
     assert!(status.workspaces[1].home.is_none());
     let homes = &status.summary.homes;
     assert_eq!(

@@ -94,6 +94,7 @@ EOF
 /storage/local-lvm	user	homestack@pve	PVEAuditor
 /storage/local-lvm	token	homestack@pve!test	HomeStackTestStorage
 /vms	user	homestack@pve	HomeStackServerDisks
+/vms	user	homestack@pve	HomeStackCluster
 /vms	user	homestack@pve	PVEAuditor
 /vms	token	homestack@pve!server	PVEAuditor
 /vms	token	homestack@pve!server	HomeStackServerDisks
@@ -101,6 +102,7 @@ EOF
 /vms/101	user	homestack@pve	HomeStackTestGold
 /vms/101	user	homestack@pve	PVEAuditor
 /vms/101	user	homestack@pve	HomeStackServerDisks
+/vms/101	user	homestack@pve	HomeStackCluster
 /vms/101	token	homestack@pve!server	HomeStackServerGoldGuest
 /vms/101	token	homestack@pve!server	HomeStackServerDisks
 /vms/101	token	homestack@pve!server	PVEAuditor
@@ -188,6 +190,7 @@ expect_no_snippets() {
 
 ROLES_TARGET="HomeStack	Pool.Audit,VM.Allocate,VM.Audit,VM.Config.Cloudinit,VM.Config.Disk,VM.Config.Options,VM.GuestAgent.Audit,VM.GuestAgent.FileRead,VM.GuestAgent.Unrestricted,VM.Migrate,VM.PowerMgmt
 HomeStackGold	Pool.Audit,VM.Audit,VM.Clone,VM.Config.Options,VM.GuestAgent.Audit,VM.GuestAgent.FileRead,VM.GuestAgent.Unrestricted,VM.PowerMgmt
+HomeStackCluster	Sys.Audit
 HomeStackStorage	Datastore.AllocateSpace,Datastore.Audit
 HomeStackDeploy	Pool.Audit,VM.Allocate,VM.Audit,VM.Config.CPU,VM.Config.Disk,VM.Config.Memory,VM.Config.Network,VM.Config.Options,VM.PowerMgmt
 HomeStackDeployNodes	Sys.AccessNetwork
@@ -200,6 +203,8 @@ test_install_single_node() {
     hs_ok install --storages local-lvm --snippet-storage local --service-storages local-lvm --template-storage local --yes || return
     expect_out 'single node'
     expect_acl <<'EOF'
+/	token	homestack@pve!server	HomeStackCluster
+/	user	homestack@pve	HomeStackCluster
 /nodes	token	homestack@pve!server	PVEAuditor
 /nodes	token	homestack@pve!deploy	PVEAuditor
 /nodes	token	homestack@pve!deploy	HomeStackDeployNodes
@@ -217,6 +222,7 @@ test_install_single_node() {
 /pool/homestack-gold	user	homestack@pve	HomeStackGold
 /pool/homestack-service	token	homestack@pve!deploy	HomeStackDeploy
 /pool/homestack-service	user	homestack@pve	HomeStackDeploy
+/pool/homestack-service	user	homestack@pve	HomeStackCluster
 /sdn/zones/localnetwork/vmbr0	token	homestack@pve!server	PVESDNUser
 /sdn/zones/localnetwork/vmbr0	token	homestack@pve!deploy	PVESDNUser
 /sdn/zones/localnetwork/vmbr0	user	homestack@pve	PVESDNUser
@@ -229,7 +235,7 @@ test_install_single_node() {
 /storage/local-lvm	user	homestack@pve	HomeStackStorage
 EOF
     expect_roles <<< "$ROLES_TARGET"
-    homestack_acl | awk -F'\t' '$1 == "/" || index($1, "/vms") == 1' | grep -q . &&
+    homestack_acl | awk -F'\t' '($1 == "/" && $4 != "HomeStackCluster") || index($1, "/vms") == 1' | grep -q . &&
         fail "a token or the user can see VMs outside the HomeStack pools"
     expect_pools <<< $'homestack\t\nhomestack-gold\t101\nhomestack-service\t'
     grep -qx 'homestack@pve' "$HS_FAKE/users" || fail "user not created"
@@ -280,6 +286,8 @@ test_adopt_today_with_test() {
     setup_today
     hs_ok install --test --storages local-lvm,worker-roots --snippet-storage local --service-storages local-lvm --template-storage local --yes || return
     expect_acl <<'EOF'
+/	token	homestack@pve!test	HomeStackCluster
+/	user	homestack@pve	HomeStackCluster
 /	token	homestack@pve!server	PVEAuditor
 /	user	homestack@pve	PVEAuditor
 /nodes	token	homestack@pve!deploy	PVEAuditor
@@ -289,6 +297,7 @@ test_adopt_today_with_test() {
 /storage	token	homestack@pve!deploy	PVEAuditor
 /pool/homestack-service	token	homestack@pve!deploy	HomeStackDeploy
 /pool/homestack-service	user	homestack@pve	HomeStackDeploy
+/pool/homestack-service	user	homestack@pve	HomeStackCluster
 /pool/homestack-service	user	homestack@pve	PVEAuditor
 /sdn/zones/localnetwork/vmbr0	token	homestack@pve!deploy	PVESDNUser
 /storage/local	token	homestack@pve!deploy	HomeStackDeployTemplates
@@ -321,11 +330,13 @@ test_adopt_today_with_test() {
 /vms	token	homestack@pve!server	HomeStackServerDisks
 /vms	token	homestack@pve!server	PVEAuditor
 /vms	user	homestack@pve	HomeStackServerDisks
+/vms	user	homestack@pve	HomeStackCluster
 /vms	user	homestack@pve	PVEAuditor
 /vms/101	token	homestack@pve!server	HomeStackServerDisks
 /vms/101	token	homestack@pve!server	HomeStackServerGoldGuest
 /vms/101	token	homestack@pve!server	PVEAuditor
 /vms/101	user	homestack@pve	HomeStackServerDisks
+/vms/101	user	homestack@pve	HomeStackCluster
 /vms/101	user	homestack@pve	HomeStackServerGoldGuest
 /vms/101	user	homestack@pve	PVEAuditor
 EOF

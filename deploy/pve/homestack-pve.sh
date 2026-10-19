@@ -26,13 +26,14 @@
 #
 # The tokens read nodes, storages and SDN (PVEAuditor on /nodes, /storage,
 # /sdn) and see VMs only through the roles of the HomeStack pools: a VM in
-# no HomeStack pool is invisible to them.
+# no HomeStack pool is invisible to them. HomeStackCluster grants only
+# Sys.Audit at / to read cluster quorum.
 # The deploy token makes and replaces the server containers through the
 # API: in pool homestack-service only, from an OCI image it pulls into the
 # template storage.
 #
 # HomeStack owns: the user homestack@pve, its tokens and ACL entries, the
-# roles HomeStack, HomeStackGold, HomeStackStorage and HomeStackDeploy*,
+# roles HomeStack, HomeStackGold, HomeStackCluster, HomeStackStorage and HomeStackDeploy*,
 # the pools homestack, homestack-test, homestack-gold (Gold's membership in
 # it) and homestack-service (its containers stay on uninstall) and the
 # vendor snippets on every node. Everything else belongs to the cluster's
@@ -50,6 +51,7 @@ readonly MIN_MAJOR=9 MIN_MINOR=2
 declare -Ar ROLE_PRIVS=(
     [HomeStack]='Pool.Audit,VM.Allocate,VM.Audit,VM.Config.Cloudinit,VM.Config.Disk,VM.Config.Options,VM.GuestAgent.Audit,VM.GuestAgent.FileRead,VM.GuestAgent.Unrestricted,VM.Migrate,VM.PowerMgmt'
     [HomeStackGold]='Pool.Audit,VM.Audit,VM.Clone,VM.Config.Options,VM.GuestAgent.Audit,VM.GuestAgent.FileRead,VM.GuestAgent.Unrestricted,VM.PowerMgmt'
+    [HomeStackCluster]='Sys.Audit'
     [HomeStackStorage]='Datastore.AllocateSpace,Datastore.Audit'
     [HomeStackDeploy]='Pool.Audit,VM.Allocate,VM.Audit,VM.Config.CPU,VM.Config.Disk,VM.Config.Memory,VM.Config.Network,VM.Config.Options,VM.PowerMgmt'
     [HomeStackDeployNodes]='Sys.AccessNetwork'
@@ -57,7 +59,7 @@ declare -Ar ROLE_PRIVS=(
 )
 # Roles made by hand before this script (phases 0-4); removed once unused.
 readonly LEGACY_ROLES=(HomeStackServerDisks HomeStackServerGoldGuest HomeStackTest HomeStackTestGold HomeStackTestStorage)
-readonly ROLES=(HomeStack HomeStackGold HomeStackStorage HomeStackDeploy HomeStackDeployNodes HomeStackDeployTemplates)
+readonly ROLES=(HomeStack HomeStackCluster HomeStackGold HomeStackStorage HomeStackDeploy HomeStackDeployNodes HomeStackDeployTemplates)
 readonly SNIPPETS=(homestack-vendor-create.yaml homestack-vendor-keep.yaml)
 readonly TAB=$'\t'
 # Fields are read with IFS=$US: a tab in IFS would merge empty fields.
@@ -770,6 +772,7 @@ managed_acl() {
 token_target_acl() {
     # token_target_acl TOKENID POOL
     local who=$HS_USER!$1 id
+    printf '/\ttoken\t%s\tHomeStackCluster\n' "$who"
     for id in /nodes /storage /sdn; do
         printf '%s\ttoken\t%s\tPVEAuditor\n' "$id" "$who"
     done

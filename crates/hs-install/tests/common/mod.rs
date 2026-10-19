@@ -10,6 +10,7 @@ use hs_install::{Applied, Command, InstallError, LocalShell, Plan, Settings, app
 
 pub const ROLES_TARGET: &str = "HomeStack\tPool.Audit,VM.Allocate,VM.Audit,VM.Config.Cloudinit,VM.Config.Disk,VM.Config.Options,VM.GuestAgent.Audit,VM.GuestAgent.FileRead,VM.GuestAgent.Unrestricted,VM.Migrate,VM.PowerMgmt
 HomeStackGold\tPool.Audit,VM.Audit,VM.Clone,VM.Config.Options,VM.GuestAgent.Audit,VM.GuestAgent.FileRead,VM.GuestAgent.Unrestricted,VM.PowerMgmt
+HomeStackCluster\tSys.Audit
 HomeStackStorage\tDatastore.AllocateSpace,Datastore.Audit
 HomeStackDeploy\tPool.Audit,VM.Allocate,VM.Audit,VM.Config.CPU,VM.Config.Disk,VM.Config.Memory,VM.Config.Network,VM.Config.Options,VM.PowerMgmt
 HomeStackDeployNodes\tSys.AccessNetwork

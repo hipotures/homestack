@@ -216,6 +216,78 @@ fn free_percent(app: &App) -> Option<f64> {
     (total > 0).then(|| 100.0 * free as f64 / total as f64)
 }
 
+/// `19d 13h`, `5h 12m`, `42m`.
+fn uptime(seconds: u64) -> String {
+    let (days, hours, minutes) = (seconds / 86_400, seconds / 3_600 % 24, seconds / 60 % 60);
+    if days > 0 {
+        format!("{days}d {hours}h")
+    } else if hours > 0 {
+        format!("{hours}h {minutes}m")
+    } else {
+        format!("{minutes}m")
+    }
+}
+
+/// `used` of `max` in percent; `None` without both or with `max` 0.
+fn ratio(used: Option<u64>, max: Option<u64>) -> Option<f64> {
+    let (used, max) = (used?, max?);
+    #[allow(clippy::cast_precision_loss)]
+    (max > 0).then(|| 100.0 * used as f64 / max as f64)
+}
+
+/// Green, yellow from 75 %, red from 90 %, as the storage bars.
+fn load_color(palette: &Palette, percent: f64) -> Color {
+    match percent {
+        p if p >= 90.0 => palette.error,
+        p if p >= 75.0 => palette.warning,
+        _ => palette.ok,
+    }
+}
+
+/// How a node's load fits the cluster panel: the bar's cells and whether
+/// ` of 32` / ` of 125G` follows the percentage.
+#[derive(Clone, Copy)]
+struct LoadColumns {
+    bar: usize,
+    total: bool,
+}
+
+impl LoadColumns {
+    /// Cells of a CPU, RAM or DISK column: `██████░░  94% of 125G`.
+    fn width(self) -> usize {
+        self.bar + usize::from(self.bar > 0) + 4 + if self.total { 8 } else { 0 }
+    }
+
+    /// The widest that fits `room` cells after the node columns: three load
+    /// columns and UPTIME, two spaces between them.
+    fn fitting(room: usize) -> Self {
+        [(10, true), (6, true), (0, true), (0, false)]
+            .into_iter()
+            .map(|(bar, total)| Self { bar, total })
+            .find(|columns| 3 * (columns.width() + 2) + 8 <= room)
+            .unwrap_or(Self { bar: 0, total: false })
+    }
+}
+
+/// One load column for `percent` of `total`; `—` when unknown.
+fn load(palette: &Palette, columns: LoadColumns, percent: Option<f64>, total: &str) -> Vec<(String, Style)> {
+    let text = text_style(palette);
+    let Some(percent) = percent else {
+        return vec![(pad("—", columns.width() + 2), text.fg(palette.muted))];
+    };
+    let mut parts = Vec::new();
+    if columns.bar > 0 {
+        parts.push((bar(columns.bar, percent), text.fg(load_color(palette, percent))));
+        parts.push((" ".to_owned(), text));
+    }
+    parts.push((format!("{percent:>3.0}%"), text));
+    if columns.total {
+        parts.push((pad(&format!(" of {total}"), 8), text.fg(palette.muted)));
+    }
+    parts.push(("  ".to_owned(), text));
+    parts
+}
+
 fn cluster(buf: &mut Buffer, area: Rect, app: &App, mut controls: Vec<Control>) {
     let palette = &app.palette;
     let mut top_left = vec![Control::panel(2, "cluster")];
@@ -226,13 +298,27 @@ fn cluster(buf: &mut Buffer, area: Rect, app: &App, mut controls: Vec<Control>) 
         .map(|status| status.summary.nodes.clone())
         .unwrap_or_default();
     let online = nodes.iter().filter(|node| node.online).count();
+    let mut top_right = Vec::new();
+    // The quorum, from a server that reads it, on a cluster (not a standalone node).
+    if let Some(quorum) = app.status.as_ref().and_then(|status| status.summary.quorum.as_ref()) {
+        let name = if quorum.name.is_empty() {
+            String::new()
+        } else {
+            format!("{} · ", quorum.name)
+        };
+        let count = format!("{online}/{}", quorum.nodes.max(u32::try_from(nodes.len()).unwrap_or(0)));
+        top_right.push(if quorum.quorate {
+            Control::plain(&format!("{name}quorate ✓ {count}"))
+        } else {
+            Control::plain(&format!("{name}NO QUORUM ✗ {count}")).raised()
+        });
+    }
+    if !app.clock.is_empty() {
+        top_right.push(Control::plain(&app.clock));
+    }
     let sides = Sides {
         top_left,
-        top_right: if app.clock.is_empty() {
-            Vec::new()
-        } else {
-            vec![Control::plain(&app.clock)]
-        },
+        top_right,
         bottom_right: vec![Control::plain(&format!("{online}/{} nodes", nodes.len()))],
         ..Sides::default()
     };
@@ -255,16 +341,29 @@ fn cluster(buf: &mut Buffer, area: Rect, app: &App, mut controls: Vec<Control>) 
         spans(buf, inner.x, inner.y, inner.width, &parts);
         return;
     }
-    // The table of nodes.
-    let table_width = inner.width;
-    write(
-        buf,
-        inner.x,
-        inner.y,
-        table_width,
-        " NODE   STATE      WORKSPACES",
-        muted,
-    );
+    // The table of nodes: who, state, workspaces, then the load as fits.
+    let name_width = nodes
+        .iter()
+        .map(|node| node.node.chars().count())
+        .max()
+        .unwrap_or(0)
+        .clamp(5, 16);
+    // " NODE·  ● online   ● 1  ○ 0    "
+    let lead = 1 + name_width + 2 + 1 + 10 + 2 + 3 + 2 + 3 + 2;
+    let columns = LoadColumns::fitting(usize::from(inner.width).saturating_sub(lead));
+    let heading = {
+        let cell = columns.width() + 2;
+        format!(
+            " {}  {}{}{}{}{}UPTIME",
+            pad("NODE", name_width),
+            pad("STATE", 11),
+            pad("WORKSPACES", 12),
+            pad("CPU", cell),
+            pad("RAM", cell),
+            pad("DISK", cell),
+        )
+    };
+    write(buf, inner.x, inner.y, inner.width, &heading, muted);
     let workspaces = app
         .status
         .as_ref()
@@ -275,22 +374,35 @@ fn cluster(buf: &mut Buffer, area: Rect, app: &App, mut controls: Vec<Control>) 
         let running = here.iter().filter(|entry| entry.status == "running").count();
         let y = inner.y + 1 + u16::try_from(row).unwrap_or(0);
         let (symbol, style) = dot(palette, Some(node.online));
-        spans(
-            buf,
-            inner.x,
-            y,
-            table_width,
-            &[
-                (format!(" {}  ", pad(&node.node, 5)), text),
-                (symbol, style),
-                (format!(" {} ", pad(&node.status, 8)), text),
-                // Running and stopped as dots with their counts.
-                ("● ".to_owned(), text.fg(palette.ok)),
-                (format!("{running:<3}"), text),
-                ("○ ".to_owned(), text.fg(palette.muted)),
-                ((here.len() - running).to_string(), text),
-            ],
-        );
+        let mut parts = vec![
+            (format!(" {}  ", pad(&node.node, name_width)), text),
+            (symbol, style),
+            (format!(" {} ", pad(&node.status, 8)), text),
+            // Running and stopped as dots with their counts.
+            ("● ".to_owned(), text.fg(palette.ok)),
+            (format!("{running:<3}"), text),
+            ("○ ".to_owned(), text.fg(palette.muted)),
+            (format!("{:<3}  ", here.len() - running), text),
+        ];
+        let cores = node.maxcpu.map_or_else(String::new, |n| n.to_string());
+        parts.extend(load(palette, columns, node.cpu.map(|cpu| 100.0 * cpu), &cores));
+        parts.extend(load(
+            palette,
+            columns,
+            ratio(node.mem_bytes, node.maxmem_bytes),
+            &node.maxmem_bytes.map_or_else(String::new, size),
+        ));
+        parts.extend(load(
+            palette,
+            columns,
+            ratio(node.disk_bytes, node.maxdisk_bytes),
+            &node.maxdisk_bytes.map_or_else(String::new, size),
+        ));
+        parts.push(match node.uptime_seconds {
+            Some(seconds) => (uptime(seconds), text),
+            None => ("—".to_owned(), muted),
+        });
+        spans(buf, inner.x, y, inner.width, &parts);
     }
 }
 

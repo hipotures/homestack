@@ -84,6 +84,19 @@ pub struct StatusSummary {
     /// `false` when a node or storage that holds HomeStack volumes could not
     /// be scanned.
     pub orphan_scan_complete: bool,
+    /// The cluster's name and quorum (`GET /cluster/status`); absent on a
+    /// standalone node or when Proxmox denies the request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quorum: Option<ClusterQuorum>,
+}
+
+/// The `cluster` entry of `GET /cluster/status`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct ClusterQuorum {
+    pub name: String,
+    pub quorate: bool,
+    /// Nodes the cluster has.
+    pub nodes: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
@@ -112,12 +125,29 @@ pub struct LayoutCapacity {
     pub percent: Option<f64>,
 }
 
-/// A cluster node and whether Proxmox reports it online.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+/// A cluster node and whether Proxmox reports it online, with the load
+/// `GET /nodes` reports for an online node.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct NodeState {
     pub node: String,
     pub status: String,
     pub online: bool,
+    /// CPU use, `0.0`–`1.0` of `maxcpu`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpu: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub maxcpu: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mem_bytes: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub maxmem_bytes: Option<u64>,
+    /// The node's root filesystem.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disk_bytes: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub maxdisk_bytes: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uptime_seconds: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]

@@ -65,6 +65,60 @@ fn the_cluster_line_names_nodes_and_free_storage_without_servers_or_gold() {
 }
 
 #[test]
+fn the_cluster_table_shows_each_node_s_load_and_uptime_and_the_quorum() {
+    let mut fixture = app();
+    let mut status = tui_fixture::status();
+    const GIB: u64 = 1 << 30;
+    status["summary"]["nodes"] = serde_json::json!([
+        {"node": "pve1", "status": "online", "online": true, "cpu": 0.203, "maxcpu": 32,
+         "mem_bytes": 94 * GIB, "maxmem_bytes": 100 * GIB, "disk_bytes": 3 * GIB, "maxdisk_bytes": 100 * GIB,
+         "uptime_seconds": 19 * 86_400 + 13 * 3_600 + 51 * 60},
+        {"node": "pve2", "status": "online", "online": true, "cpu": 0.017, "maxcpu": 32,
+         "mem_bytes": 10 * GIB, "maxmem_bytes": 100 * GIB, "disk_bytes": 17 * GIB, "maxdisk_bytes": 100 * GIB,
+         "uptime_seconds": 5 * 3_600 + 12 * 60},
+        {"node": "pve3", "status": "offline", "online": false},
+    ]);
+    status["summary"]["quorum"] = serde_json::json!({"name": "homelab", "quorate": true, "nodes": 3});
+    fixture.app.set_status(&status);
+
+    // Wide: bars, percentages of the totals and the uptime.
+    let buf = render(&fixture.app, 120, 36);
+    let text = screen(&buf);
+    assert!(row(&buf, 0).contains("┐homelab · quorate ✓ 2/3┌"), "{text}");
+    let heading = row(&buf, 1);
+    for column in ["NODE", "STATE", "WORKSPACES", "CPU", "RAM", "DISK", "UPTIME"] {
+        assert!(heading.contains(column), "{column}: {heading}");
+    }
+    let pve1 = row(&buf, 2);
+    assert!(pve1.contains("█") && pve1.contains(" 20% of 32"), "{pve1}");
+    assert!(pve1.contains(" 94% of 100G") && pve1.contains("19d 13h"), "{pve1}");
+    let palette = Palette::named("HomeStack", false).unwrap();
+    let (x, y) = position(&buf, " 94% of 100G");
+    // The bar, then a space, then the right-aligned percentage.
+    assert_eq!(buf[(x - 2, y)].fg, palette.error, "94 % RAM is red");
+    assert!(row(&buf, 3).contains("5h 12m"), "{}", row(&buf, 3));
+    // An offline node has no numbers.
+    let pve3 = row(&buf, 4);
+    assert!(
+        pve3.contains("offline") && pve3.contains("—") && !pve3.contains('%'),
+        "{pve3}"
+    );
+
+    // Narrower: the bars go first, the numbers stay.
+    let buf = render(&fixture.app, 90, 36);
+    let pve1 = row(&buf, 2);
+    assert!(
+        !pve1.contains("█") && pve1.contains(" 20% of 32") && pve1.contains("19d 13h"),
+        "{pve1}"
+    );
+
+    // Without quorum the border says so.
+    status["summary"]["quorum"]["quorate"] = serde_json::json!(false);
+    fixture.app.set_status(&status);
+    assert!(row(&render(&fixture.app, 120, 36), 0).contains("NO QUORUM ✗"));
+}
+
+#[test]
 fn the_first_row_is_selected_and_down_moves_the_selection() {
     let mut fixture = app();
     let buf = render(&fixture.app, 80, 24);

@@ -19,7 +19,7 @@ use crate::state::{Acl, HS_USER, POOL_GOLD, POOL_SERVICE, POOL_TEST, POOL_WORKSP
 const DEPLOY_TOKEN: &str = "deploy";
 
 /// The roles HomeStack owns and their privileges.
-const ROLES: [(&str, &str); 6] = [
+const ROLES: [(&str, &str); 7] = [
     (
         "HomeStack",
         "Pool.Audit,VM.Allocate,VM.Audit,VM.Config.Cloudinit,VM.Config.Disk,VM.Config.Options,VM.GuestAgent.Audit,VM.GuestAgent.FileRead,VM.GuestAgent.Unrestricted,VM.Migrate,VM.PowerMgmt",
@@ -28,6 +28,7 @@ const ROLES: [(&str, &str); 6] = [
         "HomeStackGold",
         "Pool.Audit,VM.Audit,VM.Clone,VM.Config.Options,VM.GuestAgent.Audit,VM.GuestAgent.FileRead,VM.GuestAgent.Unrestricted,VM.PowerMgmt",
     ),
+    ("HomeStackCluster", "Sys.Audit"),
     ("HomeStackStorage", "Datastore.AllocateSpace,Datastore.Audit"),
     (
         "HomeStackDeploy",
@@ -212,6 +213,7 @@ fn acl_token(path: &str, token: &str, role: &str) -> Acl {
 
 fn token_target_acl(names: &Names) -> BTreeSet<Acl> {
     let mut entries = BTreeSet::new();
+    entries.insert(acl_token("/", names.token, "HomeStackCluster"));
     for path in ["/nodes", "/storage", "/sdn"] {
         entries.insert(acl_token(path, names.token, "PVEAuditor"));
     }
