@@ -142,6 +142,28 @@ pub fn resolve(state: &State, settings: &Settings) -> (Settings, Vec<String>) {
     (resolved, taken)
 }
 
+/// Infer the snippet storage for an uninstall when none was explicitly passed:
+/// a unique snippet-capable storage carrying a HomeStack storage ACL, or the
+/// only snippet-capable storage on the cluster.
+pub fn uninstall_snippet_storage(state: &State) -> Option<String> {
+    let choices = storage_choices(state, "snippets");
+    let acl = state.managed_acl();
+    let managed: Vec<&Choice> = choices
+        .iter()
+        .filter(|choice| {
+            let path = format!("/storage/{}", choice.value);
+            acl.iter().any(|entry| entry.path == path)
+        })
+        .collect();
+    if let [one] = managed.as_slice() {
+        return Some(one.value.clone());
+    }
+    if let [one] = choices.as_slice() {
+        return Some(one.value.clone());
+    }
+    None
+}
+
 fn check_storage(state: &State, found: &mut Findings, id: &str, content: &str) {
     match state.storages.get(id) {
         None => found.errors.push(format!(

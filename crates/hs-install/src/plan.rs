@@ -752,7 +752,11 @@ pub fn make_plan(
     let (resolved, taken) = if command == Command::Install {
         checks::resolve(&state, settings)
     } else {
-        (settings.clone(), Vec::new())
+        let mut resolved = settings.clone();
+        if !resolved.test && resolved.snippet_storage.is_none() {
+            resolved.snippet_storage = checks::uninstall_snippet_storage(&state);
+        }
+        (resolved, Vec::new())
     };
     let settings = &resolved;
     let (part, pool, token) = if settings.test {

@@ -1,231 +1,226 @@
 # HomeStack
 
-HomeStack manages disposable Proxmox VE workspace roots while keeping each workspace home on a separate persistent disk. The Rust desktop client talks to HomeStack API servers, which use scoped Proxmox API tokens.
+**Disposable Proxmox VE development workspaces with persistent `/home` disks, hardware-key SSH, and one-step user-space provisioning.**
 
-## Build and run
+HomeStack lets you treat your workspace operating system as cattle while keeping your work, credentials, and home directory safe on a dedicated persistent volume. Spin up a workspace from a **Gold** base VM, work inside it over SSH, and whenever the root filesystem gets cluttered or you update system packages in Gold, run `homestack refresh` to swap the OS disk in place—without touching `/home`.
 
-Build with Rust 1.99 or newer. Python 3 is needed for the repository's build wrapper; there is no Python CLI to install.
+<!-- Screenshots placeholder -->
+
+---
+
+## Why HomeStack?
+
+- **Disposable OS root, persistent `/home`** — Every workspace has two disks: `scsi0` (disposable root cloned from your `homestack-gold` VM) and `scsi1` (persistent `ext4` volume mounted at `/home/<USER>`). Refreshing a workspace stages a fresh root from Gold, verifies guest health, and rolls back automatically if anything fails.
+- **No permanent Proxmox root access** — Root access (via SSH or an authenticated [Herdr](https://herdr.dev) pane) is used only when installing or uninstalling HomeStack. Day-to-day operations run from the desktop client against lightweight `homestack-server` LXC containers that use least-privilege Proxmox API tokens.
+- **Full-screen TUI & scriptable CLI** — Manage workspaces, inspect storage capacity, start/stop Gold, add SSH keys, run rolling API server updates, and provision tools interactively with keyboard and mouse—or script everything with `--yes` and `--json`.
+- **Hardware-key SSH by default** — Generates isolated OpenSSH aliases under `~/.ssh/config.d/homestack/` with per-workspace `known_hosts` files (`StrictHostKeyChecking accept-new`), keeping your main `~/.ssh/known_hosts` clean across root refreshes and workspace recreations.
+- **Unified workspace setup (`homestack setup`)** — Provision shell profiles (`bash`, `zsh`, `fish`, `nu`), coding agents and toolchains (`codex`, `claude`, `opencode`, `hermes`, `pi`, `herdr`, `rust`), dotfiles, structured config patches (`toml`, `json`, `yaml`), GitHub repositories with per-workspace deploy keys, and nightly `bk` backups over a single SSH `ControlMaster` session.
+
+---
+
+## How It Works
+
+```mermaid
+flowchart LR
+    subgraph Desktop["Trusted Desktop"]
+        CLI["homestack (TUI & CLI)"]
+        SSH["OpenSSH + Security Keys"]
+    end
+
+    subgraph Cluster["Proxmox VE Node / Cluster"]
+        API["homestack-server (LXC)"]
+        Gold["Gold VM (homestack-gold)\nscsi0: Base OS"]
+        subgraph WS["Workspace VM (homestack-ws)"]
+            Root["scsi0: Disposable Root"]
+            Home["scsi1: Persistent /home"]
+        end
+    end
+
+    CLI -- "HTTPS + API Token" --> API
+    API -- "Scoped PVE Token" --> Gold
+    API -- "Clone / Refresh / Resize / Migrate" --> WS
+    SSH -- "SSH ControlMaster / rsync" --> WS
+```
+
+### Proxmox Tags & Roles
+
+HomeStack identifies and guards VMs and containers using Proxmox tags:
+
+| Tag | Target | Purpose |
+| :--- | :--- | :--- |
+| `homestack-gold` | QEMU VM | User-maintained base VM (`scsi0` root only) cloned for `create` and `refresh`. |
+| `homestack-ws` | QEMU VM | Managed workspace with disposable `scsi0` root and persistent `scsi1` home (`HS_HOME_<VMID>`). |
+| `homestack-lock` | QEMU VM | Optional tag added alongside `homestack-ws` to block `refresh` and protect customized roots. |
+| `homestack-alien` | QEMU VM | Existing non-HomeStack VM opted into `homestack setup`, `repo`, and `addkey` while lifecycle operations remain disabled. |
+| `homestack-api` | LXC container | HomeStack API server instance (`api1`, `api2`, …) deployed and updated by the installer. |
+
+---
+
+## Quick Start
+
+### 1. Build the binary
+
+Build with Rust 1.99 or newer (Python 3 is used only by the repository's build wrapper; there is no Python runtime in the client or server):
 
 ```sh
 python3 scripts/cargo.py build --locked -p hs-cli --bin homestack
 ./target/debug/homestack
 ```
 
-Install the binary in your `PATH` to use the `homestack` commands below. The desktop also needs OpenSSH; Herdr is optional for installation access and workspace tabs. File transfers use `rsync`. Repository provisioning uses an authenticated `gh` CLI on the desktop. Workspace setup and backup retain their Python programs inside the VM.
+Place `homestack` (and `homestack-deploy` if deploying from PATH) in your `PATH`.
 
-## First installation and profiles
+**Desktop prerequisites:**
+- `ssh` / `ssh-keygen` (OpenSSH)
+- `rsync` (for Setup file transfers)
+- `gh` (optional, authenticated GitHub CLI for `homestack repo` and Setup repository discovery)
+- `herdr` (optional, for Herdr pane installation access and automatic workspace machine registration)
+- `bwrap` and `fido2-token` (optional, when using `fido_devices` to filter visible FIDO2 security keys)
 
-Start `homestack` or `homestack install` without an existing configuration. Choose root access to a Proxmox node through SSH or a Herdr pane, inspect the discovered resources, then select Gold, storage, network, workspace account, home size and SSH identities. Review the plan before Install applies it. Interrupted installation answers are saved separately from active configuration and restored on re-entry.
+### 2. First-time installation
 
-`config.minimal.toml` is an optional installation seed. It is not an active client configuration. The installer creates `client.toml`, server configuration and credentials after confirmation. Workspace SSH identity files are selected in the installer; no particular desktop key path is required in a seed.
+Run `homestack` (opens the TUI) or `homestack install` without an existing configuration:
+
+1. **Access** — Connect as `root` to any node in your Proxmox cluster over **SSH** (`root@pve1`) or an already authenticated **Herdr** terminal pane.
+2. **Check** — Inspect discovered nodes, storages, network bridges, and candidate Gold VMs.
+3. **Settings** — Select Gold (optional during initial install), workspace disk storages, snippet/template storages, server domain (or `--no-servers`), network CIDR/gateway/DNS, workspace username/UID/GID, default `/home` size, and desktop SSH identity files.
+4. **Review & Install** — Review every Proxmox and deployment action before anything changes. Interrupted answers are saved in a draft (`install-draft.toml`) and restored automatically when you reopen the installer.
 
 ```sh
-homestack discover --json
-homestack install
-homestack --profil e2e
+homestack                 # Open the TUI (starts first-time setup if unconfigured)
+homestack discover --json # Read-only cluster discovery
+homestack install         # Interactive or flag-driven CLI installer
+homestack uninstall       # Remove HomeStack roles, pools, tokens, and unused vendor snippets
+```
+
+> [!TIP]
+> `config.minimal.toml` is an optional installation seed, not an active client configuration. After confirmation, the installer generates `client.toml`, `server.toml`, and scoped tokens under `~/.config/homestack/`.
+
+### 3. Client profiles
+
+The default profile lives under `~/.config/homestack` (or `$XDG_CONFIG_HOME/homestack`). Named profiles keep independent credentials, SSH aliases, and UI preferences:
+
+```sh
+homestack --profile e2e
 homestack profiles
 ```
 
-The default profile stores configuration below `~/.config/homestack` (or `$XDG_CONFIG_HOME/homestack`). Named profiles have independent credentials, SSH state and preferences. Use `--config PATH` to select an explicit client configuration outside a named profile. See [Client profiles](docs/client-profiles.md).
+Use `--config PATH` to point at an explicit `client.toml` outside a named profile. See [Client profiles](docs/client-profiles.md) for details.
 
-An installed profile opens cluster status. Menu > Reinstall HomeStack opens the full installer; Menu > Update API containers updates server images using the saved deployment. A failed connection is reported without assuming that the installation has disappeared.
+Inside the TUI (`Menu` / `m`):
+- **Reinstall HomeStack** opens the full installer with your saved settings pre-filled.
+- **Update API containers** performs a rolling update of `homestack-server` LXC containers across cluster nodes using the saved deployment configuration.
+- **Uninstall HomeStack** removes HomeStack's Proxmox user, tokens, roles, ACLs, pools, and unused vendor Cloud-Init snippets, retires `client.toml` to `client.toml.uninstalled`, and returns cleanly to the first-time setup screen.
 
-## Connections and trust
+---
 
-Root access is needed once for Proxmox account, role, pool and token installation. Normal workspace operations go through the HTTPS API servers and scoped tokens. Workspace SSH and setup use the desktop's selected identities and verified host keys.
+## CLI Reference
 
-For Herdr installation access, select a pane with an authenticated root shell at a Proxmox node's prompt. SSH installation access is also supported. The access screen verifies the chosen connection before resource discovery.
+Lifecycle commands accept either a numeric `VMID` or an exact workspace name. Mutating commands (`create`, `refresh`, `resize`, `migrate`, `destroy`, `addkey`) always display an execution plan before confirmation. Pass `--yes` to accept the plan and `--json` for machine-readable output.
 
-Configure generated workspace SSH entries in `[workspace_ssh]`; its user matches the workspace account in `[user]`. `identity_files` contains the desktop private-key paths selected during installation. Optional `fido_devices` limits the security-key kinds visible to SSH; this needs `bwrap` and `fido2-token`. Credentials and machine-specific configuration belong outside the repository.
+| Command | Description |
+| :--- | :--- |
+| `homestack` | Launch the interactive terminal UI (TUI). |
+| `homestack status [VMID\|NAME]` | Cluster-wide overview (workspaces, Gold, storage capacity, detached volumes) or detailed single-VM inspection. |
+| `homestack create <VMID> <NAME>` | Clone Gold into a new workspace, allocate its persistent `/home` disk, configure Cloud-Init, and register its SSH alias. |
+| `homestack refresh <VMID\|NAME>` | Replace the workspace's `scsi0` root disk with a fresh clone from Gold while preserving `scsi1` (`/home`). |
+| `homestack resize <VMID\|NAME>` | Grow `--root-size <SIZE>` or `--home-size <SIZE>` online (Proxmox disk + partition/LUKS/LVM + `ext4`/`btrfs`). |
+| `homestack migrate <VMID\|NAME> <NODE>` | Offline-migrate a workspace and its disks to another cluster node (`--target-storage <ID>`). |
+| `homestack destroy <VMID\|NAME>` | Delete a workspace VM and its attached persistent `/home` volume after verifying identity. |
+| `homestack addkey <VMID\|NAME>` | Add an SSH public key (`--key <PATH.pub>`) or re-apply configured keys via Cloud-Init without touching `/home`. |
+| `homestack setup [WORKSPACE] [SELECTORS...]` | Inspect or provision dotfiles, shell environments, applications, credentials, backups, and repositories. |
+| `homestack repo <VMID\|NAME> [OWNER/REPO]` | Provision or rotate a workspace-local GitHub deploy key and clone/fast-forward the repository. |
+| `homestack install` / `uninstall` | Install, reconcile, or remove HomeStack on Proxmox VE and deploy `homestack-server` containers. |
+| `homestack discover` | Read-only Proxmox cluster inspection prior to installation. |
+| `homestack profiles` | List available client profiles. |
+| `homestack transport` | Show active API server transport and endpoint configuration. |
 
-Server deployment: [Deployment](docs/migration/deploy.md). API contract: [OpenAPI](docs/openapi.json). Isolated testing: [E2E bootstrap](docs/e2e-bootstrap.md) and [laboratory design](docs/isolated-e2e-lab.md).
-
-## Commands
+### Common Lifecycle Examples
 
 ```bash
-homestack discover
-homestack install
-homestack transport
+# Create workspaces on the default node/storage or on a specific node and storage
 homestack create 200 example-workspace
 homestack create 200 example-workspace --home-size 20G
 homestack create 200 example-workspace --storage example-storage
 homestack create 200 example-workspace --node pve-example-2 --storage example-storage --home-size 500G
+
+# Refresh OS root from Gold, resize disks online, migrate, or destroy
 homestack refresh 200
 homestack resize 200 --root-size 32G
 homestack resize 200 --home-size 500G
+homestack migrate 200 pve-example-2 --target-storage example-storage
+homestack destroy 200
+
+# Manage SSH keys and repositories
 homestack addkey 200 --key ~/.ssh/id_ecdsa_sk_trezor_vm.pub
 homestack addkey 200
-homestack migrate 200 pve-example-2 --target-storage example-storage
 homestack repo example-workspace
 homestack repo example-workspace owner/repository
-homestack destroy 200
+
+# Inspect cluster or workspace status
 homestack status
 homestack status 200
 ```
 
-Lifecycle targets may be a numeric VMID or exact workspace name. `create`, `refresh`, `resize`, `migrate`, and `destroy` resolve and display a plan before confirmation. Use `--yes` to accept a plan and `--json` for machine-readable plans/results.
+### Cross-Node Creation & Migration
 
-`resize` accepts one disk per invocation: `--root-size` or `--home-size`, specified as an absolute total disk size such as `32G` or `1T`. It grows the Proxmox disk and mounted ext4 or single-device Btrfs filesystem online, including a partition, LUKS mapping and LVM layers when present. Btrfs subvolumes are resolved to their backing device before resizing. The standard two-disk root/home layout is supported; the selected partition must be last on its disk. LVM requires a dedicated volume group with one physical volume and one ordinary linear logical volume; the logical volume grows into all available space in that group. Shrinking, thin pools, RAID and shared/multi-volume groups are rejected before disk growth.
+- `create --node NODE` selects the workspace destination; omitting it uses Gold's node. `--storage` selects an allowed storage on the destination for root and home; otherwise HomeStack selects the first configured storage for that node.
+- When creating on another node, the server creates a full clone on Gold's node, then migrates the stopped clone and its disks to the destination through the Proxmox API. It verifies the migrated disks and network configuration before allocating the persistent home and preparing Cloud-Init. Both nodes must be online and provide the required storage and bridges. Gold is not modified by this transfer. Failed-clone cleanup requires proof that the VM and its disks belong to the target operation; an unrecognized VM or foreign disk is left intact.
 
-The VM must be running with a working QEMU Guest Agent and the filesystem tool (`resize2fs` or `btrfs`). Layer-specific tools (`growpart`, `cryptsetup`, and LVM utilities) are checked before execution. For LUKS, HomeStack reads the matching `/etc/crypttab` entry. A configured regular key file is validated and used entirely inside the guest. If no key file is configured, interactive execution asks for a passphrase without echo. The client sends it in the HTTPS apply request, and the server passes it to `cryptsetup` through guest-agent standard input, never command arguments. Noninteractive execution requiring a passphrase stops before disk growth. A missing or invalid configured key file is reported without switching authentication methods.
+### Online Disk Resize (`homestack resize`)
 
-Repeating the same target size completes interrupted growth, including LUKS/LVM/filesystem stages, without further enlarging the virtual disk. `homestack-lock` blocks only `refresh` and does not prevent `resize`. A later refresh replaces root with the Gold disk again; use the lock to protect customized roots.
+- `resize` accepts one disk per invocation: `--root-size` or `--home-size`, specified as an absolute total disk size such as `32G` or `1T`.
+- It grows the Proxmox disk and mounted `ext4` or single-device `Btrfs` filesystem online, including a partition, LUKS mapping, and LVM layers when present. Btrfs subvolumes are resolved to their backing device before resizing.
+- The standard two-disk root/home layout is supported; the selected partition must be last on its disk. LVM requires a dedicated volume group with one physical volume and one ordinary linear logical volume; the logical volume grows into all available space in that group. Shrinking, thin pools, RAID, and shared/multi-volume groups are rejected before disk growth.
+- The VM must be running with a working QEMU Guest Agent and the filesystem tool (`resize2fs` or `btrfs`). Layer-specific tools (`growpart`, `cryptsetup`, and LVM utilities) are checked before execution.
+- For LUKS, HomeStack reads the matching `/etc/crypttab` entry. A configured regular key file is validated and used entirely inside the guest. If no key file is configured, interactive execution asks for a passphrase without echo; the client sends it in the HTTPS apply request, and the server passes it to `cryptsetup` through guest-agent standard input, never command arguments. Non-interactive execution requiring a passphrase stops before disk growth. A missing or invalid configured key file is reported without switching authentication methods.
+- Repeating the same target size completes interrupted growth, including LUKS/LVM/filesystem stages, without further enlarging the virtual disk. `homestack-lock` blocks only `refresh` and does not prevent `resize`. A later refresh replaces root with the Gold disk again; use `homestack-lock` to protect customized roots.
 
-In the Rust TUI, **Add key** lists public keys with checkboxes. Each row shows the key's comment (its name) and `.pub` file. Use ↑/↓ to move, Space or click to select several keys, and Enter to review and apply the entire selection once. The client reviews the whole selection once, then adds each key through the standard single-key API and registers its matching private key locally. No server update is required. If one addition fails, completed additions remain and the client stops before the remaining keys. For native workspaces, the separate “Apply the keys already configured in the VM” option repairs access without selecting a new file. For a running `homestack-alien` VM, Add key instead copies the selected public keys over its SSH alias into the login account’s `~/.ssh/authorized_keys`; existing keys and restrictions are preserved. SSH can ask for an existing password or key through the TUI. This path does not change Cloud-Init, VM tags or power state and does not require a server update.
+### Adding & Repairing SSH Keys (`homestack addkey`)
 
-`addkey` adds one SSH public key (a `.pub` file with exactly one key and a comment) to a workspace through Proxmox Cloud-Init, without touching the root disk or the persistent home. It shows its plan first. It adds the key to the VM's Proxmox `sshkeys`; sets `allow_format=0` in the HomeStack vendor snippet so the rerun cannot rewrite `authorized_keys` or the home permissions; replaces one `ensure-keys` step that appends missing keys to root's and the workspace user's `authorized_keys` (nothing is ever removed); writes a new `instance-id` so Cloud-Init runs once more; updates Cloud-Init through the Proxmox API; and, for a running VM, shuts it down and starts it, waits for Cloud-Init to report `done`, removes the workspace's own local `known_hosts` file (a new instance generates new SSH host keys; see Workspace SSH below), and checks that the key is in both `authorized_keys` files. A stopped VM stays stopped and applies the key on its next start. A restart is never done without asking: after the key is prepared, a final question (default no) decides, and `--yes` alone never restarts a VM; use `--restart` to restart without the question. Without `--key`, `addkey test1` applies the keys already in the VM's Proxmox `sshkeys` (for example to recreate a deleted `authorized_keys`); a missing `authorized_keys` file or `.ssh` directory is created with private modes. After a new key, the private key is added to `identity_files` in the HomeStack config and this VM's local ssh config is rewritten (YubiKey first, Trezor when no YubiKey is connected). If a step fails before the restart, the vendor and meta snippets are put back. Removing or replacing keys is not part of `addkey`.
+- **In the TUI:** **Add key** lists public keys with checkboxes. Each row shows the key's comment (its name) and `.pub` file. Use `↑`/`↓` to move, `Space` or click to select several keys, and `Enter` to review and apply the entire selection once. For native workspaces, the separate *"Apply the keys already configured in the VM"* option repairs access without selecting a new file. For a running `homestack-alien` VM, **Add key** instead copies the selected public keys over its SSH alias into the login account's `~/.ssh/authorized_keys` (preserving existing keys and restrictions, without changing Cloud-Init, VM tags, or power state).
+- **In the CLI:** `addkey` adds one SSH public key (a `.pub` file with a single key and comment) to a workspace through Proxmox Cloud-Init without touching the root disk or persistent home:
+  1. Adds the key to the VM's Proxmox `sshkeys`.
+  2. Sets `allow_format=0` in the HomeStack vendor snippet so the rerun cannot rewrite `authorized_keys` or home permissions.
+  3. Replaces one `ensure-keys` step that appends missing keys to `root`'s and the workspace user's `authorized_keys` (nothing is ever removed).
+  4. Writes a new `instance-id` so Cloud-Init runs once more and updates Cloud-Init through the Proxmox API.
+  5. For a running VM, asks before restarting (`--yes` alone never restarts a VM; pass `--restart` to restart without prompting), shuts it down and starts it, waits for Cloud-Init to report `done`, removes the workspace's local `known_hosts` file (`~/.ssh/config.d/homestack/known_hosts/vm<VMID>`), and verifies the key in both `authorized_keys` files. A stopped VM stays stopped and applies the key on its next start.
+  6. Without `--key`, `homestack addkey <WORKSPACE>` re-applies the keys already in Proxmox `sshkeys` (for example, to recreate a deleted `authorized_keys`).
+  7. After adding a new key, the matching private key is added to `identity_files` in the HomeStack config and the VM's local SSH config is rewritten (YubiKey first, Trezor when no YubiKey is connected).
 
-`create --node NODE` selects the workspace destination; omitting it uses Gold's node. `--storage` selects an allowed storage on the destination for root and home; otherwise HomeStack selects the first configured storage for that node.
+---
 
-For another node, the server creates a full clone on Gold's node, then migrates the stopped clone and its disks to the destination through the Proxmox API. It verifies the migrated disks and network configuration before allocating the persistent home and preparing Cloud-Init. Both nodes must be online and provide the required storage and bridges. Gold is not modified by this transfer. Failed-clone cleanup requires proof that the VM and its disks belong to the target operation; an unrecognized VM or foreign disk is left intact.
+## Workspace SSH & Security Keys
 
-## Preparing a Gold VM
+Root access is needed once for Proxmox account, role, pool, and token installation. Normal workspace operations go through the HTTPS API servers and scoped tokens. Workspace SSH and setup use the desktop's selected identities and verified host keys.
 
-Gold is a user-maintained base VM, not a HomeStack-generated operating-system image. HomeStack intentionally leaves the OS, system packages, development tools, and other root-filesystem contents under the user's control, but the VM must satisfy a small contract so that cloning, refresh, persistent home, networking, SSH, and guest verification remain deterministic.
+Configure generated workspace SSH entries in `[workspace_ssh]`; its user matches the workspace account in `[user]`. `identity_files` contains the desktop private-key paths selected during installation. Optional `fido_devices` limits the security-key kinds visible to SSH (requires `bwrap` and `fido2-token`).
 
-### Proxmox VM contract
+- **OpenSSH aliases:** After a successful `create`, HomeStack writes and `fsync`s a mode-`0600` workspace entry below `~/.ssh/config.d/homestack/`, atomically publishes it, and only then removes stale entries for the same VMID. Ensure your `~/.ssh/config` includes `~/.ssh/config.d/homestack/*.conf`.
+- **Isolated `known_hosts`:** Each workspace entry points to its own host-key file at `~/.ssh/config.d/homestack/known_hosts/vm<VMID>` with `StrictHostKeyChecking accept-new`. OpenSSH learns the workspace's key on first connection and verifies it thereafter, without reading or polluting `~/.ssh/known_hosts`. `refresh`, `addkey` (after restart), and `destroy` remove only that workspace's file.
+- **TUI SSH action:** Connects through the VM's name as an OpenSSH alias (e.g. `ssh rt`), preserving your desktop's `Host`, `Match`, identity, and proxy settings. Gold uses `root@ALIAS`. Authentication is restricted to public keys, so an unplugged hardware key reports an authentication failure instead of falling back to a password prompt.
+- **Single ControlMaster for Setup:** One SSH `ControlMaster` connection is established and reused across guest checks, directory creation, `rsync`, verification, and setup handlers. Fresh authentication is disabled on child connections so a broken socket fails closed instead of prompting for repeated security-key touches.
 
-Prepare a QEMU VM with the following properties:
+---
 
-- add the exact HomeStack role tag `homestack-gold`; do not also tag the VM `homestack-ws`;
-- attach the disposable OS root as `scsi0` and include `scsi0` in the VM boot order;
-- do not attach a persistent-home disk or other data disks to Gold; HomeStack creates workspace `scsi1` itself, and a full clone would otherwise copy unrelated disks;
-- configure exactly the primary workspace NIC as `net0`; HomeStack derives the workspace MAC and bridge from it;
-- attach a Proxmox Cloud-Init drive;
-- enable the Proxmox QEMU Guest Agent option;
-- avoid host-specific passthrough devices in Gold;
-- configure at least one valid public SSH key in Proxmox `sshkeys` if Gold will normally remain stopped. This lets HomeStack obtain workspace public keys without booting Gold.
+## Unified Workspace Setup (`homestack setup`)
 
-Gold may live on any storage available to its node. Its source root volume name is discovered from `scsi0` and does not need a HomeStack workspace volume name.
-
-### Guest contract
-
-Current HomeStack guest initialization targets a systemd Linux guest using Cloud-Init and NetworkManager. For Debian/Ubuntu-family Gold images, the required baseline is:
-
-```bash
-apt-get update
-apt-get install -y cloud-init qemu-guest-agent network-manager openssh-server e2fsprogs util-linux
-```
-
-Install `rsync` for Setup Files transfers:
-
-```bash
-apt-get install -y rsync
-```
-
-`homestack repo` additionally requires `git` and `ssh-keygen` in the workspace. These are optional Gold capabilities because repository provisioning is independent of the VM lifecycle.
-
-Run administrative preparation as `root`; HomeStack does not use `sudo`. The Gold readiness table labels every check as `required` or `optional`. Missing required checks block the installer stage; missing optional capabilities are reported but do not block final configuration.
-
-The guest must contain the configured workspace account before cloning. With the default HomeStack settings this is:
-
-```text
-root
-user  UID 1000  GID 1000
-```
-
-The workspace account must not have root escalation. The `sudo` package may remain installed, but the workspace account must have no permitted sudo commands. There must be no additional regular user accounts with UID 1000-65533. System/service accounts are unaffected by this rule.
-
-Root must have a usable `/root/.ssh/authorized_keys`. Workspace public keys are taken first from the Proxmox `sshkeys` setting and, when Gold is running with QEMU Guest Agent available, may fall back to `/home/<USER>/.ssh/authorized_keys`. Only public keys belong in Gold or Proxmox configuration; private hardware-key material remains on the trusted desktop.
-
-HomeStack-generated Cloud-Init explicitly disables SSH password authentication and requests regeneration of cloned SSH host keys. The current network snippet uses `renderer: NetworkManager`, so NetworkManager is a current Gold requirement rather than an arbitrary recommendation.
-
-### Finalize Gold before normal use
-
-After installing and configuring the guest, enable the services required on cloned workspaces:
+`setup` is an explicit user-space operation, independent of `install`, `create`, `refresh`, and `migrate`. It runs on the trusted desktop, resolves the workspace through verified infrastructure, and operates as the unprivileged workspace user. Nothing is selected automatically.
 
 ```bash
-systemctl enable qemu-guest-agent
-systemctl enable NetworkManager
-systemctl enable ssh
-```
-
-For an image that will normally remain stopped, clean Cloud-Init state and the machine ID immediately before the final shutdown:
-
-```bash
-cloud-init clean --logs --machine-id
-poweroff
-```
-
-Do not boot the finalized Gold again unless you intend to update and re-finalize it. `cloud-init clean --machine-id` prevents clones from inheriting the Gold machine identity. HomeStack's per-workspace Cloud-Init metadata supplies a new instance identity and hostname, while `ssh_deletekeys: true` regenerates SSH host keys.
-
-Gold's root may contain any system-wide packages and configuration that should reappear after every `refresh`. Project data and user state should not be baked into Gold: workspace `/home/<USER>` is a separate persistent ext4 disk and survives root refreshes and migrations.
-
-### Installer readiness check
-
-The installer checks a selected Gold before applying the plan. Installation answers are saved separately, so after preparing Gold you can reopen the installer and review the saved choices. Resource checks run again against the current cluster state.
-
-Gold is optional during installation. Select the server network bridge independently; creating and refreshing workspaces require a configured Gold later. When a Gold is selected, `homestack install` performs a non-destructive readiness check. Required checks validate the PVE role tag, root/data-disk layout, `net0`, Cloud-Init drive, QEMU Guest Agent option, and boot order. If Gold is running, required guest and security checks also cover QEMU Guest Agent access, the mandatory guest tools, the configured user/UID/GID, the no-sudo-privileges policy, regular-user policy, root SSH keys, and a workspace public-key source. `rsync` is an optional capability needed for Setup Files; `git` and `ssh-keygen` are optional capabilities needed only for `homestack repo`.
-
-The installer never starts Gold just to inspect it. A stopped Gold can therefore pass the PVE-side contract when it has valid Proxmox `sshkeys`, but the installer reports guest checks as not inspected. Runtime `create` and `refresh` verification still fail closed if the resulting workspace violates the account, SSH, persistent-home, or guest requirements.
-
-## Storage and lifecycle invariants
-
-- Gold is the configured `gold_vmid` and must have the exact `homestack-gold` tag.
-- Workspaces have the exact `homestack-ws` role tag.
-- Existing VMs created outside HomeStack can use the standalone `homestack-alien` role tag. Set it in Proxmox under VM → Options → Tags; replace `homestack-ws` if present, and do not combine it with `homestack-gold`. For example, tag `rt` with `homestack-alien`, then run `homestack setup rt`. This role allows setup (applications, files, shell profiles, configuration, repositories and backup) and standalone repository operations without a Gold disk layout. It keeps the configured workspace username, UID/GID, `/home/<USER>`, hostname and writable home requirements, and uses the usual configured SSH keys and VMID-derived IP. It does not require a separate ext4 home mount or an `HS_HOME_<VMID>` label. Prepare missing system prerequisites yourself. HomeStack refuses lifecycle operations on alien VMs, including refresh/recovery, resize, destroy and migration; manage their disks and VM lifecycle in Proxmox. Status lists them as `ALIEN` and excludes their homes from managed-home storage totals.
-- Add the optional `homestack-lock` tag alongside `homestack-ws` in Proxmox to block `refresh`. Remove it from the VM to allow root replacement again; `--yes` does not bypass the lock. The tag is checked during planning, before execution, and again before switching roots. Explicit refresh recovery is also blocked while tagged; automatic rollback of an already-started failed refresh remains allowed to restore the original root. Other workspace operations are unaffected.
-- `scsi0` is the disposable root; `scsi1` is persistent home. The configured root and home slots must always be different.
-- Persistent home is ext4 with label `HS_HOME_<VMID>`.
-- Persistent-home volumes are named `vm-<VMID>-hs-home-<USER>`. A newly created root is named `vm-<VMID>-hs-root-default`; a refreshed root may retain the collision-free name allocated by Proxmox during staging.
-- Create placement and migration targets must belong to the node's configured `storage_layouts` list.
-- Refresh stages a new root while the old root remains recoverable, keeps home attached, boots and verifies the guest, and deletes the old root only after verification succeeds. A workspace that was stopped is temporarily booted for verification and stopped again afterward.
-- Refresh stores its transaction journal in the VM description through the Proxmox API, using configuration digests to guard updates. On failure it rolls back to the original root; if recovery itself is interrupted, the next `refresh` detects the journal and offers recovery instead of starting another replacement.
-- Migration is offline, copies cloud-init snippets before shutdown, preserves home, and restores the previous power state.
-- Cleanup removes only verified HomeStack volumes and exact stale references; unrelated `unusedN` entries and volumes are untouched.
-- Destroy re-resolves the workspace role and persistent-home identity before deleting the VM and attached home.
-
-Gold's source root name is discovered from its configured `scsi0`; Gold itself does not need the workspace root naming convention. Refresh imports that source as a staged unused disk, preserves the VM configuration, MAC, role tag, Cloud-Init disk, and persistent home, and waits for QEMU Guest Agent commands to report explicit process completion before accepting their results. The full Gold preparation and readiness contract is described above.
-
-## Workspace SSH
-
-The TUI's SSH action connects through the VM's name as an OpenSSH alias (for example, `ssh rt`), preserving the desktop's `Host`, `Match`, identity and proxy settings. Gold uses `root@ALIAS`. Custom configuration filenames such as `rt.conf` are supported through the desktop's normal `Include` rules; the action does not substitute an IP login from the server. Authentication is restricted to public keys, so an unavailable security key reports an authentication failure instead of requesting the account password.
-
-After a successful create, HomeStack writes and fsyncs a mode-`0600` temporary workspace entry below `~/.ssh/config.d/homestack/`, atomically publishes it, and only then removes stale entries for the same VMID. A publication failure therefore preserves the previous working alias. If this local step fails after VM verification, HomeStack reports that the VM was created successfully and does not roll it back.
-
-In the Rust client each entry also names a `known_hosts` file of its own, `~/.ssh/config.d/homestack/known_hosts/vm<VMID>`, with `StrictHostKeyChecking accept-new`: ssh learns the machine's key at the first connection and then keeps checking it, and your own `~/.ssh/known_hosts` is never read or changed. `create` makes the directory (mode `0700`); `refresh`, `addkey` (after a restart) and `destroy` remove only that workspace's file, since the machine gets new host keys. A file that is not there is nothing to remove.
-
-Setup Files are explicit `setup` selections and never run as part of create, refresh, or migration. Define each file or directory as a `[[setup.items]]` entry and select it with `setup WORKSPACE files=ID,ID`; an ending slash denotes a directory. File preparation, transfer, and verification phases never print file contents.
-
-Applications may also own structured configuration files. Add `config_files` to an application entry with a `path`, `format` (`toml`, `json`, or `yaml`), and nested `values` tables. HomeStack patches only the declared scalar and array leaves, preserving unrelated keys, sections, comments, and ordering where the parser supports it. A changed array is replaced as one value. Missing keys are added and existing declared keys are updated; there is no deletion, unset, null-as-delete, or stale-key cleanup. Selecting an application selects all of its config files and leaves, while a file or nested section can be selected as a group and individual leaves can be toggled. The tree shows only declared values.
-
-Applications may also own desktop file copies. Add `files = ["~/.claude/.credentials.json", "~/.claude/statusline.sh"]` to an application entry; each path appears under the application in the tree and is copied with the same rules as Files entries (no deletes, user-only permissions, the executable bit is kept when the source has it). Selecting the application selects its file copies too, so declare an authentication file there only when every selection of that application should copy it. A single copy can be selected with its stable ID, for example `app=claude:file:~/.claude/statusline.sh`. Use the Files group for files that belong to no application.
-
-HomeStack parses every source document and reparses the merged candidate before writing. Malformed documents and scalar/array parents where a map is required block preflight. Nested `values` tables define path segments; a quoted key such as `"foo.bar"` stays one literal key. Parsing runs on the desktop; fresh guests need no TOML/YAML packages. Whole-file Files actions remain available, but selecting one together with a structured patch at an overlapping path is rejected.
-
-An application may declare `[setup.items.validation]`: `type = "exit-code"` requires exit 0; `type = "json-path"` reads the JSON report at the literal `path` and accepts values listed in `accepted`. The validator runs once after all selected files are patched, when the application was installed/updated or configuration actually changed. Config-only no-ops and status inspection do not run it. Applications without a validator still receive document validation; omitting `validation` or setting it to `false` means no external validator. On validation failure, only that application's structured files changed by this operation are restored from the snapshot, before any successful state is recorded. An update-only compatibility failure is reported without automatic repair.
-
-Structured values and application validators come exclusively from the runtime HomeStack configuration (`~/.config/homestack/client.toml`, or the selected `--config` file). The built-in Codex installer has neither. Extend it with `[[setup.items]]` and `id = "codex"`, then declare its validation and config-file tables using the TOML structure below. If that ID already exists in your file, add the tables to that entry instead of duplicating it. The example is documentation, not an implicit runtime source. Adding, changing, or removing managed options requires only editing this runtime configuration; new nested values appear automatically in Setup. Removing a declaration stops managing that value and does not delete it from the workspace file.
-
-The stable selector `app=codex` includes the application and all its declared configuration leaves. A single leaf can be selected with the same app selector namespace, for example `app=codex:config:/tui/status_line_use_colors`. Key segments use JSON Pointer escaping (`~0` for `~`, `~1` for `/`), then percent-encoding for selector delimiters. Reuse the IDs shown by `setup list`. The catalog, review, and details pane show full desired values, including long arrays.
-
-One SSH ControlMaster connection is established and reused for guest checks, directory creation, rsync, verification, and selected guest setup handlers. Fresh authentication methods are disabled on child connections, so a broken control socket fails instead of requesting another hardware-key interaction. Herdr's final desktop machine registration uses a separate SSH connection and displays its own hardware-key authentication notice. HomeStack does not use password authentication, a fallback key, `sudo`, or credentials stored on PVE hosts.
-
-## Unified workspace setup
-
-`setup` is an explicit user-space operation, independent of `install`, `create`, `refresh`, and `migrate`. It runs on the trusted desktop, resolves the exact workspace through verified Herdr/PVE infrastructure, and operates as the configured unprivileged guest account. Nothing is selected automatically. Applications, repositories, and backup do not require selecting Files or copying GitHub authentication.
-
-```bash
-# Desktop catalog discovery: no Herdr or guest SSH connection.
+# Desktop catalog discovery (no guest SSH connection required)
 homestack setup list
 homestack setup list --json
 
-# Read-only live state inspection of one workspace.
+# Read-only live state inspection of one workspace
 homestack setup status hermes
 homestack setup status hermes --json
 
-# Full-screen selection. One SSH ControlMaster is authenticated before the TUI
-# and remains open until setup exits.
+# Interactive full-screen selector (authenticates one SSH ControlMaster before opening the TUI)
 homestack setup hermes
 
-# Numeric selections refer to the last displayed compatible catalog.
-# Check the actual indices in your listing; these numbers are illustrative.
+# Select by 1-based catalog index or stable ID
 homestack setup hermes f=1 e=1 a=1,2
-
-# Use the catalog identifier printed by setup list for concurrent sessions.
 homestack setup hermes env=1 app=1 --catalog CATALOG_ID --dry-run
-
-# Stable IDs are preferable for scripts; repository identity is explicit.
 homestack setup hermes env=bash app=codex,opencode --yes
 homestack setup hermes repo=hipotures/homestack --yes
 homestack setup hermes backup=bk --yes
@@ -233,55 +228,31 @@ homestack setup 200 env=bash app=codex --dry-run
 homestack setup hermes env=bash app=codex --yes --non-interactive --json
 ```
 
-The groups are **Files** (`files`, `f`), **Environment** (`env`, `e`), **Applications** (`app`, `a`), **Credentials** (`cred`, `c`), **Backup** (`backup`, `b`), and **Repositories** (`repo`, `r`). Select comma-separated one-based indices or stable IDs. `0` or `all` selects the entire explicitly named category and cannot be mixed with other values. Omitted groups select nothing. Repeating an equivalent assignment deduplicates it; conflicting repeated assignments, unknown IDs and invalid indices are errors. `--yes` accepts only the HomeStack plan; it neither selects actions nor answers installer questions.
+### Setup Categories & Built-in Catalog
 
-An explicit VMID or exact workspace name is always required for execution and for `setup status`. With selectors, HomeStack displays a plain plan and confirmation. Without selectors, an interactive terminal opens the Textual interface; non-TTY execution reports an actionable error. `setup status WORKSPACE` opens one read-only guest SSH session, verifies the workspace identity and persistent home, reports detected setup state, then closes the session without writes. Without `--yes`, JSON/non-TTY/`--non-interactive` invocations return a plan with `confirmation_required: true` and exit 3. `--dry-run` performs local validation and read-only target resolution, but no guest SSH, transfers, installer commands or GitHub deploy-key writes.
+| Group | CLI Keys | Built-in / Configured Items |
+| :--- | :--- | :--- |
+| **Files** | `files`, `f` | User-defined `[[setup.items]]` files and directories (`path = "~/notes/"`). |
+| **Environment** | `env`, `e` | `bash`, `zsh`, `fish`, `nu` (generates complete shell startup configs with pre-apply backups). |
+| **Applications** | `app`, `a` | `codex`, `claude`, `herdr`, `opencode`, `opencode-v2`, `pi`, `hermes`, `rust`, plus custom `[[setup.items]]`. |
+| **Credentials** | `cred`, `c` | Explicit credential/file items (always executed last after all other groups). |
+| **Backup** | `backup`, `b` | `bk` (nightly `systemd --user` archive backup + restricted desktop retrieval keys). |
+| **Repositories** | `repo`, `r` | Repositories discovered from GitHub (`[repo] owner`) or explicitly named (`repo=owner/name`). |
 
-`--non-interactive` and JSON execution disallow interactive installers unless a configured, verified `non_interactive` recipe exists. They do not bypass hardware authentication: the configured security key may still require touch. HomeStack never switches identities to make an unattended run work. JSON stdout contains only the result; progress goes to stderr. Captured installer commands/output and onboarding transcripts are not put in results or logs. Without a configured installation check, a successful command is reported with installation state still unknown.
+- Select comma-separated 1-based indices or stable IDs. `0` or `all` selects the entire explicitly named category.
+- Without selectors, an interactive terminal opens the full-screen TUI selector. With selectors, HomeStack prints a plan and asks for confirmation (`--yes` accepts the plan; `--dry-run` validates locally without opening guest SSH).
+- `--non-interactive` and `--json` disallow interactive third-party installers unless a verified `non_interactive` recipe is configured. Hardware security keys may still require a physical touch.
 
-### Catalog identity and numbering
+### Built-in Application Highlights
 
-Listings include category index, stable ID, label, file path or repository identity, desktop availability, and available repository timestamps. They never claim to know guest installation state. Repository discovery uses authenticated desktop `gh api` with all pages, including accessible private repositories belonging to `[repo] owner`. Discovery failures remain visible and do not disable unrelated groups. GitHub host is explicitly `github.com`, matching the existing repository provisioning service.
+- **Rust (`app=rust`):** Runs the official `rustup` installer with `-y --profile minimal`, sources `~/.cargo/env`, and verifies working `rustup`, `rustc`, and `cargo` in `~/.cargo/bin`.
+- **Claude Code (`app=claude`):** Runs the official native installer (`curl -fsSL https://claude.ai/install.sh | bash`) into `~/.local/bin` and checks `claude --version`.
+- **Herdr (`app=herdr`):** Installs the `herdr` binary if missing, writes `~/.config/systemd/user/herdr.service` (which runs `herdr update` before starting `herdr server`), enables user linger without `sudo`, and registers the workspace on the desktop with `herdr machine add user@<vm> --label <vm> --remote-session default`.
+- **Codex, OpenCode, Hermes, Pi (`app=codex`, `app=opencode`, `app=opencode-v2`, `app=hermes`, `app=pi`):** Follow their official upstream installers with explicit `HOME`, `PATH`, and live readiness checks.
 
-```toml
-[repo]
-owner = "example-owner"
-checkout_root = "~/DEV"
-sort = "recent" # recent (default), created, or name
-```
+### Customizing Items, Files & Structured Config Patches
 
-`recent` sorts descending by the later of creation and push time; missing push dates use creation time. Full repository name breaks ties deterministically. Explicit multi-repository selection is supported and is unrelated to the workspace name.
-
-Each displayed catalog saves a version-1 immutable metadata snapshot below `$XDG_STATE_HOME/homestack/catalogs/` (default `~/.local/state/homestack/catalogs/`). It is scoped to the resolved configuration path and catalog-definition fingerprint. Repository mappings additionally bind the GitHub host/account/account ID, configured owner, checkout root and sort. Snapshots store IDs and repository identities, not commands, tokens or file contents. Files/Environment/Applications-only numeric execution does not require GitHub access. Missing/incompatible snapshots instruct you to list again. An explicit `--catalog ID` keeps using that immutable mapping after later listings; a new push never silently changes an old numeric selection. Selected repository identity and administration permission are rechecked before application.
-
-### Terminal controls
-
-Interactive setup authenticates one workspace SSH ControlMaster **before** the TUI is shown. The connection remains owned by that `setup` process and is reused for state inspection, review preflight, Files, Environment, Applications, Backup, Repositories, and `F5` state refreshes. It closes when the TUI exits. Child SSH/rsync sessions cannot authenticate independently, so loss of the master fails closed instead of prompting for another key touch. `setup list` remains targetless and never opens guest SSH.
-
-The checkbox tree is selection state for the current TUI session, not installation state. The tree stays on the left and the full, independently scrollable read-only details pane stays on the right. The target/status header and filter sit above them, with one single-line shortcut footer below. Repository branches start collapsed. Installed/configured/in-sync entries detected during the current state inspection are green. Selecting an already-ready application, or selecting an entry that will overwrite existing configuration, makes its label red as an explicit update/reapply warning. An Environment profile whose configuration and recorded file hashes match shows `NO CHANGES` and stays green when selected. Files modified since the last apply are listed in details. A managed Environment profile stays green in the tree and turns red when selected for an update; review describes backup followed by replacement with the generated HomeStack configuration. Successful actions are deselected after execution and the guest state is inspected again through the same SSH master.
-
-Up/Down moves through the tree, Left/Right collapses/expands, Space toggles an item or branch, and `0` selects the current branch. Clicking a checkbox toggles it; clicking a name only highlights it; clicking a disclosure arrow only expands/collapses. `/` focuses the filter and bulk selection with a filter affects **visible matches only**. The header reports hidden selections only when the filter hides selected items; those items also appear in review. Tab/Shift+Tab navigate focus; PageUp/PageDown and the mouse wheel scroll the details pane. `F5` refreshes live guest state without applying changes. `Ctrl+R` reloads the catalog and then refreshes state. The details pane always shows complete item information, with long text and commands wrapped to its width; highlighting another item scrolls it back to the top. Custom command payloads remain redacted. Enter on the main setup screen opens **Review & apply** for the current selections; it does nothing beyond a notification when nothing is selected.
-
-The single-line footer uses plain colored keys without boxes. Its actions support mouse clicks and Tab/Shift+Tab focus; on narrow terminals, focusing an action scrolls it into view. Enter activates the focused control. In review, **Apply this plan** starts focused and requires a separate Enter or click to confirm before any writes; Esc or **Back** returns without applying. Only the main footer’s `Enter` key blinks yellow/dim once per second while any session selections are pending, including hidden selections. It stops when selections are empty or setup is running; Review is inactive while running. Review has one centered action row: `Esc Back   Enter Apply this plan`, with each key on a gray background and its dim description alongside.
-
-After confirmation, a centered execution window shows a live, wrapped activity log for preflight, snapshots, file copies, shell configuration, installers, repository provisioning, and state recording. Repository activity includes deploy-key work, cloning, Git configuration, and verification when those steps are needed. The log reports sanitized operation names and results; arbitrary command payloads and raw stdout/stderr remain withheld. Interactive installers continue in their terminal and the activity window resumes afterward. Esc requests cancellation while work is running. When execution and the live-state refresh finish, the updated main setup screen remains underneath the result log and a single centered `Enter OK` action becomes available; Enter, Esc, or a mouse click closes it and returns focus to the tree.
-
-
-### Catalog configuration
-
-Every configuration receives built-in Bash (`bash`), Zsh (`zsh`), Fish (`fish`), Nushell (`nu`), Codex (`codex`), Claude Code (`claude`), Herdr (`herdr`), OpenCode (`opencode`), OpenCode v2 (`opencode-v2`), Pi (`pi`), Hermes Agent (`hermes`), and Rust (`rust`) definitions in memory. These provide shell profiles and application setup, not application-owned structured values or validators. Presence never selects or executes them. `config.example.toml` shows the catalog and explicit structured configuration examples.
-
-Select Rust with `homestack setup gpu app=rust` (replace `gpu` with the workspace name or VMID). Setup downloads the [official rustup installer](https://rust-lang.org/tools/install/), runs it with `-y --profile minimal`, and sources `~/.cargo/env` in the installer shell. Installation checks require working `rustup`, `rustc`, and `cargo` from `~/.cargo/bin`. Rustup configures shell startup paths; HomeStack's Environment profiles also include this directory. In an already open terminal, run `source "$HOME/.cargo/env"` to use the tools immediately.
-
-Claude Code is the second item in Applications, immediately after Codex. Select it with `homestack setup gpu app=claude`; Setup runs the [official native installer](https://code.claude.com/docs/en/setup) (`curl -fsSL https://claude.ai/install.sh | bash`), which places `claude` in `~/.local/bin`, and checks `claude --version`. Sign-in remains separate; to reuse the desktop login, declare a Files entry for `~/.claude/.credentials.json`.
-
-Herdr is the third item in Applications, immediately after Claude Code. Select it with `homestack setup gpu app=herdr` (replace `gpu` with the workspace name or VMID). Setup installs a missing binary with the [official installer](https://herdr.dev/docs/install/), writes `~/.config/systemd/user/herdr.service`, enables linger for the workspace user without sudo, and enables the service. Linger starts the user service when the VM boots, without requiring a login. Refresh restores linger when it finds the Herdr service in the preserved home. If the guest's authorization policy denies self-linger, Setup reports the administrator command needed to enable it.
-
-The service runs `herdr update` before every start, including manual and automatic restarts, and then runs `herdr server`. An update command failure is ignored so the installed binary can start. Manual `herdr update` remains available; [current Herdr releases preserve compatible running servers](https://herdr.dev/docs/install/#update). A service restart stops its server and may terminate terminal processes. Setup never updates, stops or restarts an existing server: it leaves an active service running, or defers starting the service until the next VM boot if unmanaged sessions already exist. A fresh server starts immediately.
-
-Finally, Setup runs `herdr machine add user@gpu --label gpu --remote-session default` on the trusted desktop, using the configured account and VM name. The SSH alias retains HomeStack's configured hardware-key paths; `~/.ssh/config` must include `~/.ssh/config.d/homestack/*.conf`. Setup verifies the alias's effective address, user and identities before registration. This desktop command opens its own SSH connection and may require another YubiKey/security-key touch. The TUI stays visible while the command runs in the background, with a spinner beside a framed authentication notice, a gently pulsing YubiKey heading, and a bold key-touch instruction; Escape cancels the local registration process while leaving the guest service configured. Hardware keys requiring an unlock or PIN must be ready in the desktop ssh-agent. The background command cannot answer installation/restart approval prompts: if Herdr requires an interactive decision, Setup displays the manual command to run in a terminal. Existing matching profiles are reused, renamed to the VM name and enabled as needed; conflicting labels or duplicate profiles block preflight. A failed registration reports that the guest service is configured, and rerunning `app=herdr` completes the desktop step without restarting sessions. Initial desktop registration requires interactive Setup; unattended runs can reconcile an existing profile.
-
-Use `[[setup.items]]` to customize by stable ID. Existing definitions merge field by field, once per ID; duplicate definitions in one document are rejected. Changing an application's command clears inherited installation checks and unattended safety declarations. Explicitly supply the new command's `interaction`, `check`, and optional `non_interactive` recipe. Supported handler parameters are validated; unknown fields are errors. Application interpreters are Bash or Zsh so pipeline failures propagate. Group labels/descriptions live separately in `[[setup.groups]]`; additional groups can reuse existing handler types without renderer changes.
+Extend built-in items or declare new ones in `~/.config/homestack/client.toml` using `[[setup.items]]`:
 
 ```toml
 [[setup.items]]
@@ -295,92 +266,68 @@ path = "~/notes/"
 [[setup.items]]
 id = "codex"
 label = "Codex CLI"
-# Other built-in fields remain available; override command only deliberately.
-
-# A custom application requires group, handler, label, description and command.
-# Optional: interpreter, interaction, prerequisites, prerequisite_checks, check,
-# non_interactive, bin_dirs, requires_absent, backup_paths, files, depends_on.
+# Optional: attach desktop file copies or structured config patches to an application
+files = ["~/.codex/instructions.md"]
 ```
 
-`depends_on = ["ID"]` requires those actions to be explicitly selected and displays their order; it never silently selects credentials or applications. Cycles and missing dependencies block the plan.
+- **Setup Files (`group = "files"` or application `files = [...]`):** Use `rsync` semantics without deleting unselected guest files. An ending slash denotes a directory. User-only permissions are enforced and file contents are never printed. A single application file copy can be selected via `app=claude:file:~/.claude/statusline.sh`.
+- **Structured configuration patches (`config_files`):** Attach `config_files` tables (`path`, `format` = `"toml"` | `"json"` | `"yaml"`, and nested `values` tables) to an application entry. HomeStack parses the source document on the desktop, patches only the declared scalar and array leaves while preserving unrelated keys and comments, and reparses the merged result before writing. Individual leaves can be toggled in the TUI or selected via JSON Pointer syntax (e.g. `app=codex:config:/tui/status_line_use_colors`).
+- **Application validators (`[setup.items.validation]`):** Supports `type = "exit-code"` (requires exit 0) or `type = "json-path"` (checks `path` against `accepted` values). On validation failure, structured files modified by that operation are restored from the pre-apply snapshot.
+- **Explicit dependencies (`depends_on = ["ID"]`):** Requires the listed actions to be selected and orders them deterministically without silently pulling in unselected credentials or tools.
 
-Configuration is explicit: add a `[[setup.items]]` definition with a stable ID, handler, label, description, and handler parameters. Review the proposed TOML yourself; HomeStack does not rewrite live configuration on load/list/setup. Configuration publication retains existing atomic writes and backups.
+<details>
+<summary><strong>Catalog snapshots, TUI controls & execution safety details</strong></summary>
 
-### Execution and safety
+#### Catalog identity and numbering
+Listings include category index, stable ID, label, file path or repository identity, desktop availability, and repository timestamps. Repository discovery uses authenticated desktop `gh api` across all pages for `[repo] owner` (`sort = "recent"` | `"created"` | `"name"`). Each displayed catalog saves an immutable version-1 snapshot under `$XDG_STATE_HOME/homestack/catalogs/` (`~/.local/state/homestack/catalogs/`); pass `--catalog ID` to bind numeric selections to a specific snapshot across concurrent sessions.
 
-For interactive `setup`, one private, owned ControlMaster remains alive from the initial guest-state inspection until the TUI exits, including repeated review/apply cycles. Explicit selector execution and `setup status` own one master for that single command. Every child SSH/rsync/PTY session requires the existing master and disables fresh authentication; losing the master fails closed. Socket cleanup runs on normal completion, errors and cancellation. Before reads that are trusted as workspace state, and again before writes, HomeStack verifies hostname, account, UID/GID, expected home, and the dedicated ext4 mount labeled `HS_HOME_<VMID>`.
+#### Setup TUI controls
+- **Left pane (checkbox tree):** Represents selection state for the current session. Detected installed/in-sync items are shown in green; selecting an already-ready item or one that overwrites existing configuration highlights it in red as an update/reapply warning.
+- **Right pane (details):** Independently scrollable (`PageUp`/`PageDown`/mouse wheel) full item details.
+- **Keys:** `↑`/`↓` move, `←`/`→` collapse/expand, `Space` toggles an item or branch, `0` selects the current branch, `/` filters visible items, `F5` refreshes live guest state, `Ctrl+R` reloads the catalog and refreshes state, and `Enter` opens **Review & apply**.
 
-All selected actions are preflighted before any mutates state. Environment normally precedes Files, Applications, Repositories and Backup, and the Credentials group always runs last, after everything else; explicit selected dependencies take precedence. Overlapping writes (including Files versus startup profiles and colliding checkout/key paths) are rejected. A blocked preflight leaves the plan unapplied. Execution stops on failure, retains successful outcomes and marks remaining items `not-run`; results use `succeeded`, `already-ready`, `failed`, `blocked`, and `not-run`. Overall failure exits 1. Third-party installers are not transactional and are never blindly retried.
+#### State registry and pre-apply snapshots
+Setup state lives inside the workspace's persistent home at `~/.local/state/homestack/setup.json`, so destroying a workspace and its home cleanly removes its setup state. Before overwriting any existing declared path, HomeStack creates an operation snapshot under `~/.local/state/homestack/YYYYMMDD_HHMMSS/` containing pre-change files, SHA-256 metadata (`snapshot.json`), and `setup.before.json`.
 
-Files retain home-relative rsync semantics and never delete unselected destinations. Only selected source types/trees are validated for execution. Source/destination symlinks, special files and unsafe ancestors are rejected. Transfers do not preserve desktop ownership; guest ownership is verified and permissions restrict access to the configured user. File content is never printed. No SSH identity, authentication configuration, application credential or key rotation is implicitly selected.
+</details>
 
-Environment profiles generate complete HomeStack configuration files and replace differing files atomically after backing up their pre-Apply contents. The target configuration is independent of existing file contents: custom lines in those files remain in the backup and are not merged into the replacement. Generated files avoid repeated PATH entries and do not change the login shell. Bash generates `.bashrc` and the first existing login file in Bash precedence order (`.bash_profile`, `.bash_login`, `.profile`), defaulting to `.profile` when none exists. Zsh initializes its built-in completion; Fish uses its native startup syntax; Nushell updates `env.nu` and `config.nu`. Symlinks and unsafe paths block replacement. Shell syntax is checked before writing using the selected binary. Missing shell binaries are reported for separate Gold preparation/refresh. Per-file sidecar `.homestack-backup-*` files are not created.
+---
 
-Application execution has explicit interpreter, HOME, working directory and PATH regardless of Environment selection. User bin directories are declarative. Selecting an application whose configured live check already passes is an explicit update/reapply request; HomeStack runs the selected installer instead of silently skipping it. `check` is recipe-specific and is used for live detection/verification only; command output and application version strings are not stored in workspace state. Optional `backup_paths` declare user-home configuration that must be snapshotted before an application update. Empty `backup_paths` are allowed but the interactive review warns that arbitrary third-party installer changes outside HomeStack-managed files cannot be restored. The default recipes follow [Codex installation](https://developers.openai.com/codex/cli/), [OpenCode installation](https://opencode.ai/docs/), and [Hermes installation](https://hermes-agent.nousresearch.com/docs/getting-started/installation/) and its [official stage installer](https://github.com/NousResearch/hermes-agent/blob/main/scripts/install.sh). Codex preserves the known `CODEX_NON_INTERACTIVE=1` recipe. OpenCode is non-interactive and uses `~/.opencode/bin`. Hermes uses the official repository/venv/python-deps/node-deps/path/config/complete stages, omitting system-package preparation, browser/computer-use installation, desktop, gateway and provider onboarding. Its conservative recipe requires a working supported Node/npm and compiler toolchain from Gold, preventing the upstream Node bootstrap's system-library installation path. Existing incomplete Hermes source installations block automatic replacement. Version checks establish installed software only; provider readiness remains separate.
+## BK Workspace & Local Backup (`backup=bk`)
 
-Guest `python3` and `findmnt` support identity/path/atomic-write verification. Files alone require desktop/guest rsync. Repository actions require guest git/ssh/ssh-keygen and authenticated desktop GitHub administration access; desktop tokens stay on the desktop. Backup setup requires guest `python3`, `file`, `git`, `systemctl`, the Python modules `rich`, `sqlite3`, and `curses`, and a usable user systemd manager. Missing prerequisites never trigger Gold edits, privileged fallbacks, package installation, lifecycle operations or automatic credential copies. Repositories reuse isolated checkout-local SSH configuration and existing keys. For an existing checkout, setup fetches only the configured upstream branch and performs at most one fast-forward-only update when the branch is clean and only behind its upstream. It refuses dirty or untracked worktrees, local commits, diverged history, detached HEADs, and branches without an upstream; it never stashes, resets, cleans, rebases, creates merge commits, pushes, or reclones an existing checkout. Incomplete/read-only deploy-key repair is left to explicit standalone repository maintenance.
-
-### BK workspace backup
-
-To install BK for the current local user instead of a workspace, use the same Setup category:
+HomeStack includes **BK**, a lightweight archive backup manager with a `systemd --user` nightly timer (`03:15`, `Persistent=true`) and restricted desktop SSH retrieval keys.
 
 ```bash
+# Install BK in a workspace (survives homestack refresh inside persistent /home)
+homestack setup WORKSPACE backup=bk
+
+# Or install BK locally for the current desktop user
 homestack setup --local backup=bk
+homestack setup --local status
 ```
 
-Local Setup installs `~/.local/bin/bk` and the `backup.service` / `backup.timer` units under `~/.config/systemd/user/`, then enables the nightly user timer. It also creates `~/.config/bk/backup.yaml` if absent, with the default destination `~/backup` and the configuration itself as its first protected source. Existing configuration is never replaced by Setup. It uses the existing Setup preflight, operation snapshots and state registry. It does not connect to PVE or SSH, generate retrieval keys, or modify `authorized_keys`. Run `bk edit` to select sources. Enabling the persistent timer may trigger a backup. System Python must already provide Rich, SQLite and curses; `file`, `git` and a working user systemd manager are also required. No packages are installed automatically.
+- **Files installed:** `~/.local/bin/bk`, `~/.config/systemd/user/backup.service`, `~/.config/systemd/user/backup.timer`, and an initial `~/.config/bk/backup.yaml` (never overwrites an existing config):
+  ```yaml
+  version: 1
+  destination: "/home/user/backup"
+  retention: 7
+  respect_gitignore: true
+  sources:
+    - "/home/user/.config/bk/backup.yaml"
+  ```
+- **Inside the workspace:** Run `bk edit` to choose backed-up paths, `bk run` for an immediate backup, and `bk status` to inspect the latest run and retained archives.
+- **Restricted desktop retrieval keys:** For workspaces, Setup generates two passphrase-free Ed25519 key pairs on the desktop (`~/.ssh/homestack/backup/vm<VMID>-bk-archive` and `vm<VMID>-bk-status`) and installs restricted `authorized_keys` entries in the workspace that force `/usr/bin/cat --` on `/home/<USER>/backup/backup.tgz` or `/home/<USER>/backup/status.json` (no shell, no PTY, no port forwarding):
+  ```bash
+  ssh -T -F /dev/null -o BatchMode=yes -o IdentitiesOnly=yes \
+    -o IdentityAgent=none -o ControlMaster=no -o ControlPath=none \
+    -i ~/.ssh/homestack/backup/vm200-bk-status USER@WORKSPACE_IP x
+  ```
 
-Use `homestack setup --local` for the interactive Backup selector, `homestack setup --local backup=bk --dry-run` to preview the plan, or `homestack setup --local status` to inspect the installation. `--yes` and `--json` follow normal Setup behavior. Local Setup currently supports the Backup category only.
+---
 
-Select BK with `homestack setup WORKSPACE backup=bk` or `homestack setup WORKSPACE b=bk`. HomeStack installs `~/.local/bin/bk`, `~/.config/systemd/user/backup.service`, and `~/.config/systemd/user/backup.timer`, creates `~/backup/` when needed, and enables the user timer. These paths live in persistent home and therefore survive `homestack refresh`.
+## Repository Provisioning (`homestack repo`)
 
-HomeStack manages the executable, two unit files, and restricted SSH retrieval credentials. On installation it creates a missing `~/.config/bk/backup.yaml`, but never replaces or normalizes an existing one. Archives, logs, status, locks and staging data remain user-owned. Run `bk edit` inside the workspace to choose sources. Run `bk run` for a manual backup and `bk status` to inspect the latest attempt and retained backups. With only the protected self-entry, a run backs up the configuration itself. If configuration is absent, `bk run` remains a successful no-op.
-
-BK reads configuration only from `~/.config/bk/backup.yaml`. The initial configuration uses absolute paths derived from the current user's home:
-
-```yaml
-version: 1
-destination: "/home/user/backup"
-retention: 7
-respect_gitignore: true
-sources:
-  - "/home/user/.config/bk/backup.yaml"
-```
-
-Change `destination` to choose where BK stores its archives, logs, status and staging directory. The configuration remains its protected first source regardless of destination. BK excludes destination contents from directory traversal so backups cannot recursively include themselves. Changing destination does not move existing backups. Workspace SSH retrieval keys retain their fixed `~/backup` paths; use the default destination there unless retrieval is separately reconfigured.
-
-An outside-home destination must already exist before a run. Prepare and mount external storage yourself; BK does not mount disks, create a missing external destination, or fall back to another directory. An existing directory alone is not proof that the intended disk is mounted.
-
-Missing scalar options are added atomically with their defaults when BK reads an otherwise valid configuration. Existing values and source selections are preserved; invalid values remain errors. BK does not search the former configuration location: move or recreate the file manually and ensure its first source is the new absolute configuration path.
-
-The user timer runs nightly at 03:15. `Persistent=true` catches up a missed activation when the user systemd manager next starts. It does not keep the timer running while that manager is stopped, and HomeStack does not enable lingering.
-
-Backup setup requires desktop `ssh-keygen` and guest `/usr/bin/cat`. It creates two passphrase-free ED25519 pairs on the trusted desktop: `~/.ssh/homestack/backup/vm<VMID>-bk-archive` and `~/.ssh/homestack/backup/vm<VMID>-bk-status`, each with its `.pub` file. Private keys never leave the desktop. Through the existing hardware-authenticated Setup connection, HomeStack installs only two restricted public-key entries in the workspace user's `~/.ssh/authorized_keys`, preserving unrelated keys and comments. Each entry forces `/usr/bin/cat --` on exactly one file: `/home/<USER>/backup/backup.tgz` or `/home/<USER>/backup/status.json`. These identities cannot open a shell, select a command, allocate a PTY, or forward connections.
-
-For example, retrieve the status of VM 200 from the desktop using its dedicated identity (replace the user and address):
-
-```bash
-ssh -T -F /dev/null -o BatchMode=yes -o IdentitiesOnly=yes \
-  -o IdentityAgent=none -o ControlMaster=no -o ControlPath=none \
-  -i ~/.ssh/homestack/backup/vm200-bk-status USER@WORKSPACE_IP x
-```
-
-The server ignores `x` and returns only the fixed status file. Use `vm200-bk-archive` to stream the archive instead. Normal SSH host-key verification remains enabled. Missing output files are valid before the first backup; retrieval then fails with `cat`'s nonzero exit code, without invalidating Setup readiness.
-
-Repeated Setup preserves valid key pairs. A missing `.pub` is derived from its private key; an orphaned public key is replaced with a newly generated pair. A mismatched existing pair blocks Setup rather than rotating credentials. Refresh, migration, and rename preserve the VMID-based keys. Successful workspace destruction removes only that VMID's four managed key files, leaving the parent directory and other workspaces' keys intact.
-
-### Workspace setup state and snapshots
-
-Setup state lives with the persistent home, not on the trusted desktop, at `~/.local/state/homestack/setup.json`. This follows the XDG state-home convention while deliberately keeping the HomeStack state below the workspace persistent home. Deleting the workspace and its persistent home therefore deletes its setup state as well; recreating a VM with the same name does not inherit stale desktop-side state. Merely inspecting a workspace does not create the file.
-
-The registry records stable setup IDs, handler type, first/last HomeStack application timestamps, and the current SHA-256/size/modification metadata for files that HomeStack directly manages. Application records contain management/install timestamps only; they do not persist `--version` output. The registry is not the sole source of truth: `setup status` and interactive startup also perform live checks. A manually installed application can therefore be detected as installed even when no HomeStack record exists, while a recorded item that no longer passes its live check is not reported as ready.
-
-Before an approved plan overwrites an existing declared path, HomeStack creates one operation snapshot below `~/.local/state/homestack/YYYYMMDD_HHMMSS/` (with a collision suffix when needed). The snapshot preserves the complete pre-change files/directories under `home/`, stores their SHA-256 and modification metadata in `snapshot.json`, and copies the previous registry as `setup.before.json` when it exists. All snapshot candidates are prepared before the first selected write; snapshot failure blocks the plan before mutation. Files that did not exist are represented in snapshot metadata but need no payload copy. Environment preflight compares each existing file with the generated target configuration. Only differing files are backed up and replaced. The backup contains the exact file bytes present immediately before Apply; it is not built from the new configuration or from the registry hash. Only after snapshot success and application does setup record the new state. If all files already match the target configuration, no snapshot is created and the result reports no files changed. The state registry retains the last snapshot reference when a later apply creates no new snapshot. Snapshots are configuration/data backups, not a promise of full rollback for arbitrary third-party installers.
-
-
-## Repository provisioning
-
-Repository setup is explicit and independent of create, refresh, and migrate. Configure the default GitHub owner and checkout root:
+Repository provisioning can be run through `homestack setup WORKSPACE repo=OWNER/REPO` or as a standalone command:
 
 ```toml
 [repo]
@@ -388,34 +335,84 @@ owner = "owner"
 checkout_root = "~/DEV"
 ```
 
-Run either form:
-
 ```bash
-homestack repo WORKSPACE
-homestack repo WORKSPACE OWNER/REPO
+homestack repo WORKSPACE              # Uses [repo].owner + resolved workspace name
+homestack repo WORKSPACE OWNER/REPO   # Explicit repository override
 ```
 
-Without an explicit repository, HomeStack resolves the workspace first and uses `[repo] owner` plus the actual workspace name: `homestack repo WORKSPACE` means `OWNER/WORKSPACE`. This also applies to numeric VMID targets, so `homestack repo 200` uses the resolved workspace name rather than `OWNER/200`. An explicit `OWNER/REPO` overrides this default. If neither an explicit repository nor `[repo] owner` is available, the command fails without making changes. The command first inspects the workspace and GitHub state, then offers `Exit`, `Setup`, or `Rotate key`.
+1. **Inspects** the workspace and GitHub state, then offers `Exit`, `Setup`, or `Rotate key`.
+2. **Generates** an Ed25519 deploy-key pair inside the workspace's persistent home (`~/.ssh/homestack/github/`). The private key never leaves the workspace; HomeStack reads only `.pub` and registers it as a read-write GitHub deploy key via the desktop's authenticated `gh` CLI.
+3. **Clones or fast-forwards** `<checkout_root>/<repo-name>`. Existing checkouts are updated with `git merge --ff-only` only when clean and behind their upstream; dirty worktrees, local commits, or diverged histories are left untouched.
+4. **Rotate key** replaces the GitHub deploy key and workspace key pair in place without modifying the working tree.
 
-Setup creates one Ed25519 deploy-key pair below `~/.ssh/homestack/github/` inside the workspace persistent home. The private key never leaves the workspace. HomeStack reads only the public key over the existing hardware-authenticated workspace SSH connection and registers it through the trusted desktop's authenticated `gh` session as a read-write GitHub deploy key.
+---
 
-The checkout lives at `<checkout_root>/<repo-name>`. If it does not exist, HomeStack clones it over SSH. If the correct repository already exists, HomeStack fetches the current branch's configured upstream and leaves the working tree untouched when it is already up to date. A clean branch that is only behind its upstream is advanced with one `git merge --ff-only`; dirty or untracked worktrees, local commits, diverged history, detached HEADs, and missing upstream configuration are rejected without changing the working tree or local commits. No stash, reset, clean, rebase, merge commit, push, or destructive reclone is performed. Re-running Setup on a fully configured repository is a no-op. If the GitHub deploy key disappeared but the local key pair remains valid, Setup re-registers the existing public key.
+## Preparing a Gold VM
 
-Rotate key replaces only the repository deploy key. It removes the matching GitHub deploy key, generates a new workspace-local key pair at the same path, registers the new public key as read-write, and verifies Git access. The checkout and working tree are not modified.
+Gold is a user-maintained base VM, not an opaque vendor image. You control the OS, packages, and system configuration, while adhering to a small contract so cloning, refresh, networking, and verification stay deterministic.
 
-## Status
+### Proxmox VM Contract
 
-Global status discovers tagged workspaces cluster-wide, checks configured storage capacity, and inventories only HomeStack-named detached volumes on storage IDs allowed by `storage_layouts`. It reads the Proxmox cluster-node state first: node-specific VM and storage queries are skipped for nodes reported offline, and their offline state is shown instead of producing proxy SSH connection warnings. Lifecycle preflight remains fail-closed when an operation requires another node. Detailed status includes VM, network, guest-agent, persistent-home, SSH readiness, and configured volume information. Presentation and human-readable formatting live in the Rust client; `--json` returns the underlying result structures.
+Configure a QEMU VM in Proxmox with:
+- **Tag:** Exact tag `homestack-gold` (never combine with `homestack-ws` or `homestack-alien`).
+- **Disk (`scsi0`):** Attach the OS root disk as `scsi0` and include `scsi0` in the boot order. Do **not** attach `scsi1` or extra data disks to Gold—HomeStack allocates `scsi1` (`/home`) per workspace.
+- **Network (`net0`):** Configure the primary NIC as `net0` (HomeStack derives the workspace bridge and MAC from it).
+- **Cloud-Init & Guest Agent:** Attach a Proxmox Cloud-Init drive, enable the **QEMU Guest Agent** option, and avoid host-specific PCI/USB passthrough devices.
+- **SSH keys:** Configure at least one public SSH key in Proxmox Cloud-Init `sshkeys` so HomeStack can read workspace public keys even when Gold is stopped.
 
-## Development
+### Guest OS Contract (Debian / Ubuntu Baseline)
+
+Inside the Gold VM (running as `root`):
+
+```bash
+# Required baseline packages
+apt-get update
+apt-get install -y cloud-init qemu-guest-agent network-manager openssh-server e2fsprogs util-linux
+
+# Recommended optional capabilities (for Setup Files and homestack repo)
+apt-get install -y rsync git
+```
+
+- **Accounts:** Keep `root` (with a valid `/root/.ssh/authorized_keys`) and the workspace account matching `[user]` (default `user`, `UID 1000`, `GID 1000`). The workspace user must **not** have `sudo` privileges, and there must be no other regular users in `UID 1000–65533`.
+- **Services:** Enable the required services before shutting Gold down:
+  ```bash
+  systemctl enable qemu-guest-agent NetworkManager ssh
+  ```
+- **Finalize before stopping:** Clean Cloud-Init state and reset the machine ID immediately before powering off so clones generate fresh identities and SSH host keys:
+  ```bash
+  cloud-init clean --logs --machine-id
+  poweroff
+  ```
+
+> [!IMPORTANT]
+> Do not boot a finalized Gold VM again unless you are updating it—and if you do boot it to update packages, run `cloud-init clean --logs --machine-id` again before `poweroff`.
+
+---
+
+## Storage & Lifecycle Invariants
+
+- **`scsi0` vs `scsi1`:** `scsi0` is the disposable root (`vm-<VMID>-hs-root-default` or a collision-free staged volume name); `scsi1` is the persistent `ext4` home (`vm-<VMID>-hs-home-<USER>`, filesystem label `HS_HOME_<VMID>`).
+- **Transactional refresh:** `refresh` stages a new root from Gold while keeping the old root recoverable, keeps `scsi1` attached, boots and verifies the guest over `qemu-guest-agent`, and deletes the old root only after verification passes. A stopped workspace is booted temporarily for verification and stopped again afterward. If interrupted, the transaction journal in the VM description allows safe rollback or recovery on the next run.
+- **Refresh lock (`homestack-lock`):** Adding `homestack-lock` in Proxmox blocks `refresh` (even with `--yes`) to protect customized roots while still allowing `resize`, `setup`, `addkey`, and `status`.
+- **Alien VMs (`homestack-alien`):** Existing unmanaged VMs tagged `homestack-alien` can use `homestack setup`, `homestack repo`, and `homestack addkey` over SSH without requiring a separate `scsi1` disk or `HS_HOME_<VMID>` label, while lifecycle operations (`refresh`, `resize`, `migrate`, `destroy`) are refused.
+- **Cluster-aware status:** `homestack status` checks node online state first, skipping node-specific queries for offline nodes instead of hanging on proxy SSH timeouts, while lifecycle preflight remains fail-closed if a required target node is offline.
+
+---
+
+## Documentation & Development
+
+- **Architecture & Operations:**
+  - [Client profiles](docs/client-profiles.md)
+  - [Server deployment (`homestack-deploy`)](docs/migration/deploy.md)
+  - [OpenAPI specification](docs/openapi.json)
+  - [Isolated E2E bootstrap](docs/e2e-bootstrap.md) & [E2E laboratory design](docs/isolated-e2e-lab.md)
+  - [Migration plan](docs/migration/PLAN.md) & [Parity reference](parity/README.md)
+
+### Running Checks & Tests
+
+Always use `scripts/cargo.py` (or `scripts/check.sh`) rather than raw `cargo build` / `cargo test`—the wrapper serializes builds and cleans up disposable test binaries while preserving top-level executables and active E2E lab data in `target/`:
 
 ```sh
 scripts/check.sh
 python3 scripts/cargo.py test --locked -p hs-cli
 ```
-
-The checks run Rust tests, simulator regression tests against frozen reference outputs, Clippy, formatting and deployment-script checks. `scripts/check.sh --live` additionally uses explicitly configured test resources and changes those resources. See [Deployment](docs/migration/deploy.md) for prerequisites.
-
-The build wrapper serializes commands and removes disposable hashed executables and incremental state after successful verification. It preserves top-level applications, dependency libraries, release output and E2E data. Failed commands retain their artifacts. Do not remove `target/` or run unwrapped Cargo tests alongside wrapped commands.
-
-The completed migration audit and historical implementation decisions are in [the migration plan](docs/migration/PLAN.md). Frozen Python reference data is documented in [parity/README.md](parity/README.md); no tests execute the retired CLI.

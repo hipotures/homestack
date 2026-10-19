@@ -65,16 +65,22 @@ fn settings(ctx: &Context, args: &Args, install: &InstallArgs) -> Settings {
         file.parent()
             .map_or_else(|| ctx.home.clone(), std::path::Path::to_path_buf)
     });
+    let token_dir = expand_home(&token_dir.display().to_string(), &ctx.home);
+    let snippet_storage = install.snippet_storage.clone().or_else(|| {
+        matches!(args.command, crate::args::Command::Uninstall(_))
+            .then(|| install_flow::configured_snippet_storage(&token_dir))
+            .flatten()
+    });
     Settings {
         test: install.test,
         storages: install.storages.clone(),
-        snippet_storage: install.snippet_storage.clone(),
+        snippet_storage,
         service_storages: install.service_storages.clone(),
         template_storage: install.template_storage.clone(),
         gold: install.gold,
         bridge: install.bridge.clone(),
         adopt: install.adopt.clone(),
-        token_dir: expand_home(&token_dir.display().to_string(), &ctx.home),
+        token_dir,
     }
 }
 

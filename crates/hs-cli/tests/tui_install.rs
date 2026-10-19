@@ -909,3 +909,35 @@ fn storage_selection_preserves_click_order() {
     let install = fixture.app.install.as_ref().unwrap();
     assert_eq!(install.settings[0].picked, [1, 0]);
 }
+
+#[test]
+fn after_uninstall_retires_client_toml_the_first_install_screen_opens_without_missing_file_notice() {
+    let mut fixture = checked(Mode::Uninstall);
+    fixture.app.set_notice(Some((
+        "HomeStack is not installed on this desktop yet.".to_owned(),
+        vec!["There is no ~/.config/homestack/client.toml.".to_owned()],
+    )));
+    press(&mut fixture.app, KeyCode::Enter);
+    fixture.app.install_event(Event::Reviewed {
+        sections: vec![("Removed from Proxmox".to_owned(), vec!["user homestack@pve".to_owned()])],
+        problems: Vec::new(),
+    });
+    press(&mut fixture.app, KeyCode::Tab);
+    assert_eq!(
+        press(&mut fixture.app, KeyCode::Enter),
+        Some(Request::Install(Command::Apply))
+    );
+    fixture.app.install_event(Event::Done {
+        ok: true,
+        lines: vec!["HomeStack is removed from Proxmox.".to_owned()],
+    });
+    assert_eq!(press(&mut fixture.app, KeyCode::Enter), Some(Request::Installed));
+    assert_eq!(fixture.app.after_installed(false), None);
+    assert!(fixture.app.notice.is_none());
+    let install = fixture.app.install.as_ref().expect("first-time install screen");
+    assert_eq!(install.mode, Mode::Install);
+    assert!(install.first_start);
+    let text = screen(&render(&fixture.app, 120, 36));
+    assert!(text.contains("HomeStack install: first setup"), "{text}");
+    assert!(!text.contains("There is no "), "{text}");
+}

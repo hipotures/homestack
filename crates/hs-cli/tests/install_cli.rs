@@ -1736,3 +1736,129 @@ fn a_new_install_session_automatically_resumes_saved_answers() {
     assert_eq!(cluster.changes(), 0);
     assert!(!cluster.token_dir().join("client.toml").exists());
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tui_uninstall_removes_vendor_snippets_using_saved_snippet_storage() {
+    use hs_cli::tui::install::{Event, Method, Mode};
+    use hs_cli::tui::installing::{self, Command, Setup};
+
+    let cluster = Cluster::new(&["pve1", "pve2"]);
+    cluster.write(
+        "storage.json",
+        r#"[{"storage":"local","type":"dir","content":"iso,vztmpl,backup,snippets"},
+ {"storage":"shared-nfs","type":"nfs","shared":1,"content":"images,rootdir,snippets,vztmpl"},
+ {"storage":"local-lvm","type":"lvmthin","content":"images,rootdir"}]
+"#,
+    );
+    let access = ["--ssh", "root@pve1"];
+    assert_eq!(
+        run(&cluster, &install_argv(&access, &["--yes"]), &[], false).await.code,
+        0
+    );
+    for node in ["vz", "nodes/pve2/vz"] {
+        assert!(
+            cluster
+                .dir
+                .join(format!("{node}/snippets/homestack-vendor-create.yaml"))
+                .exists(),
+            "snippet missing on {node}"
+        );
+        assert!(
+            cluster
+                .dir
+                .join(format!("{node}/snippets/homestack-vendor-keep.yaml"))
+                .exists(),
+            "snippet missing on {node}"
+        );
+    }
+    std::fs::write(
+        cluster.token_dir().join("server.toml"),
+        "[cloud_init]\nsnippet_storage = \"local\"\n",
+    )
+    .unwrap();
+    let client_path = cluster.token_dir().join("client.toml");
+    std::fs::write(&client_path, "saved connection").unwrap();
+
+    let setup = Setup {
+        mode: Mode::Uninstall,
+        system: Arc::new(cluster.system()),
+        home: cluster.home.clone(),
+        token_dir: cluster.token_dir(),
+        client_path: client_path.clone(),
+        servers: Arc::new(FakeServers::default()) as Arc<dyn Servers>,
+        sounds: hs_cli::touch::Sounds::disabled(),
+        ssh_prefix: Vec::new(),
+        stop: Arc::default(),
+        server_image: None,
+        server_domain: None,
+        handle: tokio::runtime::Handle::current(),
+    };
+    let (commands, receiver) = std::sync::mpsc::channel();
+    let (sender, events) = std::sync::mpsc::channel();
+    installing::spawn(setup, receiver, move |event| {
+        let _ = sender.send(event);
+    });
+
+    commands
+        .send(Command::Connect {
+            method: Method::Ssh,
+            target: "root@pve1".to_owned(),
+        })
+        .unwrap();
+    let Event::Connected(_) = next_event(&events) else {
+        panic!("not connected");
+    };
+    commands
+        .send(Command::Review {
+            answers: Vec::new(),
+            domain: None,
+        })
+        .unwrap();
+    match next_event(&events) {
+        Event::Reviewed { sections, problems } => {
+            assert!(problems.is_empty(), "{problems:?}");
+            assert!(
+                sections.iter().any(|(_, lines)| {
+                    lines
+                        .iter()
+                        .any(|line| line.contains("remove homestack-vendor-create.yaml"))
+                }),
+                "{sections:?}"
+            );
+            assert!(
+                !sections
+                    .iter()
+                    .any(|(_, lines)| { lines.iter().any(|line| line.contains("pass --snippet-storage")) }),
+                "{sections:?}"
+            );
+        }
+        other => panic!("{other:?}"),
+    }
+    commands.send(Command::Apply).unwrap();
+    let ok = loop {
+        match next_event(&events) {
+            Event::Line(_) => {}
+            Event::Done { ok, .. } => break ok,
+            other => panic!("{other:?}"),
+        }
+    };
+    assert!(ok);
+    for node in ["vz", "nodes/pve2/vz"] {
+        assert!(
+            !cluster
+                .dir
+                .join(format!("{node}/snippets/homestack-vendor-create.yaml"))
+                .exists(),
+            "vendor-create snippet left on {node}"
+        );
+        assert!(
+            !cluster
+                .dir
+                .join(format!("{node}/snippets/homestack-vendor-keep.yaml"))
+                .exists(),
+            "vendor-keep snippet left on {node}"
+        );
+    }
+    assert!(!client_path.exists());
+    assert!(cluster.token_dir().join("client.toml.uninstalled").exists());
+}

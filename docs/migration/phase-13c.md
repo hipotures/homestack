@@ -363,13 +363,12 @@ this run does not close the complete cleanup gate. The subsequent
 "no server answers" message is expected after server token revocation.
 
 Owner acceptance (2026-10-18): repeated E2E install/uninstall cycles worked;
-phase 13c is closed functionally. The missing-client-file notice shown when
-returning from a successful uninstall is a separate UI follow-up: offer the
-installer instead of a filesystem diagnostic. This follow-up has not yet
-been implemented. The 29 parity `todo` entries still require an evidence-based
-audit before phase 15; functional acceptance does not automatically mark
-those tests as ported or excluded. Vendor snippet cleanup remains the
-explicit follow-up recorded above.
+phase 13c is closed functionally. Returning from a successful uninstall now
+opens the first-time install screen instead of a missing-client-file
+filesystem diagnostic, and TUI/CLI uninstall supplies `snippet_storage` from
+the saved profile configuration (falling back to the cluster's HomeStack
+snippet storage ACL or unique snippet storage). Live E2E verification of vendor
+snippet cleanup remains the explicit follow-up recorded above.
 
 Copy audit (2026-10-18): removed ellipses from application-owned UI text,
 CLI help/errors, setup, E2E messages and display truncation. Git range syntax,

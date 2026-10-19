@@ -359,6 +359,25 @@ impl App {
         herdr.then_some(Request::HerdrTabs)
     }
 
+    /// Clear cached cluster state after an install or uninstall finishes; when
+    /// `has_client_config` is false (a production uninstall retired
+    /// `client.toml`), open the first-time install screen instead of leaving a
+    /// missing-file notice on the main screen.
+    pub fn after_installed(&mut self, has_client_config: bool) -> Option<Request> {
+        self.clear_details();
+        self.status = None;
+        self.servers.clear();
+        self.unreachable.clear();
+        self.pool = None;
+        self.gold_pool = None;
+        self.set_notice(None);
+        if has_client_config {
+            None
+        } else {
+            self.open_install(super::install::Mode::Install, true)
+        }
+    }
+
     /// What the install worker tells; it all goes to the log too.
     pub fn install_event(&mut self, event: super::install::Event) {
         use super::install::Event;

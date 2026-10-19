@@ -65,10 +65,13 @@ pub struct Setup {
 
 impl Setup {
     fn settings(&self) -> Settings {
+        let snippet_storage = (self.mode == Mode::Uninstall)
+            .then(|| install_flow::configured_snippet_storage(&self.token_dir))
+            .flatten();
         Settings {
             test: false,
             storages: Vec::new(),
-            snippet_storage: None,
+            snippet_storage,
             service_storages: Vec::new(),
             template_storage: None,
             gold: None,

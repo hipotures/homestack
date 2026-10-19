@@ -862,6 +862,12 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
                             }
                         }
                         Request::Install(command) => {
+                            if command == Command::Apply
+                                && app.install.as_ref().is_some_and(|install| install.mode == Mode::Uninstall)
+                            {
+                                connection.stop.store(true, Ordering::SeqCst);
+                                connected = None;
+                            }
                             app.log(&clock.now(), &format!("install: {command:?}"));
                             installing.send(command, &mut app, ctx, &updates);
                         }
@@ -970,22 +976,29 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
                         },
                         Request::Installed => {
                             details.cancel();
-                            app.clear_details();
-                            app.status = None;
-                            app.pool = None;
-                            app.gold_pool = None;
                             installing.send(Command::Cancel, &mut app, ctx, &updates);
                             connection.stop.store(true, Ordering::SeqCst);
                             connected = None;
-                            connection = match Connection::open(ctx, &updates) {
-                                Ok(opened) => {
-                                    app.set_notice(None);
-                                    opened
+                            let has_client = config::default_path(&ctx.home, ctx.config_home.as_deref()).exists();
+                            if app.after_installed(has_client) == Some(Request::HerdrTabs) {
+                                match crate::root_herdr::tabs(ctx.system.as_ref()) {
+                                    Ok(tabs) => app.set_herdr_tabs(
+                                        tabs.into_iter().map(|tab| (tab.name, tab.title)).collect(),
+                                    ),
+                                    Err(error) => {
+                                        if let Some(install) = app.install.as_mut() { install.error = Some(error.0.clone()); }
+                                        app.log(&clock.now(), &error.0);
+                                    }
                                 }
-                                Err(notice) => {
+                            }
+                            connection = if has_client {
+                                Connection::open(ctx, &updates).unwrap_or_else(|notice| {
                                     app.set_notice(Some(notice));
                                     Connection::none()
-                                }
+                                })
+                            } else {
+                                app.log(&clock.now(), "no client.toml: the install screen");
+                                Connection::none()
                             };
                         }
                         other => start(&other, connection.client.as_ref(), ctx, &updates),

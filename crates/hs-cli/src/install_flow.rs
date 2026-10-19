@@ -662,6 +662,36 @@ fn deployed_domain(path: &std::path::Path) -> Option<String> {
         .map(str::to_owned)
 }
 
+/// `snippet_storage` recorded by an earlier install in `token_dir`
+/// (`server.toml`, `install.toml`, `config.toml`, or `install-draft.toml`).
+#[must_use]
+pub fn configured_snippet_storage(token_dir: &std::path::Path) -> Option<String> {
+    for name in ["server.toml", "install.toml", "config.toml"] {
+        let Ok(text) = std::fs::read_to_string(token_dir.join(name)) else {
+            continue;
+        };
+        let Ok(table) = text.parse::<toml::Table>() else {
+            continue;
+        };
+        if let Some(storage) = table
+            .get("cloud_init")
+            .and_then(toml::Value::as_table)
+            .and_then(|cloud_init| cloud_init.get("snippet_storage"))
+            .or_else(|| table.get("snippet_storage"))
+            .and_then(toml::Value::as_str)
+            .map(str::trim)
+            .filter(|storage| !storage.is_empty())
+        {
+            return Some(storage.to_owned());
+        }
+    }
+    load_draft(&token_dir.join("install-draft.toml"))
+        .get("snippet-storage")
+        .and_then(|values| values.first())
+        .map(|storage| storage.trim().to_owned())
+        .filter(|storage| !storage.is_empty())
+}
+
 /// Keep the choices of the form (mode 0600); a failure only loses them.
 pub fn save_draft(
     path: &std::path::Path,
