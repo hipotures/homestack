@@ -277,7 +277,10 @@ fn load(palette: &Palette, columns: LoadColumns, percent: Option<f64>, total: &s
     };
     let mut parts = Vec::new();
     if columns.bar > 0 {
-        parts.push((bar(columns.bar, percent), text.fg(load_color(palette, percent))));
+        parts.push((
+            bar(columns.bar, percent),
+            text.fg(load_color(palette, percent)).add_modifier(Modifier::DIM),
+        ));
         parts.push((" ".to_owned(), text));
     }
     parts.push((format!("{percent:>3.0}%"), text));
