@@ -1,8 +1,4 @@
-//! The commit this client is built from and the image's patch number, for
-//! the server image's tag (`<major>.<minor>.<patch>-<commit>`,
-//! `docs/migration/phase-13c.md` section 8). The patch is the number of
-//! commits since `version` last changed in the workspace's `Cargo.toml`, as
-//! the CI counts it; a new major or minor version starts it again.
+//! The latest API release reachable from this client's source revision.
 
 use std::process::Command;
 
@@ -15,20 +11,30 @@ fn git(args: &[&str]) -> Option<String> {
         .filter(|text| !text.is_empty())
 }
 
+fn version(tag: &str) -> Option<(u64, u64, u64)> {
+    let parts = tag.split('.').collect::<Vec<_>>();
+    if parts.len() != 3
+        || parts.iter().any(|part| {
+            part.is_empty()
+                || !part.bytes().all(|byte| byte.is_ascii_digit())
+                || (part.len() > 1 && part.starts_with('0'))
+        })
+    {
+        return None;
+    }
+    Some((parts[0].parse().ok()?, parts[1].parse().ok()?, parts[2].parse().ok()?))
+}
+
 fn main() {
-    if let Some(commit) = git(&["rev-parse", "HEAD"]) {
-        println!("cargo:rustc-env=HOMESTACK_COMMIT={commit}");
+    if let Some(tags) = git(&["tag", "--merged", "HEAD"])
+        && let Some(tag) = tags
+            .lines()
+            .filter_map(|tag| version(tag).map(|version| (version, tag)))
+            .max()
+    {
+        println!("cargo:rustc-env=HOMESTACK_API_VERSION={}", tag.1);
     }
-    if let Some(top) = git(&["rev-parse", "--show-toplevel"]) {
-        let manifest = format!("{top}/Cargo.toml");
-        if let Some(since) = git(&["log", "-1", "--format=%H", "-G", "^version = ", "--", &manifest])
-            && let Some(count) = git(&["rev-list", "--count", &format!("{since}..HEAD")])
-        {
-            println!("cargo:rustc-env=HOMESTACK_PATCH={count}");
-        }
-        println!("cargo:rerun-if-changed={manifest}");
-    }
-    for path in ["HEAD", "packed-refs"] {
+    for path in ["HEAD", "packed-refs", "refs/tags"] {
         if let Some(file) = git(&["rev-parse", "--git-path", path]) {
             println!("cargo:rerun-if-changed={file}");
         }

@@ -770,7 +770,13 @@ async fn status_server() -> (String, String, pve_sim::PveSim) {
 }
 
 fn server_argv<'a>(extra: &'a [&'a str]) -> Vec<&'a str> {
-    let mut argv = vec!["install", "--ssh", "root@pve1"];
+    let mut argv = vec![
+        "install",
+        "--ssh",
+        "root@pve1",
+        "--server-image",
+        "ghcr.io/hipotures/homestack-server:0.2.0",
+    ];
     argv.extend(STORAGES);
     argv.extend(extra);
     argv
@@ -849,17 +855,7 @@ async fn the_servers_are_deployed_after_proxmox_and_the_install_ends_with_status
         ]
     );
     assert_eq!(config.domain, "hs.example.net");
-    // <major>.<minor>.<patch>-<commit>, the patch counted by build.rs.
-    let tag = config
-        .image
-        .strip_prefix("ghcr.io/hipotures/homestack-server:0.1.")
-        .unwrap_or_default();
-    let (patch, commit) = tag.split_once('-').unwrap_or_default();
-    assert!(
-        !patch.is_empty() && patch.bytes().all(|b| b.is_ascii_digit()) && commit.len() == 12,
-        "{}",
-        config.image
-    );
+    assert_eq!(config.image, "ghcr.io/hipotures/homestack-server:0.2.0");
     assert_eq!(config.template_storage, "local");
     assert_eq!(config.pool, "homestack-service");
     assert_eq!(
@@ -1247,6 +1243,8 @@ async fn the_servers_put_workspace_disks_on_the_storages_chosen_in_the_form() {
             "local",
             "--service-storages",
             "fast-roots,local-lvm",
+            "--server-image",
+            "ghcr.io/hipotures/homestack-server:0.2.0",
             "--template-storage",
             "local",
             "--server-domain",
@@ -1328,7 +1326,7 @@ async fn first_install_collects_workspace_settings_without_an_input_file() {
         sounds: hs_cli::touch::Sounds::disabled(),
         ssh_prefix: Vec::new(),
         stop: Arc::default(),
-        server_image: None,
+        server_image: Some("ghcr.io/hipotures/homestack-server:0.2.0".to_owned()),
         server_domain: Some("hs.example.net".to_owned()),
         handle: tokio::runtime::Handle::current(),
     };
@@ -1567,7 +1565,7 @@ async fn a_rescan_offers_a_vm_taken_out_of_its_pool_and_keeps_the_choices() {
         sounds: hs_cli::touch::Sounds::disabled(),
         ssh_prefix: Vec::new(),
         stop: Arc::default(),
-        server_image: None,
+        server_image: Some("ghcr.io/hipotures/homestack-server:0.2.0".to_owned()),
         server_domain: Some("hs.example.net".to_owned()),
         handle: tokio::runtime::Handle::current(),
     };
@@ -1789,7 +1787,7 @@ async fn tui_uninstall_removes_vendor_snippets_using_saved_snippet_storage() {
         sounds: hs_cli::touch::Sounds::disabled(),
         ssh_prefix: Vec::new(),
         stop: Arc::default(),
-        server_image: None,
+        server_image: Some("ghcr.io/hipotures/homestack-server:0.2.0".to_owned()),
         server_domain: None,
         handle: tokio::runtime::Handle::current(),
     };

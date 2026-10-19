@@ -17,8 +17,7 @@
 # (live_pool_guard.rs).
 # The deployment gate (crates/hs-deploy/tests/live_deploy.rs) needs the
 # files of its live-deploy.toml (deploy token, client token, certificate)
-# and the node image of HEAD on ghcr.io (CI publishes it after a push), or
-# HOMESTACK_LIVE_IMAGE.
+# and HOMESTACK_LIVE_IMAGE naming a published numeric API release.
 # The client gate (crates/hs-cli/tests/live_cli.rs) deploys the same test
 # instances and runs homestack create, status, refresh and destroy on VM 240.
 # The TUI gate (crates/hs-cli/tests/live_tui.rs) does the same with the
@@ -45,6 +44,10 @@ while (($#)); do
     esac
     shift
 done
+
+if ((live)); then
+    : "${HOMESTACK_LIVE_IMAGE:?--live requires HOMESTACK_LIVE_IMAGE naming a published API release}"
+fi
 
 root=$(cd "$(dirname "$0")/.." && pwd)
 cd "$root"
@@ -116,8 +119,7 @@ if ((live)); then
     cargo test -p hs-server --locked --test live_addkey -- --ignored --nocapture
     step "live cluster (L4): create on another node than Gold's in the test pool"
     cargo test -p hs-server --locked --test live_create_node -- --ignored --nocapture
-    # The node image CI published for this commit, unless another is named.
-    image=${HOMESTACK_LIVE_IMAGE:-ghcr.io/hipotures/homestack-server:$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)-$(git rev-parse HEAD | cut -c1-12)}
+    image=$HOMESTACK_LIVE_IMAGE
     step "live cluster (L4): three instances deployed from $image, one stopped"
     HOMESTACK_LIVE_IMAGE=$image cargo test -p hs-deploy --locked --test live_deploy -- --ignored --nocapture
     step "live cluster (L4): the homestack client on VM 240 through the test instances"

@@ -2,6 +2,8 @@ name: Rust checks
 
 on:
   push:
+    branches: ['**']
+    tags: ['[0-9]+.[0-9]+.[0-9]+']
   pull_request:
   workflow_dispatch:
 
@@ -14,6 +16,8 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -28,15 +32,10 @@ jobs:
       - name: Check commit whitespace
         run: git show --format= --check HEAD
 
-  # The node image for homestack-deploy:
-  # ghcr.io/hipotures/homestack-server:<major>.<minor>.<patch>-<commit>, public, on every
-  # push to rust-migration (deploy/image/Containerfile).
-  # The patch is the number of commits since `version` last changed in
-  # Cargo.toml (crates/hs-cli/build.rs counts the same).
+  # Publish immutable API releases, e.g. homestack-server:0.2.0.
   image:
-    # Built at once, beside the checks: a deployment names the commit's
-    # image, and the checks still say whether the commit is good.
-    if: github.event_name == 'push' && github.ref == 'refs/heads/rust-migration'
+    needs: check
+    if: github.event_name == 'push' && github.ref_type == 'tag'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -48,11 +47,11 @@ jobs:
           fetch-depth: 0
       - name: Image tag
         id: tag
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
         run: |
-          version=$(sed -n 's/^version = "\([0-9]*\.[0-9]*\)\..*"$/\1/p' Cargo.toml | head -1)
-          since=$(git log -1 --format=%H -G '^version = ' -- Cargo.toml)
-          patch=$(git rev-list --count "$since..HEAD")
-          echo "tag=${version}.${patch}-${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
+          [[ "$RELEASE_TAG" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          echo "tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
       - name: Install Rust 1.99.0 for musl
         run: |
           sudo apt-get install -y --no-install-recommends musl-tools
@@ -82,4 +81,7 @@ jobs:
           file: deploy/image/Containerfile
           push: true
           tags: ghcr.io/hipotures/homestack-server:${{ steps.tag.outputs.tag }}
-          labels: org.opencontainers.image.source=https://github.com/hipotures/homestack
+          labels: |
+            org.opencontainers.image.source=https://github.com/hipotures/homestack
+            org.opencontainers.image.version=${{ steps.tag.outputs.tag }}
+            org.opencontainers.image.revision=${{ github.sha }}

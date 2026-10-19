@@ -18,7 +18,7 @@ use hs_deploy::config::DeployConfig;
 use hs_deploy::dns::DnsHost;
 use hs_install::Plan;
 
-/// The node image's repository; the tag is `<version>-<commit>`.
+/// The node image's repository; the tag is a numeric API release.
 pub const IMAGE_REPOSITORY: &str = "ghcr.io/hipotures/homestack-server";
 /// The pool of the server containers.
 pub const SERVICE_POOL: &str = "homestack-service";
@@ -93,18 +93,11 @@ impl Servers for RealServers {
     }
 }
 
-/// The image of this build: `<major>.<minor>.<patch>-<commit>`, the patch
-/// counted by `build.rs` as the CI counts it, when the commit is known.
+/// The most recent API release reachable from this build's source revision.
 #[must_use]
 pub fn default_image() -> Option<String> {
-    let commit = option_env!("HOMESTACK_COMMIT").filter(|commit| commit.len() >= 12)?;
-    let patch = option_env!("HOMESTACK_PATCH").unwrap_or(env!("CARGO_PKG_VERSION_PATCH"));
-    Some(format!(
-        "{IMAGE_REPOSITORY}:{}.{}.{patch}-{}",
-        env!("CARGO_PKG_VERSION_MAJOR"),
-        env!("CARGO_PKG_VERSION_MINOR"),
-        &commit[..12]
-    ))
+    let version = option_env!("HOMESTACK_API_VERSION")?;
+    Some(format!("{IMAGE_REPOSITORY}:{version}"))
 }
 
 /// What the servers part of an install will do.
@@ -302,7 +295,7 @@ pub fn plan_servers(
     let image = image.map(str::to_owned).or_else(default_image);
     if image.is_none() {
         out.problems.push(
-            "this build does not know its commit, so the server image is unknown: give --server-image".to_owned(),
+            "this build has no API release tag: fetch release tags and rebuild, or give --server-image".to_owned(),
         );
     }
     let settings = &plan.settings;

@@ -185,7 +185,7 @@ mod tests {
     #[test]
     fn installed_image_is_compared_with_the_cache_on_every_status_read() {
         let updates = ImageUpdates::default();
-        let mut entry = container("ghcr.io/a/b:0.1.99-123456abcdef");
+        let mut entry = container("ghcr.io/a/b:0.2.99");
         updates.annotate(&mut entry);
         assert_eq!(
             entry.image_update.as_ref().map(|update| update.state),
@@ -194,7 +194,7 @@ mod tests {
         updates.checks.write().expect("cache lock").insert(
             "ghcr.io/a/b".to_owned(),
             Check {
-                latest: Some("ghcr.io/a/b:0.1.100-123456abcdef".to_owned()),
+                latest: Some("ghcr.io/a/b:0.2.100".to_owned()),
                 checked_at: Some("2026-10-19T12:00:00Z".to_owned()),
                 error: None,
             },
@@ -204,7 +204,7 @@ mod tests {
             entry.image_update.as_ref().map(|update| update.state),
             Some(ImageUpdateState::Available)
         );
-        entry.image = Some("ghcr.io/a/b:0.1.100-123456abcdef".to_owned());
+        entry.image = Some("ghcr.io/a/b:0.2.100".to_owned());
         updates.annotate(&mut entry);
         assert_eq!(
             entry.image_update.as_ref().map(|update| update.state),
@@ -218,19 +218,19 @@ mod tests {
         updates.checks.write().expect("cache lock").insert(
             "ghcr.io/a/b".to_owned(),
             Check {
-                latest: Some("ghcr.io/a/b:0.1.100-123456abcdef".to_owned()),
+                latest: Some("ghcr.io/a/b:0.2.100".to_owned()),
                 checked_at: Some("2026-10-19T12:00:00Z".to_owned()),
                 error: Some("Registry unavailable".to_owned()),
             },
         );
-        let mut entry = container("ghcr.io/a/b:0.1.99-123456abcdef");
+        let mut entry = container("ghcr.io/a/b:0.2.99");
         updates.annotate(&mut entry);
         let result = entry.image_update.expect("image check");
         assert_eq!(result.state, ImageUpdateState::Available);
         assert!(result.available.is_some());
         assert!(result.checked_at.is_some());
         assert!(result.error.is_some());
-        let mut entry = container("ghcr.io/a/b:0.1.100-123456abcdef");
+        let mut entry = container("ghcr.io/a/b:0.2.100");
         updates.annotate(&mut entry);
         assert_eq!(
             entry.image_update.as_ref().map(|update| update.state),

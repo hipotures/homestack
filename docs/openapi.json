@@ -745,7 +745,7 @@
         "tags": [
           "status"
         ],
-        "summary": "HomeStack volumes no VM uses.",
+        "summary": "HomeStack volumes not referenced by any readable visible VM configuration.",
         "operationId": "orphans",
         "responses": {
           "200": {
@@ -1488,6 +1488,67 @@
         ]
       }
     },
+    "/v1/storage/overview": {
+      "get": {
+        "tags": [
+          "status"
+        ],
+        "summary": "Extended storage inventory, independent of the main status read.",
+        "operationId": "storage_overview",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StorageOverview"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/v1/workspaces/{target}": {
       "get": {
         "tags": [
@@ -1984,6 +2045,30 @@
             "description": "No required check failed."
           },
           "power_state": {
+            "type": "string"
+          },
+          "vmid": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
+      "GuestBackup": {
+        "type": "object",
+        "description": "Newest backup actually present in the readable backup storage inventory.",
+        "required": [
+          "vmid",
+          "created_at",
+          "storage"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "storage": {
             "type": "string"
           },
           "vmid": {
@@ -2664,7 +2749,7 @@
       },
       "OrphanVolume": {
         "type": "object",
-        "description": "A HomeStack volume (`vm-<vmid>-hs-(root|home)-<name>`) no VM uses.",
+        "description": "A HomeStack volume (`vm-<vmid>-hs-(root|home)-<name>`) no visible VM references.",
         "required": [
           "volid",
           "vmid",
@@ -3050,6 +3135,78 @@
           "done",
           "failed"
         ]
+      },
+      "StorageOverview": {
+        "type": "object",
+        "description": "Extended inventory read independently of the main status.",
+        "required": [
+          "storages",
+          "latest_backups",
+          "backup_scan_complete",
+          "warnings"
+        ],
+        "properties": {
+          "backup_scan_complete": {
+            "type": "boolean"
+          },
+          "latest_backups": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GuestBackup"
+            }
+          },
+          "storages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StorageStatus"
+            }
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "StorageStatus": {
+        "type": "object",
+        "description": "A local storage on one node, or a shared storage listed once for all nodes.",
+        "required": [
+          "storage",
+          "storage_type",
+          "content",
+          "shared",
+          "nodes",
+          "capacity",
+          "available"
+        ],
+        "properties": {
+          "available": {
+            "type": "boolean"
+          },
+          "capacity": {
+            "$ref": "#/components/schemas/Capacity"
+          },
+          "content": {
+            "type": "string"
+          },
+          "nodes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "shared": {
+            "type": "boolean"
+          },
+          "storage": {
+            "type": "string"
+          },
+          "storage_type": {
+            "type": "string"
+          }
+        }
       },
       "StreamMessage": {
         "type": "object",

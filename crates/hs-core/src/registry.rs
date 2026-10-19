@@ -120,14 +120,15 @@ pub fn deployed_image(config: &Value) -> Option<String> {
     })
 }
 
-/// HomeStack publication order: `<major>.<minor>.<build>-<commit>`.
+/// HomeStack publication order: `<major>.<minor>.<patch>`.
 #[must_use]
 pub fn version(tag: &str) -> Option<(u64, u64, u64)> {
-    let (numbers, commit) = tag.split_once('-')?;
-    if commit.len() != 12 || !commit.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+    if tag.split('.').any(|part| {
+        part.is_empty() || !part.bytes().all(|byte| byte.is_ascii_digit()) || (part.len() > 1 && part.starts_with('0'))
+    }) {
         return None;
     }
-    let mut parts = numbers.split('.');
+    let mut parts = tag.split('.');
     let result = (
         parts.next()?.parse().ok()?,
         parts.next()?.parse().ok()?,
@@ -210,37 +211,32 @@ mod tests {
 
     #[test]
     fn builds_are_compared_numerically_within_one_repository() {
-        assert!(newer(
-            "ghcr.io/a/b:0.1.100-123456abcdef",
-            "ghcr.io/a/b:0.1.99-123456abcdef"
-        ));
-        assert!(!newer(
-            "ghcr.io/a/b:0.1.99-123456abcdef",
-            "ghcr.io/a/b:0.1.100-123456abcdef"
-        ));
-        assert!(!newer(
-            "ghcr.io/a/c:0.1.100-123456abcdef",
-            "ghcr.io/a/b:0.1.99-123456abcdef"
-        ));
-        assert!(!newer("ghcr.io/a/b:latest", "ghcr.io/a/b:0.1.99-123456abcdef"));
-        assert_eq!(version("0.1.100-123456abcdef-debug"), None);
+        assert!(newer("ghcr.io/a/b:0.2.100", "ghcr.io/a/b:0.2.99"));
+        assert!(!newer("ghcr.io/a/b:0.2.99", "ghcr.io/a/b:0.2.100"));
+        assert!(!newer("ghcr.io/a/c:0.2.100", "ghcr.io/a/b:0.2.99"));
+        assert!(!newer("ghcr.io/a/b:latest", "ghcr.io/a/b:0.2.99"));
+        assert_eq!(version("0.2.100-debug"), None);
+        assert_eq!(version("0.2.0"), Some((0, 2, 0)));
+        for invalid in ["0.1.238-e4284ff477d1", "v0.2.0", "0.02.0", "0.2.+1", "0.2", "0.2.0.1"] {
+            assert_eq!(version(invalid), None, "{invalid}");
+        }
     }
 
     #[test]
     fn only_deployer_metadata_identifies_a_managed_image() {
-        let description = "image ghcr.io/a/b:0.1.1-123456abcdef";
+        let description = "image ghcr.io/a/b:0.2.1";
         assert_eq!(deployed_image(&serde_json::json!({"description": description})), None);
         assert_eq!(
             deployed_image(&serde_json::json!({"description": format!("{description}\nmade by homestack-deploy")})),
-            Some("ghcr.io/a/b:0.1.1-123456abcdef".to_owned())
+            Some("ghcr.io/a/b:0.2.1".to_owned())
         );
     }
 
     #[test]
     fn an_image_splits_into_registry_path_and_tag() {
         assert_eq!(
-            split("ghcr.io/hipotures/homestack-server:0.1.0-5b8ded498d24"),
-            Some(("ghcr.io", "hipotures/homestack-server", "0.1.0-5b8ded498d24"))
+            split("ghcr.io/hipotures/homestack-server:0.2.1"),
+            Some(("ghcr.io", "hipotures/homestack-server", "0.2.1"))
         );
         assert_eq!(split("ghcr.io/hipotures/homestack-server"), None);
         assert_eq!(split("registry:5000/image"), None);

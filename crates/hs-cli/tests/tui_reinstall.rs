@@ -59,7 +59,7 @@ fn image(tag: &str, made: &str) -> Image {
 }
 
 fn images(names: &[(u32, &str)]) -> Images {
-    let old = image("0.1.0-c27810b43325", "2026-10-16 03:23");
+    let old = image("0.2.0", "2026-10-16 03:23");
     Images {
         servers: names
             .iter()
@@ -69,7 +69,7 @@ fn images(names: &[(u32, &str)]) -> Images {
                 image: Some(old.clone()),
             })
             .collect(),
-        published: vec![image("0.1.0-5b8ded498d24", "2026-10-16 03:42"), old],
+        published: vec![image("0.2.1", "2026-10-16 03:42"), old],
     }
 }
 
@@ -96,29 +96,17 @@ fn enter_on_a_server_reads_the_images_and_shows_them() {
 
     fixture.app.set_images(&[102_002], Ok(images(&[(102_002, "api2")])));
     let text = screen(&render(&fixture.app, 140, 40));
-    assert!(
-        text.contains("Image      ‹ 0.1.0-5b8ded498d24  2026-10-16 03:42 ›"),
-        "{text}"
-    );
-    assert!(
-        text.contains("api2       0.1.0-c27810b43325  2026-10-16 03:23"),
-        "{text}"
-    );
-    assert!(text.contains("› 0.1.0-5b8ded498d24  2026-10-16 03:42  new"), "{text}");
-    assert!(
-        text.contains("  0.1.0-c27810b43325  2026-10-16 03:23  now on api2"),
-        "{text}"
-    );
+    assert!(text.contains("Image      ‹ 0.2.1  2026-10-16 03:42 ›"), "{text}");
+    assert!(text.contains("api2       0.2.0  2026-10-16 03:23"), "{text}");
+    assert!(text.contains("› 0.2.1  2026-10-16 03:42  new"), "{text}");
+    assert!(text.contains("  0.2.0  2026-10-16 03:23  now on api2"), "{text}");
 
     let start = started(press(&mut fixture.app, KeyCode::Enter));
     assert_eq!(start.kind, Kind::Reinstall);
-    assert_eq!(start.parameters["image"], format!("{REPOSITORY}:0.1.0-5b8ded498d24"));
+    assert_eq!(start.parameters["image"], format!("{REPOSITORY}:0.2.1"));
     assert_eq!(start.parameters["servers"], json!(["api2"]));
     let plan = start.parameters["plan"].to_string();
-    assert!(
-        plan.contains("api2  CT 102002  0.1.0-c27810b43325 → 0.1.0-5b8ded498d24"),
-        "{plan}"
-    );
+    assert!(plan.contains("api2  CT 102002  0.2.0 → 0.2.1"), "{plan}");
 }
 
 #[test]
@@ -167,7 +155,7 @@ fn space_marks_servers_and_enter_on_a_marked_one_takes_them_all() {
 
     // The plan, then the run: both rows show it once the box is hidden.
     fixture.app.progress(Progress::Plan {
-        lines: vec!["Reinstall from 0.1.0-5b8ded498d24".to_owned()],
+        lines: vec!["Reinstall from 0.2.1".to_owned()],
         question: Kind::Reinstall.question(false).to_owned(),
         blocked: None,
         secret: None,
@@ -243,13 +231,13 @@ fn the_run_shows_every_server_and_what_the_one_under_way_does() {
         state,
     };
     fixture.app.progress(Progress::Steps(vec![
-        step("api1: reinstalled from 0.1.161-9cc8e058c0ae", StepState::Done),
+        step("api1: reinstalled from 0.2.161", StepState::Done),
         step("api2: starting", StepState::Running),
         step("api3: waiting", StepState::Waiting),
     ]));
     let text = screen(&render(&fixture.app, 140, 40));
     for line in [
-        "✓ api1: reinstalled from 0.1.161-9cc8e058c0ae",
+        "✓ api1: reinstalled from 0.2.161",
         "◐ api2: starting",
         "○ api3: waiting",
         "1 of 3 steps done",
@@ -263,7 +251,7 @@ fn update_arrow_touches_the_name_and_stays_separate_from_a_six_digit_vmid() {
     let mut fixture = servers();
     let mut status = serde_json::to_value(fixture.app.status.as_ref().unwrap()).unwrap();
     status["others"][0]["image_update"] = json!({
-        "state": "available", "available": format!("{REPOSITORY}:0.1.215-123456abcdef"),
+        "state": "available", "available": format!("{REPOSITORY}:0.2.215"),
         "checked_at": "2026-10-19T10:00:00Z", "error": null
     });
     fixture.app.set_status(&status);
@@ -286,16 +274,16 @@ fn update_arrow_touches_the_name_and_stays_separate_from_a_six_digit_vmid() {
 fn container_details_show_installed_and_available_images_and_check_time() {
     let mut fixture = servers();
     let mut status = serde_json::to_value(fixture.app.status.as_ref().unwrap()).unwrap();
-    status["others"][0]["image"] = json!(format!("{REPOSITORY}:0.1.214-123456abcdef"));
+    status["others"][0]["image"] = json!(format!("{REPOSITORY}:0.2.214"));
     status["others"][0]["image_update"] = json!({
-        "state": "available", "available": format!("{REPOSITORY}:0.1.215-abcdef123456"),
+        "state": "available", "available": format!("{REPOSITORY}:0.2.215"),
         "checked_at": "2026-10-19T10:00:00Z", "error": null
     });
     fixture.app.set_status(&status);
     select(&mut fixture.app, 102_001);
     fixture.app.info = true;
     let text = screen(&render(&fixture.app, 160, 36));
-    for expected in ["0.1.214-123456abcdef", "0.1.215-abcdef123456", "2026-10-19 10:00 UTC"] {
+    for expected in ["0.2.214", "0.2.215", "2026-10-19 10:00 UTC"] {
         assert!(text.contains(expected), "{text}");
     }
 }
@@ -369,12 +357,12 @@ fn failed_startup_check_is_reported_without_blocking_workspaces() {
 #[test]
 fn newer_build_is_detected_when_registry_timestamps_are_missing() {
     let current = Image {
-        image: format!("{REPOSITORY}:0.1.100-123456abcdef"),
+        image: format!("{REPOSITORY}:0.2.100"),
         made: "—".to_owned(),
         created: None,
     };
     let newer = Image {
-        image: format!("{REPOSITORY}:0.1.101-123456abcdef"),
+        image: format!("{REPOSITORY}:0.2.101"),
         made: "—".to_owned(),
         created: None,
     };

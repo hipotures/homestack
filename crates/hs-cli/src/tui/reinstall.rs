@@ -26,7 +26,7 @@ pub struct Image {
 }
 
 impl Image {
-    /// The tag alone: `0.1.0-5b8ded498d24`.
+    /// The tag alone: `0.2.0`.
     #[must_use]
     pub fn tag(&self) -> &str {
         self.image.rsplit_once(':').map_or(self.image.as_str(), |(_, tag)| tag)
