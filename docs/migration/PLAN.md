@@ -354,11 +354,11 @@ Bez poola, zawężonego tokenu i zapisanych decyzji 9 i 10 agent nie zaczyna faz
 
 ### Faza 13c: instalator i deinstalator w Rust
 
-**Status (2026-10-18):** functionally complete; accepted by the owner after
-repeated E2E install/uninstall cycles. See the
+**Status (2026-10-18, follow-ups verified 2026-10-19):** complete; accepted by
+the owner after repeated E2E install/uninstall cycles. See the
 [completion checklist](phase-13c.md#10-completion-checklist-2026-10-18) for
-verification evidence and separate UI, snippet cleanup and parity follow-ups.
-The remaining parity audit is complete; see [the audit report](parity-todo-audit.md).
+verification evidence; all UI, snippet cleanup and parity follow-ups are
+complete (see [the audit report](parity-todo-audit.md)).
 
 **Dodana 2026-10-13 decyzją właściciela** (wcześniej F1 nie miał fazy, testy czekały w fazie 13). **Rozszerzona tego samego dnia:** `homestack install` i `homestack uninstall` w kliencie Rust zastępują ręczne kopiowanie i uruchamianie `deploy/pve/homestack-pve.sh` na nodzie.
 

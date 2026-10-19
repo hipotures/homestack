@@ -337,12 +337,15 @@ separate update menu request and text editing at 80 by 24.
   installation through Herdr was exercised in the isolated E2E lab.
 - [x] E2E uninstall through SSH removes the HomeStack user, tokens, roles,
   ACLs and pools while preserving Gold 100 and API container 101.
-- [ ] Verify vendor snippet cleanup with snippet storage supplied; the
-  observed TUI uninstall left both vendor snippets because no snippet
-  storage was passed to the uninstall plan.
+- [x] Verify vendor snippet cleanup with snippet storage supplied; live TUI
+  uninstall in E2E run `ebdee449-7acd-402c-adc1-9a241116cd79` (2026-10-19 at
+  03:24:01–03:24:02 local log time, 41 changes) removed both
+  `homestack-vendor-create.yaml` and `homestack-vendor-keep.yaml` from `pve1`
+  and opened the first-time setup screen cleanly without connection or missing
+  file warnings.
 - [x] Owner accepted phase 13c after repeated E2E install/uninstall cycles
   (2026-10-18). This acceptance closes the functional phase; the specific
-  directly observed runs and cleanup limitations remain recorded below.
+  directly observed runs and cleanup verification are recorded below.
 - [x] Audit and resolve all remaining phase-13c parity entries against
   current behavior and regression coverage; see [the audit report](parity-todo-audit.md).
 
@@ -354,21 +357,21 @@ issued immediately after boot timed out; retrying once the guest was ready
 succeeded. No forced stop was used. Simulator tests cover Gold power, role
 and pool restrictions, template/lock refusal, and workspace protection.
 
-E2E uninstall evidence: run `b2e4128c-29f4-4c56-9e9b-20e0352513c1`,
-2026-10-18 at 11:15:48 local log time, `root@pve-e2e` over SSH,
-39 changes completed. A read-only cluster check found no HomeStack users,
-roles, ACLs or pools. Gold 100 and API container 101 were still running.
-`homestack-vendor-create.yaml` and `homestack-vendor-keep.yaml` remained;
-this run does not close the complete cleanup gate. The subsequent
-"no server answers" message is expected after server token revocation.
+E2E uninstall evidence: initial run `b2e4128c-29f4-4c56-9e9b-20e0352513c1`
+(2026-10-18 at 11:15:48 local log time, `root@pve-e2e` over SSH, 39 changes)
+removed HomeStack users, roles, ACLs and pools while preserving Gold 100 and
+API container 101, leaving the two vendor snippets before snippet-storage
+forwarding was added. Follow-up run `ebdee449-7acd-402c-adc1-9a241116cd79`
+(2026-10-19 at 03:24:01–03:24:02 local log time, 41 changes) verified full
+cleanup including removal of `homestack-vendor-create.yaml` and
+`homestack-vendor-keep.yaml` on `pve1`, retired `client.toml` to
+`client.toml.uninstalled` without background status connection errors, and
+transitioned directly to the first-time install screen (followed by a clean
+41-change reinstall at 03:24:53–03:25:12).
 
-Owner acceptance (2026-10-18): repeated E2E install/uninstall cycles worked;
-phase 13c is closed functionally. Returning from a successful uninstall now
-opens the first-time install screen instead of a missing-client-file
-filesystem diagnostic, and TUI/CLI uninstall supplies `snippet_storage` from
-the saved profile configuration (falling back to the cluster's HomeStack
-snippet storage ACL or unique snippet storage). Live E2E verification of vendor
-snippet cleanup remains the explicit follow-up recorded above.
+Owner acceptance (2026-10-18, follow-ups verified 2026-10-19): repeated E2E
+install/uninstall cycles worked; phase 13c and all post-acceptance follow-ups
+are closed.
 
 Copy audit (2026-10-18): removed ellipses from application-owned UI text,
 CLI help/errors, setup, E2E messages and display truncation. Git range syntax,
