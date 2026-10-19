@@ -1931,6 +1931,7 @@ impl super::state::App {
     /// storage and log panels while it is open.
     pub fn open_setup_box(&mut self, setup: SetupBox) {
         self.before_setup = Some(self.shown);
+        self.shown.workspaces = true;
         self.shown.storage = false;
         self.shown.log = false;
         self.setup = Some(setup);

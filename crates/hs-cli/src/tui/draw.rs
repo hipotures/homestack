@@ -1082,9 +1082,9 @@ fn list_item(palette: &Palette, label: &str, chosen: bool) -> (String, Style) {
 }
 
 const HELP: [&str; 23] = [
-    "1 2 3 4     show or hide workspaces, cluster, storage, log",
+    "1 2 3 4     view 1 workspaces, 2 cluster+storage, 3 storage, 4 log (again: auto)",
     "0           the standard view: every panel and node, no filter",
-    "v           next view (auto, 1, 2)",
+    "v           next view (auto, 1, 2, 3, 4)",
     "m           menu",
     "F2          copy mode: select terminal text; F2 or Esc resumes the display",
     "↑ ↓         select a workspace; PgUp PgDn Home End",

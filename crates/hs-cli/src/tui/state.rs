@@ -46,8 +46,8 @@ pub enum Request {
     Quit,
 }
 
-/// The presets `p` walks through: their names and panels.
-pub const VIEWS: [(&str, Shown); 3] = [
+/// The views `0`–`4` select and `v` walks through: their names and panels.
+pub const VIEWS: [(&str, Shown); 5] = [
     (
         "auto",
         Shown {
@@ -61,7 +61,7 @@ pub const VIEWS: [(&str, Shown); 3] = [
         "1",
         Shown {
             workspaces: true,
-            cluster: true,
+            cluster: false,
             storage: false,
             log: false,
         },
@@ -69,10 +69,28 @@ pub const VIEWS: [(&str, Shown); 3] = [
     (
         "2",
         Shown {
-            workspaces: true,
+            workspaces: false,
+            cluster: true,
+            storage: true,
+            log: false,
+        },
+    ),
+    (
+        "3",
+        Shown {
+            workspaces: false,
+            cluster: false,
+            storage: true,
+            log: false,
+        },
+    ),
+    (
+        "4",
+        Shown {
+            workspaces: false,
             cluster: false,
             storage: false,
-            log: false,
+            log: true,
         },
     ),
 ];
@@ -1181,32 +1199,34 @@ impl App {
         if self.action.as_ref().is_some_and(|action| !action.hidden) {
             return self.action_key(key.code);
         }
-        if let KeyCode::Char(c @ ('n' | 'r' | 'z' | 'k' | 'g' | 'd' | 't')) = key.code {
-            return self.open_action(c);
-        }
-        if key.code == KeyCode::Char('e') {
-            return self.open_setup();
-        }
-        if key.code == KeyCode::Char('s') {
-            return self
-                .selected_entry()
-                .filter(|entry| super::shell::available(self, entry.vmid))
-                .map(|entry| Request::Ssh(entry.vmid));
-        }
-        if key.code == KeyCode::Enter
-            && let Some(action) = self.action.as_mut()
-        {
-            action.hidden = false;
-            return None;
-        }
-        // On a server container: Space marks it, Enter reinstalls it (or
-        // every marked one).
-        if key.code == KeyCode::Char(' ') {
-            self.toggle_mark();
-            return None;
-        }
-        if key.code == KeyCode::Enter {
-            return self.open_reinstall();
+        if self.shown.workspaces {
+            if let KeyCode::Char(c @ ('n' | 'r' | 'z' | 'k' | 'g' | 'd' | 't')) = key.code {
+                return self.open_action(c);
+            }
+            if key.code == KeyCode::Char('e') {
+                return self.open_setup();
+            }
+            if key.code == KeyCode::Char('s') {
+                return self
+                    .selected_entry()
+                    .filter(|entry| super::shell::available(self, entry.vmid))
+                    .map(|entry| Request::Ssh(entry.vmid));
+            }
+            if key.code == KeyCode::Enter
+                && let Some(action) = self.action.as_mut()
+            {
+                action.hidden = false;
+                return None;
+            }
+            // On a server container: Space marks it, Enter reinstalls it (or
+            // every marked one).
+            if key.code == KeyCode::Char(' ') {
+                self.toggle_mark();
+                return None;
+            }
+            if key.code == KeyCode::Enter {
+                return self.open_reinstall();
+            }
         }
         match key.code {
             KeyCode::Char('q') => return Some(Request::Quit),
@@ -1218,8 +1238,13 @@ impl App {
             // Esc leaves, as q does (the owner, 2026-10-14).
             KeyCode::Esc => return Some(Request::Quit),
             KeyCode::Char(digit @ '1'..='4') => {
-                self.shown
-                    .toggle(u8::try_from(digit.to_digit(10).unwrap_or(0)).unwrap_or(0));
+                let index = usize::try_from(digit.to_digit(10).unwrap_or(0)).unwrap_or(0);
+                let next = if self.view == index { 0 } else { index };
+                if let Some((_, shown)) = VIEWS.get(next) {
+                    self.view = next;
+                    self.shown = *shown;
+                    self.save_view();
+                }
             }
             KeyCode::Char('v') => {
                 self.view = (self.view + 1) % VIEWS.len();
@@ -1235,9 +1260,9 @@ impl App {
                 self.keep_selection();
                 self.save_view();
             }
-            KeyCode::Char('f') => self.filtering = true,
-            KeyCode::Tab | KeyCode::BackTab => self.on_group = !self.on_group,
-            KeyCode::Right | KeyCode::Left if self.on_group => {
+            KeyCode::Char('f') if self.shown.workspaces => self.filtering = true,
+            KeyCode::Tab | KeyCode::BackTab if self.shown.workspaces => self.on_group = !self.on_group,
+            KeyCode::Right | KeyCode::Left if self.shown.workspaces && self.on_group => {
                 // None, the pools by ID, None, …
                 let groups = self.groups();
                 let count = groups.len();
@@ -1257,7 +1282,7 @@ impl App {
                     .map(|(id, _)| id.clone());
                 self.keep_selection();
             }
-            KeyCode::Right | KeyCode::Left => {
+            KeyCode::Right | KeyCode::Left if self.shown.workspaces => {
                 let count = self.nodes().len();
                 if count > 0 {
                     // None, 0, 1, …, count-1, None, …
@@ -1271,6 +1296,30 @@ impl App {
                     self.keep_selection();
                 }
             }
+            KeyCode::Down if !self.shown.workspaces && self.shown.log => {
+                self.log_scroll = (self.log_scroll + 1).min(self.lines.len().saturating_sub(1));
+                self.log_unread = self.log_unread.min(self.log_scroll);
+            }
+            KeyCode::Up if !self.shown.workspaces && self.shown.log => {
+                self.log_scroll = self.log_scroll.saturating_sub(1);
+                self.log_unread = self.log_unread.min(self.log_scroll);
+            }
+            KeyCode::PageDown if !self.shown.workspaces && self.shown.log => {
+                self.log_scroll = (self.log_scroll + 10).min(self.lines.len().saturating_sub(1));
+                self.log_unread = self.log_unread.min(self.log_scroll);
+            }
+            KeyCode::PageUp if !self.shown.workspaces && self.shown.log => {
+                self.log_scroll = self.log_scroll.saturating_sub(10);
+                self.log_unread = self.log_unread.min(self.log_scroll);
+            }
+            KeyCode::Home if !self.shown.workspaces && self.shown.log => {
+                self.log_scroll = 0;
+                self.log_unread = 0;
+            }
+            KeyCode::End if !self.shown.workspaces && self.shown.log => {
+                self.log_scroll = self.lines.len().saturating_sub(1);
+                self.log_unread = self.log_unread.min(self.log_scroll);
+            }
             KeyCode::Down => self.move_by(1),
             KeyCode::Up => self.move_by(-1),
             KeyCode::PageDown => self.move_by(10),
@@ -1279,7 +1328,7 @@ impl App {
             KeyCode::End => self.select_at(self.rows().len().saturating_sub(1)),
             // The details box opens on i only (as info), at every width (the
             // owner, 2026-10-15).
-            KeyCode::Char('i') if self.selected.is_some() => {
+            KeyCode::Char('i') if self.shown.workspaces && self.selected.is_some() => {
                 self.info = !self.info;
             }
             _ => {}

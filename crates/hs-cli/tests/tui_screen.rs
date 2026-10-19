@@ -131,18 +131,82 @@ fn at_160_by_45_the_list_gains_the_root_column() {
 }
 
 #[test]
-fn a_digit_hides_its_panel_and_the_menu_moves_to_the_first_panel_shown() {
+fn digits_switch_views_and_zero_restores_the_standard_view() {
     let mut fixture = app();
-    press(&mut fixture.app, KeyCode::Char('2'));
+    // 1: workspaces full screen
+    press(&mut fixture.app, KeyCode::Char('1'));
     let buf = render(&fixture.app, 120, 36);
     let top = row(&buf, 0);
     assert!(
-        top.starts_with("╭─┐¹‹ all ›┌┐profile: default┌┐menu┌┐view auto┌┐filter┌"),
+        top.starts_with("╭─┐¹‹ all ›┌┐profile: default┌┐menu┌┐view 1┌┐filter┌"),
         "{top}"
     );
+    let text = screen(&buf);
+    assert!(!text.contains("²cluster") && !text.contains("³storage") && !text.contains("⁴log"));
+
+    // 2: cluster + storage
     press(&mut fixture.app, KeyCode::Char('2'));
+    let text = screen(&render(&fixture.app, 120, 36));
+    assert!(
+        text.contains("²cluster")
+            && text.contains("³storage")
+            && text.contains("┐view 2┌")
+            && !text.contains("¹‹")
+            && !text.contains("⁴log"),
+        "{text}"
+    );
+
+    // 3: storage full screen
+    press(&mut fixture.app, KeyCode::Char('3'));
+    let text = screen(&render(&fixture.app, 120, 36));
+    assert!(
+        text.contains("³storage")
+            && text.contains("┐view 3┌")
+            && !text.contains("²cluster")
+            && !text.contains("¹‹")
+            && !text.contains("⁴log"),
+        "{text}"
+    );
+
+    // 4: log full screen
+    press(&mut fixture.app, KeyCode::Char('4'));
+    let text = screen(&render(&fixture.app, 120, 36));
+    assert!(
+        text.contains("⁴log")
+            && text.contains("┐view 4┌")
+            && !text.contains("²cluster")
+            && !text.contains("³storage")
+            && !text.contains("¹‹"),
+        "{text}"
+    );
+
+    // Pressing the active view's digit again toggles back to standard auto view
+    press(&mut fixture.app, KeyCode::Char('4'));
+    assert_eq!(fixture.app.view, 0);
+    let text = screen(&render(&fixture.app, 120, 36));
+    assert!(
+        text.contains("┐view auto┌")
+            && text.contains("²cluster")
+            && text.contains("¹‹ all ›")
+            && text.contains("³storage")
+            && text.contains("⁴log"),
+        "{text}"
+    );
+
+    // 0: restores standard auto view and clears node/filter
+    press(&mut fixture.app, KeyCode::Char('1'));
+    assert_eq!(fixture.app.view, 1);
+    press(&mut fixture.app, KeyCode::Char('0'));
     let buf = render(&fixture.app, 120, 36);
-    assert!(row(&buf, 0).starts_with("╭─┐²cluster┌"));
+    let text = screen(&buf);
+    assert!(
+        row(&buf, 0).starts_with("╭─┐²cluster┌")
+            && text.contains("┐view auto┌")
+            && text.contains("¹‹ all ›")
+            && text.contains("³storage")
+            && text.contains("⁴log"),
+        "{text}"
+    );
 }
 
 #[test]
@@ -150,10 +214,28 @@ fn v_cycles_the_views() {
     let mut fixture = app();
     press(&mut fixture.app, KeyCode::Char('v'));
     let text = screen(&render(&fixture.app, 120, 36));
-    assert!(text.contains("┐view 1┌") && !text.contains("³storage"), "{text}");
+    assert!(
+        text.contains("┐view 1┌") && text.contains("¹‹") && !text.contains("³storage"),
+        "{text}"
+    );
     press(&mut fixture.app, KeyCode::Char('v'));
     let text = screen(&render(&fixture.app, 120, 36));
-    assert!(text.contains("┐view 2┌") && !text.contains("²cluster"), "{text}");
+    assert!(
+        text.contains("┐view 2┌") && text.contains("²cluster") && text.contains("³storage") && !text.contains("¹‹"),
+        "{text}"
+    );
+    press(&mut fixture.app, KeyCode::Char('v'));
+    let text = screen(&render(&fixture.app, 120, 36));
+    assert!(
+        text.contains("┐view 3┌") && text.contains("³storage") && !text.contains("²cluster"),
+        "{text}"
+    );
+    press(&mut fixture.app, KeyCode::Char('v'));
+    let text = screen(&render(&fixture.app, 120, 36));
+    assert!(
+        text.contains("┐view 4┌") && text.contains("⁴log") && !text.contains("³storage"),
+        "{text}"
+    );
     press(&mut fixture.app, KeyCode::Char('v'));
     let text = screen(&render(&fixture.app, 120, 36));
     assert!(text.contains("┐view auto┌") && text.contains("⁴log"), "{text}");
@@ -473,12 +555,16 @@ fn the_buttons_in_the_borders_and_the_menu_s_items_are_clicked() {
     let buf = render(&fixture.app, 120, 36);
     let (x, y) = position(&buf, "Check the servers");
     assert_eq!(click(&mut fixture.app, x, y), Some(Request::Transport));
-    // A panel's digit hides it.
+    // A panel's digit switches to its view.
     fixture.app.overlay = None;
     let buf = render(&fixture.app, 120, 36);
     let (x, y) = position(&buf, "³storage");
     click(&mut fixture.app, x + 1, y);
-    assert!(!fixture.app.shown.storage, "the storage panel is hidden");
+    assert_eq!(fixture.app.view, 3);
+    assert!(
+        fixture.app.shown.storage && !fixture.app.shown.workspaces,
+        "switched to view 3 (storage)"
+    );
 }
 
 #[test]
