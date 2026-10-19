@@ -1477,9 +1477,11 @@ impl App {
             if key.code == KeyCode::F(6)
                 || (editor.on_test_button() && matches!(key.code, KeyCode::Enter | KeyCode::Char(' ')))
             {
-                return editor
-                    .begin_test()
-                    .map(|id| Request::TestIntegration(id, editor.clone()));
+                let id = editor.begin_test();
+                if let Ok(preferences) = Preferences::load(&self.preferences.path) {
+                    self.preferences.table = preferences.table;
+                }
+                return id.map(|id| Request::TestIntegration(id, editor.clone()));
             }
             if key.code == KeyCode::F(5) {
                 // Saving test targets updates tui.toml; keep later preference writes current.
@@ -1489,8 +1491,15 @@ impl App {
                 }
                 return None;
             }
-            if editor.key(key) {
-                self.overlay = Some(Overlay::Integrations { index: editor.provider });
+            let close = editor.key(key);
+            let provider = editor.provider;
+            if key.code == KeyCode::Esc
+                && let Ok(preferences) = Preferences::load(&self.preferences.path)
+            {
+                self.preferences.table = preferences.table;
+            }
+            if close {
+                self.overlay = Some(Overlay::Integrations { index: provider });
             }
             return None;
         }

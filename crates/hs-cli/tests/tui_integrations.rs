@@ -359,3 +359,43 @@ fn integration_list_shows_saved_test_outcomes_dates_and_zones() {
         }
     }
 }
+
+#[test]
+fn testing_remembers_zone_before_completion_without_saving_draft_credentials() {
+    let dir = tempfile::tempdir().unwrap();
+    let credentials = "SPACESHIP_API_KEY=original-key\nSPACESHIP_API_SECRET=original-secret\n";
+    std::fs::write(dir.path().join("spaceship-dns"), credentials).unwrap();
+    let mut editor = Editor::open(dir.path(), 1).unwrap();
+    editor.values[0] = "draft-key".to_owned();
+    editor.select(2);
+    editor.paste("example.test");
+    let mut app = App::new(Preferences::fallback(&dir.path().join("tui.toml")), false).unwrap();
+    app.overlay = Some(Overlay::Integration(Box::new(editor)));
+    assert!(matches!(
+        app.key(KeyEvent::new(KeyCode::F(6), KeyModifiers::NONE)),
+        Some(hs_cli::tui::state::Request::TestIntegration(_, _))
+    ));
+    app.preferences.save_theme("Nord").unwrap();
+    let reloaded = Editor::open(dir.path(), 1).unwrap();
+    assert_eq!(reloaded.zone(), "example.test");
+    assert_eq!(reloaded.values[0], "original-key");
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("spaceship-dns")).unwrap(),
+        credentials
+    );
+}
+
+#[test]
+fn leaving_form_remembers_local_dns_target_even_without_valid_credentials() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut editor = Editor::open(dir.path(), 2).unwrap();
+    editor.select(3);
+    editor.paste("example.test");
+    editor.select(4);
+    editor.paste("192.0.2.53");
+    assert!(press(&mut editor, KeyCode::Esc));
+    let reloaded = Editor::open(dir.path(), 2).unwrap();
+    assert_eq!(reloaded.zone(), "example.test");
+    assert_eq!(reloaded.values[4], "192.0.2.53");
+    assert!(!dir.path().join("dns-tsig.key").exists());
+}

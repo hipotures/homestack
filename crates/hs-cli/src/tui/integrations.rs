@@ -248,7 +248,9 @@ impl Editor {
     }
 
     fn changed(&mut self) {
-        self.dirty = true;
+        if self.focus < self.credential_labels().len() {
+            self.dirty = true;
+        }
         self.testing = false;
         self.test_id = 0;
         self.confirm_discard = false;
@@ -261,6 +263,12 @@ impl Editor {
 
     /// Return true to leave. F4 toggles disclosure; F5 saves without exposing values.
     pub fn key(&mut self, key: KeyEvent) -> bool {
+        if key.code == KeyCode::Esc
+            && let Err(error) = self.save_targets()
+        {
+            self.message = error;
+            return false;
+        }
         if self.on_test_button()
             && !matches!(
                 key.code,
@@ -413,7 +421,7 @@ impl Editor {
             return None;
         }
         self.visible = false;
-        if let Err(error) = self.validate_test() {
+        if let Err(error) = self.save_targets().and_then(|()| self.validate_test()) {
             self.message = error;
             return None;
         }
@@ -524,10 +532,9 @@ impl Editor {
         )
     }
 
-    pub fn save(&mut self) -> Result<(), String> {
-        self.validate()?;
+    /// Remember non-secret test targets independently of saving credentials.
+    fn save_targets(&self) -> Result<(), String> {
         let parent = self.path.parent().ok_or("Invalid credentials path")?;
-        let text = self.serialize();
         let mut preferences =
             super::theme::Preferences::load(&parent.join("tui.toml")).map_err(|_| "Cannot read test settings")?;
         let mut tests = preferences
@@ -552,6 +559,14 @@ impl Editor {
         preferences
             .write(&preferences.table)
             .map_err(|_| "Cannot save test settings")?;
+        Ok(())
+    }
+
+    pub fn save(&mut self) -> Result<(), String> {
+        self.validate()?;
+        self.save_targets()?;
+        let parent = self.path.parent().ok_or("Invalid credentials path")?;
+        let text = self.serialize();
         let write = || -> std::io::Result<()> {
             std::fs::create_dir_all(parent)?;
             let mut file = tempfile::NamedTempFile::new_in(parent)?;
