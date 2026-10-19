@@ -10,7 +10,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use hs_cli::tui::draw::render;
 use hs_cli::tui::state::Request;
 use hs_cli::tui::theme::Palette;
-use ratatui::style::Modifier;
+use ratatui::style::Color;
 use tui_fixture::{app, details, position, press, row, screen};
 
 #[test]
@@ -93,14 +93,9 @@ fn the_cluster_table_shows_each_node_s_load_and_uptime_and_the_quorum() {
     let pve1 = row(&buf, 2);
     assert!(pve1.contains("█") && pve1.contains(" 20% of 32"), "{pve1}");
     assert!(pve1.contains(" 94% of 100G") && pve1.contains("19d 13h"), "{pve1}");
-    let palette = Palette::named("HomeStack", false).unwrap();
     let (x, y) = position(&buf, " 94% of 100G");
     // The bar, then a space, then the right-aligned percentage.
-    assert_eq!(buf[(x - 2, y)].fg, palette.error, "94 % RAM is red");
-    assert!(
-        buf[(x - 2, y)].modifier.contains(Modifier::DIM),
-        "load bars are subdued"
-    );
+    assert_eq!(buf[(x - 2, y)].fg, Color::Rgb(126, 57, 67), "94 % RAM uses a muted red");
     assert!(row(&buf, 3).contains("5h 12m"), "{}", row(&buf, 3));
     // An offline node has no numbers.
     let pve3 = row(&buf, 4);

@@ -235,12 +235,17 @@ fn ratio(used: Option<u64>, max: Option<u64>) -> Option<f64> {
     (max > 0).then(|| 100.0 * used as f64 / max as f64)
 }
 
-/// Green, yellow from 75 %, red from 90 %, as the storage bars.
+/// Subdued green, yellow from 75 %, red from 90 %.
 fn load_color(palette: &Palette, percent: f64) -> Color {
-    match percent {
+    let color = match percent {
         p if p >= 90.0 => palette.error,
         p if p >= 75.0 => palette.warning,
         _ => palette.ok,
+    };
+    // Blend with the background: terminals may ignore DIM for RGB colors.
+    match (color, palette.background) {
+        (Color::Rgb(r, g, b), Color::Rgb(br, bg, bb)) => Color::Rgb(r / 2 + br / 2, g / 2 + bg / 2, b / 2 + bb / 2),
+        _ => color,
     }
 }
 
@@ -277,10 +282,7 @@ fn load(palette: &Palette, columns: LoadColumns, percent: Option<f64>, total: &s
     };
     let mut parts = Vec::new();
     if columns.bar > 0 {
-        parts.push((
-            bar(columns.bar, percent),
-            text.fg(load_color(palette, percent)).add_modifier(Modifier::DIM),
-        ));
+        parts.push((bar(columns.bar, percent), text.fg(load_color(palette, percent))));
         parts.push((" ".to_owned(), text));
     }
     parts.push((format!("{percent:>3.0}%"), text));
