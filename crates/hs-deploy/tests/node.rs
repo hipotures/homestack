@@ -196,6 +196,10 @@ async fn a_container_with_the_same_image_certificate_and_address_is_kept() -> Re
     };
     let quiet = |_: &str| {};
     assert!(node::unchanged(&pve, "pve1", 2097, description, net0, &quiet).await?);
+    assert_eq!(
+        node::hwaddr(&pve, "pve1", 2097).await?.as_deref(),
+        Some("BC:24:11:2E:C1:09")
+    );
     let newer = description.replace("image i:1", "image i:2");
     assert!(
         !node::unchanged(&pve, "pve1", 2097, &newer, net0, &quiet).await?,

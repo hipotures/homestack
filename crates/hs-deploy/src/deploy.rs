@@ -248,7 +248,7 @@ pub async fn apply(config: &DeployConfig, only: &[String], say: &impl Fn(&str)) 
             "{}: CT {} on {} ({}, {})",
             instance.name, instance.ctid, instance.node, instance.address, instance.storage
         ));
-        let net0 = format!(
+        let mut net0 = format!(
             "name=eth0,bridge={},ip={}/{},gw={}",
             config.bridge, instance.address, config.cidr, config.gateway
         );
@@ -274,6 +274,10 @@ pub async fn apply(config: &DeployConfig, only: &[String], say: &impl Fn(&str)) 
                     started.elapsed().as_millis()
                 ));
                 continue;
+            }
+            if let Some(mac) = node::hwaddr(&pve, &found.node, instance.ctid).await? {
+                say(&format!("  keeping MAC address {mac}"));
+                net0.push_str(&format!(",hwaddr={mac}"));
             }
             timed(
                 &instance.name,

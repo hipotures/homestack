@@ -344,6 +344,28 @@ pub async fn made_from(pve: &impl Pve, node: &str, ctid: u32) -> Result<Option<S
         .map(|image| image.trim().to_owned()))
 }
 
+/// Extract the `hwaddr` property from a Proxmox `net0` string, if present.
+#[must_use]
+pub fn extract_hwaddr(net0: &str) -> Option<String> {
+    net0.split(',')
+        .map(str::trim)
+        .find_map(|part| {
+            let (key, value) = part.split_once('=')?;
+            (key.trim() == "hwaddr").then(|| value.trim())
+        })
+        .filter(|mac| !mac.is_empty())
+        .map(str::to_owned)
+}
+
+/// The MAC address (`hwaddr`) from container `ctid`'s `net0` configuration.
+pub async fn hwaddr(pve: &impl Pve, node: &str, ctid: u32) -> Result<Option<String>, String> {
+    let config = pve
+        .get(&format!("/nodes/{node}/lxc/{ctid}/config"), &[])
+        .await
+        .map_err(|e| format!("CT {ctid} config: {e}"))?;
+    Ok(config["net0"].as_str().and_then(extract_hwaddr))
+}
+
 /// Whether `actual` (from Proxmox `/nodes/{node}/lxc/{ctid}/config`) has the
 /// same managed network settings as `expected`, ignoring key order and
 /// Proxmox-generated properties (`hwaddr`, `type`, `host-managed`).
@@ -423,6 +445,8 @@ mod tests {
             "name=eth0,bridge=vmbr0,gw=10.10.10.1,hwaddr=BC:24:11:2E:C1:09,ip=10.10.10.214/24,type=veth,host-managed=1";
         assert!(same_net(normalized, expected));
         assert!(same_net(expected, expected));
+        assert_eq!(extract_hwaddr(normalized).as_deref(), Some("BC:24:11:2E:C1:09"));
+        assert_eq!(extract_hwaddr(expected), None);
         assert!(!same_net(
             "name=eth0,bridge=vmbr0,gw=10.10.10.1,hwaddr=BC:24:11:2E:C1:09,ip=10.10.10.215/24,type=veth",
             expected
