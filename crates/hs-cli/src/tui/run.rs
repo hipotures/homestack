@@ -791,7 +791,6 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
             && let Some(client) = &connection.client
         {
             storage_loading = true;
-            app.storage_overview = None;
             let client = Arc::clone(client);
             let updates = updates.clone();
             let stop = Arc::clone(&connection.stop);
@@ -1091,7 +1090,7 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
                 Update::Storage(result) => {
                     storage_loading = false;
                     storage_next = std::time::Instant::now() + REFRESH;
-                    app.storage_overview = Some(result);
+                    app.set_storage_overview(result);
                 }
                 Update::Servers(servers) => app.set_servers(servers),
                 Update::Images(targets, images) => app.set_images(&targets, images),

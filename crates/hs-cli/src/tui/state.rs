@@ -349,6 +349,38 @@ impl App {
         }
     }
 
+    /// Treat inventory order as presentation data, not a storage change.
+    pub fn set_storage_overview(&mut self, mut result: Result<hs_model::status::StorageOverview, String>) -> bool {
+        if let Ok(overview) = &mut result {
+            for storage in &mut overview.storages {
+                let mut content: Vec<_> = storage
+                    .content
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|kind| !kind.is_empty())
+                    .collect();
+                content.sort_unstable();
+                content.dedup();
+                storage.content = content.join(",");
+                storage.nodes.sort();
+                storage.nodes.dedup();
+            }
+            overview
+                .storages
+                .sort_by(|a, b| (&a.storage, &a.nodes).cmp(&(&b.storage, &b.nodes)));
+            overview
+                .latest_backups
+                .sort_by(|a, b| (a.vmid, &a.storage, a.created_at).cmp(&(b.vmid, &b.storage, b.created_at)));
+            overview.warnings.sort();
+            overview.warnings.dedup();
+        }
+        if self.storage_overview.as_ref() == Some(&result) {
+            return false;
+        }
+        self.storage_overview = Some(result);
+        true
+    }
+
     /// The deployment and registry are read directly, independently of API status.
     pub fn set_api_updates(&mut self, result: Result<super::reinstall::Images, String>) {
         self.api_updates_checking = false;
