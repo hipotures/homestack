@@ -312,6 +312,20 @@ fn steps(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard, wide: bool) {
                 style.fg(if passed { app.palette.ok } else { app.palette.error }),
             );
         }
+        if at == 4 && passed {
+            write(
+                buf,
+                area.right() - 1,
+                y,
+                1,
+                "●",
+                if app.palette.no_color {
+                    style
+                } else {
+                    style.fg(app.palette.ok)
+                },
+            );
+        }
         if at > 4
             || (at == 4 && !wizard.tunnel_available())
             || (at == 3 && !wizard.api_available())
