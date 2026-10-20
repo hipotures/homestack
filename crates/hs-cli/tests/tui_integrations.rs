@@ -522,3 +522,36 @@ fn passing_test_reports_save_failure_and_keeps_changes_pending() {
     assert!(editor.report_open);
     assert!(!editor.message.contains("draft-secret"));
 }
+
+#[test]
+fn passing_tests_preserve_unchanged_credentials_including_reverted_edits() {
+    use hs_cli::tui::integrations::TestReport;
+    use std::os::unix::fs::MetadataExt;
+    for reverted_edit in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("integrations")).unwrap();
+        let path = dir.path().join("integrations/spaceship-dns");
+        let original =
+            "# Retain original formatting\nSPACESHIP_API_KEY=existing-key\nSPACESHIP_API_SECRET=existing-secret\n";
+        std::fs::write(&path, original).unwrap();
+        let before = std::fs::metadata(&path).unwrap();
+        let mut editor = Editor::open(dir.path(), 1).unwrap();
+        if reverted_edit {
+            editor.paste("x");
+            press(&mut editor, KeyCode::Backspace);
+        }
+        editor.select(2);
+        editor.paste("example.test");
+        let id = editor.begin_test().unwrap();
+        assert!(!editor.has_changes());
+        let report = TestReport::completed(&editor, Ok("Accepted".to_owned()), 100);
+        let mut app = App::new(Preferences::fallback(&dir.path().join("tui.toml")), false).unwrap();
+        app.overlay = Some(Overlay::Integration(Box::new(editor)));
+        app.integration_test_result(id, report.clone());
+        let after = std::fs::metadata(&path).unwrap();
+        assert_eq!(after.ino(), before.ino());
+        assert_eq!(after.modified().unwrap(), before.modified().unwrap());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+        assert_eq!(Editor::open(dir.path(), 1).unwrap().report, Some(report));
+    }
+}

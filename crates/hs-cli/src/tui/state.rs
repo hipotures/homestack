@@ -1415,6 +1415,7 @@ impl App {
                 editor.testing = false;
                 let mut errors: Vec<String> = saved.err().into_iter().collect();
                 if report.passed
+                    && editor.has_changes()
                     && let Err(error) = editor.save()
                 {
                     errors.push(format!("Connection verified, but automatic save failed: {error}"));
