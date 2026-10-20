@@ -482,7 +482,8 @@ fn pangolin_exact_testbackend_renders_and_responsive_columns() {
         if width >= 120 {
             assert!(form_row < last_step_row);
             assert!(text.contains("STEPS"));
-            assert!(text.contains("No private keys or authentication secrets"));
+            assert!(!text.contains("No private keys or authentication secrets"));
+            assert!(text.contains("▸ How does this work?"));
         } else {
             assert!(form_row > last_step_row);
         }
@@ -1534,4 +1535,66 @@ fn pangolin_header_reports_overall_progress_without_borrowing_another_steps_stat
             }
         }
     }
+}
+
+#[test]
+fn pangolin_step_results_keep_colored_marks_when_selected_and_hide_stale_failures() {
+    use ratatui::{Terminal, backend::TestBackend};
+    let dir = tempfile::tempdir().unwrap();
+    let mut w = discovery_wizard(dir.path());
+    w.discovery = Some(pangolin::Discovery::failure(
+        &w.target,
+        "Permission denied",
+        "SSH connected, but Docker metadata is not accessible to this account.",
+    ));
+    let mut app = App::new(Preferences::fallback(&dir.path().join("tui.toml")), false).unwrap();
+    app.overlay = Some(Overlay::Pangolin(Box::new(w)));
+    for selected in [0, 2, 4] {
+        if let Some(Overlay::Pangolin(w)) = app.overlay.as_mut() {
+            w.select_step(selected);
+        }
+        for (width, height) in [(80, 24), (120, 36)] {
+            let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+            terminal.draw(|frame| hs_cli::tui::draw::draw(frame, &app)).unwrap();
+            let buffer = terminal.backend().buffer();
+            for (label, mark, color) in [
+                ("1. Pangolin server", "✓", app.palette.ok),
+                ("2. Pangolin prerequisites", "✓", app.palette.ok),
+                ("3. Pangolin discovery", "✗", app.palette.error),
+            ] {
+                let (row, column) = (0..height)
+                    .find_map(|y| {
+                        let nav_width = if width >= 120 { 40 } else { width };
+                        let line: String = (0..nav_width).map(|x| buffer[(x, y)].symbol()).collect();
+                        line.find(label).map(|at| (y, line[..at].chars().count() as u16 - 2))
+                    })
+                    .unwrap();
+                assert_eq!(buffer[(column, row)].symbol(), mark);
+                assert_eq!(buffer[(column, row)].fg, color);
+                assert_ne!(
+                    buffer[(column + 2, row)].fg,
+                    color,
+                    "Only the result mark should be colored"
+                );
+                if label.starts_with(&format!("{}.", selected + 1)) {
+                    assert_eq!(buffer[(column, row)].bg, app.palette.selection);
+                }
+            }
+        }
+    }
+    if let Some(Overlay::Pangolin(w)) = app.overlay.as_mut() {
+        w.select_step(0);
+        let id = w.begin_test().unwrap();
+        w.complete(id, report(&w.target, false));
+    }
+    let text = rendered(&app, 120, 36);
+    assert!(text.contains("✗ 1. Pangolin server"));
+    assert!(
+        !text.contains("✗ 3. Pangolin discovery"),
+        "Unavailable discovery must not show an old failure"
+    );
+    if let Some(Overlay::Pangolin(w)) = app.overlay.as_mut() {
+        edit(w, "replacement.example.test");
+    }
+    assert!(!rendered(&app, 120, 36).contains("✗ 1. Pangolin server"));
 }

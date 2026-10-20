@@ -196,13 +196,21 @@ fn steps(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard, wide: bool) {
             text
         };
         write(buf, area.x, y, area.width, &" ".repeat(usize::from(area.width)), style);
-        let mark = if chosen && wizard.focus == 0 {
-            "▸"
-        } else if (at == 0 && wizard.status() == "Verified")
+        let passed = (at == 0 && wizard.status() == "Verified")
             || (at == 1 && wizard.prerequisites_confirmed())
-            || (at == 2 && wizard.discovery_status() == "Discovered")
-        {
+            || (at == 2 && wizard.discovery_status() == "Discovered");
+        let failed = (at == 0 && wizard.status() == "Failed")
+            || (at == 2
+                && matches!(
+                    wizard.discovery_status(),
+                    "Failed" | "Permission denied" | "Not found" | "Unsupported installation" | "Partially discovered"
+                ));
+        let mark = if passed {
             "✓"
+        } else if failed {
+            "✗"
+        } else if chosen && wizard.focus == 0 {
+            "▸"
         } else {
             " "
         };
@@ -214,6 +222,16 @@ fn steps(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard, wide: bool) {
             &format!("{mark} {}. {title}", at + 1),
             style,
         );
+        if (passed || failed) && !app.palette.no_color {
+            write(
+                buf,
+                area.x,
+                y,
+                1,
+                mark,
+                style.fg(if passed { app.palette.ok } else { app.palette.error }),
+            );
+        }
         if at > 2 || (at == 2 && !wizard.discovery_available()) || (at == 1 && !wizard.prerequisites_available()) {
             write(buf, area.right() - 8, y, 8, "[Locked]", style.fg(app.palette.muted));
         }
