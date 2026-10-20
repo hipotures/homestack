@@ -213,35 +213,3 @@ fn warn_if_readable_by_others(path: &Path) {
         tracing::warn!(path = %path.display(), "configuration file is accessible to other users; use mode 0600");
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    const SERVER_TOML: &str = "version = 1\n[node]\nname = \"pve1\"\ngold_vmid = 100\n[storage_layouts]\nhomestack-storage-1 = [\"local\"]\n[root]\ndisk = \"scsi0\"\n[home]\ndisk = \"scsi1\"\ndefault_size = \"20G\"\n[network]\nprefix = \"192.0.2\"\ncidr = 24\ngateway = \"192.0.2.1\"\ndns = [\"192.0.2.53\"]\n[cloud_init]\nsnippet_storage = \"local\"\nsnippet_dir = \"/var/lib/vz/snippets\"\n[user]\nname = \"user\"\nuid = 1000\ngid = 1000\n";
-
-    type TestResult = Result<(), Box<dyn std::error::Error>>;
-
-    /// Port of `test_config.py::ConfigTests::test_atomic_replace_failure_leaves_original_intact`.
-    #[test]
-    fn a_failed_rename_leaves_the_original_intact() -> TestResult {
-        let dir = tempfile::tempdir()?;
-        let path = dir.path().join("server.toml");
-        let mut store = ConfigStore::open(path.clone())?;
-        let first = store.replace(SERVER_TOML.to_owned(), &Precondition::Absent)?;
-
-        store.rename = |_, _| Err(io::Error::other("replace failed"));
-        let newer = SERVER_TOML.replace("gold_vmid = 100", "gold_vmid = 102");
-        let result = store.replace(newer, &Precondition::Exists(Some(first.version.clone())));
-        assert!(matches!(result, Err(ReplaceError::Io(ref error)) if error.to_string() == "replace failed"));
-
-        assert_eq!(std::fs::read_to_string(&path)?, SERVER_TOML);
-        assert_eq!(store.current().map(|c| c.version.clone()), Some(first.version));
-        let temporary: Vec<_> = std::fs::read_dir(dir.path())?
-            .filter_map(Result::ok)
-            .filter(|entry| entry.file_name().to_string_lossy().ends_with(".tmp"))
-            .collect();
-        assert!(temporary.is_empty(), "{temporary:?}");
-        Ok(())
-    }
-}

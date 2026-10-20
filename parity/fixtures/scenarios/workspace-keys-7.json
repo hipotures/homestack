@@ -1,9 +1,0 @@
-{
-  "ops": [
-    "get{path=/cluster/resources,type=vm}"
-  ],
-  "output": {
-    "error": "Gold VM 199 does not exist",
-    "ok": false
-  }
-}

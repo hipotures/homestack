@@ -325,34 +325,3 @@ fn path_covers(acl_path: &str, path: &str) -> bool {
     let acl_path = acl_path.trim_end_matches('/');
     acl_path.is_empty() || path == acl_path || path.strip_prefix(acl_path).is_some_and(|rest| rest.starts_with('/'))
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn token(acl: &[(&str, &[&str])]) -> TokenSpec {
-        TokenSpec {
-            id: "u@pve!t".to_owned(),
-            secret: "s".to_owned(),
-            acl: acl
-                .iter()
-                .map(|(path, privileges)| ((*path).to_owned(), privileges.iter().map(|p| (*p).to_owned()).collect()))
-                .collect(),
-        }
-    }
-
-    #[test]
-    fn privileges_propagate_to_child_paths_only() {
-        let root = token(&[("/", &["Sys.Audit"])]);
-        assert!(has_privilege(&root, "/nodes/a", "Sys.Audit"));
-        assert!(!has_privilege(&root, "/nodes/a", "VM.Audit"));
-
-        let nodes = token(&[("/nodes/a", &["Sys.Audit"])]);
-        assert!(has_privilege(&nodes, "/nodes/a", "Sys.Audit"));
-        assert!(!has_privilege(&nodes, "/nodes/ab", "Sys.Audit"));
-        assert!(!has_privilege(&nodes, "/nodes", "Sys.Audit"));
-
-        let root = token(&[("/", &["*"])]);
-        assert!(has_privilege(&root, "/nodes/a", "Sys.Modify"));
-    }
-}

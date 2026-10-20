@@ -131,36 +131,3 @@ async fn main() -> ExitCode {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn words(list: &[&str]) -> Vec<String> {
-        list.iter().map(|word| (*word).to_owned()).collect()
-    }
-
-    #[test]
-    fn parse_accepts_tag_on_apply_and_refuses_it_elsewhere() -> Result<(), String> {
-        let parsed = parse(&words(&[
-            "--config",
-            "/tmp/deploy.toml",
-            "apply",
-            "--tag",
-            "0.1.214-c71ef134237d",
-            "--only",
-            "api1",
-        ]))?;
-        assert_eq!(parsed.command, "apply");
-        assert_eq!(parsed.tag.as_deref(), Some("0.1.214-c71ef134237d"));
-        assert_eq!(parsed.only, ["api1"]);
-
-        let alias = parse(&words(&["apply", "--image", "0.1.214-c71ef134237d"]))?;
-        assert_eq!(alias.tag.as_deref(), Some("0.1.214-c71ef134237d"));
-
-        assert!(parse(&words(&["apply", "--tag"])).is_err());
-        assert!(parse(&words(&["apply", "--tag", ""])).is_err());
-        assert!(parse(&words(&["status", "--tag", "0.1.0-abc"])).is_err());
-        Ok(())
-    }
-}

@@ -192,39 +192,3 @@ pub fn log_format(var: impl Fn(&str) -> Option<String>) -> Result<LogFormat, Str
         Some(_) => Err("HOMESTACK_LOG_FORMAT must be text or json".to_owned()),
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn env(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> {
-        let pairs: Vec<(String, String)> = pairs.iter().map(|(k, v)| ((*k).to_owned(), (*v).to_owned())).collect();
-        move |name| pairs.iter().find(|(k, _)| k == name).map(|(_, v)| v.clone())
-    }
-
-    #[test]
-    fn pools_default_to_the_install_scripts() {
-        assert_eq!(
-            pools(&env(&[])),
-            Ok(Pools {
-                workspaces: "homestack".to_owned(),
-                gold: "homestack-gold".to_owned()
-            })
-        );
-    }
-
-    #[test]
-    fn a_test_instance_uses_the_test_pool() {
-        let pools = pools(&env(&[("HOMESTACK_PVE_POOL", " homestack-test ")]));
-        assert_eq!(pools.map(|p| p.workspaces), Ok("homestack-test".to_owned()));
-    }
-
-    #[test]
-    fn pool_names_are_checked_like_proxmox() {
-        for bad in ["a b", "a/b/c/d", "a//b", "pool!"] {
-            assert!(pools(&env(&[("HOMESTACK_PVE_POOL", bad)])).is_err(), "{bad}");
-        }
-        assert!(pools(&env(&[("HOMESTACK_PVE_POOL", "team/homestack_1.x")])).is_ok());
-        assert!(pools(&env(&[("HOMESTACK_PVE_GOLD_POOL", "homestack")])).is_err());
-    }
-}

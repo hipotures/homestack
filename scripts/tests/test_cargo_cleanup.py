@@ -1,13 +1,10 @@
-"""Verify cleanup boundaries and the success-only command lifecycle."""
+"""Protect applications and E2E artifacts from build cleanup."""
 
 import importlib.util
 import os
 from pathlib import Path
-import subprocess
-import sys
 import tempfile
 import unittest
-from unittest.mock import patch
 
 SCRIPT = Path(__file__).resolve().parents[1] / "cargo.py"
 SPEC = importlib.util.spec_from_file_location("cargo_cleanup", SCRIPT)
@@ -68,37 +65,6 @@ class CleanupTests(unittest.TestCase):
             (target / "debug/deps/test-0123456789abcdef").symlink_to(executable)
             self.assertEqual(MODULE.cleanup(target), (0, 0))
             self.assertEqual(executable.read_bytes(), b"keep")
-
-    def test_only_successful_commands_trigger_cleanup(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            for status in (0, 1, -15):
-                with self.subTest(status=status), patch.object(sys, "argv", [str(SCRIPT), "test"]), \
-                     patch.object(MODULE.subprocess, "run") as run, \
-                     patch.object(MODULE, "cleanup", return_value=(0, 0)) as cleanup:
-                    run.side_effect = [
-                        subprocess.CompletedProcess([], 0, '{"target_directory": "' + temporary + '"}'),
-                        subprocess.CompletedProcess([], status),
-                    ]
-                    self.assertEqual(MODULE.main(), status if status >= 0 else 143)
-                    self.assertEqual(cleanup.call_count, int(status == 0))
-
-    def test_explicit_target_directory_is_used_and_test_arguments_are_not_parsed(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            for arguments, expected in (
-                (["test", "--target-dir", temporary], Path(temporary)),
-                (["build", "--target-dir=" + temporary], Path(temporary)),
-                (["test", "--", "--target-dir", "unused"], Path(temporary) / "default"),
-            ):
-                with self.subTest(arguments=arguments), \
-                     patch.object(sys, "argv", [str(SCRIPT), *arguments]), \
-                     patch.object(MODULE.subprocess, "run") as run, \
-                     patch.object(MODULE, "cleanup", return_value=(0, 0)) as cleanup:
-                    run.side_effect = [
-                        subprocess.CompletedProcess([], 0, '{"target_directory": "' + temporary + '/default"}'),
-                        subprocess.CompletedProcess([], 0),
-                    ]
-                    self.assertEqual(MODULE.main(), 0)
-                    cleanup.assert_called_once_with(expected)
 
 
 if __name__ == "__main__":

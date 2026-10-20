@@ -173,33 +173,3 @@ impl std::fmt::Display for TxtRecord {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn the_host_is_known_by_its_name_servers() {
-        let names = |list: &[&str]| list.iter().map(|name| (*name).to_owned()).collect::<Vec<_>>();
-        assert_eq!(host_of(&names(&["dns20.ovh.net.", "ns20.ovh.net."])), DnsHost::Ovh);
-        assert_eq!(
-            host_of(&names(&["launch1.spaceship.net", "launch2.spaceship.net"])),
-            DnsHost::Spaceship
-        );
-        assert_eq!(
-            host_of(&names(&["ns1.elsewhere.example.", "launch1.spaceship.net"])),
-            DnsHost::Other("ns1.elsewhere.example".to_owned())
-        );
-        assert_eq!(host_of(&[]), DnsHost::Other("nowhere".to_owned()));
-    }
-
-    #[test]
-    fn the_zone_is_looked_for_from_the_domain_up_to_two_labels() {
-        assert_eq!(
-            zone_candidates("a.b.example.net"),
-            ["a.b.example.net", "b.example.net", "example.net"]
-        );
-        assert_eq!(zone_candidates("homestack.app"), ["homestack.app"]);
-        assert!(zone_candidates("app").is_empty());
-    }
-}

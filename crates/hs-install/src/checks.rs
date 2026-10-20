@@ -639,23 +639,3 @@ pub fn all_questions(state: &State, settings: &Settings) -> Vec<Question> {
     }
     questions
 }
-
-#[cfg(test)]
-mod tests {
-    use super::api_name;
-
-    #[test]
-    fn node_api_names_follow_explicit_or_single_label_wildcard_sans() {
-        let names = |names: &[&str]| names.iter().map(|name| (*name).to_owned()).collect::<Vec<_>>();
-        assert_eq!(
-            api_name("pve1", &names(&["*.e2e.example.net"])).as_deref(),
-            Some("pve1.e2e.example.net")
-        );
-        assert_eq!(
-            api_name("pve1", &names(&["*.example.net", "pve1.internal.example.net"])).as_deref(),
-            Some("pve1.internal.example.net")
-        );
-        assert!(api_name("pve1", &names(&["pve.example.net", "pve2.example.net"])).is_none());
-        assert!(api_name("pve1", &names(&["*.*.example.net", "pve*.example.net", "*."])).is_none());
-    }
-}

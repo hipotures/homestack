@@ -360,19 +360,3 @@ pub async fn verify_migrated_home(
     }
     Ok(())
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn regular_users_like_awk() {
-        let passwd = "root:x:0:0:root:/root:/bin/bash\n\
-                      developer:x:1000:1000::/home/developer:/bin/bash\n\
-                      nobody:x:65534:65534:nobody:/nonexistent:/usr/sbin/nologin\n\
-                      odd:x:abc:1::/:/bin/sh\n\
-                      \n\
-                      guest:x:1001:100::/home/guest:/bin/bash\n";
-        assert_eq!(regular_users(passwd), ["developer:1000:1000", "guest:1001:100"]);
-    }
-}

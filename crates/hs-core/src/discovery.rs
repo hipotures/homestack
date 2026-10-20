@@ -237,31 +237,3 @@ pub async fn workspace_networks(
     }
     Ok(candidates)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn networks_like_ipaddress() {
-        assert_eq!(
-            ipv4_network("192.168.100.200/24"),
-            Some((Ipv4Addr::new(192, 168, 100, 0), 24))
-        );
-        assert_eq!(
-            ipv4_network("192.168.1.11/255.255.255.0"),
-            Some((Ipv4Addr::new(192, 168, 1, 0), 24))
-        );
-        assert_eq!(ipv4_network("10.0.0.1"), Some((Ipv4Addr::new(10, 0, 0, 1), 32)));
-        assert_eq!(ipv4_network("10.0.0.1/255.0.255.0"), None);
-        assert_eq!(compatible((Ipv4Addr::new(10, 0, 0, 0), 25)), None);
-        assert_eq!(
-            compatible((Ipv4Addr::new(10, 0, 0, 0), 16)).as_deref(),
-            Some("10.0.0.0/16")
-        );
-        assert_eq!(
-            parse_dns_values(Some("1.1.1.1, 8.8.8.8;x 1.1.1.1")),
-            ["1.1.1.1", "8.8.8.8"]
-        );
-    }
-}

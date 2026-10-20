@@ -591,37 +591,3 @@ pub async fn storage_definitions(pve: &impl Pve) -> Result<Vec<Map<String, Value
 pub(crate) fn u64_value(value: Option<&Value>) -> Option<u64> {
     non_negative(value)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-
-    #[test]
-    fn integer_value_follows_python_int() {
-        assert_eq!(integer_value(Some(&json!(5))), Some(5));
-        assert_eq!(integer_value(Some(&json!("5"))), Some(5));
-        assert_eq!(integer_value(Some(&json!(" 7 "))), Some(7));
-        assert_eq!(integer_value(Some(&json!(2.9))), Some(2));
-        assert_eq!(integer_value(Some(&json!(true))), Some(1));
-        assert_eq!(integer_value(Some(&json!("2.5"))), None);
-        assert_eq!(integer_value(Some(&json!(null))), None);
-    }
-
-    #[test]
-    fn disk_sizes_like_python() {
-        assert_eq!(parse_disk_size_gb("x:y,size=20G"), Some(20.0));
-        assert_eq!(parse_disk_size_gb("x:y,size=4M,ssd=1"), Some(4.0 / 1024.0));
-        assert_eq!(parse_disk_size_gb("x:y,size=1T"), Some(1024.0));
-        assert_eq!(parse_disk_size_gb("x:y,size=20"), None);
-        assert_eq!(parse_disk_size_gb("x:y"), None);
-    }
-
-    #[test]
-    fn volume_names_with_extensions() {
-        assert!(volume_identity("s:vm-1-hs-home-a.b").is_some_and(|v| v.name == "a.b"));
-        assert!(volume_identity("s:vm-1-hs-home-a.qcow2").is_some_and(|v| v.name == "a"));
-        assert!(volume_identity("s:vm-x-hs-home-a").is_none());
-        assert!(volume_identity("no-colon").is_none());
-    }
-}

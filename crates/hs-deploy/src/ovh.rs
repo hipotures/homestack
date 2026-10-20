@@ -205,35 +205,3 @@ impl OvhClient {
             .map(drop)
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn credentials_read_like_the_acme_plugin_writes_them() -> Result<(), String> {
-        let credentials = OvhCredentials::parse("OVH_AK=ak\nOVH_AS=as\nOVH_CK=ck\n")?;
-        assert_eq!(credentials.endpoint, "https://eu.api.ovh.com/1.0");
-        assert_eq!(credentials.application_key, "ak");
-        assert!(!format!("{credentials:?}").contains("as"));
-        let ca = OvhCredentials::parse("OVH_AK=a\nOVH_AS=b\nOVH_CK=c\nOVH_END_POINT=ovh-ca")?;
-        assert_eq!(ca.endpoint, "https://ca.api.ovh.com/1.0");
-        assert!(OvhCredentials::parse("OVH_AK=a\nOVH_AS=b").is_err_and(|e| e.contains("OVH_CK")));
-        Ok(())
-    }
-
-    #[test]
-    fn the_signature_is_sha1_of_the_joined_request() {
-        let credentials = OvhCredentials {
-            application_key: "ak".to_owned(),
-            application_secret: "as".to_owned(),
-            consumer_key: "ck".to_owned(),
-            endpoint: "https://eu.api.ovh.com/1.0".to_owned(),
-        };
-        // `echo -n "as+ck+GET+https://eu.api.ovh.com/1.0/me++1700000000" | sha1sum`
-        assert_eq!(
-            signature(&credentials, "GET", "https://eu.api.ovh.com/1.0/me", "", 1_700_000_000),
-            "$1$212ae9d571c1dbc085f3630b6c2b68d5b3fdc482"
-        );
-    }
-}

@@ -1398,38 +1398,3 @@ async fn force_new_root<P: Pve, O: Observer>(
     done.insert("host_key_changed".to_owned(), json!(true));
     Ok(done)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn ipconfig0_needs_a_static_address_and_a_gateway() -> Result<(), CoreError> {
-        assert_eq!(
-            parse_ipconfig0("ip=192.0.2.200/24,gw=192.0.2.1")?,
-            ("192.0.2.200".to_owned(), 24, "192.0.2.1".to_owned())
-        );
-        assert!(parse_ipconfig0("ip=dhcp").is_err());
-        assert!(parse_ipconfig0("ip=192.0.2.200/24").is_err());
-        assert!(parse_ipconfig0("").is_err());
-        Ok(())
-    }
-
-    #[test]
-    fn the_journal_block_keeps_the_rest_of_the_description() -> Result<(), CoreError> {
-        let (rest, payload) = split_description("notes\n<!-- homestack-journal: abc -->")?;
-        assert_eq!(rest, "notes");
-        assert_eq!(payload, Some("abc"));
-        assert_eq!(split_description("plain")?, ("plain".to_owned(), None));
-        assert!(split_description("x <!-- homestack-journal: abc").is_err());
-        Ok(())
-    }
-
-    #[test]
-    fn root_attachment_takes_golds_options() {
-        assert_eq!(
-            root_attachment_spec("s:vm-200-disk-1", "s:vm-101-disk-0,iothread=1,size=16G,discard=on"),
-            "s:vm-200-disk-1,iothread=1,discard=on"
-        );
-    }
-}

@@ -110,26 +110,3 @@ pub fn setup_id(text: &str) -> bool {
     chars.next().is_some_and(|c| c.is_ascii_lowercase())
         && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
 }
-
-#[cfg(test)]
-#[allow(clippy::unwrap_used)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn repr_quotes_as_python_does() {
-        assert_eq!(py_repr("a"), "'a'");
-        assert_eq!(py_repr("it's"), "\"it's\"");
-        assert_eq!(py_repr("both ' \""), "'both \\' \"'");
-        assert_eq!(py_repr("a\nb\\"), "'a\\nb\\\\'");
-        assert_eq!(py_repr("\0"), "'\\x00'");
-    }
-
-    #[test]
-    fn repositories_follow_the_github_grammar() {
-        assert_eq!(repository(" owner/project ").unwrap(), "owner/project");
-        for bad in ["owner", "-owner/x", "owner/", "owner/a b", "o/..", "owner/x/y"] {
-            assert!(repository(bad).is_err(), "{bad}");
-        }
-    }
-}

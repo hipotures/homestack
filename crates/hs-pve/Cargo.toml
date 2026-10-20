@@ -18,8 +18,3 @@ thiserror = "2.0.21"
 tokio = { version = "1.53.2", features = ["time"] }
 tracing = "0.1.44"
 url = "2.5.8"
-
-[dev-dependencies]
-pve-sim = { path = "../pve-sim" }
-tokio = { version = "1.53.2", features = ["rt-multi-thread", "macros"] }
-toml = "1.1.8"

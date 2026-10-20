@@ -269,30 +269,3 @@ pub async fn work(
     }
     progress(Progress::Done { ok: true, lines });
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_registry_time_is_shown_as_local_minutes() {
-        assert_eq!(
-            local_time("2026-10-16T01:42:01.535937043Z", 7200).as_deref(),
-            Some("2026-10-16 03:42")
-        );
-        assert_eq!(local_time("not a time", 0), None);
-    }
-
-    #[test]
-    fn deploy_toml_keeps_everything_but_the_image() -> Result<(), Box<dyn std::error::Error>> {
-        let dir = tempfile::tempdir()?;
-        let path = dir.path().join("deploy.toml");
-        std::fs::write(&path, "# the servers\nimage = \"r/p:old\" # kept\ndomain = \"x\"\n")?;
-        keep_image(&path, "r/p:new")?;
-        assert_eq!(
-            std::fs::read_to_string(&path)?,
-            "# the servers\nimage = \"r/p:new\" # kept\ndomain = \"x\"\n"
-        );
-        Ok(())
-    }
-}

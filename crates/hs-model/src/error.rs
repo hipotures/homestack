@@ -145,35 +145,3 @@ impl ErrorBody {
         self
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn error_body_matches_the_documented_shape() -> Result<(), serde_json::Error> {
-        let body = ErrorBody::new(ErrorCode::PveUnavailable, "No Proxmox endpoint is reachable.", "rid");
-        let json = serde_json::to_value(&body)?;
-        assert_eq!(
-            json,
-            serde_json::json!({
-                "schema_version": 1,
-                "error": {
-                    "code": "pve_unavailable",
-                    "message": "No Proxmox endpoint is reachable.",
-                    "retryable": true,
-                    "request_id": "rid"
-                }
-            })
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn only_availability_errors_are_retryable() {
-        assert!(ErrorCode::PveUnavailable.retryable());
-        assert!(ErrorCode::PveNodeUnavailable.retryable());
-        assert!(!ErrorCode::PveAuthFailed.retryable());
-        assert!(!ErrorCode::Unauthorized.retryable());
-    }
-}

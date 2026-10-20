@@ -34,12 +34,7 @@ uuid = { version = "1.28.0", features = ["v4"] }
 yaml-rust2 = { version = "0.13.0", default-features = false }
 
 [dev-dependencies]
-axum = "0.8.9"
-axum-server = { version = "0.8.0", features = ["tls-rustls"] }
 hs-pve = { version = "0.1.0", path = "../hs-pve" }
-hs-server = { version = "0.1.0", path = "../hs-server" }
-pve-sim = { version = "0.1.0", path = "../pve-sim" }
-tokio = { version = "1.53.2", features = ["rt-multi-thread", "macros", "net", "test-util"] }
 
 [[bin]]
 name = "homestack"

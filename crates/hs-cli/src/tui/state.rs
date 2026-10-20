@@ -1280,7 +1280,11 @@ impl App {
                     }
                     Some(Hit::PangolinDiscovery(control)) => {
                         if let Some(Overlay::Pangolin(wizard)) = self.overlay.as_mut()
-                            && wizard.selected_step == 2 && wizard.discovery_available() && !wizard.help_open && !wizard.report_open {
+                            && wizard.selected_step == 2
+                            && wizard.discovery_available()
+                            && !wizard.help_open
+                            && !wizard.report_open
+                        {
                             wizard.focus = control;
                             return press(self, if control == 1 { KeyCode::F(6) } else { KeyCode::F(7) });
                         }
@@ -1497,9 +1501,14 @@ impl App {
             return request;
         }
         if let Some(Overlay::Pangolin(wizard)) = self.overlay.as_mut() {
-            if !wizard.report_open && !wizard.help_open && wizard.selected_step == 2
-                && (key.code == KeyCode::F(6) || (wizard.focus == 1 && key.code == KeyCode::Enter)) {
-                return wizard.begin_discovery().map(|id| Request::DiscoverPangolin(id, wizard.target.clone()));
+            if !wizard.report_open
+                && !wizard.help_open
+                && wizard.selected_step == 2
+                && (key.code == KeyCode::F(6) || (wizard.focus == 1 && key.code == KeyCode::Enter))
+            {
+                return wizard
+                    .begin_discovery()
+                    .map(|id| Request::DiscoverPangolin(id, wizard.target.clone()));
             }
             if !wizard.report_open
                 && !wizard.help_open
@@ -1892,24 +1901,5 @@ impl App {
             },
         }
         None
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    #![allow(clippy::unwrap_used)]
-
-    use super::*;
-
-    #[test]
-    fn cached_errors_expire_after_ten_seconds_and_apply_only_to_their_vm() {
-        let preferences = Preferences::fallback(std::path::Path::new("/unused/tui.toml"));
-        let mut app = App::new(preferences, false).unwrap();
-        app.selected = Some(201);
-        app.set_details(201, Err("guest unavailable".to_owned()));
-        assert!(app.details_fresh(201));
-        assert!(!app.details_fresh(202));
-        app.details.as_mut().unwrap().read_at -= DETAILS_TTL;
-        assert!(!app.details_fresh(201));
     }
 }

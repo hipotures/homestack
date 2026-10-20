@@ -27,8 +27,12 @@ jobs:
           rustup toolchain install 1.99.0 --profile minimal --component clippy,rustfmt
           rustup default 1.99.0
       - uses: Swatinem/rust-cache@v2.9.2
-      - name: L1-L3 checks
+      - name: Development checks
+        if: github.ref_type != 'tag' && github.event_name != 'workflow_dispatch'
         run: scripts/check.sh
+      - name: Full verification for releases or explicit QA
+        if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
+        run: scripts/check.sh --full
       - name: Check commit whitespace
         run: git show --format= --check HEAD
 

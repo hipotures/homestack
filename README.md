@@ -415,13 +415,14 @@ apt-get install -y rsync git
   - [Client profiles](docs/client-profiles.md)
   - [OpenAPI specification](docs/openapi.json)
   - [Isolated E2E bootstrap](docs/e2e-bootstrap.md) & [E2E laboratory design](docs/isolated-e2e-lab.md)
-  - [Parity reference](parity/README.md)
 
 ### Running Checks & Tests
 
 Always use `scripts/cargo.py` (or `scripts/check.sh`) rather than raw `cargo build` / `cargo test`—the wrapper serializes builds and cleans up disposable test binaries while preserving top-level executables and active E2E lab data in `target/`:
 
 ```sh
-scripts/check.sh
-python3 scripts/cargo.py test --locked -p hs-cli
+scripts/check.sh          # Formatting and compiled application binaries
+scripts/check.sh --full   # Explicit retained checks and static analysis
 ```
+
+Development policy, mandatory compilation and Git synchronization, and the future prompt-driven functional QA direction are defined in [AGENTS.md](AGENTS.md). Live E2E remains separate and requires an authorized isolated lab; see the existing E2E documentation above.

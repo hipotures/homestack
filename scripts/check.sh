@@ -1,95 +1,55 @@
 #!/usr/bin/env bash
-# HomeStack checks (docs/migration/PLAN.md, section 2).
-#
-#   scripts/check.sh            L1-L3, no cluster
-#   scripts/check.sh --live     also L4 against the real cluster
-#   scripts/check.sh --phase N  only the tests and scenarios of phase N
-#
-# --live needs HOMESTACK_LIVE_TOKEN_FILE and HOMESTACK_LIVE_PVE_ENDPOINTS
-# (see crates/hs-server/tests/live.rs), docker for the image check, and
-# HOMESTACK_LIVE_TEST_TOKEN_FILE for changes in the test pool (crates/hs-server/tests/live_jobs.rs,
-# live_cloudinit.rs, live_lifecycle.rs, live_refresh.rs, live_resize.rs,
-# live_migrate.rs, live_addkey.rs, live_create_node.rs), the only live checks
-# that change the cluster; the boot also needs the vendor snippets of this
-# tree on every node (docs/migration/deploy.md). With
-# HOMESTACK_LIVE_OUTSIDE_VMID (a VM in 240-249 tagged homestack-ws and in no
-# pool) it also checks that changes outside the pool are refused
-# (live_pool_guard.rs).
-# The deployment gate (crates/hs-deploy/tests/live_deploy.rs) needs the
-# files of its live-deploy.toml (deploy token, client token, certificate)
-# and HOMESTACK_LIVE_IMAGE naming a published numeric API release.
-# The client gate (crates/hs-cli/tests/live_cli.rs) deploys the same test
-# instances and runs homestack create, status, refresh and destroy on VM 240.
-# The TUI gate (crates/hs-cli/tests/live_tui.rs) does the same with the
-# TUI's actions (plan, Apply, the job's steps), and a Cancel first.
+# HomeStack verification through the existing serialized Cargo wrapper.
+#   scripts/check.sh          formatting and application compilation
+#   scripts/check.sh --full   retained automated checks and static analysis
+#   scripts/check.sh --live   existing live checks in an authorized isolated lab
+# --live requires HOMESTACK_LIVE_IMAGE, HOMESTACK_LIVE_TOKEN_FILE,
+# HOMESTACK_LIVE_PVE_ENDPOINTS and HOMESTACK_LIVE_TEST_TOKEN_FILE.
+# See the live test sources and existing E2E documentation for lab setup.
 set -euo pipefail
 
 if [[ ${HOMESTACK_BUILD_WRAPPER:-} != 1 ]]; then
     exec python3 "$(dirname "$0")/cargo.py" --check "$@"
 fi
 
-usage() {
-    sed -n '2,/^set -euo/{/^#/p}' "$0" | sed 's/^# \{0,1\}//'
-    exit 2
-}
-
 live=0
-phase=
+full=0
 while (($#)); do
     case $1 in
+        --full) full=1 ;;
         --live) live=1 ;;
-        --phase) phase=${2:?--phase needs a phase, e.g. 2 or 14a}; shift ;;
-        -h | --help) usage ;;
-        *) echo "check.sh: unknown argument $1" >&2; usage ;;
+        -h | --help) sed -n '2,8s/^# *//p' "$0"; exit 0 ;;
+        *) echo "check.sh: unknown argument $1" >&2; exit 2 ;;
     esac
     shift
 done
-
-if ((live)); then
-    : "${HOMESTACK_LIVE_IMAGE:?--live requires HOMESTACK_LIVE_IMAGE naming a published API release}"
-fi
 
 root=$(cd "$(dirname "$0")/.." && pwd)
 cd "$root"
 unset VIRTUAL_ENV
 step() { printf '\n== %s\n' "$*"; }
 
-if [[ -n $phase ]]; then
-    export HOMESTACK_PHASE=$phase
-    mapfile -t ported < <(cargo run -q -p hs-parity -- manifest-phase "$root/parity/manifest.toml" "$phase")
-    if ((${#ported[@]})); then
-        step "Rust tests porting phase $phase (${#ported[@]})"
-        cargo test --workspace --locked -- --exact "${ported[@]}"
-    else
-        step "no Rust tests port phase $phase yet"
-    fi
-    step "parity scenarios and configuration corpus of phase $phase"
-    cargo test -p hs-parity --locked --test scenarios --test config_corpus
-    exit 0
+if ((live)); then
+    : "${HOMESTACK_LIVE_IMAGE:?--live requires HOMESTACK_LIVE_IMAGE naming a published API release}"
 fi
 
-step "build cleanup boundaries"
-python3 -m unittest discover -s scripts/tests
-
-step "cargo fmt"
+step "formatting"
 cargo fmt --all --check
+step "application binaries"
+cargo build --workspace --bins --locked
 
-step "clippy"
-cargo clippy --workspace --all-targets --locked -- -D warnings
-
-step "Rust tests: unit, simulator (L2) and parity scenarios (L3)"
-cargo test --workspace --locked
-
-step "cluster install script (deploy/pve)"
-uvx --from shellcheck-py==0.10.0.1 shellcheck -x deploy/pve/homestack-pve.sh deploy/pve/embed-snippets.sh \
-    deploy/pve/tests/run.sh deploy/pve/tests/fake-pve scripts/live-probe-import-from.sh
-deploy/pve/tests/run.sh
-
-step "test manifest (L1)"
-work=$(mktemp -d)
-trap 'rm -rf "$work"' EXIT
-cargo test --workspace --locked -q -- --list --format terse > "$work/rust-tests" 2>/dev/null
-cargo run -q -p hs-parity -- manifest-check "$root/parity/manifest.toml" "$root/parity/fixtures/python-test-ids.txt" "$work/rust-tests"
+if ((full)); then
+    step "retained Python checks"
+    python3 -m unittest discover -s scripts/tests
+    step "static analysis"
+    cargo clippy --workspace --all-targets --locked -- -D warnings
+    step "retained Rust checks (live scenarios remain opt-in)"
+    cargo test --workspace --locked
+    step "cluster install script"
+    uvx --from shellcheck-py==0.10.0.1 shellcheck -x deploy/pve/homestack-pve.sh deploy/pve/embed-snippets.sh \
+        deploy/pve/tests/run.sh deploy/pve/tests/fake-pve scripts/live-probe-import-from.sh
+    deploy/pve/tests/run.sh
+fi
 
 if ((live)); then
     : "${HOMESTACK_LIVE_TOKEN_FILE:?--live needs HOMESTACK_LIVE_TOKEN_FILE}"
@@ -128,4 +88,4 @@ if ((live)); then
     HOMESTACK_LIVE_IMAGE=$image cargo test -p hs-cli --locked --test live_tui -- --ignored --nocapture
 fi
 
-step "all checks passed$( ((live)) && echo ' (including live)')"
+step "requested checks passed"

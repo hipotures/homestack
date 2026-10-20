@@ -3,8 +3,7 @@
 //! Python ignores tables it does not know; so does this reader, and lists
 //! them in [`Legacy::dropped`]. `[[setup.*]]` entries are carried over
 //! without checking them; the setup catalog is validated where it is used
-//! (phase 14). The parity corpus (`parity/config-corpus.toml`) checks that
-//! Python and this reader reach the same verdict.
+//! (phase 14).
 
 use hs_model::config::fields::{self, type_error};
 use hs_model::config::{Config, ConfigError};

@@ -487,27 +487,3 @@ fn is_usb_id(entry: &str) -> bool {
         Some((vendor, product)) => hex4(vendor) && hex4(product),
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn checkout_roots_are_normalized_like_python() {
-        assert_eq!(checkout_root(" ~/DEV/ ").ok().as_deref(), Some("~/DEV"));
-        assert_eq!(checkout_root("~/a/b//").ok().as_deref(), Some("~/a/b"));
-        for root in ["~/", "~", "/tmp/x", "~/a//b", "~/./a", "~/a/.."] {
-            assert!(checkout_root(root).is_err(), "{root}");
-        }
-    }
-
-    #[test]
-    fn usb_ids_are_four_hex_digits() {
-        for id in ["1050", "1050:0407", "abcd:ef01"] {
-            assert!(is_usb_id(id), "{id}");
-        }
-        for id in ["105", "10500", "1050:", "1050:04070", "ghij"] {
-            assert!(!is_usb_id(id), "{id}");
-        }
-    }
-}

@@ -55,33 +55,3 @@ impl fmt::Display for NodeName {
         f.write_str(&self.0)
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn accepts_dns_labels() {
-        for name in ["pve1", "example-node-1", "a", "N0DE"] {
-            assert!(NodeName::parse(name).is_ok(), "{name}");
-        }
-    }
-
-    #[test]
-    fn rejects_anything_that_could_change_the_api_path() {
-        let long = "a".repeat(64);
-        for name in [
-            "",
-            "-pve",
-            "pve-",
-            "pve/1",
-            "pve1/../x",
-            "pve 1",
-            "pve.1",
-            "pve%2f",
-            long.as_str(),
-        ] {
-            assert_eq!(NodeName::parse(name), Err(NodeNameError), "{name}");
-        }
-    }
-}

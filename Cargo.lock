@@ -918,8 +918,6 @@ dependencies = [
 name = "hs-cli"
 version = "0.1.0"
 dependencies = [
- "axum",
- "axum-server",
  "base64 0.23.1",
  "crossterm",
  "hs-client",
@@ -929,8 +927,6 @@ dependencies = [
  "hs-install",
  "hs-model",
  "hs-pve",
- "hs-server",
- "pve-sim",
  "ratatui",
  "ratcn",
  "rpassword",
@@ -951,7 +947,6 @@ dependencies = [
 name = "hs-client"
 version = "0.1.0"
 dependencies = [
- "axum",
  "reqwest",
  "serde",
  "serde_json",
@@ -965,7 +960,6 @@ name = "hs-config"
 version = "0.1.0"
 dependencies = [
  "hs-model",
- "tempfile",
  "toml",
 ]
 
@@ -1042,7 +1036,6 @@ dependencies = [
  "base64 0.23.1",
  "serde_json",
  "sha2",
- "tempfile",
 ]
 
 [[package]]
@@ -1059,39 +1052,15 @@ dependencies = [
 ]
 
 [[package]]
-name = "hs-parity"
-version = "0.1.0"
-dependencies = [
- "axum",
- "axum-server",
- "hs-cli",
- "hs-config",
- "hs-core",
- "hs-model",
- "hs-pve",
- "hs-server",
- "pve-sim",
- "reqwest",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror",
- "tokio",
- "toml",
-]
-
-[[package]]
 name = "hs-pve"
 version = "0.1.0"
 dependencies = [
  "hs-model",
- "pve-sim",
  "reqwest",
  "serde",
  "serde_json",
  "thiserror",
  "tokio",
- "toml",
  "tracing",
  "url",
 ]
@@ -1908,7 +1877,6 @@ dependencies = [
  "hs-model",
  "percent-encoding",
  "rcgen",
- "reqwest",
  "serde",
  "serde_json",
  "sha2",
