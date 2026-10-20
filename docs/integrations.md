@@ -28,13 +28,13 @@ the Spaceship and TSIG files in the same directory by default; explicit
 `homestack-deploy` uses the credential paths explicitly saved in its deployment
 configuration. `tui.toml` contains interface preferences, not integration data.
 
-## Pangolin setup: SSH server and manual prerequisites
+## Pangolin setup: server, prerequisites and discovery
 
 Open **Settings > Integrations > Remote Access > Pangolin** to enter the setup
 wizard. All eight stages are shown: Pangolin server, Pangolin prerequisites,
 Pangolin discovery, Integration API, API tunnel, Bootstrap API key, HomeStack API
-key, and Integration verification. The first two stages are implemented;
-stages 3–8 remain locked and cannot execute operations.
+key, and Integration verification. The first three stages are implemented;
+stages 4–8 remain locked and cannot execute operations.
 
 On wide terminals, the step list sits to the left of the selected step's details.
 At 80x24, all eight steps appear above a compact form. Up/Down in the step list
@@ -82,7 +82,7 @@ in seconds for runs lasting at least one second. Reopening restores that recorde
 verification and the 1/8 progress; it does not open an SSH session automatically.
 A target without a matching successful report is saved but not verified. A verified target shows **1/8** and enables manual prerequisites.
 
-These phases do not inspect Pangolin, Docker or administrative permissions,
+Steps 1–2 do not inspect Pangolin, Docker or administrative permissions,
 configure an API or tunnel, bootstrap credentials, or create remote objects.
 It changes no VPS configuration. A successful SSH test does not establish that
 Pangolin is installed or that any later integration stage works.
@@ -126,10 +126,81 @@ leave confirmation unchanged and display an error; Space retries. Confirmation
 restores on restart, but never claims technical verification of Pangolin or its
 API.
 
-**Pangolin discovery** (Step 3) remains unimplemented. Its future read-only SSH
-inventory will identify installation/running state, version, actual installation
-method, container/service identities, Compose/service and application configuration
-paths, listening ports and mappings, and Integration API port and enabled state.
-It will report ambiguous or unsupported layouts without modifying them. It will
-not assume Docker Compose, fixed names or paths. Any subsequent configuration
-change belongs to Step 4, with explicit approval and backup.
+### Installation discovery (Step 3)
+
+Step 3 unlocks after the current saved server is verified and its prerequisites
+are confirmed. F6 or **Discover** starts a bounded, asynchronous, read-only SSH
+inspection. Tab/Shift+Tab cycles navigation, Discover and (when available) Report;
+Enter activates the selected action. F7 opens the scrollable inventory, F4 opens
+contextual help, and Esc cancels a running discovery. Mouse actions use the same
+controls. At 80x24, Tab into the details opens a compact page; Tab back to
+navigation shows all eight steps. No later stage is executable.
+
+The existing SSH/askpass and hardware-touch mechanisms are reused. Discovery
+uses a fresh authenticated connection because the existing bounded SSH worker
+explicitly disables connection sharing. Host verification and authentication
+settings are unchanged. The overall deadline remains 45 seconds, including
+configuration resolution and authentication; each remote subprocess has a
+6-second timeout. Python 3 must already exist on the remote server; nothing is
+installed and bytecode writes are disabled.
+
+The fixed remote Python probe performs only these operations:
+
+- `docker ps -a --no-trunc --format ...`: identify official `fosrl/pangolin`
+  image references (Docker Hub or GHCR), including stopped containers.
+- `docker inspect --format ... <validated container ID>`: select running state,
+  image reference, mounts, port bindings, PID and the two Compose labels. No
+  environment or unrelated labels are requested.
+- `systemctl list-unit-files --type=service` and narrowly selected
+  `systemctl show`: identify Pangolin-named units and executable, active state,
+  service-file and working-directory metadata. No service is started or changed.
+- Read a bounded `config.yml`/`config.yaml` discovered from actual config mounts,
+  extracting only literal `flags.enable_integration_api` and server port scalars.
+- Read `/proc/<inspected PID>/net/tcp{,6}` for listening TCP ports. No `docker exec`,
+  `nsenter`, `sudo`, API request, recursive filesystem search or configuration
+  mutation occurs.
+
+Docker Compose is distinguished by its runtime project labels. Plain Docker is
+supported without Compose metadata. Native/systemd executable identities are
+reported as partial inventory: arbitrary native configuration layouts are not
+assumed. Multiple installations or unrecognized Pangolin-named service
+executables are unsupported and never selected automatically. Custom image
+names and non-systemd native deployments cannot currently be reliably identified.
+
+Only allowlisted inventory leaves the remote probe. Raw configuration, process
+and container environments, unrelated labels, SSH stderr and exceptions are
+never displayed or persisted. Free-form remote diagnostics are discarded in
+favor of fixed issue codes. Paths remain data and are never interpolated into a
+shell command. The complete probe is embedded in the Rust binary and is auditable
+at `crates/hs-cli/src/tui/pangolin_discover.py`.
+
+Results distinguish Not discovered, Discovering, Discovered, Partially discovered,
+Not found, Permission denied, Unsupported installation, Failed, Cancelled and
+Outdated. A stopped installation is partial and explicitly marked Stopped.
+Completion requires an identified running container and readable unambiguous
+configuration. A disabled Integration API is acceptable; absent port settings
+remain Unknown rather than assuming version-dependent defaults. An enabled API
+also requires an explicit valid port and observable listening state. Bindings
+are classified as loopback only, wider interface or not published. Socket access,
+configuration permissions and unsupported YAML are explicit unresolved fields.
+
+Image references are evidence of the configured image, **not confirmation of the
+running software version**. Arbitrary YAML constructs (anchors, inline mappings,
+expressions) and runtime overrides are not evaluated; unresolved values remain
+unknown. Configuration is an observation of the file, not proof it matches the
+already-running process. Inspect the F7 inventory before any future configuration
+phase. Installation and application/API settings are observed independently.
+
+Sanitized inventory, target, date, outcome and fixed diagnostic summary are saved
+atomically in `[discovery]` in the existing private integration file. Repeated
+runs replace that record. Restarting restores historical results, not continuous
+monitoring. Editing the target invalidates discovery; failure never erases the
+SSH target, prerequisite confirmation or unrelated settings. A failed save does
+not count as completion. Successful discovery advances progress to **3/8**.
+
+Integration API changes belong exclusively to the unimplemented Step 4 and will
+require approval and backup. This wizard does not enable API access, change ports,
+restart services, request credentials or create Pangolin objects.
+
+Configuration keys were checked against the
+[Pangolin v1.24.0 configuration schema](https://github.com/fosrl/pangolin/blob/1.24.0/server/lib/readConfigFile.ts).

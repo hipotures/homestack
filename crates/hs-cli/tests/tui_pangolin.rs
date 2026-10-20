@@ -505,7 +505,7 @@ fn pangolin_context_help_is_readable_for_every_locked_stage_and_blocks_actions()
         assert!(app.key(key(KeyCode::F(4))).is_none());
         let text = rendered(&app, 80, 24);
         assert!(text.contains(&format!("help · {}.", step + 1)));
-        if step > 1 {
+        if step > 2 {
             assert!(text.contains("Locked - not implemented."));
         }
         assert!(app.key(key(KeyCode::F(5))).is_none());
@@ -990,7 +990,7 @@ fn pangolin_phase2_testbackend_snapshots_help_and_future_discovery() {
     }
     app.key(key(KeyCode::Esc));
     assert_eq!(pangolin::STAGES[2], "Pangolin discovery");
-    for step in 2..8 {
+    for step in 3..8 {
         if let Some(Overlay::Pangolin(w)) = app.overlay.as_mut() {
             w.select_step(step);
         }
@@ -1054,8 +1054,11 @@ fn pangolin_prerequisites_enter_continues_without_unchecking_or_executing_discov
     );
     assert_eq!(std::fs::read_to_string(&path).unwrap(), saved);
     assert!(open(dir.path()).prerequisites_confirmed());
-    assert!(rendered(&app, 120, 36).contains("Locked - not implemented."));
-    assert!(app.key(key(KeyCode::F(6))).is_none());
+    assert!(rendered(&app, 120, 36).contains("[ Discover ]"));
+    assert!(matches!(
+        app.key(key(KeyCode::F(6))),
+        Some(Request::DiscoverPangolin(_, _))
+    ));
 }
 
 #[test]
@@ -1082,4 +1085,267 @@ fn pangolin_prerequisites_enter_saves_before_advancing_and_stays_on_write_failur
     w.key(key(KeyCode::Char(' ')));
     assert_eq!(w.completed(), 1);
     assert!(!open(dir.path()).prerequisites_confirmed());
+}
+
+fn discovery_wizard(dir: &std::path::Path) -> Wizard {
+    let mut w = prerequisites_wizard(dir);
+    w.toggle_prerequisites();
+    w.select_step(2);
+    w
+}
+fn inventory(target: &str, enabled: bool) -> pangolin::Discovery {
+    pangolin::Discovery::parse(target, &serde_json::json!({
+        "outcome":"Discovered", "facts":{
+            "installation":"Docker Compose", "identity":"aaaaaaaaaaaa", "state":"Running",
+            "image":"fosrl/pangolin:synthetic", "version_evidence":"Image reference only; running software version unverified",
+            "compose":"/srv/synthetic/compose.yml", "config":"/srv/synthetic/config.yml", "config_status":"Literal settings parsed",
+            "api_enabled":enabled.to_string(), "api_port":"4567", "api_listening":"Yes", "api_publication":"Loopback only"
+        }
+    }).to_string()).unwrap()
+}
+#[test]
+fn pangolin_discovery_dependencies_completion_restore_and_refresh() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut w = prerequisites_wizard(dir.path());
+    w.select_step(2);
+    assert!(w.begin_discovery().is_none());
+    w.toggle_prerequisites();
+    assert!(w.discovery_available());
+    let id = w.begin_discovery().unwrap();
+    assert!(w.begin_discovery().is_none());
+    assert_eq!(w.discovery_status(), "Discovering");
+    assert_eq!(w.status(), "Verified");
+    assert_eq!(w.completed(), 2);
+    w.complete_discovery(id, inventory(&w.target, false));
+    assert_eq!(w.discovery_status(), "Discovered");
+    assert_eq!(w.completed(), 3);
+    let restored = open(dir.path());
+    assert_eq!(restored.completed(), 3);
+    assert_eq!(restored.discovery, w.discovery);
+    let id = w.begin_discovery().unwrap();
+    let mut next = inventory(&w.target, true);
+    next.facts.insert("api_port".to_owned(), "4568".to_owned());
+    w.complete_discovery(id, next);
+    let saved = std::fs::read_to_string(dir.path().join("integrations/pangolin.toml")).unwrap();
+    assert_eq!(saved.matches("[discovery]").count(), 1);
+    assert_eq!(open(dir.path()).discovery.unwrap().fact("api_port"), "4568");
+    w.select_step(0);
+    edit(&mut w, "replacement.example.test");
+    assert_eq!(w.discovery_status(), "Outdated");
+    assert_eq!(w.completed(), 0);
+}
+#[test]
+fn pangolin_discovery_cancellation_stale_result_and_persistence_failure() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut w = discovery_wizard(dir.path());
+    let id = w.begin_discovery().unwrap();
+    w.key(key(KeyCode::Esc));
+    assert_eq!(w.discovery_status(), "Cancelled");
+    assert_eq!(open(dir.path()).discovery_status(), "Cancelled");
+    w.complete_discovery(id, inventory(&w.target, true));
+    assert_eq!(w.discovery_status(), "Cancelled");
+    assert!(w.prerequisites_confirmed());
+    let id = w.begin_discovery().unwrap();
+    w.select_step(0);
+    edit(&mut w, "changed.example.test");
+    w.complete_discovery(id, inventory("prerequisite-lab", true));
+    assert_ne!(w.discovery_status(), "Discovered");
+    let mut w = discovery_wizard(dir.path());
+    let id = w.begin_discovery().unwrap();
+    let path = dir.path().join("integrations/pangolin.toml");
+    std::fs::remove_file(&path).unwrap();
+    std::fs::create_dir(&path).unwrap();
+    w.complete_discovery(id, inventory(&w.target, true));
+    assert_eq!(w.discovery_status(), "Failed");
+    assert_eq!(w.completed(), 2);
+    assert!(w.message.contains("Cannot read"));
+}
+#[test]
+fn pangolin_discovery_mocked_transport_auth_timeout_and_secret_redaction() {
+    let mock = Mock::new(Output::stdout(&serde_json::json!({"outcome":"Not found", "facts":{}, "issues":["not_found", "synthetic-secret-never-export"], "environment":"synthetic-secret-never-export"}).to_string()));
+    let run = |mock: &Mock, stop: &AtomicBool| {
+        pangolin::discover(
+            mock,
+            "discovery.example.test",
+            &[],
+            stop,
+            &hs_cli::touch::Sounds::disabled(),
+            hs_cli::touch::default_player(),
+        )
+    };
+    let report = run(&mock, &AtomicBool::new(false));
+    assert_eq!(report.outcome, "Not found");
+    assert!(!report.text(0).contains("synthetic-secret"));
+    let calls = mock.calls.lock().unwrap();
+    assert_eq!(calls.len(), 2);
+    assert!(calls[1].last().unwrap().starts_with("python3 -B -c '"));
+    assert!(!calls[1].iter().any(|s| s == "sudo"));
+    drop(calls);
+    let failure = Mock::new(Output {
+        code: 255,
+        stdout: String::new(),
+        stderr: "Permission denied synthetic-secret".to_owned(),
+    });
+    let report = run(&failure, &AtomicBool::new(false));
+    assert_eq!(report.outcome, "Failed");
+    assert!(report.diagnostic.contains("authentication failed"));
+    assert!(!report.diagnostic.contains("synthetic-secret"));
+    let mut timeout = Mock::new(Output::stdout(""));
+    timeout.error = Some(io::ErrorKind::TimedOut);
+    assert_eq!(
+        run(&timeout, &AtomicBool::new(false)).diagnostic,
+        "Discovery timed out."
+    );
+    assert_eq!(run(&mock, &AtomicBool::new(true)).outcome, "Cancelled");
+}
+#[test]
+fn pangolin_discovery_malformed_inventory_cannot_claim_success() {
+    for text in [
+        "not-json synthetic-secret",
+        "{}",
+        r#"{"outcome":"Discovered","facts":{"identity":false}}"#,
+    ] {
+        let error = pangolin::Discovery::parse("inventory.example.test", text).unwrap_err();
+        assert!(!error.contains("synthetic-secret"));
+    }
+    let incomplete =
+        pangolin::Discovery::parse("inventory.example.test", r#"{"outcome":"Discovered","facts":{}}"#).unwrap();
+    assert_eq!(incomplete.outcome, "Partially discovered");
+    let mut incomplete = inventory("inventory.example.test", true);
+    incomplete.facts.insert("state".to_owned(), "Stopped".to_owned());
+    assert_eq!(incomplete.fact("state"), "Stopped");
+}
+#[test]
+fn pangolin_discovery_ui_controls_help_mouse_and_exact_terminal_buffers() {
+    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+    let dir = tempfile::tempdir().unwrap();
+    let mut w = discovery_wizard(dir.path());
+    w.focus = 1;
+    let mut app = App::new(Preferences::fallback(&dir.path().join("tui.toml")), false).unwrap();
+    app.overlay = Some(Overlay::Pangolin(Box::new(w)));
+    for (width, height) in [(80, 24), (120, 36), (160, 45)] {
+        let text = rendered(&app, width, height);
+        for phrase in ["2/8", "Not discovered", "[ Discover ]", "F6 discover", "F4 help"] {
+            assert!(text.contains(phrase), "{text}");
+        }
+        assert!(!text.contains("F6 test"));
+    }
+    // Test the actual registered mouse control, not a direct state method.
+    let text = rendered(&app, 120, 36);
+    let (row, column) = text
+        .lines()
+        .enumerate()
+        .find_map(|(r, line)| line.find("[ Discover ]").map(|c| (r, c)))
+        .unwrap();
+    // Convert UTF-8 byte offset to terminal cells for the Unicode frame.
+    let column = text.lines().nth(row).unwrap()[..column].chars().count();
+    let request = app.mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: column as u16,
+        row: row as u16,
+        modifiers: KeyModifiers::NONE,
+    });
+    let Some(Request::DiscoverPangolin(id, target)) = request else {
+        panic!("Missing mouse discovery request");
+    };
+    assert!(app.key(key(KeyCode::F(6))).is_none());
+    if let Some(Overlay::Pangolin(w)) = app.overlay.as_mut() {
+        w.complete_discovery(id, inventory(&target, false));
+    }
+    for (width, height) in [(80, 24), (120, 36), (160, 45)] {
+        let text = rendered(&app, width, height);
+        for phrase in ["3/8", "Discovered", "[ Discover again ]", "[ Detailed report ]"] {
+            assert!(text.contains(phrase), "{text}");
+        }
+        if let Some(path) = std::env::var_os("HOMESTACK_PANGOLIN_RENDER_DIR") {
+            let path = std::path::PathBuf::from(path);
+            std::fs::create_dir_all(&path).unwrap();
+            std::fs::write(path.join(format!("pangolin-phase3-{width}x{height}.txt")), &text).unwrap();
+        }
+    }
+    // Report is both keyboard-focusable and registered as a mouse control.
+    app.key(key(KeyCode::Tab));
+    assert!(matches!(&app.overlay, Some(Overlay::Pangolin(w)) if w.focus == 2));
+    app.key(key(KeyCode::Enter));
+    assert!(matches!(&app.overlay, Some(Overlay::Pangolin(w)) if w.report_open));
+    app.key(key(KeyCode::Esc));
+    let text = rendered(&app, 120, 36);
+    let (row, line) = text
+        .lines()
+        .enumerate()
+        .find(|(_, line)| line.contains("[ Detailed report ]"))
+        .unwrap();
+    let column = line[..line.find("[ Detailed report ]").unwrap()].chars().count();
+    app.mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: column as u16,
+        row: row as u16,
+        modifiers: KeyModifiers::NONE,
+    });
+    assert!(matches!(&app.overlay, Some(Overlay::Pangolin(w)) if w.report_open && w.focus == 2));
+    app.key(key(KeyCode::Esc));
+    app.key(key(KeyCode::F(7)));
+    let mut text = String::new();
+    for _ in 0..30 {
+        text.push_str(&rendered(&app, 80, 24));
+        app.key(key(KeyCode::PageDown));
+    }
+    assert!(text.contains("historical observation"));
+    assert!(text.contains("api publication: Loopback only"));
+    app.key(key(KeyCode::Esc));
+    app.key(key(KeyCode::F(4)));
+    let mut text = String::new();
+    for _ in 0..15 {
+        text.push_str(&rendered(&app, 80, 24));
+        app.key(key(KeyCode::PageDown));
+    }
+    for phrase in ["read-only", "Docker Compose", "Step 4", "Python 3", "Changing"] {
+        assert!(text.contains(phrase), "{phrase}");
+    }
+    app.key(key(KeyCode::Esc));
+    for step in 3..8 {
+        if let Some(Overlay::Pangolin(w)) = app.overlay.as_mut() {
+            w.select_step(step);
+        }
+        assert!(app.key(key(KeyCode::F(6))).is_none());
+        assert!(app.key(key(KeyCode::F(7))).is_none());
+        assert!(rendered(&app, 120, 36).contains("Locked - not implemented."));
+    }
+}
+#[test]
+fn pangolin_remote_probe_offline_fixtures() {
+    let output = std::process::Command::new("python3")
+        .arg("-B")
+        .arg(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/pangolin_probe_test.py"))
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+}
+
+#[test]
+fn pangolin_discovery_confirmation_revocation_survives_reopening_and_worker_failure() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut w = discovery_wizard(dir.path());
+    let id = w.begin_discovery().unwrap();
+    w.complete_discovery(id, inventory(&w.target, false));
+    w.toggle_prerequisites();
+    assert_eq!(w.discovery_status(), "Outdated");
+    let mut w = open(dir.path());
+    w.toggle_prerequisites();
+    assert_eq!(w.discovery_status(), "Outdated");
+    assert_eq!(w.completed(), 2);
+    w.select_step(2);
+    let id = w.begin_discovery().unwrap();
+    w.worker_failed(id, "Cannot start the existing SSH askpass bridge.");
+    assert!(!w.testing && !w.discovering);
+    assert_eq!(w.discovery_status(), "Failed");
+    assert_eq!(
+        open(dir.path()).discovery.unwrap().diagnostic,
+        "Cannot start the existing SSH askpass bridge."
+    );
+    let id = w.begin_discovery().unwrap();
+    w.toggle_prerequisites();
+    assert!(!w.testing);
+    w.complete_discovery(id, inventory(&w.target, false));
+    assert_eq!(w.discovery_status(), "Outdated");
 }

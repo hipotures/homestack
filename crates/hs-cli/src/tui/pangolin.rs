@@ -1,4 +1,4 @@
-//! Pangolin setup: SSH verification and manual, non-secret prerequisites.
+//! Pangolin setup: SSH verification, manual prerequisites and read-only discovery.
 use std::io::Write;
 use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::path::{Path, PathBuf};
@@ -22,7 +22,7 @@ pub const STAGES: [&str; 8] = [
 pub const DESCRIPTIONS: [&str; 8] = [
     "Select and test an existing OpenSSH destination.",
     "Confirm installation and preparation of a temporary Root bootstrap key.",
-    "Future: discover the actual Pangolin installation through read-only SSH inspection.",
+    "Discover runtime, configuration and ports through read-only SSH inspection.",
     "Future: inspect API configuration; approve and back up any changes.",
     "Future: tunnel to the private Integration API and verify reachability.",
     "Future: accept a masked temporary key and verify its permissions.",
@@ -33,7 +33,7 @@ pub const DESCRIPTIONS: [&str; 8] = [
 pub const HELP: [&str; 8] = [
     "Select an OpenSSH alias, hostname, IP address or user@host. OpenSSH reads your existing configuration to resolve the user, port, identities and proxy settings; HomeStack does not assume root.\n\nF6 tests the current draft asynchronously: ssh -G resolves configuration, then an authenticated SSH session executes only true. Existing askpass prompts support host confirmation, passphrases, PINs and FIDO key touch. Host verification remains enabled; password and keyboard-interactive fallback remain disabled.\n\nThe overall deadline is 45 seconds. Esc cancels; changing the target invalidates verification. Only a successful unchanged test saves its target automatically, with mode 0600. Failure or cancellation does not overwrite the saved target.\n\nHomeStack stores no private SSH keys or authentication secrets. The last successful test and its date are retained when reopening. Editing the target requires a new test. This phase does not inspect or configure Pangolin.",
     "Prepare Pangolin Server on the SSH server verified in Step 1. Confirm both instruction groups only after completing them. This is a manual declaration, not technical verification. No installation, API operation or remote change occurs here.\n\nIn the Pangolin administration interface, open API Keys and create homestack-bootstrap with Root authorization and these actions:\n  createApiKey\n  listApiKeys\n  listApiKeyActions\n  setApiKeyActions\n\nRoot scope is required for Integration API key management; selecting four actions alone is insufficient. These actions create the restricted key, detect conflicts, inspect actions and assign permissions. The temporary administrative key is separate from the permanent, restricted HomeStack key.\n\nKeep its token securely until masked entry in Step 6. Do not enter it here. Revoke it only after the permanent key has been provisioned and verified successfully.\n\nStep 3 will discover the installation method, version, services, configuration paths and ports read-only. It does not assume Docker Compose or fixed paths. The Integration API may remain disabled until Step 4. Checking this box does not verify installation or API availability. Confirmation is saved for the selected server; changing the target requires reconfirmation.",
-    "Locked - not implemented.\n\nPangolin discovery will inspect the selected server over authenticated SSH, read-only. It will identify whether Pangolin is installed and running, its version, actual installation method, container and service identities, Compose or service configuration paths, application configuration files, active listening ports and mappings, and the Integration API port and enabled/disabled state.\n\nNo Docker Compose layout, container name or installation path is assumed. Ambiguous or unsupported layouts will be reported and never modified automatically. Later configuration changes belong to Step 4 and require explicit approval and backup.\n\nNo discovery or remote connection is performed by this stage yet.",
+    "Discover the existing installation over authenticated SSH, read-only, without modifying it. Docker Compose metadata identifies a project and its configuration files; plain Docker has no verified Compose project. Native systemd executables may be identified, but unsupported layouts remain incomplete.\n\nHomeStack reads selected runtime metadata, discovered configuration paths, literal Integration API settings and listening sockets. Mounts describe host-to-container paths; published ports describe host bind addresses. Only allowlisted inventory is returned. No environments, secrets or full configuration files are displayed or saved. Remote Python 3 is required; nothing is installed.\n\nF6 discovers or retries, Esc cancels, F7 opens the scrollable report. Permission failures require access through your existing account; HomeStack never uses sudo. Multiple installations are ambiguous and never selected automatically. Supply an account with read access or inspect unsupported layouts separately.\n\nDisabled Integration API is allowed. Missing or ambiguous settings remain unknown, never guessed. API changes belong to Step 4 with approval and backup. Steps 4-8 remain unimplemented.\n\nSaved results are historical observations, not continuous monitoring. Changing the SSH destination invalidates discovery and requires a new inspection.",
     "Locked - not implemented.\n\nA future step will inspect the installed Pangolin version and actual Integration API configuration. If enable_integration_api or a loopback port mapping needs to change, HomeStack will show the exact plan, require approval and back up configuration first.\n\nThe Integration API must not be exposed publicly. This screen currently performs no server inspection, configuration change or service restart.",
     "Locked - not implemented.\n\nA future step will establish an SSH tunnel to the private Integration API endpoint and verify reachability. The tunnel will be owned and managed separately from basic SSH verification.\n\nNo tunnel is opened, no API port is guessed and no API connection is attempted in this phase.",
     "Locked - not implemented.\n\nA future step will accept a temporary bootstrap API credential in a masked field and verify its Root scope and required API-key permissions. The secret must not enter logs, command arguments or repository files.\n\nNo API credential field is enabled now. Step 1 only stores the non-secret SSH destination.",
@@ -115,6 +115,8 @@ impl Report {
 
 #[derive(Clone, PartialEq)]
 pub struct Wizard {
+    pub discovery: Option<Discovery>,
+    pub discovering: bool,
     pub target: String,
     pub focus: usize,
     pub cursor: usize,
@@ -183,6 +185,8 @@ impl Wizard {
             .filter(|confirmed| verified.as_deref() == Some(*confirmed))
             .map(str::to_owned);
         Ok(Self {
+            discovery: settings.get("discovery").and_then(Discovery::restore),
+            discovering: false,
             cursor: target.chars().count(),
             saved: target.clone(),
             target,
@@ -207,11 +211,82 @@ impl Wizard {
             confirm_discard: false,
         })
     }
+    pub fn discovery_available(&self) -> bool {
+        self.prerequisites_confirmed()
+    }
+    pub fn discovery_status(&self) -> &str {
+        if self.discovering {
+            return "Discovering";
+        }
+        match &self.discovery {
+            Some(r) if !self.discovery_available() || r.target != self.target => "Outdated",
+            Some(r) => &r.outcome,
+            None => "Not discovered",
+        }
+    }
+    pub fn begin_discovery(&mut self) -> Option<u64> {
+        if self.testing || self.selected_step != 2 || !self.discovery_available() || self.help_open || self.report_open
+        {
+            return None;
+        }
+        self.test_id = NEXT_TEST.fetch_add(1, Ordering::Relaxed);
+        self.tested_revision = self.revision;
+        self.testing = true;
+        self.discovering = true;
+        self.message.clear();
+        Some(self.test_id)
+    }
+    pub fn complete_discovery(&mut self, id: u64, result: Discovery) {
+        if !self.discovering
+            || self.test_id != id
+            || result.target != self.target
+            || self.revision != self.tested_revision
+            || !self.discovery_available()
+        {
+            return;
+        }
+        self.testing = false;
+        self.discovering = false;
+        let saved = (|| {
+            let mut table = read(&self.path)?;
+            if table.get("server_target").and_then(toml::Value::as_str) != Some(self.target.as_str())
+                || table
+                    .get("prerequisites")
+                    .and_then(|p| p.get("confirmed"))
+                    .and_then(toml::Value::as_bool)
+                    != Some(true)
+                || table
+                    .get("prerequisites")
+                    .and_then(|p| p.get("target"))
+                    .and_then(toml::Value::as_str)
+                    != Some(self.target.as_str())
+            {
+                return Err("Server prerequisites changed; confirm them again.".to_owned());
+            }
+            table.insert("discovery".to_owned(), result.store());
+            persist(&self.path, &table)
+        })();
+        self.discovery = Some(result);
+        if let Err(error) = saved {
+            if let Some(result) = self.discovery.as_mut() {
+                result.outcome = "Failed".to_owned();
+            }
+            self.message = error;
+        }
+    }
+    pub fn worker_failed(&mut self, id: u64, message: &str) {
+        if self.discovering {
+            self.complete_discovery(id, Discovery::failure(&self.target, "Failed", message));
+        } else {
+            self.testing = false;
+        }
+        self.message = message.to_owned();
+    }
     pub fn has_changes(&self) -> bool {
         self.target != self.saved
     }
     pub fn status(&self) -> &'static str {
-        if self.testing {
+        if self.testing && !self.discovering {
             "Testing"
         } else if self.verified.as_ref() == Some(&self.target) {
             "Verified"
@@ -233,6 +308,10 @@ impl Wizard {
     }
     fn changed(&mut self) {
         self.revision += 1;
+        if let Some(discovery) = self.discovery.as_mut() {
+            discovery.outcome = "Outdated".to_owned();
+        }
+        self.discovering = false;
         self.verified = None;
         self.prerequisites_target = None;
         self.testing = false;
@@ -261,7 +340,9 @@ impl Wizard {
         self.prerequisites_available() && self.prerequisites_target.as_ref() == Some(&self.target)
     }
     pub fn completed(&self) -> usize {
-        usize::from(self.status() == "Verified") + usize::from(self.prerequisites_confirmed())
+        usize::from(self.status() == "Verified")
+            + usize::from(self.prerequisites_confirmed())
+            + usize::from(self.discovery_status() == "Discovered")
     }
     pub fn toggle_prerequisites(&mut self) {
         if !self.prerequisites_available() {
@@ -289,11 +370,22 @@ impl Wizard {
             prerequisites.insert("target".to_owned(), toml::Value::String(self.target.clone()));
             prerequisites.insert("confirmed".to_owned(), toml::Value::Boolean(confirmed));
             table.insert("prerequisites".to_owned(), toml::Value::Table(prerequisites));
+            if !confirmed && let Some(discovery) = table.get_mut("discovery").and_then(toml::Value::as_table_mut) {
+                discovery.insert("outcome".to_owned(), toml::Value::String("Outdated".to_owned()));
+            }
             persist(&self.path, &table)
         })();
         match result {
             Ok(()) => {
                 self.prerequisites_target = confirmed.then(|| self.target.clone());
+                if !confirmed && self.discovering {
+                    self.discovering = false;
+                    self.testing = false;
+                    self.test_id = 0;
+                }
+                if !confirmed && let Some(result) = self.discovery.as_mut() {
+                    result.outcome = "Outdated".to_owned();
+                }
                 self.message.clear();
             }
             Err(error) => self.message = format!("{error} Space retries."),
@@ -312,7 +404,7 @@ impl Wizard {
             self.prerequisites_scroll = 0;
         }
     }
-    /// Every stage can be selected for explanation; only Steps 1 and 2 have actions.
+    /// Every stage can be selected for explanation; only Steps 1-3 have actions.
     pub fn select_step(&mut self, step: usize) {
         self.selected_step = step.min(STAGES.len() - 1);
         self.focus = 0;
@@ -337,11 +429,36 @@ impl Wizard {
         if self.report_open {
             match key.code {
                 KeyCode::Esc | KeyCode::Enter | KeyCode::F(7) => self.report_open = false,
-                KeyCode::Down | KeyCode::PageDown => self.report_scroll += 1,
-                KeyCode::Up | KeyCode::PageUp => self.report_scroll = self.report_scroll.saturating_sub(1),
+                KeyCode::Down => self.report_scroll = self.report_scroll.saturating_add(1),
+                KeyCode::PageDown => self.report_scroll = self.report_scroll.saturating_add(8),
+                KeyCode::Up => self.report_scroll = self.report_scroll.saturating_sub(1),
+                KeyCode::PageUp => self.report_scroll = self.report_scroll.saturating_sub(8),
                 _ => {}
             }
             return false;
+        }
+        if self.selected_step == 2 && self.discovery_available() {
+            match key.code {
+                KeyCode::Tab | KeyCode::BackTab => {
+                    let count = if self.discovery.is_some() { 3 } else { 2 };
+                    self.focus = if key.code == KeyCode::BackTab {
+                        (self.focus + count - 1) % count
+                    } else {
+                        (self.focus + 1) % count
+                    };
+                    return false;
+                }
+                KeyCode::Enter | KeyCode::Right if self.focus == 0 => {
+                    self.focus = 1;
+                    return false;
+                }
+                KeyCode::Enter if self.focus == 2 => {
+                    self.report_open = self.discovery.is_some();
+                    self.report_scroll = 0;
+                    return false;
+                }
+                _ => {}
+            }
         }
         if self.selected_step == 1 && self.prerequisites_available() {
             match key.code {
@@ -375,7 +492,7 @@ impl Wizard {
                         self.toggle_prerequisites();
                     }
                     if self.prerequisites_confirmed() {
-                        // Select the future stage for explanation only; never execute it.
+                        // Select discovery without starting any remote operation.
                         self.select_step(2);
                     }
                     return false;
@@ -393,10 +510,15 @@ impl Wizard {
         }
         match key.code {
             KeyCode::Esc if self.testing => {
+                if self.discovering {
+                    let result = Discovery::failure(&self.target, "Cancelled", "Discovery cancelled.");
+                    self.complete_discovery(self.test_id, result);
+                } else {
+                    self.verified = None;
+                    self.message = "SSH test cancelled.".to_owned();
+                }
                 self.testing = false;
                 self.test_id = 0;
-                self.verified = None;
-                self.message = "SSH test cancelled.".to_owned();
             }
             KeyCode::Esc if !self.has_changes() || self.confirm_discard => return true,
             KeyCode::Esc => {
@@ -408,7 +530,11 @@ impl Wizard {
                 self.help_scroll = 0;
             }
             KeyCode::F(7) => {
-                self.report_open = self.report.is_some();
+                self.report_open = if self.selected_step == 2 {
+                    self.discovery.is_some()
+                } else {
+                    self.selected_step == 0 && self.report.is_some()
+                };
                 self.report_scroll = 0;
             }
             KeyCode::Down if self.focus == 0 => self.select_step((self.selected_step + 1) % STAGES.len()),
@@ -476,6 +602,7 @@ impl Wizard {
         // Only fixed metadata is persisted; no raw SSH output or prompt text.
         table.insert("last_test".to_owned(), toml::Value::Table(last_test));
         if self.prerequisites_target.as_ref() != Some(&self.target) {
+            table.remove("discovery");
             table.remove("prerequisites");
         }
         persist(&self.path, &table)?;
@@ -553,6 +680,19 @@ pub fn test_ssh(
     sounds: &crate::touch::Sounds,
     player: crate::touch::Player,
 ) -> Result<String, String> {
+    ssh_command(system, target, prefix, stop, sounds, player, "true")
+        .map(|_| "PASS · Effective OpenSSH configuration resolved\nPASS · SSH authenticated, remote command successful (true)\nNo Pangolin inspection or server configuration performed.".to_owned())
+}
+
+fn ssh_command(
+    system: &dyn System,
+    target: &str,
+    prefix: &[String],
+    stop: &AtomicBool,
+    sounds: &crate::touch::Sounds,
+    player: crate::touch::Player,
+    remote: &str,
+) -> Result<String, String> {
     validate_destination(target)?;
     let started = std::time::Instant::now();
     let limit = Duration::from_secs(45);
@@ -628,7 +768,7 @@ pub fn test_ssh(
     let mut command = prefix.to_vec();
     command.push("ssh".to_owned());
     command.extend(options.map(str::to_owned));
-    command.extend(["--".to_owned(), target.to_owned(), "true".to_owned()]);
+    command.extend(["--".to_owned(), target.to_owned(), remote.to_owned()]);
     crate::touch::touch_wait(target, sounds, player, |_| {
         let output = run(&command)?;
         if stop.load(Ordering::SeqCst) {
@@ -658,7 +798,7 @@ pub fn test_ssh(
                 .to_owned(),
             );
         }
-        Ok("PASS · Effective OpenSSH configuration resolved\nPASS · SSH authenticated, remote command successful (true)\nNo Pangolin inspection or server configuration performed.".to_owned())
+        Ok(output.stdout)
     })
 }
 
@@ -672,3 +812,266 @@ impl Drop for Pending {
         self.cancel.store(true, Ordering::SeqCst);
     }
 }
+
+/// Only these non-secret inventory fields may cross the SSH/report boundary.
+const FACTS: [&str; 20] = [
+    "working_directory",
+    "installation",
+    "identity",
+    "state",
+    "image",
+    "version_evidence",
+    "compose_project",
+    "compose",
+    "config",
+    "config_status",
+    "mounts",
+    "mappings",
+    "api_enabled",
+    "api_port",
+    "api_publication",
+    "api_listening",
+    "listening_ports",
+    "internal_port",
+    "external_port",
+    "service_file",
+];
+const OUTCOMES: [&str; 10] = [
+    "Discovered",
+    "Partially discovered",
+    "Not found",
+    "Permission denied",
+    "Unsupported installation",
+    "Failed",
+    "Cancelled",
+    "Outdated",
+    "Not discovered",
+    "Discovering",
+];
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Discovery {
+    pub target: String,
+    pub at: String,
+    pub outcome: String,
+    pub facts: std::collections::BTreeMap<String, String>,
+    pub diagnostic: String,
+}
+impl Discovery {
+    pub fn failure(target: &str, outcome: &str, detail: &str) -> Self {
+        Self {
+            target: target.to_owned(),
+            at: time::OffsetDateTime::now_utc()
+                .format(&time::format_description::well_known::Rfc3339)
+                .unwrap_or_default(),
+            outcome: outcome.to_owned(),
+            facts: Default::default(),
+            diagnostic: detail.to_owned(),
+        }
+    }
+    pub fn parse(target: &str, text: &str) -> Result<Self, String> {
+        let invalid = || "Discovery returned malformed or unsafe inventory; raw output omitted.".to_owned();
+        if text.len() > 32768 {
+            return Err(invalid());
+        }
+        let value: serde_json::Value = serde_json::from_str(text).map_err(|_| invalid())?;
+        let outcome = value
+            .get("outcome")
+            .and_then(|v| v.as_str())
+            .filter(|s| OUTCOMES.contains(s))
+            .ok_or_else(invalid)?;
+        let mut report = Self::failure(target, outcome, "Inventory contains unresolved fields. See report.");
+        let facts = value.get("facts").and_then(|v| v.as_object()).ok_or_else(invalid)?;
+        for key in FACTS {
+            if let Some(value) = facts.get(key) {
+                let text = value
+                    .as_str()
+                    .filter(|s| s.len() <= 512 && !s.chars().any(char::is_control))
+                    .ok_or_else(invalid)?;
+                report.facts.insert(key.to_owned(), text.to_owned());
+            }
+        }
+        // Map bounded issue codes to fixed diagnostics; never display remote free text.
+        let issues = value.get("issues").and_then(|v| v.as_array());
+        let messages: Vec<&str> = issues.into_iter().flatten().take(16).filter_map(|v| match v.as_str()? {
+            "unsupported" => Some("A Pangolin-named service uses an unrecognized executable; installation is unsupported."),
+            "ambiguous" => Some("Multiple Pangolin installations detected. Automatic selection is unsafe."),
+            "docker_unavailable" => Some("Docker runtime inspection failed; check daemon availability and account access."),
+            "docker_permission" => Some("SSH connected, but Docker metadata is not accessible to this account."),
+            "compose_unknown" => Some("Docker Compose project found, but its configuration file location is unknown."),
+            "config_unknown" => Some("Pangolin configuration path could not be uniquely determined."),
+            "config_unreadable" => Some("Pangolin configuration is unreadable or uses unsupported YAML."),
+            "sockets_unreadable" => Some("Container listening sockets are not readable by this account."),
+            "stopped" => Some("Pangolin is installed but its service is stopped."),
+            "api_unknown" => Some("Integration API settings are unknown; defaults are not inferred."),
+            "native_incomplete" => Some("Native/systemd service identified; configuration and version remain unresolved."),
+            "docker_listing_invalid" => Some("Docker returned unexpected runtime metadata."),
+            "not_found" => Some("Pangolin installation not found in accessible supported runtimes. Custom layouts are not searched."),
+            _ => None,
+        }).collect();
+        report.diagnostic = if messages.is_empty() {
+            "Read-only inventory; unknown fields remain unresolved. No remote changes made.".to_owned()
+        } else {
+            messages.join("\n")
+        };
+        if outcome == "Discovered"
+            && !(matches!(report.fact("installation"), "Docker" | "Docker Compose")
+                && report.fact("state") == "Running"
+                && report.fact("identity") != "Unknown"
+                && report.fact("config").starts_with('/')
+                && report.fact("config_status") == "Literal settings parsed"
+                && matches!(report.fact("api_enabled"), "true" | "false")
+                && (report.fact("api_enabled") == "false"
+                    || (report.fact("api_port").parse::<u16>().is_ok_and(|p| p > 0)
+                        && matches!(report.fact("api_listening"), "Yes" | "No"))))
+        {
+            report.outcome = "Partially discovered".to_owned();
+            report.diagnostic = "Mandatory discovery evidence is missing; unresolved fields remain unknown.".to_owned();
+        }
+        Ok(report)
+    }
+    pub fn fact(&self, key: &str) -> &str {
+        self.facts.get(key).map_or("Unknown", String::as_str)
+    }
+    fn store(&self) -> toml::Value {
+        let mut table = toml::Table::new();
+        for (key, value) in [("target", &self.target), ("at", &self.at), ("outcome", &self.outcome)] {
+            table.insert(key.to_owned(), toml::Value::String(value.clone()));
+        }
+        let facts = self
+            .facts
+            .iter()
+            .map(|(key, value)| (key.clone(), toml::Value::String(value.clone())))
+            .collect();
+        table.insert("facts".to_owned(), toml::Value::Table(facts));
+        if self.diagnostic.lines().all(|line| SAFE_DIAGNOSTICS.contains(&line)) {
+            table.insert("diagnostic".to_owned(), toml::Value::String(self.diagnostic.clone()));
+        }
+        toml::Value::Table(table)
+    }
+    fn restore(value: &toml::Value) -> Option<Self> {
+        let target = value.get("target")?.as_str()?;
+        validate_destination(target).ok()?;
+        let at = value.get("at")?.as_str()?;
+        time::OffsetDateTime::parse(at, &time::format_description::well_known::Rfc3339).ok()?;
+        let facts: serde_json::Map<String, serde_json::Value> = value
+            .get("facts")?
+            .as_table()?
+            .iter()
+            .filter_map(|(key, value)| {
+                value
+                    .as_str()
+                    .map(|s| (key.clone(), serde_json::Value::String(s.to_owned())))
+            })
+            .collect();
+        let input = serde_json::json!({"outcome":value.get("outcome")?.as_str()?, "facts":facts});
+        let mut result = Self::parse(target, &input.to_string()).ok()?;
+        result.at = at.to_owned();
+        if let Some(detail) = value.get("diagnostic").and_then(toml::Value::as_str)
+            && detail.len() <= 4096
+            && detail.lines().all(|line| SAFE_DIAGNOSTICS.contains(&line))
+        {
+            result.diagnostic = detail.to_owned();
+        }
+        Some(result)
+    }
+    pub fn text(&self, offset: i64) -> String {
+        let date = Report {
+            target: String::new(),
+            at: self.at.clone(),
+            passed: false,
+            detail: String::new(),
+            duration_ms: 0,
+        }
+        .local_date(offset);
+        let mut lines = vec![
+            format!("Server: {}", self.target),
+            format!("Last discovery: {date} (historical observation)"),
+            format!("Outcome: {}", self.outcome),
+            self.diagnostic.clone(),
+        ];
+        for key in FACTS {
+            lines.push(format!("{}: {}", key.replace('_', " "), self.fact(key)));
+        }
+        let access = if self.fact("api_enabled") == "false" {
+            "Integration API is disabled; enabling it belongs to Step 4."
+        } else if self.fact("api_enabled") != "true" {
+            "Integration API configuration is unknown; inspect permissions and layout."
+        } else if self.fact("api_listening") == "No" {
+            "Configured API is not listening; Step 4 must investigate before bootstrap."
+        } else if self.fact("api_publication") == "Wider interface" {
+            "API is published beyond loopback; review exposure before future bootstrap."
+        } else if self.fact("api_publication") == "Not published" {
+            "API is not published to the host; future bootstrap transport needs configuration."
+        } else {
+            "Transport and API reachability are not tested in this phase."
+        };
+        lines.push(format!("Future bootstrap access: {access}"));
+        lines.join("\n\n")
+    }
+}
+
+pub fn discover(
+    system: &dyn System,
+    target: &str,
+    prefix: &[String],
+    stop: &AtomicBool,
+    sounds: &crate::touch::Sounds,
+    player: crate::touch::Player,
+) -> Discovery {
+    // Single-quote the fixed program for the remote SSH shell. No target/path
+    // or other remotely supplied value is ever interpolated into shell source.
+    let source = include_str!("pangolin_discover.py");
+    let command = format!("python3 -B -c '{}'", source.replace('\'', "'\\''"));
+    let result = ssh_command(system, target, prefix, stop, sounds, player, &command)
+        .and_then(|text| Discovery::parse(target, &text));
+    match result {
+        Ok(report) if !stop.load(Ordering::SeqCst) => report,
+        Ok(_) => Discovery::failure(target, "Cancelled", "Discovery cancelled."),
+        Err(error) => {
+            let outcome = if stop.load(Ordering::SeqCst) || error.contains("cancelled") {
+                "Cancelled"
+            } else {
+                "Failed"
+            };
+            let detail = if error.contains("timed out") {
+                "Discovery timed out."
+            } else if error.contains("remote command failed") {
+                "Read-only probe failed. Remote Python 3 is required; no packages were installed."
+            } else {
+                &error
+            };
+            Discovery::failure(target, outcome, detail)
+        }
+    }
+}
+
+const SAFE_DIAGNOSTICS: &[&str] = &[
+    "Docker runtime inspection failed; check daemon availability and account access.",
+    "Previous SSH operation is stopping; retry shortly.",
+    "Cannot start the existing SSH askpass bridge.",
+    "Docker Compose project found, but its configuration file location is unknown.",
+    "A Pangolin-named service uses an unrecognized executable; installation is unsupported.",
+    "Multiple Pangolin installations detected. Automatic selection is unsafe.",
+    "SSH connected, but Docker metadata is not accessible to this account.",
+    "Pangolin configuration path could not be uniquely determined.",
+    "Pangolin configuration is unreadable or uses unsupported YAML.",
+    "Container listening sockets are not readable by this account.",
+    "Pangolin is installed but its service is stopped.",
+    "Integration API settings are unknown; defaults are not inferred.",
+    "Native/systemd service identified; configuration and version remain unresolved.",
+    "Docker returned unexpected runtime metadata.",
+    "Pangolin installation not found in accessible supported runtimes. Custom layouts are not searched.",
+    "Read-only inventory; unknown fields remain unresolved. No remote changes made.",
+    "Mandatory discovery evidence is missing; unresolved fields remain unknown.",
+    "Discovery cancelled.",
+    "Discovery timed out.",
+    "Read-only probe failed. Remote Python 3 is required; no packages were installed.",
+    "SSH authentication failed; check the configured identity and access.",
+    "SSH host key verification failed; inspect known_hosts before retrying.",
+    "SSH host is unreachable; check the destination, port and network.",
+    "SSH connection timed out.",
+    "Cannot resolve effective OpenSSH configuration.",
+    "Cannot execute OpenSSH; check that ssh is installed.",
+    "Discovery returned malformed or unsafe inventory; raw output omitted.",
+];

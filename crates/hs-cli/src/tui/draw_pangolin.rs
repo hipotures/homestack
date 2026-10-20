@@ -15,7 +15,9 @@ pub(super) fn screen(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
     let palette = &app.palette;
     let text = text_style(palette);
     let muted = text.fg(palette.muted);
-    let available = wizard.selected_step == 0 || (wizard.selected_step == 1 && wizard.prerequisites_available());
+    let available = wizard.selected_step == 0
+        || (wizard.selected_step == 1 && wizard.prerequisites_available())
+        || (wizard.selected_step == 2 && wizard.discovery_available());
     let prerequisites = wizard.selected_step == 1;
     let inner = frame(
         buf,
@@ -41,13 +43,23 @@ pub(super) fn screen(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
                     Control::named("F4", "help", KeyCode::F(4)),
                     Control::named("Esc", "back", KeyCode::Esc),
                 ]
+            } else if wizard.selected_step == 2 {
+                vec![
+                    Control::named("↑↓", "steps", KeyCode::Down),
+                    Control::named("Tab", "focus", KeyCode::Tab).enabled(available),
+                    Control::named("F4", "help", KeyCode::F(4)),
+                    Control::named("F6", "discover", KeyCode::F(6)).enabled(available && !wizard.testing),
+                    Control::named("F7", "report", KeyCode::F(7)).enabled(wizard.discovery.is_some()),
+                    Control::named("Esc", if wizard.testing { "cancel" } else { "back" }, KeyCode::Esc),
+                ]
             } else {
                 vec![
                     Control::named("↑↓", "steps", KeyCode::Down),
                     Control::named("Tab", "focus", KeyCode::Tab).enabled(available),
                     Control::named("F4", "help", KeyCode::F(4)),
                     Control::named("F6", "test", KeyCode::F(6)).enabled(wizard.selected_step == 0 && !wizard.testing),
-                    Control::named("F7", "report", KeyCode::F(7)).enabled(wizard.report.is_some()),
+                    Control::named("F7", "report", KeyCode::F(7))
+                        .enabled(wizard.selected_step == 0 && wizard.report.is_some()),
                     Control::named("Esc", if wizard.testing { "cancel" } else { "back" }, KeyCode::Esc),
                 ]
             },
@@ -60,8 +72,14 @@ pub(super) fn screen(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
     }
     let x = inner.x + 1;
     let width = inner.width - 2;
-    let verified = wizard.status() == "Verified";
-    let status = if prerequisites && wizard.prerequisites_available() {
+    let verified = if wizard.selected_step == 2 {
+        wizard.discovery_status() == "Discovered"
+    } else {
+        wizard.status() == "Verified"
+    };
+    let status = if wizard.selected_step == 2 {
+        wizard.discovery_status()
+    } else if prerequisites && wizard.prerequisites_available() {
         if wizard.prerequisites_confirmed() {
             "Confirmed by user"
         } else {
@@ -114,6 +132,21 @@ pub(super) fn screen(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
             app,
             wizard,
             true,
+        );
+    } else if wizard.selected_step == 2 && wizard.focus > 0 && wizard.discovery_available() {
+        write(
+            buf,
+            body.x,
+            body.y,
+            body.width,
+            "3. Pangolin discovery",
+            text.add_modifier(Modifier::BOLD),
+        );
+        discovery_details(
+            buf,
+            Rect::new(body.x, body.y + 2, body.width, body.height.saturating_sub(2)),
+            app,
+            wizard,
         );
     } else if prerequisites && wizard.focus > 0 && wizard.prerequisites_available() {
         // Compact details page: Tab returns to the complete step navigation.
@@ -172,7 +205,8 @@ fn steps(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard, wide: bool) {
             } else {
                 style
             }
-        } else if at > 1 || (at == 1 && !wizard.prerequisites_available()) {
+        } else if at > 2 || (at == 2 && !wizard.discovery_available()) || (at == 1 && !wizard.prerequisites_available())
+        {
             text.fg(app.palette.muted)
         } else {
             text
@@ -180,7 +214,10 @@ fn steps(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard, wide: bool) {
         write(buf, area.x, y, area.width, &" ".repeat(usize::from(area.width)), style);
         let mark = if chosen && wizard.focus == 0 {
             "▸"
-        } else if (at == 0 && wizard.status() == "Verified") || (at == 1 && wizard.prerequisites_confirmed()) {
+        } else if (at == 0 && wizard.status() == "Verified")
+            || (at == 1 && wizard.prerequisites_confirmed())
+            || (at == 2 && wizard.discovery_status() == "Discovered")
+        {
             "✓"
         } else {
             " "
@@ -193,7 +230,7 @@ fn steps(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard, wide: bool) {
             &format!("{mark} {}. {title}", at + 1),
             style,
         );
-        if at > 1 || (at == 1 && !wizard.prerequisites_available()) {
+        if at > 2 || (at == 2 && !wizard.discovery_available()) || (at == 1 && !wizard.prerequisites_available()) {
             write(buf, area.right() - 8, y, 8, "[Locked]", style.fg(app.palette.muted));
         }
         chrome::register(Rect::new(area.x, y, area.width, 1), Hit::PangolinStep(at));
@@ -214,6 +251,15 @@ fn details(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard, wide: bool)
             text.add_modifier(Modifier::BOLD),
         );
         y += 2;
+    }
+    if wizard.selected_step == 2 && wizard.discovery_available() {
+        discovery_details(
+            buf,
+            Rect::new(area.x, y, area.width, area.bottom().saturating_sub(y)),
+            app,
+            wizard,
+        );
+        return;
     }
     if wizard.selected_step == 1 && wizard.prerequisites_available() {
         prerequisites_details(
@@ -236,7 +282,9 @@ fn details(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard, wide: bool)
             );
             y += 1;
         }
-        let lines = if wizard.selected_step == 1 {
+        let lines = if wizard.selected_step == 2 {
+            "Locked: verify Step 1 and confirm Step 2 for the current server. F4 explains discovery.".to_owned()
+        } else if wizard.selected_step == 1 {
             "Locked: verify and save the current SSH target in Step 1 first.\n\nF4 explains the manual prerequisites."
                 .to_owned()
         } else {
@@ -379,6 +427,78 @@ fn details(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard, wide: bool)
     }
 }
 
+fn discovery_details(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
+    if area.height < 3 {
+        return;
+    }
+    let text = text_style(&app.palette);
+    let mut lines = format!("Server: {}", wizard.target);
+    if let Some(report) = &wizard.discovery {
+        if report.outcome != "Discovered" {
+            lines.push_str(&format!(
+                "\n{}",
+                report.diagnostic.lines().next().unwrap_or("See F7 report.")
+            ));
+        }
+        lines.push_str(&format!(
+            "\n{} · {}\nSoftware version: unverified (image in F7 report)\nConfig: {}\nAPI: {} · port {}\nHistorical observation; full inventory and issues: F7.",
+            report.fact("installation"),
+            report.fact("state"),
+            report.fact("config"),
+            match report.fact("api_enabled") { "true" => "Enabled", "false" => "Disabled", _ => "Unknown" },
+            report.fact("api_port")
+        ));
+    } else {
+        lines.push_str(
+            "\nInspect runtime, configuration and ports read-only.\nNo server configuration will be changed.",
+        );
+    }
+    if !wizard.message.is_empty() {
+        lines.push_str(&format!("\n{}", wizard.message));
+    }
+    let style = if wizard.focus == 1 {
+        text.bg(app.palette.selection).fg(app.palette.focus)
+    } else {
+        text
+    };
+    let label = if wizard.discovering {
+        "[ Discovering… Esc cancels ]"
+    } else if wizard.discovery.is_some() {
+        "[ Discover again ]"
+    } else {
+        "[ Discover ]"
+    };
+    write(buf, area.x, area.y, area.width, label, style);
+    if !wizard.testing {
+        chrome::register(
+            Rect::new(area.x, area.y, label.chars().count() as u16, 1),
+            Hit::PangolinDiscovery(1),
+        );
+    }
+    if wizard.discovery.is_some() {
+        write(
+            buf,
+            area.x,
+            area.y + 1,
+            area.width,
+            "[ Detailed report ]",
+            if wizard.focus == 2 {
+                text.bg(app.palette.selection).fg(app.palette.focus)
+            } else {
+                text
+            },
+        );
+        chrome::register(Rect::new(area.x, area.y + 1, 19, 1), Hit::PangolinDiscovery(2));
+    }
+    lines_into(
+        buf,
+        Rect::new(area.x, area.y + 2, area.width, area.height - 2),
+        &lines,
+        0,
+        text,
+    );
+}
+
 fn prerequisites_details(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
     if area.height < 4 {
         return;
@@ -489,7 +609,12 @@ fn modal(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
     let title = if wizard.help_open {
         format!("help · {}. {}", wizard.selected_step + 1, STAGES[wizard.selected_step])
     } else {
-        "SSH verification report".to_owned()
+        if wizard.selected_step == 2 {
+            "Pangolin discovery report"
+        } else {
+            "SSH verification report"
+        }
+        .to_owned()
     };
     // Keep only the modal frame's own registered controls; clicks through
     // the help panel must never reach the form or step list underneath.
@@ -510,6 +635,15 @@ fn modal(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
     );
     let (content, scroll) = if wizard.help_open {
         (HELP[wizard.selected_step].to_owned(), wizard.help_scroll)
+    } else if wizard.selected_step == 2 {
+        (
+            wizard
+                .discovery
+                .as_ref()
+                .map(|r| r.text(app.utc_offset))
+                .unwrap_or_default(),
+            wizard.report_scroll,
+        )
     } else if let Some(report) = &wizard.report {
         (
             format!(

@@ -47,6 +47,7 @@ pub enum Request {
     CopyJson,
     TestIntegration(u64, Box<super::integrations::Editor>),
     TestPangolin(u64, String),
+    DiscoverPangolin(u64, String),
     Quit,
 }
 
@@ -1277,6 +1278,14 @@ impl App {
                         self.overlay = Some(Overlay::Integrations { index: item });
                         return press(self, KeyCode::Enter);
                     }
+                    Some(Hit::PangolinDiscovery(control)) => {
+                        if let Some(Overlay::Pangolin(wizard)) = self.overlay.as_mut()
+                            && wizard.selected_step == 2 && wizard.discovery_available() && !wizard.help_open && !wizard.report_open {
+                            wizard.focus = control;
+                            return press(self, if control == 1 { KeyCode::F(6) } else { KeyCode::F(7) });
+                        }
+                        return None;
+                    }
                     Some(Hit::PangolinPrerequisite(control)) => {
                         if let Some(Overlay::Pangolin(wizard)) = self.overlay.as_mut() {
                             wizard.prerequisite_control(control);
@@ -1488,6 +1497,10 @@ impl App {
             return request;
         }
         if let Some(Overlay::Pangolin(wizard)) = self.overlay.as_mut() {
+            if !wizard.report_open && !wizard.help_open && wizard.selected_step == 2
+                && (key.code == KeyCode::F(6) || (wizard.focus == 1 && key.code == KeyCode::Enter)) {
+                return wizard.begin_discovery().map(|id| Request::DiscoverPangolin(id, wizard.target.clone()));
+            }
             if !wizard.report_open
                 && !wizard.help_open
                 && wizard.selected_step == 0

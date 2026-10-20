@@ -34,6 +34,7 @@ enum Update {
     Startup(&'static str),
     IntegrationTest(u64, super::integrations::TestReport),
     PangolinTest(u64, super::pangolin::Report),
+    PangolinDiscovery(u64, super::pangolin::Discovery),
     PangolinAsk(u64, AskEvent),
     Status(String, Value),
     StatusRejected(String),
@@ -505,6 +506,7 @@ fn start(request: &Request, client: Option<&Arc<Client>>, ctx: &Context, updates
         Request::Quit
         | Request::TestIntegration(_, _)
         | Request::TestPangolin(_, _)
+        | Request::DiscoverPangolin(_, _)
         | Request::CopyJson
         | Request::Act(_)
         | Request::Decide(_)
@@ -875,11 +877,11 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
                         return Ok(0);
                     }
                     match request {
-                        Request::TestPangolin(id, target) => {
+                        Request::TestPangolin(id, target) | Request::DiscoverPangolin(id, target) => {
+                            let discovery = matches!(&app.overlay, Some(Overlay::Pangolin(w)) if w.discovering);
                             if pangolin_worker.is_some() {
                                 if let Some(Overlay::Pangolin(wizard)) = app.overlay.as_mut() {
-                                    wizard.testing = false;
-                                    wizard.message = "Previous SSH test is stopping; retry shortly.".to_owned();
+                                    wizard.worker_failed(id, "Previous SSH operation is stopping; retry shortly.");
                                 }
                                 continue;
                             }
@@ -888,8 +890,7 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
                                 Ok(value) => value,
                                 Err(_) => {
                                     if let Some(Overlay::Pangolin(wizard)) = app.overlay.as_mut() {
-                                        wizard.testing = false;
-                                        wizard.message = "Cannot start the existing SSH askpass bridge.".to_owned();
+                                        wizard.worker_failed(id, "Cannot start the existing SSH askpass bridge.");
                                     }
                                     continue;
                                 }
@@ -911,6 +912,11 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
                             let sender = updates.clone();
                             tokio::task::spawn_blocking(move || {
                                 let started = std::time::Instant::now();
+                                if discovery {
+                                    let result = super::pangolin::discover(system.as_ref(), &target, &prefix, &cancel, &sounds, crate::touch::default_player());
+                                    let _ = sender.send(Update::PangolinDiscovery(id, result));
+                                    return;
+                                }
                                 let result = super::pangolin::test_ssh(system.as_ref(), &target, &prefix, &cancel, &sounds, crate::touch::default_player());
                                 let report = super::pangolin::Report {
                                     target, at: String::new(), passed: result.is_ok(), detail: result.unwrap_or_else(|e| e),
@@ -1177,6 +1183,13 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
                 }
             }
             Some(update) = received.recv() => match update {
+                Update::PangolinDiscovery(id, report) => {
+                    if pangolin_worker.as_ref().is_some_and(|(worker, _)| worker.id == id) {
+                        pangolin_worker = None;
+                        if let Some(question) = pangolin_question.take() { app.ask_ended(question.id); question.answer(None); }
+                        if let Some(Overlay::Pangolin(wizard)) = app.overlay.as_mut() { wizard.complete_discovery(id, report); }
+                    }
+                }
                 Update::PangolinTest(id, report) => {
                     if pangolin_worker.as_ref().is_some_and(|(worker, _)| worker.id == id) {
                         pangolin_worker = None;
