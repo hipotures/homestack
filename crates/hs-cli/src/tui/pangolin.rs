@@ -366,8 +366,18 @@ impl Wizard {
                     self.prerequisites_scroll = 0;
                     return false;
                 }
-                KeyCode::Char(' ') | KeyCode::Enter if self.focus == 3 => {
+                KeyCode::Char(' ') if self.focus == 3 => {
                     self.toggle_prerequisites();
+                    return false;
+                }
+                KeyCode::Enter if self.focus == 3 => {
+                    if !self.prerequisites_confirmed() {
+                        self.toggle_prerequisites();
+                    }
+                    if self.prerequisites_confirmed() {
+                        // Select the future stage for explanation only; never execute it.
+                        self.select_step(2);
+                    }
                     return false;
                 }
                 KeyCode::PageDown => {

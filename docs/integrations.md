@@ -92,8 +92,9 @@ Pangolin is installed or that any later integration stage works.
 After Step 1 verifies and saves the current server, select **Pangolin
 prerequisites**. Expand **Pangolin installation** and **Bootstrap API key** with
 Enter or Right; Left collapses a header. Tab/Shift+Tab cycles navigation, the two
-headers and the single confirmation checkbox. Space or Enter toggles the checkbox;
-clicking headers and the checkbox performs the same actions. F4 opens scrollable
+headers and the single confirmation checkbox. Space or a click toggles the
+checkbox. Enter on the checkbox confirms and saves it if necessary, then selects
+Pangolin discovery without executing it. A failed save keeps the current step. F4 opens scrollable
 contextual help for every stage, including locked stages. PageUp/PageDown scroll
 instructions while headers and confirmation stay visible. At 80x24, focusing a
 control opens a compact details page; Tab back to navigation shows all eight

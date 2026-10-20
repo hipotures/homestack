@@ -819,7 +819,7 @@ fn pangolin_prerequisite_headers_keyboard_and_checkbox_persist_without_secrets()
     assert!(restored.prerequisites_confirmed());
     restored.select_step(1);
     restored.focus = 3;
-    restored.key(key(KeyCode::Enter));
+    restored.key(key(KeyCode::Char(' ')));
     assert_eq!(restored.completed(), 1);
     assert!(!open(dir.path()).prerequisites_confirmed());
     // Phase 2 never queues a worker or remote operation.
@@ -1029,4 +1029,56 @@ fn pangolin_retesting_same_server_keeps_manual_confirmation_but_stale_files_cann
     let unverified = open(dir.path());
     assert!(!unverified.prerequisites_available());
     assert!(!unverified.prerequisites_confirmed());
+}
+
+#[test]
+fn pangolin_prerequisites_enter_continues_without_unchecking_or_executing_discovery() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut w = prerequisites_wizard(dir.path());
+    w.focus = 3;
+    w.key(key(KeyCode::Char(' ')));
+    let path = dir.path().join("integrations/pangolin.toml");
+    let saved = std::fs::read_to_string(&path).unwrap();
+    let mut app = App::new(Preferences::fallback(&dir.path().join("tui.toml")), false).unwrap();
+    app.overlay = Some(Overlay::Pangolin(Box::new(w)));
+    for (width, height) in [(80, 24), (120, 36), (160, 45)] {
+        let text = rendered(&app, width, height);
+        assert!(text.contains("Enter next"));
+        assert!(text.contains("Space toggle"));
+        assert!(text.contains("Esc back"));
+    }
+    assert!(app.key(key(KeyCode::Enter)).is_none());
+    assert!(
+        matches!(&app.overlay, Some(Overlay::Pangolin(w)) if w.selected_step == 2 && w.prerequisites_confirmed() && w.completed() == 2)
+    );
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), saved);
+    assert!(open(dir.path()).prerequisites_confirmed());
+    assert!(rendered(&app, 120, 36).contains("Locked - not implemented."));
+    assert!(app.key(key(KeyCode::F(6))).is_none());
+}
+
+#[test]
+fn pangolin_prerequisites_enter_saves_before_advancing_and_stays_on_write_failure() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut w = prerequisites_wizard(dir.path());
+    w.focus = 3;
+    let path = dir.path().join("integrations/pangolin.toml");
+    let saved = std::fs::read_to_string(&path).unwrap();
+    std::fs::remove_file(&path).unwrap();
+    std::fs::create_dir(&path).unwrap();
+    w.key(key(KeyCode::Enter));
+    assert_eq!(w.selected_step, 1);
+    assert!(!w.prerequisites_confirmed());
+    assert!(!w.message.is_empty());
+    std::fs::remove_dir(&path).unwrap();
+    std::fs::write(&path, saved).unwrap();
+    w.key(key(KeyCode::Enter));
+    assert_eq!(w.selected_step, 2);
+    assert_eq!(w.completed(), 2);
+    assert!(open(dir.path()).prerequisites_confirmed());
+    w.select_step(1);
+    w.focus = 3;
+    w.key(key(KeyCode::Char(' ')));
+    assert_eq!(w.completed(), 1);
+    assert!(!open(dir.path()).prerequisites_confirmed());
 }

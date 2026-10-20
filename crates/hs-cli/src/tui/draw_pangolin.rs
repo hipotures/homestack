@@ -27,8 +27,17 @@ pub(super) fn screen(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
                 vec![
                     Control::named("↑↓", "steps", KeyCode::Down),
                     Control::named("Tab", "focus", KeyCode::Tab).enabled(available),
-                    Control::named("Enter", "open/toggle", KeyCode::Enter).enabled(available),
-                    Control::named("Pg↓↑", "scroll", KeyCode::PageDown).enabled(available),
+                    Control::named(
+                        "Enter",
+                        if wizard.focus == 3 { "next" } else { "open/close" },
+                        KeyCode::Enter,
+                    )
+                    .enabled(available),
+                    if wizard.focus == 3 {
+                        Control::named("Space", "toggle", KeyCode::Char(' ')).enabled(available)
+                    } else {
+                        Control::named("Pg↓↑", "scroll", KeyCode::PageDown).enabled(available)
+                    },
                     Control::named("F4", "help", KeyCode::F(4)),
                     Control::named("Esc", "back", KeyCode::Esc),
                 ]
