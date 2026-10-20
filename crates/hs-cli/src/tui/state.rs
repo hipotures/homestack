@@ -48,6 +48,12 @@ pub enum Request {
     TestIntegration(u64, Box<super::integrations::Editor>),
     TestPangolin(u64, String),
     DiscoverPangolin(u64, String),
+    PangolinApi(
+        u64,
+        String,
+        super::pangolin::Discovery,
+        Option<Box<super::pangolin_api::Plan>>,
+    ),
     Quit,
 }
 
@@ -1278,6 +1284,26 @@ impl App {
                         self.overlay = Some(Overlay::Integrations { index: item });
                         return press(self, KeyCode::Enter);
                     }
+                    Some(Hit::PangolinApi(control)) => {
+                        if let Some(Overlay::Pangolin(wizard)) = self.overlay.as_mut() {
+                            if wizard.api_confirm {
+                                wizard.api_confirm_yes = control == 5;
+                                return press(self, KeyCode::Enter);
+                            }
+                            if wizard.selected_step == 3 && !wizard.help_open && !wizard.report_open {
+                                wizard.focus = control;
+                                return press(
+                                    self,
+                                    match control {
+                                        1 => KeyCode::F(6),
+                                        2 => KeyCode::F(7),
+                                        _ => KeyCode::F(5),
+                                    },
+                                );
+                            }
+                        }
+                        return None;
+                    }
                     Some(Hit::PangolinDiscovery(control)) => {
                         if let Some(Overlay::Pangolin(wizard)) = self.overlay.as_mut()
                             && wizard.selected_step == 2
@@ -1501,6 +1527,30 @@ impl App {
             return request;
         }
         if let Some(Overlay::Pangolin(wizard)) = self.overlay.as_mut() {
+            if wizard.api_confirm && key.code == KeyCode::Enter && wizard.api_confirm_yes {
+                let plan = wizard.api.as_ref().and_then(|a| a.plan.clone());
+                let discovery = wizard.discovery.clone();
+                if let (Some(plan), Some(discovery)) = (plan, discovery) {
+                    return wizard
+                        .begin_api(true)
+                        .map(|id| Request::PangolinApi(id, wizard.target.clone(), discovery, Some(Box::new(plan))));
+                }
+                wizard.api_confirm = false;
+                return None;
+            }
+            if !wizard.api_confirm
+                && !wizard.report_open
+                && !wizard.help_open
+                && wizard.selected_step == 3
+                && (key.code == KeyCode::F(6) || (wizard.focus == 1 && key.code == KeyCode::Enter))
+            {
+                if let Some(discovery) = wizard.discovery.clone() {
+                    return wizard
+                        .begin_api(false)
+                        .map(|id| Request::PangolinApi(id, wizard.target.clone(), discovery, None));
+                }
+                return None;
+            }
             if !wizard.report_open
                 && !wizard.help_open
                 && wizard.selected_step == 2

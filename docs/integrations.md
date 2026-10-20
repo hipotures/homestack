@@ -28,13 +28,13 @@ the Spaceship and TSIG files in the same directory by default; explicit
 `homestack-deploy` uses the credential paths explicitly saved in its deployment
 configuration. `tui.toml` contains interface preferences, not integration data.
 
-## Pangolin setup: server, prerequisites and discovery
+## Pangolin setup: server, prerequisites, discovery and Integration API
 
 Open **Settings > Integrations > Remote Access > Pangolin** to enter the setup
 wizard. All eight stages are shown: Pangolin server, Pangolin prerequisites,
 Pangolin discovery, Integration API, API tunnel, Bootstrap API key, HomeStack API
-key, and Integration verification. The first three stages are implemented;
-stages 4–8 remain locked and cannot execute operations.
+key, and Integration verification. The first four stages are implemented;
+stages 5–8 remain locked and cannot execute operations.
 
 On wide terminals, the step list sits to the left of the selected step's details.
 At 80x24, all eight steps appear above a compact form. Up/Down in the step list
@@ -198,9 +198,94 @@ monitoring. Editing the target invalidates discovery; failure never erases the
 SSH target, prerequisite confirmation or unrelated settings. A failed save does
 not count as completion. Successful discovery advances progress to **3/8**.
 
-Integration API changes belong exclusively to the unimplemented Step 4 and will
-require approval and backup. This wizard does not enable API access, change ports,
-restart services, request credentials or create Pangolin objects.
+Discovery itself never enables API access, changes ports or restarts services.
+Step 4 provides the separate, explicitly approved configuration workflow below.
+No API keys or Pangolin objects are created.
 
 Configuration keys were checked against the
 [Pangolin v1.24.0 configuration schema](https://github.com/fosrl/pangolin/blob/1.24.0/server/lib/readConfigFile.ts).
+
+
+### Step 4: private Integration API
+
+Step 4 unlocks after successful discovery for the same verified SSH destination.
+**F6 / Inspect API** runs asynchronously through the existing SSH and askpass
+transport. It rechecks installation identity, configuration path, literal API
+settings, service state and Docker port bindings. A bounded unauthenticated
+`GET /v1/` must return HTTP 200 with `{"message":"Healthy"}` through an IPv4
+loopback publication correlated with the Pangolin container. This request uses
+no credentials, redirects or HTTP proxy environment variables. TCP listening
+alone cannot pass. A healthy private API completes **4/8** without writes,
+backups or restart. Repeat inspection remains read-only.
+
+Use **Tab / Shift+Tab** to move between navigation, Inspect, Details and Apply;
+**Enter** activates the focused control. **F4** opens scrollable help, **F7**
+opens the scrollable plan/report, and **F5** opens Apply confirmation only for a
+current applicable plan. Mouse actions use the same controls. Confirmation
+starts on **Cancel**; Tab or Left/Right selects **Apply**, then Enter confirms.
+Esc closes a modal, cancels an operation or returns. At 80x24, Tab enters the
+full-height details page; navigation remains available by cycling focus.
+
+When configuration is needed, the proposed plan identifies current/proposed
+settings, exact files, host/container API ports, Compose project context,
+service, interruption, protected backup location and verification steps.
+An existing external API publication is explicitly identified: converting it
+to loopback requires approval because other integrations may lose access.
+Only confirmed Apply can modify the server. No OS accounts, permissions,
+Docker groups, sudo, password fallback, proxies, firewall or DNS are changed.
+
+Automatic editing is deliberately narrow: official Docker Pangolin discovered
+in Step 3, a single Compose file, literal YAML, verified directory bind mount,
+matching running Compose configuration hash and image, and ownership/write
+access allowing atomic replacement. Remote Python 3, existing PyYAML and
+Docker Compose v2 with JSON/config-hash output are required; HomeStack installs
+nothing. Existing explicit API ports are retained. If a disabled installation
+omits the API port, the plan explicitly proposes the documented default 3003;
+it is never labelled observed runtime evidence. Short-form literal TCP port
+lists support adding an IPv4 loopback mapping or converting a single external
+IPv4 mapping while preserving its host port. Existing unrelated content and
+settings are retained. The full effective Compose configuration is validated
+with the actual project name/directory and explicit Compose file; environment
+file interpolation is not introduced.
+
+After confirmation, runtime, effective Compose model and file hashes/identities
+are revalidated. Only changed files are copied into a collision-safe timestamped
+remote directory with mode 0700; originals and recovery metadata have mode 0600.
+No configuration contents or backups leave the VPS. Files are atomically
+replaced with their original ownership and permissions. Only the Pangolin
+service is force-recreated with `--no-deps --no-build --pull never`, preserving
+its verified Compose settings. This can interrupt Pangolin, connected Sites,
+Resources and active sessions. No images are pulled or other services restarted.
+Private publication, runtime and API health are checked after activation;
+sanitized discovery facts are refreshed for the recreated container.
+
+Failures distinguish authentication, permissions, unsupported layout/YAML,
+stale plan, backup, validation, activation and health problems. The report
+states whether nothing changed, activation remains unverified, or the remote
+outcome is uncertain. Backups remain available under the reported protected
+path; `recovery.json` records original paths, hashes and ownership. HomeStack
+does not retry mutations or roll back automatically. Inspect current files
+and service before independently approving any recovery. Cancelling or losing
+SSH during Apply does not guarantee that the remote operation stopped: inspect
+before retrying. Inspection uses a 180-second overall SSH deadline; individual
+remote commands and health requests are also bounded.
+
+Only sanitized non-secret metadata is saved atomically in `[integration_api]`:
+target, installation association, date, outcome, configured port, endpoint,
+applied summary and backup reference. Plans remain in memory and require a new
+inspection after restart. Historical verification is not continuous monitoring.
+Server changes or new discovery invalidate Phase 4; unrelated credentials and
+settings remain intact. A persistence failure cannot complete the step.
+
+Unsupported automatic changes include multiple Compose files, interpolation,
+anchors/tags/duplicate YAML keys, env files, hooks, build/profile/extended
+services, host/shared networking, ambiguous or single-file mounts, and native
+service or plain-Docker reconfiguration. Already healthy ordinary Docker
+installations can be verified without Compose editing. Custom reverse proxies
+and firewall reachability are not audited: verification establishes the
+container's loopback-only API publication, not a network-wide exposure audit.
+Unrecognized layouts require independent configuration followed by inspection.
+**Step 5 remains locked:** no tunnel is opened and no API key is requested.
+
+The unauthenticated health contract is checked against the
+[Pangolin v1.24.0 Integration API router](https://github.com/fosrl/pangolin/blob/1.24.0/server/routers/integration.ts).

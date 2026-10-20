@@ -23,7 +23,7 @@ pub const DESCRIPTIONS: [&str; 8] = [
     "Select and test an existing OpenSSH destination.",
     "Confirm installation and preparation of a temporary Root bootstrap key.",
     "Discover runtime, configuration and ports through read-only SSH inspection.",
-    "Future: inspect API configuration; approve and back up any changes.",
+    "Inspect private Integration API health; approve minimal backed-up configuration changes.",
     "Future: tunnel to the private Integration API and verify reachability.",
     "Future: accept a masked temporary key and verify its permissions.",
     "Future: provision and securely save a least-privilege organization key.",
@@ -33,8 +33,8 @@ pub const DESCRIPTIONS: [&str; 8] = [
 pub const HELP: [&str; 8] = [
     "Select an OpenSSH alias, hostname, IP address or user@host. OpenSSH reads your existing configuration to resolve the user, port, identities and proxy settings; HomeStack does not assume root.\n\nF6 tests the current draft asynchronously: ssh -G resolves configuration, then an authenticated SSH session executes only true. Existing askpass prompts support host confirmation, passphrases, PINs and FIDO key touch. Host verification remains enabled; password and keyboard-interactive fallback remain disabled.\n\nThe overall deadline is 45 seconds. Esc cancels; changing the target invalidates verification. Only a successful unchanged test saves its target automatically, with mode 0600. Failure or cancellation does not overwrite the saved target.\n\nHomeStack stores no private SSH keys or authentication secrets. The last successful test and its date are retained when reopening. Editing the target requires a new test. This phase does not inspect or configure Pangolin.",
     "Prepare Pangolin Server on the SSH server verified in Step 1. Confirm both instruction groups only after completing them. This is a manual declaration, not technical verification. No installation, API operation or remote change occurs here.\n\nIn the Pangolin administration interface, open API Keys and create homestack-bootstrap with Root authorization and these actions:\n  createApiKey\n  listApiKeys\n  listApiKeyActions\n  setApiKeyActions\n\nRoot scope is required for Integration API key management; selecting four actions alone is insufficient. These actions create the restricted key, detect conflicts, inspect actions and assign permissions. The temporary administrative key is separate from the permanent, restricted HomeStack key.\n\nKeep its token securely until masked entry in Step 6. Do not enter it here. Revoke it only after the permanent key has been provisioned and verified successfully.\n\nStep 3 will discover the installation method, version, services, configuration paths and ports read-only. It does not assume Docker Compose or fixed paths. The Integration API may remain disabled until Step 4. Checking this box does not verify installation or API availability. Confirmation is saved for the selected server; changing the target requires reconfirmation.",
-    "Discover the existing installation over authenticated SSH, read-only, without modifying it. Docker Compose metadata identifies a project and its configuration files; plain Docker has no verified Compose project. Native systemd executables may be identified, but unsupported layouts remain incomplete.\n\nHomeStack reads selected runtime metadata, discovered configuration paths, literal Integration API settings and listening sockets. Mounts describe host-to-container paths; published ports describe host bind addresses. Only allowlisted inventory is returned. No environments, secrets or full configuration files are displayed or saved. Remote Python 3 is required; nothing is installed.\n\nF6 discovers or retries, Esc cancels, F7 opens the scrollable report. Permission failures require access through your existing account; HomeStack never uses sudo. Multiple installations are ambiguous and never selected automatically. Supply an account with read access or inspect unsupported layouts separately.\n\nDisabled Integration API is allowed. Missing or ambiguous settings remain unknown, never guessed. API changes belong to Step 4 with approval and backup. Steps 4-8 remain unimplemented.\n\nSaved results are historical observations, not continuous monitoring. Changing the SSH destination invalidates discovery and requires a new inspection.",
-    "Locked - not implemented.\n\nA future step will inspect the installed Pangolin version and actual Integration API configuration. If enable_integration_api or a loopback port mapping needs to change, HomeStack will show the exact plan, require approval and back up configuration first.\n\nThe Integration API must not be exposed publicly. This screen currently performs no server inspection, configuration change or service restart.",
+    "Discover the existing installation over authenticated SSH, read-only, without modifying it. Docker Compose metadata identifies a project and its configuration files; plain Docker has no verified Compose project. Native systemd executables may be identified, but unsupported layouts remain incomplete.\n\nHomeStack reads selected runtime metadata, discovered configuration paths, literal Integration API settings and listening sockets. Mounts describe host-to-container paths; published ports describe host bind addresses. Only allowlisted inventory is returned. No environments, secrets or full configuration files are displayed or saved. Remote Python 3 is required; nothing is installed.\n\nF6 discovers or retries, Esc cancels, F7 opens the scrollable report. Permission failures require access through your existing account; HomeStack never uses sudo. Multiple installations are ambiguous and never selected automatically. Supply an account with read access or inspect unsupported layouts separately.\n\nDisabled Integration API is allowed. Missing or ambiguous settings remain unknown, never guessed. API changes belong to Step 4 with approval and backup. Steps 5-8 remain unimplemented.\n\nSaved results are historical observations, not continuous monitoring. Changing the SSH destination invalidates discovery and requires a new inspection.",
+    "Inspect the existing Integration API over SSH without credentials. F6 revalidates Step 3 metadata and checks the configured API port, runtime publication and unauthenticated GET /v1/ health. A successful loopback-only health response completes this step without any write or restart.\n\nWhen changes are required, F7 shows exact values, files, service, impact and protected remote backup path. F5 opens confirmation defaulting to Cancel. Only explicit Apply authorizes writes. The target, file hashes and effective Compose configuration are checked again before backup and activation.\n\nAutomatic editing supports literal YAML in a single-file Docker Compose project with a verified directory bind mount and ownership allowing atomic replacement. Existing remote PyYAML and Docker Compose v2 are required for editing; no packages or privilege escalation are attempted. Complex YAML, interpolation, multiple files and ambiguous mounts require independent configuration.\n\nOnly Pangolin is recreated, without dependencies, builds or image pulls. Sites, Resources and sessions may briefly be interrupted. Backups remain private on the VPS, never downloaded. Failures retain backups and distinguish no changes from uncertain or unhealthy activation. No automatic rollback or mutation retry occurs.\n\nEsc cancels inspection. Interrupting Apply can leave changes in place: inspect the service and backup before retrying. Saved results are historical. Changing the target or rerunning discovery invalidates verification. No API key or tunnel is used; Step 5 remains locked.",
     "Locked - not implemented.\n\nA future step will establish an SSH tunnel to the private Integration API endpoint and verify reachability. The tunnel will be owned and managed separately from basic SSH verification.\n\nNo tunnel is opened, no API port is guessed and no API connection is attempted in this phase.",
     "Locked - not implemented.\n\nA future step will accept a temporary bootstrap API credential in a masked field and verify its Root scope and required API-key permissions. The secret must not enter logs, command arguments or repository files.\n\nNo API credential field is enabled now. Step 1 only stores the non-secret SSH destination.",
     "Locked - not implemented.\n\nA future step will create an organization-scoped HomeStack API key with only the permissions required by the integration, verify its assigned permissions and save it securely.\n\nSelective reconfiguration must reuse unrelated existing credentials and avoid duplicate keys or resources. No keys or Pangolin objects are created by the current wizard.",
@@ -43,6 +43,9 @@ pub const HELP: [&str; 8] = [
 pub const INSTALLATION: &str = "Pangolin Server must be installed and running on the selected server.\n\nPangolin must already be installed on the SSH server selected in Step 1. No particular installation method is required: Docker Compose, standalone services and other deployment methods may exist. Step 3 will discover the actual installation. The Integration API may still be disabled; Step 4 handles it. Phase 2 makes no remote configuration changes.";
 pub const BOOTSTRAP: &str = "Create the temporary homestack-bootstrap Root API key.\n\nIn the Pangolin administration interface, open API Keys and create:\nName: homestack-bootstrap\nAuthorization: Root\nRequired actions:\n  createApiKey\n  listApiKeys\n  listApiKeyActions\n  setApiKeyActions\n\nIntegration API key management requires Root authorization; four actions without Root scope are insufficient. This temporary administrative key is separate from the restricted HomeStack integration key. Keep the token securely until Step 6; do not enter it here. Revoke it after successful provisioning and verification of the permanent key.";
 static NEXT_TEST: AtomicU64 = AtomicU64::new(1);
+pub(super) fn next_test() -> u64 {
+    NEXT_TEST.fetch_add(1, Ordering::Relaxed)
+}
 
 /// Strict destination syntax, never an option, URI, command or credential.
 pub fn validate_destination(target: &str) -> Result<(), String> {
@@ -115,6 +118,11 @@ impl Report {
 
 #[derive(Clone, PartialEq)]
 pub struct Wizard {
+    pub api: Option<super::pangolin_api::Api>,
+    pub api_running: bool,
+    pub api_applying: bool,
+    pub api_confirm: bool,
+    pub api_confirm_yes: bool,
     pub discovery: Option<Discovery>,
     pub discovering: bool,
     pub target: String,
@@ -185,6 +193,13 @@ impl Wizard {
             .filter(|confirmed| verified.as_deref() == Some(*confirmed))
             .map(str::to_owned);
         Ok(Self {
+            api: settings
+                .get("integration_api")
+                .and_then(super::pangolin_api::Api::restore),
+            api_running: false,
+            api_applying: false,
+            api_confirm: false,
+            api_confirm_yes: false,
             discovery: settings.get("discovery").and_then(Discovery::restore),
             discovering: false,
             cursor: target.chars().count(),
@@ -211,6 +226,17 @@ impl Wizard {
             confirm_discard: false,
         })
     }
+    pub(super) fn persist_api(&self, report: &super::pangolin_api::Api) -> Result<(), String> {
+        let mut table = read(&self.path)?;
+        if table.get("discovery").and_then(Discovery::restore) != self.discovery {
+            return Err("Discovery changed on disk; inspect again before saving API verification.".into());
+        }
+        if let Some(discovery) = &report.refreshed {
+            table.insert("discovery".into(), discovery.store());
+        }
+        table.insert("integration_api".into(), report.store()?);
+        persist(&self.path, &table)
+    }
     pub fn discovery_available(&self) -> bool {
         self.prerequisites_confirmed()
     }
@@ -229,6 +255,7 @@ impl Wizard {
         {
             return None;
         }
+        self.invalidate_api();
         self.test_id = NEXT_TEST.fetch_add(1, Ordering::Relaxed);
         self.tested_revision = self.revision;
         self.testing = true;
@@ -275,7 +302,13 @@ impl Wizard {
         }
     }
     pub fn worker_failed(&mut self, id: u64, message: &str) {
-        if self.discovering {
+        if self.api_running {
+            let mut report = self.api.clone().unwrap_or_else(|| self.api_failure("ssh"));
+            report.status = "Failed".into();
+            report.code = "ssh".into();
+            report.plan = None;
+            self.complete_api(id, report);
+        } else if self.discovering {
             self.complete_discovery(id, Discovery::failure(&self.target, "Failed", message));
         } else {
             self.testing = false;
@@ -286,7 +319,7 @@ impl Wizard {
         self.target != self.saved
     }
     pub fn status(&self) -> &'static str {
-        if self.testing && !self.discovering {
+        if self.testing && !self.discovering && !self.api_running {
             "Testing"
         } else if self.verified.as_ref() == Some(&self.target) {
             "Verified"
@@ -307,6 +340,8 @@ impl Wizard {
         }
     }
     fn changed(&mut self) {
+        self.invalidate_api();
+        self.api_running = false;
         self.revision += 1;
         if let Some(discovery) = self.discovery.as_mut() {
             discovery.outcome = "Outdated".to_owned();
@@ -343,12 +378,14 @@ impl Wizard {
         usize::from(self.status() == "Verified")
             + usize::from(self.prerequisites_confirmed())
             + usize::from(self.discovery_status() == "Discovered")
+            + usize::from(self.api_status() == "Verified")
     }
     pub fn toggle_prerequisites(&mut self) {
         if !self.prerequisites_available() {
             return;
         }
         let confirmed = !self.prerequisites_confirmed();
+        self.invalidate_api();
         let result = (|| {
             let mut table = read(&self.path)?;
             // Never record confirmation against a replaced or unverified file.
@@ -404,8 +441,11 @@ impl Wizard {
             self.prerequisites_scroll = 0;
         }
     }
-    /// Every stage can be selected for explanation; only Steps 1-3 have actions.
+    /// Every stage can be selected for explanation; only Steps 1-4 have actions.
     pub fn select_step(&mut self, step: usize) {
+        if self.api_confirm || self.api_running {
+            return;
+        }
         self.selected_step = step.min(STAGES.len() - 1);
         self.focus = 0;
         self.help_scroll = 0;
@@ -414,6 +454,17 @@ impl Wizard {
 
     /// Field and action focus is independent of step navigation.
     pub fn key(&mut self, key: KeyEvent) -> bool {
+        if self.api_confirm {
+            match key.code {
+                KeyCode::Esc => self.api_confirm = false,
+                KeyCode::Tab | KeyCode::BackTab | KeyCode::Left | KeyCode::Right => {
+                    self.api_confirm_yes = !self.api_confirm_yes
+                }
+                KeyCode::Enter if !self.api_confirm_yes => self.api_confirm = false,
+                _ => {}
+            }
+            return false;
+        }
         if self.help_open {
             match key.code {
                 KeyCode::Esc | KeyCode::F(4) | KeyCode::Enter => self.help_open = false,
@@ -436,6 +487,66 @@ impl Wizard {
                 _ => {}
             }
             return false;
+        }
+        if self.selected_step == 3 && self.api_available() {
+            match key.code {
+                KeyCode::Tab | KeyCode::BackTab => {
+                    let mut controls = vec![0, 1];
+                    if self.api.is_some() {
+                        controls.push(2);
+                    }
+                    if self.can_apply_api() {
+                        controls.push(3);
+                    }
+                    let at = controls.iter().position(|f| *f == self.focus).unwrap_or(0);
+                    self.focus = controls[if key.code == KeyCode::BackTab {
+                        (at + controls.len() - 1) % controls.len()
+                    } else {
+                        (at + 1) % controls.len()
+                    }];
+                    return false;
+                }
+                KeyCode::Enter | KeyCode::Right if self.focus == 0 => {
+                    self.focus = 1;
+                    return false;
+                }
+                KeyCode::Enter if self.focus == 2 => {
+                    self.report_open = self.api.is_some();
+                    self.report_scroll = 0;
+                    return false;
+                }
+                KeyCode::F(5) | KeyCode::Enter if key.code == KeyCode::F(5) || self.focus == 3 => {
+                    if self.can_apply_api() {
+                        self.api_confirm = true;
+                        self.api_confirm_yes = false;
+                    }
+                    return false;
+                }
+                KeyCode::Esc if self.api_running => {
+                    self.testing = false;
+                    self.api_running = false;
+                    self.test_id = 0;
+                    let mut r = self.api.clone().unwrap_or_else(|| self.api_failure("cancelled"));
+                    r.code = if self.api_applying { "uncertain" } else { "cancelled" }.into();
+                    r.status = "Cancelled".into();
+                    if self.api_applying
+                        && let Some(plan) = &r.plan
+                    {
+                        r.backup = plan.backup.clone();
+                    }
+                    r.plan = None;
+                    if self.api_applying {
+                        r.changed = "Remote outcome uncertain; inspect before retrying".into();
+                    }
+                    self.api = Some(r);
+                    self.api_applying = false;
+                    if let Some(r) = &self.api {
+                        let _ = self.persist_api(r);
+                    }
+                    return false;
+                }
+                _ => {}
+            }
         }
         if self.selected_step == 2 && self.discovery_available() {
             match key.code {
@@ -530,7 +641,9 @@ impl Wizard {
                 self.help_scroll = 0;
             }
             KeyCode::F(7) => {
-                self.report_open = if self.selected_step == 2 {
+                self.report_open = if self.selected_step == 3 {
+                    self.api.is_some()
+                } else if self.selected_step == 2 {
                     self.discovery.is_some()
                 } else {
                     self.selected_step == 0 && self.report.is_some()
@@ -602,6 +715,7 @@ impl Wizard {
         // Only fixed metadata is persisted; no raw SSH output or prompt text.
         table.insert("last_test".to_owned(), toml::Value::Table(last_test));
         if self.prerequisites_target.as_ref() != Some(&self.target) {
+            table.remove("integration_api");
             table.remove("discovery");
             table.remove("prerequisites");
         }
@@ -680,11 +794,12 @@ pub fn test_ssh(
     sounds: &crate::touch::Sounds,
     player: crate::touch::Player,
 ) -> Result<String, String> {
-    ssh_command(system, target, prefix, stop, sounds, player, "true").0
+    ssh_command(system, target, prefix, stop, sounds, player, "true", Duration::from_secs(45)).0
         .map(|_| "PASS · Effective OpenSSH configuration resolved\nPASS · SSH authenticated, remote command successful (true)\nNo Pangolin inspection or server configuration performed.".to_owned())
 }
 
-fn ssh_command(
+#[allow(clippy::too_many_arguments)]
+pub(super) fn ssh_command(
     system: &dyn System,
     target: &str,
     prefix: &[String],
@@ -692,22 +807,20 @@ fn ssh_command(
     sounds: &crate::touch::Sounds,
     player: crate::touch::Player,
     remote: &str,
+    limit: Duration,
 ) -> (Result<String, String>, Option<String>) {
     let mut account = None;
     let result = (|| {
         validate_destination(target)?;
         let started = std::time::Instant::now();
-        let limit = Duration::from_secs(45);
         let run = |argv: &[String]| -> Result<Output, String> {
             if stop.load(Ordering::SeqCst) {
                 return Err("SSH test cancelled.".to_owned());
             }
-            let remaining = limit
-                .checked_sub(started.elapsed())
-                .ok_or("SSH test timed out (45s).")?;
+            let remaining = limit.checked_sub(started.elapsed()).ok_or("SSH operation timed out.")?;
             system.run_until(argv, stop, remaining).map_err(|e| {
                 match e.kind() {
-                    std::io::ErrorKind::TimedOut => "SSH test timed out (45s).",
+                    std::io::ErrorKind::TimedOut => "SSH operation timed out.",
                     std::io::ErrorKind::Interrupted => "SSH test cancelled.",
                     _ => "Cannot execute OpenSSH; check that ssh is installed.",
                 }
@@ -1161,7 +1274,16 @@ pub fn discover(
     // or other remotely supplied value is ever interpolated into shell source.
     let source = include_str!("pangolin_discover.py");
     let command = format!("python3 -B -c '{}'", source.replace('\'', "'\\''"));
-    let (result, account) = ssh_command(system, target, prefix, stop, sounds, player, &command);
+    let (result, account) = ssh_command(
+        system,
+        target,
+        prefix,
+        stop,
+        sounds,
+        player,
+        &command,
+        Duration::from_secs(45),
+    );
     let result = result.and_then(|text| Discovery::parse(target, &text));
     let mut report = match result {
         Ok(report) if !stop.load(Ordering::SeqCst) => report,

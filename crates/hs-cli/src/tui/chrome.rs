@@ -450,6 +450,7 @@ pub enum Hit {
     PangolinStep(usize),
     PangolinPrerequisite(usize),
     PangolinDiscovery(usize),
+    PangolinApi(usize),
     IntegrationField(usize),
     /// The log panel: the farthest it scrolls, the rows it shows and the
     /// line under the pointer (lines back from the newest; `None` below

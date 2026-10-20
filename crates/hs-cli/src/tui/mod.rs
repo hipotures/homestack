@@ -15,6 +15,7 @@ pub mod installing;
 pub mod integrations;
 pub mod layout;
 pub mod pangolin;
+pub mod pangolin_api;
 pub mod reinstall;
 pub mod run;
 pub mod setup;

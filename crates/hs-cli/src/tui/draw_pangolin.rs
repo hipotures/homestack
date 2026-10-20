@@ -17,7 +17,8 @@ pub(super) fn screen(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
     let muted = text.fg(palette.muted);
     let available = wizard.selected_step == 0
         || (wizard.selected_step == 1 && wizard.prerequisites_available())
-        || (wizard.selected_step == 2 && wizard.discovery_available());
+        || (wizard.selected_step == 2 && wizard.discovery_available())
+        || (wizard.selected_step == 3 && wizard.api_available());
     let prerequisites = wizard.selected_step == 1;
     let inner = frame(
         buf,
@@ -42,6 +43,18 @@ pub(super) fn screen(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
                     },
                     Control::named("F4", "help", KeyCode::F(4)),
                     Control::named("Esc", "back", KeyCode::Esc),
+                ]
+            } else if wizard.selected_step == 3 && wizard.testing {
+                vec![Control::named("Esc", "cancel", KeyCode::Esc)]
+            } else if wizard.selected_step == 3 {
+                vec![
+                    Control::named("↑↓", "steps", KeyCode::Down).enabled(!wizard.testing),
+                    Control::named("Tab", "focus", KeyCode::Tab).enabled(available && !wizard.testing),
+                    Control::named("F4", "help", KeyCode::F(4)),
+                    Control::named("F5", "apply", KeyCode::F(5)).enabled(wizard.can_apply_api()),
+                    Control::named("F6", "inspect", KeyCode::F(6)).enabled(available && !wizard.testing),
+                    Control::named("F7", "details", KeyCode::F(7)).enabled(wizard.api.is_some()),
+                    Control::named("Esc", if wizard.testing { "cancel" } else { "back" }, KeyCode::Esc),
                 ]
             } else if wizard.selected_step == 2 {
                 vec![
@@ -117,6 +130,21 @@ pub(super) fn screen(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
             wizard,
             true,
         );
+    } else if wizard.selected_step == 3 && wizard.focus > 0 && wizard.api_available() {
+        write(
+            buf,
+            body.x,
+            body.y,
+            body.width,
+            "4. Integration API",
+            text.add_modifier(Modifier::BOLD),
+        );
+        api_details(
+            buf,
+            Rect::new(body.x, body.y + 2, body.width, body.height.saturating_sub(2)),
+            app,
+            wizard,
+        );
     } else if wizard.selected_step == 2 && wizard.focus > 0 && wizard.discovery_available() {
         write(
             buf,
@@ -158,6 +186,9 @@ pub(super) fn screen(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
     if wizard.selected_step == 0 && !wizard.testing && !wizard.message.is_empty() {
         write(buf, x, inner.bottom() - 1, width, &wizard.message, muted);
     }
+    if wizard.api_confirm {
+        approval(buf, area, app, wizard);
+    }
     if wizard.help_open || wizard.report_open {
         modal(buf, area, app, wizard);
     }
@@ -189,7 +220,10 @@ fn steps(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard, wide: bool) {
             } else {
                 style
             }
-        } else if at > 2 || (at == 2 && !wizard.discovery_available()) || (at == 1 && !wizard.prerequisites_available())
+        } else if at > 3
+            || (at == 3 && !wizard.api_available())
+            || (at == 2 && !wizard.discovery_available())
+            || (at == 1 && !wizard.prerequisites_available())
         {
             text.fg(app.palette.muted)
         } else {
@@ -198,8 +232,10 @@ fn steps(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard, wide: bool) {
         write(buf, area.x, y, area.width, &" ".repeat(usize::from(area.width)), style);
         let passed = (at == 0 && wizard.status() == "Verified")
             || (at == 1 && wizard.prerequisites_confirmed())
-            || (at == 2 && wizard.discovery_status() == "Discovered");
+            || (at == 2 && wizard.discovery_status() == "Discovered")
+            || (at == 3 && wizard.api_status() == "Verified");
         let failed = (at == 0 && wizard.status() == "Failed")
+            || (at == 3 && matches!(wizard.api_status(), "Failed" | "Permission denied"))
             || (at == 2
                 && matches!(
                     wizard.discovery_status(),
@@ -232,7 +268,11 @@ fn steps(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard, wide: bool) {
                 style.fg(if passed { app.palette.ok } else { app.palette.error }),
             );
         }
-        if at > 2 || (at == 2 && !wizard.discovery_available()) || (at == 1 && !wizard.prerequisites_available()) {
+        if at > 3
+            || (at == 3 && !wizard.api_available())
+            || (at == 2 && !wizard.discovery_available())
+            || (at == 1 && !wizard.prerequisites_available())
+        {
             write(buf, area.right() - 8, y, 8, "[Locked]", style.fg(app.palette.muted));
         }
         chrome::register(Rect::new(area.x, y, area.width, 1), Hit::PangolinStep(at));
@@ -253,6 +293,15 @@ fn details(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard, wide: bool)
             text.add_modifier(Modifier::BOLD),
         );
         y += 2;
+    }
+    if wizard.selected_step == 3 && wizard.api_available() {
+        api_details(
+            buf,
+            Rect::new(area.x, y, area.width, area.bottom().saturating_sub(y)),
+            app,
+            wizard,
+        );
+        return;
     }
     if wizard.selected_step == 2 && wizard.discovery_available() {
         discovery_details(
@@ -284,7 +333,10 @@ fn details(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard, wide: bool)
             );
             y += 1;
         }
-        let lines = if wizard.selected_step == 2 {
+        let lines = if wizard.selected_step == 3 {
+            "Locked: complete discovery for the selected server first. F4 explains Integration API configuration."
+                .to_owned()
+        } else if wizard.selected_step == 2 {
             "Locked: verify Step 1 and confirm Step 2 for the current server. F4 explains discovery.".to_owned()
         } else if wizard.selected_step == 1 {
             "Locked: verify and save the current SSH target in Step 1 first.\n\nF4 explains the manual prerequisites."
@@ -626,7 +678,9 @@ fn modal(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
     let title = if wizard.help_open {
         format!("help · {}. {}", wizard.selected_step + 1, STAGES[wizard.selected_step])
     } else {
-        if wizard.selected_step == 2 {
+        if wizard.selected_step == 3 {
+            "Integration API plan / report"
+        } else if wizard.selected_step == 2 {
             "Pangolin discovery report"
         } else {
             "SSH verification report"
@@ -652,6 +706,11 @@ fn modal(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
     );
     let (content, scroll) = if wizard.help_open {
         (HELP[wizard.selected_step].to_owned(), wizard.help_scroll)
+    } else if wizard.selected_step == 3 {
+        (
+            wizard.api.as_ref().map(|r| r.text(app.utc_offset)).unwrap_or_default(),
+            wizard.report_scroll,
+        )
     } else if wizard.selected_step == 2 {
         (
             wizard
@@ -688,4 +747,180 @@ fn modal(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
         scroll,
         text_style(&app.palette),
     );
+}
+
+fn api_details(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
+    if area.height < 4 {
+        return;
+    }
+    let text = text_style(&app.palette);
+    let status = wizard.api_status();
+    let color = match status {
+        "Verified" => app.palette.ok,
+        "Failed" | "Permission denied" => app.palette.error,
+        _ => app.palette.muted,
+    };
+    write(
+        buf,
+        area.x,
+        area.y,
+        area.width,
+        &format!("Status: {status}"),
+        text.fg(color).add_modifier(Modifier::BOLD),
+    );
+    let buttons = [
+        (
+            1,
+            if wizard.api_running {
+                "[ Working… Esc cancels ]"
+            } else if wizard.api.is_some() {
+                "[ Verify again ]"
+            } else {
+                "[ Inspect API ]"
+            },
+        ),
+        (2, "[ View plan / Details ]"),
+        (3, "[ Apply changes ]"),
+    ];
+    for (row, (control, label)) in buttons.iter().enumerate() {
+        if *control == 2 && wizard.api.is_none() || *control == 3 && !wizard.can_apply_api() {
+            continue;
+        }
+        let style = if wizard.focus == *control {
+            text.bg(app.palette.selection).fg(app.palette.focus)
+        } else {
+            text
+        };
+        write(buf, area.x, area.y + 1 + row as u16, area.width, label, style);
+        if !wizard.testing {
+            chrome::register(
+                Rect::new(area.x, area.y + 1 + row as u16, area.width.min(label.len() as u16), 1),
+                Hit::PangolinApi(*control),
+            );
+        }
+    }
+    if area.height > 4 {
+        let summary = if !wizard.message.is_empty() {
+            wizard.message.clone()
+        } else if let Some(r) = &wizard.api {
+            if status == "Outdated" {
+                "Server or discovery changed; inspect again. Previous results cannot authorize changes.".into()
+            } else if status == "Verified" {
+                format!(
+                    "{}\nAPI port: {} · Loopback only\n{}\nLast verification: historical; F7 for date and details.",
+                    r.endpoint,
+                    r.port,
+                    r.explanation()
+                )
+            } else if let Some(p) = &r.plan {
+                format!(
+                    "{}\nRestart: {} only\nTemporary Pangolin interruption (Sites, Resources, sessions).\nF7: files, values, backup and verification plan.",
+                    p.edits.join("\n"),
+                    p.service
+                )
+            } else {
+                format!(
+                    "Server: {}\n{}{}\n{}",
+                    wizard.target,
+                    if r.access == "Externally published" {
+                        "WARNING: API is externally published.\n"
+                    } else {
+                        ""
+                    },
+                    r.explanation(),
+                    r.changed
+                )
+            }
+        } else {
+            format!(
+                "Server: {}\nRevalidate discovery and inspect private API health.\nNo keys or tunnel are used.",
+                wizard.target
+            )
+        };
+        lines_into(
+            buf,
+            Rect::new(area.x, area.y + 4, area.width, area.height - 4),
+            &summary,
+            0,
+            text,
+        );
+    }
+}
+
+fn approval(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
+    chrome::clear_hits();
+    let width = area.width.saturating_sub(4).min(94);
+    let height = area.height.saturating_sub(2).min(26);
+    let rect = Rect::new(
+        area.x + (area.width - width) / 2,
+        area.y + (area.height - height) / 2,
+        width,
+        height,
+    );
+    let inner = frame(
+        buf,
+        rect,
+        &app.palette,
+        &Sides {
+            top_left: vec![Control::plain("approve Integration API changes")],
+            bottom_left: vec![
+                Control::named("Tab", "select", KeyCode::Tab),
+                Control::named("Enter", "confirm", KeyCode::Enter),
+                Control::named("Esc", "cancel", KeyCode::Esc),
+            ],
+            focused: true,
+            ..Sides::default()
+        },
+    );
+    let text = text_style(&app.palette);
+    let Some(plan) = wizard.api.as_ref().and_then(|a| a.plan.as_ref()) else {
+        return;
+    };
+    let content = format!(
+        "Server: {}\nWARNING: temporary Pangolin interruption, including Sites, Resources and active sessions.\n{}\nFiles: {}\nBackup: {}\nRecreate only service: {}{}\nFiles and runtime will be revalidated. Backups stay on the VPS; no automatic rollback.",
+        wizard.target,
+        plan.edits.join("\n"),
+        plan.files
+            .iter()
+            .filter(|f| f.before != f.after)
+            .map(|f| f.path.as_str())
+            .collect::<Vec<_>>()
+            .join(", "),
+        plan.backup,
+        plan.service,
+        if plan.external {
+            " Existing external API connectivity will be removed."
+        } else {
+            ""
+        }
+    );
+    lines_into(
+        buf,
+        Rect::new(
+            inner.x + 1,
+            inner.y,
+            inner.width.saturating_sub(2),
+            inner.height.saturating_sub(2),
+        ),
+        &content,
+        0,
+        text,
+    );
+    for (yes, x, label, control) in [
+        (false, inner.x + 1, "[ Cancel ]", 4),
+        (true, inner.x + 16, "[ Apply ]", 5),
+    ] {
+        let style = if wizard.api_confirm_yes == yes {
+            text.bg(app.palette.selection)
+                .fg(app.palette.focus)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            text
+        };
+        write(buf, x, inner.bottom() - 1, label.len() as u16, label, style);
+        chrome::register(
+            Rect::new(x, inner.bottom() - 1, label.len() as u16, 1),
+            Hit::PangolinApi(control),
+        );
+    }
 }
