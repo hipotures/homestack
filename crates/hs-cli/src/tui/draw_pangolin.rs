@@ -8,28 +8,40 @@ use ratatui::{
 
 use super::chrome::{self, Control, Hit, Sides, frame, text_style};
 use super::draw::{bar, wrap, write};
-use super::pangolin::{DESCRIPTIONS, HELP, STAGES, Wizard};
+use super::pangolin::{BOOTSTRAP, DESCRIPTIONS, HELP, INSTALLATION, STAGES, Wizard};
 use super::state::App;
 
 pub(super) fn screen(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
     let palette = &app.palette;
     let text = text_style(palette);
     let muted = text.fg(palette.muted);
-    let available = wizard.selected_step == 0;
+    let available = wizard.selected_step == 0 || (wizard.selected_step == 1 && wizard.prerequisites_available());
+    let prerequisites = wizard.selected_step == 1;
     let inner = frame(
         buf,
         area,
         palette,
         &Sides {
             top_left: vec![Control::plain("settings / integrations / pangolin")],
-            bottom_left: vec![
-                Control::named("↑↓", "steps", KeyCode::Down),
-                Control::named("Tab", "focus", KeyCode::Tab).enabled(available),
-                Control::named("F4", "help", KeyCode::F(4)),
-                Control::named("F6", "test", KeyCode::F(6)).enabled(available && !wizard.testing),
-                Control::named("F7", "report", KeyCode::F(7)).enabled(wizard.report.is_some()),
-                Control::named("Esc", if wizard.testing { "cancel" } else { "back" }, KeyCode::Esc),
-            ],
+            bottom_left: if prerequisites {
+                vec![
+                    Control::named("↑↓", "steps", KeyCode::Down),
+                    Control::named("Tab", "focus", KeyCode::Tab).enabled(available),
+                    Control::named("Enter", "open/toggle", KeyCode::Enter).enabled(available),
+                    Control::named("Pg↓↑", "scroll", KeyCode::PageDown).enabled(available),
+                    Control::named("F4", "help", KeyCode::F(4)),
+                    Control::named("Esc", "back", KeyCode::Esc),
+                ]
+            } else {
+                vec![
+                    Control::named("↑↓", "steps", KeyCode::Down),
+                    Control::named("Tab", "focus", KeyCode::Tab).enabled(available),
+                    Control::named("F4", "help", KeyCode::F(4)),
+                    Control::named("F6", "test", KeyCode::F(6)).enabled(wizard.selected_step == 0 && !wizard.testing),
+                    Control::named("F7", "report", KeyCode::F(7)).enabled(wizard.report.is_some()),
+                    Control::named("Esc", if wizard.testing { "cancel" } else { "back" }, KeyCode::Esc),
+                ]
+            },
             focused: true,
             ..Sides::default()
         },
@@ -40,7 +52,16 @@ pub(super) fn screen(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
     let x = inner.x + 1;
     let width = inner.width - 2;
     let verified = wizard.status() == "Verified";
-    let state = format!("{}   {}/8 completed", wizard.status(), usize::from(verified));
+    let status = if prerequisites && wizard.prerequisites_available() {
+        if wizard.prerequisites_confirmed() {
+            "Confirmed by user"
+        } else {
+            "Awaiting confirmation"
+        }
+    } else {
+        wizard.status()
+    };
+    let state = format!("{status}   {}/8 completed", wizard.completed());
     write(
         buf,
         x,
@@ -62,7 +83,7 @@ pub(super) fn screen(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
         x,
         inner.y + 1,
         width,
-        &bar(usize::from(width), if verified { 12.5 } else { 0.0 }),
+        &bar(usize::from(width), wizard.completed() as f64 * 12.5),
         text.fg(palette.accent),
     );
     let body = Rect::new(x, inner.y + 3, width, inner.height - 5);
@@ -85,6 +106,9 @@ pub(super) fn screen(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
             wizard,
             true,
         );
+    } else if prerequisites && wizard.focus > 0 && wizard.prerequisites_available() {
+        // Compact details page: Tab returns to the complete step navigation.
+        prerequisites_details(buf, body, app, wizard);
     } else {
         // At 80x24 all eight navigation rows and the essential form stay on
         // screen. Explanations open in the same scrollable help panel as wide mode.
@@ -105,7 +129,7 @@ pub(super) fn screen(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
             false,
         );
     }
-    if !wizard.testing && !wizard.message.is_empty() {
+    if wizard.selected_step == 0 && !wizard.testing && !wizard.message.is_empty() {
         write(buf, x, inner.bottom() - 1, width, &wizard.message, muted);
     }
     if wizard.help_open || wizard.report_open {
@@ -139,7 +163,7 @@ fn steps(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard, wide: bool) {
             } else {
                 style
             }
-        } else if at > 0 {
+        } else if at > 1 || (at == 1 && !wizard.prerequisites_available()) {
             text.fg(app.palette.muted)
         } else {
             text
@@ -147,7 +171,7 @@ fn steps(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard, wide: bool) {
         write(buf, area.x, y, area.width, &" ".repeat(usize::from(area.width)), style);
         let mark = if chosen && wizard.focus == 0 {
             "▸"
-        } else if at == 0 && wizard.status() == "Verified" {
+        } else if (at == 0 && wizard.status() == "Verified") || (at == 1 && wizard.prerequisites_confirmed()) {
             "✓"
         } else {
             " "
@@ -160,7 +184,7 @@ fn steps(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard, wide: bool) {
             &format!("{mark} {}. {title}", at + 1),
             style,
         );
-        if at > 0 {
+        if at > 1 || (at == 1 && !wizard.prerequisites_available()) {
             write(buf, area.right() - 8, y, 8, "[Locked]", style.fg(app.palette.muted));
         }
         chrome::register(Rect::new(area.x, y, area.width, 1), Hit::PangolinStep(at));
@@ -182,6 +206,15 @@ fn details(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard, wide: bool)
         );
         y += 2;
     }
+    if wizard.selected_step == 1 && wizard.prerequisites_available() {
+        prerequisites_details(
+            buf,
+            Rect::new(area.x, y, area.width, area.bottom().saturating_sub(y)),
+            app,
+            wizard,
+        );
+        return;
+    }
     if wizard.selected_step > 0 {
         if !wide {
             write(
@@ -194,10 +227,15 @@ fn details(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard, wide: bool)
             );
             y += 1;
         }
-        let lines = format!(
-            "Locked - not implemented in Phase 1.\n\n{}\n\nF4 opens detailed help. Enter also opens help; it never runs this step.",
-            DESCRIPTIONS[wizard.selected_step]
-        );
+        let lines = if wizard.selected_step == 1 {
+            "Locked: verify and save the current SSH target in Step 1 first.\n\nF4 explains the manual prerequisites."
+                .to_owned()
+        } else {
+            format!(
+                "Locked - not implemented.\n\n{}\n\nF4 opens detailed help. Enter also opens help; it never runs this step.",
+                DESCRIPTIONS[wizard.selected_step]
+            )
+        };
         lines_into(
             buf,
             Rect::new(area.x, y, area.width, area.bottom().saturating_sub(y)),
@@ -327,6 +365,102 @@ fn details(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard, wide: bool)
             Rect::new(area.x, y, area.width, area.bottom() - y),
             "Uses your existing OpenSSH configuration. SSH aliases and FIDO hardware keys are supported.\n\nNo private keys or authentication secrets are stored by HomeStack. The test only executes true.\n\nF4 opens detailed contextual help.",
             0,
+            muted,
+        );
+    }
+}
+
+fn prerequisites_details(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
+    if area.height < 4 {
+        return;
+    }
+    let text = text_style(&app.palette);
+    let muted = text.fg(app.palette.muted);
+    let focus = |at| {
+        if wizard.focus == at {
+            let style = text
+                .bg(app.palette.selection)
+                .fg(app.palette.focus)
+                .add_modifier(Modifier::BOLD);
+            if app.palette.no_color {
+                style.add_modifier(Modifier::REVERSED)
+            } else {
+                style
+            }
+        } else {
+            text
+        }
+    };
+    // Headers and confirmation remain visible while the instruction body scrolls.
+    for (index, title) in ["Pangolin installation", "Bootstrap API key"].iter().enumerate() {
+        let y = area.y + index as u16;
+        write(
+            buf,
+            area.x,
+            y,
+            area.width,
+            &format!("{} {title}", if wizard.instructions[index] { "▾" } else { "▸" }),
+            focus(index + 1),
+        );
+        chrome::register(
+            Rect::new(area.x, y, area.width, 1),
+            Hit::PangolinPrerequisite(index + 1),
+        );
+    }
+    let checkbox_y = area.bottom() - 2;
+    write(
+        buf,
+        area.x,
+        checkbox_y,
+        area.width,
+        &format!(
+            "[{}] I have completed these prerequisites",
+            if wizard.prerequisites_confirmed() { "x" } else { " " }
+        ),
+        focus(3),
+    );
+    chrome::register(
+        Rect::new(area.x, checkbox_y, area.width, 1),
+        Hit::PangolinPrerequisite(3),
+    );
+    let status = if !wizard.message.is_empty() {
+        wizard.message.as_str()
+    } else if wizard.prerequisites_confirmed() {
+        "Confirmed by user"
+    } else {
+        "Awaiting confirmation"
+    };
+    let status_width = area.width;
+    write(
+        buf,
+        area.x,
+        checkbox_y + 1,
+        status_width,
+        status,
+        text.fg(if wizard.message.is_empty() {
+            app.palette.muted
+        } else {
+            app.palette.error
+        }),
+    );
+    if area.height > 4 {
+        let mut instructions = Vec::new();
+        instructions.push(format!("Selected server: {}", wizard.target));
+        instructions.push(if wizard.instructions[0] {
+            INSTALLATION.to_owned()
+        } else {
+            "Pangolin Server must be installed and running on the selected server.".to_owned()
+        });
+        instructions.push(if wizard.instructions[1] {
+            BOOTSTRAP.to_owned()
+        } else {
+            "Create the temporary homestack-bootstrap Root API key.".to_owned()
+        });
+        lines_into(
+            buf,
+            Rect::new(area.x, area.y + 2, area.width, area.height - 4),
+            &instructions.join("\n\n"),
+            wizard.prerequisites_scroll,
             muted,
         );
     }

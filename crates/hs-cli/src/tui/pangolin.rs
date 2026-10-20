@@ -1,4 +1,4 @@
-//! Phase 1 of Pangolin setup: non-secret target and read-only SSH verification.
+//! Pangolin setup: SSH verification and manual, non-secret prerequisites.
 use std::io::Write;
 use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::path::{Path, PathBuf};
@@ -12,7 +12,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 pub const STAGES: [&str; 8] = [
     "Pangolin server",
     "Pangolin prerequisites",
-    "SSH connection",
+    "Pangolin discovery",
     "Integration API",
     "API tunnel",
     "Bootstrap API key",
@@ -21,8 +21,8 @@ pub const STAGES: [&str; 8] = [
 ];
 pub const DESCRIPTIONS: [&str; 8] = [
     "Select and test an existing OpenSSH destination.",
-    "Future: confirm installation and preparation of a Root bootstrap key.",
-    "Future: verify administrative SSH access for server configuration.",
+    "Confirm installation and preparation of a temporary Root bootstrap key.",
+    "Future: discover the actual Pangolin installation through read-only SSH inspection.",
     "Future: inspect API configuration; approve and back up any changes.",
     "Future: tunnel to the private Integration API and verify reachability.",
     "Future: accept a masked temporary key and verify its permissions.",
@@ -32,14 +32,16 @@ pub const DESCRIPTIONS: [&str; 8] = [
 /// Contextual help for locked stages describes future work, not a working operation.
 pub const HELP: [&str; 8] = [
     "Select an OpenSSH alias, hostname, IP address or user@host. OpenSSH reads your existing configuration to resolve the user, port, identities and proxy settings; HomeStack does not assume root.\n\nF6 tests the current draft asynchronously: ssh -G resolves configuration, then an authenticated SSH session executes only true. Existing askpass prompts support host confirmation, passphrases, PINs and FIDO key touch. Host verification remains enabled; password and keyboard-interactive fallback remain disabled.\n\nThe overall deadline is 45 seconds. Esc cancels; changing the target invalidates verification. Only a successful unchanged test saves its target automatically, with mode 0600. Failure or cancellation does not overwrite the saved target.\n\nHomeStack stores no private SSH keys or authentication secrets. The last successful test and its date are retained when reopening. Editing the target requires a new test. This phase does not inspect or configure Pangolin.",
-    "Locked - not implemented in Phase 1.\n\nThe future prerequisite step will explain how to install Pangolin and prepare a temporary Root API key named homestack-bootstrap with createApiKey, listApiKeys, listApiKeyActions and setApiKeyActions.\n\nA future confirmation checkbox will record that the user completed these preparations. User confirmation will not be presented as technical verification. No checkbox, key input or remote operation is enabled now.",
-    "Locked - not implemented in Phase 1.\n\nA future step will establish the administrative SSH session required for server-side configuration. It will reuse existing OpenSSH configuration and HomeStack authentication prompts, including hardware keys.\n\nThe current Step 1 test verifies basic authentication and harmless command execution only; it does not verify administrator privileges or inspect the Pangolin installation.",
-    "Locked - not implemented in Phase 1.\n\nA future step will inspect the installed Pangolin version and actual Integration API configuration. If enable_integration_api or a loopback port mapping needs to change, HomeStack will show the exact plan, require approval and back up configuration first.\n\nThe Integration API must not be exposed publicly. This screen currently performs no server inspection, configuration change or service restart.",
-    "Locked - not implemented in Phase 1.\n\nA future step will establish an SSH tunnel to the private Integration API endpoint and verify reachability. The tunnel will be owned and managed separately from basic SSH verification.\n\nNo tunnel is opened, no API port is guessed and no API connection is attempted in this phase.",
-    "Locked - not implemented in Phase 1.\n\nA future step will accept a temporary bootstrap API credential in a masked field and verify its Root scope and required API-key permissions. The secret must not enter logs, command arguments or repository files.\n\nNo API credential field is enabled now. Step 1 only stores the non-secret SSH destination.",
-    "Locked - not implemented in Phase 1.\n\nA future step will create an organization-scoped HomeStack API key with only the permissions required by the integration, verify its assigned permissions and save it securely.\n\nSelective reconfiguration must reuse unrelated existing credentials and avoid duplicate keys or resources. No keys or Pangolin objects are created by the current wizard.",
-    "Locked - not implemented in Phase 1.\n\nA future step will independently verify the integration, assigned permissions and safe read-only API operations. It must distinguish observed results from assumptions and user confirmations.\n\nA successful SSH test marks only Step 1 complete (1/8). It does not establish that Pangolin, its API, tunnels or resource routing work.",
+    "Prepare Pangolin Server on the SSH server verified in Step 1. Confirm both instruction groups only after completing them. This is a manual declaration, not technical verification. No installation, API operation or remote change occurs here.\n\nIn the Pangolin administration interface, open API Keys and create homestack-bootstrap with Root authorization and these actions:\n  createApiKey\n  listApiKeys\n  listApiKeyActions\n  setApiKeyActions\n\nRoot scope is required for Integration API key management; selecting four actions alone is insufficient. These actions create the restricted key, detect conflicts, inspect actions and assign permissions. The temporary administrative key is separate from the permanent, restricted HomeStack key.\n\nKeep its token securely until masked entry in Step 6. Do not enter it here. Revoke it only after the permanent key has been provisioned and verified successfully.\n\nStep 3 will discover the installation method, version, services, configuration paths and ports read-only. It does not assume Docker Compose or fixed paths. The Integration API may remain disabled until Step 4. Checking this box does not verify installation or API availability. Confirmation is saved for the selected server; changing the target requires reconfirmation.",
+    "Locked - not implemented.\n\nPangolin discovery will inspect the selected server over authenticated SSH, read-only. It will identify whether Pangolin is installed and running, its version, actual installation method, container and service identities, Compose or service configuration paths, application configuration files, active listening ports and mappings, and the Integration API port and enabled/disabled state.\n\nNo Docker Compose layout, container name or installation path is assumed. Ambiguous or unsupported layouts will be reported and never modified automatically. Later configuration changes belong to Step 4 and require explicit approval and backup.\n\nNo discovery or remote connection is performed by this stage yet.",
+    "Locked - not implemented.\n\nA future step will inspect the installed Pangolin version and actual Integration API configuration. If enable_integration_api or a loopback port mapping needs to change, HomeStack will show the exact plan, require approval and back up configuration first.\n\nThe Integration API must not be exposed publicly. This screen currently performs no server inspection, configuration change or service restart.",
+    "Locked - not implemented.\n\nA future step will establish an SSH tunnel to the private Integration API endpoint and verify reachability. The tunnel will be owned and managed separately from basic SSH verification.\n\nNo tunnel is opened, no API port is guessed and no API connection is attempted in this phase.",
+    "Locked - not implemented.\n\nA future step will accept a temporary bootstrap API credential in a masked field and verify its Root scope and required API-key permissions. The secret must not enter logs, command arguments or repository files.\n\nNo API credential field is enabled now. Step 1 only stores the non-secret SSH destination.",
+    "Locked - not implemented.\n\nA future step will create an organization-scoped HomeStack API key with only the permissions required by the integration, verify its assigned permissions and save it securely.\n\nSelective reconfiguration must reuse unrelated existing credentials and avoid duplicate keys or resources. No keys or Pangolin objects are created by the current wizard.",
+    "Locked - not implemented.\n\nA future step will independently verify the integration, assigned permissions and safe read-only API operations. It must distinguish observed results from assumptions and user confirmations.\n\nA successful SSH test marks only Step 1 complete (1/8). It does not establish that Pangolin, its API, tunnels or resource routing work.",
 ];
+pub const INSTALLATION: &str = "Pangolin Server must be installed and running on the selected server.\n\nPangolin must already be installed on the SSH server selected in Step 1. No particular installation method is required: Docker Compose, standalone services and other deployment methods may exist. Step 3 will discover the actual installation. The Integration API may still be disabled; Step 4 handles it. Phase 2 makes no remote configuration changes.";
+pub const BOOTSTRAP: &str = "Create the temporary homestack-bootstrap Root API key.\n\nIn the Pangolin administration interface, open API Keys and create:\nName: homestack-bootstrap\nAuthorization: Root\nRequired actions:\n  createApiKey\n  listApiKeys\n  listApiKeyActions\n  setApiKeyActions\n\nIntegration API key management requires Root authorization; four actions without Root scope are insufficient. This temporary administrative key is separate from the restricted HomeStack integration key. Keep the token securely until Step 6; do not enter it here. Revoke it after successful provisioning and verification of the permanent key.";
 static NEXT_TEST: AtomicU64 = AtomicU64::new(1);
 
 /// Strict destination syntax, never an option, URI, command or credential.
@@ -118,6 +120,9 @@ pub struct Wizard {
     pub cursor: usize,
     pub expanded: bool,
     pub selected_step: usize,
+    pub instructions: [bool; 2],
+    pub prerequisites_scroll: usize,
+    prerequisites_target: Option<String>,
     pub help_open: bool,
     pub help_scroll: usize,
     pub testing: bool,
@@ -171,6 +176,12 @@ impl Wizard {
             .as_ref()
             .filter(|r| r.passed && r.target == target)
             .map(|r| r.target.clone());
+        let prerequisites_target = settings
+            .get("prerequisites")
+            .filter(|value| value.get("confirmed").and_then(toml::Value::as_bool) == Some(true))
+            .and_then(|value| value.get("target").and_then(toml::Value::as_str))
+            .filter(|confirmed| verified.as_deref() == Some(*confirmed))
+            .map(str::to_owned);
         Ok(Self {
             cursor: target.chars().count(),
             saved: target.clone(),
@@ -179,6 +190,9 @@ impl Wizard {
             focus: 0,
             expanded: true,
             selected_step: 0,
+            instructions: [false; 2],
+            prerequisites_scroll: 0,
+            prerequisites_target,
             help_open: false,
             help_scroll: 0,
             testing: false,
@@ -220,6 +234,7 @@ impl Wizard {
     fn changed(&mut self) {
         self.revision += 1;
         self.verified = None;
+        self.prerequisites_target = None;
         self.testing = false;
         self.test_id = 0;
         self.confirm_discard = false;
@@ -239,11 +254,70 @@ impl Wizard {
         self.cursor += clean.chars().count();
         self.changed();
     }
-    /// Every stage can be selected for explanation; only Step 1 has actions.
+    pub fn prerequisites_available(&self) -> bool {
+        self.status() == "Verified" && self.saved == self.target
+    }
+    pub fn prerequisites_confirmed(&self) -> bool {
+        self.prerequisites_available() && self.prerequisites_target.as_ref() == Some(&self.target)
+    }
+    pub fn completed(&self) -> usize {
+        usize::from(self.status() == "Verified") + usize::from(self.prerequisites_confirmed())
+    }
+    pub fn toggle_prerequisites(&mut self) {
+        if !self.prerequisites_available() {
+            return;
+        }
+        let confirmed = !self.prerequisites_confirmed();
+        let result = (|| {
+            let mut table = read(&self.path)?;
+            // Never record confirmation against a replaced or unverified file.
+            if table.get("server_target").and_then(toml::Value::as_str) != Some(self.target.as_str())
+                || table
+                    .get("last_test")
+                    .and_then(|v| v.get("target"))
+                    .and_then(toml::Value::as_str)
+                    != Some(self.target.as_str())
+                || table
+                    .get("last_test")
+                    .and_then(|v| v.get("passed"))
+                    .and_then(toml::Value::as_bool)
+                    != Some(true)
+            {
+                return Err("Server settings changed; retest Step 1 before confirming.".to_owned());
+            }
+            let mut prerequisites = toml::Table::new();
+            prerequisites.insert("target".to_owned(), toml::Value::String(self.target.clone()));
+            prerequisites.insert("confirmed".to_owned(), toml::Value::Boolean(confirmed));
+            table.insert("prerequisites".to_owned(), toml::Value::Table(prerequisites));
+            persist(&self.path, &table)
+        })();
+        match result {
+            Ok(()) => {
+                self.prerequisites_target = confirmed.then(|| self.target.clone());
+                self.message.clear();
+            }
+            Err(error) => self.message = format!("{error} Space retries."),
+        }
+    }
+    /// Mouse interaction uses the same controls and dependency checks as keys.
+    pub fn prerequisite_control(&mut self, control: usize) {
+        if self.selected_step != 1 || !self.prerequisites_available() || self.help_open || self.report_open {
+            return;
+        }
+        self.focus = control.clamp(1, 3);
+        if self.focus == 3 {
+            self.toggle_prerequisites();
+        } else {
+            self.instructions[self.focus - 1] = !self.instructions[self.focus - 1];
+            self.prerequisites_scroll = 0;
+        }
+    }
+    /// Every stage can be selected for explanation; only Steps 1 and 2 have actions.
     pub fn select_step(&mut self, step: usize) {
         self.selected_step = step.min(STAGES.len() - 1);
         self.focus = 0;
         self.help_scroll = 0;
+        self.message.clear();
     }
 
     /// Field and action focus is independent of step navigation.
@@ -268,6 +342,44 @@ impl Wizard {
                 _ => {}
             }
             return false;
+        }
+        if self.selected_step == 1 && self.prerequisites_available() {
+            match key.code {
+                KeyCode::Tab => {
+                    self.focus = (self.focus + 1) % 4;
+                    return false;
+                }
+                KeyCode::BackTab => {
+                    self.focus = (self.focus + 3) % 4;
+                    return false;
+                }
+                KeyCode::Enter | KeyCode::Right if self.focus == 0 => {
+                    self.focus = 1;
+                    return false;
+                }
+                KeyCode::Enter if self.focus == 1 || self.focus == 2 => {
+                    self.prerequisite_control(self.focus);
+                    return false;
+                }
+                KeyCode::Right | KeyCode::Left if self.focus == 1 || self.focus == 2 => {
+                    self.instructions[self.focus - 1] = key.code == KeyCode::Right;
+                    self.prerequisites_scroll = 0;
+                    return false;
+                }
+                KeyCode::Char(' ') | KeyCode::Enter if self.focus == 3 => {
+                    self.toggle_prerequisites();
+                    return false;
+                }
+                KeyCode::PageDown => {
+                    self.prerequisites_scroll = self.prerequisites_scroll.saturating_add(5);
+                    return false;
+                }
+                KeyCode::PageUp => {
+                    self.prerequisites_scroll = self.prerequisites_scroll.saturating_sub(5);
+                    return false;
+                }
+                _ => {}
+            }
         }
         match key.code {
             KeyCode::Esc if self.testing => {
@@ -299,16 +411,20 @@ impl Wizard {
                 self.help_scroll = 0;
             }
             KeyCode::Char(' ') if self.focus == 0 => self.expanded = !self.expanded,
-            KeyCode::Home if self.focus == 1 => self.cursor = 0,
-            KeyCode::End if self.focus == 1 => self.cursor = self.target.chars().count(),
-            KeyCode::Left if self.focus == 1 => self.cursor = self.cursor.saturating_sub(1),
-            KeyCode::Right if self.focus == 1 => self.cursor = (self.cursor + 1).min(self.target.chars().count()),
-            KeyCode::Char('u') if self.focus == 1 && key.modifiers.contains(KeyModifiers::CONTROL) => {
+            KeyCode::Home if self.selected_step == 0 && self.focus == 1 => self.cursor = 0,
+            KeyCode::End if self.selected_step == 0 && self.focus == 1 => self.cursor = self.target.chars().count(),
+            KeyCode::Left if self.selected_step == 0 && self.focus == 1 => self.cursor = self.cursor.saturating_sub(1),
+            KeyCode::Right if self.selected_step == 0 && self.focus == 1 => {
+                self.cursor = (self.cursor + 1).min(self.target.chars().count())
+            }
+            KeyCode::Char('u')
+                if self.selected_step == 0 && self.focus == 1 && key.modifiers.contains(KeyModifiers::CONTROL) =>
+            {
                 self.target.clear();
                 self.cursor = 0;
                 self.changed();
             }
-            KeyCode::Backspace | KeyCode::Delete if self.focus == 1 => {
+            KeyCode::Backspace | KeyCode::Delete if self.selected_step == 0 && self.focus == 1 => {
                 let mut chars: Vec<char> = self.target.chars().collect();
                 let at = if key.code == KeyCode::Backspace {
                     self.cursor.checked_sub(1)
@@ -349,18 +465,10 @@ impl Wizard {
         );
         // Only fixed metadata is persisted; no raw SSH output or prompt text.
         table.insert("last_test".to_owned(), toml::Value::Table(last_test));
-        let save = || -> Result<(), Box<dyn std::error::Error>> {
-            let parent = self.path.parent().ok_or("Invalid integration path")?;
-            std::fs::DirBuilder::new().recursive(true).mode(0o700).create(parent)?;
-            let mut file = tempfile::NamedTempFile::new_in(parent)?;
-            file.as_file().set_permissions(std::fs::Permissions::from_mode(0o600))?;
-            file.write_all(toml::to_string_pretty(&table)?.as_bytes())?;
-            file.as_file().sync_all()?;
-            file.persist(&self.path)?;
-            std::fs::File::open(parent)?.sync_all()?;
-            Ok(())
-        };
-        save().map_err(|_| "Cannot save Pangolin server settings".to_owned())?;
+        if self.prerequisites_target.as_ref() != Some(&self.target) {
+            table.remove("prerequisites");
+        }
+        persist(&self.path, &table)?;
         self.saved = self.target.clone();
         self.confirm_discard = false;
         Ok(())
@@ -402,6 +510,20 @@ impl Wizard {
         }
         self.report = Some(report);
     }
+}
+fn persist(path: &Path, table: &toml::Table) -> Result<(), String> {
+    let save = || -> Result<(), Box<dyn std::error::Error>> {
+        let parent = path.parent().ok_or("Invalid integration path")?;
+        std::fs::DirBuilder::new().recursive(true).mode(0o700).create(parent)?;
+        let mut file = tempfile::NamedTempFile::new_in(parent)?;
+        file.as_file().set_permissions(std::fs::Permissions::from_mode(0o600))?;
+        file.write_all(toml::to_string_pretty(table)?.as_bytes())?;
+        file.as_file().sync_all()?;
+        file.persist(path)?;
+        std::fs::File::open(parent)?.sync_all()?;
+        Ok(())
+    };
+    save().map_err(|_| "Cannot save Pangolin settings.".to_owned())
 }
 fn read(path: &Path) -> Result<toml::Table, String> {
     match std::fs::read_to_string(path) {

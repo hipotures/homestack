@@ -1277,6 +1277,12 @@ impl App {
                         self.overlay = Some(Overlay::Integrations { index: item });
                         return press(self, KeyCode::Enter);
                     }
+                    Some(Hit::PangolinPrerequisite(control)) => {
+                        if let Some(Overlay::Pangolin(wizard)) = self.overlay.as_mut() {
+                            wizard.prerequisite_control(control);
+                        }
+                        return None;
+                    }
                     Some(Hit::PangolinStep(step)) => {
                         if let Some(Overlay::Pangolin(wizard)) = self.overlay.as_mut() {
                             wizard.select_step(step);

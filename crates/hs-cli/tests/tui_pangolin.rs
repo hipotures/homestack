@@ -428,7 +428,7 @@ fn pangolin_verified_progress_keeps_future_stages_locked() {
     let text = buf.content.iter().map(|c| c.symbol()).collect::<String>();
     assert!(text.contains("1/8"));
     assert!(text.contains("Verified"));
-    assert_eq!(text.matches("[Locked]").count(), 7);
+    assert_eq!(text.matches("[Locked]").count(), 6);
 }
 
 fn rendered(app: &App, width: u16, height: u16) -> String {
@@ -505,8 +505,8 @@ fn pangolin_context_help_is_readable_for_every_locked_stage_and_blocks_actions()
         assert!(app.key(key(KeyCode::F(4))).is_none());
         let text = rendered(&app, 80, 24);
         assert!(text.contains(&format!("help · {}.", step + 1)));
-        if step > 0 {
-            assert!(text.contains("Locked - not implemented in Phase 1."));
+        if step > 1 {
+            assert!(text.contains("Locked - not implemented."));
         }
         assert!(app.key(key(KeyCode::F(5))).is_none());
         assert!(app.key(key(KeyCode::F(6))).is_none());
@@ -747,4 +747,286 @@ fn pangolin_success_uses_connection_status_without_redundant_footer_message() {
                 .is_empty()
         );
     }
+}
+
+fn prerequisites_wizard(dir: &std::path::Path) -> Wizard {
+    let mut w = open(dir);
+    edit(&mut w, "prerequisite-lab");
+    verify(&mut w);
+    w.select_step(1);
+    w
+}
+
+#[test]
+fn pangolin_prerequisites_require_current_verified_and_saved_server() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut w = open(dir.path());
+    w.select_step(1);
+    assert!(!w.prerequisites_available());
+    w.toggle_prerequisites();
+    assert!(!w.prerequisites_confirmed());
+    assert!(!dir.path().join("integrations").exists());
+    w.select_step(0);
+    edit(&mut w, "prerequisite-lab");
+    let id = w.begin_test().unwrap();
+    w.complete(id, report("prerequisite-lab", false));
+    assert!(!w.prerequisites_available());
+    verify(&mut w);
+    assert!(w.prerequisites_available());
+    w.select_step(1);
+    assert!(w.begin_test().is_none());
+}
+
+#[test]
+fn pangolin_prerequisite_headers_keyboard_and_checkbox_persist_without_secrets() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut w = prerequisites_wizard(dir.path());
+    assert_eq!(w.completed(), 1);
+    w.key(key(KeyCode::Tab));
+    assert_eq!(w.focus, 1);
+    w.key(key(KeyCode::Right));
+    assert!(w.instructions[0]);
+    w.key(key(KeyCode::Left));
+    assert!(!w.instructions[0]);
+    w.key(key(KeyCode::Enter));
+    assert!(w.instructions[0]);
+    w.key(key(KeyCode::Enter));
+    assert!(!w.instructions[0]);
+    w.key(key(KeyCode::Tab));
+    w.key(key(KeyCode::Enter));
+    assert!(w.instructions[1]);
+    w.key(key(KeyCode::Left));
+    assert!(!w.instructions[1]);
+    w.key(key(KeyCode::Right));
+    assert!(w.instructions[1]);
+    let original_target = w.target.clone();
+    w.key(key(KeyCode::Char('u')));
+    assert_eq!(w.target, original_target);
+    w.key(key(KeyCode::Tab));
+    w.key(key(KeyCode::Char(' ')));
+    assert!(w.prerequisites_confirmed());
+    assert_eq!(w.completed(), 2);
+    let path = dir.path().join("integrations/pangolin.toml");
+    let stored = std::fs::read_to_string(&path).unwrap();
+    let table: toml::Table = toml::from_str(&stored).unwrap();
+    let manual = table["prerequisites"].as_table().unwrap();
+    assert_eq!(manual.len(), 2);
+    assert_eq!(manual["target"].as_str(), Some("prerequisite-lab"));
+    assert_eq!(manual["confirmed"].as_bool(), Some(true));
+    assert_eq!(std::fs::metadata(path).unwrap().permissions().mode() & 0o777, 0o600);
+    assert!(!stored.contains("token"));
+    let mut restored = open(dir.path());
+    assert!(restored.prerequisites_confirmed());
+    restored.select_step(1);
+    restored.focus = 3;
+    restored.key(key(KeyCode::Enter));
+    assert_eq!(restored.completed(), 1);
+    assert!(!open(dir.path()).prerequisites_confirmed());
+    // Phase 2 never queues a worker or remote operation.
+    let mut app = App::new(Preferences::fallback(&dir.path().join("tui.toml")), false).unwrap();
+    app.overlay = Some(Overlay::Pangolin(Box::new(restored)));
+    assert!(app.key(key(KeyCode::F(6))).is_none());
+    assert!(app.key(key(KeyCode::Char(' '))).is_none());
+}
+
+#[test]
+fn pangolin_prerequisites_invalidate_on_target_edit_and_do_not_return_after_retest() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut w = prerequisites_wizard(dir.path());
+    w.toggle_prerequisites();
+    assert!(w.prerequisites_confirmed());
+    w.select_step(0);
+    edit(&mut w, "changed-prerequisite-lab");
+    assert!(!w.prerequisites_available());
+    assert!(!w.prerequisites_confirmed());
+    verify(&mut w);
+    assert_eq!(w.completed(), 1);
+    assert!(!open(dir.path()).prerequisites_confirmed());
+    edit(&mut w, "prerequisite-lab");
+    verify(&mut w);
+    assert!(!open(dir.path()).prerequisites_confirmed());
+}
+
+#[test]
+fn pangolin_prerequisites_write_failure_preserves_state_and_allows_retry() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut w = prerequisites_wizard(dir.path());
+    let path = dir.path().join("integrations/pangolin.toml");
+    let stored = std::fs::read_to_string(&path).unwrap();
+    std::fs::remove_file(&path).unwrap();
+    std::fs::create_dir(&path).unwrap();
+    w.toggle_prerequisites();
+    assert!(!w.prerequisites_confirmed());
+    assert_eq!(w.completed(), 1);
+    assert!(w.message.contains("Space retries"));
+    std::fs::remove_dir(&path).unwrap();
+    std::fs::write(&path, format!("{stored}\n[unrelated]\nkeep = true\n")).unwrap();
+    w.focus = 3;
+    w.key(key(KeyCode::Char(' ')));
+    assert!(w.prerequisites_confirmed());
+    assert!(w.message.is_empty());
+    assert!(std::fs::read_to_string(&path).unwrap().contains("keep = true"));
+    // A failed attempt to uncheck does not falsely report that it was saved.
+    std::fs::remove_file(&path).unwrap();
+    std::fs::create_dir(&path).unwrap();
+    w.toggle_prerequisites();
+    assert!(w.prerequisites_confirmed());
+    assert!(!w.message.is_empty());
+}
+
+#[test]
+fn pangolin_prerequisites_mouse_headers_and_checkbox_use_registered_hits() {
+    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = App::new(Preferences::fallback(&dir.path().join("tui.toml")), false).unwrap();
+    app.overlay = Some(Overlay::Pangolin(Box::new(prerequisites_wizard(dir.path()))));
+    let click_label = |app: &mut App, label: &str| {
+        let text = rendered(app, 120, 36);
+        let (row, line) = text.lines().enumerate().find(|(_, line)| line.contains(label)).unwrap();
+        let column = line
+            .chars()
+            .collect::<Vec<_>>()
+            .windows(label.chars().count())
+            .position(|chars| chars.iter().collect::<String>() == label)
+            .unwrap();
+        app.mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: column as u16,
+            row: row as u16,
+            modifiers: KeyModifiers::NONE,
+        });
+    };
+    click_label(&mut app, "▸ Pangolin installation");
+    assert!(matches!(&app.overlay, Some(Overlay::Pangolin(w)) if w.instructions[0]));
+    click_label(&mut app, "▾ Pangolin installation");
+    assert!(matches!(&app.overlay, Some(Overlay::Pangolin(w)) if !w.instructions[0]));
+    click_label(&mut app, "▸ Bootstrap API key");
+    assert!(matches!(&app.overlay, Some(Overlay::Pangolin(w)) if w.instructions[1]));
+    click_label(&mut app, "[ ] I have completed these prerequisites");
+    assert!(matches!(&app.overlay, Some(Overlay::Pangolin(w)) if w.prerequisites_confirmed()));
+    click_label(&mut app, "[x] I have completed these prerequisites");
+    assert!(matches!(&app.overlay, Some(Overlay::Pangolin(w)) if !w.prerequisites_confirmed()));
+}
+
+#[test]
+fn pangolin_phase2_testbackend_snapshots_help_and_future_discovery() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut w = prerequisites_wizard(dir.path());
+    w.instructions = [true; 2];
+    w.focus = 3;
+    let mut app = App::new(Preferences::fallback(&dir.path().join("tui.toml")), false).unwrap();
+    app.overlay = Some(Overlay::Pangolin(Box::new(w)));
+    for (width, height) in [(80, 24), (120, 36), (160, 45)] {
+        let text = rendered(&app, width, height);
+        for label in [
+            "Pangolin installation",
+            "Bootstrap API key",
+            "I have completed these prerequisites",
+            "Awaiting confirmation",
+            "1/8",
+            "F4 help",
+        ] {
+            assert!(text.contains(label), "Missing {label} at {width}x{height}\n{text}");
+        }
+        let buffer = hs_cli::tui::draw::render(&app, width, height);
+        let (row, line) = text
+            .lines()
+            .enumerate()
+            .find(|(_, line)| line.contains("[ ] I have completed"))
+            .unwrap();
+        let column = line.chars().position(|c| c == '[').unwrap();
+        assert_eq!(buffer[(column as u16, row as u16)].bg, app.palette.selection);
+        assert!(!text.contains("[ Test ]"));
+        assert!(!text.contains("F6 test"));
+        assert!(!text.contains("[ Save ]"));
+        assert!(!text.contains("PASS"));
+        assert!(!text.contains("Verified"));
+        assert_eq!(text.lines().count(), height as usize);
+        if let Some(output) = std::env::var_os("HOMESTACK_PANGOLIN_RENDER_DIR") {
+            let output = std::path::PathBuf::from(output);
+            std::fs::create_dir_all(&output).unwrap();
+            std::fs::write(output.join(format!("pangolin-phase2-{width}x{height}.txt")), &text).unwrap();
+        }
+        // All expanded instruction text is reachable, even in the compact page.
+        let mut seen = text;
+        for _ in 0..20 {
+            app.key(key(KeyCode::PageDown));
+            seen.push_str(&rendered(&app, width, height));
+        }
+        for action in [
+            "createApiKey",
+            "listApiKeys",
+            "listApiKeyActions",
+            "setApiKeyActions",
+            "Authorization: Root",
+        ] {
+            assert!(seen.contains(action), "Missing {action} at {width}x{height}");
+        }
+        if let Some(Overlay::Pangolin(w)) = app.overlay.as_mut() {
+            w.prerequisites_scroll = 0;
+        }
+    }
+    app.key(key(KeyCode::Char(' ')));
+    assert!(rendered(&app, 120, 36).contains("2/8"));
+    assert!(rendered(&app, 120, 36).contains("Confirmed by user"));
+    app.key(key(KeyCode::F(4)));
+    let mut help = String::new();
+    for _ in 0..12 {
+        help.push_str(&rendered(&app, 80, 24));
+        app.key(key(KeyCode::PageDown));
+    }
+    for phrase in [
+        "Root scope",
+        "createApiKey",
+        "listApiKeys",
+        "listApiKeyActions",
+        "setApiKeyActions",
+        "Step 6",
+        "Revoke",
+        "manual declaration",
+    ] {
+        assert!(help.contains(phrase), "Missing {phrase}");
+    }
+    app.key(key(KeyCode::Esc));
+    assert_eq!(pangolin::STAGES[2], "Pangolin discovery");
+    for step in 2..8 {
+        if let Some(Overlay::Pangolin(w)) = app.overlay.as_mut() {
+            w.select_step(step);
+        }
+        assert!(app.key(key(KeyCode::F(6))).is_none());
+        assert!(app.key(key(KeyCode::Char(' '))).is_none());
+        assert!(rendered(&app, 120, 36).contains("Locked - not implemented."));
+        app.key(key(KeyCode::F(4)));
+        if step == 2 {
+            assert!(rendered(&app, 120, 36).contains("Pangolin discovery"));
+        }
+        app.key(key(KeyCode::Esc));
+    }
+}
+
+#[test]
+fn pangolin_retesting_same_server_keeps_manual_confirmation_but_stale_files_cannot_confirm() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut w = prerequisites_wizard(dir.path());
+    w.toggle_prerequisites();
+    w.select_step(0);
+    verify(&mut w);
+    assert!(open(dir.path()).prerequisites_confirmed());
+    w.select_step(1);
+    let path = dir.path().join("integrations/pangolin.toml");
+    let saved = std::fs::read_to_string(&path).unwrap();
+    let replaced = saved.replace("prerequisite-lab", "another-lab");
+    std::fs::write(&path, &replaced).unwrap();
+    w.toggle_prerequisites();
+    assert!(w.message.contains("Server settings changed"));
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), replaced);
+    // A manually saved target without successful evidence cannot unlock Step 2.
+    std::fs::write(
+        &path,
+        "server_target = \"unverified-lab\"\n[prerequisites]\ntarget = \"unverified-lab\"\nconfirmed = true\n",
+    )
+    .unwrap();
+    let unverified = open(dir.path());
+    assert!(!unverified.prerequisites_available());
+    assert!(!unverified.prerequisites_confirmed());
 }
