@@ -72,31 +72,7 @@ pub(super) fn screen(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
     }
     let x = inner.x + 1;
     let width = inner.width - 2;
-    let verified = if wizard.selected_step == 2 {
-        wizard.discovery_status() == "Discovered"
-    } else {
-        wizard.status() == "Verified"
-    };
-    let status = if wizard.selected_step == 2 {
-        if matches!(wizard.discovery_status(), "Discovering" | "Outdated") {
-            wizard.discovery_status()
-        } else {
-            wizard
-                .discovery
-                .as_ref()
-                .and_then(|r| r.problem())
-                .map_or(wizard.discovery_status(), |p| p.0)
-        }
-    } else if prerequisites && wizard.prerequisites_available() {
-        if wizard.prerequisites_confirmed() {
-            "Confirmed by user"
-        } else {
-            "Awaiting confirmation"
-        }
-    } else {
-        wizard.status()
-    };
-    let state = format!("{status}   {}/8 completed", wizard.completed());
+    let state = format!("{}/8 completed", wizard.completed());
     write(
         buf,
         x,
@@ -111,16 +87,7 @@ pub(super) fn screen(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
         inner.y,
         width.min(state.len() as u16),
         &state,
-        text.fg(if verified {
-            palette.ok
-        } else if wizard.selected_step == 2
-            && wizard.discovery.as_ref().is_some_and(|r| r.problem().is_some())
-            && !matches!(wizard.discovery_status(), "Discovering" | "Outdated" | "Cancelled")
-        {
-            palette.error
-        } else {
-            palette.muted
-        }),
+        text.fg(palette.muted),
     );
     write(
         buf,
@@ -445,7 +412,7 @@ fn details(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard, wide: bool)
 }
 
 fn discovery_details(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
-    if area.height < 3 {
+    if area.height < 5 {
         return;
     }
     let text = text_style(&app.palette);
@@ -465,6 +432,29 @@ fn discovery_details(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
     {
         lines.push_str(&format!("\n{}", wizard.message));
     }
+    let current = wizard.discovery_status();
+    let category = if matches!(current, "Discovering" | "Outdated") {
+        current
+    } else {
+        wizard
+            .discovery
+            .as_ref()
+            .and_then(|r| r.problem())
+            .map_or(current, |p| p.0)
+    };
+    let (mark, color) = match current {
+        "Discovered" => ("✓ ", app.palette.ok),
+        "Not discovered" | "Discovering" | "Outdated" | "Cancelled" => ("", app.palette.muted),
+        _ => ("✗ ", app.palette.error),
+    };
+    write(
+        buf,
+        area.x,
+        area.y,
+        area.width,
+        &format!("{mark}{category}"),
+        text.fg(color).add_modifier(Modifier::BOLD),
+    );
     let style = if wizard.focus == 1 {
         text.bg(app.palette.selection).fg(app.palette.focus)
     } else {
@@ -477,10 +467,10 @@ fn discovery_details(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
     } else {
         "[ Discover ]"
     };
-    write(buf, area.x, area.y, area.width, label, style);
+    write(buf, area.x, area.y + 2, area.width, label, style);
     if !wizard.testing {
         chrome::register(
-            Rect::new(area.x, area.y, label.chars().count() as u16, 1),
+            Rect::new(area.x, area.y + 2, label.chars().count() as u16, 1),
             Hit::PangolinDiscovery(1),
         );
     }
@@ -488,7 +478,7 @@ fn discovery_details(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
         write(
             buf,
             area.x,
-            area.y + 1,
+            area.y + 3,
             area.width,
             "[ Detailed report ]",
             if wizard.focus == 2 {
@@ -497,11 +487,11 @@ fn discovery_details(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
                 text
             },
         );
-        chrome::register(Rect::new(area.x, area.y + 1, 19, 1), Hit::PangolinDiscovery(2));
+        chrome::register(Rect::new(area.x, area.y + 3, 19, 1), Hit::PangolinDiscovery(2));
     }
     lines_into(
         buf,
-        Rect::new(area.x, area.y + 2, area.width, area.height - 2),
+        Rect::new(area.x, area.y + 4, area.width, area.height - 4),
         &lines,
         0,
         text,

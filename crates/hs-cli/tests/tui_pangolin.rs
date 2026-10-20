@@ -922,7 +922,6 @@ fn pangolin_phase2_testbackend_snapshots_help_and_future_discovery() {
             "Pangolin installation",
             "Bootstrap API key",
             "I have completed these prerequisites",
-            "Awaiting confirmation",
             "1/8",
             "F4 help",
         ] {
@@ -936,7 +935,7 @@ fn pangolin_phase2_testbackend_snapshots_help_and_future_discovery() {
             .unwrap();
         let column = line.chars().position(|c| c == '[').unwrap();
         assert_eq!(buffer[(column as u16, row as u16)].bg, app.palette.selection);
-        assert_eq!(text.matches("Awaiting confirmation").count(), 1);
+        assert!(!text.contains("Awaiting confirmation"));
         assert!(!text.contains("[ Test ]"));
         assert!(!text.contains("F6 test"));
         assert!(!text.contains("[ Save ]"));
@@ -969,7 +968,7 @@ fn pangolin_phase2_testbackend_snapshots_help_and_future_discovery() {
     }
     app.key(key(KeyCode::Char(' ')));
     assert!(rendered(&app, 120, 36).contains("2/8"));
-    assert_eq!(rendered(&app, 120, 36).matches("Confirmed by user").count(), 1);
+    assert!(!rendered(&app, 120, 36).contains("Confirmed by user"));
     app.key(key(KeyCode::F(4)));
     let mut help = String::new();
     for _ in 0..12 {
@@ -1254,7 +1253,7 @@ fn pangolin_discovery_ui_controls_help_mouse_and_exact_terminal_buffers() {
     }
     for (width, height) in [(80, 24), (120, 36), (160, 45)] {
         let text = rendered(&app, width, height);
-        for phrase in ["3/8", "Discovered", "[ Discover again ]", "[ Detailed report ]"] {
+        for phrase in ["3/8", "✓ Discovered", "[ Discover again ]", "[ Detailed report ]"] {
             assert!(text.contains(phrase), "{text}");
         }
         if let Some(path) = std::env::var_os("HOMESTACK_PANGOLIN_RENDER_DIR") {
@@ -1412,6 +1411,10 @@ fn pangolin_discovery_failures_render_compactly_without_unknown_inventory() {
             ] {
                 assert!(!text.contains(absent), "{text}");
             }
+            assert!(
+                text.contains(&format!("✗ {category}")),
+                "Missing visible failure status: {text}"
+            );
             assert_eq!(text.matches(category).count(), 1, "{text}");
             assert_eq!(text.matches(action).count(), 1, "{text}");
             assert!(text.matches(diagnostic).count() <= 1, "Duplicate diagnostic: {text}");
@@ -1496,4 +1499,35 @@ fn pangolin_discovery_details_only_list_observed_inventory() {
             .count(),
         1
     );
+}
+
+#[test]
+fn pangolin_header_reports_overall_progress_without_borrowing_another_steps_status() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut w = discovery_wizard(dir.path());
+    w.discovery = Some(pangolin::Discovery::failure(
+        &w.target,
+        "Permission denied",
+        "SSH connected, but Docker metadata is not accessible to this account.",
+    ));
+    let mut app = App::new(Preferences::fallback(&dir.path().join("tui.toml")), false).unwrap();
+    app.overlay = Some(Overlay::Pangolin(Box::new(w)));
+    for step in 0..8 {
+        if let Some(Overlay::Pangolin(w)) = app.overlay.as_mut() {
+            w.select_step(step);
+        }
+        for (width, height) in [(80, 24), (120, 36)] {
+            let text = rendered(&app, width, height);
+            let header = text.lines().nth(1).unwrap();
+            assert!(header.contains("2/8 completed"), "{text}");
+            for status in ["Verified", "Permission denied", "Confirmed", "Locked"] {
+                assert!(!header.contains(status), "{text}");
+            }
+            if step >= 3 {
+                assert!(text.contains("Locked - not implemented."), "{text}");
+                assert!(!text.contains("Verified"), "{text}");
+                assert!(!text.contains("Permission denied"), "{text}");
+            }
+        }
+    }
 }

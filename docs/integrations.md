@@ -116,8 +116,8 @@ Step 6. Step 2 has no token input and reads or writes no credential file. The
 temporary administrative key is separate from the restricted HomeStack key;
 revoke it only after permanent-key provisioning and verification succeed.
 
-The checkbox confirms both instruction groups. **Awaiting confirmation** becomes
-**Confirmed by user**, and progress changes from **1/8** to **2/8**, only after an
+The checkbox confirms both instruction groups. It becomes checked and progress
+changes from **1/8** to **2/8** only after an
 atomic private write to the existing `integrations/pangolin.toml`. Unchecking
 persists the incomplete state. Confirmation is associated with the exact verified
 server target; editing the target invalidates it, and saving a changed target
