@@ -176,6 +176,27 @@ fn serve(stream: UnixStream, id: u64, events: &Sender<Event>) {
     let prompt = request["prompt"].as_str().unwrap_or_default().to_owned();
     let kind = kind_of(request["hint"].as_str(), &prompt);
     if kind == Kind::Touch {
+        // Short-lived touch notices must not briefly open a modal. Show only
+        // a sustained wait; prompts requiring answers remain immediate.
+        if lines
+            .get_ref()
+            .set_read_timeout(Some(std::time::Duration::from_millis(300)))
+            .is_err()
+        {
+            return;
+        }
+        let mut rest = String::new();
+        match lines.read_line(&mut rest) {
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) => {}
+            _ => return,
+        }
+        if lines.get_ref().set_read_timeout(None).is_err() {
+            return;
+        }
         let group = request["group"]
             .as_i64()
             .and_then(|group| i32::try_from(group).ok())
@@ -189,7 +210,6 @@ fn serve(stream: UnixStream, id: u64, events: &Sender<Event>) {
         }));
         // The notice lasts until ssh stops the askpass: its end of the
         // socket closes.
-        let mut rest = String::new();
         while lines.read_line(&mut rest).unwrap_or(0) != 0 {
             rest.clear();
         }
