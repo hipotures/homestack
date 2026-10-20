@@ -192,7 +192,7 @@ impl Wizard {
             target,
             path,
             focus: 0,
-            expanded: true,
+            expanded: false,
             selected_step: 0,
             instructions: [false; 2],
             prerequisites_scroll: 0,

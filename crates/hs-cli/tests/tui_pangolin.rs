@@ -88,8 +88,12 @@ fn pangolin_all_stages_are_navigable_but_only_first_has_actions() {
     assert_eq!(w.focus, 1);
     w.key(key(KeyCode::BackTab));
     assert_eq!(w.focus, 0);
+    assert!(!w.expanded);
+    w.key(key(KeyCode::Char(' ')));
+    assert!(w.expanded);
     w.key(key(KeyCode::Char(' ')));
     assert!(!w.expanded);
+    assert!(!open(dir.path()).expanded);
     assert!(!dir.path().join("integrations").exists());
 }
 
