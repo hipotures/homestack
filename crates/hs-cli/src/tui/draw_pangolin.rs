@@ -432,26 +432,16 @@ fn prerequisites_details(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizar
         Rect::new(area.x, checkbox_y, area.width, 1),
         Hit::PangolinPrerequisite(3),
     );
-    let status = if !wizard.message.is_empty() {
-        wizard.message.as_str()
-    } else if wizard.prerequisites_confirmed() {
-        "Confirmed by user"
-    } else {
-        "Awaiting confirmation"
-    };
-    let status_width = area.width;
-    write(
-        buf,
-        area.x,
-        checkbox_y + 1,
-        status_width,
-        status,
-        text.fg(if wizard.message.is_empty() {
-            app.palette.muted
-        } else {
-            app.palette.error
-        }),
-    );
+    if !wizard.message.is_empty() {
+        write(
+            buf,
+            area.x,
+            checkbox_y + 1,
+            area.width,
+            &wizard.message,
+            text.fg(app.palette.error),
+        );
+    }
     if area.height > 4 {
         let mut instructions = Vec::new();
         instructions.push(format!("Selected server: {}", wizard.target));

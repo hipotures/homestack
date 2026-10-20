@@ -936,6 +936,7 @@ fn pangolin_phase2_testbackend_snapshots_help_and_future_discovery() {
             .unwrap();
         let column = line.chars().position(|c| c == '[').unwrap();
         assert_eq!(buffer[(column as u16, row as u16)].bg, app.palette.selection);
+        assert_eq!(text.matches("Awaiting confirmation").count(), 1);
         assert!(!text.contains("[ Test ]"));
         assert!(!text.contains("F6 test"));
         assert!(!text.contains("[ Save ]"));
@@ -968,7 +969,7 @@ fn pangolin_phase2_testbackend_snapshots_help_and_future_discovery() {
     }
     app.key(key(KeyCode::Char(' ')));
     assert!(rendered(&app, 120, 36).contains("2/8"));
-    assert!(rendered(&app, 120, 36).contains("Confirmed by user"));
+    assert_eq!(rendered(&app, 120, 36).matches("Confirmed by user").count(), 1);
     app.key(key(KeyCode::F(4)));
     let mut help = String::new();
     for _ in 0..12 {
