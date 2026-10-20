@@ -46,6 +46,7 @@ pub enum Request {
     /// Copy the already loaded API responses to the terminal's clipboard.
     CopyJson,
     TestIntegration(u64, Box<super::integrations::Editor>),
+    TestPangolin(u64, String),
     Quit,
 }
 
@@ -131,6 +132,7 @@ pub enum Overlay {
         index: usize,
     },
     Integration(Box<super::integrations::Editor>),
+    Pangolin(Box<super::pangolin::Wizard>),
     /// The theme list in the Appearance section; `previous` comes back with Esc.
     Themes {
         index: usize,
@@ -254,6 +256,8 @@ pub struct App {
     /// it holds.
     pub dragging: Option<(super::chrome::Bar, u16)>,
     pub clock: String,
+    /// Local UTC offset shared with the existing TUI clock.
+    pub utc_offset: i64,
     /// The local date `YYYY-MM-DD` for `tui.log`; empty in tests.
     pub today: String,
     /// Where the list's rows were drawn last: x, width, the first row's y,
@@ -338,6 +342,7 @@ impl App {
             log_unread: 0,
             dragging: None,
             clock: String::new(),
+            utc_offset: 0,
             today: String::new(),
             waiting: 0,
             list_rows: std::cell::Cell::new((0, 0, 0, 0, 0)),
@@ -1272,9 +1277,22 @@ impl App {
                         self.overlay = Some(Overlay::Integrations { index: item });
                         return press(self, KeyCode::Enter);
                     }
+                    Some(Hit::PangolinStep(step)) => {
+                        if let Some(Overlay::Pangolin(wizard)) = self.overlay.as_mut() {
+                            wizard.select_step(step);
+                        }
+                        return None;
+                    }
                     Some(Hit::IntegrationField(field)) => {
                         if let Some(Overlay::Integration(editor)) = self.overlay.as_mut() {
                             editor.select(field);
+                        }
+                        if let Some(Overlay::Pangolin(wizard)) = self.overlay.as_mut()
+                            && !wizard.help_open
+                            && !wizard.report_open
+                            && wizard.selected_step == 0
+                        {
+                            wizard.focus = field.min(2);
                         }
                         return None;
                     }
@@ -1462,6 +1480,22 @@ impl App {
                 self.log(&time, &format!("install step: {after:?}"));
             }
             return request;
+        }
+        if let Some(Overlay::Pangolin(wizard)) = self.overlay.as_mut() {
+            if !wizard.report_open
+                && !wizard.help_open
+                && wizard.selected_step == 0
+                && (key.code == KeyCode::F(6)
+                    || (wizard.focus == 2 && matches!(key.code, KeyCode::Enter | KeyCode::Char(' '))))
+            {
+                return wizard
+                    .begin_test()
+                    .map(|id| Request::TestPangolin(id, wizard.target.clone()));
+            }
+            if wizard.key(key) {
+                self.overlay = Some(Overlay::Integrations { index: 3 });
+            }
+            return None;
         }
         if let Some(Overlay::Integration(editor)) = self.overlay.as_mut() {
             if editor.report_open {
@@ -1770,7 +1804,7 @@ impl App {
                 KeyCode::Esc => self.overlay = Some(Overlay::Menu { index: 4 }),
                 _ => self.overlay = Some(Overlay::Settings { section }),
             },
-            Overlay::Integration(_) => self.overlay = Some(overlay),
+            Overlay::Integration(_) | Overlay::Pangolin(_) => self.overlay = Some(overlay),
             Overlay::Integrations { mut index } => {
                 match code {
                     KeyCode::Down => index = (index + 1) % 4,
@@ -1780,7 +1814,14 @@ impl App {
                         return None;
                     }
                     KeyCode::Enter | KeyCode::Right if index == 3 => {
-                        self.overlay = Some(Overlay::Integrations { index });
+                        let dir = self.preferences.path.parent().unwrap_or(std::path::Path::new("."));
+                        self.overlay = Some(match super::pangolin::Wizard::open(dir) {
+                            Ok(wizard) => Overlay::Pangolin(Box::new(wizard)),
+                            Err(error) => Overlay::Report {
+                                title: "Pangolin".to_owned(),
+                                lines: vec![error],
+                            },
+                        });
                         return None;
                     }
                     KeyCode::Enter | KeyCode::Right => {

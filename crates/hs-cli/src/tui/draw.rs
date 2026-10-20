@@ -1660,7 +1660,7 @@ fn draw_settings(buf: &mut Buffer, area: Rect, app: &App, section: usize, themes
             lines.push(vec![("Remote Access".to_owned(), heading)]);
             let chosen = matches!(app.overlay, Some(Overlay::Integrations { index: 3 }));
             let (item, style) = unfocused_item(palette, &format!("{:<18}", "Pangolin"), chosen, true);
-            lines.push(vec![(item, style), ("Planned".to_owned(), muted)]);
+            lines.push(vec![(item, style), ("Setup (Phase 1)".to_owned(), muted)]);
         }
     }
     for (row, parts) in lines.iter().enumerate() {
@@ -1918,6 +1918,7 @@ fn draw_overlay(buf: &mut Buffer, area: Rect, app: &App, overlay: &Overlay) {
         Overlay::Settings { section } => return draw_settings(buf, area, app, *section, None),
         Overlay::Integrations { .. } => return draw_settings(buf, area, app, 3, None),
         Overlay::Integration(editor) => return draw_integration(buf, area, app, editor),
+        Overlay::Pangolin(wizard) => return super::draw_pangolin::screen(buf, area, app, wizard),
         Overlay::Themes { index, .. } => return draw_settings(buf, area, app, APPEARANCE, Some(*index)),
         _ => {}
     }
@@ -1942,7 +1943,11 @@ fn draw_overlay(buf: &mut Buffer, area: Rect, app: &App, overlay: &Overlay) {
                 Control::key("close esc"),
             ],
         ),
-        Overlay::Settings { .. } | Overlay::Themes { .. } | Overlay::Integrations { .. } | Overlay::Integration(_) => {
+        Overlay::Settings { .. }
+        | Overlay::Themes { .. }
+        | Overlay::Integrations { .. }
+        | Overlay::Integration(_)
+        | Overlay::Pangolin(_) => {
             return;
         }
         Overlay::Help => (

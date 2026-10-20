@@ -33,6 +33,8 @@ const REFRESH: Duration = Duration::from_secs(10);
 enum Update {
     Startup(&'static str),
     IntegrationTest(u64, super::integrations::TestReport),
+    PangolinTest(u64, super::pangolin::Report),
+    PangolinAsk(u64, AskEvent),
     Status(String, Value),
     StatusRejected(String),
     ApiUpdates(u64, Result<super::reinstall::Images, String>),
@@ -502,6 +504,7 @@ fn start(request: &Request, client: Option<&Arc<Client>>, ctx: &Context, updates
         }
         Request::Quit
         | Request::TestIntegration(_, _)
+        | Request::TestPangolin(_, _)
         | Request::CopyJson
         | Request::Act(_)
         | Request::Decide(_)
@@ -763,7 +766,20 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
     let mut storage_visible = false;
     let mut storage_next = std::time::Instant::now();
     let mut integration_paste = false;
+    let mut pangolin_worker: Option<(super::pangolin::Pending, Bridge)> = None;
+    let mut pangolin_question: Option<crate::askpass::Question> = None;
     loop {
+        if let Some((worker, _)) = &pangolin_worker {
+            let active = matches!(&app.overlay, Some(Overlay::Pangolin(w)) if w.testing && w.test_id == worker.id);
+            if !active {
+                worker.cancel.store(true, Ordering::SeqCst);
+                if let Some(question) = pangolin_question.take() {
+                    app.ask_ended(question.id);
+                    question.answer(None);
+                }
+            }
+        }
+        app.utc_offset = clock.offset;
         app.clock = clock.now();
         app.today = clock.today();
         details.update(app.details_target(), connection.client.as_ref());
@@ -810,7 +826,10 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
             });
         }
         storage_visible = visible;
-        let editing_credentials = matches!(app.overlay, Some(super::state::Overlay::Integration(_)));
+        let editing_credentials = matches!(
+            app.overlay,
+            Some(super::state::Overlay::Integration(_) | super::state::Overlay::Pangolin(_))
+        );
         if editing_credentials != integration_paste {
             if editing_credentials {
                 execute!(io::stdout(), crossterm::event::EnableBracketedPaste)
@@ -838,7 +857,11 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
                         (key.modifiers.contains(event::KeyModifiers::CONTROL) && matches!(key.code, event::KeyCode::Char('c' | 'q')))) => app.key(key),
                     Event::Mouse(mouse) if !screen.copying => app.mouse(mouse),
                     Event::Paste(text) if !screen.copying => {
-                        if let Some(super::state::Overlay::Integration(editor)) = app.overlay.as_mut() { editor.paste(&text); }
+                        match app.overlay.as_mut() {
+                            Some(Overlay::Integration(editor)) => editor.paste(&text),
+                            Some(Overlay::Pangolin(wizard)) => wizard.paste(&text),
+                            _ => {}
+                        }
                         None
                     }
                     _ => None,
@@ -852,6 +875,50 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
                         return Ok(0);
                     }
                     match request {
+                        Request::TestPangolin(id, target) => {
+                            if pangolin_worker.is_some() {
+                                if let Some(Overlay::Pangolin(wizard)) = app.overlay.as_mut() {
+                                    wizard.testing = false;
+                                    wizard.message = "Previous SSH test is stopping; retry shortly.".to_owned();
+                                }
+                                continue;
+                            }
+                            let program = std::env::current_exe().map_err(|_| AppError::new("Cannot locate SSH askpass program"))?;
+                            let (bridge, asks) = match Bridge::start(program) {
+                                Ok(value) => value,
+                                Err(_) => {
+                                    if let Some(Overlay::Pangolin(wizard)) = app.overlay.as_mut() {
+                                        wizard.testing = false;
+                                        wizard.message = "Cannot start the existing SSH askpass bridge.".to_owned();
+                                    }
+                                    continue;
+                                }
+                            };
+                            let sender = updates.clone();
+                            std::thread::spawn(move || {
+                                for ask in asks {
+                                    if sender.send(Update::PangolinAsk(id, ask)).is_err() { break; }
+                                }
+                            });
+                            let prefix = bridge.command_prefix();
+                            let cancel = Arc::new(AtomicBool::new(false));
+                            pangolin_worker = Some((super::pangolin::Pending { id, cancel: Arc::clone(&cancel) }, bridge));
+                            let client_path = config::default_path(&ctx.home, ctx.config_home.as_deref());
+                            let sounds = config::load(&client_path)
+                                .map(|loaded| Sounds::from_table(loaded.client.sounds.as_ref()))
+                                .unwrap_or_default();
+                            let system = Arc::clone(&ctx.system);
+                            let sender = updates.clone();
+                            tokio::task::spawn_blocking(move || {
+                                let started = std::time::Instant::now();
+                                let result = super::pangolin::test_ssh(system.as_ref(), &target, &prefix, &cancel, &sounds, crate::touch::default_player());
+                                let report = super::pangolin::Report {
+                                    target, at: String::new(), passed: result.is_ok(), detail: result.unwrap_or_else(|e| e),
+                                    duration_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+                                };
+                                let _ = sender.send(Update::PangolinTest(id, report));
+                            });
+                        }
                         Request::TestIntegration(id, editor) => {
                             let sender = updates.clone();
                             tokio::spawn(async move {
@@ -974,7 +1041,9 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
                             installing.send(command, &mut app, ctx, &updates);
                         }
                         Request::Answer(answer) => {
-                            if let Some(question) = installing.pending.take() {
+                            if let Some(question) = pangolin_question.take() {
+                                question.answer(answer);
+                            } else if let Some(question) = installing.pending.take() {
                                 question.answer(answer);
                             }
                         }
@@ -1108,6 +1177,33 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
                 }
             }
             Some(update) = received.recv() => match update {
+                Update::PangolinTest(id, report) => {
+                    if pangolin_worker.as_ref().is_some_and(|(worker, _)| worker.id == id) {
+                        pangolin_worker = None;
+                        if let Some(question) = pangolin_question.take() {
+                            app.ask_ended(question.id);
+                            question.answer(None);
+                        }
+                        if let Some(Overlay::Pangolin(wizard)) = app.overlay.as_mut() { wizard.complete(id, report); }
+                    }
+                }
+                Update::PangolinAsk(id, event) => {
+                    let active = matches!(&app.overlay, Some(Overlay::Pangolin(w)) if w.testing && w.test_id == id);
+                    match event {
+                        AskEvent::Ask(question) if active => {
+                            let mut view = AskView::new(question.id, question.kind, &question.prompt);
+                            view.key_names = crate::identity::key_names(&ctx.home, &question.prompt);
+                            app.ask(view);
+                            pangolin_question = Some(question);
+                        }
+                        AskEvent::Ask(question) => question.answer(None),
+                        AskEvent::Ended(question_id) if pangolin_worker.as_ref().is_some_and(|(worker, _)| worker.id == id)
+                            && pangolin_question.as_ref().is_some_and(|q| q.id == question_id) => {
+                            app.ask_ended(question_id); pangolin_question = None;
+                        }
+                        _ => {}
+                    }
+                }
                 Update::IntegrationTest(id, result) => app.integration_test_result(id, result),
                 Update::Startup(message) => app.startup_message = Some(message),
                 Update::Status(url, status) => {

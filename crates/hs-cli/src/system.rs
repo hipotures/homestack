@@ -54,6 +54,11 @@ pub trait System: Send + Sync {
     fn run_master_until(&self, argv: &[String], _stop: &AtomicBool) -> io::Result<Output> {
         self.run_master(argv)
     }
+    /// Captured command with cancellation and an overall deadline. Test systems
+    /// may return synthetic output without spawning a process.
+    fn run_until(&self, argv: &[String], _stop: &AtomicBool, _timeout: std::time::Duration) -> io::Result<Output> {
+        self.run(argv)
+    }
     /// Seconds on a monotonic clock.
     fn monotonic(&self) -> f64;
     /// Run `argv` with `input` on its stdin; its output captured.
@@ -173,6 +178,84 @@ impl System for RealSystem {
             stderr,
         })
     }
+    fn run_until(&self, argv: &[String], stop: &AtomicBool, timeout: std::time::Duration) -> io::Result<Output> {
+        use rustix::fs::{OFlags, fcntl_getfl, fcntl_setfl};
+        use std::io::Read;
+        let (program, args) = argv.split_first().ok_or_else(|| io::Error::other("empty command"))?;
+        if stop.load(Ordering::SeqCst) {
+            return Err(io::Error::new(io::ErrorKind::Interrupted, "Cancelled"));
+        }
+        let mut child = Command::new(program)
+            .args(args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?;
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        // Nonblocking reads keep both pipes drained without reader threads,
+        // temporary diagnostic files or pipe waits that outlive cancellation.
+        fn drain(pipe: &mut impl Read, bytes: &mut Vec<u8>) -> io::Result<bool> {
+            let mut chunk = [0; 4096];
+            // Bound each iteration too, so an unending output stream cannot
+            // starve cancellation or the deadline.
+            for _ in 0..16 {
+                match pipe.read(&mut chunk) {
+                    Ok(0) => return Ok(true),
+                    Ok(count) => bytes.extend_from_slice(&chunk[..count.min(65536_usize.saturating_sub(bytes.len()))]),
+                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => break,
+                    Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                    Err(error) => return Err(error),
+                }
+            }
+            Ok(false)
+        }
+        let result = (|| {
+            let mut out = child.stdout.take().ok_or_else(|| io::Error::other("no stdout"))?;
+            let mut err = child.stderr.take().ok_or_else(|| io::Error::other("no stderr"))?;
+            fcntl_setfl(&out, fcntl_getfl(&out)? | OFlags::NONBLOCK)?;
+            fcntl_setfl(&err, fcntl_getfl(&err)? | OFlags::NONBLOCK)?;
+            let started = Instant::now();
+            loop {
+                let cancelled = stop.load(Ordering::SeqCst);
+                if cancelled || started.elapsed() >= timeout {
+                    return Err(io::Error::new(
+                        if cancelled {
+                            io::ErrorKind::Interrupted
+                        } else {
+                            io::ErrorKind::TimedOut
+                        },
+                        "Command stopped",
+                    ));
+                }
+                let out_done = drain(&mut out, &mut stdout)?;
+                let err_done = drain(&mut err, &mut stderr)?;
+                if out_done
+                    && err_done
+                    && let Some(status) = child.try_wait()?
+                {
+                    return Ok(status);
+                }
+                std::thread::sleep(std::time::Duration::from_millis(25));
+            }
+        })();
+        if result.is_err() {
+            // The askpass prefix uses setsid. Signal only this command's own
+            // process group, never the TUI's; kill and reap before returning.
+            let pid = rustix::process::Pid::from_child(&child);
+            if rustix::process::getpgid(Some(pid)).is_ok_and(|group| group == pid) {
+                let _ = rustix::process::kill_process_group(pid, rustix::process::Signal::KILL);
+            }
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        Ok(Output {
+            code: code(result?),
+            stdout: String::from_utf8_lossy(&stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&stderr).into_owned(),
+        })
+    }
+
     fn monotonic(&self) -> f64 {
         self.started.elapsed().as_secs_f64()
     }

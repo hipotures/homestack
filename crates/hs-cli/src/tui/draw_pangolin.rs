@@ -1,0 +1,407 @@
+//! Pangolin setup uses the same frame, tree selection and detail panes as setup.
+use crossterm::event::KeyCode;
+use ratatui::{
+    buffer::Buffer,
+    layout::Rect,
+    style::{Modifier, Style},
+};
+
+use super::chrome::{self, Control, Hit, Sides, frame, text_style};
+use super::draw::{bar, wrap, write};
+use super::pangolin::{DESCRIPTIONS, HELP, STAGES, Wizard};
+use super::state::App;
+
+pub(super) fn screen(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
+    let palette = &app.palette;
+    let text = text_style(palette);
+    let muted = text.fg(palette.muted);
+    let available = wizard.selected_step == 0;
+    let inner = frame(
+        buf,
+        area,
+        palette,
+        &Sides {
+            top_left: vec![Control::plain("settings / integrations / pangolin")],
+            bottom_left: vec![
+                Control::named("↑↓", "steps", KeyCode::Down),
+                Control::named("Tab", "focus", KeyCode::Tab).enabled(available),
+                Control::named("F4", "help", KeyCode::F(4)),
+                Control::named("F6", "test", KeyCode::F(6)).enabled(available && !wizard.testing),
+                Control::named("F7", "report", KeyCode::F(7)).enabled(wizard.report.is_some()),
+                Control::named("Esc", if wizard.testing { "cancel" } else { "back" }, KeyCode::Esc),
+            ],
+            focused: true,
+            ..Sides::default()
+        },
+    );
+    if inner.width < 8 || inner.height < 18 {
+        return;
+    }
+    let x = inner.x + 1;
+    let width = inner.width - 2;
+    let verified = wizard.status() == "Verified";
+    let state = format!("{}   {}/8 completed", wizard.status(), usize::from(verified));
+    write(
+        buf,
+        x,
+        inner.y,
+        width,
+        "Pangolin Integration Setup",
+        text.add_modifier(Modifier::BOLD),
+    );
+    write(
+        buf,
+        x + width.saturating_sub(state.len() as u16),
+        inner.y,
+        width.min(state.len() as u16),
+        &state,
+        text.fg(if verified { palette.ok } else { palette.muted }),
+    );
+    write(
+        buf,
+        x,
+        inner.y + 1,
+        width,
+        &bar(usize::from(width), if verified { 12.5 } else { 0.0 }),
+        text.fg(palette.accent),
+    );
+    let body = Rect::new(x, inner.y + 3, width, inner.height - 5);
+    if width >= 108 {
+        let nav_width = 40;
+        for y in body.top()..body.bottom() {
+            write(buf, body.x + nav_width, y, 1, "│", muted);
+        }
+        steps(
+            buf,
+            Rect::new(body.x, body.y, nav_width - 1, body.height),
+            app,
+            wizard,
+            true,
+        );
+        details(
+            buf,
+            Rect::new(body.x + nav_width + 3, body.y, body.width - nav_width - 3, body.height),
+            app,
+            wizard,
+            true,
+        );
+    } else {
+        // At 80x24 all eight navigation rows and the essential form stay on
+        // screen. Explanations open in the same scrollable help panel as wide mode.
+        steps(buf, Rect::new(body.x, body.y, body.width, 8), app, wizard, false);
+        write(
+            buf,
+            body.x,
+            body.y + 8,
+            body.width,
+            &"─".repeat(usize::from(body.width)),
+            muted,
+        );
+        details(
+            buf,
+            Rect::new(body.x, body.y + 9, body.width, body.height.saturating_sub(9)),
+            app,
+            wizard,
+            false,
+        );
+    }
+    if !wizard.testing && !wizard.message.is_empty() {
+        write(buf, x, inner.bottom() - 1, width, &wizard.message, muted);
+    }
+    if wizard.help_open || wizard.report_open {
+        modal(buf, area, app, wizard);
+    }
+}
+
+fn steps(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard, wide: bool) {
+    let text = text_style(&app.palette);
+    let top = area.y + u16::from(wide);
+    if wide {
+        write(
+            buf,
+            area.x + 1,
+            area.y,
+            area.width - 1,
+            "STEPS",
+            text.fg(app.palette.muted),
+        );
+    }
+    for (at, title) in STAGES.iter().enumerate() {
+        let y = top + at as u16;
+        if y >= area.bottom() {
+            break;
+        }
+        let chosen = at == wizard.selected_step;
+        let style = if chosen {
+            let style = text.bg(app.palette.selection).add_modifier(Modifier::BOLD);
+            if app.palette.no_color {
+                style.add_modifier(Modifier::REVERSED)
+            } else {
+                style
+            }
+        } else if at > 0 {
+            text.fg(app.palette.muted)
+        } else {
+            text
+        };
+        write(buf, area.x, y, area.width, &" ".repeat(usize::from(area.width)), style);
+        let mark = if chosen && wizard.focus == 0 {
+            "▸"
+        } else if at == 0 && wizard.status() == "Verified" {
+            "✓"
+        } else {
+            " "
+        };
+        write(
+            buf,
+            area.x,
+            y,
+            area.width,
+            &format!("{mark} {}. {title}", at + 1),
+            style,
+        );
+        if at > 0 {
+            write(buf, area.right() - 8, y, 8, "[Locked]", style.fg(app.palette.muted));
+        }
+        chrome::register(Rect::new(area.x, y, area.width, 1), Hit::PangolinStep(at));
+    }
+}
+
+fn details(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard, wide: bool) {
+    let text = text_style(&app.palette);
+    let muted = text.fg(app.palette.muted);
+    let mut y = area.y;
+    if wide {
+        write(
+            buf,
+            area.x,
+            y,
+            area.width,
+            &format!("{}. {}", wizard.selected_step + 1, STAGES[wizard.selected_step]),
+            text.add_modifier(Modifier::BOLD),
+        );
+        y += 2;
+    }
+    if wizard.selected_step > 0 {
+        if !wide {
+            write(
+                buf,
+                area.x,
+                y,
+                area.width,
+                STAGES[wizard.selected_step],
+                text.add_modifier(Modifier::BOLD),
+            );
+            y += 1;
+        }
+        let lines = format!(
+            "Locked - not implemented in Phase 1.\n\n{}\n\nF4 opens detailed help. Enter also opens help; it never runs this step.",
+            DESCRIPTIONS[wizard.selected_step]
+        );
+        lines_into(
+            buf,
+            Rect::new(area.x, y, area.width, area.bottom().saturating_sub(y)),
+            &lines,
+            0,
+            muted,
+        );
+        return;
+    }
+    write(
+        buf,
+        area.x,
+        y,
+        area.width,
+        "SSH connection alias / server hostname",
+        if wizard.focus == 1 {
+            text.fg(app.palette.focus)
+        } else {
+            text
+        },
+    );
+    let input = Rect::new(area.x, y + 1, area.width, 3);
+    let field = frame(
+        buf,
+        input,
+        &app.palette,
+        &Sides {
+            focused: wizard.focus == 1,
+            ..Sides::default()
+        },
+    );
+    let capacity = usize::from(field.width.saturating_sub(2)).max(1);
+    let start = if wizard.focus == 1 {
+        wizard.cursor.saturating_sub(capacity - 1)
+    } else {
+        0
+    };
+    let value: String = wizard
+        .target
+        .chars()
+        .chain(std::iter::once(' '))
+        .skip(start)
+        .take(capacity)
+        .collect();
+    write(buf, field.x + 1, field.y, field.width.saturating_sub(2), &value, text);
+    if wizard.focus == 1 {
+        let c = wizard.target.chars().nth(wizard.cursor).unwrap_or(' ');
+        write(
+            buf,
+            field.x + 1 + (wizard.cursor - start) as u16,
+            field.y,
+            1,
+            &c.to_string(),
+            text.add_modifier(Modifier::REVERSED),
+        );
+    }
+    chrome::register(Rect::new(area.x, y, area.width, 4), Hit::IntegrationField(1));
+    y += 4 + u16::from(wide);
+    let connection = if wizard.testing {
+        "Testing SSH… (Esc cancels)"
+    } else if wizard.status() == "Not configured" {
+        "Not tested"
+    } else {
+        wizard.status()
+    };
+    write(
+        buf,
+        area.x,
+        y,
+        area.width,
+        &format!("Connection: {connection}"),
+        text.fg(if wizard.status() == "Verified" {
+            app.palette.ok
+        } else {
+            app.palette.muted
+        }),
+    );
+    y += 1;
+    let last = wizard
+        .report
+        .as_ref()
+        .map(|r| {
+            format!(
+                "Last test: {} · {} · {}",
+                if r.passed { "PASS" } else { "FAIL" },
+                r.local_date(app.utc_offset),
+                r.duration()
+            )
+        })
+        .unwrap_or_else(|| "Last test: Never".to_owned());
+    write(buf, area.x, y, area.width, &last, muted);
+    y += 1 + u16::from(wide);
+    let style = if wizard.focus == 2 {
+        let style = text
+            .bg(app.palette.selection)
+            .fg(app.palette.focus)
+            .add_modifier(Modifier::BOLD);
+        if app.palette.no_color {
+            style.add_modifier(Modifier::REVERSED)
+        } else {
+            style
+        }
+    } else {
+        text
+    };
+    write(buf, area.x, y, 8, "[ Test ]", style);
+    chrome::register(Rect::new(area.x, y, 8, 1), Hit::Key(KeyCode::F(6)));
+    y += 1 + u16::from(wide);
+    if y < area.bottom() {
+        write(
+            buf,
+            area.x,
+            y,
+            area.width,
+            &format!(
+                "{} How does this work?  F4 help",
+                if wizard.expanded && wide { "▾" } else { "▸" }
+            ),
+            text.fg(app.palette.focus),
+        );
+        chrome::register(Rect::new(area.x, y, area.width, 1), Hit::Key(KeyCode::F(4)));
+        y += 1;
+    }
+    if wide && wizard.expanded && y < area.bottom() {
+        lines_into(
+            buf,
+            Rect::new(area.x, y, area.width, area.bottom() - y),
+            "Uses your existing OpenSSH configuration. SSH aliases and FIDO hardware keys are supported.\n\nNo private keys or authentication secrets are stored by HomeStack. The test only executes true.\n\nF4 opens detailed contextual help.",
+            0,
+            muted,
+        );
+    }
+}
+
+fn lines_into(buf: &mut Buffer, area: Rect, text: &str, scroll: usize, style: Style) {
+    let lines: Vec<String> = text
+        .lines()
+        .flat_map(|line| wrap(line, usize::from(area.width)))
+        .collect();
+    let scroll = scroll.min(lines.len().saturating_sub(usize::from(area.height)));
+    for (row, line) in lines.iter().skip(scroll).take(usize::from(area.height)).enumerate() {
+        write(buf, area.x, area.y + row as u16, area.width, line, style);
+    }
+}
+
+fn modal(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
+    // The same centered, framed and scrollable panel convention as reports.
+    let width = area.width.saturating_sub(8).min(92);
+    let height = area.height.saturating_sub(4).min(28);
+    let rect = Rect::new(
+        area.x + (area.width - width) / 2,
+        area.y + (area.height - height) / 2,
+        width,
+        height,
+    );
+    let title = if wizard.help_open {
+        format!("help · {}. {}", wizard.selected_step + 1, STAGES[wizard.selected_step])
+    } else {
+        "SSH verification report".to_owned()
+    };
+    // Keep only the modal frame's own registered controls; clicks through
+    // the help panel must never reach the form or step list underneath.
+    chrome::clear_hits();
+    let inner = frame(
+        buf,
+        rect,
+        &app.palette,
+        &Sides {
+            top_left: vec![Control::plain(&title)],
+            bottom_left: vec![
+                Control::named("↑↓", "scroll", KeyCode::Down),
+                Control::named("Esc", "close", KeyCode::Esc),
+            ],
+            focused: true,
+            ..Sides::default()
+        },
+    );
+    let (content, scroll) = if wizard.help_open {
+        (HELP[wizard.selected_step].to_owned(), wizard.help_scroll)
+    } else if let Some(report) = &wizard.report {
+        (
+            format!(
+                "Target: {}\nDate (local): {}\nResult: {} ({})\n\n{}",
+                report.target,
+                report.local_date(app.utc_offset),
+                if report.passed { "PASS" } else { "FAIL" },
+                report.duration(),
+                report.detail
+            ),
+            wizard.report_scroll,
+        )
+    } else {
+        (String::new(), 0)
+    };
+    lines_into(
+        buf,
+        Rect::new(
+            inner.x + 1,
+            inner.y + 1,
+            inner.width.saturating_sub(2),
+            inner.height.saturating_sub(2),
+        ),
+        &content,
+        scroll,
+        text_style(&app.palette),
+    );
+}
