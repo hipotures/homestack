@@ -24,7 +24,7 @@ pub const DESCRIPTIONS: [&str; 8] = [
     "Confirm installation and preparation of a temporary Root bootstrap key.",
     "Discover runtime, configuration and ports through read-only SSH inspection.",
     "Inspect private Integration API health; approve minimal backed-up configuration changes.",
-    "Future: tunnel to the private Integration API and verify reachability.",
+    "Manage an owned SSH tunnel and verify private API health without credentials.",
     "Future: accept a masked temporary key and verify its permissions.",
     "Future: provision and securely save a least-privilege organization key.",
     "Future: verify integration permissions and read-only operations.",
@@ -33,9 +33,9 @@ pub const DESCRIPTIONS: [&str; 8] = [
 pub const HELP: [&str; 8] = [
     "Select an OpenSSH alias, hostname, IP address or user@host. OpenSSH reads your existing configuration to resolve the user, port, identities and proxy settings; HomeStack does not assume root.\n\nF6 tests the current draft asynchronously: ssh -G resolves configuration, then an authenticated SSH session executes only true. Existing askpass prompts support host confirmation, passphrases, PINs and FIDO key touch. Host verification remains enabled; password and keyboard-interactive fallback remain disabled.\n\nThe overall deadline is 45 seconds. Esc cancels; changing the target invalidates verification. Only a successful unchanged test saves its target automatically, with mode 0600. Failure or cancellation does not overwrite the saved target.\n\nHomeStack stores no private SSH keys or authentication secrets. The last successful test and its date are retained when reopening. Editing the target requires a new test. This phase does not inspect or configure Pangolin.",
     "Prepare Pangolin Server on the SSH server verified in Step 1. Confirm both instruction groups only after completing them. This is a manual declaration, not technical verification. No installation, API operation or remote change occurs here.\n\nIn the Pangolin administration interface, open API Keys and create homestack-bootstrap with Root authorization and these actions:\n  createApiKey\n  listApiKeys\n  listApiKeyActions\n  setApiKeyActions\n\nRoot scope is required for Integration API key management; selecting four actions alone is insufficient. These actions create the restricted key, detect conflicts, inspect actions and assign permissions. The temporary administrative key is separate from the permanent, restricted HomeStack key.\n\nKeep its token securely until masked entry in Step 6. Do not enter it here. Revoke it only after the permanent key has been provisioned and verified successfully.\n\nStep 3 will discover the installation method, version, services, configuration paths and ports read-only. It does not assume Docker Compose or fixed paths. The Integration API may remain disabled until Step 4. Checking this box does not verify installation or API availability. Confirmation is saved for the selected server; changing the target requires reconfirmation.",
-    "Discover the existing installation over authenticated SSH, read-only, without modifying it. Docker Compose metadata identifies a project and its configuration files; plain Docker has no verified Compose project. Native systemd executables may be identified, but unsupported layouts remain incomplete.\n\nHomeStack reads selected runtime metadata, discovered configuration paths, literal Integration API settings and listening sockets. Mounts describe host-to-container paths; published ports describe host bind addresses. Only allowlisted inventory is returned. No environments, secrets or full configuration files are displayed or saved. Remote Python 3 is required; nothing is installed.\n\nF6 discovers or retries, Esc cancels, F7 opens the scrollable report. Permission failures require access through your existing account; HomeStack never uses sudo. Multiple installations are ambiguous and never selected automatically. Supply an account with read access or inspect unsupported layouts separately.\n\nDisabled Integration API is allowed. Missing or ambiguous settings remain unknown, never guessed. API changes belong to Step 4 with approval and backup. Steps 5-8 remain unimplemented.\n\nSaved results are historical observations, not continuous monitoring. Changing the SSH destination invalidates discovery and requires a new inspection.",
-    "Inspect the existing Integration API over SSH without credentials. F6 revalidates Step 3 metadata and checks the configured API port, runtime publication and unauthenticated GET /v1/ health. A successful loopback-only health response completes this step without any write or restart.\n\nWhen changes are required, F7 shows exact values, files, service, impact and protected remote backup path. F5 opens confirmation defaulting to Cancel. Only explicit Apply authorizes writes. The target, file hashes and effective Compose configuration are checked again before backup and activation.\n\nAutomatic editing supports literal YAML in a single-file Docker Compose project with a verified directory bind mount and ownership allowing atomic replacement. Existing remote PyYAML and Docker Compose v2 are required for editing; no packages or privilege escalation are attempted. Complex YAML, interpolation, multiple files and ambiguous mounts require independent configuration.\n\nOnly Pangolin is recreated, without dependencies, builds or image pulls. Sites, Resources and sessions may briefly be interrupted. Backups remain private on the VPS, never downloaded. Failures retain backups and distinguish no changes from uncertain or unhealthy activation. No automatic rollback or mutation retry occurs.\n\nEsc cancels inspection. Interrupting Apply can leave changes in place: inspect the service and backup before retrying. Saved results are historical. Changing the target or rerunning discovery invalidates verification. No API key or tunnel is used; Step 5 remains locked.",
-    "Locked - not implemented.\n\nA future step will establish an SSH tunnel to the private Integration API endpoint and verify reachability. The tunnel will be owned and managed separately from basic SSH verification.\n\nNo tunnel is opened, no API port is guessed and no API connection is attempted in this phase.",
+    "Discover the existing installation over authenticated SSH, read-only, without modifying it. Docker Compose metadata identifies a project and its configuration files; plain Docker has no verified Compose project. Native systemd executables may be identified, but unsupported layouts remain incomplete.\n\nHomeStack reads selected runtime metadata, discovered configuration paths, literal Integration API settings and listening sockets. Mounts describe host-to-container paths; published ports describe host bind addresses. Only allowlisted inventory is returned. No environments, secrets or full configuration files are displayed or saved. Remote Python 3 is required; nothing is installed.\n\nF6 discovers or retries, Esc cancels, F7 opens the scrollable report. Permission failures require access through your existing account; HomeStack never uses sudo. Multiple installations are ambiguous and never selected automatically. Supply an account with read access or inspect unsupported layouts separately.\n\nDisabled Integration API is allowed. Missing or ambiguous settings remain unknown, never guessed. API changes belong to Step 4 with approval and backup. Steps 6-8 remain unimplemented.\n\nSaved results are historical observations, not continuous monitoring. Changing the SSH destination invalidates discovery and requires a new inspection.",
+    "Inspect the existing Integration API over SSH without credentials. F6 revalidates Step 3 metadata and checks the configured API port, runtime publication and unauthenticated GET /v1/ health. A successful loopback-only health response completes this step without any write or restart.\n\nWhen changes are required, F7 shows exact values, files, service, impact and protected remote backup path. F5 opens confirmation defaulting to Cancel. Only explicit Apply authorizes writes. The target, file hashes and effective Compose configuration are checked again before backup and activation.\n\nAutomatic editing supports literal YAML in a single-file Docker Compose project with a verified directory bind mount and ownership allowing atomic replacement. Existing remote PyYAML and Docker Compose v2 are required for editing; no packages or privilege escalation are attempted. Complex YAML, interpolation, multiple files and ambiguous mounts require independent configuration.\n\nOnly Pangolin is recreated, without dependencies, builds or image pulls. Sites, Resources and sessions may briefly be interrupted. Backups remain private on the VPS, never downloaded. Failures retain backups and distinguish no changes from uncertain or unhealthy activation. No automatic rollback or mutation retry occurs.\n\nEsc cancels inspection. Interrupting Apply can leave changes in place: inspect the service and backup before retrying. Saved results are historical. Changing the target or rerunning discovery invalidates verification. No API key or tunnel is used; Step 5 manages a separate private tunnel.",
+    "Connect through authenticated OpenSSH to the private endpoint verified in Step 4. No API key, password fallback, remote command or server change is used. Existing SSH configuration and hardware-key askpass prompts are retained; host identity verification stays enabled.\n\nF6 connects or verifies the existing tunnel. F5 disconnects only the owned connection. Tab moves between navigation and actions; Enter activates them. F7 shows a sanitized report. Esc cancels connection or verification; Esc leaving the wizard closes its owned tunnel. Closing help or navigating between stages does not close an active connection.\n\nHomeStack creates a private session-only control socket with configured forwards cleared, then adds only its own IPv4 loopback forward through that socket. A free unprivileged local port is allocated automatically, with up to three collision retries. No shared SSH master is changed.\n\nConnected requires an HTTP 200 Pangolin Healthy JSON response through the forward and a live owned SSH child. Requests use no proxies, redirects or credentials. A listener alone is insufficient. Startup is bounded to 45 seconds and each health request to 2 seconds. Process termination is monitored; remote API health is refreshed with F6, not continuously monitored.\n\nThe connection survives navigation to future stages. It closes on disconnect, cancellation, wizard exit, application shutdown or invalidated server/API metadata. Only historical successful connection metadata is persisted; restarting HomeStack always starts disconnected, without authentication prompts. Local ports and process IDs are never saved as reusable connections.\n\nWhen remote API access fails, return to Step 4. Steps 6-8 remain unimplemented.",
     "Locked - not implemented.\n\nA future step will accept a temporary bootstrap API credential in a masked field and verify its Root scope and required API-key permissions. The secret must not enter logs, command arguments or repository files.\n\nNo API credential field is enabled now. Step 1 only stores the non-secret SSH destination.",
     "Locked - not implemented.\n\nA future step will create an organization-scoped HomeStack API key with only the permissions required by the integration, verify its assigned permissions and save it securely.\n\nSelective reconfiguration must reuse unrelated existing credentials and avoid duplicate keys or resources. No keys or Pangolin objects are created by the current wizard.",
     "Locked - not implemented.\n\nA future step will independently verify the integration, assigned permissions and safe read-only API operations. It must distinguish observed results from assumptions and user confirmations.\n\nA successful SSH test marks only Step 1 complete (1/8). It does not establish that Pangolin, its API, tunnels or resource routing work.",
@@ -118,6 +118,7 @@ impl Report {
 
 #[derive(Clone, PartialEq)]
 pub struct Wizard {
+    pub tunnel: super::pangolin_tunnel::View,
     pub api: Option<super::pangolin_api::Api>,
     pub api_running: bool,
     pub api_applying: bool,
@@ -192,7 +193,23 @@ impl Wizard {
             .and_then(|value| value.get("target").and_then(toml::Value::as_str))
             .filter(|confirmed| verified.as_deref() == Some(*confirmed))
             .map(str::to_owned);
+        let history = settings
+            .get("tunnel_history")
+            .and_then(|v| v.clone().try_into::<super::pangolin_tunnel::History>().ok())
+            .filter(|h| {
+                h.target == target
+                    && validate_destination(&h.target).is_ok()
+                    && h.remote
+                        .strip_prefix("127.0.0.1:")
+                        .and_then(|p| p.parse::<u16>().ok())
+                        .is_some_and(|p| p > 0)
+                    && time::OffsetDateTime::parse(&h.at, &time::format_description::well_known::Rfc3339).is_ok()
+            });
         Ok(Self {
+            tunnel: super::pangolin_tunnel::View {
+                history,
+                ..Default::default()
+            },
             api: settings
                 .get("integration_api")
                 .and_then(super::pangolin_api::Api::restore),
@@ -226,6 +243,17 @@ impl Wizard {
             confirm_discard: false,
         })
     }
+    pub(super) fn save_tunnel_history(&self, history: &super::pangolin_tunnel::History) -> Result<(), String> {
+        let mut table = read(&self.path)?;
+        if table.get("server_target").and_then(toml::Value::as_str) != Some(self.target.as_str()) {
+            return Err("Server changed; tunnel history was not saved.".into());
+        }
+        table.insert(
+            "tunnel_history".into(),
+            toml::Value::try_from(history).map_err(|_| "Cannot serialize tunnel history.")?,
+        );
+        persist(&self.path, &table)
+    }
     pub(super) fn persist_api(&self, report: &super::pangolin_api::Api) -> Result<(), String> {
         let mut table = read(&self.path)?;
         if table.get("discovery").and_then(Discovery::restore) != self.discovery {
@@ -251,7 +279,12 @@ impl Wizard {
         }
     }
     pub fn begin_discovery(&mut self) -> Option<u64> {
-        if self.testing || self.selected_step != 2 || !self.discovery_available() || self.help_open || self.report_open
+        if self.tunnel.busy()
+            || self.testing
+            || self.selected_step != 2
+            || !self.discovery_available()
+            || self.help_open
+            || self.report_open
         {
             return None;
         }
@@ -379,6 +412,9 @@ impl Wizard {
             + usize::from(self.prerequisites_confirmed())
             + usize::from(self.discovery_status() == "Discovered")
             + usize::from(self.api_status() == "Verified")
+            + usize::from(
+                self.tunnel.current.state == super::pangolin_tunnel::State::Connected && self.tunnel_available(),
+            )
     }
     pub fn toggle_prerequisites(&mut self) {
         if !self.prerequisites_available() {
@@ -441,7 +477,7 @@ impl Wizard {
             self.prerequisites_scroll = 0;
         }
     }
-    /// Every stage can be selected for explanation; only Steps 1-4 have actions.
+    /// Every stage can be selected for explanation; only Steps 1-5 have actions.
     pub fn select_step(&mut self, step: usize) {
         if self.api_confirm || self.api_running {
             return;
@@ -487,6 +523,28 @@ impl Wizard {
                 _ => {}
             }
             return false;
+        }
+        if self.selected_step == 4 && self.tunnel_available() {
+            match key.code {
+                KeyCode::Tab | KeyCode::BackTab => {
+                    let mut controls = vec![0, 1];
+                    if self.tunnel.current.state == super::pangolin_tunnel::State::Connected {
+                        controls.push(2);
+                    }
+                    let at = controls.iter().position(|v| *v == self.focus).unwrap_or(0);
+                    self.focus = controls[if key.code == KeyCode::BackTab {
+                        (at + controls.len() - 1) % controls.len()
+                    } else {
+                        (at + 1) % controls.len()
+                    }];
+                    return false;
+                }
+                KeyCode::Enter | KeyCode::Right if self.focus == 0 => {
+                    self.focus = 1;
+                    return false;
+                }
+                _ => {}
+            }
         }
         if self.selected_step == 3 && self.api_available() {
             match key.code {
@@ -641,7 +699,9 @@ impl Wizard {
                 self.help_scroll = 0;
             }
             KeyCode::F(7) => {
-                self.report_open = if self.selected_step == 3 {
+                self.report_open = if self.selected_step == 4 {
+                    true
+                } else if self.selected_step == 3 {
                     self.api.is_some()
                 } else if self.selected_step == 2 {
                     self.discovery.is_some()
@@ -725,7 +785,7 @@ impl Wizard {
         Ok(())
     }
     pub fn begin_test(&mut self) -> Option<u64> {
-        if self.testing || self.selected_step != 0 || self.help_open || self.report_open {
+        if self.tunnel.busy() || self.testing || self.selected_step != 0 || self.help_open || self.report_open {
             return None;
         }
         if let Err(error) = validate_destination(&self.target) {

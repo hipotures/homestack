@@ -28,13 +28,13 @@ the Spaceship and TSIG files in the same directory by default; explicit
 `homestack-deploy` uses the credential paths explicitly saved in its deployment
 configuration. `tui.toml` contains interface preferences, not integration data.
 
-## Pangolin setup: server, prerequisites, discovery and Integration API
+## Pangolin setup wizard: Steps 1–5
 
 Open **Settings > Integrations > Remote Access > Pangolin** to enter the setup
 wizard. All eight stages are shown: Pangolin server, Pangolin prerequisites,
 Pangolin discovery, Integration API, API tunnel, Bootstrap API key, HomeStack API
-key, and Integration verification. The first four stages are implemented;
-stages 5–8 remain locked and cannot execute operations.
+key, and Integration verification. The first five stages are implemented;
+stages 6–8 remain locked and cannot execute operations.
 
 On wide terminals, the step list sits to the left of the selected step's details.
 At 80x24, all eight steps appear above a compact form. Up/Down in the step list
@@ -285,7 +285,95 @@ installations can be verified without Compose editing. Custom reverse proxies
 and firewall reachability are not audited: verification establishes the
 container's loopback-only API publication, not a network-wide exposure audit.
 Unrecognized layouts require independent configuration followed by inspection.
-**Step 5 remains locked:** no tunnel is opened and no API key is requested.
+**Step 4 does not open a tunnel or request an API key.** Step 5 below manages the private transport separately.
 
 The unauthenticated health contract is checked against the
 [Pangolin v1.24.0 Integration API router](https://github.com/fosrl/pangolin/blob/1.24.0/server/routers/integration.ts).
+
+
+### Step 5: managed private API tunnel
+
+Step 5 unlocks only for the current verified SSH target, confirmed prerequisites,
+successful discovery and verified private API endpoint. The host publication
+port comes from the exact Phase 4 endpoint, which may differ from the container
+API port. Missing, stale, non-loopback, credential-bearing or ambiguous endpoint
+metadata is rejected; no default port or public fallback is used.
+
+**F6 / Connect** starts asynchronously with the existing OpenSSH configuration,
+askpass UI and hardware-key sound/touch mechanism. Host-key verification remains
+enabled. Password and keyboard-interactive fallback, agent/X11/tunnel-device
+forwarding, configured local/remote commands and background persistence are
+disabled. No remote command, software installation, SSH configuration edit,
+server change or API authentication occurs.
+
+The wizard owns a foreground SSH `Child` and a unique control socket under a
+private mode-0700 temporary directory. Initial `ClearAllForwardings=yes` removes
+all forwards inherited from SSH configuration. After authenticated master
+startup, a separate `ssh -F /dev/null -S <owned socket> -O forward` request adds
+only `-L 127.0.0.1:<allocated port>:127.0.0.1:<verified host port>`, with
+`ClearAllForwardings=no`. This avoids accidentally suppressing HomeStack's own
+forward. The control request cannot fall back to a new SSH session or touch an
+unrelated master. `GatewayPorts=no` preserves the explicit IPv4 loopback bind.
+
+A temporary IPv4-loopback listener allocates a free unprivileged local port,
+then releases it immediately before OpenSSH binds it. OpenSSH's successful mux
+acknowledgement is required before probing HTTP. Bind races are handled with
+up to three bounded retries through the same authenticated connection; unrelated
+listeners are never stopped. Local ephemeral ports are not reused across runs.
+
+Connected requires a direct bounded HTTP request through that newly established
+forward: `/v1/`, HTTP 200, and exactly the Pangolin `Healthy` JSON object. Redirects,
+proxy environment variables and credentials are never used. Responses are bounded
+to 8 KiB of headers and 1 KiB of decoded body; HTTP/1.0 and HTTP/1.1 with content
+length, connection-close or bounded chunked bodies are supported. The owned SSH
+child must still be alive after health verification. Startup is bounded to 45
+seconds and health requests to 2 seconds; cancellation is checked throughout.
+
+The manager retains the process independently of the startup operation. It
+survives navigation between wizard stages. **F6 / Verify** checks the existing
+connection without reallocating its port or authenticating again. The process
+is monitored for unexpected termination, including OpenSSH server-alive checks;
+API health is refreshed explicitly with F6 rather than continuously polled.
+SSH authentication, host verification, port conflicts, startup, remote API,
+unexpected response, timeout and cancellation have separate sanitized messages.
+Raw stderr, HTTP bodies and authentication material are not displayed or saved.
+
+**F5 / Disconnect** terminates and reaps only this owned SSH process and its
+private process group. The same cleanup runs on startup cancellation, wizard
+exit, normal application exit, or invalidated server/discovery/API metadata.
+Cleanup waits for its worker and owned child; no PID-file ownership or shared
+ControlMaster termination is used. Abnormal process/worker exit invalidates the
+live endpoint. Normal teardown does not leave an orphaned SSH connector.
+
+Keyboard: Up/Down select stages in navigation; Tab/Shift+Tab move through the
+available Connect/Verify and Disconnect controls; Enter activates them. F4 opens
+scrollable contextual help and F7 a sanitized connection report. Esc closes help,
+cancels a connection/verification, or leaves the wizard. Merely selecting another
+stage or closing help preserves a connected tunnel. Cancelling an explicit
+verification closes that connection; leaving the wizard always releases it.
+Mouse actions match the keyboard. At 80x24, Tab opens full-height details and the
+frame uses a compact F5 Stop label so Esc remains visible.
+
+States are Disconnected, Connecting, Verifying, Connected, Connection lost,
+Failed, Cancelled and Outdated. Progress is **5/8 only while connected** and
+returns to **4/8** on disconnect. Only target, remote endpoint and last successful
+health timestamp are persisted atomically under `[tunnel_history]`. Historical
+success restores as **Disconnected**, never opens SSH on application startup,
+and cannot serve as a live endpoint. No local port, PID, private key or API token
+is persisted.
+
+Future consumers obtain the current endpoint from the owned runtime
+`Session::endpoint(&current_spec)`. This validates the current server/API
+association, verified session state and actual child liveness; it returns no
+endpoint while verifying, after failure, or for a changed configuration. No new
+tunnel is needed per API operation. **Steps 6–8 remain locked and unimplemented.**
+
+The implementation requires Linux/Unix process groups, OpenSSH multiplexed
+forwarding and the existing `setsid`/askpass infrastructure. A short local-port
+allocation race remains inherent to OpenSSH TCP local forwarding; explicit mux
+acknowledgement and bounded retries handle it. There is no automatic reconnect
+or promise of child cleanup after an uncatchable OS kill/power loss.
+
+Forward suppression and explicit forwarding use the documented
+[OpenSSH forwarding options](https://man.openbsd.org/ssh_config#ClearAllForwardings)
+and [multiplexed control requests](https://man.openbsd.org/ssh#O).

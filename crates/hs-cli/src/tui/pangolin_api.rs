@@ -269,7 +269,8 @@ impl Wizard {
         !self.testing && self.api_status() == "Changes required" && self.api.as_ref().is_some_and(|a| a.plan.is_some())
     }
     pub fn begin_api(&mut self, apply: bool) -> Option<u64> {
-        if self.testing
+        if self.tunnel.busy()
+            || self.testing
             || self.selected_step != 3
             || !self.api_available()
             || self.help_open

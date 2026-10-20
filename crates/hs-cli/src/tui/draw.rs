@@ -1660,7 +1660,7 @@ fn draw_settings(buf: &mut Buffer, area: Rect, app: &App, section: usize, themes
             lines.push(vec![("Remote Access".to_owned(), heading)]);
             let chosen = matches!(app.overlay, Some(Overlay::Integrations { index: 3 }));
             let (item, style) = unfocused_item(palette, &format!("{:<18}", "Pangolin"), chosen, true);
-            lines.push(vec![(item, style), ("Setup (Steps 1–4)".to_owned(), muted)]);
+            lines.push(vec![(item, style), ("Setup (Steps 1–5)".to_owned(), muted)]);
         }
     }
     for (row, parts) in lines.iter().enumerate() {

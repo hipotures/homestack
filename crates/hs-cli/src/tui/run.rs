@@ -36,6 +36,7 @@ enum Update {
     PangolinTest(u64, super::pangolin::Report),
     PangolinDiscovery(u64, super::pangolin::Discovery),
     PangolinApi(u64, Box<super::pangolin_api::Api>),
+    PangolinTunnel(u64, super::pangolin_tunnel::Event),
     PangolinAsk(u64, AskEvent),
     Status(String, Value),
     StatusRejected(String),
@@ -509,6 +510,8 @@ fn start(request: &Request, client: Option<&Arc<Client>>, ctx: &Context, updates
         | Request::TestPangolin(_, _)
         | Request::DiscoverPangolin(_, _)
         | Request::PangolinApi(_, _, _, _)
+        | Request::PangolinTunnel(_, _)
+        | Request::StopPangolinTunnel(_)
         | Request::CopyJson
         | Request::Act(_)
         | Request::Decide(_)
@@ -771,8 +774,42 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
     let mut storage_next = std::time::Instant::now();
     let mut integration_paste = false;
     let mut pangolin_worker: Option<(super::pangolin::Pending, Bridge)> = None;
+    let mut pangolin_tunnel: Option<(super::pangolin_tunnel::Session, Bridge)> = None;
     let mut pangolin_question: Option<crate::askpass::Question> = None;
     loop {
+        if let Some((session, _)) = &pangolin_tunnel {
+            let valid = matches!(&app.overlay,Some(Overlay::Pangolin(w)) if w.tunnel.id==session.id && w.tunnel_spec().as_ref()==Some(&session.spec));
+            if !valid {
+                if let Some(question) = pangolin_question.take() {
+                    app.ask_ended(question.id);
+                    question.answer(None);
+                }
+                pangolin_tunnel = None;
+                if let Some(Overlay::Pangolin(w)) = app.overlay.as_mut() {
+                    w.end_tunnel(super::pangolin_tunnel::State::Outdated);
+                }
+            } else if session.finished() {
+                if let Some(Overlay::Pangolin(w)) = app.overlay.as_mut()
+                    && (w.tunnel.current.state == super::pangolin_tunnel::State::Connected || w.tunnel.busy())
+                {
+                    w.tunnel_event(
+                        session.id,
+                        super::pangolin_tunnel::Event {
+                            state: super::pangolin_tunnel::State::Lost,
+                            error: Some(super::pangolin_tunnel::Error::Lost),
+                            port: None,
+                        },
+                    );
+                }
+                if matches!(&app.overlay,Some(Overlay::Pangolin(w)) if !w.tunnel.busy()) {
+                    if let Some(question) = pangolin_question.take() {
+                        app.ask_ended(question.id);
+                        question.answer(None);
+                    }
+                    pangolin_tunnel = None;
+                }
+            }
+        }
         if let Some((worker, _)) = &pangolin_worker {
             let active = matches!(&app.overlay, Some(Overlay::Pangolin(w)) if w.testing && w.test_id == worker.id);
             if !active {
@@ -879,6 +916,44 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
                         return Ok(0);
                     }
                     match request {
+                        Request::StopPangolinTunnel(cancelled)=>{
+                            if let Some(question)=pangolin_question.take(){app.ask_ended(question.id);question.answer(None);}
+                            pangolin_tunnel=None;
+                            if let Some(Overlay::Pangolin(w))=app.overlay.as_mut(){w.end_tunnel(if cancelled{super::pangolin_tunnel::State::Cancelled}else{super::pangolin_tunnel::State::Disconnected});}
+                        }
+                        Request::PangolinTunnel(mut id, spec) => {
+                            if let Some((session, _)) = &pangolin_tunnel
+                                && session.id == id && session.spec == spec && session.endpoint(&spec).is_some() {
+                                session.verify();
+                                continue;
+                            }
+                            if pangolin_tunnel.is_some() {
+                                id = super::pangolin::next_test();
+                                if let Some(Overlay::Pangolin(w)) = app.overlay.as_mut() {
+                                    w.tunnel.id = id;
+                                    w.tunnel.current.state = super::pangolin_tunnel::State::Connecting;
+                                    w.tunnel.current.port = None;
+                                }
+                            }
+                            pangolin_tunnel=None;
+                            if pangolin_worker.is_some(){
+                                if let Some(Overlay::Pangolin(w))=app.overlay.as_mut(){w.tunnel_event(id,super::pangolin_tunnel::Event{state:super::pangolin_tunnel::State::Failed,error:Some(super::pangolin_tunnel::Error::Startup),port:None});}
+                                continue;
+                            }
+                            let program=std::env::current_exe().map_err(|_|AppError::new("Cannot locate SSH askpass program"))?;
+                            let (bridge,asks)=match Bridge::start(program){Ok(v)=>v,Err(_)=>{
+                                if let Some(Overlay::Pangolin(w))=app.overlay.as_mut(){w.tunnel_event(id,super::pangolin_tunnel::Event{state:super::pangolin_tunnel::State::Failed,error:Some(super::pangolin_tunnel::Error::Startup),port:None});}
+                                continue;
+                            }};
+                            let sender=updates.clone();
+                            std::thread::spawn(move||{for ask in asks{if sender.send(Update::PangolinAsk(id,ask)).is_err(){break;}}});
+                            let client_path=config::default_path(&ctx.home,ctx.config_home.as_deref());
+                            let sounds=config::load(&client_path).map(|loaded|Sounds::from_table(loaded.client.sounds.as_ref())).unwrap_or_default();
+                            let sender=updates.clone();
+                            let notify=Arc::new(move|event|{let _=sender.send(Update::PangolinTunnel(id,event));});
+                            let session=super::pangolin_tunnel::Session::start(id,spec,Arc::clone(&ctx.system),bridge.command_prefix(),sounds,crate::touch::default_player(),notify);
+                            pangolin_tunnel=Some((session,bridge));
+                        }
                         request @ (Request::TestPangolin(_, _) | Request::DiscoverPangolin(_, _) | Request::PangolinApi(_, _, _, _)) => {
                             let (id, target, api) = match request {
                                 Request::PangolinApi(id, target, discovery, plan) => (id, target, Some((discovery, plan))),
@@ -1060,7 +1135,13 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
                         }
                         Request::Answer(answer) => {
                             if let Some(question) = pangolin_question.take() {
+                                let cancelled = answer.is_none();
                                 question.answer(answer);
+                                if cancelled && pangolin_tunnel.is_some()
+                                    && matches!(&app.overlay, Some(Overlay::Pangolin(w)) if w.tunnel.busy()) {
+                                    pangolin_tunnel = None;
+                                    if let Some(Overlay::Pangolin(w)) = app.overlay.as_mut() { w.end_tunnel(super::pangolin_tunnel::State::Cancelled); }
+                                }
                             } else if let Some(question) = installing.pending.take() {
                                 question.answer(answer);
                             }
@@ -1195,6 +1276,13 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
                 }
             }
             Some(update) = received.recv() => match update {
+                Update::PangolinTunnel(id, mut event) => {
+                    if event.state == super::pangolin_tunnel::State::Connected
+                        && !pangolin_tunnel.as_ref().is_some_and(|(session, _)| session.id == id && session.endpoint(&session.spec).is_some()) {
+                        event = super::pangolin_tunnel::Event { state: super::pangolin_tunnel::State::Lost, error: Some(super::pangolin_tunnel::Error::Lost), port: None };
+                    }
+                    if let Some(Overlay::Pangolin(w)) = app.overlay.as_mut() { w.tunnel_event(id, event); }
+                }
                 Update::PangolinApi(id, report) => {
                     if pangolin_worker.as_ref().is_some_and(|(worker, _)| worker.id == id) {
                         pangolin_worker = None;
@@ -1220,7 +1308,7 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
                     }
                 }
                 Update::PangolinAsk(id, event) => {
-                    let active = matches!(&app.overlay, Some(Overlay::Pangolin(w)) if w.testing && w.test_id == id);
+                    let active = matches!(&app.overlay, Some(Overlay::Pangolin(w)) if (w.testing && w.test_id == id) || (w.tunnel.busy() && w.tunnel.id==id));
                     match event {
                         AskEvent::Ask(question) if active => {
                             let mut view = AskView::new(question.id, question.kind, &question.prompt);
@@ -1229,7 +1317,7 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
                             pangolin_question = Some(question);
                         }
                         AskEvent::Ask(question) => question.answer(None),
-                        AskEvent::Ended(question_id) if pangolin_worker.as_ref().is_some_and(|(worker, _)| worker.id == id)
+                        AskEvent::Ended(question_id) if (pangolin_worker.as_ref().is_some_and(|(worker, _)| worker.id == id) || pangolin_tunnel.as_ref().is_some_and(|(session,_)|session.id==id))
                             && pangolin_question.as_ref().is_some_and(|q| q.id == question_id) => {
                             app.ask_ended(question_id); pangolin_question = None;
                         }

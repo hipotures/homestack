@@ -54,6 +54,8 @@ pub enum Request {
         super::pangolin::Discovery,
         Option<Box<super::pangolin_api::Plan>>,
     ),
+    PangolinTunnel(u64, super::pangolin_tunnel::Spec),
+    StopPangolinTunnel(bool),
     Quit,
 }
 
@@ -1284,6 +1286,17 @@ impl App {
                         self.overlay = Some(Overlay::Integrations { index: item });
                         return press(self, KeyCode::Enter);
                     }
+                    Some(Hit::PangolinTunnel(control)) => {
+                        if let Some(Overlay::Pangolin(wizard)) = self.overlay.as_mut()
+                            && wizard.selected_step == 4
+                            && !wizard.help_open
+                            && !wizard.report_open
+                        {
+                            wizard.focus = control;
+                            return press(self, if control == 1 { KeyCode::F(6) } else { KeyCode::F(5) });
+                        }
+                        return None;
+                    }
                     Some(Hit::PangolinApi(control)) => {
                         if let Some(Overlay::Pangolin(wizard)) = self.overlay.as_mut() {
                             if wizard.api_confirm {
@@ -1527,6 +1540,23 @@ impl App {
             return request;
         }
         if let Some(Overlay::Pangolin(wizard)) = self.overlay.as_mut() {
+            if !wizard.report_open && !wizard.help_open && !wizard.api_confirm {
+                if key.code == KeyCode::Esc && wizard.tunnel.busy() {
+                    return Some(Request::StopPangolinTunnel(true));
+                }
+                if wizard.selected_step == 4 {
+                    if (key.code == KeyCode::F(5) || (key.code == KeyCode::Enter && wizard.focus == 2))
+                        && wizard.tunnel.current.state == super::pangolin_tunnel::State::Connected
+                    {
+                        return Some(Request::StopPangolinTunnel(false));
+                    }
+                    if key.code == KeyCode::F(6) || (key.code == KeyCode::Enter && wizard.focus == 1) {
+                        return wizard
+                            .begin_tunnel()
+                            .map(|(id, spec)| Request::PangolinTunnel(id, spec));
+                    }
+                }
+            }
             if wizard.api_confirm && key.code == KeyCode::Enter && wizard.api_confirm_yes {
                 let plan = wizard.api.as_ref().and_then(|a| a.plan.clone());
                 let discovery = wizard.discovery.clone();

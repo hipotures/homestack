@@ -18,7 +18,8 @@ pub(super) fn screen(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
     let available = wizard.selected_step == 0
         || (wizard.selected_step == 1 && wizard.prerequisites_available())
         || (wizard.selected_step == 2 && wizard.discovery_available())
-        || (wizard.selected_step == 3 && wizard.api_available());
+        || (wizard.selected_step == 3 && wizard.api_available())
+        || (wizard.selected_step == 4 && wizard.tunnel_available());
     let prerequisites = wizard.selected_step == 1;
     let inner = frame(
         buf,
@@ -44,6 +45,24 @@ pub(super) fn screen(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
                     Control::named("F4", "help", KeyCode::F(4)),
                     Control::named("Esc", "back", KeyCode::Esc),
                 ]
+            } else if wizard.selected_step == 4 && wizard.tunnel.busy() {
+                vec![Control::named("Esc", "cancel", KeyCode::Esc)]
+            } else if wizard.selected_step == 4 {
+                let connected = wizard.tunnel.current.state == super::pangolin_tunnel::State::Connected;
+                let compact = area.width < 100;
+                let mut controls = vec![
+                    Control::named("Tab", "focus", KeyCode::Tab).enabled(available),
+                    Control::named("F4", "help", KeyCode::F(4)),
+                    Control::named("F5", if compact { "stop" } else { "disconnect" }, KeyCode::F(5)).enabled(connected),
+                    Control::named("F6", if connected { "verify" } else { "connect" }, KeyCode::F(6))
+                        .enabled(available && !wizard.testing),
+                    Control::named("F7", "details", KeyCode::F(7)),
+                    Control::named("Esc", "back", KeyCode::Esc),
+                ];
+                if !compact {
+                    controls.insert(0, Control::named("↑↓", "steps", KeyCode::Down));
+                }
+                controls
             } else if wizard.selected_step == 3 && wizard.testing {
                 vec![Control::named("Esc", "cancel", KeyCode::Esc)]
             } else if wizard.selected_step == 3 {
@@ -129,6 +148,21 @@ pub(super) fn screen(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
             app,
             wizard,
             true,
+        );
+    } else if wizard.selected_step == 4 && wizard.focus > 0 && wizard.tunnel_available() {
+        write(
+            buf,
+            body.x,
+            body.y,
+            body.width,
+            "5. API tunnel",
+            text.add_modifier(Modifier::BOLD),
+        );
+        tunnel_details(
+            buf,
+            Rect::new(body.x, body.y + 2, body.width, body.height.saturating_sub(2)),
+            app,
+            wizard,
         );
     } else if wizard.selected_step == 3 && wizard.focus > 0 && wizard.api_available() {
         write(
@@ -220,7 +254,8 @@ fn steps(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard, wide: bool) {
             } else {
                 style
             }
-        } else if at > 3
+        } else if at > 4
+            || (at == 4 && !wizard.tunnel_available())
             || (at == 3 && !wizard.api_available())
             || (at == 2 && !wizard.discovery_available())
             || (at == 1 && !wizard.prerequisites_available())
@@ -233,8 +268,17 @@ fn steps(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard, wide: bool) {
         let passed = (at == 0 && wizard.status() == "Verified")
             || (at == 1 && wizard.prerequisites_confirmed())
             || (at == 2 && wizard.discovery_status() == "Discovered")
-            || (at == 3 && wizard.api_status() == "Verified");
-        let failed = (at == 0 && wizard.status() == "Failed")
+            || (at == 3 && wizard.api_status() == "Verified")
+            || (at == 4
+                && wizard.tunnel.current.state == super::pangolin_tunnel::State::Connected
+                && wizard.tunnel_available());
+        let failed = (at == 4
+            && wizard.tunnel_available()
+            && matches!(
+                wizard.tunnel.current.state,
+                super::pangolin_tunnel::State::Failed | super::pangolin_tunnel::State::Lost
+            ))
+            || (at == 0 && wizard.status() == "Failed")
             || (at == 3 && matches!(wizard.api_status(), "Failed" | "Permission denied"))
             || (at == 2
                 && matches!(
@@ -268,7 +312,8 @@ fn steps(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard, wide: bool) {
                 style.fg(if passed { app.palette.ok } else { app.palette.error }),
             );
         }
-        if at > 3
+        if at > 4
+            || (at == 4 && !wizard.tunnel_available())
             || (at == 3 && !wizard.api_available())
             || (at == 2 && !wizard.discovery_available())
             || (at == 1 && !wizard.prerequisites_available())
@@ -293,6 +338,17 @@ fn details(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard, wide: bool)
             text.add_modifier(Modifier::BOLD),
         );
         y += 2;
+    }
+    if wizard.selected_step == 4
+        && (wizard.tunnel_available() || wizard.tunnel.current.state == super::pangolin_tunnel::State::Outdated)
+    {
+        tunnel_details(
+            buf,
+            Rect::new(area.x, y, area.width, area.bottom().saturating_sub(y)),
+            app,
+            wizard,
+        );
+        return;
     }
     if wizard.selected_step == 3 && wizard.api_available() {
         api_details(
@@ -333,7 +389,10 @@ fn details(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard, wide: bool)
             );
             y += 1;
         }
-        let lines = if wizard.selected_step == 3 {
+        let lines = if wizard.selected_step == 4 {
+            "Locked: verify the private Integration API in Step 4 for the current server first. F4 explains the tunnel."
+                .to_owned()
+        } else if wizard.selected_step == 3 {
             "Locked: complete discovery for the selected server first. F4 explains Integration API configuration."
                 .to_owned()
         } else if wizard.selected_step == 2 {
@@ -678,7 +737,9 @@ fn modal(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
     let title = if wizard.help_open {
         format!("help · {}. {}", wizard.selected_step + 1, STAGES[wizard.selected_step])
     } else {
-        if wizard.selected_step == 3 {
+        if wizard.selected_step == 4 {
+            "Private API tunnel report"
+        } else if wizard.selected_step == 3 {
             "Integration API plan / report"
         } else if wizard.selected_step == 2 {
             "Pangolin discovery report"
@@ -706,6 +767,19 @@ fn modal(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
     );
     let (content, scroll) = if wizard.help_open {
         (HELP[wizard.selected_step].to_owned(), wizard.help_scroll)
+    } else if wizard.selected_step == 4 {
+        (
+            format!(
+                "{}{}",
+                wizard.tunnel.text(app.utc_offset),
+                if wizard.message.is_empty() {
+                    String::new()
+                } else {
+                    format!("\n{}", wizard.message)
+                }
+            ),
+            wizard.report_scroll,
+        )
     } else if wizard.selected_step == 3 {
         (
             wizard.api.as_ref().map(|r| r.text(app.utc_offset)).unwrap_or_default(),
@@ -923,4 +997,92 @@ fn approval(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
             Hit::PangolinApi(control),
         );
     }
+}
+
+fn tunnel_details(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
+    if area.height < 3 {
+        return;
+    }
+    let text = text_style(&app.palette);
+    let state = wizard.tunnel.current.state;
+    let color = match state {
+        super::pangolin_tunnel::State::Connected => app.palette.ok,
+        super::pangolin_tunnel::State::Failed | super::pangolin_tunnel::State::Lost => app.palette.error,
+        _ => app.palette.muted,
+    };
+    write(
+        buf,
+        area.x,
+        area.y,
+        area.width,
+        &format!("Status: {}", state.label()),
+        text.fg(color).add_modifier(Modifier::BOLD),
+    );
+    let connected = state == super::pangolin_tunnel::State::Connected;
+    if !wizard.tunnel.busy() {
+        let label = if connected {
+            "[ Verify ]"
+        } else if matches!(
+            state,
+            super::pangolin_tunnel::State::Failed
+                | super::pangolin_tunnel::State::Lost
+                | super::pangolin_tunnel::State::Cancelled
+        ) {
+            "[ Retry ]"
+        } else {
+            "[ Connect ]"
+        };
+        let style = if wizard.focus == 1 {
+            text.bg(app.palette.selection).fg(app.palette.focus)
+        } else {
+            text
+        };
+        write(buf, area.x, area.y + 1, area.width, label, style);
+        if !wizard.testing && wizard.tunnel_available() {
+            chrome::register(
+                Rect::new(area.x, area.y + 1, label.len() as u16, 1),
+                Hit::PangolinTunnel(1),
+            );
+        }
+        if connected {
+            let style = if wizard.focus == 2 {
+                text.bg(app.palette.selection).fg(app.palette.focus)
+            } else {
+                text
+            };
+            write(
+                buf,
+                area.x + 13,
+                area.y + 1,
+                area.width.saturating_sub(13),
+                "[ Disconnect ]",
+                style,
+            );
+            chrome::register(Rect::new(area.x + 13, area.y + 1, 14, 1), Hit::PangolinTunnel(2));
+        }
+    }
+    let summary = if let Some(error) = wizard.tunnel.current.error {
+        error.message().to_owned()
+    } else if wizard.tunnel.busy() {
+        "Establishing private SSH forwarding and verifying API health… Esc cancels.".into()
+    } else if let Some(spec) = wizard.tunnel_spec() {
+        let mut lines = format!("Server: {}\nRemote API: {}", spec.target, spec.remote());
+        if connected {
+            if let Some(port) = wizard.tunnel.current.port {
+                lines.push_str(&format!("\nLocal endpoint: 127.0.0.1:{port}\nAPI health: PASS"));
+            }
+        } else {
+            lines.push_str("\nA private SSH tunnel will provide API access. No API key is used.");
+        }
+        lines
+    } else {
+        "Private API configuration changed. Verify Step 4 again.".into()
+    };
+    lines_into(
+        buf,
+        Rect::new(area.x, area.y + 2, area.width, area.height - 2),
+        &summary,
+        0,
+        text,
+    );
 }
