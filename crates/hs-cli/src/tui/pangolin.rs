@@ -680,7 +680,7 @@ pub fn test_ssh(
     sounds: &crate::touch::Sounds,
     player: crate::touch::Player,
 ) -> Result<String, String> {
-    ssh_command(system, target, prefix, stop, sounds, player, "true")
+    ssh_command(system, target, prefix, stop, sounds, player, "true").0
         .map(|_| "PASS · Effective OpenSSH configuration resolved\nPASS · SSH authenticated, remote command successful (true)\nNo Pangolin inspection or server configuration performed.".to_owned())
 }
 
@@ -692,114 +692,128 @@ fn ssh_command(
     sounds: &crate::touch::Sounds,
     player: crate::touch::Player,
     remote: &str,
-) -> Result<String, String> {
-    validate_destination(target)?;
-    let started = std::time::Instant::now();
-    let limit = Duration::from_secs(45);
-    let run = |argv: &[String]| -> Result<Output, String> {
-        if stop.load(Ordering::SeqCst) {
-            return Err("SSH test cancelled.".to_owned());
-        }
-        let remaining = limit
-            .checked_sub(started.elapsed())
-            .ok_or("SSH test timed out (45s).")?;
-        system.run_until(argv, stop, remaining).map_err(|e| {
-            match e.kind() {
-                std::io::ErrorKind::TimedOut => "SSH test timed out (45s).",
-                std::io::ErrorKind::Interrupted => "SSH test cancelled.",
-                _ => "Cannot execute OpenSSH; check that ssh is installed.",
+) -> (Result<String, String>, Option<String>) {
+    let mut account = None;
+    let result = (|| {
+        validate_destination(target)?;
+        let started = std::time::Instant::now();
+        let limit = Duration::from_secs(45);
+        let run = |argv: &[String]| -> Result<Output, String> {
+            if stop.load(Ordering::SeqCst) {
+                return Err("SSH test cancelled.".to_owned());
             }
-            .to_owned()
-        })
-    };
-    // Explicitly retain host verification, disable side effects from forwards
-    // and LocalCommand, and require a foreground command rather than a shell,
-    // configured RemoteCommand, multiplexed session or background connection.
-    let options = [
-        "-T",
-        "-o",
-        "ConnectTimeout=15",
-        "-o",
-        "ConnectionAttempts=1",
-        "-o",
-        "BatchMode=no",
-        "-o",
-        "ControlMaster=no",
-        "-o",
-        "ControlPath=none",
-        "-o",
-        "ClearAllForwardings=yes",
-        "-o",
-        "PermitLocalCommand=no",
-        "-o",
-        "RemoteCommand=none",
-        "-o",
-        "SessionType=default",
-        "-o",
-        "ForkAfterAuthentication=no",
-        "-o",
-        "PasswordAuthentication=no",
-        "-o",
-        "KbdInteractiveAuthentication=no",
-        "-o",
-        "LogLevel=ERROR",
-    ];
-    let mut config = prefix.to_vec();
-    config.push("ssh".to_owned());
-    config.extend(options.map(str::to_owned));
-    config.extend(["-G".to_owned(), "--".to_owned(), target.to_owned()]);
-    let resolved = run(&config)?;
-    if resolved.code != 0
-        || !["hostname ", "user ", "port "]
-            .iter()
-            .all(|key| resolved.stdout.lines().any(|line| line.starts_with(key)))
-    {
-        return Err("Cannot resolve effective OpenSSH configuration.".to_owned());
-    }
-    let host_keys = resolved
-        .stdout
-        .lines()
-        .find_map(|line| line.strip_prefix("stricthostkeychecking "));
-    if !matches!(host_keys, Some("ask" | "true" | "yes" | "accept-new")) {
-        return Err(
-            "SSH configuration must enable host key verification; insecure host checking is refused.".to_owned(),
-        );
-    }
-    let mut command = prefix.to_vec();
-    command.push("ssh".to_owned());
-    command.extend(options.map(str::to_owned));
-    command.extend(["--".to_owned(), target.to_owned(), remote.to_owned()]);
-    crate::touch::touch_wait(target, sounds, player, |_| {
-        let output = run(&command)?;
-        if stop.load(Ordering::SeqCst) {
-            return Err("SSH test cancelled.".to_owned());
-        }
-        if output.code != 0 {
-            // Never display raw SSH output, config dumps, paths, prompts or secrets.
-            let error = output.stderr.to_ascii_lowercase();
-            return Err(
-                if error.contains("permission denied") || error.contains("authentication failed") {
-                    "SSH authentication failed; check the configured identity and access."
-                } else if error.contains("host key verification failed")
-                    || error.contains("host identification has changed")
-                {
-                    "SSH host key verification failed; inspect known_hosts before retrying."
-                } else if error.contains("timed out") {
-                    "SSH connection timed out."
-                } else if error.contains("resolve hostname")
-                    || error.contains("connection refused")
-                    || error.contains("no route to host")
-                    || error.contains("network is unreachable")
-                {
-                    "SSH host is unreachable; check the destination, port and network."
-                } else {
-                    "SSH remote command failed; check SSH configuration and server access."
+            let remaining = limit
+                .checked_sub(started.elapsed())
+                .ok_or("SSH test timed out (45s).")?;
+            system.run_until(argv, stop, remaining).map_err(|e| {
+                match e.kind() {
+                    std::io::ErrorKind::TimedOut => "SSH test timed out (45s).",
+                    std::io::ErrorKind::Interrupted => "SSH test cancelled.",
+                    _ => "Cannot execute OpenSSH; check that ssh is installed.",
                 }
-                .to_owned(),
+                .to_owned()
+            })
+        };
+        // Explicitly retain host verification, disable side effects from forwards
+        // and LocalCommand, and require a foreground command rather than a shell,
+        // configured RemoteCommand, multiplexed session or background connection.
+        let options = [
+            "-T",
+            "-o",
+            "ConnectTimeout=15",
+            "-o",
+            "ConnectionAttempts=1",
+            "-o",
+            "BatchMode=no",
+            "-o",
+            "ControlMaster=no",
+            "-o",
+            "ControlPath=none",
+            "-o",
+            "ClearAllForwardings=yes",
+            "-o",
+            "PermitLocalCommand=no",
+            "-o",
+            "RemoteCommand=none",
+            "-o",
+            "SessionType=default",
+            "-o",
+            "ForkAfterAuthentication=no",
+            "-o",
+            "PasswordAuthentication=no",
+            "-o",
+            "KbdInteractiveAuthentication=no",
+            "-o",
+            "LogLevel=ERROR",
+        ];
+        let mut config = prefix.to_vec();
+        config.push("ssh".to_owned());
+        config.extend(options.map(str::to_owned));
+        config.extend(["-G".to_owned(), "--".to_owned(), target.to_owned()]);
+        let resolved = run(&config)?;
+        if resolved.code != 0
+            || !["hostname ", "user ", "port "]
+                .iter()
+                .all(|key| resolved.stdout.lines().any(|line| line.starts_with(key)))
+        {
+            return Err("Cannot resolve effective OpenSSH configuration.".to_owned());
+        }
+        account = resolved
+            .stdout
+            .lines()
+            .find_map(|line| line.strip_prefix("user "))
+            .filter(|user| {
+                !user.is_empty()
+                    && user.len() <= 128
+                    && user.bytes().all(|c| c.is_ascii_alphanumeric() || b"._-".contains(&c))
+            })
+            .map(str::to_owned);
+        let host_keys = resolved
+            .stdout
+            .lines()
+            .find_map(|line| line.strip_prefix("stricthostkeychecking "));
+        if !matches!(host_keys, Some("ask" | "true" | "yes" | "accept-new")) {
+            return Err(
+                "SSH configuration must enable host key verification; insecure host checking is refused.".to_owned(),
             );
         }
-        Ok(output.stdout)
-    })
+        let mut command = prefix.to_vec();
+        command.push("ssh".to_owned());
+        command.extend(options.map(str::to_owned));
+        command.extend(["--".to_owned(), target.to_owned(), remote.to_owned()]);
+        crate::touch::touch_wait(target, sounds, player, |_| {
+            let output = run(&command)?;
+            if stop.load(Ordering::SeqCst) {
+                return Err("SSH test cancelled.".to_owned());
+            }
+            if output.code != 0 {
+                // Never display raw SSH output, config dumps, paths, prompts or secrets.
+                let error = output.stderr.to_ascii_lowercase();
+                return Err(
+                    if error.contains("permission denied") || error.contains("authentication failed") {
+                        "SSH authentication failed; check the configured identity and access."
+                    } else if error.contains("host key verification failed")
+                        || error.contains("host identification has changed")
+                    {
+                        "SSH host key verification failed; inspect known_hosts before retrying."
+                    } else if error.contains("timed out") {
+                        "SSH connection timed out."
+                    } else if error.contains("resolve hostname")
+                        || error.contains("connection refused")
+                        || error.contains("no route to host")
+                        || error.contains("network is unreachable")
+                    {
+                        "SSH host is unreachable; check the destination, port and network."
+                    } else {
+                        "SSH remote command failed; check SSH configuration and server access."
+                    }
+                    .to_owned(),
+                );
+            }
+            Ok(output.stdout)
+        })
+    })();
+    (result, account)
 }
 
 /// Cancels the worker when the wizard/TUI closes, edits or starts another test.
@@ -814,7 +828,8 @@ impl Drop for Pending {
 }
 
 /// Only these non-secret inventory fields may cross the SSH/report boundary.
-const FACTS: [&str; 20] = [
+const FACTS: [&str; 21] = [
+    "ssh_user",
     "working_directory",
     "installation",
     "identity",
@@ -933,6 +948,116 @@ impl Discovery {
     pub fn fact(&self, key: &str) -> &str {
         self.facts.get(key).map_or("Unknown", String::as_str)
     }
+    pub fn known(&self, key: &str) -> Option<&str> {
+        self.facts
+            .get(key)
+            .map(String::as_str)
+            .filter(|s| !s.is_empty() && !matches!(*s, "Unknown" | "Unavailable"))
+    }
+    pub fn has_inventory(&self) -> bool {
+        self.known("installation").is_some() || self.known("identity").is_some()
+    }
+    /// A single category, explanation and next action; technical detail stays in F7.
+    pub fn problem(&self) -> Option<(&'static str, &'static str, &'static str)> {
+        Some(match self.outcome.as_str() {
+            "Discovered" => return None,
+            "Permission denied" => (
+                "Permission denied",
+                "Cannot access Docker metadata.",
+                "Grant appropriate Docker access or choose another authorized SSH account.",
+            ),
+            "Not found" => (
+                "Not found",
+                "Pangolin was not found in accessible runtimes.",
+                "Check the selected server and confirm Pangolin is installed.",
+            ),
+            "Unsupported installation" if self.diagnostic.contains("Multiple") => (
+                "Ambiguous installation",
+                "Multiple Pangolin installations were found.",
+                "Inspect F7 Details to identify the intended installation.",
+            ),
+            "Unsupported installation" => (
+                "Unsupported installation",
+                "The installation layout could not be identified safely.",
+                "Inspect F7 Details and ask the server administrator to identify the runtime.",
+            ),
+            "Partially discovered" if self.fact("state") == "Stopped" => (
+                "Stopped service",
+                "Pangolin is installed but its service is stopped.",
+                "Ask the server administrator to start Pangolin, then retry.",
+            ),
+            "Partially discovered" => (
+                "Partially discovered",
+                "Some installation details could not be read or identified.",
+                "Inspect F7 Details for missing metadata and required read access.",
+            ),
+            "Cancelled" => ("Cancelled", "Discovery was cancelled.", "Press F6 to retry when ready."),
+            "Outdated" => (
+                "Outdated",
+                "The saved discovery no longer applies to this server configuration.",
+                "Complete the server prerequisites and run discovery again.",
+            ),
+            _ if self.diagnostic.contains("authentication failed") => (
+                "SSH authentication failed",
+                "SSH authentication did not succeed.",
+                "Check the configured SSH identity or choose another authorized account.",
+            ),
+            _ if self.diagnostic.contains("host key") => (
+                "SSH host key failure",
+                "SSH host key verification did not succeed.",
+                "Inspect the host key and known_hosts before retrying.",
+            ),
+            _ if self.diagnostic.contains("unreachable") => (
+                "SSH unreachable",
+                "The configured SSH destination is unreachable.",
+                "Check the SSH destination, port and network, then retry.",
+            ),
+            _ if self.diagnostic.contains("timed out") => (
+                "Discovery timed out",
+                "Discovery exceeded its connection or execution deadline.",
+                "Check server reachability and retry; inspect F7 Details if it persists.",
+            ),
+            _ => (
+                "Discovery failed",
+                "The read-only inspection could not complete.",
+                "Inspect F7 Details, resolve the reported issue and retry.",
+            ),
+        })
+    }
+    pub fn summary(&self) -> String {
+        let account = self
+            .known("ssh_user")
+            .or_else(|| self.target.split_once('@').map(|(user, _)| user));
+        let server = self
+            .target
+            .split_once('@')
+            .map_or(self.target.as_str(), |(_, host)| host);
+        let mut lines = vec![match account {
+            Some(account) => format!("SSH account: {account} · Server: {server}"),
+            None => format!("Server: {server} (SSH account not resolved)"),
+        }];
+        if let Some((_, explanation, action)) = self.problem() {
+            lines.push(explanation.to_owned());
+            lines.push(action.to_owned());
+        } else if self.has_inventory() {
+            for (key, label) in [
+                ("installation", "Installation"),
+                ("state", "Runtime"),
+                ("config", "Config"),
+                ("api_enabled", "API enabled"),
+                ("api_port", "API port"),
+            ] {
+                if let Some(value) = self.known(key) {
+                    lines.push(format!("{label}: {value}"));
+                }
+            }
+            if self.known("image").is_some() {
+                lines.push("Software version: unverified (image in F7 Details)".to_owned());
+            }
+            lines.push("Historical observation; date and inventory: F7 Details.".to_owned());
+        }
+        lines.join("\n")
+    }
     fn store(&self) -> toml::Value {
         let mut table = toml::Table::new();
         for (key, value) in [("target", &self.target), ("at", &self.at), ("outcome", &self.outcome)] {
@@ -988,10 +1113,21 @@ impl Discovery {
             format!("Server: {}", self.target),
             format!("Last discovery: {date} (historical observation)"),
             format!("Outcome: {}", self.outcome),
-            self.diagnostic.clone(),
         ];
-        for key in FACTS {
-            lines.push(format!("{}: {}", key.replace('_', " "), self.fact(key)));
+        for detail in self.diagnostic.lines().filter(|line| !line.is_empty()) {
+            if !lines.iter().any(|line| line == detail) {
+                lines.push(detail.to_owned());
+            }
+        }
+        if let Some(account) = self.known("ssh_user") {
+            lines.insert(1, format!("SSH account: {account}"));
+        }
+        if self.has_inventory() {
+            for key in FACTS.into_iter().filter(|key| *key != "ssh_user") {
+                if let Some(value) = self.known(key) {
+                    lines.push(format!("{}: {value}", key.replace('_', " ")));
+                }
+            }
         }
         let access = if self.fact("api_enabled") == "false" {
             "Integration API is disabled; enabling it belongs to Step 4."
@@ -1006,7 +1142,9 @@ impl Discovery {
         } else {
             "Transport and API reachability are not tested in this phase."
         };
-        lines.push(format!("Future bootstrap access: {access}"));
+        if self.known("api_enabled").is_some() {
+            lines.push(format!("Future bootstrap access: {access}"));
+        }
         lines.join("\n\n")
     }
 }
@@ -1023,9 +1161,9 @@ pub fn discover(
     // or other remotely supplied value is ever interpolated into shell source.
     let source = include_str!("pangolin_discover.py");
     let command = format!("python3 -B -c '{}'", source.replace('\'', "'\\''"));
-    let result = ssh_command(system, target, prefix, stop, sounds, player, &command)
-        .and_then(|text| Discovery::parse(target, &text));
-    match result {
+    let (result, account) = ssh_command(system, target, prefix, stop, sounds, player, &command);
+    let result = result.and_then(|text| Discovery::parse(target, &text));
+    let mut report = match result {
         Ok(report) if !stop.load(Ordering::SeqCst) => report,
         Ok(_) => Discovery::failure(target, "Cancelled", "Discovery cancelled."),
         Err(error) => {
@@ -1043,7 +1181,11 @@ pub fn discover(
             };
             Discovery::failure(target, outcome, detail)
         }
+    };
+    if let Some(account) = account {
+        report.facts.insert("ssh_user".to_owned(), account);
     }
+    report
 }
 
 const SAFE_DIAGNOSTICS: &[&str] = &[

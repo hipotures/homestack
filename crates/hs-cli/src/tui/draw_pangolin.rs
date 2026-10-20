@@ -49,7 +49,7 @@ pub(super) fn screen(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
                     Control::named("Tab", "focus", KeyCode::Tab).enabled(available),
                     Control::named("F4", "help", KeyCode::F(4)),
                     Control::named("F6", "discover", KeyCode::F(6)).enabled(available && !wizard.testing),
-                    Control::named("F7", "report", KeyCode::F(7)).enabled(wizard.discovery.is_some()),
+                    Control::named("F7", "details", KeyCode::F(7)).enabled(wizard.discovery.is_some()),
                     Control::named("Esc", if wizard.testing { "cancel" } else { "back" }, KeyCode::Esc),
                 ]
             } else {
@@ -78,7 +78,15 @@ pub(super) fn screen(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
         wizard.status() == "Verified"
     };
     let status = if wizard.selected_step == 2 {
-        wizard.discovery_status()
+        if matches!(wizard.discovery_status(), "Discovering" | "Outdated") {
+            wizard.discovery_status()
+        } else {
+            wizard
+                .discovery
+                .as_ref()
+                .and_then(|r| r.problem())
+                .map_or(wizard.discovery_status(), |p| p.0)
+        }
     } else if prerequisites && wizard.prerequisites_available() {
         if wizard.prerequisites_confirmed() {
             "Confirmed by user"
@@ -103,7 +111,16 @@ pub(super) fn screen(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
         inner.y,
         width.min(state.len() as u16),
         &state,
-        text.fg(if verified { palette.ok } else { palette.muted }),
+        text.fg(if verified {
+            palette.ok
+        } else if wizard.selected_step == 2
+            && wizard.discovery.as_ref().is_some_and(|r| r.problem().is_some())
+            && !matches!(wizard.discovery_status(), "Discovering" | "Outdated" | "Cancelled")
+        {
+            palette.error
+        } else {
+            palette.muted
+        }),
     );
     write(
         buf,
@@ -432,28 +449,20 @@ fn discovery_details(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
         return;
     }
     let text = text_style(&app.palette);
-    let mut lines = format!("Server: {}", wizard.target);
-    if let Some(report) = &wizard.discovery {
-        if report.outcome != "Discovered" {
-            lines.push_str(&format!(
-                "\n{}",
-                report.diagnostic.lines().next().unwrap_or("See F7 report.")
-            ));
-        }
-        lines.push_str(&format!(
-            "\n{} · {}\nSoftware version: unverified (image in F7 report)\nConfig: {}\nAPI: {} · port {}\nHistorical observation; full inventory and issues: F7.",
-            report.fact("installation"),
-            report.fact("state"),
-            report.fact("config"),
-            match report.fact("api_enabled") { "true" => "Enabled", "false" => "Disabled", _ => "Unknown" },
-            report.fact("api_port")
-        ));
+    let mut lines = if let Some(report) = &wizard.discovery {
+        report.summary()
     } else {
-        lines.push_str(
-            "\nInspect runtime, configuration and ports read-only.\nNo server configuration will be changed.",
-        );
-    }
-    if !wizard.message.is_empty() {
+        format!(
+            "Server: {}\nInspect runtime, configuration and ports read-only.\nNo server configuration will be changed.",
+            wizard.target
+        )
+    };
+    if !wizard.message.is_empty()
+        && !wizard
+            .discovery
+            .as_ref()
+            .is_some_and(|report| report.diagnostic.contains(&wizard.message))
+    {
         lines.push_str(&format!("\n{}", wizard.message));
     }
     let style = if wizard.focus == 1 {

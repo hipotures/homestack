@@ -1349,3 +1349,151 @@ fn pangolin_discovery_confirmation_revocation_survives_reopening_and_worker_fail
     w.complete_discovery(id, inventory(&w.target, false));
     assert_eq!(w.discovery_status(), "Outdated");
 }
+
+#[test]
+fn pangolin_discovery_failures_render_compactly_without_unknown_inventory() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = App::new(Preferences::fallback(&dir.path().join("tui.toml")), false).unwrap();
+    for (outcome, diagnostic, category, action) in [
+        (
+            "Permission denied",
+            "SSH connected, but Docker metadata is not accessible to this account.",
+            "Permission denied",
+            "Grant appropriate Docker access",
+        ),
+        (
+            "Not found",
+            "Pangolin installation not found in accessible supported runtimes. Custom layouts are not searched.",
+            "Not found",
+            "Check the selected server",
+        ),
+        (
+            "Partially discovered",
+            "Pangolin is installed but its service is stopped.",
+            "Stopped service",
+            "Ask the server administrator",
+        ),
+        (
+            "Unsupported installation",
+            "Multiple Pangolin installations detected. Automatic selection is unsafe.",
+            "Ambiguous installation",
+            "Inspect F7 Details",
+        ),
+        (
+            "Failed",
+            "SSH authentication failed; check the configured identity and access.",
+            "SSH authentication failed",
+            "Check the configured SSH identity",
+        ),
+    ] {
+        let mut w = discovery_wizard(dir.path());
+        w.focus = 1;
+        let mut report = pangolin::Discovery::failure(&w.target, outcome, diagnostic);
+        report.facts.insert("ssh_user".to_owned(), "operator".to_owned());
+        if category == "Stopped service" {
+            report.facts.insert("installation".to_owned(), "Docker".to_owned());
+            report.facts.insert("state".to_owned(), "Stopped".to_owned());
+        }
+        w.discovery = Some(report);
+        w.message = diagnostic.to_owned(); // Worker startup errors can also populate this field.
+        app.overlay = Some(Overlay::Pangolin(Box::new(w)));
+        for (width, height) in [(80, 24), (120, 36)] {
+            let text = rendered(&app, width, height);
+            for phrase in [category, "SSH account: operator", "Server: prerequisite-lab", action] {
+                assert!(text.contains(phrase), "{text}");
+            }
+            for absent in [
+                "Unknown",
+                "Unavailable",
+                "Software version:",
+                "Config:",
+                "API port:",
+                "Future bootstrap",
+            ] {
+                assert!(!text.contains(absent), "{text}");
+            }
+            assert_eq!(text.matches(category).count(), 1, "{text}");
+            assert_eq!(text.matches(action).count(), 1, "{text}");
+            assert!(text.matches(diagnostic).count() <= 1, "Duplicate diagnostic: {text}");
+            if category == "Permission denied"
+                && let Some(path) = std::env::var_os("HOMESTACK_PANGOLIN_RENDER_DIR")
+            {
+                let path = std::path::PathBuf::from(path);
+                std::fs::create_dir_all(&path).unwrap();
+                std::fs::write(path.join(format!("pangolin-permission-{width}x{height}.txt")), &text).unwrap();
+            }
+        }
+        app.key(key(KeyCode::F(7)));
+        let mut detail = String::new();
+        for _ in 0..8 {
+            detail.push_str(&rendered(&app, 80, 24));
+            app.key(key(KeyCode::PageDown));
+        }
+        assert!(detail.contains("SSH account: operator"));
+        assert!(!detail.contains("Unknown"));
+        assert!(!detail.contains("api port:"));
+        app.key(key(KeyCode::Esc));
+    }
+}
+
+#[test]
+fn pangolin_discovery_resolves_account_from_openssh_including_auth_failures() {
+    let output =
+        serde_json::json!({"outcome":"Permission denied", "facts":{}, "issues":["docker_permission"]}).to_string();
+    let mock = Mock::new(Output::stdout(&output));
+    let discover = |mock: &Mock, target: &str| {
+        pangolin::discover(
+            mock,
+            target,
+            &[],
+            &AtomicBool::new(false),
+            &hs_cli::touch::Sounds::disabled(),
+            hs_cli::touch::default_player(),
+        )
+    };
+    let report = discover(&mock, "discovery.example.test");
+    assert_eq!(report.known("ssh_user"), Some("operator"));
+    assert!(report.summary().contains("SSH account: operator"));
+    let mock = Mock::new(Output {
+        code: 255,
+        stdout: String::new(),
+        stderr: "Permission denied synthetic-secret".to_owned(),
+    });
+    let report = discover(&mock, "discovery.example.test");
+    assert_eq!(report.known("ssh_user"), Some("operator"));
+    assert_eq!(report.problem().unwrap().0, "SSH authentication failed");
+    assert!(!report.text(0).contains("synthetic-secret"));
+    let mut unresolved = Mock::new(Output::stdout(""));
+    unresolved.config.clear();
+    let report = discover(&unresolved, "discovery.example.test");
+    assert!(report.known("ssh_user").is_none());
+    assert!(report.summary().contains("SSH account not resolved"));
+    let report = discover(&unresolved, "alternate@discovery.example.test");
+    assert!(report.summary().contains("SSH account: alternate"));
+}
+
+#[test]
+fn pangolin_discovery_details_only_list_observed_inventory() {
+    let mut report = inventory("discovery.example.test", false);
+    report.facts.insert("ssh_user".to_owned(), "operator".to_owned());
+    report
+        .facts
+        .insert("working_directory".to_owned(), "Unknown".to_owned());
+    report.facts.insert("service_file".to_owned(), String::new());
+    assert!(report.summary().contains("Installation: Docker Compose"));
+    let detail = report.text(0);
+    assert!(detail.contains("installation: Docker Compose"));
+    assert!(detail.contains("config: /srv/synthetic/config.yml"));
+    assert!(!detail.contains("working directory:"));
+    assert!(!detail.contains("service file:"));
+    assert_eq!(detail.matches("SSH account: operator").count(), 1);
+    assert!(!detail.contains("Unknown"));
+    report.diagnostic = "SSH connected, but Docker metadata is not accessible to this account.\nSSH connected, but Docker metadata is not accessible to this account.".to_owned();
+    assert_eq!(
+        report
+            .text(0)
+            .matches("SSH connected, but Docker metadata is not accessible to this account.")
+            .count(),
+        1
+    );
+}
