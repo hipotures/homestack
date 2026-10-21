@@ -440,15 +440,35 @@ impl Wizard {
     pub fn prerequisites_confirmed(&self) -> bool {
         self.prerequisites_available() && self.prerequisites_target.as_ref() == Some(&self.target)
     }
+    /// Saved setup progress is independent of this session's authorization.
+    pub fn step_configured(&self, step: usize) -> bool {
+        match step {
+            0 => self.status() == "Verified",
+            1 => self.prerequisites_confirmed(),
+            2 => self.discovery_status() == "Discovered",
+            3 => self.api_status() == "Verified",
+            4 => {
+                self.tunnel_connected()
+                    || self.tunnel.history.as_ref().is_some_and(|history| {
+                        self.tunnel_spec()
+                            .is_some_and(|spec| history.target == self.target && history.remote == spec.remote())
+                    })
+            }
+            5 => {
+                self.bootstrap_verified()
+                    || self.bootstrap.history.as_ref().is_some_and(|history| {
+                        history.target == self.target
+                            && history.organization == self.bootstrap.organization
+                            && history.organization_confirmed
+                    })
+            }
+            6 => self.permanent_verified() || self.permanent_destination().is_file(),
+            7 => self.sites_healthy(),
+            _ => false,
+        }
+    }
     pub fn completed(&self) -> usize {
-        usize::from(self.status() == "Verified")
-            + usize::from(self.prerequisites_confirmed())
-            + usize::from(self.discovery_status() == "Discovered")
-            + usize::from(self.api_status() == "Verified")
-            + usize::from(self.tunnel_connected())
-            + usize::from(self.bootstrap_verified())
-            + usize::from(self.permanent_verified())
-            + usize::from(self.sites_healthy())
+        (0..STAGES.len()).filter(|step| self.step_configured(*step)).count()
     }
     pub fn toggle_prerequisites(&mut self) {
         if !self.prerequisites_available() {
@@ -511,7 +531,7 @@ impl Wizard {
             self.prerequisites_scroll = 0;
         }
     }
-    /// Every stage can be selected for explanation; only Steps 1-7 have actions.
+    /// Select a stage and return focus to the step navigation.
     pub fn select_step(&mut self, step: usize) {
         if self.api_confirm
             || self.api_running
@@ -562,6 +582,25 @@ impl Wizard {
                 _ => {}
             }
             return false;
+        }
+        if self.selected_step == 7 && self.sites_summary().is_some() {
+            match key.code {
+                KeyCode::Tab => self.focus = (self.focus + 1) % 3,
+                KeyCode::BackTab => self.focus = (self.focus + 2) % 3,
+                KeyCode::Right if self.focus == 0 => self.focus = 1,
+                KeyCode::Down | KeyCode::Up if self.focus > 0 => {
+                    self.focus = 3 - self.focus;
+                    return false;
+                }
+                KeyCode::Left | KeyCode::Right if self.focus > 0 => self.focus = 3 - self.focus,
+                _ => {}
+            }
+            if matches!(
+                key.code,
+                KeyCode::Tab | KeyCode::BackTab | KeyCode::Left | KeyCode::Right
+            ) {
+                return false;
+            }
         }
         if self.selected_step == 6 && self.permanent_key(key) {
             return false;

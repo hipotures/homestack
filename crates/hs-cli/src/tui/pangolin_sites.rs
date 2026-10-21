@@ -1413,6 +1413,15 @@ impl super::pangolin::Wizard {
             .is_some_and(|s| s.healthy(&self.target, &self.bootstrap.organization))
     }
 
+    /// The saved result belongs to this server and organization.
+    pub fn sites_summary(&self) -> Option<&Summary> {
+        self.sites.as_ref().filter(|summary| {
+            summary.target == self.target
+                && summary.organization == self.bootstrap.organization
+                && !summary.deployed.is_empty()
+        })
+    }
+
     /// Read the summary again after the deployment screen closes.
     pub fn reload_sites(&mut self) {
         self.sites = Summary::load(&self.sites_path());

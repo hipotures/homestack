@@ -1586,6 +1586,7 @@ impl App {
                 self.install = None;
                 if sites && let Some(Overlay::Pangolin(wizard)) = self.overlay.as_mut() {
                     wizard.reload_sites();
+                    wizard.focus = 0;
                 }
             }
             if before != after {
@@ -1606,10 +1607,18 @@ impl App {
                 }
             }
             if !wizard.report_open && !wizard.help_open && !wizard.api_confirm {
-                if wizard.selected_step == 7
-                    && matches!(key.code, KeyCode::Enter | KeyCode::Right | KeyCode::Tab | KeyCode::F(6))
-                {
-                    return wizard.sites_available().then_some(Request::PangolinSites);
+                if wizard.selected_step == 7 {
+                    if wizard.sites_summary().is_some() {
+                        if key.code == KeyCode::Char('f') || (key.code == KeyCode::Enter && wizard.focus != 2) {
+                            self.overlay = Some(Overlay::Integrations { index: 3 });
+                            return None;
+                        }
+                        if key.code == KeyCode::F(6) || (key.code == KeyCode::Enter && wizard.focus == 2) {
+                            return wizard.sites_available().then_some(Request::PangolinSites);
+                        }
+                    } else if matches!(key.code, KeyCode::Enter | KeyCode::Right | KeyCode::Tab | KeyCode::F(6)) {
+                        return wizard.sites_available().then_some(Request::PangolinSites);
+                    }
                 }
                 if key.code == KeyCode::Esc && wizard.tunnel.busy() {
                     return Some(Request::StopPangolinTunnel(true));

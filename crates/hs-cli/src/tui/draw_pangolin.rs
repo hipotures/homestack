@@ -22,7 +22,8 @@ pub(super) fn screen(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
         || (wizard.selected_step == 4 && wizard.tunnel_available())
         || (wizard.selected_step == 5 && wizard.bootstrap_available())
         || (wizard.selected_step == 6 && wizard.permanent_available())
-        || (wizard.selected_step == 7 && (wizard.sites_available() || app.install.is_some()));
+        || (wizard.selected_step == 7
+            && (wizard.sites_available() || wizard.sites_summary().is_some() || app.install.is_some()));
     let escape = if wizard.focus == 0 { "back" } else { "steps" };
     let arrows = if wizard.focus == 0 { "steps" } else { "focus" };
     let prerequisites = wizard.selected_step == 1;
@@ -50,6 +51,19 @@ pub(super) fn screen(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
                         Control::named("Pg↓↑", "scroll", KeyCode::PageDown).enabled(available)
                     },
                     Control::named("F4", "help", KeyCode::F(4)),
+                    Control::named("Esc", escape, KeyCode::Esc),
+                ]
+            } else if wizard.selected_step == 7 && wizard.sites_summary().is_some() {
+                vec![
+                    Control::named("↑↓", arrows, KeyCode::Down),
+                    Control::named("Tab", "focus", KeyCode::Tab),
+                    Control::named(
+                        "Enter",
+                        if wizard.focus == 2 { "configure" } else { "finish" },
+                        KeyCode::Enter,
+                    ),
+                    Control::named("F6", "configure", KeyCode::F(6)).enabled(wizard.sites_available()),
+                    Control::named("F7", "details", KeyCode::F(7)),
                     Control::named("Esc", escape, KeyCode::Esc),
                 ]
             } else if wizard.selected_step == 7 {
@@ -165,7 +179,7 @@ pub(super) fn screen(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
     }
     let x = inner.x + 1;
     let width = inner.width - 2;
-    let state = format!("{}/8 completed", wizard.completed());
+    let state = format!("{}/8 configured", wizard.completed());
     write(
         buf,
         x,
@@ -190,6 +204,7 @@ pub(super) fn screen(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
         &bar(usize::from(width), wizard.completed() as f64 * 12.5),
         text.fg(palette.accent),
     );
+    write(buf, x, inner.y + 2, width, "✓ saved setup    ● live API tunnel", muted);
     let body = Rect::new(x, inner.y + 3, width, inner.height - 5);
     if width >= 108 {
         let nav_width = 41;
@@ -210,7 +225,9 @@ pub(super) fn screen(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
             wizard,
             true,
         );
-    } else if wizard.selected_step == 7 && (wizard.sites_available() || app.install.is_some()) {
+    } else if wizard.selected_step == 7
+        && (wizard.sites_available() || wizard.sites_summary().is_some() || app.install.is_some())
+    {
         sites_details(buf, body, app, wizard);
     } else if wizard.selected_step == 6 && wizard.focus > 0 {
         write(
@@ -340,14 +357,7 @@ fn steps(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard, wide: bool) {
             break;
         }
         let chosen = at == wizard.selected_step;
-        let passed = (at == 0 && wizard.status() == "Verified")
-            || (at == 1 && wizard.prerequisites_confirmed())
-            || (at == 2 && wizard.discovery_status() == "Discovered")
-            || (at == 3 && wizard.api_status() == "Verified")
-            || (at == 4 && wizard.tunnel_connected())
-            || (at == 5 && wizard.bootstrap_verified())
-            || (at == 6 && wizard.permanent_verified())
-            || (at == 7 && wizard.sites_healthy());
+        let passed = wizard.step_configured(at);
         let failed = (at == 5 && wizard.bootstrap_available() && wizard.bootstrap_status() == "Failed")
             || (at == 4
                 && wizard.tunnel_available()
@@ -409,7 +419,7 @@ fn steps(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard, wide: bool) {
                 style.fg(if passed { app.palette.ok } else { app.palette.error }),
             );
         }
-        if at == 4 && passed {
+        if at == 4 && wizard.tunnel_connected() {
             write(
                 buf,
                 area.right() - 1,
@@ -423,7 +433,7 @@ fn steps(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard, wide: bool) {
                 },
             );
         }
-        if locked {
+        if locked && !passed && !(at == 7 && wizard.sites_summary().is_some()) {
             write(buf, area.right() - 8, y, 8, "[Locked]", style);
         }
         if app.install.is_none() {
@@ -1260,6 +1270,11 @@ fn bootstrap_details(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
     };
     let label = 19;
     let status = wizard.bootstrap_status();
+    let status = if status == "Not verified" && wizard.step_configured(5) {
+        "Previously verified; key not loaded"
+    } else {
+        status
+    };
     let connected = wizard.tunnel_connected();
     let mut y = area.y;
     write(
@@ -1402,6 +1417,11 @@ fn bootstrap_details(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
             "Bootstrap key verified. HomeStack API key management is ready.".to_owned(),
             text,
         )
+    } else if wizard.step_configured(5) && wizard.bootstrap.key.is_empty() {
+        (
+            "Bootstrap was verified previously. Its temporary credential is not saved.\nYou only need it again to manage the HomeStack API key; Site deployment uses the saved organization key.".to_owned(),
+            muted,
+        )
     } else if !connected {
         (
             format!("Connect the API tunnel in Step 5 before validating the bootstrap key.\n{memory}"),
@@ -1456,6 +1476,22 @@ fn permanent_details(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
             },
             text,
         );
+        return;
+    }
+    if !wizard.permanent_available() && wizard.permanent_destination().is_file() {
+        for (row, label) in [
+            "Credential    Saved locally".to_owned(),
+            format!("Organization  {}", wizard.bootstrap.organization),
+            format!("API tunnel    {}", wizard.tunnel.current.state.label()),
+            String::new(),
+            "The saved key is available for Site deployment after connecting Step 5.".to_owned(),
+            "Bootstrap verification is required only to manage the key.".to_owned(),
+        ]
+        .iter()
+        .enumerate()
+        {
+            line(row as u16 + 1, label, text);
+        }
         return;
     }
     if wizard.permanent_verified() {
@@ -1586,6 +1622,60 @@ fn permanent_details(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
 }
 
 fn sites_details(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
+    if app.install.is_none()
+        && let Some(summary) = wizard.sites_summary()
+    {
+        let text = text_style(&app.palette);
+        let status = if wizard.sites_healthy() {
+            "Deployment completed: every connector was running and online."
+        } else {
+            "Deployment incomplete: some connectors were not online."
+        };
+        let mut lines = vec![status.to_owned(), String::new()];
+        for node in &summary.deployed {
+            lines.push(format!(
+                "{}: Site {} · CT {} · {} · Pangolin {}",
+                node.node, node.site, node.ctid, node.container, node.connection,
+            ));
+        }
+        lines.push(String::new());
+        lines.push("Saved deployment result. Open Details for the date and full report.".to_owned());
+        lines.push(format!("API tunnel: {}", wizard.tunnel.current.state.label()));
+        if !wizard.message.is_empty() {
+            lines.push(wizard.message.clone());
+        }
+        lines_into(
+            buf,
+            Rect::new(area.x, area.y, area.width, area.height.saturating_sub(3)),
+            &lines.join("\n"),
+            0,
+            text,
+        );
+        if area.height >= 3 {
+            let y = area.bottom() - 2;
+            let mut x = area.x;
+            for (control, label, key) in [
+                (1, "[ Finish ]", KeyCode::Char('f')),
+                (2, "[ Configure connectors ]", KeyCode::F(6)),
+            ] {
+                let width = (label.len() as u16).min(area.right().saturating_sub(x));
+                let enabled = control == 1 || wizard.sites_available();
+                let style = if !enabled {
+                    text.fg(app.palette.muted)
+                } else if wizard.focus == control {
+                    text.fg(app.palette.focus).bg(app.palette.selection)
+                } else {
+                    text
+                };
+                write(buf, x, y, width, label, style);
+                if enabled {
+                    chrome::register(Rect::new(x, y, width, 1), Hit::Key(key));
+                }
+                x += width + 2;
+            }
+        }
+        return;
+    }
     if !wizard.sites_available() && app.install.is_none() {
         lines_into(
             buf,
