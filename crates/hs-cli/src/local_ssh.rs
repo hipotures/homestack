@@ -49,15 +49,23 @@ pub fn local_ssh_lines(home: &Path, ssh: &WorkspaceSsh, vmid: u32, name: &str, i
         format!("    HostName {ip}"),
         format!("    User {}", ssh.user),
     ];
-    let tail = [
-        format!("    IdentitiesOnly {}", if ssh.identities_only { "yes" } else { "no" }),
+    let mut tail = vec![format!(
+        "    IdentitiesOnly {}",
+        if ssh.identities_only { "yes" } else { "no" }
+    )];
+    // BatchMode makes ssh announce a security-key touch through SSH_ASKPASS
+    // even on a terminal, so an askpass helper can play a sound.
+    if !kinds.is_empty() {
+        tail.push("    BatchMode yes".to_owned());
+    }
+    tail.extend([
         format!("    LogLevel {}", ssh.log_level),
         "    StrictHostKeyChecking accept-new".to_owned(),
         format!(
             "    UserKnownHostsFile {}",
             ssh_path(&known_hosts_file(home, vmid).display().to_string())
         ),
-    ];
+    ]);
     if kinds.len() < 2 {
         lines.extend(files.iter().map(|path| format!("    IdentityFile {}", ssh_path(path))));
         lines.extend(tail);
