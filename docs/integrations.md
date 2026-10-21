@@ -661,4 +661,21 @@ private configuration file, with self-update and SSH features disabled. It has
 no credentials, health server or extra capabilities. Its releases are separate
 from the API image: a `pangolin-site-X.Y.Z` tag publishes
 `homestack-pangolin-site:X.Y.Z`, and the image reference HomeStack deploys is
-pinned in `crates/hs-cli/src/tui/pangolin_sites.rs`.
+initially pinned in `crates/hs-cli/src/tui/pangolin_sites.rs`. An image selected
+through the container update dialog is saved in `integrations/pangolin-sites.toml`
+and reused by later Site deployments.
+
+Enter on a managed Site connector opens its image replacement dialog, using
+numeric releases from the connector repository rather than the API repository.
+Space selects multiple connectors; API containers and Site connectors are never
+updated together. The review precedes all writes. Replacement verifies the
+container pool, node, ownership tags, description, local Site journal and
+configuration revision, then checks the installed credential digest. Root SSH
+to one selected Proxmox node restores the existing credential through standard
+input after recreation. The CTID, root disk storage and size, resource limits,
+network configuration, MAC address and Site identity are retained. Image boot
+settings come from the selected image. Additional disks, devices or custom boot
+environments require separate review and are not silently discarded. The final
+result verifies the restored credential and running connector service; it does
+not claim to have verified the Site's online state in the Pangolin API. No Site
+or public resource is created, deleted or rotated by this workflow.

@@ -7,6 +7,8 @@
 //! the root SSH session's standard input (`pct exec`), never a command
 //! line, the environment, a description or a log.
 
+pub mod images;
+
 use std::collections::BTreeSet;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -44,6 +46,7 @@ const PAGE: usize = 100;
 /// What only the Pangolin wizard knows, handed to the install worker.
 #[derive(Clone)]
 pub struct Context {
+    pub image: String,
     pub endpoint: Endpoint,
     /// The Pangolin server's SSH destination (Step 1).
     pub target: String,
@@ -75,6 +78,7 @@ const BRIDGE: usize = 3;
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Summary {
+    pub image: String,
     pub target: String,
     pub organization: String,
     pub url: String,
@@ -208,9 +212,9 @@ fn hostname(node: &str) -> String {
     format!("pangolin-{node}")
 }
 
-fn description(organization: &str, site: &str) -> String {
+fn description(organization: &str, site: &str, image: &str) -> String {
     format!(
-        "HomeStack Pangolin Site connector {site}\norganization {organization}\nsite {site}\nimage {IMAGE}\nmade by homestack"
+        "HomeStack Pangolin Site connector {site}\norganization {organization}\nsite {site}\nimage {image}\nmade by homestack"
     )
 }
 
@@ -719,6 +723,7 @@ fn remember(ctx: &Context, choice: &Choice) {
     }
     summary.target.clone_from(&ctx.target);
     summary.organization.clone_from(&ctx.organization);
+    summary.image.clone_from(&ctx.image);
     summary.url.clone_from(&choice.url);
     summary.nodes.clone_from(&choice.nodes);
     summary.storages.clone_from(&choice.storages);
@@ -921,7 +926,7 @@ async fn node_plan(
         None if candidates.len() > 1 => return Err(format!("several {host} containers exist; resolve them first")),
         None => candidates.first().copied(),
     };
-    let wanted = description(&ctx.organization, &nice);
+    let wanted = description(&ctx.organization, &nice, &ctx.image);
     let net = net0(&choice.bridge.clone().unwrap_or_default());
     let say = |_: &str| {};
     let (ctid, container, installed) = match existing {
@@ -980,7 +985,7 @@ async fn node_plan(
     };
     taken.insert(ctid);
     let pull = if matches!(container, CtStep::Create | CtStep::Recreate) {
-        let volid = format!("{template}:vztmpl/{}", node::image_file(IMAGE)?);
+        let volid = format!("{template}:vztmpl/{}", node::image_file(&ctx.image)?);
         let content = pve
             .get(
                 &format!("/nodes/{name}/storage/{template}/content"),
@@ -1044,7 +1049,7 @@ fn sections(ctx: &Context, plan: &Plan) -> Vec<(String, Vec<String>)> {
         };
         containers.push(format!("{}  CT {}  {}", n.node, n.ctid, what));
         if n.pull {
-            images.push(format!("pull {IMAGE} into {} on {}", plan.template, n.node));
+            images.push(format!("pull {} into {} on {}", ctx.image, plan.template, n.node));
         }
     }
     sections.push(("Sites (one per node, independent credentials)".to_owned(), sites));
@@ -1189,7 +1194,7 @@ async fn deploy_node(
     let net = net0(&plan.bridge);
     if matches!(n.container, CtStep::Create | CtStep::Recreate) {
         // The image first: a replaced container is down only while it is remade.
-        let ostemplate = node::ensure_image(pve, name, &plan.template, IMAGE, say).await?;
+        let ostemplate = node::ensure_image(pve, name, &plan.template, &ctx.image, say).await?;
         let mut net = net.clone();
         if n.container == CtStep::Recreate {
             let found = node::container(pve, n.ctid)
@@ -1213,7 +1218,7 @@ async fn deploy_node(
             cores: config.cores,
             net0: net,
             nameserver: None,
-            description: description(&ctx.organization, &n.site),
+            description: description(&ctx.organization, &n.site, &ctx.image),
             tag: TAG,
         };
         node::create(pve, &spec, say).await?;
@@ -1430,6 +1435,13 @@ impl super::pangolin::Wizard {
     /// The worker's context, bound to the live tunnel `endpoint`.
     pub(super) fn sites_context(&self, endpoint: Endpoint) -> Option<Context> {
         self.sites_available().then(|| Context {
+            image: self
+                .sites
+                .as_ref()
+                .map(|s| s.image.as_str())
+                .filter(|s| !s.is_empty())
+                .unwrap_or(IMAGE)
+                .to_owned(),
             endpoint,
             target: self.target.clone(),
             organization: self.bootstrap.organization.clone(),
@@ -1452,7 +1464,14 @@ impl super::pangolin::Wizard {
         let mut lines = vec![
             format!("Organization: {}", self.bootstrap.organization),
             format!("Pangolin server: {}", self.target),
-            format!("Image: {IMAGE}"),
+            format!(
+                "Image: {}",
+                self.sites
+                    .as_ref()
+                    .map(|s| s.image.as_str())
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or(IMAGE)
+            ),
         ];
         match self.sites.as_ref().filter(|s| s.target == self.target) {
             Some(summary) if !summary.deployed.is_empty() => {

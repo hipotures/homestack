@@ -11,6 +11,14 @@ use tokio::sync::mpsc;
 
 use super::action::{Decision, Kind, Progress, Start, Step, StepState};
 
+/// Root SSH access used only to restore an existing connector credential.
+pub struct SiteAccess {
+    pub system: std::sync::Arc<dyn crate::system::System>,
+    pub home: PathBuf,
+    pub prefix: Vec<String>,
+    pub sounds: crate::touch::Sounds,
+}
+
 /// How many of the last published images are offered.
 const OFFERED: usize = 10;
 
@@ -48,6 +56,7 @@ pub struct Images {
     pub servers: Vec<Server>,
     /// Newest first.
     pub published: Vec<Image>,
+    pub sites: Vec<super::pangolin_sites::images::Snapshot>,
 }
 
 impl Images {
@@ -107,6 +116,9 @@ pub fn local_time(created: &str, offset: i64) -> Option<String> {
 /// The containers `vmids` (instances of `deploy_toml`), the image each was
 /// made from, and the images published lately, times shifted by `offset`.
 pub async fn read(deploy_toml: &Path, vmids: &[u32], offset: i64) -> Result<Images, String> {
+    if let Some(images) = super::pangolin_sites::images::read(deploy_toml, vmids, offset).await? {
+        return Ok(images);
+    }
     let config = DeployConfig::load(deploy_toml)?;
     let made = hs_deploy::deploy::images(&config).await?;
     let mut chosen = Vec::new();
@@ -154,7 +166,11 @@ pub async fn read(deploy_toml: &Path, vmids: &[u32], offset: i64) -> Result<Imag
             }),
         })
         .collect();
-    Ok(Images { servers, published })
+    Ok(Images {
+        servers,
+        published,
+        sites: Vec::new(),
+    })
 }
 
 /// Set `image` in `deploy.toml`, keeping the rest of the file as it is.
@@ -180,10 +196,12 @@ pub async fn work(
     decisions: &mut mpsc::UnboundedReceiver<Decision>,
     progress: &(dyn Fn(Progress) + Send + Sync),
     say: &(dyn Fn(&str) + Send + Sync),
+    site_access: Option<SiteAccess>,
 ) {
     let parameters = &start.parameters;
     let image = parameters["image"].as_str().unwrap_or_default().to_owned();
     let servers = strings(&parameters["servers"]);
+    let sites = parameters["sites"] == true;
     progress(Progress::Plan {
         lines: strings(&parameters["plan"]),
         question: Kind::Reinstall.question(false).to_owned(),
@@ -201,6 +219,49 @@ pub async fn work(
         None => return,
     }
     let failed = |lines: Vec<String>| progress(Progress::Done { ok: false, lines });
+    if sites {
+        let snapshots: Vec<super::pangolin_sites::images::Snapshot> =
+            match serde_json::from_value(parameters["servers"].clone()) {
+                Ok(snapshots) => snapshots,
+                Err(_) => return failed(vec!["Invalid Site image replacement plan".to_owned()]),
+            };
+        let Some(access) = site_access else {
+            return failed(vec!["Root SSH access is unavailable".to_owned()]);
+        };
+        let report = |line: &str| {
+            say(line);
+            progress(Progress::Steps(vec![Step {
+                name: line.to_owned(),
+                state: StepState::Running,
+            }]));
+        };
+        report("Connecting to Proxmox and checking Site credentials");
+        let handle = tokio::runtime::Handle::current();
+        let result = tokio::task::block_in_place(|| {
+            let node = super::pangolin_sites::images::root_target(&snapshots)?;
+            let mut root = crate::root_ssh::SshRoot::open_asking(
+                access.system,
+                &access.home,
+                &node,
+                None,
+                &access.sounds,
+                access.prefix,
+                std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            )
+            .map_err(|_| "Cannot open root SSH access to restore Site credentials".to_owned())?;
+            handle.block_on(super::pangolin_sites::images::apply(
+                &deploy_toml,
+                &snapshots,
+                &image,
+                &mut root,
+                &report,
+            ))
+        });
+        return match result {
+            Ok(lines) => progress(Progress::Done { ok: true, lines }),
+            Err(error) => failed(vec![error]),
+        };
+    }
     let mut config = match DeployConfig::load(&deploy_toml) {
         Ok(config) => config,
         Err(error) => return failed(vec![error]),

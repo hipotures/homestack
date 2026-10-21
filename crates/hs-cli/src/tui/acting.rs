@@ -495,7 +495,7 @@ impl App {
     /// Enter on a server container: the reinstall box for it, or for every
     /// marked one when it is marked; the images are read first.
     pub(super) fn open_reinstall(&mut self) -> Option<Request> {
-        let entry = self.selected_entry().filter(|entry| is_server(entry))?.clone();
+        let entry = self.selected_entry().filter(|entry| image_container(entry))?.clone();
         if let Some(action) = &self.action {
             let line = format!("one action at a time: {} is still open", action.title());
             self.log("", &line);
@@ -505,7 +505,9 @@ impl App {
             self.status
                 .iter()
                 .flat_map(|status| status.gold.iter().chain(&status.workspaces).chain(&status.others))
-                .filter(|other| self.marked.contains(&other.vmid) && is_server(other))
+                .filter(|other| {
+                    self.marked.contains(&other.vmid) && image_container(other) && is_site(other) == is_site(&entry)
+                })
                 .map(|other| (other.vmid, other.name.clone().unwrap_or_default()))
                 .collect()
         } else {
@@ -583,7 +585,15 @@ impl App {
             .get(index)
             .ok_or_else(|| "The registry lists no image.".to_owned())?;
         let mut plan = vec![
-            format!("Update API containers from {}", image.tag()),
+            format!(
+                "Update {} containers from {}",
+                if images.sites.is_empty() {
+                    "API"
+                } else {
+                    "Pangolin Site"
+                },
+                image.tag()
+            ),
             format!("made {}", image.made),
             String::new(),
         ];
@@ -606,6 +616,12 @@ impl App {
             ));
         }
         plan.push(String::new());
+        if !images.sites.is_empty() {
+            plan.push("Site identities and credentials are retained; the network and MAC are preserved.".to_owned());
+            plan.push("Root SSH access to a Proxmox node restores credentials over standard input.".to_owned());
+            plan.push("Each connector is briefly offline while its container is recreated.".to_owned());
+            return Ok(json!({"image": image.image, "servers": images.sites, "plan": plan, "sites": true}));
+        }
         plan.push("One at a time, each container is stopped, destroyed and made".to_owned());
         plan.push("again from the image, with its address, certificate and".to_owned());
         plan.push("configuration; one with this image already is only configured.".to_owned());
@@ -617,7 +633,7 @@ impl App {
     pub(super) fn toggle_mark(&mut self) {
         if let Some(vmid) = self
             .selected_entry()
-            .filter(|entry| is_server(entry))
+            .filter(|entry| image_container(entry))
             .map(|entry| entry.vmid)
             && !self.marked.remove(&vmid)
         {
@@ -1021,4 +1037,16 @@ pub fn is_server(entry: &StatusEntry) -> bool {
         && !entry.tags.iter().any(|tag| tag == super::pangolin_sites::TAG)
         && (entry.pool.as_deref() == Some(crate::servers::SERVICE_POOL)
             || entry.tags.iter().any(|tag| tag == "homestack-server"))
+}
+
+/// A managed Pangolin Site connector.
+#[must_use]
+pub fn is_site(entry: &StatusEntry) -> bool {
+    entry.role == "CT" && entry.tags.iter().any(|tag| tag == super::pangolin_sites::TAG)
+}
+
+/// Containers with a managed image replacement workflow.
+#[must_use]
+pub fn image_container(entry: &StatusEntry) -> bool {
+    is_server(entry) || is_site(entry)
 }

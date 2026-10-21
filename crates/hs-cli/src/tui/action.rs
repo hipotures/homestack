@@ -60,7 +60,7 @@ impl Kind {
             Self::Destroy => "destroy",
             Self::Start => "start",
             Self::Stop => "stop",
-            Self::Reinstall => "update API",
+            Self::Reinstall => "update image",
         }
     }
 
@@ -84,7 +84,7 @@ impl Kind {
             Self::Start => "Start this workspace?",
             Self::Stop => "Stop this workspace? Its system shuts down; it is never forced.",
             Self::Reinstall => {
-                "Update these API containers? Each container is made again from the image; what is only inside it is lost."
+                "Update these containers? Each container is made again from the image; what is only inside it is lost."
             }
         }
     }
@@ -726,7 +726,7 @@ impl Action {
     #[must_use]
     pub fn title(&self) -> String {
         match self.vmid {
-            _ if self.kind == Kind::Reinstall => format!("update API {}", self.name),
+            _ if self.kind == Kind::Reinstall => format!("update image {}", self.name),
             Some(vmid) => format!("{} {vmid} {}", self.kind.word(), self.name),
             None => "new workspace".to_owned(),
         }

@@ -569,11 +569,20 @@ fn workspace_actions(app: &App) -> Vec<Control> {
     let selected = app.selected_entry();
     let running = selected.is_some_and(|entry| entry.status == "running");
     let free = selected.is_some() && app.action.is_none() && app.setup.is_none();
-    if selected.is_some_and(super::acting::is_server) {
+    if selected.is_some_and(super::acting::image_container) {
         return vec![
             Control::key("&info"),
             Control::named("␣", "select", KeyCode::Char(' ')),
-            Control::named("↵", "update API", KeyCode::Enter).enabled(free),
+            Control::named(
+                "↵",
+                if selected.is_some_and(super::acting::is_site) {
+                    "update Site"
+                } else {
+                    "update API"
+                },
+                KeyCode::Enter,
+            )
+            .enabled(free),
         ];
     }
     vec![
@@ -2122,12 +2131,19 @@ fn reinstall_lines(app: &App, chosen: usize, text: Style, muted: Style, lines: &
     };
     lines.push((String::new(), text));
     lines.push(("Now".to_owned(), muted));
+    let name_width = images
+        .servers
+        .iter()
+        .map(|server| server.name.chars().count())
+        .max()
+        .unwrap_or(0)
+        + 2;
     for server in &images.servers {
         let now = server.image.as_ref().map_or_else(
             || "not made by homestack-deploy".to_owned(),
             |image| format!("{}  {}", image.tag(), image.made),
         );
-        lines.push((format!("{:<11}{now}", server.name), text));
+        lines.push((format!("{:<name_width$}{now}", server.name), text));
     }
     lines.push((String::new(), text));
     lines.push(("Published".to_owned(), muted));

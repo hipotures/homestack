@@ -1775,7 +1775,7 @@ impl App {
                 return None;
             }
             if key.code == KeyCode::Enter {
-                return if self.selected_entry().is_some_and(super::acting::is_server) {
+                return if self.selected_entry().is_some_and(super::acting::image_container) {
                     self.open_reinstall()
                 } else {
                     self.open_setup()

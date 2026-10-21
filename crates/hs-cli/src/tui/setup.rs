@@ -1939,6 +1939,9 @@ impl super::state::App {
 
     /// Enter or `e` on a running workspace: the setup box, connecting first.
     pub(super) fn open_setup(&mut self) -> Option<super::state::Request> {
+        if self.selected_entry().is_some_and(super::acting::is_site) {
+            return self.open_reinstall();
+        }
         if let Some(action) = &self.action {
             let line = format!("one action at a time: {} is still open", action.title());
             self.log("", &line);
