@@ -1305,7 +1305,7 @@ impl App {
                             && w.selected_step == 6
                             && !w.help_open
                             && !w.report_open
-                            && w.permanent.running == 0
+                            && (w.permanent.running == 0 || control == 4)
                         {
                             if w.permanent.confirm {
                                 w.permanent.confirm_yes = control == 9;

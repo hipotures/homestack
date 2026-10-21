@@ -721,9 +721,22 @@ impl Wizard {
             return true;
         }
         if self.permanent.running != 0 {
-            if key.code == KeyCode::Esc {
-                self.permanent.cancel_requested = true;
-                self.message = "Cancellation requested. Outcome uncertain if a remote mutation was sent; waiting for durable recovery evidence.".into();
+            // Inspection must not delay entering the panel or reading its help.
+            // Credential edits and remote actions still wait for the worker.
+            match key.code {
+                KeyCode::Esc => {
+                    self.permanent.cancel_requested = true;
+                    self.message = "Cancellation requested. Outcome uncertain if a remote mutation was sent; waiting for durable recovery evidence.".into();
+                }
+                KeyCode::Enter | KeyCode::Right if self.focus == 0 => self.focus = 4,
+                KeyCode::Tab | KeyCode::BackTab => self.focus = if self.focus == 0 { 4 } else { 0 },
+                KeyCode::Up | KeyCode::Down if self.focus > 0 => self.focus = 0,
+                KeyCode::Enter if self.focus == 4 => {
+                    self.report_open = true;
+                    self.report_scroll = 0;
+                }
+                KeyCode::F(4) | KeyCode::F(7) => return false,
+                _ => {}
             }
             return true;
         }

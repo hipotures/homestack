@@ -467,6 +467,9 @@ with the currently verified Root bootstrap credential. Organization identity mus
 have been confirmed by `GET /v1/org/{orgId}` in Step 6; otherwise the wizard shows:
 “Organization not verified. Grant getOrg to the bootstrap key and verify Step 6 again.”
 Every worker repeats bootstrap authorization and organization identity checks.
+The step list shows Checking while these reads run. Enter opens the panel
+immediately; focus navigation, F4 Help and F7 Details remain available while
+credential edits and remote actions wait for completion.
 
 No key named `homestack` permits a **Create HomeStack API key** plan. Exactly one
 permits **Use existing key**. Multiple matches block every automatic selection or

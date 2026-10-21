@@ -334,7 +334,10 @@ fn steps(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard, wide: bool) {
                     wizard.discovery_status(),
                     "Failed" | "Permission denied" | "Not found" | "Unsupported installation" | "Partially discovered"
                 ));
-        let mark = if passed {
+        let busy = at == 6 && wizard.permanent.running != 0;
+        let mark = if busy {
+            "…"
+        } else if passed {
             "✓"
         } else if failed {
             "✗"
@@ -350,7 +353,19 @@ fn steps(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard, wide: bool) {
             || (at == 1 && !wizard.prerequisites_available());
         let (line, style) = super::draw::unfocused_item(
             &app.palette,
-            &format!("{mark} {}. {title}", at + 1),
+            &format!(
+                "{mark} {}. {title}{}",
+                at + 1,
+                if busy {
+                    if wizard.permanent.operation == Some(super::pangolin_permanent::Operation::Apply) {
+                        " · Applying…"
+                    } else {
+                        " · Checking…"
+                    }
+                } else {
+                    ""
+                }
+            ),
             chosen,
             wizard.focus == 0,
         );
@@ -1445,9 +1460,16 @@ fn permanent_details(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
     let p = &wizard.permanent;
     let out = p.result.as_ref();
     let status = if p.running != 0 {
-        "Working"
+        if p.operation == Some(super::pangolin_permanent::Operation::Apply) {
+            "Applying"
+        } else {
+            "Checking…"
+        }
     } else if wizard.permanent_verified() {
         "Verified"
+    } else if out.is_some_and(|r| r.ids.len() == 1 && !r.record.as_ref().is_some_and(|record| record.credential_saved))
+    {
+        "Awaiting credential"
     } else {
         "Incomplete"
     };
@@ -1554,9 +1576,8 @@ fn permanent_details(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
         if y >= area.bottom() {
             break;
         }
-        let active = p.running == 0
-            && (control == 4 || wizard.permanent_available())
-            && (control != 7 || wizard.permanent_can_apply());
+        let active = control == 4
+            || (p.running == 0 && wizard.permanent_available() && (control != 7 || wizard.permanent_can_apply()));
         let style = if wizard.focus == control && active {
             text.fg(app.palette.focus)
                 .bg(app.palette.selection)
@@ -1591,6 +1612,8 @@ fn permanent_details(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
     if y < area.bottom() {
         let message = if !wizard.message.is_empty() {
             wizard.message.clone()
+        } else if p.running != 0 {
+            "Checking Pangolin authorization and organization keys through SSH… Help and Details remain available while this runs.".into()
         } else if !wizard.permanent_available() {
             "Organization not verified. Grant getOrg to the bootstrap key and verify Step 6 again.".into()
         } else if wizard.permanent_verified() {
