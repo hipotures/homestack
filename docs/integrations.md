@@ -110,6 +110,10 @@ authorization and these four actions:
 - `listApiKeyActions`
 - `setApiKeyActions`
 
+Also enable the recommended optional **`getOrg` (Get organization)** action.
+It lets Step 6 confirm the Organization ID immediately. Without it, bootstrap
+key validation can still succeed, but organization existence remains unconfirmed.
+
 Root authorization is required for Integration API key management; selecting the
 four actions alone is insufficient. Keep the token securely until masked entry in
 Step 6. Step 2 has no token input and reads or writes no credential file. The
@@ -410,8 +414,9 @@ with the complete credential only in the Bearer authorization header:
   management actions must be present. `createApiKey` and `setApiKeyActions`
   are confirmed only as assigned metadata; no write permission is exercised.
 - `/v1/org/{orgId}` confirms existence only on a matching successful response.
-  HTTP 403 is expected without `getOrg` and does not fail validation. An empty
-  key list alone never proves that an organization exists. HTTP 404 fails it.
+  Grant the recommended optional `getOrg` (Get organization) action to allow
+  this confirmation. HTTP 403 is expected without it and does not fail validation.
+  An empty key list alone never proves that an organization exists. HTTP 404 fails it.
 
 An existing organization key named `homestack` is reported for deliberate
 handling in Step 7; it is never duplicated, overwritten, regenerated or deleted.
