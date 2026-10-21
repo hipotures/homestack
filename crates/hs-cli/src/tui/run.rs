@@ -820,11 +820,10 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
                 }
             }
         }
-        if let Some(worker) = &pangolin_permanent {
-            if !matches!(&app.overlay, Some(Overlay::Pangolin(w)) if w.permanent.running == worker.id && !w.permanent.cancel_requested && w.permanent_current() && w.permanent_available())
-            {
-                worker.cancel.store(true, Ordering::SeqCst);
-            }
+        if let Some(worker) = &pangolin_permanent
+            && !matches!(&app.overlay, Some(Overlay::Pangolin(w)) if w.permanent.running == worker.id && !w.permanent.cancel_requested && w.permanent_current() && w.permanent_available())
+        {
+            worker.cancel.store(true, Ordering::SeqCst);
         }
         // A verification never outlives its tunnel session, edit or wizard.
         if let Some(Overlay::Pangolin(w)) = app.overlay.as_mut()

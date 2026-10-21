@@ -31,7 +31,7 @@ use super::pangolin_tunnel::Endpoint;
 use crate::install_flow::Answer;
 
 /// The connector image; a new release is a new `pangolin-site-X.Y.Z` tag.
-pub const IMAGE: &str = "ghcr.io/hipotures/homestack-pangolin-site:0.1.0";
+pub const IMAGE: &str = "ghcr.io/hipotures/homestack-pangolin-site:0.1.1";
 /// Every connector container carries it, and nothing else does.
 pub const TAG: &str = "homestack-pangolin-site";
 /// Inside the image: writes the configuration from standard input.

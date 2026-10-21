@@ -660,4 +660,3 @@ no credentials, health server or extra capabilities. Its releases are separate
 from the API image: a `pangolin-site-X.Y.Z` tag publishes
 `homestack-pangolin-site:X.Y.Z`, and the image reference HomeStack deploys is
 pinned in `crates/hs-cli/src/tui/pangolin_sites.rs`.
-
