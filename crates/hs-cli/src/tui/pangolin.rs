@@ -1060,7 +1060,7 @@ impl Drop for Pending {
 }
 
 /// Only these non-secret inventory fields may cross the SSH/report boundary.
-const FACTS: [&str; 21] = [
+const FACTS: [&str; 22] = [
     "ssh_user",
     "working_directory",
     "installation",
@@ -1072,6 +1072,7 @@ const FACTS: [&str; 21] = [
     "compose",
     "config",
     "config_status",
+    "dashboard_url",
     "mounts",
     "mappings",
     "api_enabled",

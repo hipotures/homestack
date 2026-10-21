@@ -48,6 +48,8 @@ pub struct Context {
     /// The Pangolin server's SSH destination (Step 1).
     pub target: String,
     pub organization: String,
+    /// Public endpoint read from app.dashboard_url on the Pangolin server.
+    pub url: String,
     /// The Step 7 credential; its recovery record names the key.
     pub key: PathBuf,
     /// SHA-256 of server and organization, as Step 7 names its files.
@@ -68,7 +70,6 @@ const NODES: usize = 0;
 const STORAGES: usize = 1;
 const TEMPLATE: usize = 2;
 const BRIDGE: usize = 3;
-const URL: usize = 4;
 
 /// Non-secret choices and the last deployment, shown in Step 8.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -468,7 +469,7 @@ struct Session {
 
 /// The worker of the install screen in Sites mode.
 pub(super) fn work(setup: &Setup, commands: &Receiver<Command>, tell: &(dyn Fn(Event) + Send + Sync)) {
-    let Some(ctx) = setup.sites.clone() else {
+    let Some(mut ctx) = setup.sites.clone() else {
         tell(Event::Failed(
             "The Pangolin wizard's tunnel is not available.".to_owned(),
         ));
@@ -481,6 +482,24 @@ pub(super) fn work(setup: &Setup, commands: &Receiver<Command>, tell: &(dyn Fn(E
                 tell(Event::Busy(format!(
                     "Connecting to {target} (touch your key or give its PIN if it asks)"
                 )));
+                if ctx.url.is_empty() {
+                    tell(Event::Busy(
+                        "Reading the dashboard address from the Pangolin server".to_owned(),
+                    ));
+                    let discovery = super::pangolin::discover(
+                        setup.system.as_ref(),
+                        &ctx.target,
+                        &setup.ssh_prefix,
+                        &setup.stop,
+                        &setup.sounds,
+                        crate::touch::default_player(),
+                    );
+                    ctx.url = discovery.known("dashboard_url").unwrap_or_default().to_owned();
+                }
+                if !valid_url(&ctx.url) {
+                    tell(Event::Failed("Cannot read a valid HTTPS app.dashboard_url from the Pangolin server configuration. Check the server configuration and rerun Step 3 discovery.".to_owned()));
+                    continue;
+                }
                 let opened = setup.open(Method::Ssh, &target).map_err(|e| e.0).and_then(|mut root| {
                     tell(Event::Busy("Connected; reading the cluster".to_owned()));
                     let access = hs_install::probe(root.as_mut()).map_err(|e| e.to_string())?;
@@ -504,7 +523,7 @@ pub(super) fn work(setup: &Setup, commands: &Receiver<Command>, tell: &(dyn Fn(E
             Command::Rescan { answers, .. } => {
                 let Some(s) = session.as_mut() else { continue };
                 tell(Event::Busy("Rescanning the cluster".to_owned()));
-                let choice = choice(&s.settings, &answers);
+                let choice = choice(&ctx, &s.settings, &answers);
                 match survey(setup, &ctx, s) {
                     Ok(mut found) => {
                         keep_answers(&mut found.settings, &choice);
@@ -517,7 +536,7 @@ pub(super) fn work(setup: &Setup, commands: &Receiver<Command>, tell: &(dyn Fn(E
             Command::Review { answers, .. } => {
                 let Some(s) = session.as_mut() else { continue };
                 tell(Event::Busy("Reading Pangolin and the cluster".to_owned()));
-                let choice = choice(&s.settings, &answers);
+                let choice = choice(&ctx, &s.settings, &answers);
                 remember(&ctx, &choice);
                 let plan = setup
                     .handle
@@ -542,7 +561,7 @@ pub(super) fn work(setup: &Setup, commands: &Receiver<Command>, tell: &(dyn Fn(E
 }
 
 /// The settings: nodes, connector storages, image storage, bridge and the
-/// Pangolin URL, from the cluster and the install's own choices.
+/// Connector placement choices from the Proxmox cluster.
 fn survey(setup: &Setup, ctx: &Context, s: &mut Session) -> Result<Found, String> {
     let settings = hs_install::Settings {
         test: false,
@@ -638,19 +657,6 @@ fn survey(setup: &Setup, ctx: &Context, s: &mut Session) -> Result<Found, String
             text: None,
         });
     }
-    let url = saved
-        .as_ref()
-        .map(|saved| saved.url.clone())
-        .filter(|url| !url.is_empty())
-        .unwrap_or_else(|| guess_url(&ctx.target));
-    found_settings.push(Setting {
-        title: "Pangolin URL".to_owned(),
-        note: "The Pangolin dashboard address the connectors connect to, https://host.".to_owned(),
-        multiple: false,
-        choices: Vec::new(),
-        picked: Vec::new(),
-        text: Some(url),
-    });
     s.settings.clone_from(&found_settings);
     Ok(Found {
         root: format!("{} · PVE {}", s.describe, s.access.version),
@@ -667,17 +673,7 @@ fn survey(setup: &Setup, ctx: &Context, s: &mut Session) -> Result<Found, String
     })
 }
 
-/// `https://<host>` when the Pangolin SSH destination is a DNS name.
-fn guess_url(target: &str) -> String {
-    let host = target.rsplit_once('@').map_or(target, |(_, host)| host);
-    if host.contains('.') && host.parse::<std::net::IpAddr>().is_err() {
-        format!("https://{host}")
-    } else {
-        String::new()
-    }
-}
-
-fn choice(settings: &[Setting], answers: &[Answer]) -> Choice {
+fn choice(ctx: &Context, settings: &[Setting], answers: &[Answer]) -> Choice {
     let picked = |index: usize| -> Vec<String> {
         match (settings.get(index), answers.get(index)) {
             (Some(setting), Some(Answer::Picked(picked))) => picked
@@ -693,10 +689,7 @@ fn choice(settings: &[Setting], answers: &[Answer]) -> Choice {
         storages: picked(STORAGES),
         template: picked(TEMPLATE).into_iter().next(),
         bridge: picked(BRIDGE).into_iter().next(),
-        url: match answers.get(URL) {
-            Some(Answer::Text(text)) => text.trim().trim_end_matches('/').to_owned(),
-            _ => String::new(),
-        },
+        url: ctx.url.clone(),
     }
 }
 
@@ -715,9 +708,6 @@ fn keep_answers(settings: &mut [Setting], choice: &Choice) {
                 .filter_map(|value| setting.choices.iter().position(|(choice, _)| choice == value))
                 .collect();
         }
-    }
-    if let Some(setting) = settings.get_mut(URL) {
-        setting.text = Some(choice.url.clone());
     }
 }
 
@@ -771,7 +761,7 @@ async fn survey_plan(
         return Err("Tick at least one node.".to_owned());
     }
     if !valid_url(&choice.url) {
-        return Err("Give the Pangolin URL as https://host (the dashboard address).".to_owned());
+        return Err("The Pangolin server configuration must provide a valid HTTPS app.dashboard_url.".to_owned());
     }
     if choice.storages.is_empty() || choice.template.is_none() || choice.bridge.is_none() {
         return Err("Choose the connector disks, the image storage and the network bridge.".to_owned());
@@ -1434,6 +1424,13 @@ impl super::pangolin::Wizard {
             endpoint,
             target: self.target.clone(),
             organization: self.bootstrap.organization.clone(),
+            url: self
+                .discovery
+                .as_ref()
+                .filter(|d| d.target == self.target)
+                .and_then(|d| d.known("dashboard_url"))
+                .unwrap_or_default()
+                .to_owned(),
             key: self.permanent_destination(),
             identity: self.permanent_identity(),
             summary: self.sites_path(),

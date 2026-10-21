@@ -54,7 +54,7 @@ def scalar_config(path):
         parents = [item[1] for item in sections]
         if value.startswith(('|', '>')):
             return False
-        if indent == 0 and key in ('flags', 'server'):
+        if indent == 0 and key in ('app', 'flags', 'server'):
             if key in roots or value:
                 return False
             roots.add(key)
@@ -67,6 +67,15 @@ def scalar_config(path):
             seen.add(key)
             if value in ('true', 'false'):
                 facts['api_enabled'] = value
+        elif parents == ['app'] and sections[0][0] == 0 and key == 'dashboard_url':
+            if key in seen:
+                facts.pop('dashboard_url', None)
+                return False
+            seen.add(key)
+            if len(value) >= 2 and value[0] in ('"', "'") and value[-1] == value[0]:
+                value = value[1:-1]
+            if re.fullmatch(r'https://[A-Za-z0-9.\-\[\]:]+/?', value):
+                facts['dashboard_url'] = safe(value.rstrip('/'))
         elif parents == ['server'] and sections[0][0] == 0 and key in ('integration_port', 'internal_port', 'external_port'):
             if key in seen:
                 return False
