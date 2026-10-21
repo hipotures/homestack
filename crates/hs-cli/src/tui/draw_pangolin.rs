@@ -313,15 +313,12 @@ fn steps(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard, wide: bool) {
             || (at == 3 && !wizard.api_available())
             || (at == 2 && !wizard.discovery_available())
             || (at == 1 && !wizard.prerequisites_available());
-        let (line, mut style) = super::draw::unfocused_item(
+        let (line, style) = super::draw::unfocused_item(
             &app.palette,
             &format!("{mark} {}. {title}", at + 1),
             chosen,
             wizard.focus == 0,
         );
-        if locked && !chosen {
-            style = style.fg(app.palette.muted);
-        }
         write(buf, area.x, y, area.width, &" ".repeat(usize::from(area.width)), style);
         write(buf, area.x, y, area.width, &line, style);
         if (passed || failed) && !app.palette.no_color && !(chosen && wizard.focus > 0) {
@@ -349,7 +346,7 @@ fn steps(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard, wide: bool) {
             );
         }
         if locked {
-            write(buf, area.right() - 8, y, 8, "[Locked]", style.fg(app.palette.muted));
+            write(buf, area.right() - 8, y, 8, "[Locked]", style);
         }
         chrome::register(Rect::new(area.x, y, area.width, 1), Hit::PangolinStep(at));
     }
