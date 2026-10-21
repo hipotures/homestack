@@ -63,10 +63,11 @@ The server does not enforce unique key names or support an idempotency token her
 
 ## Approved HomeStack action profile
 
-The planned scope is Site CRUD, **public** Resource CRUD, Target CRUD, connection-health inspection, existing resource policy inspection/update, rule-based access control, and organization/domain reads. “Manage” means create, read, update and delete; optional operational controls are excluded.
+The planned scope is blueprint application, Site CRUD, **public** Resource CRUD, Target CRUD, connection-health inspection, existing resource policy inspection/update, rule-based access control, and organization/domain reads. “Manage” means create, read, update and delete; optional operational controls are excluded.
 
 | Purpose | Exact action IDs |
 | --- | --- |
+| Apply blueprints | `applyBlueprint` |
 | Sites and health | `createSite`, `getSite`, `listSites`, `updateSite`, `deleteSite` |
 | Public Resources | `createResource`, `getResource`, `listResources`, `updateResource`, `deleteResource` |
 | Targets | `createTarget`, `getTarget`, `listTargets`, `updateTarget`, `deleteTarget` |
@@ -74,9 +75,11 @@ The planned scope is Site CRUD, **public** Resource CRUD, Target CRUD, connectio
 | Existing resource policies | `getResourcePolicy`, `updateResourcePolicy`, `setResourcePolicyRules` |
 | Inline resource rules | `createResourceRule`, `listResourceRules`, `updateResourceRule`, `deleteResourceRule` |
 
-There are **25 actions**. Site listing exposes connection `online` state where applicable; there is no additional health permission in this profile. A local Site may not have `online`. This is connection-health inspection, not health-check configuration or metrics/log collection.
+There are **26 actions**. Site listing exposes connection `online` state where applicable; there is no additional health permission in this profile. A local Site may not have `online`. This is connection-health inspection, not health-check configuration or metrics/log collection.
 
-The profile excludes API key administration, organization modification/deletion, users, role administration, identity providers, domains administration, AI operations, restarts, site provisioning keys, private/site resources, shared-policy lifecycle, password/PIN/header/email authentication setup, and assignment of users/roles to policies. Resource policy rules and existing policy attachment through resource update cover the selected rule-based plan. If later integration requirements include identity-based grants, private resources or other authentication methods, review a new exact profile before provisioning; this tool does not speculate about those requirements or grant every related action.
+The profile excludes API key administration, organization modification/deletion, users, role administration, identity providers, domains administration, AI operations, restarts, site provisioning keys, direct private/site resource management, shared-policy lifecycle, password/PIN/header/email authentication setup, and assignment of users/roles to policies. Resource policy rules and existing policy attachment through resource update cover the selected rule-based plan. If later integration requirements include identity-based grants, private resources or other authentication methods, review a new exact profile before provisioning; this tool does not speculate about those requirements or grant every related action.
+
+`applyBlueprint` also authorizes the operations expressed by a blueprint, including private resources; review blueprint contents before applying them. No separate blueprint read/list actions are granted.
 
 Read probes confirm only the listed safe operations. Mutating privileges and object-specific Target/policy reads are checked by exact assigned-action metadata and source analysis; no production object is touched to prove them. Organization-scoped credentials can manage all objects covered by those actions in their organization; this is not per-Site isolation.
 

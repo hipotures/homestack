@@ -11,7 +11,8 @@ use std::sync::atomic::AtomicBool;
 use std::time::Instant;
 use zeroize::Zeroizing;
 
-pub const ACTIONS: [&str; 25] = [
+pub const ACTIONS: [&str; 26] = [
+    "applyBlueprint",
     "createSite",
     "getSite",
     "listSites",
@@ -633,7 +634,7 @@ fn work(endpoint: &Endpoint, mut input: Input, stop: &AtomicBool, out: &mut Outc
         out.plan = None;
         if api(root.request("POST", &action_path(&input.org, &id), Some(&body), Probe::Actions))?.0 != 200 {
             return Err(
-                "Action assignment rejected. Check compatibility with the pinned 25-action profile. Credential is retained; recheck before applying another reviewed plan."
+                "Action assignment rejected. Check compatibility with the required 26-action profile. Credential is retained; recheck before applying another reviewed plan."
                     .into(),
             );
         }

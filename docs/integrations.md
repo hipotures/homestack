@@ -505,11 +505,13 @@ protect credentials and recovery metadata. Other processes running as the same
 desktop user can access these files. Secrets never enter TOML, logs, diagnostics,
 command arguments, Git, the VPS or PVE nodes.
 
-The standard 25-action profile is pinned to Pangolin source revision
+The standard 26-action profile includes blueprint application and the resource
+management actions reviewed against Pangolin source revision
 `0842e6df53e898759ed05b77086ddd3c673b6149`:
 
 | Area | Actions |
 | --- | --- |
+| Apply blueprints | `applyBlueprint` |
 | Sites and connection status | `createSite`, `getSite`, `listSites`, `updateSite`, `deleteSite` |
 | Public Resources | `createResource`, `getResource`, `listResources`, `updateResource`, `deleteResource` |
 | Targets | `createTarget`, `getTarget`, `listTargets`, `updateTarget`, `deleteTarget` |

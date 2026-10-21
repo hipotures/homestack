@@ -21,8 +21,9 @@ import warnings
 
 SOURCE_REVISION = "0842e6df53e898759ed05b77086ddd3c673b6149"
 MANAGEMENT = frozenset({"listApiKeys", "listApiKeyActions", "setApiKeyActions", "createApiKey"})
-# This profile covers public resources and their inline/rule-based access policies.
+# This profile covers blueprint application, public resources and their access policies.
 ACTIONS = tuple(sorted({
+    "applyBlueprint",
     "createSite", "getSite", "listSites", "updateSite", "deleteSite",
     "createResource", "getResource", "listResources", "updateResource", "deleteResource",
     "createTarget", "getTarget", "listTargets", "updateTarget", "deleteTarget",
