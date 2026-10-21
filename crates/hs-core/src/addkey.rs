@@ -155,18 +155,6 @@ pub fn ensure_keys_script(keys: &[String], user: &str) -> String {
     script
 }
 
-/// Whether `cicustom` names one of the two HomeStack vendor snippets, and
-/// nothing else; `Some(true)` for the keep snippet.
-fn homestack_snippet(cfg: &Config, cicustom: &str) -> Option<bool> {
-    if cicustom == cicustom_value(cfg, HomeFormat::Keep) {
-        Some(true)
-    } else if cicustom == cicustom_value(cfg, HomeFormat::Create) {
-        Some(false)
-    } else {
-        None
-    }
-}
-
 /// `build_addkey_plan` for a workspace of `pool`.
 pub async fn plan_addkey(
     pve: &impl Pve,
@@ -180,13 +168,7 @@ pub async fn plan_addkey(
     let info = resolve_existing_workspace(pve, cfg, vmid).await?;
     let (ip, _, _) = parse_ipconfig0(info.vm_config.get("ipconfig0").map(String::as_str).unwrap_or_default())?;
     let cicustom = info.vm_config.get("cicustom").map(String::as_str).unwrap_or_default();
-    let Some(keep_snippet) = homestack_snippet(cfg, cicustom) else {
-        return Err(CoreError::Refused(format!(
-            "VM {vmid} does not use the HomeStack vendor snippet {} or {}; refusing to add a key",
-            HomeFormat::Keep.snippet_file(),
-            HomeFormat::Create.snippet_file()
-        )));
-    };
+    let keep_snippet = cicustom == cicustom_value(cfg, HomeFormat::Keep);
     let current = info.vm_config.get("sshkeys").map(String::as_str).unwrap_or_default();
     let (keys, present) = match &key {
         Some(key) => merge_sshkeys(current, key),
@@ -220,7 +202,7 @@ pub async fn plan_addkey(
         if keep_snippet {
             "Keep the keep vendor snippet, which cannot rewrite authorized_keys or home".to_owned()
         } else {
-            "Switch to the keep vendor snippet so Cloud-Init cannot rewrite authorized_keys or home".to_owned()
+            "Replace custom Cloud-Init snippets with the HomeStack keep vendor snippet; Proxmox generates user, network and meta data".to_owned()
         },
     ];
     if running {
@@ -263,6 +245,8 @@ pub async fn plan_addkey(
         "label": label,
         "key_already_in_sshkeys": present,
         "keep_snippet": keep_snippet,
+        "original_cicustom": cicustom,
+        "original_sshkeys": current,
         "keys": keys,
         "restart": request.restart,
         "steps": steps,
@@ -379,6 +363,15 @@ pub async fn add_key(
     if status != planned_status {
         return Err(CoreError::Refused(format!(
             "VM {vmid} is {status}, not {planned_status} as planned; generate a new plan"
+        )));
+    }
+    if info.vm_config.get("cicustom").map(String::as_str).unwrap_or_default()
+        != text(plan, "original_cicustom")?
+        || info.vm_config.get("sshkeys").map(String::as_str).unwrap_or_default()
+            != text(plan, "original_sshkeys")?
+    {
+        return Err(CoreError::Refused(format!(
+            "VM {vmid} Cloud-Init snippets or SSH keys changed after planning; generate a new plan"
         )));
     }
     let running = status == "running";
