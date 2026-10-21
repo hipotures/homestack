@@ -1509,6 +1509,7 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
             },
             _ = tick.tick() => app.tick(),
             _ = fast.tick(), if (app.status.is_none() && app.unreachable.is_empty())
+                || matches!(&app.overlay, Some(Overlay::Pangolin(w)) if w.bootstrap.key_visible())
                 || app.setup.as_ref().is_some_and(super::setup::SetupBox::animating)
                 || app.install.as_ref().is_some_and(super::install::Install::connecting) =>
             {

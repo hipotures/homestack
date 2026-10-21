@@ -482,12 +482,17 @@ pub struct Bootstrap {
     pub organization: String,
     pub cursor: usize,
     pub key: Credential,
+    key_visible_until: Option<Instant>,
     revision: u64,
     pub running: u64,
     pub check: Option<Check>,
     pub history: Option<History>,
 }
 impl Bootstrap {
+    pub fn key_visible(&self) -> bool {
+        !self.key.is_empty() && self.key_visible_until.is_some_and(|until| Instant::now() < until)
+    }
+
     pub fn restore(history: Option<History>) -> Self {
         let organization = history.as_ref().map(|h| h.organization.clone()).unwrap_or_default();
         Self {
@@ -635,6 +640,7 @@ impl Wizard {
     /// F5 / Clear: erase the secret locally; nothing is revoked on Pangolin.
     pub fn clear_bootstrap(&mut self) {
         self.bootstrap.key.clear();
+        self.bootstrap.key_visible_until = None;
         self.bootstrap_edited();
     }
     /// Server or integration identity changed: the secret is no longer bound
@@ -643,7 +649,11 @@ impl Wizard {
         self.clear_bootstrap();
     }
     pub(super) fn bootstrap_paste(&mut self, text: &str) {
-        self.bootstrap_insert(text.trim());
+        let text = text.trim();
+        self.bootstrap_insert(text);
+        if self.focus == 2 && !text.is_empty() {
+            self.bootstrap.key_visible_until = Some(Instant::now() + Duration::from_secs(10));
+        }
     }
     fn bootstrap_insert(&mut self, text: &str) {
         match self.focus {

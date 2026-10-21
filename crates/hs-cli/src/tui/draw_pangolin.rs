@@ -1333,15 +1333,30 @@ fn bootstrap_details(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
                 );
             }
         } else {
-            // A fixed mask: neither characters nor length are revealed.
-            let dots = if wizard.bootstrap.key.is_empty() {
+            let key = &wizard.bootstrap.key;
+            let shown = if wizard.bootstrap.key_visible() {
+                // Credential input is ASCII; keep the insertion point visible.
+                &key.value[key.value.len().saturating_sub(capacity - 1)..]
+            } else {
+                ""
+            };
+            // After the preview, a fixed mask conceals the credential's length.
+            let dots = if key.is_empty() || !shown.is_empty() {
                 0
             } else {
                 32.min(capacity - 1)
             };
-            write(buf, x, y, capacity as u16, &"•".repeat(dots), text);
+            write(buf, x, y, capacity as u16, &"*".repeat(dots), text);
+            write(buf, x, y, capacity as u16, shown, text);
             if wizard.focus == 2 {
-                write(buf, x + dots as u16, y, 1, " ", text.add_modifier(Modifier::REVERSED));
+                write(
+                    buf,
+                    x + (dots + shown.len()) as u16,
+                    y,
+                    1,
+                    " ",
+                    text.add_modifier(Modifier::REVERSED),
+                );
             }
         }
         if wizard.bootstrap.running == 0 {
