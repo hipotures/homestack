@@ -2012,7 +2012,7 @@ fn draw_overlay(buf: &mut Buffer, area: Rect, app: &App, overlay: &Overlay) {
 
 /// A list item of a pair of lists: the chosen one keeps its marker but is
 /// muted while the focus is in the other list.
-fn unfocused_item(palette: &Palette, label: &str, chosen: bool, focused: bool) -> (String, Style) {
+pub(super) fn unfocused_item(palette: &Palette, label: &str, chosen: bool, focused: bool) -> (String, Style) {
     let (line, style) = list_item(palette, label, chosen);
     if chosen && !focused {
         (line, text_style(palette).fg(palette.muted))

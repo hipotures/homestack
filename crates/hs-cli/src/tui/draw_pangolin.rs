@@ -149,7 +149,7 @@ pub(super) fn screen(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
     );
     let body = Rect::new(x, inner.y + 3, width, inner.height - 5);
     if width >= 108 {
-        let nav_width = 40;
+        let nav_width = 41;
         for y in body.top()..body.bottom() {
             write(buf, body.x + nav_width, y, 1, "│", muted);
         }
@@ -280,27 +280,6 @@ fn steps(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard, wide: bool) {
             break;
         }
         let chosen = at == wizard.selected_step;
-        let style = if chosen && wizard.focus == 0 {
-            let style = text.bg(app.palette.selection).add_modifier(Modifier::BOLD);
-            if app.palette.no_color {
-                style.add_modifier(Modifier::REVERSED)
-            } else {
-                style
-            }
-        } else if chosen {
-            text.add_modifier(Modifier::BOLD)
-        } else if at > 5
-            || (at == 5 && !wizard.bootstrap_available())
-            || (at == 4 && !wizard.tunnel_available())
-            || (at == 3 && !wizard.api_available())
-            || (at == 2 && !wizard.discovery_available())
-            || (at == 1 && !wizard.prerequisites_available())
-        {
-            text.fg(app.palette.muted)
-        } else {
-            text
-        };
-        write(buf, area.x, y, area.width, &" ".repeat(usize::from(area.width)), style);
         let passed = (at == 0 && wizard.status() == "Verified")
             || (at == 1 && wizard.prerequisites_confirmed())
             || (at == 2 && wizard.discovery_status() == "Discovered")
@@ -325,23 +304,30 @@ fn steps(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard, wide: bool) {
             "✓"
         } else if failed {
             "✗"
-        } else if chosen && wizard.focus == 0 {
-            "▸"
         } else {
             " "
         };
-        write(
-            buf,
-            area.x,
-            y,
-            area.width,
+        let locked = at > 5
+            || (at == 5 && !wizard.bootstrap_available())
+            || (at == 4 && !wizard.tunnel_available())
+            || (at == 3 && !wizard.api_available())
+            || (at == 2 && !wizard.discovery_available())
+            || (at == 1 && !wizard.prerequisites_available());
+        let (line, mut style) = super::draw::unfocused_item(
+            &app.palette,
             &format!("{mark} {}. {title}", at + 1),
-            style,
+            chosen,
+            wizard.focus == 0,
         );
-        if (passed || failed) && !app.palette.no_color {
+        if locked && !chosen {
+            style = style.fg(app.palette.muted);
+        }
+        write(buf, area.x, y, area.width, &" ".repeat(usize::from(area.width)), style);
+        write(buf, area.x, y, area.width, &line, style);
+        if (passed || failed) && !app.palette.no_color && !(chosen && wizard.focus > 0) {
             write(
                 buf,
-                area.x,
+                area.x + 2,
                 y,
                 1,
                 mark,
@@ -362,13 +348,7 @@ fn steps(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard, wide: bool) {
                 },
             );
         }
-        if at > 5
-            || (at == 5 && !wizard.bootstrap_available())
-            || (at == 4 && !wizard.tunnel_available())
-            || (at == 3 && !wizard.api_available())
-            || (at == 2 && !wizard.discovery_available())
-            || (at == 1 && !wizard.prerequisites_available())
-        {
+        if locked {
             write(buf, area.right() - 8, y, 8, "[Locked]", style.fg(app.palette.muted));
         }
         chrome::register(Rect::new(area.x, y, area.width, 1), Hit::PangolinStep(at));
