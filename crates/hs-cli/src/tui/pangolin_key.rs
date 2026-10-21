@@ -627,7 +627,6 @@ impl Wizard {
     /// Any edit invalidates the result and abandons a running verification.
     fn bootstrap_edited(&mut self) {
         self.permanent.result = None;
-        self.permanent.credential.clear();
         self.permanent.confirm = false;
         self.bootstrap.revision += 1;
         self.bootstrap.running = 0;

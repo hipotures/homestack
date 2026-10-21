@@ -1,9 +1,9 @@
-//! Step 7: explicit organization-key plans and durable, conservative recovery.
+//! Step 7: automatic credential discovery, selected permission actions and durable recovery.
 use super::pangolin::{Wizard, next_test};
 use super::pangolin_key::{self as bootstrap, Client, Credential, Probe};
 use super::pangolin_store::Storage;
 use super::pangolin_tunnel::Endpoint;
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -46,6 +46,7 @@ pub enum Stage {
     NoMutation,
     Prepared,
     CreationRequested,
+    RotationRequested,
     Created,
     CredentialSaved,
     ActionsVerified,
@@ -64,18 +65,18 @@ pub struct Record {
     pub credential_saved: bool,
     pub actions_verified: bool,
     pub at: String,
+    #[serde(default)]
+    pub rotation_from: Option<String>,
 }
 #[derive(Debug, Clone, PartialEq)]
 pub enum Plan {
     Create,
-    Replace { id: String, before: BTreeSet<String> },
-    AssignCreated { id: String, before: BTreeSet<String> },
+    Permissions { id: String, before: BTreeSet<String> },
+    Rotate { id: String },
 }
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Operation {
     Inspect,
-    Verify,
-    Prepare,
     Apply,
 }
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -84,10 +85,7 @@ pub struct View {
     pub cancel_requested: bool,
     pub confirm: bool,
     pub confirm_yes: bool,
-    pub pasted: bool,
-    pub import: bool,
-    pub input: String,
-    pub credential: Credential,
+    pub replace: bool,
     pub result: Option<Outcome>,
     pub operation: Option<Operation>,
     pub tunnel: u64,
@@ -101,7 +99,6 @@ pub struct Outcome {
     pub assigned: BTreeSet<String>,
     pub record: Option<Record>,
     pub plan: Option<Plan>,
-    pub prepared: bool,
     pub verified: bool,
     pub reads: bool,
     pub negatives: bool,
@@ -112,6 +109,30 @@ impl Outcome {
             error: Some(message.into()),
             ..Self::default()
         }
+    }
+    pub fn error_summary(&self) -> Option<&'static str> {
+        let error = self.error.as_deref()?;
+        Some(if error.contains("deleteApiKey") {
+            "Grant deleteApiKey to the bootstrap key, then Refresh."
+        } else if error.contains("uncertain")
+            || error.contains("Uncertain")
+            || error.contains("recovery")
+            || error.contains("Recovery")
+        {
+            "Recovery needs attention. Open F7 Details before retrying."
+        } else if error.contains("changed") || error.contains("Changed") {
+            "State changed. Review the counts or Refresh before retrying."
+        } else if error.contains("Negative authorization") {
+            "Security check failed. Review key permissions in F7 Details."
+        } else if error.contains("storage")
+            || error.contains("destination")
+            || error.contains("credential")
+            || error.contains("Credential")
+        {
+            "Check private credential storage in F7 Details, then Refresh."
+        } else {
+            "Setup failed. Open F7 Details, resolve the cause, then Refresh."
+        })
     }
     pub fn missing(&self) -> Vec<&str> {
         ACTIONS
@@ -133,9 +154,9 @@ pub(super) struct Input {
     target: String,
     org: String,
     root: Credential,
-    credential: Credential,
-    source: Option<PathBuf>,
-    import: bool,
+    trusted: Vec<PathBuf>,
+    legacy: PathBuf,
+    replace: bool,
     destination: PathBuf,
     operation: Operation,
     plan: Option<Plan>,
@@ -260,6 +281,7 @@ pub(super) fn execute(endpoint: &Endpoint, input: Input, stop: &AtomicBool) -> O
     if let Err(error) = work(endpoint, input, stop, &mut out) {
         out.error = Some(
             if out.record.as_ref().is_some_and(|r| r.stage == Stage::CreationRequested)
+                || out.record.as_ref().is_some_and(|r| r.stage == Stage::RotationRequested)
                 || (applying
                     && (stop.load(std::sync::atomic::Ordering::SeqCst) || !endpoint.alive())
                     && out
@@ -275,7 +297,7 @@ pub(super) fn execute(endpoint: &Endpoint, input: Input, stop: &AtomicBool) -> O
     }
     out
 }
-fn work(endpoint: &Endpoint, input: Input, stop: &AtomicBool, out: &mut Outcome) -> Result<()> {
+fn work(endpoint: &Endpoint, mut input: Input, stop: &AtomicBool, out: &mut Outcome) -> Result<()> {
     let root_result = bootstrap::verify(endpoint, &input.org, &input.root, stop);
     if root_result.problem.is_some() || root_result.organization != Some(true) {
         return Err(ORG_REQUIRED.into());
@@ -292,7 +314,13 @@ fn work(endpoint: &Endpoint, input: Input, stop: &AtomicBool, out: &mut Outcome)
         return Err(MULTIPLE.into());
     }
     let storage = Storage::open(&input.destination)?;
-    let mut record = storage.load::<Record>()?.unwrap_or(Record {
+    let saved = storage.load::<Record>()?;
+    let saved = if saved.is_none() && input.legacy.with_file_name("recovery.json").exists() {
+        Storage::open(&input.legacy)?.load::<Record>()?
+    } else {
+        saved
+    };
+    let mut record = saved.unwrap_or(Record {
         target: input.target.clone(),
         organization: input.org.clone(),
         name: "homestack".into(),
@@ -303,6 +331,7 @@ fn work(endpoint: &Endpoint, input: Input, stop: &AtomicBool, out: &mut Outcome)
         credential_saved: false,
         actions_verified: false,
         at: stamp(),
+        rotation_from: None,
     });
     if record.target != input.target
         || record.organization != input.org
@@ -316,10 +345,37 @@ fn work(endpoint: &Endpoint, input: Input, stop: &AtomicBool, out: &mut Outcome)
         return Err("Recovery identity differs. Resolve the non-secret recovery record explicitly.".into());
     }
     out.record = Some(record.clone());
+    if record.stage == Stage::RotationRequested {
+        return Err("Rotation outcome uncertain. Inspect F7 recovery evidence before any further operation.".into());
+    }
+    let rotating = input.operation == Operation::Apply && matches!(input.plan, Some(Plan::Rotate { .. }));
+    let state_destination = input.destination.clone();
+    if let (true, Some(Plan::Rotate { id })) = (rotating, &input.plan) {
+        let stem = input
+            .destination
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .ok_or("Invalid credential destination.")?;
+        input.destination = input.destination.with_file_name(format!("{stem}-replacement-{id}.key"));
+    } else if record.credential_path.parent() == input.destination.parent() {
+        input.destination = record.credential_path.clone();
+    }
+    // Keep the identity lock and recovery journal stable across rotations. A new
+    // credential gets a separate filename, preserving any old or rejected secret.
+    let alternate_storage = if input.destination != state_destination {
+        Some(Storage::open(&input.destination)?)
+    } else {
+        None
+    };
+    let credential_storage = alternate_storage.as_ref().unwrap_or(&storage);
     if matches!(record.stage, Stage::CreationRequested | Stage::Created) {
         // A crash may follow durable secret persistence but precede its metadata update.
         // Recover only by the actual local token ID, never by a name-only guess.
-        let recovered = storage.recover_credential(&input.destination).map_err(|_| "Outcome uncertain. Creation was requested and no safely persisted credential is available. Pangolin cannot return its original secret. Never retry creation; resolve recovery separately.")?;
+        let recovered = if record.credential_path == input.destination {
+            credential_storage.recover_credential(&input.destination)
+        } else {
+            Storage::open(&record.credential_path)?.recover_credential(&record.credential_path)
+        }.map_err(|_| "Outcome uncertain. Creation was requested and no safely persisted credential is available. Pangolin cannot return its original secret. Never retry creation; resolve recovery separately.")?;
         let id = recovered.key_id().map_err(|_| "Recovery credential invalid.")?;
         if out.ids != vec![id.to_owned()] || record.key_id.as_ref().is_some_and(|known| known != id) {
             return Err(
@@ -338,32 +394,70 @@ fn work(endpoint: &Endpoint, input: Input, stop: &AtomicBool, out: &mut Outcome)
     if let Some(id) = out.ids.first() {
         out.assigned = actions(&root, &input.org, id)?;
     }
-    if matches!(input.operation, Operation::Inspect | Operation::Verify) && out.ids.is_empty() {
-        if !matches!(record.stage, Stage::NoMutation | Stage::Prepared) {
-            return Err("Unresolved recovery prevents creation.".into());
+    if rotating {
+        let Some(Plan::Rotate { id }) = &input.plan else {
+            unreachable!()
+        };
+        if out.ids != vec![id.clone()]
+            || record.created_here && !matches!(record.stage, Stage::Complete | Stage::NoMutation)
+        {
+            return Err("Recovery or key identity changed. Rotation refused; inspect F7.".into());
         }
-        out.plan = Some(Plan::Create);
-        return Ok(());
-    }
-    if input.operation == Operation::Prepare && out.ids.is_empty() && input.plan == Some(Plan::Create) {
-        if !matches!(record.stage, Stage::NoMutation | Stage::Prepared) {
-            return Err("Unresolved recovery prevents creation.".into());
+        let root_id = input.root.key_id().map_err(|_| "Bootstrap credential invalid.")?;
+        if id == root_id || !actions(&root, &input.org, root_id)?.contains("deleteApiKey") {
+            return Err(
+                "Rotation requires deleteApiKey on the bootstrap key. Grant it explicitly, then Refresh.".into(),
+            );
         }
-        storage.release()?;
-        storage.reserve()?;
+        credential_storage.release()?;
+        credential_storage.reserve()?;
+        if keys(&root, &input.org)? != vec![id.clone()] {
+            return Err("Key identity changed. Refresh before replacing the key.".into());
+        }
+        record.rotation_from = Some(id.clone());
+        record.key_id = Some(id.clone());
+        save(&storage, &mut record, Stage::RotationRequested)?;
+        out.record = Some(record.clone());
+        let status = api(root.request(
+            "DELETE",
+            &format!("/v1/org/{}/api-key/{id}", input.org),
+            None,
+            Probe::Keys,
+        ))?
+        .0;
+        if status != 200 || !keys(&root, &input.org)?.is_empty() {
+            return Err("Rotation outcome uncertain. Inspect F7; deletion will not be retried.".into());
+        }
+        record.key_id = None;
+        record.credential_saved = false;
+        record.credential_path = input.destination.clone();
+        record.created_here = false;
         save(&storage, &mut record, Stage::Prepared)?;
-        out.record = Some(record);
+        out.ids.clear();
+    }
+    if out.ids.is_empty() && input.operation == Operation::Inspect {
+        if !matches!(record.stage, Stage::NoMutation | Stage::Prepared) {
+            return Err("Unresolved recovery prevents creation. Inspect F7.".into());
+        }
         out.plan = Some(Plan::Create);
-        out.prepared = true;
         return Ok(());
     }
-    let creating = input.operation == Operation::Apply && input.plan == Some(Plan::Create);
+    let creating = input.operation == Operation::Apply && (input.plan == Some(Plan::Create) || rotating);
+    if creating && !rotating {
+        if !matches!(record.stage, Stage::NoMutation | Stage::Prepared) {
+            return Err("Unresolved recovery prevents creation. Inspect F7.".into());
+        }
+        credential_storage.release()?;
+        credential_storage.reserve()?;
+        record.credential_path = input.destination.clone();
+        save(&storage, &mut record, Stage::Prepared)?;
+    }
     let credential;
     if creating {
         if !out.ids.is_empty() {
             return Err("A homestack key appeared before creation. Creation refused.".into());
         }
-        if record.stage != Stage::Prepared || !storage.has_pending() {
+        if record.stage != Stage::Prepared || !credential_storage.has_pending() {
             return Err("No reserved and reviewed creation plan.".into());
         }
         // Repeat identity and full name-conflict checks immediately before the single PUT.
@@ -408,7 +502,7 @@ fn work(endpoint: &Endpoint, input: Input, stop: &AtomicBool, out: &mut Outcome)
         out.record = Some(record.clone());
         // Save the secret before any metadata/network operation that could fail.
         // CreationRequested remains a conservative crash barrier until persistence succeeds.
-        if storage.persist(&credential).is_err() {
+        if credential_storage.persist(&credential).is_err() {
             let _ = save(&storage, &mut record, Stage::Created);
             out.record = Some(record.clone());
             return Err("Key created; credential not safely persisted. Recovery is required. If the complete local token is unavailable, its secret cannot be retrieved from Pangolin. Never create a replacement automatically.".into());
@@ -421,37 +515,34 @@ fn work(endpoint: &Endpoint, input: Input, stop: &AtomicBool, out: &mut Outcome)
         let Some(id) = out.ids.first() else {
             return Err("No HomeStack key found. Inspect before planning creation.".into());
         };
-        credential = if !input.credential.is_empty() {
-            input.credential.duplicate()
-        } else if let Some(source) = &input.source {
-            super::pangolin_store::read_credential(source)?
-        } else if record.credential_saved
-            || storage.has_credential()
-            || storage.has_pending()
-            || matches!(
-                record.stage,
-                Stage::Created | Stage::CredentialSaved | Stage::ActionsVerified | Stage::Complete
-            )
-        {
-            if record.credential_path == input.destination {
-                storage.recover_credential(&input.destination).map_err(|_| "Existing HomeStack credential is not safely available. Pangolin cannot return the original secret. Resolve recovery separately; no duplicate will be created.")?
-            } else {
-                super::pangolin_store::read_credential(&record.credential_path)?
-            }
+        let mut found = if credential_storage.has_pending() {
+            let token = credential_storage.recover_credential(&input.destination)?;
+            (token.key_id().ok() == Some(id.as_str())).then_some(token)
         } else {
-            return Err("An existing HomeStack key was found, but its credential is not available. Pangolin cannot return its original secret. Provide the existing credential to continue without creating a duplicate.".into());
+            None
         };
+        let mut candidates = vec![record.credential_path.clone(), input.destination.clone()];
+        candidates.extend(input.trusted.iter().cloned());
+        for path in candidates {
+            if found.is_some() {
+                break;
+            }
+            if let Ok(token) = super::pangolin_store::read_credential(&path)
+                && token.key_id().ok() == Some(id.as_str())
+            {
+                found = Some(token);
+                break;
+            }
+        }
+        let Some(token) = found else {
+            out.plan = Some(Plan::Rotate { id: id.clone() });
+            return Ok(());
+        };
+        credential = token;
         if credential.key_id().map_err(|_| "Invalid ID.secret credential.")? != id {
             return Err("Credential key ID does not match the existing organization key. Adoption refused.".into());
         }
     }
-    let resuming_creation = !creating
-        && record.created_here
-        && record.credential_saved
-        && matches!(record.stage, Stage::Created | Stage::CredentialSaved)
-        && record.credential_path == input.destination
-        && input.source.is_none()
-        && input.credential.is_empty();
     let id = credential.key_id().map_err(|_| "Invalid credential.")?.to_owned();
     let permanent = Client {
         endpoint,
@@ -461,32 +552,38 @@ fn work(endpoint: &Endpoint, input: Input, stop: &AtomicBool, out: &mut Outcome)
     };
     // Newly created keys have no actions until the approved assignment below.
     if !creating {
-        // Imported keys must authenticate before any replacement plan. An owned creation
-        // may still have zero actions: its durable token and creation provenance permit
-        // an explicitly reviewed continuation, followed by full independent verification.
-        if !resuming_creation {
-            org(&permanent, &input.org)?;
-        }
-        let path = input.source.clone().filter(|_| !input.import).unwrap_or_else(|| {
-            if input.credential.is_empty() && input.source.is_none() {
-                record.credential_path.clone()
-            } else {
-                input.destination.clone()
-            }
-        });
-        if path == input.destination {
-            if storage.has_credential() || storage.has_pending() {
-                let stored = storage.recover_credential(&path)?;
-                if stored.value != credential.value {
-                    return Err(
-                        "Canonical credential already exists with different content; it will never be overwritten."
-                            .into(),
-                    );
+        // Pangolin authenticates before checking actions. HTTP 403 proves possession
+        // even when getOrg is missing; the bootstrap listing independently binds this
+        // ID to the organization. Full permanent-token reads remain mandatory below.
+        {
+            match permanent.get(&format!("/v1/org/{}", input.org), Probe::Organization) {
+                Err(bootstrap::Problem::Rejected(_)) => {
+                    out.plan = Some(Plan::Rotate { id: id.clone() });
+                    return Ok(());
                 }
-            } else {
-                storage.reserve()?;
-                storage.persist(&credential)?;
+                result => {
+                    match api(result)? {
+                        (403, _) => {}
+                        (200, Some(data))
+                            if data.get("org").and_then(|v| v.get("orgId")).and_then(|v| v.as_str())
+                                == Some(input.org.as_str()) => {}
+                        _ => return Err(
+                            "Credential cannot verify this organization. Check its access in Pangolin, then Refresh."
+                                .into(),
+                        ),
+                    }
+                }
             }
+        }
+        let path = input.destination.clone();
+        if credential_storage.has_credential() || credential_storage.has_pending() {
+            let stored = credential_storage.recover_credential(&path)?;
+            if stored.value != credential.value {
+                return Err("Saved credential has different content. Resolve the conflict in F7.".into());
+            }
+        } else {
+            credential_storage.reserve()?;
+            credential_storage.persist(&credential)?;
         }
         record.key_id = Some(id.clone());
         record.credential_path = path;
@@ -496,43 +593,47 @@ fn work(endpoint: &Endpoint, input: Input, stop: &AtomicBool, out: &mut Outcome)
         save(&storage, &mut record, Stage::CredentialSaved)?;
         out.record = Some(record.clone());
     }
-    let differs = out.assigned != expected();
-    let replace = if resuming_creation {
-        Plan::AssignCreated {
-            id: id.clone(),
-            before: out.assigned.clone(),
-        }
+    let required = expected();
+    let desired = if creating || input.replace {
+        required.clone()
     } else {
-        Plan::Replace {
-            id: id.clone(),
-            before: out.assigned.clone(),
-        }
+        out.assigned.union(&required).cloned().collect()
     };
-    if !creating && differs {
-        out.plan = Some(replace.clone());
-        if input.operation == Operation::Prepare {
-            if input.plan != Some(replace.clone()) {
-                return Err("Permissions changed. Review the refreshed additions/removals before approving.".into());
-            }
-            out.prepared = true;
+    let differs = out.assigned != desired;
+    let plan = Plan::Permissions {
+        id: id.clone(),
+        before: out.assigned.clone(),
+    };
+    if !creating
+        && out.assigned != required
+        && (input.operation == Operation::Apply || !required.is_subset(&out.assigned))
+    {
+        out.plan = Some(plan.clone());
+        if input.operation == Operation::Inspect {
             return Ok(());
         }
-        if input.operation != Operation::Apply || input.plan != Some(replace) {
-            return Err(if resuming_creation {
-                "Created credential retained. Actions are pending; review the continuation plan in F7 and approve with F5. No new key will be created."
-            } else { "Existing credential validated. Permissions differ; review missing and extra actions in F7. Replacement requires separate approval." }.into());
+        if input.plan != Some(plan) {
+            return Err("Permissions changed. Review the refreshed counts and execute again.".into());
         }
     }
     if creating || (differs && input.operation == Operation::Apply) {
         if keys(&root, &input.org)? != vec![id.clone()] {
             return Err("Key conflict changed; permission replacement refused.".into());
         }
-        if !creating && actions(&root, &input.org, &id)? != out.assigned {
-            return Err("Actions changed immediately before replacement; review again.".into());
-        }
         org(&root, &input.org)?;
-        let body = serde_json::to_string(&serde_json::json!({"actionIds": ACTIONS}))
+        let latest = actions(&root, &input.org, &id)?;
+        if !creating && latest != out.assigned {
+            out.assigned = latest.clone();
+            out.plan = Some(Plan::Permissions {
+                id: id.clone(),
+                before: latest,
+            });
+            return Err("Permissions changed. Review the refreshed counts and execute again.".into());
+        }
+        let body = serde_json::to_string(&serde_json::json!({"actionIds": desired}))
             .map_err(|_| "Cannot encode approved actions.")?;
+        // A failed or uncertain setter requires Refresh, never another blind write.
+        out.plan = None;
         if api(root.request("POST", &action_path(&input.org, &id), Some(&body), Probe::Actions))?.0 != 200 {
             return Err(
                 "Action assignment rejected. Check compatibility with the pinned 25-action profile. Credential is retained; recheck before applying another reviewed plan."
@@ -541,8 +642,8 @@ fn work(endpoint: &Endpoint, input: Input, stop: &AtomicBool, out: &mut Outcome)
         }
     }
     out.assigned = actions(&root, &input.org, &id)?;
-    if out.assigned != expected() {
-        return Err("Assigned actions differ from the exact approved 25-action profile.".into());
+    if out.assigned != desired || !required.is_subset(&out.assigned) {
+        return Err("Permission readback differs from the selected operation. Refresh before retrying.".into());
     }
     if keys(&root, &input.org)? != vec![id.clone()] {
         return Err("Cannot confirm a unique organization-scoped, non-Root homestack key.".into());
@@ -552,7 +653,15 @@ fn work(endpoint: &Endpoint, input: Input, stop: &AtomicBool, out: &mut Outcome)
     out.record = Some(record.clone());
     reads(&permanent, &input.org)?;
     out.reads = true;
-    negatives(&permanent, &input.org, &id)?;
+    if let Err(error) = negatives(&permanent, &input.org, &id) {
+        if out.assigned != required {
+            out.plan = Some(Plan::Permissions {
+                id: id.clone(),
+                before: out.assigned.clone(),
+            });
+        }
+        return Err(error);
+    }
     out.negatives = true;
     // Verify secure availability again instead of trusting a prior write or referenced file.
     let stored = super::pangolin_store::read_credential(&record.credential_path)?;
@@ -588,39 +697,95 @@ impl Wizard {
             && self.permanent.running == 0
             && self.permanent.result.as_ref().is_some_and(|r| r.verified)
     }
-    pub fn permanent_destination(&self) -> PathBuf {
-        use sha2::{Digest, Sha256};
-        let identity = format!("{}\0{}", self.target, self.bootstrap.organization);
-        let digest: String = Sha256::digest(identity.as_bytes())
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect();
+    pub fn permanent_legacy_destination(&self) -> PathBuf {
         self.path
             .parent()
             .unwrap_or(std::path::Path::new("/"))
             .join("secrets/pangolin")
-            .join(digest)
+            .join(self.permanent_identity())
             .join("homestack.key")
     }
+    fn permanent_identity(&self) -> String {
+        use sha2::{Digest, Sha256};
+        Sha256::digest(format!("{}\0{}", self.target, self.bootstrap.organization).as_bytes())
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect()
+    }
+    pub fn permanent_destination(&self) -> PathBuf {
+        let home = std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("/"));
+        let config = std::env::var_os("XDG_CONFIG_HOME")
+            .filter(|s| !s.is_empty())
+            .map(PathBuf::from)
+            .unwrap_or_else(|| home.join(".config"));
+        config
+            .join("homestack/secrets")
+            .join(format!("pangolin-{}.key", self.permanent_identity()))
+    }
     pub fn permanent_controls(&self) -> Vec<usize> {
-        let mut controls = vec![0];
-        if self.permanent.result.as_ref().is_some_and(|r| r.ids.len() == 1) {
-            controls.extend([1, 2, 3]);
+        if self.permanent.running != 0 || self.permanent_verified() || !self.permanent_available() {
+            return vec![0];
         }
-        controls.extend([4, 5]);
-        if self.permanent.result.as_ref().is_some_and(|r| r.ids.len() == 1) {
-            controls.push(6);
+        match self.permanent.result.as_ref().and_then(|r| r.plan.as_ref()) {
+            Some(Plan::Permissions { .. }) => vec![0, 1, 2],
+            Some(_) => vec![0, 1],
+            None => vec![0],
         }
-        if self.permanent_can_apply() {
-            controls.push(7);
-        }
-        controls
+    }
+    pub fn permanent_counts(&self) -> (usize, usize, usize) {
+        let Some(out) = &self.permanent.result else {
+            return (0, 0, 0);
+        };
+        let required = expected();
+        let replace = self.permanent.replace;
+        (
+            if replace {
+                out.assigned.intersection(&required).count()
+            } else {
+                out.assigned.len()
+            },
+            required.difference(&out.assigned).count(),
+            if replace {
+                out.assigned.difference(&required).count()
+            } else {
+                0
+            },
+        )
     }
     pub fn permanent_can_apply(&self) -> bool {
         self.permanent_available()
             && self.permanent_current()
             && self.permanent.running == 0
             && self.permanent.result.as_ref().is_some_and(|r| r.plan.is_some())
+    }
+    pub fn permanent_action(&mut self, key: KeyCode) -> Option<Operation> {
+        if self.permanent.running != 0 {
+            return None;
+        }
+        if key == KeyCode::F(6) && !self.permanent.confirm {
+            return Some(Operation::Inspect);
+        }
+        if key != KeyCode::Enter {
+            return None;
+        }
+        if self.permanent.confirm {
+            return self.permanent.confirm_yes.then_some(Operation::Apply);
+        }
+        if self.focus == 0 || !self.permanent_can_apply() {
+            return None;
+        }
+        self.permanent.replace = self.focus == 2;
+        if matches!(
+            self.permanent.result.as_ref().and_then(|r| r.plan.as_ref()),
+            Some(Plan::Rotate { .. })
+        ) {
+            self.permanent.confirm = true;
+            self.permanent.confirm_yes = false;
+            return None;
+        }
+        Some(Operation::Apply)
     }
     pub fn begin_permanent(&mut self, operation: Operation) -> Option<u64> {
         if self.permanent.running != 0 || self.selected_step != 6 || self.help_open || self.report_open {
@@ -630,13 +795,15 @@ impl Wizard {
             self.message = ORG_REQUIRED.into();
             return None;
         }
-        if matches!(operation, Operation::Prepare | Operation::Apply) && !self.permanent_can_apply() {
+        if operation == Operation::Apply && !self.permanent_can_apply() {
             return None;
         }
         if operation == Operation::Apply
-            && (!self.permanent.confirm
-                || !self.permanent.confirm_yes
-                || !self.permanent.result.as_ref().is_some_and(|r| r.prepared))
+            && matches!(
+                self.permanent.result.as_ref().and_then(|r| r.plan.as_ref()),
+                Some(Plan::Rotate { .. })
+            )
+            && !(self.permanent.confirm && self.permanent.confirm_yes)
         {
             return None;
         }
@@ -654,15 +821,20 @@ impl Wizard {
         if id == 0 || self.permanent.running != id || !self.permanent_available() {
             return None;
         }
+        let destination = self.permanent_destination();
+        let legacy = self.permanent_legacy_destination();
+        let mut trusted = vec![legacy.clone(), destination.with_file_name("pangolin.json")];
+        if let Some(config) = self.path.parent().and_then(|p| p.parent()) {
+            trusted.push(config.join("secrets/pangolin.json"));
+        }
         Some(Input {
             target: self.target.clone(),
             org: self.bootstrap.organization.clone(),
             root: self.bootstrap.key.duplicate(),
-            credential: self.permanent.credential.duplicate(),
-            source: (!self.permanent.pasted && !self.permanent.input.is_empty())
-                .then(|| PathBuf::from(&self.permanent.input)),
-            import: self.permanent.import,
-            destination: self.permanent_destination(),
+            trusted,
+            legacy,
+            replace: self.permanent.replace,
+            destination,
             operation: self.permanent.operation?,
             plan: self.permanent.result.as_ref().and_then(|r| r.plan.clone()),
         })
@@ -672,69 +844,34 @@ impl Wizard {
             return;
         }
         self.permanent.running = 0;
-        self.permanent.credential.clear();
         if !self.permanent_current() || !self.permanent_available() {
             result.verified = false;
-            result.prepared = false;
             result.plan = None;
-            result.error =
-                Some("Tunnel or identity changed. Reconnect and inspect; durable recovery state is retained.".into());
+            result.error = Some("Connection changed. Reconnect and Refresh; recovery evidence is retained.".into());
         }
-        self.permanent.confirm = result.prepared && result.error.is_none();
-        self.permanent.confirm_yes = false;
-        if self.permanent.confirm {
-            self.report_scroll = 0;
-        }
+        self.permanent.confirm = false;
         self.permanent.result = Some(result);
-    }
-    pub fn permanent_paste(&mut self, text: &str) {
-        if self.permanent.running != 0 || self.permanent.confirm || self.focus != 2 {
-            return;
-        }
-        if self.permanent.pasted {
-            self.permanent.credential.insert(text);
-        } else {
-            let capacity = 4096usize.saturating_sub(self.permanent.input.len());
-            self.permanent
-                .input
-                .extend(text.chars().filter(|c| !c.is_control()).take(capacity));
-        }
-        // Editing never preserves a previous mutation approval.
-        if let Some(result) = &mut self.permanent.result {
-            result.plan = None;
-            result.prepared = false;
-            result.verified = false;
+        self.permanent.replace = false;
+        if self.focus > 0 {
+            self.focus = 1;
         }
     }
     pub fn permanent_key(&mut self, key: KeyEvent) -> bool {
         if self.permanent.confirm {
             match key.code {
                 KeyCode::Esc => self.permanent.confirm = false,
-                KeyCode::Tab | KeyCode::BackTab | KeyCode::Left | KeyCode::Right | KeyCode::Char(' ') => {
+                KeyCode::Tab | KeyCode::BackTab | KeyCode::Left | KeyCode::Right | KeyCode::Up | KeyCode::Down => {
                     self.permanent.confirm_yes = !self.permanent.confirm_yes
                 }
                 KeyCode::Enter if !self.permanent.confirm_yes => self.permanent.confirm = false,
-                KeyCode::PageDown | KeyCode::Down => self.report_scroll = self.report_scroll.saturating_add(3),
-                KeyCode::PageUp | KeyCode::Up => self.report_scroll = self.report_scroll.saturating_sub(3),
+                KeyCode::F(7) => return false,
                 _ => {}
             }
             return true;
         }
         if self.permanent.running != 0 {
-            // Inspection must not delay entering the panel or reading its help.
-            // Credential edits and remote actions still wait for the worker.
             match key.code {
-                KeyCode::Esc => {
-                    self.permanent.cancel_requested = true;
-                    self.message = "Cancellation requested. Outcome uncertain if a remote mutation was sent; waiting for durable recovery evidence.".into();
-                }
-                KeyCode::Enter | KeyCode::Right if self.focus == 0 => self.focus = 4,
-                KeyCode::Tab | KeyCode::BackTab => self.focus = if self.focus == 0 { 4 } else { 0 },
-                KeyCode::Up | KeyCode::Down if self.focus > 0 => self.focus = 0,
-                KeyCode::Enter if self.focus == 4 => {
-                    self.report_open = true;
-                    self.report_scroll = 0;
-                }
+                KeyCode::Esc => self.permanent.cancel_requested = true,
                 KeyCode::F(4) | KeyCode::F(7) => return false,
                 _ => {}
             }
@@ -743,72 +880,17 @@ impl Wizard {
         let controls = self.permanent_controls();
         let at = controls.iter().position(|v| *v == self.focus).unwrap_or(0);
         match key.code {
-            KeyCode::Down | KeyCode::Tab if key.code == KeyCode::Tab || self.focus > 0 => {
-                self.focus = controls[(at + 1) % controls.len()]
+            KeyCode::Tab => self.focus = controls[(at + 1) % controls.len()],
+            KeyCode::BackTab => self.focus = controls[(at + controls.len() - 1) % controls.len()],
+            KeyCode::Left | KeyCode::Right | KeyCode::Down | KeyCode::Up if self.focus > 0 => {
+                self.focus = if controls.contains(&2) && self.focus == 1 { 2 } else { 1 };
             }
-            KeyCode::Up | KeyCode::BackTab if key.code == KeyCode::BackTab || self.focus > 0 => {
-                self.focus = controls[(at + controls.len() - 1) % controls.len()]
-            }
-            KeyCode::Enter | KeyCode::Right if self.focus == 0 => self.focus = controls.get(1).copied().unwrap_or(0),
-            KeyCode::Enter | KeyCode::Char(' ') if self.focus == 1 => {
-                self.permanent.pasted = !self.permanent.pasted;
-                self.permanent.credential.clear();
-                self.permanent.input.clear();
-                if let Some(r) = &mut self.permanent.result {
-                    r.verified = false;
-                    r.plan = None;
-                    r.prepared = false;
-                }
-            }
-            KeyCode::Enter | KeyCode::Char(' ') if self.focus == 3 => {
-                self.permanent.import = !self.permanent.import;
-                if let Some(r) = &mut self.permanent.result {
-                    r.verified = false;
-                    r.plan = None;
-                    r.prepared = false;
-                }
-            }
-            KeyCode::Enter if self.focus == 4 => {
-                self.report_open = true;
-                self.report_scroll = 0;
-            }
-            KeyCode::Backspace if self.focus == 2 => {
-                if self.permanent.pasted {
-                    self.permanent.credential.pop();
-                } else {
-                    self.permanent.input.pop();
-                }
-                if let Some(r) = &mut self.permanent.result {
-                    r.verified = false;
-                    r.plan = None;
-                    r.prepared = false;
-                }
-            }
-            KeyCode::Delete if self.focus == 2 => {
-                self.permanent.credential.clear();
-                self.permanent.input.clear();
-                if let Some(r) = &mut self.permanent.result {
-                    r.verified = false;
-                    r.plan = None;
-                    r.prepared = false;
-                }
-            }
-            KeyCode::Char('u') if self.focus == 2 && key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.permanent.credential.clear();
-                self.permanent.input.clear();
-                if let Some(r) = &mut self.permanent.result {
-                    r.verified = false;
-                    r.plan = None;
-                    r.prepared = false;
-                }
-            }
-            KeyCode::Char(c)
-                if self.focus == 2 && !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
-            {
-                self.permanent_paste(&c.to_string())
-            }
+            KeyCode::Enter | KeyCode::Right if self.focus == 0 => self.focus = controls.get(1).copied().unwrap_or(1),
+            KeyCode::Esc if self.focus > 0 => self.focus = 0,
+            KeyCode::F(5) => {}
             _ => return false,
         }
+        self.permanent.replace = self.focus == 2;
         true
     }
     pub fn permanent_report(&self) -> String {
@@ -843,11 +925,14 @@ impl Wizard {
             }
             if let Some(record) = &out.record {
                 lines.push(format!("Created by this wizard: {}", record.created_here));
-                lines.push(format!("Recovery stage: {:?}\nKnown key ID: {}\nCredential: {}\nDurably saved: {}\nExact actions verified: {}\nAt: {}", record.stage, record.key_id.as_deref().unwrap_or("Not returned"), record.credential_path.display(), record.credential_saved, record.actions_verified, record.at));
+                if let Some(id) = &record.rotation_from {
+                    lines.push(format!("Rotation original key ID: {id}"));
+                }
+                lines.push(format!("Recovery stage: {:?}\nKnown key ID: {}\nCredential: {}\nDurably saved: {}\nRequired actions verified: {}\nAt: {}", record.stage, record.key_id.as_deref().unwrap_or("Not returned"), record.credential_path.display(), record.credential_saved, record.actions_verified, record.at));
             }
             lines.push(format!("Independent Organization/Sites/Resources/domains reads: {}\nAdmin listing + action administration + other-org access: {}", if out.reads { "PASS" } else { "Not verified" }, if out.negatives { "DENIED (expected)" } else { "Not verified" }));
         }
-        lines.push("Approved action profile (exact equality required):".into());
+        lines.push("Required action profile (Merge preserves extra actions):".into());
         lines.extend(ACTIONS.into_iter().map(|a| format!("  {a}")));
         lines.push("Writes to Sites, Resources, Targets and policies were NOT executed. Write capabilities are confirmed only through assigned action metadata. Non-Root scope follows the pinned API's filtered organization listing and independent negative checks. No Root key is revoked.".into());
         lines.join("\n")

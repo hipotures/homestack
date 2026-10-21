@@ -1305,16 +1305,15 @@ impl App {
                             && w.selected_step == 6
                             && !w.help_open
                             && !w.report_open
-                            && (w.permanent.running == 0 || control == 4)
+                            && w.permanent.running == 0
                         {
                             if w.permanent.confirm {
                                 w.permanent.confirm_yes = control == 9;
                             } else {
                                 w.focus = control;
                             }
-                            if control != 2 {
-                                return press(self, KeyCode::Enter);
-                            }
+                            w.permanent.replace = control == 2;
+                            return press(self, KeyCode::Enter);
                         }
                         return None;
                     }
@@ -1577,18 +1576,11 @@ impl App {
         }
         if let Some(Overlay::Pangolin(wizard)) = self.overlay.as_mut() {
             if wizard.selected_step == 6 && !wizard.help_open && !wizard.report_open {
-                use super::pangolin_permanent::Operation;
-                let operation = if wizard.permanent.confirm {
-                    (key.code == KeyCode::Enter && wizard.permanent.confirm_yes).then_some(Operation::Apply)
-                } else if key.code == KeyCode::F(5) || (key.code == KeyCode::Enter && wizard.focus == 7) {
-                    Some(Operation::Prepare)
-                } else if key.code == KeyCode::F(6) || (key.code == KeyCode::Enter && wizard.focus == 6) {
-                    Some(Operation::Verify)
-                } else if key.code == KeyCode::Enter && wizard.focus == 5 {
-                    Some(Operation::Inspect)
-                } else {
-                    None
-                };
+                let was_confirm = wizard.permanent.confirm;
+                let operation = wizard.permanent_action(key.code);
+                if !was_confirm && wizard.permanent.confirm {
+                    return None;
+                }
                 if let Some(operation) = operation {
                     return wizard.begin_permanent(operation).map(Request::PangolinPermanent);
                 }

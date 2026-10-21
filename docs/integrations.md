@@ -462,31 +462,52 @@ dumps.
 
 ### Step 7: permanent HomeStack organization API key
 
-Entry refreshes all organization API-key pages through the owned Step 5 tunnel
-with the currently verified Root bootstrap credential. Organization identity must
-have been confirmed by `GET /v1/org/{orgId}` in Step 6; otherwise the wizard shows:
-“Organization not verified. Grant getOrg to the bootstrap key and verify Step 6 again.”
-Every worker repeats bootstrap authorization and organization identity checks.
-The step list shows Checking while these reads run. Enter opens the panel
-immediately; focus navigation, F4 Help and F7 Details remain available while
-credential edits and remote actions wait for completion.
+Entering Step 7 performs no network request and does not reconnect SSH. Press
+**F6 Refresh** to inspect all organization API-key pages through the existing
+Step 5 tunnel, using the currently verified Step 6 bootstrap key. Every operation
+rechecks bootstrap authorization and organization identity. A valid, saved key
+with all required actions and passing security checks completes the step
+automatically, advancing progress to **7/8**. Returning to the step preserves its current result; Refresh explicitly
+revalidates it. Step 8 remains locked.
 
-No key named `homestack` permits a **Create HomeStack API key** plan. Exactly one
-permits **Use existing key**. Multiple matches block every automatic selection or
-mutation and expose only their non-secret IDs in F7. Pangolin does not enforce
-unique names. Missing local credentials never justify a duplicate, deletion or
-rotation; the original secret cannot be fetched again from Pangolin.
+The main screen shows one state and the relevant action only:
 
-For an existing key, choose a local file by entering its absolute path or select
-masked credential entry and paste the complete `ID.secret` token. File contents,
-not extensions, are validated: a `.json` file containing a plain token works.
-HomeStack does not scan for credentials. Imports require a regular, current-user
-owned file with mode 0600 or stricter, a private parent directory, safe ancestors,
-no symlinks or hard links, and a path outside Git repositories. Reads are bounded.
-The token ID must match the unique listed key, and an authenticated organization
-read must succeed before any permission replacement can be planned.
+- No `homestack` key: **Create key**.
+- Existing key without a usable local credential: **Replace key**.
+- Different permissions: aligned **KEEP / ADD / REMOVE** counts and
+  **Merge / Replace** buttons.
+- Completed: organization, key name, organization/non-Root scope, verified
+  permissions and saved credential status.
 
-The exact approved profile is:
+No token, file path, import, inspection, mode selector or separate Apply control
+is exposed. **F7 Details** contains sanitized technical and recovery evidence;
+it never opens automatically. No raw response or credential is displayed.
+
+HomeStack automatically checks its established private credential locations:
+`$XDG_CONFIG_HOME/homestack/secrets/` (default
+`~/.config/homestack/secrets/`), the established `secrets/pangolin.json`, the
+previous wizard credential location and the credential referenced by its durable
+recovery record. It never scans arbitrary home-directory files. File contents,
+not suffixes, determine validity: `pangolin.json` may contain a plain `ID.secret`
+token. Its ID must match the unique remote organization key, and its credential
+must authenticate through the Integration API.
+
+New credentials use `secrets/pangolin-<SHA-256 of server and organization>.key`
+in the established HomeStack configuration directory, independent of the wizard
+metadata directory. Older valid credentials are copied there automatically;
+the source is preserved. Rotation uses a separate collision-safe filename
+containing the previous non-secret key ID; the stable recovery journal points to
+the current credential. Old and rejected secrets remain intact. Unrelated or
+different credential content is never overwritten. Files must be regular,
+current-user owned and mode 0600 or stricter, in private 0700 directories outside
+Git. Descriptor-relative traversal refuses
+symlinks and unsafe ancestors. Exclusive publication, atomic writes and fsync
+protect credentials and recovery metadata. Other processes running as the same
+desktop user can access these files. Secrets never enter TOML, logs, diagnostics,
+command arguments, Git, the VPS or PVE nodes.
+
+The standard 25-action profile is pinned to Pangolin source revision
+`0842e6df53e898759ed05b77086ddd3c673b6149`:
 
 | Area | Actions |
 | --- | --- |
@@ -497,77 +518,58 @@ The exact approved profile is:
 | Resource policies | `getResourcePolicy`, `updateResourcePolicy`, `setResourcePolicyRules` |
 | Resource rules | `createResourceRule`, `listResourceRules`, `updateResourceRule`, `deleteResourceRule` |
 
-This is the standalone tool's established 25-action profile, pinned to Pangolin
-source revision `0842e6df53e898759ed05b77086ddd3c673b6149`. No action IDs are guessed.
-The key is organization-scoped and non-Root. API-key administration, user and
-organization administration, private-resource administration, global system
-operations and service restarts are excluded.
+**Merge** is selected by default and submits `existing ∪ required`, preserving
+manually assigned actions. **Replace** submits only `required`, removing extras.
+Tab, arrows or clicking select the operation; changing selection recalculates
+counts immediately. Enter and mouse activation execute the selected action.
+Focus changes perform no remote writes. Esc returns without executing an action.
+There is no F5 or Apply phase. KEEP counts preserved actions, ADD counts missing
+required actions, and REMOVE counts extras removed by Replace (zero for Merge).
 
-Existing file adoption references the source by default. Selecting Import creates
-a canonical local copy and preserves the source. Paste and creation use
-`integrations/secrets/pangolin/<SHA-256 of server and organization>/homestack.key`
-beneath the configured HomeStack configuration directory. F7 and the approval
-view show the actual absolute path. Credential files are mode 0600 in private
-0700 directories; descriptor-relative traversal refuses symlinks, unsafe ownership,
-unsafe writable ancestors and Git repositories. Credentials are published
-atomically from a durable temporary inode with exclusive creation and fsync;
-existing credential files are never overwritten. Filesystem modes do not isolate
-other processes running under the same desktop account.
+The action setter replaces the entire set. HomeStack reads the complete current
+set for the preview, then rechecks unique key identity, organization and current
+actions immediately before mutation. A changed remote set blocks the write and
+refreshes the preview for another explicit selection. It submits the complete
+result, skips unchanged sets and verifies readback. Merge accepts extra actions
+when all required actions are present. Refresh also completes an already valid
+superset automatically, without rewriting its actions. Failed security checks
+retain the permission comparison so Replace can remove unsafe extra actions.
 
-Tab/Shift+Tab moves focus, Enter activates, and Up/Down navigates the step list
-when navigation is focused. **F4** explains the workflow. **F6** inspects or verifies
-safely; **F7** shows the full profile, destination, missing/extra actions and recovery
-evidence. **F5** prepares only a valid plan and opens a separate approval dialog
-with **Cancel selected by default**. Tab or Space selects Approve; Enter confirms.
-The dialog scrolls with PageUp/PageDown. Mouse controls use the same transitions.
-No remote mutation occurs during inspection, credential verification or planning.
+Create key reserves private storage and records a durable creation barrier before
+sending one `PUT /v1/org/{orgId}/api-key`. It saves the returned credential before
+assigning actions with `POST /v1/org/{orgId}/api-key/{apiKeyId}/actions`, then
+verifies the result. Multiple keys named `homestack` block selection and creation;
+a missing secret never justifies a duplicate.
 
-Before creation, the wizard revalidates Root authorization, organization identity
-and every key page, reserves the secure credential/recovery destinations, obtains
-approval of the organization, scope, profile and path, then checks conflicts again.
-It sends exactly one `PUT /v1/org/{orgId}/api-key` with `{"name":"homestack"}`.
-The separately returned ID and secret form the validated `ID.secret` credential,
-which is persisted before assigning actions with
-`POST /v1/org/{orgId}/api-key/{apiKeyId}/actions`. Complete action readback must
-match the approved set exactly. No write is retried automatically.
+Replace key is credential rotation, separate from permission Replace. It first
+opens a short confirmation explaining that consumers of the old credential may
+lose access, with Cancel selected. Only explicit approval starts rotation. The
+bootstrap key must already have `deleteApiKey`; HomeStack never grants it. Before
+deleting, HomeStack reserves safe credential storage, rechecks the exact unique
+key ID, and durably records the old ID and rotation-requested state. It sends one
+DELETE for that ID and confirms absence before creating, saving, assigning and
+verifying its replacement. Failed or uncertain deletion is never blindly retried
+and cannot trigger duplicate creation. Unsafe storage, unresolved recovery or
+missing delete authorization stops rotation before invalidating the old key.
 
-An existing key with different actions receives a separate replacement plan only
-after its credential is authenticated and its current action set is read completely.
-F7 and confirmation show every addition and removal. The setter replaces the full
-set. Immediately before an approved replacement the wizard rechecks organization,
-unique key identity and the entire previous action set. Correct existing keys
-require no Pangolin mutation.
+Independent verification uses the permanent token through the existing tunnel:
+organization identity, Sites, Resources and domains must be readable. API-key
+listing, action administration and another organization's Sites must each return
+HTTP 403. A 401, 404, timeout or unexpected success does not pass. Unique membership
+in Pangolin's organization/non-Root listing is independently checked with the
+bootstrap credential. Extra permissions that fail a negative authorization check
+are reported as a verification failure, never as least-privilege success. No Site,
+Resource, Target or policy is mutated to exercise permissions.
 
-Independent verification uses the permanent token through the same tunnel:
-organization identity, Site listing, Resource listing and domain metadata must
-succeed. Organization key listing, API-key action administration, and Site listing
-under a random different organization must each return **HTTP 403**. A 401, 404,
-timeout or unexpected success does not pass a negative check. The Root credential
-reads assigned actions and confirms unique membership in the pinned API's filtered
-organization/non-Root key listing. No Site, Resource, Target or policy is mutated
-to test permissions: write capabilities are confirmed through metadata only.
-
-The adjacent `recovery.json` stores only server/organization identity, key name/ID,
-credential path, stage, durable-credential/action-verification flags and UTC time.
-Stages distinguish no mutation, prepared, creation requested/outcome uncertain,
-created without safe persistence, credential saved/actions pending, actions
-verified/independent checks pending, and complete. It is updated atomically with
-fsync. A per-destination advisory lock prevents concurrent HomeStack workers.
-Recovery matches actual persisted credentials and known key IDs; it never creates
-another key after an uncertain request. A crash after secret persistence can be
-recovered even if the metadata update did not finish. If the secret was lost,
-Pangolin cannot recover it: resolve that remote key in a separate reviewed operation.
-Action-assignment failures retain the credential and require another reviewed plan
-if permissions still differ. A distinct continuation plan uses the durable creation
-record and original saved credential for a wizard-created key that still lacks
-read permissions. Imported existing keys must authenticate before a replacement
-plan is offered. Full independent checks remain mandatory after assignment. Cancellation after a possible mutation reports an
-uncertain outcome and waits for the worker's durable recovery evidence.
-
-Completion requires exact organization, unique non-Root key, exact profile, durable
-credential availability and all independent checks. Successful non-secret evidence
-and the credential survive restart. The tunnel does not: reconnect and revalidate
-Steps 5–6 before rechecking Step 7. Server or organization changes invalidate live
-verification and use a separate identity directory without deleting prior secrets
-or remote keys. The temporary Root token remains memory-only and is never revoked
-automatically. Phase 8 final integration verification is not implemented.
+The identity lock and recovery journal stay stable across rotations. Pending
+files are namespaced for each credential beside its destination.
+Recovery metadata contains only identity, key ID, path, stage, timestamps and
+verification flags. Existing wizard recovery records remain readable. Uncertain
+creation or rotation blocks retries; interrupted credential publication is
+recovered only by matching the persisted token and remote key IDs. A wizard-created
+key with saved credentials and incomplete actions can continue through an explicit
+permission action. Original secrets and recovery evidence are retained on failure.
+The bootstrap credential stays in memory and is never revoked automatically.
+Restart requires reconnecting Steps 5–6 and Refresh; historical evidence never
+authorizes network requests. Verification uses synthetic local API responses and
+rendering at 80×24 and 120×36, without production access.

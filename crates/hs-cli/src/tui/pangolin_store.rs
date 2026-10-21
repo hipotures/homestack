@@ -123,17 +123,33 @@ pub(super) struct Storage {
     dir: OwnedFd,
     // Held for the entire operation, including all network requests.
     _lock: File,
+    key: String,
+    pending: String,
+    recovery: String,
 }
 impl Storage {
     pub fn open(path: &Path) -> Result<Self> {
         let (dir, name) = parent(path, true)?;
-        if name != "homestack.key" {
-            return Err(IO.into());
-        }
+        let legacy = name == "homestack.key";
+        let pending = if legacy {
+            "credential.pending".into()
+        } else {
+            format!("{name}.pending")
+        };
+        let recovery = if legacy {
+            "recovery.json".into()
+        } else {
+            format!("{name}.recovery.json")
+        };
+        let lock_name = if legacy {
+            "operation.lock".into()
+        } else {
+            format!("{name}.lock")
+        };
         let lock = File::from(
             fs::openat(
                 &dir,
-                "operation.lock",
+                lock_name.as_str(),
                 OFlags::RDWR | OFlags::CREATE | OFlags::NOFOLLOW | OFlags::CLOEXEC | OFlags::NONBLOCK,
                 Mode::from_raw_mode(0o600),
             )
@@ -149,14 +165,20 @@ impl Storage {
         }
         fs::flock(&lock, FlockOperation::NonBlockingLockExclusive)
             .map_err(|_| "Another HomeStack key operation holds this destination.")?;
-        Ok(Self { dir, _lock: lock })
+        Ok(Self {
+            dir,
+            _lock: lock,
+            key: name,
+            pending,
+            recovery,
+        })
     }
     pub fn load<T: serde::de::DeserializeOwned>(&self) -> Result<Option<T>> {
-        match fs::statat(&self.dir, "recovery.json", AtFlags::SYMLINK_NOFOLLOW) {
+        match fs::statat(&self.dir, self.recovery.as_str(), AtFlags::SYMLINK_NOFOLLOW) {
             Err(rustix::io::Errno::NOENT) => Ok(None),
             Err(_) => Err(IO.into()),
             Ok(_) => {
-                let content = bounded(file(&self.dir, "recovery.json", false)?, 16384)?;
+                let content = bounded(file(&self.dir, self.recovery.as_str(), false)?, 16384)?;
                 serde_json::from_str(&content)
                     .map(Some)
                     .map_err(|_| "Invalid recovery record. Resolve it explicitly before provisioning.".into())
@@ -169,7 +191,7 @@ impl Storage {
         let result = (|| {
             serde_json::to_writer(&mut out, record).map_err(|_| IO)?;
             out.sync_all().map_err(|_| IO)?;
-            fs::renameat(&self.dir, name.as_str(), &self.dir, "recovery.json").map_err(|_| IO)?;
+            fs::renameat(&self.dir, name.as_str(), &self.dir, self.recovery.as_str()).map_err(|_| IO)?;
             fs::fsync(&self.dir).map_err(|_| IO)?;
             Ok(())
         })();
@@ -177,24 +199,24 @@ impl Storage {
         result
     }
     pub fn reserve(&self) -> Result<()> {
-        if fs::statat(&self.dir, "homestack.key", AtFlags::SYMLINK_NOFOLLOW).is_ok() {
+        if fs::statat(&self.dir, self.key.as_str(), AtFlags::SYMLINK_NOFOLLOW).is_ok() {
             return Err("Credential destination already exists; it will never be overwritten.".into());
         }
-        let out = file(&self.dir, "credential.pending", true)?;
+        let out = file(&self.dir, self.pending.as_str(), true)?;
         out.sync_all().map_err(|_| IO)?;
         fs::fsync(&self.dir).map_err(|_| IO)?;
         Ok(())
     }
     pub fn has_credential(&self) -> bool {
-        fs::statat(&self.dir, "homestack.key", AtFlags::SYMLINK_NOFOLLOW).is_ok()
+        fs::statat(&self.dir, self.key.as_str(), AtFlags::SYMLINK_NOFOLLOW).is_ok()
     }
     pub fn has_pending(&self) -> bool {
-        fs::statat(&self.dir, "credential.pending", AtFlags::SYMLINK_NOFOLLOW).is_ok()
+        fs::statat(&self.dir, self.pending.as_str(), AtFlags::SYMLINK_NOFOLLOW).is_ok()
     }
     /// Before mutation only, an empty reservation can safely be released.
     pub fn release(&self) -> Result<()> {
         if self.has_pending() {
-            if file(&self.dir, "credential.pending", false)?
+            if file(&self.dir, self.pending.as_str(), false)?
                 .metadata()
                 .map_err(|_| IO)?
                 .len()
@@ -202,7 +224,7 @@ impl Storage {
             {
                 return Err("Pending credential requires recovery; creation is blocked.".into());
             }
-            fs::unlinkat(&self.dir, "credential.pending", AtFlags::empty()).map_err(|_| IO)?;
+            fs::unlinkat(&self.dir, self.pending.as_str(), AtFlags::empty()).map_err(|_| IO)?;
             fs::fsync(&self.dir).map_err(|_| IO)?;
         }
         Ok(())
@@ -213,7 +235,7 @@ impl Storage {
         let mut out = File::from(
             fs::openat(
                 &self.dir,
-                "credential.pending",
+                self.pending.as_str(),
                 OFlags::WRONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC | OFlags::NONBLOCK,
                 Mode::empty(),
             )
@@ -233,14 +255,14 @@ impl Storage {
         out.sync_all().map_err(|_| IO)?;
         fs::linkat(
             &self.dir,
-            "credential.pending",
+            self.pending.as_str(),
             &self.dir,
-            "homestack.key",
+            self.key.as_str(),
             AtFlags::empty(),
         )
         .map_err(|_| IO)?;
         fs::fsync(&self.dir).map_err(|_| IO)?;
-        fs::unlinkat(&self.dir, "credential.pending", AtFlags::empty()).map_err(|_| IO)?;
+        fs::unlinkat(&self.dir, self.pending.as_str(), AtFlags::empty()).map_err(|_| IO)?;
         fs::fsync(&self.dir).map_err(|_| IO)?;
         Ok(())
     }
@@ -249,29 +271,29 @@ impl Storage {
         if !self.has_pending() {
             return read_credential(path);
         }
-        let pending = path.with_file_name("credential.pending");
+        let pending = path.with_file_name(self.pending.as_str());
         // A crash after linkat leaves two names for the same inode. Verify both before removing one.
-        if let Ok(key) = fs::statat(&self.dir, "homestack.key", AtFlags::SYMLINK_NOFOLLOW) {
-            let temp = fs::statat(&self.dir, "credential.pending", AtFlags::SYMLINK_NOFOLLOW).map_err(|_| IO)?;
+        if let Ok(key) = fs::statat(&self.dir, self.key.as_str(), AtFlags::SYMLINK_NOFOLLOW) {
+            let temp = fs::statat(&self.dir, self.pending.as_str(), AtFlags::SYMLINK_NOFOLLOW).map_err(|_| IO)?;
             if key.st_ino != temp.st_ino || key.st_dev != temp.st_dev {
                 return Err(IO.into());
             }
         } else {
             read_credential(&pending)?;
-            file(&self.dir, "credential.pending", false)?
+            file(&self.dir, self.pending.as_str(), false)?
                 .sync_all()
                 .map_err(|_| IO)?;
             fs::linkat(
                 &self.dir,
-                "credential.pending",
+                self.pending.as_str(),
                 &self.dir,
-                "homestack.key",
+                self.key.as_str(),
                 AtFlags::empty(),
             )
             .map_err(|_| IO)?;
         }
         fs::fsync(&self.dir).map_err(|_| IO)?;
-        fs::unlinkat(&self.dir, "credential.pending", AtFlags::empty()).map_err(|_| IO)?;
+        fs::unlinkat(&self.dir, self.pending.as_str(), AtFlags::empty()).map_err(|_| IO)?;
         fs::fsync(&self.dir).map_err(|_| IO)?;
         read_credential(path)
     }

@@ -822,40 +822,6 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
                 worker.cancel.store(true, Ordering::SeqCst);
             }
         }
-        // Entry always refreshes the key list through the live, owned tunnel.
-        if let Some(Overlay::Pangolin(w)) = app.overlay.as_mut()
-            && w.selected_step == 6
-            && w.permanent.running == 0
-            && !w.permanent.confirm
-            && !w.help_open
-            && !w.report_open
-            && w.permanent_available()
-            && (w.permanent.result.is_none() || !w.permanent_current())
-            && let Some(id) = w.begin_permanent(super::pangolin_permanent::Operation::Inspect)
-        {
-            let endpoint = pangolin_tunnel
-                .as_ref()
-                .filter(|(s, _)| s.id == w.tunnel.id)
-                .zip(w.tunnel_spec())
-                .and_then(|((s, _), spec)| s.live_endpoint(&spec));
-            if let (Some(endpoint), Some(input)) = (endpoint, w.permanent_input(id)) {
-                let cancel = Arc::new(AtomicBool::new(false));
-                pangolin_permanent = Some(super::pangolin::Pending {
-                    id,
-                    cancel: Arc::clone(&cancel),
-                });
-                let sender = updates.clone();
-                tokio::task::spawn_blocking(move || {
-                    let result = super::pangolin_permanent::execute(&endpoint, input, &cancel);
-                    let _ = sender.send(Update::PangolinPermanent(id, result));
-                });
-            } else {
-                w.complete_permanent(
-                    id,
-                    super::pangolin_permanent::Outcome::failed("Live tunnel unavailable. Reconnect Step 5."),
-                );
-            }
-        }
         // A verification never outlives its tunnel session, edit or wizard.
         if let Some(Overlay::Pangolin(w)) = app.overlay.as_mut()
             && w.bootstrap.running != 0
