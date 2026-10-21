@@ -973,7 +973,7 @@ impl App {
             }
             Progress::Done { ok, lines } => {
                 action.hidden = false;
-                Stage::Done { ok, lines }
+                Stage::Done { ok, lines, scroll: 0 }
             }
         };
     }

@@ -1142,7 +1142,8 @@ impl App {
             }
             Scrolls::Action => {
                 if let Some(action) = self.action.as_mut()
-                    && let super::action::Stage::Plan { scroll, .. } = &mut action.stage
+                    && let super::action::Stage::Plan { scroll, .. } | super::action::Stage::Done { scroll, .. } =
+                        &mut action.stage
                 {
                     *scroll = offset;
                 }

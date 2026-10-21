@@ -1035,10 +1035,17 @@ pub async fn run_job(
     if job["state"] == "succeeded" {
         return Ok(job["result"].clone());
     }
-    let message = job["error"]["message"]
+    let mut message = job["error"]["message"]
         .as_str()
         .filter(|message| !message.is_empty())
         .map_or_else(|| format!("Job {id} failed"), str::to_owned);
+    if let Some(log) = job["log"].as_array().filter(|log| !log.is_empty()) {
+        message.push_str("\n\nProxmox task log:\n");
+        for line in log.iter().filter_map(Value::as_str) {
+            message.push_str(line);
+            message.push('\n');
+        }
+    }
     Err(AppError::new(message))
 }
 

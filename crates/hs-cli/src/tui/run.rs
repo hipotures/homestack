@@ -1504,6 +1504,11 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
                         let outcome = if *ok { "done" } else { "failed" };
                         let first = lines.first().cloned().unwrap_or_default();
                         app.log(&clock.now(), &format!("{title}: {outcome}; {first}"));
+                        if !*ok {
+                            for line in lines.iter().skip(1).filter(|line| !line.is_empty()) {
+                                app.log(&clock.now(), line);
+                            }
+                        }
                         decide = None;
                         if let Some(client) = connection.client.clone() {
                             let updates = updates.clone();

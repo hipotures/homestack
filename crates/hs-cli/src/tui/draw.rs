@@ -2420,7 +2420,12 @@ fn action_box(buf: &mut Buffer, area: Rect, app: &App, action: &Action) {
                 push(line, text, &mut lines);
             }
         }
-        Stage::Done { ok, lines: result } => {
+        Stage::Done {
+            ok,
+            lines: result,
+            scroll: offset,
+        } => {
+            scroll = *offset;
             let style = if *ok { text } else { text.fg(palette.error) };
             for line in result {
                 push(line, style, &mut lines);

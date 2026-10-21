@@ -704,6 +704,7 @@ pub enum Stage {
     Done {
         ok: bool,
         lines: Vec<String>,
+        scroll: usize,
     },
 }
 
