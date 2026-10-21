@@ -512,7 +512,7 @@ impl Wizard {
     }
 
     /// Field and action focus is independent of step navigation.
-    pub fn key(&mut self, key: KeyEvent) -> bool {
+    pub fn key(&mut self, mut key: KeyEvent) -> bool {
         if self.api_confirm {
             match key.code {
                 KeyCode::Esc => self.api_confirm = false,
@@ -546,6 +546,14 @@ impl Wizard {
                 _ => {}
             }
             return false;
+        }
+        // Arrow keys follow the active pane; modals keep their scrolling above.
+        if self.focus > 0 {
+            key.code = match key.code {
+                KeyCode::Down => KeyCode::Tab,
+                KeyCode::Up => KeyCode::BackTab,
+                code => code,
+            };
         }
         if self.selected_step == 5 && self.bootstrap_available() && self.bootstrap_key(key) {
             return false;
@@ -715,6 +723,10 @@ impl Wizard {
                 self.testing = false;
                 self.test_id = 0;
             }
+            KeyCode::Esc if self.focus > 0 => {
+                self.focus = 0;
+                self.confirm_discard = false;
+            }
             KeyCode::Esc if !self.has_changes() || self.confirm_discard => return true,
             KeyCode::Esc => {
                 self.confirm_discard = true;
@@ -743,6 +755,7 @@ impl Wizard {
             KeyCode::Tab | KeyCode::Down if self.selected_step == 0 => self.focus = (self.focus + 1) % 3,
             KeyCode::BackTab | KeyCode::Up if self.selected_step == 0 => self.focus = (self.focus + 2) % 3,
             KeyCode::Enter | KeyCode::Right if self.focus == 0 && self.selected_step == 0 => self.focus = 1,
+            KeyCode::Enter if self.selected_step == 0 && self.focus == 1 => self.focus = 2,
             KeyCode::Enter if self.selected_step > 0 => {
                 self.help_open = true;
                 self.help_scroll = 0;

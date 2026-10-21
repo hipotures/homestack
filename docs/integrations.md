@@ -36,6 +36,17 @@ Pangolin discovery, Integration API, API tunnel, Bootstrap API key, HomeStack AP
 key, and Integration verification. The first six stages are implemented;
 stages 7–8 remain locked and cannot execute operations.
 
+Steps 1–6 share the same focus navigation. Enter or Right from the step list
+focuses the selected step's controls. Up/Down selects steps while the list has
+focus and cycles controls while the details have focus, like Tab/Shift+Tab.
+Esc from the details returns focus to the step list without discarding inputs,
+clearing the bootstrap credential or disconnecting the tunnel. Esc from the
+step list leaves the wizard, with confirmation for unsaved server edits.
+Closing a modal or cancelling an operation takes priority over moving focus;
+press Esc again afterward to return to the list. The navigation highlight and
+footer labels follow the active pane. Completing a test keeps the current step
+and focus; Esc from the Test button returns to the step list.
+
 On wide terminals, the step list sits to the left of the selected step's details.
 At 80x24, all eight steps appear above a compact form. Up/Down in the step list
 selects any stage, including locked stages for explanation. Enter or Tab on the

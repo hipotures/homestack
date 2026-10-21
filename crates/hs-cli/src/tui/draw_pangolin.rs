@@ -21,6 +21,8 @@ pub(super) fn screen(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
         || (wizard.selected_step == 3 && wizard.api_available())
         || (wizard.selected_step == 4 && wizard.tunnel_available())
         || (wizard.selected_step == 5 && wizard.bootstrap_available());
+    let escape = if wizard.focus == 0 { "back" } else { "steps" };
+    let arrows = if wizard.focus == 0 { "steps" } else { "focus" };
     let prerequisites = wizard.selected_step == 1;
     let inner = frame(
         buf,
@@ -30,7 +32,7 @@ pub(super) fn screen(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
             top_left: vec![Control::plain("settings / integrations / pangolin")],
             bottom_left: if prerequisites {
                 vec![
-                    Control::named("↑↓", "steps", KeyCode::Down),
+                    Control::named("↑↓", arrows, KeyCode::Down),
                     Control::named("Tab", "focus", KeyCode::Tab).enabled(available),
                     Control::named(
                         "Enter",
@@ -44,7 +46,7 @@ pub(super) fn screen(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
                         Control::named("Pg↓↑", "scroll", KeyCode::PageDown).enabled(available)
                     },
                     Control::named("F4", "help", KeyCode::F(4)),
-                    Control::named("Esc", "back", KeyCode::Esc),
+                    Control::named("Esc", escape, KeyCode::Esc),
                 ]
             } else if wizard.selected_step == 5 && wizard.bootstrap.running != 0 {
                 vec![Control::named("Esc", "cancel", KeyCode::Esc)]
@@ -55,10 +57,10 @@ pub(super) fn screen(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
                     Control::named("F5", "clear", KeyCode::F(5)),
                     Control::named("F6", "verify", KeyCode::F(6)).enabled(wizard.tunnel_connected()),
                     Control::named("F7", "details", KeyCode::F(7)),
-                    Control::named("Esc", "back", KeyCode::Esc),
+                    Control::named("Esc", escape, KeyCode::Esc),
                 ];
                 if area.width >= 100 {
-                    controls.insert(0, Control::named("↑↓", "steps", KeyCode::Down));
+                    controls.insert(0, Control::named("↑↓", arrows, KeyCode::Down));
                 }
                 controls
             } else if wizard.selected_step == 4 && wizard.tunnel.busy() {
@@ -73,42 +75,42 @@ pub(super) fn screen(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
                     Control::named("F6", if connected { "verify" } else { "connect" }, KeyCode::F(6))
                         .enabled(available && !wizard.testing),
                     Control::named("F7", "details", KeyCode::F(7)),
-                    Control::named("Esc", "back", KeyCode::Esc),
+                    Control::named("Esc", escape, KeyCode::Esc),
                 ];
                 if !compact {
-                    controls.insert(0, Control::named("↑↓", "steps", KeyCode::Down));
+                    controls.insert(0, Control::named("↑↓", arrows, KeyCode::Down));
                 }
                 controls
             } else if wizard.selected_step == 3 && wizard.testing {
                 vec![Control::named("Esc", "cancel", KeyCode::Esc)]
             } else if wizard.selected_step == 3 {
                 vec![
-                    Control::named("↑↓", "steps", KeyCode::Down).enabled(!wizard.testing),
+                    Control::named("↑↓", arrows, KeyCode::Down).enabled(!wizard.testing),
                     Control::named("Tab", "focus", KeyCode::Tab).enabled(available && !wizard.testing),
                     Control::named("F4", "help", KeyCode::F(4)),
                     Control::named("F5", "apply", KeyCode::F(5)).enabled(wizard.can_apply_api()),
                     Control::named("F6", "inspect", KeyCode::F(6)).enabled(available && !wizard.testing),
                     Control::named("F7", "details", KeyCode::F(7)).enabled(wizard.api.is_some()),
-                    Control::named("Esc", if wizard.testing { "cancel" } else { "back" }, KeyCode::Esc),
+                    Control::named("Esc", if wizard.testing { "cancel" } else { escape }, KeyCode::Esc),
                 ]
             } else if wizard.selected_step == 2 {
                 vec![
-                    Control::named("↑↓", "steps", KeyCode::Down),
+                    Control::named("↑↓", arrows, KeyCode::Down),
                     Control::named("Tab", "focus", KeyCode::Tab).enabled(available),
                     Control::named("F4", "help", KeyCode::F(4)),
                     Control::named("F6", "discover", KeyCode::F(6)).enabled(available && !wizard.testing),
                     Control::named("F7", "details", KeyCode::F(7)).enabled(wizard.discovery.is_some()),
-                    Control::named("Esc", if wizard.testing { "cancel" } else { "back" }, KeyCode::Esc),
+                    Control::named("Esc", if wizard.testing { "cancel" } else { escape }, KeyCode::Esc),
                 ]
             } else {
                 vec![
-                    Control::named("↑↓", "steps", KeyCode::Down),
+                    Control::named("↑↓", arrows, KeyCode::Down),
                     Control::named("Tab", "focus", KeyCode::Tab).enabled(available),
                     Control::named("F4", "help", KeyCode::F(4)),
                     Control::named("F6", "test", KeyCode::F(6)).enabled(wizard.selected_step == 0 && !wizard.testing),
                     Control::named("F7", "report", KeyCode::F(7))
                         .enabled(wizard.selected_step == 0 && wizard.report.is_some()),
-                    Control::named("Esc", if wizard.testing { "cancel" } else { "back" }, KeyCode::Esc),
+                    Control::named("Esc", if wizard.testing { "cancel" } else { escape }, KeyCode::Esc),
                 ]
             },
             focused: true,
@@ -278,13 +280,15 @@ fn steps(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard, wide: bool) {
             break;
         }
         let chosen = at == wizard.selected_step;
-        let style = if chosen {
+        let style = if chosen && wizard.focus == 0 {
             let style = text.bg(app.palette.selection).add_modifier(Modifier::BOLD);
             if app.palette.no_color {
                 style.add_modifier(Modifier::REVERSED)
             } else {
                 style
             }
+        } else if chosen {
+            text.add_modifier(Modifier::BOLD)
         } else if at > 5
             || (at == 5 && !wizard.bootstrap_available())
             || (at == 4 && !wizard.tunnel_available())
@@ -479,7 +483,10 @@ fn details(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard, wide: bool)
         area.x,
         y,
         area.width,
-        "SSH connection alias / server hostname",
+        &format!(
+            "{}SSH connection alias / server hostname",
+            if wizard.focus == 1 { "▸ " } else { "  " }
+        ),
         if wizard.focus == 1 {
             text.fg(app.palette.focus)
         } else {
@@ -1212,7 +1219,7 @@ fn bootstrap_details(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
             area.x,
             y,
             label,
-            title,
+            &format!("{}{title}", if wizard.focus == control { "▸ " } else { "  " }),
             if wizard.focus == control {
                 text.fg(app.palette.focus)
             } else {
