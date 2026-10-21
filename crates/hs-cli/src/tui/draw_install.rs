@@ -123,7 +123,7 @@ pub(super) fn screen(buf: &mut Buffer, area: Rect, app: &App, install: &Install)
 }
 
 /// The buttons of the stage in the bottom border.
-fn buttons(install: &Install) -> Vec<Control> {
+pub(super) fn buttons(install: &Install) -> Vec<Control> {
     match install.stage {
         Stage::Access if install.failed.is_some() => vec![Control::key("close Esc")],
         Stage::Access if install.connecting() => vec![Control::key("cancel Esc")],

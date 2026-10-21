@@ -615,15 +615,18 @@ impl App {
         herdr.then_some(Request::HerdrTabs)
     }
 
-    /// Open Step 8's deployment over the Pangolin wizard, which stays (with
-    /// its tunnel) underneath; the access that connected last is offered.
-    pub fn open_sites(&mut self) {
+    /// Step 8 uses the saved access host and keeps the live Pangolin tunnel.
+    pub fn sites_install(&self) -> super::install::Install {
         let mut install = super::install::Install::new(super::install::Mode::Sites, false);
         if let Some(host) = self.preferences.table.get("install_host").and_then(toml::Value::as_str) {
             host.clone_into(&mut install.host);
             install.caret = install.host.chars().count();
         }
-        self.install = Some(install);
+        install
+    }
+
+    pub fn open_sites(&mut self) {
+        self.install = Some(self.sites_install());
     }
 
     /// Clear cached cluster state after an install or uninstall finishes; when
@@ -1603,7 +1606,9 @@ impl App {
                 }
             }
             if !wizard.report_open && !wizard.help_open && !wizard.api_confirm {
-                if wizard.selected_step == 7 && key.code == KeyCode::F(6) {
+                if wizard.selected_step == 7
+                    && matches!(key.code, KeyCode::Enter | KeyCode::Right | KeyCode::Tab | KeyCode::F(6))
+                {
                     return wizard.sites_available().then_some(Request::PangolinSites);
                 }
                 if key.code == KeyCode::Esc && wizard.tunnel.busy() {

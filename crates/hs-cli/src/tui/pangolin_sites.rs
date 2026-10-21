@@ -1423,15 +1423,6 @@ impl super::pangolin::Wizard {
             .is_some_and(|s| s.healthy(&self.target, &self.bootstrap.organization))
     }
 
-    /// The last deployment's rows for this server and organization.
-    #[must_use]
-    pub fn sites_deployed(&self) -> &[Deployed] {
-        self.sites
-            .as_ref()
-            .filter(|s| s.target == self.target && s.organization == self.bootstrap.organization)
-            .map_or(&[], |s| s.deployed.as_slice())
-    }
-
     /// Read the summary again after the deployment screen closes.
     pub fn reload_sites(&mut self) {
         self.sites = Summary::load(&self.sites_path());

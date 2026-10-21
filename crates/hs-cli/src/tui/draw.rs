@@ -111,7 +111,13 @@ fn draw_into(buf: &mut Buffer, area: Rect, app: &App) {
         return;
     }
     if let Some(install) = &app.install {
-        super::draw_install::screen(buf, area, app, install);
+        if install.mode == super::install::Mode::Sites
+            && let Some(Overlay::Pangolin(wizard)) = &app.overlay
+        {
+            super::draw_pangolin::screen(buf, area, app, wizard);
+        } else {
+            super::draw_install::screen(buf, area, app, install);
+        }
         if let Some(asking) = &app.asking {
             super::draw_install::asking(buf, area, app, asking);
         }

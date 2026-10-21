@@ -22,7 +22,7 @@ pub(super) fn screen(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
         || (wizard.selected_step == 4 && wizard.tunnel_available())
         || (wizard.selected_step == 5 && wizard.bootstrap_available())
         || (wizard.selected_step == 6 && wizard.permanent_available())
-        || (wizard.selected_step == 7 && wizard.sites_available());
+        || (wizard.selected_step == 7 && (wizard.sites_available() || app.install.is_some()));
     let escape = if wizard.focus == 0 { "back" } else { "steps" };
     let arrows = if wizard.focus == 0 { "steps" } else { "focus" };
     let prerequisites = wizard.selected_step == 1;
@@ -32,7 +32,9 @@ pub(super) fn screen(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
         palette,
         &Sides {
             top_left: vec![Control::plain("settings / integrations / pangolin")],
-            bottom_left: if prerequisites {
+            bottom_left: if let Some(install) = &app.install {
+                super::draw_install::buttons(install)
+            } else if prerequisites {
                 vec![
                     Control::named("↑↓", arrows, KeyCode::Down),
                     Control::named("Tab", "focus", KeyCode::Tab).enabled(available),
@@ -54,7 +56,7 @@ pub(super) fn screen(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
                 vec![
                     Control::named("↑↓", arrows, KeyCode::Down),
                     Control::named("F4", "help", KeyCode::F(4)),
-                    Control::named("F6", "deploy", KeyCode::F(6)).enabled(available),
+                    Control::named("Enter", "configure", KeyCode::Enter).enabled(available),
                     Control::named("F7", "details", KeyCode::F(7)),
                     Control::named("Esc", escape, KeyCode::Esc),
                 ]
@@ -208,6 +210,8 @@ pub(super) fn screen(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
             wizard,
             true,
         );
+    } else if wizard.selected_step == 7 && (wizard.sites_available() || app.install.is_some()) {
+        sites_details(buf, body, app, wizard);
     } else if wizard.selected_step == 6 && wizard.focus > 0 {
         write(
             buf,
@@ -422,7 +426,9 @@ fn steps(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard, wide: bool) {
         if locked {
             write(buf, area.right() - 8, y, 8, "[Locked]", style);
         }
-        chrome::register(Rect::new(area.x, y, area.width, 1), Hit::PangolinStep(at));
+        if app.install.is_none() {
+            chrome::register(Rect::new(area.x, y, area.width, 1), Hit::PangolinStep(at));
+        }
     }
 }
 
@@ -1252,7 +1258,7 @@ fn bootstrap_details(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
             text
         }
     };
-    let label = 17;
+    let label = 19;
     let status = wizard.bootstrap_status();
     let connected = wizard.tunnel_connected();
     let mut y = area.y;
@@ -1392,25 +1398,10 @@ fn bootstrap_details(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
             muted,
         )
     } else if status == "Verified" {
-        let outcome = &wizard.bootstrap_check().map(|c| c.outcome.clone()).unwrap_or_default();
-        let mut lines = format!(
-            "Authorization\n  {:<24}PASS\n  {:<24}PASS\n  {:<24}PASS\n  {:<24}Assigned\n  {:<24}Assigned\n  {:<24}{}\nWrite operations were not executed.",
-            "Root access",
-            "listApiKeys",
-            "listApiKeyActions",
-            "createApiKey",
-            "setApiKeyActions",
-            "Organization",
-            if outcome.organization == Some(true) {
-                "Confirmed"
-            } else {
-                "Not confirmed yet"
-            }
-        );
-        if !outcome.existing.is_empty() {
-            lines.push_str("\nExisting homestack key found; Step 7 will handle it without duplicates.");
-        }
-        (lines, text)
+        (
+            "Bootstrap key verified. HomeStack API key management is ready.".to_owned(),
+            text,
+        )
     } else if !connected {
         (
             format!("Connect the API tunnel in Step 5 before validating the bootstrap key.\n{memory}"),
@@ -1432,7 +1423,7 @@ fn bootstrap_details(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
         )
     } else {
         (
-            format!("Enter the Organization ID and the temporary key, then press F6.\n{memory}"),
+            format!("Enter the Organization ID and the temporary key, select Verify key.\n{memory}"),
             muted,
         )
     };
@@ -1483,6 +1474,25 @@ fn permanent_details(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
         {
             line(row as u16 + 1, label, text);
         }
+        if area.height > 9 {
+            let style = if wizard.focus > 0 {
+                text.fg(app.palette.focus).bg(app.palette.selection)
+            } else {
+                text
+            };
+            write(
+                buf,
+                area.x + 7,
+                area.y + 9,
+                area.width.saturating_sub(7),
+                "[ Verify again ]",
+                style,
+            );
+            chrome::register(
+                Rect::new(area.x + 7, area.y + 9, area.width.saturating_sub(7).min(16), 1),
+                Hit::PangolinPermanent(1),
+            );
+        }
         return;
     }
     let plan = out
@@ -1503,7 +1513,7 @@ fn permanent_details(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
             None => line(
                 1,
                 if wizard.permanent_available() {
-                    "Press F6 Refresh to check the HomeStack API key."
+                    "Check the HomeStack API key."
                 } else {
                     "Verify the connection and bootstrap key in Steps 5–6."
                 },
@@ -1531,6 +1541,7 @@ fn permanent_details(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
             Some(Plan::Permissions { .. }) => vec![(1, "[ Merge ]", !p.replace), (2, "[ Replace ]", p.replace)],
             Some(Plan::Rotate { .. }) => vec![(1, "[ Replace key ]", true)],
             Some(Plan::Create) => vec![(1, "[ Create key ]", true)],
+            None if wizard.permanent_available() => vec![(1, "[ Check API key ]", true)],
             None => vec![],
         }
     };
@@ -1575,70 +1586,45 @@ fn permanent_details(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
 }
 
 fn sites_details(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
-    let text = text_style(&app.palette);
-    let muted = text.fg(app.palette.muted);
-    let mut lines: Vec<(String, Style)> = Vec::new();
-    if !wizard.sites_available() {
-        lines.push((
-            "Locked: connect the API tunnel in Step 5 and save the HomeStack API key in Step 7 first.".to_owned(),
-            muted,
-        ));
-    } else if wizard.sites_deployed().is_empty() {
-        lines.push(("No Site connectors deployed yet.".to_owned(), text));
-        lines.push((String::new(), text));
-        lines.push((
-            "F6 opens the deployment: access, settings, review, deploy.".to_owned(),
-            text,
-        ));
-    } else {
-        lines.push((
-            if wizard.sites_healthy() {
-                "Last deployment: every connector running and online."
-            } else {
-                "Last deployment: not every connector is online."
-            }
-            .to_owned(),
-            text,
-        ));
-        lines.push((String::new(), text));
-        lines.push((
-            format!(
-                "{:<10}{:<20}{:<10}{:<12}{}",
-                "Node", "Site", "CT", "Container", "Pangolin"
+    if !wizard.sites_available() && app.install.is_none() {
+        lines_into(
+            buf,
+            area,
+            "Connect the API tunnel in Step 5 and save the HomeStack API key in Step 7 first.",
+            0,
+            text_style(&app.palette).fg(app.palette.muted),
+        );
+        return;
+    }
+    let preview = app.sites_install();
+    let install = app.install.as_ref().unwrap_or(&preview);
+    let form = Rect::new(
+        area.x,
+        area.y,
+        area.width,
+        area.height.saturating_sub(u16::from(!wizard.message.is_empty())),
+    );
+    super::draw_install::screen(buf, form, app, install);
+    if !wizard.message.is_empty() && area.height > 0 {
+        write(
+            buf,
+            area.x,
+            area.bottom() - 1,
+            area.width,
+            &wizard.message,
+            text_style(&app.palette).fg(app.palette.error),
+        );
+    }
+    if app.install.is_none() {
+        // Activate the inline form before its access keys can connect.
+        chrome::register(
+            Rect::new(
+                form.x + 1,
+                form.y + 1,
+                form.width.saturating_sub(2),
+                form.height.saturating_sub(2),
             ),
-            muted,
-        ));
-        for d in wizard.sites_deployed() {
-            let style = if d.container == "running" && d.connection == "online" {
-                text
-            } else {
-                text.fg(app.palette.error)
-            };
-            lines.push((
-                format!(
-                    "{:<10}{:<20}{:<10}{:<12}{}",
-                    d.node, d.site, d.ctid, d.container, d.connection
-                ),
-                style,
-            ));
-        }
-        lines.push((String::new(), text));
-        lines.push((
-            "Historical result. F6 deploys again: Sites and credentials are reused.".to_owned(),
-            muted,
-        ));
-    }
-    if !wizard.message.is_empty() {
-        lines.push((String::new(), text));
-        lines.push((wizard.message.clone(), text.fg(app.palette.error)));
-    }
-    for (row, (line, style)) in lines.iter().enumerate() {
-        let row = u16::try_from(row + 1).unwrap_or(u16::MAX);
-        if row >= area.height {
-            break;
-        }
-        for (offset, piece) in wrap(line, usize::from(area.width)).iter().take(1).enumerate() {
-            write(buf, area.x, area.y + row + offset as u16, area.width, piece, *style);
-        }
+            Hit::Key(KeyCode::Enter),
+        );
     }
 }

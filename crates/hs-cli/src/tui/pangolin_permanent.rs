@@ -722,13 +722,13 @@ impl Wizard {
             .join(format!("pangolin-{}.key", self.permanent_identity()))
     }
     pub fn permanent_controls(&self) -> Vec<usize> {
-        if self.permanent.running != 0 || self.permanent_verified() || !self.permanent_available() {
+        if self.permanent.running != 0 || !self.permanent_available() {
             return vec![0];
         }
         match self.permanent.result.as_ref().and_then(|r| r.plan.as_ref()) {
             Some(Plan::Permissions { .. }) => vec![0, 1, 2],
             Some(_) => vec![0, 1],
-            None => vec![0],
+            None => vec![0, 1],
         }
     }
     pub fn permanent_counts(&self) -> (usize, usize, usize) {
@@ -770,8 +770,11 @@ impl Wizard {
         if self.permanent.confirm {
             return self.permanent.confirm_yes.then_some(Operation::Apply);
         }
-        if self.focus == 0 || !self.permanent_can_apply() {
+        if self.focus == 0 {
             return None;
+        }
+        if !self.permanent_can_apply() {
+            return self.permanent_available().then_some(Operation::Inspect);
         }
         self.permanent.replace = self.focus == 2;
         if matches!(
