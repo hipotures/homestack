@@ -2,9 +2,8 @@
 //! workspace, loads the catalog, opens one connection (the touch of the
 //! security key is asked in the TUI through the askpass bridge) and keeps
 //! it until setup opens on another workspace, so the box opens again
-//! without a touch; it reads the state and runs what the box asks. An interactive installer and
-//! Herdr's desktop registration get the terminal: the worker asks the TUI
-//! for it and waits.
+//! without a touch; it reads the state and runs what the box asks. Interactive
+//! installers get the terminal; Herdr registration uses the TUI's SSH prompts.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -27,7 +26,6 @@ use crate::setup::plan::Plan;
 use crate::setup::workspace::{LocalWorkspace, Workspace};
 use crate::setup::{Settings, Target};
 use crate::system::{Output, System};
-use crate::touch::Sounds;
 
 /// The terminal, lent to the worker: the TUI shows `banner` once it has
 /// left the screen, sends on `go`, and takes the screen back when `done`
@@ -107,7 +105,8 @@ pub fn with_terminal<T>(tell: &Tell, banner: Vec<String>, operation: impl FnOnce
 pub struct Watcher {
     pub tell: Tell,
     pub cancel: Arc<AtomicBool>,
-    pub sounds: Sounds,
+    pub system: Arc<dyn System>,
+    pub ssh_prefix: Vec<String>,
 }
 
 impl Observer for Watcher {
@@ -127,15 +126,26 @@ impl Observer for Watcher {
         if self.cancelled() {
             return Err(AppError::new("Cancelled before desktop Herdr registration"));
         }
-        let sounds = self.sounds.clone();
-        with_terminal(&self.tell, Vec::new(), || {
-            crate::setup::herdr::register_desktop(argv, &sounds)
-        })
-        .unwrap_or_else(|| {
-            Err(AppError::new(
-                "Desktop Herdr registration cancelled; guest service remains configured",
-            ))
-        })
+        if self.ssh_prefix.is_empty() {
+            return Err(AppError::new(
+                "Desktop Herdr registration needs the TUI SSH prompt bridge; close and reopen setup",
+            ));
+        }
+        let mut command = self.ssh_prefix.clone();
+        command.extend_from_slice(argv);
+        self.system
+            .run_until(&command, &self.cancel, std::time::Duration::from_secs(300))
+            .map_err(|error| {
+                AppError::new(match error.kind() {
+                    std::io::ErrorKind::Interrupted => {
+                        "Desktop Herdr registration cancelled; guest service remains configured"
+                    }
+                    std::io::ErrorKind::TimedOut => {
+                        "Desktop Herdr registration timed out; guest service remains configured"
+                    }
+                    _ => "Could not run desktop Herdr registration; guest service remains configured",
+                })
+            })
     }
 
     fn cancelled(&mut self) -> bool {
@@ -281,7 +291,6 @@ fn run(start: &Start, tell: &Tell, cancel: &Arc<AtomicBool>, commands: &Receiver
         catalog: Box::new(catalog.clone()),
         state,
     });
-    let sounds = Sounds::from_table(start.loaded.client.sounds.as_ref());
     let system = start.system.as_ref();
     while let Ok(command) = commands.recv() {
         match command {
@@ -331,7 +340,8 @@ fn run(start: &Start, tell: &Tell, cancel: &Arc<AtomicBool>, commands: &Receiver
                 let mut watcher = Watcher {
                     tell: Arc::clone(tell),
                     cancel: Arc::clone(cancel),
-                    sounds: sounds.clone(),
+                    system: Arc::clone(&start.system),
+                    ssh_prefix: start.ssh_prefix.clone(),
                 };
                 let result = execute_plan(
                     &session.settings,
