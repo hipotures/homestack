@@ -252,7 +252,18 @@ impl App {
         let fields = match kind {
             Kind::New => {
                 let nodes = self.nodes();
-                let storages = nodes.first().map(|node| self.storages_on(node)).unwrap_or_default();
+                let first_node = self
+                    .gold_node()
+                    .and_then(|gold_node| nodes.iter().position(|node| *node == gold_node))
+                    .unwrap_or(0);
+                let storages = nodes
+                    .get(first_node)
+                    .map(|node| self.storages_on(node))
+                    .unwrap_or_default();
+                let mut node = Field::choice("Node", nodes, "Where the VM is made; ← → or a click on ‹ › to choose.");
+                if let Input::Choice { index, .. } = &mut node.input {
+                    *index = first_node;
+                }
                 let pools = self.pools();
                 let first = self.first_pool(&pools);
                 let mut pool = Field::choice(
@@ -270,7 +281,7 @@ impl App {
                         "",
                         "A letter first, then letters, digits, '.' or '-'; it is also the SSH alias.",
                     ),
-                    Field::choice("Node", nodes, "Where the VM is made; ← → or a click on ‹ › to choose."),
+                    node,
                     Field::choice(
                         "Storage",
                         storages,
