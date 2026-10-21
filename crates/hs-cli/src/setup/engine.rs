@@ -1225,18 +1225,58 @@ fn run_plan(
             }
         }
     }
-    if results.iter().any(|r| r["status"] == json!("blocked")) {
-        observer.activity(None, "Setup stopped during preflight");
+    // Keep each application's installer and configuration together, and
+    // skip dependants of blocked items without blocking unrelated work.
+    let units = application_units(&plan.entries);
+    loop {
+        let mut changed = false;
+        for (_, entries) in &units {
+            let blocked = entries.iter().find_map(|entry| {
+                std::iter::once(entry.id.as_str())
+                    .chain(entry.depends_on.iter().map(String::as_str))
+                    .find_map(|id| results.iter().find(|row| row["id"] == id && row["status"] == "blocked"))
+                    .map(|row| row["label"].as_str().unwrap_or_default().to_owned())
+            });
+            if let Some(blocked) = blocked {
+                for entry in entries {
+                    let row = results
+                        .iter_mut()
+                        .find(|row| row["id"] == entry.id)
+                        .expect("planned result");
+                    if row["status"] != "blocked" {
+                        row["status"] = json!("blocked");
+                        row["detail"] = json!(format!("Skipped because {blocked} did not pass preflight"));
+                        observer.progress(&entry.id, "blocked");
+                        changed = true;
+                    }
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    let active_entries: Vec<Entry> = plan
+        .entries
+        .iter()
+        .filter(|entry| {
+            !results
+                .iter()
+                .any(|row| row["id"] == entry.id && row["status"] == "blocked")
+        })
+        .cloned()
+        .collect();
+    if active_entries.is_empty() {
+        observer.activity(None, "No setup items passed preflight");
         return Ok(());
     }
     let mut backup_paths: Vec<String> = Vec::new();
-    let selected_applications: Vec<&str> = plan
-        .entries
+    let selected_applications: Vec<&str> = active_entries
         .iter()
         .filter(|e| e.application().is_some())
         .map(|e| e.id.as_str())
         .collect();
-    for entry in &plan.entries {
+    for entry in &active_entries {
         backup_paths.extend(backup_paths_for_entry(settings, entry, &states[&entry.id]));
         if let Params::Structured { application, .. } = &entry.params
             && selected_applications.contains(&application.as_str())
@@ -1252,7 +1292,7 @@ fn run_plan(
             }
         }
         observer.activity(None, "Create operation snapshot");
-        let ids: Vec<&str> = plan.entries.iter().map(|e| e.id.as_str()).collect();
+        let ids: Vec<&str> = active_entries.iter().map(|e| e.id.as_str()).collect();
         *snapshot = guest(
             workspace,
             settings,
@@ -1277,7 +1317,7 @@ fn run_plan(
             .iter()
             .filter(|e| e.application().is_some() && !plan.entries.iter().any(|p| p.id == e.id)),
     );
-    for (owner, entries) in application_units(&plan.entries) {
+    for (owner, entries) in application_units(&active_entries) {
         // Documents written in this unit and the digest written.
         let mut applied_configs: Vec<(String, String)> = Vec::new();
         let mut completed_files: HashMap<String, Value> = HashMap::new();

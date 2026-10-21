@@ -1726,6 +1726,11 @@ impl SetupBox {
         {
             let status = if result["ok"] == true {
                 "Setup finished"
+            } else if rows
+                .iter()
+                .any(|row| matches!(row["status"].as_str(), Some("succeeded" | "already-ready")))
+            {
+                "Setup partially completed"
             } else {
                 "Setup stopped"
             };
