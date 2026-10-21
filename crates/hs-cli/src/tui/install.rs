@@ -16,6 +16,8 @@ use crate::install_flow::Answer;
 pub enum Mode {
     Install,
     Uninstall,
+    /// Pangolin Step 8: a Site connector per node (SSH root only).
+    Sites,
 }
 
 impl Mode {
@@ -25,6 +27,7 @@ impl Mode {
         match self {
             Self::Install => &["access", "check", "settings", "review", "install"],
             Self::Uninstall => &["access", "check", "review", "remove"],
+            Self::Sites => &["access", "settings", "review", "deploy"],
         }
     }
 }
@@ -255,6 +258,7 @@ impl Install {
             Mode::Install if self.first_start => "HomeStack install: first setup",
             Mode::Install => "HomeStack reinstall",
             Mode::Uninstall => "HomeStack uninstall",
+            Mode::Sites => "Pangolin Site connectors",
         }
     }
     #[must_use]
@@ -304,6 +308,8 @@ impl Install {
         let at = match (self.stage, self.mode) {
             (Stage::Access, _) => 0,
             (Stage::Check, _) => 1,
+            (Stage::Settings, Mode::Sites) => 1,
+            (Stage::Review, Mode::Sites) => 2,
             (Stage::Settings, _) => 2,
             (Stage::Review, Mode::Install) => 3,
             (Stage::Review, Mode::Uninstall) => 2,
@@ -409,7 +415,7 @@ impl Install {
                 // The install goes straight to its settings (the check stays
                 // in the log and one Esc back); the uninstall shows the check.
                 self.stage = match self.mode {
-                    Mode::Install => Stage::Settings,
+                    Mode::Install | Mode::Sites => Stage::Settings,
                     Mode::Uninstall => Stage::Check,
                 };
             }
@@ -467,6 +473,10 @@ impl Install {
             Stage::Review => self.review_key(code),
             Stage::Run => (false, None),
             Stage::Done => match code {
+                // Back to the Pangolin wizard; root is let go.
+                KeyCode::Enter | KeyCode::Esc if self.ok && self.mode == Mode::Sites => {
+                    (true, Some(Request::Install(Command::Cancel)))
+                }
                 KeyCode::Enter | KeyCode::Esc | KeyCode::Char('o') if self.ok => (true, Some(Request::Installed)),
                 KeyCode::Enter | KeyCode::Esc | KeyCode::Char('b') => {
                     self.stage = Stage::Review;
@@ -523,6 +533,8 @@ impl Install {
                     })),
                 );
             }
+            // Site credentials travel on SSH's standard input: no Herdr pane.
+            KeyCode::Left | KeyCode::Right if self.field == 2 && self.mode == Mode::Sites => {}
             KeyCode::Left | KeyCode::Right if self.field == 2 => {
                 self.method = match self.method {
                     Method::Ssh => Method::Herdr,
@@ -620,7 +632,7 @@ impl Install {
                 self.stage = Stage::Settings;
                 None
             }
-            Mode::Uninstall => {
+            Mode::Uninstall | Mode::Sites => {
                 self.stage = Stage::Review;
                 self.reviewed = false;
                 self.remove_focused = false;
@@ -676,6 +688,11 @@ impl Install {
             }
         }
         match code {
+            KeyCode::Esc | KeyCode::Char('b') if !self.chooser && self.mode == Mode::Sites && !on_domain => {
+                self.stage = Stage::Access;
+                self.found = None;
+                return (false, Some(Request::Install(Command::Cancel)));
+            }
             KeyCode::Esc if !self.chooser => self.stage = Stage::Check,
             KeyCode::Esc => self.chooser = false,
             KeyCode::Char('r') if !on_domain => return self.settings_key(KeyCode::Enter),
@@ -750,10 +767,16 @@ impl Install {
     fn review_key(&mut self, code: KeyCode) -> (bool, Option<Request>) {
         let ready = self.reviewed && self.problems.is_empty();
         match (self.mode, code) {
-            (Mode::Install, KeyCode::Esc) => self.stage = Stage::Settings,
+            (Mode::Install | Mode::Sites, KeyCode::Esc) => self.stage = Stage::Settings,
             (Mode::Uninstall, KeyCode::Esc) => self.stage = Stage::Check,
             (_, KeyCode::Down) => self.scroll += 1,
             (_, KeyCode::Up) => self.scroll = self.scroll.saturating_sub(1),
+            (Mode::Sites, KeyCode::Enter | KeyCode::Char('d')) if ready => {
+                self.stage = Stage::Run;
+                self.lines.clear();
+                return (false, Some(Request::Install(Command::Apply)));
+            }
+            (Mode::Sites, KeyCode::Char('b')) => self.stage = Stage::Settings,
             (Mode::Install, KeyCode::Enter | KeyCode::Char('i')) if ready => {
                 self.stage = Stage::Run;
                 self.lines.clear();

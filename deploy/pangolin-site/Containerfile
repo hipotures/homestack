@@ -1,0 +1,20 @@
+# The Pangolin Site connector image (homestack-pangolin-site): Pangolin CLI
+# in Site mode under runit, with no credentials. HomeStack creates an
+# unprivileged LXC from it on each selected node and then writes that node's
+# own Site credential through `pct exec` standard input
+# (homestack-site-credential). Built and published by
+# .github/workflows/ci.yml for tags pangolin-site-X.Y.Z.
+FROM docker.io/library/alpine:3.24.2
+ARG PANGOLIN_CLI_VERSION=0.18.1
+ARG PANGOLIN_CLI_SHA256=07ae60ba0da7f3d25da6b78b76f0f2f40069605c2c52340f2f364e3cef72053f
+RUN apk add --no-cache ca-certificates runit \
+    && wget -q -O /usr/local/bin/pangolin-cli \
+       "https://github.com/fosrl/cli/releases/download/${PANGOLIN_CLI_VERSION}/pangolin-cli_linux_amd64" \
+    && echo "${PANGOLIN_CLI_SHA256}  /usr/local/bin/pangolin-cli" | sha256sum -c - \
+    && chmod 0755 /usr/local/bin/pangolin-cli \
+    && adduser -S -D -H -h /var/lib/pangolin-site -s /sbin/nologin site \
+    && install -d -m 0700 -o site -g nogroup /var/lib/pangolin-site
+COPY homestack-site-credential /usr/local/bin/homestack-site-credential
+COPY service /etc/service
+STOPSIGNAL SIGTERM
+ENTRYPOINT ["runsvdir", "-P", "/etc/service"]

@@ -124,6 +124,24 @@ impl Root for SshRoot {
         })
     }
 
+    fn run_input(&mut self, command: &str, input: &str) -> Result<Output, InstallError> {
+        let mut argv = vec!["ssh".to_owned()];
+        argv.extend(self.master.child_options());
+        argv.extend([self.target.clone(), command.to_owned()]);
+        let output = self
+            .system
+            .run_input(&argv, input)
+            .map_err(|error| InstallError::failed(format!("Could not run ssh: {error}")))?;
+        if output.code == 255 {
+            return Err(InstallError::failed(format!("ssh to {} failed", self.target)));
+        }
+        Ok(Output {
+            code: output.code,
+            stdout: output.stdout,
+            stderr: output.stderr,
+        })
+    }
+
     fn describe(&self) -> String {
         format!("ssh {}", self.target)
     }

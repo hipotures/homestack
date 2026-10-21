@@ -24,6 +24,7 @@ pub use plan::{Action, Cluster, Plan, Step, make_plan, questions};
 pub use probe::{Access, Node, Topology, probe};
 pub use root::{LocalShell, Output, Root};
 pub use settings::{Command, Settings};
+pub use snippets::node_command;
 
 /// Why an install or uninstall did not go on.
 #[derive(Debug, Clone, PartialEq, Eq)]

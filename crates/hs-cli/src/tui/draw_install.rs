@@ -134,7 +134,7 @@ fn buttons(install: &Install) -> Vec<Control> {
         ],
         Stage::Check => vec![
             Control::key(match install.mode {
-                Mode::Install => "&Settings Enter",
+                Mode::Install | Mode::Sites => "&Settings Enter",
                 Mode::Uninstall => "&Review Enter",
             }),
             Control::key("back Esc"),
@@ -152,6 +152,11 @@ fn buttons(install: &Install) -> Vec<Control> {
                     Control::key("&Install Enter").enabled(ready),
                     Control::key("back Esc"),
                 ],
+                Mode::Sites => vec![
+                    Control::key("scroll ↑↓"),
+                    Control::key("&Deploy Enter").enabled(ready),
+                    Control::key("back Esc"),
+                ],
                 Mode::Uninstall => {
                     let (remove, cancel) = if install.remove_focused {
                         ("▶Remove Enter", "cancel")
@@ -163,6 +168,7 @@ fn buttons(install: &Install) -> Vec<Control> {
             }
         }
         Stage::Run => vec![Control::key("stop Esc").muted()],
+        Stage::Done if install.ok && install.mode == Mode::Sites => vec![Control::key("close Enter")],
         Stage::Done if install.ok => vec![Control::key("&Open HomeStack Enter"), Control::key("&Quit")],
         Stage::Done => vec![Control::key("&back to the review Enter or Esc"), Control::key("&Quit")],
     }
@@ -192,6 +198,10 @@ fn access(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
             "Root on one node is needed again to remove what HomeStack made in Proxmox. Nothing changes until \
              you press Remove in the review step; no VM, container or volume is ever removed."
         }
+        Mode::Sites => {
+            "Root on one node over SSH reads the cluster and hands each connector its own Site credential on \
+             standard input. Nothing changes in Pangolin or Proxmox until you press Deploy in the review step."
+        }
     };
     let mut y = inner.y + 1;
     y += u16::try_from(paragraph(buf, inner, y, intro, text)).unwrap_or(0) + 1;
@@ -215,7 +225,11 @@ fn access(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
         x + 28,
         y,
         width.saturating_sub(28),
-        "↑ then ← →: SSH or a Herdr pane",
+        if install.mode == Mode::Sites {
+            "SSH only: credentials never pass through a pane"
+        } else {
+            "↑ then ← →: SSH or a Herdr pane"
+        },
         muted,
     );
     y += 2;
@@ -687,6 +701,8 @@ fn done(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
         (true, Mode::Uninstall) => ("HomeStack is removed from Proxmox.", text.fg(palette.ok)),
         (false, Mode::Install) => ("The install did not finish.", text.fg(palette.error)),
         (false, Mode::Uninstall) => ("The uninstall did not finish.", text.fg(palette.error)),
+        (true, Mode::Sites) => ("Every Site connector runs and is online.", text.fg(palette.ok)),
+        (false, Mode::Sites) => ("The Site connectors are not all online.", text.fg(palette.error)),
     };
     write(buf, x, inner.y + 1, width, heading, style.add_modifier(Modifier::BOLD));
     let mut row = 3;

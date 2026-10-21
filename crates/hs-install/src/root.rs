@@ -31,6 +31,17 @@ pub trait Root {
     /// Run `command` (one shell command line) as root on the node.
     fn run(&mut self, command: &str) -> Result<Output, InstallError>;
 
+    /// Run `command` with `input` on its standard input: a secret reaches
+    /// the node without appearing in a command line, a pane or a log. Only
+    /// an access with a private channel (SSH) can do it.
+    fn run_input(&mut self, command: &str, input: &str) -> Result<Output, InstallError> {
+        let _ = (command, input);
+        Err(InstallError::failed(format!(
+            "{} cannot pass a secret privately; reach root over SSH",
+            self.describe()
+        )))
+    }
+
     /// A secret has just been shown on the access: remove its traces (the
     /// screen and scrollback of a pane). Nothing to do over SSH.
     fn forget_screen(&mut self) {}

@@ -21,7 +21,8 @@ pub(super) fn screen(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
         || (wizard.selected_step == 3 && wizard.api_available())
         || (wizard.selected_step == 4 && wizard.tunnel_available())
         || (wizard.selected_step == 5 && wizard.bootstrap_available())
-        || (wizard.selected_step == 6 && wizard.permanent_available());
+        || (wizard.selected_step == 6 && wizard.permanent_available())
+        || (wizard.selected_step == 7 && wizard.sites_available());
     let escape = if wizard.focus == 0 { "back" } else { "steps" };
     let arrows = if wizard.focus == 0 { "steps" } else { "focus" };
     let prerequisites = wizard.selected_step == 1;
@@ -47,6 +48,14 @@ pub(super) fn screen(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
                         Control::named("Pg↓↑", "scroll", KeyCode::PageDown).enabled(available)
                     },
                     Control::named("F4", "help", KeyCode::F(4)),
+                    Control::named("Esc", escape, KeyCode::Esc),
+                ]
+            } else if wizard.selected_step == 7 {
+                vec![
+                    Control::named("↑↓", arrows, KeyCode::Down),
+                    Control::named("F4", "help", KeyCode::F(4)),
+                    Control::named("F6", "deploy", KeyCode::F(6)).enabled(available),
+                    Control::named("F7", "details", KeyCode::F(7)),
                     Control::named("Esc", escape, KeyCode::Esc),
                 ]
             } else if wizard.selected_step == 6 {
@@ -333,7 +342,8 @@ fn steps(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard, wide: bool) {
             || (at == 3 && wizard.api_status() == "Verified")
             || (at == 4 && wizard.tunnel_connected())
             || (at == 5 && wizard.bootstrap_verified())
-            || (at == 6 && wizard.permanent_verified());
+            || (at == 6 && wizard.permanent_verified())
+            || (at == 7 && wizard.sites_healthy());
         let failed = (at == 5 && wizard.bootstrap_available() && wizard.bootstrap_status() == "Failed")
             || (at == 4
                 && wizard.tunnel_available()
@@ -358,7 +368,7 @@ fn steps(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard, wide: bool) {
         } else {
             " "
         };
-        let locked = at > 6
+        let locked = (at == 7 && !wizard.sites_available())
             || (at == 6 && !wizard.permanent_available())
             || (at == 5 && !wizard.bootstrap_available())
             || (at == 4 && !wizard.tunnel_available())
@@ -433,6 +443,15 @@ fn details(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard, wide: bool)
     }
     if wizard.selected_step == 6 {
         permanent_details(
+            buf,
+            Rect::new(area.x, y, area.width, area.bottom().saturating_sub(y)),
+            app,
+            wizard,
+        );
+        return;
+    }
+    if wizard.selected_step == 7 {
+        sites_details(
             buf,
             Rect::new(area.x, y, area.width, area.bottom().saturating_sub(y)),
             app,
@@ -853,7 +872,9 @@ fn modal(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
     let title = if wizard.help_open {
         format!("help · {}. {}", wizard.selected_step + 1, STAGES[wizard.selected_step])
     } else {
-        if wizard.selected_step == 6 {
+        if wizard.selected_step == 7 {
+            "Pangolin Sites report"
+        } else if wizard.selected_step == 6 {
             "HomeStack API key details"
         } else if wizard.selected_step == 5 {
             "Bootstrap API key report"
@@ -887,6 +908,8 @@ fn modal(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
     );
     let (content, scroll) = if wizard.help_open {
         (HELP[wizard.selected_step].to_owned(), wizard.help_scroll)
+    } else if wizard.selected_step == 7 {
+        (wizard.sites_report(app.utc_offset), wizard.report_scroll)
     } else if wizard.selected_step == 6 {
         (wizard.permanent_report(), wizard.report_scroll)
     } else if wizard.selected_step == 5 {
@@ -1532,6 +1555,75 @@ fn permanent_details(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
                     );
                 }
             }
+        }
+    }
+}
+
+fn sites_details(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
+    let text = text_style(&app.palette);
+    let muted = text.fg(app.palette.muted);
+    let mut lines: Vec<(String, Style)> = Vec::new();
+    if !wizard.sites_available() {
+        lines.push((
+            "Locked: connect the API tunnel in Step 5 and save the HomeStack API key in Step 7 first.".to_owned(),
+            muted,
+        ));
+    } else if wizard.sites_deployed().is_empty() {
+        lines.push(("No Site connectors deployed yet.".to_owned(), text));
+        lines.push((String::new(), text));
+        lines.push((
+            "F6 opens the deployment: access, settings, review, deploy.".to_owned(),
+            text,
+        ));
+    } else {
+        lines.push((
+            if wizard.sites_healthy() {
+                "Last deployment: every connector running and online."
+            } else {
+                "Last deployment: not every connector is online."
+            }
+            .to_owned(),
+            text,
+        ));
+        lines.push((String::new(), text));
+        lines.push((
+            format!(
+                "{:<10}{:<20}{:<10}{:<12}{}",
+                "Node", "Site", "CT", "Container", "Pangolin"
+            ),
+            muted,
+        ));
+        for d in wizard.sites_deployed() {
+            let style = if d.container == "running" && d.connection == "online" {
+                text
+            } else {
+                text.fg(app.palette.error)
+            };
+            lines.push((
+                format!(
+                    "{:<10}{:<20}{:<10}{:<12}{}",
+                    d.node, d.site, d.ctid, d.container, d.connection
+                ),
+                style,
+            ));
+        }
+        lines.push((String::new(), text));
+        lines.push((
+            "Historical result. F6 deploys again: Sites and credentials are reused.".to_owned(),
+            muted,
+        ));
+    }
+    if !wizard.message.is_empty() {
+        lines.push((String::new(), text));
+        lines.push((wizard.message.clone(), text.fg(app.palette.error)));
+    }
+    for (row, (line, style)) in lines.iter().enumerate() {
+        let row = u16::try_from(row + 1).unwrap_or(u16::MAX);
+        if row >= area.height {
+            break;
+        }
+        for (offset, piece) in wrap(line, usize::from(area.width)).iter().take(1).enumerate() {
+            write(buf, area.x, area.y + row + offset as u16, area.width, piece, *style);
         }
     }
 }

@@ -3,7 +3,7 @@ name: Checks and API release
 on:
   push:
     branches: ['**']
-    tags: ['[0-9]+.[0-9]+.[0-9]+']
+    tags: ['[0-9]+.[0-9]+.[0-9]+', 'pangolin-site-[0-9]+.[0-9]+.[0-9]+']
   pull_request:
   workflow_dispatch:
 
@@ -39,7 +39,7 @@ jobs:
   # Publish immutable API releases, e.g. homestack-server:0.2.0.
   image:
     needs: check
-    if: github.event_name == 'push' && github.ref_type == 'tag'
+    if: github.event_name == 'push' && github.ref_type == 'tag' && !startsWith(github.ref_name, 'pangolin-site-')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -85,6 +85,42 @@ jobs:
           file: deploy/image/Containerfile
           push: true
           tags: ghcr.io/hipotures/homestack-server:${{ steps.tag.outputs.tag }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/hipotures/homestack
+            org.opencontainers.image.version=${{ steps.tag.outputs.tag }}
+            org.opencontainers.image.revision=${{ github.sha }}
+
+  # Publish immutable Pangolin Site connector releases, e.g.
+  # homestack-pangolin-site:0.1.0 from tag pangolin-site-0.1.0. A separate
+  # tag prefix keeps them from ever replacing an API release.
+  site-image:
+    needs: check
+    if: github.event_name == 'push' && github.ref_type == 'tag' && startsWith(github.ref_name, 'pangolin-site-')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Image tag
+        id: tag
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          [[ "$RELEASE_TAG" =~ ^pangolin-site-((0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*))$ ]]
+          echo "tag=${BASH_REMATCH[1]}" >> "$GITHUB_OUTPUT"
+      - uses: docker/login-action@v3.4.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6.18.0
+        with:
+          context: deploy/pangolin-site
+          file: deploy/pangolin-site/Containerfile
+          push: true
+          tags: ghcr.io/hipotures/homestack-pangolin-site:${{ steps.tag.outputs.tag }}
           labels: |
             org.opencontainers.image.source=https://github.com/hipotures/homestack
             org.opencontainers.image.version=${{ steps.tag.outputs.tag }}

@@ -516,6 +516,7 @@ fn start(request: &Request, client: Option<&Arc<Client>>, ctx: &Context, updates
         | Request::StopPangolinTunnel(_)
         | Request::VerifyPangolinKey(_)
         | Request::PangolinPermanent(_)
+        | Request::PangolinSites
         | Request::CopyJson
         | Request::Act(_)
         | Request::Decide(_)
@@ -599,6 +600,8 @@ struct Installing {
     pending: Option<crate::askpass::Question>,
     server_domain: Option<String>,
     server_image: Option<String>,
+    /// Sites mode: what the Pangolin wizard hands the worker.
+    sites: Option<super::pangolin_sites::Context>,
 }
 
 impl Installing {
@@ -671,6 +674,7 @@ impl Installing {
             server_image: self.server_image.clone(),
             server_domain: self.server_domain.clone(),
             handle: tokio::runtime::Handle::current(),
+            sites: (mode == Mode::Sites).then(|| self.sites.clone()).flatten(),
         };
         let (sender, receiver) = std::sync::mpsc::channel();
         let updates = updates.clone();
@@ -949,6 +953,22 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
                             if let Some(question)=pangolin_question.take(){app.ask_ended(question.id);question.answer(None);}
                             pangolin_tunnel=None;
                             if let Some(Overlay::Pangolin(w))=app.overlay.as_mut(){w.end_tunnel(if cancelled{super::pangolin_tunnel::State::Cancelled}else{super::pangolin_tunnel::State::Disconnected});}
+                        }
+                        Request::PangolinSites => {
+                            let Some(Overlay::Pangolin(w)) = app.overlay.as_ref() else { continue };
+                            let endpoint = pangolin_tunnel.as_ref().filter(|(s, _)| s.id == w.tunnel.id).zip(w.tunnel_spec()).and_then(|((s, _), spec)| s.live_endpoint(&spec));
+                            match endpoint.and_then(|endpoint| w.sites_context(endpoint)) {
+                                Some(context) => {
+                                    installing.send(Command::Cancel, &mut app, ctx, &updates);
+                                    installing.sites = Some(context);
+                                    app.open_sites();
+                                }
+                                None => {
+                                    if let Some(Overlay::Pangolin(w)) = app.overlay.as_mut() {
+                                        w.message = "Live tunnel unavailable. Reconnect Step 5.".to_owned();
+                                    }
+                                }
+                            }
                         }
                         Request::PangolinPermanent(id) => {
                             let Some(Overlay::Pangolin(w)) = app.overlay.as_mut() else { continue };

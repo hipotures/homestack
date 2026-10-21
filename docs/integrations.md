@@ -28,13 +28,13 @@ the Spaceship and TSIG files in the same directory by default; explicit
 `homestack-deploy` uses the credential paths explicitly saved in its deployment
 configuration. `tui.toml` contains interface preferences, not integration data.
 
-## Pangolin setup wizard: Steps 1–7
+## Pangolin setup wizard: Steps 1–8
 
 Open **Settings > Integrations > Remote Access > Pangolin** to enter the setup
 wizard. All eight stages are shown: Pangolin server, Pangolin prerequisites,
 Pangolin discovery, Integration API, API tunnel, Bootstrap API key, HomeStack API
-key, and Integration verification. The first seven stages are implemented;
-stage 8 remains locked and cannot execute operations.
+key, and Pangolin Sites. All eight stages are implemented; Step 8 deploys the
+Site connectors through the installer screens.
 
 Steps 1–7 share the same focus navigation. Enter or Right from the step list
 focuses the selected step's controls. Up/Down selects steps while the list has
@@ -53,8 +53,7 @@ selects any stage, including locked stages for explanation. Enter or Tab on the
 first stage moves to the **SSH connection alias / server hostname** field;
 Tab/BackTab move between navigation, field and Test. F4 opens a scrollable
 contextual help panel for the selected stage; Esc closes it without leaving the
-wizard. Help is available for all eight stages. Unimplemented stages have no execution
-controls. The field accepts
+wizard. Help is available for all eight stages. The field accepts
 an OpenSSH alias, hostname, IP address or `user@host`; it never assumes `root`.
 OpenSSH resolves the user's existing configuration, including user, port,
 identities, proxy settings and hardware authentication. There are no embedded
@@ -383,7 +382,7 @@ API consumers obtain the current endpoint from the owned runtime
 association, verified session state and actual child liveness; it returns no
 endpoint while verifying, after failure, or for a changed configuration. No new
 tunnel is needed per API operation. Steps 6–7 use this live session for bootstrap
-validation and permanent-key adoption or provisioning. Step 8 remains unimplemented.
+validation and permanent-key adoption or provisioning; Step 8 uses it for Sites.
 
 The implementation requires Linux/Unix process groups, OpenSSH multiplexed
 forwarding and the existing `setsid`/askpass infrastructure. A short local-port
@@ -452,7 +451,7 @@ successful summary are saved atomically in the existing private
 `integrations/pangolin.toml`; no separate credential store is created. Restart
 restores historical information with an empty token and disconnected tunnel.
 Progress reaches **6/8** with current successful bootstrap validation and a connected
-tunnel, then **7/8** after Step 7 succeeds. Phase 8 remains unimplemented.
+tunnel, then **7/8** after Step 7 succeeds and **8/8** after a Step 8 deployment ends healthy.
 
 Verification uses synthetic local API responses and disposable tunnel processes;
 it does not establish compatibility with every Pangolin deployment or replace
@@ -468,7 +467,7 @@ Step 5 tunnel, using the currently verified Step 6 bootstrap key. Every operatio
 rechecks bootstrap authorization and organization identity. A valid, saved key
 with all required actions and passing security checks completes the step
 automatically, advancing progress to **7/8**. Returning to the step preserves its current result; Refresh explicitly
-revalidates it. Step 8 remains locked.
+revalidates it. Step 8 uses the saved key without the bootstrap key.
 
 The main screen shows one state and the relevant action only:
 
@@ -575,3 +574,90 @@ The bootstrap credential stays in memory and is never revoked automatically.
 Restart requires reconnecting Steps 5–6 and Refresh; historical evidence never
 authorizes network requests. Verification uses synthetic local API responses and
 rendering at 80×24 and 120×36, without production access.
+
+### Step 8: Pangolin Site connectors
+
+Step 8 deploys one independent Pangolin Site connector per selected Proxmox
+node: node `pve1` gets Site `pangolin-pve1` and one LXC container on `pve1`, and
+so on. It is available once the Step 5 tunnel is connected, the organization is
+known from Step 6 and Step 7 has saved the permanent organization key; the
+temporary Root bootstrap key is not needed. Entering the step changes nothing.
+**F6 deploy** opens the existing installer screen in a Sites mode with the same
+layout, keys and mouse handling: **access › settings › review › deploy**. The
+wizard and its tunnel stay underneath; Esc or Enter on the result returns to it.
+
+**Access** reaches root on one node over SSH, as `homestack install` does,
+including hardware-key touches. Herdr panes are not offered: Site credentials
+travel on SSH standard input, which a pane would display. **Settings** lists the
+online nodes (all ticked by default), the connector disk storages, the image
+storage and the network bridge, starting from the install's own choices
+(`install-draft.toml`), and the Pangolin URL, the dashboard address the
+connectors connect to (`https://host`, prefilled from the Step 1 host name or the
+previous run). F5 rescans the cluster. **Review** is read-only and shows, per
+node, whether the Site is reused or created, whether the container is kept,
+started, created or recreated, which image downloads happen and what is left
+unchanged, with blocking problems listed first. **Deploy** rechecks that nothing
+changed since the review, then streams its progress; the result lists each node,
+Site, CTID, container status and connection status.
+
+All Pangolin requests use the saved Step 7 key through the Step 5 tunnel:
+`GET /v1/org/{orgId}`, `GET /v1/org/{orgId}/sites` (every page with `page` and
+`pageSize`), `GET /v1/org/{orgId}/site/{niceId}` and `PUT /v1/org/{orgId}/site`
+with `type: "newt"`, the deterministic name and nice ID and a client-supplied
+`newtId` and `secret` (Pangolin source revision
+`0842e6df53e898759ed05b77086ddd3c673b6149`). Creating Sites exposes nothing;
+Resources and Targets remain separate.
+
+Each Site's credential (`newtId.secret`) is generated on this desktop and saved
+under `$XDG_CONFIG_HOME/homestack/secrets/`
+(`pangolin-site-<SHA-256 of server and organization>-<node>.key`, mode 0600,
+exclusive publication, fsync) together with a non-secret journal
+(`…key.recovery.json`: organization, node, nice ID, Newt ID, Site ID, CTID,
+stage) before Pangolin hears of it. The journal records the creation request
+first, so an interrupted creation is resolved by looking the Site up by nice ID
+and Newt ID: it is adopted or created again with the same credential, never
+duplicated. Every node has its own credential. A Site that exists without its
+local credential, or with another Newt ID, stops that node without changes;
+rotation is a separate operation and never part of a deployment.
+
+Containers are made with the deploy token from `deploy.toml`, exactly as the API
+servers: `oci-registry-pull` into the chosen image storage, an unprivileged
+container in the `homestack-service` pool with `onboot`, the sizes of
+`deploy.toml`, `net0` on the chosen bridge with DHCP, tag
+`homestack-pangolin-site` and a description naming organization, Site and image
+(no credential). CTIDs are the lowest free ones cluster-wide, read through root,
+and are kept in the journal. Only a container that carries the tag, the expected
+name and node, a matching description and is visible to the deploy token is
+treated as managed; anything else stops that node. A managed container with
+another image or network is recreated with its MAC address kept. The container
+list of the main screen does not count connectors as HomeStack servers.
+
+The credential reaches only its own container: `pct exec <ctid> --
+homestack-site-credential` runs on the node (through the node's own root SSH for
+other nodes) with the configuration on standard input. Inside, it is written
+atomically to `/var/lib/pangolin-site/site.json`, mode 0600, owned by the
+unprivileged `site` account that runs the connector. HomeStack compares only its
+SHA-256 (`--digest`) and reinstalls it when it differs, for example after
+recreation. It never enters the image, Git, Proxmox descriptions or environment,
+command lines, logs or progress messages, and no SSH key is copied to Proxmox.
+
+Repeated deployment is idempotent: existing Sites, credentials and healthy
+containers are reused and need no changes; a stopped container is started; a
+running container whose Site is offline is restarted. Success requires every
+selected container to run in Proxmox and its Site to report `online: true` in the
+Site listing, polled every 5 seconds for up to 180 seconds; container and
+connection status are reported separately. A failure on one node does not stop
+the others; deploying again reuses everything already done. Unselected nodes,
+other Sites and every other guest and volume are left alone. The non-secret
+choices and the last result are kept in `integrations/pangolin-sites.toml`; F7
+shows them as a historical result.
+
+The connector image `ghcr.io/hipotures/homestack-pangolin-site` is built from
+`deploy/pangolin-site/`: Alpine with runit and the pinned Pangolin CLI release
+(SHA-256 checked) running `pangolin-cli up site` as `site`, reading only its
+private configuration file, with self-update and SSH features disabled. It has
+no credentials, health server or extra capabilities. Its releases are separate
+from the API image: a `pangolin-site-X.Y.Z` tag publishes
+`homestack-pangolin-site:X.Y.Z`, and the image reference HomeStack deploys is
+pinned in `crates/hs-cli/src/tui/pangolin_sites.rs`.
+

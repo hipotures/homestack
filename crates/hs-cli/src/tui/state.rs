@@ -59,6 +59,8 @@ pub enum Request {
     /// Verify the bootstrap key of this run; the secret stays in the wizard.
     VerifyPangolinKey(u64),
     PangolinPermanent(u64),
+    /// Open Step 8's deployment screen with the wizard's live tunnel.
+    PangolinSites,
     Quit,
 }
 
@@ -611,6 +613,17 @@ impl App {
         }
         self.install = Some(install);
         herdr.then_some(Request::HerdrTabs)
+    }
+
+    /// Open Step 8's deployment over the Pangolin wizard, which stays (with
+    /// its tunnel) underneath; the access that connected last is offered.
+    pub fn open_sites(&mut self) {
+        let mut install = super::install::Install::new(super::install::Mode::Sites, false);
+        if let Some(host) = self.preferences.table.get("install_host").and_then(toml::Value::as_str) {
+            host.clone_into(&mut install.host);
+            install.caret = install.host.chars().count();
+        }
+        self.install = Some(install);
     }
 
     /// Clear cached cluster state after an install or uninstall finishes; when
@@ -1563,10 +1576,14 @@ impl App {
         }
         if let Some(install) = self.install.as_mut() {
             let before = install.stage;
+            let sites = install.mode == super::install::Mode::Sites;
             let (close, request) = install.key(key.code);
             let after = install.stage;
             if close {
                 self.install = None;
+                if sites && let Some(Overlay::Pangolin(wizard)) = self.overlay.as_mut() {
+                    wizard.reload_sites();
+                }
             }
             if before != after {
                 let time = self.clock.clone();
@@ -1586,6 +1603,9 @@ impl App {
                 }
             }
             if !wizard.report_open && !wizard.help_open && !wizard.api_confirm {
+                if wizard.selected_step == 7 && key.code == KeyCode::F(6) {
+                    return wizard.sites_available().then_some(Request::PangolinSites);
+                }
                 if key.code == KeyCode::Esc && wizard.tunnel.busy() {
                     return Some(Request::StopPangolinTunnel(true));
                 }

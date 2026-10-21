@@ -702,7 +702,7 @@ impl Wizard {
             .join(self.permanent_identity())
             .join("homestack.key")
     }
-    fn permanent_identity(&self) -> String {
+    pub(super) fn permanent_identity(&self) -> String {
         use sha2::{Digest, Sha256};
         Sha256::digest(format!("{}\0{}", self.target, self.bootstrap.organization).as_bytes())
             .iter()

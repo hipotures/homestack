@@ -173,6 +173,8 @@ pub struct NewContainer<'a> {
     pub net0: String,
     pub nameserver: Option<String>,
     pub description: String,
+    /// The tag that marks what made it ([`SERVER_TAG`] for a server).
+    pub tag: &'a str,
 }
 
 /// Create the container (stopped); the image sets its entrypoint and
@@ -210,7 +212,7 @@ pub async fn create(pve: &impl Pve, spec: &NewContainer<'_>, say: &impl Fn(&str)
         .await
         .map_err(|e| format!("create CT {}: {e}", spec.ctid))?;
     wait(pve, &upid, &format!("create CT {}", spec.ctid)).await?;
-    ensure_tag(pve, spec.node, spec.ctid, say).await?;
+    ensure_tag_named(pve, spec.node, spec.ctid, spec.tag, say).await?;
     Ok(())
 }
 
@@ -301,6 +303,17 @@ pub async fn power(pve: &impl Pve, node: &str, ctid: u32, action: &str) -> Resul
 /// Give container `ctid` [`SERVER_TAG`], its other tags kept; whether it
 /// lacked it (a container made before the tag).
 pub async fn ensure_tag(pve: &impl Pve, node: &str, ctid: u32, say: &impl Fn(&str)) -> Result<bool, String> {
+    ensure_tag_named(pve, node, ctid, SERVER_TAG, say).await
+}
+
+/// Give container `ctid` `tag`, its other tags kept; whether it lacked it.
+pub async fn ensure_tag_named(
+    pve: &impl Pve,
+    node: &str,
+    ctid: u32,
+    tag: &str,
+    say: &impl Fn(&str),
+) -> Result<bool, String> {
     let config = pve
         .get(&format!("/nodes/{node}/lxc/{ctid}/config"), &[])
         .await
@@ -315,10 +328,10 @@ pub async fn ensure_tag(pve: &impl Pve, node: &str, ctid: u32, say: &impl Fn(&st
         .map(str::trim)
         .filter(|tag| !tag.is_empty())
         .collect();
-    if tags.contains(&SERVER_TAG) {
+    if tags.contains(&tag) {
         return Ok(false);
     }
-    tags.push(SERVER_TAG);
+    tags.push(tag);
     let digest = config["digest"].as_str().unwrap_or_default().to_owned();
     pve.put(
         &format!("/nodes/{node}/lxc/{ctid}/config"),

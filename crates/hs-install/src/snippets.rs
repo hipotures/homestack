@@ -41,15 +41,22 @@ pub fn sum(text: &str) -> String {
 
 /// Run `command` as root on `node`: here, or over the node's own root SSH.
 pub fn on_node(root: &mut dyn Root, local: &str, node: &Node, command: &str) -> Result<Output, InstallError> {
+    root.run(&node_command(local, node, command))
+}
+
+/// `command` as the access on `local` runs it on `node`: as it is, or
+/// through the node's own root SSH (standard input passes through).
+#[must_use]
+pub fn node_command(local: &str, node: &Node, command: &str) -> String {
     if node.name == local {
-        root.run(command)
+        command.to_owned()
     } else {
-        root.run(&format!(
+        format!(
             "ssh -o BatchMode=yes -o ConnectTimeout=10 -o HostKeyAlias={} root@{} {}",
             quote(&node.name),
             quote(&node.ip),
             quote(command)
-        ))
+        )
     }
 }
 

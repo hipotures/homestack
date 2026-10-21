@@ -61,6 +61,8 @@ pub struct Setup {
     pub server_domain: Option<String>,
     /// The runtime the deployment and the last check run on.
     pub handle: tokio::runtime::Handle,
+    /// Sites mode: the Pangolin wizard's tunnel, organization and key.
+    pub sites: Option<super::pangolin_sites::Context>,
 }
 
 impl Setup {
@@ -83,12 +85,12 @@ impl Setup {
 
     fn command(&self) -> Install {
         match self.mode {
-            Mode::Install => Install::Install,
+            Mode::Install | Mode::Sites => Install::Install,
             Mode::Uninstall => Install::Uninstall,
         }
     }
 
-    fn open(&self, method: Method, target: &str) -> Result<Box<dyn Root>, AppError> {
+    pub(super) fn open(&self, method: Method, target: &str) -> Result<Box<dyn Root>, AppError> {
         match method {
             Method::Herdr => Ok(Box::new(HerdrRoot::open(Arc::clone(&self.system), target)?)),
             Method::Ssh if self.ssh_prefix.is_empty() => Ok(Box::new(SshRoot::open(
@@ -117,7 +119,11 @@ pub fn spawn(setup: Setup, commands: Receiver<Command>, tell: impl Fn(Event) + S
     std::thread::spawn(move || {
         // The servers' DNS lookups and the deployment use the runtime.
         let _entered = setup.handle.enter();
-        work(&setup, &commands, &tell);
+        if setup.mode == Mode::Sites {
+            super::pangolin_sites::work(&setup, &commands, &tell);
+        } else {
+            work(&setup, &commands, &tell);
+        }
     });
 }
 
@@ -237,7 +243,7 @@ fn survey(setup: &Setup, session: &mut Session, tell: &(dyn Fn(Event) + Send + S
             check.extend(install_check(&review));
             first = Some((answers, Some(domain), review));
         }
-        Mode::Uninstall => match session.plan(&setup.settings()) {
+        Mode::Uninstall | Mode::Sites => match session.plan(&setup.settings()) {
             Ok(plan) => {
                 check.push(if plan.steps.is_empty() {
                     (

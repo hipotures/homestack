@@ -242,6 +242,7 @@ pub struct Session {
     live: Arc<Mutex<Live>>,
     thread: Option<thread::JoinHandle<()>>,
 }
+#[derive(Clone)]
 pub struct Endpoint {
     live: Arc<Mutex<Live>>,
     pub port: u16,

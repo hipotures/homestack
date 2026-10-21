@@ -1013,10 +1013,12 @@ fn set_part(form: &mut Form, chosen: Part) {
     }
 }
 
-/// A HomeStack server: a container in the servers' pool or tagged as one.
+/// A HomeStack server: a container in the servers' pool or tagged as one;
+/// a Pangolin Site connector shares the pool but is not a server.
 #[must_use]
 pub fn is_server(entry: &StatusEntry) -> bool {
     entry.role == "CT"
+        && !entry.tags.iter().any(|tag| tag == super::pangolin_sites::TAG)
         && (entry.pool.as_deref() == Some(crate::servers::SERVICE_POOL)
             || entry.tags.iter().any(|tag| tag == "homestack-server"))
 }
