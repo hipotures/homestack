@@ -58,6 +58,7 @@ pub enum Request {
     StopPangolinTunnel(bool),
     /// Verify the bootstrap key of this run; the secret stays in the wizard.
     VerifyPangolinKey(u64),
+    PangolinPermanent(u64),
     Quit,
 }
 
@@ -1299,6 +1300,24 @@ impl App {
                         }
                         return None;
                     }
+                    Some(Hit::PangolinPermanent(control)) => {
+                        if let Some(Overlay::Pangolin(w)) = self.overlay.as_mut()
+                            && w.selected_step == 6
+                            && !w.help_open
+                            && !w.report_open
+                            && w.permanent.running == 0
+                        {
+                            if w.permanent.confirm {
+                                w.permanent.confirm_yes = control == 9;
+                            } else {
+                                w.focus = control;
+                            }
+                            if control != 2 {
+                                return press(self, KeyCode::Enter);
+                            }
+                        }
+                        return None;
+                    }
                     Some(Hit::PangolinBootstrap(control)) => {
                         if let Some(Overlay::Pangolin(wizard)) = self.overlay.as_mut()
                             && wizard.selected_step == 5
@@ -1557,6 +1576,23 @@ impl App {
             return request;
         }
         if let Some(Overlay::Pangolin(wizard)) = self.overlay.as_mut() {
+            if wizard.selected_step == 6 && !wizard.help_open && !wizard.report_open {
+                use super::pangolin_permanent::Operation;
+                let operation = if wizard.permanent.confirm {
+                    (key.code == KeyCode::Enter && wizard.permanent.confirm_yes).then_some(Operation::Apply)
+                } else if key.code == KeyCode::F(5) || (key.code == KeyCode::Enter && wizard.focus == 7) {
+                    Some(Operation::Prepare)
+                } else if key.code == KeyCode::F(6) || (key.code == KeyCode::Enter && wizard.focus == 6) {
+                    Some(Operation::Verify)
+                } else if key.code == KeyCode::Enter && wizard.focus == 5 {
+                    Some(Operation::Inspect)
+                } else {
+                    None
+                };
+                if let Some(operation) = operation {
+                    return wizard.begin_permanent(operation).map(Request::PangolinPermanent);
+                }
+            }
             if !wizard.report_open && !wizard.help_open && !wizard.api_confirm {
                 if key.code == KeyCode::Esc && wizard.tunnel.busy() {
                     return Some(Request::StopPangolinTunnel(true));

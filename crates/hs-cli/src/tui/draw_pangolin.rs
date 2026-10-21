@@ -20,7 +20,8 @@ pub(super) fn screen(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
         || (wizard.selected_step == 2 && wizard.discovery_available())
         || (wizard.selected_step == 3 && wizard.api_available())
         || (wizard.selected_step == 4 && wizard.tunnel_available())
-        || (wizard.selected_step == 5 && wizard.bootstrap_available());
+        || (wizard.selected_step == 5 && wizard.bootstrap_available())
+        || (wizard.selected_step == 6 && wizard.permanent_available());
     let escape = if wizard.focus == 0 { "back" } else { "steps" };
     let arrows = if wizard.focus == 0 { "steps" } else { "focus" };
     let prerequisites = wizard.selected_step == 1;
@@ -47,6 +48,23 @@ pub(super) fn screen(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
                     },
                     Control::named("F4", "help", KeyCode::F(4)),
                     Control::named("Esc", escape, KeyCode::Esc),
+                ]
+            } else if wizard.selected_step == 6 {
+                vec![
+                    Control::named("Tab", "focus", KeyCode::Tab),
+                    Control::named("F4", "help", KeyCode::F(4)),
+                    Control::named("F5", "apply", KeyCode::F(5)).enabled(wizard.permanent_can_apply()),
+                    Control::named("F6", "recheck", KeyCode::F(6)).enabled(available && wizard.permanent.running == 0),
+                    Control::named("F7", "details", KeyCode::F(7)),
+                    Control::named(
+                        "Esc",
+                        if wizard.permanent.running != 0 {
+                            "cancel"
+                        } else {
+                            escape
+                        },
+                        KeyCode::Esc,
+                    ),
                 ]
             } else if wizard.selected_step == 5 && wizard.bootstrap.running != 0 {
                 vec![Control::named("Esc", "cancel", KeyCode::Esc)]
@@ -167,6 +185,21 @@ pub(super) fn screen(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
             wizard,
             true,
         );
+    } else if wizard.selected_step == 6 && wizard.focus > 0 {
+        write(
+            buf,
+            body.x,
+            body.y,
+            body.width,
+            "7. HomeStack API key",
+            text.add_modifier(Modifier::BOLD),
+        );
+        permanent_details(
+            buf,
+            Rect::new(body.x, body.y + 1, body.width, body.height.saturating_sub(1)),
+            app,
+            wizard,
+        );
     } else if wizard.selected_step == 5 && wizard.focus > 0 && wizard.bootstrap_available() {
         write(
             buf,
@@ -256,7 +289,7 @@ pub(super) fn screen(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
     if wizard.api_confirm {
         approval(buf, area, app, wizard);
     }
-    if wizard.help_open || wizard.report_open {
+    if wizard.help_open || wizard.report_open || wizard.permanent.confirm {
         modal(buf, area, app, wizard);
     }
 }
@@ -285,7 +318,8 @@ fn steps(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard, wide: bool) {
             || (at == 2 && wizard.discovery_status() == "Discovered")
             || (at == 3 && wizard.api_status() == "Verified")
             || (at == 4 && wizard.tunnel_connected())
-            || (at == 5 && wizard.bootstrap_verified());
+            || (at == 5 && wizard.bootstrap_verified())
+            || (at == 6 && wizard.permanent_verified());
         let failed = (at == 5 && wizard.bootstrap_available() && wizard.bootstrap_status() == "Failed")
             || (at == 4
                 && wizard.tunnel_available()
@@ -307,7 +341,8 @@ fn steps(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard, wide: bool) {
         } else {
             " "
         };
-        let locked = at > 5
+        let locked = at > 6
+            || (at == 6 && !wizard.permanent_available())
             || (at == 5 && !wizard.bootstrap_available())
             || (at == 4 && !wizard.tunnel_available())
             || (at == 3 && !wizard.api_available())
@@ -366,6 +401,15 @@ fn details(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard, wide: bool)
             text.add_modifier(Modifier::BOLD),
         );
         y += 2;
+    }
+    if wizard.selected_step == 6 {
+        permanent_details(
+            buf,
+            Rect::new(area.x, y, area.width, area.bottom().saturating_sub(y)),
+            app,
+            wizard,
+        );
+        return;
     }
     if wizard.selected_step == 5 && wizard.bootstrap_available() {
         bootstrap_details(
@@ -780,7 +824,9 @@ fn modal(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
     let title = if wizard.help_open {
         format!("help · {}. {}", wizard.selected_step + 1, STAGES[wizard.selected_step])
     } else {
-        if wizard.selected_step == 5 {
+        if wizard.selected_step == 6 {
+            "HomeStack API key plan / report"
+        } else if wizard.selected_step == 5 {
             "Bootstrap API key report"
         } else if wizard.selected_step == 4 {
             "Private API tunnel report"
@@ -802,16 +848,57 @@ fn modal(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
         &app.palette,
         &Sides {
             top_left: vec![Control::plain(&title)],
-            bottom_left: vec![
-                Control::named("↑↓", "scroll", KeyCode::Down),
-                Control::named("Esc", "close", KeyCode::Esc),
-            ],
+            bottom_left: if wizard.permanent.confirm {
+                vec![
+                    Control::named("Pg↓↑", "review", KeyCode::PageDown),
+                    Control::named(
+                        "Tab",
+                        if wizard.permanent.confirm_yes {
+                            "Approve selected"
+                        } else {
+                            "Cancel selected"
+                        },
+                        KeyCode::Tab,
+                    ),
+                    Control::named("Enter", "confirm", KeyCode::Enter),
+                    Control::named("Esc", "cancel", KeyCode::Esc),
+                ]
+            } else {
+                vec![
+                    Control::named("↑↓", "scroll", KeyCode::Down),
+                    Control::named("Esc", "close", KeyCode::Esc),
+                ]
+            },
             focused: true,
             ..Sides::default()
         },
     );
     let (content, scroll) = if wizard.help_open {
         (HELP[wizard.selected_step].to_owned(), wizard.help_scroll)
+    } else if wizard.selected_step == 6 {
+        let prefix = if wizard.permanent.confirm {
+            let plan = wizard.permanent.result.as_ref().and_then(|r| r.plan.as_ref());
+            format!(
+                "REVIEW AND APPROVE {}\nScope: organization / non-Root.\n{}\nThe secret may only be returned once. Cancel is selected by default.\nTab selects Approve; Enter confirms. Esc cancels.\n\n",
+                if matches!(plan, Some(super::pangolin_permanent::Plan::Create)) {
+                    "CREATION"
+                } else if matches!(plan, Some(super::pangolin_permanent::Plan::AssignCreated { .. })) {
+                    "CREATED KEY CONTINUATION"
+                } else {
+                    "ACTION REPLACEMENT"
+                },
+                if matches!(plan, Some(super::pangolin_permanent::Plan::Create)) {
+                    "Creates exactly one key. Any existing-key conflict blocks creation."
+                } else if matches!(plan, Some(super::pangolin_permanent::Plan::AssignCreated { .. })) {
+                    "Assigns the reviewed profile to the recorded wizard-created key. No new key is created. Missing/Extra lists every addition/removal."
+                } else {
+                    "Replaces all assigned actions. F7 below lists every addition (Missing) and removal (Extra)."
+                }
+            )
+        } else {
+            String::new()
+        };
+        (format!("{prefix}{}", wizard.permanent_report()), wizard.report_scroll)
     } else if wizard.selected_step == 5 {
         (wizard.bootstrap_report(app.utc_offset), wizard.report_scroll)
     } else if wizard.selected_step == 4 {
@@ -862,12 +949,32 @@ fn modal(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
             inner.x + 1,
             inner.y + 1,
             inner.width.saturating_sub(2),
-            inner.height.saturating_sub(2),
+            inner
+                .height
+                .saturating_sub(if wizard.permanent.confirm { 4 } else { 2 }),
         ),
         &content,
         scroll,
         text_style(&app.palette),
     );
+    if wizard.permanent.confirm && inner.height >= 3 {
+        let y = inner.bottom() - 1;
+        for (control, x, label, selected) in [
+            (8, inner.x + 1, "[ Cancel ]", !wizard.permanent.confirm_yes),
+            (9, inner.x + 14, "[ Approve ]", wizard.permanent.confirm_yes),
+        ] {
+            let style = if selected {
+                text_style(&app.palette)
+                    .fg(app.palette.focus)
+                    .bg(app.palette.selection)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                text_style(&app.palette)
+            };
+            write(buf, x, y, label.len() as u16, label, style);
+            chrome::register(Rect::new(x, y, label.len() as u16, 1), Hit::PangolinPermanent(control));
+        }
+    }
 }
 
 fn api_details(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
@@ -1328,4 +1435,181 @@ fn bootstrap_details(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
         0,
         style,
     );
+}
+
+fn permanent_details(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
+    if area.height == 0 {
+        return;
+    }
+    let text = text_style(&app.palette);
+    let p = &wizard.permanent;
+    let out = p.result.as_ref();
+    let status = if p.running != 0 {
+        "Working"
+    } else if wizard.permanent_verified() {
+        "Verified"
+    } else {
+        "Incomplete"
+    };
+    let summary = format!(
+        "{status} · {} · {}",
+        wizard.bootstrap.organization,
+        wizard.tunnel.current.state.label()
+    );
+    write(
+        buf,
+        area.x,
+        area.y,
+        area.width,
+        &summary,
+        text.fg(if wizard.permanent_verified() {
+            app.palette.ok
+        } else {
+            app.palette.muted
+        }),
+    );
+    if area.height < 7 {
+        return;
+    }
+    let found = out.map(|r| r.ids.len());
+    let key = match found {
+        Some(0) => "Key name: homestack · Organization / non-Root · 25 actions",
+        Some(1) => "Existing key: Found · Organization / non-Root",
+        Some(_) => "Multiple HomeStack API keys exist. Automatic selection is unsafe.",
+        None => "Awaiting fresh organization key inspection",
+    };
+    write(buf, area.x, area.y + 1, area.width, key, text);
+    let source = if p.pasted {
+        "[ Switch to local credential file ]"
+    } else {
+        "[ Switch to masked credential paste ]"
+    };
+    let mask = if p.credential.is_empty() {
+        ""
+    } else {
+        "••••••••"
+    };
+    let field = if p.pasted {
+        format!("Credential (masked) [ {mask} ]")
+    } else {
+        format!("File [ {} ]", p.input)
+    };
+    let import = format!(
+        "[{}] Import into HomeStack secrets area",
+        if p.import { "x" } else { " " }
+    );
+    let controls = [
+        (1, source.to_owned()),
+        (2, field),
+        (3, import),
+        (4, "[ View permissions / destination ]".into()),
+        (5, "[ Inspect existing key ]".into()),
+        (6, "[ Use existing key / Verify credential ]".into()),
+        (
+            7,
+            if out.is_some_and(|o| {
+                matches!(
+                    o.plan,
+                    Some(
+                        super::pangolin_permanent::Plan::Replace { .. }
+                            | super::pangolin_permanent::Plan::AssignCreated { .. }
+                    )
+                )
+            }) {
+                "[ Review action assignment plan ]"
+            } else {
+                "[ Create HomeStack API key ]"
+            }
+            .into(),
+        ),
+    ];
+    let mut y = area.y + 2;
+    if wizard.permanent_verified() {
+        for line in [
+            "Permissions 25/25 · Credential stored securely",
+            "Organization / Sites / Resources / domains: PASS",
+            "Admin access / Other org: DENIED (expected)",
+        ] {
+            if y >= area.bottom() {
+                break;
+            }
+            write(buf, area.x, y, area.width, line, text.fg(app.palette.ok));
+            y += 1;
+        }
+    } else if found == Some(0) && y < area.bottom() {
+        write(
+            buf,
+            area.x,
+            y,
+            area.width,
+            "Credential destination: private HomeStack secrets area (F7)",
+            text,
+        );
+        y += 1;
+    }
+    for (control, label) in controls {
+        if !wizard.permanent_controls().contains(&control) {
+            continue;
+        }
+        if y >= area.bottom() {
+            break;
+        }
+        let active = p.running == 0
+            && (control == 4 || wizard.permanent_available())
+            && (control != 7 || wizard.permanent_can_apply());
+        let style = if wizard.focus == control && active {
+            text.fg(app.palette.focus)
+                .bg(app.palette.selection)
+                .add_modifier(Modifier::BOLD)
+        } else if active {
+            text
+        } else {
+            text.fg(app.palette.muted)
+        };
+        // Show the tail of a long path while editing, without hiding the field label.
+        let label = if control == 2 && !p.pasted && label.chars().count() > usize::from(area.width) {
+            format!(
+                "File […{} ]",
+                p.input
+                    .chars()
+                    .rev()
+                    .take(usize::from(area.width.saturating_sub(10)))
+                    .collect::<String>()
+                    .chars()
+                    .rev()
+                    .collect::<String>()
+            )
+        } else {
+            label
+        };
+        write(buf, area.x, y, area.width, &label, style);
+        if active {
+            chrome::register(Rect::new(area.x, y, area.width, 1), Hit::PangolinPermanent(control));
+        }
+        y += 1;
+    }
+    if y < area.bottom() {
+        let message = if !wizard.message.is_empty() {
+            wizard.message.clone()
+        } else if !wizard.permanent_available() {
+            "Organization not verified. Grant getOrg to the bootstrap key and verify Step 6 again.".into()
+        } else if wizard.permanent_verified() {
+            if out.and_then(|r| r.record.as_ref()).is_some_and(|r| !r.created_here) {
+                "Existing HomeStack key verified. F7 shows the independent read and authorization evidence.".into()
+            } else {
+                "HomeStack key verified. F7 shows the independent read and authorization evidence.".into()
+            }
+        } else if let Some(error) = out.and_then(|o| o.error.as_deref()) {
+            error.into()
+        } else {
+            "Review permissions and the private destination in F7. F5 opens a separate confirmation; it defaults to Cancel.".into()
+        };
+        for line in wrap(&message, usize::from(area.width))
+            .iter()
+            .take(usize::from(area.bottom().saturating_sub(y)))
+        {
+            write(buf, area.x, y, area.width, line, text.fg(app.palette.muted));
+            y += 1;
+        }
+    }
 }

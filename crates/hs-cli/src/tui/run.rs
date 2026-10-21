@@ -38,6 +38,7 @@ enum Update {
     PangolinApi(u64, Box<super::pangolin_api::Api>),
     PangolinTunnel(u64, super::pangolin_tunnel::Event),
     PangolinKey(u64, super::pangolin_key::Outcome),
+    PangolinPermanent(u64, super::pangolin_permanent::Outcome),
     PangolinAsk(u64, AskEvent),
     Status(String, Value),
     StatusRejected(String),
@@ -514,6 +515,7 @@ fn start(request: &Request, client: Option<&Arc<Client>>, ctx: &Context, updates
         | Request::PangolinTunnel(_, _)
         | Request::StopPangolinTunnel(_)
         | Request::VerifyPangolinKey(_)
+        | Request::PangolinPermanent(_)
         | Request::CopyJson
         | Request::Act(_)
         | Request::Decide(_)
@@ -779,6 +781,7 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
     let mut pangolin_tunnel: Option<(super::pangolin_tunnel::Session, Bridge)> = None;
     let mut pangolin_question: Option<crate::askpass::Question> = None;
     let mut pangolin_key: Option<super::pangolin::Pending> = None;
+    let mut pangolin_permanent: Option<super::pangolin::Pending> = None;
     loop {
         if let Some((session, _)) = &pangolin_tunnel {
             let valid = matches!(&app.overlay,Some(Overlay::Pangolin(w)) if w.tunnel.id==session.id && w.tunnel_spec().as_ref()==Some(&session.spec));
@@ -811,6 +814,46 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
                     }
                     pangolin_tunnel = None;
                 }
+            }
+        }
+        if let Some(worker) = &pangolin_permanent {
+            if !matches!(&app.overlay, Some(Overlay::Pangolin(w)) if w.permanent.running == worker.id && !w.permanent.cancel_requested && w.permanent_current() && w.permanent_available())
+            {
+                worker.cancel.store(true, Ordering::SeqCst);
+            }
+        }
+        // Entry always refreshes the key list through the live, owned tunnel.
+        if let Some(Overlay::Pangolin(w)) = app.overlay.as_mut()
+            && w.selected_step == 6
+            && w.permanent.running == 0
+            && !w.permanent.confirm
+            && !w.help_open
+            && !w.report_open
+            && w.permanent_available()
+            && (w.permanent.result.is_none() || !w.permanent_current())
+            && let Some(id) = w.begin_permanent(super::pangolin_permanent::Operation::Inspect)
+        {
+            let endpoint = pangolin_tunnel
+                .as_ref()
+                .filter(|(s, _)| s.id == w.tunnel.id)
+                .zip(w.tunnel_spec())
+                .and_then(|((s, _), spec)| s.live_endpoint(&spec));
+            if let (Some(endpoint), Some(input)) = (endpoint, w.permanent_input(id)) {
+                let cancel = Arc::new(AtomicBool::new(false));
+                pangolin_permanent = Some(super::pangolin::Pending {
+                    id,
+                    cancel: Arc::clone(&cancel),
+                });
+                let sender = updates.clone();
+                tokio::task::spawn_blocking(move || {
+                    let result = super::pangolin_permanent::execute(&endpoint, input, &cancel);
+                    let _ = sender.send(Update::PangolinPermanent(id, result));
+                });
+            } else {
+                w.complete_permanent(
+                    id,
+                    super::pangolin_permanent::Outcome::failed("Live tunnel unavailable. Reconnect Step 5."),
+                );
             }
         }
         // A verification never outlives its tunnel session, edit or wizard.
@@ -940,6 +983,17 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
                             if let Some(question)=pangolin_question.take(){app.ask_ended(question.id);question.answer(None);}
                             pangolin_tunnel=None;
                             if let Some(Overlay::Pangolin(w))=app.overlay.as_mut(){w.end_tunnel(if cancelled{super::pangolin_tunnel::State::Cancelled}else{super::pangolin_tunnel::State::Disconnected});}
+                        }
+                        Request::PangolinPermanent(id) => {
+                            let Some(Overlay::Pangolin(w)) = app.overlay.as_mut() else { continue };
+                            let endpoint = pangolin_tunnel.as_ref().filter(|(s, _)| s.id == w.tunnel.id).zip(w.tunnel_spec()).and_then(|((s, _), spec)| s.live_endpoint(&spec));
+                            let (Some(endpoint), Some(input)) = (endpoint, w.permanent_input(id)) else {
+                                w.complete_permanent(id, super::pangolin_permanent::Outcome::failed("Live tunnel unavailable. Reconnect Step 5.")); continue;
+                            };
+                            let cancel = Arc::new(AtomicBool::new(false));
+                            pangolin_permanent = Some(super::pangolin::Pending { id, cancel: Arc::clone(&cancel) });
+                            let sender = updates.clone();
+                            tokio::task::spawn_blocking(move || { let result = super::pangolin_permanent::execute(&endpoint, input, &cancel); let _ = sender.send(Update::PangolinPermanent(id, result)); });
                         }
                         Request::VerifyPangolinKey(id) => {
                             let Some(Overlay::Pangolin(w)) = app.overlay.as_mut() else { continue };
@@ -1322,6 +1376,12 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
                         event = super::pangolin_tunnel::Event { state: super::pangolin_tunnel::State::Lost, error: Some(super::pangolin_tunnel::Error::Lost), port: None };
                     }
                     if let Some(Overlay::Pangolin(w)) = app.overlay.as_mut() { w.tunnel_event(id, event); }
+                }
+                Update::PangolinPermanent(id, result) => {
+                    if pangolin_permanent.as_ref().is_some_and(|w| w.id == id) {
+                        pangolin_permanent = None;
+                        if let Some(Overlay::Pangolin(w)) = app.overlay.as_mut() { w.complete_permanent(id, result); }
+                    }
                 }
                 Update::PangolinKey(id, outcome) => {
                     if pangolin_key.as_ref().is_some_and(|worker| worker.id == id) {

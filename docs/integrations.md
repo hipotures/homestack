@@ -28,15 +28,15 @@ the Spaceship and TSIG files in the same directory by default; explicit
 `homestack-deploy` uses the credential paths explicitly saved in its deployment
 configuration. `tui.toml` contains interface preferences, not integration data.
 
-## Pangolin setup wizard: Steps 1–6
+## Pangolin setup wizard: Steps 1–7
 
 Open **Settings > Integrations > Remote Access > Pangolin** to enter the setup
 wizard. All eight stages are shown: Pangolin server, Pangolin prerequisites,
 Pangolin discovery, Integration API, API tunnel, Bootstrap API key, HomeStack API
-key, and Integration verification. The first six stages are implemented;
-stages 7–8 remain locked and cannot execute operations.
+key, and Integration verification. The first seven stages are implemented;
+stage 8 remains locked and cannot execute operations.
 
-Steps 1–6 share the same focus navigation. Enter or Right from the step list
+Steps 1–7 share the same focus navigation. Enter or Right from the step list
 focuses the selected step's controls. Up/Down selects steps while the list has
 focus and cycles controls while the details have focus, like Tab/Shift+Tab.
 Esc from the details returns focus to the step list without discarding inputs,
@@ -114,19 +114,20 @@ stages again. SSH Test and Save controls are absent from Step 2.
 Pangolin Server must already run on the selected server. No installation method
 is assumed; the Integration API may remain disabled. In Pangolin's administration
 interface, create a temporary API key named `homestack-bootstrap` with **Root**
-authorization and these four actions:
+authorization and these five required actions:
 
 - `createApiKey`
 - `listApiKeys`
 - `listApiKeyActions`
 - `setApiKeyActions`
+- `getOrg` (Get organization)
 
-Also enable the recommended optional **`getOrg` (Get organization)** action.
-It lets Step 6 confirm the Organization ID immediately. Without it, bootstrap
-key validation can still succeed, but organization existence remains unconfirmed.
+Step 6 must independently confirm the exact Organization ID. The wizard requires
+all five actions; the standalone bootstrap utility retains its older four-action
+minimum. Old saved results cannot bypass organization verification.
 
 Root authorization is required for Integration API key management; selecting the
-four actions alone is insufficient. Keep the token securely until masked entry in
+five actions alone is insufficient. Keep the token securely until masked entry in
 Step 6. Step 2 has no token input and reads or writes no credential file. The
 temporary administrative key is separate from the restricted HomeStack key;
 revoke it only after permanent-key provisioning and verification succeed.
@@ -381,7 +382,8 @@ API consumers obtain the current endpoint from the owned runtime
 `Session::endpoint(&current_spec)`. This validates the current server/API
 association, verified session state and actual child liveness; it returns no
 endpoint while verifying, after failure, or for a changed configuration. No new
-tunnel is needed per API operation. Step 6 uses this live session; **Steps 7–8 remain unimplemented.**
+tunnel is needed per API operation. Steps 6–7 use this live session for bootstrap
+validation and permanent-key adoption or provisioning. Step 8 remains unimplemented.
 
 The implementation requires Linux/Unix process groups, OpenSSH multiplexed
 forwarding and the existing `setsid`/askpass infrastructure. A short local-port
@@ -421,12 +423,11 @@ with the complete credential only in the Bearer authorization header:
 - `/v1/org/{orgId}/api-keys?limit=100&offset=...` exhausts organization key
   pages. Success exercises authentication, the Root guard and `listApiKeys`.
 - `/v1/org/{orgId}/api-key/{keyId}/actions?limit=100&offset=...` exhausts the
-  bootstrap key's assigned actions and exercises `listApiKeyActions`. All four
-  management actions must be present. `createApiKey` and `setApiKeyActions`
+  bootstrap key's assigned actions and exercises `listApiKeyActions`. All five
+  required actions must be present. `createApiKey` and `setApiKeyActions`
   are confirmed only as assigned metadata; no write permission is exercised.
 - `/v1/org/{orgId}` confirms existence only on a matching successful response.
-  Grant the recommended optional `getOrg` (Get organization) action to allow
-  this confirmation. HTTP 403 is expected without it and does not fail validation.
+  The `getOrg` action is mandatory. HTTP 403 fails validation and blocks Step 7.
   An empty key list alone never proves that an organization exists. HTTP 404 fails it.
 
 An existing organization key named `homestack` is reported for deliberate
@@ -445,16 +446,125 @@ worker completion cannot authorize later operations.
 
 The credential and worker request buffers use zeroizing memory. Clear, wizard
 exit, application exit, or invalidated server/integration metadata erase the
-credential; cancellation also releases the worker's copy. Navigating to the
-Step 7 placeholder keeps it in memory. Only the Organization ID and a sanitized
+credential; cancellation also releases the worker's copy. Navigating to
+Step 7 keeps it in memory. Only the Organization ID and a sanitized
 successful summary are saved atomically in the existing private
 `integrations/pangolin.toml`; no separate credential store is created. Restart
 restores historical information with an empty token and disconnected tunnel.
-Progress reaches **6/8** only with a current successful validation and connected
-tunnel. Phases 7 and 8 remain unavailable for execution.
+Progress reaches **6/8** with current successful bootstrap validation and a connected
+tunnel, then **7/8** after Step 7 succeeds. Phase 8 remains unimplemented.
 
 Verification uses synthetic local API responses and disposable tunnel processes;
 it does not establish compatibility with every Pangolin deployment or replace
 validation against an explicitly authorized server. As with other process
 memory, zeroization does not control operating-system swap or external memory
 dumps.
+
+### Step 7: permanent HomeStack organization API key
+
+Entry refreshes all organization API-key pages through the owned Step 5 tunnel
+with the currently verified Root bootstrap credential. Organization identity must
+have been confirmed by `GET /v1/org/{orgId}` in Step 6; otherwise the wizard shows:
+“Organization not verified. Grant getOrg to the bootstrap key and verify Step 6 again.”
+Every worker repeats bootstrap authorization and organization identity checks.
+
+No key named `homestack` permits a **Create HomeStack API key** plan. Exactly one
+permits **Use existing key**. Multiple matches block every automatic selection or
+mutation and expose only their non-secret IDs in F7. Pangolin does not enforce
+unique names. Missing local credentials never justify a duplicate, deletion or
+rotation; the original secret cannot be fetched again from Pangolin.
+
+For an existing key, choose a local file by entering its absolute path or select
+masked credential entry and paste the complete `ID.secret` token. File contents,
+not extensions, are validated: a `.json` file containing a plain token works.
+HomeStack does not scan for credentials. Imports require a regular, current-user
+owned file with mode 0600 or stricter, a private parent directory, safe ancestors,
+no symlinks or hard links, and a path outside Git repositories. Reads are bounded.
+The token ID must match the unique listed key, and an authenticated organization
+read must succeed before any permission replacement can be planned.
+
+The exact approved profile is:
+
+| Area | Actions |
+| --- | --- |
+| Sites and connection status | `createSite`, `getSite`, `listSites`, `updateSite`, `deleteSite` |
+| Public Resources | `createResource`, `getResource`, `listResources`, `updateResource`, `deleteResource` |
+| Targets | `createTarget`, `getTarget`, `listTargets`, `updateTarget`, `deleteTarget` |
+| Organization/domain metadata | `getOrg`, `listOrgDomains`, `getDomain` |
+| Resource policies | `getResourcePolicy`, `updateResourcePolicy`, `setResourcePolicyRules` |
+| Resource rules | `createResourceRule`, `listResourceRules`, `updateResourceRule`, `deleteResourceRule` |
+
+This is the standalone tool's established 25-action profile, pinned to Pangolin
+source revision `0842e6df53e898759ed05b77086ddd3c673b6149`. No action IDs are guessed.
+The key is organization-scoped and non-Root. API-key administration, user and
+organization administration, private-resource administration, global system
+operations and service restarts are excluded.
+
+Existing file adoption references the source by default. Selecting Import creates
+a canonical local copy and preserves the source. Paste and creation use
+`integrations/secrets/pangolin/<SHA-256 of server and organization>/homestack.key`
+beneath the configured HomeStack configuration directory. F7 and the approval
+view show the actual absolute path. Credential files are mode 0600 in private
+0700 directories; descriptor-relative traversal refuses symlinks, unsafe ownership,
+unsafe writable ancestors and Git repositories. Credentials are published
+atomically from a durable temporary inode with exclusive creation and fsync;
+existing credential files are never overwritten. Filesystem modes do not isolate
+other processes running under the same desktop account.
+
+Tab/Shift+Tab moves focus, Enter activates, and Up/Down navigates the step list
+when navigation is focused. **F4** explains the workflow. **F6** inspects or verifies
+safely; **F7** shows the full profile, destination, missing/extra actions and recovery
+evidence. **F5** prepares only a valid plan and opens a separate approval dialog
+with **Cancel selected by default**. Tab or Space selects Approve; Enter confirms.
+The dialog scrolls with PageUp/PageDown. Mouse controls use the same transitions.
+No remote mutation occurs during inspection, credential verification or planning.
+
+Before creation, the wizard revalidates Root authorization, organization identity
+and every key page, reserves the secure credential/recovery destinations, obtains
+approval of the organization, scope, profile and path, then checks conflicts again.
+It sends exactly one `PUT /v1/org/{orgId}/api-key` with `{"name":"homestack"}`.
+The separately returned ID and secret form the validated `ID.secret` credential,
+which is persisted before assigning actions with
+`POST /v1/org/{orgId}/api-key/{apiKeyId}/actions`. Complete action readback must
+match the approved set exactly. No write is retried automatically.
+
+An existing key with different actions receives a separate replacement plan only
+after its credential is authenticated and its current action set is read completely.
+F7 and confirmation show every addition and removal. The setter replaces the full
+set. Immediately before an approved replacement the wizard rechecks organization,
+unique key identity and the entire previous action set. Correct existing keys
+require no Pangolin mutation.
+
+Independent verification uses the permanent token through the same tunnel:
+organization identity, Site listing, Resource listing and domain metadata must
+succeed. Organization key listing, API-key action administration, and Site listing
+under a random different organization must each return **HTTP 403**. A 401, 404,
+timeout or unexpected success does not pass a negative check. The Root credential
+reads assigned actions and confirms unique membership in the pinned API's filtered
+organization/non-Root key listing. No Site, Resource, Target or policy is mutated
+to test permissions: write capabilities are confirmed through metadata only.
+
+The adjacent `recovery.json` stores only server/organization identity, key name/ID,
+credential path, stage, durable-credential/action-verification flags and UTC time.
+Stages distinguish no mutation, prepared, creation requested/outcome uncertain,
+created without safe persistence, credential saved/actions pending, actions
+verified/independent checks pending, and complete. It is updated atomically with
+fsync. A per-destination advisory lock prevents concurrent HomeStack workers.
+Recovery matches actual persisted credentials and known key IDs; it never creates
+another key after an uncertain request. A crash after secret persistence can be
+recovered even if the metadata update did not finish. If the secret was lost,
+Pangolin cannot recover it: resolve that remote key in a separate reviewed operation.
+Action-assignment failures retain the credential and require another reviewed plan
+if permissions still differ. A distinct continuation plan uses the durable creation
+record and original saved credential for a wizard-created key that still lacks
+read permissions. Imported existing keys must authenticate before a replacement
+plan is offered. Full independent checks remain mandatory after assignment. Cancellation after a possible mutation reports an
+uncertain outcome and waits for the worker's durable recovery evidence.
+
+Completion requires exact organization, unique non-Root key, exact profile, durable
+credential availability and all independent checks. Successful non-secret evidence
+and the credential survive restart. The tunnel does not: reconnect and revalidate
+Steps 5–6 before rechecking Step 7. Server or organization changes invalidate live
+verification and use a separate identity directory without deleting prior secrets
+or remote keys. The temporary Root token remains memory-only and is never revoked
+automatically. Phase 8 final integration verification is not implemented.

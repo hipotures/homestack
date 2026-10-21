@@ -9,7 +9,13 @@ use std::time::{Duration, Instant};
 use zeroize::{Zeroize, Zeroizing};
 
 /// Actions homestack-bootstrap needs to provision the permanent key in Step 7.
-pub const MANAGEMENT: [&str; 4] = ["listApiKeys", "listApiKeyActions", "createApiKey", "setApiKeyActions"];
+pub const MANAGEMENT: [&str; 5] = [
+    "listApiKeys",
+    "listApiKeyActions",
+    "createApiKey",
+    "setApiKeyActions",
+    "getOrg",
+];
 const MAX_ID: usize = 128;
 const MAX_SECRET: usize = 512;
 const CAPACITY: usize = MAX_ID + 1 + MAX_SECRET;
@@ -31,7 +37,7 @@ pub fn valid_identifier(value: &str) -> bool {
 /// The secret has no Debug output, serialization or copying clone: a cloned
 /// wizard receives an empty credential. The buffer is erased on every removal.
 pub struct Credential {
-    value: Zeroizing<String>,
+    pub(super) value: Zeroizing<String>,
     overflow: bool,
 }
 impl Credential {
@@ -47,7 +53,7 @@ impl Credential {
     /// Never grows beyond the preallocated capacity, so no reallocation leaves
     /// an unerased copy behind. Unprintable or non-ASCII input becomes a space,
     /// which validation rejects instead of silently repairing the token.
-    fn insert(&mut self, text: &str) {
+    pub(super) fn insert(&mut self, text: &str) {
         for c in text.chars() {
             if self.value.len() >= CAPACITY {
                 self.overflow = true;
@@ -56,18 +62,18 @@ impl Credential {
             self.value.push(if c.is_ascii_graphic() { c } else { ' ' });
         }
     }
-    fn pop(&mut self) {
+    pub(super) fn pop(&mut self) {
         if let Some(last) = self.value.len().checked_sub(1) {
             self.value.replace_range(last.., "\0");
             self.value.truncate(last);
         }
     }
-    fn clear(&mut self) {
+    pub(super) fn clear(&mut self) {
         self.value.zeroize();
         self.overflow = false;
     }
     /// The non-secret key ID of a well-formed `ID.secret` credential.
-    fn key_id(&self) -> Result<&str, Problem> {
+    pub(super) fn key_id(&self) -> Result<&str, Problem> {
         if self.value.is_empty() {
             return Err(Problem::MissingKey);
         }
@@ -192,6 +198,9 @@ impl Problem {
                 "{} returned HTTP 403: the key needs Root authorization and the listApiKeys action.",
                 Probe::Keys.request()
             ),
+            Self::Forbidden(Probe::Organization) => {
+                "Organization not verified. Grant getOrg to the bootstrap key and verify Step 6 again.".into()
+            }
             Self::Forbidden(probe) => format!(
                 "{} returned HTTP 403: the key needs the listApiKeyActions action.",
                 probe.request()
@@ -297,7 +306,7 @@ fn check(
     if outcome.assigned.len() != MANAGEMENT.len() {
         return Err(Problem::MissingActions);
     }
-    // Without getOrg a 403 is expected; key listing never proves existence.
+    // Organization identity is mandatory for the wizard, including old saved results.
     outcome.organization = match client.get(&format!("/v1/org/{org}"), Probe::Organization)? {
         (200, Some(data)) => {
             if data
@@ -310,7 +319,7 @@ fn check(
             }
             Some(true)
         }
-        (403, _) => Some(false),
+        (403, _) => return Err(Problem::Forbidden(Probe::Organization)),
         (404, _) => return Err(Problem::OrgNotFound),
         _ => return Err(Problem::Incompatible(Probe::Organization)),
     };
@@ -320,52 +329,18 @@ fn check(
     Ok(())
 }
 
-struct Client<'a> {
-    endpoint: &'a Endpoint,
-    credential: &'a Credential,
-    stop: &'a AtomicBool,
-    started: Instant,
+pub(super) struct Client<'a> {
+    pub(super) endpoint: &'a Endpoint,
+    pub(super) credential: &'a Credential,
+    pub(super) stop: &'a AtomicBool,
+    pub(super) started: Instant,
 }
 impl Client<'_> {
     /// Returns the envelope's `data` for HTTP 200; other statuses are left to
     /// the caller except 401, which always means the credential was rejected.
-    fn get(&self, path: &str, probe: Probe) -> Result<(u16, Option<serde_json::Value>), Problem> {
-        if self.stop.load(Ordering::SeqCst) {
-            return Err(Problem::Cancelled);
-        }
+    pub(super) fn get(&self, path: &str, probe: Probe) -> Result<(u16, Option<serde_json::Value>), Problem> {
+        let (status, body) = self.request("GET", path, None, probe)?;
         if !self.endpoint.alive() {
-            return Err(Problem::Lost);
-        }
-        let limit = DEADLINE
-            .checked_sub(self.started.elapsed())
-            .filter(|d| !d.is_zero())
-            .ok_or(Problem::Timeout)?
-            .min(REQUEST_LIMIT);
-        let host = format!("127.0.0.1:{}", self.endpoint.port);
-        let parts: [&[u8]; 7] = [
-            b"GET ",
-            path.as_bytes(),
-            b" HTTP/1.1\r\nHost: ",
-            host.as_bytes(),
-            b"\r\nAuthorization: Bearer ",
-            self.credential.value.as_bytes(),
-            b"\r\nAccept: application/json\r\nConnection: close\r\n\r\n",
-        ];
-        let mut request = Zeroizing::new(Vec::with_capacity(parts.iter().map(|p| p.len()).sum()));
-        for part in parts {
-            request.extend_from_slice(part);
-        }
-        let result = pangolin_tunnel::exchange(self.endpoint.port, &request, self.stop, limit, MAX_BODY);
-        drop(request);
-        let alive = self.endpoint.alive();
-        let (status, body) = result.map_err(|error| match error {
-            pangolin_tunnel::Error::Cancelled => Problem::Cancelled,
-            _ if !alive => Problem::Lost,
-            pangolin_tunnel::Error::Timeout => Problem::Timeout,
-            pangolin_tunnel::Error::Remote => Problem::Unreachable,
-            _ => Problem::Incompatible(probe),
-        })?;
-        if !alive {
             return Err(Problem::Lost);
         }
         match status {
@@ -384,8 +359,49 @@ impl Client<'_> {
             status => Ok((status, None)),
         }
     }
+    /// The raw response is erased on drop, including create responses containing a secret.
+    pub(super) fn request(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<&str>,
+        probe: Probe,
+    ) -> Result<(u16, Zeroizing<Vec<u8>>), Problem> {
+        if self.stop.load(Ordering::SeqCst) {
+            return Err(Problem::Cancelled);
+        }
+        if !self.endpoint.alive() {
+            return Err(Problem::Lost);
+        }
+        let limit = DEADLINE
+            .checked_sub(self.started.elapsed())
+            .filter(|d| !d.is_zero())
+            .ok_or(Problem::Timeout)?
+            .min(REQUEST_LIMIT);
+        let body = body.unwrap_or("");
+        let header = format!(
+            "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nAuthorization: Bearer ",
+            self.endpoint.port,
+            body.len()
+        );
+        let mut request = Zeroizing::new(Vec::with_capacity(
+            header.len() + self.credential.value.len() + body.len() + 80,
+        ));
+        request.extend_from_slice(header.as_bytes());
+        request.extend_from_slice(self.credential.value.as_bytes());
+        request.extend_from_slice(b"\r\nAccept: application/json\r\nConnection: close\r\n\r\n");
+        request.extend_from_slice(body.as_bytes());
+        let result = pangolin_tunnel::exchange(self.endpoint.port, &request, self.stop, limit, MAX_BODY);
+        result.map_err(|error| match error {
+            pangolin_tunnel::Error::Cancelled => Problem::Cancelled,
+            _ if !self.endpoint.alive() => Problem::Lost,
+            pangolin_tunnel::Error::Timeout => Problem::Timeout,
+            pangolin_tunnel::Error::Remote => Problem::Unreachable,
+            _ => Problem::Incompatible(probe),
+        })
+    }
     /// Exhausts pages instead of trusting `total`, which may be a page count.
-    fn collection(
+    pub(super) fn collection(
         &self,
         path: &str,
         field: &str,
@@ -505,7 +521,9 @@ impl Wizard {
         self.bootstrap.running == 0
             && !self.bootstrap.key.is_empty()
             && self.tunnel_connected()
-            && self.bootstrap_check().is_some_and(|c| c.outcome.problem.is_none())
+            && self.bootstrap_check().is_some_and(|c| {
+                c.outcome.problem.is_none() && c.outcome.organization == Some(true) && c.outcome.missing().is_empty()
+            })
     }
     pub fn bootstrap_status(&self) -> &'static str {
         if self.bootstrap.running != 0 {
@@ -608,6 +626,9 @@ impl Wizard {
     }
     /// Any edit invalidates the result and abandons a running verification.
     fn bootstrap_edited(&mut self) {
+        self.permanent.result = None;
+        self.permanent.credential.clear();
+        self.permanent.confirm = false;
         self.bootstrap.revision += 1;
         self.bootstrap.running = 0;
         self.bootstrap.check = None;
@@ -781,7 +802,7 @@ impl Wizard {
                 match o.organization {
                     Some(true) => "PASS - organization confirmed by getOrg",
                     Some(false) =>
-                        "HTTP 403 (expected without getOrg) - organization existence not independently confirmed",
+                        "Organization not verified. Grant getOrg to the bootstrap key and verify Step 6 again.",
                     None => "Not checked - organization existence not confirmed",
                 }
             ));

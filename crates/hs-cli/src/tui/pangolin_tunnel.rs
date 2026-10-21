@@ -732,7 +732,7 @@ pub(super) fn exchange(
     stop: &AtomicBool,
     limit: Duration,
     max_body: usize,
-) -> Result<(u16, Vec<u8>), Error> {
+) -> Result<(u16, zeroize::Zeroizing<Vec<u8>>), Error> {
     let started = Instant::now();
     if stop.load(Ordering::SeqCst) {
         return Err(Error::Cancelled);
@@ -749,8 +749,8 @@ pub(super) fn exchange(
         .set_write_timeout(Some(Duration::from_millis(500)))
         .map_err(|_| Error::Remote)?;
     stream.write_all(request).map_err(health_error)?;
-    let mut bytes = Vec::new();
-    let mut chunk = [0; 1024];
+    let mut bytes = zeroize::Zeroizing::new(Vec::with_capacity(8192 + 2 * max_body + 1024));
+    let mut chunk = zeroize::Zeroizing::new([0; 1024]);
     loop {
         if stop.load(Ordering::SeqCst) {
             return Err(Error::Cancelled);
@@ -758,7 +758,7 @@ pub(super) fn exchange(
         if started.elapsed() >= limit {
             return Err(Error::Timeout);
         }
-        match stream.read(&mut chunk) {
+        match stream.read(&mut *chunk) {
             Ok(0) => break,
             Ok(n) => {
                 bytes.extend_from_slice(&chunk[..n]);
@@ -789,7 +789,7 @@ pub(super) fn exchange(
         return Err(Error::Response);
     }
     let status = status[1].parse::<u16>().map_err(|_| Error::Response)?;
-    let mut body = bytes[boundary + 4..].to_vec();
+    let mut body = zeroize::Zeroizing::new(bytes[boundary + 4..].to_vec());
     let mut length = None;
     let mut chunked = false;
     for line in lines {
@@ -810,7 +810,7 @@ pub(super) fn exchange(
         if length.is_some() {
             return Err(Error::Response);
         }
-        let mut decoded = Vec::new();
+        let mut decoded = zeroize::Zeroizing::new(Vec::with_capacity(max_body));
         let mut input = body.as_slice();
         loop {
             let at = input.windows(2).position(|w| w == b"\r\n").ok_or(Error::Response)?;
