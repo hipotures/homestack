@@ -604,10 +604,7 @@ fn work(endpoint: &Endpoint, mut input: Input, stop: &AtomicBool, out: &mut Outc
         id: id.clone(),
         before: out.assigned.clone(),
     };
-    if !creating
-        && out.assigned != required
-        && (input.operation == Operation::Apply || !required.is_subset(&out.assigned))
-    {
+    if !creating && out.assigned != required {
         out.plan = Some(plan.clone());
         if input.operation == Operation::Inspect {
             return Ok(());

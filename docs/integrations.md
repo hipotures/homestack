@@ -531,9 +531,11 @@ set for the preview, then rechecks unique key identity, organization and current
 actions immediately before mutation. A changed remote set blocks the write and
 refreshes the preview for another explicit selection. It submits the complete
 result, skips unchanged sets and verifies readback. Merge accepts extra actions
-when all required actions are present. Refresh also completes an already valid
-superset automatically, without rewriting its actions. Failed security checks
-retain the permission comparison so Replace can remove unsafe extra actions.
+when all required actions are present. Refresh compares the entire assigned set
+with the standard profile: extra actions always open the permission comparison,
+even when no required actions are missing. Merge preserves those extras without
+rewriting an unchanged set; Replace removes them. Failed security checks retain
+the permission comparison so Replace can remove unsafe extra actions.
 
 Create key reserves private storage and records a durable creation barrier before
 sending one `PUT /v1/org/{orgId}/api-key`. It saves the returned credential before
