@@ -134,10 +134,29 @@ pub fn verify_desktop_alias(system: &dyn System, settings: &Settings, target: &T
     };
     let identities: Vec<String> = all("identityfile").iter().map(|path| expand(path)).collect();
     let expected: Vec<String> = settings.keys.identity_files.iter().map(|path| expand(path)).collect();
-    if output.code != 0
-        || all("hostname") != [target.ip.clone()]
+    let kinds: std::collections::BTreeSet<_> = expected.iter().filter_map(|path| crate::fido::kind_of(path)).collect();
+    // The generated SSH alias selects one security-key kind with Match
+    // exec. Require its keys and every ordinary key, not inactive kinds.
+    let selected_kinds: std::collections::BTreeSet<_> = expected
+        .iter()
+        .filter(|path| identities.contains(path))
+        .filter_map(|path| crate::fido::kind_of(path))
+        .collect();
+    let keys_match = (kinds.len() < 2 || !selected_kinds.is_empty())
+        && expected.iter().all(|path| {
+            let inactive =
+                kinds.len() > 1 && crate::fido::kind_of(path).is_some_and(|kind| !selected_kinds.contains(kind));
+            inactive || identities.contains(path)
+        });
+    if output.code != 0 {
+        return Err(AppError::new(format!(
+            "Could not inspect the desktop SSH alias. Run ssh -G {}@{} on the desktop to see the SSH configuration error, then retry app=herdr",
+            settings.user, target.name
+        )));
+    }
+    if all("hostname") != [target.ip.clone()]
         || all("user") != [settings.user.clone()]
-        || !expected.iter().all(|path| identities.contains(path))
+        || !keys_match
         || all("identitiesonly") != [if settings.keys.identities_only { "yes" } else { "no" }.to_owned()]
     {
         return Err(AppError::new(
