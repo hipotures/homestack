@@ -365,11 +365,9 @@ pub async fn add_key(
             "VM {vmid} is {status}, not {planned_status} as planned; generate a new plan"
         )));
     }
-    if info.vm_config.get("cicustom").map(String::as_str).unwrap_or_default()
-        != text(plan, "original_cicustom")?
-        || info.vm_config.get("sshkeys").map(String::as_str).unwrap_or_default()
-            != text(plan, "original_sshkeys")?
-    {
+    let current_cicustom = info.vm_config.get("cicustom").map(String::as_str).unwrap_or_default();
+    let current_sshkeys = info.vm_config.get("sshkeys").map(String::as_str).unwrap_or_default();
+    if current_cicustom != text(plan, "original_cicustom")? || current_sshkeys != text(plan, "original_sshkeys")? {
         return Err(CoreError::Refused(format!(
             "VM {vmid} Cloud-Init snippets or SSH keys changed after planning; generate a new plan"
         )));
