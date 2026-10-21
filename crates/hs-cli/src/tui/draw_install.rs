@@ -410,15 +410,23 @@ fn settings(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
     if let Some(domain) = &install.domain {
         rows.push(("Server domain".to_owned(), domain.clone()));
     }
-    // As wide as the longest title and value, at most half the screen; a
-    // narrow screen cuts them.
+    // Stack the choices below the complete setting list in narrow panes.
+    // Wide panes can show the list and choices side by side.
     let longest =
         |pick: fn(&(String, String)) -> &String| rows.iter().map(|row| pick(row).chars().count()).max().unwrap_or(0);
     let narrow = inner.width < 110;
     let label_width = if narrow { 17 } else { longest(|row| &row.0) + 2 };
     let wanted = u16::try_from(2 + label_width + longest(|row| &row.1) + 2).unwrap_or(u16::MAX);
-    let left = if narrow { 28 } else { wanted.clamp(40, inner.width / 2) };
-    let visible = usize::from(inner.height.saturating_sub(5)).max(1);
+    let left = if narrow {
+        inner.width
+    } else {
+        wanted.clamp(40, inner.width / 2)
+    };
+    let visible = if narrow {
+        rows.len().min(usize::from(inner.height.saturating_sub(7) / 2).max(1))
+    } else {
+        usize::from(inner.height.saturating_sub(5)).max(1)
+    };
     let start = (install.row + 1).saturating_sub(visible);
     for (row, (title, value)) in rows.iter().enumerate().skip(start).take(visible) {
         let chosen = row == install.row;
@@ -437,7 +445,8 @@ fn settings(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
             super::chrome::Hit::Setting(row),
         );
     }
-    if rows.len() + 10 < usize::from(inner.height)
+    if !narrow
+        && rows.len() + 10 < usize::from(inner.height)
         && let Some(found) = &install.found
     {
         let how = found.root.split(" · ").next().unwrap_or_default();
@@ -461,11 +470,11 @@ fn settings(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
         ("F5", "rescan cluster"),
         ("?", "help: what each one is"),
     ];
-    for (row, (key, what)) in help
-        .iter()
-        .enumerate()
-        .take(usize::from(inner.height).saturating_sub(rows.len() + 5))
-    {
+    for (row, (key, what)) in help.iter().enumerate().take(if narrow {
+        0
+    } else {
+        usize::from(inner.height).saturating_sub(rows.len() + 5)
+    }) {
         let line = format!("{key:<9}{what}");
         write(
             buf,
@@ -476,13 +485,28 @@ fn settings(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
             muted,
         );
     }
-    // The chooser of the focused row, in a box on the right as big as what
-    // it holds: a blank line and a margin round the lines.
+    let choices_area = if narrow {
+        let offset = u16::try_from(visible + 2).unwrap_or(inner.height).min(inner.height);
+        Rect::new(
+            inner.x,
+            inner.y + offset,
+            inner.width,
+            inner.height.saturating_sub(offset),
+        )
+    } else {
+        Rect::new(inner.x + left, inner.y, inner.width.saturating_sub(left), inner.height)
+    };
+    if choices_area.width < 8 || choices_area.height < 4 {
+        return;
+    }
     let fit = |content: usize, lines: usize| {
-        let available = inner.width.saturating_sub(left);
-        let width = u16::try_from(content + 6).unwrap_or(u16::MAX).min(available);
-        let height = u16::try_from(lines + 4).unwrap_or(u16::MAX).min(inner.height);
-        Rect::new(inner.x + left, inner.y, width, height)
+        let width = if narrow {
+            choices_area.width
+        } else {
+            u16::try_from(content + 6).unwrap_or(u16::MAX).min(choices_area.width)
+        };
+        let height = u16::try_from(lines + 4).unwrap_or(u16::MAX).min(choices_area.height);
+        Rect::new(choices_area.x, choices_area.y, width, height)
     };
     let on_domain = install.domain.is_some() && install.row == install.settings.len();
     if on_domain {
@@ -598,17 +622,24 @@ fn settings(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
         },
     );
     let width = box_inner.width.saturating_sub(2);
-    for (index, (line, cursor)) in lines.iter().enumerate() {
+    let visible = usize::from(box_inner.height.saturating_sub(1));
+    let selected = if install.chooser {
+        install.cursor
+    } else {
+        setting.picked.first().copied().unwrap_or(0)
+    };
+    let start = selected.saturating_add(1).saturating_sub(visible);
+    for (index, (line, cursor)) in lines.iter().enumerate().skip(start).take(visible) {
         write(
             buf,
             box_inner.x + 1,
-            at(box_inner.y, 1 + index),
+            at(box_inner.y, 1 + index - start),
             width,
             &cut(line, usize::from(width)),
             if *cursor { focus } else { text },
         );
         super::chrome::register(
-            Rect::new(box_inner.x, at(box_inner.y, 1 + index), box_inner.width, 1),
+            Rect::new(box_inner.x, at(box_inner.y, 1 + index - start), box_inner.width, 1),
             super::chrome::Hit::Choice(index),
         );
     }
