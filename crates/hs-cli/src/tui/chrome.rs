@@ -452,6 +452,8 @@ pub enum Hit {
     PangolinDiscovery(usize),
     PangolinApi(usize),
     PangolinTunnel(usize),
+    /// Step 6 fields and actions, numbered as its focus order.
+    PangolinBootstrap(usize),
     IntegrationField(usize),
     /// The log panel: the farthest it scrolls, the rows it shows and the
     /// line under the pointer (lines back from the newest; `None` below

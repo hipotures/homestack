@@ -322,6 +322,7 @@ impl Wizard {
         self.api = Some(report);
     }
     pub fn invalidate_api(&mut self) {
+        self.forget_bootstrap();
         if let Some(api) = self.api.as_mut() {
             api.status = "Outdated".into();
             api.plan = None;

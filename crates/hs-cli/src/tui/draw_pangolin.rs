@@ -19,7 +19,8 @@ pub(super) fn screen(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
         || (wizard.selected_step == 1 && wizard.prerequisites_available())
         || (wizard.selected_step == 2 && wizard.discovery_available())
         || (wizard.selected_step == 3 && wizard.api_available())
-        || (wizard.selected_step == 4 && wizard.tunnel_available());
+        || (wizard.selected_step == 4 && wizard.tunnel_available())
+        || (wizard.selected_step == 5 && wizard.bootstrap_available());
     let prerequisites = wizard.selected_step == 1;
     let inner = frame(
         buf,
@@ -45,6 +46,21 @@ pub(super) fn screen(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
                     Control::named("F4", "help", KeyCode::F(4)),
                     Control::named("Esc", "back", KeyCode::Esc),
                 ]
+            } else if wizard.selected_step == 5 && wizard.bootstrap.running != 0 {
+                vec![Control::named("Esc", "cancel", KeyCode::Esc)]
+            } else if wizard.selected_step == 5 && available {
+                let mut controls = vec![
+                    Control::named("Tab", "focus", KeyCode::Tab),
+                    Control::named("F4", "help", KeyCode::F(4)),
+                    Control::named("F5", "clear", KeyCode::F(5)),
+                    Control::named("F6", "verify", KeyCode::F(6)).enabled(wizard.tunnel_connected()),
+                    Control::named("F7", "details", KeyCode::F(7)),
+                    Control::named("Esc", "back", KeyCode::Esc),
+                ];
+                if area.width >= 100 {
+                    controls.insert(0, Control::named("↑↓", "steps", KeyCode::Down));
+                }
+                controls
             } else if wizard.selected_step == 4 && wizard.tunnel.busy() {
                 vec![Control::named("Esc", "cancel", KeyCode::Esc)]
             } else if wizard.selected_step == 4 {
@@ -148,6 +164,21 @@ pub(super) fn screen(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
             app,
             wizard,
             true,
+        );
+    } else if wizard.selected_step == 5 && wizard.focus > 0 && wizard.bootstrap_available() {
+        write(
+            buf,
+            body.x,
+            body.y,
+            body.width,
+            "6. Bootstrap API key",
+            text.add_modifier(Modifier::BOLD),
+        );
+        bootstrap_details(
+            buf,
+            Rect::new(body.x, body.y + 2, body.width, body.height.saturating_sub(2)),
+            app,
+            wizard,
         );
     } else if wizard.selected_step == 4 && wizard.focus > 0 && wizard.tunnel_available() {
         write(
@@ -254,7 +285,8 @@ fn steps(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard, wide: bool) {
             } else {
                 style
             }
-        } else if at > 4
+        } else if at > 5
+            || (at == 5 && !wizard.bootstrap_available())
             || (at == 4 && !wizard.tunnel_available())
             || (at == 3 && !wizard.api_available())
             || (at == 2 && !wizard.discovery_available())
@@ -269,15 +301,15 @@ fn steps(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard, wide: bool) {
             || (at == 1 && wizard.prerequisites_confirmed())
             || (at == 2 && wizard.discovery_status() == "Discovered")
             || (at == 3 && wizard.api_status() == "Verified")
+            || (at == 4 && wizard.tunnel_connected())
+            || (at == 5 && wizard.bootstrap_verified());
+        let failed = (at == 5 && wizard.bootstrap_available() && wizard.bootstrap_status() == "Failed")
             || (at == 4
-                && wizard.tunnel.current.state == super::pangolin_tunnel::State::Connected
-                && wizard.tunnel_available());
-        let failed = (at == 4
-            && wizard.tunnel_available()
-            && matches!(
-                wizard.tunnel.current.state,
-                super::pangolin_tunnel::State::Failed | super::pangolin_tunnel::State::Lost
-            ))
+                && wizard.tunnel_available()
+                && matches!(
+                    wizard.tunnel.current.state,
+                    super::pangolin_tunnel::State::Failed | super::pangolin_tunnel::State::Lost
+                ))
             || (at == 0 && wizard.status() == "Failed")
             || (at == 3 && matches!(wizard.api_status(), "Failed" | "Permission denied"))
             || (at == 2
@@ -326,7 +358,8 @@ fn steps(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard, wide: bool) {
                 },
             );
         }
-        if at > 4
+        if at > 5
+            || (at == 5 && !wizard.bootstrap_available())
             || (at == 4 && !wizard.tunnel_available())
             || (at == 3 && !wizard.api_available())
             || (at == 2 && !wizard.discovery_available())
@@ -352,6 +385,15 @@ fn details(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard, wide: bool)
             text.add_modifier(Modifier::BOLD),
         );
         y += 2;
+    }
+    if wizard.selected_step == 5 && wizard.bootstrap_available() {
+        bootstrap_details(
+            buf,
+            Rect::new(area.x, y, area.width, area.bottom().saturating_sub(y)),
+            app,
+            wizard,
+        );
+        return;
     }
     if wizard.selected_step == 4
         && (wizard.tunnel_available() || wizard.tunnel.current.state == super::pangolin_tunnel::State::Outdated)
@@ -403,7 +445,10 @@ fn details(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard, wide: bool)
             );
             y += 1;
         }
-        let lines = if wizard.selected_step == 4 {
+        let lines = if wizard.selected_step == 5 {
+            "Locked: verify the private Integration API in Step 4 and connect the API tunnel in Step 5 first. F4 explains the bootstrap key."
+                .to_owned()
+        } else if wizard.selected_step == 4 {
             "Locked: verify the private Integration API in Step 4 for the current server first. F4 explains the tunnel."
                 .to_owned()
         } else if wizard.selected_step == 3 {
@@ -751,7 +796,9 @@ fn modal(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
     let title = if wizard.help_open {
         format!("help · {}. {}", wizard.selected_step + 1, STAGES[wizard.selected_step])
     } else {
-        if wizard.selected_step == 4 {
+        if wizard.selected_step == 5 {
+            "Bootstrap API key report"
+        } else if wizard.selected_step == 4 {
             "Private API tunnel report"
         } else if wizard.selected_step == 3 {
             "Integration API plan / report"
@@ -781,6 +828,8 @@ fn modal(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
     );
     let (content, scroll) = if wizard.help_open {
         (HELP[wizard.selected_step].to_owned(), wizard.help_scroll)
+    } else if wizard.selected_step == 5 {
+        (wizard.bootstrap_report(app.utc_offset), wizard.report_scroll)
     } else if wizard.selected_step == 4 {
         (
             format!(
@@ -1098,5 +1147,201 @@ fn tunnel_details(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
         &summary,
         0,
         text,
+    );
+}
+
+fn bootstrap_details(buf: &mut Buffer, area: Rect, app: &App, wizard: &Wizard) {
+    if area.height < 6 || area.width < 24 {
+        return;
+    }
+    let text = text_style(&app.palette);
+    let muted = text.fg(app.palette.muted);
+    let focused = |at: usize| {
+        if wizard.focus == at {
+            let style = text.bg(app.palette.selection).fg(app.palette.focus);
+            if app.palette.no_color {
+                style.add_modifier(Modifier::REVERSED)
+            } else {
+                style
+            }
+        } else {
+            text
+        }
+    };
+    let label = 17;
+    let status = wizard.bootstrap_status();
+    let connected = wizard.tunnel_connected();
+    let mut y = area.y;
+    write(
+        buf,
+        area.x,
+        y,
+        area.width,
+        &format!("{:<17}{status}", "Credential"),
+        text.fg(match status {
+            "Verified" => app.palette.ok,
+            "Failed" => app.palette.error,
+            _ => app.palette.muted,
+        })
+        .add_modifier(Modifier::BOLD),
+    );
+    y += 1;
+    write(
+        buf,
+        area.x,
+        y,
+        area.width,
+        &format!("{:<17}{}", "API tunnel", wizard.tunnel.current.state.label()),
+        if connected { text.fg(app.palette.ok) } else { muted },
+    );
+    y += 1;
+    write(
+        buf,
+        area.x,
+        y,
+        area.width,
+        &format!("{:<17}{}", "Pangolin server", wizard.target),
+        text,
+    );
+    y += 1;
+    // Single-line fields keep both inputs and actions visible at 80x24.
+    let capacity = usize::from(area.width.saturating_sub(label + 2)).max(1);
+    for (control, title) in [(1, "Organization ID"), (2, "Temporary key")] {
+        write(
+            buf,
+            area.x,
+            y,
+            label,
+            title,
+            if wizard.focus == control {
+                text.fg(app.palette.focus)
+            } else {
+                text
+            },
+        );
+        let bracket = if wizard.focus == control {
+            text.fg(app.palette.focus)
+        } else {
+            muted
+        };
+        write(buf, area.x + label, y, 1, "[", bracket);
+        write(buf, area.x + label + 1 + capacity as u16, y, 1, "]", bracket);
+        let x = area.x + label + 1;
+        if control == 1 {
+            let value = &wizard.bootstrap.organization;
+            let cursor = wizard.bootstrap.cursor;
+            let start = if wizard.focus == 1 {
+                cursor.saturating_sub(capacity - 1)
+            } else {
+                0
+            };
+            let shown: String = value.chars().skip(start).take(capacity).collect();
+            write(buf, x, y, capacity as u16, &shown, text);
+            if wizard.focus == 1 {
+                let c = value.chars().nth(cursor).unwrap_or(' ');
+                write(
+                    buf,
+                    x + (cursor - start) as u16,
+                    y,
+                    1,
+                    &c.to_string(),
+                    text.add_modifier(Modifier::REVERSED),
+                );
+            }
+        } else {
+            // A fixed mask: neither characters nor length are revealed.
+            let dots = if wizard.bootstrap.key.is_empty() {
+                0
+            } else {
+                32.min(capacity - 1)
+            };
+            write(buf, x, y, capacity as u16, &"•".repeat(dots), text);
+            if wizard.focus == 2 {
+                write(buf, x + dots as u16, y, 1, " ", text.add_modifier(Modifier::REVERSED));
+            }
+        }
+        if wizard.bootstrap.running == 0 {
+            chrome::register(Rect::new(area.x, y, area.width, 1), Hit::PangolinBootstrap(control));
+        }
+        y += 1;
+    }
+    if wizard.bootstrap.running != 0 {
+        write(buf, area.x, y, area.width, "[ Verifying… Esc cancels ]", focused(3));
+    } else {
+        let verify = if status == "Verified" {
+            "[ Verify again ]"
+        } else {
+            "[ Verify key ]"
+        };
+        let style = if connected { focused(3) } else { muted };
+        write(buf, area.x, y, verify.len() as u16, verify, style);
+        chrome::register(Rect::new(area.x, y, verify.len() as u16, 1), Hit::PangolinBootstrap(3));
+        let clear = area.x + verify.len() as u16 + 3;
+        write(buf, clear, y, 9, "[ Clear ]", focused(4));
+        chrome::register(Rect::new(clear, y, 9, 1), Hit::PangolinBootstrap(4));
+    }
+    // At 80x24 the result block needs the spacer row.
+    y += if area.height >= 17 { 2 } else { 1 };
+    if y >= area.bottom() {
+        return;
+    }
+    let memory = "The temporary key stays in memory only.";
+    let (lines, style) = if wizard.bootstrap.running != 0 {
+        (
+            "Verifying read-only through the SSH tunnel… Esc cancels.\nNo Pangolin objects are created or changed."
+                .to_owned(),
+            muted,
+        )
+    } else if status == "Verified" {
+        let outcome = &wizard.bootstrap_check().map(|c| c.outcome.clone()).unwrap_or_default();
+        let mut lines = format!(
+            "Authorization\n  {:<24}PASS\n  {:<24}PASS\n  {:<24}PASS\n  {:<24}Assigned\n  {:<24}Assigned\n  {:<24}{}\nWrite operations were not executed.",
+            "Root access",
+            "listApiKeys",
+            "listApiKeyActions",
+            "createApiKey",
+            "setApiKeyActions",
+            "Organization",
+            if outcome.organization == Some(true) {
+                "Confirmed"
+            } else {
+                "Not confirmed yet"
+            }
+        );
+        if !outcome.existing.is_empty() {
+            lines.push_str("\nExisting homestack key found; Step 7 will handle it without duplicates.");
+        }
+        (lines, text)
+    } else if !connected {
+        (
+            format!("Connect the API tunnel in Step 5 before validating the bootstrap key.\n{memory}"),
+            muted,
+        )
+    } else if let Some(problem) = wizard.bootstrap_check().and_then(|c| c.outcome.problem) {
+        let action = problem.action();
+        (
+            format!(
+                "{}{}{action}\n{memory}",
+                problem.message(),
+                if action.is_empty() { "" } else { "\n" }
+            ),
+            if problem == super::pangolin_key::Problem::Cancelled {
+                muted
+            } else {
+                text.fg(app.palette.error)
+            },
+        )
+    } else {
+        (
+            format!("Enter the Organization ID and the temporary key, then press F6.\n{memory}"),
+            muted,
+        )
+    };
+    lines_into(
+        buf,
+        Rect::new(area.x, y, area.width, area.bottom() - y),
+        &lines,
+        0,
+        style,
     );
 }

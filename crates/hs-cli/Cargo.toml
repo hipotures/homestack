@@ -33,6 +33,7 @@ toml_edit = "0.25.17"
 url = "2.5.8"
 uuid = { version = "1.28.0", features = ["v4"] }
 yaml-rust2 = { version = "0.13.0", default-features = false }
+zeroize = "1.9.1"
 
 [dev-dependencies]
 hs-pve = { version = "0.1.0", path = "../hs-pve" }

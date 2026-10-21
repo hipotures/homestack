@@ -56,6 +56,8 @@ pub enum Request {
     ),
     PangolinTunnel(u64, super::pangolin_tunnel::Spec),
     StopPangolinTunnel(bool),
+    /// Verify the bootstrap key of this run; the secret stays in the wizard.
+    VerifyPangolinKey(u64),
     Quit,
 }
 
@@ -1297,6 +1299,21 @@ impl App {
                         }
                         return None;
                     }
+                    Some(Hit::PangolinBootstrap(control)) => {
+                        if let Some(Overlay::Pangolin(wizard)) = self.overlay.as_mut()
+                            && wizard.selected_step == 5
+                            && wizard.bootstrap_available()
+                            && wizard.bootstrap.running == 0
+                            && !wizard.help_open
+                            && !wizard.report_open
+                        {
+                            wizard.focus = control;
+                            if control >= 3 {
+                                return press(self, if control == 3 { KeyCode::F(6) } else { KeyCode::F(5) });
+                            }
+                        }
+                        return None;
+                    }
                     Some(Hit::PangolinApi(control)) => {
                         if let Some(Overlay::Pangolin(wizard)) = self.overlay.as_mut() {
                             if wizard.api_confirm {
@@ -1543,6 +1560,11 @@ impl App {
             if !wizard.report_open && !wizard.help_open && !wizard.api_confirm {
                 if key.code == KeyCode::Esc && wizard.tunnel.busy() {
                     return Some(Request::StopPangolinTunnel(true));
+                }
+                if wizard.selected_step == 5
+                    && (key.code == KeyCode::F(6) || (key.code == KeyCode::Enter && wizard.focus == 3))
+                {
+                    return wizard.begin_bootstrap().map(Request::VerifyPangolinKey);
                 }
                 if wizard.selected_step == 4 {
                     if (key.code == KeyCode::F(5) || (key.code == KeyCode::Enter && wizard.focus == 2))

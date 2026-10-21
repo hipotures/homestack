@@ -28,13 +28,13 @@ the Spaceship and TSIG files in the same directory by default; explicit
 `homestack-deploy` uses the credential paths explicitly saved in its deployment
 configuration. `tui.toml` contains interface preferences, not integration data.
 
-## Pangolin setup wizard: Steps 1–5
+## Pangolin setup wizard: Steps 1–6
 
 Open **Settings > Integrations > Remote Access > Pangolin** to enter the setup
 wizard. All eight stages are shown: Pangolin server, Pangolin prerequisites,
 Pangolin discovery, Integration API, API tunnel, Bootstrap API key, HomeStack API
-key, and Integration verification. The first five stages are implemented;
-stages 6–8 remain locked and cannot execute operations.
+key, and Integration verification. The first six stages are implemented;
+stages 7–8 remain locked and cannot execute operations.
 
 On wide terminals, the step list sits to the left of the selected step's details.
 At 80x24, all eight steps appear above a compact form. Up/Down in the step list
@@ -134,7 +134,7 @@ inspection. Tab/Shift+Tab cycles navigation, Discover and (when available) Repor
 Enter activates the selected action. F7 opens the scrollable inventory, F4 opens
 contextual help, and Esc cancels a running discovery. Mouse actions use the same
 controls. At 80x24, Tab into the details opens a compact page; Tab back to
-navigation shows all eight steps. No later stage is executable.
+navigation shows all eight steps. Later stages have their own dependency checks.
 
 The existing SSH/askpass and hardware-touch mechanisms are reused. Discovery
 uses a fresh authenticated connection because the existing bounded SSH worker
@@ -362,11 +362,11 @@ success restores as **Disconnected**, never opens SSH on application startup,
 and cannot serve as a live endpoint. No local port, PID, private key or API token
 is persisted.
 
-Future consumers obtain the current endpoint from the owned runtime
+API consumers obtain the current endpoint from the owned runtime
 `Session::endpoint(&current_spec)`. This validates the current server/API
 association, verified session state and actual child liveness; it returns no
 endpoint while verifying, after failure, or for a changed configuration. No new
-tunnel is needed per API operation. **Steps 6–8 remain locked and unimplemented.**
+tunnel is needed per API operation. Step 6 uses this live session; **Steps 7–8 remain unimplemented.**
 
 The implementation requires Linux/Unix process groups, OpenSSH multiplexed
 forwarding and the existing `setsid`/askpass infrastructure. A short local-port
@@ -377,3 +377,68 @@ or promise of child cleanup after an uncatchable OS kill/power loss.
 Forward suppression and explicit forwarding use the documented
 [OpenSSH forwarding options](https://man.openbsd.org/ssh_config#ClearAllForwardings)
 and [multiplexed control requests](https://man.openbsd.org/ssh#O).
+
+
+### Step 6: bootstrap API key validation
+
+Enter the exact Organization ID and the complete temporary
+`homestack-bootstrap` credential (`ID.secret`) prepared in Step 2. Validation
+requires the current Steps 1–4 and the already connected, health-verified,
+owned Step 5 SSH tunnel for the same server and API endpoint. A saved tunnel
+history is insufficient. Step 6 never opens another connection or uses a public
+API URL. A disconnected tunnel directs the user back to Step 5.
+
+Tab/Shift+Tab cycles navigation, Organization ID, Temporary key, Verify and
+Clear. Enter activates controls; **F6** verifies, **F5** clears the credential,
+**F4** opens help and **F7** opens the sanitized report. **Esc** cancels a running
+verification before leaving the wizard. Mouse fields and buttons use the same
+checks. At 80x24, Tab enters the compact details page. The fixed mask reveals
+neither token characters nor length and has no reveal option. Token editing is
+append-only: Backspace removes the last character; Delete or Ctrl+U clears it.
+Pastes trim surrounding whitespace, reject invalid characters and reject
+oversized credentials rather than accepting a truncated token. Organization
+IDs and key IDs accept only 1–128 ASCII letters, digits, underscores or hyphens;
+secrets accept 1–512 of those characters, with exactly one separating dot.
+
+All API operations are GET requests through the literal IPv4 loopback forward,
+with the complete credential only in the Bearer authorization header:
+
+- `/v1/org/{orgId}/api-keys?limit=100&offset=...` exhausts organization key
+  pages. Success exercises authentication, the Root guard and `listApiKeys`.
+- `/v1/org/{orgId}/api-key/{keyId}/actions?limit=100&offset=...` exhausts the
+  bootstrap key's assigned actions and exercises `listApiKeyActions`. All four
+  management actions must be present. `createApiKey` and `setApiKeyActions`
+  are confirmed only as assigned metadata; no write permission is exercised.
+- `/v1/org/{orgId}` confirms existence only on a matching successful response.
+  HTTP 403 is expected without `getOrg` and does not fail validation. An empty
+  key list alone never proves that an organization exists. HTTP 404 fails it.
+
+An existing organization key named `homestack` is reported for deliberate
+handling in Step 7; it is never duplicated, overwritten, regenerated or deleted.
+The bootstrap credential is never revoked here. No Sites, Resources, Targets,
+DNS records, policies or other Pangolin objects are changed.
+
+Requests refuse redirects and ignore proxy configuration, validate response
+schemas and pagination, limit decoded bodies to 1 MiB, and use a 10-second
+request timeout and 60-second overall deadline. HTTP 401, HTTP 403 on required
+reads, missing actions, invalid input, incompatible responses, cancellation,
+timeout and tunnel loss have fixed sanitized diagnostics. Raw responses,
+authorization headers and credentials are never displayed, logged or persisted.
+Edits, cancellation and replaced tunnel sessions invalidate results; stale
+worker completion cannot authorize later operations.
+
+The credential and worker request buffers use zeroizing memory. Clear, wizard
+exit, application exit, or invalidated server/integration metadata erase the
+credential; cancellation also releases the worker's copy. Navigating to the
+Step 7 placeholder keeps it in memory. Only the Organization ID and a sanitized
+successful summary are saved atomically in the existing private
+`integrations/pangolin.toml`; no separate credential store is created. Restart
+restores historical information with an empty token and disconnected tunnel.
+Progress reaches **6/8** only with a current successful validation and connected
+tunnel. Phases 7 and 8 remain unavailable for execution.
+
+Verification uses synthetic local API responses and disposable tunnel processes;
+it does not establish compatibility with every Pangolin deployment or replace
+validation against an explicitly authorized server. As with other process
+memory, zeroization does not control operating-system swap or external memory
+dumps.

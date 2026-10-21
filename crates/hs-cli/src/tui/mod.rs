@@ -16,6 +16,7 @@ pub mod integrations;
 pub mod layout;
 pub mod pangolin;
 pub mod pangolin_api;
+pub mod pangolin_key;
 pub mod pangolin_tunnel;
 pub mod reinstall;
 pub mod run;

@@ -37,6 +37,7 @@ enum Update {
     PangolinDiscovery(u64, super::pangolin::Discovery),
     PangolinApi(u64, Box<super::pangolin_api::Api>),
     PangolinTunnel(u64, super::pangolin_tunnel::Event),
+    PangolinKey(u64, super::pangolin_key::Outcome),
     PangolinAsk(u64, AskEvent),
     Status(String, Value),
     StatusRejected(String),
@@ -512,6 +513,7 @@ fn start(request: &Request, client: Option<&Arc<Client>>, ctx: &Context, updates
         | Request::PangolinApi(_, _, _, _)
         | Request::PangolinTunnel(_, _)
         | Request::StopPangolinTunnel(_)
+        | Request::VerifyPangolinKey(_)
         | Request::CopyJson
         | Request::Act(_)
         | Request::Decide(_)
@@ -776,6 +778,7 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
     let mut pangolin_worker: Option<(super::pangolin::Pending, Bridge)> = None;
     let mut pangolin_tunnel: Option<(super::pangolin_tunnel::Session, Bridge)> = None;
     let mut pangolin_question: Option<crate::askpass::Question> = None;
+    let mut pangolin_key: Option<super::pangolin::Pending> = None;
     loop {
         if let Some((session, _)) = &pangolin_tunnel {
             let valid = matches!(&app.overlay,Some(Overlay::Pangolin(w)) if w.tunnel.id==session.id && w.tunnel_spec().as_ref()==Some(&session.spec));
@@ -809,6 +812,18 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
                     pangolin_tunnel = None;
                 }
             }
+        }
+        // A verification never outlives its tunnel session, edit or wizard.
+        if let Some(Overlay::Pangolin(w)) = app.overlay.as_mut()
+            && w.bootstrap.running != 0
+            && (!w.tunnel_connected() || !pangolin_tunnel.as_ref().is_some_and(|(s, _)| s.id == w.tunnel.id))
+        {
+            w.cancel_bootstrap(super::pangolin_key::Problem::Lost);
+        }
+        if pangolin_key.as_ref().is_some_and(
+            |worker| !matches!(&app.overlay, Some(Overlay::Pangolin(w)) if w.bootstrap.running == worker.id),
+        ) {
+            pangolin_key = None;
         }
         if let Some((worker, _)) = &pangolin_worker {
             let active = matches!(&app.overlay, Some(Overlay::Pangolin(w)) if w.testing && w.test_id == worker.id);
@@ -897,18 +912,23 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
                     Event::Key(key) if key.kind == KeyEventKind::Press && (!screen.copying ||
                         (key.modifiers.contains(event::KeyModifiers::CONTROL) && matches!(key.code, event::KeyCode::Char('c' | 'q')))) => app.key(key),
                     Event::Mouse(mouse) if !screen.copying => app.mouse(mouse),
-                    Event::Paste(text) if !screen.copying => {
+                    Event::Paste(mut text) if !screen.copying => {
                         match app.overlay.as_mut() {
                             Some(Overlay::Integration(editor)) => editor.paste(&text),
                             Some(Overlay::Pangolin(wizard)) => wizard.paste(&text),
                             _ => {}
                         }
+                        // Pasted text may be a credential: erase the event buffer.
+                        zeroize::Zeroize::zeroize(&mut text);
                         None
                     }
                     _ => None,
                 };
                 if let Some(request) = request {
                     if request == Request::Quit {
+                        if let Some(Overlay::Pangolin(wizard)) = app.overlay.as_mut() {
+                            wizard.clear_bootstrap();
+                        }
                         for (_, worker) in setup_workers.drain() {
                             worker.close();
                         }
@@ -920,6 +940,26 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
                             if let Some(question)=pangolin_question.take(){app.ask_ended(question.id);question.answer(None);}
                             pangolin_tunnel=None;
                             if let Some(Overlay::Pangolin(w))=app.overlay.as_mut(){w.end_tunnel(if cancelled{super::pangolin_tunnel::State::Cancelled}else{super::pangolin_tunnel::State::Disconnected});}
+                        }
+                        Request::VerifyPangolinKey(id) => {
+                            let Some(Overlay::Pangolin(w)) = app.overlay.as_mut() else { continue };
+                            let endpoint = pangolin_tunnel
+                                .as_ref()
+                                .filter(|(session, _)| session.id == w.tunnel.id)
+                                .zip(w.tunnel_spec())
+                                .and_then(|((session, _), spec)| session.live_endpoint(&spec));
+                            let (Some(endpoint), Some((organization, credential))) = (endpoint, w.bootstrap_input(id)) else {
+                                w.complete_bootstrap(id, super::pangolin_key::Outcome::failed(super::pangolin_key::Problem::Disconnected));
+                                continue;
+                            };
+                            let cancel = Arc::new(AtomicBool::new(false));
+                            pangolin_key = Some(super::pangolin::Pending { id, cancel: Arc::clone(&cancel) });
+                            let sender = updates.clone();
+                            tokio::task::spawn_blocking(move || {
+                                let outcome = super::pangolin_key::verify(&endpoint, &organization, &credential, &cancel);
+                                drop(credential);
+                                let _ = sender.send(Update::PangolinKey(id, outcome));
+                            });
                         }
                         Request::PangolinTunnel(mut id, spec) => {
                             if let Some((session, _)) = &pangolin_tunnel
@@ -1282,6 +1322,12 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
                         event = super::pangolin_tunnel::Event { state: super::pangolin_tunnel::State::Lost, error: Some(super::pangolin_tunnel::Error::Lost), port: None };
                     }
                     if let Some(Overlay::Pangolin(w)) = app.overlay.as_mut() { w.tunnel_event(id, event); }
+                }
+                Update::PangolinKey(id, outcome) => {
+                    if pangolin_key.as_ref().is_some_and(|worker| worker.id == id) {
+                        pangolin_key = None;
+                        if let Some(Overlay::Pangolin(wizard)) = app.overlay.as_mut() { wizard.complete_bootstrap(id, outcome); }
+                    }
                 }
                 Update::PangolinApi(id, report) => {
                     if pangolin_worker.as_ref().is_some_and(|(worker, _)| worker.id == id) {

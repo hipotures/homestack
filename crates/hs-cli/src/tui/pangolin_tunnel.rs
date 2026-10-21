@@ -242,6 +242,17 @@ pub struct Session {
     live: Arc<Mutex<Live>>,
     thread: Option<thread::JoinHandle<()>>,
 }
+pub struct Endpoint {
+    live: Arc<Mutex<Live>>,
+    pub port: u16,
+}
+impl Endpoint {
+    pub fn alive(&self) -> bool {
+        self.live.lock().is_ok_and(|mut live| {
+            live.verified && live.port == Some(self.port) && live.process.as_mut().is_some_and(Owned::alive)
+        })
+    }
+}
 struct Live {
     process: Option<Owned>,
     verified: bool,
@@ -298,6 +309,20 @@ impl Session {
             return None;
         }
         Some(format!("http://127.0.0.1:{}/v1/", live.port?))
+    }
+    /// A worker-side handle on the current verified forward; it stops being
+    /// alive when the child exits, verification restarts or the session drops.
+    pub fn live_endpoint(&self, spec: &Spec) -> Option<Endpoint> {
+        let port = self
+            .endpoint(spec)?
+            .strip_prefix("http://127.0.0.1:")?
+            .strip_suffix("/v1/")?
+            .parse::<u16>()
+            .ok()?;
+        Some(Endpoint {
+            live: Arc::clone(&self.live),
+            port,
+        })
     }
     pub fn verify(&self) {
         if let Ok(mut live) = self.live.lock() {
@@ -689,6 +714,25 @@ fn health_error(error: std::io::Error) -> Error {
     }
 }
 fn health_with_limit(port: u16, stop: &AtomicBool, limit: Duration) -> Result<(), Error> {
+    let request = b"GET /v1/ HTTP/1.1\r\nHost: 127.0.0.1\r\nAccept: application/json\r\nConnection: close\r\n\r\n";
+    let (status, body) = exchange(port, request, stop, limit, 1024)?;
+    if status != 200
+        || serde_json::from_slice::<serde_json::Value>(&body).ok() != Some(serde_json::json!({"message":"Healthy"}))
+    {
+        return Err(Error::Response);
+    }
+    Ok(())
+}
+
+/// One bounded HTTP/1.x exchange with the literal IPv4 loopback forward: no
+/// proxy lookup, redirects or logging. Returns the status and decoded body.
+pub(super) fn exchange(
+    port: u16,
+    request: &[u8],
+    stop: &AtomicBool,
+    limit: Duration,
+    max_body: usize,
+) -> Result<(u16, Vec<u8>), Error> {
     let started = Instant::now();
     if stop.load(Ordering::SeqCst) {
         return Err(Error::Cancelled);
@@ -704,9 +748,7 @@ fn health_with_limit(port: u16, stop: &AtomicBool, limit: Duration) -> Result<()
     stream
         .set_write_timeout(Some(Duration::from_millis(500)))
         .map_err(|_| Error::Remote)?;
-    stream
-        .write_all(b"GET /v1/ HTTP/1.1\r\nHost: 127.0.0.1\r\nAccept: application/json\r\nConnection: close\r\n\r\n")
-        .map_err(health_error)?;
+    stream.write_all(request).map_err(health_error)?;
     let mut bytes = Vec::new();
     let mut chunk = [0; 1024];
     loop {
@@ -720,7 +762,8 @@ fn health_with_limit(port: u16, stop: &AtomicBool, limit: Duration) -> Result<()
             Ok(0) => break,
             Ok(n) => {
                 bytes.extend_from_slice(&chunk[..n]);
-                if bytes.len() > 9216 {
+                // Chunk framing may add overhead beyond the decoded body bound.
+                if bytes.len() > 8192 + 2 * max_body {
                     return Err(Error::Response);
                 }
             }
@@ -742,9 +785,10 @@ fn health_with_limit(port: u16, stop: &AtomicBool, limit: Duration) -> Result<()
         .ok_or(Error::Response)?
         .split_whitespace()
         .collect::<Vec<_>>();
-    if status.len() < 2 || !matches!(status[0], "HTTP/1.1" | "HTTP/1.0") || status[1] != "200" {
+    if status.len() < 2 || !matches!(status[0], "HTTP/1.1" | "HTTP/1.0") || status[1].len() != 3 {
         return Err(Error::Response);
     }
+    let status = status[1].parse::<u16>().map_err(|_| Error::Response)?;
     let mut body = bytes[boundary + 4..].to_vec();
     let mut length = None;
     let mut chunked = false;
@@ -783,7 +827,7 @@ fn health_with_limit(port: u16, stop: &AtomicBool, limit: Duration) -> Result<()
             if count == 0 {
                 break;
             }
-            if count > 1024usize.saturating_sub(decoded.len())
+            if count > max_body.saturating_sub(decoded.len())
                 || input.len() < count + 2
                 || &input[count..count + 2] != b"\r\n"
             {
@@ -794,11 +838,8 @@ fn health_with_limit(port: u16, stop: &AtomicBool, limit: Duration) -> Result<()
         }
         body = decoded;
     }
-    if body.len() > 1024 || length.is_some_and(|l| l != body.len()) {
+    if body.len() > max_body || length.is_some_and(|l| l != body.len()) {
         return Err(Error::Response);
     }
-    if serde_json::from_slice::<serde_json::Value>(&body).ok() != Some(serde_json::json!({"message":"Healthy"})) {
-        return Err(Error::Response);
-    }
-    Ok(())
+    Ok((status, body))
 }
