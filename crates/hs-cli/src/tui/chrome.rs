@@ -37,9 +37,17 @@ pub struct Control {
     pub digit: Option<u8>,
     pub look: Look,
     pub bold: bool,
-    /// A carousel (`true` the group's, `false` the node's): a click on its
-    /// left half turns it back, on its right half forward.
-    pub carousel: Option<bool>,
+    /// A carousel: a click on its left half turns it back, on its right
+    /// half forward.
+    pub carousel: Option<Carousel>,
+}
+
+/// The carousels of the workspaces panel's border.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Carousel {
+    Group,
+    Power,
+    Node,
 }
 
 impl Control {
@@ -100,8 +108,8 @@ impl Control {
     }
 
     #[must_use]
-    pub fn carousel(mut self, group: bool) -> Self {
-        self.carousel = Some(group);
+    pub fn carousel(mut self, carousel: Carousel) -> Self {
+        self.carousel = Some(carousel);
         self
     }
 
@@ -463,8 +471,8 @@ pub enum Hit {
     Integration(usize),
     /// A column of the list in the Machines section of the settings.
     Column(usize),
-    /// A carousel clicked: the group's (`true`) or the node's, forward or back.
-    Turn(bool, bool),
+    /// A carousel clicked, forward (`true`) or back.
+    Turn(Carousel, bool),
     /// A choice of the parallel reads in the System section of the settings.
     Parallel(usize),
     PangolinStep(usize),
@@ -545,12 +553,12 @@ pub fn control_key(control: &Control) -> Option<crossterm::event::KeyCode> {
 }
 
 fn register_control(area: Rect, control: &Control) {
-    if let Some(group) = control.carousel {
+    if let Some(carousel) = control.carousel {
         let half = area.width / 2;
-        register(Rect::new(area.x, area.y, half, 1), Hit::Turn(group, false));
+        register(Rect::new(area.x, area.y, half, 1), Hit::Turn(carousel, false));
         register(
             Rect::new(area.x + half, area.y, area.width - half, 1),
-            Hit::Turn(group, true),
+            Hit::Turn(carousel, true),
         );
         return;
     }

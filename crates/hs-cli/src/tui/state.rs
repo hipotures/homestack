@@ -126,6 +126,35 @@ pub const MENU: [&str; 9] = [
     "Quit",
 ];
 
+/// The machines the list shows by their state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Power {
+    All,
+    Online,
+    Offline,
+}
+
+impl Power {
+    #[must_use]
+    pub fn word(self) -> &'static str {
+        match self {
+            Self::All => "all",
+            Self::Online => "online",
+            Self::Offline => "offline",
+        }
+    }
+
+    /// The next place of the carousel, or the previous one.
+    #[must_use]
+    pub fn turn(self, forward: bool) -> Self {
+        match (self, forward) {
+            (Self::All, true) | (Self::Offline, false) => Self::Online,
+            (Self::Online, true) | (Self::All, false) => Self::Offline,
+            (Self::Offline, true) | (Self::Online, false) => Self::All,
+        }
+    }
+}
+
 /// The sections of the settings box, in order.
 pub const SETTINGS: [&str; 6] = ["General", "Appearance", "Machines", "System", "Refresh", "Integrations"];
 /// The section of [`SETTINGS`] that holds the theme.
@@ -292,8 +321,8 @@ pub struct App {
     pub info: bool,
     pub filter: String,
     pub filtering: bool,
-    /// Only the running machines (`o`).
-    pub online: bool,
+    /// The machines shown by their state (`o`).
+    pub power: Power,
     /// Whether each of [`COLUMNS`] is shown.
     pub columns: [bool; COLUMNS.len()],
     /// The node carousel: `None` is every node.
@@ -425,7 +454,7 @@ impl App {
             info: false,
             filter: String::new(),
             filtering: false,
-            online: false,
+            power: Power::All,
             columns,
             node: None,
             group: None,
@@ -1100,7 +1129,11 @@ impl App {
                     .is_none_or(|group| entry.pool.as_ref() == Some(group))
             })
             .filter(|entry| node.as_ref().is_none_or(|node| &entry.node == node))
-            .filter(|entry| !self.online || entry.status == "running")
+            .filter(|entry| match self.power {
+                Power::All => true,
+                Power::Online => entry.status == "running",
+                Power::Offline => entry.status != "running",
+            })
             .filter(|entry| {
                 filter.is_empty()
                     || entry.vmid.to_string().contains(&filter)
@@ -1383,7 +1416,7 @@ impl App {
     }
 
     fn mouse_event(&mut self, event: crossterm::event::MouseEvent) -> Option<Request> {
-        use super::chrome::Hit;
+        use super::chrome::{Carousel, Hit};
         use crossterm::event::{MouseButton, MouseEventKind};
         let press = |app: &mut Self, code: KeyCode| app.key(KeyEvent::new(code, KeyModifiers::NONE));
         let in_box = self.install.is_some() || self.overlay.is_some() || self.asking.is_some() || self.setup.is_some();
@@ -1448,8 +1481,13 @@ impl App {
                 // the themes is chosen and opened.
                 match super::chrome::hit_at(event.column, event.row) {
                     Some(Hit::Key(code)) => return press(self, code),
-                    Some(Hit::Turn(group, forward)) => {
-                        self.on_group = group;
+                    Some(Hit::Turn(Carousel::Power, forward)) => {
+                        self.power = self.power.turn(forward);
+                        self.keep_selection();
+                        return None;
+                    }
+                    Some(Hit::Turn(carousel, forward)) => {
+                        self.on_group = carousel == Carousel::Group;
                         return press(self, if forward { KeyCode::Right } else { KeyCode::Left });
                     }
                     // A setting of the install, and a choice in its box.
@@ -2022,7 +2060,7 @@ impl App {
             KeyCode::Char('/') if self.shown.workspaces => self.filtering = true,
             KeyCode::Char('f') if self.shown.workspaces => self.toggle_favorite(),
             KeyCode::Char('o') if self.shown.workspaces => {
-                self.online = !self.online;
+                self.power = self.power.turn(true);
                 self.keep_selection();
             }
             KeyCode::Tab | KeyCode::BackTab if self.shown.workspaces => self.on_group = !self.on_group,

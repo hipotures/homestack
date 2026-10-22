@@ -8,7 +8,7 @@ use ratatui::layout::{Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
 
 use super::action::Action;
-use super::chrome::{Control, Hit, Scrolls, Sides, alert_style, frame, register, scrollbar, text_style};
+use super::chrome::{Carousel, Control, Hit, Scrolls, Sides, alert_style, frame, register, scrollbar, text_style};
 use super::layout::{MIN_HEIGHT, MIN_WIDTH, arrange};
 use super::state::{
     APPEARANCE, App, COLUMNS, INTEGRATIONS, MACHINES, MENU, Overlay, PARALLEL, PARALLEL_CHOICES, SETTINGS, SYSTEM,
@@ -874,7 +874,7 @@ fn workspaces(buf: &mut Buffer, area: Rect, app: &App, mut controls: Vec<Control
     let rows = app.rows();
     let switch = |control: Control, on: bool| if on { control.raised() } else { control };
     let mut top_left = vec![switch(
-        Control::panel(1, &format!("‹ {} ›", app.group_name())).carousel(true),
+        Control::panel(1, &format!("‹ {} ›", app.group_name())).carousel(Carousel::Group),
         app.on_group,
     )];
     top_left.append(&mut controls);
@@ -884,14 +884,14 @@ fn workspaces(buf: &mut Buffer, area: Rect, app: &App, mut controls: Vec<Control
     } else {
         top_left.push(Control::key("&/filter"));
     }
-    top_left.push(Control::key(if app.online { "[x] &online" } else { "[ ] &online" }));
+    top_left.push(Control::plain(&format!("‹ {} ›", app.power.word())).carousel(Carousel::Power));
     let node = app.node_name().unwrap_or_else(|| "all".to_owned());
     let position = app.selected_index().map_or(0, |index| index + 1);
     let sides = Sides {
         top_left,
         top_right: vec![
             switch(
-                Control::plain(&format!("‹ node: {node} ›")).carousel(false),
+                Control::plain(&format!("‹ node: {node} ›")).carousel(Carousel::Node),
                 !app.on_group,
             ),
             Control::key("&new").enabled(app.status.is_some() && app.action.is_none()),
@@ -2348,7 +2348,7 @@ const HELP: [&str; 28] = [
     "← →         ★ (favorites), all or one pool (after tab: one node or all)",
     "f           star or unstar the selected workspace (kept in tui.toml)",
     "/           filter by name or VMID; ↵ keeps it, esc clears it",
-    "o           only the running machines (again: all)",
+    "o           all, online or offline machines; a click on ‹ › turns it too",
     "esc         close a box, return to view 0, then confirm quit (↵ yes, esc cancel)",
     "q           quit immediately",
     "",
