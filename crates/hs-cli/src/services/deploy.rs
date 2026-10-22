@@ -295,7 +295,7 @@ async fn config_of(pve: &impl Pve, ctid: u32) -> Result<Option<(node::Container,
 
 /// `count` free CTIDs from the start of the API servers' block (102001
 /// for servers at 102001-102003), each with an address in the network.
-async fn automatic(config: &DeployConfig, pve: &impl Pve, count: usize) -> Result<Vec<u32>, String> {
+pub async fn automatic(config: &DeployConfig, pve: &impl Pve, count: usize) -> Result<Vec<u32>, String> {
     let first = config
         .instances
         .iter()
@@ -368,6 +368,12 @@ pub async fn plan(
     }
     if choice.nodes.is_empty() {
         problems.push("Tick at least one node".to_owned());
+    }
+    for node in &choice.nodes {
+        let prefix = format!("{node}:");
+        if choice.root_storages.iter().filter(|p| p.starts_with(&prefix)).count() > 1 {
+            problems.push(format!("{node}: tick one storage"));
+        }
     }
     if !manifest.multi_node && choice.nodes.len() > 1 {
         problems.push(format!(

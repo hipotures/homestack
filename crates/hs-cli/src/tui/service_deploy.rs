@@ -17,15 +17,13 @@ use crate::services::manifest::MOUNT;
 use crate::services::registry::{self, Deployment, Stage};
 
 const VERSION: usize = 0;
-const NODES: usize = 1;
-const ROOT: usize = 2;
-const HOME: usize = 3;
-const CTIDS: usize = 4;
-const CORES: usize = 5;
-const MEMORY: usize = 6;
-const ROOT_GIB: usize = 7;
-const HOME_GIB: usize = 8;
-const ENVIRONMENT: usize = 9;
+const PLACEMENT: usize = 1;
+const CTIDS: usize = 2;
+const CORES: usize = 3;
+const MEMORY: usize = 4;
+const ROOT_GIB: usize = 5;
+const HOME_GIB: usize = 6;
+const ENVIRONMENT: usize = 7;
 
 struct Session {
     config: DeployConfig,
@@ -128,7 +126,15 @@ async fn open(setup: &Setup, source: &Source, kept: Option<&Choice>) -> Result<(
             source.manifest.image_repository
         ));
     }
-    let resumed = record.as_ref().map(resumed_choice);
+    let mut resumed = record.as_ref().map(resumed_choice);
+    // A single instance gets its CTID filled in: the first free one.
+    if kept.is_none() && resumed.is_none() && !source.manifest.multi_node {
+        let ctid = deploy::automatic(&config, &pve, 1).await?;
+        resumed = Some(Choice {
+            ctids: ctid.iter().map(u32::to_string).collect(),
+            ..Choice::default()
+        });
+    }
     let settings = settings(source, &cluster, kept.or(resumed.as_ref()), setup.offset);
     let mut check = vec![
         (
@@ -231,37 +237,19 @@ fn settings(source: &Source, cluster: &Cluster, kept: Option<&Choice>, offset: i
         .map(|k| picked(&releases, std::slice::from_ref(&k.version)))
         .filter(|p| !p.is_empty())
         .unwrap_or_else(|| vec![0]);
-    let nodes: Vec<(String, String)> = cluster.nodes.iter().map(|n| (n.clone(), String::new())).collect();
-    // One row per node and storage, the nodes in order.
+    // One row per node and storage, the nodes in order: the node gets an
+    // instance whose disk and home volume are made on that storage.
     let mut rows: Vec<&deploy::NodeStorage> = cluster.storages.iter().collect();
     rows.sort_by(|a, b| (&a.node, &a.storage).cmp(&(&b.node, &b.storage)));
-    let storages: Vec<(String, String)> = rows
+    let placements: Vec<(String, String)> = rows
         .iter()
         .map(|s| {
             (
                 format!("{}:{}", s.node, s.storage),
-                format!("{} GiB free of {} GiB", gib(s.available), gib(s.total)),
+                format!("{}/{} GiB free", gib(s.available), gib(s.total)),
             )
         })
         .collect();
-    // By default each node's storage with the most free space.
-    let roomiest: Vec<usize> = cluster
-        .nodes
-        .iter()
-        .filter_map(|node| {
-            rows.iter()
-                .enumerate()
-                .filter(|(_, s)| s.node == *node)
-                .max_by_key(|(_, s)| s.available)
-                .map(|(index, _)| index)
-        })
-        .collect();
-    let storage_pick = |wanted: Option<&Vec<String>>| {
-        wanted
-            .map(|w| picked(&storages, w))
-            .filter(|p| !p.is_empty())
-            .unwrap_or_else(|| roomiest.clone())
-    };
     let text = |value: Option<&String>, default: &str| {
         Some(
             value
@@ -270,12 +258,19 @@ fn settings(source: &Source, cluster: &Cluster, kept: Option<&Choice>, offset: i
                 .unwrap_or_else(|| default.to_owned()),
         )
     };
-    let nodes_note = if manifest.multi_node {
-        "The nodes that get an instance: one container per ticked node, each with its own home volume. Instances \
-         are independent; nothing is replicated or balanced between them."
+    let (title, note) = if manifest.multi_node {
+        (
+            "Nodes",
+            "Tick one storage on each node that gets an instance: its disk and its home volume are made there, \
+             new volumes of the sizes below; nothing on the storage is changed. Instances are independent; nothing \
+             is replicated or balanced between them.",
+        )
     } else {
-        "The node that gets the service. Its manifest allows exactly one instance (multi_node: false); ticking \
-         more is refused in the review."
+        (
+            "Node",
+            "The node and storage of the only instance (multi_node: false): its disk and its home volume are made \
+             there, new volumes of the sizes below; nothing on the storage is changed.",
+        )
     };
     vec![
         Setting {
@@ -291,30 +286,11 @@ fn settings(source: &Source, cluster: &Cluster, kept: Option<&Choice>, offset: i
             text: None,
         },
         Setting {
-            title: "Nodes".to_owned(),
-            note: nodes_note.to_owned(),
-            multiple: true,
-            picked: kept.map(|k| picked(&nodes, &k.nodes)).unwrap_or_default(),
-            choices: nodes,
-            text: None,
-        },
-        Setting {
-            title: "Container disk".to_owned(),
-            note: "Where each container's disposable root disk is made, one per node; a node uses its ticked storage. Only storages the deploy token may use are offered."
-                .to_owned(),
-            multiple: true,
-            picked: storage_pick(kept.map(|k| &k.root_storages)),
-            choices: storages.clone(),
-            text: None,
-        },
-        Setting {
-            title: "Home volume".to_owned(),
-            note: format!(
-                "Where each instance's own persistent volume is made, mounted at {MOUNT} before the first start, one per node."
-            ),
-            multiple: true,
-            picked: storage_pick(kept.map(|k| &k.home_storages)),
-            choices: storages,
+            title: title.to_owned(),
+            note: note.to_owned(),
+            multiple: manifest.multi_node,
+            picked: kept.map(|k| picked(&placements, &k.root_storages)).unwrap_or_default(),
+            choices: placements,
             text: None,
         },
         Setting {
@@ -388,16 +364,20 @@ fn choice(settings: &[Setting], answers: &[Answer]) -> Choice {
         Some(Answer::Text(text)) => text.trim().to_owned(),
         _ => String::new(),
     };
-    // The nodes in the list's order, as the CTIDs are given.
-    let mut nodes = picked(NODES);
-    if let Some(setting) = settings.get(NODES) {
-        nodes.sort_by_key(|node| setting.choices.iter().position(|(value, _)| value == node));
+    // `NODE:STORAGE` in the list's order (by node), as the CTIDs are given.
+    let placements = picked(PLACEMENT);
+    let mut nodes: Vec<String> = Vec::new();
+    for placement in &placements {
+        let node = placement.split_once(':').map_or(placement.as_str(), |(node, _)| node);
+        if !nodes.iter().any(|known| known == node) {
+            nodes.push(node.to_owned());
+        }
     }
     Choice {
         version: picked(VERSION).into_iter().next().unwrap_or_default(),
         nodes,
-        root_storages: picked(ROOT),
-        home_storages: picked(HOME),
+        root_storages: placements.clone(),
+        home_storages: placements,
         ctids: text(CTIDS),
         cores: text(CORES),
         memory_mib: text(MEMORY),
