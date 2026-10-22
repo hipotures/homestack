@@ -15,6 +15,7 @@ use serde_json::Value;
 
 use crate::AppError;
 use crate::config::Loaded;
+use crate::services::github::Discovery;
 use crate::setup::catalog::{Catalog, load_catalog, save_snapshot};
 use crate::setup::cli::{
     catalog_with_repositories, connect, connect_asking, key_advice, key_label, local_settings, local_target_of,
@@ -55,6 +56,8 @@ pub enum Event {
     Progress(String, String),
     Finished(Value, Option<Value>),
     Terminal(Handoff),
+    /// The manifests a repository declares.
+    Services(String, Result<Discovery, String>),
 }
 
 /// What the box asks.
@@ -62,6 +65,8 @@ pub enum Command {
     Refresh,
     Catalog,
     Execute(Box<Plan>),
+    /// Read a repository's manifests on its default branch (read only).
+    Services(String, Option<String>),
     /// The box closed: the connection stays for the next one.
     Close,
     /// A box opened again on the same target: the state is read again.
@@ -309,6 +314,10 @@ fn run(start: &Start, tell: &Tell, cancel: &Arc<AtomicBool>, commands: &Receiver
                     return;
                 }
             },
+            Command::Services(repository, branch) => {
+                let found = crate::services::github::discover(system, &repository, branch.as_deref());
+                tell(Event::Services(repository, found));
+            }
             Command::Refresh => match session.inspect(system) {
                 Ok(state) => tell(Event::State(state)),
                 Err(error) => tell(Event::Notice(format!("State refresh failed: {}", error.0), true)),

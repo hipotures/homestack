@@ -21,6 +21,7 @@ pub mod profile;
 pub mod root_herdr;
 pub mod root_ssh;
 pub mod servers;
+pub mod services;
 pub mod setup;
 pub mod system;
 pub mod touch;

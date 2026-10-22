@@ -506,7 +506,10 @@ impl App {
     /// Enter on a server container: the reinstall box for it, or for every
     /// marked one when it is marked; the images are read first.
     pub(super) fn open_reinstall(&mut self) -> Option<Request> {
-        let entry = self.selected_entry().filter(|entry| image_container(entry))?.clone();
+        let entry = self
+            .selected_entry()
+            .filter(|entry| self.image_container(entry))?
+            .clone();
         if let Some(action) = &self.action {
             let line = format!("one action at a time: {} is still open", action.title());
             self.log("", &line);
@@ -517,7 +520,9 @@ impl App {
                 .iter()
                 .flat_map(|status| status.gold.iter().chain(&status.workspaces).chain(&status.others))
                 .filter(|other| {
-                    self.marked.contains(&other.vmid) && image_container(other) && is_site(other) == is_site(&entry)
+                    self.marked.contains(&other.vmid)
+                        && self.image_container(other)
+                        && is_site(other) == is_site(&entry)
                 })
                 .map(|other| (other.vmid, other.name.clone().unwrap_or_default()))
                 .collect()
@@ -644,7 +649,7 @@ impl App {
     pub(super) fn toggle_mark(&mut self) {
         if let Some(vmid) = self
             .selected_entry()
-            .filter(|entry| image_container(entry))
+            .filter(|entry| self.image_container(entry))
             .map(|entry| entry.vmid)
             && !self.marked.remove(&vmid)
         {
@@ -1040,14 +1045,15 @@ fn set_part(form: &mut Form, chosen: Part) {
     }
 }
 
-/// A HomeStack server: a container in the servers' pool or tagged as one;
-/// a Pangolin Site connector shares the pool but is not a server.
+/// A HomeStack API server: a container tagged as one whose CTID
+/// `deploy.toml` saves as an instance (`api`). The servers' pool alone
+/// proves nothing: other services and the Site connectors share it.
 #[must_use]
-pub fn is_server(entry: &StatusEntry) -> bool {
+pub fn is_server(entry: &StatusEntry, api: &std::collections::BTreeSet<u32>) -> bool {
     entry.role == "CT"
+        && api.contains(&entry.vmid)
+        && entry.tags.iter().any(|tag| tag == hs_deploy::node::SERVER_TAG)
         && !entry.tags.iter().any(|tag| tag == super::pangolin_sites::TAG)
-        && (entry.pool.as_deref() == Some(crate::servers::SERVICE_POOL)
-            || entry.tags.iter().any(|tag| tag == "homestack-server"))
 }
 
 /// A managed Pangolin Site connector.
@@ -1056,8 +1062,10 @@ pub fn is_site(entry: &StatusEntry) -> bool {
     entry.role == "CT" && entry.tags.iter().any(|tag| tag == super::pangolin_sites::TAG)
 }
 
-/// Containers with a managed image replacement workflow.
-#[must_use]
-pub fn image_container(entry: &StatusEntry) -> bool {
-    is_server(entry) || is_site(entry)
+impl App {
+    /// Containers with a managed image replacement workflow.
+    #[must_use]
+    pub fn image_container(&self, entry: &StatusEntry) -> bool {
+        is_server(entry, &self.api_instances) || is_site(entry)
+    }
 }

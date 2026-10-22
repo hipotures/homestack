@@ -9,7 +9,7 @@ use ratatui::style::{Modifier, Style};
 
 use super::chrome::{Control, Hit, Scrolls, Sides, frame, register, scrollbar, text_style};
 use super::draw::{SPINNER, cut, message_box, wrap, write};
-use super::setup::{SetupBox, Stage, Tone};
+use super::setup::{ServicesView, SetupBox, Stage, Tone, service_details, service_row};
 use super::state::App;
 use super::theme::Palette;
 
@@ -68,6 +68,16 @@ pub(super) fn setup_box(buf: &mut Buffer, area: Rect, app: &App, setup: &SetupBo
     let bottom_left = match &setup.stage {
         Stage::Loading { .. } => vec![Control::named("ESC", "cancel", KeyCode::Esc)],
         Stage::Failed { .. } => vec![Control::named("ENTER", "close", KeyCode::Enter)],
+        Stage::Tree if setup.cursor_repository().is_some() => {
+            let review = Control::named("A", "review & apply", KeyCode::Char('a')).enabled(!setup.busy);
+            vec![
+                Control::named("SPACE", "toggle", KeyCode::Char(' ')),
+                Control::named("TAB", "group", KeyCode::Tab),
+                Control::named("ENTER", "services", KeyCode::Enter),
+                if pending { review.chosen() } else { review },
+                Control::named("ESC", "cancel", KeyCode::Esc),
+            ]
+        }
         Stage::Tree => {
             let review = Control::named("ENTER", "review & apply", KeyCode::Enter).enabled(!setup.busy);
             vec![
@@ -78,6 +88,10 @@ pub(super) fn setup_box(buf: &mut Buffer, area: Rect, app: &App, setup: &SetupBo
                 Control::named("ESC", "cancel", KeyCode::Esc),
             ]
         }
+        Stage::Services(_) => vec![
+            Control::named("F5", "reread", KeyCode::F(5)),
+            Control::named("ESC", "back", KeyCode::Esc),
+        ],
         Stage::Review { apply, .. } => {
             let back = Control::named("ESC", "back", KeyCode::Esc);
             let run = Control::named("ENTER", "apply this plan", KeyCode::Char('a'));
@@ -150,6 +164,7 @@ pub(super) fn setup_box(buf: &mut Buffer, area: Rect, app: &App, setup: &SetupBo
             auth_wait,
         } => running(buf, inner, app, (lines, *finished, title, *auth_wait), setup.frame),
         Stage::Tree => tree_stage(buf, inner, app, setup),
+        Stage::Services(view) => services_stage(buf, inner, app, setup, view),
     }
     if let Some(notice) = &setup.notice {
         let y = inner.bottom().saturating_sub(1);
@@ -408,6 +423,146 @@ fn draw_details(buf: &mut Buffer, area: Rect, app: &App, setup: &SetupBox) {
     }
     let bar = Rect::new(area.x, area.y.saturating_sub(1), area.width, area.height + 2);
     scrollbar(buf, bar, palette, Scrolls::SetupDetails, scroll, height, lines.len());
+}
+
+/// A repository's services: its manifest files, the highlighted one's
+/// details beside them (below when narrow). Nothing here changes anything.
+fn services_stage(buf: &mut Buffer, inner: Rect, app: &App, setup: &SetupBox, view: &ServicesView) {
+    let palette = &app.palette;
+    let text = text_style(palette);
+    let muted = text.fg(palette.muted);
+    let error = text.fg(palette.error);
+    let width = inner.width.saturating_sub(2);
+    let heading = match &view.branch {
+        Some(branch) => format!("Services of {} ({branch})", view.repository),
+        None => format!("Services of {}", view.repository),
+    };
+    write(
+        buf,
+        inner.x + 1,
+        inner.y,
+        width,
+        &heading,
+        text.add_modifier(Modifier::BOLD),
+    );
+    let body = Rect::new(inner.x, inner.y + 2, inner.width, inner.height.saturating_sub(2));
+    if body.height == 0 {
+        return;
+    }
+    let found = match setup.discovery(&view.repository) {
+        None => {
+            let spinner = SPINNER[setup.frame % SPINNER.len()];
+            let line = format!("{spinner} Reading .homestack/*.yaml on GitHub");
+            write(buf, body.x + 1, body.y, width, &line, text);
+            return;
+        }
+        Some(Err(problem)) => {
+            for (row, line) in wrap(problem, usize::from(width)).iter().enumerate() {
+                let y = body.y + u16::try_from(row).unwrap_or(0);
+                if y < body.bottom() {
+                    write(buf, body.x + 1, y, width, line, error);
+                }
+            }
+            return;
+        }
+        Some(Ok(found)) => found,
+    };
+    let mut y = body.y;
+    if let Some(problem) = &found.problem {
+        write(buf, body.x + 1, y, width, problem, text.fg(palette.warning));
+        y += 2;
+    }
+    if found.files.is_empty() {
+        let line = "No .homestack/*.yaml on the default branch: nothing deployable.";
+        write(buf, body.x + 1, y, width, line, muted);
+        return;
+    }
+    let rest = Rect::new(body.x, y, body.width, body.bottom().saturating_sub(y));
+    let (list, details) = if rest.width >= 70 {
+        let list_width = rest.width * 2 / 5;
+        (
+            Rect::new(rest.x, rest.y, list_width, rest.height),
+            Rect::new(
+                rest.x + list_width + 1,
+                rest.y,
+                rest.width - list_width - 1,
+                rest.height,
+            ),
+        )
+    } else {
+        let list_height = u16::try_from(found.files.len())
+            .unwrap_or(u16::MAX)
+            .min(rest.height / 2)
+            .max(1);
+        (
+            Rect::new(rest.x, rest.y, rest.width, list_height),
+            Rect::new(
+                rest.x,
+                rest.y + list_height + 1,
+                rest.width,
+                rest.height.saturating_sub(list_height + 1),
+            ),
+        )
+    };
+    let cursor = view.cursor.min(found.files.len() - 1);
+    let offset = (cursor + 1).saturating_sub(usize::from(list.height));
+    for (index, file) in found
+        .files
+        .iter()
+        .enumerate()
+        .skip(offset)
+        .take(usize::from(list.height))
+    {
+        let y = list.y + u16::try_from(index - offset).unwrap_or(0);
+        let (line, tone) = service_row(file);
+        let mut style = tone_style(palette, text, tone);
+        if index == cursor {
+            style = style.bg(palette.selection).add_modifier(Modifier::BOLD);
+            if palette.no_color {
+                style = style.add_modifier(Modifier::REVERSED);
+            }
+            write(buf, list.x, y, list.width, &" ".repeat(usize::from(list.width)), style);
+        }
+        write(buf, list.x + 1, y, list.width.saturating_sub(2), &line, style);
+    }
+    if details.height == 0 || details.width <= 2 {
+        return;
+    }
+    let observed: Option<Vec<hs_model::status::StatusEntry>> = app.status.as_ref().map(|status| {
+        status
+            .gold
+            .iter()
+            .chain(&status.workspaces)
+            .chain(&status.others)
+            .cloned()
+            .collect()
+    });
+    let lines: Vec<String> = service_details(found, &found.files[cursor], &app.services, observed.as_deref())
+        .iter()
+        .flat_map(|line| wrap(line, usize::from(details.width.saturating_sub(2))))
+        .collect();
+    let height = usize::from(details.height);
+    let scroll = view.scroll.min(lines.len().saturating_sub(height));
+    for (row, line) in lines.iter().skip(scroll).take(height).enumerate() {
+        let y = details.y + u16::try_from(row).unwrap_or(0);
+        let style = if row + scroll == 0 {
+            text.add_modifier(Modifier::BOLD)
+        } else if line.starts_with("Error: ") {
+            error
+        } else {
+            text
+        };
+        let used = write(buf, details.x + 1, y, details.width.saturating_sub(2), line, style);
+        if row + scroll > 0
+            && !line.starts_with("Error: ")
+            && let Some(at) = line.find(": ")
+            && at <= 16
+        {
+            let label = &line[..=at];
+            let label_width = u16::try_from(label.chars().count()).unwrap_or(0);
+            write(buf, details.x + 1, y, used.min(label_width), label, muted);
+        }
+    }
 }
 
 /// Every group with its count, the shown one raised; a click shows one.

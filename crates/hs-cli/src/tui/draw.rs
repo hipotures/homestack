@@ -569,7 +569,11 @@ fn workspace_actions(app: &App) -> Vec<Control> {
     let selected = app.selected_entry();
     let running = selected.is_some_and(|entry| entry.status == "running");
     let free = selected.is_some() && app.action.is_none() && app.setup.is_none();
-    if selected.is_some_and(super::acting::image_container) {
+    // A service container no workflow manages yet: nothing to act on.
+    if selected.is_some_and(|entry| entry.role == "CT" && !app.image_container(entry)) {
+        return vec![Control::key("&info")];
+    }
+    if selected.is_some_and(|entry| app.image_container(entry)) {
         return vec![
             Control::key("&info"),
             Control::named("␣", "select", KeyCode::Char(' ')),
@@ -609,9 +613,35 @@ fn workspace_actions(app: &App) -> Vec<Control> {
     ]
 }
 
+/// A container as the service registry sees it. The API servers and Site
+/// connectors keep their own update workflows until they are adopted.
+fn container_service(app: &App, entry: &StatusEntry) -> String {
+    use crate::services::registry::{Status, instance_status};
+    let registry = match &app.services {
+        Ok(registry) => registry,
+        Err(error) => return Status::Unavailable(error.clone()).label(),
+    };
+    if let Some((deployment, instance)) = registry.instance(entry.vmid) {
+        let observed = std::slice::from_ref(entry);
+        let status = instance_status(deployment, instance, Some(observed));
+        return format!("{} ({}): {}", deployment.service, deployment.repository, status.label());
+    }
+    let legacy = if super::acting::is_site(entry) {
+        " (legacy Pangolin Site)"
+    } else if app.image_container(entry) {
+        " (legacy HomeStack API)"
+    } else {
+        ""
+    };
+    format!("{}{legacy}", Status::Unmanaged.label())
+}
+
 /// Label and value pairs of the selected workspace.
 fn detail_pairs(app: &App, entry: &StatusEntry) -> Vec<(&'static str, String)> {
     let mut pairs = vec![("", format!("{} on {}", entry.status, entry.node))];
+    if entry.role == "CT" {
+        pairs.push(("service", container_service(app, entry)));
+    }
     if let Some(image) = &entry.image {
         let tag = |image: &str| image.rsplit_once(':').map_or(image, |(_, tag)| tag).to_owned();
         pairs.push(("address", entry.ip.clone().unwrap_or_else(|| "—".to_owned())));

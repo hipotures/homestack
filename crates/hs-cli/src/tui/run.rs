@@ -724,6 +724,13 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
     }
     let (updates, mut received) = mpsc::unbounded_channel::<Update>();
     app.set_keys(public_keys(&ctx.home));
+    if let Ok(deployment) = hs_deploy::config::DeployConfig::load(&deploy_toml(ctx)) {
+        app.api_instances = deployment.instances.iter().map(|instance| instance.ctid).collect();
+    }
+    app.services = crate::services::registry::load(&crate::services::registry::path_for(&config::default_path(
+        &ctx.home,
+        ctx.config_home.as_deref(),
+    )));
     let first_start = !config::default_path(&ctx.home, ctx.config_home.as_deref()).exists();
     let mut connection = if first_start || explicit_install {
         if app.open_install(Mode::Install, first_start) == Some(Request::HerdrTabs) {
@@ -1303,6 +1310,11 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
                                         .as_mut()
                                         .and_then(|setup| setup.pending_plan.take())
                                         .map(|plan| Work::Execute(Box::new(plan))),
+                                    Ask::Services => app
+                                        .setup
+                                        .as_mut()
+                                        .and_then(|setup| setup.services_request.take())
+                                        .map(|(repository, branch)| Work::Services(repository, branch)),
                                     Ask::Cancel => {
                                         worker.cancel.store(true, Ordering::SeqCst);
                                         None

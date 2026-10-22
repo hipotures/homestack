@@ -308,6 +308,10 @@ pub struct App {
     pub marked: std::collections::BTreeSet<u32>,
     /// What the reinstall box shows, once read.
     pub images: Option<Result<super::reinstall::Images, String>>,
+    /// The CTIDs `deploy.toml` saves as HomeStack API instances.
+    pub api_instances: std::collections::BTreeSet<u32>,
+    /// The profile's service registry, as read at the start.
+    pub services: Result<crate::services::registry::Registry, String>,
 }
 
 impl App {
@@ -334,6 +338,8 @@ impl App {
             storage_overview: None,
             api_updates: None,
             api_updates_checking: false,
+            api_instances: std::collections::BTreeSet::new(),
+            services: Ok(crate::services::registry::Registry::default()),
             startup_message: None,
             servers: Vec::new(),
             unreachable: Vec::new(),
@@ -1776,7 +1782,7 @@ impl App {
                 return None;
             }
             if key.code == KeyCode::Enter {
-                return if self.selected_entry().is_some_and(super::acting::image_container) {
+                return if self.selected_entry().is_some_and(|entry| self.image_container(entry)) {
                     self.open_reinstall()
                 } else {
                     self.open_setup()

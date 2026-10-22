@@ -7,8 +7,12 @@
 use std::collections::{BTreeSet, HashMap};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use hs_model::status::StatusEntry;
 use serde_json::Value;
 
+use crate::services::github::{Discovery, ManifestFile};
+use crate::services::manifest::Healthcheck;
+use crate::services::registry::{Registry, service_status};
 use crate::setup::catalog::Catalog;
 use crate::setup::definitions::{ConfigFile, Entry, Params, app_file_entries, application_children, config_entry_id};
 use crate::setup::engine::truthy;
@@ -79,6 +83,8 @@ pub enum Stage {
         apply: bool,
         plan: Box<Plan>,
     },
+    /// The services a repository declares (read only, cluster level).
+    Services(ServicesView),
     /// The run (Python `Execution`).
     Running {
         lines: Vec<String>,
@@ -98,10 +104,119 @@ pub enum Ask {
     Catalog,
     /// Run `pending_plan`.
     Execute,
+    /// Read the manifests of `services_request`.
+    Services,
     /// Esc while it runs.
     Cancel,
     /// The box closes: the connection ends.
     Close,
+}
+
+/// One repository's services: its manifest files on the left, the
+/// highlighted one's details on the right.
+#[derive(Debug, Clone)]
+pub struct ServicesView {
+    pub repository: String,
+    pub branch: Option<String>,
+    /// The highlighted manifest file.
+    pub cursor: usize,
+    pub scroll: usize,
+}
+
+fn short(sha: &str) -> &str {
+    sha.get(..12).unwrap_or(sha)
+}
+
+/// The line of a manifest file in the services list.
+#[must_use]
+pub fn service_row(file: &ManifestFile) -> (String, Tone) {
+    match &file.manifest {
+        Ok(manifest) => (format!("{}  {}", manifest.id, manifest.name), Tone::Plain),
+        Err(_) => (
+            format!("{}  invalid", file.path.trim_start_matches(".homestack/")),
+            Tone::Red,
+        ),
+    }
+}
+
+/// What a manifest file declares, and the service's state in the registry
+/// compared with the containers Proxmox lists (`observed`).
+#[must_use]
+pub fn service_details(
+    discovery: &Discovery,
+    file: &ManifestFile,
+    registry: &Result<Registry, String>,
+    observed: Option<&[StatusEntry]>,
+) -> Vec<String> {
+    let revision = format!("Revision: {} @ {}", discovery.branch, short(&discovery.commit));
+    let manifest = match &file.manifest {
+        Ok(manifest) => manifest,
+        Err(error) => {
+            return vec![
+                "Invalid manifest".to_owned(),
+                format!("File: {}", file.path),
+                revision,
+                format!("Error: {error}"),
+                String::new(),
+                "No service is offered from this file; fix it in the repository.".to_owned(),
+            ];
+        }
+    };
+    let mut lines = vec![
+        format!("{} ({})", manifest.name, manifest.id),
+        format!("Repository: {}", discovery.repository),
+        format!("File: {}", file.path),
+        revision,
+        format!("Blob: {}", short(&file.blob)),
+        format!("Image: {}", manifest.image_repository),
+        "Version: chosen from published releases when deployed".to_owned(),
+    ];
+    if manifest.ports.is_empty() {
+        lines.push("Ports: none".to_owned());
+    }
+    for port in &manifest.ports {
+        lines.push(format!("Port: {} {}/tcp", port.name, port.port));
+    }
+    lines.push(match &manifest.healthcheck {
+        Some(Healthcheck::Http {
+            port,
+            path,
+            expected_status,
+        }) => format!("Health: HTTP GET {path} on {port}, expects {expected_status}"),
+        Some(Healthcheck::Tcp { port }) => {
+            format!("Health: TCP connect to {port} (the port opens; not application health)")
+        }
+        None => "Health: unverified (no health check declared)".to_owned(),
+    });
+    lines.push(format!("Mount: {}", crate::services::manifest::MOUNT));
+    if manifest.directories.is_empty() {
+        lines.push("Directories: none declared".to_owned());
+    }
+    for directory in &manifest.directories {
+        lines.push(format!("Directory: {}/{directory}", crate::services::manifest::MOUNT));
+    }
+    for mapping in &manifest.mappings {
+        lines.push(format!(
+            "Mapping: {} → {}/{}",
+            mapping.source,
+            crate::services::manifest::MOUNT,
+            mapping.destination
+        ));
+    }
+    lines.push(if manifest.multi_node {
+        "Nodes: one or more, independent instances".to_owned()
+    } else {
+        "Nodes: exactly one".to_owned()
+    });
+    lines.push(format!("State model: {}", manifest.state_model.as_str()));
+    lines.push(String::new());
+    for (ctid, status) in service_status(registry, &discovery.repository, &manifest.id, observed) {
+        lines.push(match ctid {
+            Some(ctid) => format!("Status: CT {ctid} {}", status.label()),
+            None => format!("Status: {}", status.label()),
+        });
+    }
+    lines
 }
 
 /// A message (Python `notify`).
@@ -150,6 +265,12 @@ pub struct SetupBox {
     pub result: Option<Value>,
     /// The reviewed plan the run takes.
     pub pending_plan: Option<Plan>,
+    /// The repository (and its default branch) whose manifests the worker
+    /// reads next.
+    pub services_request: Option<(String, Option<String>)>,
+    /// What each opened repository declares, as last read; `None` while
+    /// it is read.
+    pub discoveries: HashMap<String, Option<Result<Discovery, String>>>,
     pub ssh_status: String,
     pub stage: Stage,
     pub details_scroll: usize,
@@ -333,6 +454,8 @@ impl SetupBox {
             cancel_requested: false,
             result: None,
             pending_plan: None,
+            services_request: None,
+            discoveries: HashMap::new(),
             ssh_status: if connected { "connected" } else { "not connected" }.to_owned(),
             stage: Stage::Tree,
             details_scroll: 0,
@@ -1798,10 +1921,11 @@ impl SetupBox {
     /// Whether the spinner turns (connecting, or a run under way).
     #[must_use]
     pub fn animating(&self) -> bool {
-        matches!(
-            self.stage,
-            Stage::Loading { .. } | Stage::Running { finished: false, .. }
-        )
+        match &self.stage {
+            Stage::Loading { .. } | Stage::Running { finished: false, .. } => true,
+            Stage::Services(view) => self.discovery(&view.repository).is_none(),
+            _ => false,
+        }
     }
 
     /// Whether the run is under way.
@@ -1810,9 +1934,96 @@ impl SetupBox {
         matches!(self.stage, Stage::Running { finished: false, .. })
     }
 
+    /// The repository of the highlighted row, when it is one.
+    #[must_use]
+    pub fn cursor_repository(&self) -> Option<String> {
+        match &self.entry(&self.cursor)?.params {
+            Params::Repository { repository } => Some(repository.clone()),
+            _ => None,
+        }
+    }
+
+    /// Enter on a repository: its services, read once per box.
+    fn open_services(&mut self) -> Option<Ask> {
+        let repository = self.cursor_repository()?;
+        let branch = self
+            .catalog
+            .timestamps
+            .get(&self.cursor)
+            .and_then(|stamps| stamps.get("default_branch"))
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        self.stage = Stage::Services(ServicesView {
+            repository: repository.clone(),
+            branch: branch.clone(),
+            cursor: 0,
+            scroll: 0,
+        });
+        if self.discoveries.contains_key(&repository) {
+            return None;
+        }
+        Some(self.read_services(repository, branch))
+    }
+
+    fn read_services(&mut self, repository: String, branch: Option<String>) -> Ask {
+        self.discoveries.insert(repository.clone(), None);
+        self.services_request = Some((repository, branch));
+        Ask::Services
+    }
+
+    /// What the worker read of `repository`.
+    pub fn services_read(&mut self, repository: String, result: Result<Discovery, String>) {
+        self.discoveries.insert(repository, Some(result));
+    }
+
+    /// The discovery the services view shows, once read.
+    #[must_use]
+    pub fn discovery(&self, repository: &str) -> Option<&Result<Discovery, String>> {
+        self.discoveries.get(repository).and_then(Option::as_ref)
+    }
+
+    fn services_key(&mut self, key: KeyEvent) -> Option<Ask> {
+        let Stage::Services(view) = &self.stage else {
+            return None;
+        };
+        let repository = view.repository.clone();
+        let read = self.discovery(&repository);
+        let loading = read.is_none();
+        let count = read
+            .and_then(|read| read.as_ref().ok())
+            .map_or(0, |found| found.files.len());
+        let Stage::Services(view) = &mut self.stage else {
+            return None;
+        };
+        match key.code {
+            KeyCode::Esc => self.stage = Stage::Tree,
+            KeyCode::Up => {
+                view.cursor = view.cursor.saturating_sub(1);
+                view.scroll = 0;
+            }
+            KeyCode::Down => {
+                view.cursor = (view.cursor + 1).min(count.saturating_sub(1));
+                view.scroll = 0;
+            }
+            KeyCode::PageUp => view.scroll = view.scroll.saturating_sub(10),
+            KeyCode::PageDown => view.scroll += 10,
+            KeyCode::F(5) if !loading => {
+                let branch = view.branch.clone();
+                view.cursor = 0;
+                view.scroll = 0;
+                return Some(self.read_services(repository, branch));
+            }
+            _ => {}
+        }
+        None
+    }
+
     /// Handle a key; what the worker has to do.
     pub fn key(&mut self, key: KeyEvent) -> Option<Ask> {
         self.notice = None;
+        if matches!(self.stage, Stage::Services(_)) {
+            return self.services_key(key);
+        }
         match &mut self.stage {
             Stage::Loading { .. } => (key.code == KeyCode::Esc).then_some(Ask::Close),
             Stage::Failed { .. } => matches!(key.code, KeyCode::Esc | KeyCode::Enter).then_some(Ask::Close),
@@ -1854,6 +2065,7 @@ impl SetupBox {
                 _ => None,
             },
             Stage::Tree => self.tree_key(key),
+            Stage::Services(_) => None,
         }
     }
 
@@ -1916,7 +2128,9 @@ impl SetupBox {
             KeyCode::Char(' ') => self.toggle(&cursor, false),
             KeyCode::Char('0') => self.toggle(&cursor, true),
             KeyCode::Char('f') => self.filtering = true,
-            KeyCode::Enter => self.review(),
+            // Enter on a repository opens its services; `a` reviews from anywhere.
+            KeyCode::Enter if self.cursor_repository().is_some() => return self.open_services(),
+            KeyCode::Enter | KeyCode::Char('a') => self.review(),
             KeyCode::Esc => {
                 if !self.filter.is_empty() {
                     self.filter.clear();
@@ -1946,6 +2160,11 @@ impl super::state::App {
     pub(super) fn open_setup(&mut self) -> Option<super::state::Request> {
         if self.selected_entry().is_some_and(super::acting::is_site) {
             return self.open_reinstall();
+        }
+        // Other containers are services, not workspaces: no setup, and no
+        // update until a service workflow manages them.
+        if self.selected_entry().is_some_and(|entry| entry.role == "CT") {
+            return None;
         }
         if let Some(action) = &self.action {
             let line = format!("one action at a time: {} is still open", action.title());
@@ -2043,6 +2262,16 @@ impl super::state::App {
                 setup.finished(result, state);
                 let outcome = if ok { "finished" } else { "stopped" };
                 self.log(&time, &format!("setup: {outcome}"));
+            }
+            Event::Services(repository, found) => {
+                let failure = found
+                    .as_ref()
+                    .err()
+                    .map(|error| format!("setup: services of {repository}: {error}"));
+                setup.services_read(repository, found);
+                if let Some(line) = failure {
+                    self.log(&time, &line);
+                }
             }
             // The loop lends the terminal itself.
             Event::Terminal(_) => {}
