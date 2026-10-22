@@ -127,13 +127,21 @@ pub const MENU: [&str; 9] = [
 ];
 
 /// The sections of the settings box, in order.
-pub const SETTINGS: [&str; 5] = ["General", "Appearance", "Machines", "Refresh", "Integrations"];
+pub const SETTINGS: [&str; 6] = ["General", "Appearance", "Machines", "System", "Refresh", "Integrations"];
 /// The section of [`SETTINGS`] that holds the theme.
 pub const APPEARANCE: usize = 1;
 /// The section of [`SETTINGS`] that holds the list's columns.
 pub const MACHINES: usize = 2;
+/// The section of [`SETTINGS`] that holds how the servers read Proxmox.
+pub const SYSTEM: usize = 3;
 /// The section of [`SETTINGS`] that holds the integrations.
-pub const INTEGRATIONS: usize = 4;
+pub const INTEGRATIONS: usize = 5;
+
+/// The choices of how many Proxmox requests a server reads at a time.
+pub const PARALLEL_CHOICES: [usize; 6] = [1, 2, 4, 8, 16, 32];
+/// How many Proxmox requests a server reads at a time for the status, as
+/// `tui.toml` keeps it; the status reader asks with it.
+pub static PARALLEL: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(8);
 
 /// The list's columns in their order, and whether one is shown without a
 /// choice in `tui.toml`.
@@ -174,6 +182,11 @@ pub enum Overlay {
     },
     /// The column list in the Machines section; `index` is one of [`COLUMNS`].
     Columns {
+        index: usize,
+    },
+    /// The open list of the System section's parallel reads; `index` is one
+    /// of [`PARALLEL_CHOICES`].
+    Parallel {
         index: usize,
     },
     Integration(Box<super::integrations::Editor>),
@@ -368,6 +381,15 @@ impl App {
             .get("columns")
             .and_then(toml::Value::as_array)
             .map(|keys| keys.iter().filter_map(toml::Value::as_str).collect());
+        if let Some(parallel) = preferences
+            .table
+            .get("parallel")
+            .and_then(toml::Value::as_integer)
+            .and_then(|value| usize::try_from(value).ok())
+            .filter(|value| PARALLEL_CHOICES.contains(value))
+        {
+            PARALLEL.store(parallel, std::sync::atomic::Ordering::SeqCst);
+        }
         let columns = COLUMNS.map(|(key, shown)| chosen.as_ref().map_or(shown, |chosen| chosen.contains(&key)));
         let favorites = preferences
             .table
@@ -1258,6 +1280,20 @@ impl App {
         }
     }
 
+    /// Read `parallel` Proxmox requests at a time, kept in `tui.toml`.
+    fn save_parallel(&mut self, parallel: usize) {
+        PARALLEL.store(parallel, std::sync::atomic::Ordering::SeqCst);
+        let mut table = self.preferences.table.clone();
+        table.insert(
+            "parallel".to_owned(),
+            toml::Value::Integer(i64::try_from(parallel).unwrap_or(8)),
+        );
+        match self.preferences.write(&table) {
+            Ok(()) => self.preferences.table = table,
+            Err(error) => self.log("", &error.0),
+        }
+    }
+
     fn save_view(&mut self) {
         let mut table = self.preferences.table.clone();
         table.remove("preset");
@@ -1453,6 +1489,13 @@ impl App {
                     Some(Hit::SetupRow(index, part)) => return self.setup_click(index, part),
                     Some(Hit::SetupDetails) => return None,
                     Some(Hit::Log { .. } | Hit::Bar(_)) => return None,
+                    Some(Hit::Parallel(item)) => {
+                        if let Some(parallel) = PARALLEL_CHOICES.get(item) {
+                            self.save_parallel(*parallel);
+                        }
+                        self.overlay = Some(Overlay::Settings { section: SYSTEM });
+                        return None;
+                    }
                     Some(Hit::Column(item)) => {
                         self.overlay = Some(Overlay::Columns { index: item });
                         self.toggle_column(item);
@@ -1580,7 +1623,7 @@ impl App {
                             Some(Overlay::Menu { index }) => *index = item,
                             // A section of the settings is chosen; Appearance and
                             // Machines open at once, their list being all they have.
-                            Some(Overlay::Integrations { .. } | Overlay::Columns { .. }) => {
+                            Some(Overlay::Integrations { .. } | Overlay::Columns { .. } | Overlay::Parallel { .. }) => {
                                 self.overlay = Some(Overlay::Settings {
                                     section: item.min(SETTINGS.len() - 1),
                                 });
@@ -1588,7 +1631,7 @@ impl App {
                             }
                             Some(Overlay::Settings { section }) => {
                                 *section = item.min(SETTINGS.len() - 1);
-                                return if *section == APPEARANCE || *section == MACHINES {
+                                return if [APPEARANCE, MACHINES, SYSTEM].contains(section) {
                                     press(self, KeyCode::Enter)
                                 } else {
                                     None
@@ -2159,6 +2202,15 @@ impl App {
                 KeyCode::Enter | KeyCode::Right if section == MACHINES => {
                     self.overlay = Some(Overlay::Columns { index: 0 });
                 }
+                KeyCode::Enter | KeyCode::Right if section == SYSTEM => {
+                    let current = PARALLEL.load(std::sync::atomic::Ordering::SeqCst);
+                    self.overlay = Some(Overlay::Parallel {
+                        index: PARALLEL_CHOICES
+                            .iter()
+                            .position(|choice| *choice == current)
+                            .unwrap_or(3),
+                    });
+                }
                 KeyCode::Enter | KeyCode::Right if section == INTEGRATIONS => {
                     self.overlay = Some(Overlay::Integrations { index: 0 });
                 }
@@ -2166,6 +2218,23 @@ impl App {
                 _ => self.overlay = Some(Overlay::Settings { section }),
             },
             Overlay::Integration(_) | Overlay::Pangolin(_) => self.overlay = Some(overlay),
+            Overlay::Parallel { mut index } => {
+                match code {
+                    KeyCode::Down => index = (index + 1).min(PARALLEL_CHOICES.len() - 1),
+                    KeyCode::Up => index = index.saturating_sub(1),
+                    KeyCode::Enter => {
+                        self.save_parallel(PARALLEL_CHOICES[index]);
+                        self.overlay = Some(Overlay::Settings { section: SYSTEM });
+                        return None;
+                    }
+                    KeyCode::Esc | KeyCode::Left => {
+                        self.overlay = Some(Overlay::Settings { section: SYSTEM });
+                        return None;
+                    }
+                    _ => {}
+                }
+                self.overlay = Some(Overlay::Parallel { index });
+            }
             Overlay::Columns { mut index } => {
                 match code {
                     KeyCode::Down => index = (index + 1) % COLUMNS.len(),

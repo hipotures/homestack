@@ -141,6 +141,9 @@ pub struct StatusScope {
     /// Only those on this node.
     #[serde(default)]
     node: Option<String>,
+    /// Proxmox requests read at a time, 1 to 32; 8 without it.
+    #[serde(default)]
+    parallel: Option<usize>,
 }
 
 /// Global status, as `homestack status --json`; with `pool` or `node` only
@@ -164,7 +167,8 @@ pub async fn status(
     Query(scope): Query<StatusScope>,
 ) -> Result<Json<GlobalStatus>, ApiError> {
     let stored = configuration(&state)?;
-    let mut status = global_status(state.pve()?.as_ref(), &stored.config)
+    let parallel = scope.parallel.unwrap_or(8).clamp(1, 32);
+    let mut status = global_status(state.pve()?.as_ref(), &stored.config, parallel)
         .await
         .map_err(|e| core_error(e, "No such resource."))?;
     for entry in &mut status.others {

@@ -15,6 +15,7 @@ reqwest = { version = "0.13.5", default-features = false, features = ["rustls", 
 hs-model = { version = "0.1.0", path = "../hs-model" }
 hs-pve = { version = "0.1.0", path = "../hs-pve" }
 base64 = "0.23.1"
+futures-util = "0.3.34"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 thiserror = "2.0.21"

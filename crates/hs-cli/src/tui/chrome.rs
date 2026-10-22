@@ -454,6 +454,8 @@ pub enum Hit {
     Integration(usize),
     /// A column of the list in the Machines section of the settings.
     Column(usize),
+    /// A choice of the parallel reads in the System section of the settings.
+    Parallel(usize),
     PangolinStep(usize),
     PangolinPrerequisite(usize),
     PangolinDiscovery(usize),

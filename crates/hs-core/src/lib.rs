@@ -20,6 +20,7 @@ pub mod lease;
 pub mod lifecycle;
 pub mod migrate;
 pub mod power;
+pub mod prefetch;
 pub mod pve;
 pub mod refresh;
 pub mod registry;

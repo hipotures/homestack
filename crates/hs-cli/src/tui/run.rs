@@ -320,7 +320,8 @@ async fn read_status(client: &Client, updates: &mpsc::UnboundedSender<Update>, s
     if !stop.load(Ordering::SeqCst) {
         let _ = updates.send(Update::Servers(servers.clone()));
     }
-    let answer = client.get_from("/v1/status").await;
+    let parallel = super::state::PARALLEL.load(Ordering::SeqCst);
+    let answer = client.get_from(&format!("/v1/status?parallel={parallel}")).await;
     if stop.load(Ordering::SeqCst) {
         return false;
     }

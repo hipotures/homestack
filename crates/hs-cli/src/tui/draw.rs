@@ -10,7 +10,10 @@ use ratatui::style::{Color, Modifier, Style};
 use super::action::Action;
 use super::chrome::{Control, Hit, Scrolls, Sides, alert_style, frame, register, scrollbar, text_style};
 use super::layout::{MIN_HEIGHT, MIN_WIDTH, arrange};
-use super::state::{APPEARANCE, App, COLUMNS, INTEGRATIONS, MACHINES, MENU, Overlay, SETTINGS, VIEWS};
+use super::state::{
+    APPEARANCE, App, COLUMNS, INTEGRATIONS, MACHINES, MENU, Overlay, PARALLEL, PARALLEL_CHOICES, SETTINGS, SYSTEM,
+    VIEWS,
+};
 use super::theme::{Palette, THEMES};
 
 /// The screen at `width` x `height`, for tests and snapshots.
@@ -599,7 +602,10 @@ fn columns(app: &App, width: usize, tag_width: usize, name_width: usize) -> Vec<
     // narrower, when at least 9 cells are left (an address, cut with "…").
     let mut used = 0;
     let mut chosen = Vec::new();
-    for mut column in all.into_iter().filter(|column| column.width > 0 && app.column_shown(column.key)) {
+    for mut column in all
+        .into_iter()
+        .filter(|column| column.width > 0 && app.column_shown(column.key))
+    {
         if used + column.width < width {
             used += column.width + 1;
             chosen.push(column);
@@ -1137,7 +1143,14 @@ fn workspaces(buf: &mut Buffer, area: Rect, app: &App, mut controls: Vec<Control
                 {
                     let color = load_color(palette, 100.0 - free);
                     let cell = pad_right(&text, column.width);
-                    write(buf, x, y, u16::try_from(column.width).unwrap_or(0), &cell, style.fg(color));
+                    write(
+                        buf,
+                        x,
+                        y,
+                        u16::try_from(column.width).unwrap_or(0),
+                        &cell,
+                        style.fg(color),
+                    );
                 }
             }
             x += u16::try_from(column.width).unwrap_or(0);
@@ -1717,12 +1730,23 @@ fn draw_settings(buf: &mut Buffer, area: Rect, app: &App, section: usize, themes
         Some(Overlay::Columns { index }) => Some(index),
         _ => None,
     };
+    let choosing = match app.overlay {
+        Some(Overlay::Parallel { index }) => Some(index),
+        _ => None,
+    };
     let sections_focused = themes.is_none()
         && picking.is_none()
+        && choosing.is_none()
         && !matches!(app.overlay, Some(Overlay::Integrations { .. }));
     let bottom = if themes.is_some() {
         vec![
             Control::key("preview ↑↓"),
+            Control::key("save ↵"),
+            Control::key("back esc"),
+        ]
+    } else if choosing.is_some() {
+        vec![
+            Control::key("select ↑↓"),
             Control::key("save ↵"),
             Control::key("back esc"),
         ]
@@ -1801,7 +1825,19 @@ fn draw_settings(buf: &mut Buffer, area: Rect, app: &App, section: usize, themes
             lines.push(line("Confirmations", "On", None));
         }
         (MACHINES, _) => {}
-        (3, _) => {
+        (SYSTEM, _) => {
+            let parallel = PARALLEL.load(std::sync::atomic::Ordering::SeqCst);
+            let mut parts = line("Parallel reads", &parallel.to_string(), None);
+            parts.push((" ▾".to_owned(), muted));
+            lines.push(parts);
+            if let Some(index) = choosing {
+                for (at, choice) in PARALLEL_CHOICES.iter().enumerate() {
+                    let (item, style) = list_item(palette, &choice.to_string(), at == index);
+                    lines.push(vec![(" ".repeat(14), text), (item, style)]);
+                }
+            }
+        }
+        (4, _) => {
             lines.push(line("Status", "auto", None));
             lines.push(line("Log", "live", None));
         }
@@ -1866,6 +1902,18 @@ fn draw_settings(buf: &mut Buffer, area: Rect, app: &App, section: usize, themes
         }
         if section == APPEARANCE && (first..first + THEMES.len()).contains(&row) {
             super::chrome::register(Rect::new(x, y, width, 1), super::chrome::Hit::Theme(row - first));
+        }
+    }
+    if section == SYSTEM {
+        let y = inner.y + 1 + u16::try_from(first).unwrap_or(0);
+        super::chrome::register(Rect::new(x, y, width, 1), super::chrome::Hit::Item(SYSTEM));
+        if choosing.is_some() {
+            for at in 0..PARALLEL_CHOICES.len() {
+                let y = y + 1 + u16::try_from(at).unwrap_or(0);
+                if y < inner.bottom() {
+                    super::chrome::register(Rect::new(x, y, width, 1), super::chrome::Hit::Parallel(at));
+                }
+            }
         }
     }
     if section == MACHINES {
@@ -2133,6 +2181,7 @@ fn draw_overlay(buf: &mut Buffer, area: Rect, app: &App, overlay: &Overlay) {
         Overlay::Settings { section } => return draw_settings(buf, area, app, *section, None),
         Overlay::Integrations { .. } => return draw_settings(buf, area, app, INTEGRATIONS, None),
         Overlay::Columns { .. } => return draw_settings(buf, area, app, MACHINES, None),
+        Overlay::Parallel { .. } => return draw_settings(buf, area, app, SYSTEM, None),
         Overlay::Integration(editor) => return draw_integration(buf, area, app, editor),
         Overlay::Pangolin(wizard) => return super::draw_pangolin::screen(buf, area, app, wizard),
         Overlay::Themes { index, .. } => return draw_settings(buf, area, app, APPEARANCE, Some(*index)),
@@ -2163,6 +2212,7 @@ fn draw_overlay(buf: &mut Buffer, area: Rect, app: &App, overlay: &Overlay) {
         | Overlay::Themes { .. }
         | Overlay::Integrations { .. }
         | Overlay::Columns { .. }
+        | Overlay::Parallel { .. }
         | Overlay::Integration(_)
         | Overlay::Pangolin(_) => {
             return;
@@ -2246,7 +2296,11 @@ fn dim(buf: &mut Buffer, area: Rect, palette: &Palette) {
                 cell.modifier.insert(Modifier::DIM);
                 continue;
             }
-            cell.fg = toward(if cell.fg == Color::Reset { palette.foreground } else { cell.fg });
+            cell.fg = toward(if cell.fg == Color::Reset {
+                palette.foreground
+            } else {
+                cell.fg
+            });
             if cell.bg != Color::Reset {
                 cell.bg = toward(cell.bg);
             }

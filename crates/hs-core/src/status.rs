@@ -383,12 +383,7 @@ pub async fn workspace_home_usage(
         free_bytes: None,
         free_percent: None,
     };
-    if status != "running"
-        || pve
-            .post(&format!("/nodes/{node}/qemu/{vmid}/agent/ping"), &[])
-            .await
-            .is_err()
-    {
+    if status != "running" {
         return usage;
     }
     let Some(fs) = home_filesystem(pve, cfg, node, vmid).await else {
@@ -605,8 +600,10 @@ impl Inventory {
     }
 }
 
-/// `global_status`
-pub async fn global_status(pve: &impl Pve, cfg: &Config) -> Result<GlobalStatus, CoreError> {
+/// `global_status`, with Proxmox read `parallel` requests at a time.
+pub async fn global_status(pve: &impl Pve, cfg: &Config, parallel: usize) -> Result<GlobalStatus, CoreError> {
+    let pve = &crate::prefetch::Prefetch::new(pve, parallel);
+    prefetch_status(pve, cfg).await?;
     let inventory = Inventory::read(pve, cfg).await?;
     let nodes: BTreeMap<String, NodeState> = inventory.nodes.iter().map(|n| (n.node.clone(), n.clone())).collect();
     let configs = &inventory.configs;
@@ -967,6 +964,45 @@ pub async fn global_status(pve: &impl Pve, cfg: &Config) -> Result<GlobalStatus,
         pools,
         warnings,
     })
+}
+
+/// Everything [`global_status`] reads after the cluster's guests and nodes:
+/// their configurations, the running workspaces' filesystems, the storages,
+/// the pools and the quorum.
+async fn prefetch_status<P: Pve>(pve: &crate::prefetch::Prefetch<'_, P>, cfg: &Config) -> Result<(), CoreError> {
+    let resources = cluster_vm_resources(pve).await?;
+    let nodes = cluster_node_statuses(pve).await?;
+    let containers = cluster_container_resources(pve).await.unwrap_or_default();
+    let online = |node: &str| nodes.iter().any(|state| state.node == node && state.online);
+    let mut requests: Vec<(String, Vec<(&str, &str)>)> =
+        vec![("/pools".to_owned(), vec![]), ("/cluster/status".to_owned(), vec![])];
+    for item in resources.iter().filter(|item| online(&item.node)) {
+        requests.push((format!("/nodes/{}/qemu/{}/config", item.node, item.vmid), vec![]));
+    }
+    for item in status_resources(&resources, cfg)
+        .into_iter()
+        .filter(|item| online(&item.node) && item.status.as_deref() == Some("running"))
+    {
+        requests.push((
+            format!("/nodes/{}/qemu/{}/agent/get-fsinfo", item.node, item.vmid),
+            vec![],
+        ));
+    }
+    for item in containers.iter().filter(|item| online(&item.node)) {
+        requests.push((format!("/nodes/{}/lxc/{}/config", item.node, item.vmid), vec![]));
+    }
+    for node in nodes.iter().filter(|node| node.online) {
+        requests.push((format!("/nodes/{}/storage", node.node), vec![]));
+        for storage in storage_ids_for_node(cfg, &node.node) {
+            requests.push((format!("/nodes/{}/storage/{storage}/status", node.node), vec![]));
+            requests.push((
+                format!("/nodes/{}/storage/{storage}/content", node.node),
+                vec![("content", "images")],
+            ));
+        }
+    }
+    pve.warm(requests).await;
+    Ok(())
 }
 
 fn non_empty(value: Option<&String>) -> Option<&str> {
