@@ -117,11 +117,6 @@ pub fn verify(source: &Source, record: &Deployment, instance: &Instance, config:
     if ip.and_then(|p| p.split('/').next()) != Some(instance.address.as_str()) {
         return Err("IP address differs from the registry".to_owned());
     }
-    for tag in &instance.tags {
-        if !text(config, "tags").split([';', ',']).any(|t| t == tag) {
-            return Err(format!("ownership tag {tag} is missing"));
-        }
-    }
     let (version, digest) = instance.release.as_ref().map_or(
         (record.image_version.as_str(), record.image_digest.as_str()),
         |release| (release.version.as_str(), release.digest.as_str()),

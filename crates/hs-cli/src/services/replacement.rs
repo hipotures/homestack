@@ -1396,7 +1396,7 @@ mod tests {
     fn target() -> Target {
         let before: Instance = serde_json::from_value(json!({
             "node":"pve3", "ctid":120, "hostname":"example", "address":"192.0.2.10",
-            "mac":"02:00:00:00:00:10", "pool":"homestack-service", "tags":["homestack-app", "private"],
+            "mac":"02:00:00:00:00:10", "pool":"homestack-service", "tags":["homestack-server", "private"],
             "cores":1, "memory_mib":512, "root_storage":"local-lvm", "root_gib":4,
             "home_storage":"local-lvm", "home_gib":8, "root_volume":"local-lvm:vm-120-disk-0",
             "home_volume":"local-lvm:vm-120-disk-1", "stage":"ready", "desired":"running"
@@ -1456,7 +1456,7 @@ mod tests {
     fn recorded_home_identity_and_original_ownership_must_match() {
         let mut target = target();
         target.after.home_volume = "local-lvm:vm-121-disk-2".to_owned();
-        let original_config = json!({"rootfs":"local-lvm:vm-120-disk-0,size=4G", "hostname":"example", "description":"original", "tags":"private;homestack-app", "unprivileged":1});
+        let original_config = json!({"rootfs":"local-lvm:vm-120-disk-0,size=4G", "hostname":"example", "description":"original", "tags":"private;homestack-server", "unprivileged":1});
         let replacement_config = json!({"rootfs":"local-lvm:vm-121-disk-0,size=4G", "mp0":"local-lvm:vm-121-disk-1,mp=/home/app,backup=1,size=8G"});
         assert!(moved_home(&target, &original_config, &replacement_config).is_err());
         assert!(original(&target, &original_config).is_ok());
@@ -1464,7 +1464,7 @@ mod tests {
             ("rootfs", "local-lvm:vm-999-disk-0"),
             ("hostname", "foreign"),
             ("description", "foreign"),
-            ("tags", "homestack-app"),
+            ("tags", "homestack-server"),
         ] {
             let mut wrong = original_config.clone();
             wrong[field] = json!(value);
@@ -1606,7 +1606,7 @@ mod tests {
             backup_storage: String::new(),
             targets: vec![target.clone()],
         };
-        let replacement_config = json!({"rootfs":"local-lvm:vm-121-disk-0,size=4G", "mp0":"local-lvm:vm-121-disk-1,mp=/home/app,backup=1,size=8G", "hostname":"example", "description":format!("{}\n", description(&source,&journal,&target)), "tags":"homestack-app;private", "unprivileged":1, "arch":"amd64", "onboot":0, "digest":"replacement_config"});
+        let replacement_config = json!({"rootfs":"local-lvm:vm-121-disk-0,size=4G", "mp0":"local-lvm:vm-121-disk-1,mp=/home/app,backup=1,size=8G", "hostname":"example", "description":format!("{}\n", description(&source,&journal,&target)), "tags":"homestack-server;private", "unprivileged":1, "arch":"amd64", "onboot":0, "digest":"replacement_config"});
         assert!(replacement(&source, &journal, &target, &replacement_config).is_ok());
         for (field, value) in [
             (
@@ -1626,7 +1626,7 @@ mod tests {
             assert!(replacement(&source, &journal, &target, &changed).is_err());
         }
         let api = Api(Mutex::new((
-            json!({"rootfs":"local-lvm:vm-120-disk-0,size=4G", "hostname":"example", "description":"original", "tags":"homestack-app;private", "unprivileged":1, "onboot":0, "net0":target.network, "digest":"original_config"}),
+            json!({"rootfs":"local-lvm:vm-120-disk-0,size=4G", "hostname":"example", "description":"original", "tags":"homestack-server;private", "unprivileged":1, "onboot":0, "net0":target.network, "digest":"original_config"}),
             replacement_config,
         )));
         let dir = tempfile::tempdir().unwrap();

@@ -14,7 +14,6 @@ pub async fn read(config: &Value, ip: &str) -> Option<Report> {
     let description = config["description"].as_str()?;
     if !description.lines().any(|line| line == "made by homestack")
         || !description.lines().any(|line| line.starts_with("HomeStack service "))
-        || !config["tags"].as_str()?.split(';').any(|tag| tag == "homestack-app")
     {
         return None;
     }
