@@ -1448,6 +1448,10 @@ impl App {
                 // the themes is chosen and opened.
                 match super::chrome::hit_at(event.column, event.row) {
                     Some(Hit::Key(code)) => return press(self, code),
+                    Some(Hit::Turn(group, forward)) => {
+                        self.on_group = group;
+                        return press(self, if forward { KeyCode::Right } else { KeyCode::Left });
+                    }
                     // A setting of the install, and a choice in its box.
                     Some(Hit::Setting(row)) => {
                         if let Some(install) = self.install.as_mut() {

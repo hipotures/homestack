@@ -874,7 +874,7 @@ fn workspaces(buf: &mut Buffer, area: Rect, app: &App, mut controls: Vec<Control
     let rows = app.rows();
     let switch = |control: Control, on: bool| if on { control.raised() } else { control };
     let mut top_left = vec![switch(
-        Control::panel(1, &format!("‹ {} ›", app.group_name())),
+        Control::panel(1, &format!("‹ {} ›", app.group_name())).carousel(true),
         app.on_group,
     )];
     top_left.append(&mut controls);
@@ -890,7 +890,10 @@ fn workspaces(buf: &mut Buffer, area: Rect, app: &App, mut controls: Vec<Control
     let sides = Sides {
         top_left,
         top_right: vec![
-            switch(Control::plain(&format!("‹ node: {node} ›")), !app.on_group),
+            switch(
+                Control::plain(&format!("‹ node: {node} ›")).carousel(false),
+                !app.on_group,
+            ),
             Control::key("&new").enabled(app.status.is_some() && app.action.is_none()),
         ],
         bottom_left: workspace_actions(app),
