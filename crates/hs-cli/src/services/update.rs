@@ -409,6 +409,40 @@ pub async fn apply(
     Ok(lines)
 }
 
+/// Distinguish a reviewed reinstall from a root already made by that operation.
+/// The temporary holder carries the operation through interrupted replacement.
+const REPLACEMENT_OPERATION: &str = "replacement-operation ";
+
+async fn replacement_operation(pve: &impl Pve, node: &str, ctid: u32) -> Result<String, String> {
+    let containers = pve
+        .get(&format!("/nodes/{node}/lxc"), &[])
+        .await
+        .map_err(|e| format!("Replacement inventory: {e}"))?;
+    let containers = containers.as_array().ok_or("Replacement inventory is unavailable")?;
+    if containers
+        .iter()
+        .any(|entry| entry["vmid"].as_u64() == Some(u64::from(recreate::HOLDER_ID)))
+    {
+        let holder = pve
+            .get(&format!("/nodes/{node}/lxc/{}/config", recreate::HOLDER_ID), &[])
+            .await
+            .map_err(|e| format!("Replacement holder: {e}"))?;
+        let description = text(&holder, "description");
+        if recreate::holder_of(description) != Some(ctid) {
+            return Err("The shared replacement holder is busy; finish its update first".to_owned());
+        }
+        if let Some(operation) = description
+            .lines()
+            .find_map(|line| line.strip_prefix(REPLACEMENT_OPERATION))
+        {
+            return uuid::Uuid::parse_str(operation)
+                .map(|id| id.to_string())
+                .map_err(|_| "Replacement holder has an invalid operation identity".to_owned());
+        }
+    }
+    Ok(uuid::Uuid::new_v4().to_string())
+}
+
 async fn one(
     pve: &impl Pve,
     source: &Source,
@@ -426,7 +460,11 @@ async fn one(
     if now.mac != target.mac || !node::same_net(&now.network, &target.network) {
         return Err(format!("CT {ctid} changed since review; review again"));
     }
-    let description = deploy::description(source, &plan.image, &plan.digest);
+    let operation = replacement_operation(pve, node, ctid).await?;
+    let description = format!(
+        "{}\n{REPLACEMENT_OPERATION}{operation}",
+        deploy::description(source, &plan.image, &plan.digest)
+    );
     // Pull the release once per digest; the file is removed after the update.
     let short = plan.digest.trim_start_matches("sha256:").get(..12).unwrap_or_default();
     let file = format!("hs-{ctid}-{short}");
@@ -475,7 +513,15 @@ async fn one(
         task(pve, &upid, &format!("backup CT {ctid}")).await?;
     }
     say(&format!("{node}: CT {ctid} · Replace"));
-    let note = instance::note(target);
+    let previous = instance::note(target);
+    let note = format!(
+        "{}\n{REPLACEMENT_OPERATION}{operation}",
+        previous
+            .lines()
+            .filter(|line| !line.starts_with(REPLACEMENT_OPERATION))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
     let spec = node::NewContainer {
         node,
         ctid,

@@ -741,7 +741,7 @@ fn check_resume(instance: &NewInstance, cfg: &Value, expected: &Resume) -> Resul
         || cfg["mp0"].as_str() != Some(expected.home_mount.as_str())
         || root != expected.root
         || cfg["net0"].as_str() != Some(expected.network.as_str())
-        || cfg["description"].as_str() != Some(expected.description.as_str())
+        || cfg["description"].as_str().map(str::trim_end) != Some(expected.description.trim_end())
         || cfg["hostname"].as_str() != Some(instance.hostname.as_str())
     {
         return Err(format!(
@@ -959,7 +959,7 @@ async fn run(
         if let Some(bootstrap) = &bootstrap {
             if let Some(expected) = &instance.resume {
                 check_resume(instance, &current, expected)?;
-            } else if current["description"].as_str() != Some(text.as_str()) {
+            } else if current["description"].as_str().map(str::trim_end) != Some(text.trim_end()) {
                 return Err(format!("CT {ctid}: common ownership changed; initialization stopped"));
             }
             let original_mount = current["mp0"].as_str().ok_or("API home is missing")?;
@@ -971,7 +971,7 @@ async fn run(
                 .collect::<Vec<_>>()
                 .join("\n");
             let pending = format!("{base}\n{API_INIT_HOME}{original_mount}");
-            if current["description"].as_str() != Some(pending.as_str()) {
+            if current["description"].as_str().map(str::trim_end) != Some(pending.trim_end()) {
                 set_description(pve, instance, &current, &pending).await?;
             }
             let initialize = bootstrap

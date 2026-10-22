@@ -140,8 +140,11 @@ restart path is reused. Image updates reject the pending initialization marker;
 finish initialization before using Update. No credential is regenerated.
 
 Completed managed instances retain their selector, state and common ownership
-through the existing PVE API `hs_deploy::recreate` path. That algorithm and its
-volume invariants are unchanged. Ordinary update/migrate manifest probing is
+through the existing PVE API `hs_deploy::recreate` path. Common image replacement
+records a non-secret operation identity in its existing PVE description and
+holder note, so reinstalling an identical release actually replaces the root;
+interrupted replacement reuses the identity observed on its holder. The replacement
+algorithm and its volume invariants are unchanged. Ordinary update/migrate manifest probing is
 still TCP connectivity, not the complete initialization checks described here.
 PVE metadata and guest telemetry do not prove application records were read;
 this task makes no general data-persistence claim from mount metadata alone.
@@ -183,10 +186,13 @@ represent a real LXC, application disk, Proxmox restart or PVE token authority.
 The three retained `hs-deploy` volume/recovery safety checks remain intact.
 No permanent test suite or production operation is added.
 
-Real empty/reused mounted-volume startup and rootfs replacement, durable guest
-file verification, real PVE environment/pending semantics and authenticated
-bootstrap against an actual new LXC still require explicitly authorized
-isolated targets. No live E2E result is claimed.
+The authorized [2026-10-23 live verification](managed-api-live-verification-2026-10-23.md)
+subsequently exercised a new API in `homestack-test`, real bootstrap/reboots,
+direct guest-file persistence and same-CTID rootfs replacement. It found and
+fixed PVE trailing-newline ownership comparisons and identical-release reinstall
+being skipped. The test instance, holder and test-created disks/templates were
+removed; the six production containers remained unchanged. See the report for
+measured downtime, exact scope and remaining limitations.
 
 Later production adoption requires separate owner authorization, an inventory
 of each legacy container's ownership/state/mounts, certificates and token files,
