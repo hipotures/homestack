@@ -2201,6 +2201,7 @@ fn draw_overlay(buf: &mut Buffer, area: Rect, app: &App, overlay: &Overlay) {
     let width = u16::try_from(width).unwrap_or(u16::MAX);
     let height = u16::try_from(lines.len() + 4).unwrap_or(u16::MAX);
     let rect = centered(area, width, height);
+    dim(buf, area, palette);
     let inner = frame(
         buf,
         rect,
@@ -2225,6 +2226,33 @@ fn draw_overlay(buf: &mut Buffer, area: Rect, app: &App, overlay: &Overlay) {
         }
     }
     let _ = muted;
+}
+
+/// Darken everything drawn in `area`, so a box over it stands out: each
+/// colour two thirds of the way to the background.
+fn dim(buf: &mut Buffer, area: Rect, palette: &Palette) {
+    let toward = |color: Color| match (color, palette.background) {
+        (Color::Rgb(r, g, b), Color::Rgb(br, bg, bb)) => {
+            let mix = |c: u8, base: u8| u8::try_from((u16::from(c) + 2 * u16::from(base)) / 3).unwrap_or(base);
+            Color::Rgb(mix(r, br), mix(g, bg), mix(b, bb))
+        }
+        (Color::Reset, _) => color,
+        _ => palette.muted,
+    };
+    for y in area.top()..area.bottom() {
+        for x in area.left()..area.right() {
+            let cell = &mut buf[(x, y)];
+            if palette.no_color {
+                cell.modifier.insert(Modifier::DIM);
+                continue;
+            }
+            cell.fg = toward(if cell.fg == Color::Reset { palette.foreground } else { cell.fg });
+            if cell.bg != Color::Reset {
+                cell.bg = toward(cell.bg);
+            }
+            cell.modifier.remove(Modifier::BOLD);
+        }
+    }
 }
 
 /// A list item of a pair of lists: the chosen one keeps its marker but is
