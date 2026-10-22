@@ -43,6 +43,10 @@ Unknown fields are rejected, so a typo does not silently change meaning.
 | `deployment.multi_node` | boolean | no (default `false`) | `true` only with `state_model` `stateless` or `external` |
 | `deployment.state_model` | string | yes | `local`, `stateless` or `external` |
 
+For HTTP services the path is the readiness endpoint of the health endpoint
+standard in [SKILL.md](SKILL.md) (`/health/ready`, `application/health+json`).
+HomeStack judges health by the status code; the body is for people and tools.
+
 `tcp` health means only that the port accepts connections; HomeStack must show
 it as such, not as an application-level healthy result.
 
