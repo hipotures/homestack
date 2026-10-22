@@ -23,29 +23,35 @@ does not replace the PVE ownership and volume checks below.
    before and after the pull. Refuse changed tags. Do not reuse an unverified
    cached archive. This relies on the service's immutable release contract; it
    does not provide an independent checksum of the archive through PVE's API.
-2. Create A2 stopped, without network or home and with autostart disabled. Preserve
-   the hostname, pool, all tags, resources and application environment. Runtime
-   values stay in PVE and are excluded from the local journal and logs.
-3. Disable A1 autostart, request graceful shutdown and wait. A failed shutdown
-   does not trigger a forced stop. If selected, complete a stopped backup including
-   home before proceeding.
-4. Call `POST /nodes/{node}/lxc/{A1}/move_volume` with `volume=mp0`,
-   `target-vmid=A2`, `target-volume=mp0` and both config digests. The API checks
-   storage rename support and reassignment permissions. Refuse snapshots, drift,
-   unexpected devices/mounts, HA management and occupied target slots.
-5. Wait for the recorded task and verify both configurations: A1 lost its home,
-   A2 received it under `/home/app` with the same mount options and capacity, and
-   both root volumes remain unchanged. Record the old/new volume IDs and task.
-6. Remove A1's network, assign its exact network configuration to A2 and restore
-   the original power state. Check the manifest's health probe for a running
-   service, then restore the original autostart setting on A2.
-7. Atomically replace the registry's active CTID/root/home while keeping service,
-   node, hostname, IP, MAC, pool and tags. Keep the old CT/root and transfer evidence
-   in the instance history. Local favorites and selection follow the new CTID.
+2. Create the replacement container stopped, without network or home and with
+   autostart disabled. Preserve the hostname, pool, all tags, resources and
+   application environment. Runtime values stay in PVE and are excluded from the
+   local journal and logs.
+3. Disable autostart on the original container, request graceful shutdown and
+   wait. A failed shutdown does not trigger a forced stop. If selected, complete
+   a stopped backup including home before proceeding.
+4. Call `POST /nodes/{node}/lxc/{source_ctid}/move_volume` with `volume=mp0`,
+   `target-vmid=<replacement_ctid>`, `target-volume=mp0` and both config
+   digests. The API checks storage rename support and reassignment permissions.
+   Refuse snapshots, drift, unexpected devices/mounts, HA management and
+   occupied target slots.
+5. Wait for the recorded task and verify both configurations: the original
+   container lost its home, the replacement received it under `/home/app` with
+   the same mount options and capacity, and both root volumes remain unchanged.
+   Record the old/new volume IDs and task.
+6. Remove the original container's network and assign its exact network
+   configuration to the replacement. Restore the original power state. Check the
+   manifest's health probe for a running service, then restore the original
+   autostart setting on the replacement container.
+7. Atomically replace the registry's active CTID/root/home while keeping
+   service, node, hostname, IP, MAC, pool and tags. Keep the old CT/root and
+   transfer evidence in the instance history. Local favorites and selection
+   follow the new CTID.
 
-A1 remains stopped without network, home or autostart. No container, old root or
-data volume is automatically deleted. Preparing A2 is another generation of the
-same logical instance, including for a single-node service.
+The original container remains stopped without network, home or autostart.
+No container, old root or data volume is automatically deleted. The replacement
+is another generation of the same logical instance, including for a single-node
+service.
 
 Every transition and returned task ID is journaled under the profile operation
 lock. Recovery requires a new review and verifies the recorded instances before
@@ -59,8 +65,8 @@ read. File markers and application data inspection are additional verification.
 Restoring an old image does not undo database migrations. A data-changing upgrade
 requires a consistent backup; restoring that backup is a separate explicit action.
 
-The manual pve3 smoke check used Tutor 0.1.2 on both generations: A1 102004 to
-A2 102005 and back, followed by a separately authorized permanent switch to A2.
+The manual pve3 smoke check used Tutor 0.1.2 on both generations: CT 102004 to
+CT 102005 and back, followed by a separately authorized permanent switch to CT 102005.
 PVE confirmed LVM rename and both applications answered `/alive` with HTTP 200.
 The owner checked the content after the permanent switch. The production Tutor
 on pve2 was not changed. This check is evidence for the API sequence, not a live

@@ -2432,7 +2432,8 @@ fn action_box(buf: &mut Buffer, area: Rect, app: &App, action: &Action) {
         } => {
             scroll = *offset;
             for line in plan {
-                let style = if line.ends_with("NO CHANGES MADE YET") {
+                let style = if line.ends_with("NO CHANGES MADE YET") || matches!(line.as_str(), "Changes" | "Preserved")
+                {
                     text.add_modifier(Modifier::BOLD)
                 } else {
                     text
