@@ -48,6 +48,9 @@ pub struct StatusResource {
     pub tags: Option<String>,
     /// Only with `Pool.Audit` on the pool.
     pub pool: Option<String>,
+    /// A container's root filesystem, used and total; a VM's are not measured.
+    pub disk_bytes: Option<u64>,
+    pub maxdisk_bytes: Option<u64>,
 }
 
 /// Python's `str(value)` for JSON scalars.
@@ -441,6 +444,8 @@ pub async fn cluster_vm_resources(pve: &impl Pve) -> Result<Vec<StatusResource>,
             status: text_or_none(map.get("status")),
             tags: text_or_none(map.get("tags")),
             pool: text_or_none(map.get("pool")),
+            disk_bytes: None,
+            maxdisk_bytes: None,
         })
         .collect();
     resources.sort_by_key(|r| r.vmid);
@@ -466,6 +471,8 @@ pub async fn cluster_container_resources(pve: &impl Pve) -> Result<Vec<StatusRes
                 status: text_or_none(item.get("status")),
                 tags: text_or_none(item.get("tags")),
                 pool: text_or_none(item.get("pool")),
+                disk_bytes: integer_value(item.get("disk")).and_then(|v| u64::try_from(v).ok()),
+                maxdisk_bytes: integer_value(item.get("maxdisk")).and_then(|v| u64::try_from(v).ok()),
             })
         })
         .collect();

@@ -3226,6 +3226,17 @@
           "role_tag_ok": {
             "type": "boolean"
           },
+          "root": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/HomeUsage",
+                "description": "Root disk capacity/usage; usage only when measured."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "root_storage": {
             "type": [
               "string",
@@ -3696,3 +3707,4 @@
     }
   }
 }
+

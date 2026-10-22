@@ -47,6 +47,9 @@ pub struct StatusEntry {
     /// Workspace address, or the actual static `net0` address for a container.
     pub ip: Option<String>,
     pub root_storage: Option<String>,
+    /// Root disk capacity/usage; usage only when measured.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root: Option<HomeUsage>,
     /// Home capacity/usage; `null` when no home configuration is available.
     pub home: Option<HomeUsage>,
     /// Optional in-container measurements; observations, never ownership proof.

@@ -411,6 +411,59 @@ pub async fn workspace_home_usage(
     usage
 }
 
+/// The size of a disk option (`size=32G`), when it has one.
+fn sized(option: &str) -> HomeUsage {
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "a disk size in whole bytes"
+    )]
+    let size_bytes = parse_disk_size_gb(option).map(|gb| (gb * 1024.0_f64.powi(3)) as u64);
+    HomeUsage {
+        size_bytes,
+        used_bytes: None,
+        free_bytes: None,
+        free_percent: None,
+    }
+}
+
+/// `used` of `total` bytes with what is free.
+fn measured(used: u64, total: u64) -> HomeUsage {
+    let free = total.saturating_sub(used);
+    #[allow(clippy::cast_precision_loss, reason = "df's percentage is a small integer")]
+    let free_percent = (100.0 - df_percent(used, free) as f64).max(0.0);
+    HomeUsage {
+        size_bytes: Some(total),
+        used_bytes: Some(used),
+        free_bytes: Some(free),
+        free_percent: Some(free_percent),
+    }
+}
+
+/// A workspace's root disk: the size from the VM config, and usage of `/`
+/// from `get-fsinfo` when the VM runs and the agent answers.
+async fn workspace_root_usage(pve: &impl Pve, node: &str, vmid: u32, status: &str, root_cfg: &str) -> HomeUsage {
+    let usage = sized(root_cfg);
+    if status != "running" {
+        return usage;
+    }
+    let Ok(info) = pve
+        .get(&format!("/nodes/{node}/qemu/{vmid}/agent/get-fsinfo"), &[])
+        .await
+    else {
+        return usage;
+    };
+    let root = info.get("result").and_then(Value::as_array).and_then(|filesystems| {
+        filesystems
+            .iter()
+            .find(|fs| fs.get("mountpoint").and_then(Value::as_str) == Some("/"))
+    });
+    match root.map(|fs| (u64_value(fs.get("used-bytes")), u64_value(fs.get("total-bytes")))) {
+        Some((Some(used), Some(total))) => measured(used, total),
+        _ => usage,
+    }
+}
+
 /// `df`'s use percentage: used / (used + avail), rounded up.
 #[must_use]
 pub fn df_percent(used: u64, avail: u64) -> u64 {
@@ -610,6 +663,7 @@ pub async fn global_status(pve: &impl Pve, cfg: &Config) -> Result<GlobalStatus,
                 node: gold_node,
                 ip: expected_ip(cfg, resource.vmid),
                 root_storage: disk_storage(gold_cfg.get(&cfg.root_disk).map(String::as_str)),
+                root: gold_cfg.get(&cfg.root_disk).map(|option| sized(option)),
                 home: None,
                 service_status: None,
                 role_tag_ok,
@@ -686,6 +740,20 @@ pub async fn global_status(pve: &impl Pve, cfg: &Config) -> Result<GlobalStatus,
             tags: tag_list(non_empty(vm_cfg.get("tags")).or(item.tags.as_deref())),
             ip: expected_ip(cfg, item.vmid),
             root_storage: disk_storage(vm_cfg.get(&cfg.root_disk).map(String::as_str)),
+            root: match vm_cfg.get(&cfg.root_disk) {
+                Some(option) if node_online => Some(
+                    workspace_root_usage(
+                        pve,
+                        &item.node,
+                        item.vmid,
+                        item.status.as_deref().unwrap_or("unknown"),
+                        option,
+                    )
+                    .await,
+                ),
+                Some(option) => Some(sized(option)),
+                None => None,
+            },
             home,
             image: None,
             service_status: None,
@@ -720,17 +788,27 @@ pub async fn global_status(pve: &impl Pve, cfg: &Config) -> Result<GlobalStatus,
         };
         let image = container_config.as_ref().and_then(crate::registry::deployed_image);
         let service = container_config.as_ref().and_then(crate::registry::deployed_service);
-        let root_storage = if !online {
-            None
+        let (root_storage, mut root) = if !online {
+            (None, None)
         } else if container {
-            container_config
+            let rootfs = container_config
                 .as_ref()
-                .and_then(|config| disk_storage(config.get("rootfs").and_then(Value::as_str)))
+                .and_then(|config| config.get("rootfs").and_then(Value::as_str));
+            // PVE's LXC disk/maxdisk counters describe the root filesystem.
+            let root = match (item.disk_bytes, item.maxdisk_bytes) {
+                (Some(used), Some(total)) if total > 0 && item.status.as_deref() == Some("running") => {
+                    Some(measured(used, total))
+                }
+                _ => rootfs.map(sized),
+            };
+            (disk_storage(rootfs), root)
         } else {
-            vm_config(pve, &item.node, item.vmid)
-                .await
-                .ok()
-                .and_then(|config| disk_storage(config.get(&cfg.root_disk).map(String::as_str)))
+            let config = vm_config(pve, &item.node, item.vmid).await.ok();
+            let option = config.as_ref().and_then(|config| config.get(&cfg.root_disk));
+            (
+                disk_storage(option.map(String::as_str)),
+                option.map(|option| sized(option)),
+            )
         };
         let role = if container {
             "CT"
@@ -788,6 +866,21 @@ pub async fn global_status(pve: &impl Pve, cfg: &Config) -> Result<GlobalStatus,
                 .zip(measured.available_bytes)
                 .and_then(|(total, available)| (total > 0).then(|| available as f64 * 100.0 / total as f64));
         }
+        // The service's own measurement of `/`, when it reports one.
+        if let Some(report) = &service_status
+            && let Some(fs) = report
+                .filesystems
+                .iter()
+                .find(|fs| fs.mount == "/" && fs.mounted && fs.error.is_none())
+            && let (Some(total), Some(available)) = (fs.total_bytes, fs.available_bytes)
+        {
+            root = Some(HomeUsage {
+                size_bytes: Some(total),
+                used_bytes: fs.used_bytes,
+                free_bytes: Some(available),
+                free_percent: (total > 0).then(|| available as f64 * 100.0 / total as f64),
+            });
+        }
         others.push(StatusEntry {
             vmid: item.vmid,
             role: role.to_owned(),
@@ -799,6 +892,7 @@ pub async fn global_status(pve: &impl Pve, cfg: &Config) -> Result<GlobalStatus,
             tags: tag_list(item.tags.as_deref()),
             ip,
             root_storage,
+            root,
             home,
             service_status,
             role_tag_ok: true,

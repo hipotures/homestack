@@ -507,9 +507,27 @@ fn columns(width: usize, tag_width: usize, name_width: usize) -> Vec<Column> {
         },
         Column {
             heading: "ROOT",
-            width: 11,
-            right: false,
-            value: |entry| format!(" {}", entry.root_storage.clone().unwrap_or_default()),
+            width: 5,
+            right: true,
+            value: |entry| {
+                entry
+                    .root
+                    .as_ref()
+                    .and_then(|root| root.size_bytes)
+                    .map_or_else(|| "—".to_owned(), size)
+            },
+        },
+        Column {
+            heading: "FREE",
+            width: 6,
+            right: true,
+            value: |entry| {
+                entry
+                    .root
+                    .as_ref()
+                    .and_then(|root| root.free_percent)
+                    .map_or_else(|| "—".to_owned(), |percent| format!("{percent:.0}%"))
+            },
         },
     ];
     // Columns while they fit; the first that does not fit still comes,
