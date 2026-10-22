@@ -549,7 +549,6 @@ pub async fn plan(
             release: None,
             network: None,
             nameserver: None,
-            retired: Vec::new(),
         });
     }
     if let Some(record) = record {

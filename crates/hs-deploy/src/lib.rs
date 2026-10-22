@@ -8,4 +8,5 @@ pub mod deploy;
 pub mod dns;
 pub mod node;
 pub mod ovh;
+pub mod recreate;
 pub mod spaceship;

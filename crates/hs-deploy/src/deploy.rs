@@ -14,6 +14,7 @@ use crate::acme;
 use crate::config::{DeployConfig, InstanceSpec};
 use crate::dns::DnsApi;
 use crate::node::{self, NewContainer};
+use crate::recreate;
 
 /// How long a new instance may take to answer over TLS.
 const HEALTH_LIMIT: Duration = Duration::from_secs(180);
@@ -308,13 +309,6 @@ pub async fn apply(config: &DeployConfig, only: &[String], say: &impl Fn(&str)) 
                 say(&format!("  keeping MAC address {mac}"));
                 net0.push_str(&format!(",hwaddr={mac}"));
             }
-            timed(
-                &instance.name,
-                "stop and destroy",
-                say,
-                node::destroy(&pve, &found, instance.ctid, say),
-            )
-            .await?;
         }
         let ostemplate = timed(
             &instance.name,
@@ -342,9 +336,17 @@ pub async fn apply(config: &DeployConfig, only: &[String], say: &impl Fn(&str)) 
         };
         timed(
             &instance.name,
-            "create container and tag",
+            "replace container",
             say,
-            node::create(&pve, &spec, say),
+            recreate::replace(
+                &pve,
+                &recreate::Replace {
+                    spec,
+                    graceful: false,
+                    keep: &[],
+                },
+                say,
+            ),
         )
         .await?;
         let env = [

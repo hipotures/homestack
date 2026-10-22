@@ -425,8 +425,8 @@ async fn common_images(path: &Path, ids: &[u32], offset: i64) -> Result<Option<I
                 .iter()
                 .map(|target| {
                     format!(
-                        "{} · CT {} → {}",
-                        target.before.node, target.before.ctid, target.after.ctid
+                        "{} · CT {} · step {:?}",
+                        target.before.node, target.before.ctid, target.step
                     )
                 })
                 .collect::<Vec<_>>()

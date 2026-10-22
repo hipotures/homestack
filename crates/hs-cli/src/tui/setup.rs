@@ -273,16 +273,6 @@ pub fn service_details(
             }
             lines.push(format!("  root volume {}", instance.root_volume));
             lines.push(format!("  pool {} · tags {}", instance.pool, instance.tags.join(";")));
-            for previous in &instance.retired {
-                lines.push(format!(
-                    "  retained CT {} · root {} · image {} (stopped, no network/home)",
-                    previous.ctid, previous.root_volume, previous.release.version
-                ));
-                lines.push(format!(
-                    "  transferred home {} → {}",
-                    previous.home_before, previous.home_after
-                ));
-            }
             if !instance.home_volume.is_empty() {
                 lines.push(format!(
                     "  {} · home · {}",

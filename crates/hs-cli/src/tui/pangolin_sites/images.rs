@@ -356,7 +356,7 @@ pub async fn apply(
         if &found != snapshot {
             return Err("Site connector changed since review; review again".to_owned());
         }
-        let ct = node::container(&pve, snapshot.ctid)
+        node::container(&pve, snapshot.ctid)
             .await?
             .ok_or("Connector disappeared")?;
         if installed(root, &access, &snapshot.node, snapshot.ctid)? != expected {
@@ -407,8 +407,16 @@ pub async fn apply(
             tag: Some(TAG),
             mp0: None,
         };
-        node::destroy(&pve, &ct, snapshot.ctid, &|line| say(line)).await?;
-        node::create(&pve, &spec, &|line| say(line)).await?;
+        hs_deploy::recreate::replace(
+            &pve,
+            &hs_deploy::recreate::Replace {
+                spec,
+                graceful: false,
+                keep: &[],
+            },
+            &|line| say(line),
+        )
+        .await?;
         let retained: Vec<(String, String)> = original
             .as_object()
             .ok_or("Invalid configuration")?

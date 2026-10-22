@@ -100,24 +100,6 @@ pub struct Instance {
     pub network: Option<String>,
     #[serde(default)]
     pub nameserver: Option<String>,
-    /// Previous generations, kept stopped without network or home.
-    #[serde(default)]
-    pub retired: Vec<Retired>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Retired {
-    pub ctid: u32,
-    pub root_volume: String,
-    pub release: Release,
-    pub home_before: String,
-    pub home_after: String,
-    pub transfer_task: String,
-    #[serde(default)]
-    pub removed: bool,
-    #[serde(default)]
-    pub delete_task: Option<String>,
 }
 
 /// The immutable release last installed on one instance.

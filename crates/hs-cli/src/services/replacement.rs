@@ -1,34 +1,45 @@
-//! Replace a registered service using Proxmox API only. Prepare the replacement without
-//! network, home or autostart, then transfer the existing home and network.
-//! The original container remains stopped with its root. No guest commands or SSH are involved.
+//! Update a registered service's image under the same CTID, through the
+//! Proxmox API only. The home volume waits in a temporary holder container
+//! while the container is made again (`hs_deploy::recreate`). Each step is
+//! journaled; an interrupted update resumes from what Proxmox shows.
 
 use std::collections::BTreeSet;
 use std::path::Path;
 
 use hs_core::pve::Pve;
-use hs_deploy::{config::DeployConfig, node};
+use hs_deploy::{config::DeployConfig, node, recreate};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::deploy::{self, Source};
 use super::lifecycle::{self, Action, Choice};
-use super::registry::{self, Deployment, Desired, Instance, Operation, Release, Retired};
+use super::registry::{self, Deployment, Desired, Instance, Operation, Release};
+
+/// Configuration the new container keeps from the old one, besides what
+/// the registry records.
+const KEEP: &[&str] = &[
+    "env",
+    "swap",
+    "cpulimit",
+    "cpuunits",
+    "searchdomain",
+    "startup",
+    "features",
+    "timezone",
+    "console",
+    "tty",
+    "cmode",
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Step {
     Pull,
-    Create,
-    Prepare,
-    Shutdown,
     Backup,
-    MoveHome,
-    Disconnect,
-    Connect,
+    Replace,
+    Configure,
     Start,
     Register,
-    Cleanup,
-    Complete,
 }
 
 /// Non-secret intent and evidence. Runtime environment values stay in PVE.
@@ -58,7 +69,6 @@ pub struct Target {
     pub network: String,
     pub step: Step,
     pub task: Option<String>,
-    pub transfer_task: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -91,13 +101,12 @@ fn tags(cfg: &Value) -> Vec<String> {
         .collect()
 }
 
-fn description(source: &Source, journal: &Journal, target: &Target) -> String {
+/// The update's description; its `update` line tells the new container from the old one.
+fn description(source: &Source, journal: &Journal) -> String {
     format!(
-        "{}\nreplacement {} from CT {} root {}",
+        "{}\nupdate {}",
         deploy::description(source, &journal.image, &journal.digest),
-        journal.id,
-        target.before.ctid,
-        target.before.root_volume
+        journal.id
     )
 }
 
@@ -381,7 +390,6 @@ pub async fn plan(
     }
     for target in &plan.journal.targets {
         let before = &target.before;
-        let after = &target.after;
         let current = before
             .release
             .as_ref()
@@ -394,17 +402,17 @@ pub async fn plan(
         let state = if target.running { "running" } else { "stopped" };
         let autostart = if target.onboot { "on" } else { "off" };
         plan.lines.extend([
-            format!("{} · {}", before.hostname, before.node),
+            format!("{} · {} · CT {}", before.hostname, before.node, before.ctid),
             String::new(),
             "Changes".to_owned(),
             format!(
                 "  Image      {current} → {selected}{}",
                 if current == selected { " (reinstall)" } else { "" }
             ),
-            format!("  Container  {} → {}", before.ctid, after.ctid),
-            format!("  Root       new {} GiB on {}", after.root_gib, after.root_storage),
+            format!("  Root       new {} GiB on {}", before.root_gib, before.root_storage),
             String::new(),
             "Preserved".to_owned(),
+            format!("  Container  CT {}", before.ctid),
             format!(
                 "  Home       {} · {} GiB · /home/app",
                 before.home_volume, before.home_gib
@@ -414,12 +422,11 @@ pub async fn plan(
             format!("  Tags       {}", before.tags.join(";")),
             format!("  State      {state} → {state} · autostart {autostart}"),
             String::new(),
-            format!(
-                "After verification: automatically remove old CT {} and its root.",
-                before.ctid
-            ),
-            String::new(),
         ]);
+        if plan.recovery {
+            plan.lines.push(format!("Resume from step {:?}.", target.step));
+            plan.lines.push(String::new());
+        }
     }
     if !plan.journal.backup_storage.is_empty() {
         plan.lines.push(format!(
@@ -455,27 +462,18 @@ async fn review(
     }
     if plan.recovery {
         if record.operation.as_ref().and_then(|o| o.replacement.as_ref()).is_none() {
-            return Err("No interrupted API replacement is recorded".to_owned());
+            return Err("No interrupted image update is recorded".to_owned());
         }
         if source.commit != plan.journal.commit || source.blob != plan.journal.blob {
-            return Err("Recovery requires the exact reviewed manifest revision".to_owned());
+            return Err("Resuming requires the exact reviewed manifest revision".to_owned());
         }
-        for target in &plan.journal.targets {
-            if !choice.ctids.contains(&target.before.ctid) && !choice.ctids.contains(&target.after.ctid) {
-                return Err("Select every instance of the interrupted replacement for recovery".to_owned());
-            }
-            if !matches!(target.step, Step::Cleanup | Step::Complete) {
-                let (_, original) = read(pve, &target.before).await?;
-                self::original(target, &original)?;
-                plan.configs.push((target.before.ctid, original));
-            }
-            if let Some((found, cfg)) = deploy::config_of(pve, target.after.ctid).await? {
-                if found.node != target.after.node {
-                    return Err("Replacement moved to another node".to_owned());
-                }
-                replacement(source, &plan.journal, target, &cfg)?;
-                plan.configs.push((target.after.ctid, cfg));
-            }
+        if plan
+            .journal
+            .targets
+            .iter()
+            .any(|target| !choice.ctids.contains(&target.before.ctid))
+        {
+            return Err("Select every instance of the interrupted update to resume it".to_owned());
         }
         return Ok(());
     }
@@ -501,7 +499,6 @@ async fn review(
     let release = hs_core::registry::resolve(&plan.journal.image).await?;
     plan.journal.digest = release.digest;
     plan.journal.platform = release.platform;
-    let mut reserved = BTreeSet::new();
     for id in &choice.ctids {
         let instance = record
             .instances
@@ -509,11 +506,12 @@ async fn review(
             .find(|i| i.ctid == *id)
             .ok_or("Selected CT does not belong to this service")?;
         if !matches!(instance.stage, registry::Stage::Ready | registry::Stage::Created) {
-            return Err("Only installed instances can be replaced".to_owned());
+            return Err("Only installed instances can be updated".to_owned());
         }
         let (found, cfg) = read(pve, instance).await?;
         lifecycle::verify(source, record, instance, &cfg)?;
         safe_config(pve, instance, &cfg).await?;
+        recreate::mounts(&cfg)?;
         let mut before = instance.clone();
         before.release = Some(instance.release.clone().unwrap_or_else(|| Release {
             version: record.image_version.clone(),
@@ -542,32 +540,7 @@ async fn review(
         if !choice.backup_storage.is_empty() && !text(&cfg, "mp0").split(',').any(|v| v == "backup=1") {
             return Err("Home must have backup=1 for the selected backup".to_owned());
         }
-        let mut candidate = before.ctid.checked_add(1).ok_or("No replacement CTID available")?;
-        let mut next = None;
-        for _ in 0..1024 {
-            if !reserved.contains(&candidate)
-                && !record
-                    .instances
-                    .iter()
-                    .any(|i| i.ctid == candidate || i.retired.iter().any(|r| r.ctid == candidate))
-            {
-                // PVE checks all guests, including those outside the token's pools.
-                match pve.get("/cluster/nextid", &[("vmid", &candidate.to_string())]).await {
-                    Ok(value) if value.as_str().and_then(|s| s.parse::<u32>().ok()) == Some(candidate) => {
-                        next = Some(candidate);
-                        break;
-                    }
-                    Err(hs_pve::PveError::Api { status: 400, .. }) => {}
-                    Err(error) => return Err(format!("Cannot verify a free replacement CTID: {error}")),
-                    _ => return Err("PVE returned an unexpected CTID response".to_owned()),
-                }
-            }
-            candidate = candidate.checked_add(1).ok_or("No replacement CTID available")?;
-        }
-        let ctid = next.ok_or("No verified free replacement CTID; cluster visibility may be unavailable")?;
-        reserved.insert(ctid);
         let mut after = before.clone();
-        after.ctid = ctid;
         after.root_volume.clear();
         after.home_volume.clear();
         after.verified = None;
@@ -592,7 +565,6 @@ async fn review(
             network: text(&cfg, "net0").to_owned(),
             step: Step::Pull,
             task: None,
-            transfer_task: None,
         });
         plan.configs.push((*id, cfg));
     }
@@ -619,7 +591,7 @@ fn save(path: &Path, source: &Source, journal: &Journal) -> Result<(), String> {
             step: journal
                 .targets
                 .iter()
-                .map(|t| format!("{}→{} {:?}", t.before.ctid, t.after.ctid, t.step))
+                .map(|t| format!("CT {} {:?}", t.before.ctid, t.step))
                 .collect::<Vec<_>>()
                 .join(", "),
             started: record
@@ -687,206 +659,57 @@ fn original(target: &Target, cfg: &Value) -> Result<(), String> {
         || text(cfg, "hostname") != target.before.hostname
         || text(cfg, "description") != target.source_description
         || tags(cfg) != target.before.tags
-        || cfg["unprivileged"].as_u64() != Some(1)
+        || text(cfg, "mp0") != target.home_mount
+        || text(cfg, "net0") != target.network
     {
-        return Err("Original container identity/root/preserved metadata changed; no automatic repair".to_owned());
+        return Err("Original container changed since review; no automatic repair".to_owned());
     }
     Ok(())
 }
 
-fn replacement(source: &Source, journal: &Journal, target: &Target, cfg: &Value) -> Result<(), String> {
-    // Proxmox terminates saved descriptions with LF; it is not ownership drift.
-    if text(cfg, "description").trim_end_matches('\n') != description(source, journal, target).trim_end_matches('\n') {
-        return Err(format!(
-            "CT {}: replacement ownership metadata differs from the recorded operation",
-            target.after.ctid
-        ));
+/// The new container: this update's description, a root of its own on the
+/// reviewed storage and the original home under the same mount options.
+fn replaced(source: &Source, journal: &Journal, target: &Target, cfg: &Value) -> Result<(String, String), String> {
+    if text(cfg, "description").trim_end() != description(source, journal).trim_end() {
+        return Err(format!("CT {}: not made by this update", target.before.ctid));
     }
-    if text(cfg, "hostname") != target.before.hostname {
-        return Err(format!("CT {}: replacement hostname changed", target.after.ctid));
-    }
-    if cfg["unprivileged"].as_u64() != Some(1) {
-        return Err(format!("CT {}: replacement is not unprivileged", target.after.ctid));
-    }
-    if text(cfg, "arch") != "amd64" {
-        return Err(format!(
-            "CT {}: replacement architecture is not amd64",
-            target.after.ctid
-        ));
-    }
-    if !target.after.root_volume.is_empty() && volume(cfg, "rootfs") != target.after.root_volume {
-        return Err(format!("CT {}: replacement root volume changed", target.after.ctid));
-    }
-    if !matches!(target.step, Step::Pull | Step::Create | Step::Prepare) && tags(cfg) != target.before.tags {
-        return Err("Replacement tags changed".to_owned());
+    if text(cfg, "hostname") != target.before.hostname || cfg["unprivileged"].as_u64() != Some(1) {
+        return Err(format!("CT {}: hostname or privilege changed", target.before.ctid));
     }
     let root = volume(cfg, "rootfs");
-    if !root.starts_with(&format!("{}:", target.after.root_storage))
-        || !root
-            .split(':')
-            .nth(1)
-            .is_some_and(|v| v.contains(&format!("-{}-", target.after.ctid)))
+    if !root.starts_with(&format!("{}:", target.before.root_storage))
         || root == target.before.root_volume
-    {
-        return Err("Replacement root does not belong to the replacement container on the reviewed storage".to_owned());
-    }
-    Ok(())
-}
-
-/// A successful API reassignment plus these observations proves the transfer;
-/// a renamed volume is never treated as a newly allocated home.
-fn verified_home(target: &Target, replacement_config: &Value) -> Result<String, String> {
-    if volume(replacement_config, "rootfs") != target.after.root_volume {
-        return Err("Replacement root changed".to_owned());
-    }
-    let mount = text(replacement_config, "mp0");
-    let home = volume(replacement_config, "mp0");
-    let options = |s: &str| s.split(',').skip(1).map(str::to_owned).collect::<BTreeSet<_>>();
-    if options(mount) != options(&target.home_mount)
-        || !options(mount).contains("mp=/home/app")
-        || !home.starts_with(&format!("{}:", target.before.home_storage))
-        || !home
-            .split(':')
-            .nth(1)
-            .is_some_and(|v| v.contains(&format!("-{}-", target.after.ctid)))
-        || home == target.after.root_volume
-        || (!target.after.home_volume.is_empty() && home != target.after.home_volume)
-    {
-        return Err("Transferred home identity/storage/mount options differ from the journal".to_owned());
-    }
-    Ok(home)
-}
-
-fn moved_home(target: &Target, original_config: &Value, replacement_config: &Value) -> Result<String, String> {
-    if original_config.get("mp0").is_some() || volume(original_config, "rootfs") != target.before.root_volume {
-        return Err("Home still attached to the original container or its root changed".to_owned());
-    }
-    let home = verified_home(target, replacement_config)?;
-    if original_config.as_object().is_none_or(|fields| {
-        fields.iter().any(|(k, v)| {
-            (k.starts_with("mp") || k.starts_with("unused"))
-                && v.as_str().is_some_and(|v| {
-                    v.split(',')
-                        .next()
-                        .is_some_and(|id| id == target.before.home_volume || id == home)
-                })
-        })
-    }) {
-        return Err("Original container still references the data volume".to_owned());
-    }
-    Ok(home)
-}
-
-fn removable_root(target: &Target, cfg: &Value, state: &str) -> Result<(), String> {
-    original(target, cfg)?;
-    if state != "stopped"
-        || cfg["onboot"].as_u64() == Some(1)
-        || cfg.get("net0").is_some()
-        || cfg.as_object().is_none_or(|fields| {
-            fields
-                .keys()
-                .any(|key| key.starts_with("mp") || key.starts_with("unused"))
-        })
-        || target.before.root_volume == target.after.home_volume
-        || target.before.root_volume == target.after.root_volume
+        || !root.contains(&format!("-{}-", target.before.ctid))
     {
         return Err(format!(
-            "CT {}: automatic cleanup requires only the verified old root, stopped and disconnected",
+            "CT {}: root is not a new volume of its own",
             target.before.ctid
         ));
     }
-    Ok(())
-}
-
-async fn cleanup(
-    pve: &impl Pve,
-    path: &Path,
-    source: &Source,
-    journal: &mut Journal,
-    index: usize,
-) -> Result<(), String> {
-    let target = journal.targets[index].clone();
-    let (state, cfg) = read(pve, &target.after).await?;
-    replacement(source, journal, &target, &cfg)?;
-    verified_home(&target, &cfg)?;
-    if text(&cfg, "net0") != target.network
-        || (state.status == "running") != target.running
-        || (cfg["onboot"].as_u64() == Some(1)) != target.onboot
+    let options = |mount: &str| mount.split_once(',').map(|(_, rest)| rest.to_owned());
+    let home = volume(cfg, "mp0");
+    if options(text(cfg, "mp0")) != options(&target.home_mount)
+        || !home.starts_with(&format!("{}:", target.before.home_storage))
+        || !home.contains(&format!("-{}-", target.before.ctid))
+        || home == root
     {
-        return Err("Replacement power/network state changed before cleanup".to_owned());
+        return Err(format!(
+            "CT {}: home is missing or its storage/mount options differ",
+            target.before.ctid
+        ));
     }
-    if target.step == Step::Complete
-        && target
-            .after
-            .retired
-            .iter()
-            .any(|r| r.ctid == target.before.ctid && r.removed && r.delete_task.is_some())
+    if !node::same_net(text(cfg, "net0"), &target.network)
+        || node::extract_hwaddr(text(cfg, "net0")) != node::extract_hwaddr(&target.network)
     {
-        return Ok(());
+        return Err(format!("CT {}: network differs from the original", target.before.ctid));
     }
-    if target.task.is_none() {
-        if target.running {
-            deploy::healthy(&source.manifest, &target.before.address).await?;
-        }
-        let (old_state, old) = read(pve, &target.before).await?;
-        removable_root(&target, &old, &old_state.status)?;
-        safe_config(pve, &target.before, &old).await?;
-        // Re-read immediately before deletion. DELETE has no config digest parameter.
-        let (latest_state, latest) = read(pve, &target.before).await?;
-        if old != latest {
-            return Err("Old container changed before cleanup".to_owned());
-        }
-        removable_root(&target, &latest, &latest_state.status)?;
-        save(path, source, journal)?;
-        let task = pve
-            .delete(
-                &format!("/nodes/{}/lxc/{}", target.before.node, target.before.ctid),
-                &[("purge", "0"), ("destroy-unreferenced-disks", "0")],
-            )
-            .await
-            .map_err(|error| error.to_string())?;
-        let task = task
-            .as_str()
-            .ok_or("Cleanup returned no task ID; inspect before retrying")?;
-        if !task.starts_with(&format!("UPID:{}:", target.before.node)) {
-            return Err("Cleanup task belongs to another node".to_owned());
-        }
-        journal.targets[index].task = Some(task.to_owned());
-        save(path, source, journal)?;
-    }
-    let task = journal.targets[index].task.clone().ok_or("Cleanup task missing")?;
-    lifecycle::task(pve, &json!(task)).await?;
-    let mut after = target.after.clone();
-    let previous = after
-        .retired
-        .iter_mut()
-        .find(|r| r.ctid == target.before.ctid)
-        .ok_or("Cleanup generation record missing")?;
-    previous.removed = true;
-    previous.delete_task = Some(task);
-    registry::update(path, |registry| {
-        let slot = registry
-            .deployments
-            .iter_mut()
-            .find(|d| d.repository == source.repository && d.service == source.manifest.id)
-            .and_then(|d| d.instances.iter_mut().find(|i| i.ctid == after.ctid))
-            .ok_or("Replacement registry record missing")?;
-        if slot.root_volume != after.root_volume || slot.home_volume != after.home_volume || slot.node != after.node {
-            return Err("Replacement registry identity changed before cleanup completion".to_owned());
-        }
-        *slot = after.clone();
-        Ok(())
-    })?;
-    journal.targets[index].after = after;
-    advance(journal, index, Step::Complete);
-    save(path, source, journal)?;
-    Ok(())
+    Ok((root, home))
 }
 
 async fn image_matches(journal: &Journal) -> Result<(), String> {
     let current = hs_core::registry::resolve(&journal.image).await?;
     if current.digest != journal.digest || current.platform != journal.platform {
-        return Err("Image tag changed since review; refuse replacement".to_owned());
+        return Err("Image tag changed since review; refuse the update".to_owned());
     }
     Ok(())
 }
@@ -912,34 +735,6 @@ pub async fn apply(
             return Err(format!("CT {ctid} changed since review"));
         }
     }
-    if !plan.recovery {
-        for target in &plan.journal.targets {
-            let (state, _) = read(pve, &target.before).await?;
-            if (state.status == "running") != target.running {
-                return Err("Original power state changed since review".to_owned());
-            }
-            if registry
-                .deployments
-                .iter()
-                .flat_map(|d| &d.instances)
-                .any(|i| i.ctid == target.after.ctid || i.retired.iter().any(|r| r.ctid == target.after.ctid))
-            {
-                return Err("Replacement CTID is reserved by another registry instance".to_owned());
-            }
-            if registry
-                .deployments
-                .iter()
-                .filter_map(|d| d.operation.as_ref()?.replacement.as_ref())
-                .any(|j| j.targets.iter().any(|t| t.after.ctid == target.after.ctid))
-            {
-                return Err("Replacement CTID is reserved by an unfinished operation".to_owned());
-            }
-            let id = target.after.ctid.to_string();
-            pve.get("/cluster/nextid", &[("vmid", &id)])
-                .await
-                .map_err(|_| "Replacement CTID is no longer free")?;
-        }
-    }
     let mut journal = plan.journal.clone();
     save(path, source, &journal)?;
     let mut lines = Vec::new();
@@ -951,15 +746,8 @@ pub async fn apply(
         }
         let target = &journal.targets[index];
         let line = format!(
-            "{}: {} · CT {} → {} · home {} → {} · pool {} · tags {}",
-            target.before.node,
-            target.before.hostname,
-            target.before.ctid,
-            target.after.ctid,
-            target.before.home_volume,
-            target.after.home_volume,
-            target.after.pool,
-            target.after.tags.join(";")
+            "{}: {} · CT {} · {} · home {}",
+            target.before.node, target.before.hostname, target.before.ctid, journal.image, target.after.home_volume
         );
         say(&line);
         lines.push(line);
@@ -989,28 +777,20 @@ async fn run(
 ) -> Result<(), String> {
     loop {
         let target = journal.targets[index].clone();
-        if matches!(target.step, Step::Cleanup | Step::Complete) {
-            cleanup(pve, path, source, journal, index).await?;
-            return Ok(());
-        }
-        say(&format!(
-            "{}: CT {} → {} · {:?}",
-            target.before.node, target.before.ctid, target.after.ctid, target.step
-        ));
-        let base = format!("/nodes/{}/lxc/{}", target.before.node, target.before.ctid);
-        let next_base = format!("/nodes/{}/lxc/{}", target.after.node, target.after.ctid);
-        let (old_state, old) = read(pve, &target.before).await?;
-        original(&target, &old)?;
-        let filename = format!("hs-{}-{}", journal.id, target.after.ctid);
-        let template = format!("{}:vztmpl/{filename}.tar", journal.template_storage);
+        let instance = &target.before;
+        say(&format!("{}: CT {} · {:?}", instance.node, instance.ctid, target.step));
+        let base = format!("/nodes/{}/lxc/{}", instance.node, instance.ctid);
         match target.step {
             Step::Pull => {
+                let (_, old) = read(pve, instance).await?;
+                original(&target, &old)?;
                 image_matches(journal).await?;
                 let endpoint = format!(
                     "/nodes/{}/storage/{}/oci-registry-pull",
-                    target.before.node, journal.template_storage
+                    instance.node, journal.template_storage
                 );
                 let image = journal.image.clone();
+                let filename = format!("hs-{}-{}", journal.id, instance.ctid);
                 job(
                     pve,
                     path,
@@ -1022,155 +802,14 @@ async fn run(
                 )
                 .await?;
                 image_matches(journal).await?;
-                advance(journal, index, Step::Create);
-            }
-            Step::Create => {
-                if target.task.is_none() {
-                    if deploy::config_of(pve, target.after.ctid).await?.is_some() {
-                        return Err(
-                            "Replacement container already exists without a recorded create task; inspect it before retrying".to_owned(),
-                        );
-                    }
-                    let id = target.after.ctid.to_string();
-                    pve.get("/cluster/nextid", &[("vmid", &id)])
-                        .await
-                        .map_err(|_| "Replacement container CTID is occupied")?;
-                    let spec = node::NewContainer {
-                        node: &target.after.node,
-                        ctid: target.after.ctid,
-                        hostname: &target.after.hostname,
-                        ostemplate: &template,
-                        pool: &target.after.pool,
-                        storage: &target.after.root_storage,
-                        disk_gib: target.after.root_gib,
-                        memory_mib: target.after.memory_mib,
-                        cores: target.after.cores,
-                        net0: None,
-                        onboot: false,
-                        nameserver: target.after.nameserver.clone(),
-                        description: description(source, journal, &target),
-                        tag: None,
-                        mp0: None,
-                    };
-                    let upid = node::create_task(pve, &spec).await?;
-                    journal.targets[index].task = Some(upid.as_str().ok_or("No create task ID")?.to_owned());
-                    save(path, source, journal)?;
-                }
-                lifecycle::task(pve, &json!(journal.targets[index].task)).await?;
-                let (state, cfg) = read(pve, &target.after).await?;
-                replacement(source, journal, &target, &cfg)?;
-                if state.status != "stopped"
-                    || cfg.get("mp0").is_some()
-                    || cfg.get("net0").is_some()
-                    || cfg["onboot"].as_u64() == Some(1)
-                {
-                    return Err("Replacement container must be stopped without network, home or autostart".to_owned());
-                }
-                journal.targets[index].after.root_volume = volume(&cfg, "rootfs");
-                advance(journal, index, Step::Prepare);
-            }
-            Step::Prepare => {
-                lifecycle::verify(
-                    source,
-                    &registry::load(path)?
-                        .deployment(&source.repository, &source.manifest.id)
-                        .ok_or("Service disappeared")?
-                        .clone(),
-                    &target.before,
-                    &old,
-                )?;
-                let (state, cfg) = read(pve, &target.after).await?;
-                replacement(source, journal, &target, &cfg)?;
-                if state.status != "stopped"
-                    || cfg.get("mp0").is_some()
-                    || cfg.get("net0").is_some()
-                    || cfg["onboot"].as_u64() == Some(1)
-                {
-                    return Err("Prepared replacement container is no longer isolated".to_owned());
-                }
-                let previous_env = node::parse_env(text(&old, "env"));
-                let env = node::merge_env(&node::parse_env(text(&cfg, "env")), &previous_env, &[]);
-                let mut fields = vec![
-                    ("env".to_owned(), env),
-                    ("tags".to_owned(), target.before.tags.join(";")),
-                    ("onboot".to_owned(), "0".to_owned()),
-                ];
-                for key in [
-                    "hostname",
-                    "cores",
-                    "memory",
-                    "swap",
-                    "cpulimit",
-                    "cpuunits",
-                    "nameserver",
-                    "searchdomain",
-                    "startup",
-                    "features",
-                    "timezone",
-                    "console",
-                    "tty",
-                    "cmode",
-                ] {
-                    if let Some(value) = old.get(key) {
-                        fields.push((
-                            key.to_owned(),
-                            value.as_str().map_or_else(|| value.to_string(), str::to_owned),
-                        ));
-                    }
-                }
-                put(pve, &target.after, &cfg, fields).await?;
-                let (_, prepared) = read(pve, &target.after).await?;
-                if tags(&prepared) != target.before.tags
-                    || text(&prepared, "env")
-                        != node::merge_env(&node::parse_env(text(&cfg, "env")), &previous_env, &[])
-                {
-                    return Err("Replacement container did not retain original tags/runtime environment".to_owned());
-                }
-                safe_config(pve, &target.before, &old).await?;
-                safe_config(pve, &target.after, &prepared).await?;
-                advance(journal, index, Step::Shutdown);
-            }
-            Step::Shutdown => {
-                if text(&old, "mp0") != target.home_mount || text(&old, "net0") != target.network {
-                    return Err("Original container home or network changed before shutdown".to_owned());
-                }
-                let (state, cfg) = read(pve, &target.after).await?;
-                replacement(source, journal, &target, &cfg)?;
-                if state.status != "stopped"
-                    || cfg.get("mp0").is_some()
-                    || cfg.get("net0").is_some()
-                    || cfg["onboot"].as_u64() == Some(1)
-                {
-                    return Err(
-                        "Replacement container must remain isolated before shutting down the original container"
-                            .to_owned(),
-                    );
-                }
-                safe_config(pve, &target.after, &cfg).await?;
-                safe_config(pve, &target.before, &old).await?;
-                put(pve, &target.before, &old, vec![("onboot".to_owned(), "0".to_owned())]).await?;
-                if old_state.status == "running" || target.task.is_some() {
-                    job(
-                        pve,
-                        path,
-                        source,
-                        journal,
-                        index,
-                        &format!("{base}/status/shutdown"),
-                        &[("timeout", "60"), ("forceStop", "0")],
-                    )
-                    .await?;
-                }
-                if read(pve, &target.before).await?.0.status != "stopped" {
-                    return Err("Original container did not stop gracefully; no forced stop".to_owned());
-                }
                 advance(journal, index, Step::Backup);
             }
             Step::Backup => {
-                if old_state.status != "stopped" || text(&old, "mp0") != target.home_mount {
-                    return Err("Original container is not stopped with its original home".to_owned());
-                }
                 if !journal.backup_storage.is_empty() {
+                    if target.task.is_none() {
+                        let (_, old) = read(pve, instance).await?;
+                        original(&target, &old)?;
+                    }
                     let storage = journal.backup_storage.clone();
                     job(
                         pve,
@@ -1178,9 +817,9 @@ async fn run(
                         source,
                         journal,
                         index,
-                        &format!("/nodes/{}/vzdump", target.before.node),
+                        &format!("/nodes/{}/vzdump", instance.node),
                         &[
-                            ("vmid", &target.before.ctid.to_string()),
+                            ("vmid", &instance.ctid.to_string()),
                             ("storage", &storage),
                             ("mode", "stop"),
                             ("compress", "zstd"),
@@ -1188,202 +827,129 @@ async fn run(
                     )
                     .await?;
                 }
-                advance(journal, index, Step::MoveHome);
+                advance(journal, index, Step::Replace);
             }
-            Step::MoveHome => {
-                let (state, cfg) = read(pve, &target.after).await?;
-                replacement(source, journal, &target, &cfg)?;
-                if old_state.status != "stopped"
-                    || state.status != "stopped"
-                    || old["onboot"].as_u64() == Some(1)
-                    || cfg["onboot"].as_u64() == Some(1)
+            Step::Replace => {
+                if let Some((_, cfg)) = deploy::config_of(pve, instance.ctid).await?
+                    && text(&cfg, "description") == target.source_description
                 {
-                    return Err("Both containers must remain stopped with autostart disabled".to_owned());
+                    original(&target, &cfg)?;
+                    safe_config(pve, instance, &cfg).await?;
                 }
-                if target.task.is_none() {
-                    if text(&old, "mp0") != target.home_mount || cfg.get("mp0").is_some() {
-                        return Err("Home transfer has no recorded task and unexpected mounts; inspect storage, do not allocate another home".to_owned());
-                    }
-                    safe_config(pve, &target.before, &old).await?;
-                    safe_config(pve, &target.after, &cfg).await?;
-                }
-                job(
+                let template = format!(
+                    "{}:vztmpl/hs-{}-{}.tar",
+                    journal.template_storage, journal.id, instance.ctid
+                );
+                let spec = node::NewContainer {
+                    node: &instance.node,
+                    ctid: instance.ctid,
+                    hostname: &instance.hostname,
+                    ostemplate: &template,
+                    pool: &instance.pool,
+                    storage: &instance.root_storage,
+                    disk_gib: instance.root_gib,
+                    memory_mib: instance.memory_mib,
+                    cores: instance.cores,
+                    net0: Some(target.network.clone()),
+                    onboot: false,
+                    nameserver: instance.nameserver.clone(),
+                    description: description(source, journal),
+                    tag: None,
+                    mp0: None,
+                };
+                recreate::replace(
                     pve,
-                    path,
-                    source,
-                    journal,
-                    index,
-                    &format!("{base}/move_volume"),
-                    &[
-                        ("volume", "mp0"),
-                        ("target-vmid", &target.after.ctid.to_string()),
-                        ("target-volume", "mp0"),
-                        ("digest", text(&old, "digest")),
-                        ("target-digest", text(&cfg, "digest")),
-                    ],
+                    &recreate::Replace {
+                        spec,
+                        graceful: true,
+                        keep: KEEP,
+                    },
+                    &|line| say(line),
                 )
                 .await?;
-                let (_, original_config) = read(pve, &target.before).await?;
-                let (_, replacement_config) = read(pve, &target.after).await?;
-                let home = moved_home(&target, &original_config, &replacement_config)?;
-                journal.targets[index].after.home_volume = home.clone();
-                journal.targets[index].transfer_task = journal.targets[index].task.clone();
-                say(&format!(
-                    "Verified home transfer {} → {home}",
-                    target.before.home_volume
-                ));
-                advance(journal, index, Step::Disconnect);
+                let (_, cfg) = read(pve, instance).await?;
+                let (root, home) = replaced(source, journal, &target, &cfg)?;
+                say(&format!("Home {} → {home}", instance.home_volume));
+                journal.targets[index].after.root_volume = root;
+                journal.targets[index].after.home_volume = home;
+                advance(journal, index, Step::Configure);
             }
-            Step::Disconnect | Step::Connect | Step::Start | Step::Register => {
-                let (state, cfg) = read(pve, &target.after).await?;
-                replacement(source, journal, &target, &cfg)?;
-                moved_home(&target, &old, &cfg)?;
-                if tags(&cfg) != target.before.tags
-                    || old_state.status != "stopped"
-                    || old["onboot"].as_u64() == Some(1)
+            Step::Configure => {
+                let (state, cfg) = read(pve, instance).await?;
+                replaced(source, journal, &target, &cfg)?;
+                if state.status != "stopped" {
+                    return Err("The new container started before it was configured".to_owned());
+                }
+                if tags(&cfg) != instance.tags {
+                    put(pve, instance, &cfg, vec![("tags".to_owned(), instance.tags.join(";"))]).await?;
+                }
+                let (_, cfg) = read(pve, instance).await?;
+                let record = registry::load(path)?;
+                lifecycle::verify(
+                    source,
+                    record
+                        .deployment(&source.repository, &source.manifest.id)
+                        .ok_or("Service disappeared")?,
+                    &target.after,
+                    &cfg,
+                )?;
+                if tags(&cfg) != instance.tags {
+                    return Err("The new container did not keep the original tags".to_owned());
+                }
+                advance(journal, index, Step::Start);
+            }
+            Step::Start => {
+                let (state, cfg) = read(pve, instance).await?;
+                replaced(source, journal, &target, &cfg)?;
+                if target.running {
+                    if state.status != "running" || target.task.is_some() {
+                        job(pve, path, source, journal, index, &format!("{base}/status/start"), &[]).await?;
+                    }
+                    say(&deploy::healthy(&source.manifest, &instance.address).await?);
+                    journal.targets[index].after.verified =
+                        source.manifest.healthcheck.as_ref().map(|_| deploy::stamp());
+                } else if state.status != "stopped" {
+                    return Err("Previously stopped service unexpectedly started".to_owned());
+                }
+                let (_, current) = read(pve, instance).await?;
+                put(
+                    pve,
+                    instance,
+                    &current,
+                    vec![("onboot".to_owned(), if target.onboot { "1" } else { "0" }.to_owned())],
+                )
+                .await?;
+                advance(journal, index, Step::Register);
+            }
+            Step::Register => {
+                let (state, cfg) = read(pve, instance).await?;
+                replaced(source, journal, &target, &cfg)?;
+                if (state.status == "running") != target.running || (cfg["onboot"].as_u64() == Some(1)) != target.onboot
                 {
-                    return Err(
-                        "Original container must remain retired and the replacement container must retain all tags"
-                            .to_owned(),
-                    );
+                    return Err("Final power/autostart state differs from the reviewed plan".to_owned());
                 }
-                match target.step {
-                    Step::Disconnect => {
-                        if state.status != "stopped" || cfg.get("net0").is_some() {
-                            return Err("Replacement container started or acquired a network before cutover".to_owned());
-                        }
-                        if old.get("net0").is_some() {
-                            if text(&old, "net0") != target.network {
-                                return Err("Original container network changed".to_owned());
-                            }
-                            put(
-                                pve,
-                                &target.before,
-                                &old,
-                                vec![("delete".to_owned(), "net0".to_owned())],
-                            )
-                            .await?;
-                        }
-                        advance(journal, index, Step::Connect);
+                let mut after = target.after.clone();
+                after.stage = registry::Stage::Ready;
+                registry::update(path, |registry| {
+                    let slot = registry
+                        .deployments
+                        .iter_mut()
+                        .find(|d| d.repository == source.repository && d.service == source.manifest.id)
+                        .ok_or("Service disappeared")?
+                        .instances
+                        .iter_mut()
+                        .find(|i| i.ctid == instance.ctid)
+                        .ok_or("Instance disappeared")?;
+                    if slot.node != instance.node || slot.address != instance.address || slot.mac != instance.mac {
+                        return Err("Logical instance identity changed".to_owned());
                     }
-                    Step::Connect => {
-                        if old.get("net0").is_some() || state.status != "stopped" {
-                            return Err("Network cutover is not isolated".to_owned());
-                        }
-                        if cfg.get("net0").is_some() && text(&cfg, "net0") != target.network {
-                            return Err("Replacement container has a different network".to_owned());
-                        }
-                        if cfg.get("net0").is_none() {
-                            put(
-                                pve,
-                                &target.after,
-                                &cfg,
-                                vec![("net0".to_owned(), target.network.clone())],
-                            )
-                            .await?;
-                        }
-                        advance(journal, index, Step::Start);
-                    }
-                    Step::Start => {
-                        if old.get("net0").is_some() || text(&cfg, "net0") != target.network {
-                            return Err("Original network was not transferred exactly".to_owned());
-                        }
-                        let record = registry::load(path)?;
-                        lifecycle::verify(
-                            source,
-                            record
-                                .deployment(&source.repository, &source.manifest.id)
-                                .ok_or("Service disappeared")?,
-                            &target.after,
-                            &cfg,
-                        )?;
-                        safe_config(pve, &target.after, &cfg).await?;
-                        if target.running {
-                            if state.status != "running" || target.task.is_some() {
-                                job(
-                                    pve,
-                                    path,
-                                    source,
-                                    journal,
-                                    index,
-                                    &format!("{next_base}/status/start"),
-                                    &[],
-                                )
-                                .await?;
-                            }
-                            say(&deploy::healthy(&source.manifest, &target.before.address).await?);
-                            journal.targets[index].after.verified =
-                                source.manifest.healthcheck.as_ref().map(|_| deploy::stamp());
-                        } else if state.status != "stopped" {
-                            return Err("Previously stopped service unexpectedly started".to_owned());
-                        }
-                        let (_, current) = read(pve, &target.after).await?;
-                        put(
-                            pve,
-                            &target.after,
-                            &current,
-                            vec![("onboot".to_owned(), if target.onboot { "1" } else { "0" }.to_owned())],
-                        )
-                        .await?;
-                        advance(journal, index, Step::Register);
-                    }
-                    Step::Register => {
-                        if old.get("net0").is_some()
-                            || text(&cfg, "net0") != target.network
-                            || (state.status == "running") != target.running
-                            || (cfg["onboot"].as_u64() == Some(1)) != target.onboot
-                        {
-                            return Err("Final power/network/autostart state differs from the reviewed plan".to_owned());
-                        }
-                        let mut after = target.after.clone();
-                        after.retired.retain(|r| !r.removed);
-                        after.stage = registry::Stage::Ready;
-                        if !after.retired.iter().any(|r| r.ctid == target.before.ctid) {
-                            after.retired.push(Retired {
-                                ctid: target.before.ctid,
-                                root_volume: target.before.root_volume.clone(),
-                                release: target
-                                    .before
-                                    .release
-                                    .clone()
-                                    .ok_or("Previous image release identity missing")?,
-                                home_before: target.before.home_volume.clone(),
-                                home_after: target.after.home_volume.clone(),
-                                transfer_task: target
-                                    .transfer_task
-                                    .clone()
-                                    .ok_or("Home transfer task evidence missing")?,
-                                removed: false,
-                                delete_task: None,
-                            });
-                        }
-                        registry::update(path, |registry| {
-                            let record = registry
-                                .deployments
-                                .iter_mut()
-                                .find(|d| d.repository == source.repository && d.service == source.manifest.id)
-                                .ok_or("Service disappeared")?;
-                            let slot = record
-                                .instances
-                                .iter_mut()
-                                .find(|i| i.ctid == target.before.ctid || i.ctid == target.after.ctid)
-                                .ok_or("Instance disappeared")?;
-                            if slot.node != target.before.node
-                                || slot.address != target.before.address
-                                || slot.mac != target.before.mac
-                            {
-                                return Err("Logical instance identity changed".to_owned());
-                            }
-                            *slot = after.clone();
-                            Ok(())
-                        })?;
-                        journal.targets[index].after = after;
-                        advance(journal, index, Step::Cleanup);
-                    }
-                    _ => unreachable!(),
-                }
+                    *slot = after.clone();
+                    Ok(())
+                })?;
+                journal.targets[index].after = after;
+                save(path, source, journal)?;
+                return Ok(());
             }
-            Step::Cleanup | Step::Complete => unreachable!(),
         }
         save(path, source, journal)?;
     }
@@ -1394,85 +960,6 @@ async fn run(
 mod tests {
     use super::*;
 
-    fn target() -> Target {
-        let before: Instance = serde_json::from_value(json!({
-            "node":"pve3", "ctid":120, "hostname":"example", "address":"192.0.2.10",
-            "mac":"02:00:00:00:00:10", "pool":"homestack-service", "tags":["homestack-server", "private"],
-            "cores":1, "memory_mib":512, "root_storage":"local-lvm", "root_gib":4,
-            "home_storage":"local-lvm", "home_gib":8, "root_volume":"local-lvm:vm-120-disk-0",
-            "home_volume":"local-lvm:vm-120-disk-1", "stage":"ready", "desired":"running"
-        }))
-        .unwrap();
-        let mut after = before.clone();
-        after.ctid = 121;
-        after.root_volume = "local-lvm:vm-121-disk-0".to_owned();
-        after.home_volume.clear();
-        Target {
-            before,
-            after,
-            running: true,
-            onboot: true,
-            source_description: "original".to_owned(),
-            home_mount: "local-lvm:vm-120-disk-1,mp=/home/app,backup=1,size=8G".to_owned(),
-            network: String::new(),
-            step: Step::MoveHome,
-            task: None,
-            transfer_task: None,
-        }
-    }
-
-    #[test]
-    fn home_transfer_rejects_wrong_mount_storage_root_and_remaining_reference() {
-        let target = target();
-        let original_config = json!({"rootfs":"local-lvm:vm-120-disk-0,size=4G"});
-        let replacement_config = json!({"rootfs":"local-lvm:vm-121-disk-0,size=4G", "mp0":"local-lvm:vm-121-disk-1,mp=/home/app,backup=1,size=8G"});
-        assert_eq!(
-            moved_home(&target, &original_config, &replacement_config).unwrap(),
-            "local-lvm:vm-121-disk-1"
-        );
-        for mount in [
-            "other:vm-121-disk-1,mp=/home/app,backup=1,size=8G",
-            "local-lvm:vm-122-disk-1,mp=/home/app,backup=1,size=8G",
-            "local-lvm:vm-121-disk-0,mp=/home/app,backup=1,size=8G",
-            "local-lvm:vm-121-disk-1,mp=/home/other,backup=1,size=8G",
-            "local-lvm:vm-121-disk-1,mp=/home/app,backup=1,size=4G",
-        ] {
-            let mut wrong = replacement_config.clone();
-            wrong["mp0"] = json!(mount);
-            assert!(moved_home(&target, &original_config, &wrong).is_err());
-        }
-        for key in ["mp0", "unused0"] {
-            for home in ["local-lvm:vm-120-disk-1", "local-lvm:vm-121-disk-1"] {
-                let mut referenced = original_config.clone();
-                referenced[key] = json!(home);
-                assert!(moved_home(&target, &referenced, &replacement_config).is_err());
-            }
-        }
-        let mut changed_root = original_config;
-        changed_root["rootfs"] = json!("local-lvm:vm-120-disk-2,size=4G");
-        assert!(moved_home(&target, &changed_root, &replacement_config).is_err());
-    }
-
-    #[test]
-    fn recorded_home_identity_and_original_ownership_must_match() {
-        let mut target = target();
-        target.after.home_volume = "local-lvm:vm-121-disk-2".to_owned();
-        let original_config = json!({"rootfs":"local-lvm:vm-120-disk-0,size=4G", "hostname":"example", "description":"original", "tags":"private;homestack-server", "unprivileged":1});
-        let replacement_config = json!({"rootfs":"local-lvm:vm-121-disk-0,size=4G", "mp0":"local-lvm:vm-121-disk-1,mp=/home/app,backup=1,size=8G"});
-        assert!(moved_home(&target, &original_config, &replacement_config).is_err());
-        assert!(original(&target, &original_config).is_ok());
-        for (field, value) in [
-            ("rootfs", "local-lvm:vm-999-disk-0"),
-            ("hostname", "foreign"),
-            ("description", "foreign"),
-            ("tags", "homestack-server"),
-        ] {
-            let mut wrong = original_config.clone();
-            wrong[field] = json!(value);
-            assert!(original(&target, &wrong).is_err());
-        }
-    }
-
     #[test]
     fn permissions_distinguish_presence_from_propagation() {
         let perms = json!({"/vms/120":{"VM.Config.Disk":0}, "/storage":{"Datastore.AllocateSpace":0}, "/nodes":{"Sys.AccessNetwork":1}});
@@ -1481,197 +968,5 @@ mod tests {
         assert!(!permit(&perms, "/storage/local-lvm", "Datastore.AllocateSpace"));
         assert!(permit(&perms, "/nodes/pve3", "Sys.AccessNetwork"));
         assert!(!permit(&perms, "/vms/120", "VM.Console"));
-    }
-
-    #[tokio::test]
-    async fn interrupted_transfer_of_stopped_service_resumes_and_removes_only_the_old_root() {
-        use super::super::manifest::{Manifest, StateModel};
-        use hs_pve::PveError;
-        use std::sync::Mutex;
-
-        struct Api(Mutex<(Value, Value)>);
-        impl Pve for Api {
-            async fn get(&self, path: &str, _: &[(&str, &str)]) -> Result<Value, PveError> {
-                let pair = self.0.lock().unwrap();
-                Ok(match path {
-                    "/cluster/resources" => json!([
-                        // Cached inventory is deliberately stale/incomplete.
-                        {"type":"lxc", "vmid":120, "node":"pve3", "status":"running"},
-                        {"type":"lxc", "vmid":121, "node":"pve3"}
-                    ]),
-                    "/pools/homestack-service" => json!({"members":[
-                        {"type":"lxc", "vmid":120, "node":"pve3"},
-                        {"type":"lxc", "vmid":121, "node":"pve3"}
-                    ]}),
-                    "/nodes/pve3/lxc/120/config" => pair.0.clone(),
-                    "/nodes/pve3/lxc/121/config" => pair.1.clone(),
-                    p if p.contains("/tasks/") && p.ends_with("/status") => {
-                        json!({"status":"stopped", "exitstatus":"OK"})
-                    }
-                    p if p.ends_with("/status/current") => json!({"status":"stopped", "ha":{"managed":0}}),
-                    p if p.ends_with("/snapshot") => json!([{"name":"current"}]),
-                    p if p.ends_with("/firewall/options") => json!({}),
-                    p if p.ends_with("/pending")
-                        || p.ends_with("/replication")
-                        || p.contains("/firewall/")
-                        || p.ends_with("/log") =>
-                    {
-                        json!([])
-                    }
-                    _ => panic!("Unexpected read: {path}"),
-                })
-            }
-            async fn post(&self, path: &str, _: &[(&str, &str)]) -> Result<Value, PveError> {
-                panic!("Recovery must not recreate disks, repeat the move or start the stopped service: {path}")
-            }
-            async fn delete(&self, path: &str, fields: &[(&str, &str)]) -> Result<Value, PveError> {
-                assert_eq!(
-                    path, "/nodes/pve3/lxc/120",
-                    "Only the original container may be destroyed"
-                );
-                assert_eq!(fields, [("purge", "0"), ("destroy-unreferenced-disks", "0")]);
-                Ok(json!(
-                    "UPID:pve3:00000002:00000002:00000002:vzdestroy:120:operator@pve:"
-                ))
-            }
-            async fn put(&self, path: &str, fields: &[(&str, &str)]) -> Result<Value, PveError> {
-                let mut pair = self.0.lock().unwrap();
-                let cfg = match path {
-                    "/nodes/pve3/lxc/120/config" => &mut pair.0,
-                    "/nodes/pve3/lxc/121/config" => &mut pair.1,
-                    _ => panic!("Unexpected mutation: {path}"),
-                };
-                assert_eq!(
-                    fields.iter().find(|(k, _)| *k == "digest").unwrap().1,
-                    text(cfg, "digest")
-                );
-                for (key, value) in fields {
-                    match *key {
-                        "delete" => {
-                            assert_eq!(*value, "net0");
-                            cfg.as_object_mut().unwrap().remove("net0");
-                        }
-                        "net0" => cfg["net0"] = json!(value),
-                        "onboot" => cfg["onboot"] = json!(value.parse::<u32>().unwrap()),
-                        "digest" => {}
-                        _ => panic!("Unexpected configuration change: {key}"),
-                    }
-                }
-                Ok(Value::Null)
-            }
-        }
-
-        let source = Source {
-            repository: "owner/repo".to_owned(),
-            branch: "main".to_owned(),
-            commit: "commit".to_owned(),
-            path: ".homestack/example.yaml".to_owned(),
-            blob: "blob".to_owned(),
-            manifest: Manifest {
-                id: "example".to_owned(),
-                name: "Example".to_owned(),
-                image_repository: "ghcr.io/example/service".to_owned(),
-                ports: vec![],
-                healthcheck: None,
-                directories: vec!["data".to_owned()],
-                mappings: vec![],
-                multi_node: false,
-                state_model: StateModel::Local,
-            },
-        };
-        let mut target = target();
-        target.running = false;
-        target.after.desired = Desired::Stopped;
-        target.before.release = Some(Release {
-            version: "1.0.0".to_owned(),
-            digest: "old-digest".to_owned(),
-            commit: "old-commit".to_owned(),
-            manifest_blob: "old-blob".to_owned(),
-        });
-        target.after.release = Some(Release {
-            version: "1.0.1".to_owned(),
-            digest: "new-digest".to_owned(),
-            commit: source.commit.clone(),
-            manifest_blob: source.blob.clone(),
-        });
-        target.network = "name=eth0,bridge=vmbr0,ip=192.0.2.10/24,hwaddr=02:00:00:00:00:10,type=veth".to_owned();
-        target.task = Some("UPID:pve3:00000001:00000001:00000001:move_volume:120-0:operator@pve:".to_owned());
-        let mut journal = Journal {
-            id: "operation".to_owned(),
-            commit: source.commit.clone(),
-            blob: source.blob.clone(),
-            image: source.image("1.0.1"),
-            digest: "new-digest".to_owned(),
-            platform: "platform-digest".to_owned(),
-            template_storage: "local".to_owned(),
-            backup_storage: String::new(),
-            targets: vec![target.clone()],
-        };
-        let replacement_config = json!({"rootfs":"local-lvm:vm-121-disk-0,size=4G", "mp0":"local-lvm:vm-121-disk-1,mp=/home/app,backup=1,size=8G", "hostname":"example", "description":format!("{}\n", description(&source,&journal,&target)), "tags":"homestack-server;private", "unprivileged":1, "arch":"amd64", "onboot":0, "digest":"replacement_config"});
-        assert!(replacement(&source, &journal, &target, &replacement_config).is_ok());
-        for (field, value) in [
-            (
-                "description",
-                json!(format!(
-                    "{}\nforeign metadata\n",
-                    description(&source, &journal, &target)
-                )),
-            ),
-            ("hostname", json!("foreign")),
-            ("arch", json!("arm64")),
-            ("unprivileged", json!(0)),
-            ("rootfs", json!("local-lvm:vm-999-disk-0,size=4G")),
-        ] {
-            let mut changed = replacement_config.clone();
-            changed[field] = value;
-            assert!(replacement(&source, &journal, &target, &changed).is_err());
-        }
-        let api = Api(Mutex::new((
-            json!({"rootfs":"local-lvm:vm-120-disk-0,size=4G", "hostname":"example", "description":"original", "tags":"homestack-server;private", "unprivileged":1, "onboot":0, "net0":target.network, "digest":"original_config"}),
-            replacement_config,
-        )));
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("services.toml");
-        let record = Deployment {
-            repository: source.repository.clone(),
-            service: source.manifest.id.clone(),
-            git_ref: source.branch.clone(),
-            commit: source.commit.clone(),
-            manifest_path: source.path.clone(),
-            manifest_blob: source.blob.clone(),
-            image_repository: source.manifest.image_repository.clone(),
-            image_version: "1.0.0".to_owned(),
-            image_digest: "old-digest".to_owned(),
-            environment: vec![],
-            instances: vec![target.before.clone()],
-            operation: None,
-        };
-        registry::update(&path, |r| {
-            r.deployments.push(record);
-            Ok(())
-        })
-        .unwrap();
-        save(&path, &source, &journal).unwrap();
-        run(&api, &path, &source, &mut journal, 0, &|_| {}).await.unwrap();
-        let registry = registry::load(&path).unwrap();
-        let active = &registry.deployments[0].instances[0];
-        assert_eq!(active.ctid, 121);
-        assert_eq!(active.desired, Desired::Stopped);
-        assert!(active.verified.is_none());
-        assert_eq!(active.home_volume, "local-lvm:vm-121-disk-1");
-        assert_eq!(active.retired[0].root_volume, "local-lvm:vm-120-disk-0");
-        assert!(active.retired[0].transfer_task.starts_with("UPID:pve3:"));
-        assert!(active.retired[0].removed);
-        assert!(
-            active.retired[0]
-                .delete_task
-                .as_deref()
-                .is_some_and(|t| t.contains(":vzdestroy:120:"))
-        );
-        let pair = api.0.lock().unwrap();
-        assert!(pair.0.get("mp0").is_none() && pair.0.get("net0").is_none());
-        assert_eq!(pair.0["onboot"], 0);
-        assert_eq!(pair.1["onboot"], 1);
-        assert_eq!(pair.1["net0"], target.network);
     }
 }

@@ -29,7 +29,7 @@ pub fn image_file(reference: &str) -> Result<String, String> {
     Ok(format!("{name}_{tag}.tar"))
 }
 
-async fn wait(pve: &impl Pve, upid: &Value, what: &str) -> Result<(), String> {
+pub(crate) async fn wait(pve: &impl Pve, upid: &Value, what: &str) -> Result<(), String> {
     let upid = upid.as_str().ok_or_else(|| format!("{what}: Proxmox gave no task"))?;
     let result = wait_task(pve, upid, &TaskWait::up_to(TASK_LIMIT), &NoObserver)
         .await

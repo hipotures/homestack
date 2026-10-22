@@ -1,86 +1,69 @@
-# Registered service container replacement
+# Container image updates
 
-Update prepares a new container on the original node using only the scoped
-Proxmox API token. No SSH connection or command in a guest or on a PVE host is
-part of replacement or its recovery. Legacy internal services keep their existing
-handlers until separately adopted.
+API servers, Pangolin connectors and registered services update their image the
+same way, through `hs_deploy::recreate` and the scoped Proxmox API token only.
+The container keeps its CTID, so the CTID stays tied to its IP address.
 
-The operator reviews the selected release and digests, old/new CTIDs, node, pool,
-all tags, network identity, root storage and the existing home volume. Nothing
-changes during review. The new CTID is independent of the service IP address.
-HomeStack labels the home with the manifest service ID and `/home/app`; the
-technical PVE volume ID remains visible in details. PVE owns the backend name
-and may change its CTID component during reassignment.
-The container overview reads its IP from `net0` and home capacity from `mp0`.
-Home free space comes from fresh in-container HTTP telemetry when the service
-implements the [service status contract](../.agents/skills/homestack-service/service-status.md).
-Otherwise it stays unknown: PVE's LXC `disk`/`maxdisk` counters describe the
-root filesystem and must not be used as measurements of `/home/app`. Telemetry
-does not replace the PVE ownership and volume checks below.
+- A container without mount-point volumes is stopped, destroyed and made again
+  from the new image.
+- A container with mount-point volumes (a service's `/home/app`) first gets a
+  temporary holder container on the same node, named `hs-holder-<ctid>`. The
+  holder is created from the same image while the service still runs, is never
+  started and has no network. The configuration the new container keeps
+  (environment, features, resource options) is copied into the holder; its
+  description then ends with `holder ready`. Runtime values therefore stay in
+  PVE and never reach the local journal or logs.
+- The old container is shut down, its volumes move to the holder
+  (`move_volume`), the old container (now only its own root) is destroyed with
+  `purge=0` and `destroy-unreferenced-disks=0`, the new container is created
+  under the same CTID with the original `net0` including its MAC, the volumes
+  move back with their mount options, the kept configuration is merged over the
+  new image's own entries and the holder is removed.
+- Bind mounts, network mounts, devices and unused volumes are refused; they are
+  not supported yet.
 
-1. Pull the selected release into a new operation-specific OCI archive. PVE 9.2
-   accepts tagged pull references; verify the registry's index and amd64 digests
-   before and after the pull. Refuse changed tags. Do not reuse an unverified
-   cached archive. This relies on the service's immutable release contract; it
-   does not provide an independent checksum of the archive through PVE's API.
-2. Create the replacement container stopped, without network or home and with
-   autostart disabled. Preserve the hostname, pool, all tags, resources and
-   application environment. Runtime values stay in PVE and are excluded from the
-   local journal and logs.
-3. Disable autostart on the original container, request graceful shutdown and
-   wait. A failed shutdown does not trigger a forced stop. If selected, complete
-   a stopped backup including home before proceeding.
-4. Call `POST /nodes/{node}/lxc/{source_ctid}/move_volume` with `volume=mp0`,
-   `target-vmid=<replacement_ctid>`, `target-volume=mp0` and both config
-   digests. The API checks storage rename support and reassignment permissions.
-   Refuse snapshots, drift, unexpected devices/mounts, HA management and
-   occupied target slots.
-5. Wait for the recorded task and verify both configurations: the original
-   container lost its home, the replacement received it under `/home/app` with
-   the same mount options and capacity, and both root volumes remain unchanged.
-   Record the old/new volume IDs and task.
-6. Remove the original container's network and assign its exact network
-   configuration to the replacement. Restore the original power state. Check the
-   manifest's health probe for a running service, then restore the original
-   autostart setting on the replacement container.
-7. Atomically replace the registry's active CTID/root/home while keeping
-   service, node, hostname, IP, MAC, pool and tags. Record the old CT/root and
-   transfer evidence in the instance history. Local favorites and selection
-   follow the new CTID.
-8. Verify the replacement again (identity, root, home, network, power state,
-   health) and the original container (identity, stopped, no network, no
-   autostart, no mount points or unused volumes, no snapshots, HA, replication
-   or firewall configuration). Re-read it immediately before
-   `DELETE /nodes/{node}/lxc/{source_ctid}` with `purge=0` and
-   `destroy-unreferenced-disks=0`, which removes only the old CT and its root.
-   Record the deletion task in the instance history.
+Every run continues from what Proxmox shows: the CT and its description (the
+new container's description identifies this update), the holder and whether it
+is ready, and where the volumes are. A locked container stops the run until its
+task ends. An interrupted update therefore resumes by reopening Update image.
+At no point does a volume belong to no container, and a container is destroyed
+only when it holds nothing but its own root.
 
-A failed check before step 8 keeps the original container for recovery; a
-failed cleanup check leaves it in place and the update stays resumable. The data
-volume is never deleted. The replacement is another generation of the same
-logical instance, including for a single-node service.
+Measured on pve3 (LVM-thin, 2026-10-22): creating the holder takes about 1 s and
+removing it 0.3 s, both outside the downtime. Moving a 1 GiB home takes about
+0.5 s. Shutdown, move out, destroy, create from a 60 MB service image, move back
+and start took 5.5 s, before the application's own start-up and health check.
 
-Every transition and returned task ID is journaled under the profile operation
-lock. Recovery requires a new review and verifies the recorded instances before
-continuing. Missing responses, failed tasks and ambiguous storage state stop for
-inspection; they never trigger another empty home allocation, guessed adoption
-or disk cleanup. Completed nodes remain recorded when another node fails.
+## Registered services
 
-Reopen the existing image selector to resume an interrupted update. It offers
-only the recorded release and requires confirmation before continuing with the
-saved CTIDs and task IDs. Power-state decisions read the node's
-`/nodes/{node}/lxc/{ctid}/status/current`, because cached cluster inventory can
-omit the state of a newly created container.
+The operator reviews the selected release and digest, the CTID, node, pool, tags,
+network identity, root storage and the home volume. Nothing changes during
+review. The service journal (`services.toml`, profile operation lock) records
+each step and task:
 
-API configuration and task evidence verify reassignment, not guest file contents
-or filesystem UUIDs. Application health alone does not prove existing data was
-read. File markers and application data inspection are additional verification.
-Restoring an old image does not undo database migrations. A data-changing upgrade
-requires a consistent backup; restoring that backup is a separate explicit action.
+1. Pull the release into an operation-specific OCI archive. PVE 9.2 accepts
+   tagged pull references; the registry's index and amd64 digests are verified
+   before and after the pull and changed tags are refused.
+2. If selected, back up the container including its home (`vzdump`, stop mode).
+3. Replace the container as described above, with a graceful shutdown that never
+   forces a stop. Verify the new root, the home under the original mount
+   options and the original network and MAC.
+4. Restore the tags, then verify ownership, IP, MAC and volumes against the
+   registry.
+5. Restore the original power state, check the manifest's health probe for a
+   running service, then restore the original autostart setting.
+6. Record the new root and home volume IDs and the release in the registry.
 
-The manual pve3 smoke check used Tutor 0.1.2 on both generations: CT 102004 to
-CT 102005 and back, followed by a separately authorized permanent switch to CT 102005.
-PVE confirmed LVM rename and both applications answered `/alive` with HTTP 200.
-The owner checked the content after the permanent switch. The production Tutor
-on pve2 was not changed. This check is evidence for the API sequence, not a live
-execution of the Rust implementation or a version/database migration test.
+PVE renames a volume when it moves, so the home's volume ID changes; HomeStack
+labels the home with the manifest service ID and `/home/app` and records the new
+ID. The container overview reads its IP from `net0` and home capacity from
+`mp0`. Home free space comes from fresh in-container HTTP telemetry when the
+service implements the
+[service status contract](../.agents/skills/homestack-service/service-status.md);
+otherwise it stays unknown, because PVE's `disk`/`maxdisk` counters describe the
+root filesystem.
+
+API configuration and task evidence verify the volume moves, not guest file
+contents. Application health alone does not prove existing data was read.
+Restoring an old image does not undo database migrations; a data-changing
+upgrade requires a consistent backup, and restoring it is a separate action.
