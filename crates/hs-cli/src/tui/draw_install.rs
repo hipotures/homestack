@@ -563,8 +563,12 @@ fn settings(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
         return;
     };
     if let Some(value) = &setting.text {
-        // The field, a blank row and the note, wrapped as `paragraph` wraps it.
-        let rect = fit(48, 2 + wrap(&setting.note, 48).len());
+        // The field over as many rows as its text takes, so its end and the
+        // cursor stay in sight; a blank row; the note, wrapped as `paragraph`
+        // wraps it.
+        let typed: Vec<char> = format!("{value}▏").chars().collect();
+        let field: Vec<String> = typed.chunks(44).map(|chunk| chunk.iter().collect()).collect();
+        let rect = fit(48, field.len() + 1 + wrap(&setting.note, 48).len());
         let box_inner = frame(
             buf,
             rect,
@@ -575,15 +579,17 @@ fn settings(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
                 ..Sides::default()
             },
         );
-        write(
-            buf,
-            box_inner.x + 2,
-            at(box_inner.y, 1),
-            box_inner.width.saturating_sub(4),
-            &format!("[ {value}▏ ]"),
-            focus,
-        );
-        paragraph(buf, box_inner, at(box_inner.y, 3), &setting.note, muted);
+        for (row, line) in field.iter().enumerate() {
+            write(
+                buf,
+                box_inner.x + 2,
+                at(box_inner.y, 1 + row),
+                box_inner.width.saturating_sub(4),
+                line,
+                focus,
+            );
+        }
+        paragraph(buf, box_inner, at(box_inner.y, 2 + field.len()), &setting.note, muted);
         return;
     }
     // The choices only; what a setting is for is in the help. The value and
