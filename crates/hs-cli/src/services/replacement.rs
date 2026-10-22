@@ -401,11 +401,12 @@ pub async fn plan(
             String::new(),
         ]);
     }
-    plan.lines.push(if plan.journal.backup_storage.is_empty() {
-        "Backup: none selected. Image rollback does not undo database changes.".to_owned()
-    } else {
-        format!("Backup: stopped container and home → {}", plan.journal.backup_storage)
-    });
+    if !plan.journal.backup_storage.is_empty() {
+        plan.lines.push(format!(
+            "Backup: stopped container and home → {}",
+            plan.journal.backup_storage
+        ));
+    }
     if plan.journal.targets.iter().any(|target| target.running) {
         plan.lines
             .push(format!("Check: {}", deploy::health_text(&source.manifest)));
