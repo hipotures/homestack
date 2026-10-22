@@ -174,7 +174,7 @@ pub struct NewContainer<'a> {
     pub nameserver: Option<String>,
     pub description: String,
     /// The tag that marks what made it ([`SERVER_TAG`] for a server).
-    pub tag: &'a str,
+    pub tag: Option<&'a str>,
     /// A new volume made with the container, `STORAGE:GIB,mp=PATH,…`.
     pub mp0: Option<String>,
 }
@@ -217,7 +217,9 @@ pub async fn create(pve: &impl Pve, spec: &NewContainer<'_>, say: &impl Fn(&str)
         .await
         .map_err(|e| format!("create CT {}: {e}", spec.ctid))?;
     wait(pve, &upid, &format!("create CT {}", spec.ctid)).await?;
-    ensure_tag_named(pve, spec.node, spec.ctid, spec.tag, say).await?;
+    if let Some(tag) = spec.tag {
+        ensure_tag_named(pve, spec.node, spec.ctid, tag, say).await?;
+    }
     Ok(())
 }
 

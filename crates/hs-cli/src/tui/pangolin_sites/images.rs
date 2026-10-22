@@ -399,7 +399,7 @@ pub async fn apply(
                 })
                 .collect::<Vec<_>>()
                 .join("\n"),
-            tag: TAG,
+            tag: Some(TAG),
             mp0: None,
         };
         node::destroy(&pve, &ct, snapshot.ctid, &|line| say(line)).await?;

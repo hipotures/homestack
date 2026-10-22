@@ -12,7 +12,7 @@ use super::install::{Event, Found, Mark, Setting};
 use super::installing::{Command, Setup};
 use super::reinstall::local_time;
 use crate::install_flow::Answer;
-use crate::services::deploy::{self, Choice, Cluster, Plan, Source, TAG};
+use crate::services::deploy::{self, Choice, Cluster, Plan, Source};
 use crate::services::manifest::MOUNT;
 use crate::services::registry::{self, Deployment, Stage};
 
@@ -288,7 +288,7 @@ fn settings(source: &Source, cluster: &Cluster, kept: Option<&Choice>, offset: i
         Setting {
             title: title.to_owned(),
             note: format!(
-                "{note} Each instance is an unprivileged container in pool homestack-service with tag {TAG}, its \
+                "{note} Each instance is an unprivileged container in pool homestack-service with tag homestack-server, its \
                  health checked from this desktop after the start and again after one restart. One node at a time; \
                  the first failure stops the run and nothing is removed; deploying again resumes it. Other \
                  containers, the API servers, the Site connectors and Pangolin are not touched."

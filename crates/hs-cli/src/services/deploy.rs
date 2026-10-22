@@ -24,8 +24,6 @@ use serde_json::Value;
 use super::manifest::{Healthcheck, MOUNT, Manifest};
 use super::registry::{self, Deployment, Desired, Instance, Operation, Stage};
 
-/// The tag of a container made by this deployment.
-pub const TAG: &str = "homestack-app";
 /// How long a started instance may take to pass its health check.
 const HEALTH_LIMIT: Duration = Duration::from_secs(180);
 const HEALTH_RETRY: Duration = Duration::from_secs(2);
@@ -135,17 +133,6 @@ fn description(source: &Source, image: &str, digest: &str) -> String {
     )
 }
 
-fn tags(config: &Value) -> Vec<String> {
-    config["tags"]
-        .as_str()
-        .unwrap_or_default()
-        .split([';', ','])
-        .map(str::trim)
-        .filter(|tag| !tag.is_empty())
-        .map(str::to_owned)
-        .collect()
-}
-
 /// Whether container configuration `config` was made by this service.
 fn made_by(source: &Source, config: &Value) -> bool {
     let text = config["description"].as_str().unwrap_or_default();
@@ -153,7 +140,6 @@ fn made_by(source: &Source, config: &Value) -> bool {
     has(&format!("HomeStack service {}", source.manifest.id))
         && has(&format!("repository {}", source.repository))
         && has("made by homestack")
-        && tags(config).iter().any(|tag| tag == TAG)
 }
 
 /// The online nodes, the storages the deploy token may use and the
@@ -526,7 +512,7 @@ pub async fn plan(
             address: ip.to_string(),
             mac: String::new(),
             pool: config.pool.clone(),
-            tags: vec![TAG.to_owned()],
+            tags: vec![node::SERVER_TAG.to_owned()],
             cores,
             memory_mib,
             root_storage,
@@ -863,7 +849,7 @@ async fn run(
                 net0: net0(&instance.address),
                 nameserver: plan.nameserver.clone(),
                 description: text.clone(),
-                tag: TAG,
+                tag: Some(node::SERVER_TAG),
                 mp0: Some(format!(
                     "{}:{},mp={MOUNT},backup=1",
                     instance.home_storage, instance.home_gib

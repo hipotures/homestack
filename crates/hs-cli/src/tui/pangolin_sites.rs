@@ -1219,7 +1219,7 @@ async fn deploy_node(
             net0: net,
             nameserver: None,
             description: description(&ctx.organization, &n.site, &ctx.image),
-            tag: TAG,
+            tag: Some(TAG),
             mp0: None,
         };
         node::create(pve, &spec, say).await?;
