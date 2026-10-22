@@ -1064,6 +1064,23 @@ fn workspaces(buf: &mut Buffer, area: Rect, app: &App, mut controls: Vec<Control
                 style.fg(palette.warning),
             );
         }
+        // Little free space in the cluster panel's colours: yellow from 75 %
+        // used, red from 90 %.
+        let mut x = list.x;
+        for column in &columns {
+            x += 1;
+            if column.heading == "FREE" {
+                let text = (column.value)(&shown);
+                if let Some(free) = text.strip_suffix('%').and_then(|percent| percent.parse::<f64>().ok())
+                    && free <= 25.0
+                {
+                    let color = load_color(palette, 100.0 - free);
+                    let cell = pad_right(&text, column.width);
+                    write(buf, x, y, u16::try_from(column.width).unwrap_or(0), &cell, style.fg(color));
+                }
+            }
+            x += u16::try_from(column.width).unwrap_or(0);
+        }
         // The tags' squares in their colours, from the first column.
         for (at, tag) in entry.tags.iter().take(MAX_TAGS).enumerate() {
             let x = list.x + 1 + u16::try_from(at).unwrap_or(0);
