@@ -294,7 +294,8 @@ Listings include category index, stable ID, label, file path or repository ident
 #### Setup TUI controls
 - **Left pane (checkbox tree):** Represents selection state for the current session. Detected installed/in-sync items are shown in green; selecting an already-ready item or one that overwrites existing configuration highlights it in red as an update/reapply warning.
 - **Right pane (details):** Independently scrollable (`PageUp`/`PageDown`/mouse wheel) full item details.
-- **Keys:** `↑`/`↓` move, `←`/`→` collapse/expand, `Space` toggles an item or branch, `0` selects the current branch, `/` filters visible items, `F5` refreshes live guest state, `Ctrl+R` reloads the catalog and refreshes state, and `Enter` opens **Review & apply**.
+- **Keys:** `↑`/`↓` move, `←`/`→` switch groups, `Enter` expands/collapses, `Space` toggles an item or branch, `0` selects the current branch, `f` filters visible items, `F5` refreshes live guest state, `Ctrl+R` reloads the catalog and refreshes state, and `a` opens **Review & apply**.
+- **Services group:** after Repositories, read only: the repositories (those with deployed services first), `Enter` reads and lists a repository's `.homestack/*.yaml` services, `F5` reads them again.
 
 #### State registry and pre-apply snapshots
 Setup state lives inside the workspace's persistent home at `~/.local/state/homestack/setup.json`, so destroying a workspace and its home cleanly removes its setup state. Before overwriting any existing declared path, HomeStack creates an operation snapshot under `~/.local/state/homestack/YYYYMMDD_HHMMSS/` containing pre-change files, SHA-256 metadata (`snapshot.json`), and `setup.before.json`.

@@ -1300,14 +1300,6 @@ impl App {
                     }
                     Some(Hit::SetupDetails) => return None,
                     Some(Hit::Log { .. } | Hit::Bar(_)) => return None,
-                    Some(Hit::SetupGroup(index)) => {
-                        if let Some(setup) = self.setup.as_mut()
-                            && matches!(setup.stage, super::setup::Stage::Tree)
-                        {
-                            setup.show_section(index);
-                        }
-                        return None;
-                    }
                     Some(Hit::Integration(item)) => {
                         self.overlay = Some(Overlay::Integrations { index: item });
                         return press(self, KeyCode::Enter);

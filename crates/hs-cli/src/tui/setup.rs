@@ -539,42 +539,7 @@ impl SetupBox {
         (count, entries.len())
     }
 
-    /// Each tab of the group bar: its label, its items with something
-    /// selected (for Services: repositories with deployed services) and
-    /// its items.
-    #[must_use]
-    pub fn tabs(&self) -> Vec<(String, usize, usize)> {
-        let mut tabs: Vec<(String, usize, usize)> = self
-            .settings
-            .setup
-            .groups
-            .iter()
-            .map(|group| {
-                let (count, total) = self.group_count(&group.id);
-                (group.label.clone(), count, total)
-            })
-            .collect();
-        if !tabs.is_empty() {
-            let rows = self.service_rows();
-            let repositories: Vec<&String> = rows
-                .iter()
-                .filter(|row| row.file.is_none())
-                .map(|row| &row.repository)
-                .collect();
-            let deployed = repositories
-                .iter()
-                .filter(|repository| {
-                    self.registry
-                        .as_ref()
-                        .is_ok_and(|registry| registry.has_repository(repository))
-                })
-                .count();
-            tabs.insert(self.services_tab(), (SERVICES.to_owned(), deployed, repositories.len()));
-        }
-        tabs
-    }
-
-    /// The tabs, for the carousel and the group bar: the groups and
+    /// The groups, for the carousel (← → move through them), and
     /// Services.
     #[must_use]
     pub fn groups(&self) -> Vec<String> {
@@ -1173,7 +1138,7 @@ impl SetupBox {
 
     /// Python `target_label`: the line above the tree.
     #[must_use]
-    pub fn target_label(&self, progress: &str) -> String {
+    pub fn target_label(&self, progress: &str, utc_offset: i64) -> String {
         let mut parts = vec![self.target_description()];
         if !self.target.ip.is_empty() {
             parts.push(self.target.ip.clone());
@@ -1182,10 +1147,8 @@ impl SetupBox {
             parts.push(format!("SSH: {}", self.ssh_status));
         }
         if let Some(checked) = self.state["checked_at"].as_str() {
-            parts.push(format!("State: {checked}"));
-        }
-        if let Some(id) = &self.catalog.snapshot_id {
-            parts.push(format!("Catalog: {}", id.chars().take(8).collect::<String>()));
+            let local = super::reinstall::local_time(checked, utc_offset).unwrap_or_else(|| checked.to_owned());
+            parts.push(format!("State: {local}"));
         }
         let hidden = self.hidden_selected();
         if hidden > 0 {
@@ -2261,34 +2224,19 @@ impl SetupBox {
             KeyCode::End => self.move_service_cursor(isize::MAX / 2),
             KeyCode::PageUp => self.details_scroll = self.details_scroll.saturating_sub(10),
             KeyCode::PageDown => self.details_scroll += 10,
-            KeyCode::Tab => self.show_section(self.section + 1),
-            KeyCode::BackTab => self.show_section(self.section + self.groups().len() - 1),
+            KeyCode::Right | KeyCode::Tab => self.show_section(self.section + 1),
+            KeyCode::Left | KeyCode::BackTab => self.show_section(self.section + self.groups().len() - 1),
             KeyCode::Char('f') => self.filtering = true,
-            KeyCode::Right | KeyCode::Enter => {
+            // Enter opens or closes the highlighted repository.
+            KeyCode::Enter => {
                 if let Some(ServiceRow { repository, file: None }) = row {
-                    if key.code == KeyCode::Enter && self.services_open.contains(&repository) {
+                    if self.services_open.contains(&repository) {
                         self.services_open.remove(&repository);
                     } else {
                         return self.open_repository(&repository);
                     }
                 }
             }
-            KeyCode::Left => match row {
-                Some(ServiceRow { repository, file: None }) => {
-                    self.services_open.remove(&repository);
-                }
-                Some(ServiceRow { repository, .. }) => {
-                    let rows = self.service_rows();
-                    if let Some(at) = rows
-                        .iter()
-                        .position(|row| row.repository == repository && row.file.is_none())
-                    {
-                        self.services_cursor = at;
-                        self.details_scroll = 0;
-                    }
-                }
-                None => {}
-            },
             KeyCode::F(5) => {
                 if let Some(ServiceRow { repository, .. }) = row
                     && self.discovery(&repository).is_some()
@@ -2368,14 +2316,12 @@ impl SetupBox {
                     self.filter.pop();
                     self.rebuild();
                 }
-                // The filter's Enter reviews (Python `on_input_submitted`).
-                KeyCode::Enter => self.review(),
                 KeyCode::Esc => {
                     self.filter.clear();
                     self.filtering = false;
                     self.rebuild();
                 }
-                KeyCode::Down | KeyCode::Up | KeyCode::Tab => self.filtering = false,
+                KeyCode::Enter | KeyCode::Down | KeyCode::Up | KeyCode::Tab => self.filtering = false,
                 _ => {}
             }
             return None;
@@ -2399,24 +2345,22 @@ impl SetupBox {
             KeyCode::End => self.move_cursor(isize::MAX / 2),
             KeyCode::PageUp => self.details_scroll = self.details_scroll.saturating_sub(10),
             KeyCode::PageDown => self.details_scroll += 10,
-            KeyCode::Tab => self.show_section(self.section + 1),
-            KeyCode::BackTab => {
+            KeyCode::Right | KeyCode::Tab => self.show_section(self.section + 1),
+            KeyCode::Left | KeyCode::BackTab => {
                 let count = self.groups().len().max(1);
                 self.show_section(self.section + count - 1);
             }
-            KeyCode::Left => {
-                let open = self.nodes.get(&cursor).is_some_and(|node| node.branch) && self.is_expanded(&cursor);
-                if open && !self.is_group(&cursor) {
-                    self.set_open(&cursor, false);
-                } else if let Some(parent) = self.nodes.get(&cursor).and_then(|node| node.parent.clone()) {
-                    self.highlight(&parent);
+            // Enter opens or closes the highlighted item.
+            KeyCode::Enter => {
+                if self.nodes.get(&cursor).is_some_and(|node| node.branch) && !self.is_group(&cursor) {
+                    let open = self.is_expanded(&cursor);
+                    self.set_open(&cursor, !open);
                 }
             }
-            KeyCode::Right => self.set_open(&cursor, true),
             KeyCode::Char(' ') => self.toggle(&cursor, false),
             KeyCode::Char('0') => self.toggle(&cursor, true),
             KeyCode::Char('f') => self.filtering = true,
-            KeyCode::Enter => self.review(),
+            KeyCode::Char('a') => self.review(),
             KeyCode::Esc => {
                 if !self.filter.is_empty() {
                     self.filter.clear();

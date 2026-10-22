@@ -2102,8 +2102,8 @@ const HELP: [&str; 26] = [
     "On a server (containers): ␣ select or unselect it; ↵ update its image,",
     "or every selected one when it is selected, from a published image.",
     "",
-    "Setup: tab next group, ␣ toggle, 0 branch, f filter, ← → close or",
-    "open, ↵ review, F5 reread state, Ctrl+R catalog; green ready, red overwrite.",
+    "Setup: ← → group (Services lists the repositories' services), ↵ open or",
+    "close, ␣ toggle, 0 branch, f filter, a review, F5 reread, Ctrl+R catalog.",
     "The CLI has every command: homestack --help",
 ];
 

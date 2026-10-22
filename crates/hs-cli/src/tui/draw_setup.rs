@@ -69,16 +69,17 @@ pub(super) fn setup_box(buf: &mut Buffer, area: Rect, app: &App, setup: &SetupBo
         Stage::Loading { .. } => vec![Control::named("ESC", "cancel", KeyCode::Esc)],
         Stage::Failed { .. } => vec![Control::named("ENTER", "close", KeyCode::Enter)],
         Stage::Tree if setup.in_services() => vec![
-            Control::named("→", "open", KeyCode::Right),
-            Control::named("TAB", "group", KeyCode::Tab),
+            Control::named("←→", "group", KeyCode::Right),
+            Control::named("ENTER", "open", KeyCode::Enter),
             Control::named("F5", "reread", KeyCode::F(5)),
             Control::named("ESC", "cancel", KeyCode::Esc),
         ],
         Stage::Tree => {
-            let review = Control::named("ENTER", "review & apply", KeyCode::Enter).enabled(!setup.busy);
+            let review = Control::named("A", "review & apply", KeyCode::Char('a')).enabled(!setup.busy);
             vec![
                 Control::named("SPACE", "toggle", KeyCode::Char(' ')),
-                Control::named("TAB", "group", KeyCode::Tab),
+                Control::named("←→", "group", KeyCode::Right),
+                Control::named("ENTER", "open", KeyCode::Enter),
                 Control::named("F5", "reread", KeyCode::F(5)),
                 if pending { review.chosen() } else { review },
                 Control::named("ESC", "cancel", KeyCode::Esc),
@@ -253,13 +254,12 @@ fn tree_stage(buf: &mut Buffer, inner: Rect, app: &App, setup: &SetupBox) {
     let text = text_style(palette);
     let muted = text.fg(palette.muted);
     let width = usize::from(inner.width.saturating_sub(2));
-    let label = wrap(&setup.target_label(&setup.last_progress), width);
+    let label = wrap(&setup.target_label(&setup.last_progress, app.utc_offset), width);
     let mut y = inner.y;
     for line in label.iter().take(2) {
         write(buf, inner.x + 1, y, inner.width.saturating_sub(2), line, muted);
         y += 1;
     }
-    y = group_bar(buf, inner, y, app, setup);
     y += 1;
     let notice_rows = u16::from(setup.notice.is_some());
     let body = Rect::new(
@@ -514,52 +514,4 @@ fn draw_details(buf: &mut Buffer, area: Rect, app: &App, setup: &SetupBox, detai
     }
     let bar = Rect::new(area.x, area.y.saturating_sub(1), area.width, area.height + 2);
     scrollbar(buf, bar, palette, Scrolls::SetupDetails, scroll, height, lines.len());
-}
-
-/// Every group with its count, the shown one raised; a click shows one.
-/// The bar wraps when the groups do not fit on one line.
-fn group_bar(buf: &mut Buffer, inner: Rect, mut y: u16, app: &App, setup: &SetupBox) -> u16 {
-    let palette = &app.palette;
-    let text = text_style(palette);
-    let right = inner.right().saturating_sub(1);
-    let mut x = inner.x + 1;
-    for (index, (name, count, total)) in setup.tabs().into_iter().enumerate() {
-        let label = format!(" {name} ");
-        let counter = format!("{count}/{total} ");
-        let width = u16::try_from(label.chars().count() + counter.chars().count()).unwrap_or(0);
-        if x + width > right && x > inner.x + 1 {
-            x = inner.x + 1;
-            y += 1;
-        }
-        if y >= inner.bottom() {
-            break;
-        }
-        let active = index == setup.section;
-        let style = if active {
-            text.fg(palette.background)
-                .bg(palette.focus)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            text.add_modifier(Modifier::BOLD)
-        };
-        let counter_style = if active || count > 0 {
-            style
-        } else {
-            text.fg(palette.muted)
-        };
-        let name_width = write(buf, x, y, right.saturating_sub(x), &label, style);
-        let counter_x = x + name_width;
-        let used = name_width
-            + write(
-                buf,
-                counter_x,
-                y,
-                right.saturating_sub(counter_x),
-                &counter,
-                counter_style,
-            );
-        register(Rect::new(x, y, used, 1), Hit::SetupGroup(index));
-        x += used + 1;
-    }
-    y + 1
 }
