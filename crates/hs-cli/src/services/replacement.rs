@@ -460,11 +460,13 @@ async fn review(
                 return Err("Select every instance of the interrupted replacement for recovery".to_owned());
             }
             let (_, original) = read(pve, &target.before).await?;
+            self::original(target, &original)?;
             plan.configs.push((target.before.ctid, original));
             if let Some((found, cfg)) = deploy::config_of(pve, target.after.ctid).await? {
                 if found.node != target.after.node {
                     return Err("Replacement moved to another node".to_owned());
                 }
+                replacement(source, &plan.journal, target, &cfg)?;
                 plan.configs.push((target.after.ctid, cfg));
             }
         }
@@ -686,13 +688,27 @@ fn original(target: &Target, cfg: &Value) -> Result<(), String> {
 }
 
 fn replacement(source: &Source, journal: &Journal, target: &Target, cfg: &Value) -> Result<(), String> {
-    if text(cfg, "description") != description(source, journal, target)
-        || text(cfg, "hostname") != target.before.hostname
-        || cfg["unprivileged"].as_u64() != Some(1)
-        || text(cfg, "arch") != "amd64"
-        || (!target.after.root_volume.is_empty() && volume(cfg, "rootfs") != target.after.root_volume)
-    {
-        return Err("Replacement container ownership, architecture or root changed; no automatic adoption".to_owned());
+    // Proxmox terminates saved descriptions with LF; it is not ownership drift.
+    if text(cfg, "description").trim_end_matches('\n') != description(source, journal, target).trim_end_matches('\n') {
+        return Err(format!(
+            "CT {}: replacement ownership metadata differs from the recorded operation",
+            target.after.ctid
+        ));
+    }
+    if text(cfg, "hostname") != target.before.hostname {
+        return Err(format!("CT {}: replacement hostname changed", target.after.ctid));
+    }
+    if cfg["unprivileged"].as_u64() != Some(1) {
+        return Err(format!("CT {}: replacement is not unprivileged", target.after.ctid));
+    }
+    if text(cfg, "arch") != "amd64" {
+        return Err(format!(
+            "CT {}: replacement architecture is not amd64",
+            target.after.ctid
+        ));
+    }
+    if !target.after.root_volume.is_empty() && volume(cfg, "rootfs") != target.after.root_volume {
+        return Err(format!("CT {}: replacement root volume changed", target.after.ctid));
     }
     if !matches!(target.step, Step::Pull | Step::Create | Step::Prepare) && tags(cfg) != target.before.tags {
         return Err("Replacement tags changed".to_owned());
@@ -1470,9 +1486,28 @@ mod tests {
             backup_storage: String::new(),
             targets: vec![target.clone()],
         };
+        let replacement_config = json!({"rootfs":"local-lvm:vm-121-disk-0,size=4G", "mp0":"local-lvm:vm-121-disk-1,mp=/home/app,backup=1,size=8G", "hostname":"example", "description":format!("{}\n", description(&source,&journal,&target)), "tags":"homestack-app;private", "unprivileged":1, "arch":"amd64", "onboot":0, "digest":"replacement_config"});
+        assert!(replacement(&source, &journal, &target, &replacement_config).is_ok());
+        for (field, value) in [
+            (
+                "description",
+                json!(format!(
+                    "{}\nforeign metadata\n",
+                    description(&source, &journal, &target)
+                )),
+            ),
+            ("hostname", json!("foreign")),
+            ("arch", json!("arm64")),
+            ("unprivileged", json!(0)),
+            ("rootfs", json!("local-lvm:vm-999-disk-0,size=4G")),
+        ] {
+            let mut changed = replacement_config.clone();
+            changed[field] = value;
+            assert!(replacement(&source, &journal, &target, &changed).is_err());
+        }
         let api = Api(Mutex::new((
             json!({"rootfs":"local-lvm:vm-120-disk-0,size=4G", "hostname":"example", "description":"original", "tags":"homestack-app;private", "unprivileged":1, "onboot":0, "net0":target.network, "digest":"original_config"}),
-            json!({"rootfs":"local-lvm:vm-121-disk-0,size=4G", "mp0":"local-lvm:vm-121-disk-1,mp=/home/app,backup=1,size=8G", "hostname":"example", "description":description(&source,&journal,&target), "tags":"homestack-app;private", "unprivileged":1, "arch":"amd64", "onboot":0, "digest":"replacement_config"}),
+            replacement_config,
         )));
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("services.toml");
