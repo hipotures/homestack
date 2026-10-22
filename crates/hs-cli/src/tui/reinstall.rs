@@ -58,6 +58,8 @@ pub struct Images {
     pub published: Vec<Image>,
     pub sites: Vec<super::pangolin_sites::images::Snapshot>,
     pub common: Option<(String, String)>,
+    /// The recorded containers of an interrupted update, shown in the selector.
+    pub resume: Option<String>,
 }
 
 impl Images {
@@ -175,6 +177,7 @@ pub async fn read(deploy_toml: &Path, vmids: &[u32], offset: i64) -> Result<Imag
         published,
         sites: Vec::new(),
         common: None,
+        resume: None,
     })
 }
 
@@ -416,6 +419,19 @@ async fn common_images(path: &Path, ids: &[u32], offset: i64) -> Result<Option<I
         published,
         sites: Vec::new(),
         common: Some((record.repository.clone(), record.service.clone())),
+        resume: interrupted.map(|journal| {
+            journal
+                .targets
+                .iter()
+                .map(|target| {
+                    format!(
+                        "{} · CT {} → {}",
+                        target.before.node, target.before.ctid, target.after.ctid
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ")
+        }),
     }))
 }
 

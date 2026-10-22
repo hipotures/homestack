@@ -2187,6 +2187,15 @@ fn reinstall_lines(app: &App, chosen: usize, text: Style, muted: Style, lines: &
         Some(Ok(images)) => images,
     };
     lines.push((String::new(), text));
+    if let Some(resume) = &images.resume {
+        lines.push((
+            "Interrupted update".to_owned(),
+            text.fg(app.palette.warning).add_modifier(Modifier::BOLD),
+        ));
+        lines.push((resume.clone(), text));
+        lines.push(("Enter: review and resume".to_owned(), text));
+        lines.push((String::new(), text));
+    }
     lines.push(("Now".to_owned(), muted));
     let name_width = images
         .servers
@@ -2235,6 +2244,12 @@ fn action_box(buf: &mut Buffer, area: Rect, app: &App, action: &Action) {
     let palette = &app.palette;
     let text = text_style(palette);
     let muted = text.fg(palette.muted);
+    let resuming = action.kind == Kind::Reinstall
+        && app
+            .images
+            .as_ref()
+            .and_then(|images| images.as_ref().ok())
+            .is_some_and(|images| images.resume.is_some());
     let stages: &[&str] = if action.kind.has_form() {
         &["form", "plan", "run"]
     } else {
@@ -2263,14 +2278,17 @@ fn action_box(buf: &mut Buffer, area: Rect, app: &App, action: &Action) {
         ],
         Stage::Form(_) => vec![
             Control::key("next ⇥"),
-            Control::key("plan ↵"),
+            Control::key(if resuming { "resume ↵" } else { "plan ↵" }),
             Control::key("cancel esc"),
         ],
         Stage::Asking => vec![Control::key("cancel esc")],
         Stage::Plan { blocked, focus, .. } => {
             let mut buttons = Vec::new();
             if blocked.is_none() {
-                buttons.push(raised(Control::key("&apply"), *focus == PlanFocus::Apply));
+                buttons.push(raised(
+                    Control::key(if resuming { "resume ↵" } else { "&apply" }),
+                    *focus == PlanFocus::Apply,
+                ));
             }
             buttons.push(raised(Control::key("cancel esc"), *focus == PlanFocus::Cancel));
             buttons

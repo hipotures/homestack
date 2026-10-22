@@ -288,6 +288,7 @@ pub async fn read(deployment: &Path, targets: &[u32], offset: i64) -> Result<Opt
         published,
         sites: snapshots,
         common: None,
+        resume: None,
     }))
 }
 
