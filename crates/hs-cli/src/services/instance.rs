@@ -38,6 +38,8 @@ pub struct Instance {
     pub digest: String,
     /// The description, as HomeStack wrote it.
     pub description: String,
+    /// The container's environment, in its order.
+    pub environment: Vec<(String, String)>,
     /// Only the holder of the container is left: the replacement stopped
     /// after the old container was removed.
     pub held: bool,
@@ -132,6 +134,7 @@ pub fn parse(ctid: u32, node: &str, pool: &str, cfg: &Value, running: bool) -> R
         image: service.image,
         digest: service.digest,
         description: description.clone(),
+        environment: node::parse_env(text(cfg, "env")),
         held,
     };
     if held {

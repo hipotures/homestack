@@ -218,7 +218,7 @@ fn number(text: &str, what: &str, range: std::ops::RangeInclusive<u32>) -> Resul
 
 /// Names that look like secrets: the container configuration is readable
 /// in Proxmox, and HomeStack has no secret transport for services.
-fn secret_name(key: &str) -> bool {
+pub fn secret_name(key: &str) -> bool {
     ["TOKEN", "SECRET", "PASSWORD", "PASSWD", "KEY", "CREDENTIAL"]
         .iter()
         .any(|word| key.contains(word))

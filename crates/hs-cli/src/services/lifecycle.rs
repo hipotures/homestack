@@ -1,29 +1,47 @@
 //! Maintenance of deployed service containers through the Proxmox API:
-//! growing a disk, and removing an instance together with its home.
+//! changing the environment, growing a disk, and removing an instance
+//! together with its home.
 
 use hs_core::pve::Pve;
 use hs_core::tasks::{NoObserver, TaskWait, wait_task};
 use hs_deploy::node;
 use serde_json::Value;
 
+use super::deploy;
 use super::instance::{self, Instance};
+use super::manifest::Manifest;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Action {
+    Environment,
     Resize,
     Remove,
 }
 
 impl Action {
-    pub const ALL: [Self; 2] = [Self::Resize, Self::Remove];
+    pub const ALL: [Self; 3] = [Self::Environment, Self::Resize, Self::Remove];
 
     #[must_use]
     pub fn label(self) -> &'static str {
         match self {
+            Self::Environment => "Environment",
             Self::Resize => "Resize",
             Self::Remove => "Remove with its home",
         }
     }
+}
+
+/// The entries the environment setting shows: neither `PATH` nor anything
+/// named like a secret.
+#[must_use]
+pub fn shown_environment(instance: &Instance) -> String {
+    instance
+        .environment
+        .iter()
+        .filter(|(key, _)| key != "PATH" && !deploy::secret_name(key))
+        .map(|(key, value)| format!("{key}={value}"))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// What the operator chose; numbers as typed.
@@ -33,6 +51,8 @@ pub struct Choice {
     pub ctids: Vec<u32>,
     pub root_gib: String,
     pub home_gib: String,
+    /// Environment: `KEY=value` to set, `KEY=` to remove.
+    pub environment: String,
     /// Remove: the selected containers' names, as typed.
     pub confirmation: String,
 }
@@ -44,6 +64,8 @@ pub struct Plan {
     pub targets: Vec<Instance>,
     pub root_gib: Option<u32>,
     pub home_gib: Option<u32>,
+    pub set: Vec<(String, String)>,
+    pub remove: Vec<String>,
     pub lines: Vec<String>,
     pub problems: Vec<String>,
 }
@@ -76,6 +98,8 @@ pub async fn plan(pve: &impl Pve, repository: &str, service: &str, choice: &Choi
         targets: Vec::new(),
         root_gib: None,
         home_gib: None,
+        set: Vec::new(),
+        remove: Vec::new(),
         lines: Vec::new(),
         problems: Vec::new(),
     };
@@ -94,6 +118,54 @@ pub async fn plan(pve: &impl Pve, repository: &str, service: &str, choice: &Choi
         }
     }
     match choice.action {
+        Action::Environment => {
+            match deploy::environment(&choice.environment) {
+                Ok(entries) => {
+                    for (key, value) in entries {
+                        if value.is_empty() {
+                            plan.remove.push(key);
+                        } else {
+                            plan.set.push((key, value));
+                        }
+                    }
+                }
+                Err(error) => plan.problems.push(error),
+            }
+            for target in &plan.targets {
+                plan.lines
+                    .push(format!("CT {} {} on {}", target.ctid, target.hostname, target.node));
+                let now = |key: &str| {
+                    target
+                        .environment
+                        .iter()
+                        .find(|(k, _)| k == key)
+                        .map(|(_, v)| v.clone())
+                };
+                let mut changed = false;
+                for (key, value) in &plan.set {
+                    if now(key).as_deref() != Some(value.as_str()) {
+                        changed = true;
+                        plan.lines.push(match now(key) {
+                            Some(old) => format!("  {key}: {old} → {value}"),
+                            None => format!("  {key}: new, {value}"),
+                        });
+                    }
+                }
+                for key in &plan.remove {
+                    if now(key).is_some() {
+                        changed = true;
+                        plan.lines.push(format!("  {key}: removed"));
+                    }
+                }
+                if !changed {
+                    plan.lines.push("  unchanged".to_owned());
+                } else if target.running {
+                    plan.lines.push(
+                        "  restarts to take the change, then its health is checked; /home/app is untouched".to_owned(),
+                    );
+                }
+            }
+        }
         Action::Resize => {
             match (size(&choice.root_gib, "Root"), size(&choice.home_gib, "Home")) {
                 (Ok(root), Ok(home)) => {
@@ -162,7 +234,12 @@ async fn task(pve: &impl Pve, upid: &Value, what: &str) -> Result<(), String> {
     }
 }
 
-pub async fn apply(pve: &impl Pve, plan: &Plan, say: &(dyn Fn(&str) + Send + Sync)) -> Result<Vec<String>, String> {
+pub async fn apply(
+    pve: &impl Pve,
+    manifest: &Manifest,
+    plan: &Plan,
+    say: &(dyn Fn(&str) + Send + Sync),
+) -> Result<Vec<String>, String> {
     if !plan.problems.is_empty() {
         return Err("Resolve the review problems first".to_owned());
     }
@@ -174,6 +251,26 @@ pub async fn apply(pve: &impl Pve, plan: &Plan, say: &(dyn Fn(&str) + Send + Syn
             return Err(format!("CT {ctid} changed since review; review again"));
         }
         match plan.action {
+            Action::Environment => {
+                let remove: Vec<&str> = plan.remove.iter().map(String::as_str).collect();
+                say(&format!("CT {ctid} · environment"));
+                node::set_env(pve, node, ctid, &plan.set, &remove).await?;
+                let after = instance::read_on(pve, node, ctid).await?;
+                if after.environment == now.environment {
+                    lines.push(format!("CT {ctid} {}: environment unchanged", target.hostname));
+                    continue;
+                }
+                if now.running {
+                    say(&format!("CT {ctid} · restarting"));
+                    node::power(pve, node, ctid, "reboot").await?;
+                    say(&deploy::healthy(manifest, &target.address).await?);
+                }
+                lines.push(format!(
+                    "CT {ctid} {}: environment set{}",
+                    target.hostname,
+                    if now.running { ", restarted, healthy" } else { "" }
+                ));
+            }
             Action::Resize => {
                 for (disk, wanted) in [("rootfs", plan.root_gib), ("mp0", plan.home_gib)] {
                     let Some(wanted) = wanted else { continue };

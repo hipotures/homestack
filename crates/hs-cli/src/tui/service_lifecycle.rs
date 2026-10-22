@@ -106,6 +106,19 @@ pub(super) fn work(
                         Some(String::new()),
                     ),
                     setting(
+                        "Environment",
+                        "Environment only: KEY=value entries separated by spaces change or add a variable; KEY= \
+                         removes one; variables not named stay as they are. No secrets: the container \
+                         configuration is readable in Proxmox. A running container restarts to take the change; \
+                         its data in /home/app stays.",
+                        Vec::new(),
+                        false,
+                        Some(match instances.as_slice() {
+                            [only] => lifecycle::shown_environment(only),
+                            _ => String::new(),
+                        }),
+                    ),
+                    setting(
                         "Confirmation",
                         "Remove only: type the names of the selected containers, separated by spaces. The container \
                          and its home volume are deleted for good.",
@@ -161,7 +174,8 @@ pub(super) fn work(
                     ctids: selected(1).iter().filter_map(|id| id.parse().ok()).collect(),
                     root_gib: text(2),
                     home_gib: text(3),
-                    confirmation: text(4),
+                    environment: text(4),
+                    confirmation: text(5),
                 };
                 let plan =
                     setup
@@ -176,7 +190,10 @@ pub(super) fn work(
             Command::Apply => {
                 let Some(plan) = reviewed.take() else { continue };
                 let say = |line: &str| tell(Event::Line(line.to_owned()));
-                match setup.handle.block_on(lifecycle::apply(&pve, &plan, &say)) {
+                match setup
+                    .handle
+                    .block_on(lifecycle::apply(&pve, &source.manifest, &plan, &say))
+                {
                     Ok(lines) => tell(Event::Done { ok: true, lines }),
                     Err(error) => tell(Event::Done {
                         ok: false,
