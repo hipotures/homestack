@@ -401,7 +401,14 @@ async fn common_images(path: &Path, ids: &[u32], offset: i64) -> Result<Option<I
     let held: Vec<String> = targets
         .iter()
         .filter(|t| t.held)
-        .map(|t| format!("{} · CT {} · home in CT {}", t.node, t.ctid, hs_deploy::recreate::HOLDER_ID))
+        .map(|t| {
+            format!(
+                "{} · CT {} · home in CT {}",
+                t.node,
+                t.ctid,
+                hs_deploy::recreate::HOLDER_ID
+            )
+        })
         .collect();
     Ok(Some(Images {
         servers,

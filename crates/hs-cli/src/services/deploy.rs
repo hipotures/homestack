@@ -606,7 +606,12 @@ fn verify(instance: &NewInstance, config: &Value) -> Result<(String, String, Str
 
 /// Apply a reviewed plan, one instance at a time; it stops at the first
 /// failure. Whether every instance is ready, and what was done.
-pub async fn apply(pve: &impl Pve, source: &Source, plan: &Plan, say: &(dyn Fn(&str) + Send + Sync)) -> (bool, Vec<String>) {
+pub async fn apply(
+    pve: &impl Pve,
+    source: &Source,
+    plan: &Plan,
+    say: &(dyn Fn(&str) + Send + Sync),
+) -> (bool, Vec<String>) {
     let mut lines = Vec::new();
     match run(pve, source, plan, say, &mut lines).await {
         Ok(()) => (true, lines),

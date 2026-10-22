@@ -87,9 +87,9 @@ pub async fn plan(pve: &impl Pve, repository: &str, service: &str, choice: &Choi
             Ok(target) if target.repository == repository && target.service == service && !target.held => {
                 plan.targets.push(target);
             }
-            Ok(_) => plan
-                .problems
-                .push(format!("CT {ctid} is not an instance of this service ready for maintenance")),
+            Ok(_) => plan.problems.push(format!(
+                "CT {ctid} is not an instance of this service ready for maintenance"
+            )),
             Err(error) => plan.problems.push(error),
         }
     }
@@ -103,22 +103,23 @@ pub async fn plan(pve: &impl Pve, repository: &str, service: &str, choice: &Choi
                 (root, home) => plan.problems.extend([root.err(), home.err()].into_iter().flatten()),
             }
             if plan.root_gib.is_none() && plan.home_gib.is_none() && plan.problems.is_empty() {
-                plan.problems.push("Give the new size of the root or the home".to_owned());
+                plan.problems
+                    .push("Give the new size of the root or the home".to_owned());
             }
             for target in &plan.targets {
-                plan.lines.push(format!("CT {} {} on {}", target.ctid, target.hostname, target.node));
+                plan.lines
+                    .push(format!("CT {} {} on {}", target.ctid, target.hostname, target.node));
                 for (what, now, wanted) in [
                     ("Root", target.root_gib, plan.root_gib),
                     ("Home", target.home_gib, plan.home_gib),
                 ] {
                     let Some(wanted) = wanted else { continue };
                     if wanted <= now {
-                        plan.problems.push(format!(
-                            "CT {}: {what} is {now} GiB; a disk only grows",
-                            target.ctid
-                        ));
+                        plan.problems
+                            .push(format!("CT {}: {what} is {now} GiB; a disk only grows", target.ctid));
                     }
-                    plan.lines.push(format!("  {what} {now} GiB → {wanted} GiB, filesystem grows online"));
+                    plan.lines
+                        .push(format!("  {what} {now} GiB → {wanted} GiB, filesystem grows online"));
                 }
             }
         }

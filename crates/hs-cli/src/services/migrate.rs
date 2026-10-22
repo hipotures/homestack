@@ -142,7 +142,10 @@ pub async fn apply(
     let before = instance::read(pve, ctid).await?;
     movable(&before)?;
     if before.node != target.node {
-        let mut form = vec![("target", target.node.as_str()), ("target-storage", target.storage.as_str())];
+        let mut form = vec![
+            ("target", target.node.as_str()),
+            ("target-storage", target.storage.as_str()),
+        ];
         if before.running {
             form.push(("restart", "1"));
         }
@@ -184,6 +187,10 @@ pub async fn apply(
         target.node,
         after.root_volume,
         after.home_volume,
-        if after.running { " · running, healthy" } else { " · stopped" }
+        if after.running {
+            " · running, healthy"
+        } else {
+            " · stopped"
+        }
     )])
 }

@@ -114,7 +114,10 @@ pub fn parse(ctid: u32, node: &str, pool: &str, cfg: &Value, running: bool) -> R
         network: text(cfg, "net0").to_owned(),
         nameserver: cfg["nameserver"].as_str().map(str::to_owned),
         cores: cfg["cores"].as_u64().and_then(|n| u32::try_from(n).ok()).unwrap_or(1),
-        memory_mib: cfg["memory"].as_u64().and_then(|n| u32::try_from(n).ok()).unwrap_or(512),
+        memory_mib: cfg["memory"]
+            .as_u64()
+            .and_then(|n| u32::try_from(n).ok())
+            .unwrap_or(512),
         root_volume,
         root_storage: root_storage.clone(),
         root_gib,

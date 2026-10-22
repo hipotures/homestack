@@ -49,11 +49,9 @@ pub(super) fn work(
             Command::Connect { .. } | Command::Rescan { .. } => {
                 reviewed = None;
                 tell(Event::Busy("Reading the service's containers".to_owned()));
-                let found = setup.handle.block_on(instance::of_service(
-                    &pve,
-                    &source.repository,
-                    &source.manifest.id,
-                ));
+                let found = setup
+                    .handle
+                    .block_on(instance::of_service(&pve, &source.repository, &source.manifest.id));
                 let instances = match found {
                     Ok(instances) => instances,
                     Err(error) => {
@@ -65,7 +63,10 @@ pub(super) fn work(
                     setting(
                         "Operation",
                         "For image updates, select the container in the main list and press Enter; to move one, press g there.",
-                        Action::ALL.iter().map(|a| (a.label().to_owned(), String::new())).collect(),
+                        Action::ALL
+                            .iter()
+                            .map(|a| (a.label().to_owned(), String::new()))
+                            .collect(),
                         false,
                         None,
                     ),
@@ -162,12 +163,10 @@ pub(super) fn work(
                     home_gib: text(3),
                     confirmation: text(4),
                 };
-                let plan = setup.handle.block_on(lifecycle::plan(
-                    &pve,
-                    &source.repository,
-                    &source.manifest.id,
-                    &choice,
-                ));
+                let plan =
+                    setup
+                        .handle
+                        .block_on(lifecycle::plan(&pve, &source.repository, &source.manifest.id, &choice));
                 tell(Event::Reviewed {
                     sections: vec![(action.label().to_owned(), plan.lines.clone())],
                     problems: plan.problems.clone(),

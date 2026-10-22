@@ -367,11 +367,7 @@ mod tests {
             let cts = self.0.lock().unwrap();
             let id = |p: &str| p.split('/').nth(4).and_then(|s| s.parse::<u32>().ok()).unwrap();
             Ok(match path {
-                "/nodes/pve3/lxc" => json!(
-                    cts.keys()
-                        .map(|id| json!({"vmid":id}))
-                        .collect::<Vec<_>>()
-                ),
+                "/nodes/pve3/lxc" => json!(cts.keys().map(|id| json!({"vmid":id})).collect::<Vec<_>>()),
                 "/nodes/pve3/storage/local/content" => json!([{"volid": "local:vztmpl/alpine_3.24.tar"}]),
                 p if p.contains("/tasks/") && p.ends_with("/status") => json!({"status":"stopped", "exitstatus":"OK"}),
                 p if p.contains("/tasks/") => json!([]),

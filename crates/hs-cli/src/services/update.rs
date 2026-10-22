@@ -283,7 +283,11 @@ pub async fn plan(
             format!("  Name/pool  {} · {}", target.hostname, target.pool),
             format!(
                 "  State      {state} → {} · autostart {}",
-                if target.running || target.onboot { "running" } else { "stopped" },
+                if target.running || target.onboot {
+                    "running"
+                } else {
+                    "stopped"
+                },
                 if target.onboot { "on" } else { "off" }
             ),
             String::new(),
@@ -298,10 +302,8 @@ pub async fn plan(
         }
     }
     if !plan.backup_storage.is_empty() {
-        plan.lines.push(format!(
-            "Backup: stopped container and home → {}",
-            plan.backup_storage
-        ));
+        plan.lines
+            .push(format!("Backup: stopped container and home → {}", plan.backup_storage));
     }
     plan.lines.push(match &source.manifest.healthcheck {
         None => "Health check: not provided by this service.".to_owned(),
@@ -392,7 +394,9 @@ pub async fn apply(
     let mut lines = Vec::new();
     for target in &plan.targets {
         let line = one(pve, source, plan, target, say).await.map_err(|error| {
-            format!("{error}\nUpdate paused. Update the image again to finish it; it continues from what Proxmox shows.")
+            format!(
+                "{error}\nUpdate paused. Update the image again to finish it; it continues from what Proxmox shows."
+            )
         })?;
         say(&line);
         lines.push(line);
@@ -529,14 +533,9 @@ async fn one(
         }
         say(&deploy::healthy(&source.manifest, &target.address).await?);
     }
-    node::remove_old_images(
-        pve,
-        node,
-        &plan.template_storage,
-        &format!("hs-{ctid}-"),
-        "",
-        &|line| say(line),
-    )
+    node::remove_old_images(pve, node, &plan.template_storage, &format!("hs-{ctid}-"), "", &|line| {
+        say(line)
+    })
     .await;
     Ok(format!(
         "{node}: {} · CT {ctid} · {} · home {}{}",
