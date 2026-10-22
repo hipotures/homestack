@@ -443,6 +443,12 @@ fn columns(width: usize, tag_width: usize, name_width: usize) -> Vec<Column> {
             value: |entry| entry.vmid.to_string(),
         },
         Column {
+            heading: "TYPE",
+            width: 4,
+            right: false,
+            value: |entry| if entry.role == "CT" { "CT" } else { "VM" }.to_owned(),
+        },
+        Column {
             heading: "NAME",
             width: name_width.max(12) + 1,
             right: false,
