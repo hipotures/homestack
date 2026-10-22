@@ -59,6 +59,12 @@ continuing. Missing responses, failed tasks and ambiguous storage state stop for
 inspection; they never trigger another empty home allocation, guessed adoption
 or disk cleanup. Completed nodes remain recorded when another node fails.
 
+Reopen the existing image selector to resume an interrupted update. It offers
+only the recorded release and requires confirmation before continuing with the
+saved CTIDs and task IDs. Power-state decisions read the node's
+`/nodes/{node}/lxc/{ctid}/status/current`, because cached cluster inventory can
+omit the state of a newly created container.
+
 API configuration and task evidence verify reassignment, not guest file contents
 or filesystem UUIDs. Application health alone does not prove existing data was
 read. File markers and application data inspection are additional verification.

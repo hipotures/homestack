@@ -379,13 +379,21 @@ async fn common_images(path: &Path, ids: &[u32], offset: i64) -> Result<Option<I
             }),
         });
     }
-    let installed: Vec<String> = servers
+    let mut installed: Vec<String> = servers
         .iter()
         .filter_map(|s| s.image.as_ref().map(|i| i.image.clone()))
         .collect();
+    let interrupted = record
+        .operation
+        .as_ref()
+        .and_then(|operation| operation.replacement.as_ref());
+    if let Some(journal) = interrupted {
+        installed.push(journal.image.clone());
+    }
     let published: Vec<Image> = hs_core::registry::recent(&source.image("latest"), OFFERED, &installed)
         .await?
         .into_iter()
+        .filter(|release| interrupted.is_none_or(|journal| release.image == journal.image))
         .map(|r| Image {
             made: r
                 .created
@@ -461,8 +469,19 @@ async fn common_work(
         }
         let config = DeployConfig::load(path)?;
         let pve = hs_deploy::deploy::deploy_client(&config)?;
+        let interrupted = record
+            .operation
+            .as_ref()
+            .and_then(|operation| operation.replacement.as_ref());
+        if interrupted.is_some_and(|journal| journal.image != image) {
+            return Err("Resume the interrupted image update before choosing another version".to_owned());
+        }
         let choice = lifecycle::Choice {
-            action: Some(lifecycle::Action::Update),
+            action: Some(if interrupted.is_some() {
+                lifecycle::Action::Recovery
+            } else {
+                lifecycle::Action::Update
+            }),
             ctids: ids,
             version: version.to_owned(),
             ..lifecycle::Choice::default()
@@ -470,7 +489,12 @@ async fn common_work(
         let plan = lifecycle::plan(&pve, &config, &source, record, &choice).await;
         progress(Progress::Plan {
             lines: plan.lines.clone(),
-            question: "Apply this service image update?".to_owned(),
+            question: if interrupted.is_some() {
+                "Resume this service image update?"
+            } else {
+                "Apply this service image update?"
+            }
+            .to_owned(),
             blocked: (!plan.problems.is_empty()).then(|| plan.problems.join("\n")),
             secret: None,
         });

@@ -134,15 +134,33 @@ async fn pool_member(pve: &impl Pve, instance: &Instance) -> Result<(), String> 
 }
 
 async fn read(pve: &impl Pve, instance: &Instance) -> Result<(node::Container, Value), String> {
-    let (found, cfg) = deploy::config_of(pve, instance.ctid)
+    let (mut found, cfg) = deploy::config_of(pve, instance.ctid)
         .await?
         .ok_or_else(|| format!("CT {} is missing", instance.ctid))?;
     if found.node != instance.node {
         return Err(format!("CT {} changed node", instance.ctid));
     }
     pool_member(pve, instance).await?;
+    // Cluster inventory is cached and may omit a newly created CT's status.
+    // Lifecycle decisions require the node's current state, never that cache.
+    let current = pve
+        .get(
+            &format!("/nodes/{}/lxc/{}/status/current", instance.node, instance.ctid),
+            &[],
+        )
+        .await
+        .map_err(|error| {
+            format!(
+                "CT {} on {}: cannot read current power state: {error}",
+                instance.ctid, instance.node
+            )
+        })?;
+    found.status = current["status"].as_str().unwrap_or_default().to_owned();
     if !matches!(found.status.as_str(), "running" | "stopped") {
-        return Err("Container power state is unavailable".to_owned());
+        return Err(format!(
+            "CT {} on {}: current power state is unavailable",
+            instance.ctid, instance.node
+        ));
     }
     Ok((found, cfg))
 }
@@ -794,7 +812,7 @@ pub async fn apply(
     for index in 0..journal.targets.len() {
         if let Err(error) = run(pve, path, source, &mut journal, index, say).await {
             return Err(format!(
-                "{error}. Progress remains in the profile journal; use Recovery. Existing roots are retained; no cleanup or empty-home allocation was attempted."
+                "{error}\nUpdate paused. Reopen Update image to review and resume."
             ));
         }
         let target = &journal.targets[index];
@@ -1347,8 +1365,9 @@ mod tests {
                 let pair = self.0.lock().unwrap();
                 Ok(match path {
                     "/cluster/resources" => json!([
-                        {"type":"lxc", "vmid":120, "node":"pve3", "status":"stopped"},
-                        {"type":"lxc", "vmid":121, "node":"pve3", "status":"stopped"}
+                        // Cached inventory is deliberately stale/incomplete.
+                        {"type":"lxc", "vmid":120, "node":"pve3", "status":"running"},
+                        {"type":"lxc", "vmid":121, "node":"pve3"}
                     ]),
                     "/pools/homestack-service" => json!({"members":[
                         {"type":"lxc", "vmid":120, "node":"pve3"},
