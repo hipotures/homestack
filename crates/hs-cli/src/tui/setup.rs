@@ -12,7 +12,7 @@ use serde_json::Value;
 
 use crate::services::github::{Discovery, ManifestFile};
 use crate::services::manifest::Healthcheck;
-use crate::services::registry::{Registry, service_status};
+use crate::services::registry::{Registry, Status, service_status};
 use crate::setup::catalog::Catalog;
 use crate::setup::definitions::{ConfigFile, Entry, Params, app_file_entries, application_children, config_entry_id};
 use crate::setup::engine::truthy;
@@ -83,8 +83,6 @@ pub enum Stage {
         apply: bool,
         plan: Box<Plan>,
     },
-    /// The services a repository declares (read only, cluster level).
-    Services(ServicesView),
     /// The run (Python `Execution`).
     Running {
         lines: Vec<String>,
@@ -112,16 +110,16 @@ pub enum Ask {
     Close,
 }
 
-/// One repository's services: its manifest files on the left, the
-/// highlighted one's details on the right.
-#[derive(Debug, Clone)]
-pub struct ServicesView {
+/// A row of the Services group: a repository, or one of its manifest
+/// files (its index in the repository's discovery).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServiceRow {
     pub repository: String,
-    pub branch: Option<String>,
-    /// The highlighted manifest file.
-    pub cursor: usize,
-    pub scroll: usize,
+    pub file: Option<usize>,
 }
+
+/// The label of the Services group in the group bar.
+pub const SERVICES: &str = "Services";
 
 fn short(sha: &str) -> &str {
     sha.get(..12).unwrap_or(sha)
@@ -271,6 +269,12 @@ pub struct SetupBox {
     /// What each opened repository declares, as last read; `None` while
     /// it is read.
     pub discoveries: HashMap<String, Option<Result<Discovery, String>>>,
+    /// The repositories opened in the Services group.
+    pub services_open: BTreeSet<String>,
+    /// The highlighted row of the Services group.
+    pub services_cursor: usize,
+    /// The profile's service registry.
+    pub registry: Result<Registry, String>,
     pub ssh_status: String,
     pub stage: Stage,
     pub details_scroll: usize,
@@ -431,6 +435,11 @@ impl SetupBox {
     #[must_use]
     pub fn new(settings: Settings, target: Target, catalog: Catalog, state: Option<Value>) -> Self {
         let connected = state.is_some();
+        let registry = if settings.config_path.as_os_str().is_empty() {
+            Ok(Registry::default())
+        } else {
+            crate::services::registry::load(&crate::services::registry::path_for(&settings.config_path))
+        };
         let mut setup = Self {
             settings,
             target,
@@ -456,6 +465,9 @@ impl SetupBox {
             pending_plan: None,
             services_request: None,
             discoveries: HashMap::new(),
+            services_open: BTreeSet::new(),
+            services_cursor: 0,
+            registry,
             ssh_status: if connected { "connected" } else { "not connected" }.to_owned(),
             stage: Stage::Tree,
             details_scroll: 0,
@@ -474,8 +486,42 @@ impl SetupBox {
         *self = ready;
     }
 
+    /// The ID of the group shown at tab `index`; `None` for Services.
     fn group_id(&self, index: usize) -> Option<String> {
-        self.settings.setup.groups.get(index).map(|group| group.id.clone())
+        self.group_index(index)
+            .and_then(|group| self.settings.setup.groups.get(group))
+            .map(|group| group.id.clone())
+    }
+
+    /// The tab of the Services group: right after Repositories.
+    #[must_use]
+    pub fn services_tab(&self) -> usize {
+        let groups = &self.settings.setup.groups;
+        groups
+            .iter()
+            .position(|group| group.id == "repo")
+            .map_or(groups.len(), |at| at + 1)
+    }
+
+    /// Whether the Services group is shown.
+    #[must_use]
+    pub fn in_services(&self) -> bool {
+        !self.settings.setup.groups.is_empty() && self.section == self.services_tab()
+    }
+
+    /// The configured group at tab `tab`.
+    fn group_index(&self, tab: usize) -> Option<usize> {
+        let services = self.services_tab();
+        match tab.cmp(&services) {
+            std::cmp::Ordering::Less => Some(tab),
+            std::cmp::Ordering::Equal => None,
+            std::cmp::Ordering::Greater => Some(tab - 1),
+        }
+    }
+
+    /// The tab of configured group `group`.
+    fn tab_of(&self, group: usize) -> usize {
+        if group >= self.services_tab() { group + 1 } else { group }
     }
 
     /// Of the group `id`: its items with something selected, and its items.
@@ -493,15 +539,56 @@ impl SetupBox {
         (count, entries.len())
     }
 
-    /// The groups, for the carousel.
+    /// Each tab of the group bar: its label, its items with something
+    /// selected (for Services: repositories with deployed services) and
+    /// its items.
+    #[must_use]
+    pub fn tabs(&self) -> Vec<(String, usize, usize)> {
+        let mut tabs: Vec<(String, usize, usize)> = self
+            .settings
+            .setup
+            .groups
+            .iter()
+            .map(|group| {
+                let (count, total) = self.group_count(&group.id);
+                (group.label.clone(), count, total)
+            })
+            .collect();
+        if !tabs.is_empty() {
+            let rows = self.service_rows();
+            let repositories: Vec<&String> = rows
+                .iter()
+                .filter(|row| row.file.is_none())
+                .map(|row| &row.repository)
+                .collect();
+            let deployed = repositories
+                .iter()
+                .filter(|repository| {
+                    self.registry
+                        .as_ref()
+                        .is_ok_and(|registry| registry.has_repository(repository))
+                })
+                .count();
+            tabs.insert(self.services_tab(), (SERVICES.to_owned(), deployed, repositories.len()));
+        }
+        tabs
+    }
+
+    /// The tabs, for the carousel and the group bar: the groups and
+    /// Services.
     #[must_use]
     pub fn groups(&self) -> Vec<String> {
-        self.settings
+        let mut labels: Vec<String> = self
+            .settings
             .setup
             .groups
             .iter()
             .map(|group| group.label.clone())
-            .collect()
+            .collect();
+        if !labels.is_empty() {
+            labels.insert(self.services_tab(), SERVICES.to_owned());
+        }
+        labels
     }
 
     fn filter_text(&self) -> String {
@@ -1036,7 +1123,12 @@ impl SetupBox {
         while let Some(parent) = self.nodes.get(&id).and_then(|node| node.parent.clone()) {
             id = parent;
         }
-        self.settings.setup.groups.iter().position(|group| group.id == id)
+        self.settings
+            .setup
+            .groups
+            .iter()
+            .position(|group| group.id == id)
+            .map(|group| self.tab_of(group))
     }
 
     /// Python `restore_cursor`: a hidden highlight moves to the closest
@@ -1640,15 +1732,17 @@ impl SetupBox {
         identity.clone_into(&mut self.cursor);
     }
 
-    /// Show group `index`.
+    /// Show tab `index` (a group, or Services).
     pub fn show_section(&mut self, index: usize) {
-        let count = self.settings.setup.groups.len();
+        let count = self.groups().len();
         if count == 0 {
             return;
         }
         self.section = index % count;
-        let group = self.group_id(self.section).unwrap_or_default();
-        self.highlight(&group);
+        if let Some(group) = self.group_id(self.section) {
+            self.highlight(&group);
+        }
+        self.details_scroll = 0;
     }
 
     /// Expand (`open`) or collapse a branch (Python `action_expand`,
@@ -1923,7 +2017,7 @@ impl SetupBox {
     pub fn animating(&self) -> bool {
         match &self.stage {
             Stage::Loading { .. } | Stage::Running { finished: false, .. } => true,
-            Stage::Services(view) => self.discovery(&view.repository).is_none(),
+            Stage::Tree => self.in_services() && self.discoveries.values().any(Option::is_none),
             _ => false,
         }
     }
@@ -1934,38 +2028,67 @@ impl SetupBox {
         matches!(self.stage, Stage::Running { finished: false, .. })
     }
 
-    /// The repository of the highlighted row, when it is one.
+    /// The rows of the Services group: the catalog's repositories, those
+    /// with deployed services first, each opened one followed by its
+    /// manifest files.
     #[must_use]
-    pub fn cursor_repository(&self) -> Option<String> {
-        match &self.entry(&self.cursor)?.params {
-            Params::Repository { repository } => Some(repository.clone()),
-            _ => None,
-        }
-    }
-
-    /// Enter on a repository: its services, read once per box.
-    fn open_services(&mut self) -> Option<Ask> {
-        let repository = self.cursor_repository()?;
-        let branch = self
+    pub fn service_rows(&self) -> Vec<ServiceRow> {
+        let filter = self.filter_text();
+        let mut repositories: Vec<&String> = self
             .catalog
-            .timestamps
-            .get(&self.cursor)
-            .and_then(|stamps| stamps.get("default_branch"))
-            .and_then(Value::as_str)
-            .map(str::to_owned);
-        self.stage = Stage::Services(ServicesView {
-            repository: repository.clone(),
-            branch: branch.clone(),
-            cursor: 0,
-            scroll: 0,
-        });
-        if self.discoveries.contains_key(&repository) {
-            return None;
+            .entries
+            .iter()
+            .filter_map(|entry| match &entry.params {
+                Params::Repository { repository } if entry.group == "repo" => Some(repository),
+                _ => None,
+            })
+            .filter(|repository| filter.is_empty() || repository.to_lowercase().contains(&filter))
+            .collect();
+        if let Ok(registry) = &self.registry {
+            repositories.sort_by_key(|repository| !registry.has_repository(repository));
         }
-        Some(self.read_services(repository, branch))
+        let mut rows = Vec::new();
+        for repository in repositories {
+            rows.push(ServiceRow {
+                repository: repository.clone(),
+                file: None,
+            });
+            if self.services_open.contains(repository)
+                && let Some(Ok(found)) = self.discovery(repository)
+            {
+                rows.extend((0..found.files.len()).map(|index| ServiceRow {
+                    repository: repository.clone(),
+                    file: Some(index),
+                }));
+            }
+        }
+        rows
     }
 
-    fn read_services(&mut self, repository: String, branch: Option<String>) -> Ask {
+    /// The highlighted row of the Services group.
+    #[must_use]
+    pub fn service_cursor_row(&self) -> Option<ServiceRow> {
+        let rows = self.service_rows();
+        let at = self.services_cursor.min(rows.len().checked_sub(1)?);
+        rows.into_iter().nth(at)
+    }
+
+    /// The default branch the catalog reported for `repository`.
+    fn default_branch(&self, repository: &str) -> Option<String> {
+        let entry =
+            self.catalog.entries.iter().find(
+                |entry| matches!(&entry.params, Params::Repository { repository: known } if known == repository),
+            )?;
+        self.catalog
+            .timestamps
+            .get(&entry.id)?
+            .get("default_branch")?
+            .as_str()
+            .map(str::to_owned)
+    }
+
+    fn read_services(&mut self, repository: String) -> Ask {
+        let branch = self.default_branch(&repository);
         self.discoveries.insert(repository.clone(), None);
         self.services_request = Some((repository, branch));
         Ask::Services
@@ -1982,37 +2105,203 @@ impl SetupBox {
         self.discoveries.get(repository).and_then(Option::as_ref)
     }
 
+    /// The label of a Services row and its STATE, the registry compared
+    /// with the containers Proxmox lists (`observed`).
+    #[must_use]
+    pub fn service_row_text(&self, row: &ServiceRow, observed: Option<&[StatusEntry]>) -> (String, (String, Tone)) {
+        let deployed = self
+            .registry
+            .as_ref()
+            .is_ok_and(|registry| registry.has_repository(&row.repository));
+        let read = self.discoveries.get(&row.repository);
+        let Some(index) = row.file else {
+            let state = match read {
+                _ if deployed => ("deployed".to_owned(), Tone::Green),
+                None => (String::new(), Tone::Plain),
+                Some(None) => ("reading…".to_owned(), Tone::Dim),
+                Some(Some(Err(_))) => ("error".to_owned(), Tone::Red),
+                Some(Some(Ok(found))) => {
+                    let valid = found.services().count();
+                    let invalid = found.files.len() - valid;
+                    match (valid, invalid) {
+                        (0, 0) => ("no services".to_owned(), Tone::Dim),
+                        (valid, 0) => (
+                            format!("{valid} service{}", if valid == 1 { "" } else { "s" }),
+                            Tone::Plain,
+                        ),
+                        (valid, invalid) => (format!("{valid} valid, {invalid} invalid"), Tone::Yellow),
+                    }
+                }
+            };
+            return (row.repository.clone(), state);
+        };
+        let Some(Some(Ok(found))) = read else {
+            return (String::new(), (String::new(), Tone::Plain));
+        };
+        let Some(file) = found.files.get(index) else {
+            return (String::new(), (String::new(), Tone::Plain));
+        };
+        let (label, tone) = service_row(file);
+        let state = match &file.manifest {
+            Err(_) => ("invalid".to_owned(), tone),
+            Ok(manifest) => {
+                let statuses = service_status(&self.registry, &row.repository, &manifest.id, observed);
+                let text = statuses
+                    .iter()
+                    .map(|(_, status)| status.label())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let tone = match statuses.first().map(|(_, status)| status) {
+                    Some(Status::NotDeployed) => Tone::Dim,
+                    Some(Status::Running) => Tone::Green,
+                    _ => Tone::Yellow,
+                };
+                (text, tone)
+            }
+        };
+        (label, state)
+    }
+
+    /// The details of the highlighted Services row.
+    #[must_use]
+    pub fn service_detail_lines(&self, observed: Option<&[StatusEntry]>) -> Vec<String> {
+        let Some(row) = self.service_cursor_row() else {
+            let reason = if self.catalog.repository_error.is_empty() {
+                "No repositories match.".to_owned()
+            } else {
+                self.catalog.repository_error.clone()
+            };
+            return vec![SERVICES.to_owned(), String::new(), reason];
+        };
+        let read = self.discovery(&row.repository);
+        if let (Some(index), Some(Ok(found))) = (row.file, read)
+            && let Some(file) = found.files.get(index)
+        {
+            return service_details(found, file, &self.registry, observed);
+        }
+        let mut lines = vec![row.repository.clone()];
+        if let Some(branch) = self.default_branch(&row.repository) {
+            lines.push(format!("Branch: {branch}"));
+        }
+        let deployed = self.registry.as_ref().map_or(0, |registry| {
+            registry
+                .deployments
+                .iter()
+                .filter(|deployment| deployment.repository == row.repository)
+                .count()
+        });
+        lines.push(format!("Deployed: {deployed}"));
+        match self.discoveries.get(&row.repository) {
+            None => lines.push("Services: not read; → or ENTER reads .homestack/*.yaml".to_owned()),
+            Some(None) => lines.push("Services: reading .homestack/*.yaml on GitHub".to_owned()),
+            Some(Some(Err(error))) => lines.push(format!("Error: {error}")),
+            Some(Some(Ok(found))) => {
+                lines.push(format!("Revision: {} @ {}", found.branch, short(&found.commit)));
+                if let Some(problem) = &found.problem {
+                    lines.push(format!("Problem: {problem}"));
+                }
+                if found.files.is_empty() {
+                    lines.push("Services: none (no .homestack/*.yaml)".to_owned());
+                }
+                for file in &found.files {
+                    lines.push(match &file.manifest {
+                        Ok(manifest) => format!("Service: {} ({})", manifest.id, file.path),
+                        Err(_) => format!("Invalid: {}", file.path),
+                    });
+                }
+            }
+        }
+        lines
+    }
+
+    /// Move the Services highlight by `step` rows.
+    fn move_service_cursor(&mut self, step: isize) {
+        let count = self.service_rows().len();
+        if count == 0 {
+            return;
+        }
+        let at = self.services_cursor.min(count - 1);
+        self.services_cursor = at.saturating_add_signed(step).min(count - 1);
+        self.details_scroll = 0;
+    }
+
+    /// Open a repository of the Services group: its manifests are read the
+    /// first time.
+    fn open_repository(&mut self, repository: &str) -> Option<Ask> {
+        self.services_open.insert(repository.to_owned());
+        (!self.discoveries.contains_key(repository)).then(|| self.read_services(repository.to_owned()))
+    }
+
+    /// A key in the Services group: read only, nothing is selected.
     fn services_key(&mut self, key: KeyEvent) -> Option<Ask> {
-        let Stage::Services(view) = &self.stage else {
+        if self.filtering {
+            match key.code {
+                KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => self.filter.push(c),
+                KeyCode::Backspace => {
+                    self.filter.pop();
+                }
+                KeyCode::Esc => {
+                    self.filter.clear();
+                    self.filtering = false;
+                }
+                KeyCode::Enter | KeyCode::Down | KeyCode::Up | KeyCode::Tab => self.filtering = false,
+                _ => {}
+            }
+            self.services_cursor = 0;
             return None;
-        };
-        let repository = view.repository.clone();
-        let read = self.discovery(&repository);
-        let loading = read.is_none();
-        let count = read
-            .and_then(|read| read.as_ref().ok())
-            .map_or(0, |found| found.files.len());
-        let Stage::Services(view) = &mut self.stage else {
-            return None;
-        };
+        }
+        let row = self.service_cursor_row();
         match key.code {
-            KeyCode::Esc => self.stage = Stage::Tree,
-            KeyCode::Up => {
-                view.cursor = view.cursor.saturating_sub(1);
-                view.scroll = 0;
+            KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) && !self.busy => {
+                return Some(Ask::Catalog);
             }
-            KeyCode::Down => {
-                view.cursor = (view.cursor + 1).min(count.saturating_sub(1));
-                view.scroll = 0;
+            KeyCode::Up => self.move_service_cursor(-1),
+            KeyCode::Down => self.move_service_cursor(1),
+            KeyCode::Home => self.move_service_cursor(isize::MIN / 2),
+            KeyCode::End => self.move_service_cursor(isize::MAX / 2),
+            KeyCode::PageUp => self.details_scroll = self.details_scroll.saturating_sub(10),
+            KeyCode::PageDown => self.details_scroll += 10,
+            KeyCode::Tab => self.show_section(self.section + 1),
+            KeyCode::BackTab => self.show_section(self.section + self.groups().len() - 1),
+            KeyCode::Char('f') => self.filtering = true,
+            KeyCode::Right | KeyCode::Enter => {
+                if let Some(ServiceRow { repository, file: None }) = row {
+                    if key.code == KeyCode::Enter && self.services_open.contains(&repository) {
+                        self.services_open.remove(&repository);
+                    } else {
+                        return self.open_repository(&repository);
+                    }
+                }
             }
-            KeyCode::PageUp => view.scroll = view.scroll.saturating_sub(10),
-            KeyCode::PageDown => view.scroll += 10,
-            KeyCode::F(5) if !loading => {
-                let branch = view.branch.clone();
-                view.cursor = 0;
-                view.scroll = 0;
-                return Some(self.read_services(repository, branch));
+            KeyCode::Left => match row {
+                Some(ServiceRow { repository, file: None }) => {
+                    self.services_open.remove(&repository);
+                }
+                Some(ServiceRow { repository, .. }) => {
+                    let rows = self.service_rows();
+                    if let Some(at) = rows
+                        .iter()
+                        .position(|row| row.repository == repository && row.file.is_none())
+                    {
+                        self.services_cursor = at;
+                        self.details_scroll = 0;
+                    }
+                }
+                None => {}
+            },
+            KeyCode::F(5) => {
+                if let Some(ServiceRow { repository, .. }) = row
+                    && self.discovery(&repository).is_some()
+                {
+                    self.services_open.insert(repository.clone());
+                    return Some(self.read_services(repository));
+                }
             }
+            KeyCode::Esc if !self.filter.is_empty() => {
+                self.filter.clear();
+                self.services_cursor = 0;
+            }
+            KeyCode::Esc => return Some(Ask::Close),
             _ => {}
         }
         None
@@ -2021,7 +2310,7 @@ impl SetupBox {
     /// Handle a key; what the worker has to do.
     pub fn key(&mut self, key: KeyEvent) -> Option<Ask> {
         self.notice = None;
-        if matches!(self.stage, Stage::Services(_)) {
+        if matches!(self.stage, Stage::Tree) && self.in_services() {
             return self.services_key(key);
         }
         match &mut self.stage {
@@ -2065,7 +2354,6 @@ impl SetupBox {
                 _ => None,
             },
             Stage::Tree => self.tree_key(key),
-            Stage::Services(_) => None,
         }
     }
 
@@ -2113,7 +2401,7 @@ impl SetupBox {
             KeyCode::PageDown => self.details_scroll += 10,
             KeyCode::Tab => self.show_section(self.section + 1),
             KeyCode::BackTab => {
-                let count = self.settings.setup.groups.len().max(1);
+                let count = self.groups().len().max(1);
                 self.show_section(self.section + count - 1);
             }
             KeyCode::Left => {
@@ -2128,9 +2416,7 @@ impl SetupBox {
             KeyCode::Char(' ') => self.toggle(&cursor, false),
             KeyCode::Char('0') => self.toggle(&cursor, true),
             KeyCode::Char('f') => self.filtering = true,
-            // Enter on a repository opens its services; `a` reviews from anywhere.
-            KeyCode::Enter if self.cursor_repository().is_some() => return self.open_services(),
-            KeyCode::Enter | KeyCode::Char('a') => self.review(),
+            KeyCode::Enter => self.review(),
             KeyCode::Esc => {
                 if !self.filter.is_empty() {
                     self.filter.clear();
@@ -2205,6 +2491,12 @@ impl super::state::App {
             return;
         };
         if !matches!(setup.stage, Stage::Tree) {
+            return;
+        }
+        if setup.in_services() {
+            setup.filtering = false;
+            setup.services_cursor = index;
+            setup.details_scroll = 0;
             return;
         }
         let Some(row) = setup.rows().get(index).cloned() else {

@@ -320,20 +320,15 @@ pub fn load_catalog(settings: &Settings, repositories: Option<Discover<'_>>) -> 
                     }
                     catalog.timestamps.insert(item_id, stamps);
                 }
-                // Repositories with deployed services first.
-                let registry =
-                    crate::services::registry::load(&crate::services::registry::path_for(&settings.config_path))
-                        .unwrap_or_default();
                 let order = |entry: &Entry| match &entry.params {
                     Params::Repository { repository } => (
-                        !registry.has_repository(repository),
                         repos
                             .iter()
                             .position(|repo| repo["full_name"].as_str() == Some(repository.as_str()))
                             .unwrap_or(repos.len()),
                         repository.clone(),
                     ),
-                    _ => (false, 0, String::new()),
+                    _ => (0, String::new()),
                 };
                 let is_repo = |e: &Entry| e.group == "repo" && matches!(e.params, Params::Repository { .. });
                 let mut repository_entries: Vec<Entry> = entries.iter().filter(|e| is_repo(e)).cloned().collect();
