@@ -23,6 +23,7 @@ RUN cargo build --release --locked --target x86_64-unknown-linux-musl -p hs-serv
 FROM docker.io/library/alpine:3.24.2 AS node
 RUN apk add --no-cache ca-certificates caddy runit \
     && adduser -S -D -H -h /var/lib/homestack -s /sbin/nologin homestack \
+    && mkdir -p /home/app \
     && install -d -m 0700 -o homestack -g nogroup /var/lib/homestack
 COPY --from=build /src/target/x86_64-unknown-linux-musl/release/homestack-server /usr/local/bin/homestack-server
 COPY deploy/lxc/Caddyfile /etc/caddy/Caddyfile

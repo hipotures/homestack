@@ -6,6 +6,7 @@
 FROM docker.io/library/alpine:3.24.2
 RUN apk add --no-cache ca-certificates caddy runit \
     && adduser -S -D -H -h /var/lib/homestack -s /sbin/nologin homestack \
+    && mkdir -p /home/app \
     && install -d -m 0700 -o homestack -g nogroup /var/lib/homestack
 COPY homestack-server /usr/local/bin/homestack-server
 COPY Caddyfile /etc/caddy/Caddyfile

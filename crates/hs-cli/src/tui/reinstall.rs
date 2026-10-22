@@ -350,7 +350,7 @@ async fn common_images(path: &Path, ids: &[u32], offset: i64) -> Result<Option<I
     let Some(first) = ids.first() else { return Ok(None) };
     let config = DeployConfig::load(path)?;
     let pve = hs_deploy::deploy::deploy_client(&config)?;
-    // API servers and Site connectors are not services; they have their own updates.
+    // Common identity takes priority; legacy API/Site descriptions use their own updates.
     let Ok(first) = instance::read(&pve, *first).await else {
         return Ok(None);
     };

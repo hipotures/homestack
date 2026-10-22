@@ -792,6 +792,8 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
     let mut setup_open: Option<Option<u32>> = None;
     let mut details = super::details::Loader::default();
     let mut api_check_started = false;
+    // At the start and then every hour: a new API image shows up by itself.
+    let mut api_check_at = std::time::Instant::now();
     let mut api_check_generation = 0_u64;
     let mut storage_loading = false;
     let mut storage_visible = false;
@@ -868,11 +870,16 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
         app.today = clock.today();
         details.update(app.details_target(), connection.client.as_ref());
         let deployment = deploy_toml(ctx);
-        if !api_check_started && app.install.is_none() && deployment.is_file() {
+        if !api_check_started
+            && std::time::Instant::now() >= api_check_at
+            && app.install.is_none()
+            && deployment.is_file()
+        {
             api_check_started = true;
             api_check_generation += 1;
             let generation = api_check_generation;
-            app.api_updates_checking = true;
+            // Only the first check shows "API …"; later ones keep the last answer.
+            app.api_updates_checking = app.api_updates.is_none();
             let updates = updates.clone();
             let offset = clock.offset;
             tokio::spawn(async move {
@@ -1487,7 +1494,11 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
                     app.set_status(&status);
                 }
                 Update::ApiUpdates(generation, result) => {
-                    if generation == api_check_generation { app.set_api_updates(result); }
+                    if generation == api_check_generation {
+                        app.set_api_updates(result);
+                        api_check_started = false;
+                        api_check_at = std::time::Instant::now() + Duration::from_secs(3600);
+                    }
                 }
                 Update::StatusRejected(error) => {
                     app.startup_message = None;
@@ -1551,6 +1562,7 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
                         if *ok && app.action.as_ref().is_some_and(|action| action.kind == Kind::Reinstall) {
                             app.marked.clear();
                             api_check_started = false;
+                            api_check_at = std::time::Instant::now();
                         }
                         let outcome = if *ok { "done" } else { "failed" };
                         let first = lines.first().cloned().unwrap_or_default();

@@ -13,8 +13,10 @@ RUN apk add --no-cache ca-certificates runit \
     && echo "${PANGOLIN_CLI_SHA256}  /usr/local/bin/pangolin-cli" | sha256sum -c - \
     && chmod 0755 /usr/local/bin/pangolin-cli \
     && adduser -S -D -H -h /var/lib/pangolin-site -s /sbin/nologin site \
+    && mkdir -p /home/app \
     && install -d -m 0700 -o site -g nogroup /var/lib/pangolin-site
 COPY homestack-site-credential /usr/local/bin/homestack-site-credential
+COPY state-path /usr/local/lib/homestack-site-state
 COPY service /etc/service
 STOPSIGNAL SIGTERM
 ENTRYPOINT ["runsvdir", "-P", "/etc/service"]

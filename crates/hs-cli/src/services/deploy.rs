@@ -37,6 +37,26 @@ pub struct Source {
 }
 
 impl Source {
+    /// Internal images need authenticated initialization beyond the generic
+    /// environment form. Refuse before creation until that handoff exists.
+    pub fn initialization_blocker(&self) -> Option<&'static str> {
+        match self.manifest.image_repository.as_str() {
+            "ghcr.io/hipotures/homestack-server" => Some(
+                "New managed API installation is blocked: the common deployment flow has no authenticated \
+                 API initializer. It must reuse hs_deploy::deploy bootstrap with a stored valid certificate, \
+                 per-instance settings, PVE token upload and authenticated HTTPS /health/live verification. \
+                 The existing installer remains available for legacy installations. See docs/internal-services.md.",
+            ),
+            "ghcr.io/hipotures/homestack-pangolin-site" => Some(
+                "New managed Site installation is blocked: the common deployment flow has no Step 8 initializer \
+                 carrying the verified Step 7 organization key, private per-node credential journal and \
+                 authenticated root channel. Credential installation and Pangolin online verification must \
+                 complete before success. See docs/internal-services.md.",
+            ),
+            _ => None,
+        }
+    }
+
     /// `REGISTRY/PATH:VERSION` of the manifest's image.
     #[must_use]
     pub fn image(&self, version: &str) -> String {
@@ -313,6 +333,9 @@ pub async fn plan(config: &DeployConfig, pve: &impl Pve, source: &Source, cluste
         ..Plan::default()
     };
     let problems = &mut plan.problems;
+    if let Some(problem) = source.initialization_blocker() {
+        problems.push(problem.to_owned());
+    }
     if !cluster.releases.iter().any(|release| release.image == plan.image) {
         problems.push("Choose a published release".to_owned());
     } else {
@@ -635,6 +658,9 @@ async fn run(
     say: &(dyn Fn(&str) + Send + Sync),
     lines: &mut Vec<String>,
 ) -> Result<(), String> {
+    if let Some(problem) = source.initialization_blocker() {
+        return Err(problem.to_owned());
+    }
     if !plan.problems.is_empty() || plan.instances.is_empty() {
         return Err("The plan has problems; review it again".to_owned());
     }

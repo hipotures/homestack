@@ -287,6 +287,17 @@ pub async fn apply(config: &DeployConfig, only: &[String], say: &impl Fn(&str)) 
             instance.name, config.domain, config.image, stored.not_after
         );
         if let Some(found) = node::container(&pve, instance.ctid).await? {
+            let server = format!("{}.{}", instance.name, config.domain);
+            if found.node != instance.node
+                || node::made_from(&pve, &found.node, instance.ctid, &server)
+                    .await?
+                    .is_none()
+            {
+                return Err(format!(
+                    "CT {}: legacy API ownership does not match {server}; nothing is changed",
+                    instance.ctid
+                ));
+            }
             let same = found.node == instance.node
                 && found.status == "running"
                 && node::unchanged(&pve, &instance.node, instance.ctid, &description, &net0, say).await?;
@@ -434,7 +445,10 @@ pub async fn images(config: &DeployConfig) -> Result<Vec<(String, Option<String>
     let mut found = Vec::new();
     for instance in &config.instances {
         let image = match node::container(&pve, instance.ctid).await? {
-            Some(container) => node::made_from(&pve, &container.node, instance.ctid).await?,
+            Some(container) => {
+                let server = format!("{}.{}", instance.name, config.domain);
+                node::made_from(&pve, &container.node, instance.ctid, &server).await?
+            }
             None => None,
         };
         found.push((instance.name.clone(), image));

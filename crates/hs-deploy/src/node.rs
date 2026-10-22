@@ -403,16 +403,21 @@ pub async fn ensure_tag_named(
 
 /// The image container `ctid` was made from: the `image` line of the
 /// description `apply` writes.
-pub async fn made_from(pve: &impl Pve, node: &str, ctid: u32) -> Result<Option<String>, String> {
+pub async fn made_from(pve: &impl Pve, node: &str, ctid: u32, server: &str) -> Result<Option<String>, String> {
     let config = pve
         .get(&format!("/nodes/{node}/lxc/{ctid}/config"), &[])
         .await
         .map_err(|e| format!("CT {ctid} config: {e}"))?;
-    Ok(config["description"]
-        .as_str()
-        .unwrap_or_default()
+    let description = config["description"].as_str().unwrap_or_default();
+    if description.lines().next() != Some(format!("HomeStack server {server}").as_str())
+        || !description.lines().any(|line| line == "made by homestack-deploy")
+    {
+        return Ok(None);
+    }
+    Ok(description
         .lines()
         .find_map(|line| line.trim().strip_prefix("image "))
+        .filter(|image| image.starts_with("ghcr.io/hipotures/homestack-server:"))
         .map(|image| image.trim().to_owned()))
 }
 

@@ -2,9 +2,10 @@
 # runit service: homestack-server as the unprivileged user homestack. The
 # container's environment (set by homestack-deploy) adds the instance's
 # settings to these.
+set -eu
 exec 2>&1
+. /etc/service/state-path
 export HOMESTACK_LISTEN=127.0.0.1:8080 \
     HOMESTACK_LOG_FORMAT=json \
-    HOMESTACK_STATE_DIR=/var/lib/homestack \
     HOMESTACK_CADDY_ADMIN=http://127.0.0.1:2019
 exec chpst -u homestack /usr/local/bin/homestack-server

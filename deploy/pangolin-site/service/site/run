@@ -2,14 +2,16 @@
 # Pangolin CLI in Site mode as the unprivileged site account. The ID, secret
 # and endpoint come only from the private configuration file, never from the
 # environment or the command line. Self-update and SSH features stay off.
+set -eu
 exec 2>&1
-file=/var/lib/pangolin-site/site.json
+. /usr/local/lib/homestack-site-state
+file="$dir/site.json"
 if [ ! -s "$file" ]; then
     echo "waiting for the Site credential"
     exec sleep 30
 fi
 exec chpst -u site:nogroup env -i \
-    HOME=/var/lib/pangolin-site \
+    HOME="$dir" \
     PATH=/usr/local/bin:/usr/bin:/bin \
     CONFIG_FILE="$file" \
     NEWT_SYSTEM_SUBSTRATE=CONTAINER \
