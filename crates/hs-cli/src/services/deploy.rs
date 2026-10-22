@@ -872,6 +872,16 @@ async fn run(
         instance.mac = mac;
         instance.stage = Stage::Created;
         set_instance(registry_path, source, &instance)?;
+        // The console opens a root shell; an image has no getty to log in.
+        if current["cmode"].as_str() != Some("shell") {
+            let digest = current["digest"].as_str().unwrap_or_default();
+            pve.put(
+                &format!("/nodes/{node}/lxc/{ctid}/config"),
+                &[("cmode", "shell"), ("digest", digest)],
+            )
+            .await
+            .map_err(|e| format!("CT {ctid} console: {e}"))?;
+        }
         if !plan.environment.is_empty() {
             node::set_env(pve, &node, ctid, &plan.environment, &[]).await?;
             say(&format!("  environment: {}", keys.join(", ")));
