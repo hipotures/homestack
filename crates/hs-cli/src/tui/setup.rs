@@ -1139,28 +1139,29 @@ impl SetupBox {
         }
     }
 
-    /// Python `target_label`: the line above the tree.
+    /// The target and its connection, at the foot of the details (Python
+    /// `target_label`, the line above the tree).
     #[must_use]
-    pub fn target_label(&self, progress: &str, utc_offset: i64) -> String {
-        let mut parts = vec![self.target_description()];
+    pub fn target_lines(&self, utc_offset: i64) -> Vec<String> {
+        let mut lines = vec![self.target_description()];
         if !self.target.ip.is_empty() {
-            parts.push(self.target.ip.clone());
+            lines.push(format!("Address: {}", self.target.ip));
         }
         if !self.target.local {
-            parts.push(format!("SSH: {}", self.ssh_status));
+            lines.push(format!("SSH: {}", self.ssh_status));
         }
         if let Some(checked) = self.state["checked_at"].as_str() {
             let local = super::reinstall::local_time(checked, utc_offset).unwrap_or_else(|| checked.to_owned());
-            parts.push(format!("State: {local}"));
+            lines.push(format!("State: {local}"));
         }
         let hidden = self.hidden_selected();
         if hidden > 0 {
-            parts.push(format!("Hidden selected: {hidden}"));
+            lines.push(format!("Hidden selected: {hidden}"));
         }
-        if !progress.is_empty() {
-            parts.push(progress.to_owned());
+        if !self.last_progress.is_empty() {
+            lines.push(self.last_progress.clone());
         }
-        parts.join("    ")
+        lines
     }
 
     fn backup_details(&self) -> Vec<String> {
@@ -2243,8 +2244,9 @@ impl SetupBox {
             KeyCode::Char('f') => self.filtering = true,
             KeyCode::Enter => return self.toggle_repository(),
             KeyCode::F(5) => {
+                // Not while the last read is still under way.
                 if let Some(ServiceRow { repository, .. }) = row
-                    && self.discovery(&repository).is_some()
+                    && !matches!(self.discoveries.get(&repository), Some(None))
                 {
                     self.services_open.insert(repository.clone());
                     return Some(self.read_services(repository));

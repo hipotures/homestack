@@ -71,7 +71,7 @@ pub(super) fn setup_box(buf: &mut Buffer, area: Rect, app: &App, setup: &SetupBo
         Stage::Tree if setup.in_services() => vec![
             Control::named("←→", "group", KeyCode::Right),
             Control::named("ENTER", "open", KeyCode::Enter),
-            Control::named("F5", "reread", KeyCode::F(5)),
+            Control::named("F5", "refresh", KeyCode::F(5)),
             Control::named("ESC", "cancel", KeyCode::Esc),
         ],
         Stage::Tree => {
@@ -80,7 +80,7 @@ pub(super) fn setup_box(buf: &mut Buffer, area: Rect, app: &App, setup: &SetupBo
                 Control::named("SPACE", "toggle", KeyCode::Char(' ')),
                 Control::named("←→", "group", KeyCode::Right),
                 Control::named("ENTER", "open", KeyCode::Enter),
-                Control::named("F5", "reread", KeyCode::F(5)),
+                Control::named("F5", "refresh", KeyCode::F(5)),
                 if pending { review.chosen() } else { review },
                 Control::named("ESC", "cancel", KeyCode::Esc),
             ]
@@ -253,14 +253,7 @@ fn tree_stage(buf: &mut Buffer, inner: Rect, app: &App, setup: &SetupBox) {
     let palette = &app.palette;
     let text = text_style(palette);
     let muted = text.fg(palette.muted);
-    let width = usize::from(inner.width.saturating_sub(2));
-    let label = wrap(&setup.target_label(&setup.last_progress, app.utc_offset), width);
-    let mut y = inner.y;
-    for line in label.iter().take(2) {
-        write(buf, inner.x + 1, y, inner.width.saturating_sub(2), line, muted);
-        y += 1;
-    }
-    y += 1;
+    let y = inner.y + 1;
     let notice_rows = u16::from(setup.notice.is_some());
     let body = Rect::new(
         inner.x,
@@ -299,9 +292,50 @@ fn tree_stage(buf: &mut Buffer, inner: Rect, app: &App, setup: &SetupBox) {
         draw_tree(buf, tree_area, app, setup);
         setup.details(&setup.cursor)
     };
-    if details_area.height > 0 && details_area.width > 2 {
-        draw_details(buf, details_area, app, setup, &details);
+    if details_area.height == 0 || details_area.width <= 2 {
+        return;
     }
+    // The target and its connection at the foot of the details.
+    let width = usize::from(details_area.width.saturating_sub(2));
+    let foot: Vec<String> = setup
+        .target_lines(app.utc_offset)
+        .iter()
+        .flat_map(|line| wrap(line, width))
+        .collect();
+    let foot_height = u16::try_from(foot.len() + 1).unwrap_or(u16::MAX);
+    let content = if details_area.height > foot_height + 3 {
+        let top = details_area.bottom() - foot_height;
+        for (row, line) in foot.iter().enumerate() {
+            let y = top + 1 + u16::try_from(row).unwrap_or(0);
+            let used = write(
+                buf,
+                details_area.x + 1,
+                y,
+                details_area.width.saturating_sub(2),
+                line,
+                text,
+            );
+            let label_end = line.find(": ").map_or(line.len(), |at| at + 1);
+            let label_width = u16::try_from(line[..label_end].chars().count()).unwrap_or(0);
+            write(
+                buf,
+                details_area.x + 1,
+                y,
+                used.min(label_width),
+                &line[..label_end],
+                muted,
+            );
+        }
+        Rect::new(
+            details_area.x,
+            details_area.y,
+            details_area.width,
+            details_area.height - foot_height,
+        )
+    } else {
+        details_area
+    };
+    draw_details(buf, content, app, setup, &details);
 }
 
 /// The containers the status lists, for the services' states.

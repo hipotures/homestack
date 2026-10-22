@@ -2103,7 +2103,7 @@ const HELP: [&str; 26] = [
     "or every selected one when it is selected, from a published image.",
     "",
     "Setup: ← → group (Services lists the repositories' services), ↵ open or",
-    "close, ␣ toggle, 0 branch, f filter, a review, F5 reread, Ctrl+R catalog.",
+    "close, ␣ toggle, 0 branch, f filter, a review, F5 refresh, Ctrl+R catalog.",
     "The CLI has every command: homestack --help",
 ];
 
