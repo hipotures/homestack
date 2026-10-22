@@ -21,6 +21,8 @@ pub struct Replace<'a> {
     pub keep: &'a [&'a str],
 }
 
+/// The one holder CTID: easy to spot in logs, and PVE refuses a second one.
+pub const HOLDER_ID: u32 = 999_999;
 const HOLDER: &str = "HomeStack holder for CT";
 const READY: &str = "holder ready";
 
@@ -76,9 +78,9 @@ async fn running(pve: &impl Pve, node: &str, ctid: u32) -> Result<bool, String> 
     }
 }
 
-/// The containers on `node` by CTID and name. Read from the node itself:
+/// The CTIDs on `node`. Read from the node itself:
 /// `/cluster/resources` lags behind a container just made or destroyed.
-async fn on_node(pve: &impl Pve, node: &str) -> Result<Vec<(u32, String)>, String> {
+async fn on_node(pve: &impl Pve, node: &str) -> Result<Vec<u32>, String> {
     let list = pve
         .get(&format!("/nodes/{node}/lxc"), &[])
         .await
@@ -87,33 +89,31 @@ async fn on_node(pve: &impl Pve, node: &str) -> Result<Vec<(u32, String)>, Strin
         .into_iter()
         .flatten()
         .map(|item| {
-            let id = item["vmid"]
+            item["vmid"]
                 .as_u64()
                 .or_else(|| item["vmid"].as_str().and_then(|s| s.parse().ok()))
                 .and_then(|n| u32::try_from(n).ok())
-                .ok_or_else(|| format!("{node} containers: CTID unavailable"))?;
-            Ok((id, item["name"].as_str().unwrap_or_default().to_owned()))
+                .ok_or_else(|| format!("{node} containers: CTID unavailable"))
         })
         .collect()
 }
 
-/// The holder of `ctid` among `cts`, made by this module; whether it is ready.
-async fn holder(pve: &impl Pve, node: &str, ctid: u32, cts: &[(u32, String)]) -> Result<Option<(u32, bool)>, String> {
-    let name = holder_name(ctid);
-    let found: Vec<u32> = cts.iter().filter(|(_, n)| *n == name).map(|(id, _)| *id).collect();
-    let [id] = found.as_slice() else {
-        return if found.is_empty() {
-            Ok(None)
-        } else {
-            Err(format!("Several holders of CT {ctid}; inspect them"))
-        };
-    };
-    let cfg = config(pve, node, *id).await?;
-    let mut lines = text(&cfg, "description").lines();
-    if lines.next() != Some(format!("{HOLDER} {ctid}").as_str()) {
-        return Err(format!("CT {id} is named {name} but is not its holder; inspect it"));
+/// Whether the holder on `node` holds `ctid` and is ready; a holder of
+/// another container stops this replacement until that one finishes.
+async fn holder(pve: &impl Pve, node: &str, ctid: u32, cts: &[u32]) -> Result<Option<bool>, String> {
+    if !cts.contains(&HOLDER_ID) {
+        return Ok(None);
     }
-    Ok(Some((*id, lines.any(|line| line == READY))))
+    let cfg = config(pve, node, HOLDER_ID).await?;
+    let description = text(&cfg, "description");
+    let mut lines = description.lines();
+    if lines.next() != Some(format!("{HOLDER} {ctid}").as_str()) {
+        return Err(format!(
+            "CT {HOLDER_ID} is busy ({}); finish that update first",
+            description.lines().next().unwrap_or("not a holder")
+        ));
+    }
+    Ok(Some(lines.any(|line| line == READY)))
 }
 
 fn is_new(cfg: &Value, spec: &NewContainer<'_>) -> bool {
@@ -151,22 +151,11 @@ async fn prepare_holder(
     pve: &impl Pve,
     r: &Replace<'_>,
     old: &Value,
-    existing: Option<u32>,
+    exists: bool,
     say: &impl Fn(&str),
 ) -> Result<(), String> {
-    let (node, ctid) = (r.spec.node, r.spec.ctid);
-    let id = if let Some(id) = existing {
-        id
-    } else {
-        let id = pve
-            .get("/cluster/nextid", &[])
-            .await
-            .map_err(|e| format!("free CTID: {e}"))?;
-        let id = id
-            .as_str()
-            .and_then(|s| s.parse::<u32>().ok())
-            .or_else(|| id.as_u64().and_then(|n| u32::try_from(n).ok()))
-            .ok_or("Proxmox gave no free CTID")?;
+    let (node, ctid, id) = (r.spec.node, r.spec.ctid, HOLDER_ID);
+    if !exists {
         let name = holder_name(ctid);
         node::create(
             pve,
@@ -190,8 +179,7 @@ async fn prepare_holder(
             say,
         )
         .await?;
-        id
-    };
+    }
     let cfg = config(pve, node, id).await?;
     let mut fields = kept(old, r.keep);
     fields.push(("description".to_owned(), format!("{HOLDER} {ctid}\n{READY}")));
@@ -279,8 +267,8 @@ async fn remove_bare(pve: &impl Pve, node: &str, ctid: u32, say: &impl Fn(&str))
 
 /// Give the new container the holder's volumes and kept configuration, then
 /// remove the holder.
-async fn finish(pve: &impl Pve, r: &Replace<'_>, id: u32, say: &impl Fn(&str)) -> Result<(), String> {
-    let (node, ctid) = (r.spec.node, r.spec.ctid);
+async fn finish(pve: &impl Pve, r: &Replace<'_>, say: &impl Fn(&str)) -> Result<(), String> {
+    let (node, ctid, id) = (r.spec.node, r.spec.ctid, HOLDER_ID);
     if running(pve, node, ctid).await? {
         return Err(format!(
             "CT {ctid} runs while holder CT {id} still exists; inspect them"
@@ -310,14 +298,14 @@ pub async fn replace(pve: &impl Pve, r: &Replace<'_>, say: &impl Fn(&str)) -> Re
     loop {
         let cts = on_node(pve, node).await?;
         let holder = holder(pve, node, ctid, &cts).await?;
-        if !cts.iter().any(|(id, _)| *id == ctid) {
+        if !cts.contains(&ctid) {
             node::create(pve, &r.spec, say).await?;
             continue;
         }
         let cfg = config(pve, node, ctid).await?;
         if is_new(&cfg, &r.spec) {
-            if let Some((id, _)) = holder {
-                finish(pve, r, id, say).await?;
+            if holder.is_some() {
+                finish(pve, r, say).await?;
             }
             return Ok(());
         }
@@ -327,12 +315,12 @@ pub async fn replace(pve: &impl Pve, r: &Replace<'_>, say: &impl Fn(&str)) -> Re
                 stop(pve, node, ctid, r.graceful, say).await?;
                 remove_bare(pve, node, ctid, say).await?;
             }
-            Some((id, false)) => prepare_holder(pve, r, &cfg, Some(id), say).await?,
-            None => prepare_holder(pve, r, &cfg, None, say).await?,
-            Some((id, true)) => {
+            Some(false) => prepare_holder(pve, r, &cfg, true, say).await?,
+            None => prepare_holder(pve, r, &cfg, false, say).await?,
+            Some(true) => {
                 stop(pve, node, ctid, r.graceful, say).await?;
                 for key in &keys {
-                    move_volume(pve, node, ctid, id, key, say).await?;
+                    move_volume(pve, node, ctid, HOLDER_ID, key, say).await?;
                 }
                 remove_bare(pve, node, ctid, say).await?;
             }
@@ -362,11 +350,10 @@ mod tests {
             let id = |p: &str| p.split('/').nth(4).and_then(|s| s.parse::<u32>().ok()).unwrap();
             Ok(match path {
                 "/nodes/pve3/lxc" => json!(
-                    cts.iter()
-                        .map(|(id, (cfg, _))| json!({"vmid":id, "name":cfg["hostname"]}))
+                    cts.keys()
+                        .map(|id| json!({"vmid":id}))
                         .collect::<Vec<_>>()
                 ),
-                "/cluster/nextid" => json!("130"),
                 p if p.contains("/tasks/") && p.ends_with("/status") => json!({"status":"stopped", "exitstatus":"OK"}),
                 p if p.contains("/tasks/") => json!([]),
                 p if p.ends_with("/status/current") => {
@@ -504,9 +491,9 @@ mod tests {
     async fn interrupted_replacement_resumes_from_the_holder() {
         // The old container is gone; only the ready holder keeps the home.
         let holder = json!({"hostname":holder_name(120), "description":format!("{HOLDER} 120\n{READY}"),
-            "rootfs":"local-lvm:vm-130-disk-0,size=4G", "mp0":"local-lvm:vm-130-disk-1,mp=/home/app,backup=1,size=8G",
+            "rootfs":"local-lvm:vm-999999-disk-0,size=4G", "mp0":"local-lvm:vm-999999-disk-1,mp=/home/app,backup=1,size=8G",
             "env":"PATH=/bin\0SECRET=kept", "features":"nesting=1", "digest":"d"});
-        finished(&Node(Mutex::new(BTreeMap::from([(130, (holder, false))])))).await;
+        finished(&Node(Mutex::new(BTreeMap::from([(HOLDER_ID, (holder, false))])))).await;
     }
 
     #[test]

@@ -7,7 +7,8 @@ The container keeps its CTID, so the CTID stays tied to its IP address.
 - A container without mount-point volumes is stopped, destroyed and made again
   from the new image.
 - A container with mount-point volumes (a service's `/home/app`) first gets a
-  temporary holder container on the same node, named `hs-holder-<ctid>`. The
+  temporary holder container on the same node, always CT 999999 named
+  `hs-holder-<ctid>`, so only one such update runs in the cluster at a time. The
   holder is created from the same image while the service still runs, is never
   started and has no network. The configuration the new container keeps
   (environment, features, resource options) is copied into the holder; its
