@@ -114,6 +114,10 @@ pub struct Retired {
     pub home_before: String,
     pub home_after: String,
     pub transfer_task: String,
+    #[serde(default)]
+    pub removed: bool,
+    #[serde(default)]
+    pub delete_task: Option<String>,
 }
 
 /// The immutable release last installed on one instance.

@@ -27,6 +27,7 @@ pub enum Step {
     Connect,
     Start,
     Register,
+    Cleanup,
     Complete,
 }
 
@@ -412,7 +413,10 @@ pub async fn plan(
             format!("  Tags       {}", before.tags.join(";")),
             format!("  State      {state} → {state} · autostart {autostart}"),
             String::new(),
-            format!("After success: manually delete old CT {}.", before.ctid),
+            format!(
+                "After verification: automatically remove old CT {} and its root.",
+                before.ctid
+            ),
             String::new(),
         ]);
     }
@@ -459,9 +463,11 @@ async fn review(
             if !choice.ctids.contains(&target.before.ctid) && !choice.ctids.contains(&target.after.ctid) {
                 return Err("Select every instance of the interrupted replacement for recovery".to_owned());
             }
-            let (_, original) = read(pve, &target.before).await?;
-            self::original(target, &original)?;
-            plan.configs.push((target.before.ctid, original));
+            if !matches!(target.step, Step::Cleanup | Step::Complete) {
+                let (_, original) = read(pve, &target.before).await?;
+                self::original(target, &original)?;
+                plan.configs.push((target.before.ctid, original));
+            }
             if let Some((found, cfg)) = deploy::config_of(pve, target.after.ctid).await? {
                 if found.node != target.after.node {
                     return Err("Replacement moved to another node".to_owned());
@@ -728,12 +734,9 @@ fn replacement(source: &Source, journal: &Journal, target: &Target, cfg: &Value)
 
 /// A successful API reassignment plus these observations proves the transfer;
 /// a renamed volume is never treated as a newly allocated home.
-fn moved_home(target: &Target, original_config: &Value, replacement_config: &Value) -> Result<String, String> {
-    if original_config.get("mp0").is_some()
-        || volume(original_config, "rootfs") != target.before.root_volume
-        || volume(replacement_config, "rootfs") != target.after.root_volume
-    {
-        return Err("Home still attached to the original container or a root changed during transfer".to_owned());
+fn verified_home(target: &Target, replacement_config: &Value) -> Result<String, String> {
+    if volume(replacement_config, "rootfs") != target.after.root_volume {
+        return Err("Replacement root changed".to_owned());
     }
     let mount = text(replacement_config, "mp0");
     let home = volume(replacement_config, "mp0");
@@ -750,6 +753,14 @@ fn moved_home(target: &Target, original_config: &Value, replacement_config: &Val
     {
         return Err("Transferred home identity/storage/mount options differ from the journal".to_owned());
     }
+    Ok(home)
+}
+
+fn moved_home(target: &Target, original_config: &Value, replacement_config: &Value) -> Result<String, String> {
+    if original_config.get("mp0").is_some() || volume(original_config, "rootfs") != target.before.root_volume {
+        return Err("Home still attached to the original container or its root changed".to_owned());
+    }
+    let home = verified_home(target, replacement_config)?;
     if original_config.as_object().is_none_or(|fields| {
         fields.iter().any(|(k, v)| {
             (k.starts_with("mp") || k.starts_with("unused"))
@@ -763,6 +774,112 @@ fn moved_home(target: &Target, original_config: &Value, replacement_config: &Val
         return Err("Original container still references the data volume".to_owned());
     }
     Ok(home)
+}
+
+fn removable_root(target: &Target, cfg: &Value, state: &str) -> Result<(), String> {
+    original(target, cfg)?;
+    if state != "stopped"
+        || cfg["onboot"].as_u64() == Some(1)
+        || cfg.get("net0").is_some()
+        || cfg.as_object().is_none_or(|fields| {
+            fields
+                .keys()
+                .any(|key| key.starts_with("mp") || key.starts_with("unused"))
+        })
+        || target.before.root_volume == target.after.home_volume
+        || target.before.root_volume == target.after.root_volume
+    {
+        return Err(format!(
+            "CT {}: automatic cleanup requires only the verified old root, stopped and disconnected",
+            target.before.ctid
+        ));
+    }
+    Ok(())
+}
+
+async fn cleanup(
+    pve: &impl Pve,
+    path: &Path,
+    source: &Source,
+    journal: &mut Journal,
+    index: usize,
+) -> Result<(), String> {
+    let target = journal.targets[index].clone();
+    let (state, cfg) = read(pve, &target.after).await?;
+    replacement(source, journal, &target, &cfg)?;
+    verified_home(&target, &cfg)?;
+    if text(&cfg, "net0") != target.network
+        || (state.status == "running") != target.running
+        || (cfg["onboot"].as_u64() == Some(1)) != target.onboot
+    {
+        return Err("Replacement power/network state changed before cleanup".to_owned());
+    }
+    if target.step == Step::Complete
+        && target
+            .after
+            .retired
+            .iter()
+            .any(|r| r.ctid == target.before.ctid && r.removed && r.delete_task.is_some())
+    {
+        return Ok(());
+    }
+    if target.task.is_none() {
+        if target.running {
+            deploy::healthy(&source.manifest, &target.before.address).await?;
+        }
+        let (old_state, old) = read(pve, &target.before).await?;
+        removable_root(&target, &old, &old_state.status)?;
+        safe_config(pve, &target.before, &old).await?;
+        // Re-read immediately before deletion. DELETE has no config digest parameter.
+        let (latest_state, latest) = read(pve, &target.before).await?;
+        if old != latest {
+            return Err("Old container changed before cleanup".to_owned());
+        }
+        removable_root(&target, &latest, &latest_state.status)?;
+        save(path, source, journal)?;
+        let task = pve
+            .delete(
+                &format!("/nodes/{}/lxc/{}", target.before.node, target.before.ctid),
+                &[("purge", "0"), ("destroy-unreferenced-disks", "0")],
+            )
+            .await
+            .map_err(|error| error.to_string())?;
+        let task = task
+            .as_str()
+            .ok_or("Cleanup returned no task ID; inspect before retrying")?;
+        if !task.starts_with(&format!("UPID:{}:", target.before.node)) {
+            return Err("Cleanup task belongs to another node".to_owned());
+        }
+        journal.targets[index].task = Some(task.to_owned());
+        save(path, source, journal)?;
+    }
+    let task = journal.targets[index].task.clone().ok_or("Cleanup task missing")?;
+    lifecycle::task(pve, &json!(task)).await?;
+    let mut after = target.after.clone();
+    let previous = after
+        .retired
+        .iter_mut()
+        .find(|r| r.ctid == target.before.ctid)
+        .ok_or("Cleanup generation record missing")?;
+    previous.removed = true;
+    previous.delete_task = Some(task);
+    registry::update(path, |registry| {
+        let slot = registry
+            .deployments
+            .iter_mut()
+            .find(|d| d.repository == source.repository && d.service == source.manifest.id)
+            .and_then(|d| d.instances.iter_mut().find(|i| i.ctid == after.ctid))
+            .ok_or("Replacement registry record missing")?;
+        if slot.root_volume != after.root_volume || slot.home_volume != after.home_volume || slot.node != after.node {
+            return Err("Replacement registry identity changed before cleanup completion".to_owned());
+        }
+        *slot = after.clone();
+        Ok(())
+    })?;
+    journal.targets[index].after = after;
+    advance(journal, index, Step::Complete);
+    save(path, source, journal)?;
+    Ok(())
 }
 
 async fn image_matches(journal: &Journal) -> Result<(), String> {
@@ -871,6 +988,10 @@ async fn run(
 ) -> Result<(), String> {
     loop {
         let target = journal.targets[index].clone();
+        if matches!(target.step, Step::Cleanup | Step::Complete) {
+            cleanup(pve, path, source, journal, index).await?;
+            return Ok(());
+        }
         say(&format!(
             "{}: CT {} → {} · {:?}",
             target.before.node, target.before.ctid, target.after.ctid, target.step
@@ -1112,7 +1233,7 @@ async fn run(
                 ));
                 advance(journal, index, Step::Disconnect);
             }
-            Step::Disconnect | Step::Connect | Step::Start | Step::Register | Step::Complete => {
+            Step::Disconnect | Step::Connect | Step::Start | Step::Register => {
                 let (state, cfg) = read(pve, &target.after).await?;
                 replacement(source, journal, &target, &cfg)?;
                 moved_home(&target, &old, &cfg)?;
@@ -1214,6 +1335,7 @@ async fn run(
                             return Err("Final power/network/autostart state differs from the reviewed plan".to_owned());
                         }
                         let mut after = target.after.clone();
+                        after.retired.retain(|r| !r.removed);
                         after.stage = registry::Stage::Ready;
                         if !after.retired.iter().any(|r| r.ctid == target.before.ctid) {
                             after.retired.push(Retired {
@@ -1230,6 +1352,8 @@ async fn run(
                                     .transfer_task
                                     .clone()
                                     .ok_or("Home transfer task evidence missing")?,
+                                removed: false,
+                                delete_task: None,
                             });
                         }
                         registry::update(path, |registry| {
@@ -1253,23 +1377,12 @@ async fn run(
                             Ok(())
                         })?;
                         journal.targets[index].after = after;
-                        advance(journal, index, Step::Complete);
-                    }
-                    Step::Complete => {
-                        if old.get("net0").is_some()
-                            || text(&cfg, "net0") != target.network
-                            || (state.status == "running") != target.running
-                            || (cfg["onboot"].as_u64() == Some(1)) != target.onboot
-                        {
-                            return Err(
-                                "Completed replacement drifted; inspect it before clearing the journal".to_owned()
-                            );
-                        }
-                        return Ok(());
+                        advance(journal, index, Step::Cleanup);
                     }
                     _ => unreachable!(),
                 }
             }
+            Step::Cleanup | Step::Complete => unreachable!(),
         }
         save(path, source, journal)?;
     }
@@ -1370,7 +1483,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn interrupted_transfer_of_stopped_service_resumes_without_start_or_disk_allocation() {
+    async fn interrupted_transfer_of_stopped_service_resumes_and_removes_only_the_old_root() {
         use super::super::manifest::{Manifest, StateModel};
         use hs_pve::PveError;
         use std::sync::Mutex;
@@ -1410,8 +1523,15 @@ mod tests {
             async fn post(&self, path: &str, _: &[(&str, &str)]) -> Result<Value, PveError> {
                 panic!("Recovery must not recreate disks, repeat the move or start the stopped service: {path}")
             }
-            async fn delete(&self, path: &str, _: &[(&str, &str)]) -> Result<Value, PveError> {
-                panic!("Recovery must not destroy anything: {path}")
+            async fn delete(&self, path: &str, fields: &[(&str, &str)]) -> Result<Value, PveError> {
+                assert_eq!(
+                    path, "/nodes/pve3/lxc/120",
+                    "Only the original container may be destroyed"
+                );
+                assert_eq!(fields, [("purge", "0"), ("destroy-unreferenced-disks", "0")]);
+                Ok(json!(
+                    "UPID:pve3:00000002:00000002:00000002:vzdestroy:120:operator@pve:"
+                ))
             }
             async fn put(&self, path: &str, fields: &[(&str, &str)]) -> Result<Value, PveError> {
                 let mut pair = self.0.lock().unwrap();
@@ -1540,6 +1660,13 @@ mod tests {
         assert_eq!(active.home_volume, "local-lvm:vm-121-disk-1");
         assert_eq!(active.retired[0].root_volume, "local-lvm:vm-120-disk-0");
         assert!(active.retired[0].transfer_task.starts_with("UPID:pve3:"));
+        assert!(active.retired[0].removed);
+        assert!(
+            active.retired[0]
+                .delete_task
+                .as_deref()
+                .is_some_and(|t| t.contains(":vzdestroy:120:"))
+        );
         let pair = api.0.lock().unwrap();
         assert!(pair.0.get("mp0").is_none() && pair.0.get("net0").is_none());
         assert_eq!(pair.0["onboot"], 0);

@@ -44,14 +44,21 @@ does not replace the PVE ownership and volume checks below.
    manifest's health probe for a running service, then restore the original
    autostart setting on the replacement container.
 7. Atomically replace the registry's active CTID/root/home while keeping
-   service, node, hostname, IP, MAC, pool and tags. Keep the old CT/root and
+   service, node, hostname, IP, MAC, pool and tags. Record the old CT/root and
    transfer evidence in the instance history. Local favorites and selection
    follow the new CTID.
+8. Verify the replacement again (identity, root, home, network, power state,
+   health) and the original container (identity, stopped, no network, no
+   autostart, no mount points or unused volumes, no snapshots, HA, replication
+   or firewall configuration). Re-read it immediately before
+   `DELETE /nodes/{node}/lxc/{source_ctid}` with `purge=0` and
+   `destroy-unreferenced-disks=0`, which removes only the old CT and its root.
+   Record the deletion task in the instance history.
 
-The original container remains stopped without network, home or autostart.
-No container, old root or data volume is automatically deleted. The replacement
-is another generation of the same logical instance, including for a single-node
-service.
+A failed check before step 8 keeps the original container for recovery; a
+failed cleanup check leaves it in place and the update stays resumable. The data
+volume is never deleted. The replacement is another generation of the same
+logical instance, including for a single-node service.
 
 Every transition and returned task ID is journaled under the profile operation
 lock. Recovery requires a new review and verifies the recorded instances before
