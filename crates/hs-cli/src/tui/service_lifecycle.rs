@@ -283,7 +283,13 @@ pub(super) fn work(
                         )
                     {
                         let targets = ssh_targets(&targets)?;
-                        for observed in &plan.observed {
+                        // Recovery of a container that no longer exists reads
+                        // Proxmox only.
+                        for observed in plan
+                            .observed
+                            .iter()
+                            .filter(|o| plan.journal.action != Action::Recovery || !o.config.is_null())
+                        {
                             let node = &observed.instance.node;
                             if !roots.contains_key(node) {
                                 tell(Event::Busy(format!("Verifying root SSH access on {node}")));
