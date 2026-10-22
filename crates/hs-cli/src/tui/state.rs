@@ -252,6 +252,10 @@ pub struct App {
     pub node: Option<usize>,
     /// The group carousel: `None` is all, else a pool's ID.
     pub group: Option<String>,
+    /// The carousel shows the favorites (its first place, the start).
+    pub starred: bool,
+    /// The VMIDs starred with `f`, kept in `tui.toml`.
+    pub favorites: std::collections::BTreeSet<u32>,
     /// ← → turn the group carousel (the default) or, after Tab, the node one.
     pub on_group: bool,
     pub overlay: Option<Overlay>,
@@ -326,7 +330,18 @@ impl App {
             .and_then(|value| usize::try_from(value).ok())
             .filter(|value| *value < VIEWS.len())
             .unwrap_or(0);
+        let favorites = preferences
+            .table
+            .get("favorites")
+            .and_then(toml::Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(toml::Value::as_integer)
+            .filter_map(|vmid| u32::try_from(vmid).ok())
+            .collect();
         Ok(Self {
+            favorites,
+            starred: true,
             lab_gold_vmid: None,
             profile: "default".to_owned(),
             preferences,
@@ -961,9 +976,12 @@ impl App {
             .collect()
     }
 
-    /// The group shown: `all` or a pool's name.
+    /// The group shown: `★ favorites`, `all` or a pool's name.
     #[must_use]
     pub fn group_name(&self) -> String {
+        if self.starred {
+            return "★ favorites".to_owned();
+        }
         let groups = self.groups();
         self.group
             .as_ref()
@@ -990,6 +1008,7 @@ impl App {
         entries.sort_by_key(|entry| entry.vmid);
         entries
             .into_iter()
+            .filter(|entry| !self.starred || self.favorites.contains(&entry.vmid))
             .filter(|entry| {
                 self.group
                     .as_ref()
@@ -1105,6 +1124,31 @@ impl App {
                 self.log(&time, &error.0);
             }
         }
+    }
+
+    /// `f`: star the selection, or unstar it; kept in `tui.toml`.
+    fn toggle_favorite(&mut self) {
+        let Some(vmid) = self.selected_entry().map(|entry| entry.vmid) else {
+            return;
+        };
+        if !self.favorites.remove(&vmid) {
+            self.favorites.insert(vmid);
+        }
+        let mut table = self.preferences.table.clone();
+        table.insert(
+            "favorites".to_owned(),
+            toml::Value::Array(
+                self.favorites
+                    .iter()
+                    .map(|vmid| toml::Value::Integer(i64::from(*vmid)))
+                    .collect(),
+            ),
+        );
+        match self.preferences.write(&table) {
+            Ok(()) => self.preferences.table = table,
+            Err(error) => self.log("", &error.0),
+        }
+        self.keep_selection();
     }
 
     fn save_view(&mut self) {
@@ -1811,24 +1855,29 @@ impl App {
                 self.keep_selection();
                 self.save_view();
             }
-            KeyCode::Char('f') if self.shown.workspaces => self.filtering = true,
+            KeyCode::Char('/') if self.shown.workspaces => self.filtering = true,
+            KeyCode::Char('f') if self.shown.workspaces => self.toggle_favorite(),
             KeyCode::Tab | KeyCode::BackTab if self.shown.workspaces => self.on_group = !self.on_group,
             KeyCode::Right | KeyCode::Left if self.shown.workspaces && self.on_group => {
-                // None, the pools by ID, None, …
+                // Favorites, all, the pools by ID, favorites, …
                 let groups = self.groups();
-                let count = groups.len();
-                let position = self
-                    .group
-                    .as_ref()
-                    .and_then(|id| groups.iter().position(|(pool, _)| pool == id))
-                    .map_or(0, |index| index + 1);
-                let next = if key.code == KeyCode::Right {
-                    (position + 1) % (count + 1)
+                let places = groups.len() + 2;
+                let position = if self.starred {
+                    0
                 } else {
-                    (position + count) % (count + 1)
+                    self.group
+                        .as_ref()
+                        .and_then(|id| groups.iter().position(|(pool, _)| pool == id))
+                        .map_or(1, |index| index + 2)
                 };
+                let next = if key.code == KeyCode::Right {
+                    (position + 1) % places
+                } else {
+                    (position + places - 1) % places
+                };
+                self.starred = next == 0;
                 self.group = next
-                    .checked_sub(1)
+                    .checked_sub(2)
                     .and_then(|index| groups.get(index))
                     .map(|(id, _)| id.clone());
                 self.keep_selection();

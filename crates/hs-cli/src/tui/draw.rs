@@ -570,12 +570,19 @@ fn workspace_actions(app: &App) -> Vec<Control> {
     let running = selected.is_some_and(|entry| entry.status == "running");
     let free = selected.is_some() && app.action.is_none() && app.setup.is_none();
     // A service container no workflow manages yet: nothing to act on.
+    let favorite = Control::key(if selected.is_some_and(|entry| app.favorites.contains(&entry.vmid)) {
+        "un&favorite"
+    } else {
+        "&favorite"
+    })
+    .enabled(selected.is_some());
     if selected.is_some_and(|entry| entry.role == "CT" && !app.image_container(entry)) {
-        return vec![Control::key("&info")];
+        return vec![Control::key("&info"), favorite];
     }
     if selected.is_some_and(|entry| app.image_container(entry)) {
         return vec![
             Control::key("&info"),
+            favorite,
             Control::named("␣", "select", KeyCode::Char(' ')),
             Control::named(
                 "↵",
@@ -591,6 +598,7 @@ fn workspace_actions(app: &App) -> Vec<Control> {
     }
     vec![
         Control::key("&info").enabled(selected.is_some()),
+        favorite,
         Control::key(
             if selected.is_some_and(|entry| super::shell::is_gold(app, entry.vmid)) {
                 "&ssh root"
@@ -789,7 +797,7 @@ fn workspaces(buf: &mut Buffer, area: Rect, app: &App, mut controls: Vec<Control
         let cursor = if app.filtering { "▏" } else { "" };
         top_left.push(Control::plain(&format!("filter: {}{cursor}", app.filter)));
     } else {
-        top_left.push(Control::key("&filter"));
+        top_left.push(Control::key("&/filter"));
     }
     let node = app.node_name().unwrap_or_else(|| "all".to_owned());
     let position = app.selected_index().map_or(0, |index| index + 1);
@@ -1017,6 +1025,22 @@ fn workspaces(buf: &mut Buffer, area: Rect, app: &App, mut controls: Vec<Control
                     alert_style(palette, style),
                 );
             }
+        }
+        // A favorite's gold star in STATE, after its state dot.
+        if app.favorites.contains(&entry.vmid)
+            && let Some(state_x) = columns
+                .iter()
+                .position(|column| column.heading == "STATE")
+                .map(|at| columns[..at].iter().map(|column| column.width + 1).sum::<usize>())
+        {
+            write(
+                buf,
+                list.x + 1 + u16::try_from(state_x + 4).unwrap_or(0),
+                y,
+                1,
+                "★",
+                style.fg(palette.warning),
+            );
         }
         // The tags' squares in their colours, from the first column.
         for (at, tag) in entry.tags.iter().take(MAX_TAGS).enumerate() {
@@ -2078,7 +2102,7 @@ fn list_item(palette: &Palette, label: &str, chosen: bool) -> (String, Style) {
     }
 }
 
-const HELP: [&str; 26] = [
+const HELP: [&str; 27] = [
     "1 2 3 4     view 1 workspaces, 2 cluster+storage, 3 storage, 4 log (again: auto)",
     "0           the standard view: every panel and node, no filter",
     "v           next view (auto, 1, 2, 3, 4)",
@@ -2088,8 +2112,9 @@ const HELP: [&str; 26] = [
     "F3          copy loaded JSON data to clipboard (terminal OSC 52 support required)",
     "↑ ↓         select a workspace; PgUp PgDn Home End",
     "i           details of the selected workspace (again: hide them)",
-    "← →         one node or all",
-    "f           filter by name or VMID; ↵ keeps it, esc clears it",
+    "← →         ★ favorites, all or one pool (after tab: one node or all)",
+    "f           star or unstar the selected workspace (kept in tui.toml)",
+    "/           filter by name or VMID; ↵ keeps it, esc clears it",
     "esc         close a box, return to view 0, then confirm quit (↵ yes, esc cancel)",
     "q           quit immediately",
     "",
