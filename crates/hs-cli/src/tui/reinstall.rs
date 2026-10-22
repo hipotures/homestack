@@ -498,7 +498,7 @@ async fn common_work(
             } else {
                 lifecycle::Action::Update
             }),
-            ctids: ids,
+            ctids: ids.clone(),
             version: version.to_owned(),
             ..lifecycle::Choice::default()
         };
@@ -522,7 +522,37 @@ async fn common_work(
             _ => return Ok(Some(vec!["Cancelled. No changes were made.".to_owned()])),
         }
         let replacement = plan.replacement.as_ref().ok_or("API replacement plan is missing")?;
-        let lines = crate::services::replacement::apply(&pve, &state_path, &source, replacement, say).await?;
+        // One row per container; the one under way shows its current step.
+        let rows = std::sync::Mutex::new((
+            ids.iter()
+                .map(|id| Step {
+                    name: format!("CT {id}: waiting"),
+                    state: StepState::Waiting,
+                })
+                .collect::<Vec<Step>>(),
+            None::<usize>,
+        ));
+        let said = |line: &str| {
+            say(line);
+            let doing = line.trim();
+            let Ok(mut rows) = rows.lock() else { return };
+            let (steps, current) = &mut *rows;
+            if let Some(index) = ids.iter().position(|id| doing.contains(&format!("CT {id} · "))) {
+                if let Some(previous) = current.filter(|previous| *previous != index) {
+                    steps[previous].state = StepState::Done;
+                    steps[previous].name = format!("CT {}: done", ids[previous]);
+                }
+                *current = Some(index);
+            }
+            if let Some(index) = *current {
+                let id = ids[index];
+                let step = doing.split_once(&format!("CT {id} · ")).map_or(doing, |(_, step)| step);
+                steps[index].state = StepState::Running;
+                steps[index].name = format!("CT {id}: {step}");
+            }
+            progress(Progress::Steps(steps.clone()));
+        };
+        let lines = crate::services::replacement::apply(&pve, &state_path, &source, replacement, &said).await?;
         Ok(Some(lines))
     }
     .await;
