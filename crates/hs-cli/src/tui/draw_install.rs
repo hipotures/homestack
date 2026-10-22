@@ -440,12 +440,8 @@ fn settings(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
         |pick: fn(&(String, String)) -> &String| rows.iter().map(|row| pick(row).chars().count()).max().unwrap_or(0);
     let narrow = inner.width < 110;
     let label_width = if narrow { 17 } else { longest(|row| &row.0) + 2 };
-    let wanted = u16::try_from(2 + label_width + longest(|row| &row.1) + 2).unwrap_or(u16::MAX);
-    let left = if narrow {
-        inner.width
-    } else {
-        wanted.clamp(40, inner.width / 2)
-    };
+    // Keep the choice panel anchored while selected values change length.
+    let left = if narrow { inner.width } else { (inner.width / 2).min(64) };
     let visible = if narrow {
         rows.len().min(usize::from(inner.height.saturating_sub(7) / 2).max(1))
     } else {
