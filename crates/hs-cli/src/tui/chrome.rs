@@ -236,7 +236,14 @@ fn draw_control(
     }
     for (index, c) in control.text.chars().enumerate() {
         let in_key = control.hotkeys.contains(&index);
-        let chosen = if in_key { key_style } else { style };
+        // The favorites' star is gold wherever it is.
+        let chosen = if in_key {
+            key_style
+        } else if c == '★' {
+            style.fg(palette.warning)
+        } else {
+            style
+        };
         put(buf, at, y, c, chosen);
         at += 1;
     }

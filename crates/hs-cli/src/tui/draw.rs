@@ -2112,7 +2112,7 @@ const HELP: [&str; 27] = [
     "F3          copy loaded JSON data to clipboard (terminal OSC 52 support required)",
     "↑ ↓         select a workspace; PgUp PgDn Home End",
     "i           details of the selected workspace (again: hide them)",
-    "← →         ★ favorites, all or one pool (after tab: one node or all)",
+    "← →         ★ (favorites), all or one pool (after tab: one node or all)",
     "f           star or unstar the selected workspace (kept in tui.toml)",
     "/           filter by name or VMID; ↵ keeps it, esc clears it",
     "esc         close a box, return to view 0, then confirm quit (↵ yes, esc cancel)",
