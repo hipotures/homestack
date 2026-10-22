@@ -301,7 +301,7 @@ pub async fn work(
         }
     };
     for (index, name) in servers.iter().enumerate() {
-        set(index, StepState::Running, &format!("reinstall from {tag}"));
+        set(index, StepState::Running, &format!("updating to {tag}"));
         let said = |line: &str| {
             say(line);
             let doing = line.trim();
@@ -312,7 +312,7 @@ pub async fn work(
         };
         let outcome = hs_deploy::deploy::apply(&config, std::slice::from_ref(name), &said).await;
         match &outcome {
-            Ok(()) => set(index, StepState::Done, &format!("reinstalled from {tag}")),
+            Ok(()) => set(index, StepState::Done, &format!("updated to {tag}")),
             Err(_) => set(index, StepState::Failed, "failed"),
         }
         if let Err(error) = outcome {
@@ -320,7 +320,7 @@ pub async fn work(
             let mut lines = vec![format!("{name}: {error}")];
             if !done.is_empty() {
                 let done: Vec<&str> = done.iter().map(|server| server.as_str()).collect();
-                lines.push(format!("Reinstalled before it: {}.", done.join(", ")));
+                lines.push(format!("Updated before it: {}.", done.join(", ")));
             }
             lines.push("deploy.toml is unchanged.".to_owned());
             return failed(lines);
@@ -331,11 +331,11 @@ pub async fn work(
     {
         return failed(vec![
             error,
-            format!("Reinstalled before check: {}.", servers.join(", ")),
+            format!("Updated before the check: {}.", servers.join(", ")),
             "deploy.toml is unchanged.".to_owned(),
         ]);
     }
-    let mut lines = vec![format!("Reinstalled from {tag}: {}.", servers.join(", "))];
+    let mut lines = vec![format!("Updated to {tag}: {}.", servers.join(", "))];
     match keep_image(&deploy_toml, &image) {
         Ok(()) => lines.push(format!("{} names this image now.", deploy_toml.display())),
         Err(error) => lines.push(format!("deploy.toml could not be changed: {error}")),
