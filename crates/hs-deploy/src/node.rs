@@ -79,8 +79,18 @@ pub async fn ensure_image(
     Ok(volid)
 }
 
-/// Server images in `storage` of `node` other than `current` (a file name).
-pub async fn old_images(pve: &impl Pve, node: &str, storage: &str, current: &str) -> Result<Vec<String>, String> {
+/// The file-name prefix of API server images.
+pub const SERVER_IMAGES: &str = "homestack-server_";
+
+/// Images in `storage` of `node` whose file name starts with `prefix`, other
+/// than `current` (a file name).
+pub async fn old_images(
+    pve: &impl Pve,
+    node: &str,
+    storage: &str,
+    prefix: &str,
+    current: &str,
+) -> Result<Vec<String>, String> {
     let content = pve
         .get(
             &format!("/nodes/{node}/storage/{storage}/content"),
@@ -88,7 +98,7 @@ pub async fn old_images(pve: &impl Pve, node: &str, storage: &str, current: &str
         )
         .await
         .map_err(|e| format!("{node} {storage}: {e}"))?;
-    let prefix = format!("{storage}:vztmpl/homestack-server_");
+    let prefix = format!("{storage}:vztmpl/{prefix}");
     let current = format!("{storage}:vztmpl/{current}");
     Ok(content
         .as_array()
@@ -98,6 +108,39 @@ pub async fn old_images(pve: &impl Pve, node: &str, storage: &str, current: &str
         .filter(|volid| volid.starts_with(&prefix) && *volid != current)
         .map(str::to_owned)
         .collect())
+}
+
+/// Delete the images `old_images` finds. A failure is reported, not
+/// returned: a leftover image never fails the update that made it.
+pub async fn remove_old_images(
+    pve: &impl Pve,
+    node: &str,
+    storage: &str,
+    prefix: &str,
+    current: &str,
+    say: &impl Fn(&str),
+) {
+    let old = match old_images(pve, node, storage, prefix, current).await {
+        Ok(old) => old,
+        Err(error) => return say(&format!("  old images not removed: {error}")),
+    };
+    for volid in old {
+        let removed = match pve
+            .delete(
+                &format!("/nodes/{node}/storage/{storage}/content/{}", volid.replace('/', "%2F")),
+                &[],
+            )
+            .await
+        {
+            Ok(task) if task.is_string() => wait(pve, &task, &format!("remove {volid}")).await,
+            Ok(_) => Ok(()),
+            Err(error) => Err(error.to_string()),
+        };
+        match removed {
+            Ok(()) => say(&format!("  removed {volid}")),
+            Err(error) => say(&format!("  {volid} not removed: {error}")),
+        }
+    }
 }
 
 /// A container the token sees.

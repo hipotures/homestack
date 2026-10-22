@@ -15,24 +15,26 @@ pub trait Pve: Sync {
     fn delete(&self, path: &str, query: &[(&str, &str)]) -> impl Future<Output = Result<Value, PveError>> + Send;
 }
 
-fn segments(path: &str) -> Vec<&str> {
-    path.trim_start_matches('/').split('/').collect()
+/// The path's segments; `%2F` inside a segment (a volume ID such as
+/// `local:vztmpl/x.tar`) stays part of it.
+fn segments(path: &str) -> Vec<String> {
+    path.trim_start_matches('/').split('/').map(|s| s.replace("%2F", "/")).collect()
 }
 
 impl Pve for PveClient {
     async fn get(&self, path: &str, query: &[(&str, &str)]) -> Result<Value, PveError> {
-        self.get_value(&segments(path), query).await
+        self.get_value(&segments(path).iter().map(String::as_str).collect::<Vec<_>>(), query).await
     }
 
     async fn post(&self, path: &str, form: &[(&str, &str)]) -> Result<Value, PveError> {
-        self.post_value(&segments(path), form).await
+        self.post_value(&segments(path).iter().map(String::as_str).collect::<Vec<_>>(), form).await
     }
 
     async fn put(&self, path: &str, form: &[(&str, &str)]) -> Result<Value, PveError> {
-        self.put_value(&segments(path), form).await
+        self.put_value(&segments(path).iter().map(String::as_str).collect::<Vec<_>>(), form).await
     }
 
     async fn delete(&self, path: &str, query: &[(&str, &str)]) -> Result<Value, PveError> {
-        self.delete_value(&segments(path), query).await
+        self.delete_value(&segments(path).iter().map(String::as_str).collect::<Vec<_>>(), query).await
     }
 }

@@ -789,7 +789,7 @@ async fn run(
                     instance.node, journal.template_storage
                 );
                 let image = journal.image.clone();
-                let filename = format!("hs-{}-{}", journal.id, instance.ctid);
+                let filename = format!("hs-{}-{}", instance.ctid, journal.id);
                 job(
                     pve,
                     path,
@@ -837,7 +837,7 @@ async fn run(
                 }
                 let template = format!(
                     "{}:vztmpl/hs-{}-{}.tar",
-                    journal.template_storage, journal.id, instance.ctid
+                    journal.template_storage, instance.ctid, journal.id
                 );
                 let spec = node::NewContainer {
                     node: &instance.node,
@@ -944,6 +944,15 @@ async fn run(
                 })?;
                 journal.targets[index].after = after;
                 save(path, source, journal)?;
+                node::remove_old_images(
+                    pve,
+                    &instance.node,
+                    &journal.template_storage,
+                    &format!("hs-{}-", instance.ctid),
+                    "",
+                    &|line| say(line),
+                )
+                .await;
                 return Ok(());
             }
         }

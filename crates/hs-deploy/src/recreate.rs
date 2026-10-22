@@ -23,6 +23,8 @@ pub struct Replace<'a> {
 
 /// The one holder CTID: easy to spot in logs, and PVE refuses a second one.
 pub const HOLDER_ID: u32 = 999_999;
+/// The holder is never started; the smallest image will do.
+const HOLDER_IMAGE: &str = "docker.io/library/alpine:3.24";
 const HOLDER: &str = "HomeStack holder for CT";
 const READY: &str = "holder ready";
 
@@ -157,16 +159,18 @@ async fn prepare_holder(
     let (node, ctid, id) = (r.spec.node, r.spec.ctid, HOLDER_ID);
     if !exists {
         let name = holder_name(ctid);
+        let storage = r.spec.ostemplate.split_once(':').map_or("", |(storage, _)| storage);
+        let ostemplate = node::ensure_image(pve, node, storage, HOLDER_IMAGE, say).await?;
         node::create(
             pve,
             &NewContainer {
                 node,
                 ctid: id,
                 hostname: &name,
-                ostemplate: r.spec.ostemplate,
+                ostemplate: &ostemplate,
                 pool: r.spec.pool,
                 storage: r.spec.storage,
-                disk_gib: r.spec.disk_gib,
+                disk_gib: 1,
                 memory_mib: 64,
                 cores: 1,
                 net0: None,
@@ -354,6 +358,7 @@ mod tests {
                         .map(|id| json!({"vmid":id}))
                         .collect::<Vec<_>>()
                 ),
+                "/nodes/pve3/storage/local/content" => json!([{"volid": "local:vztmpl/alpine_3.24.tar"}]),
                 p if p.contains("/tasks/") && p.ends_with("/status") => json!({"status":"stopped", "exitstatus":"OK"}),
                 p if p.contains("/tasks/") => json!([]),
                 p if p.ends_with("/status/current") => {

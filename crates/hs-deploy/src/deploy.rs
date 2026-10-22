@@ -415,7 +415,15 @@ pub async fn apply(config: &DeployConfig, only: &[String], say: &impl Fn(&str)) 
         say,
         check_versions_for(config, &selected, &api_token, say),
     )
-    .await
+    .await?;
+    let current = node::image_file(&config.image)?;
+    let mut nodes: Vec<&str> = selected.iter().map(|instance| instance.node.as_str()).collect();
+    nodes.sort_unstable();
+    nodes.dedup();
+    for name in nodes {
+        node::remove_old_images(&pve, name, &config.template_storage, node::SERVER_IMAGES, &current, say).await;
+    }
+    Ok(())
 }
 
 /// The image each instance's container was made from, by instance name;
@@ -507,11 +515,10 @@ pub async fn status(config: &DeployConfig, only: &[String], say: &impl Fn(&str))
     nodes.sort_unstable();
     nodes.dedup();
     for name in nodes {
-        // The deploy token may not remove them (decisions.md, phase 11).
-        let old = node::old_images(&pve, name, &config.template_storage, &current).await?;
+        let old = node::old_images(&pve, name, &config.template_storage, node::SERVER_IMAGES, &current).await?;
         if !old.is_empty() {
             say(&format!(
-                "{name}: old server images (root removes them): {}",
+                "{name}: old server images (the next apply removes them): {}",
                 old.join(" ")
             ));
         }

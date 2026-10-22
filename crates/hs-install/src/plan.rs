@@ -37,7 +37,7 @@ const ROLES: [(&str, &str); 7] = [
     ("HomeStackDeployNodes", "Sys.AccessNetwork"),
     (
         "HomeStackDeployTemplates",
-        "Datastore.AllocateSpace,Datastore.AllocateTemplate,Datastore.Audit",
+        "Datastore.Allocate,Datastore.AllocateSpace,Datastore.AllocateTemplate,Datastore.Audit",
     ),
 ];
 

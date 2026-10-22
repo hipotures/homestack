@@ -498,6 +498,14 @@ pub async fn apply(
         say(&line);
         lines.push(line);
     }
+    let current = node::image_file(image)?;
+    let prefix = current.split_once('_').map_or(current.as_str(), |(name, _)| name).to_owned() + "_";
+    let mut nodes: Vec<&str> = snapshots.iter().map(|snapshot| snapshot.node.as_str()).collect();
+    nodes.sort_unstable();
+    nodes.dedup();
+    for name in nodes {
+        node::remove_old_images(&pve, name, &summary.template_storage, &prefix, &current, &|line| say(line)).await;
+    }
     Ok(lines)
 }
 

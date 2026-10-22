@@ -9,8 +9,8 @@ The container keeps its CTID, so the CTID stays tied to its IP address.
 - A container with mount-point volumes (a service's `/home/app`) first gets a
   temporary holder container on the same node, always CT 999999 named
   `hs-holder-<ctid>`, so only one such update runs in the cluster at a time. The
-  holder is created from the same image while the service still runs, is never
-  started and has no network. The configuration the new container keeps
+  holder is created from `alpine:3.24` with a 1 GiB root while the service still
+  runs, is never started and has no network. The configuration the new container keeps
   (environment, features, resource options) is copied into the holder; its
   description then ends with `holder ready`. Runtime values therefore stay in
   PVE and never reach the local journal or logs.
@@ -22,6 +22,13 @@ The container keeps its CTID, so the CTID stays tied to its IP address.
   new image's own entries and the holder is removed.
 - Bind mounts, network mounts, devices and unused volumes are refused; they are
   not supported yet.
+
+After a successful update HomeStack removes the images it pulled and no longer
+needs from the template storage: the service's `hs-<ctid>-*` archives, older
+`homestack-server_*` and older `homestack-pangolin-site_*` images. The deploy
+token's `HomeStackDeployTemplates` role on that storage includes
+`Datastore.Allocate` for this. A failed removal is reported and never fails the
+update.
 
 Every run continues from what Proxmox shows: the CT and its description (the
 new container's description identifies this update), the holder and whether it
