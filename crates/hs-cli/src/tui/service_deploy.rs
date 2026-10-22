@@ -212,7 +212,8 @@ fn settings(source: &Source, cluster: &Cluster, kept: Option<&Choice>, offset: i
             list: false,
             title: "CTID".to_owned(),
             note: "Empty: the first free CTIDs, shown in the review. Or one CTID per ticked node, in the order of \
-                   the nodes, separated by commas. The address follows from it: 102240 is .102.240."
+                   the nodes, separated by commas. The address follows from it: 102240 is .102.240. To resume an \
+                   interrupted API initialization, give its CTID and retain the same version, node and sizes."
                 .to_owned(),
             multiple: false,
             choices: Vec::new(),
@@ -312,6 +313,12 @@ fn sections(source: &Source, cluster: &Cluster, plan: &Plan, offset: i64) -> Vec
         .unwrap_or_default();
     let mut lines = vec![format!("{} {version}{made}", manifest.name)];
     for i in &plan.instances {
+        if i.resume.is_some() {
+            lines.push(format!(
+                "Resume API initialization in CT {} using its existing home; no container or volume is created",
+                i.ctid
+            ));
+        }
         lines.push(format!(
             "{}  CT {}  {}  {}  disk {} GiB + home {} GiB on {}  {} CPU  {} MiB",
             i.node, i.ctid, i.hostname, i.address, i.root_gib, i.home_gib, i.root_storage, i.cores, i.memory_mib
@@ -321,5 +328,8 @@ fn sections(source: &Source, cluster: &Cluster, plan: &Plan, offset: i64) -> Vec
         lines.push(format!("{key}={value}"));
     }
     lines.push(format!("then: {}", deploy::health_text(manifest)));
+    if source.is_api() {
+        lines.push("API: reuse the configured desktop certificate and credentials; initialize /home/app/homestack, verify authenticated HTTPS, remove TLS bootstrap values, reboot and verify stored configuration, PVE access and the guest home mount".to_owned());
+    }
     vec![("Deploy".to_owned(), lines)]
 }

@@ -6,6 +6,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use base64::Engine;
 use hs_client::{Client, ClientConfig, Endpoint};
+use hs_core::pve::Pve;
+use hs_model::jobs::Secret;
 use hs_pve::{PveClient, PveClientConfig, PveToken};
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -122,7 +124,9 @@ async fn wait_health(
     limit: Duration,
     say: &impl Fn(&str),
 ) -> Result<(), String> {
-    wait_health_with(client, instance, phase, limit, HEALTH_QUIET, HEALTH_RETRY, say).await
+    wait_health_with(client, instance, phase, limit, HEALTH_QUIET, HEALTH_RETRY, say)
+        .await
+        .map_err(|error| format!("{instance}: HTTPS health {phase}: {error}"))
 }
 
 async fn wait_health_with(
@@ -186,6 +190,283 @@ async fn wait_health_with(
     }
 }
 
+/// Authenticated API initialization, independent of LXC creation/replacement.
+/// Secrets are read afresh at review/apply and never included in a plan or Debug.
+pub struct ApiBootstrap {
+    config: DeployConfig,
+    stored: acme::Stored,
+    api_token: Secret,
+    pve_token: Secret,
+    server_toml: String,
+    verifier: rustls_platform_verifier::Verifier,
+}
+
+impl ApiBootstrap {
+    /// Validate the existing desktop inputs without contacting or changing a guest.
+    pub fn load(config: &DeployConfig) -> Result<Self, String> {
+        use rustls::pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
+        let stored = certificate(config)?;
+        let certs = CertificateDer::pem_slice_iter(stored.cert.as_bytes())
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|_| "API bootstrap: invalid certificate chain")?;
+        let key = PrivateKeyDer::from_pem_slice(stored.key.as_bytes())
+            .map_err(|_| "API bootstrap: invalid TLS private key")?;
+        rustls::sign::CertifiedKey::from_der(certs, key, &rustls::crypto::aws_lc_rs::default_provider())
+            .and_then(|key| key.keys_match())
+            .map_err(|_| "API bootstrap: certificate and private key do not match")?;
+        let (_, pem) = x509_parser::pem::parse_x509_pem(stored.cert.as_bytes())
+            .map_err(|_| "API bootstrap: invalid certificate")?;
+        if !pem
+            .parse_x509()
+            .map_err(|_| "API bootstrap: invalid certificate")?
+            .validity()
+            .is_valid()
+        {
+            return Err("API bootstrap: certificate is not currently valid".to_owned());
+        }
+        let api_token = read_secret(&config.server.api_token_file)?;
+        if api_token.is_empty() || api_token.chars().any(|c| c.is_whitespace() || c.is_control()) {
+            return Err("API bootstrap: invalid or empty API bearer token".to_owned());
+        }
+        let pve_token = read_secret(&config.server.pve_token_file)?;
+        let token = PveToken::parse(&pve_token).map_err(|_| "API bootstrap: invalid PVE token")?;
+        PveClient::new(PveClientConfig::new(config.pve.endpoints.clone(), token))
+            .map_err(|_| "API bootstrap: invalid PVE endpoint or token settings")?;
+        let valid_pool = |name: &str| {
+            let levels: Vec<_> = name.split('/').collect();
+            levels.len() <= 3
+                && levels.iter().all(|level| {
+                    !level.is_empty() && level.bytes().all(|b| b.is_ascii_alphanumeric() || b".-_".contains(&b))
+                })
+        };
+        if !valid_pool(&config.server.pool)
+            || !valid_pool(&config.server.gold_pool)
+            || config.server.pool == config.server.gold_pool
+        {
+            return Err("API bootstrap: invalid or identical workspace and gold pool settings".to_owned());
+        }
+        let roots = if let Some(path) = &config.acme.ca_file {
+            let pem = std::fs::read(path).map_err(|_| "API bootstrap: cannot read API CA certificates")?;
+            let roots = CertificateDer::pem_slice_iter(&pem)
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|_| "API bootstrap: invalid API CA certificates")?;
+            if roots.is_empty() {
+                return Err("API bootstrap: API CA file contains no certificates".to_owned());
+            }
+            roots
+        } else {
+            Vec::new()
+        };
+        let verifier = rustls_platform_verifier::Verifier::new_with_extra_roots(
+            roots,
+            std::sync::Arc::new(rustls::crypto::aws_lc_rs::default_provider()),
+        )
+        .map_err(|_| "API bootstrap: cannot load certificate trust roots")?;
+        let server_toml = std::fs::read_to_string(&config.server.config_file)
+            .map_err(|e| format!("API bootstrap: cannot read server.toml: {}", e.kind()))?;
+        if server_toml.len() > 256 * 1024 {
+            return Err("API bootstrap: server.toml exceeds 256 KiB".to_owned());
+        }
+        hs_model::config::Config::parse(&server_toml).map_err(|_| "API bootstrap: invalid server.toml")?;
+        Ok(Self {
+            config: config.clone(),
+            stored,
+            api_token: Secret::new(api_token),
+            pve_token: Secret::new(pve_token),
+            server_toml,
+            verifier,
+        })
+    }
+
+    /// Validate TLS client settings and the chosen instance hostname/address.
+    pub fn validate_instance(&self, instance: &InstanceSpec) -> Result<(), String> {
+        use rustls::{
+            client::danger::ServerCertVerifier,
+            pki_types::{CertificateDer, ServerName, UnixTime, pem::PemObject},
+        };
+        let hostname = format!("{}.{}", instance.name, self.config.domain);
+        let name = ServerName::try_from(hostname).map_err(|_| "API bootstrap: invalid certificate hostname")?;
+        let chain = CertificateDer::pem_slice_iter(self.stored.cert.as_bytes())
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|_| "API bootstrap: invalid certificate chain")?;
+        let (leaf, intermediates) = chain.split_first().ok_or("API bootstrap: certificate chain is empty")?;
+        self.verifier
+            .verify_server_cert(leaf, intermediates, &name, &[], UnixTime::now())
+            .map_err(
+                |_| "API bootstrap: certificate chain or hostname is not trusted by the configured HTTPS client",
+            )?;
+        instances_client(&self.config, &[instance], self.api_token.expose()).map(|_| ())
+    }
+
+    fn token_hash(&self) -> String {
+        Sha256::digest(self.api_token.expose().as_bytes())
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect()
+    }
+
+    fn endpoints(&self) -> String {
+        self.config
+            .pve
+            .endpoints
+            .iter()
+            .map(|url| url.as_str().trim_end_matches('/'))
+            .collect::<Vec<_>>()
+            .join(",")
+    }
+
+    /// Initialize or resume an already-created CT. Never creates, replaces,
+    /// deletes or attaches storage, and never changes ownership descriptions.
+    pub async fn initialize(
+        &self,
+        pve: &impl Pve,
+        instance: &InstanceSpec,
+        managed: bool,
+        say: &impl Fn(&str),
+    ) -> Result<(), String> {
+        self.validate_instance(instance)?;
+        let mut env = vec![
+            ("HOMESTACK_INSTANCE".to_owned(), instance.name.clone()),
+            ("HOMESTACK_API_TOKEN_SHA256".to_owned(), self.token_hash()),
+            ("HOMESTACK_PVE_ENDPOINTS".to_owned(), self.endpoints()),
+            ("HOMESTACK_PVE_POOL".to_owned(), self.config.server.pool.clone()),
+            (
+                "HOMESTACK_PVE_GOLD_POOL".to_owned(),
+                self.config.server.gold_pool.clone(),
+            ),
+        ];
+        if managed {
+            env.push(("HOMESTACK_MANAGED_HOME".to_owned(), "1".to_owned()));
+        }
+        let status = pve
+            .get(
+                &format!("/nodes/{}/lxc/{}/status/current", instance.node, instance.ctid),
+                &[],
+            )
+            .await
+            .map_err(|_| "API bootstrap: cannot read container power state")?;
+        if managed {
+            let cfg = pve
+                .get(&format!("/nodes/{}/lxc/{}/config", instance.node, instance.ctid), &[])
+                .await
+                .map_err(|_| "API bootstrap: cannot read environment")?;
+            let current = node::parse_env(cfg["env"].as_str().unwrap_or_default());
+            let conflicting = current.iter().any(|(key, value)| {
+                env.iter()
+                    .find(|(expected, _)| expected == key)
+                    .is_some_and(|(_, expected)| expected != value)
+                    || (key.starts_with("HOMESTACK_")
+                        && !TLS_VARIABLES.contains(&key.as_str())
+                        && !env.iter().any(|(expected, _)| expected == key))
+            });
+            if conflicting || (status["status"] == "running" && env.iter().any(|entry| !current.contains(entry))) {
+                return Err(
+                    "API bootstrap: container settings differ; refusing to change its identity or state paths"
+                        .to_owned(),
+                );
+            }
+        }
+        match status["status"].as_str() {
+            Some("stopped") => {
+                let b64 = |value: &str| base64::engine::general_purpose::STANDARD.encode(value);
+                env.extend([
+                    (TLS_VARIABLES[0].to_owned(), b64(&self.stored.cert)),
+                    (TLS_VARIABLES[1].to_owned(), b64(&self.stored.key)),
+                ]);
+                timed(&instance.name, "set bootstrap environment", say, async {
+                    node::set_env(pve, &instance.node, instance.ctid, &env, &[])
+                        .await
+                        .map_err(|_| "API bootstrap: could not set bootstrap environment".to_owned())
+                })
+                .await?;
+                timed(
+                    &instance.name,
+                    "Proxmox start task",
+                    say,
+                    node::power(pve, &instance.node, instance.ctid, "start"),
+                )
+                .await?;
+            }
+            Some("running") if managed => {}
+            _ => {
+                return Err(
+                    "API bootstrap: expected a stopped container, or a running managed initialization".to_owned(),
+                );
+            }
+        }
+        let client = instances_client(&self.config, &[instance], self.api_token.expose())?;
+        wait_health(&client, &instance.name, "after start", HEALTH_LIMIT, say).await?;
+        timed(&instance.name, "remove TLS bootstrap environment", say, async {
+            node::set_env(pve, &instance.node, instance.ctid, &[], &TLS_VARIABLES)
+                .await
+                .map_err(|_| "API bootstrap: could not remove TLS bootstrap environment".to_owned())
+        })
+        .await?;
+        if node::env_pending(pve, &instance.node, instance.ctid).await? {
+            timed(
+                &instance.name,
+                "Proxmox reboot task",
+                say,
+                node::power(pve, &instance.node, instance.ctid, "reboot"),
+            )
+            .await?;
+            wait_health(&client, &instance.name, "after reboot", HEALTH_LIMIT, say).await?;
+        }
+        if node::env_keys(pve, &instance.node, instance.ctid)
+            .await?
+            .iter()
+            .any(|key| TLS_VARIABLES.contains(&key.as_str()))
+        {
+            return Err("API bootstrap: TLS bootstrap environment is still present".to_owned());
+        }
+        configure(&client, instance, self.pve_token.expose(), &self.server_toml, say).await?;
+        if managed {
+            timed(&instance.name, "verify persistent state after reboot", say, async {
+                node::power(pve, &instance.node, instance.ctid, "reboot").await?;
+                wait_health(&client, &instance.name, "persistent state", HEALTH_LIMIT, say).await?;
+                let expected = hs_model::config::config_version(&self.server_toml);
+                if client
+                    .config_version_on(0)
+                    .await
+                    .map_err(|e| health_error(&e))?
+                    .as_deref()
+                    != Some(&expected)
+                {
+                    return Err("API bootstrap: configuration did not survive reboot".to_owned());
+                }
+                client
+                    .get_on(0, "/v1/pve/version")
+                    .await
+                    .map_err(|e| format!("API bootstrap: stored PVE credentials: {}", health_error(&e)))?;
+                let started = Instant::now();
+                loop {
+                    let report = client
+                        .get_on(0, "/.well-known/homestack/status")
+                        .await
+                        .map_err(|e| health_error(&e))?;
+                    if report["schema"] == 1
+                        && report["sample_age_seconds"].as_u64().is_some_and(|age| age <= 30)
+                        && report["filesystems"].as_array().is_some_and(|mounts| {
+                            mounts
+                                .iter()
+                                .any(|m| m["mount"] == "/home/app" && m["mounted"] == true && m["error"].is_null())
+                        })
+                    {
+                        break;
+                    }
+                    if started.elapsed() >= Duration::from_secs(15) {
+                        return Err("API bootstrap: guest did not confirm a mounted /home/app".to_owned());
+                    }
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                }
+                Ok(())
+            })
+            .await?;
+        }
+        Ok(())
+    }
+}
+
 /// `cert`: obtain or renew `*.<domain>`; with `push`, send it to every
 /// running instance.
 pub async fn cert(config: &DeployConfig, force: bool, push: bool, say: &impl Fn(&str)) -> Result<(), String> {
@@ -238,26 +519,15 @@ pub async fn cert(config: &DeployConfig, force: bool, push: bool, say: &impl Fn(
 /// that all instances hold the same configuration.
 pub async fn apply(config: &DeployConfig, only: &[String], say: &impl Fn(&str)) -> Result<(), String> {
     let selected = config.selected(only)?;
-    let stored = certificate(config)?;
+    let bootstrap = ApiBootstrap::load(config)?;
+    let stored = &bootstrap.stored;
     let pve = deploy_client(config)?;
-    let api_token = read_secret(&config.server.api_token_file)?;
-    let pve_token = read_secret(&config.server.pve_token_file)?;
-    PveToken::parse(&pve_token).map_err(|e| format!("{}: {e}", config.server.pve_token_file.display()))?;
-    let server_toml = std::fs::read_to_string(&config.server.config_file)
-        .map_err(|e| format!("{}: {}", config.server.config_file.display(), e.kind()))?;
+    let api_token = bootstrap.api_token.expose();
+    let pve_token = bootstrap.pve_token.expose();
+    let server_toml = &bootstrap.server_toml;
     say("using the stored TLS certificate; apply does not request or renew a certificate");
-    let hash: String = Sha256::digest(api_token.as_bytes())
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect();
-    let b64 = |text: &str| base64::engine::general_purpose::STANDARD.encode(text);
-    let endpoints = config
-        .pve
-        .endpoints
-        .iter()
-        .map(|url| url.as_str().trim_end_matches('/').to_owned())
-        .collect::<Vec<_>>()
-        .join(",");
+    let hash = bootstrap.token_hash();
+    let endpoints = bootstrap.endpoints();
 
     // What the container is made with, in its description: the same server,
     // image, certificate and settings keep the container.
@@ -306,9 +576,9 @@ pub async fn apply(config: &DeployConfig, only: &[String], say: &impl Fn(&str)) 
                 if node::ensure_tag(&pve, &instance.node, instance.ctid, say).await? {
                     say(&format!("  tagged {}", node::SERVER_TAG));
                 }
-                let client = instances_client(config, &[instance], &api_token)?;
+                let client = instances_client(config, &[instance], api_token)?;
                 wait_health(&client, &instance.name, "existing container", HEALTH_LIMIT, say).await?;
-                configure(&client, instance, &pve_token, &server_toml, say).await?;
+                configure(&client, instance, pve_token, server_toml, say).await?;
                 say(&format!(
                     "  {}: instance apply completed in {} ms",
                     instance.name,
@@ -361,60 +631,7 @@ pub async fn apply(config: &DeployConfig, only: &[String], say: &impl Fn(&str)) 
             ),
         )
         .await?;
-        let env = [
-            ("HOMESTACK_INSTANCE", instance.name.clone()),
-            ("HOMESTACK_API_TOKEN_SHA256", hash.clone()),
-            ("HOMESTACK_PVE_ENDPOINTS", endpoints.clone()),
-            ("HOMESTACK_PVE_POOL", config.server.pool.clone()),
-            ("HOMESTACK_PVE_GOLD_POOL", config.server.gold_pool.clone()),
-            (TLS_VARIABLES[0], b64(&stored.cert)),
-            (TLS_VARIABLES[1], b64(&stored.key)),
-        ]
-        .map(|(key, value)| (key.to_owned(), value));
-        timed(
-            &instance.name,
-            "set bootstrap environment",
-            say,
-            node::set_env(&pve, &instance.node, instance.ctid, &env, &[]),
-        )
-        .await?;
-        say("  starting");
-        timed(
-            &instance.name,
-            "Proxmox start task",
-            say,
-            node::power(&pve, &instance.node, instance.ctid, "start"),
-        )
-        .await?;
-        let client = instances_client(config, &[instance], &api_token)?;
-        wait_health(&client, &instance.name, "after start", HEALTH_LIMIT, say).await?;
-        say("  answers over TLS; removing the certificate from the container's configuration");
-        timed(
-            &instance.name,
-            "remove TLS bootstrap environment",
-            say,
-            node::set_env(&pve, &instance.node, instance.ctid, &[], &TLS_VARIABLES),
-        )
-        .await?;
-        if node::env_pending(&pve, &instance.node, instance.ctid).await? {
-            say("  the change waits for a restart; restarting");
-            timed(
-                &instance.name,
-                "Proxmox reboot task",
-                say,
-                node::power(&pve, &instance.node, instance.ctid, "reboot"),
-            )
-            .await?;
-            wait_health(&client, &instance.name, "after reboot", HEALTH_LIMIT, say).await?;
-        }
-        let keys = node::env_keys(&pve, &instance.node, instance.ctid).await?;
-        if keys.iter().any(|key| TLS_VARIABLES.contains(&key.as_str())) {
-            return Err(format!(
-                "{}: the certificate is still in the container's configuration",
-                instance.name
-            ));
-        }
-        configure(&client, instance, &pve_token, &server_toml, say).await?;
+        bootstrap.initialize(&pve, instance, false, say).await?;
         say(&format!(
             "  {}: instance apply completed in {} ms",
             instance.name,
@@ -425,7 +642,7 @@ pub async fn apply(config: &DeployConfig, only: &[String], say: &impl Fn(&str)) 
         "deployment",
         "configuration consistency check",
         say,
-        check_versions_for(config, &selected, &api_token, say),
+        check_versions_for(config, &selected, api_token, say),
     )
     .await?;
     let current = node::image_file(&config.image)?;
@@ -585,21 +802,21 @@ async fn configure(
         client
             .put_text_on(0, "/v1/secrets/pve-token", pve_token, "text/plain")
             .await
-            .map_err(|error| format!("{}: Proxmox token: {error}", instance.name))
+            .map_err(|error| format!("{}: Proxmox token: {}", instance.name, health_error(&error)))
     })
     .await?;
     let version = timed(&instance.name, "upload server.toml", say, async {
         client
             .configure_on(0, server_toml)
             .await
-            .map_err(|error| format!("{}: server.toml: {error}", instance.name))
+            .map_err(|error| format!("{}: server.toml: {}", instance.name, health_error(&error)))
     })
     .await?;
     let reported = timed(&instance.name, "verify configuration version", say, async {
         client
             .config_version_on(0)
             .await
-            .map_err(|error| format!("{}: config version: {error}", instance.name))
+            .map_err(|error| format!("{}: config version: {}", instance.name, health_error(&error)))
     })
     .await?;
     if reported.as_deref() != Some(version.as_str()) {

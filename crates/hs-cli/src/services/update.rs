@@ -331,6 +331,11 @@ async fn review(
     plan.platform = release.platform;
     for ctid in ctids {
         let target = instance::read(pve, *ctid).await?;
+        if deploy::api_initializing(&target.description) {
+            return Err(format!(
+                "CT {ctid}: finish API initialization by reviewing deployment with this CTID before updating its image"
+            ));
+        }
         if target.repository != source.repository || target.service != source.manifest.id {
             return Err(format!(
                 "CT {ctid} runs {} of {}, not {}",
@@ -413,6 +418,11 @@ async fn one(
 ) -> Result<String, String> {
     let (ctid, node) = (target.ctid, target.node.as_str());
     let now = instance::read_on(pve, node, ctid).await?;
+    if deploy::api_initializing(&now.description) {
+        return Err(format!(
+            "CT {ctid}: API initialization is unfinished; image replacement is refused"
+        ));
+    }
     if now.mac != target.mac || !node::same_net(&now.network, &target.network) {
         return Err(format!("CT {ctid} changed since review; review again"));
     }

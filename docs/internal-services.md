@@ -1,173 +1,190 @@
-# Internal service manifests: future installations only
+# Internal services: new managed instances
 
-Phase 5 adds two portable schema-1 definitions to this repository. Discovery
-shows HomeStack API and Pangolin Site independently of the number of PVE nodes.
-This does not adopt or authorize changes to any existing internal container.
+The repository declares two portable schema-1 services:
+`.homestack/homestack-api.yaml` and `.homestack/pangolin-site.yaml`.
+HomeStack API can now initialize through common service deployment. Pangolin
+Site remains blocked. No existing internal container is adopted or modified.
 
-## Implementation map and compatibility inventory
+## API deployment
 
-| Reusable mechanism | Integration for a new managed instance | Remaining gap |
-| --- | --- | --- |
-| `services/github.rs::discover`, `manifest.rs::parse` | `.homestack/homestack-api.yaml` and `pangolin-site.yaml` | None for discovery; image versions still come from numeric OCI releases |
-| `services/deploy.rs::{plan,run}` | Scoped deploy token, chosen CTID/address/resources, separate `mp0` before start, common `description` identity | Authenticated internal initialization is unavailable in this flow; review and apply both refuse before mutation |
-| `hs_deploy::deploy::{apply,instances_client}` | Existing API certificate, bootstrap environment, token/config upload and validated HTTPS verification | Bootstrap is embedded in legacy replacement; it cannot be invoked as an initializer for a generic-created CT without replacing its ownership metadata |
-| `tui/pangolin_sites.rs::{api_key,node_plan,deploy_node,create_site,health}` | Step 7 key, per-node private credential/recovery journal, secure stdin installation and Site online verification | The generic worker has no live Step 5 tunnel, verified Step 7 context or authenticated root session; Step 8 also creates its own legacy CT identity |
-| `services/instance.rs`, `hs_core::registry::deployed_service` | PVE description is the only common instance identity | No desktop registry or adoption operation is added |
-| `services/update.rs`, `hs_deploy::recreate` | Sequential replacement preserving CTID/network and the original home volume; environment retained | Internal readiness hooks must be connected before advertising complete internal lifecycle verification |
-| `services/{migrate,lifecycle}.rs`, `tui/service_lifecycle.rs` | Existing migration, resizing and explicit maintenance/remove flows | API HTTPS and Site online checks must accompany disruptive internal operations; TCP/no probe cannot establish readiness |
+The existing service browser and review/apply worker use
+`services/deploy.rs::{survey,plan,apply}` and the scoped PVE deploy token.
+They select the numeric OCI release, node/storage, CTID/address and resources,
+create an unprivileged LXC with disposable rootfs and a separate persistent
+`mp0` at `/home/app`, and retain the common `HomeStack service homestack-api`
+identity, repository, manifest revision, image and digest. No desktop registry,
+SSH connection or second replacement engine is involved.
 
-The inspected upstream is `8ff94cc`, two commits after the task baseline
-`a8d7c7f`: TUI dimming and batched status reads. Neither changes initialization,
-manifest discovery, state paths or image replacement. Phase 5 preserves both.
-During implementation, concurrent commits `50a2f31` and `df9a414` advanced the
-workspace. The latter included the tracked Phase 5 runtime, installation guards
-and API ownership edits together with unrelated TUI update polling; this task
-preserves that history and commits only its remaining files.
+The API initializer accepts only the canonical HomeStack API manifest. One
+independently configured instance is deployed per review. The operator must
+choose image `0.2.10` or later: earlier images do not implement managed state.
+The manifest's TCP 443 check still means connectivity only; API deployment
+uses authenticated HTTPS checks in addition to that portable declaration.
 
-### API runtime
+### Prerequisites checked before creation
 
-`deploy/lxc/service/homestack/run` binds the API to loopback port 8080;
-`deploy/lxc/service/caddy/run` serves certificate-validated TLS on port 443.
-`deploy/lxc/Caddyfile` uses the state directory selected by both runit services.
-The manifest TCP probe means connectivity only. It does not invoke plaintext
-HTTP on TLS, publish port 8080 or claim API readiness. Generic telemetry is not
-inferred from this TCP declaration.
+`hs_deploy::deploy::ApiBootstrap::load` reads the existing trusted desktop
+inputs from `deploy.toml`. Review checks certificate validity dates, wildcard
+coverage, a matching TLS private key, a nonempty bearer token, a parseable PVE
+token and HTTPS endpoint settings, valid pool settings and `server.toml` within
+its upload limit, and the chosen hostname/chain against the HTTPS client's
+system and configured CA roots. It neither requests a certificate nor changes DNS. Apply reads
+and validates these inputs again before any image pull, CT or volume creation,
+and revalidates the reviewed image digest/platform.
 
-`hs-server/src/settings.rs::from_env` places `server.toml`, `secrets/pve-token`
-and `tls/{cert,key}.pem` under `HOMESTACK_STATE_DIR`. The authenticated routes in
-`routes.rs` and `secrets.rs` persist configuration/secrets and reload Caddy.
-Secret files use private directories and mode 0600; Caddy runs as container root
-and can read the homestack account's TLS files.
+The generated hostname is used as `<hostname>.<configured domain>` for TLS
+hostname validation; the HTTPS client connects to the chosen instance address
+using the existing `instances_client` mechanism. The system roots and optional
+`[acme] ca_file` remain authoritative. Certificate checking is never bypassed.
+The desktop needs its configuration and scoped PVE access, but does not need an
+already-running HomeStack API. The existing installer retains its own first-API
+path through `servers.rs::RealServers::deploy`.
 
-The node image now accepts the explicit non-secret selector
-`HOMESTACK_MANAGED_HOME=1`. `deploy/lxc/service/state-path` requires an exact
-`/home/app` mount, rejects symlinks and creates `/home/app/homestack` owned by
-homestack with mode 0700. Both Caddy and the server use that directory;
-`HOMESTACK_CONFIG_FILE` is fixed to its `server.toml` in this mode. The mount
-itself stays empty in the image. With the selector absent (or 0), the legacy
-`/var/lib/homestack` behavior remains. No data is copied or relocated.
+The API's Environment field must remain empty: the initializer supplies its
+settings. Arbitrary file/token/state overrides are not accepted. A configured
+custom `[pve] ca_file` blocks this new path: the existing server bootstrap has
+no custom-PVE-CA upload operation, so new instances currently require
+system-trusted PVE endpoint certificates. The optional API HTTPS CA is a
+separate desktop trust setting and remains supported. No alternative trust or
+secret transport is invented.
 
-The manifest uses `local`, `multi_node: false`: local operational settings,
-TLS and secrets are instance state. Existing multiple APIs do not establish a
-replication contract for arbitrary new manifest instances.
+### Shared authenticated bootstrap
 
-### Site runtime
+Legacy `hs_deploy::deploy::apply` and new common deployment call the same
+`ApiBootstrap::initialize` operation. This operation never creates, replaces,
+destroys or mounts storage, and never rewrites ownership descriptions.
 
-`deploy/pangolin-site/service/site/run` is an outbound connector with no health
-listener. A missing manifest healthcheck remains unverified. Its specific check
-is a running CT plus its own Site's `online: true` from the Integration API.
-The existing legacy updater verifies credential restoration and connector
-running, but does not independently prove Pangolin online (see integrations.md).
+For the new common instance:
 
-The same explicit selector makes the image and credential receiver use
-`/home/app/pangolin-site/site.json`; the directory is owned by site, mode 0700,
-and the atomic credential receiver keeps the file at 0600. The CLI's HOME is
-that directory too. `env -i`, `DISABLE_SSH=true` and the existing pinned CLI
-invocation remain intact; no self-update mechanism is added. Without the
-selector, `/var/lib/pangolin-site/site.json` remains the path.
+1. Common creation attaches `mp0` before first start. Autostart is initially
+   disabled so a host reboot cannot start an uninitialized API in legacy mode.
+2. The common description temporarily records `api-initialization-home` with
+   the exact original `mp0` option. This contains no application secret and
+   keeps normal common-service ownership recognizable.
+3. Bootstrap sets `HOMESTACK_MANAGED_HOME=1`, the unique instance name, bearer
+   token SHA-256, PVE endpoints and pool settings, and the existing temporary
+   TLS bootstrap values using the scoped PVE API. It starts the container and
+   waits for HTTPS `GET /health/live` using the existing bearer client, hostname
+   validation and CA roots.
+4. It removes both temporary TLS bootstrap variables, reboots when PVE reports
+   pending environment changes, checks HTTPS again, and confirms the variables
+   are absent. It securely uploads the configured PVE token and `server.toml`
+   through the existing protected HTTPS routes and verifies the returned
+   configuration version.
+5. Managed initialization reboots once more and verifies HTTPS, the expected
+   stored configuration version, and read-only `/v1/pve/version` using the
+   stored token. The existing HTTPS service telemetry must confirm a fresh,
+   successful measurement of the mounted `/home/app`. Health requests carry
+   the bearer header; protected configuration/PVE routes independently verify
+   bearer authentication.
+6. Common deployment rechecks the running CT, unchanged root/home/network and
+   ownership, managed selector and TLS-variable removal. Only then does it
+   remove the pending marker, enable autostart and report success. The common
+   service metadata remains intact.
 
-A future initializer must pass the selector explicitly to the credential
-receiver as well as set it in the LXC boot environment: `pct exec` must not be
-assumed to inherit PID 1's environment. For example, its authenticated guest
-command is `env HOMESTACK_MANAGED_HOME=1 homestack-site-credential`, with the
-credential only on standard input. This is initialization/recovery, never part
-of the generic rootfs replacement. Digest verification uses the same selector.
-Each instance has its own credential; no identity is shared between nodes.
-The manifest conservatively uses local state and one placement per deployment.
+API runit scripts in `deploy/lxc/service/` select
+`/home/app/homestack` only with the managed selector. They require an exact
+mount and reject symlinks instead of creating disposable replacement state.
+The directory is owned by homestack, mode 0700. `server.toml`,
+`secrets/pve-token` and `tls/{cert,key}.pem` persist there, with private file
+modes enforced by existing server writes. Caddy uses the same selected TLS
+paths and serves port 443 in front of loopback 8080. No new listener or daemon
+is added. Without the selector, legacy `/var/lib/homestack` behavior remains.
 
-## Read-only plan for completing a new-install handoff
+Raw bearer/PVE tokens stay in their configured desktop files and bootstrap
+memory. The existing initial TLS transfer temporarily uses PVE environment
+values; these are removed before success. No raw token, certificate or key is
+put in plans, descriptions, progress or logs. Failure diagnostics identify the
+stage and suppress secret-bearing response bodies.
 
-The current browser can discover and review these services. `Source::initialization_blocker`
-rejects either internal image repository, even under another manifest id or a
-fork. `plan` reports the missing prerequisites; `run` checks again before image
-pull, CT creation, environment writes or start. Manually entering environment
-variables cannot bypass this guard. This phase does not claim successful new
-managed installations. Both paths remain blocked pending these handoffs:
+## Interrupted initialization and recovery
 
-1. API: validate operator choices and free CTIDs through the common planner.
-   Reuse `deploy::certificate`, token parsing and existing bootstrap logic in
-   `deploy::apply` as a callable initialization step, without invoking its
-   replacement loop. Retain the trusted-desktop installer and its first-API
-   capability (`install_flow.rs`, `servers.rs::RealServers::deploy`); no running
-   HomeStack API may be required. Use the stored valid certificate; do not
-   change DNS, renew certificates or provision public exposure in this flow.
-2. Before starting a new API, set the managed selector, unique instance name,
-   bearer token hash, PVE endpoints and pool settings, and temporary TLS values
-   through the existing scoped PVE bootstrap. Common creation attaches `mp0`
-   first. Use `instances_client` with the chosen address, certificate hostname
-   and configured CA roots; keep TLS verification and API authentication on.
-3. Reuse `wait_health` for authenticated HTTPS `/health/live`; remove temporary
-   TLS environment values, reboot if pending, confirm their absence, upload
-   the PVE token and `server.toml` through `configure`, and verify the stored
-   configuration version. Additional private CA files or explicit token-file
-   overrides must be persisted/restored too; generic environment entry is not
-   a secret transport. Report completion only after these checks.
-4. Site: supply the current Step 5 private verified tunnel, independently
-   verified Step 7 permanent least-privilege organization key, selected node
-   and authenticated root channel to the existing Step 8 initializer. The
-   temporary Root bootstrap key is never a substitute. Separate its existing
-   CT creation from `create_site`/journal/credential/online operations, retaining
-   recovery of uncertain outcomes without duplicate Site creation or rotation.
-5. Allocate only a new Site identity, save its private per-node credential
-   before creation, and bind its recovery evidence to the new CT. Create the
-   CT through common deployment with managed mode and `mp0`, inject its own
-   credential using secure stdin, compare digests privately, and require both
-   CT running and Pangolin online. Do not reuse a functioning legacy identity.
-6. Keep the common `HomeStack service <id>` description, repository, manifest
-   revision, version and digest throughout initialization. Put no secrets in
-   metadata or progress. A failed initialization remains failed; never create
-   another home to hide a missing mount or fabricate readiness.
-7. Connect the same HTTPS/online checks to common Update/Migrate/restarts.
-   Image replacement itself stays solely in `hs_deploy::recreate`, one instance
-   at a time, with its observed-state recovery and exact home-volume safeguards.
-   The preserved non-secret managed selector selects the same state after a
-   replacement. No root prompt or credential reinjection is needed on ordinary
-   managed updates once the home contains the initialized state.
+A failure retains the created CT and its actual home. No failure branch deletes,
+formats or replaces either. Progress reports the failing step; temporary TLS
+values can remain in PVE after a failure before cleanup, and the resumed
+initializer removes them. Autostart remains disabled until successful completion.
 
-This plan can be assessed from code without reading live secrets or issuing
-PVE mutations. Real initialization, restart and rootfs-swap verification needs
-separately authorized isolated targets. Mount metadata proves neither stored
-application records nor that the application has read them.
+To resume, reopen deployment for the same manifest and explicitly choose the
+same CTID, version, node/storage and sizes. Automatic CTID allocation always
+chooses a new free CTID; it is not a recovery selector. Review establishes
+ownership from actual PVE configuration and verifies the original home marker,
+resources and address. Recovery does not reserve space for another root/home
+pair because no new volume is allocated. Apply compares the observed home, root, network,
+hostname and description again. It skips both image pull and LXC creation for
+a resumed CT, then reruns the idempotent bootstrap/configuration checks.
+A freshly created, still stopped CT interrupted before writing its pending
+marker can also resume only when its exact common description matches and it
+has no HomeStack bootstrap environment yet.
 
-## Ownership, releases and the later adoption task
+Missing/changed homes, disappeared CTs after recovery review, foreign or legacy
+ownership, changed manifest/image metadata and already completed instances are
+refused. Review must use the matching manifest revision; a changed revision is
+not silently reassociated. A pending instance whose existing bootstrap settings conflict, or which has
+unsupported HomeStack environment overrides, is refused rather than changing
+its authentication identity or state paths. A running instance must already
+have all required settings.
+If a running instance has pending environment changes, the normal TLS cleanup
+restart path is reused. Image updates reject the pending initialization marker;
+finish initialization before using Update. No credential is regenerated.
 
-Common ownership takes priority in `tui/reinstall.rs::common_images`. Legacy
-API discovery/replacement additionally requires its exact `HomeStack server
-<name>.<domain>` description and `made by homestack-deploy` marker with the API
-image repository. Pool membership or an arbitrary `image` line is insufficient.
-Legacy Site ownership remains checked by pool, node, tags, description, private
-journal and credential. Tutor and arbitrary service containers gain no API
-identity. Existing six internal containers are not eligible for managed mode
-merely because a new image supports it.
+Completed managed instances retain their selector, state and common ownership
+through the existing PVE API `hs_deploy::recreate` path. That algorithm and its
+volume invariants are unchanged. Ordinary update/migrate manifest probing is
+still TCP connectivity, not the complete initialization checks described here.
+PVE metadata and guest telemetry do not prove application records were read;
+this task makes no general data-persistence claim from mount metadata alone.
 
-API releases keep numeric Git tags via `scripts/tag-api.py`; Site releases keep
-`pangolin-site-X.Y.Z`. Both publish numeric OCI versions. The API runtime change
-requires an API image release under AGENTS.md. A new Site image supporting the
-selector is required before enabling new Site installations; this phase leaves
-Site publication pending isolated runtime verification and a release decision.
-Existing image versions remain immutable. Publishing authorizes no deployment.
+## Pangolin Site remains blocked
 
-Later adoption requires separate owner authorization and an instance-by-instance
-inventory of ownership, rootfs state, mount/volume ownership, certificates,
-credentials and private journals. It needs an approved plan to preserve existing
-API configuration/TLS/tokens and each Site identity, explicit persistent-volume
-preparation/data transfer and application-specific verification. None of those
-steps, metadata rewrites or production restarts are performed here. Finish and
-verify the new-install handoffs above before treating adoption as supported.
+`Source::initialization_blocker` still rejects the Site image, including under
+another manifest id or repository. No Site identity, credential or journal is
+created or changed by this work. Its manifest has no inbound listener or generic
+healthcheck; generic health remains unverified.
 
-## Local verification and limits
+Future Site integration must carry the verified Step 5 private tunnel and
+permanent least-privilege Step 7 organization key into Step 8's existing private
+per-node credential/journal logic. It must initialize each new CT through its
+existing authenticated root-channel stdin receiver, explicitly select the
+managed credential path, and verify CT running plus its own Pangolin Site
+online. The temporary Root key is never a substitute. This initialization-only
+prerequisite does not belong in generic image replacement.
 
-The Cargo wrapper built `homestack`, `homestack-deploy` and `homestack-server`.
-A temporary Rust executable exercised the actual schema parser and GitHub
-discovery against local GitHub-response fixtures containing both manifests. It
-also verified both apply guards before any PVE call, truthful TCP/unverified
-probe text, and positive/negative legacy API ownership cases. No permanent
-tests were added. Shell checks covered syntax, unchanged legacy selection,
-invalid selectors and rejection of an absent mount. Managed selection and
-private-directory creation arguments were checked with mount detection and
-installation intercepted; no real mounted-volume lifecycle was exercised.
+The prepared Site image's managed selector uses
+`/home/app/pangolin-site/site.json`, owned by site with private modes; default
+legacy behavior remains `/var/lib/pangolin-site/site.json`. The CLI's HOME
+follows the selected directory. `DISABLE_SSH=true` and the existing pinned CLI
+invocation remain intact. An eventual Site initializer must explicitly pass the
+selector to `homestack-site-credential` too: `pct exec` must not be assumed to
+inherit PID 1's environment. Site image publication/integration remains separate.
 
-No production credentials were read and no live PVE/Pangolin calls or container
-changes were made. Real empty/reused-volume startup, secret retention across a
-rootfs swap, validated HTTPS bootstrap and Site online verification remain
-isolated-environment requirements before enabling the blocked install paths.
+## Verification and production adoption boundary
+
+Focused temporary verification uses synthetic credentials/certificates,
+in-memory PVE responses and a local HTTPS fixture. It checks planning and
+apply-time prerequisite failures, managed selection before start, common
+metadata, TLS-variable cleanup, secure configuration/token upload, post-reboot
+checks, interrupted initialization/reviewed recovery without requiring a second
+volume allocation, refusal to replace a
+missing home, Site blocking and the shared legacy initializer. The real HTTPS
+client performs certificate and hostname validation; the fixture does not
+represent a real LXC, application disk, Proxmox restart or PVE token authority.
+The three retained `hs-deploy` volume/recovery safety checks remain intact.
+No permanent test suite or production operation is added.
+
+Real empty/reused mounted-volume startup and rootfs replacement, durable guest
+file verification, real PVE environment/pending semantics and authenticated
+bootstrap against an actual new LXC still require explicitly authorized
+isolated targets. No live E2E result is claimed.
+
+Later production adoption requires separate owner authorization, an inventory
+of each legacy container's ownership/state/mounts, certificates and token files,
+and each Site's independent identity and desktop recovery journal. It needs an
+approved volume preparation/data transfer plan, application-specific persistence
+verification and separately approved metadata reassociation. None is performed
+here. Legacy API installation/update remains on its existing ownership path;
+common identity takes priority for newly managed instances.
+
+API numeric Git tags and `scripts/tag-api.py`, Site prefixed Git tags and numeric
+OCI versions are unchanged. This handoff changes only client/deployer code and
+its dependencies, not the server image or runtime; no API image release is
+required. Publishing any future image authorizes no production deployment.

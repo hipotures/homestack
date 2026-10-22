@@ -13,7 +13,8 @@ use std::time::{Duration, Instant};
 
 use hs_core::pve::Pve;
 use hs_core::registry::{Published, Resolved};
-use hs_deploy::config::DeployConfig;
+use hs_deploy::config::{DeployConfig, InstanceSpec};
+use hs_deploy::deploy::ApiBootstrap;
 use hs_deploy::node::{self, NewContainer};
 use serde_json::Value;
 
@@ -24,6 +25,12 @@ const HEALTH_LIMIT: Duration = Duration::from_secs(180);
 const HEALTH_RETRY: Duration = Duration::from_secs(2);
 /// How many published releases are offered.
 const RELEASES: usize = 10;
+const API_INIT_HOME: &str = "api-initialization-home ";
+
+/// A non-secret PVE marker for unfinished initialization, never an instance registry.
+pub(super) fn api_initializing(description: &str) -> bool {
+    description.lines().any(|line| line.starts_with(API_INIT_HOME))
+}
 
 /// The manifest revision a deployment is made from.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -37,16 +44,16 @@ pub struct Source {
 }
 
 impl Source {
-    /// Internal images need authenticated initialization beyond the generic
-    /// environment form. Refuse before creation until that handoff exists.
+    /// Refuse unsupported internal initializers before any creation.
     pub fn initialization_blocker(&self) -> Option<&'static str> {
         match self.manifest.image_repository.as_str() {
-            "ghcr.io/hipotures/homestack-server" => Some(
-                "New managed API installation is blocked: the common deployment flow has no authenticated \
-                 API initializer. It must reuse hs_deploy::deploy bootstrap with a stored valid certificate, \
-                 per-instance settings, PVE token upload and authenticated HTTPS /health/live verification. \
-                 The existing installer remains available for legacy installations. See docs/internal-services.md.",
-            ),
+            "ghcr.io/hipotures/homestack-server"
+                if self.repository != "hipotures/homestack"
+                    || self.manifest.id != "homestack-api"
+                    || self.path != ".homestack/homestack-api.yaml" =>
+            {
+                Some("API initialization requires the canonical HomeStack API manifest from hipotures/homestack.")
+            }
             "ghcr.io/hipotures/homestack-pangolin-site" => Some(
                 "New managed Site installation is blocked: the common deployment flow has no Step 8 initializer \
                  carrying the verified Step 7 organization key, private per-node credential journal and \
@@ -55,6 +62,11 @@ impl Source {
             ),
             _ => None,
         }
+    }
+
+    #[must_use]
+    pub fn is_api(&self) -> bool {
+        self.manifest.image_repository == "ghcr.io/hipotures/homestack-server"
     }
 
     /// `REGISTRY/PATH:VERSION` of the manifest's image.
@@ -116,6 +128,28 @@ pub struct NewInstance {
     pub root_gib: u32,
     pub home_storage: String,
     pub home_gib: u32,
+    /// Non-secret observed identity of an interrupted API initialization.
+    pub resume: Option<Resume>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Resume {
+    pub home_mount: String,
+    pub root: String,
+    pub network: String,
+    pub description: String,
+}
+
+impl NewInstance {
+    fn api_spec(&self) -> Result<InstanceSpec, String> {
+        Ok(InstanceSpec {
+            name: self.hostname.clone(),
+            node: self.node.clone(),
+            ctid: self.ctid,
+            address: self.address.parse().map_err(|_| "Invalid API instance address")?,
+            storage: self.root_storage.clone(),
+        })
+    }
 }
 
 /// What applying would do; nothing is changed by making it.
@@ -135,6 +169,8 @@ pub struct Plan {
     /// The pool the containers join.
     pub pool: String,
     pub problems: Vec<String>,
+    // File paths and non-secret settings only; credentials are loaded at apply.
+    api_config: Option<DeployConfig>,
 }
 
 /// The first of `id`, `id-2`, `id-3`… no container in `taken` is named.
@@ -318,7 +354,7 @@ fn address(config: &DeployConfig, ctid: u32) -> Option<Ipv4Addr> {
     hs_model::address::address_of(ctid, &network)
 }
 
-/// Plan `choice`: new instances, never a change to an existing one.
+/// Plan new instances or explicit recovery of an interrupted new API initialization.
 #[allow(clippy::too_many_lines)]
 pub async fn plan(config: &DeployConfig, pve: &impl Pve, source: &Source, cluster: &Cluster, choice: &Choice) -> Plan {
     let manifest = &source.manifest;
@@ -332,6 +368,20 @@ pub async fn plan(config: &DeployConfig, pve: &impl Pve, source: &Source, cluste
         pool: config.pool.clone(),
         ..Plan::default()
     };
+    if source.is_api() {
+        plan.api_config = Some(config.clone());
+    }
+    let bootstrap = if source.is_api() {
+        match ApiBootstrap::load(config) {
+            Ok(bootstrap) => Some(bootstrap),
+            Err(error) => {
+                plan.problems.push(error);
+                None
+            }
+        }
+    } else {
+        None
+    };
     let problems = &mut plan.problems;
     if let Some(problem) = source.initialization_blocker() {
         problems.push(problem.to_owned());
@@ -342,6 +392,20 @@ pub async fn plan(config: &DeployConfig, pve: &impl Pve, source: &Source, cluste
         match hs_core::registry::resolve(&plan.image).await {
             Ok(resolved) => plan.resolved = Some(resolved),
             Err(error) => problems.push(error),
+        }
+    }
+    if source.is_api() {
+        if choice.placements.len() > 1 {
+            problems.push("Deploy one independently configured API instance at a time".to_owned());
+        }
+        if hs_core::registry::version(&choice.version).is_none_or(|version| version < (0, 2, 10)) {
+            problems.push("Managed API deployment requires API image 0.2.10 or later".to_owned());
+        }
+        if config.pve.ca_file.is_some() {
+            problems.push("Managed API initialization cannot install a custom PVE CA file; endpoints must use system-trusted certificates".to_owned());
+        }
+        if !choice.environment.trim().is_empty() {
+            problems.push("API environment is supplied by authenticated bootstrap; leave Environment empty".to_owned());
         }
     }
     if choice.placements.is_empty() {
@@ -445,22 +509,10 @@ pub async fn plan(config: &DeployConfig, pve: &impl Pve, source: &Source, cluste
             problems.push(format!("{node}: {storage} cannot hold containers"));
             continue;
         };
-        let wanted = used.entry((node.clone(), storage.clone())).or_default();
-        *wanted += u64::from(root_gib + home_gib) * gib;
-        if free_bytes < *wanted {
-            problems.push(format!("{node}: {storage} has {} GiB free", free_bytes / gib));
-        }
-        match free(pve, ctid).await {
-            Ok(true) => {}
-            Ok(false) => problems.push(format!("CT {ctid} is taken")),
-            Err(error) => problems.push(error),
-        }
-        let name = hostname(&manifest.id, &taken);
-        taken.insert(name.clone());
-        plan.instances.push(NewInstance {
+        let mut instance = NewInstance {
             node: node.clone(),
             ctid,
-            hostname: name,
+            hostname: hostname(&manifest.id, &taken),
             address: ip.to_string(),
             cores,
             memory_mib,
@@ -468,7 +520,46 @@ pub async fn plan(config: &DeployConfig, pve: &impl Pve, source: &Source, cluste
             root_gib,
             home_storage: storage.clone(),
             home_gib,
-        });
+            resume: None,
+        };
+        match free(pve, ctid).await {
+            Ok(true) => {}
+            Ok(false) if source.is_api() => {
+                match resumable(
+                    pve,
+                    source,
+                    &plan.image,
+                    plan.resolved.as_ref().map(|r| r.digest.as_str()).unwrap_or_default(),
+                    &plan.pool,
+                    &instance,
+                )
+                .await
+                {
+                    Ok((name, resume)) => {
+                        instance.hostname = name;
+                        instance.resume = Some(resume);
+                    }
+                    Err(error) => problems.push(error),
+                }
+            }
+            Ok(false) => problems.push(format!("CT {ctid} is taken")),
+            Err(error) => problems.push(error),
+        }
+        if instance.resume.is_none() {
+            let wanted = used.entry((node.clone(), storage.clone())).or_default();
+            *wanted += u64::from(root_gib + home_gib) * gib;
+            if free_bytes < *wanted {
+                problems.push(format!("{node}: {storage} has {} GiB free", free_bytes / gib));
+            }
+        }
+        if let Some(bootstrap) = &bootstrap {
+            match instance.api_spec().and_then(|spec| bootstrap.validate_instance(&spec)) {
+                Ok(()) => {}
+                Err(error) => problems.push(error),
+            }
+        }
+        taken.insert(instance.hostname.clone());
+        plan.instances.push(instance);
     }
     let file = node::image_file(&plan.image).unwrap_or_default();
     let volid = format!("{}:vztmpl/{file}", config.template_storage);
@@ -628,6 +719,102 @@ fn verify(instance: &NewInstance, config: &Value) -> Result<(String, String, Str
     Ok((root.to_owned(), home.to_owned(), mac))
 }
 
+async fn set_description(pve: &impl Pve, instance: &NewInstance, cfg: &Value, description: &str) -> Result<(), String> {
+    pve.put(
+        &format!("/nodes/{}/lxc/{}/config", instance.node, instance.ctid),
+        &[
+            ("description", description),
+            (
+                "digest",
+                cfg["digest"].as_str().ok_or("PVE configuration revision is missing")?,
+            ),
+        ],
+    )
+    .await
+    .map_err(|_| format!("CT {}: cannot record API initialization state", instance.ctid))?;
+    Ok(())
+}
+
+fn check_resume(instance: &NewInstance, cfg: &Value, expected: &Resume) -> Result<(), String> {
+    let (root, _, _) = verify(instance, cfg)?;
+    if cfg.get("lock").is_some()
+        || cfg["mp0"].as_str() != Some(expected.home_mount.as_str())
+        || root != expected.root
+        || cfg["net0"].as_str() != Some(expected.network.as_str())
+        || cfg["description"].as_str() != Some(expected.description.as_str())
+        || cfg["hostname"].as_str() != Some(instance.hostname.as_str())
+    {
+        return Err(format!(
+            "CT {}: home, network or ownership changed; initialization stopped",
+            instance.ctid
+        ));
+    }
+    Ok(())
+}
+
+/// Only the operator's explicit CTID can resume a matching unfinished API.
+/// Legacy APIs and completed common services never satisfy this predicate.
+async fn resumable(
+    pve: &impl Pve,
+    source: &Source,
+    image: &str,
+    digest: &str,
+    pool: &str,
+    instance: &NewInstance,
+) -> Result<(String, Resume), String> {
+    let ctid = instance.ctid;
+    let found = node::container(pve, ctid)
+        .await?
+        .ok_or("API initialization container disappeared")?;
+    if found.node != instance.node || found.pool != pool {
+        return Err(format!(
+            "CT {ctid}: node or pool differs; it is not eligible for initialization recovery"
+        ));
+    }
+    let cfg = pve
+        .get(&format!("/nodes/{}/lxc/{ctid}/config", instance.node), &[])
+        .await
+        .map_err(|_| format!("CT {ctid}: cannot inspect initialization"))?;
+    let desc = cfg["description"].as_str().unwrap_or_default();
+    let base = desc
+        .lines()
+        .filter(|line| !line.starts_with(API_INIT_HOME))
+        .collect::<Vec<_>>()
+        .join("\n");
+    if base != description(source, image, digest) || cfg.get("lock").is_some() {
+        return Err(format!("CT {ctid}: not a matching unfinished common API deployment"));
+    }
+    let current = super::instance::parse(ctid, &instance.node, pool, &cfg, found.status == "running")?;
+    let (root, _, _) = verify(instance, &cfg)?;
+    let home_mount = cfg["mp0"].as_str().ok_or("API home is missing")?;
+    let marker = desc.lines().find_map(|line| line.strip_prefix(API_INIT_HOME));
+    let pristine =
+        found.status == "stopped" && !current.environment.iter().any(|(key, _)| key.starts_with("HOMESTACK_"));
+    if marker.is_some_and(|original| original != home_mount)
+        || (marker.is_none() && !pristine)
+        || current.address != instance.address
+        || current.cores != instance.cores
+        || current.memory_mib != instance.memory_mib
+        || current.root_gib != instance.root_gib
+        || current.home_gib != instance.home_gib
+        || hs_deploy::recreate::mounts(&cfg)? != ["mp0"]
+        || cfg.get("hookscript").is_some()
+    {
+        return Err(format!(
+            "CT {ctid}: initialization recovery requires its original home and reviewed settings"
+        ));
+    }
+    Ok((
+        current.hostname,
+        Resume {
+            home_mount: home_mount.to_owned(),
+            root,
+            network: current.network,
+            description: desc.to_owned(),
+        },
+    ))
+}
+
 /// Apply a reviewed plan, one instance at a time; it stops at the first
 /// failure. Whether every instance is ready, and what was done.
 pub async fn apply(
@@ -641,11 +828,15 @@ pub async fn apply(
         Ok(()) => (true, lines),
         Err(error) => {
             lines.push(error);
-            lines.push(
+            lines.push(if source.is_api() {
+                "Nothing was removed. For an interrupted API initialization, review deployment again with the same \
+                 CTID, version, node and sizes to resume using its existing home. Do not remove or replace it."
+                    .to_owned()
+            } else {
                 "Nothing was removed. A container made before the failure is listed as an instance; remove it or \
                  update its image."
-                    .to_owned(),
-            );
+                    .to_owned()
+            });
             (false, lines)
         }
     }
@@ -665,6 +856,37 @@ async fn run(
         return Err("The plan has problems; review it again".to_owned());
     }
     let resolved = plan.resolved.as_ref().ok_or("The release was not resolved")?;
+    let bootstrap = if source.is_api() {
+        let config = plan.api_config.as_ref().ok_or("API initialization was not reviewed")?;
+        let version = plan
+            .image
+            .rsplit_once(':')
+            .map(|(_, version)| version)
+            .unwrap_or_default();
+        if plan.instances.len() != 1
+            || source.image(version) != plan.image
+            || hs_core::registry::version(version).is_none_or(|version| version < (0, 2, 10))
+        {
+            return Err("Review one API instance with a managed-runtime image release".to_owned());
+        }
+        if config.pve.ca_file.is_some() || !plan.environment.is_empty() {
+            return Err(
+                "API bootstrap settings changed or include unsupported environment/CA overrides; review again"
+                    .to_owned(),
+            );
+        }
+        let bootstrap = ApiBootstrap::load(config)?;
+        for instance in &plan.instances {
+            bootstrap.validate_instance(&instance.api_spec()?)?;
+        }
+        let current = hs_core::registry::resolve(&plan.image).await?;
+        if current.digest != resolved.digest || current.platform != resolved.platform {
+            return Err("API image changed since review; review again".to_owned());
+        }
+        Some(bootstrap)
+    } else {
+        None
+    };
     let manifest = &source.manifest;
     let keys: Vec<String> = plan.environment.iter().map(|(key, _)| key.clone()).collect();
     let text = description(source, &plan.image, &resolved.digest);
@@ -681,10 +903,26 @@ async fn run(
             "{node}: CT {ctid} {} at {}",
             instance.hostname, instance.address
         ));
-        let ostemplate = node::ensure_image(pve, &node, &plan.template_storage, &plan.image, &|line| say(line)).await?;
-        if !free(pve, ctid).await? {
-            return Err(format!("CT {ctid} was taken after the review; nothing was made"));
+        let existing = !free(pve, ctid).await?;
+        if existing && instance.resume.is_none() {
+            return Err(format!(
+                "CT {ctid} was taken after review; review again to inspect initialization"
+            ));
         }
+        if !existing && instance.resume.is_some() {
+            return Err(format!("CT {ctid} disappeared; refusing to create a replacement home"));
+        }
+        if existing {
+            let (_, observed) = resumable(pve, source, &plan.image, &resolved.digest, &plan.pool, instance).await?;
+            if Some(&observed) != instance.resume.as_ref() {
+                return Err(format!("CT {ctid}: initialization state changed after review"));
+            }
+        }
+        let ostemplate = if existing {
+            String::new()
+        } else {
+            node::ensure_image(pve, &node, &plan.template_storage, &plan.image, &|line| say(line)).await?
+        };
         let spec = NewContainer {
             node: &node,
             ctid,
@@ -696,7 +934,8 @@ async fn run(
             memory_mib: instance.memory_mib,
             cores: instance.cores,
             net0: Some(net0(&instance.address)),
-            onboot: true,
+            // A host reboot must not start an API before its managed selector is installed.
+            onboot: !source.is_api(),
             nameserver: plan.nameserver.clone(),
             description: text.clone(),
             tag: Some(node::SERVER_TAG),
@@ -705,13 +944,84 @@ async fn run(
                 instance.home_storage, instance.home_gib
             )),
         };
-        node::create(pve, &spec, &|line| say(line)).await?;
+        if !existing {
+            if !free(pve, ctid).await? {
+                return Err(format!("CT {ctid} was taken after review; nothing was made"));
+            }
+            node::create(pve, &spec, &|line| say(line)).await?;
+        }
         let current = pve
             .get(&format!("/nodes/{node}/lxc/{ctid}/config"), &[])
             .await
             .map_err(|e| format!("CT {ctid} config: {e}"))?;
         let (root, home, mac) = verify(instance, &current)?;
         say(&format!("  root {root}, home {home} at {MOUNT}, MAC {mac}"));
+        if let Some(bootstrap) = &bootstrap {
+            if let Some(expected) = &instance.resume {
+                check_resume(instance, &current, expected)?;
+            } else if current["description"].as_str() != Some(text.as_str()) {
+                return Err(format!("CT {ctid}: common ownership changed; initialization stopped"));
+            }
+            let original_mount = current["mp0"].as_str().ok_or("API home is missing")?;
+            let base = current["description"]
+                .as_str()
+                .ok_or("API ownership is missing")?
+                .lines()
+                .filter(|line| !line.starts_with(API_INIT_HOME))
+                .collect::<Vec<_>>()
+                .join("\n");
+            let pending = format!("{base}\n{API_INIT_HOME}{original_mount}");
+            if current["description"].as_str() != Some(pending.as_str()) {
+                set_description(pve, instance, &current, &pending).await?;
+            }
+            let initialize = bootstrap
+                .initialize(pve, &instance.api_spec()?, true, &|line| say(line))
+                .await;
+            initialize.map_err(|error| format!("CT {ctid}: API initialization failed: {error}"))?;
+            let after = pve
+                .get(&format!("/nodes/{node}/lxc/{ctid}/config"), &[])
+                .await
+                .map_err(|_| "API initialization: cannot verify final container configuration")?;
+            let expected = Resume {
+                home_mount: original_mount.to_owned(),
+                root: root.clone(),
+                network: current["net0"].as_str().unwrap_or_default().to_owned(),
+                description: pending,
+            };
+            check_resume(instance, &after, &expected)?;
+            let power = pve
+                .get(&format!("/nodes/{node}/lxc/{ctid}/status/current"), &[])
+                .await
+                .map_err(|_| "API initialization: cannot verify final power state")?;
+            if power["status"] != "running" {
+                return Err(format!("CT {ctid}: API is not running"));
+            }
+            let env = node::parse_env(after["env"].as_str().unwrap_or_default());
+            if !env.contains(&("HOMESTACK_MANAGED_HOME".to_owned(), "1".to_owned()))
+                || env
+                    .iter()
+                    .any(|(key, _)| key == "HOMESTACK_TLS_CERT_B64" || key == "HOMESTACK_TLS_KEY_B64")
+            {
+                return Err(format!("CT {ctid}: API runtime or TLS cleanup verification failed"));
+            }
+            pve.put(
+                &format!("/nodes/{node}/lxc/{ctid}/config"),
+                &[
+                    ("description", base.as_str()),
+                    ("onboot", "1"),
+                    (
+                        "digest",
+                        after["digest"]
+                            .as_str()
+                            .ok_or("PVE configuration revision is missing")?,
+                    ),
+                ],
+            )
+            .await
+            .map_err(|_| format!("CT {ctid}: cannot finish API initialization metadata"))?;
+            lines.push(format!("{node}: CT {ctid} {} at {} initialized; authenticated HTTPS, stored configuration and PVE credentials verified after reboot", instance.hostname, instance.address));
+            continue;
+        }
         // The console opens a root shell; an image has no getty to log in.
         if current["cmode"].as_str() != Some("shell") {
             let digest = current["digest"].as_str().unwrap_or_default();
