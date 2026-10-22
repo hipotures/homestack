@@ -683,7 +683,12 @@ fn review(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
     let mut lines: Vec<(String, Style)> = Vec::new();
     if !install.problems.is_empty() {
         lines.push((
-            "Problems (they keep the install from starting)".to_owned(),
+            match install.mode {
+                Mode::Service | Mode::Sites => "Problems (they keep the deployment from starting)",
+                Mode::Uninstall => "Problems (they keep the removal from starting)",
+                Mode::Install => "Problems (they keep the install from starting)",
+            }
+            .to_owned(),
             bold.fg(palette.error),
         ));
         for problem in &install.problems {

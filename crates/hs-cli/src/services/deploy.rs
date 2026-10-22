@@ -419,7 +419,9 @@ pub async fn plan(
     let mut seen = BTreeSet::new();
     for (node, ctid) in choice.nodes.iter().zip(&ctids) {
         let Ok(ctid) = ctid.parse::<u32>() else {
-            problems.push(format!("{ctid} is not a CTID"));
+            problems.push(format!(
+                "{ctid} is not a CTID: a number of the network's addresses, like 102240"
+            ));
             continue;
         };
         if !seen.insert(ctid) {
