@@ -180,6 +180,7 @@ fn settings(source: &Source, cluster: &Cluster, kept: Option<&Choice>, offset: i
     };
     vec![
         Setting {
+            list: false,
             title: "Version".to_owned(),
             note: format!(
                 "A published release of {}: numeric X.Y.Z tags only, newest first; dev images are never offered. \
@@ -192,6 +193,7 @@ fn settings(source: &Source, cluster: &Cluster, kept: Option<&Choice>, offset: i
             text: None,
         },
         Setting {
+            list: false,
             title: "Nodes".to_owned(),
             note:
                 "Tick one storage on each node that gets a new instance: its container, disk and home volume are made \
@@ -207,6 +209,7 @@ fn settings(source: &Source, cluster: &Cluster, kept: Option<&Choice>, offset: i
             text: None,
         },
         Setting {
+            list: false,
             title: "CTID".to_owned(),
             note: "Empty: the first free CTIDs, shown in the review. Or one CTID per ticked node, in the order of \
                    the nodes, separated by commas. The address follows from it: 102240 is .102.240."
@@ -217,6 +220,7 @@ fn settings(source: &Source, cluster: &Cluster, kept: Option<&Choice>, offset: i
             text: text(kept.map(|k| &k.ctids), ""),
         },
         Setting {
+            list: false,
             title: "Cores".to_owned(),
             note: "CPU cores of each container.".to_owned(),
             multiple: false,
@@ -225,6 +229,7 @@ fn settings(source: &Source, cluster: &Cluster, kept: Option<&Choice>, offset: i
             text: text(kept.map(|k| &k.cores), "1"),
         },
         Setting {
+            list: false,
             title: "Memory (MiB)".to_owned(),
             note: "Memory of each container, without swap.".to_owned(),
             multiple: false,
@@ -233,6 +238,7 @@ fn settings(source: &Source, cluster: &Cluster, kept: Option<&Choice>, offset: i
             text: text(kept.map(|k| &k.memory_mib), "512"),
         },
         Setting {
+            list: false,
             title: "Disk (GiB)".to_owned(),
             note: "Size of each container's root disk; it is replaced with the image and holds no data.".to_owned(),
             multiple: false,
@@ -241,6 +247,7 @@ fn settings(source: &Source, cluster: &Cluster, kept: Option<&Choice>, offset: i
             text: text(kept.map(|k| &k.root_gib), "1"),
         },
         Setting {
+            list: false,
             title: "Home (GiB)".to_owned(),
             note: format!("Size of each instance's home volume at {MOUNT}, where the service keeps its data."),
             multiple: false,
@@ -249,6 +256,7 @@ fn settings(source: &Source, cluster: &Cluster, kept: Option<&Choice>, offset: i
             text: text(kept.map(|k| &k.home_gib), "1"),
         },
         Setting {
+            list: false,
             title: "Environment".to_owned(),
             note: "KEY=value entries separated by spaces, as the application's documentation asks (the manifest \
                    declares none). They are kept in the container configuration, readable in Proxmox: no secrets."

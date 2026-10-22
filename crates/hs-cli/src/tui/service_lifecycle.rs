@@ -12,6 +12,7 @@ use lifecycle::Choice;
 
 fn setting(title: &str, note: &str, choices: Vec<(String, String)>, multiple: bool, value: Option<String>) -> Setting {
     Setting {
+        list: false,
         title: title.to_owned(),
         note: note.to_owned(),
         choices,
@@ -105,15 +106,22 @@ pub(super) fn work(
                         false,
                         Some(only.map(|i| i.home_gib.to_string()).unwrap_or_default()),
                     ),
-                    setting(
-                        "Environment",
-                        "The container's variables as KEY=value separated by spaces. Change a value, add an entry \
-                         or take one out. No secrets: the configuration is readable in Proxmox. A running container \
-                         restarts to read the change; its data in /home/app stays.",
-                        Vec::new(),
-                        false,
-                        Some(shown.clone()),
-                    ),
+                    Setting {
+                        list: true,
+                        ..setting(
+                            "Environment",
+                            "The container's variables, one per row. In the box: - removes the highlighted one, + \
+                             adds one: type KEY=value and Enter; to change a value, remove it and add it anew. No \
+                             secrets: the configuration is readable in Proxmox. A running container restarts to \
+                             read the change; its data in /home/app stays.",
+                            shown
+                                .split_whitespace()
+                                .map(|entry| (entry.to_owned(), String::new()))
+                                .collect(),
+                            false,
+                            None,
+                        )
+                    },
                     setting(
                         "Remove",
                         "Type the names of the selected containers, separated by spaces, to remove them together \

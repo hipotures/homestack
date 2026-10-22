@@ -614,28 +614,46 @@ fn settings(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
                 .unwrap_or(0)
         })
         .collect();
-    let lines: Vec<(String, bool)> = rows
+    let mut lines: Vec<(String, bool)> = rows
         .iter()
         .enumerate()
         .map(|(index, row)| {
             let ticked = setting.picked.contains(&index);
-            let cursor = install.chooser && index == install.cursor;
+            let cursor = install.chooser && install.adding.is_none() && index == install.cursor;
             let mark = if cursor { "▶" } else { " " };
-            let tick = match (setting.multiple, ticked) {
-                (true, true) => "[x]",
-                (true, false) => "[ ]",
-                (false, true) => "(•)",
-                (false, false) => "( )",
+            let tick = match (setting.list, setting.multiple, ticked) {
+                (true, _, _) => "",
+                (false, true, true) => "[x]",
+                (false, true, false) => "[ ]",
+                (false, false, true) => "(•)",
+                (false, false, false) => "( )",
             };
             let cells: Vec<String> = row
                 .iter()
                 .zip(&widths)
                 .map(|(word, width)| format!("{word:<width$}"))
                 .collect();
-            (format!("{mark} {tick} {}", cells.join("  ").trim_end()), cursor)
+            let line = format!("{mark} {tick} {}", cells.join("  ").trim_end());
+            (
+                if setting.list {
+                    line.replacen("  ", " ", 1)
+                } else {
+                    line
+                },
+                cursor,
+            )
         })
         .collect();
-    let key = if setting.multiple { "tick Space" } else { "choose Space" };
+    if let Some(typed) = &install.adding {
+        lines.push((format!("+ {typed}▏"), true));
+    }
+    let key = if setting.list {
+        "remove -  add +"
+    } else if setting.multiple {
+        "tick Space"
+    } else {
+        "choose Space"
+    };
     let content = lines
         .iter()
         .map(|(line, _)| line.chars().count())
@@ -655,7 +673,9 @@ fn settings(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
     );
     let width = box_inner.width.saturating_sub(2);
     let visible = usize::from(box_inner.height.saturating_sub(1));
-    let selected = if install.chooser {
+    let selected = if install.adding.is_some() {
+        lines.len() - 1
+    } else if install.chooser {
         install.cursor
     } else {
         setting.picked.first().copied().unwrap_or(0)

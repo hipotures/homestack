@@ -80,6 +80,9 @@ pub struct Setting {
     pub choices: Vec<(String, String)>,
     pub picked: Vec<usize>,
     pub text: Option<String>,
+    /// An editable list: each choice is an entry; in its box `-` removes
+    /// the highlighted one and `+` adds one typed after it.
+    pub list: bool,
 }
 
 impl Setting {
@@ -88,6 +91,13 @@ impl Setting {
     pub fn value(&self) -> String {
         if let Some(text) = &self.text {
             return text.clone();
+        }
+        if self.list {
+            return match self.choices.len() {
+                0 => "—".to_owned(),
+                1 => "1 entry".to_owned(),
+                count => format!("{count} entries"),
+            };
         }
         // A VMID with the VM's name (the detail's first word), a storage as
         // it is.
@@ -241,6 +251,8 @@ pub struct Install {
     pub row: usize,
     pub chooser: bool,
     pub cursor: usize,
+    /// The entry typed after `+` in a list's box.
+    pub adding: Option<String>,
     pub sections: Vec<(String, Vec<String>)>,
     pub problems: Vec<String>,
     pub reviewed: bool,
@@ -292,6 +304,7 @@ impl Install {
             domain: None,
             row: 0,
             chooser: false,
+            adding: None,
             cursor: 0,
             sections: Vec::new(),
             problems: Vec::new(),
@@ -673,6 +686,10 @@ impl Install {
         self.settings
             .iter()
             .map(|setting| {
+                if setting.list {
+                    let entries: Vec<&str> = setting.choices.iter().map(|(entry, _)| entry.as_str()).collect();
+                    return Answer::Text(entries.join(" "));
+                }
                 setting.text.as_ref().map_or_else(
                     || Answer::Picked(setting.picked.clone()),
                     |text| Answer::Text(text.clone()),
@@ -692,6 +709,43 @@ impl Install {
             return (false, None);
         }
         let on_domain = self.domain.is_some() && self.row == self.settings.len();
+        if let Some(typed) = self.adding.as_mut() {
+            match code {
+                KeyCode::Char(c) => typed.push(c),
+                KeyCode::Backspace => {
+                    typed.pop();
+                }
+                KeyCode::Enter => {
+                    let entry = typed.trim().to_owned();
+                    self.adding = None;
+                    if let Some(setting) = self.settings.get_mut(self.row)
+                        && !entry.is_empty()
+                    {
+                        setting.choices.push((entry, String::new()));
+                        self.cursor = setting.choices.len() - 1;
+                    }
+                }
+                KeyCode::Esc => self.adding = None,
+                _ => {}
+            }
+            return (false, None);
+        }
+        if self.chooser
+            && let Some(setting) = self.settings.get_mut(self.row).filter(|setting| setting.list)
+        {
+            match code {
+                KeyCode::Char('+') => {
+                    self.adding = Some(String::new());
+                    return (false, None);
+                }
+                KeyCode::Char('-') if self.cursor < setting.choices.len() => {
+                    setting.choices.remove(self.cursor);
+                    self.cursor = self.cursor.min(setting.choices.len().saturating_sub(1));
+                    return (false, None);
+                }
+                _ => {}
+            }
+        }
         if let Some(text) = self
             .settings
             .get_mut(self.row)
