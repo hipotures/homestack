@@ -72,7 +72,13 @@ pub(super) fn setup_box(buf: &mut Buffer, area: Rect, app: &App, setup: &SetupBo
             Control::named("←→", "group", KeyCode::Right),
             Control::named("ENTER", "open", KeyCode::Enter),
             Control::named("F5", "refresh", KeyCode::F(5)),
-            Control::named("D", "deploy", KeyCode::Char('d')).enabled(setup.deployable().is_some()),
+            Control::named(
+                "D",
+                if setup.manageable() { "add nodes" } else { "deploy" },
+                KeyCode::Char('d'),
+            )
+            .enabled(setup.deployable().is_some()),
+            Control::named("M", "manage", KeyCode::Char('m')).enabled(setup.manageable()),
             Control::named("ESC", "cancel", KeyCode::Esc),
         ],
         Stage::Tree => {

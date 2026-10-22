@@ -1242,7 +1242,7 @@ fn run_plan(
                     let row = results
                         .iter_mut()
                         .find(|row| row["id"] == entry.id)
-                        .expect("planned result");
+                        .ok_or_else(|| AppError::new(format!("Missing planned result for {}", entry.id)))?;
                     if row["status"] != "blocked" {
                         row["status"] = json!("blocked");
                         row["detail"] = json!(format!("Skipped because {blocked} did not pass preflight"));

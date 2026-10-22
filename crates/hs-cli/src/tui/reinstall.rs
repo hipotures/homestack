@@ -57,6 +57,7 @@ pub struct Images {
     /// Newest first.
     pub published: Vec<Image>,
     pub sites: Vec<super::pangolin_sites::images::Snapshot>,
+    pub common: Option<(String, String)>,
 }
 
 impl Images {
@@ -116,6 +117,9 @@ pub fn local_time(created: &str, offset: i64) -> Option<String> {
 /// The containers `vmids` (instances of `deploy_toml`), the image each was
 /// made from, and the images published lately, times shifted by `offset`.
 pub async fn read(deploy_toml: &Path, vmids: &[u32], offset: i64) -> Result<Images, String> {
+    if let Some(images) = common_images(deploy_toml, vmids, offset).await? {
+        return Ok(images);
+    }
     if let Some(images) = super::pangolin_sites::images::read(deploy_toml, vmids, offset).await? {
         return Ok(images);
     }
@@ -170,6 +174,7 @@ pub async fn read(deploy_toml: &Path, vmids: &[u32], offset: i64) -> Result<Imag
         servers,
         published,
         sites: Vec::new(),
+        common: None,
     })
 }
 
@@ -199,6 +204,10 @@ pub async fn work(
     site_access: Option<SiteAccess>,
 ) {
     let parameters = &start.parameters;
+    if parameters.get("service").is_some() {
+        common_work(&deploy_toml, &start, decisions, progress, say).await;
+        return;
+    }
     let image = parameters["image"].as_str().unwrap_or_default().to_owned();
     let servers = strings(&parameters["servers"]);
     let sites = parameters["sites"] == true;
@@ -329,4 +338,160 @@ pub async fn work(
         Err(error) => lines.push(format!("deploy.toml could not be changed: {error}")),
     }
     progress(Progress::Done { ok: true, lines });
+}
+
+/// Read service identity from the profile registry before considering legacy
+/// handlers. A CT tag/pool never selects an image repository.
+async fn common_images(path: &Path, ids: &[u32], offset: i64) -> Result<Option<Images>, String> {
+    use crate::services::{deploy, registry};
+    let registry = registry::load(&path.with_file_name("services.toml"))?;
+    let Some((record, _)) = ids.iter().find_map(|id| registry.instance(*id)) else {
+        return Ok(None);
+    };
+    let source = common_source(record).await?;
+    let config = DeployConfig::load(path)?;
+    let pve = hs_deploy::deploy::deploy_client(&config)?;
+    let mut servers = Vec::new();
+    for id in ids {
+        let instance = record
+            .instances
+            .iter()
+            .find(|i| i.ctid == *id)
+            .ok_or("Select instances of one registered service at a time")?;
+        let (found, current) = deploy::config_of(&pve, *id)
+            .await?
+            .ok_or("Registered CT is missing; use Recovery")?;
+        if found.node != instance.node {
+            return Err("Registered CT is on a different node".to_owned());
+        }
+        crate::services::lifecycle::verify(&source, record, instance, &current)?;
+        let version = instance
+            .release
+            .as_ref()
+            .map_or(record.image_version.as_str(), |r| r.version.as_str());
+        servers.push(Server {
+            vmid: *id,
+            name: instance.hostname.clone(),
+            image: Some(Image {
+                image: format!("{}:{version}", record.image_repository),
+                made: "—".to_owned(),
+                created: None,
+            }),
+        });
+    }
+    let installed: Vec<String> = servers
+        .iter()
+        .filter_map(|s| s.image.as_ref().map(|i| i.image.clone()))
+        .collect();
+    let published: Vec<Image> = hs_core::registry::recent(&source.image("latest"), OFFERED, &installed)
+        .await?
+        .into_iter()
+        .map(|r| Image {
+            made: r
+                .created
+                .as_deref()
+                .and_then(|t| local_time(t, offset))
+                .unwrap_or_else(|| "—".to_owned()),
+            image: r.image,
+            created: r.created,
+        })
+        .collect();
+    for server in &mut servers {
+        if let Some(image) = &mut server.image
+            && let Some(known) = published.iter().find(|p| p.image == image.image)
+        {
+            *image = known.clone();
+        }
+    }
+    Ok(Some(Images {
+        servers,
+        published,
+        sites: Vec::new(),
+        common: Some((record.repository.clone(), record.service.clone())),
+    }))
+}
+
+async fn common_source(
+    record: &crate::services::registry::Deployment,
+) -> Result<crate::services::deploy::Source, String> {
+    let repository = record.repository.clone();
+    let id = record.service.clone();
+    tokio::task::spawn_blocking(move || {
+        let found = crate::services::github::discover(&crate::system::RealSystem::default(), &repository, None)?;
+        let (file, manifest) = found
+            .services()
+            .find(|(_, m)| m.id == id)
+            .ok_or("Registered service has no valid manifest on the default branch")?;
+        Ok(crate::services::deploy::Source {
+            repository,
+            branch: found.branch.clone(),
+            commit: found.commit.clone(),
+            path: file.path.clone(),
+            blob: file.blob.clone(),
+            manifest: manifest.clone(),
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+async fn common_work(
+    path: &Path,
+    start: &Start,
+    decisions: &mut mpsc::UnboundedReceiver<Decision>,
+    progress: &(dyn Fn(Progress) + Send + Sync),
+    say: &(dyn Fn(&str) + Send + Sync),
+) {
+    use crate::services::{lifecycle, registry};
+    let result = async {
+        let (repository, service): (String, String) =
+            serde_json::from_value(start.parameters["service"].clone()).map_err(|_| "Invalid service identity")?;
+        let ids: Vec<u32> =
+            serde_json::from_value(start.parameters["instances"].clone()).map_err(|_| "Invalid instance selection")?;
+        let state_path = path.with_file_name("services.toml");
+        let registry = registry::load(&state_path)?;
+        let record = registry
+            .deployment(&repository, &service)
+            .ok_or("Service is no longer registered")?;
+        let source = common_source(record).await?;
+        let image = start.parameters["image"].as_str().ok_or("Image is missing")?;
+        let version = image.rsplit_once(':').map_or("", |(_, v)| v);
+        if source.image(version) != image {
+            return Err("Selected image does not belong to this service".to_owned());
+        }
+        let config = DeployConfig::load(path)?;
+        let pve = hs_deploy::deploy::deploy_client(&config)?;
+        let choice = lifecycle::Choice {
+            action: Some(lifecycle::Action::Update),
+            ctids: ids,
+            version: version.to_owned(),
+            ..lifecycle::Choice::default()
+        };
+        let plan = lifecycle::plan(&pve, &config, &source, record, &choice).await;
+        progress(Progress::Plan {
+            lines: plan.lines.clone(),
+            question: "Apply this service image update?".to_owned(),
+            blocked: (!plan.problems.is_empty()).then(|| plan.problems.join("\n")),
+            secret: None,
+        });
+        if !plan.problems.is_empty() {
+            return Ok::<_, String>(None);
+        }
+        match decisions.recv().await {
+            Some(Decision::Apply(_)) => {}
+            _ => return Ok(Some(vec!["Cancelled. No changes were made.".to_owned()])),
+        }
+        let replacement = plan.replacement.as_ref().ok_or("API replacement plan is missing")?;
+        let lines = crate::services::replacement::apply(&pve, &state_path, &source, replacement, say).await?;
+        Ok(Some(lines))
+    }
+    .await;
+    match result {
+        Ok(Some(lines)) => progress(Progress::Done { ok: true, lines }),
+        Ok(None) => {}
+        Err(error) => progress(Progress::Done {
+            ok: false,
+            lines: vec![error],
+        }),
+    }
 }

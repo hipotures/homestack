@@ -44,6 +44,10 @@ pub(super) fn work(setup: &Setup, commands: &Receiver<Command>, tell: &(dyn Fn(E
         tell(Event::Failed("No service was chosen.".to_owned()));
         return;
     };
+    if setup.service_manage {
+        super::service_lifecycle::work(setup, &source, commands, tell);
+        return;
+    }
     let mut session: Option<Session> = None;
     while let Ok(command) = commands.recv() {
         match command {
@@ -113,7 +117,7 @@ async fn open(setup: &Setup, source: &Source, kept: Option<&Choice>) -> Result<(
         .map_err(|error| format!("{error}. Install HomeStack before deploying services."))?;
     let pve = hs_deploy::deploy::deploy_client(&config)?;
     let record = record(setup, source)?;
-    if record.as_ref().is_some_and(|r| r.operation.is_none()) {
+    if !source.manifest.multi_node && record.as_ref().is_some_and(|r| r.operation.is_none()) {
         return Err(format!(
             "{} is already deployed; updating or removing it is not available yet.",
             source.manifest.id
@@ -126,7 +130,7 @@ async fn open(setup: &Setup, source: &Source, kept: Option<&Choice>) -> Result<(
             source.manifest.image_repository
         ));
     }
-    let mut resumed = record.as_ref().map(resumed_choice);
+    let mut resumed = record.as_ref().filter(|r| r.operation.is_some()).map(resumed_choice);
     // A single instance gets its CTID filled in: the first free one.
     if kept.is_none() && resumed.is_none() && !source.manifest.multi_node {
         let ctid = deploy::automatic(&config, &pve, 1).await?;
@@ -144,7 +148,9 @@ async fn open(setup: &Setup, source: &Source, kept: Option<&Choice>) -> Result<(
         ),
         (Mark::Ok, "nodes".to_owned(), cluster.nodes.join(", ")),
     ];
-    if let Some(record) = &record {
+    if let Some(record) = &record
+        && record.operation.is_some()
+    {
         check.push((
             Mark::Note,
             "unfinished".to_owned(),

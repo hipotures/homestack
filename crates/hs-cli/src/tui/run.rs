@@ -604,6 +604,7 @@ struct Installing {
     sites: Option<super::pangolin_sites::Context>,
     /// Service mode: the manifest revision to deploy.
     service: Option<crate::services::deploy::Source>,
+    service_manage: bool,
 }
 
 impl Installing {
@@ -653,7 +654,10 @@ impl Installing {
     }
 
     fn start(&mut self, app: &mut App, ctx: &Context, updates: &mpsc::UnboundedSender<Update>) {
-        self.bridge(app, updates);
+        let mode = app.install.as_ref().map_or(Mode::Install, |install| install.mode);
+        if mode != Mode::Service {
+            self.bridge(app, updates);
+        }
         self.stop = Arc::new(AtomicBool::new(false));
         let client_path = config::default_path(&ctx.home, ctx.config_home.as_deref());
         let token_dir = client_path
@@ -662,7 +666,6 @@ impl Installing {
         let sounds = config::load(&client_path)
             .map(|loaded| Sounds::from_table(loaded.client.sounds.as_ref()))
             .unwrap_or_default();
-        let mode = app.install.as_ref().map_or(Mode::Install, |install| install.mode);
         let setup = Setup {
             mode,
             system: Arc::clone(&ctx.system),
@@ -671,13 +674,18 @@ impl Installing {
             client_path,
             servers: Arc::clone(&ctx.servers),
             sounds,
-            ssh_prefix: self.bridge.as_ref().map(Bridge::command_prefix).unwrap_or_default(),
+            ssh_prefix: if mode == Mode::Service {
+                Vec::new()
+            } else {
+                self.bridge.as_ref().map(Bridge::command_prefix).unwrap_or_default()
+            },
             stop: Arc::clone(&self.stop),
             server_image: self.server_image.clone(),
             server_domain: self.server_domain.clone(),
             handle: tokio::runtime::Handle::current(),
             sites: (mode == Mode::Sites).then(|| self.sites.clone()).flatten(),
             service: (mode == Mode::Service).then(|| self.service.clone()).flatten(),
+            service_manage: self.service_manage,
             offset: app.utc_offset,
         };
         let (sender, receiver) = std::sync::mpsc::channel();
@@ -733,7 +741,7 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
     }
     let registry_path =
         crate::services::registry::path_for(&config::default_path(&ctx.home, ctx.config_home.as_deref()));
-    app.services = crate::services::registry::load(&registry_path);
+    app.reload_services(&registry_path);
     let first_start = !config::default_path(&ctx.home, ctx.config_home.as_deref()).exists();
     let mut connection = if first_start || explicit_install {
         if app.open_install(Mode::Install, first_start) == Some(Request::HerdrTabs) {
@@ -1313,7 +1321,8 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
                                         .as_mut()
                                         .and_then(|setup| setup.pending_plan.take())
                                         .map(|plan| Work::Execute(Box::new(plan))),
-                                    Ask::Deploy => {
+                                    Ask::Deploy | Ask::Manage => {
+                                        installing.service_manage = ask == Ask::Manage;
                                         if let Some(source) = app.setup.as_mut().and_then(|setup| setup.deploy_request.take()) {
                                             app.open_service_deploy();
                                             installing.service = Some(source);
@@ -1502,10 +1511,7 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
                     app.install_event(event);
                     // The registry changed: what the lists and details show.
                     if deployed {
-                        app.services = crate::services::registry::load(&registry_path);
-                        if let Some(setup) = app.setup.as_mut() {
-                            setup.registry.clone_from(&app.services);
-                        }
+                        app.reload_services(&registry_path);
                     }
                 }
                 Update::Ask(question) => {
@@ -1532,6 +1538,7 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
                 Update::Setup(_, event) => app.setup_event(event),
                 Update::Action(progress) => {
                     if let Progress::Done { ok, lines } = &progress {
+                        app.reload_services(&registry_path);
                         details.cancel();
                         app.clear_details();
                         let title = app.action.as_ref().map(super::action::Action::title).unwrap_or_default();

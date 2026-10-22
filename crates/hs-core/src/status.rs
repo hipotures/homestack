@@ -734,6 +734,19 @@ pub async fn global_status(pve: &impl Pve, cfg: &Config) -> Result<GlobalStatus,
         } else {
             "VM"
         };
+        let home = container_config.as_ref().and_then(|config| {
+            let mount = config["mp0"].as_str()?;
+            if !mount.split(',').any(|part| part == "mp=/home/app") {
+                return None;
+            }
+            Some(HomeUsage {
+                size_bytes: parse_disk_size_gb(mount).map(|gib| (gib * 1024.0_f64.powi(3)) as u64),
+                // PVE's LXC disk/maxdisk counters describe rootfs, not mp0.
+                used_bytes: None,
+                free_bytes: None,
+                free_percent: None,
+            })
+        });
         others.push(StatusEntry {
             vmid: item.vmid,
             role: role.to_owned(),
@@ -743,9 +756,18 @@ pub async fn global_status(pve: &impl Pve, cfg: &Config) -> Result<GlobalStatus,
             node_status: node_info.map_or_else(|| "unknown".to_owned(), |n| n.status.clone()),
             pool: item.pool.clone(),
             tags: tag_list(item.tags.as_deref()),
-            ip: expected_ip(cfg, item.vmid),
+            ip: if container {
+                container_config.as_ref().and_then(|config| {
+                    config["net0"].as_str()?.split(',').find_map(|part| {
+                        let value = part.strip_prefix("ip=")?.split('/').next()?;
+                        value.parse::<std::net::Ipv4Addr>().ok().map(|ip| ip.to_string())
+                    })
+                })
+            } else {
+                expected_ip(cfg, item.vmid)
+            },
             root_storage,
-            home: None,
+            home,
             role_tag_ok: true,
             warning: None,
             image,

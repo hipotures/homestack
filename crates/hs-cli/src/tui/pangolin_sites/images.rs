@@ -287,6 +287,7 @@ pub async fn read(deployment: &Path, targets: &[u32], offset: i64) -> Result<Opt
         servers,
         published,
         sites: snapshots,
+        common: None,
     }))
 }
 
@@ -381,10 +382,13 @@ pub async fn apply(
             disk_gib,
             memory_mib: number(&original, "memory")?,
             cores: number(&original, "cores")?,
-            net0: original["net0"]
-                .as_str()
-                .ok_or("Connector network is missing")?
-                .to_owned(),
+            net0: Some(
+                original["net0"]
+                    .as_str()
+                    .ok_or("Connector network is missing")?
+                    .to_owned(),
+            ),
+            onboot: true,
             nameserver: original["nameserver"].as_str().map(str::to_owned),
             description: original["description"]
                 .as_str()

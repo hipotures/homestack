@@ -106,6 +106,8 @@ pub enum Ask {
     Services,
     /// Open the deployment of `deploy_request`.
     Deploy,
+    /// Open common lifecycle for the selected registered service.
+    Manage,
     /// Esc while it runs.
     Cancel,
     /// The box closes: the connection ends.
@@ -263,8 +265,31 @@ pub fn service_details(
                 instance.home_storage,
                 crate::services::manifest::MOUNT
             ));
+            if let Some(release) = &instance.release {
+                lines.push(format!(
+                    "  image {}:{} · {}",
+                    deployment.image_repository, release.version, release.digest
+                ));
+            }
+            lines.push(format!("  root volume {}", instance.root_volume));
+            lines.push(format!("  pool {} · tags {}", instance.pool, instance.tags.join(";")));
+            for previous in &instance.retired {
+                lines.push(format!(
+                    "  retained CT {} · root {} · image {} (stopped, no network/home)",
+                    previous.ctid, previous.root_volume, previous.release.version
+                ));
+                lines.push(format!(
+                    "  transferred home {} → {}",
+                    previous.home_before, previous.home_after
+                ));
+            }
             if !instance.home_volume.is_empty() {
-                lines.push(format!("  home volume {}", instance.home_volume));
+                lines.push(format!(
+                    "  {} · home · {}",
+                    deployment.service,
+                    crate::services::manifest::MOUNT
+                ));
+                lines.push(format!("  PVE volume {}", instance.home_volume));
             }
             if let Some(verified) = instance
                 .verified
@@ -2266,7 +2291,7 @@ impl SetupBox {
     /// The highlighted service when it can be deployed: a valid manifest
     /// with no deployment, or one an unfinished run left.
     #[must_use]
-    pub fn deployable(&self) -> Option<crate::services::deploy::Source> {
+    pub fn service_source(&self) -> Option<crate::services::deploy::Source> {
         let ServiceRow {
             repository,
             file: Some(index),
@@ -2279,13 +2304,7 @@ impl SetupBox {
         };
         let file = found.files.get(index)?;
         let manifest = file.manifest.as_ref().ok()?;
-        let registry = self.registry.as_ref().ok()?;
-        if registry
-            .deployment(&repository, &manifest.id)
-            .is_some_and(|deployment| deployment.operation.is_none())
-        {
-            return None;
-        }
+        self.registry.as_ref().ok()?;
         Some(crate::services::deploy::Source {
             repository,
             branch: found.branch.clone(),
@@ -2293,6 +2312,35 @@ impl SetupBox {
             path: file.path.clone(),
             blob: file.blob.clone(),
             manifest: manifest.clone(),
+        })
+    }
+
+    #[must_use]
+    pub fn deployable(&self) -> Option<crate::services::deploy::Source> {
+        let source = self.service_source()?;
+        if self
+            .registry
+            .as_ref()
+            .ok()?
+            .deployment(&source.repository, &source.manifest.id)
+            .is_some_and(|d| {
+                d.operation.as_ref().is_some_and(|o| o.kind != "deploy")
+                    || (d.operation.is_none() && !source.manifest.multi_node)
+            })
+        {
+            return None;
+        }
+        Some(source)
+    }
+
+    #[must_use]
+    pub fn manageable(&self) -> bool {
+        self.service_source().is_some_and(|s| {
+            self.registry
+                .as_ref()
+                .ok()
+                .and_then(|r| r.deployment(&s.repository, &s.manifest.id))
+                .is_some()
         })
     }
 
@@ -2346,6 +2394,10 @@ impl SetupBox {
             KeyCode::Left | KeyCode::BackTab => self.show_section(self.section + self.groups().len() - 1),
             KeyCode::Char('f') => self.filtering = true,
             KeyCode::Char('d') => return self.deploy(),
+            KeyCode::Char('m') if self.manageable() => {
+                self.deploy_request = self.service_source();
+                return Some(Ask::Manage);
+            }
             KeyCode::Enter => return self.toggle_repository(),
             KeyCode::F(5) => {
                 // Not while the last read is still under way.

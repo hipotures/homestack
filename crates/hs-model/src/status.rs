@@ -44,10 +44,10 @@ pub struct StatusEntry {
     /// Its Proxmox tags, in their order.
     #[serde(default)]
     pub tags: Vec<String>,
-    /// `network.prefix.<vmid>` for VMIDs 2–254.
+    /// Workspace address, or the actual static `net0` address for a container.
     pub ip: Option<String>,
     pub root_storage: Option<String>,
-    /// Home usage; `null` for Gold, alien VMs, a missing home or an offline node.
+    /// Home capacity/usage; `null` when no home configuration is available.
     pub home: Option<HomeUsage>,
     pub role_tag_ok: bool,
     pub warning: Option<String>,
@@ -91,8 +91,8 @@ pub struct PoolInfo {
     pub comment: Option<String>,
 }
 
-/// A workspace home. Without guest data only `size_bytes` (from the VM
-/// config) is known.
+/// Persistent home capacity/usage. Without filesystem measurements only
+/// `size_bytes` from the VM disk or LXC mount configuration is known.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct HomeUsage {
     pub size_bytes: Option<u64>,

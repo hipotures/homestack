@@ -93,6 +93,37 @@ pub struct Instance {
     #[serde(default)]
     pub verified: Option<String>,
     pub desired: Desired,
+    /// Per-instance release, allowing selected-node updates.
+    #[serde(default)]
+    pub release: Option<Release>,
+    #[serde(default)]
+    pub network: Option<String>,
+    #[serde(default)]
+    pub nameserver: Option<String>,
+    /// Previous generations, kept stopped without network or home.
+    #[serde(default)]
+    pub retired: Vec<Retired>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Retired {
+    pub ctid: u32,
+    pub root_volume: String,
+    pub release: Release,
+    pub home_before: String,
+    pub home_after: String,
+    pub transfer_task: String,
+}
+
+/// The immutable release last installed on one instance.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Release {
+    pub version: String,
+    pub digest: String,
+    pub commit: String,
+    pub manifest_blob: String,
 }
 
 /// How far the deployment of an instance got.
@@ -105,6 +136,10 @@ pub enum Stage {
     Created,
     /// Started and checked.
     Ready,
+    /// Container removed; the exact home volume remains reserved.
+    Retained,
+    /// Container and explicitly selected data removed.
+    Removed,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -122,6 +157,10 @@ pub struct Operation {
     pub step: String,
     /// RFC 3339.
     pub started: String,
+    #[serde(default)]
+    pub lifecycle: Option<super::lifecycle::Journal>,
+    #[serde(default)]
+    pub replacement: Option<super::replacement::Journal>,
 }
 
 impl Registry {
@@ -178,6 +217,23 @@ pub fn load(path: &Path) -> Result<Registry, String> {
         return Err(format!("{shown}: version {} is not {VERSION}", registry.version));
     }
     Ok(registry)
+}
+
+/// Held for an entire infrastructure operation; file writes use their own
+/// short lock so journal checkpoints remain atomic without deadlocking.
+pub fn operation_lock(path: &Path) -> Result<std::fs::File, String> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .mode(0o600)
+        .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32)
+        .open(path.with_file_name("services.operation.lock"))
+        .map_err(|e| e.to_string())?;
+    rustix::fs::flock(&file, rustix::fs::FlockOperation::NonBlockingLockExclusive)
+        .map_err(|_| "Another service operation holds this profile's lock".to_owned())?;
+    Ok(file)
 }
 
 /// Change the registry under its lock and replace the file atomically
@@ -254,6 +310,12 @@ pub fn instance_status(deployment: &Deployment, instance: &Instance, observed: O
     let Some(observed) = observed else {
         return Status::Unavailable("cluster status not read".to_owned());
     };
+    if instance.stage == Stage::Retained {
+        return Status::NeedsReview(format!("home retained: {}", instance.home_volume));
+    }
+    if instance.stage == Stage::Removed {
+        return Status::NotDeployed;
+    }
     if let Some(operation) = &deployment.operation {
         return Status::NeedsReview(format!("unfinished {} at {}", operation.kind, operation.step));
     }

@@ -165,7 +165,12 @@ pub(super) fn buttons(install: &Install) -> Vec<Control> {
                     Control::key("&Install Enter").enabled(ready),
                     Control::key("back Esc"),
                 ],
-                Mode::Sites | Mode::Service => vec![
+                Mode::Service => vec![
+                    Control::key("scroll ↑↓"),
+                    Control::key("&Apply Enter").enabled(ready),
+                    Control::key("back Esc"),
+                ],
+                Mode::Sites => vec![
                     Control::key("scroll ↑↓"),
                     Control::key("&Deploy Enter").enabled(ready),
                     Control::key("back Esc"),
@@ -684,7 +689,8 @@ fn review(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
     if !install.problems.is_empty() {
         lines.push((
             match install.mode {
-                Mode::Service | Mode::Sites => "Problems (they keep the deployment from starting)",
+                Mode::Service => "Problems (they prevent applying this operation)",
+                Mode::Sites => "Problems (they keep the deployment from starting)",
                 Mode::Uninstall => "Problems (they keep the removal from starting)",
                 Mode::Install => "Problems (they keep the install from starting)",
             }
@@ -764,8 +770,11 @@ fn done(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
         (false, Mode::Uninstall) => ("The uninstall did not finish.", text.fg(palette.error)),
         (true, Mode::Sites) => ("Every Site connector runs and is online.", text.fg(palette.ok)),
         (false, Mode::Sites) => ("The Site connectors are not all online.", text.fg(palette.error)),
-        (true, Mode::Service) => ("Every instance runs and passed its check.", text.fg(palette.ok)),
-        (false, Mode::Service) => ("The deployment did not finish.", text.fg(palette.error)),
+        (true, Mode::Service) => ("The reviewed service operation completed.", text.fg(palette.ok)),
+        (false, Mode::Service) => (
+            "The service operation did not finish; inspect the journal.",
+            text.fg(palette.error),
+        ),
     };
     write(buf, x, inner.y + 1, width, heading, style.add_modifier(Modifier::BOLD));
     let mut row = 3;

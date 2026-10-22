@@ -109,7 +109,7 @@ pub struct Plan {
     pub problems: Vec<String>,
 }
 
-fn stamp() -> String {
+pub(super) fn stamp() -> String {
     time::OffsetDateTime::now_utc()
         .format(&time::format_description::well_known::Rfc3339)
         .unwrap_or_default()
@@ -126,7 +126,7 @@ pub fn hostname(manifest: &Manifest, node: &str) -> String {
     }
 }
 
-fn description(source: &Source, image: &str, digest: &str) -> String {
+pub(super) fn description(source: &Source, image: &str, digest: &str) -> String {
     format!(
         "HomeStack service {}\nrepository {}\nmanifest {} {}\ncommit {}\nimage {image}\ndigest {digest}\nmade by homestack",
         source.manifest.id, source.repository, source.path, source.blob, source.commit
@@ -134,7 +134,7 @@ fn description(source: &Source, image: &str, digest: &str) -> String {
 }
 
 /// Whether container configuration `config` was made by this service.
-fn made_by(source: &Source, config: &Value) -> bool {
+pub(super) fn made_by(source: &Source, config: &Value) -> bool {
     let text = config["description"].as_str().unwrap_or_default();
     let has = |wanted: &str| text.lines().any(|line| line.trim() == wanted);
     has(&format!("HomeStack service {}", source.manifest.id))
@@ -268,7 +268,7 @@ async fn free(pve: &impl Pve, ctid: u32) -> Result<bool, String> {
 }
 
 /// Container `ctid` and its configuration when the token sees it.
-async fn config_of(pve: &impl Pve, ctid: u32) -> Result<Option<(node::Container, Value)>, String> {
+pub(crate) async fn config_of(pve: &impl Pve, ctid: u32) -> Result<Option<(node::Container, Value)>, String> {
     let Some(found) = node::container(pve, ctid).await? else {
         return Ok(None);
     };
@@ -337,6 +337,7 @@ pub async fn plan(
     let problems = &mut plan.problems;
     if let Some(record) = record
         && record.operation.is_none()
+        && !manifest.multi_node
     {
         problems.push(format!(
             "{} is already deployed; updating or removing it is not available yet",
@@ -354,6 +355,21 @@ pub async fn plan(
     }
     if choice.nodes.is_empty() {
         problems.push("Tick at least one node".to_owned());
+    }
+    if let Some(record) = record
+        && record.operation.is_none()
+    {
+        for node in &choice.nodes {
+            if record
+                .instances
+                .iter()
+                .any(|i| i.node == *node && i.stage != Stage::Removed)
+            {
+                problems.push(format!(
+                    "{node} already has an instance or retained home; select a new node or use Recovery"
+                ));
+            }
+        }
     }
     for node in &choice.nodes {
         let prefix = format!("{node}:");
@@ -524,6 +540,10 @@ pub async fn plan(
             stage,
             verified: None,
             desired: Desired::Running,
+            release: None,
+            network: None,
+            nameserver: None,
+            retired: Vec::new(),
         });
     }
     if let Some(record) = record {
@@ -632,7 +652,7 @@ async fn probe(manifest: &Manifest, address: &str) -> Result<String, String> {
 }
 
 /// Probe until the check passes or [`HEALTH_LIMIT`] runs out.
-async fn healthy(manifest: &Manifest, address: &str) -> Result<String, String> {
+pub(super) async fn healthy(manifest: &Manifest, address: &str) -> Result<String, String> {
     let started = Instant::now();
     loop {
         match probe(manifest, address).await {
@@ -659,7 +679,7 @@ fn volume(option: &str) -> (&str, Vec<(&str, &str)>) {
 /// Check what Proxmox made: the root disk and the home volume on the
 /// chosen storages, the home mounted at `/home/app`, unprivileged; the
 /// volume IDs and the MAC address.
-fn verify(instance: &Instance, config: &Value) -> Result<(String, String, String), String> {
+pub(super) fn verify(instance: &Instance, config: &Value) -> Result<(String, String, String), String> {
     let ctid = instance.ctid;
     let (root, _) = volume(
         config["rootfs"]
@@ -741,6 +761,10 @@ pub async fn apply(
     plan: &Plan,
     say: &(dyn Fn(&str) + Send + Sync),
 ) -> (bool, Vec<String>) {
+    let _lock = match registry::operation_lock(registry_path) {
+        Ok(lock) => lock,
+        Err(error) => return (false, vec![error]),
+    };
     let mut lines = Vec::new();
     match run(pve, registry_path, source, plan, say, &mut lines).await {
         Ok(()) => (true, lines),
@@ -776,15 +800,54 @@ async fn run(
     let version = plan.image.rsplit_once(':').map_or("", |(_, tag)| tag).to_owned();
     let keys: Vec<String> = plan.environment.iter().map(|(key, _)| key.clone()).collect();
     registry::update(registry_path, |registry| {
-        let at = registry
+        let mut instances = plan.instances.clone();
+        if let Some(at) = registry
             .deployments
             .iter()
-            .position(|d| d.repository == source.repository && d.service == manifest.id);
-        if let Some(at) = at {
-            if registry.deployments[at].operation.is_none() {
-                return Err(format!("{} is already deployed", manifest.id));
+            .position(|d| d.repository == source.repository && d.service == manifest.id)
+        {
+            let old = &registry.deployments[at];
+            if old
+                .operation
+                .as_ref()
+                .is_some_and(|operation| operation.kind != "deploy")
+            {
+                return Err("An unfinished lifecycle operation requires Recovery".to_owned());
+            }
+            if old.operation.is_none() {
+                if !manifest.multi_node {
+                    return Err(format!("{} is already deployed", manifest.id));
+                }
+                for previous in &old.instances {
+                    if instances
+                        .iter()
+                        .any(|i| i.ctid == previous.ctid || i.node == previous.node)
+                    {
+                        return Err("An existing node/CTID cannot be overwritten by adding nodes".to_owned());
+                    }
+                    let mut previous = previous.clone();
+                    if previous.release.is_none() {
+                        previous.release = Some(super::registry::Release {
+                            version: old.image_version.clone(),
+                            digest: old.image_digest.clone(),
+                            commit: old.commit.clone(),
+                            manifest_blob: old.manifest_blob.clone(),
+                        });
+                    }
+                    instances.push(previous);
+                }
             }
             registry.deployments.remove(at);
+        }
+        for instance in &mut instances {
+            if plan.instances.iter().any(|i| i.ctid == instance.ctid) && instance.release.is_none() {
+                instance.release = Some(super::registry::Release {
+                    version: version.clone(),
+                    digest: resolved.digest.clone(),
+                    commit: source.commit.clone(),
+                    manifest_blob: source.blob.clone(),
+                });
+            }
         }
         registry.deployments.push(Deployment {
             repository: source.repository.clone(),
@@ -797,11 +860,13 @@ async fn run(
             image_version: version.clone(),
             image_digest: resolved.digest.clone(),
             environment: keys.clone(),
-            instances: plan.instances.clone(),
+            instances,
             operation: Some(Operation {
                 kind: "deploy".to_owned(),
                 step: "started".to_owned(),
                 started: stamp(),
+                lifecycle: None,
+                replacement: None,
             }),
         });
         Ok(())
@@ -815,6 +880,14 @@ async fn run(
     };
     for planned in &plan.instances {
         let mut instance = planned.clone();
+        if instance.release.is_none() {
+            instance.release = Some(super::registry::Release {
+                version: version.clone(),
+                digest: resolved.digest.clone(),
+                commit: source.commit.clone(),
+                manifest_blob: source.blob.clone(),
+            });
+        }
         let ctid = instance.ctid;
         let node = instance.node.clone();
         say(&format!(
@@ -846,7 +919,8 @@ async fn run(
                 disk_gib: instance.root_gib,
                 memory_mib: instance.memory_mib,
                 cores: instance.cores,
-                net0: net0(&instance.address),
+                net0: Some(net0(&instance.address)),
+                onboot: true,
                 nameserver: plan.nameserver.clone(),
                 description: text.clone(),
                 tag: Some(node::SERVER_TAG),

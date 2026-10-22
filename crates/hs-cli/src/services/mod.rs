@@ -6,3 +6,6 @@ pub mod deploy;
 pub mod github;
 pub mod manifest;
 pub mod registry;
+
+pub mod lifecycle;
+pub mod replacement;

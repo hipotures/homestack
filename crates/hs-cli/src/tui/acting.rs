@@ -523,6 +523,7 @@ impl App {
                     self.marked.contains(&other.vmid)
                         && self.image_container(other)
                         && is_site(other) == is_site(&entry)
+                        && self.common_service(other) == self.common_service(&entry)
                 })
                 .map(|other| (other.vmid, other.name.clone().unwrap_or_default()))
                 .collect()
@@ -600,6 +601,10 @@ impl App {
             .published
             .get(index)
             .ok_or_else(|| "The registry lists no image.".to_owned())?;
+        if let Some(identity) = &images.common {
+            let ids: Vec<u32> = images.servers.iter().map(|s| s.vmid).collect();
+            return Ok(json!({"image":image.image,"instances":ids,"service":identity}));
+        }
         let mut plan = vec![
             format!(
                 "Update {} containers from {}",
@@ -1066,6 +1071,22 @@ impl App {
     /// Containers with a managed image replacement workflow.
     #[must_use]
     pub fn image_container(&self, entry: &StatusEntry) -> bool {
-        is_server(entry, &self.api_instances) || is_site(entry)
+        self.common_service(entry).is_some() || is_server(entry, &self.api_instances) || is_site(entry)
+    }
+
+    pub fn common_service(&self, entry: &StatusEntry) -> Option<(String, String)> {
+        if entry.role != "CT" {
+            return None;
+        }
+        let (record, instance) = self.services.as_ref().ok()?.instance(entry.vmid)?;
+        if instance.node != entry.node
+            || !matches!(
+                instance.stage,
+                crate::services::registry::Stage::Ready | crate::services::registry::Stage::Created
+            )
+        {
+            return None;
+        }
+        Some((record.repository.clone(), record.service.clone()))
     }
 }

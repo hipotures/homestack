@@ -1148,6 +1148,11 @@ impl App {
         if !self.favorites.remove(&vmid) {
             self.favorites.insert(vmid);
         }
+        self.save_favorites();
+        self.keep_selection();
+    }
+
+    fn save_favorites(&mut self) {
         let mut table = self.preferences.table.clone();
         table.insert(
             "favorites".to_owned(),
@@ -1162,7 +1167,35 @@ impl App {
             Ok(()) => self.preferences.table = table,
             Err(error) => self.log("", &error.0),
         }
-        self.keep_selection();
+    }
+
+    /// A service keeps its local selection/favorite when its CTID changes.
+    pub fn reload_services(&mut self, path: &std::path::Path) {
+        let registry = crate::services::registry::load(path);
+        let mut favorites_changed = false;
+        if let Ok(registry) = &registry {
+            for instance in registry.deployments.iter().flat_map(|d| &d.instances) {
+                for previous in &instance.retired {
+                    if self.favorites.remove(&previous.ctid) {
+                        self.favorites.insert(instance.ctid);
+                        favorites_changed = true;
+                    }
+                    if self.selected == Some(previous.ctid) {
+                        self.selected = Some(instance.ctid);
+                    }
+                    if self.marked.remove(&previous.ctid) {
+                        self.marked.insert(instance.ctid);
+                    }
+                }
+            }
+        }
+        self.services = registry;
+        if let Some(setup) = self.setup.as_mut() {
+            setup.registry.clone_from(&self.services);
+        }
+        if favorites_changed {
+            self.save_favorites();
+        }
     }
 
     fn save_view(&mut self) {

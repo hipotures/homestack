@@ -30,7 +30,7 @@ impl Mode {
             Self::Install => &["access", "check", "settings", "review", "install"],
             Self::Uninstall => &["access", "check", "review", "remove"],
             Self::Sites => &["access", "settings", "review", "deploy"],
-            Self::Service => &["settings", "review", "deploy"],
+            Self::Service => &["settings", "review", "apply"],
         }
     }
 }
@@ -262,7 +262,7 @@ impl Install {
             Mode::Install => "HomeStack reinstall",
             Mode::Uninstall => "HomeStack uninstall",
             Mode::Sites => "Pangolin Site connectors",
-            Mode::Service => "Service deployment",
+            Mode::Service => "Service",
         }
     }
     #[must_use]

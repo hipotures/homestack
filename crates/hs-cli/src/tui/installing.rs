@@ -65,6 +65,7 @@ pub struct Setup {
     pub sites: Option<super::pangolin_sites::Context>,
     /// Service mode: the manifest revision to deploy.
     pub service: Option<crate::services::deploy::Source>,
+    pub service_manage: bool,
     /// Seconds east of UTC, for the times shown.
     pub offset: i64,
 }

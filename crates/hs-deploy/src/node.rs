@@ -170,7 +170,8 @@ pub struct NewContainer<'a> {
     pub disk_gib: u32,
     pub memory_mib: u32,
     pub cores: u32,
-    pub net0: String,
+    pub net0: Option<String>,
+    pub onboot: bool,
     pub nameserver: Option<String>,
     pub description: String,
     /// The tag that marks what made it ([`SERVER_TAG`] for a server).
@@ -188,6 +189,16 @@ pub async fn create(pve: &impl Pve, spec: &NewContainer<'_>, say: &impl Fn(&str)
         "  creating CT {} ({}) on {}",
         spec.ctid, spec.hostname, spec.node
     ));
+    let upid = create_task(pve, spec).await?;
+    wait(pve, &upid, &format!("create CT {}", spec.ctid)).await?;
+    if let Some(tag) = spec.tag {
+        ensure_tag_named(pve, spec.node, spec.ctid, tag, say).await?;
+    }
+    Ok(())
+}
+
+/// Start creation separately so a caller can journal the task before waiting.
+pub async fn create_task(pve: &impl Pve, spec: &NewContainer<'_>) -> Result<Value, String> {
     let ctid = spec.ctid.to_string();
     let rootfs = format!("{}:{}", spec.storage, spec.disk_gib);
     let memory = spec.memory_mib.to_string();
@@ -201,26 +212,22 @@ pub async fn create(pve: &impl Pve, spec: &NewContainer<'_>, say: &impl Fn(&str)
         ("memory", memory.as_str()),
         ("swap", "0"),
         ("cores", cores.as_str()),
-        ("net0", spec.net0.as_str()),
         ("unprivileged", "1"),
-        ("onboot", "1"),
+        ("onboot", if spec.onboot { "1" } else { "0" }),
         ("description", spec.description.as_str()),
     ];
+    if let Some(net0) = &spec.net0 {
+        form.push(("net0", net0.as_str()));
+    }
     if let Some(nameserver) = &spec.nameserver {
         form.push(("nameserver", nameserver.as_str()));
     }
     if let Some(mp0) = &spec.mp0 {
         form.push(("mp0", mp0.as_str()));
     }
-    let upid = pve
-        .post(&format!("/nodes/{}/lxc", spec.node), &form)
+    pve.post(&format!("/nodes/{}/lxc", spec.node), &form)
         .await
-        .map_err(|e| format!("create CT {}: {e}", spec.ctid))?;
-    wait(pve, &upid, &format!("create CT {}", spec.ctid)).await?;
-    if let Some(tag) = spec.tag {
-        ensure_tag_named(pve, spec.node, spec.ctid, tag, say).await?;
-    }
-    Ok(())
+        .map_err(|e| format!("create CT {}: {e}", spec.ctid))
 }
 
 /// `env` of a container: `KEY=value` entries separated by NUL.

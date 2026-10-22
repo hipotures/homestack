@@ -586,7 +586,9 @@ fn workspace_actions(app: &App) -> Vec<Control> {
             Control::named("␣", "select", KeyCode::Char(' ')),
             Control::named(
                 "↵",
-                if selected.is_some_and(super::acting::is_site) {
+                if selected.is_some_and(|entry| app.common_service(entry).is_some()) {
+                    "update service"
+                } else if selected.is_some_and(super::acting::is_site) {
                     "update Site"
                 } else {
                     "update API"
