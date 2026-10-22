@@ -229,11 +229,11 @@ homestack setup status hermes --json
 homestack setup hermes
 
 # Select by 1-based catalog index or stable ID
-homestack setup hermes f=1 e=1 a=1,2
+homestack setup hermes e=1 a=1,2
 homestack setup hermes env=1 app=1 --catalog CATALOG_ID --dry-run
 homestack setup hermes env=bash app=codex,opencode --yes
 homestack setup hermes repo=hipotures/homestack --yes
-homestack setup hermes backup=bk --yes
+homestack setup hermes app=bk --yes
 homestack setup 200 env=bash app=codex --dry-run
 homestack setup hermes env=bash app=codex --yes --non-interactive --json
 ```
@@ -266,21 +266,13 @@ Extend built-in items or declare new ones in `~/.config/homestack/client.toml` u
 
 ```toml
 [[setup.items]]
-id = "notes"
-group = "files"
-handler = "file"
-label = "Notes directory"
-description = "Copy desktop notes into persistent home without deleting guest files."
-path = "~/notes/"
-
-[[setup.items]]
 id = "codex"
 label = "Codex CLI"
 # Optional: attach desktop file copies or structured config patches to an application
 files = ["~/.codex/instructions.md"]
 ```
 
-- **Setup Files (`group = "files"` or application `files = [...]`):** Use `rsync` semantics without deleting unselected guest files. An ending slash denotes a directory. User-only permissions are enforced and file contents are never printed. A single application file copy can be selected via `app=claude:file:~/.claude/statusline.sh`.
+- **Setup Files (application `files = [...]`):** Use `rsync` semantics without deleting unselected guest files. An ending slash denotes a directory. User-only permissions are enforced and file contents are never printed. A single application file copy can be selected via `app=claude:file:~/.claude/statusline.sh`.
 - **Structured configuration patches (`config_files`):** Attach `config_files` tables (`path`, `format` = `"toml"` | `"json"` | `"yaml"`, and nested `values` tables) to an application entry. HomeStack parses the source document on the desktop, patches only the declared scalar and array leaves while preserving unrelated keys and comments, and reparses the merged result before writing. Individual leaves can be toggled in the TUI or selected via JSON Pointer syntax (e.g. `app=codex:config:/tui/status_line_use_colors`).
 - **Application validators (`[setup.items.validation]`):** Supports `type = "exit-code"` (requires exit 0) or `type = "json-path"` (checks `path` against `accepted` values). On validation failure, structured files modified by that operation are restored from the pre-apply snapshot.
 - **Explicit dependencies (`depends_on = ["ID"]`):** Requires the listed actions to be selected and orders them deterministically without silently pulling in unselected credentials or tools.
@@ -304,16 +296,16 @@ Setup state lives inside the workspace's persistent home at `~/.local/state/home
 
 ---
 
-## BK Workspace & Local Backup (`backup=bk`)
+## BK Workspace & Local Backup (`app=bk`)
 
 HomeStack includes **BK**, a lightweight archive backup manager with a `systemd --user` nightly timer (`03:15`, `Persistent=true`) and restricted desktop SSH retrieval keys.
 
 ```bash
 # Install BK in a workspace (survives homestack refresh inside persistent /home)
-homestack setup WORKSPACE backup=bk
+homestack setup WORKSPACE app=bk
 
 # Or install BK locally for the current desktop user
-homestack setup --local backup=bk
+homestack setup --local app=bk
 homestack setup --local status
 ```
 

@@ -18,14 +18,7 @@ use crate::AppError;
 use crate::system::System;
 
 /// One-letter names of the groups.
-pub const ALIASES: [(&str, &str); 6] = [
-    ("f", "files"),
-    ("e", "env"),
-    ("a", "app"),
-    ("c", "cred"),
-    ("r", "repo"),
-    ("b", "backup"),
-];
+pub const ALIASES: [(&str, &str); 4] = [("e", "env"), ("a", "app"), ("c", "cred"), ("r", "repo")];
 
 #[derive(Debug, Clone, Default)]
 pub struct Catalog {

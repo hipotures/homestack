@@ -274,16 +274,6 @@ pub fn default_groups() -> Vec<Group> {
             "Credentials",
             "Authentication files and keys copied from the trusted desktop.",
         ),
-        (
-            "files",
-            "Files",
-            "Desktop files copied into persistent home; no deletes.",
-        ),
-        (
-            "backup",
-            "Backup",
-            "Persistent-home BK backup tool and nightly user timer.",
-        ),
     ]
     .into_iter()
     .map(|(id, label, description)| Group {
@@ -319,6 +309,9 @@ pub fn defaults() -> Vec<Entry> {
         .bins(&["~/.local/bin", "~/.hermes/bin", "~/.hermes/node/bin"]);
     hermes.prerequisite_checks = strings(&[HERMES_NODE_CHECK, HERMES_NPM_CHECK]);
     hermes.requires_absent = strings(&["~/.hermes/hermes-agent"]);
+    // Nothing to install: the "installer" only confirms the system's Git.
+    let mut git = Application::new("git --version").non_interactive(&["git"], "git --version");
+    git.files = strings(&["~/.gitconfig"]);
     items.extend([
         Entry::new(
             "codex",
@@ -391,8 +384,16 @@ pub fn defaults() -> Vec<Entry> {
                 .bins(&["~/.cargo/bin"])),
         ),
         Entry::new(
+            "git",
+            "app",
+            "application",
+            "Git",
+            "Git itself is installed system-wide by root; this checks it and copies the desktop Git configuration into persistent home.",
+            app(git),
+        ),
+        Entry::new(
             "bk",
-            "backup",
+            "app",
             "backup",
             "BK",
             "Install the persistent-home BK backup tool and nightly user timer.",
@@ -779,8 +780,8 @@ pub fn parse_setup(raw: &Table) -> Result<SetupConfig, AppError> {
             _ => return Err(AppError::new("Invalid setup group definition")),
         };
         let id = text_field(table, "id").unwrap_or_default().to_owned();
-        let reserved = ["root", "f", "e", "a", "c", "r", "b"].contains(&id.as_str())
-            || default_items.iter().any(|entry| entry.id == id);
+        let reserved =
+            ["root", "e", "a", "c", "r"].contains(&id.as_str()) || default_items.iter().any(|entry| entry.id == id);
         if !matches!(table.get("id"), None | Some(Value::String(_))) || !setup_id(&id) || seen.contains(&id) || reserved
         {
             return Err(AppError::new("Invalid or duplicate setup group ID"));

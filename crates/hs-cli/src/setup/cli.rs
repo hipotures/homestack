@@ -342,7 +342,7 @@ pub async fn run(
             tokens.insert(0, target_arg.take().unwrap_or_default());
         } else if !matches!(target_arg.as_deref(), None | Some("list" | "status")) {
             return Err(AppError::new(
-                "--local does not accept a workspace target; use setup --local backup=bk",
+                "--local does not accept a workspace target; use setup --local app=bk",
             ));
         }
     }
@@ -427,7 +427,7 @@ pub async fn run(
     let (entries, catalog_id) = if tokens.is_empty() {
         if unattended || setup.dry_run {
             return Err(AppError::new(
-                "No actions selected. Run setup list, then specify env=bash, app=codex, backup=bk or another selector",
+                "No actions selected. Run setup list, then specify env=bash, app=codex,bk or another selector",
             ));
         }
         (Vec::new(), None)
