@@ -1161,7 +1161,7 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
                             match hs_deploy::config::DeployConfig::load(&path) {
                                 Ok(config) => {
                                     let servers = config.instances.iter().map(|instance| (instance.ctid, instance.name.clone())).collect();
-                                    if let Some(Request::Images(targets)) = app.open_api_updates(servers) {
+                                    if let Some(Request::Images(targets)) = app.open_image_update(servers) {
                                         let updates = updates.clone();
                                         let offset = clock.offset;
                                         tokio::spawn(async move {

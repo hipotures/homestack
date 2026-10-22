@@ -530,11 +530,11 @@ impl App {
         } else {
             vec![(entry.vmid, entry.name.clone().unwrap_or_default())]
         };
-        self.open_api_updates(servers)
+        self.open_image_update(servers)
     }
 
-    /// Update the API containers named by the saved deployment.
-    pub fn open_api_updates(&mut self, mut servers: Vec<(u32, String)>) -> Option<Request> {
+    /// The existing image selector shared by API, Site and registered services.
+    pub fn open_image_update(&mut self, mut servers: Vec<(u32, String)>) -> Option<Request> {
         if self.action.is_some() || self.setup.is_some() {
             return None;
         }

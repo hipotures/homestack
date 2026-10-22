@@ -394,10 +394,7 @@ pub async fn plan(
             format!("  Tags       {}", before.tags.join(";")),
             format!("  State      {state} → {state} · autostart {autostart}"),
             String::new(),
-            format!(
-                "Retain CT {} stopped, without network/home: {}",
-                before.ctid, before.root_volume
-            ),
+            format!("After success: manually delete old CT {}.", before.ctid),
             String::new(),
         ]);
     }
@@ -407,21 +404,15 @@ pub async fn plan(
             plan.journal.backup_storage
         ));
     }
-    if plan.journal.targets.iter().any(|target| target.running) {
+    if source.manifest.healthcheck.is_none() {
         plan.lines
-            .push(format!("Check: {}", deploy::health_text(&source.manifest)));
+            .push("Health check: not provided by this service.".to_owned());
+    } else if plan.journal.targets.iter().any(|target| target.running) {
+        plan.lines.push("Health check: automatic after update.".to_owned());
     } else {
         plan.lines
-            .push("Check: deferred until the service is started.".to_owned());
+            .push("Health check: skipped because the service stays stopped.".to_owned());
     }
-    plan.lines.push(String::new());
-    plan.lines.push(format!("Image: {}", plan.journal.image));
-    plan.lines.push(format!("Digest: {}", plan.journal.digest));
-    plan.lines.push(format!(
-        "Source: {} · {} @ {}",
-        source.repository, source.path, source.commit
-    ));
-
     plan
 }
 

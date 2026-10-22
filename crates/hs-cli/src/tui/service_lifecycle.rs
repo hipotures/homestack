@@ -13,7 +13,6 @@ use lifecycle::{Action, Choice};
 
 const ACTIONS: &[Action] = &[
     Action::Recovery,
-    Action::Update,
     Action::Resize,
     Action::Uninstall,
     Action::Reconnect,
@@ -98,7 +97,7 @@ pub(super) fn work(
                     settings = vec![
                         setting(
                             "Operation",
-                            "Registered service only. Every operation is planned again before confirmation. Recovery checks recorded identities; it never adopts unknown containers.",
+                            "For image updates, select the container in the main list and press Enter. These maintenance operations require a separate review.",
                             ACTIONS.iter().map(|a| (a.label().to_owned(), String::new())).collect(),
                             false,
                             None,
@@ -122,7 +121,7 @@ pub(super) fn work(
                         ),
                         setting(
                             "Version",
-                            "For Update or Reconnect: a published numeric SemVer image of this service. Older images are offered for deliberate rollback; database migrations are not reversed.",
+                            "Reconnect only: a published numeric SemVer image of this service.",
                             versions,
                             false,
                             None,
