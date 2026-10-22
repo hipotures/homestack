@@ -71,10 +71,8 @@ pub struct Cluster {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Choice {
     pub version: String,
-    /// `NODE:STORAGE` entries; each gets `count` instances.
+    /// `NODE:STORAGE` entries; each node gets one instance.
     pub placements: Vec<String>,
-    /// How many instances each placement gets.
-    pub count: String,
     /// One CTID per instance, in the placements' order; empty: the first free.
     pub ctids: String,
     pub cores: String,
@@ -327,17 +325,16 @@ pub async fn plan(config: &DeployConfig, pve: &impl Pve, source: &Source, cluste
         problems.push("Tick at least one node and storage".to_owned());
     }
     let sizes = (
-        number(&choice.count, "Count", 1..=50),
         number(&choice.cores, "Cores", 1..=64),
         number(&choice.memory_mib, "Memory (MiB)", 64..=1_048_576),
         number(&choice.root_gib, "Container disk (GiB)", 1..=1024),
         number(&choice.home_gib, "Home volume (GiB)", 1..=16_384),
     );
-    let (count, cores, memory_mib, root_gib, home_gib) = match sizes {
-        (Ok(count), Ok(cores), Ok(memory), Ok(root), Ok(home)) => (count, cores, memory, root, home),
-        (count, cores, memory, root, home) => {
+    let (cores, memory_mib, root_gib, home_gib) = match sizes {
+        (Ok(cores), Ok(memory), Ok(root), Ok(home)) => (cores, memory, root, home),
+        (cores, memory, root, home) => {
             problems.extend(
-                [count.err(), cores.err(), memory.err(), root.err(), home.err()]
+                [cores.err(), memory.err(), root.err(), home.err()]
                     .into_iter()
                     .flatten(),
             );
@@ -352,8 +349,12 @@ pub async fn plan(config: &DeployConfig, pve: &impl Pve, source: &Source, cluste
         .placements
         .iter()
         .filter_map(|p| p.split_once(':'))
-        .flat_map(|(node, storage)| std::iter::repeat_n((node.to_owned(), storage.to_owned()), count as usize))
+        .map(|(node, storage)| (node.to_owned(), storage.to_owned()))
         .collect();
+    let nodes: BTreeSet<&String> = placements.iter().map(|(node, _)| node).collect();
+    if nodes.len() != placements.len() {
+        problems.push("Tick one storage on each node; a node gets one instance".to_owned());
+    }
     let mut ctids: Vec<String> = choice
         .ctids
         .split([',', ' '])

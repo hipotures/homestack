@@ -17,13 +17,12 @@ use crate::services::manifest::MOUNT;
 
 const VERSION: usize = 0;
 const PLACEMENT: usize = 1;
-const COUNT: usize = 2;
-const CTIDS: usize = 3;
-const CORES: usize = 4;
-const MEMORY: usize = 5;
-const ROOT_GIB: usize = 6;
-const HOME_GIB: usize = 7;
-const ENVIRONMENT: usize = 8;
+const CTIDS: usize = 2;
+const CORES: usize = 3;
+const MEMORY: usize = 4;
+const ROOT_GIB: usize = 5;
+const HOME_GIB: usize = 6;
+const ENVIRONMENT: usize = 7;
 
 struct Session {
     config: DeployConfig,
@@ -194,31 +193,22 @@ fn settings(source: &Source, cluster: &Cluster, kept: Option<&Choice>, offset: i
         },
         Setting {
             title: "Nodes".to_owned(),
-            note: "Tick the node and storage of the new instances: each gets its own container, disk and home volume \
+            note:
+                "Tick one storage on each node that gets a new instance: its container, disk and home volume are made \
                    there, new volumes of the sizes below; nothing on the storage is changed. Instances are \
                    independent: each keeps its own data, nothing is shared or balanced between them. Each is an \
                    unprivileged container in pool homestack-service with tag homestack-server, its health checked \
                    from this desktop after the start and again after one restart. The first failure stops the run \
                    and nothing is removed. Existing containers are not touched."
-                .to_owned(),
+                    .to_owned(),
             multiple: true,
             picked: kept.map(|k| picked(&placements, &k.placements)).unwrap_or_default(),
             choices: placements,
             text: None,
         },
         Setting {
-            title: "Count".to_owned(),
-            note: "How many new instances each ticked node and storage gets. They are named after the service: \
-                   the first free of tutor, tutor-2, tutor-3…"
-                .to_owned(),
-            multiple: false,
-            choices: Vec::new(),
-            picked: Vec::new(),
-            text: text(kept.map(|k| &k.count), "1"),
-        },
-        Setting {
             title: "CTID".to_owned(),
-            note: "Empty: the first free CTIDs, shown in the review. Or one CTID per new instance, in the order of \
+            note: "Empty: the first free CTIDs, shown in the review. Or one CTID per ticked node, in the order of \
                    the nodes, separated by commas. The address follows from it: 102240 is .102.240."
                 .to_owned(),
             multiple: false,
@@ -248,7 +238,7 @@ fn settings(source: &Source, cluster: &Cluster, kept: Option<&Choice>, offset: i
             multiple: false,
             choices: Vec::new(),
             picked: Vec::new(),
-            text: text(kept.map(|k| &k.root_gib), "4"),
+            text: text(kept.map(|k| &k.root_gib), "1"),
         },
         Setting {
             title: "Home (GiB)".to_owned(),
@@ -256,7 +246,7 @@ fn settings(source: &Source, cluster: &Cluster, kept: Option<&Choice>, offset: i
             multiple: false,
             choices: Vec::new(),
             picked: Vec::new(),
-            text: text(kept.map(|k| &k.home_gib), "8"),
+            text: text(kept.map(|k| &k.home_gib), "1"),
         },
         Setting {
             title: "Environment".to_owned(),
@@ -291,7 +281,6 @@ fn choice(settings: &[Setting], answers: &[Answer]) -> Choice {
         version: picked(VERSION).into_iter().next().unwrap_or_default(),
         // `NODE:STORAGE` in the list's order (by node), as the CTIDs are given.
         placements: picked(PLACEMENT),
-        count: text(COUNT),
         ctids: text(CTIDS),
         cores: text(CORES),
         memory_mib: text(MEMORY),

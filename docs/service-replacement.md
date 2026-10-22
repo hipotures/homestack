@@ -48,8 +48,8 @@ Proxmox alone records what is deployed: each service container's description
 names the service (`HomeStack service <id>`), its repository, manifest revision,
 image and digest, and the API's status reports it for every container. Nothing
 about a deployment is kept on the desktop. Each deployment (`d`) makes new,
-independent instances, as many as asked for on each chosen node and storage,
-named `<id>`, `<id>-2`… with the first free CTIDs.
+independent instances, one on each chosen node, named `<id>`, `<id>-2`… with
+the first free CTIDs.
 
 An image update is reviewed first: the selected release and digest, the CTID,
 node, pool, network identity, root storage and the home volume. Nothing
