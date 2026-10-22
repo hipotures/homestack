@@ -83,6 +83,7 @@ fn volume(cfg: &Value, key: &str) -> String {
 fn tags(cfg: &Value) -> Vec<String> {
     text(cfg, "tags")
         .split([';', ','])
+        .map(str::trim)
         .filter(|tag| !tag.is_empty())
         .map(str::to_owned)
         .collect::<BTreeSet<_>>()
