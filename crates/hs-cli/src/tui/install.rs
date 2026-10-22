@@ -730,17 +730,22 @@ impl Install {
             }
             return (false, None);
         }
-        if self.chooser
-            && let Some(setting) = self.settings.get_mut(self.row).filter(|setting| setting.list)
-        {
+        // A list: + and - work on its row and in its box.
+        if let Some(setting) = self.settings.get_mut(self.row).filter(|setting| setting.list) {
             match code {
                 KeyCode::Char('+') => {
+                    self.chooser = true;
                     self.adding = Some(String::new());
                     return (false, None);
                 }
-                KeyCode::Char('-') if self.cursor < setting.choices.len() => {
+                KeyCode::Char('-') if self.chooser && self.cursor < setting.choices.len() => {
                     setting.choices.remove(self.cursor);
                     self.cursor = self.cursor.min(setting.choices.len().saturating_sub(1));
+                    return (false, None);
+                }
+                KeyCode::Char('-') => {
+                    self.chooser = true;
+                    self.cursor = 0;
                     return (false, None);
                 }
                 _ => {}

@@ -647,17 +647,22 @@ fn settings(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
     if let Some(typed) = &install.adding {
         lines.push((format!("+ {typed}▏"), true));
     }
-    let key = if setting.list {
-        "remove -  add +"
-    } else if setting.multiple {
-        "tick Space"
+    let key = if setting.multiple { "tick Space" } else { "choose Space" };
+    let keys = if setting.list {
+        vec![
+            Control::named("-", "remove", crossterm::event::KeyCode::Char('-')),
+            Control::named("+", "add", crossterm::event::KeyCode::Char('+')),
+        ]
     } else {
-        "choose Space"
+        vec![Control::key(key)]
     };
     let content = lines
         .iter()
         .map(|(line, _)| line.chars().count())
-        .chain([setting.title.chars().count(), key.chars().count() + 2])
+        .chain([
+            setting.title.chars().count(),
+            if setting.list { 20 } else { key.chars().count() + 2 },
+        ])
         .max()
         .unwrap_or(0);
     let box_inner = frame(
@@ -666,7 +671,7 @@ fn settings(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
         palette,
         &Sides {
             top_left: vec![Control::plain(&setting.title)],
-            bottom_left: vec![Control::key(key)],
+            bottom_left: keys,
             focused: install.chooser,
             ..Sides::default()
         },

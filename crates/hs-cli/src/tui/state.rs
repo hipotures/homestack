@@ -1340,15 +1340,20 @@ impl App {
                         if let Some(install) = self.install.as_mut() {
                             install.row = row;
                             install.chooser = false;
+                            install.adding = None;
                         }
                         return None;
                     }
                     Some(Hit::Choice(choice)) => {
+                        let mut list = false;
                         if let Some(install) = self.install.as_mut() {
                             install.chooser = true;
                             install.cursor = choice;
+                            install.adding = None;
+                            list = install.settings.get(install.row).is_some_and(|setting| setting.list);
                         }
-                        return press(self, KeyCode::Char(' '));
+                        // A list's entry is highlighted; a choice is ticked.
+                        return if list { None } else { press(self, KeyCode::Char(' ')) };
                     }
                     // A field of a form: focus it; its ‹ or › is a key on it.
                     Some(Hit::Field(field, key)) => {
