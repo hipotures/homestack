@@ -127,9 +127,36 @@ pub const MENU: [&str; 9] = [
 ];
 
 /// The sections of the settings box, in order.
-pub const SETTINGS: [&str; 4] = ["General", "Appearance", "Refresh", "Integrations"];
+pub const SETTINGS: [&str; 5] = ["General", "Appearance", "Machines", "Refresh", "Integrations"];
 /// The section of [`SETTINGS`] that holds the theme.
 pub const APPEARANCE: usize = 1;
+/// The section of [`SETTINGS`] that holds the list's columns.
+pub const MACHINES: usize = 2;
+/// The section of [`SETTINGS`] that holds the integrations.
+pub const INTEGRATIONS: usize = 4;
+
+/// The list's columns in their order, and whether one is shown without a
+/// choice in `tui.toml`.
+pub const COLUMNS: [(&str, bool); 18] = [
+    ("TAGS", true),
+    ("VMID", true),
+    ("TYPE", true),
+    ("NAME", true),
+    ("NODE", true),
+    ("STATE", true),
+    ("ADDRESS", true),
+    ("HOME", true),
+    ("HOME USED", false),
+    ("HOME FREE", true),
+    ("ROOT", true),
+    ("ROOT USED", false),
+    ("ROOT FREE", true),
+    ("STORAGE", false),
+    ("POOL", false),
+    ("LOAD", false),
+    ("SERVICE", false),
+    ("IMAGE", false),
+];
 
 /// A box over the screen.
 #[derive(Debug, Clone, PartialEq)]
@@ -143,6 +170,10 @@ pub enum Overlay {
         section: usize,
     },
     Integrations {
+        index: usize,
+    },
+    /// The column list in the Machines section; `index` is one of [`COLUMNS`].
+    Columns {
         index: usize,
     },
     Integration(Box<super::integrations::Editor>),
@@ -250,6 +281,8 @@ pub struct App {
     pub filtering: bool,
     /// Only the running machines (`o`).
     pub online: bool,
+    /// Whether each of [`COLUMNS`] is shown.
+    pub columns: [bool; COLUMNS.len()],
     /// The node carousel: `None` is every node.
     pub node: Option<usize>,
     /// The group carousel: `None` is all, else a pool's ID.
@@ -330,6 +363,12 @@ impl App {
             .and_then(|value| usize::try_from(value).ok())
             .filter(|value| *value < VIEWS.len())
             .unwrap_or(0);
+        let chosen: Option<Vec<&str>> = preferences
+            .table
+            .get("columns")
+            .and_then(toml::Value::as_array)
+            .map(|keys| keys.iter().filter_map(toml::Value::as_str).collect());
+        let columns = COLUMNS.map(|(key, shown)| chosen.as_ref().map_or(shown, |chosen| chosen.contains(&key)));
         let favorites = preferences
             .table
             .get("favorites")
@@ -365,6 +404,7 @@ impl App {
             filter: String::new(),
             filtering: false,
             online: false,
+            columns,
             node: None,
             group: None,
             on_group: true,
@@ -1185,6 +1225,39 @@ impl App {
         }
     }
 
+    /// Whether the list shows the column `key` of [`COLUMNS`].
+    #[must_use]
+    pub fn column_shown(&self, key: &str) -> bool {
+        COLUMNS
+            .iter()
+            .position(|(column, _)| *column == key)
+            .is_some_and(|at| self.columns[at])
+    }
+
+    /// Show or hide the column `index` of [`COLUMNS`], kept in `tui.toml`.
+    fn toggle_column(&mut self, index: usize) {
+        let Some(shown) = self.columns.get_mut(index) else {
+            return;
+        };
+        *shown = !*shown;
+        let mut table = self.preferences.table.clone();
+        table.insert(
+            "columns".to_owned(),
+            toml::Value::Array(
+                COLUMNS
+                    .iter()
+                    .zip(self.columns)
+                    .filter(|(_, shown)| *shown)
+                    .map(|((key, _), _)| toml::Value::String((*key).to_owned()))
+                    .collect(),
+            ),
+        );
+        match self.preferences.write(&table) {
+            Ok(()) => self.preferences.table = table,
+            Err(error) => self.log("", &error.0),
+        }
+    }
+
     fn save_view(&mut self) {
         let mut table = self.preferences.table.clone();
         table.remove("preset");
@@ -1380,6 +1453,11 @@ impl App {
                     Some(Hit::SetupRow(index, part)) => return self.setup_click(index, part),
                     Some(Hit::SetupDetails) => return None,
                     Some(Hit::Log { .. } | Hit::Bar(_)) => return None,
+                    Some(Hit::Column(item)) => {
+                        self.overlay = Some(Overlay::Columns { index: item });
+                        self.toggle_column(item);
+                        return None;
+                    }
                     Some(Hit::Integration(item)) => {
                         self.overlay = Some(Overlay::Integrations { index: item });
                         return press(self, KeyCode::Enter);
@@ -1500,9 +1578,9 @@ impl App {
                     Some(Hit::Item(item)) => {
                         match &mut self.overlay {
                             Some(Overlay::Menu { index }) => *index = item,
-                            // A section of the settings is chosen; Appearance
-                            // opens at once, its theme list being all it has.
-                            Some(Overlay::Integrations { .. }) => {
+                            // A section of the settings is chosen; Appearance and
+                            // Machines open at once, their list being all they have.
+                            Some(Overlay::Integrations { .. } | Overlay::Columns { .. }) => {
                                 self.overlay = Some(Overlay::Settings {
                                     section: item.min(SETTINGS.len() - 1),
                                 });
@@ -1510,7 +1588,7 @@ impl App {
                             }
                             Some(Overlay::Settings { section }) => {
                                 *section = item.min(SETTINGS.len() - 1);
-                                return if *section == APPEARANCE {
+                                return if *section == APPEARANCE || *section == MACHINES {
                                     press(self, KeyCode::Enter)
                                 } else {
                                     None
@@ -2078,19 +2156,35 @@ impl App {
                         previous: Box::new(self.palette.clone()),
                     });
                 }
-                KeyCode::Enter | KeyCode::Right if section == 3 => {
+                KeyCode::Enter | KeyCode::Right if section == MACHINES => {
+                    self.overlay = Some(Overlay::Columns { index: 0 });
+                }
+                KeyCode::Enter | KeyCode::Right if section == INTEGRATIONS => {
                     self.overlay = Some(Overlay::Integrations { index: 0 });
                 }
                 KeyCode::Esc => self.overlay = Some(Overlay::Menu { index: 4 }),
                 _ => self.overlay = Some(Overlay::Settings { section }),
             },
             Overlay::Integration(_) | Overlay::Pangolin(_) => self.overlay = Some(overlay),
+            Overlay::Columns { mut index } => {
+                match code {
+                    KeyCode::Down => index = (index + 1) % COLUMNS.len(),
+                    KeyCode::Up => index = (index + COLUMNS.len() - 1) % COLUMNS.len(),
+                    KeyCode::Enter | KeyCode::Char(' ') => self.toggle_column(index),
+                    KeyCode::Esc | KeyCode::Left => {
+                        self.overlay = Some(Overlay::Settings { section: MACHINES });
+                        return None;
+                    }
+                    _ => {}
+                }
+                self.overlay = Some(Overlay::Columns { index });
+            }
             Overlay::Integrations { mut index } => {
                 match code {
                     KeyCode::Down => index = (index + 1) % 4,
                     KeyCode::Up => index = (index + 3) % 4,
                     KeyCode::Esc | KeyCode::Left => {
-                        self.overlay = Some(Overlay::Settings { section: 3 });
+                        self.overlay = Some(Overlay::Settings { section: INTEGRATIONS });
                         return None;
                     }
                     KeyCode::Enter | KeyCode::Right if index == 3 => {

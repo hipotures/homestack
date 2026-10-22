@@ -452,6 +452,8 @@ pub enum Hit {
     /// A theme in the Appearance section of the settings.
     Theme(usize),
     Integration(usize),
+    /// A column of the list in the Machines section of the settings.
+    Column(usize),
     PangolinStep(usize),
     PangolinPrerequisite(usize),
     PangolinDiscovery(usize),

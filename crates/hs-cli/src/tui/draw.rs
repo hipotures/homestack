@@ -10,7 +10,7 @@ use ratatui::style::{Color, Modifier, Style};
 use super::action::Action;
 use super::chrome::{Control, Hit, Scrolls, Sides, alert_style, frame, register, scrollbar, text_style};
 use super::layout::{MIN_HEIGHT, MIN_WIDTH, arrange};
-use super::state::{APPEARANCE, App, MENU, Overlay, SETTINGS, VIEWS};
+use super::state::{APPEARANCE, App, COLUMNS, INTEGRATIONS, MACHINES, MENU, Overlay, SETTINGS, VIEWS};
 use super::theme::{Palette, THEMES};
 
 /// The screen at `width` x `height`, for tests and snapshots.
@@ -418,49 +418,67 @@ fn cluster(buf: &mut Buffer, area: Rect, app: &App, mut controls: Vec<Control>) 
 
 /// A list column: heading, width and how a row fills it.
 struct Column {
+    /// Its name in the settings: one of [`COLUMNS`].
+    key: &'static str,
     heading: &'static str,
     width: usize,
     right: bool,
     value: fn(&StatusEntry) -> String,
 }
 
-/// The list's columns for `width` cells: first, without a heading, a square
-/// for each of up to `tag_width` tags; NAME as wide as `name_width`, the
-/// longest name, and never narrower than its 12.
-fn columns(width: usize, tag_width: usize, name_width: usize) -> Vec<Column> {
-    let tags = Column {
-        heading: "",
-        width: tag_width,
-        right: false,
-        value: |entry| "■".repeat(entry.tags.len().min(MAX_TAGS)),
-    };
+/// A size in bytes, `—` when unknown.
+fn bytes(value: Option<u64>) -> String {
+    value.map_or_else(|| "—".to_owned(), size)
+}
+
+/// A percentage, `—` when unknown.
+fn percent(value: Option<f64>) -> String {
+    value.map_or_else(|| "—".to_owned(), |percent| format!("{percent:.0}%"))
+}
+
+/// The list's columns the settings show for `width` cells: first, without
+/// a heading, a square for each of up to `tag_width` tags; NAME as wide as
+/// `name_width`, the longest name, and never narrower than its 12.
+fn columns(app: &App, width: usize, tag_width: usize, name_width: usize) -> Vec<Column> {
     let all = [
         Column {
+            key: "TAGS",
+            heading: "",
+            width: tag_width,
+            right: false,
+            value: |entry| "■".repeat(entry.tags.len().min(MAX_TAGS)),
+        },
+        Column {
+            key: "VMID",
             heading: "VMID",
-            // 101010: the numbering by address (owner, 2026-10-14).
+            // 101010: the numbering by address.
             width: 6,
             right: false,
             value: |entry| entry.vmid.to_string(),
         },
         Column {
+            key: "TYPE",
             heading: "TYPE",
             width: 4,
             right: false,
             value: |entry| if entry.role == "CT" { "CT" } else { "VM" }.to_owned(),
         },
         Column {
+            key: "NAME",
             heading: "NAME",
             width: name_width.max(12) + 1,
             right: false,
             value: |entry| format!(" {}", entry.name.as_deref().unwrap_or_default()),
         },
         Column {
+            key: "NODE",
             heading: "NODE",
             width: 4,
             right: false,
             value: |entry| entry.node.clone(),
         },
         Column {
+            key: "STATE",
             heading: "STATE",
             width: 9,
             right: false,
@@ -476,57 +494,104 @@ fn columns(width: usize, tag_width: usize, name_width: usize) -> Vec<Column> {
             },
         },
         Column {
+            key: "ADDRESS",
             heading: "ADDRESS",
             width: 15,
             right: false,
             value: |entry| entry.ip.clone().unwrap_or_else(|| "—".to_owned()),
         },
         Column {
+            key: "HOME",
             heading: "HOME",
             width: 5,
             right: true,
-            value: |entry| {
-                entry
-                    .home
-                    .as_ref()
-                    .and_then(|home| home.size_bytes)
-                    .map_or_else(|| "—".to_owned(), size)
-            },
+            value: |entry| bytes(entry.home.as_ref().and_then(|home| home.size_bytes)),
         },
         Column {
+            key: "HOME USED",
+            heading: "USED",
+            width: 5,
+            right: true,
+            value: |entry| bytes(entry.home.as_ref().and_then(|home| home.used_bytes)),
+        },
+        Column {
+            key: "HOME FREE",
             heading: "FREE",
             width: 6,
             right: true,
-            value: |entry| {
-                entry
-                    .home
-                    .as_ref()
-                    .and_then(|home| home.free_percent)
-                    .map_or_else(|| "—".to_owned(), |percent| format!("{percent:.0}%"))
-            },
+            value: |entry| percent(entry.home.as_ref().and_then(|home| home.free_percent)),
         },
         Column {
+            key: "ROOT",
             heading: "ROOT",
+            width: 5,
+            right: true,
+            value: |entry| bytes(entry.root.as_ref().and_then(|root| root.size_bytes)),
+        },
+        Column {
+            key: "ROOT USED",
+            heading: "USED",
+            width: 5,
+            right: true,
+            value: |entry| bytes(entry.root.as_ref().and_then(|root| root.used_bytes)),
+        },
+        Column {
+            key: "ROOT FREE",
+            heading: "FREE",
+            width: 6,
+            right: true,
+            value: |entry| percent(entry.root.as_ref().and_then(|root| root.free_percent)),
+        },
+        Column {
+            key: "STORAGE",
+            heading: "STORAGE",
+            width: 10,
+            right: false,
+            value: |entry| entry.root_storage.clone().unwrap_or_else(|| "—".to_owned()),
+        },
+        Column {
+            key: "POOL",
+            heading: "POOL",
+            width: 18,
+            right: false,
+            value: |entry| entry.pool.clone().unwrap_or_else(|| "—".to_owned()),
+        },
+        Column {
+            key: "LOAD",
+            heading: "LOAD",
             width: 5,
             right: true,
             value: |entry| {
                 entry
-                    .root
+                    .service_status
                     .as_ref()
-                    .and_then(|root| root.size_bytes)
-                    .map_or_else(|| "—".to_owned(), size)
+                    .and_then(|report| report.load_average.as_ref())
+                    .map_or_else(|| "—".to_owned(), |load| format!("{:.2}", load.one))
             },
         },
         Column {
-            heading: "FREE",
-            width: 6,
-            right: true,
+            key: "SERVICE",
+            heading: "SERVICE",
+            width: 14,
+            right: false,
             value: |entry| {
                 entry
-                    .root
+                    .service
                     .as_ref()
-                    .and_then(|root| root.free_percent)
-                    .map_or_else(|| "—".to_owned(), |percent| format!("{percent:.0}%"))
+                    .map_or_else(|| "—".to_owned(), |service| service.id.clone())
+            },
+        },
+        Column {
+            key: "IMAGE",
+            heading: "IMAGE",
+            width: 28,
+            right: false,
+            // The image without its registry: `owner/name:version`.
+            value: |entry| {
+                entry.image.as_deref().map_or_else(
+                    || "—".to_owned(),
+                    |image| image.split_once('/').map_or(image, |(_, path)| path).to_owned(),
+                )
             },
         },
     ];
@@ -534,11 +599,7 @@ fn columns(width: usize, tag_width: usize, name_width: usize) -> Vec<Column> {
     // narrower, when at least 9 cells are left (an address, cut with "…").
     let mut used = 0;
     let mut chosen = Vec::new();
-    if tag_width > 0 {
-        used += tag_width + 1;
-        chosen.push(tags);
-    }
-    for mut column in all {
+    for mut column in all.into_iter().filter(|column| column.width > 0 && app.column_shown(column.key)) {
         if used + column.width < width {
             used += column.width + 1;
             chosen.push(column);
@@ -961,7 +1022,7 @@ fn workspaces(buf: &mut Buffer, area: Rect, app: &App, mut controls: Vec<Control
         .map(|entry| entry.tags.len().min(MAX_TAGS))
         .max()
         .unwrap_or(0);
-    let columns = columns(usize::from(list.width), tag_width, name_width);
+    let columns = columns(app, usize::from(list.width), tag_width, name_width);
     write(
         buf,
         list.x,
@@ -1082,7 +1143,8 @@ fn workspaces(buf: &mut Buffer, area: Rect, app: &App, mut controls: Vec<Control
             x += u16::try_from(column.width).unwrap_or(0);
         }
         // The tags' squares in their colours, from the first column.
-        for (at, tag) in entry.tags.iter().take(MAX_TAGS).enumerate() {
+        let tags = columns.first().is_some_and(|column| column.key == "TAGS");
+        for (at, tag) in entry.tags.iter().take(if tags { MAX_TAGS } else { 0 }).enumerate() {
             let x = list.x + 1 + u16::try_from(at).unwrap_or(0);
             write(buf, x, y, 1, "■", style.fg(tag_color(palette, tag)));
         }
@@ -1651,11 +1713,23 @@ fn draw_settings(buf: &mut Buffer, area: Rect, app: &App, section: usize, themes
     let text = text_style(palette);
     let muted = text.fg(palette.muted);
     let under = settings_area(area, app);
-    let sections_focused = themes.is_none() && !matches!(app.overlay, Some(Overlay::Integrations { .. }));
+    let picking = match app.overlay {
+        Some(Overlay::Columns { index }) => Some(index),
+        _ => None,
+    };
+    let sections_focused = themes.is_none()
+        && picking.is_none()
+        && !matches!(app.overlay, Some(Overlay::Integrations { .. }));
     let bottom = if themes.is_some() {
         vec![
             Control::key("preview ↑↓"),
             Control::key("save ↵"),
+            Control::key("back esc"),
+        ]
+    } else if picking.is_some() {
+        vec![
+            Control::key("select ↑↓"),
+            Control::key("toggle ␣"),
             Control::key("back esc"),
         ]
     } else {
@@ -1726,7 +1800,8 @@ fn draw_settings(buf: &mut Buffer, area: Rect, app: &App, section: usize, themes
             lines.push(line("Language", "English", None));
             lines.push(line("Confirmations", "On", None));
         }
-        (2, _) => {
+        (MACHINES, _) => {}
+        (3, _) => {
             lines.push(line("Status", "auto", None));
             lines.push(line("Log", "live", None));
         }
@@ -1777,7 +1852,7 @@ fn draw_settings(buf: &mut Buffer, area: Rect, app: &App, section: usize, themes
             break;
         }
         spans(buf, x, y, width, parts);
-        if section == 3 {
+        if section == INTEGRATIONS {
             let provider = if (first + 1..first + 4).contains(&row) {
                 Some(row - first - 1)
             } else if row == first + 6 {
@@ -1791,6 +1866,38 @@ fn draw_settings(buf: &mut Buffer, area: Rect, app: &App, section: usize, themes
         }
         if section == APPEARANCE && (first..first + THEMES.len()).contains(&row) {
             super::chrome::register(Rect::new(x, y, width, 1), super::chrome::Hit::Theme(row - first));
+        }
+    }
+    if section == MACHINES {
+        // The columns as checkboxes, top to bottom and then in the next
+        // column as far as the box is high.
+        const CELL: u16 = 17;
+        let top = inner.y + 1 + u16::try_from(first).unwrap_or(0);
+        let rows = usize::from(inner.bottom().saturating_sub(top)).max(1);
+        for (at, ((key, _), shown)) in COLUMNS.iter().zip(app.columns).enumerate() {
+            let cell_x = x + CELL * u16::try_from(at / rows).unwrap_or(0);
+            let y = top + u16::try_from(at % rows).unwrap_or(0);
+            if cell_x + CELL > inner.right() {
+                break;
+            }
+            let chosen = picking == Some(at);
+            let label = if chosen {
+                text.fg(palette.focus).add_modifier(Modifier::BOLD)
+            } else if shown {
+                text
+            } else {
+                muted
+            };
+            let parts = [
+                (if chosen { "▶ " } else { "  " }.to_owned(), label),
+                (
+                    if shown { "[x] " } else { "[ ] " }.to_owned(),
+                    if shown { text.fg(palette.ok) } else { muted },
+                ),
+                ((*key).to_owned(), label),
+            ];
+            spans(buf, cell_x, y, CELL, &parts);
+            super::chrome::register(Rect::new(cell_x, y, CELL, 1), super::chrome::Hit::Column(at));
         }
     }
 }
@@ -2024,7 +2131,8 @@ fn draw_integration_report(buf: &mut Buffer, area: Rect, app: &App, editor: &sup
 fn draw_overlay(buf: &mut Buffer, area: Rect, app: &App, overlay: &Overlay) {
     match overlay {
         Overlay::Settings { section } => return draw_settings(buf, area, app, *section, None),
-        Overlay::Integrations { .. } => return draw_settings(buf, area, app, 3, None),
+        Overlay::Integrations { .. } => return draw_settings(buf, area, app, INTEGRATIONS, None),
+        Overlay::Columns { .. } => return draw_settings(buf, area, app, MACHINES, None),
         Overlay::Integration(editor) => return draw_integration(buf, area, app, editor),
         Overlay::Pangolin(wizard) => return super::draw_pangolin::screen(buf, area, app, wizard),
         Overlay::Themes { index, .. } => return draw_settings(buf, area, app, APPEARANCE, Some(*index)),
@@ -2054,6 +2162,7 @@ fn draw_overlay(buf: &mut Buffer, area: Rect, app: &App, overlay: &Overlay) {
         Overlay::Settings { .. }
         | Overlay::Themes { .. }
         | Overlay::Integrations { .. }
+        | Overlay::Columns { .. }
         | Overlay::Integration(_)
         | Overlay::Pangolin(_) => {
             return;
