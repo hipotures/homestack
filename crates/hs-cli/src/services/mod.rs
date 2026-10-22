@@ -8,4 +8,5 @@ pub mod manifest;
 pub mod registry;
 
 pub mod lifecycle;
+pub mod migrate;
 pub mod replacement;

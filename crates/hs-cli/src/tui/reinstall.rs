@@ -565,3 +565,70 @@ async fn common_work(
         }),
     }
 }
+
+/// Do `start` (`Kind::Migrate` of a registered service container): its
+/// plan, the answer, then the move with the container's current step shown.
+pub async fn migrate_work(
+    path: &Path,
+    start: &Start,
+    decisions: &mut mpsc::UnboundedReceiver<Decision>,
+    progress: &(dyn Fn(Progress) + Send + Sync),
+    say: &(dyn Fn(&str) + Send + Sync),
+) {
+    use crate::services::{migrate, registry};
+    let result = async {
+        let parameters = &start.parameters;
+        let target = migrate::Target {
+            ctid: start.vmid.ok_or("No container selected")?,
+            node: parameters["target_node"].as_str().unwrap_or_default().to_owned(),
+            storage: parameters["target_storage"].as_str().unwrap_or_default().to_owned(),
+        };
+        let state_path = path.with_file_name("services.toml");
+        let config = DeployConfig::load(path)?;
+        let pve = hs_deploy::deploy::deploy_client(&config)?;
+        let plan = migrate::plan(&pve, &state_path, &target).await?;
+        progress(Progress::Plan {
+            lines: plan.lines.clone(),
+            question: "Migrate this service container?".to_owned(),
+            blocked: (!plan.problems.is_empty()).then(|| plan.problems.join("\n")),
+            secret: None,
+        });
+        if !plan.problems.is_empty() {
+            return Ok::<_, String>(None);
+        }
+        match decisions.recv().await {
+            Some(Decision::Apply(_)) => {}
+            _ => return Ok(Some(vec!["Cancelled. No changes were made.".to_owned()])),
+        }
+        let registry = registry::load(&state_path)?;
+        let record = registry
+            .instance(target.ctid)
+            .map(|(record, _)| record)
+            .ok_or("Service is no longer registered")?;
+        let source = common_source(record).await?;
+        let ctid = target.ctid;
+        let said = |line: &str| {
+            say(line);
+            let doing = line.trim();
+            let step = doing
+                .split_once(&format!("CT {ctid} · "))
+                .map_or(doing, |(_, step)| step);
+            progress(Progress::Steps(vec![Step {
+                name: format!("CT {ctid}: {step}"),
+                state: StepState::Running,
+            }]));
+        };
+        said(&format!("CT {ctid} · checking"));
+        let lines = migrate::apply(&pve, &state_path, &source, &target, &said).await?;
+        Ok(Some(lines))
+    }
+    .await;
+    match result {
+        Ok(Some(lines)) => progress(Progress::Done { ok: true, lines }),
+        Ok(None) => {}
+        Err(error) => progress(Progress::Done {
+            ok: false,
+            lines: vec![error],
+        }),
+    }
+}

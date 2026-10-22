@@ -32,7 +32,7 @@ const ROLES: [(&str, &str); 7] = [
     ("HomeStackStorage", "Datastore.AllocateSpace,Datastore.Audit"),
     (
         "HomeStackDeploy",
-        "Pool.Audit,VM.Allocate,VM.Audit,VM.Config.CPU,VM.Config.Disk,VM.Config.Memory,VM.Config.Network,VM.Config.Options,VM.PowerMgmt",
+        "Pool.Audit,VM.Allocate,VM.Audit,VM.Config.CPU,VM.Config.Disk,VM.Config.Memory,VM.Config.Network,VM.Config.Options,VM.Migrate,VM.PowerMgmt",
     ),
     ("HomeStackDeployNodes", "Sys.AccessNetwork"),
     (

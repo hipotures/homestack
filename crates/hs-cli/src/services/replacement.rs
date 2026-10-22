@@ -110,7 +110,7 @@ fn description(source: &Source, journal: &Journal) -> String {
     )
 }
 
-fn permit(perms: &Value, path: &str, privilege: &str) -> bool {
+pub(super) fn permit(perms: &Value, path: &str, privilege: &str) -> bool {
     // PVE values indicate propagation, not whether the listed privilege exists.
     if perms[path][privilege].as_u64().is_some_and(|value| value <= 1) {
         return true;

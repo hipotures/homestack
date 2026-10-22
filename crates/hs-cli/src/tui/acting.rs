@@ -36,6 +36,42 @@ impl App {
         storages
     }
 
+    /// The registered service container `vmid`, if it is one.
+    fn service_instance(&self, vmid: u32) -> Option<&crate::services::registry::Instance> {
+        self.services.as_ref().ok()?.instance(vmid).map(|(_, instance)| instance)
+    }
+
+    /// Where a service container's disks can move on `node`: active
+    /// storages for containers of the type its root is on now, since
+    /// Proxmox moves a volume only between storages of the same type.
+    fn service_storages(&self, instance: &crate::services::registry::Instance, node: &str) -> Vec<String> {
+        let Some(Ok(overview)) = &self.storage_overview else {
+            return Vec::new();
+        };
+        let on = |storage: &hs_model::status::StorageStatus, node: &str| {
+            storage.shared || storage.nodes.iter().any(|n| n == node)
+        };
+        let Some(kind) = overview
+            .storages
+            .iter()
+            .find(|s| s.storage == instance.root_storage && on(s, &instance.node))
+            .map(|s| s.storage_type.clone())
+        else {
+            return Vec::new();
+        };
+        overview
+            .storages
+            .iter()
+            .filter(|s| {
+                s.available
+                    && s.storage_type == kind
+                    && on(s, node)
+                    && s.content.split(',').any(|content| content == "rootdir")
+            })
+            .map(|s| s.storage.clone())
+            .collect()
+    }
+
     /// The pools a new workspace can go to, as the status lists them: their
     /// IDs and names (comments in lower case); the server's pool alone when
     /// it lists neither.
@@ -345,6 +381,25 @@ impl App {
                 }
                 fields
             }
+            Kind::Migrate if let Some(instance) = vmid.and_then(|vmid| self.service_instance(vmid)) => {
+                let nodes: Vec<String> = self.nodes().into_iter().filter(|node| *node != instance.node).collect();
+                let storages = nodes
+                    .first()
+                    .map(|node| self.service_storages(instance, node))
+                    .unwrap_or_default();
+                vec![
+                    Field::choice(
+                        "Node",
+                        nodes,
+                        "Root and home move; a running service restarts on the target node.",
+                    ),
+                    Field::choice(
+                        "Storage",
+                        storages,
+                        "Only storages of the same type as now; Proxmox moves volumes only between those.",
+                    ),
+                ]
+            }
             Kind::Migrate => {
                 let here = entry.as_ref().map(|entry| entry.node.clone()).unwrap_or_default();
                 let nodes: Vec<String> = self.nodes().into_iter().filter(|node| *node != here).collect();
@@ -487,10 +542,16 @@ impl App {
             Kind::Migrate => {
                 let node = value("Node");
                 let storage = value("Storage");
+                let service = vmid.is_some_and(|vmid| self.service_instance(vmid).is_some());
                 if node.is_empty() || storage.is_empty() {
-                    return Err("There is no other node with a storage for workspace disks.".to_owned());
+                    return Err(if service {
+                        "There is no other node with a storage of the same type for this container."
+                    } else {
+                        "There is no other node with a storage for workspace disks."
+                    }
+                    .to_owned());
                 }
-                json!({"vmid": vmid, "target_node": node, "target_storage": storage})
+                json!({"vmid": vmid, "target_node": node, "target_storage": storage, "service": service})
             }
             Kind::Refresh | Kind::Destroy | Kind::Start | Kind::Stop => json!({"vmid": vmid}),
             Kind::Reinstall => self.reinstall_parameters(form)?,
@@ -689,7 +750,13 @@ impl App {
         } else {
             node
         };
-        let storages = self.storages_on(&node);
+        let service = (kind == Kind::Migrate)
+            .then(|| self.selected_entry().and_then(|entry| self.service_instance(entry.vmid)))
+            .flatten();
+        let storages = match service {
+            Some(instance) => self.service_storages(instance, &node),
+            None => self.storages_on(&node),
+        };
         if let Some(field) = form.fields.iter_mut().find(|field| field.label == "Storage")
             && let Input::Choice { options, index } = &mut field.input
             && *options != storages

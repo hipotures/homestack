@@ -75,3 +75,15 @@ API configuration and task evidence verify the volume moves, not guest file
 contents. Application health alone does not prove existing data was read.
 Restoring an old image does not undo database migrations; a data-changing
 upgrade requires a consistent backup, and restoring it is a separate action.
+
+## Moving a service container
+
+Migrate (`g`) on a registered service container moves it to another node with
+the deploy token (`VM.Migrate` in its `HomeStackDeploy` role): a restart
+migration of root and home onto one storage of the target node. The form offers
+only storages of the type the root is on now, since Proxmox moves volumes only
+between storages of the same type. The CTID, address and MAC stay. A running
+service starts again on the target node and its health check must pass; the
+registry then records the new node and volumes. A container that is already on
+the chosen node, after an interrupted migration or a move in Proxmox, is only
+recorded there.

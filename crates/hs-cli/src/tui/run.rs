@@ -1130,6 +1130,22 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
                             };
                             app.log(&clock.now(), &message);
                         }
+                        Request::Act(start) if start.kind == Kind::Migrate && start.parameters["service"] == true => {
+                            let (sender, mut decisions) = mpsc::unbounded_channel();
+                            decide = Some(sender);
+                            let updates = updates.clone();
+                            let deploy_toml = deploy_toml(ctx);
+                            tokio::spawn(async move {
+                                let told = updates.clone();
+                                let tell = move |progress: Progress| {
+                                    let _ = told.send(Update::Action(progress));
+                                };
+                                let say = move |line: &str| {
+                                    let _ = updates.send(Update::Log(line.trim().to_owned()));
+                                };
+                                super::reinstall::migrate_work(&deploy_toml, &start, &mut decisions, &tell, &say).await;
+                            });
+                        }
                         Request::Act(start) if start.kind == Kind::Reinstall => {
                             let (sender, mut decisions) = mpsc::unbounded_channel();
                             decide = Some(sender);
