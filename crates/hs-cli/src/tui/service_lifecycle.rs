@@ -8,7 +8,7 @@ use super::install::{Event, Found, Mark, Setting};
 use super::installing::{Command, Setup};
 use crate::install_flow::Answer;
 use crate::services::{deploy, instance, lifecycle};
-use lifecycle::{Action, Choice};
+use lifecycle::Choice;
 
 fn setting(title: &str, note: &str, choices: Vec<(String, String)>, multiple: bool, value: Option<String>) -> Setting {
     Setting {
@@ -43,6 +43,7 @@ pub(super) fn work(
     };
     let mut settings: Vec<Setting> = Vec::new();
     let mut reviewed: Option<lifecycle::Plan> = None;
+    let mut shown = String::new();
     while let Ok(command) = commands.recv() {
         match command {
             Command::Cancel => return,
@@ -59,20 +60,18 @@ pub(super) fn work(
                         continue;
                     }
                 };
+                // One instance: the settings show what it has now.
+                let only = match instances.as_slice() {
+                    [only] => Some(only),
+                    _ => None,
+                };
+                shown = only.map(lifecycle::shown_environment).unwrap_or_default();
                 settings = vec![
                     setting(
-                        "Operation",
-                        "For image updates, select the container in the main list and press Enter; to move one, press g there.",
-                        Action::ALL
-                            .iter()
-                            .map(|a| (a.label().to_owned(), String::new()))
-                            .collect(),
-                        false,
-                        None,
-                    ),
-                    setting(
                         "Instances",
-                        "The containers of this service in the cluster; select the ones to change.",
+                        "The containers of this service in the cluster; select the ones to change. Change a \
+                         setting below and the review shows what is done; nothing else changes. Image updates: \
+                         Enter on the container in the main list; moving it: g there.",
                         instances
                             .iter()
                             .map(|i| {
@@ -93,43 +92,39 @@ pub(super) fn work(
                     ),
                     setting(
                         "Root (GiB)",
-                        "Resize only: the new total size of the root disk; a disk only grows. Empty: unchanged.",
+                        "The size of the root disk. A larger number grows it, online; a disk never shrinks.",
                         Vec::new(),
                         false,
-                        Some(String::new()),
+                        Some(only.map(|i| i.root_gib.to_string()).unwrap_or_default()),
                     ),
                     setting(
                         "Home (GiB)",
-                        "Resize only: the new total size of the home volume at /home/app. Empty: unchanged.",
+                        "The size of the home volume at /home/app. A larger number grows it, online; its data \
+                         stays; a volume never shrinks.",
                         Vec::new(),
                         false,
-                        Some(String::new()),
+                        Some(only.map(|i| i.home_gib.to_string()).unwrap_or_default()),
                     ),
                     setting(
                         "Environment",
-                        "Environment only: KEY=value entries separated by spaces change or add a variable; KEY= \
-                         removes one; variables not named stay as they are. No secrets: the container \
-                         configuration is readable in Proxmox. A running container restarts to take the change; \
-                         its data in /home/app stays.",
+                        "The container's variables as KEY=value separated by spaces. Change a value, add an entry \
+                         or take one out. No secrets: the configuration is readable in Proxmox. A running container \
+                         restarts to read the change; its data in /home/app stays.",
                         Vec::new(),
                         false,
-                        Some(match instances.as_slice() {
-                            [only] => lifecycle::shown_environment(only),
-                            _ => String::new(),
-                        }),
+                        Some(shown.clone()),
                     ),
                     setting(
-                        "Confirmation",
-                        "Remove only: type the names of the selected containers, separated by spaces. The container \
-                         and its home volume are deleted for good.",
+                        "Remove",
+                        "Type the names of the selected containers, separated by spaces, to remove them together \
+                         with their home volumes, for good. Empty: nothing is removed.",
                         Vec::new(),
                         false,
                         Some(String::new()),
                     ),
                 ];
-                settings[0].picked = vec![0];
-                if instances.len() == 1 {
-                    settings[1].picked = vec![0];
+                if only.is_some() {
+                    settings[0].picked = vec![0];
                 }
                 tell(Event::Connected(Found {
                     root: "Service · deploy token".to_owned(),
@@ -164,25 +159,23 @@ pub(super) fn work(
                     Some(Answer::Text(value)) => value.trim().to_owned(),
                     _ => String::new(),
                 };
-                let action = selected(0)
-                    .first()
-                    .and_then(|label| Action::ALL.iter().find(|a| a.label() == label))
-                    .copied()
-                    .unwrap_or(Action::Resize);
                 let choice = Choice {
-                    action,
-                    ctids: selected(1).iter().filter_map(|id| id.parse().ok()).collect(),
-                    root_gib: text(2),
-                    home_gib: text(3),
-                    environment: text(4),
-                    confirmation: text(5),
+                    ctids: selected(0).iter().filter_map(|id| id.parse().ok()).collect(),
+                    root_gib: text(1),
+                    home_gib: text(2),
+                    environment: text(3),
+                    shown_environment: shown.clone(),
+                    remove: text(4),
                 };
                 let plan =
                     setup
                         .handle
                         .block_on(lifecycle::plan(&pve, &source.repository, &source.manifest.id, &choice));
                 tell(Event::Reviewed {
-                    sections: vec![(action.label().to_owned(), plan.lines.clone())],
+                    sections: vec![(
+                        if plan.remove { "Remove" } else { "Changes" }.to_owned(),
+                        plan.lines.clone(),
+                    )],
                     problems: plan.problems.clone(),
                 });
                 reviewed = Some(plan);
