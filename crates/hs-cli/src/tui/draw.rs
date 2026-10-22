@@ -817,6 +817,7 @@ fn workspaces(buf: &mut Buffer, area: Rect, app: &App, mut controls: Vec<Control
     } else {
         top_left.push(Control::key("&/filter"));
     }
+    top_left.push(Control::key(if app.online { "[x] &online" } else { "[ ] &online" }));
     let node = app.node_name().unwrap_or_else(|| "all".to_owned());
     let position = app.selected_index().map_or(0, |index| index + 1);
     let sides = Sides {
@@ -1013,6 +1014,9 @@ fn workspaces(buf: &mut Buffer, area: Rect, app: &App, mut controls: Vec<Control
             if palette.no_color {
                 style = style.add_modifier(Modifier::UNDERLINED);
             }
+        } else if entry.status != "running" {
+            // A stopped machine: the whole line greyed.
+            style = muted;
         }
         let mut shown = (*entry).clone();
         if let Some(action) = app.action.as_ref().filter(|action| {
@@ -2120,7 +2124,7 @@ fn list_item(palette: &Palette, label: &str, chosen: bool) -> (String, Style) {
     }
 }
 
-const HELP: [&str; 27] = [
+const HELP: [&str; 28] = [
     "1 2 3 4     view 1 workspaces, 2 cluster+storage, 3 storage, 4 log (again: auto)",
     "0           the standard view: every panel and node, no filter",
     "v           next view (auto, 1, 2, 3, 4)",
@@ -2133,6 +2137,7 @@ const HELP: [&str; 27] = [
     "← →         ★ (favorites), all or one pool (after tab: one node or all)",
     "f           star or unstar the selected workspace (kept in tui.toml)",
     "/           filter by name or VMID; ↵ keeps it, esc clears it",
+    "o           only the running machines (again: all)",
     "esc         close a box, return to view 0, then confirm quit (↵ yes, esc cancel)",
     "q           quit immediately",
     "",

@@ -248,6 +248,8 @@ pub struct App {
     pub info: bool,
     pub filter: String,
     pub filtering: bool,
+    /// Only the running machines (`o`).
+    pub online: bool,
     /// The node carousel: `None` is every node.
     pub node: Option<usize>,
     /// The group carousel: `None` is all, else a pool's ID.
@@ -362,6 +364,7 @@ impl App {
             info: false,
             filter: String::new(),
             filtering: false,
+            online: false,
             node: None,
             group: None,
             on_group: true,
@@ -1035,6 +1038,7 @@ impl App {
                     .is_none_or(|group| entry.pool.as_ref() == Some(group))
             })
             .filter(|entry| node.as_ref().is_none_or(|node| &entry.node == node))
+            .filter(|entry| !self.online || entry.status == "running")
             .filter(|entry| {
                 filter.is_empty()
                     || entry.vmid.to_string().contains(&filter)
@@ -1892,6 +1896,10 @@ impl App {
             }
             KeyCode::Char('/') if self.shown.workspaces => self.filtering = true,
             KeyCode::Char('f') if self.shown.workspaces => self.toggle_favorite(),
+            KeyCode::Char('o') if self.shown.workspaces => {
+                self.online = !self.online;
+                self.keep_selection();
+            }
             KeyCode::Tab | KeyCode::BackTab if self.shown.workspaces => self.on_group = !self.on_group,
             KeyCode::Right | KeyCode::Left if self.shown.workspaces && self.on_group => {
                 // Favorites, all, the pools by ID, favorites, …
