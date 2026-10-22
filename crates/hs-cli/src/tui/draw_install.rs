@@ -562,7 +562,8 @@ fn settings(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
         return;
     };
     if let Some(value) = &setting.text {
-        let rect = fit(48, 4);
+        // The field, a blank row and the note, wrapped as `paragraph` wraps it.
+        let rect = fit(48, 2 + wrap(&setting.note, 48).len());
         let box_inner = frame(
             buf,
             rect,

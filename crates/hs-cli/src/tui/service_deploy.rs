@@ -172,8 +172,16 @@ fn resumed_choice(record: &Deployment) -> Choice {
     Choice {
         version: record.image_version.clone(),
         nodes: record.instances.iter().map(|i| i.node.clone()).collect(),
-        root_storages: record.instances.iter().map(|i| i.root_storage.clone()).collect(),
-        home_storages: record.instances.iter().map(|i| i.home_storage.clone()).collect(),
+        root_storages: record
+            .instances
+            .iter()
+            .map(|i| format!("{}:{}", i.node, i.root_storage))
+            .collect(),
+        home_storages: record
+            .instances
+            .iter()
+            .map(|i| format!("{}:{}", i.node, i.home_storage))
+            .collect(),
         ctids: record
             .instances
             .iter()
@@ -224,26 +232,35 @@ fn settings(source: &Source, cluster: &Cluster, kept: Option<&Choice>, offset: i
         .filter(|p| !p.is_empty())
         .unwrap_or_else(|| vec![0]);
     let nodes: Vec<(String, String)> = cluster.nodes.iter().map(|n| (n.clone(), String::new())).collect();
-    let mut storage_ids: Vec<&str> = cluster.storages.iter().map(|s| s.storage.as_str()).collect();
-    storage_ids.sort_unstable();
-    storage_ids.dedup();
-    let storages: Vec<(String, String)> = storage_ids
+    // One row per node and storage, the nodes in order.
+    let mut rows: Vec<&deploy::NodeStorage> = cluster.storages.iter().collect();
+    rows.sort_by(|a, b| (&a.node, &a.storage).cmp(&(&b.node, &b.storage)));
+    let storages: Vec<(String, String)> = rows
         .iter()
-        .map(|id| {
-            let free: Vec<String> = cluster
-                .storages
-                .iter()
-                .filter(|s| s.storage == *id)
-                .map(|s| format!("{} {} GiB free", s.node, gib(s.available)))
-                .collect();
-            ((*id).to_owned(), free.join(", "))
+        .map(|s| {
+            (
+                format!("{}:{}", s.node, s.storage),
+                format!("{} GiB free of {} GiB", gib(s.available), gib(s.total)),
+            )
+        })
+        .collect();
+    // By default each node's storage with the most free space.
+    let roomiest: Vec<usize> = cluster
+        .nodes
+        .iter()
+        .filter_map(|node| {
+            rows.iter()
+                .enumerate()
+                .filter(|(_, s)| s.node == *node)
+                .max_by_key(|(_, s)| s.available)
+                .map(|(index, _)| index)
         })
         .collect();
     let storage_pick = |wanted: Option<&Vec<String>>| {
         wanted
             .map(|w| picked(&storages, w))
             .filter(|p| !p.is_empty())
-            .unwrap_or_else(|| if storages.is_empty() { Vec::new() } else { vec![0] })
+            .unwrap_or_else(|| roomiest.clone())
     };
     let text = |value: Option<&String>, default: &str| {
         Some(
@@ -283,8 +300,7 @@ fn settings(source: &Source, cluster: &Cluster, kept: Option<&Choice>, offset: i
         },
         Setting {
             title: "Container disk".to_owned(),
-            note: "Where each container's disposable root disk is made; each node uses the first ticked storage it \
-                   has. Only storages the deploy token may use are offered."
+            note: "Where each container's disposable root disk is made, one per node; a node uses its ticked storage. Only storages the deploy token may use are offered."
                 .to_owned(),
             multiple: true,
             picked: storage_pick(kept.map(|k| &k.root_storages)),
@@ -294,8 +310,7 @@ fn settings(source: &Source, cluster: &Cluster, kept: Option<&Choice>, offset: i
         Setting {
             title: "Home volume".to_owned(),
             note: format!(
-                "Where each instance's own persistent volume is made, mounted at {MOUNT} before the first start; \
-                 each node uses the first ticked storage it has."
+                "Where each instance's own persistent volume is made, mounted at {MOUNT} before the first start, one per node."
             ),
             multiple: true,
             picked: storage_pick(kept.map(|k| &k.home_storages)),
@@ -304,8 +319,8 @@ fn settings(source: &Source, cluster: &Cluster, kept: Option<&Choice>, offset: i
         },
         Setting {
             title: "CTID".to_owned(),
-            note: "One CTID per ticked node, in the order of the nodes, separated by commas. The address follows \
-                   from it: 102240 is .102.240 in the servers' network."
+            note: "Empty: the first free CTIDs, shown in the review. Or one CTID per ticked node, in the order of \
+                   the nodes, separated by commas. The address follows from it: 102240 is .102.240."
                 .to_owned(),
             multiple: false,
             choices: Vec::new(),

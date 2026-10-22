@@ -56,8 +56,9 @@ impl Source {
 pub struct NodeStorage {
     pub node: String,
     pub storage: String,
-    /// Free bytes, as Proxmox reports them.
+    /// Free and total bytes, as Proxmox reports them.
     pub available: u64,
+    pub total: u64,
 }
 
 /// What the cluster and the registry offer.
@@ -78,6 +79,7 @@ pub struct Cluster {
 pub struct Choice {
     pub version: String,
     pub nodes: Vec<String>,
+    /// `NODE:STORAGE` entries; each node uses its own.
     pub root_storages: Vec<String>,
     pub home_storages: Vec<String>,
     /// One CTID per chosen node, in the nodes' order.
@@ -203,6 +205,7 @@ pub async fn survey(config: &DeployConfig, pve: &impl Pve, source: &Source) -> R
                     node: node.clone(),
                     storage: id.to_owned(),
                     available: item["avail"].as_u64().unwrap_or(0),
+                    total: item["total"].as_u64().unwrap_or(0),
                 });
             }
         }
@@ -290,6 +293,30 @@ async fn config_of(pve: &impl Pve, ctid: u32) -> Result<Option<(node::Container,
     Ok(Some((found, config)))
 }
 
+/// `count` free CTIDs from the start of the API servers' block (102001
+/// for servers at 102001-102003), each with an address in the network.
+async fn automatic(config: &DeployConfig, pve: &impl Pve, count: usize) -> Result<Vec<u32>, String> {
+    let first = config
+        .instances
+        .iter()
+        .map(|instance| instance.ctid)
+        .min()
+        .map_or(1001, |ctid| ctid / 1000 * 1000 + 1);
+    let mut found = Vec::new();
+    for ctid in first..first + 999 {
+        if found.len() == count {
+            break;
+        }
+        if address(config, ctid).is_some() && free(pve, ctid).await? {
+            found.push(ctid);
+        }
+    }
+    if found.len() < count {
+        return Err(format!("No free CTID from {first}; give them in CTID"));
+    }
+    Ok(found)
+}
+
 /// The address of `ctid` in the deployment's network.
 fn address(config: &DeployConfig, ctid: u32) -> Option<Ipv4Addr> {
     let network = hs_model::config::Network {
@@ -369,7 +396,18 @@ pub async fn plan(
         Ok(entries) => plan.environment = entries,
         Err(error) => problems.push(error),
     }
-    let ctids: Vec<&str> = choice.ctids.split([',', ' ']).filter(|id| !id.is_empty()).collect();
+    let mut ctids: Vec<String> = choice
+        .ctids
+        .split([',', ' '])
+        .filter(|id| !id.is_empty())
+        .map(str::to_owned)
+        .collect();
+    if ctids.is_empty() {
+        match automatic(config, pve, choice.nodes.len()).await {
+            Ok(found) => ctids = found.iter().map(u32::to_string).collect(),
+            Err(error) => problems.push(error),
+        }
+    }
     if ctids.len() != choice.nodes.len() {
         problems.push(format!(
             "Give one CTID per ticked node ({} ticked, {} given)",
@@ -428,11 +466,13 @@ pub async fn plan(
             continue;
         }
         let pick = |wanted: &[String], bytes: u64, what: &str| -> Result<String, String> {
+            let prefix = format!("{node}:");
             wanted
                 .iter()
-                .find(|id| cluster.storages.iter().any(|s| s.node == *node && s.storage == **id))
-                .cloned()
-                .ok_or_else(|| format!("{node}: none of the ticked {what} storages is there"))
+                .filter_map(|picked| picked.strip_prefix(&prefix))
+                .find(|id| cluster.storages.iter().any(|s| s.node == *node && s.storage == *id))
+                .map(str::to_owned)
+                .ok_or_else(|| format!("{node}: tick a {what} storage of this node"))
                 .and_then(|id| {
                     let available = cluster
                         .storages
