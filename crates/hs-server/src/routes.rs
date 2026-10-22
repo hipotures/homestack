@@ -25,7 +25,15 @@ use crate::error::ApiError;
 pub const MAX_CONFIG_BYTES: usize = 256 * 1024;
 
 pub fn public() -> Router<AppState> {
-    Router::new().route("/health/live", get(live))
+    Router::new()
+        .route("/health/live", get(live))
+        .route(hs_service_status::PATH, get(service_status))
+}
+
+/// Cached measurements of this service's own mount namespace.
+#[utoipa::path(get, path = "/.well-known/homestack/status", tag = "health", responses((status = 200, body = hs_service_status::Report)))]
+pub async fn service_status(State(state): State<AppState>) -> Json<hs_service_status::Report> {
+    Json(state.service_status.report(hs_service_status::Status::Pass))
 }
 
 pub fn v1() -> Router<AppState> {

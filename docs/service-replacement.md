@@ -12,8 +12,11 @@ HomeStack labels the home with the manifest service ID and `/home/app`; the
 technical PVE volume ID remains visible in details. PVE owns the backend name
 and may change its CTID component during reassignment.
 The container overview reads its IP from `net0` and home capacity from `mp0`.
-Home free space stays unknown: PVE's LXC `disk`/`maxdisk` counters describe the
-root filesystem and must not be used as measurements of `/home/app`.
+Home free space comes from fresh in-container HTTP telemetry when the service
+implements the [service status contract](../.agents/skills/homestack-service/service-status.md).
+Otherwise it stays unknown: PVE's LXC `disk`/`maxdisk` counters describe the
+root filesystem and must not be used as measurements of `/home/app`. Telemetry
+does not replace the PVE ownership and volume checks below.
 
 1. Pull the selected release into a new operation-specific OCI archive. PVE 9.2
    accepts tagged pull references; verify the registry's index and amd64 digests

@@ -127,8 +127,14 @@ pub fn hostname(manifest: &Manifest, node: &str) -> String {
 }
 
 pub(super) fn description(source: &Source, image: &str, digest: &str) -> String {
+    let telemetry = match &source.manifest.healthcheck {
+        Some(Healthcheck::Http { port: name, .. }) => port(&source.manifest, name)
+            .map(|port| format!("\nstatus-port {port}"))
+            .unwrap_or_default(),
+        _ => String::new(),
+    };
     format!(
-        "HomeStack service {}\nrepository {}\nmanifest {} {}\ncommit {}\nimage {image}\ndigest {digest}\nmade by homestack",
+        "HomeStack service {}\nrepository {}\nmanifest {} {}\ncommit {}\nimage {image}\ndigest {digest}\nmade by homestack{telemetry}",
         source.manifest.id, source.repository, source.path, source.blob, source.commit
     )
 }

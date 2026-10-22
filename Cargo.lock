@@ -973,6 +973,7 @@ dependencies = [
  "base64 0.23.1",
  "hs-model",
  "hs-pve",
+ "hs-service-status",
  "pve-sim",
  "reqwest",
  "serde",
@@ -1045,6 +1046,7 @@ dependencies = [
 name = "hs-model"
 version = "0.1.0"
 dependencies = [
+ "hs-service-status",
  "serde",
  "serde_json",
  "sha2",
@@ -1079,6 +1081,7 @@ dependencies = [
  "hs-core",
  "hs-model",
  "hs-pve",
+ "hs-service-status",
  "pve-sim",
  "reqwest",
  "serde",
@@ -1097,6 +1100,15 @@ dependencies = [
  "url",
  "utoipa",
  "uuid",
+]
+
+[[package]]
+name = "hs-service-status"
+version = "0.1.0"
+dependencies = [
+ "rustix",
+ "serde",
+ "utoipa",
 ]
 
 [[package]]

@@ -49,6 +49,9 @@ pub struct StatusEntry {
     pub root_storage: Option<String>,
     /// Home capacity/usage; `null` when no home configuration is available.
     pub home: Option<HomeUsage>,
+    /// Optional in-container measurements; observations, never ownership proof.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service_status: Option<hs_service_status::Report>,
     pub role_tag_ok: bool,
     pub warning: Option<String>,
     /// The OCI image recorded by HomeStack in the container description.

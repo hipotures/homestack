@@ -10,6 +10,7 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+hs-service-status = { path = "../hs-service-status", features = ["openapi"] }
 axum = { version = "0.8.9", features = ["ws"] }
 base64 = "0.23.1"
 hs-core = { version = "0.1.0", path = "../hs-core" }

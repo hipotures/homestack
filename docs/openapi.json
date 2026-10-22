@@ -10,6 +10,26 @@
     "version": "0.1.0"
   },
   "paths": {
+    "/.well-known/homestack/status": {
+      "get": {
+        "tags": [
+          "health"
+        ],
+        "summary": "Cached measurements of this service's own mount namespace.",
+        "operationId": "service_status",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Report"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/health/live": {
       "get": {
         "tags": [
@@ -1933,6 +1953,67 @@
         },
         "additionalProperties": false
       },
+      "Filesystem": {
+        "type": "object",
+        "required": [
+          "mount",
+          "mounted"
+        ],
+        "properties": {
+          "available_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Free space available to an unprivileged application user.",
+            "minimum": 0
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "filesystem": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "free_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "mount": {
+            "type": "string"
+          },
+          "mounted": {
+            "type": "boolean",
+            "description": "Whether mountinfo confirms this exact path as a mount point."
+          },
+          "total_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "used_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
       "GlobalStatus": {
         "type": "object",
         "description": "`GET /v1/status`",
@@ -2080,7 +2161,7 @@
       },
       "HomeUsage": {
         "type": "object",
-        "description": "A workspace home. Without guest data only `size_bytes` (from the VM\nconfig) is known.",
+        "description": "Persistent home capacity/usage. Without filesystem measurements only\n`size_bytes` from the VM disk or LXC mount configuration is known.",
         "properties": {
           "free_bytes": {
             "type": [
@@ -2554,6 +2635,33 @@
           "ok"
         ]
       },
+      "LoadAverage": {
+        "type": "object",
+        "required": [
+          "scope",
+          "one",
+          "five",
+          "fifteen"
+        ],
+        "properties": {
+          "fifteen": {
+            "type": "number",
+            "format": "double"
+          },
+          "five": {
+            "type": "number",
+            "format": "double"
+          },
+          "one": {
+            "type": "number",
+            "format": "double"
+          },
+          "scope": {
+            "type": "string",
+            "description": "`system`: kernel/procfs view, not asserted to be container-local."
+          }
+        }
+      },
       "NetworkCandidate": {
         "type": "object",
         "description": "One network profile a workspace could use (`GET /v1/networks`).",
@@ -2937,6 +3045,63 @@
           }
         }
       },
+      "Report": {
+        "type": "object",
+        "required": [
+          "schema",
+          "status",
+          "uptime_seconds",
+          "filesystems"
+        ],
+        "properties": {
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A stable error code; never a raw OS error containing private paths."
+          },
+          "filesystems": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Filesystem"
+            }
+          },
+          "load_average": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/LoadAverage"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "sample_age_seconds": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "schema": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "status": {
+            "$ref": "#/components/schemas/Status",
+            "description": "Process liveness, independent of dependency readiness."
+          },
+          "uptime_seconds": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Seconds since this application's telemetry sampler was initialized.",
+            "minimum": 0
+          }
+        }
+      },
       "SshCommands": {
         "type": "object",
         "properties": {
@@ -2954,6 +3119,13 @@
           }
         }
       },
+      "Status": {
+        "type": "string",
+        "enum": [
+          "pass",
+          "fail"
+        ]
+      },
       "StatusEntry": {
         "type": "object",
         "description": "One VM in the global status.",
@@ -2970,7 +3142,7 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/HomeUsage",
-                "description": "Home usage; `null` for Gold, alien VMs, a missing home or an offline node."
+                "description": "Home capacity/usage; `null` when no home configuration is available."
               },
               {
                 "type": "null"
@@ -2999,7 +3171,7 @@
               "string",
               "null"
             ],
-            "description": "`network.prefix.<vmid>` for VMIDs 2–254."
+            "description": "Workspace address, or the actual static `net0` address for a container."
           },
           "name": {
             "type": [
@@ -3031,6 +3203,17 @@
             "type": [
               "string",
               "null"
+            ]
+          },
+          "service_status": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Report",
+                "description": "Optional in-container measurements; observations, never ownership proof."
+              },
+              {
+                "type": "null"
+              }
             ]
           },
           "status": {

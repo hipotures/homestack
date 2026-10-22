@@ -611,6 +611,7 @@ pub async fn global_status(pve: &impl Pve, cfg: &Config) -> Result<GlobalStatus,
                 ip: expected_ip(cfg, resource.vmid),
                 root_storage: disk_storage(gold_cfg.get(&cfg.root_disk).map(String::as_str)),
                 home: None,
+                service_status: None,
                 role_tag_ok,
                 warning,
                 image: None,
@@ -686,6 +687,7 @@ pub async fn global_status(pve: &impl Pve, cfg: &Config) -> Result<GlobalStatus,
             root_storage: disk_storage(vm_cfg.get(&cfg.root_disk).map(String::as_str)),
             home,
             image: None,
+            service_status: None,
             image_update: None,
             role_tag_ok: !tags.contains(GOLD_TAG) && !(alien && tags.contains(WORKSPACE_TAG)),
             warning,
@@ -734,7 +736,7 @@ pub async fn global_status(pve: &impl Pve, cfg: &Config) -> Result<GlobalStatus,
         } else {
             "VM"
         };
-        let home = container_config.as_ref().and_then(|config| {
+        let mut home = container_config.as_ref().and_then(|config| {
             let mount = config["mp0"].as_str()?;
             if !mount.split(',').any(|part| part == "mp=/home/app") {
                 return None;
@@ -747,6 +749,42 @@ pub async fn global_status(pve: &impl Pve, cfg: &Config) -> Result<GlobalStatus,
                 free_percent: None,
             })
         });
+        let ip = if container {
+            container_config.as_ref().and_then(|config| {
+                config["net0"].as_str()?.split(',').find_map(|part| {
+                    let value = part.strip_prefix("ip=")?.split('/').next()?;
+                    value.parse::<std::net::Ipv4Addr>().ok().map(|ip| ip.to_string())
+                })
+            })
+        } else {
+            expected_ip(cfg, item.vmid)
+        };
+        let service_status = if online && item.status.as_deref() == Some("running") {
+            if let (Some(config), Some(ip)) = (&container_config, &ip) {
+                crate::service_status::read(config, ip).await
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        if let Some(report) = &service_status
+            && let (Some(home), Some(measured)) = (
+                &mut home,
+                report
+                    .filesystems
+                    .iter()
+                    .find(|fs| fs.mount == "/home/app" && fs.mounted && fs.error.is_none()),
+            )
+        {
+            home.size_bytes = measured.total_bytes;
+            home.used_bytes = measured.used_bytes;
+            home.free_bytes = measured.available_bytes;
+            home.free_percent = measured
+                .total_bytes
+                .zip(measured.available_bytes)
+                .and_then(|(total, available)| (total > 0).then(|| available as f64 * 100.0 / total as f64));
+        }
         others.push(StatusEntry {
             vmid: item.vmid,
             role: role.to_owned(),
@@ -756,18 +794,10 @@ pub async fn global_status(pve: &impl Pve, cfg: &Config) -> Result<GlobalStatus,
             node_status: node_info.map_or_else(|| "unknown".to_owned(), |n| n.status.clone()),
             pool: item.pool.clone(),
             tags: tag_list(item.tags.as_deref()),
-            ip: if container {
-                container_config.as_ref().and_then(|config| {
-                    config["net0"].as_str()?.split(',').find_map(|part| {
-                        let value = part.strip_prefix("ip=")?.split('/').next()?;
-                        value.parse::<std::net::Ipv4Addr>().ok().map(|ip| ip.to_string())
-                    })
-                })
-            } else {
-                expected_ip(cfg, item.vmid)
-            },
+            ip,
             root_storage,
             home,
+            service_status,
             role_tag_ok: true,
             warning: None,
             image,

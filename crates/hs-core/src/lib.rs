@@ -25,6 +25,7 @@ pub mod refresh;
 pub mod registry;
 pub mod resize;
 pub mod resize_guest;
+pub mod service_status;
 pub mod status;
 pub mod tasks;
 pub mod verify;
