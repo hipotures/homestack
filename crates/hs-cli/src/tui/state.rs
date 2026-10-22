@@ -1294,10 +1294,7 @@ impl App {
                             _ => None,
                         };
                     }
-                    Some(Hit::SetupRow(index, part)) => {
-                        self.setup_click(index, part);
-                        return None;
-                    }
+                    Some(Hit::SetupRow(index, part)) => return self.setup_click(index, part),
                     Some(Hit::SetupDetails) => return None,
                     Some(Hit::Log { .. } | Hit::Bar(_)) => return None,
                     Some(Hit::Integration(item)) => {

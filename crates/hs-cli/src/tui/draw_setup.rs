@@ -378,6 +378,9 @@ fn draw_services(
             None => (3, "▸ "),
         };
         let mut x = area.x + indent;
+        if row.file.is_none() {
+            register(Rect::new(x, y, 2, 1), Hit::SetupRow(index, 0));
+        }
         x += write(buf, x, y, 2, arrow, base.fg(palette.muted));
         let label_style = if row.file.is_some() {
             tone_style(palette, base, if tone == Tone::Red { Tone::Red } else { Tone::Plain })

@@ -273,6 +273,8 @@ pub struct SetupBox {
     pub services_open: BTreeSet<String>,
     /// The highlighted row of the Services group.
     pub services_cursor: usize,
+    /// When and on which row the last click was, for a double click.
+    pub last_click: Option<(std::time::Instant, usize)>,
     /// The profile's service registry.
     pub registry: Result<Registry, String>,
     pub ssh_status: String,
@@ -467,6 +469,7 @@ impl SetupBox {
             discoveries: HashMap::new(),
             services_open: BTreeSet::new(),
             services_cursor: 0,
+            last_click: None,
             registry,
             ssh_status: if connected { "connected" } else { "not connected" }.to_owned(),
             stage: Stage::Tree,
@@ -2195,6 +2198,17 @@ impl SetupBox {
         (!self.discoveries.contains_key(repository)).then(|| self.read_services(repository.to_owned()))
     }
 
+    /// Open or close the highlighted repository of the Services group.
+    fn toggle_repository(&mut self) -> Option<Ask> {
+        let Some(ServiceRow { repository, file: None }) = self.service_cursor_row() else {
+            return None;
+        };
+        if self.services_open.remove(&repository) {
+            return None;
+        }
+        self.open_repository(&repository)
+    }
+
     /// A key in the Services group: read only, nothing is selected.
     fn services_key(&mut self, key: KeyEvent) -> Option<Ask> {
         if self.filtering {
@@ -2227,16 +2241,7 @@ impl SetupBox {
             KeyCode::Right | KeyCode::Tab => self.show_section(self.section + 1),
             KeyCode::Left | KeyCode::BackTab => self.show_section(self.section + self.groups().len() - 1),
             KeyCode::Char('f') => self.filtering = true,
-            // Enter opens or closes the highlighted repository.
-            KeyCode::Enter => {
-                if let Some(ServiceRow { repository, file: None }) = row {
-                    if self.services_open.contains(&repository) {
-                        self.services_open.remove(&repository);
-                    } else {
-                        return self.open_repository(&repository);
-                    }
-                }
-            }
+            KeyCode::Enter => return self.toggle_repository(),
             KeyCode::F(5) => {
                 if let Some(ServiceRow { repository, .. }) = row
                     && self.discovery(&repository).is_some()
@@ -2429,31 +2434,37 @@ impl super::state::App {
     }
 
     /// A click on a row of the tree: the arrow opens or closes, the
-    /// checkbox toggles, the name only highlights (Python's mouse parts).
-    pub(super) fn setup_click(&mut self, index: usize, part: u8) {
-        let Some(setup) = self.setup.as_mut() else {
-            return;
-        };
+    /// checkbox toggles, the name highlights; a double click on the name
+    /// opens or closes, as Enter.
+    pub(super) fn setup_click(&mut self, index: usize, part: u8) -> Option<super::state::Request> {
+        let setup = self.setup.as_mut()?;
         if !matches!(setup.stage, Stage::Tree) {
-            return;
+            return None;
         }
-        if setup.in_services() {
-            setup.filtering = false;
-            setup.services_cursor = index;
-            setup.details_scroll = 0;
-            return;
-        }
-        let Some(row) = setup.rows().get(index).cloned() else {
-            return;
-        };
+        let now = std::time::Instant::now();
+        let double = setup
+            .last_click
+            .is_some_and(|(at, row)| row == index && now.duration_since(at) < std::time::Duration::from_millis(400));
+        setup.last_click = (!double).then_some((now, index));
         setup.notice = None;
         setup.filtering = false;
+        setup.details_scroll = 0;
+        if setup.in_services() {
+            setup.services_cursor = index;
+            return (part == 0 || double)
+                .then(|| setup.toggle_repository())
+                .flatten()
+                .map(super::state::Request::SetupAsk);
+        }
+        let row = setup.rows().get(index).cloned()?;
         setup.highlight(&row.id);
         match part {
             0 if row.branch => setup.set_open(&row.id, !row.expanded),
             1 => setup.toggle(&row.id, false),
+            2 if double && row.branch => setup.set_open(&row.id, !row.expanded),
             _ => {}
         }
+        None
     }
 
     /// What the worker of the setup box tells.
