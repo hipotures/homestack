@@ -647,9 +647,6 @@ impl App {
             plan.push("Each connector is briefly offline while its container is recreated.".to_owned());
             return Ok(json!({"image": image.image, "servers": images.sites, "plan": plan, "sites": true}));
         }
-        plan.push("One at a time, each container is stopped, destroyed and made".to_owned());
-        plan.push("again from the image, with its address, certificate and".to_owned());
-        plan.push("configuration; one with this image already is only configured.".to_owned());
         let names: Vec<&str> = images.servers.iter().map(|server| server.name.as_str()).collect();
         Ok(json!({"image": image.image, "servers": names, "plan": plan}))
     }

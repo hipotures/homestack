@@ -83,9 +83,7 @@ impl Kind {
             Self::Destroy => "Permanently destroy this workspace INCLUDING its persistent home?",
             Self::Start => "Start this workspace?",
             Self::Stop => "Stop this workspace? Its system shuts down; it is never forced.",
-            Self::Reinstall => {
-                "Update these containers? Each container is made again from the image; what is only inside it is lost."
-            }
+            Self::Reinstall => "Update these containers?",
         }
     }
 }
