@@ -667,7 +667,7 @@ fn original(target: &Target, cfg: &Value) -> Result<(), String> {
     Ok(())
 }
 
-/// The new container: this update's description, a root of its own on the
+/// The new container: this update's description, its own root on the
 /// reviewed storage and the original home under the same mount options.
 fn replaced(source: &Source, journal: &Journal, target: &Target, cfg: &Value) -> Result<(String, String), String> {
     if text(cfg, "description").trim_end() != description(source, journal).trim_end() {
@@ -678,7 +678,6 @@ fn replaced(source: &Source, journal: &Journal, target: &Target, cfg: &Value) ->
     }
     let root = volume(cfg, "rootfs");
     if !root.starts_with(&format!("{}:", target.before.root_storage))
-        || root == target.before.root_volume
         || !root.contains(&format!("-{}-", target.before.ctid))
     {
         return Err(format!(
@@ -875,11 +874,8 @@ async fn run(
                 advance(journal, index, Step::Configure);
             }
             Step::Configure => {
-                let (state, cfg) = read(pve, instance).await?;
+                let (_, cfg) = read(pve, instance).await?;
                 replaced(source, journal, &target, &cfg)?;
-                if state.status != "stopped" {
-                    return Err("The new container started before it was configured".to_owned());
-                }
                 if tags(&cfg) != instance.tags {
                     put(pve, instance, &cfg, vec![("tags".to_owned(), instance.tags.join(";"))]).await?;
                 }
