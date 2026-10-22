@@ -250,7 +250,9 @@ fn deploy_target_acl(names: &Names) -> BTreeSet<Acl> {
         entries.insert(acl_token(path, token, "PVEAuditor"));
     }
     entries.insert(acl_token("/nodes", token, "HomeStackDeployNodes"));
-    entries.insert(acl_token(&format!("/pool/{POOL_SERVICE}"), token, "HomeStackDeploy"));
+    for pool in [POOL_SERVICE, POOL_TEST] {
+        entries.insert(acl_token(&format!("/pool/{pool}"), token, "HomeStackDeploy"));
+    }
     let template = names.settings.template_storage.clone().unwrap_or_default();
     entries.insert(acl_token(
         &format!("/storage/{template}"),
@@ -319,6 +321,11 @@ fn target_acl(state: &State, names: &Names, command: Command, keep_user: bool, s
             !scope.contains(&id)
         })
         .collect();
+    if command == Command::Uninstall && names.settings.test {
+        tokens.retain(|entry| {
+            entry.path != format!("/pool/{POOL_TEST}") || entry.who != format!("{HS_USER}!{DEPLOY_TOKEN}")
+        });
+    }
     if command == Command::Install {
         tokens.extend(token_target_acl(names));
         tokens.extend(deploy_target_acl(names));

@@ -220,6 +220,9 @@ test_install_single_node() {
 /pool/homestack	user	homestack@pve	HomeStack
 /pool/homestack-gold	token	homestack@pve!server	HomeStackGold
 /pool/homestack-gold	user	homestack@pve	HomeStackGold
+/pool/homestack-test	token	homestack@pve!deploy	HomeStackDeploy
+/pool/homestack-test	user	homestack@pve	HomeStackDeploy
+/pool/homestack-test	user	homestack@pve	HomeStackCluster
 /pool/homestack-service	token	homestack@pve!deploy	HomeStackDeploy
 /pool/homestack-service	user	homestack@pve	HomeStackDeploy
 /pool/homestack-service	user	homestack@pve	HomeStackCluster
@@ -237,7 +240,7 @@ EOF
     expect_roles <<< "$ROLES_TARGET"
     homestack_acl | awk -F'\t' '($1 == "/" && $4 != "HomeStackCluster") || index($1, "/vms") == 1' | grep -q . &&
         fail "a token or the user can see VMs outside the HomeStack pools"
-    expect_pools <<< $'homestack\t\nhomestack-gold\t101\nhomestack-service\t'
+    expect_pools <<< $'homestack\t\nhomestack-gold\t101\nhomestack-service\t\nhomestack-test\t'
     grep -qx 'homestack@pve' "$HS_FAKE/users" || fail "user not created"
     grep -q "^homestack@pve${tab}server${tab}1$" "$HS_FAKE/tokens.tsv" || fail "server token not created with privsep"
     grep -q "^homestack@pve${tab}deploy${tab}1$" "$HS_FAKE/tokens.tsv" || fail "deploy token not created with privsep"
@@ -295,6 +298,8 @@ test_adopt_today_with_test() {
 /nodes	user	homestack@pve	HomeStackDeployNodes
 /sdn	token	homestack@pve!deploy	PVEAuditor
 /storage	token	homestack@pve!deploy	PVEAuditor
+/pool/homestack-test	token	homestack@pve!deploy	HomeStackDeploy
+/pool/homestack-test	user	homestack@pve	HomeStackDeploy
 /pool/homestack-service	token	homestack@pve!deploy	HomeStackDeploy
 /pool/homestack-service	user	homestack@pve	HomeStackDeploy
 /pool/homestack-service	user	homestack@pve	HomeStackCluster

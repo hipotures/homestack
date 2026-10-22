@@ -790,7 +790,9 @@ deploy_target_acl() {
         printf '%s\ttoken\t%s\tPVEAuditor\n' "$id" "$who"
     done
     printf '/nodes\ttoken\t%s\tHomeStackDeployNodes\n' "$who"
-    printf '/pool/%s\ttoken\t%s\tHomeStackDeploy\n' "$POOL_SERVICE" "$who"
+    for id in "$POOL_SERVICE" homestack-test; do
+        printf '/pool/%s\ttoken\t%s\tHomeStackDeploy\n' "$id" "$who"
+    done
     printf '/storage/%s\ttoken\t%s\tHomeStackDeployTemplates\n' "$template_storage" "$who"
     for id in "${service_storages[@]}"; do
         [[ $id == "$template_storage" ]] && continue
@@ -837,6 +839,10 @@ target_acl() {
             tokenid=${tokenid#*!}
             skip=0
             for t in "${scope[@]}"; do [[ $t == "$tokenid" ]] && skip=1; done
+            if [[ $command == uninstall ]] && ((test_part)) &&
+                [[ $tokenid == "$DEPLOY_TOKEN" && ${line%%$'\t'*} == /pool/homestack-test ]]; then
+                skip=1
+            fi
             ((skip)) || printf '%s\n' "$line"
         done
     })
@@ -916,6 +922,9 @@ plan_install() {
     done
     [[ -n ${pool_members[$POOL_GOLD]+set} ]] || plan "create pool $POOL_GOLD" pveum pool add "$POOL_GOLD" --comment 'Gold'
     [[ -n ${pool_members[$POOL_SERVICE]+set} ]] || plan "create pool $POOL_SERVICE" pveum pool add "$POOL_SERVICE" --comment 'Containers'
+    if ((!test_part)) && [[ -z ${pool_members[homestack-test]+set} ]]; then
+        plan "create pool homestack-test" pveum pool add homestack-test --comment 'Test Workspaces'
+    fi
     if [[ -z ${pool_members[$POOL]+set} ]]; then
         if ((test_part)); then
             plan "create pool $POOL" pveum pool add "$POOL" --comment 'Test Workspaces'

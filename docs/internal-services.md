@@ -48,6 +48,18 @@ system-trusted PVE endpoint certificates. The optional API HTTPS CA is a
 separate desktop trust setting and remains supported. No alternative trust or
 secret transport is invented.
 
+The installer grants the desktop deploy token `HomeStackDeploy` on both
+`homestack-service` and `homestack-test`, including the matching user ACL
+required by privilege separation. An isolated API uses its separate `!test`
+runtime token; the deploy token is never uploaded to it. Uninstalling the test
+part removes the deploy token's test-pool ACL while retaining its service-pool
+access. Existing installations can add the two test-pool entries on a PVE node:
+
+```sh
+pveum acl modify /pool/homestack-test --users homestack@pve --roles HomeStackDeploy --propagate 1
+pveum acl modify /pool/homestack-test --tokens 'homestack@pve!deploy' --roles HomeStackDeploy --propagate 1
+```
+
 ### Shared authenticated bootstrap
 
 Legacy `hs_deploy::deploy::apply` and new common deployment call the same
