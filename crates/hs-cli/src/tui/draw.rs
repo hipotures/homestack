@@ -1797,7 +1797,7 @@ fn draw_settings(buf: &mut Buffer, area: Rect, app: &App, section: usize, themes
             Some(false) => muted,
             None => text,
         };
-        vec![(format!("  {label:<14}"), text), (value.to_owned(), style)]
+        vec![(format!("  {label:<16}"), text), (value.to_owned(), style)]
     };
     let mut lines: Vec<Vec<(String, Style)>> = vec![
         vec![(SETTINGS[section].to_owned(), heading)],
@@ -1833,7 +1833,7 @@ fn draw_settings(buf: &mut Buffer, area: Rect, app: &App, section: usize, themes
             if let Some(index) = choosing {
                 for (at, choice) in PARALLEL_CHOICES.iter().enumerate() {
                     let (item, style) = list_item(palette, &choice.to_string(), at == index);
-                    lines.push(vec![(" ".repeat(14), text), (item, style)]);
+                    lines.push(vec![(" ".repeat(16), text), (item, style)]);
                 }
             }
         }
