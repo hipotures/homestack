@@ -234,7 +234,8 @@ pub fn service_details(
     let deployment = registry
         .as_ref()
         .ok()
-        .and_then(|registry| registry.deployment(&discovery.repository, &manifest.id));
+        .and_then(|registry| registry.deployment(&discovery.repository, &manifest.id))
+        .filter(|deployment| deployment.active());
     if let Some(deployment) = deployment {
         lines.push(format!(
             "Deployed: {}:{}",
@@ -2315,7 +2316,7 @@ impl SetupBox {
             .deployment(&source.repository, &source.manifest.id)
             .is_some_and(|d| {
                 d.operation.as_ref().is_some_and(|o| o.kind != "deploy")
-                    || (d.operation.is_none() && !source.manifest.multi_node)
+                    || (d.active() && !source.manifest.multi_node)
             })
         {
             return None;
@@ -2331,6 +2332,18 @@ impl SetupBox {
                 .ok()
                 .and_then(|r| r.deployment(&s.repository, &s.manifest.id))
                 .is_some()
+        })
+    }
+
+    /// Whether the highlighted service is deployed now, so `d` adds nodes.
+    #[must_use]
+    pub fn deployed(&self) -> bool {
+        self.service_source().is_some_and(|s| {
+            self.registry
+                .as_ref()
+                .ok()
+                .and_then(|r| r.deployment(&s.repository, &s.manifest.id))
+                .is_some_and(crate::services::registry::Deployment::active)
         })
     }
 

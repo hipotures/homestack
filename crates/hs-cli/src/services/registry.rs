@@ -149,6 +149,15 @@ pub struct Operation {
     pub replacement: Option<super::replacement::Journal>,
 }
 
+impl Deployment {
+    /// Whether anything of it is still deployed: an unfinished operation or
+    /// an instance that is not removed.
+    #[must_use]
+    pub fn active(&self) -> bool {
+        self.operation.is_some() || self.instances.iter().any(|i| i.stage != Stage::Removed)
+    }
+}
+
 impl Registry {
     #[must_use]
     pub fn deployment(&self, repository: &str, service: &str) -> Option<&Deployment> {
@@ -161,7 +170,7 @@ impl Registry {
     pub fn has_repository(&self, repository: &str) -> bool {
         self.deployments
             .iter()
-            .any(|deployment| deployment.repository == repository)
+            .any(|deployment| deployment.repository == repository && deployment.active())
     }
 
     /// The deployment and instance that own container `ctid`.

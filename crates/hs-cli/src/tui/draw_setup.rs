@@ -74,7 +74,7 @@ pub(super) fn setup_box(buf: &mut Buffer, area: Rect, app: &App, setup: &SetupBo
             Control::named("F5", "refresh", KeyCode::F(5)),
             Control::named(
                 "D",
-                if setup.manageable() { "add nodes" } else { "deploy" },
+                if setup.deployed() { "add nodes" } else { "deploy" },
                 KeyCode::Char('d'),
             )
             .enabled(setup.deployable().is_some()),

@@ -343,6 +343,7 @@ pub async fn plan(
     let problems = &mut plan.problems;
     if let Some(record) = record
         && record.operation.is_none()
+        && record.active()
         && !manifest.multi_node
     {
         problems.push(format!(
@@ -819,7 +820,8 @@ async fn run(
             {
                 return Err("An unfinished lifecycle operation requires Recovery".to_owned());
             }
-            if old.operation.is_none() {
+            // Removed instances are history; a new deployment replaces them.
+            if old.operation.is_none() && old.active() {
                 if !manifest.multi_node {
                     return Err(format!("{} is already deployed", manifest.id));
                 }

@@ -117,7 +117,7 @@ async fn open(setup: &Setup, source: &Source, kept: Option<&Choice>) -> Result<(
         .map_err(|error| format!("{error}. Install HomeStack before deploying services."))?;
     let pve = hs_deploy::deploy::deploy_client(&config)?;
     let record = record(setup, source)?;
-    if !source.manifest.multi_node && record.as_ref().is_some_and(|r| r.operation.is_none()) {
+    if !source.manifest.multi_node && record.as_ref().is_some_and(|r| r.operation.is_none() && r.active()) {
         return Err(format!(
             "{} is already deployed; updating or removing it is not available yet.",
             source.manifest.id
