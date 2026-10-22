@@ -257,7 +257,7 @@ homestack setup hermes env=bash app=codex --yes --non-interactive --json
 
 - **Rust (`app=rust`):** Runs the official `rustup` installer with `-y --profile minimal`, sources `~/.cargo/env`, and verifies working `rustup`, `rustc`, and `cargo` in `~/.cargo/bin`.
 - **Claude Code (`app=claude`):** Runs the official native installer (`curl -fsSL https://claude.ai/install.sh | bash`) into `~/.local/bin` and checks `claude --version`.
-- **Herdr (`app=herdr`):** Installs the `herdr` binary if missing, writes `~/.config/systemd/user/herdr.service` (which runs `herdr update` before starting `herdr server`), enables user linger without `sudo`, and registers the workspace on the desktop with `herdr machine add user@<vm> --label <vm> --remote-session default`.
+- **Herdr (`app=herdr`):** Installs the `herdr` binary only if missing, preserves an existing custom binary, writes `~/.config/systemd/user/herdr.service`, enables user linger without `sudo`, and registers the workspace on the desktop with `herdr machine add user@<vm> --label <vm> --remote-session default`. The service starts the installed binary without running `herdr update`. It uses `ExitType=cgroup` so a live handoff can replace the main server process without systemd terminating the replacement and its panes. Existing sessions are left running when applying service changes; an unmanaged server is not restarted or moved into the service.
 - **Codex, OpenCode, Hermes, Pi (`app=codex`, `app=opencode`, `app=opencode-v2`, `app=hermes`, `app=pi`):** Follow their official upstream installers with explicit `HOME`, `PATH`, and live readiness checks.
 
 ### Customizing Items, Files & Structured Config Patches

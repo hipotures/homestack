@@ -451,7 +451,7 @@ pub fn apply(
             "Leave existing Herdr sessions running; service will start after the next VM reboot",
         );
     } else if !active {
-        observer.activity(Some(id), "Start Herdr service; it updates before launching the server");
+        observer.activity(Some(id), "Start Herdr service using the installed binary");
         if systemctl(workspace, settings, "start herdr.service")? != 0 {
             return Err(AppError::new("Could not start Herdr user service"));
         }

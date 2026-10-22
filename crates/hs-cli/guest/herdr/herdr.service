@@ -3,9 +3,9 @@ Description=Herdr persistent terminal server
 
 [Service]
 Type=simple
+ExitType=cgroup
 WorkingDirectory=%h
 Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
-ExecStartPre=-%h/.local/bin/herdr update
 ExecStart=%h/.local/bin/herdr server
 TimeoutStartSec=5min
 Restart=on-failure
