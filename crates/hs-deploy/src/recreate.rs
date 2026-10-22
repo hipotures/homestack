@@ -76,39 +76,44 @@ async fn running(pve: &impl Pve, node: &str, ctid: u32) -> Result<bool, String> 
     }
 }
 
-/// The holder of `ctid`: same node, made by this module; whether it is ready.
-async fn holder(pve: &impl Pve, node: &str, ctid: u32) -> Result<Option<(u32, bool)>, String> {
-    let resources = pve
-        .get("/cluster/resources", &[("type", "vm")])
+/// The containers on `node` by CTID and name. Read from the node itself:
+/// `/cluster/resources` lags behind a container just made or destroyed.
+async fn on_node(pve: &impl Pve, node: &str) -> Result<Vec<(u32, String)>, String> {
+    let list = pve
+        .get(&format!("/nodes/{node}/lxc"), &[])
         .await
-        .map_err(|e| format!("cluster resources: {e}"))?;
-    let name = holder_name(ctid);
-    let found: Vec<&Value> = resources
-        .as_array()
+        .map_err(|e| format!("{node} containers: {e}"))?;
+    list.as_array()
         .into_iter()
         .flatten()
-        .filter(|item| item["type"] == "lxc" && item["name"] == name.as_str())
-        .collect();
-    let [item] = found.as_slice() else {
+        .map(|item| {
+            let id = item["vmid"]
+                .as_u64()
+                .or_else(|| item["vmid"].as_str().and_then(|s| s.parse().ok()))
+                .and_then(|n| u32::try_from(n).ok())
+                .ok_or_else(|| format!("{node} containers: CTID unavailable"))?;
+            Ok((id, item["name"].as_str().unwrap_or_default().to_owned()))
+        })
+        .collect()
+}
+
+/// The holder of `ctid` among `cts`, made by this module; whether it is ready.
+async fn holder(pve: &impl Pve, node: &str, ctid: u32, cts: &[(u32, String)]) -> Result<Option<(u32, bool)>, String> {
+    let name = holder_name(ctid);
+    let found: Vec<u32> = cts.iter().filter(|(_, n)| *n == name).map(|(id, _)| *id).collect();
+    let [id] = found.as_slice() else {
         return if found.is_empty() {
             Ok(None)
         } else {
             Err(format!("Several holders of CT {ctid}; inspect them"))
         };
     };
-    let id = item["vmid"]
-        .as_u64()
-        .and_then(|n| u32::try_from(n).ok())
-        .ok_or("Holder CTID unavailable")?;
-    if item["node"] != node {
-        return Err(format!("Holder CT {id} of CT {ctid} is on another node; inspect it"));
-    }
-    let cfg = config(pve, node, id).await?;
+    let cfg = config(pve, node, *id).await?;
     let mut lines = text(&cfg, "description").lines();
     if lines.next() != Some(format!("{HOLDER} {ctid}").as_str()) {
         return Err(format!("CT {id} is named {name} but is not its holder; inspect it"));
     }
-    Ok(Some((id, lines.any(|line| line == READY))))
+    Ok(Some((*id, lines.any(|line| line == READY))))
 }
 
 fn is_new(cfg: &Value, spec: &NewContainer<'_>) -> bool {
@@ -303,13 +308,11 @@ async fn finish(pve: &impl Pve, r: &Replace<'_>, id: u32, say: &impl Fn(&str)) -
 pub async fn replace(pve: &impl Pve, r: &Replace<'_>, say: &impl Fn(&str)) -> Result<(), String> {
     let (node, ctid) = (r.spec.node, r.spec.ctid);
     loop {
-        let holder = holder(pve, node, ctid).await?;
-        let Some(found) = node::container(pve, ctid).await? else {
+        let cts = on_node(pve, node).await?;
+        let holder = holder(pve, node, ctid, &cts).await?;
+        if !cts.iter().any(|(id, _)| *id == ctid) {
             node::create(pve, &r.spec, say).await?;
             continue;
-        };
-        if found.node != node {
-            return Err(format!("CT {ctid} is on {}, not {node}", found.node));
         }
         let cfg = config(pve, node, ctid).await?;
         if is_new(&cfg, &r.spec) {
@@ -358,9 +361,9 @@ mod tests {
             let cts = self.0.lock().unwrap();
             let id = |p: &str| p.split('/').nth(4).and_then(|s| s.parse::<u32>().ok()).unwrap();
             Ok(match path {
-                "/cluster/resources" => json!(
+                "/nodes/pve3/lxc" => json!(
                     cts.iter()
-                        .map(|(id, (cfg, _))| json!({"type":"lxc", "vmid":id, "node":"pve3", "name":cfg["hostname"]}))
+                        .map(|(id, (cfg, _))| json!({"vmid":id, "name":cfg["hostname"]}))
                         .collect::<Vec<_>>()
                 ),
                 "/cluster/nextid" => json!("130"),
