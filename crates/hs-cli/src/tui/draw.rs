@@ -2196,6 +2196,35 @@ fn reinstall_lines(app: &App, chosen: usize, text: Style, muted: Style, lines: &
         lines.push(("Enter: review and resume".to_owned(), text));
         lines.push((String::new(), text));
     }
+    let update = images
+        .servers
+        .iter()
+        .filter_map(|server| images.update_for(server))
+        .max_by_key(|image| &image.created);
+    let verdict = if let Some(image) = update {
+        let mut now: Vec<String> = images
+            .servers
+            .iter()
+            .filter_map(|server| server.image.as_ref().map(|image| image.tag().to_string()))
+            .collect();
+        now.sort();
+        now.dedup();
+        Some((
+            format!("New image available: {} → {}", now.join(", "), image.tag()),
+            text.fg(app.palette.warning).add_modifier(Modifier::BOLD),
+        ))
+    } else if !images.servers.is_empty() && images.servers.iter().all(|server| server.image.is_some()) {
+        Some((
+            "Up to date: no newer image is published".to_owned(),
+            text.fg(app.palette.ok).add_modifier(Modifier::BOLD),
+        ))
+    } else {
+        None
+    };
+    if let Some(verdict) = verdict {
+        lines.push(verdict);
+        lines.push((String::new(), text));
+    }
     lines.push(("Now".to_owned(), muted));
     let name_width = images
         .servers
@@ -2209,7 +2238,13 @@ fn reinstall_lines(app: &App, chosen: usize, text: Style, muted: Style, lines: &
             || "not made by homestack-deploy".to_owned(),
             |image| format!("{}  {}", image.tag(), image.made),
         );
-        lines.push((format!("{:<name_width$}{now}", server.name), text));
+        match images.update_for(server) {
+            Some(update) => lines.push((
+                format!("{:<name_width$}{now}  → {}", server.name, update.tag()),
+                text.fg(app.palette.warning),
+            )),
+            None => lines.push((format!("{:<name_width$}{now}", server.name), text)),
+        }
     }
     lines.push((String::new(), text));
     lines.push(("Published".to_owned(), muted));
@@ -2228,10 +2263,12 @@ fn reinstall_lines(app: &App, chosen: usize, text: Style, muted: Style, lines: &
         } else {
             String::new()
         };
-        let (marker, style) = if index == chosen {
+        let (marker, style) = if index == chosen && newer {
+            ("› ", text.fg(app.palette.warning).add_modifier(Modifier::BOLD))
+        } else if index == chosen {
             ("› ", text.add_modifier(Modifier::BOLD))
         } else if newer {
-            ("  ", text)
+            ("  ", text.fg(app.palette.warning))
         } else {
             ("  ", muted)
         };
