@@ -1026,7 +1026,7 @@ fn workspaces(buf: &mut Buffer, area: Rect, app: &App, mut controls: Vec<Control
                 );
             }
         }
-        // A favorite's gold star in STATE, after its state dot.
+        // A favorite's gold star midway between its state dot and ADDRESS.
         if app.favorites.contains(&entry.vmid)
             && let Some(state_x) = columns
                 .iter()
@@ -1035,7 +1035,7 @@ fn workspaces(buf: &mut Buffer, area: Rect, app: &App, mut controls: Vec<Control
         {
             write(
                 buf,
-                list.x + 1 + u16::try_from(state_x + 4).unwrap_or(0),
+                list.x + 1 + u16::try_from(state_x + 6).unwrap_or(0),
                 y,
                 1,
                 "★",
