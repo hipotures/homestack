@@ -430,7 +430,7 @@ async fn inspect(
         return Err("registry lacks verified disk/MAC identities; no automatic adoption".to_owned());
     }
     let exists = volume_exists(pve, instance).await?;
-    if !exists && !(action == Action::Recovery && instance.stage == Stage::Removed) {
+    if !exists && action != Action::Recovery {
         return Err("recorded home volume is missing; no replacement will be allocated".to_owned());
     }
     let found = deploy::config_of(pve, instance.ctid).await?;
@@ -943,7 +943,11 @@ async fn recover(
             return Err("CT missing, home retained; no automatic recreation or adoption".to_owned());
         }
     } else {
-        return Err("home missing or delete-data interrupted; explicit storage review required".to_owned());
+        // Neither the container nor its home exists any more: removed,
+        // by an interrupted delete-data or in Proxmox itself.
+        say(&format!("CT {id}: container and home {} are gone; recorded as removed", instance.home_volume));
+        instance.stage = Stage::Removed;
+        instance.desired = Desired::Stopped;
     }
     persist_instance(path, source, &instance)?;
     Ok(format!(
