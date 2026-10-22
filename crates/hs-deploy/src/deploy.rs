@@ -344,6 +344,7 @@ pub async fn apply(config: &DeployConfig, only: &[String], say: &impl Fn(&str)) 
                     spec,
                     graceful: false,
                     keep: &[],
+                    note: "",
                 },
                 say,
             ),

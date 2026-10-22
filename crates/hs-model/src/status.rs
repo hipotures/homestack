@@ -59,6 +59,22 @@ pub struct StatusEntry {
     pub image: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub image_update: Option<ImageUpdate>,
+    /// The service HomeStack deployed in this container, from its description.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service: Option<DeployedService>,
+}
+
+/// A manifest-defined service in a container, as HomeStack's description
+/// records it; an observation, never ownership proof.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct DeployedService {
+    /// `owner/repo` on GitHub.
+    pub repository: String,
+    /// The manifest `id`.
+    pub id: String,
+    /// `REGISTRY/PATH:VERSION`.
+    pub image: String,
+    pub digest: String,
 }
 
 /// Whether the server is currently discovering or checking container images.

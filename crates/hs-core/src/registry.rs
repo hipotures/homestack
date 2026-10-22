@@ -184,6 +184,27 @@ pub fn deployed_image(config: &Value) -> Option<String> {
     })
 }
 
+/// The service HomeStack deployed in a container, from its description.
+#[must_use]
+pub fn deployed_service(config: &Value) -> Option<hs_model::status::DeployedService> {
+    let description = config["description"].as_str()?;
+    let value = |key: &str| {
+        description
+            .lines()
+            .find_map(|line| line.trim().strip_prefix(key)?.strip_prefix(' '))
+            .map(|value| value.trim().to_owned())
+    };
+    if !description.lines().any(|line| line.trim() == "made by homestack") {
+        return None;
+    }
+    Some(hs_model::status::DeployedService {
+        id: value("HomeStack service")?,
+        repository: value("repository")?,
+        image: value("image")?,
+        digest: value("digest")?,
+    })
+}
+
 /// HomeStack publication order: `<major>.<minor>.<patch>`.
 #[must_use]
 pub fn version(tag: &str) -> Option<(u64, u64, u64)> {

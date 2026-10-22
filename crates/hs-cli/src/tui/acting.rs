@@ -36,25 +36,28 @@ impl App {
         storages
     }
 
-    /// The registered service container `vmid`, if it is one.
-    fn service_instance(&self, vmid: u32) -> Option<&crate::services::registry::Instance> {
-        self.services.as_ref().ok()?.instance(vmid).map(|(_, instance)| instance)
+    /// Service container `vmid`, if the selected row is one.
+    fn service_entry(&self, vmid: u32) -> Option<&StatusEntry> {
+        self.selected_entry()
+            .filter(|entry| entry.vmid == vmid && vmid != hs_deploy::recreate::HOLDER_ID)
+            .filter(|entry| self.common_service(entry).is_some())
     }
 
     /// Where a service container's disks can move on `node`: active
     /// storages for containers of the type its root is on now, since
     /// Proxmox moves a volume only between storages of the same type.
-    fn service_storages(&self, instance: &crate::services::registry::Instance, node: &str) -> Vec<String> {
+    fn service_storages(&self, entry: &StatusEntry, node: &str) -> Vec<String> {
         let Some(Ok(overview)) = &self.storage_overview else {
             return Vec::new();
         };
         let on = |storage: &hs_model::status::StorageStatus, node: &str| {
             storage.shared || storage.nodes.iter().any(|n| n == node)
         };
+        let root = entry.root_storage.clone().unwrap_or_default();
         let Some(kind) = overview
             .storages
             .iter()
-            .find(|s| s.storage == instance.root_storage && on(s, &instance.node))
+            .find(|s| s.storage == root && on(s, &entry.node))
             .map(|s| s.storage_type.clone())
         else {
             return Vec::new();
@@ -381,11 +384,11 @@ impl App {
                 }
                 fields
             }
-            Kind::Migrate if let Some(instance) = vmid.and_then(|vmid| self.service_instance(vmid)) => {
-                let nodes: Vec<String> = self.nodes().into_iter().filter(|node| *node != instance.node).collect();
+            Kind::Migrate if let Some(service) = vmid.and_then(|vmid| self.service_entry(vmid)) => {
+                let nodes: Vec<String> = self.nodes().into_iter().filter(|node| *node != service.node).collect();
                 let storages = nodes
                     .first()
-                    .map(|node| self.service_storages(instance, node))
+                    .map(|node| self.service_storages(service, node))
                     .unwrap_or_default();
                 vec![
                     Field::choice(
@@ -542,7 +545,7 @@ impl App {
             Kind::Migrate => {
                 let node = value("Node");
                 let storage = value("Storage");
-                let service = vmid.is_some_and(|vmid| self.service_instance(vmid).is_some());
+                let service = vmid.is_some_and(|vmid| self.service_entry(vmid).is_some());
                 if node.is_empty() || storage.is_empty() {
                     return Err(if service {
                         "There is no other node with a storage of the same type for this container."
@@ -594,7 +597,7 @@ impl App {
         self.open_image_update(servers)
     }
 
-    /// The existing image selector shared by API, Site and registered services.
+    /// The existing image selector shared by API, Site and deployed services.
     pub fn open_image_update(&mut self, mut servers: Vec<(u32, String)>) -> Option<Request> {
         if self.action.is_some() || self.setup.is_some() {
             return None;
@@ -751,10 +754,10 @@ impl App {
             node
         };
         let service = (kind == Kind::Migrate)
-            .then(|| self.selected_entry().and_then(|entry| self.service_instance(entry.vmid)))
+            .then(|| self.selected_entry().and_then(|entry| self.service_entry(entry.vmid)))
             .flatten();
         let storages = match service {
-            Some(instance) => self.service_storages(instance, &node),
+            Some(entry) => self.service_storages(entry, &node),
             None => self.storages_on(&node),
         };
         if let Some(field) = form.fields.iter_mut().find(|field| field.label == "Storage")
@@ -1142,19 +1145,10 @@ impl App {
         self.common_service(entry).is_some() || is_server(entry, &self.api_instances) || is_site(entry)
     }
 
+    /// The service a container runs, as its description records it.
+    #[must_use]
     pub fn common_service(&self, entry: &StatusEntry) -> Option<(String, String)> {
-        if entry.role != "CT" {
-            return None;
-        }
-        let (record, instance) = self.services.as_ref().ok()?.instance(entry.vmid)?;
-        if instance.node != entry.node
-            || !matches!(
-                instance.stage,
-                crate::services::registry::Stage::Ready | crate::services::registry::Stage::Created
-            )
-        {
-            return None;
-        }
-        Some((record.repository.clone(), record.service.clone()))
+        let service = entry.service.as_ref().filter(|_| entry.role == "CT")?;
+        Some((service.repository.clone(), service.id.clone()))
     }
 }

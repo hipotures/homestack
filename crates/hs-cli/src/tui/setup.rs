@@ -12,7 +12,6 @@ use serde_json::Value;
 
 use crate::services::github::{Discovery, ManifestFile};
 use crate::services::manifest::Healthcheck;
-use crate::services::registry::{Registry, Status, service_status};
 use crate::setup::catalog::Catalog;
 use crate::setup::definitions::{ConfigFile, Entry, Params, app_file_entries, application_children, config_entry_id};
 use crate::setup::engine::truthy;
@@ -106,7 +105,7 @@ pub enum Ask {
     Services,
     /// Open the deployment of `deploy_request`.
     Deploy,
-    /// Open common lifecycle for the selected registered service.
+    /// Open maintenance of the selected service's containers.
     Manage,
     /// Esc while it runs.
     Cancel,
@@ -141,16 +140,10 @@ pub fn service_row(file: &ManifestFile) -> (String, Tone) {
     }
 }
 
-/// What a manifest file declares, and the service's state in the registry
-/// compared with the containers Proxmox lists (`observed`).
+/// What a manifest file declares, and its instances among the service
+/// containers Proxmox lists (`services`).
 #[must_use]
-pub fn service_details(
-    discovery: &Discovery,
-    file: &ManifestFile,
-    registry: &Result<Registry, String>,
-    observed: Option<&[StatusEntry]>,
-    offset: i64,
-) -> Vec<String> {
+pub fn service_details(discovery: &Discovery, file: &ManifestFile, services: &[StatusEntry]) -> Vec<String> {
     let revision = format!("Revision: {} @ {}", discovery.branch, short(&discovery.commit));
     let manifest = match &file.manifest {
         Ok(manifest) => manifest,
@@ -218,80 +211,38 @@ pub fn service_details(
             mapping.destination
         ));
     }
-    lines.push(if manifest.multi_node {
-        "Nodes: one or more, independent instances".to_owned()
-    } else {
-        "Nodes: exactly one".to_owned()
-    });
     lines.push(format!("State model: {}", manifest.state_model.as_str()));
     lines.push(String::new());
-    for (ctid, status) in service_status(registry, &discovery.repository, &manifest.id, observed) {
-        lines.push(match ctid {
-            Some(ctid) => format!("Status: CT {ctid} {}", status.label()),
-            None => format!("Status: {}", status.label()),
-        });
+    let found = instances(services, &discovery.repository, &manifest.id);
+    if found.is_empty() {
+        lines.push("Status: not deployed".to_owned());
     }
-    let deployment = registry
-        .as_ref()
-        .ok()
-        .and_then(|registry| registry.deployment(&discovery.repository, &manifest.id))
-        .filter(|deployment| deployment.active());
-    if let Some(deployment) = deployment {
+    for entry in found {
+        let image = entry.service.as_ref().map_or("", |s| s.image.as_str());
         lines.push(format!(
-            "Deployed: {}:{}",
-            deployment.image_repository, deployment.image_version
+            "CT {} {} on {}, {}: {} · {}",
+            entry.vmid,
+            entry.name.as_deref().unwrap_or_default(),
+            entry.node,
+            entry.ip.as_deref().unwrap_or("—"),
+            image.rsplit_once(':').map_or(image, |(_, tag)| tag),
+            entry.status
         ));
-        lines.push(format!("Digest: {}", deployment.image_digest));
-        lines.push(format!(
-            "From: {} @ {}",
-            deployment.manifest_path,
-            short(&deployment.commit)
-        ));
-        if !deployment.environment.is_empty() {
-            lines.push(format!("Environment: {}", deployment.environment.join(", ")));
-        }
-        if let Some(operation) = &deployment.operation {
-            lines.push(format!("Unfinished {}: {}", operation.kind, operation.step));
-        }
-        for instance in &deployment.instances {
-            lines.push(format!(
-                "CT {}: {} on {}, {}",
-                instance.ctid, instance.hostname, instance.node, instance.address
-            ));
-            lines.push(format!(
-                "  root {} GiB on {}, home {} GiB on {} at {}",
-                instance.root_gib,
-                instance.root_storage,
-                instance.home_gib,
-                instance.home_storage,
-                crate::services::manifest::MOUNT
-            ));
-            if let Some(release) = &instance.release {
-                lines.push(format!(
-                    "  image {}:{} · {}",
-                    deployment.image_repository, release.version, release.digest
-                ));
-            }
-            lines.push(format!("  root volume {}", instance.root_volume));
-            lines.push(format!("  pool {} · tags {}", instance.pool, instance.tags.join(";")));
-            if !instance.home_volume.is_empty() {
-                lines.push(format!(
-                    "  {} · home · {}",
-                    deployment.service,
-                    crate::services::manifest::MOUNT
-                ));
-                lines.push(format!("  PVE volume {}", instance.home_volume));
-            }
-            if let Some(verified) = instance
-                .verified
-                .as_deref()
-                .and_then(|at| super::reinstall::local_time(at, offset))
-            {
-                lines.push(format!("  health passed {verified}"));
-            }
-        }
     }
     lines
+}
+
+/// The containers of `repository`/`id` among `services`.
+fn instances<'a>(services: &'a [StatusEntry], repository: &str, id: &str) -> Vec<&'a StatusEntry> {
+    services
+        .iter()
+        .filter(|entry| {
+            entry
+                .service
+                .as_ref()
+                .is_some_and(|s| s.repository == repository && s.id == id)
+        })
+        .collect()
 }
 
 /// A message (Python `notify`).
@@ -354,8 +305,8 @@ pub struct SetupBox {
     pub services_cursor: usize,
     /// When and on which row the last click was, for a double click.
     pub last_click: Option<(std::time::Instant, usize)>,
-    /// The profile's service registry.
-    pub registry: Result<Registry, String>,
+    /// The service containers the status lists.
+    pub services: Vec<StatusEntry>,
     pub ssh_status: String,
     pub stage: Stage,
     pub details_scroll: usize,
@@ -516,11 +467,6 @@ impl SetupBox {
     #[must_use]
     pub fn new(settings: Settings, target: Target, catalog: Catalog, state: Option<Value>) -> Self {
         let connected = state.is_some();
-        let registry = if settings.config_path.as_os_str().is_empty() {
-            Ok(Registry::default())
-        } else {
-            crate::services::registry::load(&crate::services::registry::path_for(&settings.config_path))
-        };
         let mut setup = Self {
             settings,
             target,
@@ -550,7 +496,7 @@ impl SetupBox {
             services_open: BTreeSet::new(),
             services_cursor: 0,
             last_click: None,
-            registry,
+            services: Vec::new(),
             ssh_status: if connected { "connected" } else { "not connected" }.to_owned(),
             stage: Stage::Tree,
             details_scroll: 0,
@@ -566,6 +512,7 @@ impl SetupBox {
     pub fn ready(&mut self, catalog: Catalog, state: Value, target: Target, settings: Settings) {
         let mut ready = Self::new(settings, target, catalog, Some(state));
         ready.section = self.section;
+        ready.services = std::mem::take(&mut self.services);
         *self = ready;
     }
 
@@ -2091,9 +2038,7 @@ impl SetupBox {
             })
             .filter(|repository| filter.is_empty() || repository.to_lowercase().contains(&filter))
             .collect();
-        if let Ok(registry) = &self.registry {
-            repositories.sort_by_key(|repository| !registry.has_repository(repository));
-        }
+        repositories.sort_by_key(|repository| !self.has_repository(repository));
         let mut rows = Vec::new();
         for repository in repositories {
             rows.push(ServiceRow {
@@ -2152,14 +2097,17 @@ impl SetupBox {
         self.discoveries.get(repository).and_then(Option::as_ref)
     }
 
-    /// The label of a Services row and its STATE, the registry compared
-    /// with the containers Proxmox lists (`observed`).
+    /// Whether a container runs a service of `repository`.
+    fn has_repository(&self, repository: &str) -> bool {
+        self.services
+            .iter()
+            .any(|entry| entry.service.as_ref().is_some_and(|s| s.repository == repository))
+    }
+
+    /// The label of a Services row and its STATE: its containers in Proxmox.
     #[must_use]
-    pub fn service_row_text(&self, row: &ServiceRow, observed: Option<&[StatusEntry]>) -> (String, (String, Tone)) {
-        let deployed = self
-            .registry
-            .as_ref()
-            .is_ok_and(|registry| registry.has_repository(&row.repository));
+    pub fn service_row_text(&self, row: &ServiceRow) -> (String, (String, Tone)) {
+        let deployed = self.has_repository(&row.repository);
         let read = self.discoveries.get(&row.repository);
         let Some(index) = row.file else {
             let state = match read {
@@ -2192,18 +2140,15 @@ impl SetupBox {
         let state = match &file.manifest {
             Err(_) => ("invalid".to_owned(), tone),
             Ok(manifest) => {
-                let statuses = service_status(&self.registry, &row.repository, &manifest.id, observed);
-                let text = statuses
-                    .iter()
-                    .map(|(_, status)| status.label())
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                let tone = match statuses.first().map(|(_, status)| status) {
-                    Some(Status::NotDeployed) => Tone::Dim,
-                    Some(Status::Running) => Tone::Green,
-                    _ => Tone::Yellow,
-                };
-                (text, tone)
+                let found = instances(&self.services, &row.repository, &manifest.id);
+                let running = found.iter().filter(|entry| entry.status == "running").count();
+                match (found.len(), running) {
+                    (0, _) => ("not deployed".to_owned(), Tone::Dim),
+                    (1, 1) => ("running".to_owned(), Tone::Green),
+                    (1, _) => ("stopped".to_owned(), Tone::Yellow),
+                    (all, running) if all == running => (format!("{all} running"), Tone::Green),
+                    (all, running) => (format!("{running} of {all} running"), Tone::Yellow),
+                }
             }
         };
         (label, state)
@@ -2211,7 +2156,7 @@ impl SetupBox {
 
     /// The details of the highlighted Services row.
     #[must_use]
-    pub fn service_detail_lines(&self, observed: Option<&[StatusEntry]>, offset: i64) -> Vec<String> {
+    pub fn service_detail_lines(&self) -> Vec<String> {
         let Some(row) = self.service_cursor_row() else {
             let reason = if self.catalog.repository_error.is_empty() {
                 "No repositories match.".to_owned()
@@ -2224,20 +2169,18 @@ impl SetupBox {
         if let (Some(index), Some(Ok(found))) = (row.file, read)
             && let Some(file) = found.files.get(index)
         {
-            return service_details(found, file, &self.registry, observed, offset);
+            return service_details(found, file, &self.services);
         }
         let mut lines = vec![row.repository.clone()];
         if let Some(branch) = self.default_branch(&row.repository) {
             lines.push(format!("Branch: {branch}"));
         }
-        let deployed = self.registry.as_ref().map_or(0, |registry| {
-            registry
-                .deployments
-                .iter()
-                .filter(|deployment| deployment.repository == row.repository)
-                .count()
-        });
-        lines.push(format!("Deployed: {deployed}"));
+        let deployed = self
+            .services
+            .iter()
+            .filter(|entry| entry.service.as_ref().is_some_and(|s| s.repository == row.repository))
+            .count();
+        lines.push(format!("Instances: {deployed}"));
         match self.discoveries.get(&row.repository) {
             None => lines.push("Services: not read; → or ENTER reads .homestack/*.yaml".to_owned()),
             Some(None) => lines.push("Services: reading .homestack/*.yaml on GitHub".to_owned()),
@@ -2295,7 +2238,6 @@ impl SetupBox {
         };
         let file = found.files.get(index)?;
         let manifest = file.manifest.as_ref().ok()?;
-        self.registry.as_ref().ok()?;
         Some(crate::services::deploy::Source {
             repository,
             branch: found.branch.clone(),
@@ -2306,45 +2248,17 @@ impl SetupBox {
         })
     }
 
+    /// `d` deploys new instances of any valid service.
     #[must_use]
     pub fn deployable(&self) -> Option<crate::services::deploy::Source> {
-        let source = self.service_source()?;
-        if self
-            .registry
-            .as_ref()
-            .ok()?
-            .deployment(&source.repository, &source.manifest.id)
-            .is_some_and(|d| {
-                d.operation.as_ref().is_some_and(|o| o.kind != "deploy")
-                    || (d.active() && !source.manifest.multi_node)
-            })
-        {
-            return None;
-        }
-        Some(source)
+        self.service_source()
     }
 
+    /// `m` maintains the instances of a deployed service.
     #[must_use]
     pub fn manageable(&self) -> bool {
-        self.service_source().is_some_and(|s| {
-            self.registry
-                .as_ref()
-                .ok()
-                .and_then(|r| r.deployment(&s.repository, &s.manifest.id))
-                .is_some()
-        })
-    }
-
-    /// Whether the highlighted service is deployed now, so `d` adds nodes.
-    #[must_use]
-    pub fn deployed(&self) -> bool {
-        self.service_source().is_some_and(|s| {
-            self.registry
-                .as_ref()
-                .ok()
-                .and_then(|r| r.deployment(&s.repository, &s.manifest.id))
-                .is_some_and(crate::services::registry::Deployment::active)
-        })
+        self.service_source()
+            .is_some_and(|s| !instances(&self.services, &s.repository, &s.manifest.id).is_empty())
     }
 
     /// `d`: deploy the highlighted service.
@@ -2550,6 +2464,7 @@ impl super::state::App {
         self.shown.storage = false;
         self.shown.log = false;
         self.setup = Some(setup);
+        self.share_services();
     }
 
     /// Enter or `e` on a running workspace: the setup box, connecting first.

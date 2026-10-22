@@ -629,27 +629,19 @@ fn workspace_actions(app: &App) -> Vec<Control> {
     ]
 }
 
-/// A container as the service registry sees it. The API servers and Site
-/// connectors keep their own update workflows until they are adopted.
+/// The service a container runs, as its description in Proxmox records it.
+/// The API servers and Site connectors have their own update workflows.
 fn container_service(app: &App, entry: &StatusEntry) -> String {
-    use crate::services::registry::{Status, instance_status};
-    let registry = match &app.services {
-        Ok(registry) => registry,
-        Err(error) => return Status::Unavailable(error.clone()).label(),
-    };
-    if let Some((deployment, instance)) = registry.instance(entry.vmid) {
-        let observed = std::slice::from_ref(entry);
-        let status = instance_status(deployment, instance, Some(observed));
-        return format!("{} ({}): {}", deployment.service, deployment.repository, status.label());
+    if let Some(service) = &entry.service {
+        return format!("{} ({}): {}", service.id, service.repository, entry.status);
     }
-    let legacy = if super::acting::is_site(entry) {
-        " (legacy Pangolin Site)"
+    if super::acting::is_site(entry) {
+        "Pangolin Site connector".to_owned()
     } else if app.image_container(entry) {
-        " (legacy HomeStack API)"
+        "HomeStack API".to_owned()
     } else {
-        ""
-    };
-    format!("{}{legacy}", Status::Unmanaged.label())
+        "not deployed by HomeStack".to_owned()
+    }
 }
 
 /// Label and value pairs of the selected workspace.

@@ -14,16 +14,16 @@ use super::reinstall::local_time;
 use crate::install_flow::Answer;
 use crate::services::deploy::{self, Choice, Cluster, Plan, Source};
 use crate::services::manifest::MOUNT;
-use crate::services::registry::{self, Deployment, Stage};
 
 const VERSION: usize = 0;
 const PLACEMENT: usize = 1;
-const CTIDS: usize = 2;
-const CORES: usize = 3;
-const MEMORY: usize = 4;
-const ROOT_GIB: usize = 5;
-const HOME_GIB: usize = 6;
-const ENVIRONMENT: usize = 7;
+const COUNT: usize = 2;
+const CTIDS: usize = 3;
+const CORES: usize = 4;
+const MEMORY: usize = 5;
+const ROOT_GIB: usize = 6;
+const HOME_GIB: usize = 7;
+const ENVIRONMENT: usize = 8;
 
 struct Session {
     config: DeployConfig,
@@ -31,12 +31,6 @@ struct Session {
     cluster: Cluster,
     settings: Vec<Setting>,
     reviewed: Option<Plan>,
-}
-
-/// The registry's record of the service, when it has one.
-fn record(setup: &Setup, source: &Source) -> Result<Option<Deployment>, String> {
-    let registry = registry::load(&registry::path_for(&setup.client_path))?;
-    Ok(registry.deployment(&source.repository, &source.manifest.id).cloned())
 }
 
 pub(super) fn work(setup: &Setup, commands: &Receiver<Command>, tell: &(dyn Fn(Event) + Send + Sync)) {
@@ -71,24 +65,11 @@ pub(super) fn work(setup: &Setup, commands: &Receiver<Command>, tell: &(dyn Fn(E
             }
             Command::Review { answers, .. } => {
                 let Some(s) = session.as_mut() else { continue };
-                tell(Event::Busy(
-                    "Checking the plan against the cluster and the registry".to_owned(),
-                ));
+                tell(Event::Busy("Checking the plan against the cluster".to_owned()));
                 let choice = choice(&s.settings, &answers);
-                let plan = match record(setup, &source) {
-                    Ok(record) => setup.handle.block_on(deploy::plan(
-                        &s.config,
-                        &s.pve,
-                        &source,
-                        &s.cluster,
-                        &choice,
-                        record.as_ref(),
-                    )),
-                    Err(error) => Plan {
-                        problems: vec![error],
-                        ..Plan::default()
-                    },
-                };
+                let plan = setup
+                    .handle
+                    .block_on(deploy::plan(&s.config, &s.pve, &source, &s.cluster, &choice));
                 tell(Event::Reviewed {
                     sections: sections(&source, &s.cluster, &plan, setup.offset),
                     problems: plan.problems.clone(),
@@ -99,10 +80,7 @@ pub(super) fn work(setup: &Setup, commands: &Receiver<Command>, tell: &(dyn Fn(E
                 let Some(s) = session.as_mut() else { continue };
                 let Some(plan) = s.reviewed.take() else { continue };
                 let say = |line: &str| tell(Event::Line(line.to_owned()));
-                let path = registry::path_for(&setup.client_path);
-                let (ok, lines) = setup
-                    .handle
-                    .block_on(deploy::apply(&s.pve, &path, &source, &plan, &say));
+                let (ok, lines) = setup.handle.block_on(deploy::apply(&s.pve, &source, &plan, &say));
                 tell(Event::Done { ok, lines });
             }
             Command::Cancel => return,
@@ -111,18 +89,11 @@ pub(super) fn work(setup: &Setup, commands: &Receiver<Command>, tell: &(dyn Fn(E
 }
 
 /// The deploy token's client, the cluster, and the settings: those of
-/// `kept` (a rescan), else the unfinished run's, else defaults.
+/// `kept` (a rescan), else defaults.
 async fn open(setup: &Setup, source: &Source, kept: Option<&Choice>) -> Result<(Session, Found), String> {
     let config = DeployConfig::load(&setup.token_dir.join("deploy.toml"))
         .map_err(|error| format!("{error}. Install HomeStack before deploying services."))?;
     let pve = hs_deploy::deploy::deploy_client(&config)?;
-    let record = record(setup, source)?;
-    if !source.manifest.multi_node && record.as_ref().is_some_and(|r| r.operation.is_none() && r.active()) {
-        return Err(format!(
-            "{} is already deployed; updating or removing it is not available yet.",
-            source.manifest.id
-        ));
-    }
     let cluster = deploy::survey(&config, &pve, source).await?;
     if cluster.releases.is_empty() {
         return Err(format!(
@@ -130,17 +101,8 @@ async fn open(setup: &Setup, source: &Source, kept: Option<&Choice>) -> Result<(
             source.manifest.image_repository
         ));
     }
-    let mut resumed = record.as_ref().filter(|r| r.operation.is_some()).map(resumed_choice);
-    // A single instance gets its CTID filled in: the first free one.
-    if kept.is_none() && resumed.is_none() && !source.manifest.multi_node {
-        let ctid = deploy::automatic(&config, &pve, 1).await?;
-        resumed = Some(Choice {
-            ctids: ctid.iter().map(u32::to_string).collect(),
-            ..Choice::default()
-        });
-    }
-    let settings = settings(source, &cluster, kept.or(resumed.as_ref()), setup.offset);
-    let mut check = vec![
+    let settings = settings(source, &cluster, kept, setup.offset);
+    let check = vec![
         (
             Mark::Ok,
             "access".to_owned(),
@@ -148,18 +110,6 @@ async fn open(setup: &Setup, source: &Source, kept: Option<&Choice>) -> Result<(
         ),
         (Mark::Ok, "nodes".to_owned(), cluster.nodes.join(", ")),
     ];
-    if let Some(record) = &record
-        && record.operation.is_some()
-    {
-        check.push((
-            Mark::Note,
-            "unfinished".to_owned(),
-            format!(
-                "a deployment stopped at {}; its settings are kept",
-                record.operation.as_ref().map_or("", |o| o.step.as_str())
-            ),
-        ));
-    }
     let found = Found {
         root: format!("deploy token · PVE {}", cluster.version),
         check,
@@ -176,41 +126,6 @@ async fn open(setup: &Setup, source: &Source, kept: Option<&Choice>) -> Result<(
         },
         found,
     ))
-}
-
-/// The settings of an unfinished run.
-fn resumed_choice(record: &Deployment) -> Choice {
-    let first = record.instances.first();
-    Choice {
-        version: record.image_version.clone(),
-        nodes: record.instances.iter().map(|i| i.node.clone()).collect(),
-        root_storages: record
-            .instances
-            .iter()
-            .map(|i| format!("{}:{}", i.node, i.root_storage))
-            .collect(),
-        home_storages: record
-            .instances
-            .iter()
-            .map(|i| format!("{}:{}", i.node, i.home_storage))
-            .collect(),
-        ctids: record
-            .instances
-            .iter()
-            .map(|i| i.ctid.to_string())
-            .collect::<Vec<_>>()
-            .join(","),
-        cores: first.map_or_else(String::new, |i| i.cores.to_string()),
-        memory_mib: first.map_or_else(String::new, |i| i.memory_mib.to_string()),
-        root_gib: first.map_or_else(String::new, |i| i.root_gib.to_string()),
-        home_gib: first.map_or_else(String::new, |i| i.home_gib.to_string()),
-        environment: record
-            .environment
-            .iter()
-            .map(|key| format!("{key}="))
-            .collect::<Vec<_>>()
-            .join(" "),
-    }
 }
 
 fn gib(bytes: u64) -> u64 {
@@ -264,20 +179,6 @@ fn settings(source: &Source, cluster: &Cluster, kept: Option<&Choice>, offset: i
                 .unwrap_or_else(|| default.to_owned()),
         )
     };
-    let (title, note) = if manifest.multi_node {
-        (
-            "Nodes",
-            "Tick one storage on each node that gets an instance: its disk and its home volume are made there, \
-             new volumes of the sizes below; nothing on the storage is changed. Instances are independent; nothing \
-             is replicated or balanced between them.",
-        )
-    } else {
-        (
-            "Node",
-            "The node and storage of the only instance (multi_node: false): its disk and its home volume are made \
-             there, new volumes of the sizes below; nothing on the storage is changed.",
-        )
-    };
     vec![
         Setting {
             title: "Version".to_owned(),
@@ -292,21 +193,32 @@ fn settings(source: &Source, cluster: &Cluster, kept: Option<&Choice>, offset: i
             text: None,
         },
         Setting {
-            title: title.to_owned(),
-            note: format!(
-                "{note} Each instance is an unprivileged container in pool homestack-service with tag homestack-server, its \
-                 health checked from this desktop after the start and again after one restart. One node at a time; \
-                 the first failure stops the run and nothing is removed; deploying again resumes it. Other \
-                 containers, the API servers, the Site connectors and Pangolin are not touched."
-            ),
-            multiple: manifest.multi_node,
-            picked: kept.map(|k| picked(&placements, &k.root_storages)).unwrap_or_default(),
+            title: "Nodes".to_owned(),
+            note: "Tick the node and storage of the new instances: each gets its own container, disk and home volume \
+                   there, new volumes of the sizes below; nothing on the storage is changed. Instances are \
+                   independent: each keeps its own data, nothing is shared or balanced between them. Each is an \
+                   unprivileged container in pool homestack-service with tag homestack-server, its health checked \
+                   from this desktop after the start and again after one restart. The first failure stops the run \
+                   and nothing is removed. Existing containers are not touched."
+                .to_owned(),
+            multiple: true,
+            picked: kept.map(|k| picked(&placements, &k.placements)).unwrap_or_default(),
             choices: placements,
             text: None,
         },
         Setting {
+            title: "Count".to_owned(),
+            note: "How many new instances each ticked node and storage gets. They are named after the service: \
+                   the first free of tutor, tutor-2, tutor-3…"
+                .to_owned(),
+            multiple: false,
+            choices: Vec::new(),
+            picked: Vec::new(),
+            text: text(kept.map(|k| &k.count), "1"),
+        },
+        Setting {
             title: "CTID".to_owned(),
-            note: "Empty: the first free CTIDs, shown in the review. Or one CTID per ticked node, in the order of \
+            note: "Empty: the first free CTIDs, shown in the review. Or one CTID per new instance, in the order of \
                    the nodes, separated by commas. The address follows from it: 102240 is .102.240."
                 .to_owned(),
             multiple: false,
@@ -375,20 +287,11 @@ fn choice(settings: &[Setting], answers: &[Answer]) -> Choice {
         Some(Answer::Text(text)) => text.trim().to_owned(),
         _ => String::new(),
     };
-    // `NODE:STORAGE` in the list's order (by node), as the CTIDs are given.
-    let placements = picked(PLACEMENT);
-    let mut nodes: Vec<String> = Vec::new();
-    for placement in &placements {
-        let node = placement.split_once(':').map_or(placement.as_str(), |(node, _)| node);
-        if !nodes.iter().any(|known| known == node) {
-            nodes.push(node.to_owned());
-        }
-    }
     Choice {
         version: picked(VERSION).into_iter().next().unwrap_or_default(),
-        nodes,
-        root_storages: placements.clone(),
-        home_storages: placements,
+        // `NODE:STORAGE` in the list's order (by node), as the CTIDs are given.
+        placements: picked(PLACEMENT),
+        count: text(COUNT),
         ctids: text(CTIDS),
         cores: text(CORES),
         memory_mib: text(MEMORY),
@@ -412,17 +315,9 @@ fn sections(source: &Source, cluster: &Cluster, plan: &Plan, offset: i64) -> Vec
         .unwrap_or_default();
     let mut lines = vec![format!("{} {version}{made}", manifest.name)];
     for i in &plan.instances {
-        let resumed = if plan.resumed.contains(&i.ctid) {
-            match i.stage {
-                Stage::Ready => " (already running, kept)",
-                _ => " (made by the stopped run, reused)",
-            }
-        } else {
-            ""
-        };
         lines.push(format!(
-            "{}  CT {}  {}  disk {} GiB + home {} GiB on {}  {} CPU  {} MiB{resumed}",
-            i.node, i.ctid, i.address, i.root_gib, i.home_gib, i.root_storage, i.cores, i.memory_mib
+            "{}  CT {}  {}  {}  disk {} GiB + home {} GiB on {}  {} CPU  {} MiB",
+            i.node, i.ctid, i.hostname, i.address, i.root_gib, i.home_gib, i.root_storage, i.cores, i.memory_mib
         ));
     }
     for (key, value) in &plan.environment {

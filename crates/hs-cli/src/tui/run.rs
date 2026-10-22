@@ -739,9 +739,6 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
     if let Ok(deployment) = hs_deploy::config::DeployConfig::load(&deploy_toml(ctx)) {
         app.api_instances = deployment.instances.iter().map(|instance| instance.ctid).collect();
     }
-    let registry_path =
-        crate::services::registry::path_for(&config::default_path(&ctx.home, ctx.config_home.as_deref()));
-    app.reload_services(&registry_path);
     let first_start = !config::default_path(&ctx.home, ctx.config_home.as_deref()).exists();
     let mut connection = if first_start || explicit_install {
         if app.open_install(Mode::Install, first_start) == Some(Request::HerdrTabs) {
@@ -1521,15 +1518,7 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
                     }
                 }
                 Update::Log(line) => app.log(&clock.now(), &line),
-                Update::Install(event) => {
-                    let deployed = matches!(event, super::install::Event::Done { .. })
-                        && app.install.as_ref().is_some_and(|install| install.mode == Mode::Service);
-                    app.install_event(event);
-                    // The registry changed: what the lists and details show.
-                    if deployed {
-                        app.reload_services(&registry_path);
-                    }
-                }
+                Update::Install(event) => app.install_event(event),
                 Update::Ask(question) => {
                     let mut view = AskView::new(question.id, question.kind, &question.prompt);
                     view.key_names = crate::identity::key_names(&ctx.home, &question.prompt);
@@ -1554,7 +1543,6 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
                 Update::Setup(_, event) => app.setup_event(event),
                 Update::Action(progress) => {
                     if let Progress::Done { ok, lines } = &progress {
-                        app.reload_services(&registry_path);
                         details.cancel();
                         app.clear_details();
                         let title = app.action.as_ref().map(super::action::Action::title).unwrap_or_default();

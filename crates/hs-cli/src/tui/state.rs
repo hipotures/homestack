@@ -314,8 +314,6 @@ pub struct App {
     pub images: Option<Result<super::reinstall::Images, String>>,
     /// The CTIDs `deploy.toml` saves as HomeStack API instances.
     pub api_instances: std::collections::BTreeSet<u32>,
-    /// The profile's service registry, as read at the start.
-    pub services: Result<crate::services::registry::Registry, String>,
 }
 
 impl App {
@@ -354,7 +352,6 @@ impl App {
             api_updates: None,
             api_updates_checking: false,
             api_instances: std::collections::BTreeSet::new(),
-            services: Ok(crate::services::registry::Registry::default()),
             startup_message: None,
             servers: Vec::new(),
             unreachable: Vec::new(),
@@ -406,10 +403,25 @@ impl App {
                 self.status_json = Some(json.clone());
                 self.status = Some(status);
                 self.apply_api_updates();
+                self.share_services();
                 self.unreachable.clear();
                 self.keep_selection();
             }
             Err(error) => self.log("", &format!("The server's status could not be read: {error}")),
+        }
+    }
+
+    /// The service containers the status lists, for the Services group.
+    pub fn share_services(&mut self) {
+        let services: Vec<StatusEntry> = self
+            .status
+            .iter()
+            .flat_map(|status| status.others.iter())
+            .filter(|entry| entry.service.is_some())
+            .cloned()
+            .collect();
+        if let Some(setup) = self.setup.as_mut() {
+            setup.services = services;
         }
     }
 
@@ -1166,13 +1178,6 @@ impl App {
         match self.preferences.write(&table) {
             Ok(()) => self.preferences.table = table,
             Err(error) => self.log("", &error.0),
-        }
-    }
-
-    pub fn reload_services(&mut self, path: &std::path::Path) {
-        self.services = crate::services::registry::load(path);
-        if let Some(setup) = self.setup.as_mut() {
-            setup.registry.clone_from(&self.services);
         }
     }
 

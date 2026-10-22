@@ -1,6 +1,6 @@
 # Container image updates
 
-API servers, Pangolin connectors and registered services update their image the
+API servers, Pangolin connectors and deployed services update their image the
 same way, through `hs_deploy::recreate` and the scoped Proxmox API token only.
 The container keeps its CTID, so the CTID stays tied to its IP address.
 
@@ -42,29 +42,42 @@ removing it 0.3 s, both outside the downtime. Moving a 1 GiB home takes about
 0.5 s. Shutdown, move out, destroy, create from a 60 MB service image, move back
 and start took 5.5 s, before the application's own start-up and health check.
 
-## Registered services
+## Deployed services
 
-The operator reviews the selected release and digest, the CTID, node, pool, tags,
-network identity, root storage and the home volume. Nothing changes during
-review. The service journal (`services.toml`, profile operation lock) records
-each step and task:
+Proxmox alone records what is deployed: each service container's description
+names the service (`HomeStack service <id>`), its repository, manifest revision,
+image and digest, and the API's status reports it for every container. Nothing
+about a deployment is kept on the desktop. Each deployment (`d`) makes new,
+independent instances, as many as asked for on each chosen node and storage,
+named `<id>`, `<id>-2`… with the first free CTIDs.
 
-1. Pull the release into an operation-specific OCI archive. PVE 9.2 accepts
-   tagged pull references; the registry's index and amd64 digests are verified
-   before and after the pull and changed tags are refused.
+An image update is reviewed first: the selected release and digest, the CTID,
+node, pool, network identity, root storage and the home volume. Nothing
+changes during review. Then, for each container:
+
+1. Pull the release into an archive named after the CTID and digest unless it
+   is there. PVE 9.2 accepts tagged pull references; the registry's index and
+   amd64 digests are verified before and after the pull and changed tags are
+   refused.
 2. If selected, back up the container including its home (`vzdump`, stop mode).
 3. Replace the container as described above, with a graceful shutdown that never
-   forces a stop. Verify the new root, the home under the original mount
-   options and the original network and MAC.
-4. Restore the tags, then verify ownership, IP, MAC and volumes against the
-   registry.
-5. Restore the original power state, check the manifest's health probe for a
-   running service, then restore the original autostart setting.
-6. Record the new root and home volume IDs and the release in the registry.
+   forces a stop. The holder's description also carries the service's identity
+   and the container's settings (name, CPU, memory, root, pool, `net0`, power
+   state), so the update can finish while the old container is gone. Verify the
+   new container's description, home under the original mount options, and
+   original network and MAC.
+4. Start the service when it ran before or starts on boot, and check the
+   manifest's health probe. Remove the pulled archive.
 
-PVE renames a volume when it moves, so the home's volume ID changes; HomeStack
-labels the home with the manifest service ID and `/home/app` and records the new
-ID. The container overview reads its IP from `net0` and home capacity from
+An interrupted update is finished by updating again: every step starts from
+what Proxmox shows. While only the holder is left, the holder appears in the
+list as the service, and Enter on it updates the container it holds.
+
+Maintenance (`m`) grows a container's root or home through the Proxmox API, or
+removes containers together with their home volumes after their names are typed.
+
+PVE renames a volume when it moves, so the home's volume ID changes between
+`vm-<ctid>-disk-N` names of the same container. The container overview reads its IP from `net0` and home capacity from
 `mp0`. Home free space comes from fresh in-container HTTP telemetry when the
 service implements the
 [service status contract](../.agents/skills/homestack-service/service-status.md);
@@ -78,12 +91,11 @@ upgrade requires a consistent backup, and restoring it is a separate action.
 
 ## Moving a service container
 
-Migrate (`g`) on a registered service container moves it to another node with
+Migrate (`g`) on a service container moves it to another node with
 the deploy token (`VM.Migrate` in its `HomeStackDeploy` role): a restart
 migration of root and home onto one storage of the target node. The form offers
 only storages of the type the root is on now, since Proxmox moves volumes only
 between storages of the same type. The CTID, address and MAC stay. A running
-service starts again on the target node and its health check must pass; the
-registry then records the new node and volumes. A container that is already on
-the chosen node, after an interrupted migration or a move in Proxmox, is only
-recorded there.
+service starts again on the target node and its health check must pass. A move
+made in Proxmox itself needs nothing from HomeStack: the container is where
+Proxmox shows it.

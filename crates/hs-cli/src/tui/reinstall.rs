@@ -343,60 +343,33 @@ pub async fn work(
     progress(Progress::Done { ok: true, lines });
 }
 
-/// Read service identity from the profile registry before considering legacy
-/// handlers. A CT tag/pool never selects an image repository.
+/// The images of service containers, when the first of `ids` is one: the
+/// service's identity comes from the container's description in Proxmox.
 async fn common_images(path: &Path, ids: &[u32], offset: i64) -> Result<Option<Images>, String> {
-    use crate::services::{deploy, registry};
-    let registry = registry::load(&path.with_file_name("services.toml"))?;
-    let Some((record, _)) = ids.iter().find_map(|id| registry.instance(*id)) else {
-        return Ok(None);
-    };
-    let source = common_source(record).await?;
+    use crate::services::instance;
+    let Some(first) = ids.first() else { return Ok(None) };
     let config = DeployConfig::load(path)?;
     let pve = hs_deploy::deploy::deploy_client(&config)?;
-    let mut servers = Vec::new();
-    for id in ids {
-        let instance = record
-            .instances
-            .iter()
-            .find(|i| i.ctid == *id)
-            .ok_or("Select instances of one registered service at a time")?;
-        let (found, current) = deploy::config_of(&pve, *id)
-            .await?
-            .ok_or("Registered CT is missing; use Recovery")?;
-        if found.node != instance.node {
-            return Err("Registered CT is on a different node".to_owned());
-        }
-        crate::services::lifecycle::verify(&source, record, instance, &current)?;
-        let version = instance
-            .release
-            .as_ref()
-            .map_or(record.image_version.as_str(), |r| r.version.as_str());
-        servers.push(Server {
-            vmid: *id,
-            name: instance.hostname.clone(),
-            image: Some(Image {
-                image: format!("{}:{version}", record.image_repository),
-                made: "—".to_owned(),
-                created: None,
-            }),
-        });
+    // API servers and Site connectors are not services; they have their own updates.
+    let Ok(first) = instance::read(&pve, *first).await else {
+        return Ok(None);
+    };
+    let mut targets = vec![first];
+    for id in &ids[1..] {
+        targets.push(instance::read(&pve, *id).await?);
     }
-    let mut installed: Vec<String> = servers
+    if targets
         .iter()
-        .filter_map(|s| s.image.as_ref().map(|i| i.image.clone()))
-        .collect();
-    let interrupted = record
-        .operation
-        .as_ref()
-        .and_then(|operation| operation.replacement.as_ref());
-    if let Some(journal) = interrupted {
-        installed.push(journal.image.clone());
+        .any(|t| (&t.repository, &t.service) != (&targets[0].repository, &targets[0].service))
+    {
+        return Err("Select the containers of one service at a time".to_owned());
     }
+    let (repository, service) = (targets[0].repository.clone(), targets[0].service.clone());
+    let source = common_source(&repository, &service).await?;
+    let installed: Vec<String> = targets.iter().map(|t| t.image.clone()).collect();
     let published: Vec<Image> = hs_core::registry::recent(&source.image("latest"), OFFERED, &installed)
         .await?
         .into_iter()
-        .filter(|release| interrupted.is_none_or(|journal| release.image == journal.image))
         .map(|r| Image {
             made: r
                 .created
@@ -407,45 +380,47 @@ async fn common_images(path: &Path, ids: &[u32], offset: i64) -> Result<Option<I
             created: r.created,
         })
         .collect();
-    for server in &mut servers {
-        if let Some(image) = &mut server.image
-            && let Some(known) = published.iter().find(|p| p.image == image.image)
-        {
-            *image = known.clone();
-        }
-    }
+    let servers = targets
+        .iter()
+        .map(|target| Server {
+            vmid: target.ctid,
+            name: target.hostname.clone(),
+            image: Some(
+                published
+                    .iter()
+                    .find(|p| p.image == target.image)
+                    .cloned()
+                    .unwrap_or(Image {
+                        image: target.image.clone(),
+                        made: "—".to_owned(),
+                        created: None,
+                    }),
+            ),
+        })
+        .collect();
+    let held: Vec<String> = targets
+        .iter()
+        .filter(|t| t.held)
+        .map(|t| format!("{} · CT {} · home in CT {}", t.node, t.ctid, hs_deploy::recreate::HOLDER_ID))
+        .collect();
     Ok(Some(Images {
         servers,
         published,
         sites: Vec::new(),
-        common: Some((record.repository.clone(), record.service.clone())),
-        resume: interrupted.map(|journal| {
-            journal
-                .targets
-                .iter()
-                .map(|target| {
-                    format!(
-                        "{} · CT {} · step {:?}",
-                        target.before.node, target.before.ctid, target.step
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join(", ")
-        }),
+        common: Some((repository, service)),
+        resume: (!held.is_empty()).then(|| held.join(", ")),
     }))
 }
 
-async fn common_source(
-    record: &crate::services::registry::Deployment,
-) -> Result<crate::services::deploy::Source, String> {
-    let repository = record.repository.clone();
-    let id = record.service.clone();
+async fn common_source(repository: &str, id: &str) -> Result<crate::services::deploy::Source, String> {
+    let repository = repository.to_owned();
+    let id = id.to_owned();
     tokio::task::spawn_blocking(move || {
         let found = crate::services::github::discover(&crate::system::RealSystem::default(), &repository, None)?;
         let (file, manifest) = found
             .services()
             .find(|(_, m)| m.id == id)
-            .ok_or("Registered service has no valid manifest on the default branch")?;
+            .ok_or("The service has no valid manifest on the default branch")?;
         Ok(crate::services::deploy::Source {
             repository,
             branch: found.branch.clone(),
@@ -466,18 +441,13 @@ async fn common_work(
     progress: &(dyn Fn(Progress) + Send + Sync),
     say: &(dyn Fn(&str) + Send + Sync),
 ) {
-    use crate::services::{lifecycle, registry};
+    use crate::services::update;
     let result = async {
         let (repository, service): (String, String) =
             serde_json::from_value(start.parameters["service"].clone()).map_err(|_| "Invalid service identity")?;
         let ids: Vec<u32> =
             serde_json::from_value(start.parameters["instances"].clone()).map_err(|_| "Invalid instance selection")?;
-        let state_path = path.with_file_name("services.toml");
-        let registry = registry::load(&state_path)?;
-        let record = registry
-            .deployment(&repository, &service)
-            .ok_or("Service is no longer registered")?;
-        let source = common_source(record).await?;
+        let source = common_source(&repository, &service).await?;
         let image = start.parameters["image"].as_str().ok_or("Image is missing")?;
         let version = image.rsplit_once(':').map_or("", |(_, v)| v);
         if source.image(version) != image {
@@ -485,32 +455,10 @@ async fn common_work(
         }
         let config = DeployConfig::load(path)?;
         let pve = hs_deploy::deploy::deploy_client(&config)?;
-        let interrupted = record
-            .operation
-            .as_ref()
-            .and_then(|operation| operation.replacement.as_ref());
-        if interrupted.is_some_and(|journal| journal.image != image) {
-            return Err("Resume the interrupted image update before choosing another version".to_owned());
-        }
-        let choice = lifecycle::Choice {
-            action: Some(if interrupted.is_some() {
-                lifecycle::Action::Recovery
-            } else {
-                lifecycle::Action::Update
-            }),
-            ctids: ids.clone(),
-            version: version.to_owned(),
-            ..lifecycle::Choice::default()
-        };
-        let plan = lifecycle::plan(&pve, &config, &source, record, &choice).await;
+        let plan = update::plan(&pve, &config, &source, &ids, version, "").await;
         progress(Progress::Plan {
             lines: plan.lines.clone(),
-            question: if interrupted.is_some() {
-                "Resume this service image update?"
-            } else {
-                "Apply this service image update?"
-            }
-            .to_owned(),
+            question: "Apply this service image update?".to_owned(),
             blocked: (!plan.problems.is_empty()).then(|| plan.problems.join("\n")),
             secret: None,
         });
@@ -521,7 +469,6 @@ async fn common_work(
             Some(Decision::Apply(_)) => {}
             _ => return Ok(Some(vec!["Cancelled. No changes were made.".to_owned()])),
         }
-        let replacement = plan.replacement.as_ref().ok_or("API replacement plan is missing")?;
         // One row per container; the one under way shows its current step.
         let rows = std::sync::Mutex::new((
             ids.iter()
@@ -552,7 +499,7 @@ async fn common_work(
             }
             progress(Progress::Steps(steps.clone()));
         };
-        let lines = crate::services::replacement::apply(&pve, &state_path, &source, replacement, &said).await?;
+        let lines = update::apply(&pve, &source, &plan, &said).await?;
         Ok(Some(lines))
     }
     .await;
@@ -566,7 +513,7 @@ async fn common_work(
     }
 }
 
-/// Do `start` (`Kind::Migrate` of a registered service container): its
+/// Do `start` (`Kind::Migrate` of a service container): its
 /// plan, the answer, then the move with the container's current step shown.
 pub async fn migrate_work(
     path: &Path,
@@ -575,7 +522,7 @@ pub async fn migrate_work(
     progress: &(dyn Fn(Progress) + Send + Sync),
     say: &(dyn Fn(&str) + Send + Sync),
 ) {
-    use crate::services::{migrate, registry};
+    use crate::services::{instance, migrate};
     let result = async {
         let parameters = &start.parameters;
         let target = migrate::Target {
@@ -583,10 +530,9 @@ pub async fn migrate_work(
             node: parameters["target_node"].as_str().unwrap_or_default().to_owned(),
             storage: parameters["target_storage"].as_str().unwrap_or_default().to_owned(),
         };
-        let state_path = path.with_file_name("services.toml");
         let config = DeployConfig::load(path)?;
         let pve = hs_deploy::deploy::deploy_client(&config)?;
-        let plan = migrate::plan(&pve, &state_path, &target).await?;
+        let plan = migrate::plan(&pve, &target).await?;
         progress(Progress::Plan {
             lines: plan.lines.clone(),
             question: "Migrate this service container?".to_owned(),
@@ -600,12 +546,8 @@ pub async fn migrate_work(
             Some(Decision::Apply(_)) => {}
             _ => return Ok(Some(vec!["Cancelled. No changes were made.".to_owned()])),
         }
-        let registry = registry::load(&state_path)?;
-        let record = registry
-            .instance(target.ctid)
-            .map(|(record, _)| record)
-            .ok_or("Service is no longer registered")?;
-        let source = common_source(record).await?;
+        let found = instance::read(&pve, target.ctid).await?;
+        let source = common_source(&found.repository, &found.service).await?;
         let ctid = target.ctid;
         let said = |line: &str| {
             say(line);
@@ -619,7 +561,7 @@ pub async fn migrate_work(
             }]));
         };
         said(&format!("CT {ctid} · checking"));
-        let lines = migrate::apply(&pve, &state_path, &source, &target, &said).await?;
+        let lines = migrate::apply(&pve, &source, &target, &said).await?;
         Ok(Some(lines))
     }
     .await;

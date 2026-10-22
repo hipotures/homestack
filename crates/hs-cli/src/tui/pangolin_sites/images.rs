@@ -413,6 +413,7 @@ pub async fn apply(
                 spec,
                 graceful: false,
                 keep: &[],
+                note: "",
             },
             &|line| say(line),
         )

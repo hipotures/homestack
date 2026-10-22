@@ -74,7 +74,7 @@ pub(super) fn setup_box(buf: &mut Buffer, area: Rect, app: &App, setup: &SetupBo
             Control::named("F5", "refresh", KeyCode::F(5)),
             Control::named(
                 "D",
-                if setup.deployed() { "add nodes" } else { "deploy" },
+                "deploy",
                 KeyCode::Char('d'),
             )
             .enabled(setup.deployable().is_some()),
@@ -292,11 +292,8 @@ fn tree_stage(buf: &mut Buffer, inner: Rect, app: &App, setup: &SetupBox) {
         )
     };
     let details = if setup.in_services() {
-        let observed = observed(app);
-        draw_services(buf, tree_area, app, setup, observed.as_deref());
-        setup
-            .service_detail_lines(observed.as_deref(), app.utc_offset)
-            .join("\n")
+        draw_services(buf, tree_area, app, setup);
+        setup.service_detail_lines().join("\n")
     } else {
         draw_tree(buf, tree_area, app, setup);
         setup.details(&setup.cursor)
@@ -347,28 +344,9 @@ fn tree_stage(buf: &mut Buffer, inner: Rect, app: &App, setup: &SetupBox) {
     draw_details(buf, content, app, setup, &details);
 }
 
-/// The containers the status lists, for the services' states.
-fn observed(app: &App) -> Option<Vec<hs_model::status::StatusEntry>> {
-    app.status.as_ref().map(|status| {
-        status
-            .gold
-            .iter()
-            .chain(&status.workspaces)
-            .chain(&status.others)
-            .cloned()
-            .collect()
-    })
-}
-
 /// The Services group: the repositories as the tree draws them, without
 /// checkboxes, each opened one with its manifest files below it.
-fn draw_services(
-    buf: &mut Buffer,
-    area: Rect,
-    app: &App,
-    setup: &SetupBox,
-    observed: Option<&[hs_model::status::StatusEntry]>,
-) {
+fn draw_services(buf: &mut Buffer, area: Rect, app: &App, setup: &SetupBox) {
     let palette = &app.palette;
     let text = text_style(palette);
     let rows = setup.service_rows();
@@ -414,7 +392,7 @@ fn draw_services(
             write(buf, area.x, y, area.width, &" ".repeat(usize::from(area.width)), base);
         }
         register(Rect::new(area.x, y, area.width, 1), Hit::SetupRow(index, 2));
-        let (label, (state, tone)) = setup.service_row_text(row, observed);
+        let (label, (state, tone)) = setup.service_row_text(row);
         let (indent, arrow) = match row.file {
             Some(_) => (5, "  "),
             None if setup.services_open.contains(&row.repository) => (3, "▾ "),

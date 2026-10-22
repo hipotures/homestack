@@ -1837,6 +1837,33 @@
         },
         "additionalProperties": false
       },
+      "DeployedService": {
+        "type": "object",
+        "description": "A manifest-defined service in a container, as HomeStack's description\nrecords it; an observation, never ownership proof.",
+        "required": [
+          "repository",
+          "id",
+          "image",
+          "digest"
+        ],
+        "properties": {
+          "digest": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "description": "The manifest `id`."
+          },
+          "image": {
+            "type": "string",
+            "description": "`REGISTRY/PATH:VERSION`."
+          },
+          "repository": {
+            "type": "string",
+            "description": "`owner/repo` on GitHub."
+          }
+        }
+      },
       "Discovery": {
         "type": "object",
         "description": "`GET /v1/discovery`: the Proxmox part of `homestack discover`.",
@@ -3203,6 +3230,17 @@
             "type": [
               "string",
               "null"
+            ]
+          },
+          "service": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DeployedService",
+                "description": "The service HomeStack deployed in this container, from its description."
+              },
+              {
+                "type": "null"
+              }
             ]
           },
           "service_status": {

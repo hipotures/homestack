@@ -19,6 +19,9 @@ pub struct Replace<'a> {
     /// Configuration keys the new container keeps; `env` is merged over the
     /// new image's own entries. Kept only when the container has volumes.
     pub keep: &'a [&'a str],
+    /// Lines the holder's description carries for whoever resumes the
+    /// replacement while the old container is gone.
+    pub note: &'a str,
 }
 
 /// The one holder CTID: easy to spot in logs, and PVE refuses a second one.
@@ -31,6 +34,12 @@ const READY: &str = "holder ready";
 #[must_use]
 pub fn holder_name(ctid: u32) -> String {
     format!("hs-holder-{ctid}")
+}
+
+/// The CTID whose replacement a holder's description serves.
+#[must_use]
+pub fn holder_of(description: &str) -> Option<u32> {
+    description.lines().next()?.strip_prefix(HOLDER)?.trim().parse().ok()
 }
 
 fn text<'a>(cfg: &'a Value, key: &str) -> &'a str {
@@ -186,7 +195,12 @@ async fn prepare_holder(
     }
     let cfg = config(pve, node, id).await?;
     let mut fields = kept(old, r.keep);
-    fields.push(("description".to_owned(), format!("{HOLDER} {ctid}\n{READY}")));
+    let note = if r.note.is_empty() {
+        String::new()
+    } else {
+        format!("{}\n", r.note.trim_end())
+    };
+    fields.push(("description".to_owned(), format!("{HOLDER} {ctid}\n{note}{READY}")));
     put(pve, node, id, &cfg, &fields).await?;
     say(&format!("  holder CT {id} keeps the configuration of CT {ctid}"));
     Ok(())
@@ -468,6 +482,7 @@ mod tests {
             spec: spec("new"),
             graceful: true,
             keep: &["env", "features"],
+            note: "",
         };
         replace(node, &plan, &|_| {}).await.unwrap();
         let cts = node.0.lock().unwrap();

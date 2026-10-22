@@ -616,6 +616,7 @@ pub async fn global_status(pve: &impl Pve, cfg: &Config) -> Result<GlobalStatus,
                 warning,
                 image: None,
                 image_update: None,
+                service: None,
             })
         }
     };
@@ -689,6 +690,7 @@ pub async fn global_status(pve: &impl Pve, cfg: &Config) -> Result<GlobalStatus,
             image: None,
             service_status: None,
             image_update: None,
+            service: None,
             role_tag_ok: !tags.contains(GOLD_TAG) && !(alien && tags.contains(WORKSPACE_TAG)),
             warning,
         });
@@ -717,6 +719,7 @@ pub async fn global_status(pve: &impl Pve, cfg: &Config) -> Result<GlobalStatus,
             None
         };
         let image = container_config.as_ref().and_then(crate::registry::deployed_image);
+        let service = container_config.as_ref().and_then(crate::registry::deployed_service);
         let root_storage = if !online {
             None
         } else if container {
@@ -802,6 +805,7 @@ pub async fn global_status(pve: &impl Pve, cfg: &Config) -> Result<GlobalStatus,
             warning: None,
             image,
             image_update: None,
+            service,
         });
     }
     others.sort_by_key(|entry| entry.vmid);

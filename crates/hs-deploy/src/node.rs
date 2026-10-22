@@ -149,6 +149,7 @@ pub struct Container {
     pub node: String,
     pub status: String,
     pub name: String,
+    pub pool: String,
 }
 
 /// Container `ctid`, if the token sees it (only those of its pool).
@@ -166,6 +167,7 @@ pub async fn container(pve: &impl Pve, ctid: u32) -> Result<Option<Container>, S
             node: item["node"].as_str().unwrap_or_default().to_owned(),
             status: item["status"].as_str().unwrap_or_default().to_owned(),
             name: item["name"].as_str().unwrap_or_default().to_owned(),
+            pool: item["pool"].as_str().unwrap_or_default().to_owned(),
         }))
 }
 
