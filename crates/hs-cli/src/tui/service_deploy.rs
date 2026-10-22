@@ -287,7 +287,12 @@ fn settings(source: &Source, cluster: &Cluster, kept: Option<&Choice>, offset: i
         },
         Setting {
             title: title.to_owned(),
-            note: note.to_owned(),
+            note: format!(
+                "{note} Each instance is an unprivileged container in pool homestack-service with tag {TAG}, its \
+                 health checked from this desktop after the start and again after one restart. One node at a time; \
+                 the first failure stops the run and nothing is removed; deploying again resumes it. Other \
+                 containers, the API servers, the Site connectors and Pangolin are not touched."
+            ),
             multiple: manifest.multi_node,
             picked: kept.map(|k| picked(&placements, &k.root_storages)).unwrap_or_default(),
             choices: placements,
@@ -387,113 +392,36 @@ fn choice(settings: &[Setting], answers: &[Answer]) -> Choice {
     }
 }
 
-/// The review.
+/// The review: what is made, nothing else.
 fn sections(source: &Source, cluster: &Cluster, plan: &Plan, offset: i64) -> Vec<(String, Vec<String>)> {
     let manifest = &source.manifest;
-    let mut sections = vec![(
-        "Service".to_owned(),
-        vec![
-            format!("{} ({}) from {}", manifest.name, manifest.id, source.repository),
-            format!(
-                "{} at {} @ {} (blob {})",
-                source.path,
-                source.branch,
-                source.commit.get(..12).unwrap_or(&source.commit),
-                source.blob.get(..12).unwrap_or(&source.blob)
-            ),
-        ],
-    )];
-    let mut release = vec![plan.image.clone()];
-    if let Some(resolved) = &plan.resolved {
-        release.push(format!("digest {}", resolved.digest));
-        if resolved.platform != resolved.digest {
-            release.push(format!("linux/amd64 image {}", resolved.platform));
-        }
-        let made = resolved
-            .created
-            .as_deref()
-            .or_else(|| {
-                cluster
-                    .releases
-                    .iter()
-                    .find(|r| r.image == plan.image)
-                    .and_then(|r| r.created.as_deref())
-            })
-            .and_then(|at| local_time(at, offset));
-        if let Some(made) = made {
-            release.push(format!("made {made}"));
-        }
-    }
-    for node in &plan.pulls {
-        release.push(format!("pulled into {} on {node}", plan.template_storage));
-    }
-    sections.push(("Release".to_owned(), release));
-    let mut instances = Vec::new();
+    let version = plan.image.rsplit_once(':').map_or("", |(_, tag)| tag);
+    let made = cluster
+        .releases
+        .iter()
+        .find(|r| r.image == plan.image)
+        .and_then(|r| r.created.as_deref())
+        .and_then(|at| local_time(at, offset))
+        .map(|made| format!(", made {made}"))
+        .unwrap_or_default();
+    let mut lines = vec![format!("{} {version}{made}", manifest.name)];
     for i in &plan.instances {
-        instances.push(format!(
-            "{}  CT {}  {}  {}/{} via {}, bridge {}",
-            i.node, i.ctid, i.hostname, i.address, plan.cidr, plan.gateway, plan.bridge
-        ));
-        instances.push(format!(
-            "      root {} {} GiB · home {} {} GiB at {MOUNT} (mp0, its own volume) · {} core{} · {} MiB",
-            i.root_storage,
-            i.root_gib,
-            i.home_storage,
-            i.home_gib,
-            i.cores,
-            if i.cores == 1 { "" } else { "s" },
-            i.memory_mib
-        ));
-        if plan.resumed.contains(&i.ctid) {
-            instances.push(match i.stage {
-                Stage::Ready => "      ready in the unfinished run: kept".to_owned(),
-                _ => "      made by the unfinished run and still this service's: reused, then checked".to_owned(),
-            });
-        }
-    }
-    if !instances.is_empty() {
-        sections.push((
-            format!(
-                "Containers (unprivileged, pool {}, tag {TAG}, MAC assigned by Proxmox)",
-                plan.instances.first().map_or("", |i| i.pool.as_str())
-            ),
-            instances,
-        ));
-    }
-    sections.push((
-        "Environment (kept in the container configuration; no secrets)".to_owned(),
-        if plan.environment.is_empty() {
-            vec!["none; the manifest declares no variables, the application's documentation lists them".to_owned()]
+        let resumed = if plan.resumed.contains(&i.ctid) {
+            match i.stage {
+                Stage::Ready => " (already running, kept)",
+                _ => " (made by the stopped run, reused)",
+            }
         } else {
-            plan.environment
-                .iter()
-                .map(|(key, value)| format!("{key}={value}"))
-                .collect()
-        },
-    ));
-    sections.push((
-        "Health".to_owned(),
-        vec![
-            deploy::health_text(manifest),
-            "checked from this desktop for up to 180 s after the start, then again after one restart".to_owned(),
-        ],
-    ));
-    sections.push((
-        "Ownership and recovery".to_owned(),
-        vec![
-            "description: service, repository, manifest revision, image and digest".to_owned(),
-            "services.toml records each instance before its container is made and after every step".to_owned(),
-            "one node at a time; the first failure stops the run and nothing is removed".to_owned(),
-            "deploying again resumes a stopped run; its containers are reused only when they are this service's"
-                .to_owned(),
-        ],
-    ));
-    sections.push((
-        "Kept, never changed".to_owned(),
-        vec![
-            "every other container, VM and volume, the HomeStack API servers and the Site connectors".to_owned(),
-            "no public exposure: Pangolin resources and DNS are not touched".to_owned(),
-        ],
-    ));
-    sections
+            ""
+        };
+        lines.push(format!(
+            "{}  CT {}  {}  disk {} GiB + home {} GiB on {}  {} CPU  {} MiB{resumed}",
+            i.node, i.ctid, i.address, i.root_gib, i.home_gib, i.root_storage, i.cores, i.memory_mib
+        ));
+    }
+    for (key, value) in &plan.environment {
+        lines.push(format!("{key}={value}"));
+    }
+    lines.push(format!("then: {}", deploy::health_text(manifest)));
+    vec![("Deploy".to_owned(), lines)]
 }
