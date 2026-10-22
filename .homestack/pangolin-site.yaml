@@ -1,0 +1,16 @@
+schema: 1
+id: pangolin-site
+name: Pangolin Site
+image:
+  repository: ghcr.io/hipotures/homestack-pangolin-site
+runtime:
+  # Outbound connector: verify container running and Pangolin Site online.
+  ports: []
+persistence:
+  mount: /home/app
+  directories:
+    - pangolin-site
+deployment:
+  # Each instance requires its own Site identity and private local credential.
+  multi_node: false
+  state_model: local

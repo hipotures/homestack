@@ -1,0 +1,19 @@
+#!/bin/sh
+# Sourced by both runit services. Only new managed instances opt in.
+case "${HOMESTACK_MANAGED_HOME:-0}" in
+    0) export HOMESTACK_STATE_DIR=/var/lib/homestack ;;
+    1)
+        if [ -L /home/app ] || ! awk '$5 == "/home/app" { found=1 } END { exit !found }' /proc/self/mountinfo; then
+            echo "managed API requires a mounted /home/app" >&2
+            exit 1
+        fi
+        export HOMESTACK_STATE_DIR=/home/app/homestack
+        if [ -L "$HOMESTACK_STATE_DIR" ]; then
+            echo "managed API state must not be a symlink" >&2
+            exit 1
+        fi
+        install -d -m 0700 -o homestack -g nogroup "$HOMESTACK_STATE_DIR"
+        export HOMESTACK_CONFIG_FILE="$HOMESTACK_STATE_DIR/server.toml"
+        ;;
+    *) echo "invalid HOMESTACK_MANAGED_HOME" >&2; exit 1 ;;
+esac

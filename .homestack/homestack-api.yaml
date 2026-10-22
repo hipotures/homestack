@@ -1,0 +1,21 @@
+schema: 1
+id: homestack-api
+name: HomeStack API
+image:
+  repository: ghcr.io/hipotures/homestack-server
+runtime:
+  ports:
+    - name: https
+      port: 443
+      protocol: tcp
+  # Connectivity only; authenticated HTTPS /health/live remains authoritative.
+  healthcheck:
+    type: tcp
+    port: https
+persistence:
+  mount: /home/app
+  directories:
+    - homestack
+deployment:
+  multi_node: false
+  state_model: local

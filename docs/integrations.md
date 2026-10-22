@@ -579,6 +579,11 @@ rendering at 80×24 and 120×36, without production access.
 
 ### Step 8: Pangolin Site connectors
 
+The portable Site manifest prepares future common-managed installations; it
+does not change this legacy workflow or adopt existing connectors. See
+[internal services](internal-services.md) for the persistent runtime selector
+and the initialization prerequisites still blocking that new path.
+
 Step 8 deploys one independent Pangolin Site connector per selected Proxmox
 node: node `pve1` gets Site `pangolin-pve1` and one LXC container on `pve1`, and
 so on. It is available once the Step 5 tunnel is connected, the organization is

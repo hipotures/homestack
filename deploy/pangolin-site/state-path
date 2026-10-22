@@ -1,0 +1,18 @@
+#!/bin/sh
+# Sourced by runit and the authenticated credential receiver.
+case "${HOMESTACK_MANAGED_HOME:-0}" in
+    0) dir=/var/lib/pangolin-site ;;
+    1)
+        if [ -L /home/app ] || ! awk '$5 == "/home/app" { found=1 } END { exit !found }' /proc/self/mountinfo; then
+            echo "managed Site requires a mounted /home/app" >&2
+            exit 1
+        fi
+        dir=/home/app/pangolin-site
+        if [ -L "$dir" ]; then
+            echo "managed Site state must not be a symlink" >&2
+            exit 1
+        fi
+        install -d -m 0700 -o site -g nogroup "$dir"
+        ;;
+    *) echo "invalid HOMESTACK_MANAGED_HOME" >&2; exit 1 ;;
+esac

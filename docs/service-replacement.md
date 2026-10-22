@@ -1,5 +1,9 @@
 # Container image updates
 
+The two internal-service manifests prepare future installations only. See
+[internal services](internal-services.md) for persistent runtime selection,
+the blocked initialization handoffs and the boundary around legacy containers.
+
 API servers, Pangolin connectors and deployed services update their image the
 same way, through `hs_deploy::recreate` and the scoped Proxmox API token only.
 The container keeps its CTID, so the CTID stays tied to its IP address.
