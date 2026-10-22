@@ -18,6 +18,8 @@ pub enum Mode {
     Uninstall,
     /// Pangolin Step 8: a Site connector per node (SSH root only).
     Sites,
+    /// The first deployment of a manifest-defined service (deploy token).
+    Service,
 }
 
 impl Mode {
@@ -28,6 +30,7 @@ impl Mode {
             Self::Install => &["access", "check", "settings", "review", "install"],
             Self::Uninstall => &["access", "check", "review", "remove"],
             Self::Sites => &["access", "settings", "review", "deploy"],
+            Self::Service => &["settings", "review", "deploy"],
         }
     }
 }
@@ -259,6 +262,7 @@ impl Install {
             Mode::Install => "HomeStack reinstall",
             Mode::Uninstall => "HomeStack uninstall",
             Mode::Sites => "Pangolin Site connectors",
+            Mode::Service => "Service deployment",
         }
     }
     #[must_use]
@@ -306,6 +310,8 @@ impl Install {
     pub fn step(&self) -> (usize, usize) {
         let steps = self.mode.steps().len();
         let at = match (self.stage, self.mode) {
+            (Stage::Access | Stage::Check | Stage::Settings, Mode::Service) => 0,
+            (Stage::Review, Mode::Service) => 1,
             (Stage::Access, _) => 0,
             (Stage::Check, _) => 1,
             (Stage::Settings, Mode::Sites) => 1,
@@ -415,7 +421,7 @@ impl Install {
                 // The install goes straight to its settings (the check stays
                 // in the log and one Esc back); the uninstall shows the check.
                 self.stage = match self.mode {
-                    Mode::Install | Mode::Sites => Stage::Settings,
+                    Mode::Install | Mode::Sites | Mode::Service => Stage::Settings,
                     Mode::Uninstall => Stage::Check,
                 };
             }
@@ -423,7 +429,7 @@ impl Install {
                 // In its box, as the setup's failure.
                 self.error = None;
                 self.failed = Some(error);
-                if self.stage != Stage::Access {
+                if self.stage != Stage::Access && self.mode != Mode::Service {
                     self.stage = Stage::Access;
                 }
             }
@@ -448,8 +454,15 @@ impl Install {
         if self.failed.is_some() {
             if matches!(code, KeyCode::Enter | KeyCode::Esc) {
                 self.failed = None;
+                // Nothing was read: the service screen has nothing to show.
+                if self.mode == Mode::Service && self.found.is_none() {
+                    return (true, Some(Request::Install(Command::Cancel)));
+                }
             }
             return (false, None);
+        }
+        if self.mode == Mode::Service && self.found.is_none() && code == KeyCode::Esc {
+            return (true, Some(Request::Install(Command::Cancel)));
         }
         if self.connecting() {
             return (false, if code == KeyCode::Esc { self.cancel() } else { None });
@@ -473,6 +486,16 @@ impl Install {
             Stage::Review => self.review_key(code),
             Stage::Run => (false, None),
             Stage::Done => match code {
+                KeyCode::Enter | KeyCode::Esc if self.mode == Mode::Service && self.ok => {
+                    (true, Some(Request::Install(Command::Cancel)))
+                }
+                // A stopped deployment is reviewed again: the registry now
+                // holds what it made.
+                KeyCode::Enter | KeyCode::Esc if self.mode == Mode::Service => {
+                    self.stage = Stage::Settings;
+                    self.lines.clear();
+                    (false, None)
+                }
                 // Back to the Pangolin wizard; root is let go.
                 KeyCode::Enter | KeyCode::Esc if self.ok && self.mode == Mode::Sites => {
                     (true, Some(Request::Install(Command::Cancel)))
@@ -632,7 +655,7 @@ impl Install {
                 self.stage = Stage::Settings;
                 None
             }
-            Mode::Uninstall | Mode::Sites => {
+            Mode::Uninstall | Mode::Sites | Mode::Service => {
                 self.stage = Stage::Review;
                 self.reviewed = false;
                 self.remove_focused = false;
@@ -692,6 +715,9 @@ impl Install {
                 self.stage = Stage::Access;
                 self.found = None;
                 return (false, Some(Request::Install(Command::Cancel)));
+            }
+            KeyCode::Esc if !self.chooser && self.mode == Mode::Service => {
+                return (true, Some(Request::Install(Command::Cancel)));
             }
             KeyCode::Esc if !self.chooser => self.stage = Stage::Check,
             KeyCode::Esc => self.chooser = false,
@@ -767,7 +793,7 @@ impl Install {
     fn review_key(&mut self, code: KeyCode) -> (bool, Option<Request>) {
         let ready = self.reviewed && self.problems.is_empty();
         match (self.mode, code) {
-            (Mode::Install | Mode::Sites, KeyCode::Esc) => self.stage = Stage::Settings,
+            (Mode::Install | Mode::Sites | Mode::Service, KeyCode::Esc) => self.stage = Stage::Settings,
             (Mode::Uninstall, KeyCode::Esc) => self.stage = Stage::Check,
             (_, KeyCode::Down) => self.scroll += 1,
             (_, KeyCode::Up) => self.scroll = self.scroll.saturating_sub(1),
@@ -776,7 +802,12 @@ impl Install {
                 self.lines.clear();
                 return (false, Some(Request::Install(Command::Apply)));
             }
-            (Mode::Sites, KeyCode::Char('b')) => self.stage = Stage::Settings,
+            (Mode::Sites | Mode::Service, KeyCode::Char('b')) => self.stage = Stage::Settings,
+            (Mode::Service, KeyCode::Enter | KeyCode::Char('d')) if ready => {
+                self.stage = Stage::Run;
+                self.lines.clear();
+                return (false, Some(Request::Install(Command::Apply)));
+            }
             (Mode::Install, KeyCode::Enter | KeyCode::Char('i')) if ready => {
                 self.stage = Stage::Run;
                 self.lines.clear();

@@ -337,6 +337,7 @@ pub async fn apply(config: &DeployConfig, only: &[String], say: &impl Fn(&str)) 
             nameserver: config.nameserver.map(|ip| ip.to_string()),
             description,
             tag: node::SERVER_TAG,
+            mp0: None,
         };
         timed(
             &instance.name,

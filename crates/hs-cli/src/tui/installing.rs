@@ -63,6 +63,10 @@ pub struct Setup {
     pub handle: tokio::runtime::Handle,
     /// Sites mode: the Pangolin wizard's tunnel, organization and key.
     pub sites: Option<super::pangolin_sites::Context>,
+    /// Service mode: the manifest revision to deploy.
+    pub service: Option<crate::services::deploy::Source>,
+    /// Seconds east of UTC, for the times shown.
+    pub offset: i64,
 }
 
 impl Setup {
@@ -85,7 +89,7 @@ impl Setup {
 
     fn command(&self) -> Install {
         match self.mode {
-            Mode::Install | Mode::Sites => Install::Install,
+            Mode::Install | Mode::Sites | Mode::Service => Install::Install,
             Mode::Uninstall => Install::Uninstall,
         }
     }
@@ -119,10 +123,10 @@ pub fn spawn(setup: Setup, commands: Receiver<Command>, tell: impl Fn(Event) + S
     std::thread::spawn(move || {
         // The servers' DNS lookups and the deployment use the runtime.
         let _entered = setup.handle.enter();
-        if setup.mode == Mode::Sites {
-            super::pangolin_sites::work(&setup, &commands, &tell);
-        } else {
-            work(&setup, &commands, &tell);
+        match setup.mode {
+            Mode::Sites => super::pangolin_sites::work(&setup, &commands, &tell),
+            Mode::Service => super::service_deploy::work(&setup, &commands, &tell),
+            Mode::Install | Mode::Uninstall => work(&setup, &commands, &tell),
         }
     });
 }
@@ -243,7 +247,7 @@ fn survey(setup: &Setup, session: &mut Session, tell: &(dyn Fn(Event) + Send + S
             check.extend(install_check(&review));
             first = Some((answers, Some(domain), review));
         }
-        Mode::Uninstall | Mode::Sites => match session.plan(&setup.settings()) {
+        Mode::Uninstall | Mode::Sites | Mode::Service => match session.plan(&setup.settings()) {
             Ok(plan) => {
                 check.push(if plan.steps.is_empty() {
                     (

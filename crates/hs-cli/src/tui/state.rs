@@ -650,6 +650,14 @@ impl App {
         self.install = Some(self.sites_install());
     }
 
+    /// The deployment of a service: its settings come from the cluster.
+    pub fn open_service_deploy(&mut self) {
+        let mut install = super::install::Install::new(super::install::Mode::Service, false);
+        install.stage = super::install::Stage::Settings;
+        install.busy = Some("Reading the cluster and the published releases".to_owned());
+        self.install = Some(install);
+    }
+
     /// Clear cached cluster state after an install or uninstall finishes; when
     /// `has_client_config` is false (a production uninstall retired
     /// `client.toml`), open the first-time install screen instead of leaving a
@@ -1098,7 +1106,13 @@ impl App {
 
     /// Keep the access that connected for the next install screen.
     fn keep_access(&mut self) {
-        let Some(install) = &self.install else { return };
+        let Some(install) = self
+            .install
+            .as_ref()
+            .filter(|install| install.mode != super::install::Mode::Service)
+        else {
+            return;
+        };
         let mut table = self.preferences.table.clone();
         let method = match install.method {
             super::install::Method::Ssh => {

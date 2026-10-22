@@ -175,6 +175,8 @@ pub struct NewContainer<'a> {
     pub description: String,
     /// The tag that marks what made it ([`SERVER_TAG`] for a server).
     pub tag: &'a str,
+    /// A new volume made with the container, `STORAGE:GIB,mp=PATH,…`.
+    pub mp0: Option<String>,
 }
 
 /// Create the container (stopped); the image sets its entrypoint and
@@ -206,6 +208,9 @@ pub async fn create(pve: &impl Pve, spec: &NewContainer<'_>, say: &impl Fn(&str)
     ];
     if let Some(nameserver) = &spec.nameserver {
         form.push(("nameserver", nameserver.as_str()));
+    }
+    if let Some(mp0) = &spec.mp0 {
+        form.push(("mp0", mp0.as_str()));
     }
     let upid = pve
         .post(&format!("/nodes/{}/lxc", spec.node), &form)

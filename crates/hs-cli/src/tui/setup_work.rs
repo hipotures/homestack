@@ -315,7 +315,16 @@ fn run(start: &Start, tell: &Tell, cancel: &Arc<AtomicBool>, commands: &Receiver
                 }
             },
             Command::Services(repository, branch) => {
-                let found = crate::services::github::discover(system, &repository, branch.as_deref());
+                let mut found = crate::services::github::discover(system, &repository, branch.as_deref());
+                // The releases of each valid manifest's image, read only.
+                if let Ok(found) = found.as_mut() {
+                    for file in &mut found.files {
+                        if let Ok(manifest) = &file.manifest {
+                            let image = format!("{}:latest", manifest.image_repository);
+                            file.releases = Some(start.handle.block_on(hs_core::registry::recent(&image, 10, &[])));
+                        }
+                    }
+                }
                 tell(Event::Services(repository, found));
             }
             Command::Refresh => match session.inspect(system) {

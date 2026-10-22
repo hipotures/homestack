@@ -110,7 +110,20 @@ pub(super) fn screen(buf: &mut Buffer, area: Rect, app: &App, install: &Install)
             if let Some(busy) = &install.busy {
                 let spinner = SPINNER[install.frame % SPINNER.len()];
                 let text = text_style(palette);
-                message_box(buf, app, "rescan cluster", &[(format!("{spinner} {busy}"), text)]);
+                let title = if install.found.is_some() {
+                    "rescan cluster"
+                } else {
+                    "reading"
+                };
+                message_box(buf, app, title, &[(format!("{spinner} {busy}"), text)]);
+            }
+            if let Some(failed) = &install.failed {
+                let text = text_style(palette);
+                let style = text.fg(palette.error);
+                let mut lines: Vec<(String, Style)> = wrap(failed, 64).into_iter().map(|line| (line, style)).collect();
+                lines.push((String::new(), text));
+                lines.push(("ENTER or ESC closes.".to_owned(), text.fg(palette.muted)));
+                message_box(buf, app, "failed", &lines);
             }
         }
         Stage::Review => review(buf, inner, app, install),
@@ -134,7 +147,7 @@ pub(super) fn buttons(install: &Install) -> Vec<Control> {
         ],
         Stage::Check => vec![
             Control::key(match install.mode {
-                Mode::Install | Mode::Sites => "&Settings Enter",
+                Mode::Install | Mode::Sites | Mode::Service => "&Settings Enter",
                 Mode::Uninstall => "&Review Enter",
             }),
             Control::key("back Esc"),
@@ -152,7 +165,7 @@ pub(super) fn buttons(install: &Install) -> Vec<Control> {
                     Control::key("&Install Enter").enabled(ready),
                     Control::key("back Esc"),
                 ],
-                Mode::Sites => vec![
+                Mode::Sites | Mode::Service => vec![
                     Control::key("scroll ↑↓"),
                     Control::key("&Deploy Enter").enabled(ready),
                     Control::key("back Esc"),
@@ -168,7 +181,10 @@ pub(super) fn buttons(install: &Install) -> Vec<Control> {
             }
         }
         Stage::Run => vec![Control::key("stop Esc").muted()],
-        Stage::Done if install.ok && install.mode == Mode::Sites => vec![Control::key("close Enter")],
+        Stage::Done if install.ok && matches!(install.mode, Mode::Sites | Mode::Service) => {
+            vec![Control::key("close Enter")]
+        }
+        Stage::Done if install.mode == Mode::Service => vec![Control::key("back to the settings Enter or Esc")],
         Stage::Done if install.ok => vec![Control::key("&Open HomeStack Enter"), Control::key("&Quit")],
         Stage::Done => vec![Control::key("&back to the review Enter or Esc"), Control::key("&Quit")],
     }
@@ -201,6 +217,9 @@ fn access(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
         Mode::Sites => {
             "Root on one node over SSH reads the cluster and hands each connector its own Site credential on \
              standard input. Nothing changes in Pangolin or Proxmox until you press Deploy in the review step."
+        }
+        Mode::Service => {
+            "The deploy token reads the cluster. Nothing changes until you press Deploy in the review step."
         }
     };
     let mut y = inner.y + 1;
@@ -450,7 +469,12 @@ fn settings(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
         && let Some(found) = &install.found
     {
         let how = found.root.split(" · ").next().unwrap_or_default();
-        let line = format!("  Root access  {how}");
+        let label = if install.mode == Mode::Service {
+            "Access"
+        } else {
+            "Root access"
+        };
+        let line = format!("  {label}  {how}");
         write(
             buf,
             x,
@@ -734,6 +758,8 @@ fn done(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
         (false, Mode::Uninstall) => ("The uninstall did not finish.", text.fg(palette.error)),
         (true, Mode::Sites) => ("Every Site connector runs and is online.", text.fg(palette.ok)),
         (false, Mode::Sites) => ("The Site connectors are not all online.", text.fg(palette.error)),
+        (true, Mode::Service) => ("Every instance runs and passed its check.", text.fg(palette.ok)),
+        (false, Mode::Service) => ("The deployment did not finish.", text.fg(palette.error)),
     };
     write(buf, x, inner.y + 1, width, heading, style.add_modifier(Modifier::BOLD));
     let mut row = 3;

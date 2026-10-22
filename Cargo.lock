@@ -929,6 +929,7 @@ dependencies = [
  "hs-pve",
  "ratatui",
  "ratcn",
+ "reqwest",
  "rpassword",
  "rustix",
  "serde",

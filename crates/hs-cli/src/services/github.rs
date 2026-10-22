@@ -30,6 +30,9 @@ pub struct ManifestFile {
     /// The Git blob: the manifest's revision.
     pub blob: String,
     pub manifest: Result<Manifest, String>,
+    /// The published releases of its image, newest first; `None` until
+    /// they are read.
+    pub releases: Option<Result<Vec<hs_core::registry::Published>, String>>,
 }
 
 impl Discovery {
@@ -151,7 +154,12 @@ pub fn discover(system: &dyn System, repository: &str, branch: Option<&str>) -> 
             },
             _ => Err("not a regular file".to_owned()),
         };
-        discovery.files.push(ManifestFile { path, blob, manifest });
+        discovery.files.push(ManifestFile {
+            path,
+            blob,
+            manifest,
+            releases: None,
+        });
     }
     let ids: Vec<String> = discovery.services().map(|(_, manifest)| manifest.id.clone()).collect();
     for file in &mut discovery.files {

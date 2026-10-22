@@ -1220,6 +1220,7 @@ async fn deploy_node(
             nameserver: None,
             description: description(&ctx.organization, &n.site, &ctx.image),
             tag: TAG,
+            mp0: None,
         };
         node::create(pve, &spec, say).await?;
     }

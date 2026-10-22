@@ -65,6 +65,11 @@ impl Registry {
     }
 
     async fn get(&self, tail: &str, accept: Option<&str>) -> Result<Value, String> {
+        self.get_digest(tail, accept).await.map(|(body, _)| body)
+    }
+
+    /// The body and the registry's `Docker-Content-Digest`.
+    async fn get_digest(&self, tail: &str, accept: Option<&str>) -> Result<(Value, Option<String>), String> {
         let mut request = self.http.get(format!("{}/{tail}", self.base));
         if let Some(token) = &self.token {
             request = request.bearer_auth(token);
@@ -77,7 +82,13 @@ impl Registry {
         if !status.is_success() {
             return Err(format!("{tail}: {status}"));
         }
-        response.json().await.map_err(|error| format!("{tail}: {error}"))
+        let digest = response
+            .headers()
+            .get("docker-content-digest")
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
+        let body = response.json().await.map_err(|error| format!("{tail}: {error}"))?;
+        Ok((body, digest))
     }
 
     /// When the image of `tag` was made: its configuration's `created`; an
@@ -102,6 +113,59 @@ impl Registry {
         let config = self.get(&format!("blobs/{digest}"), None).await?;
         Ok(config["created"].as_str().map(str::to_owned))
     }
+}
+
+/// A release checked for deployment.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Resolved {
+    /// The digest of what the tag names: an index or one image.
+    pub digest: String,
+    /// The linux/amd64 image's digest (the same for a single image).
+    pub platform: String,
+    pub created: Option<String>,
+}
+
+fn is_digest(text: &str) -> bool {
+    text.strip_prefix("sha256:")
+        .is_some_and(|hex| hex.len() == 64 && hex.bytes().all(|b| b.is_ascii_hexdigit()))
+}
+
+/// The digest of `image` and of its linux/amd64 image; an error when the
+/// tag has no linux/amd64 image (an index's attestations are skipped).
+pub async fn resolve(image: &str) -> Result<Resolved, String> {
+    let (host, path, tag) = split(image).ok_or_else(|| format!("{image} is not REGISTRY/PATH:TAG"))?;
+    let registry = Registry::open(host, path).await?;
+    let (manifest, digest) = registry
+        .get_digest(&format!("manifests/{tag}"), Some(MANIFESTS))
+        .await?;
+    let digest = digest
+        .filter(|digest| is_digest(digest))
+        .ok_or_else(|| format!("{image}: the registry gave no sha256 digest"))?;
+    let (platform, image_manifest) = if let Some(list) = manifest["manifests"].as_array() {
+        let platform = list
+            .iter()
+            .find(|entry| entry["platform"]["os"] == "linux" && entry["platform"]["architecture"] == "amd64")
+            .and_then(|entry| entry["digest"].as_str())
+            .filter(|digest| is_digest(digest))
+            .ok_or_else(|| format!("{image} has no linux/amd64 image"))?
+            .to_owned();
+        let found = registry.get(&format!("manifests/{platform}"), Some(MANIFESTS)).await?;
+        (platform, found)
+    } else {
+        (digest.clone(), manifest)
+    };
+    let config_digest = image_manifest["config"]["digest"]
+        .as_str()
+        .ok_or_else(|| format!("{image}: the image has no configuration"))?;
+    let config = registry.get(&format!("blobs/{config_digest}"), None).await?;
+    if config["os"] != "linux" || config["architecture"] != "amd64" {
+        return Err(format!("{image} is not a linux/amd64 image"));
+    }
+    Ok(Resolved {
+        digest,
+        platform,
+        created: config["created"].as_str().map(str::to_owned),
+    })
 }
 
 /// The image reference recorded by HomeStack's deployer.

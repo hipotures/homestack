@@ -72,6 +72,7 @@ pub(super) fn setup_box(buf: &mut Buffer, area: Rect, app: &App, setup: &SetupBo
             Control::named("←→", "group", KeyCode::Right),
             Control::named("ENTER", "open", KeyCode::Enter),
             Control::named("F5", "refresh", KeyCode::F(5)),
+            Control::named("D", "deploy", KeyCode::Char('d')).enabled(setup.deployable().is_some()),
             Control::named("ESC", "cancel", KeyCode::Esc),
         ],
         Stage::Tree => {
@@ -287,7 +288,9 @@ fn tree_stage(buf: &mut Buffer, inner: Rect, app: &App, setup: &SetupBox) {
     let details = if setup.in_services() {
         let observed = observed(app);
         draw_services(buf, tree_area, app, setup, observed.as_deref());
-        setup.service_detail_lines(observed.as_deref()).join("\n")
+        setup
+            .service_detail_lines(observed.as_deref(), app.utc_offset)
+            .join("\n")
     } else {
         draw_tree(buf, tree_area, app, setup);
         setup.details(&setup.cursor)

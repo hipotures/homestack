@@ -54,6 +54,10 @@ pub struct Deployment {
     pub image_version: String,
     /// `sha256:…`, resolved when the version was chosen.
     pub image_digest: String,
+    /// The names of the environment variables set on the containers; the
+    /// values stay in Proxmox.
+    #[serde(default)]
+    pub environment: Vec<String>,
     #[serde(default)]
     pub instances: Vec<Instance>,
     /// Set while an operation is under way; left behind by an interruption.
@@ -67,15 +71,40 @@ pub struct Deployment {
 pub struct Instance {
     pub node: String,
     pub ctid: u32,
+    pub hostname: String,
     pub address: String,
+    /// Empty until Proxmox assigned it.
     pub mac: String,
     pub pool: String,
     #[serde(default)]
     pub tags: Vec<String>,
-    /// Proxmox volume IDs, e.g. `local-lvm:vm-120-disk-0`.
+    pub cores: u32,
+    pub memory_mib: u32,
+    pub root_storage: String,
+    pub root_gib: u32,
+    pub home_storage: String,
+    pub home_gib: u32,
+    /// Proxmox volume IDs, e.g. `local-lvm:vm-120-disk-0`; empty until the
+    /// container exists.
     pub root_volume: String,
     pub home_volume: String,
+    pub stage: Stage,
+    /// When its health check last passed (RFC 3339).
+    #[serde(default)]
+    pub verified: Option<String>,
     pub desired: Desired,
+}
+
+/// How far the deployment of an instance got.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Stage {
+    /// Recorded before the container is created.
+    Planned,
+    /// The container and its volumes exist.
+    Created,
+    /// Started and checked.
+    Ready,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -93,8 +122,6 @@ pub struct Operation {
     pub step: String,
     /// RFC 3339.
     pub started: String,
-    #[serde(default)]
-    pub instances: Vec<u32>,
 }
 
 impl Registry {

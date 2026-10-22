@@ -602,6 +602,8 @@ struct Installing {
     server_image: Option<String>,
     /// Sites mode: what the Pangolin wizard hands the worker.
     sites: Option<super::pangolin_sites::Context>,
+    /// Service mode: the manifest revision to deploy.
+    service: Option<crate::services::deploy::Source>,
 }
 
 impl Installing {
@@ -675,6 +677,8 @@ impl Installing {
             server_domain: self.server_domain.clone(),
             handle: tokio::runtime::Handle::current(),
             sites: (mode == Mode::Sites).then(|| self.sites.clone()).flatten(),
+            service: (mode == Mode::Service).then(|| self.service.clone()).flatten(),
+            offset: app.utc_offset,
         };
         let (sender, receiver) = std::sync::mpsc::channel();
         let updates = updates.clone();
@@ -727,10 +731,9 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
     if let Ok(deployment) = hs_deploy::config::DeployConfig::load(&deploy_toml(ctx)) {
         app.api_instances = deployment.instances.iter().map(|instance| instance.ctid).collect();
     }
-    app.services = crate::services::registry::load(&crate::services::registry::path_for(&config::default_path(
-        &ctx.home,
-        ctx.config_home.as_deref(),
-    )));
+    let registry_path =
+        crate::services::registry::path_for(&config::default_path(&ctx.home, ctx.config_home.as_deref()));
+    app.services = crate::services::registry::load(&registry_path);
     let first_start = !config::default_path(&ctx.home, ctx.config_home.as_deref()).exists();
     let mut connection = if first_start || explicit_install {
         if app.open_install(Mode::Install, first_start) == Some(Request::HerdrTabs) {
@@ -1310,6 +1313,19 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
                                         .as_mut()
                                         .and_then(|setup| setup.pending_plan.take())
                                         .map(|plan| Work::Execute(Box::new(plan))),
+                                    Ask::Deploy => {
+                                        if let Some(source) = app.setup.as_mut().and_then(|setup| setup.deploy_request.take()) {
+                                            app.open_service_deploy();
+                                            installing.service = Some(source);
+                                            installing.send(
+                                                Command::Connect { method: super::install::Method::Ssh, target: String::new() },
+                                                &mut app,
+                                                ctx,
+                                                &updates,
+                                            );
+                                        }
+                                        None
+                                    }
                                     Ask::Services => app
                                         .setup
                                         .as_mut()
@@ -1480,7 +1496,18 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
                     }
                 }
                 Update::Log(line) => app.log(&clock.now(), &line),
-                Update::Install(event) => app.install_event(event),
+                Update::Install(event) => {
+                    let deployed = matches!(event, super::install::Event::Done { .. })
+                        && app.install.as_ref().is_some_and(|install| install.mode == Mode::Service);
+                    app.install_event(event);
+                    // The registry changed: what the lists and details show.
+                    if deployed {
+                        app.services = crate::services::registry::load(&registry_path);
+                        if let Some(setup) = app.setup.as_mut() {
+                            setup.registry.clone_from(&app.services);
+                        }
+                    }
+                }
                 Update::Ask(question) => {
                     let mut view = AskView::new(question.id, question.kind, &question.prompt);
                     view.key_names = crate::identity::key_names(&ctx.home, &question.prompt);

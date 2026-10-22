@@ -104,6 +104,8 @@ pub enum Ask {
     Execute,
     /// Read the manifests of `services_request`.
     Services,
+    /// Open the deployment of `deploy_request`.
+    Deploy,
     /// Esc while it runs.
     Cancel,
     /// The box closes: the connection ends.
@@ -145,6 +147,7 @@ pub fn service_details(
     file: &ManifestFile,
     registry: &Result<Registry, String>,
     observed: Option<&[StatusEntry]>,
+    offset: i64,
 ) -> Vec<String> {
     let revision = format!("Revision: {} @ {}", discovery.branch, short(&discovery.commit));
     let manifest = match &file.manifest {
@@ -167,8 +170,20 @@ pub fn service_details(
         revision,
         format!("Blob: {}", short(&file.blob)),
         format!("Image: {}", manifest.image_repository),
-        "Version: chosen from published releases when deployed".to_owned(),
     ];
+    match &file.releases {
+        None => {}
+        Some(Ok(releases)) if releases.is_empty() => lines.push("Releases: none published".to_owned()),
+        Some(Ok(releases)) => lines.push(format!(
+            "Releases: {}",
+            releases
+                .iter()
+                .map(|release| release.image.rsplit_once(':').map_or("", |(_, tag)| tag))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )),
+        Some(Err(error)) => lines.push(format!("Releases: not read: {error}")),
+    }
     if manifest.ports.is_empty() {
         lines.push("Ports: none".to_owned());
     }
@@ -213,6 +228,52 @@ pub fn service_details(
             Some(ctid) => format!("Status: CT {ctid} {}", status.label()),
             None => format!("Status: {}", status.label()),
         });
+    }
+    let deployment = registry
+        .as_ref()
+        .ok()
+        .and_then(|registry| registry.deployment(&discovery.repository, &manifest.id));
+    if let Some(deployment) = deployment {
+        lines.push(format!(
+            "Deployed: {}:{}",
+            deployment.image_repository, deployment.image_version
+        ));
+        lines.push(format!("Digest: {}", deployment.image_digest));
+        lines.push(format!(
+            "From: {} @ {}",
+            deployment.manifest_path,
+            short(&deployment.commit)
+        ));
+        if !deployment.environment.is_empty() {
+            lines.push(format!("Environment: {}", deployment.environment.join(", ")));
+        }
+        if let Some(operation) = &deployment.operation {
+            lines.push(format!("Unfinished {}: {}", operation.kind, operation.step));
+        }
+        for instance in &deployment.instances {
+            lines.push(format!(
+                "CT {}: {} on {}, {}",
+                instance.ctid, instance.hostname, instance.node, instance.address
+            ));
+            lines.push(format!(
+                "  root {} GiB on {}, home {} GiB on {} at {}",
+                instance.root_gib,
+                instance.root_storage,
+                instance.home_gib,
+                instance.home_storage,
+                crate::services::manifest::MOUNT
+            ));
+            if !instance.home_volume.is_empty() {
+                lines.push(format!("  home volume {}", instance.home_volume));
+            }
+            if let Some(verified) = instance
+                .verified
+                .as_deref()
+                .and_then(|at| super::reinstall::local_time(at, offset))
+            {
+                lines.push(format!("  health passed {verified}"));
+            }
+        }
     }
     lines
 }
@@ -266,6 +327,8 @@ pub struct SetupBox {
     /// The repository (and its default branch) whose manifests the worker
     /// reads next.
     pub services_request: Option<(String, Option<String>)>,
+    /// The service whose deployment opens next.
+    pub deploy_request: Option<crate::services::deploy::Source>,
     /// What each opened repository declares, as last read; `None` while
     /// it is read.
     pub discoveries: HashMap<String, Option<Result<Discovery, String>>>,
@@ -466,6 +529,7 @@ impl SetupBox {
             result: None,
             pending_plan: None,
             services_request: None,
+            deploy_request: None,
             discoveries: HashMap::new(),
             services_open: BTreeSet::new(),
             services_cursor: 0,
@@ -2131,7 +2195,7 @@ impl SetupBox {
 
     /// The details of the highlighted Services row.
     #[must_use]
-    pub fn service_detail_lines(&self, observed: Option<&[StatusEntry]>) -> Vec<String> {
+    pub fn service_detail_lines(&self, observed: Option<&[StatusEntry]>, offset: i64) -> Vec<String> {
         let Some(row) = self.service_cursor_row() else {
             let reason = if self.catalog.repository_error.is_empty() {
                 "No repositories match.".to_owned()
@@ -2144,7 +2208,7 @@ impl SetupBox {
         if let (Some(index), Some(Ok(found))) = (row.file, read)
             && let Some(file) = found.files.get(index)
         {
-            return service_details(found, file, &self.registry, observed);
+            return service_details(found, file, &self.registry, observed, offset);
         }
         let mut lines = vec![row.repository.clone()];
         if let Some(branch) = self.default_branch(&row.repository) {
@@ -2199,6 +2263,45 @@ impl SetupBox {
         (!self.discoveries.contains_key(repository)).then(|| self.read_services(repository.to_owned()))
     }
 
+    /// The highlighted service when it can be deployed: a valid manifest
+    /// with no deployment, or one an unfinished run left.
+    #[must_use]
+    pub fn deployable(&self) -> Option<crate::services::deploy::Source> {
+        let ServiceRow {
+            repository,
+            file: Some(index),
+        } = self.service_cursor_row()?
+        else {
+            return None;
+        };
+        let Some(Ok(found)) = self.discovery(&repository) else {
+            return None;
+        };
+        let file = found.files.get(index)?;
+        let manifest = file.manifest.as_ref().ok()?;
+        let registry = self.registry.as_ref().ok()?;
+        if registry
+            .deployment(&repository, &manifest.id)
+            .is_some_and(|deployment| deployment.operation.is_none())
+        {
+            return None;
+        }
+        Some(crate::services::deploy::Source {
+            repository,
+            branch: found.branch.clone(),
+            commit: found.commit.clone(),
+            path: file.path.clone(),
+            blob: file.blob.clone(),
+            manifest: manifest.clone(),
+        })
+    }
+
+    /// `d`: deploy the highlighted service.
+    fn deploy(&mut self) -> Option<Ask> {
+        self.deploy_request = Some(self.deployable()?);
+        Some(Ask::Deploy)
+    }
+
     /// Open or close the highlighted repository of the Services group.
     fn toggle_repository(&mut self) -> Option<Ask> {
         let Some(ServiceRow { repository, file: None }) = self.service_cursor_row() else {
@@ -2242,6 +2345,7 @@ impl SetupBox {
             KeyCode::Right | KeyCode::Tab => self.show_section(self.section + 1),
             KeyCode::Left | KeyCode::BackTab => self.show_section(self.section + self.groups().len() - 1),
             KeyCode::Char('f') => self.filtering = true,
+            KeyCode::Char('d') => return self.deploy(),
             KeyCode::Enter => return self.toggle_repository(),
             KeyCode::F(5) => {
                 // Not while the last read is still under way.
