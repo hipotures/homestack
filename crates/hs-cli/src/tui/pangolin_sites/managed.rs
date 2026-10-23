@@ -146,6 +146,11 @@ impl Pangolin {
         self.ctx.endpoint.alive()
     }
 
+    /// The verified organization context and its restricted key for service routing.
+    pub(in crate::tui) fn api_context(&self) -> Result<(&Context, Credential), String> {
+        Ok((&self.ctx, self.key()?))
+    }
+
     /// What the context is, for the review.
     #[must_use]
     pub fn describe(&self) -> String {

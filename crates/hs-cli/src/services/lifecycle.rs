@@ -43,6 +43,8 @@ pub struct Choice {
     pub shown_environment: String,
     /// The selected containers' names, typed to remove them.
     pub remove: String,
+    /// A separately reviewed Pangolin attachment accompanies these settings.
+    pub attach: bool,
 }
 
 /// The reviewed changes.
@@ -96,6 +98,10 @@ pub async fn plan(pve: &impl Pve, repository: &str, service: &str, choice: &Choi
         }
     }
     if !choice.remove.trim().is_empty() {
+        if choice.attach {
+            plan.problems
+                .push("Pangolin attachment cannot be combined with removal".to_owned());
+        }
         let wanted = names(&plan.targets);
         if choice.remove.trim() != wanted {
             plan.problems.push(format!(
@@ -200,7 +206,7 @@ pub async fn plan(pve: &impl Pve, repository: &str, service: &str, choice: &Choi
             plan.lines.extend(changes);
         }
     }
-    if plan.lines.is_empty() && plan.problems.is_empty() {
+    if plan.lines.is_empty() && plan.problems.is_empty() && !choice.attach {
         plan.problems
             .push("Nothing changes: change a size or the environment, or type the names to remove".to_owned());
     }

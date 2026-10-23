@@ -7,6 +7,7 @@ use hs_deploy::config::DeployConfig;
 use super::install::{Event, Found, Mark, Setting};
 use super::installing::{Command, Setup};
 use super::pangolin_sites::managed::Pangolin;
+use super::service_pangolin;
 use crate::install_flow::Answer;
 use crate::services::deploy::SiteReady;
 use crate::services::{deploy, instance, lifecycle};
@@ -46,6 +47,8 @@ pub(super) fn work(
     };
     let mut settings: Vec<Setting> = Vec::new();
     let mut reviewed: Option<lifecycle::Plan> = None;
+    let mut attachment: Option<service_pangolin::Plan> = None;
+    let mut catalog = None;
     // A Site restart is verified by its own Site online, through this context.
     let mut pangolin: Option<Pangolin> = None;
     let mut shown = String::new();
@@ -54,6 +57,25 @@ pub(super) fn work(
             Command::Cancel => return,
             Command::Connect { .. } | Command::Rescan { .. } => {
                 reviewed = None;
+                attachment = None;
+                let kept = match &command {
+                    Command::Rescan { answers, .. } => Some(answers),
+                    _ => None,
+                };
+                let previous_settings = settings.clone();
+                if kept.is_some_and(|answers| service_pangolin::requested(answers)) {
+                    let loaded =
+                        site_context(setup, &mut pangolin, tell).and_then(|p| service_pangolin::load(p, &setup.stop));
+                    match loaded {
+                        Ok(loaded) => catalog = Some(loaded),
+                        Err(error) => {
+                            tell(Event::Failed(error));
+                            continue;
+                        }
+                    }
+                } else {
+                    catalog = None;
+                }
                 tell(Event::Busy("Reading the service's containers".to_owned()));
                 let found = setup
                     .handle
@@ -138,6 +160,10 @@ pub(super) fn work(
                 if only.is_some() {
                     settings[0].picked = vec![0];
                 }
+                settings.extend(service_pangolin::settings(source, catalog.as_ref()));
+                if let Some(answers) = kept {
+                    restore(&mut settings, &previous_settings, answers);
+                }
                 tell(Event::Connected(Found {
                     root: "Service · deploy token".to_owned(),
                     check: vec![(
@@ -156,6 +182,7 @@ pub(super) fn work(
                 }));
             }
             Command::Review { answers, .. } => {
+                attachment = None;
                 tell(Event::Busy("Reading the selected containers".to_owned()));
                 let selected = |at: usize| -> Vec<String> {
                     match (settings.get(at), answers.get(at)) {
@@ -178,6 +205,7 @@ pub(super) fn work(
                     environment: text(3),
                     shown_environment: shown.clone(),
                     remove: text(4),
+                    attach: service_pangolin::requested(&answers),
                 };
                 let mut plan =
                     setup
@@ -202,17 +230,94 @@ pub(super) fn work(
                         Err(error) => plan.problems.push(error),
                     }
                 }
+                let mut sections = vec![(
+                    if plan.remove { "Remove" } else { "Changes" }.to_owned(),
+                    plan.lines.clone(),
+                )];
+                if choice.attach && plan.problems.is_empty() {
+                    if !plan.lines.is_empty() {
+                        plan.problems
+                            .push("Save other service changes separately before attaching to Pangolin".to_owned());
+                    } else if catalog.is_none() {
+                        tell(Event::Busy("Loading Pangolin resources and Sites".to_owned()));
+                        let loaded = site_context(setup, &mut pangolin, tell)
+                            .and_then(|p| service_pangolin::load(p, &setup.stop));
+                        match loaded {
+                            Ok(loaded) => {
+                                reviewed = None;
+                                catalog = Some(loaded);
+                                let previous = settings.clone();
+                                settings.truncate(service_pangolin::ACTION);
+                                settings.extend(service_pangolin::settings(source, catalog.as_ref()));
+                                restore(&mut settings, &previous, &answers);
+                                tell(Event::Connected(Found {
+                                    root: "Service · deploy token".to_owned(),
+                                    check: vec![(
+                                        Mark::Ok,
+                                        "Pangolin".to_owned(),
+                                        "Choose a resource, Site, port and protocol, then review".to_owned(),
+                                    )],
+                                    settings: settings.clone(),
+                                    domain: None,
+                                }));
+                                continue;
+                            }
+                            Err(error) => plan.problems.push(error),
+                        }
+                    } else {
+                        let checked = site_context(setup, &mut pangolin, tell).and_then(|p| {
+                            service_pangolin::review(
+                                p,
+                                &setup.stop,
+                                catalog.as_ref(),
+                                &settings,
+                                &answers,
+                                &plan.targets,
+                            )
+                        });
+                        match checked {
+                            Ok(checked) => {
+                                sections.push(("Pangolin attachment".to_owned(), checked.lines()));
+                                attachment = Some(checked);
+                            }
+                            Err(error) => plan.problems.push(error),
+                        }
+                    }
+                }
                 tell(Event::Reviewed {
-                    sections: vec![(
-                        if plan.remove { "Remove" } else { "Changes" }.to_owned(),
-                        plan.lines.clone(),
-                    )],
+                    sections,
                     problems: plan.problems.clone(),
                 });
                 reviewed = Some(plan);
             }
             Command::Apply => {
                 let Some(plan) = reviewed.take() else { continue };
+                if !plan.problems.is_empty() {
+                    attachment = None;
+                    tell(Event::Done {
+                        ok: false,
+                        lines: vec!["Resolve the review problems first".to_owned()],
+                    });
+                    continue;
+                }
+                if let Some(attachment) = attachment.take() {
+                    let result = match pangolin.as_ref() {
+                        Some(pangolin) => {
+                            setup
+                                .handle
+                                .block_on(service_pangolin::apply(&pve, pangolin, &setup.stop, &attachment))
+                        }
+                        None => Err("The Pangolin context is unavailable; review again".to_owned()),
+                    };
+                    tell(match result {
+                        Ok(lines) => Event::Done { ok: true, lines },
+                        Err(error) => Event::Done {
+                            ok: false,
+                            lines: vec![error],
+                        },
+                    });
+                    continue;
+                }
                 let say = |line: &str| tell(Event::Line(line.to_owned()));
                 match setup.handle.block_on(lifecycle::apply(
                     &pve,
@@ -241,7 +346,7 @@ fn site_context<'a>(
     if pangolin.as_ref().is_none_or(|p| !p.alive()) {
         *pangolin = None;
         tell(Event::Busy(
-            "Opening the Pangolin API tunnel to verify the Site (touch your key or give its PIN if it asks)".to_owned(),
+            "Opening the Pangolin API tunnel (touch your key or give its PIN if it asks)".to_owned(),
         ));
         *pangolin = Some(Pangolin::open(
             &setup.token_dir,
@@ -254,4 +359,34 @@ fn site_context<'a>(
     pangolin
         .as_ref()
         .ok_or_else(|| "The Pangolin context is unavailable".to_owned())
+}
+
+/// Preserve edits across F5, matching choices by their stable values. Recreated
+/// Sites have new IDs, so a stale selection is cleared rather than reused.
+fn restore(settings: &mut [Setting], previous: &[Setting], answers: &[Answer]) {
+    for (at, setting) in settings.iter_mut().enumerate() {
+        let Some(old) = previous.get(at).filter(|old| old.title == setting.title) else {
+            continue;
+        };
+        match answers.get(at) {
+            Some(Answer::Text(text)) if setting.list => {
+                setting.choices = text.split_whitespace().map(|v| (v.to_owned(), String::new())).collect();
+            }
+            Some(Answer::Text(text)) if setting.text.is_some() => setting.text = Some(text.clone()),
+            Some(Answer::Picked(indices)) => {
+                let values: Vec<_> = indices
+                    .iter()
+                    .filter_map(|i| old.choices.get(*i))
+                    .map(|(v, _)| v)
+                    .collect();
+                setting.picked = setting
+                    .choices
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, (value, _))| values.contains(&value).then_some(i))
+                    .collect();
+            }
+            _ => {}
+        }
+    }
 }

@@ -5,6 +5,29 @@ The repository declares two portable schema-1 services:
 HomeStack API and new Pangolin Site connectors initialize through common service
 deployment. No existing internal container is adopted or modified.
 
+## Attach an existing application to Pangolin
+
+In the service's maintenance settings, select one running instance, choose
+**Pangolin → attach**, and press Enter. HomeStack opens its verified SSH API
+tunnel and loads existing enabled HTTP resources and online Site connectors.
+Choose the resource, Site, application port and HTTP/HTTPS backend protocol,
+then review and apply. F5 refreshes the lists and preserves edits; a recreated
+Site's new ID requires selecting it again.
+
+This operation creates a missing backend target or updates the resource's one
+existing target. It preserves resource policies and other target settings,
+and performs only reads against Proxmox. It never deploys, replaces, restarts
+or removes the application or its volumes. Save disk/environment changes
+separately; attachment cannot be combined with removal. Resources with multiple
+targets require managing their routing in Pangolin.
+
+Review and apply both verify organization membership, current Site identity
+and target configuration. Apply rechecks the container's identity and address,
+then verifies the saved target. An uncertain mutation response is never retried
+automatically. Saving routing does not verify public access or backend health.
+The Pangolin CLI connectors retain the API's `newt` Site type; no standalone
+Newt process is installed or started.
+
 ## API deployment
 
 The existing service browser and review/apply worker use

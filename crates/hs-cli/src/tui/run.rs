@@ -656,8 +656,9 @@ impl Installing {
 
     fn start(&mut self, app: &mut App, ctx: &Context, updates: &mpsc::UnboundedSender<Update>) {
         let mode = app.install.as_ref().map_or(Mode::Install, |install| install.mode);
-        // A Site connector needs SSH: its Pangolin tunnel and root for its credential.
+        // Site deployment and service routing use the Pangolin SSH tunnel.
         let quiet = mode == Mode::Service
+            && !self.service_manage
             && !self
                 .service
                 .as_ref()
