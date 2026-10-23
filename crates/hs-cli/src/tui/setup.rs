@@ -2192,7 +2192,13 @@ impl SetupBox {
         }
     }
 
-    /// Whether the spinner turns (connecting, or a run under way).
+    /// The spinner's character now.
+    fn spinner(&self) -> char {
+        super::draw::SPINNER[self.frame % super::draw::SPINNER.len()]
+    }
+
+    /// Whether the spinner turns (connecting, a run under way, or a
+    /// repository's manifests being read).
     #[must_use]
     pub fn animating(&self) -> bool {
         match &self.stage {
@@ -2299,7 +2305,7 @@ impl SetupBox {
             let state = match read {
                 _ if deployed => ("deployed".to_owned(), Tone::Green),
                 None => (String::new(), Tone::Plain),
-                Some(None) => ("reading…".to_owned(), Tone::Dim),
+                Some(None) => (format!("{} reading GitHub", self.spinner()), Tone::Yellow),
                 Some(Some(Err(_))) => ("error".to_owned(), Tone::Red),
                 Some(Some(Ok(found))) => {
                     let valid = found.services().count();
@@ -2378,7 +2384,10 @@ impl SetupBox {
         lines.push(format!("Instances: {deployed}"));
         match self.discoveries.get(&row.repository) {
             None => lines.push("Services: not read; → or ENTER reads .homestack/*.yaml".to_owned()),
-            Some(None) => lines.push("Services: reading .homestack/*.yaml on GitHub".to_owned()),
+            Some(None) => lines.push(format!(
+                "Services: {} reading .homestack/*.yaml on GitHub",
+                self.spinner()
+            )),
             Some(Some(Err(error))) => lines.push(format!("Error: {error}")),
             Some(Some(Ok(found))) => {
                 lines.push(format!("Revision: {} @ {}", found.branch, short(&found.commit)));
