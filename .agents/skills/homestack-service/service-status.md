@@ -1,7 +1,7 @@
 # HomeStack service telemetry, version 1
 
 This is HomeStack's application-side wire contract, independent of language
-or web framework. It does not extend manifest schema 1. HTTP services serve
+or web framework. It needs no manifest field. HTTP services serve
 `GET /.well-known/homestack/status` on the same HTTP port referenced by
 `runtime.healthcheck`. Services without HTTP have no telemetry endpoint;
 their measurements remain unavailable. No arbitrary URL or extra listener

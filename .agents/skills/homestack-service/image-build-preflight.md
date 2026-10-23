@@ -1,199 +1,120 @@
-# OCI image design, local build and LXC preflight
+# Base image, local build and resource measurement
 
-This reference is part of the canonical `homestack-service` skill. Read it
-**before** choosing a Containerfile and before recording resource sizes in a
-schema-2 `.homestack/<id>.yaml` manifest. The app author is responsible for actually
-building and executing the final image, not merely producing valid YAML.
+Read this before writing the Containerfile and before putting resource values
+into `.homestack/<id>.yaml`. The goal is the smallest image and the smallest
+resources the application really works with, found by running the built image,
+not by guessing.
 
-## 1. Establish the real runtime and propose an image base
+## 1. Choose the base image from the application
 
-Inspect actual language/toolchain, linked libraries, runtime processes,
-architecture, network listeners, TLS behavior, state paths, entrypoint,
-system dependencies, and existing build/CI workflow. Determine which
-packages are **build-only** and which must exist in the final runtime.
-Do not infer requirements from a project name or generic ecosystem advice.
+Inspect the real runtime first: language and toolchain, linked libraries
+(glibc or musl), native extensions, processes that must run together, init or
+supervision needs, outbound TLS (CA certificates), timezone data, users and
+the existing Containerfile and CI. Separate build-only dependencies from what
+the running service needs.
 
-Prefer the smallest practical **compatible and maintainable** production
-runtime. Consider, for example:
+Then pick the lightest base that runs the application without substantial
+code changes:
 
-- Static Rust or Go: multi-stage compilation and a minimal Alpine,
-  distroless-like, or scratch runtime **only if** certificates, timezone,
-  users, libc, resolver, native library, and entrypoint requirements work.
-- Rust: distinguish musl/static from glibc/dynamically linked binaries.
-  Do not copy a glibc-linked binary into Alpine and assume it will run.
-- Python: test wheel/native-extension availability with musl; Alpine may
-  cause complex source builds while a slim glibc image can be a better
-  overall choice.
-- Node.js: check native modules and Node ABI, not only application JS.
-- Multiple services in one LXC: identify needed process supervision and
-  graceful shutdown; do not add a full OS distribution just by habit.
+- A static Rust or Go binary: multi-stage build onto Alpine (or smaller) when
+  certificates, resolver, users and libc needs are covered. Do not copy a
+  glibc-linked binary into Alpine and assume it runs.
+- Python or Node.js: check native extensions against musl. When they need
+  source builds or patches on Alpine, a slim glibc image (e.g. Debian slim) is
+  the lighter overall choice.
+- Several processes, an init system or service manager (OpenRC, systemd,
+  s6, …) that the application actually depends on: choose a base that
+  provides it, rather than reimplementing it.
 
-Compare material alternatives by final image contents, compatibility,
-security updates, reproducibility, build time and runtime footprint.
-If trade-offs materially affect the owner (for example Alpine vs Debian
-slim, or static vs dynamic linking), propose the choice and ask before
-switching an established approach. Otherwise choose conservatively,
-document why and verify.
+Do not choose a base by habit in either direction: not Debian "to be safe",
+and not Alpine when it forces rewriting the application. When the choice
+changes an established, working build, or the trade-off is significant,
+present the options and the reason to the owner before switching. Document the
+chosen base and why.
 
-**The Containerfile is the source of truth for the base image, packages,
-multi-stage build and entrypoint.** Do not duplicate its `FROM` lines or
-build commands in the HomeStack manifest. A schema-2 manifest declares
-deployment resources and how to reach the published OCI image. Image
-creation is the agent's responsibility, not a hidden HomeStack build step.
+The Containerfile is the source of truth for the base image, packages and
+build steps; the manifest does not repeat them.
 
-## 2. Build the actual production artifact locally
+## 2. Build the production image locally
 
-- Preserve the repository's working Containerfile and CI arrangement.
-  Use the same production build target, architecture (`linux/amd64`),
-  feature flags and runtime inputs as release CI. Favor existing cached
-  stages and pinned dependencies rather than gratuitous clean builds.
-- Prefer a locally available OCI builder such as Podman/Buildah or Docker.
-  Do not require Docker **inside** Proxmox LXC and do not install an
-  unrequested daemon on the PVE host.
-- Capture the resulting image identity and inspect its runtime:
-  base distribution, files, entrypoint/command, effective user, exposed
-  ports, working directory, dynamic libraries and dependencies.
-- Validate that the image starts without a build toolchain, compiler,
-  package manager or privileged service manager at runtime unless truly
-  necessary. Never rely on interactive login, SSH or `sudo`.
-- Test the **built artifact**, not a local development process with host
-  dependencies. A successful compiler run is not a successful container
-  boot. OCI image compression size does not equal unpacked rootfs size.
+- Use the repository's production Containerfile, `linux/amd64`, the same build
+  target and inputs as release CI, and the available build cache.
+- Use a local builder (Podman/Buildah or Docker). Never install Docker inside
+  an LXC or on a Proxmox node.
+- Inspect the result: entrypoint/command, user, ports, unpacked size, linked
+  libraries. The image must start without a compiler, package manager, SSH or
+  interactive login.
+- Test the built image, not a development process on the host. A successful
+  compilation is not a successful container start, and the compressed image
+  size is not the unpacked rootfs size.
 
-Do not start an expensive remote GitHub Actions build merely to discover
-an entrypoint, missing library or resource-limit failure that can be
-checked with the local image.
+Do not start a remote CI build just to find a problem the local image shows.
 
-## 3. Exercise a bounded local container runtime
+## 3. Run it as a container with the intended resources
 
-Recommended sequence, in order of closeness to production:
+Run the built image with exactly the cores, memory, swap, rootfs and home
+volume size you intend to declare, unprivileged:
 
-1. Run the built OCI image in an isolated local OCI runtime with the
-   declared CPU, memory, swap and root/data size limits and no privileged
-   workaround. Verify process exit status, stdout/stderr and HTTP health.
-2. If Incus is available, run the same OCI application image as an Incus
-   application container (LXC-based) with equivalent resource settings,
-   data mounts and network access. Incus consumes OCI images through
-   an OCI registry remote; it **does not** build Containerfiles. The
-   local builder and Incus have distinct roles. Prefer a local/test
-   registry or a temporary artifact approach supported by the actual
-   tool version; do not publish a production release just to do this.
-3. A separately authorized, isolated Proxmox HomeStack test pool is
-   the higher-fidelity final integration check. Never use production
-   containers, credentials, storage or network identities for preflight.
+1. If Incus (or LXD) is available, run the OCI image as a system container
+   with those limits and a separate volume at `/home/app` for stateful
+   services. This is closest to the Proxmox LXC.
+2. Otherwise use the local OCI runtime (`podman run` / `docker run`) with
+   `--cpus`, `--memory`, `--memory-swap` and a volume for `/home/app`, and
+   state that it was not an LXC test.
 
-Do not claim that an OCI-runtime smoke test is a Proxmox LXC test, or
-that Incus perfectly reproduces Proxmox container behavior. Kernel,
-user-namespace mounts, UID/GID mapping, cgroup setup and rootfs limits
-can differ. If tools or permissions are missing, report what was and
-was not tested instead of fabricating a pass. Ask the owner before
-installing a new container runtime or changing the local machine.
+Ask the owner before installing a container runtime. If a tool or permission
+is missing, report what was not tested; never report a test that did not run.
+Never use production containers, data or credentials for these tests.
 
-## 4. Functional and persistence gates
+Check:
 
-Run the **final image** at the proposed resource values. Exercise:
+1. Cold start, `/health/live`, `/health/ready` and the telemetry endpoint on
+   the declared port.
+2. Representative work, not just an idle process: typical requests, a burst
+   of concurrent ones and the expected error paths.
+3. Stop and start again; for a stateful service, a fresh container with the
+   same home volume keeps its data unchanged.
+4. A stateful service refuses to start without a mounted `/home/app`.
+5. A stateless service starts on a fresh root with only its deployment
+   settings.
 
-1. Cold start and a readiness check: the actual listener, declared
-   port, `GET /health/live` and `GET /health/ready` if HTTP.
-   Dependency readiness is distinct from process liveness.
-2. Typical representative work, not only an idle process; include
-   expected burst/concurrent operations and relevant error paths.
-3. A clean stop and restart, then a fresh-root instance with the
-   previously used persistent volume attached for stateful services.
-   Check that durable files and app data are unchanged.
-4. For `persistence.mode: none`, a fresh-root/empty instance must start
-   with the configuration and secrets supplied again through their
-   supported deployment mechanism. Do not assume transient root files
-   magically persist after replacement.
-5. With persistence enabled, test a missing, incorrect, or unmounted
-   `/home/app` and require a safe startup failure, not silent fallback
-   onto disposable root. SQLite data, WAL and SHM must remain together.
-6. With an HTTP service, verify standard HomeStack status telemetry
-   with native measurements; keep inaccessible data, missing mounts
-   and disabled controllers distinct from zero. Use the existing
-   listener, not a new management daemon.
-7. Local plain HTTP behind network restrictions, with external TLS
-   terminated by Pangolin where applicable. Do not silently bundle
-   Caddy, certificates or a second TLS layer into a new application
-   solely to enable browser access. An existing TLS-only application
-   requires a real implementation change before its health port can
-   be documented as HTTP.
+## 4. Measure and choose the values
 
-Use fake or isolated secrets in tests. Never copy actual production
-tokens, private keys, vault databases or certificate keys into a
-container image, sample manifest, test log or third-party service.
-
-## 5. Measure and choose exact resource declarations
-
-Choose a concrete configuration for the **running** application; do not
-base it on the compiler's peak memory or GitHub runner requirements.
-Use measurable evidence:
+Read the container's own cgroup while the workload runs:
 
 | Resource | Evidence |
-| --- | --- |
-| CPU | Usage under typical and burst work, quota throttling, request latency, startup cost. |
-| Memory | Cgroup `memory.current`, high-water evidence where available, anonymous/file usage, `memory.events` OOM/OOM-kill, memory PSI; compare with the applied container limit. |
-| Rootfs | Size of unpacked runtime files plus temporary/cache/log requirements, writable root activity and actual root filesystem free space. |
-| Persistent volume | Expected durable data and growth rate, configured app paths, usable free bytes on the exact mount. |
-| Swap | Explicitly test/decide `0M` or a chosen size; do not conceal insufficient RAM with unexpected swap. |
-| I/O | Read/write throughput and stalls from available cgroup/PSI metrics during the workload. |
+| :--- | :--- |
+| CPU | `cpu.stat` usage and throttling under typical and burst work, request latency |
+| Memory | `memory.peak` (or the highest `memory.current` seen), `memory.events` with no `oom_kill`, memory PSI |
+| Swap | decide `0M` unless the application needs swap; do not hide too little RAM with swap |
+| Rootfs | unpacked image size plus temporary files, caches and logs written to root |
+| Home | expected durable data and its growth; free space on the mount |
 
-Use a finite, clearly stated representative workload. Distinguish
-peak samples from long-running steady state, disk filesystem free
-space from underlying thin-provisioned capacity, and container cgroup
-numbers from host-wide `/proc/loadavg`. If a counter is unavailable,
-say so; do not substitute host telemetry or invent values.
+Choose one value per resource with reasonable headroom above the observed
+peak, rerun the workload at exactly those values, and repeat until it runs
+without OOM, throttling that hurts latency, or full filesystems. Real clients
+may need more later; the operator can raise the values per deployment.
 
-Adjust and rerun until the application completes the preflight under
-**the precise proposed values** without OOM, unexplained crashes or
-persistent-volume violations. Include reasonable headroom based on
-observed workload and the owner's preference, but emit exactly one
-chosen size per resource. There is no schema-level minimum/recommended
-pair. Future operational measurements can justify resizing later.
+Do not size from compiler memory, CI runner sizes or the examples in
+[manifest-schema.md](manifest-schema.md).
 
-Do not use example values from the schema-2 contract as evidence of a
-real application's requirements.
+## 5. Record the evidence
 
-## 6. Publish and hand off
-
-- Confirm the local built image's runtime contract and the declared
-  manifest refer to the same image/repository/ports/state paths.
-- Document the chosen base image and measured deployment resources
-  in the application repository, along with workload, measurement
-  limits and any unverified behavior. The report is supporting
-  evidence; the YAML carries the exact proposed values.
-- Follow the service release standard: ordinary pushes run checks;
-  a manual `dev-<commit>` image can be tested before promotion;
-  an immutable numeric OCI release is created only for changes to
-  the application image/runtime. A **manifest-only resource/topology
-  change** does not by itself need a new image.
-- Verify the newly published OCI image digest and make sure it matches
-  the tested revision. If CI rebuilt rather than promoted the same
-  tested artifact, treat that as a new artifact requiring validation;
-  do not claim byte-identical promotion.
-- Do not perform a production deploy from an application-side agent.
-  HomeStack's reviewed Deployment operation owns the actual PVE
-  lifecycle and is implemented in the later phase.
-
-## Preflight reporting template
-
-Record concrete, reproducible observations. Do not mark a test passed
-without executing it.
+Document in the application repository, next to the runtime contract:
 
 ```text
-Service / commit / OCI image:
-Base image and rationale:
-Builder and architecture:
-Runtime used: OCI / Incus LXC / isolated PVE LXC
-Persistence mode and test volume:
-Workload and test duration:
-CPU configured / observed:
-Memory configured / observed peak / OOM / PSI:
-Swap configured / observed:
-Root configured / used / free:
-Home configured / used / available:
-Health/readiness/telemetry:
-Cold start / restart / fresh-root replacement:
-Unverified scenarios or runtime differences:
-Final proposed schema-2 resources:
+Image / commit:
+Base image and why:
+Runtime used: Incus LXC / OCI runtime
+Workload and duration:
+CPU declared / observed:
+Memory declared / observed peak / OOM events:
+Swap declared:
+Rootfs declared / used:
+Home declared / used (or: no persistence):
+Health, readiness and telemetry:
+Restart / fresh-root result:
+Not tested:
 ```
+
+The manifest carries the chosen values; this record is the evidence for them.
