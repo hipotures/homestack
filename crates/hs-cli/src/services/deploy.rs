@@ -533,6 +533,17 @@ pub async fn plan(
         plan.problems
             .push("Hostname is a DNS label: a-z, 0-9 and inner -, up to 63 characters".to_owned());
     }
+    match environment(&choice.environment) {
+        Ok(mut entries) => {
+            if source.is_api() || source.is_site() {
+                // Initialization owns this selector. An existing instance's
+                // correct selector is not an environment override for a new one.
+                entries.retain(|(key, value)| key != "HOMESTACK_MANAGED_HOME" || value != "1");
+            }
+            plan.environment = entries;
+        }
+        Err(error) => plan.problems.push(error),
+    }
     if source.is_api() {
         plan.api_config = Some(config.clone());
     }
@@ -576,7 +587,7 @@ pub async fn plan(
         if config.pve.ca_file.is_some() {
             problems.push("Managed API initialization cannot install a custom PVE CA file; endpoints must use system-trusted certificates".to_owned());
         }
-        if !choice.environment.trim().is_empty() {
+        if !plan.environment.is_empty() {
             problems.push("API environment is supplied by authenticated bootstrap; leave Environment empty".to_owned());
         }
     }
@@ -587,7 +598,7 @@ pub async fn plan(
         if hs_core::registry::version(&choice.version).is_none_or(|version| version < SITE_MANAGED) {
             problems.push("Managed Site deployment requires Site image 0.1.2 or later".to_owned());
         }
-        if !choice.environment.trim().is_empty() {
+        if !plan.environment.is_empty() {
             problems.push("The Site runtime selector is set by initialization; leave Environment empty".to_owned());
         }
         if site.is_none() {
@@ -618,10 +629,6 @@ pub async fn plan(
             return plan;
         }
     };
-    match environment(&choice.environment) {
-        Ok(entries) => plan.environment = entries,
-        Err(error) => problems.push(error),
-    }
     let placements: Vec<(String, String)> = choice
         .placements
         .iter()
