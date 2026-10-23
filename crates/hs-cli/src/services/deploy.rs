@@ -535,7 +535,11 @@ pub async fn plan(
         number(&choice.cores, "Cores", 1..=64),
         number(&choice.memory_mib, "Memory (MiB)", 64..=1_048_576),
         size(&choice.root_mib, "Container disk", 64..=1024 * 1024),
-        size(&choice.home_mib, "Home volume", 1..=16_384 * 1024),
+        if manifest.persistence.is_some() {
+            size(&choice.home_mib, "Home volume", 1..=16_384 * 1024)
+        } else {
+            Ok(0)
+        },
     );
     let (cores, memory_mib, root_mib, home_mib) = match sizes {
         (Ok(cores), Ok(memory), Ok(root), Ok(home)) => (cores, memory, root, home),

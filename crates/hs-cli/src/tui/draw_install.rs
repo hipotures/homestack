@@ -204,7 +204,7 @@ fn settings_buttons(install: &Install) -> Vec<Control> {
             Control::named("R", "review", KeyCode::Char('r')),
             Control::named("F5", "rescan", KeyCode::F(5)),
         ];
-        if install.mode == Mode::Service {
+        if install.removable() {
             keys.push(Control::named("DEL", "remove ticked", KeyCode::Delete));
         }
         keys.extend([Control::named("?", "help", KeyCode::Char('?')), esc("back")]);
@@ -584,7 +584,13 @@ fn settings(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
         // cursor stay in sight.
         let typed: Vec<char> = format!("{value}▏").chars().collect();
         let field: Vec<String> = typed.chunks(44).map(|chunk| chunk.iter().collect()).collect();
-        let rect = fit(48, field.len());
+        // Why Enter did not keep it, below the field.
+        let error: Vec<String> = install
+            .invalid
+            .as_deref()
+            .map(|error| wrap(&format!("✗ {error}"), 44))
+            .unwrap_or_default();
+        let rect = fit(48, field.len() + error.len());
         let box_inner = frame(
             buf,
             rect,
@@ -603,6 +609,16 @@ fn settings(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
                 box_inner.width.saturating_sub(4),
                 line,
                 focus,
+            );
+        }
+        for (row, line) in error.iter().enumerate() {
+            write(
+                buf,
+                box_inner.x + 2,
+                at(box_inner.y, 1 + field.len() + row),
+                box_inner.width.saturating_sub(4),
+                line,
+                text.fg(palette.error),
             );
         }
         return;
@@ -674,6 +690,9 @@ fn settings(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
     if let Some(typed) = &install.adding {
         lines.push((format!("+ {typed}▏"), true));
     }
+    if let Some(error) = &install.invalid {
+        lines.push((format!("✗ {error}"), false));
+    }
     let content = lines
         .iter()
         .map(|(line, _)| line.chars().count())
@@ -707,7 +726,13 @@ fn settings(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
             at(box_inner.y, 1 + index - start),
             width,
             &cut(line, usize::from(width)),
-            if *cursor { focus } else { text },
+            if line.starts_with("✗ ") {
+                text.fg(palette.error)
+            } else if *cursor {
+                focus
+            } else {
+                text
+            },
         );
         super::chrome::register(
             Rect::new(box_inner.x, at(box_inner.y, 1 + index - start), box_inner.width, 1),

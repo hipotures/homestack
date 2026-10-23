@@ -71,8 +71,11 @@ impl Mark {
     }
 }
 
+/// Checks a typed value; the error says what is expected.
+pub type Check = fn(&str) -> Result<(), String>;
+
 /// One setting and its choices (`value`, what tells it apart).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct Setting {
     pub title: String,
     pub note: String,
@@ -83,6 +86,9 @@ pub struct Setting {
     /// An editable list: each choice is an entry; in its box `-` removes
     /// the highlighted one and `+` adds one typed after it.
     pub list: bool,
+    /// Checks a typed value (or a list's new entry) when Enter keeps it:
+    /// an error keeps the box open and is shown in it.
+    pub check: Option<Check>,
 }
 
 impl Setting {
@@ -115,10 +121,10 @@ impl Setting {
                 }
             })
             .collect();
-        if shown.is_empty() {
-            "—".to_owned()
-        } else {
-            shown.join(", ")
+        match shown.len() {
+            0 => "—".to_owned(),
+            1 => shown.join(", "),
+            count => format!("{count} · {}", shown.join(", ")),
         }
     }
 
@@ -139,14 +145,14 @@ impl Setting {
 }
 
 /// A setting as it was when its box opened.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub enum Edited {
     Setting(Setting),
     Domain(String),
 }
 
 /// What the worker found once root was reached.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct Found {
     /// How root is reached and the Proxmox version, for the top border.
     pub root: String,
@@ -157,7 +163,7 @@ pub struct Found {
 }
 
 /// What the worker tells the screen.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub enum Event {
     Connected(Found),
     /// Root could not be reached, or the cluster read.
@@ -222,7 +228,7 @@ impl AskView {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct Install {
     pub mode: Mode,
     pub stage: Stage,
@@ -261,6 +267,8 @@ pub struct Install {
     pub before: Option<Edited>,
     /// The review is of removing the selected instances (Del).
     pub removing: bool,
+    /// Why the value in the open box was not kept.
+    pub invalid: Option<String>,
     pub cursor: usize,
     /// The entry typed after `+` in a list's box.
     pub adding: Option<String>,
@@ -317,6 +325,7 @@ impl Install {
             chooser: false,
             before: None,
             removing: false,
+            invalid: None,
             adding: None,
             cursor: 0,
             sections: Vec::new(),
@@ -712,6 +721,12 @@ impl Install {
             .collect()
     }
 
+    /// Del removes ticked instances: a service deployment with instances.
+    #[must_use]
+    pub fn removable(&self) -> bool {
+        self.mode == Mode::Service && self.settings.iter().any(|setting| setting.title == "Instances")
+    }
+
     /// Whether the highlighted row is the server domain.
     fn on_domain(&self) -> bool {
         self.domain.is_some() && self.row == self.settings.len()
@@ -739,6 +754,7 @@ impl Install {
     /// Leave the box: keep the value, or restore the one it had.
     fn end_edit(&mut self, keep: bool) {
         self.chooser = false;
+        self.invalid = None;
         self.adding = None;
         match self.before.take() {
             Some(Edited::Setting(before)) if !keep => {
@@ -751,8 +767,29 @@ impl Install {
         }
     }
 
+    /// Why the open text box's value cannot be kept.
+    fn value_error(&self) -> Option<String> {
+        let setting = self.settings.get(self.row).filter(|_| !self.on_domain())?;
+        let text = setting.text.as_ref()?;
+        setting.check.and_then(|check| check(text).err())
+    }
+
     /// Plan the answers: the review.
     fn review(&mut self) -> (bool, Option<Request>) {
+        // A missing or wrong value is fixed in its box first.
+        let wrong = self.settings.iter().enumerate().find_map(|(row, setting)| {
+            let text = setting.text.as_ref()?;
+            setting
+                .check
+                .and_then(|check| check(text).err())
+                .map(|error| (row, error))
+        });
+        if let Some((row, error)) = wrong {
+            self.row = row;
+            self.begin_edit();
+            self.invalid = Some(error);
+            return (false, None);
+        }
         self.stage = Stage::Review;
         self.reviewed = false;
         self.busy = Some("Reading the plan".to_owned());
@@ -784,7 +821,7 @@ impl Install {
             KeyCode::BackTab => self.row = self.row.saturating_sub(1),
             KeyCode::Enter => self.begin_edit(),
             KeyCode::Char('r' | 'R') => return self.review(),
-            KeyCode::Delete if self.mode == Mode::Service => {
+            KeyCode::Delete if self.removable() => {
                 self.stage = Stage::Review;
                 self.reviewed = false;
                 self.removing = true;
@@ -834,6 +871,10 @@ impl Install {
                 return (false, None);
             }
             KeyCode::Tab | KeyCode::BackTab => {
+                if let Some(error) = self.value_error() {
+                    self.invalid = Some(error);
+                    return (false, None);
+                }
                 self.end_edit(true);
                 let last = self.rows().saturating_sub(1);
                 self.row = if code == KeyCode::Tab {
@@ -870,7 +911,12 @@ impl Install {
                 }
                 KeyCode::Enter => {
                     let entry = typed.trim().to_owned();
+                    if let Some(error) = setting.check.and_then(|check| check(&entry).err()) {
+                        self.invalid = Some(error);
+                        return (false, None);
+                    }
                     self.adding = None;
+                    self.invalid = None;
                     if !entry.is_empty() {
                         setting.choices.push((entry, String::new()));
                         self.cursor = setting.choices.len() - 1;
@@ -882,11 +928,18 @@ impl Install {
         }
         if let Some(text) = setting.text.as_mut() {
             match code {
-                KeyCode::Char(c) => text.push(c),
+                KeyCode::Char(c) => {
+                    text.push(c);
+                    self.invalid = None;
+                }
                 KeyCode::Backspace => {
                     text.pop();
+                    self.invalid = None;
                 }
-                KeyCode::Enter => self.end_edit(true),
+                KeyCode::Enter => match setting.check.and_then(|check| check(text).err()) {
+                    Some(error) => self.invalid = Some(error),
+                    None => self.end_edit(true),
+                },
                 _ => {}
             }
             return (false, None);

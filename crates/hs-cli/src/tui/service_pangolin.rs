@@ -17,12 +17,17 @@ use crate::services::{
     manifest::Healthcheck,
 };
 
-/// The Pangolin settings follow the deployment's nine.
-pub(super) const ACTION: usize = 9;
-const RESOURCE: usize = 10;
-const SITE: usize = 11;
-const PORT: usize = 12;
-const SCHEME: usize = 13;
+/// The title of the first Pangolin setting; the others follow it.
+pub(super) const ACTION: &str = "Pangolin";
+const RESOURCE: usize = 1;
+const SITE: usize = 2;
+const PORT: usize = 3;
+const SCHEME: usize = 4;
+
+/// Where the Pangolin settings start among `settings`.
+pub(super) fn start(settings: &[Setting]) -> Option<usize> {
+    settings.iter().position(|setting| setting.title == ACTION)
+}
 const PAGE: usize = 100;
 
 #[derive(Clone, PartialEq)]
@@ -58,8 +63,9 @@ struct Target {
     body: Value,
 }
 
-pub(super) fn requested(answers: &[Answer]) -> bool {
-    matches!(answers.get(ACTION), Some(Answer::Picked(indices)) if indices.as_slice() == [1])
+pub(super) fn requested(settings: &[Setting], answers: &[Answer]) -> bool {
+    start(settings)
+        .is_some_and(|at| matches!(answers.get(at), Some(Answer::Picked(indices)) if indices.as_slice() == [1]))
 }
 
 fn setting(title: &str, note: &str, choices: Vec<(String, String)>, text: Option<String>) -> Setting {
@@ -69,6 +75,7 @@ fn setting(title: &str, note: &str, choices: Vec<(String, String)>, text: Option
         choices,
         text,
         list: false,
+        check: None,
         multiple: false,
         picked: Vec::new(),
     }
@@ -79,7 +86,7 @@ pub(super) fn settings(source: &Source, catalog: Option<&Catalog>) -> Vec<Settin
         return Vec::new();
     }
     let mut action = setting(
-        "Pangolin",
+        ACTION,
         "Choose attach, then Enter to load current resources and online Sites. Select one existing instance, \
          a resource and a Site, set the application's port and protocol, then review. This changes only \
          Pangolin routing; the container and /home/app are preserved. Unchanged makes no Pangolin request.",
@@ -331,6 +338,7 @@ pub(super) fn review(
     if !instance.running || instance.held || instance.address.parse::<std::net::IpAddr>().is_err() {
         return Err("Select a running instance with a known IP address".to_owned());
     }
+    let base = start(settings).ok_or("The Pangolin settings are missing")?;
     let selected = |at: usize| -> Result<&str, String> {
         match answers.get(at) {
             Some(Answer::Picked(indices)) if indices.len() == 1 => settings
@@ -344,21 +352,21 @@ pub(super) fn review(
     let resource = catalog
         .resources
         .iter()
-        .find(|r| r.id.to_string() == selected(RESOURCE).unwrap_or_default())
+        .find(|r| r.id.to_string() == selected(base + RESOURCE).unwrap_or_default())
         .ok_or("Select a Pangolin resource")?
         .clone();
     let site = catalog
         .sites
         .iter()
-        .find(|s| s.id.to_string() == selected(SITE).unwrap_or_default())
+        .find(|s| s.id.to_string() == selected(base + SITE).unwrap_or_default())
         .ok_or("Select an online Pangolin Site")?
         .clone();
-    let port = match answers.get(PORT) {
+    let port = match answers.get(base + PORT) {
         Some(Answer::Text(value)) => value.trim().parse::<u16>().ok().filter(|p| *p > 0),
         _ => None,
     }
     .ok_or("Pangolin port must be a number between 1 and 65535")?;
-    let scheme = selected(SCHEME)?;
+    let scheme = selected(base + SCHEME)?;
     if !["http", "https"].contains(&scheme) {
         return Err("Choose HTTP or HTTPS".to_owned());
     }

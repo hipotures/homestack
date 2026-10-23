@@ -12,7 +12,7 @@ use hs_deploy::config::DeployConfig;
 use hs_deploy::node::show_size;
 use hs_pve::PveClient;
 
-use super::install::{Event, Found, Mark, Setting};
+use super::install::{Check, Event, Found, Mark, Setting};
 use super::installing::{Command, Setup};
 use super::pangolin_sites::managed::{Initializer, Pangolin};
 use super::reinstall::local_time;
@@ -20,18 +20,20 @@ use super::service_pangolin;
 use crate::install_flow::Answer;
 use crate::services::deploy::{self, Cluster, SiteInit, SiteReady, Source};
 use crate::services::instance::{self, Instance};
-use crate::services::manifest::show_mib;
+use crate::services::manifest::{Manifest, Placement, show_mib};
 use crate::services::{lifecycle, update};
 
-const INSTANCES: usize = 0;
-const VERSION: usize = 1;
-const PLACEMENT: usize = 2;
-const CTIDS: usize = 3;
-const CORES: usize = 4;
-const MEMORY: usize = 5;
-const ROOT: usize = 6;
-const HOME: usize = 7;
-const ENVIRONMENT: usize = 8;
+// The settings by title: Instances only once there are some, Home only
+// for a service with persistence.
+const INSTANCES: &str = "Instances";
+const VERSION: &str = "Version";
+const NODES: &str = "Nodes";
+const CTIDS: &str = "New CTIDs";
+const CORES: &str = "Cores";
+const MEMORY: &str = "Memory (MiB)";
+const ROOT: &str = "Root";
+const HOME: &str = "Home";
+const ENVIRONMENT: &str = "Environment";
 
 struct Session {
     config: DeployConfig,
@@ -110,7 +112,7 @@ pub(super) fn work(setup: &Setup, commands: &Receiver<Command>, tell: &(dyn Fn(E
             }
             Command::Review { answers, .. } => {
                 let Some(s) = session.as_mut() else { continue };
-                if service_pangolin::requested(&answers) && s.catalog.is_none() {
+                if service_pangolin::requested(&s.settings, &answers) && s.catalog.is_none() {
                     // The resources and Sites are read once attach is chosen.
                     tell(Event::Busy("Loading Pangolin resources and Sites".to_owned()));
                     let loaded = s
@@ -121,7 +123,8 @@ pub(super) fn work(setup: &Setup, commands: &Receiver<Command>, tell: &(dyn Fn(E
                         Ok(catalog) => {
                             s.catalog = Some(catalog);
                             let previous = s.settings.clone();
-                            s.settings.truncate(service_pangolin::ACTION);
+                            let end = service_pangolin::start(&s.settings).unwrap_or(s.settings.len());
+                            s.settings.truncate(end);
                             s.settings
                                 .extend(service_pangolin::settings(&source, s.catalog.as_ref()));
                             restore(&mut s.settings, &previous, &answers);
@@ -314,6 +317,7 @@ fn tag(image: &str) -> &str {
 fn setting(title: &str, note: &str, choices: Vec<(String, String)>, multiple: bool, text: Option<String>) -> Setting {
     Setting {
         list: false,
+        check: None,
         title: title.to_owned(),
         note: note.to_owned(),
         multiple,
@@ -356,22 +360,34 @@ fn settings(source: &Source, cluster: &Cluster, instances: &[Instance], shown: &
         .collect();
     let resources = manifest.resources;
     let home = match (first, &manifest.persistence) {
-        (Some(i), _) if i.home_mib > 0 => show_size(i.home_mib),
-        (_, Some(persistence)) => show_mib(persistence.size_mib),
-        _ => String::new(),
+        (Some(i), _) if i.home_mib > 0 => Some(show_size(i.home_mib)),
+        (_, Some(persistence)) => Some(show_mib(persistence.size_mib)),
+        _ => None,
     };
     let mut version_setting = setting(
-        "Version",
-        "A published release of the image, newest first; dev images are never offered. Selected instances \
+        VERSION,
+        "A published release of the image, newest first; dev images are never offered. Ticked instances \
          with another version are made again from it, their home kept.",
         releases,
         false,
         None,
     );
     version_setting.picked = vec![version];
-    vec![
-        setting(
-            "Instances",
+    let mut nodes = setting(
+        NODES,
+        "The nodes that get a new instance, one storage each; its container and home volume are made there. \
+         A new service starts with the manifest's instances and placement ticked.",
+        placements,
+        true,
+        None,
+    );
+    if instances.is_empty() {
+        nodes.picked = default_nodes(manifest, &rows);
+    }
+    let mut settings = Vec::new();
+    if !instances.is_empty() {
+        settings.push(setting(
+            INSTANCES,
             "The service's containers in the cluster. Tick the ones the changes below apply to; Del removes the \
              ticked ones with their homes.",
             instances
@@ -391,70 +407,178 @@ fn settings(source: &Source, cluster: &Cluster, instances: &[Instance], shown: &
                 .collect(),
             true,
             None,
-        ),
+        ));
+    }
+    settings.extend([
         version_setting,
-        setting(
-            "New on nodes",
-            "Tick a storage on each node that gets a new instance; its container and home volume are made there.",
-            placements,
-            true,
-            None,
-        ),
-        setting(
-            "New CTIDs",
-            "Empty: the first free CTIDs. Or one CTID per ticked node, in the nodes' order, separated by commas.",
-            Vec::new(),
-            false,
-            Some(String::new()),
-        ),
-        setting(
-            "Cores",
-            "CPU cores of each container.",
-            Vec::new(),
-            false,
-            Some(first.map_or(resources.cores, |i| i.cores).to_string()),
-        ),
-        setting(
-            "Memory (MiB)",
-            "Memory of each container, without swap.",
-            Vec::new(),
-            false,
-            Some(first.map_or(resources.memory_mib, |i| i.memory_mib).to_string()),
-        ),
-        setting(
-            "Root",
-            "The root disk, a number with M or G; it holds the image and no data. It only grows.",
-            Vec::new(),
-            false,
-            Some(first.map_or_else(|| show_mib(resources.rootfs_mib), |i| show_size(i.root_mib))),
-        ),
-        setting(
-            "Home",
-            "The home volume at /home/app, a number with M or G; it keeps the service's data and only grows.",
-            Vec::new(),
-            false,
-            Some(home),
-        ),
-        Setting {
-            list: true,
-            ..setting(
-                "Environment",
-                "The containers' variables, one per entry (KEY=value). No secrets: the configuration is \
-                 readable in Proxmox. A running container restarts to read a change.",
-                shown
-                    .split_whitespace()
-                    .map(|entry| (entry.to_owned(), String::new()))
-                    .collect(),
+        nodes,
+        checked(
+            setting(
+                CTIDS,
+                "Empty: the first free CTIDs. Or one CTID per ticked node, in the nodes' order, separated by commas.",
+                Vec::new(),
                 false,
-                None,
-            )
-        },
-    ]
+                Some(String::new()),
+            ),
+            check_ctids,
+        ),
+        checked(
+            setting(
+                CORES,
+                "CPU cores of each container.",
+                Vec::new(),
+                false,
+                Some(first.map_or(resources.cores, |i| i.cores).to_string()),
+            ),
+            check_cores,
+        ),
+        checked(
+            setting(
+                MEMORY,
+                "Memory of each container, without swap.",
+                Vec::new(),
+                false,
+                Some(first.map_or(resources.memory_mib, |i| i.memory_mib).to_string()),
+            ),
+            check_memory,
+        ),
+        checked(
+            setting(
+                ROOT,
+                "The root disk, a number with M or G; it holds the image and no data. It only grows.",
+                Vec::new(),
+                false,
+                Some(first.map_or_else(|| show_mib(resources.rootfs_mib), |i| show_size(i.root_mib))),
+            ),
+            check_root,
+        ),
+    ]);
+    if let Some(home) = home {
+        settings.push(checked(
+            setting(
+                HOME,
+                "The home volume at /home/app, a number with M or G; it keeps the service's data and only grows.",
+                Vec::new(),
+                false,
+                Some(home),
+            ),
+            check_home,
+        ));
+    }
+    settings.push(Setting {
+        list: true,
+        check: Some(check_entry),
+        ..setting(
+            ENVIRONMENT,
+            "The containers' variables, one per entry (KEY=value). No secrets: the configuration is readable \
+             in Proxmox. A running container restarts to read a change.",
+            shown
+                .split_whitespace()
+                .map(|entry| (entry.to_owned(), String::new()))
+                .collect(),
+            false,
+            None,
+        )
+    });
+    settings
+}
+
+/// `setting` with the check of its typed value.
+fn checked(mut setting: Setting, check: Check) -> Setting {
+    setting.check = Some(check);
+    setting
+}
+
+/// A size written `<number>M` or `<number>G` from `min` to `max` MiB.
+fn size_in(text: &str, min: u32, max: u32) -> Result<(), String> {
+    let text = text.trim();
+    let mib = [("M", 1_u64), ("G", 1024)].iter().find_map(|(unit, factor)| {
+        let number = text.strip_suffix(unit)?;
+        if number.is_empty() || !number.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        number.parse::<u64>().ok()?.checked_mul(*factor)
+    });
+    match mib {
+        Some(mib) if (u64::from(min)..=u64::from(max)).contains(&mib) => Ok(()),
+        _ => Err(format!(
+            "A size from {} to {}, e.g. 512M or 2G",
+            show_mib(min),
+            show_mib(max)
+        )),
+    }
+}
+
+fn number_in(text: &str, min: u32, max: u32) -> Result<(), String> {
+    match text.trim().parse::<u32>() {
+        Ok(number) if (min..=max).contains(&number) => Ok(()),
+        _ => Err(format!("A whole number from {min} to {max}")),
+    }
+}
+
+fn check_cores(text: &str) -> Result<(), String> {
+    number_in(text, 1, 64)
+}
+
+fn check_memory(text: &str) -> Result<(), String> {
+    number_in(text, 64, 1_048_576)
+}
+
+fn check_root(text: &str) -> Result<(), String> {
+    size_in(text, 64, 1024 * 1024)
+}
+
+fn check_home(text: &str) -> Result<(), String> {
+    size_in(text, 1, 16_384 * 1024)
+}
+
+/// Empty, or CTIDs separated by commas.
+fn check_ctids(text: &str) -> Result<(), String> {
+    let wrong = text
+        .split(',')
+        .map(str::trim)
+        .filter(|ctid| !ctid.is_empty())
+        .any(|ctid| ctid.parse::<u32>().map_or(true, |ctid| ctid < 100));
+    if wrong {
+        Err("Empty, or CTIDs of at least 100 separated by commas".to_owned())
+    } else {
+        Ok(())
+    }
+}
+
+/// One `KEY=value` entry.
+fn check_entry(text: &str) -> Result<(), String> {
+    match deploy::environment(text) {
+        Ok(entries) if entries.len() == 1 => Ok(()),
+        Ok(_) => Err("One KEY=value entry".to_owned()),
+        Err(error) => Err(error),
+    }
+}
+
+/// The manifest's instances as ticked rows: one node each with `spread`,
+/// all on the first node with `single`; each node's storage with the most
+/// free space.
+fn default_nodes(manifest: &Manifest, rows: &[&deploy::NodeStorage]) -> Vec<usize> {
+    let mut best: Vec<usize> = Vec::new();
+    for (at, row) in rows.iter().enumerate() {
+        match best.iter_mut().find(|known| rows[**known].node == row.node) {
+            Some(known) if rows[*known].available < row.available => *known = at,
+            Some(_) => {}
+            None => best.push(at),
+        }
+    }
+    let count = usize::try_from(manifest.deployment.instances).unwrap_or(1);
+    match manifest.deployment.placement {
+        Placement::Spread => best.into_iter().take(count).collect(),
+        Placement::Single => best.into_iter().take(1).collect(),
+    }
 }
 
 /// The answers as what the operator chose.
 fn chosen(settings: &[Setting], answers: &[Answer]) -> Chosen {
-    let picked = |index: usize| -> Vec<String> {
+    let at = |title: &str| settings.iter().position(|setting| setting.title == title);
+    let picked = |title: &str| -> Vec<String> {
+        let Some(index) = at(title) else { return Vec::new() };
         match (settings.get(index), answers.get(index)) {
             (Some(setting), Some(Answer::Picked(picked))) => picked
                 .iter()
@@ -464,7 +588,7 @@ fn chosen(settings: &[Setting], answers: &[Answer]) -> Chosen {
             _ => Vec::new(),
         }
     };
-    let text = |index: usize| match answers.get(index) {
+    let text = |title: &str| match at(title).and_then(|index| answers.get(index)) {
         Some(Answer::Text(text)) => text.trim().to_owned(),
         _ => String::new(),
     };
@@ -473,7 +597,7 @@ fn chosen(settings: &[Setting], answers: &[Answer]) -> Chosen {
         deploy: deploy::Choice {
             version: picked(VERSION).into_iter().next().unwrap_or_default(),
             // `NODE:STORAGE` in the list's order (by node), as the CTIDs are given.
-            placements: picked(PLACEMENT),
+            placements: picked(NODES),
             ctids: text(CTIDS),
             cores: text(CORES),
             memory_mib: text(MEMORY),
@@ -488,12 +612,16 @@ fn chosen(settings: &[Setting], answers: &[Answer]) -> Chosen {
 /// Pangolin attachment; only what changes is listed.
 fn review(setup: &Setup, source: &Source, s: &mut Session, answers: &[Answer]) -> Review {
     let chosen = chosen(&s.settings, answers);
-    let attach_requested = service_pangolin::requested(answers);
+    let attach_requested = service_pangolin::requested(&s.settings, answers);
     let mut sections = Vec::new();
     let mut problems = Vec::new();
     let (mut update_plan, mut change, mut create, mut attach) = (None, None, None, None);
     if chosen.selected.is_empty() && chosen.deploy.placements.is_empty() {
-        problems.push("Tick instances to change, or nodes for new instances".to_owned());
+        problems.push(if s.instances.is_empty() {
+            "Tick the nodes for the new instances under Nodes".to_owned()
+        } else {
+            "Tick instances to change under Instances, or nodes for new ones under Nodes".to_owned()
+        });
     }
     if !chosen.selected.is_empty() {
         let targets: Vec<&Instance> = s

@@ -646,6 +646,7 @@ fn survey(setup: &Setup, ctx: &Context, s: &mut Session) -> Result<Found, String
     };
     found_settings.push(Setting {
         list: false,
+        check: None,
         title: "Nodes".to_owned(),
         note: "The nodes that get a Site connector: one Site pangolin-<node> and one container on each. Unticked nodes keep what they have.".to_owned(),
         multiple: true,
@@ -695,6 +696,7 @@ fn survey(setup: &Setup, ctx: &Context, s: &mut Session) -> Result<Found, String
         }
         found_settings.push(Setting {
             list: false,
+            check: None,
             title: title.to_owned(),
             note: note.to_owned(),
             multiple: question.multiple,
