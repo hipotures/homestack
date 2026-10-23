@@ -434,7 +434,8 @@ fn settings(
     let mut version_setting = setting(
         VERSION,
         "A published release of the image, newest first; dev images are never offered. Ticked instances \
-         with another version are made again from it, their home kept.",
+         are made again from it, including the same version, with existing persistent volumes kept. \
+         Size or environment changes at the current version are applied without reinstalling.",
         releases,
         false,
         None,
@@ -824,18 +825,19 @@ fn review(setup: &Setup, source: &Source, s: &mut Session, answers: &[Answer]) -
                     .push("Restarting a Site requires the verified Pangolin context".to_owned()),
             }
         }
-        let other_version: Vec<u32> = targets
+        let reinstall = plan.lines.is_empty() && !attach_requested && chosen.deploy.placements.is_empty();
+        let image_targets: Vec<u32> = targets
             .iter()
-            .filter(|i| tag(&i.image) != chosen.deploy.version)
+            .filter(|i| reinstall || tag(&i.image) != chosen.deploy.version)
             .map(|i| i.ctid)
             .collect();
-        if !other_version.is_empty() {
+        if !image_targets.is_empty() {
             if plan.lines.is_empty() {
                 let up = setup.handle.block_on(update::plan(
                     &s.pve,
                     &s.config,
                     source,
-                    &other_version,
+                    &image_targets,
                     &chosen.deploy.version,
                     "",
                     s.ready(),

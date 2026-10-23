@@ -1,5 +1,5 @@
 //! Replace a container under the same CTID. A container without mount-point
-//! volumes is destroyed and made again. Its mount-point volumes wait in a
+//! volumes is destroyed and made again. Its kept settings and mount-point volumes wait in a
 //! temporary holder container on the same node, together with the
 //! configuration the new container keeps; the holder is removed once the new
 //! container has them. Every run continues from what Proxmox shows, so an
@@ -17,7 +17,8 @@ pub struct Replace<'a> {
     /// Shut the old container down gracefully instead of stopping it.
     pub graceful: bool,
     /// Configuration keys the new container keeps; `env` is merged over the
-    /// new image's own entries. Kept only when the container has volumes.
+    /// new image's own entries. The holder also preserves these for containers
+    /// without mount-point volumes.
     pub keep: &'a [&'a str],
     /// Lines the holder's description carries for whoever resumes the
     /// replacement while the old container is gone.
@@ -331,7 +332,7 @@ pub async fn replace(pve: &impl Pve, r: &Replace<'_>, say: &impl Fn(&str)) -> Re
         }
         let keys = mounts(&cfg)?;
         match holder {
-            None if keys.is_empty() => {
+            None if keys.is_empty() && r.keep.is_empty() => {
                 stop(pve, node, ctid, r.graceful, say).await?;
                 remove_bare(pve, node, ctid, say).await?;
             }

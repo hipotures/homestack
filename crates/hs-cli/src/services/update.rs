@@ -1,11 +1,16 @@
 //! Update a deployed service's image under the same CTID, through the
-//! Proxmox API only. The home volume waits in a temporary holder container
-//! while the container is made again (`hs_deploy::recreate`). Nothing is
+//! Proxmox API only. Existing persistent volumes and kept settings wait in a
+//! temporary holder while the container is made again (`hs_deploy::recreate`).
+//! Stateless API instances are initialized again from desktop configuration. Nothing is
 //! journaled on this desktop: every run starts from what Proxmox shows, so an
 //! interrupted update is finished by updating again.
 
 use hs_core::pve::Pve;
-use hs_deploy::{config::DeployConfig, node, recreate};
+use hs_deploy::{
+    config::{DeployConfig, InstanceSpec},
+    deploy::ApiBootstrap,
+    node, recreate,
+};
 use serde_json::Value;
 
 use super::deploy::{self, SiteReady, Source};
@@ -34,6 +39,7 @@ pub struct Plan {
     pub platform: String,
     pub template_storage: String,
     pub backup_storage: String,
+    api_config: Option<DeployConfig>,
     pub targets: Vec<Instance>,
     pub lines: Vec<String>,
     pub problems: Vec<String>,
@@ -172,7 +178,10 @@ async fn preflight(pve: &impl Pve, cfg: &DeployConfig, instance: &Instance, back
             return Err(format!("Deploy token lacks {privilege} for CT {}", instance.ctid));
         }
     }
-    for storage in [&instance.root_storage, &instance.home_storage, &cfg.template_storage] {
+    for storage in [&instance.root_storage, &instance.home_storage, &cfg.template_storage]
+        .into_iter()
+        .filter(|storage| !storage.is_empty())
+    {
         if !permit(&permissions, &format!("/storage/{storage}"), "Datastore.AllocateSpace") {
             return Err(format!("Deploy token lacks Datastore.AllocateSpace on {storage}"));
         }
@@ -199,7 +208,10 @@ async fn preflight(pve: &impl Pve, cfg: &DeployConfig, instance: &Instance, back
         (&instance.root_storage, "rootdir"),
         (&instance.home_storage, "rootdir"),
         (&cfg.template_storage, "vztmpl"),
-    ] {
+    ]
+    .into_iter()
+    .filter(|(id, _)| !id.is_empty())
+    {
         let entry = storages
             .as_array()
             .and_then(|items| items.iter().find(|s| s["storage"] == *id))
@@ -254,6 +266,7 @@ pub async fn plan(
         platform: String::new(),
         template_storage: config.template_storage.clone(),
         backup_storage: backup.to_owned(),
+        api_config: source.is_api().then(|| config.clone()),
         targets: Vec::new(),
         lines: Vec::new(),
         problems: Vec::new(),
@@ -280,11 +293,15 @@ pub async fn plan(
             String::new(),
             "Preserved".to_owned(),
             format!("  Container  CT {}", target.ctid),
-            format!(
-                "  Home       {} · {} · /home/app",
-                target.home_volume,
-                node::show_size(target.home_mib)
-            ),
+            if target.home_volume.is_empty() {
+                "  Volumes    none".to_owned()
+            } else {
+                format!(
+                    "  Home       {} · {} · /home/app",
+                    target.home_volume,
+                    node::show_size(target.home_mib)
+                )
+            },
             format!("  Network    {} · MAC {}", target.address, target.mac),
             format!("  Name/pool  {} · {}", target.hostname, target.pool),
             format!(
@@ -350,8 +367,28 @@ async fn review(
                 target.service, target.repository, source.manifest.id
             ));
         }
-        if target.home_volume.is_empty() {
-            return Err(format!("CT {ctid} has no home volume (mp0)"));
+        if target.home_volume.is_empty() && source.manifest.persistence.is_some() {
+            return Err(format!(
+                "CT {ctid}: the service requires its persistent home volume (mp0)"
+            ));
+        }
+        if target.home_volume.is_empty()
+            && let Some(config) = &plan.api_config
+        {
+            let bootstrap = ApiBootstrap::load(config)?;
+            if target
+                .searchdomain
+                .as_deref()
+                .is_some_and(|domain| domain != config.domain)
+            {
+                return Err(format!(
+                    "CT {ctid}: API domain differs from the deployment certificate domain"
+                ));
+            }
+            if config.pve.ca_file.is_some() {
+                return Err("API initialization requires system-trusted PVE certificates".to_owned());
+            }
+            bootstrap.validate_instance(&api_spec(&target)?)?;
         }
         if source.is_site() {
             let site = site.ok_or("Site updates require the verified Pangolin context")?;
@@ -364,7 +401,10 @@ async fn review(
                 .map_err(|e| format!("CT {ctid} config: {e}"))?;
             safe_config(pve, &target, &cfg).await?;
             recreate::mounts(&cfg)?;
-            if !plan.backup_storage.is_empty() && !text(&cfg, "mp0").split(',').any(|v| v == "backup=1") {
+            if !plan.backup_storage.is_empty()
+                && !target.home_volume.is_empty()
+                && !text(&cfg, "mp0").split(',').any(|v| v == "backup=1")
+            {
                 return Err("Home must have backup=1 for the selected backup".to_owned());
             }
         }
@@ -415,11 +455,21 @@ pub async fn apply(
             let site = site.ok_or("Site updates require the verified Pangolin context")?;
             tokio::task::block_in_place(|| site.identity(target.ctid))?;
         }
-        let line = one(pve, source, plan, target, site, say).await.map_err(|error| {
-            format!(
-                "{error}\nUpdate paused. Update the image again to finish it; it continues from what Proxmox shows."
-            )
-        })?;
+        let bootstrap = if target.home_volume.is_empty() {
+            plan.api_config.as_ref().map(ApiBootstrap::load).transpose()?
+        } else {
+            None
+        };
+        if let Some(bootstrap) = &bootstrap {
+            bootstrap.validate_instance(&api_spec(target)?)?;
+        }
+        let line = one(pve, source, plan, target, site, bootstrap.as_ref(), say)
+            .await
+            .map_err(|error| {
+                format!(
+                    "{error}\nUpdate paused. Update the image again to finish it; it continues from what Proxmox shows."
+                )
+            })?;
         say(&line);
         lines.push(line);
     }
@@ -460,12 +510,23 @@ async fn replacement_operation(pve: &impl Pve, node: &str, ctid: u32) -> Result<
     Ok(uuid::Uuid::new_v4().to_string())
 }
 
+fn api_spec(target: &Instance) -> Result<InstanceSpec, String> {
+    Ok(InstanceSpec {
+        name: target.hostname.clone(),
+        node: target.node.clone(),
+        ctid: target.ctid,
+        address: target.address.parse().map_err(|_| "Invalid API instance address")?,
+        storage: target.root_storage.clone(),
+    })
+}
+
 async fn one(
     pve: &impl Pve,
     source: &Source,
     plan: &Plan,
     target: &Instance,
     site: Option<&dyn SiteReady>,
+    bootstrap: Option<&ApiBootstrap>,
     say: &(dyn Fn(&str) + Send + Sync),
 ) -> Result<String, String> {
     let (ctid, node) = (target.ctid, target.node.as_str());
@@ -578,14 +639,31 @@ async fn one(
         || new.mac != target.mac
         || !node::same_net(&new.network, &target.network)
         || options(&new.home_mount) != options(&target.home_mount)
-        || !new.home_volume.contains(&format!("-{ctid}-"))
+        || (target.home_volume.is_empty() != new.home_volume.is_empty())
+        || (!new.home_volume.is_empty() && !new.home_volume.contains(&format!("-{ctid}-")))
     {
         return Err(format!(
             "CT {ctid}: the new container's home, network or identity differs from the old one"
         ));
     }
-    // Autostart only now: a holder or a homeless container must never start
-    // on its own.
+    deploy::set_heartbeat(pve, node, ctid, &source.manifest).await?;
+    say(&format!("{node}: CT {ctid} · Start"));
+    let start = target.running || target.onboot;
+    if let Some(bootstrap) = bootstrap {
+        say(&format!("{node}: CT {ctid} · Initialize API"));
+        bootstrap
+            .initialize(pve, &api_spec(target)?, false, &|line| say(line))
+            .await?;
+        if !start {
+            node::power(pve, node, ctid, "stop").await?;
+        }
+    } else if start {
+        if !new.running {
+            node::power(pve, node, ctid, "start").await?;
+        }
+        say(&deploy::ready(source, site, ctid, &target.address, say).await?);
+    }
+    // Restore autostart after volume reassignment and API initialization.
     if new.onboot != target.onboot {
         let cfg = pve
             .get(&format!("/nodes/{node}/lxc/{ctid}/config"), &[])
@@ -601,15 +679,6 @@ async fn one(
         .await
         .map_err(|e| format!("CT {ctid} autostart: {e}"))?;
     }
-    deploy::set_heartbeat(pve, node, ctid, &source.manifest).await?;
-    say(&format!("{node}: CT {ctid} · Start"));
-    let start = target.running || target.onboot;
-    if start {
-        if !new.running {
-            node::power(pve, node, ctid, "start").await?;
-        }
-        say(&deploy::ready(source, site, ctid, &target.address, say).await?);
-    }
     node::remove_old_images(pve, node, &plan.template_storage, &format!("hs-{ctid}-"), "", &|line| {
         say(line)
     })
@@ -618,7 +687,11 @@ async fn one(
         "{node}: {} · CT {ctid} · {} · home {}{}",
         target.hostname,
         plan.image,
-        new.home_volume,
+        if new.home_volume.is_empty() {
+            "none"
+        } else {
+            &new.home_volume
+        },
         if start { "" } else { " · stopped" }
     ))
 }
