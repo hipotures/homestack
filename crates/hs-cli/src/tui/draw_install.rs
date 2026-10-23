@@ -496,7 +496,7 @@ fn settings(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
     let start = (install.row + 1).saturating_sub(visible);
     for (row, (title, value)) in rows.iter().enumerate().skip(start).take(visible) {
         let chosen = row == install.row;
-        let mark = if chosen { "▶ " } else { "  " };
+        let mark = if chosen && !install.chooser { "▶ " } else { "  " };
         let line = format!("{mark}{:<label_width$}{}", cut(title, label_width - 1), value);
         write(
             buf,
@@ -558,7 +558,8 @@ fn settings(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
     let on_domain = install.domain.is_some() && install.row == install.settings.len();
     if on_domain {
         let domain = install.domain.clone().unwrap_or_default();
-        let field = format!("[ {domain}▏ ]");
+        let cursor = if install.chooser { "▏" } else { "" };
+        let field = format!("[ {domain}{cursor} ]");
         // Room to type a longer one.
         let rect = fit(field.chars().count().max(40), 1);
         let box_inner = frame(
@@ -567,7 +568,7 @@ fn settings(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
             palette,
             &Sides {
                 top_left: vec![Control::plain("Server domain")],
-                focused: true,
+                focused: install.chooser,
                 ..Sides::default()
             },
         );
@@ -577,7 +578,7 @@ fn settings(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
             at(box_inner.y, 1),
             box_inner.width.saturating_sub(4),
             &field,
-            focus,
+            if install.chooser { focus } else { text },
         );
         return;
     }
@@ -587,7 +588,8 @@ fn settings(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
     if let Some(value) = &setting.text {
         // The field over as many rows as its text takes, so its end and the
         // cursor stay in sight.
-        let typed: Vec<char> = format!("{value}▏").chars().collect();
+        let cursor = if install.chooser { "▏" } else { "" };
+        let typed: Vec<char> = format!("{value}{cursor}").chars().collect();
         let field: Vec<String> = typed.chunks(44).map(|chunk| chunk.iter().collect()).collect();
         // Why Enter did not keep it, below the field.
         let error: Vec<String> = install
@@ -602,7 +604,7 @@ fn settings(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
             palette,
             &Sides {
                 top_left: vec![Control::plain(&setting.title)],
-                focused: true,
+                focused: install.chooser,
                 ..Sides::default()
             },
         );
@@ -613,7 +615,7 @@ fn settings(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
                 at(box_inner.y, 1 + row),
                 box_inner.width.saturating_sub(4),
                 line,
-                focus,
+                if install.chooser { focus } else { text },
             );
         }
         for (row, line) in error.iter().enumerate() {
