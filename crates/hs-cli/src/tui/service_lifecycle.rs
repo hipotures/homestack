@@ -267,6 +267,7 @@ pub(super) fn work(
                     } else {
                         let checked = site_context(setup, &mut pangolin, tell).and_then(|p| {
                             service_pangolin::review(
+                                source,
                                 p,
                                 &setup.stop,
                                 catalog.as_ref(),

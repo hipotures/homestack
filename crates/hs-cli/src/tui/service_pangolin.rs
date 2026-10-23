@@ -14,6 +14,7 @@ use crate::install_flow::Answer;
 use crate::services::{
     deploy::Source,
     instance::{self, Instance},
+    manifest::Healthcheck,
 };
 
 pub(super) const ACTION: usize = 5;
@@ -312,6 +313,7 @@ pub(super) fn load(pangolin: &Pangolin, stop: &AtomicBool) -> Result<Catalog, St
 }
 
 pub(super) fn review(
+    source: &Source,
     pangolin: &Pangolin,
     stop: &AtomicBool,
     catalog: Option<&Catalog>,
@@ -367,12 +369,41 @@ pub(super) fn review(
     let mut body = previous
         .as_ref()
         .map(|t| t.body.clone())
-        .unwrap_or_else(|| json!({"enabled": true, "hcEnabled": false}));
+        .unwrap_or_else(|| json!({"enabled": true}));
     body["siteId"] = json!(site.id);
     body["ip"] = json!(instance.address);
     body["mode"] = json!("http");
     body["method"] = json!(scheme);
     body["port"] = json!(port);
+    let Some(Healthcheck::Http {
+        port: health_port,
+        path,
+        expected_status,
+    }) = &source.manifest.healthcheck
+    else {
+        return Err("Pangolin HTTP monitoring requires an HTTP health check in the service manifest".to_owned());
+    };
+    let health_port = source
+        .manifest
+        .ports
+        .iter()
+        .find(|p| &p.name == health_port)
+        .ok_or("The manifest health check refers to an undeclared port")?
+        .port;
+    body["hcEnabled"] = json!(true);
+    body["hcMode"] = json!("http");
+    body["hcHostname"] = json!(instance.address);
+    body["hcPort"] = json!(health_port);
+    body["hcScheme"] = json!(if health_port == port { scheme } else { "http" });
+    body["hcPath"] = json!(path);
+    body["hcMethod"] = json!("GET");
+    body["hcStatus"] = json!(expected_status);
+    body["hcInterval"] = json!(30);
+    body["hcUnhealthyInterval"] = json!(30);
+    body["hcTimeout"] = json!(5);
+    body["hcFollowRedirects"] = json!(false);
+    body["hcHealthyThreshold"] = json!(1);
+    body["hcUnhealthyThreshold"] = json!(3);
     Ok(Plan {
         instance: instance.clone(),
         resource,
@@ -401,6 +432,14 @@ impl Plan {
             } else {
                 "Create the missing backend target".to_owned()
             },
+            format!(
+                "Monitoring enabled: GET {}://{}:{}{} expects HTTP {}",
+                self.body["hcScheme"].as_str().unwrap_or_default(),
+                self.instance.address,
+                self.body["hcPort"],
+                self.body["hcPath"].as_str().unwrap_or_default(),
+                self.body["hcStatus"]
+            ),
             "Only Pangolin routing changes. Resource access policies, container, disks and /home/app are preserved."
                 .to_owned(),
         ]

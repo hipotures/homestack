@@ -15,7 +15,11 @@ then review and apply. F5 refreshes the lists and preserves edits; a recreated
 Site's new ID requires selecting it again.
 
 This operation creates a missing backend target or updates the resource's one
-existing target. It preserves resource policies and other target settings,
+existing target. It enables monitoring from the service manifest's HTTP health
+check: the declared port, path and expected status, with GET requests every
+30 seconds and a five-second timeout. Reattaching also repairs a target whose
+monitoring was disabled. The manifest must declare an HTTP health check.
+It preserves resource policies and other routing settings,
 and performs only reads against Proxmox. It never deploys, replaces, restarts
 or removes the application or its volumes. Save disk/environment changes
 separately; attachment cannot be combined with removal. Resources with multiple
