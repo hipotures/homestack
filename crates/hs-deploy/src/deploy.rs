@@ -439,7 +439,7 @@ impl ApiBootstrap {
                         .get_on(0, "/.well-known/homestack/status")
                         .await
                         .map_err(|e| health_error(&e))?;
-                    if report["schema"] == 1
+                    if report["schema"] == 2
                         && report["sample_age_seconds"].as_u64().is_some_and(|age| age <= 30)
                         && report["filesystems"].as_array().is_some_and(|mounts| {
                             mounts
