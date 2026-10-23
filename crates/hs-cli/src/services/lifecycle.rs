@@ -8,9 +8,16 @@ use hs_core::tasks::{NoObserver, TaskWait, wait_task};
 use hs_deploy::node;
 use serde_json::Value;
 
-use super::deploy;
+use super::deploy::{self, SiteReady, Source};
 use super::instance::{self, Instance};
-use super::manifest::Manifest;
+
+/// The managed runtime selector of initialized API and Site instances.
+const MANAGED: &str = "HOMESTACK_MANAGED_HOME";
+
+/// Whether applying `plan` changes an environment, restarting running containers.
+pub fn restarts(plan: &Plan) -> bool {
+    !plan.remove && (!plan.set.is_empty() || !plan.unset.is_empty())
+}
 
 /// The entries the environment setting shows: neither `PATH` nor anything
 /// named like a secret.
@@ -129,6 +136,12 @@ pub async fn plan(pve: &impl Pve, repository: &str, service: &str, choice: &Choi
                     .map(|(key, _)| key)
                     .filter(|key| !kept.contains(&key.as_str()))
                     .collect();
+                let value =
+                    |list: &[(String, String)]| list.iter().find(|(key, _)| key == MANAGED).map(|(_, v)| v.clone());
+                if value(&entries) != value(&deploy::environment(&choice.shown_environment).unwrap_or_default()) {
+                    plan.problems
+                        .push(format!("{MANAGED} is set by initialization; it cannot be changed here"));
+                }
                 plan.set = entries;
             }
             Err(error) => plan.problems.push(error),
@@ -211,12 +224,19 @@ async fn task(pve: &impl Pve, upid: &Value, what: &str) -> Result<(), String> {
 
 pub async fn apply(
     pve: &impl Pve,
-    manifest: &Manifest,
+    source: &Source,
     plan: &Plan,
+    site: Option<&dyn SiteReady>,
     say: &(dyn Fn(&str) + Send + Sync),
 ) -> Result<Vec<String>, String> {
     if !plan.problems.is_empty() {
         return Err("Resolve the review problems first".to_owned());
+    }
+    if source.is_site() && restarts(plan) {
+        let site = site.ok_or("Restarting a Site requires the verified Pangolin context")?;
+        for target in plan.targets.iter().filter(|target| target.running) {
+            tokio::task::block_in_place(|| site.identity(target.ctid))?;
+        }
     }
     let mut lines = Vec::new();
     for target in &plan.targets {
@@ -273,7 +293,7 @@ pub async fn apply(
         if restarted {
             say(&format!("CT {ctid} · restarting"));
             node::power(pve, node, ctid, "reboot").await?;
-            say(&deploy::healthy(manifest, &target.address).await?);
+            say(&deploy::ready(source, site, ctid, &target.address, say).await?);
         }
         lines.push(format!(
             "CT {ctid} {}: root {} GiB, home {} GiB{}",

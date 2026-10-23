@@ -2,8 +2,8 @@
 
 The repository declares two portable schema-1 services:
 `.homestack/homestack-api.yaml` and `.homestack/pangolin-site.yaml`.
-HomeStack API can now initialize through common service deployment. Pangolin
-Site remains blocked. No existing internal container is adopted or modified.
+HomeStack API and new Pangolin Site connectors initialize through common service
+deployment. No existing internal container is adopted or modified.
 
 ## API deployment
 
@@ -149,29 +149,141 @@ still TCP connectivity, not the complete initialization checks described here.
 PVE metadata and guest telemetry do not prove application records were read;
 this task makes no general data-persistence claim from mount metadata alone.
 
-## Pangolin Site remains blocked
+## Pangolin Site deployment
 
-`Source::initialization_blocker` still rejects the Site image, including under
-another manifest id or repository. No Site identity, credential or journal is
-created or changed by this work. Its manifest has no inbound listener or generic
-healthcheck; generic health remains unverified.
+A new managed Site connector is deployed through the same service browser,
+review/apply worker and `services/deploy.rs::{plan,apply}` as other services:
+published numeric release and digest, reviewed node/storage/CTID/address and
+sizes, scoped deploy token, unprivileged LXC, disposable rootfs and a separate
+persistent `mp0` at `/home/app`, with the common `HomeStack service
+pangolin-site` identity, repository, manifest revision, image and digest. The
+legacy Step 8 description and tag are not used. Only the canonical
+`.homestack/pangolin-site.yaml` of `hipotures/homestack` is initialized;
+another manifest id, path or repository using the Site image is refused. One
+instance is deployed per review. The operator must choose Site image `0.1.2`
+or later: `0.1.1` predates the managed runtime selector. Environment must be
+empty.
 
-Future Site integration must carry the verified Step 5 private tunnel and
-permanent least-privilege Step 7 organization key into Step 8's existing private
-per-node credential/journal logic. It must initialize each new CT through its
-existing authenticated root-channel stdin receiver, explicitly select the
-managed credential path, and verify CT running plus its own Pangolin Site
-online. The temporary Root key is never a substitute. This initialization-only
-prerequisite does not belong in generic image replacement.
+### Authenticated context
 
-The prepared Site image's managed selector uses
-`/home/app/pangolin-site/site.json`, owned by site with private modes; default
-legacy behavior remains `/var/lib/pangolin-site/site.json`. The CLI's HOME
-follows the selected directory. `DISABLE_SSH=true` and the existing pinned CLI
-invocation remain intact. An eventual Site initializer must explicitly pass the
-selector to `homestack-site-credential` too: `pct exec` must not be assumed to
-inherit PID 1's environment. Site image publication/integration remains separate.
+The common screen does not use the Pangolin wizard's memory. For a Site, the
+deploy worker (`tui/pangolin_sites/managed.rs`) reads the saved Pangolin
+settings (`integrations/pangolin.toml`): the verified Step 1 server, Step 3
+`app.dashboard_url`, Step 4 loopback Integration API, Step 6 organization and
+the Step 7 key destination. It starts its own Step 5 tunnel with the existing
+`pangolin_tunnel::Session` (SSH, hardware key and askpass bridge as in Step 5)
+and accepts only a live endpoint that passed the existing Pangolin health
+check. The Step 7 key is read through its recovery record, which must be
+`Complete`, for this server and organization, named `homestack`, credential
+saved and actions verified, and whose file holds exactly the recorded key ID.
+`getOrg` must return the organization. These checks run at review, again
+before anything is made, and before every Pangolin step. The temporary Root
+key is never read: it exists only in the wizard's memory. No Pangolin
+credential enters the manifest, plan, PVE metadata, progress or logs.
 
+Root for the credential is the saved access host (`install_host`), opened with
+the existing SSH root access (hardware key, no password or software-key
+fallback). It is used only for credential installation and digest checks.
+
+### Instance identity and journal
+
+Each instance's Site is `homestack-site-<CTID>` (name and nice ID), distinct
+from legacy `pangolin-<node>` Sites, whose identities are unchanged. Its
+credential is `secrets/pangolin-managed-site-<identity>-<CTID>.key` (mode
+0600), with `.recovery.json` and `.lock` beside it; `<identity>` is the Step 7
+SHA-256 of server and organization. Two instances, also on one node, therefore
+never share a name, credential, journal or lock. The journal (Step 8's
+`SiteRecord`) records server, organization, node, Site, Newt ID, Site ID,
+CTID, original home volume and stage: `Prepared` (credential saved, Pangolin
+not asked), `CreationRequested`, `Created`, `Installed` (credential verified in
+the container) and `Online`. It is written only after the container exists, so
+its CTID and home record that creation. It is a private credential journal,
+not a deployment registry: ownership remains in Proxmox.
+
+Review refuses an existing Site of that name whose Newt ID is not the saved
+credential's, a Site created earlier but now gone, a Site ID different from
+the journal, and any journal or credential left for a CTID whose container is
+free (an earlier instance): such leftovers are inspected and removed
+explicitly, never adopted.
+
+### Initialization
+
+1. Common creation attaches `mp0` before the first start, autostart off.
+2. The description temporarily records `site-initialization-home` with the
+   exact original `mp0` option; then `HOMESTACK_MANAGED_HOME=1` is set while
+   the container is still stopped. Any other environment is refused.
+3. The Step 8 journal logic saves a new credential on the desktop (or recovers
+   the saved one) and the journal before Pangolin is asked; the existing
+   `create_site` marks `CreationRequested`, sends the saved Newt ID and secret,
+   and resolves a rejected or unknown outcome by reading Pangolin's Site of
+   that nice ID. An uncertain result never creates another identity: the next
+   run reconciles the Site ID and Newt ID with the journal and reuses the same
+   credential.
+4. The container starts. The configuration is sent over the root session's
+   standard input to `pct exec <CTID> -- env HOMESTACK_MANAGED_HOME=1
+   homestack-site-credential` (the selector is explicit; `pct exec` does not
+   inherit PID 1's environment). It writes `/home/app/pangolin-site/site.json`
+   (directory 0700, file 0600, owner site), and its SHA-256 must match the
+   local configuration.
+5. The worker polls Pangolin until exactly that Site ID is online and checks
+   that the Site still has the journal's organization, ID and Newt ID.
+6. Common deployment rechecks the running CT, original root/home/network,
+   ownership and selector, removes the marker, enables autostart and reports
+   success.
+
+Success therefore means: the CT exists in the reviewed pool and runs, the
+original `mp0` is at `/home/app`, managed mode is on, the installed credential
+matches the saved one, and Pangolin reports that Site of that organization,
+with the journal's IDs, online. No inbound or TCP health check is used.
+`DISABLE_SSH=true` and the pinned CLI are unchanged; the connector never
+updates itself, and no new daemon is added.
+
+### Recovery
+
+A failure removes nothing. To resume, review deployment again with the same
+CTID, version, node/storage and sizes. Recovery accepts only a CT with the
+exact common description and marker of the original `mp0` (or a pristine
+stopped CT before the marker), its reviewed resources, address and only the
+selector in its environment, and a journal for that CTID whose home is the
+CT's home. It never allocates another volume and never recreates, formats or
+replaces the home. The image is neither pulled nor the container created
+again; the steps above are idempotent: an existing Site is reused, an
+installed credential is detected by digest. Foreign, mismatched or ambiguous
+ownership, journals or Sites are refused.
+
+### Image updates and other operations
+
+Updates use the existing `hs_deploy::recreate` replacement unchanged. It keeps
+the CTID, address, MAC, original `mp0` and environment (`HOMESTACK_MANAGED_HOME=1`
+included), so the credential on the persistent home stays. The Site
+initializer is not called: no Site is created, no credential rotated or
+reinstalled, no root session opened. Review opens the same verified Pangolin
+context and requires a completed (`Online`) journal whose Site, IDs and saved
+credential match Pangolin; after the replacement the connector's own Site must
+be online. Migration and restarts after environment changes use the same Site
+readiness instead of the manifest health check. Containers still initializing
+cannot be updated or migrated, and the managed selector cannot be edited in
+maintenance. Legacy Step 8 deployment and Site image updates are unchanged.
+
+### Known limitations
+
+- Removing an instance in maintenance deletes its container and home but leaves
+  its Pangolin Site and desktop journal; delete the Site in Pangolin and the
+  journal files explicitly before reusing that CTID.
+- The Site's dashboard URL comes from Step 3 discovery; a changed URL rewrites
+  the same credential on resume, never a new identity.
+- Pangolin online status depends on Pangolin's own reporting interval; the
+  wait is 180 s.
+- Live behavior is unverified: no real LXC, root `pct exec`, Pangolin Site
+  creation or online transition has been exercised by this integration.
+
+### Remaining isolated live verification
+
+A separately authorized run in `homestack-test` should deploy one new Site
+from image `0.1.2` or later, interrupt and resume initialization, check that
+the credential is at `/home/app/pangolin-site/site.json` and the Site is online,
+replace its image and check that the Site stays and comes back online without
+a root session, and finally remove the test Site, journal, container and home.
 ## Verification and production adoption boundary
 
 Focused temporary verification uses synthetic credentials/certificates,
@@ -180,11 +292,22 @@ apply-time prerequisite failures, managed selection before start, common
 metadata, TLS-variable cleanup, secure configuration/token upload, post-reboot
 checks, interrupted initialization/reviewed recovery without requiring a second
 volume allocation, refusal to replace a
-missing home, Site blocking and the shared legacy initializer. The real HTTPS
+missing home, the then-blocked Site and the shared legacy initializer. The real HTTPS
 client performs certificate and hostname validation; the fixture does not
 represent a real LXC, application disk, Proxmox restart or PVE token authority.
 The three retained `hs-deploy` volume/recovery safety checks remain intact.
 No permanent test suite or production operation is added.
+
+The Site integration was checked the same way, temporarily: in-memory PVE
+responses, a fake root channel and private temporary journals. It checks the
+missing-context review problem and apply refusal before any PVE call, the
+Step 7 record requirements, per-CTID names and journals, credential and journal
+before any Pangolin request and their reuse, Site-step reconciliation after an
+uncertain creation, refusal of leftovers, changed homes and foreign journals,
+selector before start and prepare, start, install, online order, stdin-only
+credential transfer with the explicit selector, Site recovery predicates and
+Site readiness replacing the manifest probe. Pangolin itself, the tunnel and
+root SSH were not exercised.
 
 The authorized [2026-10-23 live verification](managed-api-live-verification-2026-10-23.md)
 subsequently exercised a new API in `homestack-test`, real bootstrap/reboots,
@@ -193,6 +316,10 @@ fixed PVE trailing-newline ownership comparisons and identical-release reinstall
 being skipped. The test instance, holder and test-created disks/templates were
 removed; the six production containers remained unchanged. See the report for
 measured downtime, exact scope and remaining limitations.
+
+Neither the three existing Site connectors nor the three API containers are
+adopted, stopped or changed, no Site credential is migrated or rotated, and
+no Resource, domain or DNS entry is created.
 
 Later production adoption requires separate owner authorization, an inventory
 of each legacy container's ownership/state/mounts, certificates and token files,
@@ -203,6 +330,8 @@ here. Legacy API installation/update remains on its existing ownership path;
 common identity takes priority for newly managed instances.
 
 API numeric Git tags and `scripts/tag-api.py`, Site prefixed Git tags and numeric
-OCI versions are unchanged. This handoff changes only client/deployer code and
-its dependencies, not the server image or runtime; no API image release is
-required. Publishing any future image authorizes no production deployment.
+OCI versions are unchanged. The Site integration changes client/deployer code,
+not the API server; no API image release is required. Its managed runtime is
+first published as `ghcr.io/hipotures/homestack-pangolin-site:0.1.2` from Git
+tag `pangolin-site-0.1.2`; `0.1.1` remains the legacy Step 8 default.
+Publishing any image authorizes no production deployment.

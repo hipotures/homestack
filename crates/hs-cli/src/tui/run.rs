@@ -656,7 +656,13 @@ impl Installing {
 
     fn start(&mut self, app: &mut App, ctx: &Context, updates: &mpsc::UnboundedSender<Update>) {
         let mode = app.install.as_ref().map_or(Mode::Install, |install| install.mode);
-        if mode != Mode::Service {
+        // A Site connector needs SSH: its Pangolin tunnel and root for its credential.
+        let quiet = mode == Mode::Service
+            && !self
+                .service
+                .as_ref()
+                .is_some_and(crate::services::deploy::Source::is_site);
+        if !quiet {
             self.bridge(app, updates);
         }
         self.stop = Arc::new(AtomicBool::new(false));
@@ -675,7 +681,7 @@ impl Installing {
             client_path,
             servers: Arc::clone(&ctx.servers),
             sounds,
-            ssh_prefix: if mode == Mode::Service {
+            ssh_prefix: if quiet {
                 Vec::new()
             } else {
                 self.bridge.as_ref().map(Bridge::command_prefix).unwrap_or_default()
@@ -1140,6 +1146,13 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
                             decide = Some(sender);
                             let updates = updates.clone();
                             let deploy_toml = deploy_toml(ctx);
+                            // A Site connector's move is verified through its own Pangolin tunnel.
+                            let prefix = installing.bridge(&mut app, &updates);
+                            let site_access = (!prefix.is_empty()).then(|| {
+                                let sounds = config::load(&config::default_path(&ctx.home, ctx.config_home.as_deref()))
+                                    .map(|loaded| Sounds::from_table(loaded.client.sounds.as_ref())).unwrap_or_default();
+                                super::reinstall::SiteAccess { system: Arc::clone(&ctx.system), home: ctx.home.clone(), prefix, sounds }
+                            });
                             tokio::spawn(async move {
                                 let told = updates.clone();
                                 let tell = move |progress: Progress| {
@@ -1148,7 +1161,7 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
                                 let say = move |line: &str| {
                                     let _ = updates.send(Update::Log(line.trim().to_owned()));
                                 };
-                                super::reinstall::migrate_work(&deploy_toml, &start, &mut decisions, &tell, &say).await;
+                                super::reinstall::migrate_work(&deploy_toml, &start, &mut decisions, &tell, &say, site_access).await;
                             });
                         }
                         Request::Act(start) if start.kind == Kind::Reinstall => {
@@ -1156,7 +1169,7 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
                             decide = Some(sender);
                             let updates = updates.clone();
                             let deploy_toml = deploy_toml(ctx);
-                            let site_access = if start.parameters["sites"] == true {
+                            let site_access = if start.parameters["sites"] == true || start.parameters["service"][1] == "pangolin-site" {
                                 let prefix = installing.bridge(&mut app, &updates);
                                 if prefix.is_empty() {
                                     app.progress(Progress::Done { ok: false, lines: vec!["Could not start SSH authentication prompts".to_owned()] });
@@ -1347,8 +1360,9 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
                                         if let Some(source) = app.setup.as_mut().and_then(|setup| setup.deploy_request.take()) {
                                             app.open_service_deploy();
                                             installing.service = Some(source);
+                                            let host = app.preferences.table.get("install_host").and_then(toml::Value::as_str).unwrap_or_default().to_owned();
                                             installing.send(
-                                                Command::Connect { method: super::install::Method::Ssh, target: String::new() },
+                                                Command::Connect { method: super::install::Method::Ssh, target: host },
                                                 &mut app,
                                                 ctx,
                                                 &updates,

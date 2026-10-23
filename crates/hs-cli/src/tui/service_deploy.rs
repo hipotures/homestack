@@ -8,11 +8,12 @@ use std::sync::mpsc::Receiver;
 use hs_deploy::config::DeployConfig;
 use hs_pve::PveClient;
 
-use super::install::{Event, Found, Mark, Setting};
+use super::install::{Event, Found, Mark, Method, Setting};
 use super::installing::{Command, Setup};
+use super::pangolin_sites::managed::{Initializer, Pangolin};
 use super::reinstall::local_time;
 use crate::install_flow::Answer;
-use crate::services::deploy::{self, Choice, Cluster, Plan, Source};
+use crate::services::deploy::{self, Choice, Cluster, Plan, SiteInit, Source};
 use crate::services::manifest::MOUNT;
 
 const VERSION: usize = 0;
@@ -30,6 +31,8 @@ struct Session {
     cluster: Cluster,
     settings: Vec<Setting>,
     reviewed: Option<Plan>,
+    /// A Pangolin Site connector: the verified Pangolin context and root.
+    site: Option<Initializer>,
 }
 
 pub(super) fn work(setup: &Setup, commands: &Receiver<Command>, tell: &(dyn Fn(Event) + Send + Sync)) {
@@ -42,9 +45,14 @@ pub(super) fn work(setup: &Setup, commands: &Receiver<Command>, tell: &(dyn Fn(E
         return;
     }
     let mut session: Option<Session> = None;
+    // Root for a Site's credential: the saved access host.
+    let mut host = String::new();
     while let Ok(command) = commands.recv() {
         match command {
             Command::Connect { .. } | Command::Rescan { .. } => {
+                if let Command::Connect { target, .. } = &command {
+                    host.clone_from(target);
+                }
                 let answers = match &command {
                     Command::Rescan { answers, .. } => Some(answers.clone()),
                     _ => None,
@@ -54,7 +62,21 @@ pub(super) fn work(setup: &Setup, commands: &Receiver<Command>, tell: &(dyn Fn(E
                     .as_ref()
                     .zip(answers.as_ref())
                     .map(|(s, answers)| choice(&s.settings, answers));
-                match setup.handle.block_on(open(setup, &source, kept.as_ref())) {
+                let site = session.take().and_then(|s| s.site).filter(Initializer::alive);
+                let opened =
+                    setup
+                        .handle
+                        .block_on(open(setup, &source, kept.as_ref()))
+                        .and_then(|(mut opened, found)| {
+                            if source.is_site() {
+                                opened.site = Some(match site {
+                                    Some(site) => site,
+                                    None => initializer(setup, &host, tell)?,
+                                });
+                            }
+                            Ok((opened, found))
+                        });
+                match opened {
                     Ok((opened, found)) => {
                         session = Some(opened);
                         tell(Event::Connected(found));
@@ -66,11 +88,12 @@ pub(super) fn work(setup: &Setup, commands: &Receiver<Command>, tell: &(dyn Fn(E
                 let Some(s) = session.as_mut() else { continue };
                 tell(Event::Busy("Checking the plan against the cluster".to_owned()));
                 let choice = choice(&s.settings, &answers);
+                let site = s.site.as_mut().map(|site| site as &mut dyn SiteInit);
                 let plan = setup
                     .handle
-                    .block_on(deploy::plan(&s.config, &s.pve, &source, &s.cluster, &choice));
+                    .block_on(deploy::plan(&s.config, &s.pve, &source, &s.cluster, &choice, site));
                 tell(Event::Reviewed {
-                    sections: sections(&source, &s.cluster, &plan, setup.offset),
+                    sections: sections(&source, &s.cluster, &plan, s.site.as_ref(), setup.offset),
                     problems: plan.problems.clone(),
                 });
                 s.reviewed = Some(plan);
@@ -79,7 +102,8 @@ pub(super) fn work(setup: &Setup, commands: &Receiver<Command>, tell: &(dyn Fn(E
                 let Some(s) = session.as_mut() else { continue };
                 let Some(plan) = s.reviewed.take() else { continue };
                 let say = |line: &str| tell(Event::Line(line.to_owned()));
-                let (ok, lines) = setup.handle.block_on(deploy::apply(&s.pve, &source, &plan, &say));
+                let site = s.site.as_mut().map(|site| site as &mut dyn SiteInit);
+                let (ok, lines) = setup.handle.block_on(deploy::apply(&s.pve, &source, &plan, site, &say));
                 tell(Event::Done { ok, lines });
             }
             Command::Cancel => return,
@@ -122,9 +146,33 @@ async fn open(setup: &Setup, source: &Source, kept: Option<&Choice>) -> Result<(
             cluster,
             settings,
             reviewed: None,
+            site: None,
         },
         found,
     ))
+}
+
+/// A Site connector's trusted context: its own verified Pangolin tunnel and
+/// Step 7 key from the saved settings, and root on `host` for the credential.
+fn initializer(setup: &Setup, host: &str, tell: &(dyn Fn(Event) + Send + Sync)) -> Result<Initializer, String> {
+    if host.is_empty() {
+        return Err("No saved access host for root on the cluster; install HomeStack first.".to_owned());
+    }
+    tell(Event::Busy(
+        "Opening the Pangolin API tunnel (touch your key or give its PIN if it asks)".to_owned(),
+    ));
+    let pangolin = Pangolin::open(
+        &setup.token_dir,
+        std::sync::Arc::clone(&setup.system),
+        setup.ssh_prefix.clone(),
+        setup.sounds.clone(),
+        &setup.stop,
+    )?;
+    tell(Event::Busy(format!(
+        "Connecting to {host} as root for the Site credential (touch your key if it asks)"
+    )));
+    let root = setup.open(Method::Ssh, host).map_err(|e| e.0)?;
+    Initializer::open(pangolin, root)
 }
 
 fn gib(bytes: u64) -> u64 {
@@ -300,7 +348,13 @@ fn choice(settings: &[Setting], answers: &[Answer]) -> Choice {
 }
 
 /// The review: what is made, nothing else.
-fn sections(source: &Source, cluster: &Cluster, plan: &Plan, offset: i64) -> Vec<(String, Vec<String>)> {
+fn sections(
+    source: &Source,
+    cluster: &Cluster,
+    plan: &Plan,
+    site: Option<&Initializer>,
+    offset: i64,
+) -> Vec<(String, Vec<String>)> {
     let manifest = &source.manifest;
     let version = plan.image.rsplit_once(':').map_or("", |(_, tag)| tag);
     let made = cluster
@@ -315,7 +369,7 @@ fn sections(source: &Source, cluster: &Cluster, plan: &Plan, offset: i64) -> Vec
     for i in &plan.instances {
         if i.resume.is_some() {
             lines.push(format!(
-                "Resume API initialization in CT {} using its existing home; no container or volume is created",
+                "Resume initialization in CT {} using its existing home; no container or volume is created",
                 i.ctid
             ));
         }
@@ -327,7 +381,18 @@ fn sections(source: &Source, cluster: &Cluster, plan: &Plan, offset: i64) -> Vec
     for (key, value) in &plan.environment {
         lines.push(format!("{key}={value}"));
     }
-    lines.push(format!("then: {}", deploy::health_text(manifest)));
+    if source.is_site() {
+        lines.extend(site.map(Initializer::describe));
+        lines.extend(plan.sites.iter().cloned());
+        lines.push(format!(
+            "Site: HOMESTACK_MANAGED_HOME=1 before the first start; credential and journal saved on this desktop \
+             before Pangolin is asked; the credential reaches {MOUNT}/pangolin-site/site.json only over root's \
+             standard input; then CT running and exactly its Site online. Autostart is enabled only after that. \
+             No Resource is created; no other Site or container is changed."
+        ));
+    } else {
+        lines.push(format!("then: {}", deploy::health_text(manifest)));
+    }
     if source.is_api() {
         lines.push("API: reuse the configured desktop certificate and credentials; initialize /home/app/homestack, verify authenticated HTTPS, remove TLS bootstrap values, reboot and verify stored configuration, PVE access and the guest home mount".to_owned());
     }

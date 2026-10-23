@@ -327,7 +327,7 @@ pub async fn apply(
         }
         let path = key_path(deployment, &summary, &snapshot.node)?;
         let credential = read_credential(&path)?;
-        if installed(root, &access, &snapshot.node, snapshot.ctid)?
+        if installed(root, &access, &snapshot.node, snapshot.ctid, false)?
             != digest(&configuration(&summary.url, &credential)?)
         {
             return Err(format!(
@@ -359,7 +359,7 @@ pub async fn apply(
         node::container(&pve, snapshot.ctid)
             .await?
             .ok_or("Connector disappeared")?;
-        if installed(root, &access, &snapshot.node, snapshot.ctid)? != expected {
+        if installed(root, &access, &snapshot.node, snapshot.ctid, false)? != expected {
             return Err(format!(
                 "CT {}: installed credential changed before replacement",
                 snapshot.ctid
@@ -454,7 +454,7 @@ pub async fn apply(
         node::power(&pve, &snapshot.node, snapshot.ctid, "start").await?;
         let mut ready = false;
         for _ in 0..30 {
-            if installed(root, &access, &snapshot.node, snapshot.ctid).is_ok() {
+            if installed(root, &access, &snapshot.node, snapshot.ctid, false).is_ok() {
                 ready = true;
                 break;
             }
@@ -474,7 +474,7 @@ pub async fn apply(
         let output = root
             .run_input(&command, &content)
             .map_err(|_| "Cannot restore Site credential over root SSH")?;
-        if output.code != 0 || installed(root, &access, &snapshot.node, snapshot.ctid)? != expected {
+        if output.code != 0 || installed(root, &access, &snapshot.node, snapshot.ctid, false)? != expected {
             return Err(format!(
                 "CT {}: credential installation failed; saved credential retained",
                 snapshot.ctid

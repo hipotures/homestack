@@ -8,7 +8,7 @@ use hs_core::pve::Pve;
 use hs_core::tasks::{NoObserver, TaskWait, wait_task};
 use serde_json::Value;
 
-use super::deploy::{self, Source};
+use super::deploy::{self, SiteReady, Source};
 use super::instance::{self, Instance};
 use super::update::permit;
 
@@ -47,6 +47,12 @@ async fn storages(pve: &impl Pve, node: &str) -> Result<Vec<Value>, String> {
 }
 
 fn movable(instance: &Instance) -> Result<(), String> {
+    if deploy::initializing(&instance.description) {
+        return Err(format!(
+            "CT {} is still initializing; finish its deployment first",
+            instance.ctid
+        ));
+    }
     if instance.held {
         return Err(format!(
             "CT {} is in the middle of an image update; finish it first",
@@ -136,11 +142,16 @@ pub async fn apply(
     pve: &impl Pve,
     source: &Source,
     target: &Target,
+    site: Option<&dyn SiteReady>,
     say: &(dyn Fn(&str) + Send + Sync),
 ) -> Result<Vec<String>, String> {
     let ctid = target.ctid;
     let before = instance::read(pve, ctid).await?;
     movable(&before)?;
+    if source.is_site() {
+        let site = site.ok_or("Site migration requires the verified Pangolin context")?;
+        tokio::task::block_in_place(|| site.identity(ctid))?;
+    }
     if before.node != target.node {
         let mut form = vec![
             ("target", target.node.as_str()),
@@ -179,7 +190,7 @@ pub async fn apply(
     ));
     if after.running {
         say(&format!("CT {ctid} · health"));
-        say(&deploy::healthy(&source.manifest, &after.address).await?);
+        say(&deploy::ready(source, site, ctid, &after.address, say).await?);
     }
     Ok(vec![format!(
         "CT {ctid} {} is on {} · root {} · home {}{}",

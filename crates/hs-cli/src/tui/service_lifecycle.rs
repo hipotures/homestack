@@ -6,7 +6,9 @@ use hs_deploy::config::DeployConfig;
 
 use super::install::{Event, Found, Mark, Setting};
 use super::installing::{Command, Setup};
+use super::pangolin_sites::managed::Pangolin;
 use crate::install_flow::Answer;
+use crate::services::deploy::SiteReady;
 use crate::services::{deploy, instance, lifecycle};
 use lifecycle::Choice;
 
@@ -44,6 +46,8 @@ pub(super) fn work(
     };
     let mut settings: Vec<Setting> = Vec::new();
     let mut reviewed: Option<lifecycle::Plan> = None;
+    // A Site restart is verified by its own Site online, through this context.
+    let mut pangolin: Option<Pangolin> = None;
     let mut shown = String::new();
     while let Ok(command) = commands.recv() {
         match command {
@@ -175,10 +179,23 @@ pub(super) fn work(
                     shown_environment: shown.clone(),
                     remove: text(4),
                 };
-                let plan =
+                let mut plan =
                     setup
                         .handle
                         .block_on(lifecycle::plan(&pve, &source.repository, &source.manifest.id, &choice));
+                if source.is_site() && lifecycle::restarts(&plan) && plan.targets.iter().any(|t| t.running) {
+                    match site_context(setup, &mut pangolin, tell) {
+                        Ok(site) => {
+                            for target in plan.targets.iter().filter(|t| t.running) {
+                                match site.identity(target.ctid) {
+                                    Ok(line) => plan.lines.push(line),
+                                    Err(error) => plan.problems.push(error),
+                                }
+                            }
+                        }
+                        Err(error) => plan.problems.push(error),
+                    }
+                }
                 tell(Event::Reviewed {
                     sections: vec![(
                         if plan.remove { "Remove" } else { "Changes" }.to_owned(),
@@ -191,10 +208,13 @@ pub(super) fn work(
             Command::Apply => {
                 let Some(plan) = reviewed.take() else { continue };
                 let say = |line: &str| tell(Event::Line(line.to_owned()));
-                match setup
-                    .handle
-                    .block_on(lifecycle::apply(&pve, &source.manifest, &plan, &say))
-                {
+                match setup.handle.block_on(lifecycle::apply(
+                    &pve,
+                    source,
+                    &plan,
+                    pangolin.as_ref().map(|p| p as &dyn SiteReady),
+                    &say,
+                )) {
                     Ok(lines) => tell(Event::Done { ok: true, lines }),
                     Err(error) => tell(Event::Done {
                         ok: false,
@@ -204,4 +224,28 @@ pub(super) fn work(
             }
         }
     }
+}
+
+/// The verified Pangolin context, opened once and kept while its tunnel lives.
+fn site_context<'a>(
+    setup: &Setup,
+    pangolin: &'a mut Option<Pangolin>,
+    tell: &(dyn Fn(Event) + Send + Sync),
+) -> Result<&'a Pangolin, String> {
+    if pangolin.as_ref().is_none_or(|p| !p.alive()) {
+        *pangolin = None;
+        tell(Event::Busy(
+            "Opening the Pangolin API tunnel to verify the Site (touch your key or give its PIN if it asks)".to_owned(),
+        ));
+        *pangolin = Some(Pangolin::open(
+            &setup.token_dir,
+            std::sync::Arc::clone(&setup.system),
+            setup.ssh_prefix.clone(),
+            setup.sounds.clone(),
+            &setup.stop,
+        )?);
+    }
+    pangolin
+        .as_ref()
+        .ok_or_else(|| "The Pangolin context is unavailable".to_owned())
 }

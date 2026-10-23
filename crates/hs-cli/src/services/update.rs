@@ -8,7 +8,7 @@ use hs_core::pve::Pve;
 use hs_deploy::{config::DeployConfig, node, recreate};
 use serde_json::Value;
 
-use super::deploy::{self, Source};
+use super::deploy::{self, SiteReady, Source};
 use super::instance::{self, Instance};
 
 /// Configuration the new container keeps from the old one.
@@ -246,6 +246,7 @@ pub async fn plan(
     ctids: &[u32],
     version: &str,
     backup: &str,
+    site: Option<&dyn SiteReady>,
 ) -> Plan {
     let mut plan = Plan {
         image: source.image(version),
@@ -257,7 +258,7 @@ pub async fn plan(
         lines: Vec::new(),
         problems: Vec::new(),
     };
-    if let Err(error) = review(pve, config, source, ctids, version, &mut plan).await {
+    if let Err(error) = review(pve, config, source, ctids, version, site, &mut plan).await {
         plan.problems.push(error);
     }
     for target in &plan.targets {
@@ -306,6 +307,7 @@ pub async fn plan(
             .push(format!("Backup: stopped container and home → {}", plan.backup_storage));
     }
     plan.lines.push(match &source.manifest.healthcheck {
+        _ if source.is_site() => "Readiness: the container runs and its own Pangolin Site is online.".to_owned(),
         None => "Health check: not provided by this service.".to_owned(),
         Some(_) => "Health check: automatic after update.".to_owned(),
     });
@@ -318,6 +320,7 @@ async fn review(
     source: &Source,
     ctids: &[u32],
     version: &str,
+    site: Option<&dyn SiteReady>,
     plan: &mut Plan,
 ) -> Result<(), String> {
     if ctids.is_empty() {
@@ -331,9 +334,9 @@ async fn review(
     plan.platform = release.platform;
     for ctid in ctids {
         let target = instance::read(pve, *ctid).await?;
-        if deploy::api_initializing(&target.description) {
+        if deploy::initializing(&target.description) {
             return Err(format!(
-                "CT {ctid}: finish API initialization by reviewing deployment with this CTID before updating its image"
+                "CT {ctid}: finish initialization by reviewing deployment with this CTID before updating its image"
             ));
         }
         if target.repository != source.repository || target.service != source.manifest.id {
@@ -344,6 +347,10 @@ async fn review(
         }
         if target.home_volume.is_empty() {
             return Err(format!("CT {ctid} has no home volume (mp0)"));
+        }
+        if source.is_site() {
+            let site = site.ok_or("Site updates require the verified Pangolin context")?;
+            plan.lines.push(tokio::task::block_in_place(|| site.identity(*ctid))?);
         }
         if !target.held {
             let cfg = pve
@@ -391,6 +398,7 @@ pub async fn apply(
     pve: &impl Pve,
     source: &Source,
     plan: &Plan,
+    site: Option<&dyn SiteReady>,
     say: &(dyn Fn(&str) + Send + Sync),
 ) -> Result<Vec<String>, String> {
     if !plan.problems.is_empty() {
@@ -398,7 +406,11 @@ pub async fn apply(
     }
     let mut lines = Vec::new();
     for target in &plan.targets {
-        let line = one(pve, source, plan, target, say).await.map_err(|error| {
+        if source.is_site() {
+            let site = site.ok_or("Site updates require the verified Pangolin context")?;
+            tokio::task::block_in_place(|| site.identity(target.ctid))?;
+        }
+        let line = one(pve, source, plan, target, site, say).await.map_err(|error| {
             format!(
                 "{error}\nUpdate paused. Update the image again to finish it; it continues from what Proxmox shows."
             )
@@ -448,13 +460,14 @@ async fn one(
     source: &Source,
     plan: &Plan,
     target: &Instance,
+    site: Option<&dyn SiteReady>,
     say: &(dyn Fn(&str) + Send + Sync),
 ) -> Result<String, String> {
     let (ctid, node) = (target.ctid, target.node.as_str());
     let now = instance::read_on(pve, node, ctid).await?;
-    if deploy::api_initializing(&now.description) {
+    if deploy::initializing(&now.description) {
         return Err(format!(
-            "CT {ctid}: API initialization is unfinished; image replacement is refused"
+            "CT {ctid}: initialization is unfinished; image replacement is refused"
         ));
     }
     if now.mac != target.mac || !node::same_net(&now.network, &target.network) {
@@ -587,7 +600,7 @@ async fn one(
         if !new.running {
             node::power(pve, node, ctid, "start").await?;
         }
-        say(&deploy::healthy(&source.manifest, &target.address).await?);
+        say(&deploy::ready(source, site, ctid, &target.address, say).await?);
     }
     node::remove_old_images(pve, node, &plan.template_storage, &format!("hs-{ctid}-"), "", &|line| {
         say(line)

@@ -10,6 +10,7 @@ use serde_json::Value;
 use tokio::sync::mpsc;
 
 use super::action::{Decision, Kind, Progress, Start, Step, StepState};
+use crate::services::deploy::SiteReady;
 
 /// Root SSH access used only to restore an existing connector credential.
 pub struct SiteAccess {
@@ -208,7 +209,7 @@ pub async fn work(
 ) {
     let parameters = &start.parameters;
     if parameters.get("service").is_some() {
-        common_work(&deploy_toml, &start, decisions, progress, say).await;
+        common_work(&deploy_toml, &start, decisions, progress, say, site_access).await;
         return;
     }
     let image = parameters["image"].as_str().unwrap_or_default().to_owned();
@@ -447,6 +448,7 @@ async fn common_work(
     decisions: &mut mpsc::UnboundedReceiver<Decision>,
     progress: &(dyn Fn(Progress) + Send + Sync),
     say: &(dyn Fn(&str) + Send + Sync),
+    site_access: Option<SiteAccess>,
 ) {
     use crate::services::update;
     let result = async {
@@ -462,7 +464,9 @@ async fn common_work(
         }
         let config = DeployConfig::load(path)?;
         let pve = hs_deploy::deploy::deploy_client(&config)?;
-        let plan = update::plan(&pve, &config, &source, &ids, version, "").await;
+        let pangolin = site_context(path, &source, site_access)?;
+        let site = pangolin.as_ref().map(|p| p as &dyn SiteReady);
+        let plan = update::plan(&pve, &config, &source, &ids, version, "", site).await;
         progress(Progress::Plan {
             lines: plan.lines.clone(),
             question: "Apply this service image update?".to_owned(),
@@ -506,7 +510,7 @@ async fn common_work(
             }
             progress(Progress::Steps(steps.clone()));
         };
-        let lines = update::apply(&pve, &source, &plan, &said).await?;
+        let lines = update::apply(&pve, &source, &plan, site, &said).await?;
         Ok(Some(lines))
     }
     .await;
@@ -528,6 +532,7 @@ pub async fn migrate_work(
     decisions: &mut mpsc::UnboundedReceiver<Decision>,
     progress: &(dyn Fn(Progress) + Send + Sync),
     say: &(dyn Fn(&str) + Send + Sync),
+    site_access: Option<SiteAccess>,
 ) {
     use crate::services::{instance, migrate};
     let result = async {
@@ -539,7 +544,17 @@ pub async fn migrate_work(
         };
         let config = DeployConfig::load(path)?;
         let pve = hs_deploy::deploy::deploy_client(&config)?;
-        let plan = migrate::plan(&pve, &target).await?;
+        let mut plan = migrate::plan(&pve, &target).await?;
+        let found = instance::read(&pve, target.ctid).await?;
+        let source = common_source(&found.repository, &found.service).await?;
+        let pangolin = site_context(path, &source, site_access)?;
+        let site = pangolin.as_ref().map(|p| p as &dyn SiteReady);
+        if let Some(site) = site {
+            match tokio::task::block_in_place(|| site.identity(target.ctid)) {
+                Ok(line) => plan.lines.push(line),
+                Err(error) => plan.problems.push(error),
+            }
+        }
         progress(Progress::Plan {
             lines: plan.lines.clone(),
             question: "Migrate this service container?".to_owned(),
@@ -553,8 +568,6 @@ pub async fn migrate_work(
             Some(Decision::Apply(_)) => {}
             _ => return Ok(Some(vec!["Cancelled. No changes were made.".to_owned()])),
         }
-        let found = instance::read(&pve, target.ctid).await?;
-        let source = common_source(&found.repository, &found.service).await?;
         let ctid = target.ctid;
         let said = |line: &str| {
             say(line);
@@ -568,7 +581,7 @@ pub async fn migrate_work(
             }]));
         };
         said(&format!("CT {ctid} · checking"));
-        let lines = migrate::apply(&pve, &source, &target, &said).await?;
+        let lines = migrate::apply(&pve, &source, &target, site, &said).await?;
         Ok(Some(lines))
     }
     .await;
@@ -580,4 +593,28 @@ pub async fn migrate_work(
             lines: vec![error],
         }),
     }
+}
+
+/// A Pangolin Site connector's verified Pangolin context, opened before
+/// anything changes; other services need none.
+fn site_context(
+    deploy_toml: &Path,
+    source: &crate::services::deploy::Source,
+    access: Option<SiteAccess>,
+) -> Result<Option<super::pangolin_sites::managed::Pangolin>, String> {
+    if !source.is_site() {
+        return Ok(None);
+    }
+    let access = access.ok_or("SSH authentication prompts are unavailable for the Pangolin tunnel")?;
+    let dir = deploy_toml.parent().ok_or("Configuration directory is missing")?;
+    tokio::task::block_in_place(|| {
+        super::pangolin_sites::managed::Pangolin::open(
+            dir,
+            access.system,
+            access.prefix,
+            access.sounds,
+            &std::sync::atomic::AtomicBool::new(false),
+        )
+    })
+    .map(Some)
 }

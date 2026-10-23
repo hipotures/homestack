@@ -1,9 +1,9 @@
 # The Pangolin Site connector image (homestack-pangolin-site): Pangolin CLI
 # in Site mode under runit, with no credentials. HomeStack creates an
-# unprivileged LXC from it on each selected node and then writes that node's
-# own Site credential through `pct exec` standard input
-# (homestack-site-credential). Built and published by
-# .github/workflows/ci.yml for tags pangolin-site-X.Y.Z.
+# unprivileged LXC from it (Step 8, or a managed instance with /home/app and
+# HOMESTACK_MANAGED_HOME=1) and then writes that connector's own Site
+# credential through `pct exec` standard input (homestack-site-credential).
+# Built and published by .github/workflows/ci.yml for tags pangolin-site-X.Y.Z.
 FROM docker.io/library/alpine:3.24.2
 ARG PANGOLIN_CLI_VERSION=0.18.1
 ARG PANGOLIN_CLI_SHA256=07ae60ba0da7f3d25da6b78b76f0f2f40069605c2c52340f2f364e3cef72053f

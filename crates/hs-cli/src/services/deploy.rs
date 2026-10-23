@@ -25,11 +25,60 @@ const HEALTH_LIMIT: Duration = Duration::from_secs(180);
 const HEALTH_RETRY: Duration = Duration::from_secs(2);
 /// How many published releases are offered.
 const RELEASES: usize = 10;
+const API_IMAGE: &str = "ghcr.io/hipotures/homestack-server";
+const SITE_IMAGE: &str = "ghcr.io/hipotures/homestack-pangolin-site";
 const API_INIT_HOME: &str = "api-initialization-home ";
+const SITE_INIT_HOME: &str = "site-initialization-home ";
+/// The first Site image whose runtime selects `/home/app/pangolin-site`.
+const SITE_MANAGED: (u64, u64, u64) = (0, 1, 2);
 
 /// A non-secret PVE marker for unfinished initialization, never an instance registry.
-pub(super) fn api_initializing(description: &str) -> bool {
-    description.lines().any(|line| line.starts_with(API_INIT_HOME))
+pub(super) fn initializing(description: &str) -> bool {
+    description
+        .lines()
+        .any(|line| line.starts_with(API_INIT_HOME) || line.starts_with(SITE_INIT_HOME))
+}
+
+/// Initialization of a new managed Pangolin Site connector, with the
+/// Pangolin integration's verified context (Step 5 tunnel, Step 7 key and
+/// Step 8 credential journal) and root access for the credential only.
+/// Blocking; nothing here creates, replaces or destroys a container.
+pub trait SiteInit {
+    /// Read only: the Site CT `ctid` gets, or why it cannot; `home` is the
+    /// home volume of an existing CT whose initialization resumes.
+    fn review(&mut self, ctid: u32, home: Option<&str>) -> Result<String, String>;
+    /// Revalidate the context, then the journal, credential and Site, before
+    /// the container starts.
+    fn prepare(&mut self, node: &str, ctid: u32, home: &str, say: &dyn Fn(&str)) -> Result<(), String>;
+    /// Install the credential into the running container's persistent home.
+    fn install(&mut self, node: &str, ctid: u32, say: &dyn Fn(&str)) -> Result<(), String>;
+    /// Wait until exactly this Site is online; the journal records it.
+    fn online(&mut self, ctid: u32, say: &dyn Fn(&str)) -> Result<String, String>;
+}
+
+/// A managed Site's readiness: an outbound connector has no inbound health
+/// endpoint, so its own Pangolin Site must be online. Blocking.
+pub trait SiteReady: Sync {
+    /// Read only: CT `ctid` is a completed managed Site of the verified organization.
+    fn identity(&self, ctid: u32) -> Result<String, String>;
+    /// Wait until its Site is online.
+    fn ready(&self, ctid: u32, say: &dyn Fn(&str)) -> Result<String, String>;
+}
+
+/// The service's readiness after a start: its own Site online for a Pangolin
+/// Site connector, else the manifest's health check.
+pub(super) async fn ready(
+    source: &Source,
+    site: Option<&dyn SiteReady>,
+    ctid: u32,
+    address: &str,
+    say: &(dyn Fn(&str) + Send + Sync),
+) -> Result<String, String> {
+    if source.is_site() {
+        let site = site.ok_or("Site readiness requires the verified Pangolin context")?;
+        return tokio::task::block_in_place(|| site.ready(ctid, say));
+    }
+    healthy(&source.manifest, address).await
 }
 
 /// The manifest revision a deployment is made from.
@@ -47,26 +96,44 @@ impl Source {
     /// Refuse unsupported internal initializers before any creation.
     pub fn initialization_blocker(&self) -> Option<&'static str> {
         match self.manifest.image_repository.as_str() {
-            "ghcr.io/hipotures/homestack-server"
+            API_IMAGE
                 if self.repository != "hipotures/homestack"
                     || self.manifest.id != "homestack-api"
                     || self.path != ".homestack/homestack-api.yaml" =>
             {
                 Some("API initialization requires the canonical HomeStack API manifest from hipotures/homestack.")
             }
-            "ghcr.io/hipotures/homestack-pangolin-site" => Some(
-                "New managed Site installation is blocked: the common deployment flow has no Step 8 initializer \
-                 carrying the verified Step 7 organization key, private per-node credential journal and \
-                 authenticated root channel. Credential installation and Pangolin online verification must \
-                 complete before success. See docs/internal-services.md.",
-            ),
+            SITE_IMAGE
+                if self.repository != "hipotures/homestack"
+                    || self.manifest.id != "pangolin-site"
+                    || self.path != ".homestack/pangolin-site.yaml" =>
+            {
+                Some("Site initialization requires the canonical Pangolin Site manifest from hipotures/homestack.")
+            }
             _ => None,
         }
     }
 
     #[must_use]
     pub fn is_api(&self) -> bool {
-        self.manifest.image_repository == "ghcr.io/hipotures/homestack-server"
+        self.manifest.image_repository == API_IMAGE
+    }
+
+    /// The Pangolin Site connector, whose readiness is its own Site online.
+    #[must_use]
+    pub fn is_site(&self) -> bool {
+        self.manifest.image_repository == SITE_IMAGE
+    }
+
+    /// The PVE marker of an unfinished initialization of this service.
+    fn marker(&self) -> Option<&'static str> {
+        if self.is_api() {
+            Some(API_INIT_HOME)
+        } else if self.is_site() {
+            Some(SITE_INIT_HOME)
+        } else {
+            None
+        }
     }
 
     /// `REGISTRY/PATH:VERSION` of the manifest's image.
@@ -169,6 +236,8 @@ pub struct Plan {
     /// The pool the containers join.
     pub pool: String,
     pub problems: Vec<String>,
+    /// What the Site initializer reviewed for each instance, in order.
+    pub sites: Vec<String>,
     // File paths and non-secret settings only; credentials are loaded at apply.
     api_config: Option<DeployConfig>,
 }
@@ -354,9 +423,17 @@ fn address(config: &DeployConfig, ctid: u32) -> Option<Ipv4Addr> {
     hs_model::address::address_of(ctid, &network)
 }
 
-/// Plan new instances or explicit recovery of an interrupted new API initialization.
+/// Plan new instances or explicit recovery of an interrupted new API or Site
+/// initialization. `site` is the Pangolin context a Site connector requires.
 #[allow(clippy::too_many_lines)]
-pub async fn plan(config: &DeployConfig, pve: &impl Pve, source: &Source, cluster: &Cluster, choice: &Choice) -> Plan {
+pub async fn plan(
+    config: &DeployConfig,
+    pve: &impl Pve,
+    source: &Source,
+    cluster: &Cluster,
+    choice: &Choice,
+    mut site: Option<&mut dyn SiteInit>,
+) -> Plan {
     let manifest = &source.manifest;
     let mut plan = Plan {
         image: source.image(&choice.version),
@@ -406,6 +483,20 @@ pub async fn plan(config: &DeployConfig, pve: &impl Pve, source: &Source, cluste
         }
         if !choice.environment.trim().is_empty() {
             problems.push("API environment is supplied by authenticated bootstrap; leave Environment empty".to_owned());
+        }
+    }
+    if source.is_site() {
+        if choice.placements.len() > 1 {
+            problems.push("Deploy one Site connector at a time; each gets its own Site and credential".to_owned());
+        }
+        if hs_core::registry::version(&choice.version).is_none_or(|version| version < SITE_MANAGED) {
+            problems.push("Managed Site deployment requires Site image 0.1.2 or later".to_owned());
+        }
+        if !choice.environment.trim().is_empty() {
+            problems.push("The Site runtime selector is set by initialization; leave Environment empty".to_owned());
+        }
+        if site.is_none() {
+            problems.push("The verified Pangolin context (Step 5 tunnel, Step 7 key) is not open".to_owned());
         }
     }
     if choice.placements.is_empty() {
@@ -524,7 +615,7 @@ pub async fn plan(config: &DeployConfig, pve: &impl Pve, source: &Source, cluste
         };
         match free(pve, ctid).await {
             Ok(true) => {}
-            Ok(false) if source.is_api() => {
+            Ok(false) if source.marker().is_some() => {
                 match resumable(
                     pve,
                     source,
@@ -555,6 +646,13 @@ pub async fn plan(config: &DeployConfig, pve: &impl Pve, source: &Source, cluste
         if let Some(bootstrap) = &bootstrap {
             match instance.api_spec().and_then(|spec| bootstrap.validate_instance(&spec)) {
                 Ok(()) => {}
+                Err(error) => problems.push(error),
+            }
+        }
+        if let Some(site) = site.as_deref_mut() {
+            let home = instance.resume.as_ref().map(|resume| home_volume(&resume.home_mount));
+            match site.review(ctid, home) {
+                Ok(line) => plan.sites.push(line),
                 Err(error) => problems.push(error),
             }
         }
@@ -678,6 +776,11 @@ fn volume(option: &str) -> (&str, Vec<(&str, &str)>) {
     (volid, options)
 }
 
+/// The volume of a mount option, without its size or options.
+fn home_volume(mount: &str) -> &str {
+    mount.split(',').next().unwrap_or_default()
+}
+
 /// Check what Proxmox made: the root disk and the home volume on the
 /// chosen storages, the home mounted at `/home/app`, unprivileged; the
 /// volume IDs and the MAC address.
@@ -731,8 +834,17 @@ async fn set_description(pve: &impl Pve, instance: &NewInstance, cfg: &Value, de
         ],
     )
     .await
-    .map_err(|_| format!("CT {}: cannot record API initialization state", instance.ctid))?;
+    .map_err(|_| format!("CT {}: cannot record initialization state", instance.ctid))?;
     Ok(())
+}
+
+/// `description` without the initialization marker `marker`.
+fn without(description: &str, marker: &str) -> String {
+    description
+        .lines()
+        .filter(|line| !line.starts_with(marker))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn check_resume(instance: &NewInstance, cfg: &Value, expected: &Resume) -> Result<(), String> {
@@ -752,8 +864,8 @@ fn check_resume(instance: &NewInstance, cfg: &Value, expected: &Resume) -> Resul
     Ok(())
 }
 
-/// Only the operator's explicit CTID can resume a matching unfinished API.
-/// Legacy APIs and completed common services never satisfy this predicate.
+/// Only the operator's explicit CTID can resume a matching unfinished API or
+/// Site. Legacy containers and completed common services never satisfy this.
 async fn resumable(
     pve: &impl Pve,
     source: &Source,
@@ -763,9 +875,10 @@ async fn resumable(
     instance: &NewInstance,
 ) -> Result<(String, Resume), String> {
     let ctid = instance.ctid;
+    let kind = source.marker().ok_or("This service has no initialization to resume")?;
     let found = node::container(pve, ctid)
         .await?
-        .ok_or("API initialization container disappeared")?;
+        .ok_or("Initialization container disappeared")?;
     if found.node != instance.node || found.pool != pool {
         return Err(format!(
             "CT {ctid}: node or pool differs; it is not eligible for initialization recovery"
@@ -776,20 +889,26 @@ async fn resumable(
         .await
         .map_err(|_| format!("CT {ctid}: cannot inspect initialization"))?;
     let desc = cfg["description"].as_str().unwrap_or_default();
-    let base = desc
-        .lines()
-        .filter(|line| !line.starts_with(API_INIT_HOME))
-        .collect::<Vec<_>>()
-        .join("\n");
-    if base != description(source, image, digest) || cfg.get("lock").is_some() {
-        return Err(format!("CT {ctid}: not a matching unfinished common API deployment"));
+    if without(desc, kind) != description(source, image, digest) || cfg.get("lock").is_some() {
+        return Err(format!("CT {ctid}: not a matching unfinished common deployment"));
     }
     let current = super::instance::parse(ctid, &instance.node, pool, &cfg, found.status == "running")?;
     let (root, _, _) = verify(instance, &cfg)?;
-    let home_mount = cfg["mp0"].as_str().ok_or("API home is missing")?;
-    let marker = desc.lines().find_map(|line| line.strip_prefix(API_INIT_HOME));
+    let home_mount = cfg["mp0"].as_str().ok_or("Home is missing")?;
+    let marker = desc.lines().find_map(|line| line.strip_prefix(kind));
     let pristine =
         found.status == "stopped" && !current.environment.iter().any(|(key, _)| key.starts_with("HOMESTACK_"));
+    // A Site has nothing in its environment but the runtime selector.
+    let foreign = source.is_site()
+        && current
+            .environment
+            .iter()
+            .any(|(key, value)| key != "PATH" && (key != "HOMESTACK_MANAGED_HOME" || value != "1"));
+    if foreign {
+        return Err(format!(
+            "CT {ctid}: unexpected environment; Site initialization recovery refused"
+        ));
+    }
     if marker.is_some_and(|original| original != home_mount)
         || (marker.is_none() && !pristine)
         || current.address != instance.address
@@ -815,21 +934,66 @@ async fn resumable(
     ))
 }
 
+/// A created Site container: the managed runtime selector before its first
+/// start, then its own Site and credential, the start, the credential in its
+/// home and the Site online. What showed it online.
+async fn initialize_site(
+    pve: &impl Pve,
+    site: &mut dyn SiteInit,
+    instance: &NewInstance,
+    home: &str,
+    say: &(dyn Fn(&str) + Send + Sync),
+) -> Result<String, String> {
+    let (node, ctid) = (instance.node.as_str(), instance.ctid);
+    let cfg = pve
+        .get(&format!("/nodes/{node}/lxc/{ctid}/config"), &[])
+        .await
+        .map_err(|_| "cannot read the container configuration")?;
+    let selector = ("HOMESTACK_MANAGED_HOME".to_owned(), "1".to_owned());
+    let env = node::parse_env(cfg["env"].as_str().unwrap_or_default());
+    if env.iter().any(|entry| entry.0 != "PATH" && *entry != selector) {
+        return Err("unexpected container environment; nothing is changed".to_owned());
+    }
+    if !env.contains(&selector) {
+        if pve_status(pve, node, ctid).await? != "stopped" {
+            return Err("the container runs without the managed runtime selector".to_owned());
+        }
+        node::set_env(pve, node, ctid, std::slice::from_ref(&selector), &[]).await?;
+        say("  managed runtime selector set before the first start");
+    }
+    tokio::task::block_in_place(|| site.prepare(node, ctid, home_volume(home), say))?;
+    if pve_status(pve, node, ctid).await? != "running" {
+        say(&format!("  starting CT {ctid}"));
+        node::power(pve, node, ctid, "start").await?;
+    }
+    tokio::task::block_in_place(|| site.install(node, ctid, say))?;
+    tokio::task::block_in_place(|| site.online(ctid, say))
+}
+
+async fn pve_status(pve: &impl Pve, node: &str, ctid: u32) -> Result<String, String> {
+    let power = pve
+        .get(&format!("/nodes/{node}/lxc/{ctid}/status/current"), &[])
+        .await
+        .map_err(|_| format!("CT {ctid}: cannot read its power state"))?;
+    Ok(power["status"].as_str().unwrap_or_default().to_owned())
+}
+
 /// Apply a reviewed plan, one instance at a time; it stops at the first
 /// failure. Whether every instance is ready, and what was done.
 pub async fn apply(
     pve: &impl Pve,
     source: &Source,
     plan: &Plan,
+    site: Option<&mut dyn SiteInit>,
     say: &(dyn Fn(&str) + Send + Sync),
 ) -> (bool, Vec<String>) {
     let mut lines = Vec::new();
-    match run(pve, source, plan, say, &mut lines).await {
+    match run(pve, source, plan, site, say, &mut lines).await {
         Ok(()) => (true, lines),
         Err(error) => {
             lines.push(error);
-            lines.push(if source.is_api() {
-                "Nothing was removed. For an interrupted API initialization, review deployment again with the same \
+            lines.push(if source.marker().is_some() {
+                "Nothing was removed. For an interrupted initialization, review deployment again with the same \
                  CTID, version, node and sizes to resume using its existing home. Do not remove or replace it."
                     .to_owned()
             } else {
@@ -846,6 +1010,7 @@ async fn run(
     pve: &impl Pve,
     source: &Source,
     plan: &Plan,
+    mut site: Option<&mut dyn SiteInit>,
     say: &(dyn Fn(&str) + Send + Sync),
     lines: &mut Vec<String>,
 ) -> Result<(), String> {
@@ -856,13 +1021,37 @@ async fn run(
         return Err("The plan has problems; review it again".to_owned());
     }
     let resolved = plan.resolved.as_ref().ok_or("The release was not resolved")?;
+    let version = plan
+        .image
+        .rsplit_once(':')
+        .map(|(_, version)| version)
+        .unwrap_or_default();
+    if source.is_site() {
+        if plan.instances.len() != 1
+            || plan.sites.len() != 1
+            || source.image(version) != plan.image
+            || hs_core::registry::version(version).is_none_or(|version| version < SITE_MANAGED)
+            || !plan.environment.is_empty()
+        {
+            return Err("Review one Site connector with a managed-runtime image release".to_owned());
+        }
+        let site = site
+            .as_deref_mut()
+            .ok_or("The verified Pangolin context is not open; review again")?;
+        // The Pangolin context, key and Site state are verified again before anything is made.
+        for (instance, reviewed) in plan.instances.iter().zip(&plan.sites) {
+            let home = instance.resume.as_ref().map(|resume| home_volume(&resume.home_mount));
+            if site.review(instance.ctid, home)? != *reviewed {
+                return Err("Pangolin Site state changed since review; review again".to_owned());
+            }
+        }
+        let current = hs_core::registry::resolve(&plan.image).await?;
+        if current.digest != resolved.digest || current.platform != resolved.platform {
+            return Err("Site image changed since review; review again".to_owned());
+        }
+    }
     let bootstrap = if source.is_api() {
         let config = plan.api_config.as_ref().ok_or("API initialization was not reviewed")?;
-        let version = plan
-            .image
-            .rsplit_once(':')
-            .map(|(_, version)| version)
-            .unwrap_or_default();
         if plan.instances.len() != 1
             || source.image(version) != plan.image
             || hs_core::registry::version(version).is_none_or(|version| version < (0, 2, 10))
@@ -934,8 +1123,8 @@ async fn run(
             memory_mib: instance.memory_mib,
             cores: instance.cores,
             net0: Some(net0(&instance.address)),
-            // A host reboot must not start an API before its managed selector is installed.
-            onboot: !source.is_api(),
+            // A host reboot must not start an API or Site before its initialization completes.
+            onboot: source.marker().is_none(),
             nameserver: plan.nameserver.clone(),
             description: text.clone(),
             tag: Some(node::SERVER_TAG),
@@ -956,32 +1145,35 @@ async fn run(
             .map_err(|e| format!("CT {ctid} config: {e}"))?;
         let (root, home, mac) = verify(instance, &current)?;
         say(&format!("  root {root}, home {home} at {MOUNT}, MAC {mac}"));
-        if let Some(bootstrap) = &bootstrap {
+        if let Some(marker) = source.marker() {
             if let Some(expected) = &instance.resume {
                 check_resume(instance, &current, expected)?;
             } else if current["description"].as_str().map(str::trim_end) != Some(text.trim_end()) {
                 return Err(format!("CT {ctid}: common ownership changed; initialization stopped"));
             }
-            let original_mount = current["mp0"].as_str().ok_or("API home is missing")?;
-            let base = current["description"]
-                .as_str()
-                .ok_or("API ownership is missing")?
-                .lines()
-                .filter(|line| !line.starts_with(API_INIT_HOME))
-                .collect::<Vec<_>>()
-                .join("\n");
-            let pending = format!("{base}\n{API_INIT_HOME}{original_mount}");
+            let original_mount = current["mp0"].as_str().ok_or("Home is missing")?;
+            let base = without(current["description"].as_str().ok_or("Ownership is missing")?, marker);
+            let pending = format!("{base}\n{marker}{original_mount}");
             if current["description"].as_str().map(str::trim_end) != Some(pending.trim_end()) {
                 set_description(pve, instance, &current, &pending).await?;
             }
-            let initialize = bootstrap
-                .initialize(pve, &instance.api_spec()?, true, &|line| say(line))
-                .await;
-            initialize.map_err(|error| format!("CT {ctid}: API initialization failed: {error}"))?;
+            let done = if let Some(bootstrap) = &bootstrap {
+                let initialize = bootstrap
+                    .initialize(pve, &instance.api_spec()?, true, &|line| say(line))
+                    .await;
+                initialize.map_err(|error| format!("CT {ctid}: API initialization failed: {error}"))?;
+                "authenticated HTTPS, stored configuration and PVE credentials verified after reboot".to_owned()
+            } else {
+                let site = site.as_deref_mut().ok_or("The verified Pangolin context is not open")?;
+                let online = initialize_site(pve, site, instance, original_mount, say)
+                    .await
+                    .map_err(|error| format!("CT {ctid}: Site initialization failed: {error}"))?;
+                format!("{online}; its credential in {MOUNT}/pangolin-site verified")
+            };
             let after = pve
                 .get(&format!("/nodes/{node}/lxc/{ctid}/config"), &[])
                 .await
-                .map_err(|_| "API initialization: cannot verify final container configuration")?;
+                .map_err(|_| "Initialization: cannot verify final container configuration")?;
             let expected = Resume {
                 home_mount: original_mount.to_owned(),
                 root: root.clone(),
@@ -992,9 +1184,9 @@ async fn run(
             let power = pve
                 .get(&format!("/nodes/{node}/lxc/{ctid}/status/current"), &[])
                 .await
-                .map_err(|_| "API initialization: cannot verify final power state")?;
+                .map_err(|_| "Initialization: cannot verify final power state")?;
             if power["status"] != "running" {
-                return Err(format!("CT {ctid}: API is not running"));
+                return Err(format!("CT {ctid} is not running"));
             }
             let env = node::parse_env(after["env"].as_str().unwrap_or_default());
             if !env.contains(&("HOMESTACK_MANAGED_HOME".to_owned(), "1".to_owned()))
@@ -1002,7 +1194,7 @@ async fn run(
                     .iter()
                     .any(|(key, _)| key == "HOMESTACK_TLS_CERT_B64" || key == "HOMESTACK_TLS_KEY_B64")
             {
-                return Err(format!("CT {ctid}: API runtime or TLS cleanup verification failed"));
+                return Err(format!("CT {ctid}: managed runtime or TLS cleanup verification failed"));
             }
             pve.put(
                 &format!("/nodes/{node}/lxc/{ctid}/config"),
@@ -1018,8 +1210,11 @@ async fn run(
                 ],
             )
             .await
-            .map_err(|_| format!("CT {ctid}: cannot finish API initialization metadata"))?;
-            lines.push(format!("{node}: CT {ctid} {} at {} initialized; authenticated HTTPS, stored configuration and PVE credentials verified after reboot", instance.hostname, instance.address));
+            .map_err(|_| format!("CT {ctid}: cannot finish initialization metadata"))?;
+            lines.push(format!(
+                "{node}: CT {ctid} {} at {} initialized; {done}; autostart enabled",
+                instance.hostname, instance.address
+            ));
             continue;
         }
         // The console opens a root shell; an image has no getty to log in.

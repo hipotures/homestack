@@ -8,6 +8,7 @@
 //! line, the environment, a description or a log.
 
 pub mod images;
+pub mod managed;
 
 use std::collections::BTreeSet;
 use std::io::Read;
@@ -127,8 +128,8 @@ impl Summary {
     }
 }
 
-/// The non-secret journal of one node's Site; its credential is the
-/// `ID.secret` file next to it.
+/// The non-secret journal of one Site (one node's, or one managed
+/// instance's); its credential is the `ID.secret` file next to it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SiteRecord {
@@ -141,15 +142,22 @@ struct SiteRecord {
     ctid: Option<u32>,
     stage: SiteStage,
     at: String,
+    /// A managed instance's home volume, recorded before Pangolin is asked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    home: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 enum SiteStage {
     /// The credential is saved; Pangolin has not been asked.
     Prepared,
     /// Creation was sent; its outcome may be unknown.
     CreationRequested,
     Created,
+    /// Managed instances only: the credential is in the container's home.
+    Installed,
+    /// Managed instances only: Pangolin reported the Site online.
+    Online,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -270,7 +278,9 @@ fn api_key(ctx: &Context) -> Result<Credential, String> {
     if record.stage != Stage::Complete
         || record.target != ctx.target
         || record.organization != ctx.organization
+        || record.name != "homestack"
         || !record.credential_saved
+        || !record.actions_verified
     {
         return Err(missing.to_owned());
     }
@@ -279,6 +289,30 @@ fn api_key(ctx: &Context) -> Result<Credential, String> {
         return Err("The saved HomeStack API key does not match its Step 7 record. Refresh Step 7.".to_owned());
     }
     Ok(key)
+}
+
+/// The key reads exactly the expected organization (getOrg).
+fn organization(ctx: &Context, key: &Credential) -> Result<(), String> {
+    let stop = AtomicBool::new(false);
+    match api(client(&ctx.endpoint, key, &stop).get(&format!("/v1/org/{}", ctx.organization), Probe::Organization))? {
+        (200, Some(data))
+            if data
+                .get("org")
+                .and_then(|o| o.get("orgId"))
+                .and_then(serde_json::Value::as_str)
+                == Some(ctx.organization.as_str()) =>
+        {
+            Ok(())
+        }
+        _ => Err("The HomeStack API key cannot confirm the organization. Refresh Step 7.".to_owned()),
+    }
+}
+
+/// Whether Site `site_id` is listed online (listSites).
+fn online(endpoint: &Endpoint, key: &Credential, organization: &str, site_id: u64) -> Result<bool, String> {
+    Ok(sites(endpoint, key, organization)?
+        .iter()
+        .any(|row| row.site_id == site_id && row.online == Some(true)))
 }
 
 /// One Site of the organization, as listed.
@@ -450,9 +484,16 @@ fn on_node(access: &Access, node: &str, command: &str) -> Result<String, String>
     Ok(hs_install::node_command(&local, target, command))
 }
 
+/// The receiver inside `ctid`; a managed instance's selects its persistent
+/// home explicitly, since `pct exec` does not inherit PID 1's environment.
+fn tool(ctid: u32, managed: bool) -> String {
+    let selector = if managed { "env HOMESTACK_MANAGED_HOME=1 " } else { "" };
+    format!("pct exec {ctid} -- {selector}{TOOL}")
+}
+
 /// The SHA-256 of the configuration installed in `ctid`, or `missing`.
-fn installed(root: &mut dyn Root, access: &Access, node: &str, ctid: u32) -> Result<String, String> {
-    let command = on_node(access, node, &format!("pct exec {ctid} -- {TOOL} --digest"))?;
+fn installed(root: &mut dyn Root, access: &Access, node: &str, ctid: u32, managed: bool) -> Result<String, String> {
+    let command = on_node(access, node, &format!("{} --digest", tool(ctid, managed)))?;
     let output = root.run(&command).map_err(|e| e.to_string())?;
     let value = output.stdout.trim();
     if output.code != 0 || !(value == "missing" || (value.len() == 64 && value.bytes().all(|b| b.is_ascii_hexdigit())))
@@ -777,16 +818,7 @@ async fn survey_plan(
         return Err("The Step 5 API tunnel is not connected. Reconnect it, then review again.".to_owned());
     }
     let key = api_key(ctx)?;
-    let stop = AtomicBool::new(false);
-    match api(client(&ctx.endpoint, &key, &stop).get(&format!("/v1/org/{}", ctx.organization), Probe::Organization))? {
-        (200, Some(data))
-            if data
-                .get("org")
-                .and_then(|o| o.get("orgId"))
-                .and_then(serde_json::Value::as_str)
-                == Some(ctx.organization.as_str()) => {}
-        _ => return Err("The HomeStack API key cannot confirm the organization. Refresh Step 7.".to_owned()),
-    }
+    organization(ctx, &key)?;
     let listed = sites(&ctx.endpoint, &key, &ctx.organization)?;
     let (config, pve) = deployment(setup)?;
     let (guests, stores) = cluster(root)?;
@@ -880,29 +912,7 @@ async fn node_plan(
         None
     };
     let ours = credential.as_ref().and_then(|c| c.key_id().ok().map(str::to_owned));
-    let step = match (&record, &remote) {
-        (_, Some((id, newt))) if ours.as_deref() == Some(newt.as_str()) => match record.as_ref().map(|r| r.stage) {
-            Some(SiteStage::Created) if record.as_ref().and_then(|r| r.site_id) == Some(*id) => SiteStep::Reuse(*id),
-            _ => SiteStep::Adopt(*id),
-        },
-        (_, Some(_)) if ours.is_none() => {
-            return Err(format!(
-                "Site {nice} exists, but its credential is not on this desktop. HomeStack never duplicates or rotates it; rotation is a separate operation"
-            ));
-        }
-        (_, Some(_)) => {
-            return Err(format!(
-                "Site {nice} exists with another Newt ID than the saved credential; nothing is changed"
-            ));
-        }
-        (Some(record), None) if record.stage == SiteStage::Created => {
-            return Err(format!(
-                "Site {nice} (id {}) was created by HomeStack but is gone from Pangolin; inspect it before deploying again",
-                record.site_id.unwrap_or_default()
-            ));
-        }
-        (_, None) => SiteStep::Create,
-    };
+    let step = site_step(record.as_ref(), remote.as_ref(), ours.as_deref(), &nice)?;
     // The container: the one the journal names, or one tagged and named
     // for this node; never a guest whose ownership is not established.
     let host = hostname(name);
@@ -971,7 +981,7 @@ async fn node_plan(
             let installed = match (&step, &credential) {
                 (CtStep::Keep, Some(credential)) => {
                     let expected = digest(&configuration(&choice.url, credential)?);
-                    installed(root, access, name, guest.vmid)? == expected
+                    installed(root, access, name, guest.vmid, false)? == expected
                 }
                 _ => false,
             };
@@ -1013,6 +1023,35 @@ async fn node_plan(
         pull,
         installed,
     })
+}
+
+/// The Site's step from its journal, the saved credential's Newt ID and
+/// Pangolin's own Site of that nice ID: nothing else is ever adopted.
+fn site_step(
+    record: Option<&SiteRecord>,
+    remote: Option<&(u64, String)>,
+    ours: Option<&str>,
+    nice: &str,
+) -> Result<SiteStep, String> {
+    match (record, remote) {
+        (_, Some((id, newt))) if ours == Some(newt.as_str()) => match record {
+            Some(record) if record.stage >= SiteStage::Created && record.site_id == Some(*id) => {
+                Ok(SiteStep::Reuse(*id))
+            }
+            _ => Ok(SiteStep::Adopt(*id)),
+        },
+        (_, Some(_)) if ours.is_none() => Err(format!(
+            "Site {nice} exists, but its credential is not on this desktop. HomeStack never duplicates or rotates it; rotation is a separate operation"
+        )),
+        (_, Some(_)) => Err(format!(
+            "Site {nice} exists with another Newt ID than the saved credential; nothing is changed"
+        )),
+        (Some(record), None) if record.stage >= SiteStage::Created => Err(format!(
+            "Site {nice} (id {}) was created by HomeStack but is gone from Pangolin; inspect it before deploying again",
+            record.site_id.unwrap_or_default()
+        )),
+        (_, None) => Ok(SiteStep::Create),
+    }
 }
 
 /// The review: what happens on each node, and what is left as it is.
@@ -1143,43 +1182,23 @@ async fn deploy_node(
     let path = ctx.site_key(&n.node);
     // Held for the whole node: no other HomeStack run touches this Site.
     let storage = Storage::open(&path)?;
-    let mut record: SiteRecord = match storage.load()? {
-        Some(record) => record,
-        None => {
-            // The credential is generated and saved before Pangolin hears of
-            // it; one saved without its journal is kept, never replaced.
-            let credential = if storage.has_credential() || storage.has_pending() {
-                storage.recover_credential(&path)?
-            } else {
-                let mut credential = Credential::default();
-                credential.insert(&random(15)?);
-                credential.insert(".");
-                credential.insert(&random(48)?);
-                storage.release()?;
-                storage.reserve()?;
-                storage.persist(&credential)?;
-                say("  new Site credential saved on this desktop");
-                credential
-            };
-            let record = SiteRecord {
-                target: ctx.target.clone(),
-                organization: ctx.organization.clone(),
-                node: n.node.clone(),
-                site: n.site.clone(),
-                newt_id: credential.key_id().map_err(|_| "Invalid Site credential.")?.to_owned(),
-                site_id: None,
-                ctid: None,
-                stage: SiteStage::Prepared,
-                at: stamp(),
-            };
-            storage.save(&record)?;
-            record
-        }
-    };
-    let credential = storage.recover_credential(&path)?;
-    if credential.key_id().ok() != Some(record.newt_id.as_str()) {
-        return Err("the saved Site credential does not match its journal; nothing is changed".to_owned());
-    }
+    let (mut record, credential) = journal(
+        &storage,
+        &path,
+        |newt_id| SiteRecord {
+            target: ctx.target.clone(),
+            organization: ctx.organization.clone(),
+            node: n.node.clone(),
+            site: n.site.clone(),
+            newt_id,
+            site_id: None,
+            ctid: None,
+            stage: SiteStage::Prepared,
+            at: stamp(),
+            home: None,
+        },
+        say,
+    )?;
     let site_id = match n.step {
         SiteStep::Reuse(id) => id,
         SiteStep::Adopt(id) => id,
@@ -1232,38 +1251,89 @@ async fn deploy_node(
         node::power(pve, name, n.ctid, "start").await?;
     }
     let content = configuration(&plan.url, &credential)?;
-    let expected = digest(&content);
-    // The container's runtime may need a moment before it can be entered.
-    let mut current = Err(String::new());
-    for _ in 0..15 {
-        current = installed(root, access, name, n.ctid);
-        if current.is_ok() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_secs(2)).await;
-    }
-    if current? != expected {
-        say("  installing the Site credential over the root session's standard input");
-        let command = on_node(access, name, &format!("pct exec {} -- {TOOL}", n.ctid))?;
-        let output = root.run_input(&command, &content).map_err(|e| e.to_string())?;
-        if output.code != 0 {
-            return Err(format!("CT {}: the credential could not be installed", n.ctid));
-        }
-        if installed(root, access, name, n.ctid)? != expected {
-            return Err(format!("CT {}: the installed credential does not match", n.ctid));
-        }
+    if install(root, access, name, n.ctid, &content, false, say)? {
         say("  credential installed and verified by its digest");
-    } else if n.container == CtStep::Keep
-        && !sites(&ctx.endpoint, key, &ctx.organization)?
-            .iter()
-            .any(|row| row.site_id == site_id && row.online == Some(true))
-    {
+    } else if n.container == CtStep::Keep && !online(&ctx.endpoint, key, &ctx.organization, site_id)? {
         say("  credential installed, but the Site is offline: restarting the connector");
         node::power(pve, name, n.ctid, "reboot").await?;
     } else {
         say("  credential already installed");
     }
     Ok(site_id)
+}
+
+/// The journal at `path` and its credential; a new one is made with `fresh`
+/// (given the Newt ID) when there is none. The credential is generated and
+/// saved before Pangolin hears of it; one saved without its journal is kept,
+/// never replaced.
+fn journal(
+    storage: &Storage,
+    path: &Path,
+    fresh: impl FnOnce(String) -> SiteRecord,
+    say: &dyn Fn(&str),
+) -> Result<(SiteRecord, Credential), String> {
+    let record: SiteRecord = match storage.load()? {
+        Some(record) => record,
+        None => {
+            let credential = if storage.has_credential() || storage.has_pending() {
+                storage.recover_credential(path)?
+            } else {
+                let mut credential = Credential::default();
+                credential.insert(&random(15)?);
+                credential.insert(".");
+                credential.insert(&random(48)?);
+                storage.release()?;
+                storage.reserve()?;
+                storage.persist(&credential)?;
+                say("  new Site credential saved on this desktop");
+                credential
+            };
+            let record = fresh(credential.key_id().map_err(|_| "Invalid Site credential.")?.to_owned());
+            storage.save(&record)?;
+            record
+        }
+    };
+    let credential = storage.recover_credential(path)?;
+    if credential.key_id().ok() != Some(record.newt_id.as_str()) {
+        return Err("the saved Site credential does not match its journal; nothing is changed".to_owned());
+    }
+    Ok((record, credential))
+}
+
+/// Install `content` into `ctid` over the root session's standard input
+/// unless it is there already; verified by its digest. Whether it was written.
+fn install(
+    root: &mut dyn Root,
+    access: &Access,
+    node: &str,
+    ctid: u32,
+    content: &str,
+    managed: bool,
+    say: &dyn Fn(&str),
+) -> Result<bool, String> {
+    let expected = digest(content);
+    // The container's runtime may need a moment before it can be entered.
+    let mut current = Err(String::new());
+    for _ in 0..15 {
+        current = installed(root, access, node, ctid, managed);
+        if current.is_ok() {
+            break;
+        }
+        std::thread::sleep(Duration::from_secs(2));
+    }
+    if current? == expected {
+        return Ok(false);
+    }
+    say("  installing the Site credential over the root session's standard input");
+    let command = on_node(access, node, &tool(ctid, managed))?;
+    let output = root.run_input(&command, content).map_err(|e| e.to_string())?;
+    if output.code != 0 {
+        return Err(format!("CT {ctid}: the credential could not be installed"));
+    }
+    if installed(root, access, node, ctid, managed)? != expected {
+        return Err(format!("CT {ctid}: the installed credential does not match"));
+    }
+    Ok(true)
 }
 
 /// `PUT /v1/org/{orgId}/site` with the saved Newt ID and secret; the journal
@@ -1274,7 +1344,7 @@ fn create_site(
     storage: &Storage,
     record: &mut SiteRecord,
     credential: &Credential,
-    say: &impl Fn(&str),
+    say: &dyn Fn(&str),
 ) -> Result<u64, String> {
     let newt = credential.key_id().map_err(|_| "Invalid Site credential.")?.to_owned();
     if let Some((id, existing)) = site(&ctx.endpoint, key, &ctx.organization, &record.site)? {
@@ -1456,6 +1526,37 @@ impl super::pangolin::Wizard {
                 .and_then(|d| d.known("dashboard_url"))
                 .unwrap_or_default()
                 .to_owned(),
+            key: self.permanent_destination(),
+            identity: self.permanent_identity(),
+            summary: self.sites_path(),
+        })
+    }
+
+    /// The same server, organization, Step 7 key and dashboard URL from the
+    /// saved settings, for managed initialization outside this wizard; bound
+    /// to a tunnel the caller started and verified.
+    pub(super) fn managed_context(&self, endpoint: Endpoint) -> Result<Context, String> {
+        if !super::pangolin_key::valid_identifier(&self.bootstrap.organization) {
+            return Err("Pangolin Step 6 has no verified organization. Complete it first.".to_owned());
+        }
+        if !self.permanent_destination().is_file() {
+            return Err("Pangolin Step 7 has not saved the HomeStack organization key. Complete it first.".to_owned());
+        }
+        let url = self
+            .discovery
+            .as_ref()
+            .filter(|d| d.target == self.target)
+            .and_then(|d| d.known("dashboard_url"))
+            .unwrap_or_default();
+        if !valid_url(url) {
+            return Err("Pangolin Step 3 discovery has no valid HTTPS app.dashboard_url. Discover again.".to_owned());
+        }
+        Ok(Context {
+            image: String::new(),
+            endpoint,
+            target: self.target.clone(),
+            organization: self.bootstrap.organization.clone(),
+            url: url.to_owned(),
             key: self.permanent_destination(),
             identity: self.permanent_identity(),
             summary: self.sites_path(),
