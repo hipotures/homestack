@@ -192,7 +192,7 @@ ROLES_TARGET="HomeStack	Pool.Audit,VM.Allocate,VM.Audit,VM.Config.Cloudinit,VM.C
 HomeStackGold	Pool.Audit,VM.Audit,VM.Clone,VM.Config.Options,VM.GuestAgent.Audit,VM.GuestAgent.FileRead,VM.GuestAgent.Unrestricted,VM.PowerMgmt
 HomeStackCluster	Sys.Audit
 HomeStackStorage	Datastore.AllocateSpace,Datastore.Audit
-HomeStackDeploy	Pool.Audit,VM.Allocate,VM.Audit,VM.Config.CPU,VM.Config.Disk,VM.Config.Memory,VM.Config.Network,VM.Config.Options,VM.PowerMgmt
+HomeStackDeploy	Pool.Audit,VM.Allocate,VM.Audit,VM.Config.CPU,VM.Config.Disk,VM.Config.Memory,VM.Config.Network,VM.Config.Options,VM.Console,VM.PowerMgmt
 HomeStackDeployNodes	Sys.AccessNetwork
 HomeStackDeployTemplates	Datastore.AllocateSpace,Datastore.AllocateTemplate,Datastore.Audit"
 
