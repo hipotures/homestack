@@ -89,6 +89,8 @@ pub struct Setting {
     /// Checks a typed value (or a list's new entry) when Enter keeps it:
     /// an error keeps the box open and is shown in it.
     pub check: Option<Check>,
+    /// Shown for an empty text value: what an empty one means.
+    pub hint: Option<String>,
 }
 
 impl Setting {
@@ -96,6 +98,11 @@ impl Setting {
     #[must_use]
     pub fn value(&self) -> String {
         if let Some(text) = &self.text {
+            if text.is_empty()
+                && let Some(hint) = &self.hint
+            {
+                return hint.clone();
+            }
             return text.clone();
         }
         if self.list {
@@ -269,6 +276,8 @@ pub struct Install {
     pub removing: bool,
     /// Why the value in the open box was not kept.
     pub invalid: Option<String>,
+    /// The service a deployment is of.
+    pub subject: Option<String>,
     pub cursor: usize,
     /// The entry typed after `+` in a list's box.
     pub adding: Option<String>,
@@ -287,13 +296,13 @@ pub struct Install {
 }
 
 impl Install {
-    pub fn title(&self) -> &'static str {
+    pub fn title(&self) -> String {
         match self.mode {
-            Mode::Install if self.first_start => "HomeStack install: first setup",
-            Mode::Install => "HomeStack reinstall",
-            Mode::Uninstall => "HomeStack uninstall",
-            Mode::Sites => "Pangolin Site connectors",
-            Mode::Service => "Service",
+            Mode::Install if self.first_start => "HomeStack install: first setup".to_owned(),
+            Mode::Install => "HomeStack reinstall".to_owned(),
+            Mode::Uninstall => "HomeStack uninstall".to_owned(),
+            Mode::Sites => "Pangolin Site connectors".to_owned(),
+            Mode::Service => format!("Deploy {}", self.subject.as_deref().unwrap_or("service")),
         }
     }
     #[must_use]
@@ -326,6 +335,7 @@ impl Install {
             before: None,
             removing: false,
             invalid: None,
+            subject: None,
             adding: None,
             cursor: 0,
             sections: Vec::new(),

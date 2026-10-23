@@ -777,8 +777,9 @@ impl App {
     }
 
     /// The deployment of a service: its settings come from the cluster.
-    pub fn open_service_deploy(&mut self) {
+    pub fn open_service_deploy(&mut self, name: &str) {
         let mut install = super::install::Install::new(super::install::Mode::Service, false);
+        install.subject = Some(name.to_owned());
         install.stage = super::install::Stage::Settings;
         install.busy = Some("Reading the cluster and the published releases".to_owned());
         self.install = Some(install);

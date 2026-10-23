@@ -508,6 +508,7 @@ fn settings(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
         );
     }
     if !narrow
+        && install.mode != Mode::Service
         && rows.len() + 10 < usize::from(inner.height)
         && let Some(found) = &install.found
     {

@@ -499,7 +499,8 @@ pub async fn plan(
     }
     if source.is_api() {
         if choice.placements.len() > 1 {
-            problems.push("Deploy one independently configured API instance at a time".to_owned());
+            problems
+                .push("The HomeStack API is initialized one instance at a time: tick one node under Nodes".to_owned());
         }
         if hs_core::registry::version(&choice.version).is_none_or(|version| version < (0, 2, 10, 0)) {
             problems.push("Managed API deployment requires API image 0.2.10 or later".to_owned());
@@ -526,7 +527,10 @@ pub async fn plan(
         }
     }
     if manifest.persistence.is_none() {
-        problems.push("Deploying a service without a home volume is not supported yet".to_owned());
+        problems.push(format!(
+            "{} declares no home volume (its persistence is empty); deploying without one is not implemented yet, so nothing can be deployed from this manifest",
+            manifest.name
+        ));
     }
     if choice.placements.is_empty() {
         problems.push("Tick at least one node and storage".to_owned());

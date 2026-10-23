@@ -1355,7 +1355,7 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
                                         .map(|plan| Work::Execute(Box::new(plan))),
                                     Ask::Deploy => {
                                         if let Some(source) = app.setup.as_mut().and_then(|setup| setup.deploy_request.take()) {
-                                            app.open_service_deploy();
+                                            app.open_service_deploy(&source.manifest.name);
                                             installing.service = Some(source);
                                             let host = app.preferences.table.get("install_host").and_then(toml::Value::as_str).unwrap_or_default().to_owned();
                                             installing.send(

@@ -252,7 +252,12 @@ fn connect(
         (None, None)
     };
     let shown = instances.first().map(lifecycle::shown_environment).unwrap_or_default();
-    let mut settings = settings(source, &cluster, &instances, &shown, setup.offset);
+    // The CTIDs an empty New CTIDs gives, one per node at most.
+    let automatic = setup
+        .handle
+        .block_on(deploy::automatic(&config, &pve, cluster.nodes.len()))
+        .unwrap_or_default();
+    let mut settings = settings(source, &cluster, &instances, &automatic, &shown, setup.offset);
     settings.extend(service_pangolin::settings(source, catalog.as_ref()));
     if let Some((previous, answers)) = kept {
         restore(&mut settings, &previous, &answers);
@@ -277,7 +282,7 @@ fn connect(
 
 fn found(config: &DeployConfig, cluster: &Cluster, settings: &[Setting]) -> Found {
     Found {
-        root: format!("deploy token · PVE {}", cluster.version),
+        root: format!("PVE {}", cluster.version),
         check: vec![
             (
                 Mark::Ok,
@@ -318,6 +323,7 @@ fn setting(title: &str, note: &str, choices: Vec<(String, String)>, multiple: bo
     Setting {
         list: false,
         check: None,
+        hint: None,
         title: title.to_owned(),
         note: note.to_owned(),
         multiple,
@@ -329,7 +335,14 @@ fn setting(title: &str, note: &str, choices: Vec<(String, String)>, multiple: bo
 
 /// The settings: the instances (none ticked), then the values of the first
 /// instance, or the manifest's for a service not deployed yet.
-fn settings(source: &Source, cluster: &Cluster, instances: &[Instance], shown: &str, offset: i64) -> Vec<Setting> {
+fn settings(
+    source: &Source,
+    cluster: &Cluster,
+    instances: &[Instance],
+    automatic: &[u32],
+    shown: &str,
+    offset: i64,
+) -> Vec<Setting> {
     let manifest = &source.manifest;
     let first = instances.first();
     let releases: Vec<(String, String)> = cluster
@@ -480,6 +493,14 @@ fn settings(source: &Source, cluster: &Cluster, instances: &[Instance], shown: &
             None,
         )
     });
+    if let Some(ctids) = settings.iter_mut().find(|setting| setting.title == CTIDS) {
+        ctids.hint = Some(if automatic.is_empty() {
+            "auto: the first free".to_owned()
+        } else {
+            let shown: Vec<String> = automatic.iter().map(u32::to_string).collect();
+            format!("auto: {}", shown.join(", "))
+        });
+    }
     settings
 }
 
@@ -538,9 +559,9 @@ fn check_ctids(text: &str) -> Result<(), String> {
         .split(',')
         .map(str::trim)
         .filter(|ctid| !ctid.is_empty())
-        .any(|ctid| ctid.parse::<u32>().map_or(true, |ctid| ctid < 100));
+        .any(|ctid| ctid.parse::<u32>().map_or(true, |ctid| ctid < 1000));
     if wrong {
-        Err("Empty, or CTIDs of at least 100 separated by commas".to_owned())
+        Err("Empty for automatic CTIDs, or CTIDs from 1000 separated by commas; the CTID gives the address: 102010 is .102.10".to_owned())
     } else {
         Ok(())
     }
@@ -853,14 +874,18 @@ fn new_sections(
                 i.ctid
             ));
         }
+        let home = if i.home_mib > 0 {
+            format!(" + home {}", show_size(i.home_mib))
+        } else {
+            String::new()
+        };
         lines.push(format!(
-            "{}  CT {}  {}  {}  root {} + home {} on {}  {} CPU  {} MiB",
+            "{}  CT {}  {}  {}  root {}{home} on {}  {} CPU  {} MiB",
             i.node,
             i.ctid,
             i.hostname,
             i.address,
             show_size(i.root_mib),
-            show_size(i.home_mib),
             i.root_storage,
             i.cores,
             i.memory_mib
