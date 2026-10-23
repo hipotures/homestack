@@ -66,7 +66,11 @@ pub(super) fn screen(buf: &mut Buffer, area: Rect, app: &App, install: &Install)
         x,
         main.y,
         room.saturating_sub(x),
-        &format!("{} [{}]", install.title(), app.profile),
+        &if app.profile == hs_config::profiles::DEFAULT {
+            install.title()
+        } else {
+            format!("{} [{}]", install.title(), app.profile)
+        },
         title_style,
     );
     x += write(buf, x, main.y, room.saturating_sub(x), " ─", border);
