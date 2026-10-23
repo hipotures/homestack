@@ -1298,7 +1298,10 @@ async fn run(
         say(&format!("  root {root}, home {home}, MAC {mac}"));
         if let Some(dns) = dns {
             dns.set(&instance.fqdn, &instance.address).await?;
-            say(&format!("  {} → {} in the local DNS", instance.fqdn, instance.address));
+            say(&format!(
+                "  {} → {} verified in system DNS",
+                instance.fqdn, instance.address
+            ));
         }
         if let Some(marker) = source.marker() {
             if let Some(expected) = &instance.resume {

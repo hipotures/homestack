@@ -2,8 +2,10 @@
 //! A records, signed with the TSIG key set up under Integrations (Local
 //! DNS). Nothing else in the zone is touched.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::time::Duration;
 
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
@@ -136,10 +138,52 @@ impl Dns {
         ))
         .await?;
         if self.addresses(fqdn).await? == [address] {
-            Ok(())
+            Self::verify_local(fqdn, address).await
         } else {
             Err(format!("{fqdn} does not answer {address} after the update"))
         }
+    }
+
+    /// Refresh this name when resolvectl is installed, then verify the desktop's
+    /// normal resolver sees exactly the planned IPv4 address.
+    pub async fn verify_local(fqdn: &str, address: &str) -> Result<(), String> {
+        tokio::time::timeout(Duration::from_secs(15), async {
+            let refresh = Command::new("resolvectl")
+                .args(["query", "--cache=no", "--type=ANY", fqdn])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::piped())
+                .kill_on_drop(true)
+                .output()
+                .await;
+            match refresh {
+                Ok(output) if output.status.success() => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Ok(output) => {
+                    let reason = String::from_utf8_lossy(&output.stderr);
+                    return Err(format!(
+                        "DNS record updated, but refreshing {fqdn} on this desktop failed: {}",
+                        reason.lines().next().unwrap_or("no details")
+                    ));
+                }
+                Err(error) => return Err(format!("Cannot refresh system DNS for {fqdn}: {error}")),
+            }
+            let found: BTreeSet<String> = tokio::net::lookup_host((fqdn, 0))
+                .await
+                .map_err(|error| format!("System DNS cannot resolve {fqdn}: {error}"))?
+                .filter(|socket| socket.is_ipv4())
+                .map(|socket| socket.ip().to_string())
+                .collect();
+            if found.len() != 1 || !found.contains(address) {
+                return Err(format!(
+                    "System DNS for {fqdn} returns [{}]; expected {address}",
+                    found.into_iter().collect::<Vec<_>>().join(", ")
+                ));
+            }
+            Ok(())
+        })
+        .await
+        .map_err(|_| format!("System DNS verification for {fqdn} timed out after 15 s"))?
     }
 
     /// Remove the A records of `fqdn`.

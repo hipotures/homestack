@@ -34,6 +34,16 @@ Newt process is installed or started.
 
 ## API deployment
 
+After publishing a service's A record, deployment refreshes that name with
+`resolvectl query --cache=no --type=ANY` and verifies that the desktop's
+normal resolver returns the planned IPv4 address. The targeted refresh runs
+when `resolvectl` is installed; otherwise the system resolver is checked
+directly. No root access or system-wide cache flush is needed.
+The DNS refresh and verification have a shared 15-second deadline. After
+starting a new API container, bootstrap waits up to 15 seconds for its IP to
+answer `ping`, then checks authenticated HTTPS with its own 15-second limit.
+The desktop needs `ping`; ICMP reachability does not replace HTTPS readiness.
+
 The existing service browser and review/apply worker use
 `services/deploy.rs::{survey,plan,apply}` and the scoped PVE deploy token.
 They select the numeric OCI release, node/storage, CTID/address and resources,
