@@ -191,8 +191,6 @@ pub fn service_details(
         ),
         format!("Repository: {}", discovery.repository),
         format!("File: {}", file.path),
-        revision,
-        format!("Blob: {}", short(&file.blob)),
     ]
     .into_iter()
     .map(|line| (line, Tone::Plain))
@@ -205,6 +203,7 @@ pub fn service_details(
                 "Releases: {}",
                 releases
                     .iter()
+                    .take(3)
                     .map(|release| release.image.rsplit_once(':').map_or("", |(_, tag)| tag))
                     .collect::<Vec<_>>()
                     .join(", ")
@@ -252,6 +251,10 @@ pub fn service_details(
             Tone::Plain,
         ));
     }
+    // Where the manifest was read, for reference.
+    lines.push((String::new(), Tone::Plain));
+    lines.push((revision, Tone::Plain));
+    lines.push((format!("Blob: {}", short(&file.blob)), Tone::Plain));
     (lines, heads)
 }
 
