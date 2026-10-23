@@ -324,7 +324,7 @@ fn run(start: &Start, tell: &Tell, cancel: &Arc<AtomicBool>, commands: &Receiver
                 // The releases of each valid manifest's image, read only.
                 if let Ok(found) = found.as_mut() {
                     for file in &mut found.files {
-                        if let Ok(manifest) = &file.manifest {
+                        if let Some(manifest) = file.valid() {
                             let image = format!("{}:latest", manifest.image_repository);
                             file.releases = Some(start.handle.block_on(hs_core::registry::recent(&image, 10, &[])));
                         }

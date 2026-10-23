@@ -525,6 +525,9 @@ pub async fn plan(
             problems.push("The verified Pangolin context (Step 5 tunnel, Step 7 key) is not open".to_owned());
         }
     }
+    if manifest.persistence.is_none() {
+        problems.push("Deploying a service without a home volume is not supported yet".to_owned());
+    }
     if choice.placements.is_empty() {
         problems.push("Tick at least one node and storage".to_owned());
     }

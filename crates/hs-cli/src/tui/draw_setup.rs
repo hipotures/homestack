@@ -288,10 +288,14 @@ fn tree_stage(buf: &mut Buffer, inner: Rect, app: &App, setup: &SetupBox) {
     };
     let details = if setup.in_services() {
         draw_services(buf, tree_area, app, setup);
-        setup.service_detail_lines().join("\n")
+        setup.service_detail_lines()
     } else {
         draw_tree(buf, tree_area, app, setup);
-        setup.details(&setup.cursor)
+        setup
+            .details(&setup.cursor)
+            .lines()
+            .map(|line| (line.to_owned(), Tone::Plain))
+            .collect()
     };
     if details_area.height == 0 || details_area.width <= 2 {
         return;
@@ -498,24 +502,28 @@ fn draw_tree(buf: &mut Buffer, area: Rect, app: &App, setup: &SetupBox) {
     scrollbar(buf, bar, palette, Scrolls::SetupTree, offset, height, rows.len());
 }
 
-fn draw_details(buf: &mut Buffer, area: Rect, app: &App, setup: &SetupBox, details: &str) {
+fn draw_details(buf: &mut Buffer, area: Rect, app: &App, setup: &SetupBox, details: &[(String, Tone)]) {
     let palette = &app.palette;
     let text = text_style(palette);
     register(area, Hit::SetupDetails);
     let width = usize::from(area.width.saturating_sub(2));
-    let lines: Vec<String> = details.lines().flat_map(|line| wrap(line, width)).collect();
+    let lines: Vec<(String, Tone)> = details
+        .iter()
+        .flat_map(|(line, tone)| wrap(line, width).into_iter().map(move |line| (line, *tone)))
+        .collect();
     let height = usize::from(area.height);
     let scroll = setup.details_scroll.min(lines.len().saturating_sub(height));
-    let status = SetupBox::status_tone(details);
-    for (row, line) in lines.iter().skip(scroll).take(height).enumerate() {
+    let status = details.first().and_then(|(line, _)| SetupBox::status_tone(line));
+    for (row, (line, tone)) in lines.iter().skip(scroll).take(height).enumerate() {
         let y = area.y + u16::try_from(row).unwrap_or(0);
         let style = match status {
             Some(tone) if row + scroll == 0 => tone_style(palette, text, tone).add_modifier(Modifier::BOLD),
-            _ => text,
+            _ => tone_style(palette, text, *tone),
         };
         let used = write(buf, area.x + 1, y, area.width.saturating_sub(2), line, style);
         // `Label: value`: the label muted, so the values stand out.
         if row + scroll > 0
+            && *tone == Tone::Plain
             && let Some(at) = line.find(": ")
             && at <= 28
             && !line[..at].contains(['~', '/', '"'])

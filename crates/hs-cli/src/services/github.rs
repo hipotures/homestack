@@ -5,7 +5,7 @@
 use base64::Engine;
 use serde_json::Value;
 
-use super::manifest::{MAX_BYTES, Manifest, parse};
+use super::manifest::{Checked, MAX_BYTES, Manifest, parse};
 use crate::system::System;
 
 /// The most manifest files read from one repository.
@@ -23,16 +23,24 @@ pub struct Discovery {
     pub files: Vec<ManifestFile>,
 }
 
-/// One `.homestack/*.yaml` file: its manifest or why it is refused.
+/// One `.homestack/*.yaml` file: what was read of it, or why it is refused.
 #[derive(Debug, Clone)]
 pub struct ManifestFile {
     pub path: String,
     /// The Git blob: the manifest's revision.
     pub blob: String,
-    pub manifest: Result<Manifest, String>,
+    pub manifest: Result<Checked, String>,
     /// The published releases of its image, newest first; `None` until
     /// they are read.
     pub releases: Option<Result<Vec<hs_core::registry::Published>, String>>,
+}
+
+impl ManifestFile {
+    /// The manifest when the file has no issues.
+    #[must_use]
+    pub fn valid(&self) -> Option<&Manifest> {
+        self.manifest.as_ref().ok()?.manifest.as_ref()
+    }
 }
 
 impl Discovery {
@@ -40,7 +48,7 @@ impl Discovery {
     pub fn services(&self) -> impl Iterator<Item = (&ManifestFile, &Manifest)> {
         self.files
             .iter()
-            .filter_map(|file| file.manifest.as_ref().ok().map(|manifest| (file, manifest)))
+            .filter_map(|file| file.valid().map(|manifest| (file, manifest)))
     }
 }
 
@@ -161,12 +169,16 @@ pub fn discover(system: &dyn System, repository: &str, branch: Option<&str>) -> 
             releases: None,
         });
     }
-    let ids: Vec<String> = discovery.services().map(|(_, manifest)| manifest.id.clone()).collect();
+    let ids: Vec<String> = discovery
+        .files
+        .iter()
+        .filter_map(|file| file.manifest.as_ref().ok().map(|checked| checked.id.clone()))
+        .collect();
     for file in &mut discovery.files {
-        if let Ok(manifest) = &file.manifest
-            && ids.iter().filter(|id| **id == manifest.id).count() > 1
+        if let Ok(checked) = &file.manifest
+            && ids.iter().filter(|id| **id == checked.id).count() > 1
         {
-            file.manifest = Err(format!("id {} is declared by more than one file", manifest.id));
+            file.manifest = Err(format!("id {} is declared by more than one file", checked.id));
         }
     }
     Ok(discovery)

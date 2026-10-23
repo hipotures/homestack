@@ -9,9 +9,10 @@ use std::collections::{BTreeSet, HashMap};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use hs_model::status::StatusEntry;
 use serde_json::Value;
+use yaml_rust2::Yaml;
 
 use crate::services::github::{Discovery, ManifestFile};
-use crate::services::manifest::Healthcheck;
+use crate::services::manifest::{Checked, SECTIONS};
 use crate::setup::catalog::Catalog;
 use crate::setup::definitions::{ConfigFile, Entry, Params, app_file_entries, application_children, config_entry_id};
 use crate::setup::engine::truthy;
@@ -132,7 +133,14 @@ fn short(sha: &str) -> &str {
 #[must_use]
 pub fn service_row(file: &ManifestFile) -> (String, Tone) {
     match &file.manifest {
-        Ok(manifest) => (format!("{}  {}", manifest.id, manifest.name), Tone::Plain),
+        Ok(checked) => (
+            format!("{}  {}", checked.id, checked.name),
+            if checked.manifest.is_some() {
+                Tone::Plain
+            } else {
+                Tone::Red
+            },
+        ),
         Err(_) => (
             format!("{}  invalid", file.path.trim_start_matches(".homestack/")),
             Tone::Red,
@@ -140,96 +148,220 @@ pub fn service_row(file: &ManifestFile) -> (String, Tone) {
     }
 }
 
-/// What a manifest file declares, and its instances among the service
+/// What a manifest file declares, its YAML collapsed to the top-level
+/// sections unless `expanded`, and its instances among the service
 /// containers Proxmox lists (`services`).
 #[must_use]
-pub fn service_details(discovery: &Discovery, file: &ManifestFile, services: &[StatusEntry]) -> Vec<String> {
+pub fn service_details(
+    discovery: &Discovery,
+    file: &ManifestFile,
+    services: &[StatusEntry],
+    expanded: bool,
+) -> Vec<(String, Tone)> {
     let revision = format!("Revision: {} @ {}", discovery.branch, short(&discovery.commit));
-    let manifest = match &file.manifest {
-        Ok(manifest) => manifest,
+    let checked = match &file.manifest {
+        Ok(checked) => checked,
         Err(error) => {
             return vec![
-                "Invalid manifest".to_owned(),
-                format!("File: {}", file.path),
-                revision,
-                format!("Error: {error}"),
-                String::new(),
-                "No service is offered from this file; fix it in the repository.".to_owned(),
+                ("Invalid manifest".to_owned(), Tone::Red),
+                (format!("File: {}", file.path), Tone::Plain),
+                (revision, Tone::Plain),
+                (format!("Error: {error}"), Tone::Red),
+                (String::new(), Tone::Plain),
+                (
+                    "No service is offered from this file; fix it in the repository.".to_owned(),
+                    Tone::Plain,
+                ),
             ];
         }
     };
-    let mut lines = vec![
-        format!("{} ({})", manifest.name, manifest.id),
+    let mut lines: Vec<(String, Tone)> = [
+        format!("{} ({})", checked.name, checked.id),
         format!("Repository: {}", discovery.repository),
         format!("File: {}", file.path),
         revision,
         format!("Blob: {}", short(&file.blob)),
-        format!("Image: {}", manifest.image_repository),
-    ];
+    ]
+    .into_iter()
+    .map(|line| (line, Tone::Plain))
+    .collect();
     match &file.releases {
         None => {}
-        Some(Ok(releases)) if releases.is_empty() => lines.push("Releases: none published".to_owned()),
-        Some(Ok(releases)) => lines.push(format!(
-            "Releases: {}",
-            releases
-                .iter()
-                .map(|release| release.image.rsplit_once(':').map_or("", |(_, tag)| tag))
-                .collect::<Vec<_>>()
-                .join(", ")
+        Some(Ok(releases)) if releases.is_empty() => lines.push(("Releases: none published".to_owned(), Tone::Plain)),
+        Some(Ok(releases)) => lines.push((
+            format!(
+                "Releases: {}",
+                releases
+                    .iter()
+                    .map(|release| release.image.rsplit_once(':').map_or("", |(_, tag)| tag))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            Tone::Plain,
         )),
-        Some(Err(error)) => lines.push(format!("Releases: not read: {error}")),
+        Some(Err(error)) => lines.push((format!("Releases: not read: {error}"), Tone::Plain)),
     }
-    if manifest.ports.is_empty() {
-        lines.push("Ports: none".to_owned());
-    }
-    for port in &manifest.ports {
-        lines.push(format!("Port: {} {}/tcp", port.name, port.port));
-    }
-    lines.push(match &manifest.healthcheck {
-        Some(Healthcheck::Http {
-            port,
-            path,
-            expected_status,
-        }) => format!("Health: HTTP GET {path} on {port}, expects {expected_status}"),
-        Some(Healthcheck::Tcp { port }) => {
-            format!("Health: TCP connect to {port} (the port opens; not application health)")
-        }
-        None => "Health: unverified (no health check declared)".to_owned(),
-    });
-    lines.push(format!("Mount: {}", crate::services::manifest::MOUNT));
-    if manifest.directories.is_empty() {
-        lines.push("Directories: none declared".to_owned());
-    }
-    for directory in &manifest.directories {
-        lines.push(format!("Directory: {}/{directory}", crate::services::manifest::MOUNT));
-    }
-    for mapping in &manifest.mappings {
-        lines.push(format!(
-            "Mapping: {} → {}/{}",
-            mapping.source,
-            crate::services::manifest::MOUNT,
-            mapping.destination
+    lines.push((String::new(), Tone::Plain));
+    if !checked.issues.is_empty() {
+        let count = checked.issues.len();
+        lines.push((
+            format!(
+                "{count} error{} in the manifest; deploy is blocked",
+                if count == 1 { "" } else { "s" }
+            ),
+            Tone::Red,
         ));
     }
-    lines.push(format!("State model: {}", manifest.state_model.as_str()));
-    lines.push(String::new());
-    let found = instances(services, &discovery.repository, &manifest.id);
+    lines.push((
+        format!(
+            "Manifest ({})",
+            if expanded { "ENTER collapses" } else { "ENTER expands" }
+        ),
+        Tone::Dim,
+    ));
+    lines.extend(manifest_lines(checked, expanded));
+    lines.push((String::new(), Tone::Plain));
+    let found = instances(services, &discovery.repository, &checked.id);
     if found.is_empty() {
-        lines.push("Status: not deployed".to_owned());
+        lines.push(("Status: not deployed".to_owned(), Tone::Plain));
     }
     for entry in found {
         let image = entry.service.as_ref().map_or("", |s| s.image.as_str());
-        lines.push(format!(
-            "CT {} {} on {}, {}: {} · {}",
-            entry.vmid,
-            entry.name.as_deref().unwrap_or_default(),
-            entry.node,
-            entry.ip.as_deref().unwrap_or("—"),
-            image.rsplit_once(':').map_or(image, |(_, tag)| tag),
-            entry.status
+        lines.push((
+            format!(
+                "CT {} {} on {}, {}: {} · {}",
+                entry.vmid,
+                entry.name.as_deref().unwrap_or_default(),
+                entry.node,
+                entry.ip.as_deref().unwrap_or("—"),
+                image.rsplit_once(':').map_or(image, |(_, tag)| tag),
+                entry.status
+            ),
+            Tone::Plain,
         ));
     }
     lines
+}
+
+/// The manifest's YAML in section order: collapsed, one line per
+/// top-level section with its error count; expanded, every value with the
+/// faulty ones and their sections red and each issue below its line.
+fn manifest_lines(checked: &Checked, expanded: bool) -> Vec<(String, Tone)> {
+    let Yaml::Hash(top) = &checked.document else {
+        return Vec::new();
+    };
+    let mut lines = Vec::new();
+    for name in SECTIONS {
+        let Some(value) = top.get(&Yaml::String(name.to_owned())) else {
+            continue;
+        };
+        let path = vec![name.to_owned()];
+        let errors = checked
+            .issues
+            .iter()
+            .filter(|issue| issue.path.starts_with(&path))
+            .count();
+        let tone = if errors > 0 { Tone::Red } else { Tone::Plain };
+        match value {
+            Yaml::Null => lines.push((format!("  {name}: (empty: off)"), tone)),
+            Yaml::Hash(_) | Yaml::Array(_) if !expanded => {
+                let note = match errors {
+                    0 => String::new(),
+                    1 => "  ✗ 1 error".to_owned(),
+                    n => format!("  ✗ {n} errors"),
+                };
+                lines.push((format!("▸ {name}{note}"), tone));
+            }
+            Yaml::Hash(_) | Yaml::Array(_) => {
+                lines.push((format!("▾ {name}:"), tone));
+                issue_lines(checked, &path, 2, &mut lines);
+                yaml_lines(checked, value, &path, 4, &mut lines);
+            }
+            scalar => lines.push((format!("  {name}: {}", scalar_text(scalar)), tone)),
+        }
+    }
+    lines
+}
+
+/// The issues exactly at `path`, below its line.
+fn issue_lines(checked: &Checked, path: &[String], indent: usize, lines: &mut Vec<(String, Tone)>) {
+    for issue in checked.issues.iter().filter(|issue| issue.path == path) {
+        lines.push((format!("{}✗ {}", " ".repeat(indent + 2), issue.message), Tone::Red));
+    }
+}
+
+/// The nested `value` at `path`, indented by `indent`.
+fn yaml_lines(checked: &Checked, value: &Yaml, path: &[String], indent: usize, lines: &mut Vec<(String, Tone)>) {
+    let pad = " ".repeat(indent);
+    let tone_at = |path: &[String]| {
+        if checked.issues.iter().any(|issue| issue.path.starts_with(path)) {
+            Tone::Red
+        } else {
+            Tone::Plain
+        }
+    };
+    match value {
+        Yaml::Hash(fields) => {
+            for (key, value) in fields {
+                let key = scalar_text(key);
+                let mut path = path.to_vec();
+                path.push(key.clone());
+                let tone = tone_at(&path);
+                match value {
+                    Yaml::Hash(inner) if !inner.is_empty() => {
+                        lines.push((format!("{pad}{key}:"), tone));
+                        issue_lines(checked, &path, indent, lines);
+                        yaml_lines(checked, value, &path, indent + 2, lines);
+                    }
+                    Yaml::Array(inner) if !inner.is_empty() => {
+                        lines.push((format!("{pad}{key}:"), tone));
+                        issue_lines(checked, &path, indent, lines);
+                        yaml_lines(checked, value, &path, indent + 2, lines);
+                    }
+                    _ => {
+                        lines.push((format!("{pad}{key}: {}", scalar_text(value)), tone));
+                        issue_lines(checked, &path, indent, lines);
+                    }
+                }
+            }
+        }
+        Yaml::Array(items) => {
+            for (index, item) in items.iter().enumerate() {
+                let mut path = path.to_vec();
+                path.push(index.to_string());
+                match item {
+                    Yaml::Hash(inner) if !inner.is_empty() => {
+                        // The entries one level deeper, the first behind `- `.
+                        let first = lines.len();
+                        yaml_lines(checked, item, &path, indent + 2, lines);
+                        if let Some((line, _)) = lines.get_mut(first) {
+                            line.replace_range(indent..indent + 2, "- ");
+                        }
+                        issue_lines(checked, &path, indent, lines);
+                    }
+                    _ => {
+                        lines.push((format!("{pad}- {}", scalar_text(item)), tone_at(&path)));
+                        issue_lines(checked, &path, indent, lines);
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// A scalar as YAML shows it; an empty mapping or list inline.
+fn scalar_text(value: &Yaml) -> String {
+    match value {
+        Yaml::String(text) if text.is_empty() => "\"\"".to_owned(),
+        Yaml::String(text) | Yaml::Real(text) => text.clone(),
+        Yaml::Integer(number) => number.to_string(),
+        Yaml::Boolean(value) => value.to_string(),
+        Yaml::Null => String::new(),
+        Yaml::Hash(_) => "{}".to_owned(),
+        Yaml::Array(_) => "[]".to_owned(),
+        _ => "?".to_owned(),
+    }
 }
 
 /// The containers of `repository`/`id` among `services`.
@@ -312,6 +444,8 @@ pub struct SetupBox {
     pub ssh_status: String,
     pub stage: Stage,
     pub details_scroll: usize,
+    /// The highlighted manifest shows its whole YAML, not just its sections.
+    pub manifest_expanded: bool,
     pub notice: Option<Notice>,
     /// The spinner's frame.
     pub frame: usize,
@@ -503,6 +637,7 @@ impl SetupBox {
             ssh_status: if connected { "connected" } else { "not connected" }.to_owned(),
             stage: Stage::Tree,
             details_scroll: 0,
+            manifest_expanded: false,
             notice: None,
             frame: 0,
         };
@@ -2146,8 +2281,9 @@ impl SetupBox {
         let (label, tone) = service_row(file);
         let state = match &file.manifest {
             Err(_) => ("invalid".to_owned(), tone),
-            Ok(manifest) => {
-                let found = instances(&self.services, &row.repository, &manifest.id);
+            Ok(checked) if checked.manifest.is_none() => ("errors".to_owned(), tone),
+            Ok(checked) => {
+                let found = instances(&self.services, &row.repository, &checked.id);
                 let running = found.iter().filter(|entry| entry.status == "running").count();
                 match (found.len(), running) {
                     (0, _) => ("not deployed".to_owned(), Tone::Dim),
@@ -2163,20 +2299,23 @@ impl SetupBox {
 
     /// The details of the highlighted Services row.
     #[must_use]
-    pub fn service_detail_lines(&self) -> Vec<String> {
+    pub fn service_detail_lines(&self) -> Vec<(String, Tone)> {
         let Some(row) = self.service_cursor_row() else {
             let reason = if self.catalog.repository_error.is_empty() {
                 "No repositories match.".to_owned()
             } else {
                 self.catalog.repository_error.clone()
             };
-            return vec![SERVICES.to_owned(), String::new(), reason];
+            return [SERVICES.to_owned(), String::new(), reason]
+                .into_iter()
+                .map(|line| (line, Tone::Plain))
+                .collect();
         };
         let read = self.discovery(&row.repository);
         if let (Some(index), Some(Ok(found))) = (row.file, read)
             && let Some(file) = found.files.get(index)
         {
-            return service_details(found, file, &self.services);
+            return service_details(found, file, &self.services, self.manifest_expanded);
         }
         let mut lines = vec![row.repository.clone()];
         if let Some(branch) = self.default_branch(&row.repository) {
@@ -2202,13 +2341,25 @@ impl SetupBox {
                 }
                 for file in &found.files {
                     lines.push(match &file.manifest {
-                        Ok(manifest) => format!("Service: {} ({})", manifest.id, file.path),
+                        Ok(checked) if checked.manifest.is_some() => format!("Service: {} ({})", checked.id, file.path),
+                        Ok(checked) => format!("Errors: {} ({})", checked.id, file.path),
                         Err(_) => format!("Invalid: {}", file.path),
                     });
                 }
             }
         }
         lines
+            .into_iter()
+            .map(|line| {
+                let tone =
+                    if line.starts_with("Errors: ") || line.starts_with("Invalid: ") || line.starts_with("Error: ") {
+                        Tone::Red
+                    } else {
+                        Tone::Plain
+                    };
+                (line, tone)
+            })
+            .collect()
     }
 
     /// Move the Services highlight by `step` rows.
@@ -2220,6 +2371,7 @@ impl SetupBox {
         let at = self.services_cursor.min(count - 1);
         self.services_cursor = at.saturating_add_signed(step).min(count - 1);
         self.details_scroll = 0;
+        self.manifest_expanded = false;
     }
 
     /// Open a repository of the Services group: its manifests are read the
@@ -2244,7 +2396,7 @@ impl SetupBox {
             return None;
         };
         let file = found.files.get(index)?;
-        let manifest = file.manifest.as_ref().ok()?;
+        let manifest = file.valid()?;
         Some(crate::services::deploy::Source {
             repository,
             branch: found.branch.clone(),
@@ -2321,6 +2473,10 @@ impl SetupBox {
             KeyCode::Char('m') if self.manageable() => {
                 self.deploy_request = self.service_source();
                 return Some(Ask::Manage);
+            }
+            KeyCode::Enter if row.as_ref().is_some_and(|row| row.file.is_some()) => {
+                self.manifest_expanded = !self.manifest_expanded;
+                self.details_scroll = 0;
             }
             KeyCode::Enter => return self.toggle_repository(),
             KeyCode::F(5) => {
