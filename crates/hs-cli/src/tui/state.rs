@@ -482,6 +482,7 @@ impl App {
                     .collect();
                 <[usize; 2]>::try_from(keys).ok()
             })
+            .filter(|[first, second]| first != second)
             .unwrap_or(SORT_DEFAULT);
         let favorites = preferences
             .table
@@ -1433,8 +1434,13 @@ impl App {
     }
 
     /// Sort the machine list's `level` row by `key` of [`SORT_KEYS`], kept
-    /// in `tui.toml`.
+    /// in `tui.toml`. The key the other row had swaps rows instead, so the
+    /// two keys never repeat.
     fn save_sort(&mut self, level: usize, key: usize) {
+        let other = 1 - level;
+        if self.sort[other] == key {
+            self.sort[other] = self.sort[level];
+        }
         self.sort[level] = key;
         let mut table = self.preferences.table.clone();
         let mut sort = table
