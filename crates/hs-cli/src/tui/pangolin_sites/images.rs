@@ -321,14 +321,16 @@ pub async fn apply(
     let access = hs_install::probe(root).map_err(|e| e.to_string())?;
     // Every selected connector is checked before any container is stopped.
     for snapshot in snapshots {
-        let (found, _) = inspect(&pve, deployment, &config, &summary, snapshot.ctid, None).await?;
+        let (found, current) = inspect(&pve, deployment, &config, &summary, snapshot.ctid, None).await?;
         if &found != snapshot {
             return Err("Site connector changed since review; review again".to_owned());
         }
         let path = key_path(deployment, &summary, &snapshot.node)?;
         let credential = read_credential(&path)?;
-        if installed(root, &access, &snapshot.node, snapshot.ctid, false)?
-            != digest(&configuration(&summary.url, &credential)?)
+        // A connector already on the image is finished below: started and its credential restored.
+        if image_of(&current)? != image
+            && installed(root, &access, &snapshot.node, snapshot.ctid, false)?
+                != digest(&configuration(&summary.url, &credential)?)
         {
             return Err(format!(
                 "CT {}: installed Site credential differs; nothing is changed",
@@ -356,102 +358,39 @@ pub async fn apply(
         if &found != snapshot {
             return Err("Site connector changed since review; review again".to_owned());
         }
-        node::container(&pve, snapshot.ctid)
+        let running = node::container(&pve, snapshot.ctid)
             .await?
-            .ok_or("Connector disappeared")?;
-        if installed(root, &access, &snapshot.node, snapshot.ctid, false)? != expected {
-            return Err(format!(
-                "CT {}: installed credential changed before replacement",
-                snapshot.ctid
-            ));
-        }
+            .ok_or("Connector disappeared")?
+            .status
+            == "running";
         if image_of(&original)? == image {
-            lines.push(format!(
-                "{}: CT {} already uses {image}; kept",
+            // Already replaced, also by an interrupted run: finish it, never replace it again.
+            if running && installed(root, &access, &snapshot.node, snapshot.ctid, false)? == expected {
+                lines.push(format!(
+                    "{}: CT {} already uses {image}; kept",
+                    snapshot.site, snapshot.ctid
+                ));
+                continue;
+            }
+            say(&format!(
+                "{}: CT {} already uses {image}; starting it and restoring its credential",
                 snapshot.site, snapshot.ctid
             ));
-            continue;
-        }
-        let (disk_storage, disk_gib) = disk(&original)?;
-        let spec = NewContainer {
-            node: &snapshot.node,
-            ctid: snapshot.ctid,
-            hostname: &snapshot.site,
-            ostemplate: &ostemplate,
-            pool: &config.pool,
-            storage: disk_storage,
-            disk_gib,
-            memory_mib: number(&original, "memory")?,
-            cores: number(&original, "cores")?,
-            net0: Some(
-                original["net0"]
-                    .as_str()
-                    .ok_or("Connector network is missing")?
-                    .to_owned(),
-            ),
-            onboot: true,
-            nameserver: original["nameserver"].as_str().map(str::to_owned),
-            description: original["description"]
-                .as_str()
-                .unwrap_or_default()
-                .lines()
-                .map(|l| {
-                    if l.starts_with("image ") {
-                        format!("image {image}")
-                    } else {
-                        l.to_owned()
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join("\n"),
-            tag: Some(TAG),
-            mp0: None,
-        };
-        hs_deploy::recreate::replace(
-            &pve,
-            &hs_deploy::recreate::Replace {
-                spec,
-                graceful: false,
-                keep: &[],
-                note: "",
-            },
-            &|line| say(line),
-        )
-        .await?;
-        let retained: Vec<(String, String)> = original
-            .as_object()
-            .ok_or("Invalid configuration")?
-            .iter()
-            .filter(|(k, _)| {
-                ![
-                    "arch",
-                    "ostype",
-                    "digest",
-                    "rootfs",
-                    "description",
-                    "entrypoint",
-                    "env",
-                    "lxc",
-                ]
-                .contains(&k.as_str())
-            })
-            .map(|(k, v)| {
-                (
-                    k.clone(),
-                    v.as_str().map(str::to_owned).unwrap_or_else(|| v.to_string()),
-                )
-            })
-            .collect();
-        let form: Vec<(&str, &str)> = retained.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
-        pve.put(&format!("/nodes/{}/lxc/{}/config", snapshot.node, snapshot.ctid), &form)
-            .await
-            .map_err(|_| {
-                format!(
-                    "CT {}: cannot restore container settings; credential remains saved locally",
+        } else {
+            if installed(root, &access, &snapshot.node, snapshot.ctid, false)? != expected {
+                return Err(format!(
+                    "CT {}: installed credential changed before replacement",
                     snapshot.ctid
-                )
-            })?;
-        node::power(&pve, &snapshot.node, snapshot.ctid, "start").await?;
+                ));
+            }
+            replace(&pve, &config, snapshot, &original, &ostemplate, image, say).await?;
+        }
+        if node::container(&pve, snapshot.ctid)
+            .await?
+            .is_none_or(|ct| ct.status != "running")
+        {
+            node::power(&pve, &snapshot.node, snapshot.ctid, "start").await?;
+        }
         let mut ready = false;
         for _ in 0..30 {
             if installed(root, &access, &snapshot.node, snapshot.ctid, false).is_ok() {
@@ -515,6 +454,119 @@ pub async fn apply(
         .await;
     }
     Ok(lines)
+}
+
+/// Replace the connector's container from `ostemplate`, keeping its CTID,
+/// MAC and settings; it is left stopped, without its credential.
+async fn replace(
+    pve: &impl Pve,
+    config: &DeployConfig,
+    snapshot: &Snapshot,
+    original: &Value,
+    ostemplate: &str,
+    image: &str,
+    say: &(dyn Fn(&str) + Send + Sync),
+) -> Result<(), String> {
+    let (disk_storage, disk_gib) = disk(original)?;
+    let spec = NewContainer {
+        node: &snapshot.node,
+        ctid: snapshot.ctid,
+        hostname: &snapshot.site,
+        ostemplate,
+        pool: &config.pool,
+        storage: disk_storage,
+        disk_gib,
+        memory_mib: number(original, "memory")?,
+        cores: number(original, "cores")?,
+        net0: Some(
+            original["net0"]
+                .as_str()
+                .ok_or("Connector network is missing")?
+                .to_owned(),
+        ),
+        onboot: true,
+        nameserver: original["nameserver"].as_str().map(str::to_owned),
+        description: original["description"]
+            .as_str()
+            .unwrap_or_default()
+            .lines()
+            .map(|l| {
+                if l.starts_with("image ") {
+                    format!("image {image}")
+                } else {
+                    l.to_owned()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+        tag: Some(TAG),
+        mp0: None,
+    };
+    hs_deploy::recreate::replace(
+        pve,
+        &hs_deploy::recreate::Replace {
+            spec,
+            graceful: false,
+            keep: &[],
+            note: "",
+        },
+        &|line| say(line),
+    )
+    .await?;
+    let retained: Vec<(String, String)> = original
+        .as_object()
+        .ok_or("Invalid configuration")?
+        .iter()
+        .filter(|(k, _)| {
+            ![
+                "arch",
+                "ostype",
+                "digest",
+                "rootfs",
+                "description",
+                "entrypoint",
+                "env",
+                "lxc",
+            ]
+            .contains(&k.as_str())
+        })
+        .map(|(k, v)| {
+            (
+                k.clone(),
+                v.as_str().map(str::to_owned).unwrap_or_else(|| v.to_string()),
+            )
+        })
+        .collect();
+    // Only what differs is set again; `unprivileged` is fixed at creation.
+    let fresh = pve
+        .get(&format!("/nodes/{}/lxc/{}/config", snapshot.node, snapshot.ctid), &[])
+        .await
+        .map_err(|e| format!("CT {}: cannot read the new configuration: {e}", snapshot.ctid))?;
+    let retained: Vec<(String, String)> = retained
+        .into_iter()
+        .filter(|(k, v)| {
+            k != "unprivileged"
+                && fresh[k.as_str()]
+                    .as_str()
+                    .map_or_else(|| fresh[k.as_str()].to_string(), str::to_owned)
+                    != *v
+        })
+        .collect();
+    if retained.is_empty() {
+        return Ok(());
+    }
+    let form: Vec<(&str, &str)> = retained.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+    pve.put(&format!("/nodes/{}/lxc/{}/config", snapshot.node, snapshot.ctid), &form)
+        .await
+        .map_err(|e| {
+            let keys: Vec<&str> = retained.iter().map(|(k, _)| k.as_str()).collect();
+            format!(
+                "CT {}: cannot restore container settings ({}): {e}; credential remains saved locally",
+                snapshot.ctid,
+                keys.join(", ")
+            )
+        })?;
+    Ok(())
 }
 
 /// Root on one reviewed node can reach the other nodes over the cluster's SSH.
