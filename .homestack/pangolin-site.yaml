@@ -10,8 +10,16 @@ runtime:
     memory: 128M
     swap: 0M
     rootfs: 128M
-  # Outbound connector: verify container running and Pangolin Site online.
-  ports: []
+  ports:
+    - name: http
+      port: 8080
+      protocol: tcp
+  healthcheck:
+    type: http
+    port: http
+    path: /health/ready
+    expected_status: 200
+    heartbeat_seconds: 60
 persistence:
   mount: /home/app
   size: 10M

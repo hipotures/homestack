@@ -84,3 +84,9 @@ This future system is not yet specified. Do not build it, redesign E2E, create p
 - Do not tag changes confined to the TUI, CLI, client-side installer/deployer, documentation, tests or development tooling when the running API container is unaffected.
 - Use `python3 scripts/tag-api.py` to fetch upstream tags, automatically choose the next patch version (starting at `0.2.0`), create an annotated tag on the clean, already pushed HEAD, and push that tag to the branch's upstream remote. Use `--dry-run` to preview the next version without creating or pushing a tag.
 - Never move, overwrite or force-push release tags. If a tag push is rejected, stop and report it. A release publishes an image; replacing running containers remains a separate deployment action.
+
+# Pangolin image releases
+
+- The Pangolin Site image has an independent SemVer line: annotated Git tag `pangolin-X.Y.Z` publishes `ghcr.io/hipotures/homestack-pangolin-site:X.Y.Z` as a single `linux/amd64` image. The pinned upstream CLI version is a build input, not the image version.
+- After building, verifying, committing and pushing an image-affecting change, run `python3 scripts/tag-image.py` to automatically publish its next patch release. The script requires a clean, already pushed HEAD and refuses a HEAD already released. Never choose version numbers manually or replace an existing release.
+- Changes confined to manifests, documentation, tests, CI or development tooling need no image release. Ordinary pushes run checks only; a manual workflow run publishes a `dev-<commit>` image.

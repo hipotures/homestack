@@ -1,7 +1,6 @@
 #!/bin/sh
 # Sourced by runit and the authenticated credential receiver.
-case "${HOMESTACK_MANAGED_HOME:-0}" in
-    0) dir=/var/lib/pangolin-site ;;
+case "${HOMESTACK_MANAGED_HOME:-1}" in
     1)
         if [ -L /home/app ] || ! awk '$5 == "/home/app" { found=1 } END { exit !found }' /proc/self/mountinfo; then
             echo "managed Site requires a mounted /home/app" >&2

@@ -16,4 +16,5 @@ exec chpst -u site:nogroup env -i \
     CONFIG_FILE="$file" \
     NEWT_SYSTEM_SUBSTRATE=CONTAINER \
     DISABLE_SSH=true \
+    HOMESTACK_HEARTBEAT_SECONDS="${HOMESTACK_HEARTBEAT_SECONDS:-60}" \
     pangolin-cli up site

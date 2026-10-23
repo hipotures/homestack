@@ -197,17 +197,20 @@ pangolin` identity (manifest id `pangolin`), repository, manifest revision, imag
 legacy Step 8 description and tag are not used. Only the canonical
 `.homestack/pangolin-site.yaml` of `hipotures/homestack` is initialized;
 another manifest id, path or repository using the Site image is refused. One
-instance is deployed per review. The operator must choose Site image `0.1.2`
-or later: `0.1.1` predates the managed runtime selector. Environment must be
-empty. Defaults are a 1G root disk and a 10M home: sizes are typed as a number
+instance is deployed per review. The operator must choose Site image `0.18.2`
+or later, with native HTTP health and telemetry. Environment must be
+empty; HomeStack supplies the managed-home selector and heartbeat interval.
+Defaults are a 128M root disk and a 10M home: sizes are typed as a number
 with M or G for every service (deployment and maintenance), and Proxmox stores
 a 10M home as `size=10M`. Containers of every service are named `<id>-<n>`
 from 1 (`pangolin-1`, `pangolin-2`, …); a 128M root or 10M home is listed as such, not 0G.
 
-Site images are numbered `<Pangolin CLI version>-<build>`, e.g. `0.18.1-1`,
-from Git tags `pangolin-site-0.18.1-1`; CI refuses a tag whose version is not
-the `PANGOLIN_CLI_VERSION` of `deploy/pangolin-site/Containerfile`. Version
-order is the release, then the build; a release without a build sorts first.
+Site images have an independent SemVer line. `python3 scripts/tag-image.py`
+automatically publishes the next `pangolin-X.Y.Z` Git tag, producing
+`homestack-pangolin-site:X.Y.Z`; `--dry-run` previews it. The pinned upstream
+Pangolin CLI version is a separate build input. See
+[the runtime contract](../deploy/pangolin-site/README.md) for HTTP health,
+on-demand telemetry, persistence and local verification evidence.
 
 ### Authenticated context
 

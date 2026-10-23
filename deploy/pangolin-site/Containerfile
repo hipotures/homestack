@@ -1,22 +1,35 @@
 # The Pangolin Site connector image (homestack-pangolin-site): Pangolin CLI
 # in Site mode under runit, with no credentials. HomeStack creates an
-# unprivileged LXC from it (Step 8, or a managed instance with /home/app and
-# HOMESTACK_MANAGED_HOME=1) and then writes that connector's own Site
+# unprivileged LXC from it with a persistent /home/app and then writes its Site
 # credential through `pct exec` standard input (homestack-site-credential).
-# Built and published by .github/workflows/ci.yml for tags pangolin-site-X.Y.Z.
-FROM docker.io/library/alpine:3.24.2
+# Built and published by .github/workflows/ci.yml for tags pangolin-X.Y.Z.
+FROM docker.io/library/golang:1.27.1-alpine3.24 AS build
 ARG PANGOLIN_CLI_VERSION=0.18.1
-ARG PANGOLIN_CLI_SHA256=07ae60ba0da7f3d25da6b78b76f0f2f40069605c2c52340f2f364e3cef72053f
+ARG PANGOLIN_CLI_SOURCE_SHA256=568fcbf62a1c485d8cec617c635ae5769ff5d6729bcf412a7f0d13efb3d498ad
+RUN apk add --no-cache python3
+WORKDIR /src
+RUN wget -q -O /tmp/cli.tar.gz "https://codeload.github.com/fosrl/cli/tar.gz/refs/tags/${PANGOLIN_CLI_VERSION}" \
+    && echo "${PANGOLIN_CLI_SOURCE_SHA256}  /tmp/cli.tar.gz" | sha256sum -c - \
+    && tar -xzf /tmp/cli.tar.gz --strip-components=1 \
+    && go mod download \
+    && cp -a /go/pkg/mod/github.com/fosrl/newt@v1.18.1 /newt \
+    && chmod -R u+w /newt \
+    && go mod edit -replace github.com/fosrl/newt=/newt
+COPY prepare-source.py homestack_*.go /extension/
+RUN python3 /extension/prepare-source.py /src /newt \
+    && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath \
+       -ldflags "-s -w -X github.com/fosrl/cli/internal/version.Version=${PANGOLIN_CLI_VERSION} -X github.com/fosrl/cli/internal/version.NewtVersionOverride=1.18.1" \
+       -o /pangolin-cli .
+
+FROM docker.io/library/alpine:3.24.2
 RUN apk add --no-cache ca-certificates runit \
-    && wget -q -O /usr/local/bin/pangolin-cli \
-       "https://github.com/fosrl/cli/releases/download/${PANGOLIN_CLI_VERSION}/pangolin-cli_linux_amd64" \
-    && echo "${PANGOLIN_CLI_SHA256}  /usr/local/bin/pangolin-cli" | sha256sum -c - \
-    && chmod 0755 /usr/local/bin/pangolin-cli \
-    && adduser -S -D -H -h /var/lib/pangolin-site -s /sbin/nologin site \
-    && mkdir -p /home/app \
-    && install -d -m 0700 -o site -g nogroup /var/lib/pangolin-site
+    && adduser -S -D -H -h /home/app/pangolin-site -s /sbin/nologin site \
+    && mkdir -p /home/app
+COPY --from=build /pangolin-cli /usr/local/bin/pangolin-cli
+COPY --from=build /src/LICENSE /usr/share/licenses/pangolin-cli/LICENSE
 COPY homestack-site-credential /usr/local/bin/homestack-site-credential
 COPY state-path /usr/local/lib/homestack-site-state
 COPY service /etc/service
+EXPOSE 8080
 STOPSIGNAL SIGTERM
 ENTRYPOINT ["runsvdir", "-P", "/etc/service"]

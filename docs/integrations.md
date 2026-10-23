@@ -662,10 +662,13 @@ shows them as a historical result.
 
 The connector image `ghcr.io/hipotures/homestack-pangolin-site` is built from
 `deploy/pangolin-site/`: Alpine with runit and the pinned Pangolin CLI release
-(SHA-256 checked) running `pangolin-cli up site` as `site`, reading only its
-private configuration file, with self-update and SSH features disabled. It has
-no credentials, health server or extra capabilities. Its releases are separate
-from the API image: a `pangolin-site-X.Y.Z` tag publishes
+(source archive SHA-256 checked) running `pangolin-cli up site` as `site`,
+reading only its private configuration file, with self-update and SSH features
+disabled. New images require a mounted `/home/app` and serve private management
+HTTP on port 8080: heartbeat health and on-demand container/storage telemetry,
+compiled into the connector process. They carry no credentials or extra
+capabilities. See [the runtime contract](../deploy/pangolin-site/README.md).
+Their releases are separate from the API image: a `pangolin-X.Y.Z` tag publishes
 `homestack-pangolin-site:X.Y.Z`, and the image reference HomeStack deploys is
 initially pinned in `crates/hs-cli/src/tui/pangolin_sites.rs`; the image last
 saved in `integrations/pangolin-sites.toml` is reused by later Site deployments.

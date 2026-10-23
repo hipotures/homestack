@@ -30,8 +30,8 @@ const API_IMAGE: &str = "ghcr.io/hipotures/homestack-server";
 const SITE_IMAGE: &str = "ghcr.io/hipotures/homestack-pangolin-site";
 const API_INIT_HOME: &str = "api-initialization-home ";
 const SITE_INIT_HOME: &str = "site-initialization-home ";
-/// The first Site image whose runtime selects `/home/app/pangolin-site`.
-const SITE_MANAGED: (u64, u64, u64, u64) = (0, 1, 2, 0);
+/// The first Site image with native HTTP health and telemetry.
+const SITE_MANAGED: (u64, u64, u64, u64) = (0, 18, 2, 0);
 
 /// A non-secret PVE marker for unfinished initialization, never an instance registry.
 pub(super) fn initializing(description: &str) -> bool {
@@ -57,8 +57,8 @@ pub trait SiteInit {
     fn online(&mut self, ctid: u32, say: &dyn Fn(&str)) -> Result<String, String>;
 }
 
-/// A managed Site's readiness and removal: an outbound connector has no
-/// inbound health endpoint, so its own Pangolin Site must be online; the Site
+/// A managed Site's readiness and removal: its own Pangolin Site must be
+/// online in addition to its HTTP health check; the Site
 /// HomeStack made for it goes with it. Blocking.
 pub trait SiteReady: Sync {
     /// Read only: CT `ctid` is a completed managed Site of the verified organization.
@@ -71,8 +71,8 @@ pub trait SiteReady: Sync {
     fn remove(&self, ctid: u32, say: &dyn Fn(&str)) -> Result<String, String>;
 }
 
-/// The service's readiness after a start: its own Site online for a Pangolin
-/// Site connector, else the manifest's health check.
+/// The service's readiness after a start, including its own Site online for
+/// a Pangolin Site connector.
 pub(super) async fn ready(
     source: &Source,
     site: Option<&dyn SiteReady>,
@@ -82,7 +82,9 @@ pub(super) async fn ready(
 ) -> Result<String, String> {
     if source.is_site() {
         let site = site.ok_or("Site readiness requires the verified Pangolin context")?;
-        return tokio::task::block_in_place(|| site.ready(ctid, say));
+        let online = tokio::task::block_in_place(|| site.ready(ctid, say))?;
+        let health = healthy(&source.manifest, address).await?;
+        return Ok(format!("{online}; {health}"));
     }
     healthy(&source.manifest, address).await
 }
@@ -663,7 +665,9 @@ pub async fn plan(
             problems.push("Deploy one Site connector at a time; each gets its own Site and credential".to_owned());
         }
         if hs_core::registry::version(&choice.version).is_none_or(|version| version < SITE_MANAGED) {
-            problems.push("Managed Site deployment requires Site image 0.1.2 or later".to_owned());
+            problems.push(
+                "Managed Site deployment requires Site image 0.18.2 or later (HTTP health and telemetry)".to_owned(),
+            );
         }
         if !plan.environment.is_empty() {
             problems.push("The Site runtime selector is set by initialization; leave Environment empty".to_owned());
@@ -931,6 +935,15 @@ pub(super) async fn set_heartbeat(pve: &impl Pve, node: &str, ctid: u32, manifes
     Ok(())
 }
 
+/// The managed Site's complete application environment, excluding PATH.
+fn site_environment(manifest: &Manifest) -> Vec<(String, String)> {
+    let mut environment = vec![("HOMESTACK_MANAGED_HOME".to_owned(), "1".to_owned())];
+    if let Some(Healthcheck::Http { heartbeat_seconds, .. }) = &manifest.healthcheck {
+        environment.push(("HOMESTACK_HEARTBEAT_SECONDS".to_owned(), heartbeat_seconds.to_string()));
+    }
+    environment
+}
+
 /// One probe of the health check; what it showed.
 async fn probe(manifest: &Manifest, address: &str) -> Result<String, String> {
     match &manifest.healthcheck {
@@ -1128,12 +1141,12 @@ async fn resumable(
     let marker = desc.lines().find_map(|line| line.strip_prefix(kind));
     let pristine =
         found.status == "stopped" && !current.environment.iter().any(|(key, _)| key.starts_with("HOMESTACK_"));
-    // A Site has nothing in its environment but the runtime selector.
+    let expected_environment = site_environment(&source.manifest);
     let foreign = source.is_site()
         && current
             .environment
             .iter()
-            .any(|(key, value)| key != "PATH" && (key != "HOMESTACK_MANAGED_HOME" || value != "1"));
+            .any(|entry| entry.0 != "PATH" && !expected_environment.contains(entry));
     if foreign {
         return Err(format!(
             "CT {ctid}: unexpected environment; Site initialization recovery refused"
@@ -1172,6 +1185,7 @@ async fn initialize_site(
     site: &mut dyn SiteInit,
     instance: &NewInstance,
     home: &str,
+    manifest: &Manifest,
     say: &(dyn Fn(&str) + Send + Sync),
 ) -> Result<String, String> {
     let (node, ctid) = (instance.node.as_str(), instance.ctid);
@@ -1179,17 +1193,20 @@ async fn initialize_site(
         .get(&format!("/nodes/{node}/lxc/{ctid}/config"), &[])
         .await
         .map_err(|_| "cannot read the container configuration")?;
-    let selector = ("HOMESTACK_MANAGED_HOME".to_owned(), "1".to_owned());
+    let expected_environment = site_environment(manifest);
     let env = node::parse_env(cfg["env"].as_str().unwrap_or_default());
-    if env.iter().any(|entry| entry.0 != "PATH" && *entry != selector) {
+    if env
+        .iter()
+        .any(|entry| entry.0 != "PATH" && !expected_environment.contains(entry))
+    {
         return Err("unexpected container environment; nothing is changed".to_owned());
     }
-    if !env.contains(&selector) {
+    if expected_environment.iter().any(|entry| !env.contains(entry)) {
         if pve_status(pve, node, ctid).await? != "stopped" {
-            return Err("the container runs without the managed runtime selector".to_owned());
+            return Err("the container runs without the reviewed Site environment".to_owned());
         }
-        node::set_env(pve, node, ctid, std::slice::from_ref(&selector), &[]).await?;
-        say("  managed runtime selector set before the first start");
+        node::set_env(pve, node, ctid, &expected_environment, &[]).await?;
+        say("  managed runtime selector and heartbeat set before the first start");
     }
     // The credential reaches the container through its console, a shell inside it.
     let cfg = pve
@@ -1215,7 +1232,9 @@ async fn initialize_site(
         node::power(pve, node, ctid, "start").await?;
     }
     tokio::task::block_in_place(|| site.install(node, ctid, say))?;
-    tokio::task::block_in_place(|| site.online(ctid, say))
+    let online = tokio::task::block_in_place(|| site.online(ctid, say))?;
+    let health = healthy(manifest, &instance.address).await?;
+    Ok(format!("{online}; {health}"))
 }
 
 async fn pve_status(pve: &impl Pve, node: &str, ctid: u32) -> Result<String, String> {
@@ -1443,7 +1462,7 @@ async fn run(
                 "authenticated HTTPS, stored configuration and PVE credentials verified after reboot".to_owned()
             } else {
                 let site = site.as_deref_mut().ok_or("The verified Pangolin context is not open")?;
-                let online = initialize_site(pve, site, instance, original_mount, say)
+                let online = initialize_site(pve, site, instance, original_mount, manifest, say)
                     .await
                     .map_err(|error| format!("CT {ctid}: Site initialization failed: {error}"))?;
                 format!("{online}; its credential in {MOUNT}/pangolin-site verified")

@@ -336,7 +336,7 @@ pub async fn plan(
             .push(format!("Backup: stopped container and home → {}", plan.backup_storage));
     }
     plan.lines.push(match &source.manifest.healthcheck {
-        _ if source.is_site() => "Readiness: the container runs and its own Pangolin Site is online.".to_owned(),
+        _ if source.is_site() => "Readiness: HTTP health check passes and its own Pangolin Site is online.".to_owned(),
         None => "Health check: not provided by this service.".to_owned(),
         Some(_) => "Health check: automatic after update.".to_owned(),
     });
