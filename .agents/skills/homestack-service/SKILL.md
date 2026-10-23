@@ -42,8 +42,8 @@ not change what the application does.
    [image-build-preflight.md](image-build-preflight.md): the lightest runtime
    the application actually works on without substantial code changes.
 4. Decide whether the service has durable state (see Persistence below). If
-   it has, put all of it under `/home/app/<directory>`; if not, declare no
-   persistence and make sure the service starts on a fresh root.
+   it has, put all of it under `/home/app/<directory>`; if not, leave `persistence:`
+   empty and make sure the service starts on a fresh root.
 5. Implement the health endpoints and the telemetry endpoint on the existing
    HTTP listener (see below).
 6. Decide the instance topology: how many production instances a normal
@@ -52,7 +52,8 @@ not change what the application does.
    declare, measure it, and adjust until it works within them
    ([image-build-preflight.md](image-build-preflight.md)).
 8. Write `.homestack/<id>.yaml` per the schema with the measured resources,
-   persistence, topology and Pangolin exposure.
+   persistence, topology and Pangolin exposure. Write every top-level section;
+   leave `persistence:` or `exposure:` empty to switch that feature off.
 9. Set up image releases to the standard below. Adapt a working build to it
    rather than replacing it wholesale.
 10. Document the service's runtime contract next to its image: base image and
@@ -66,12 +67,12 @@ every update. Durable data lives only on the optional home volume mounted at
 `/home/app`.
 
 **Stateless service** (writes nothing it needs later, e.g. an API whose data
-lives elsewhere): omit `persistence` in the manifest. HomeStack creates no
-home volume. The service must start correctly on a fresh root with only its
+lives elsewhere): leave `persistence:` empty in the manifest. HomeStack
+creates no home volume. The service must start correctly on a fresh root with only its
 image and the settings supplied at deployment. Temporary files on root are
 fine; anything that must survive an update is not.
 
-**Stateful service** (e.g. a local SQLite database): declare `persistence`
+**Stateful service** (e.g. a local SQLite database): fill `persistence`
 with the volume size and directories.
 
 - Prefer the application's own setting (an environment variable or config key
@@ -153,8 +154,8 @@ depends on them.
 Declare `exposure.pangolin` when the service should be reachable through
 Pangolin: the port to expose, the resource name and the subdomain. HomeStack
 creates one Pangolin resource for the service with every instance as its
-target, under the domain the operator selects. Omit `exposure` for services
-that are only used inside the LAN or have no inbound port.
+target, under the domain the operator selects. Leave `exposure:` empty for
+services that are only used inside the LAN or have no inbound port.
 
 ## Service telemetry
 

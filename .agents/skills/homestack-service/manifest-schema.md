@@ -18,9 +18,35 @@ resource defaults of its own.
 - Symlinks in `.homestack/` and files larger than 64 KiB are rejected.
 - A repository without `.homestack/*.yaml` is not deployable through HomeStack.
 
-## Fields
+## Top-level sections
 
-Unknown fields are rejected, so a typo does not silently change meaning.
+Every manifest contains exactly these top-level keys, all of them always
+written: `schema`, `id`, `name`, `image`, `runtime`, `persistence`,
+`deployment` and `exposure`. A missing, misspelled or additional top-level key
+makes the whole file invalid: HomeStack lists it as invalid and offers no
+service from it.
+
+`persistence` and `exposure` describe features a service may not use. To
+switch one off, keep the key and leave it empty:
+
+```yaml
+persistence:
+exposure:
+```
+
+An empty section is a deliberate decision that the feature is off. A missing
+section is an error, so a section deleted by accident never silently turns a
+feature off.
+
+## Validation inside sections
+
+Inside the sections, an unknown key (e.g. `sizes` instead of `size`) or an
+invalid value (e.g. `1GB` instead of `1G`) does not invalidate the file.
+HomeStack still reads the manifest and shows the service, marks every such key
+and the section containing it as an error, and refuses to deploy the service
+until the manifest is fixed. Unknown keys are never ignored silently.
+
+## Fields
 
 | Field | Type | Required | Rule |
 | :--- | :--- | :--- | :--- |
@@ -41,7 +67,7 @@ Unknown fields are rejected, so a typo does not silently change meaning.
 | `runtime.healthcheck.port` | string | yes | name of an entry in `runtime.ports` |
 | `runtime.healthcheck.path` | string | `http` only | absolute URL path starting with `/` |
 | `runtime.healthcheck.expected_status` | integer | `http` only | 100–599 |
-| `persistence` | mapping | no | omitted: no home volume, the service is stateless |
+| `persistence` | mapping or empty | yes | empty: no home volume, the service is stateless |
 | `persistence.mount` | string | yes | exactly `/home/app` |
 | `persistence.size` | size | yes | default size of a new home volume, at least `1M` |
 | `persistence.directories` | list of strings | no | relative paths inside the mount, no `..`, no leading `/`, no duplicates |
@@ -51,28 +77,20 @@ Unknown fields are rejected, so a typo does not silently change meaning.
 | `deployment.instances` | integer | yes | production instances one deployment creates, 1–16 |
 | `deployment.placement` | string | no (default `spread`) | `spread` (one instance per node) or `single` (all on one node) |
 | `deployment.state_model` | string | yes | `stateless`, `local` or `external` |
-| `exposure.pangolin` | mapping | no | omitted: the service is not exposed through Pangolin |
+| `exposure` | mapping or empty | yes | empty: the service is not exposed through Pangolin and is reachable only inside the LAN, e.g. a management API used by clients on the private network |
+| `exposure.pangolin` | mapping | yes, when `exposure` is not empty | Pangolin HTTP resource for the service |
 | `exposure.pangolin.port` | string | yes | name of an entry in `runtime.ports` |
 | `exposure.pangolin.name` | string | yes | Pangolin resource name, 1–64 characters |
 | `exposure.pangolin.subdomain` | string | yes | DNS label `^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`; the domain is chosen at deployment |
-
-Optional sections switch a feature on only when present; omitting one is a
-valid, deliberate choice, not a missing value:
-
-- no `runtime.healthcheck`: health is shown as `unverified`;
-- no `persistence`: no home volume is created;
-- no `exposure` (or no `exposure.pangolin`): the service is not published
-  through Pangolin and is reachable only inside the LAN, e.g. a management
-  API used by clients on the private network.
 
 A **size** is a string of a positive decimal integer followed by `M` (MiB) or
 `G` (GiB), e.g. `256M`, `2G`. No bare numbers, fractions or other units.
 
 Cross-field rules:
 
-- `state_model: local` requires `persistence`: local state without a home
-  volume would be lost on every update.
-- `state_model: stateless` must not declare `persistence`.
+- `state_model: local` requires a non-empty `persistence`: local state
+  without a home volume would be lost on every update.
+- `state_model: stateless` requires an empty `persistence`.
 - `exposure.pangolin` requires an `http` healthcheck on the same port, which
   becomes the Pangolin resource's health check.
 
@@ -127,20 +145,20 @@ inputs or private settings.
 
 - It runs as a Proxmox OCI application container (unprivileged LXC): one
   `linux/amd64` image whose `ENTRYPOINT`/`CMD` starts the service.
-- With `persistence`: `/home/app` exists in the image as an empty directory.
+- With a non-empty `persistence`: `/home/app` exists in the image as an empty directory.
   HomeStack attaches the home volume there before the first start; the image
   never mounts anything itself. At start the image creates the declared
   `persistence.directories` if they are missing and never resets, overwrites
   or migrates away existing data. Everything that must survive replacing the
   container lives under `/home/app`.
-- Without `persistence`: the service starts on a fresh root with only the
+- With an empty `persistence`: the service starts on a fresh root with only the
   image and the settings supplied at deployment.
 - The rest of the root filesystem is disposable.
 - Logs go to stdout/stderr unless the service has a real need to keep them.
 
 ## Examples
 
-A stateless API on every node, exposed through Pangolin:
+A stateless API on every node, used only inside the LAN:
 
 ```yaml
 schema: 1
@@ -163,18 +181,15 @@ runtime:
     port: http
     path: /health/ready
     expected_status: 200
+persistence:
 deployment:
   instances: 3
   placement: spread
   state_model: stateless
 exposure:
-  pangolin:
-    port: http
-    name: Example API
-    subdomain: api
 ```
 
-A single instance with a local SQLite database:
+A single instance with a local SQLite database, published through Pangolin:
 
 ```yaml
 schema: 1
