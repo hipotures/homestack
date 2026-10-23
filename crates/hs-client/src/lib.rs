@@ -370,10 +370,15 @@ impl Client {
     }
 
     /// The configuration version of instance `index` (`None` before the
-    /// first upload).
+    /// first upload). A configured instance that answers becomes preferred
+    /// for subsequent reads.
     pub async fn config_version_on(&self, index: usize) -> Result<Option<String>, ClientError> {
         let body = self.get_on(index, "/v1/config/version").await?;
-        Ok(body["config_version"].as_str().map(str::to_owned))
+        let version = body["config_version"].as_str().map(str::to_owned);
+        if version.is_some() {
+            self.preferred.store(index, Ordering::Relaxed);
+        }
+        Ok(version)
     }
 
     /// Every instance's configuration version, or why it gave none (mapping

@@ -299,16 +299,33 @@ impl Clock {
 /// Every server's answer to `/v1/config/version`: the URL and why it did
 /// not answer, has no configuration yet, or holds another configuration
 /// than the others (a client switching to it would get other behaviour).
-async fn health(client: &Client) -> Vec<(String, Option<String>)> {
+async fn health(client: &Arc<Client>) -> Vec<(String, Option<String>)> {
     let urls: Vec<String> = client.urls().map(ToString::to_string).collect();
-    let mut answers = Vec::new();
+    let mut checks = tokio::task::JoinSet::new();
     for (index, url) in urls.into_iter().enumerate() {
-        answers.push((url, client.config_version_on(index).await));
+        let client = Arc::clone(client);
+        checks.spawn(async move {
+            let answer = tokio::time::timeout(Duration::from_secs(2), client.config_version_on(index))
+                .await
+                .unwrap_or_else(|_| {
+                    Err(hs_client::ClientError::Unreachable(
+                        "Server health check timed out".to_owned(),
+                    ))
+                });
+            (index, url, answer)
+        });
     }
+    let mut answers = Vec::new();
+    while let Some(result) = checks.join_next().await {
+        if let Ok(answer) = result {
+            answers.push(answer);
+        }
+    }
+    answers.sort_by_key(|(index, _, _)| *index);
     // The version most servers hold is the expected one.
     let held: Vec<&String> = answers
         .iter()
-        .filter_map(|(_, answer)| answer.as_ref().ok().and_then(Option::as_ref))
+        .filter_map(|(_, _, answer)| answer.as_ref().ok().and_then(Option::as_ref))
         .collect();
     let common = held
         .iter()
@@ -316,7 +333,7 @@ async fn health(client: &Client) -> Vec<(String, Option<String>)> {
         .map(|version| (*version).clone());
     answers
         .into_iter()
-        .map(|(url, answer)| {
+        .map(|(_, url, answer)| {
             let error = match answer {
                 Ok(Some(version)) if common.as_ref().is_none_or(|common| *common == version) => None,
                 Ok(Some(version)) => Some(format!(
@@ -334,7 +351,7 @@ async fn health(client: &Client) -> Vec<(String, Option<String>)> {
 
 /// Read the status and the servers' health once; nothing is told once
 /// `stop` is set (a new client.toml replaced this client meanwhile).
-async fn read_status(client: &Client, updates: &mpsc::UnboundedSender<Update>, stop: &AtomicBool) -> bool {
+async fn read_status(client: &Arc<Client>, updates: &mpsc::UnboundedSender<Update>, stop: &AtomicBool) -> bool {
     let servers = health(client).await;
     // The servers' dots at once; the status takes a few seconds more.
     if !stop.load(Ordering::SeqCst) {
@@ -1561,7 +1578,21 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
                     }
                 }
                 Update::Log(line) => app.log(&clock.now(), &line),
-                Update::Install(event) => app.install_event(event),
+                Update::Install(event) => {
+                    let reload = matches!(&event, super::install::Event::Done { .. })
+                        && app.install.as_ref().is_some_and(|install| install.mode == Mode::Service);
+                    app.install_event(event);
+                    if reload {
+                        match Connection::open(ctx, &updates) {
+                            Ok(next) => {
+                                connection.stop.store(true, Ordering::SeqCst);
+                                connection = next;
+                                connected = None;
+                            }
+                            Err(notice) => app.set_notice(Some(notice)),
+                        }
+                    }
+                },
                 Update::Ask(question) => {
                     let mut view = AskView::new(question.id, question.kind, &question.prompt);
                     view.key_names = crate::identity::key_names(&ctx.home, &question.prompt);
