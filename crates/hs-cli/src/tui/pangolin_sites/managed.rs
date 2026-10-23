@@ -149,10 +149,7 @@ impl Pangolin {
     /// What the context is, for the review.
     #[must_use]
     pub fn describe(&self) -> String {
-        format!(
-            "organization {} on {} through a verified Step 5 tunnel; Step 7 organization key homestack",
-            self.ctx.organization, self.ctx.target
-        )
+        format!("organization {} on {}", self.ctx.organization, self.ctx.target)
     }
 
     /// The Step 7 key over the live, verified tunnel, reading exactly this
@@ -360,10 +357,7 @@ impl Initializer {
 
     #[must_use]
     pub fn describe(&self) -> String {
-        format!(
-            "{}; credential through the Proxmox console of the new container (deploy token, no SSH)",
-            self.pangolin.describe()
-        )
+        format!("Pangolin: {}", self.pangolin.describe())
     }
 }
 
@@ -384,13 +378,13 @@ impl SiteInit for Initializer {
         Ok(
             match reconcile(ctx, &key, ctid, nice, home, record.as_ref(), credential.as_ref())? {
                 SiteStep::Create if credential.is_some() => {
-                    format!("Site {nice}: create it with the credential the interrupted run saved (never a new one)")
+                    format!("create Site {nice} with the credential the interrupted run saved")
                 }
                 SiteStep::Create => {
-                    format!("Site {nice}: new Site with its own new credential, saved on this desktop first")
+                    format!("create Site {nice} with a new credential")
                 }
                 SiteStep::Reuse(id) | SiteStep::Adopt(id) => {
-                    format!("Site {nice}: Site {id} of the interrupted initialization, kept")
+                    format!("Site {nice} (id {id}) of the interrupted run, kept")
                 }
             },
         )

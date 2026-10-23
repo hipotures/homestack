@@ -388,17 +388,31 @@ fn sections(
         lines.push(format!("{key}={value}"));
     }
     if source.is_site() {
+        let mut steps = Vec::new();
+        for (i, site_step) in plan.instances.iter().zip(&plan.sites) {
+            let ct = if i.resume.is_some() {
+                format!("CT {} exists; it is kept with its home", i.ctid)
+            } else {
+                format!("create CT {} (stopped, autostart off)", i.ctid)
+            };
+            steps.extend([
+                format!("1. {ct}"),
+                format!("2. Pangolin: {site_step}"),
+                format!("3. start it; its credential goes into {MOUNT}/pangolin-site through its console (no SSH)"),
+                format!("4. wait until Site {} is online, then turn autostart on", i.hostname),
+            ]);
+        }
         lines.extend(site.map(Initializer::describe));
-        lines.extend(plan.sites.iter().cloned());
-        lines.push(format!(
-            "Site: HOMESTACK_MANAGED_HOME=1 before the first start; credential and journal saved on this desktop \
-             before Pangolin is asked; the credential reaches {MOUNT}/pangolin-site/site.json only over root's \
-             standard input; then CT running and exactly its Site online. Autostart is enabled only after that. \
-             No Resource is created; no other Site or container is changed."
-        ));
-    } else {
-        lines.push(format!("then: {}", deploy::health_text(manifest)));
+        return vec![
+            ("Deploy".to_owned(), lines),
+            ("Steps".to_owned(), steps),
+            (
+                "Not changed".to_owned(),
+                vec!["other containers, other Sites and Resources".to_owned()],
+            ),
+        ];
     }
+    lines.push(format!("then: {}", deploy::health_text(manifest)));
     if source.is_api() {
         lines.push("API: reuse the configured desktop certificate and credentials; initialize /home/app/homestack, verify authenticated HTTPS, remove TLS bootstrap values, reboot and verify stored configuration, PVE access and the guest home mount".to_owned());
     }
