@@ -480,6 +480,15 @@ fn rate(bytes: f64) -> String {
     }
 }
 
+/// The image a container was made from: the deployer's record, else the
+/// image of the service HomeStack deployed in it.
+fn container_image(entry: &StatusEntry) -> Option<&str> {
+    entry
+        .image
+        .as_deref()
+        .or_else(|| entry.service.as_ref().map(|service| service.image.as_str()))
+}
+
 /// The memory of a service's cgroup, when it reports one.
 fn service_memory(entry: &StatusEntry) -> Option<&hs_service_status::Memory> {
     entry.service_status.as_ref()?.container.memory.as_ref()
@@ -719,10 +728,22 @@ fn columns(app: &App, width: usize, tag_width: usize, name_width: usize) -> Vec<
             right: false,
             // The image without its registry: `owner/name:version`.
             value: |entry| {
-                entry.image.as_deref().map_or_else(
+                container_image(entry).map_or_else(
                     || "—".to_owned(),
                     |image| image.split_once('/').map_or(image, |(_, path)| path).to_owned(),
                 )
+            },
+        },
+        Column {
+            key: "TAG",
+            heading: "TAG",
+            width: 9,
+            right: false,
+            // The image's tag.
+            value: |entry| {
+                container_image(entry)
+                    .and_then(|image| image.rsplit_once(':'))
+                    .map_or_else(|| "—".to_owned(), |(_, tag)| tag.to_owned())
             },
         },
     ];
