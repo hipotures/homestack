@@ -68,6 +68,12 @@ pub(super) fn setup_box(buf: &mut Buffer, area: Rect, app: &App, setup: &SetupBo
     let bottom_left = match &setup.stage {
         Stage::Loading { .. } => vec![Control::named("ESC", "cancel", KeyCode::Esc)],
         Stage::Failed { .. } => vec![Control::named("ENTER", "close", KeyCode::Enter)],
+        Stage::Tree if setup.in_services() && setup.manifest_focus.is_some() => vec![
+            Control::named("↑↓", "section", KeyCode::Down),
+            Control::named("ENTER", "fold", KeyCode::Enter),
+            Control::named("D", "deploy", KeyCode::Char('d')).enabled(setup.deployable().is_some()),
+            Control::named("ESC", "back", KeyCode::Esc),
+        ],
         Stage::Tree if setup.in_services() => vec![
             Control::named("←→", "group", KeyCode::Right),
             Control::named("ENTER", "open", KeyCode::Enter),
@@ -269,7 +275,12 @@ fn tree_stage(buf: &mut Buffer, inner: Rect, app: &App, setup: &SetupBox) {
     // Tree 3 : details 2 side by side (Python's 3fr / 2fr); below each
     // other when narrow.
     let (tree_area, details_area) = if body.width >= 70 {
-        let tree_width = body.width * 3 / 5;
+        // Services: the list only as wide as its rows, the details the rest.
+        let tree_width = if setup.in_services() {
+            services_width(setup).clamp(24, body.width * 3 / 5)
+        } else {
+            body.width * 3 / 5
+        };
         (
             Rect::new(body.x, body.y, tree_width, body.height),
             Rect::new(
@@ -286,16 +297,17 @@ fn tree_stage(buf: &mut Buffer, inner: Rect, app: &App, setup: &SetupBox) {
             Rect::new(body.x, body.y + tree_height, body.width, body.height - tree_height),
         )
     };
-    let details = if setup.in_services() {
+    let (details, heads) = if setup.in_services() {
         draw_services(buf, tree_area, app, setup);
         setup.service_detail_lines()
     } else {
         draw_tree(buf, tree_area, app, setup);
-        setup
+        let lines = setup
             .details(&setup.cursor)
             .lines()
             .map(|line| (line.to_owned(), Tone::Plain))
-            .collect()
+            .collect();
+        (lines, Vec::new())
     };
     if details_area.height == 0 || details_area.width <= 2 {
         return;
@@ -340,7 +352,7 @@ fn tree_stage(buf: &mut Buffer, inner: Rect, app: &App, setup: &SetupBox) {
     } else {
         details_area
     };
-    draw_details(buf, content, app, setup, &details);
+    draw_details(buf, content, app, setup, &details, &heads);
 }
 
 /// The Services group: the repositories as the tree draws them, without
@@ -352,7 +364,7 @@ fn draw_services(buf: &mut Buffer, area: Rect, app: &App, setup: &SetupBox) {
     let height = usize::from(area.height);
     let at = setup.services_cursor.min(rows.len().saturating_sub(1));
     let offset = (at + 1).saturating_sub(height.saturating_sub(1));
-    let column = (area.width * 2 / 5).min(32);
+    let column = state_width(setup);
     let state_x = area.right().saturating_sub(column);
     write(
         buf,
@@ -502,33 +514,90 @@ fn draw_tree(buf: &mut Buffer, area: Rect, app: &App, setup: &SetupBox) {
     scrollbar(buf, bar, palette, Scrolls::SetupTree, offset, height, rows.len());
 }
 
-fn draw_details(buf: &mut Buffer, area: Rect, app: &App, setup: &SetupBox, details: &[(String, Tone)]) {
+/// The width of the STATE column of the Services group.
+fn state_width(setup: &SetupBox) -> u16 {
+    let widest = setup
+        .service_rows()
+        .iter()
+        .map(|row| setup.service_row_text(row).1.0.chars().count())
+        .chain(["STATE".len()])
+        .max()
+        .unwrap_or(0);
+    u16::try_from(widest + 1).unwrap_or(u16::MAX)
+}
+
+/// The width the Services group's rows need: arrow, label, gap and STATE.
+fn services_width(setup: &SetupBox) -> u16 {
+    let label = setup
+        .service_rows()
+        .iter()
+        .map(|row| {
+            let indent = if row.file.is_some() { 5 } else { 3 };
+            indent + 2 + setup.service_row_text(row).0.chars().count()
+        })
+        .chain([format!("{}  {}", super::setup::SERVICES, setup.service_rows().len()).len() + 1])
+        .max()
+        .unwrap_or(0);
+    u16::try_from(label + 2)
+        .unwrap_or(u16::MAX)
+        .saturating_add(state_width(setup))
+}
+
+/// The details; `heads` are the lines of the manifest's sections, which a
+/// click opens or closes, and the highlighted one stays in view.
+fn draw_details(
+    buf: &mut Buffer,
+    area: Rect,
+    app: &App,
+    setup: &SetupBox,
+    details: &[(String, Tone)],
+    heads: &[usize],
+) {
     let palette = &app.palette;
     let text = text_style(palette);
     register(area, Hit::SetupDetails);
     let width = usize::from(area.width.saturating_sub(2));
-    let lines: Vec<(String, Tone)> = details
+    // Each wrapped row with the line it comes from.
+    let lines: Vec<(String, Tone, usize)> = details
         .iter()
-        .flat_map(|(line, tone)| wrap(line, width).into_iter().map(move |line| (line, *tone)))
+        .enumerate()
+        .flat_map(|(at, (line, tone))| wrap(line, width).into_iter().map(move |line| (line, *tone, at)))
         .collect();
+    let first_row = |at: usize| lines.iter().position(|(_, _, line)| *line == at);
+    let focused = setup.manifest_focus.and_then(|focus| heads.get(focus)).copied();
     let height = usize::from(area.height);
-    let scroll = setup.details_scroll.min(lines.len().saturating_sub(height));
+    let mut scroll = setup.details_scroll;
+    if let Some(row) = focused.and_then(first_row) {
+        scroll = scroll.clamp((row + 1).saturating_sub(height), row);
+    }
+    let scroll = scroll.min(lines.len().saturating_sub(height));
     let status = details.first().and_then(|(line, _)| SetupBox::status_tone(line));
-    for (row, (line, tone)) in lines.iter().skip(scroll).take(height).enumerate() {
-        let y = area.y + u16::try_from(row).unwrap_or(0);
-        let style = match status {
-            Some(tone) if row + scroll == 0 => tone_style(palette, text, tone).add_modifier(Modifier::BOLD),
+    for (row, (line, tone, at)) in lines.iter().enumerate().skip(scroll).take(height) {
+        let y = area.y + u16::try_from(row - scroll).unwrap_or(0);
+        let mut style = match status {
+            Some(tone) if row == 0 => tone_style(palette, text, tone).add_modifier(Modifier::BOLD),
             _ => tone_style(palette, text, *tone),
         };
+        if let Some(section) = heads.iter().position(|head| head == at) {
+            register(Rect::new(area.x, y, area.width, 1), Hit::ManifestSection(section));
+            if focused == Some(*at) {
+                style = style.bg(palette.selection).add_modifier(Modifier::BOLD);
+                if palette.no_color {
+                    style = style.add_modifier(Modifier::REVERSED);
+                }
+                write(buf, area.x, y, area.width, &" ".repeat(usize::from(area.width)), style);
+            }
+        }
         let used = write(buf, area.x + 1, y, area.width.saturating_sub(2), line, style);
         // `Label: value`: the label muted, so the values stand out.
-        if row + scroll > 0
+        if row > 0
             && *tone == Tone::Plain
-            && let Some(at) = line.find(": ")
-            && at <= 28
-            && !line[..at].contains(['~', '/', '"'])
+            && focused != Some(*at)
+            && let Some(colon) = line.find(": ")
+            && colon <= 28
+            && !line[..colon].contains(['~', '/', '"'])
         {
-            let label = &line[..=at];
+            let label = &line[..=colon];
             write(
                 buf,
                 area.x + 1,

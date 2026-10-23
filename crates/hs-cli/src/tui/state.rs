@@ -1550,6 +1550,12 @@ impl App {
                     }
                     Some(Hit::SetupRow(index, part)) => return self.setup_click(index, part),
                     Some(Hit::SetupDetails) => return None,
+                    Some(Hit::ManifestSection(index)) => {
+                        if let Some(setup) = self.setup.as_mut() {
+                            setup.toggle_manifest_section(index);
+                        }
+                        return None;
+                    }
                     Some(Hit::Log { .. } | Hit::Bar(_)) => return None,
                     Some(Hit::Parallel(item)) => {
                         if let Some(parallel) = PARALLEL_CHOICES.get(item) {
@@ -1725,7 +1731,10 @@ impl App {
             }
             MouseEventKind::ScrollDown | MouseEventKind::ScrollUp
                 if self.setup.is_some()
-                    && super::chrome::hit_at(event.column, event.row) == Some(Hit::SetupDetails) =>
+                    && matches!(
+                        super::chrome::hit_at(event.column, event.row),
+                        Some(Hit::SetupDetails | Hit::ManifestSection(_))
+                    ) =>
             {
                 if let Some(setup) = self.setup.as_mut() {
                     setup.details_scroll = if event.kind == MouseEventKind::ScrollDown {

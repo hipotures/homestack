@@ -155,21 +155,21 @@ pub fn service_row(file: &ManifestFile) -> (String, Tone) {
     }
 }
 
-/// What a manifest file declares, its YAML collapsed to the top-level
-/// sections unless `expanded`, and its instances among the service
-/// containers Proxmox lists (`services`).
+/// What a manifest file declares, its YAML with only the sections in
+/// `open` unfolded, and its instances among the service containers Proxmox
+/// lists (`services`); also the lines of its sections.
 #[must_use]
 pub fn service_details(
     discovery: &Discovery,
     file: &ManifestFile,
     services: &[StatusEntry],
-    expanded: bool,
-) -> Vec<(String, Tone)> {
+    open: &BTreeSet<String>,
+) -> (Vec<(String, Tone)>, Vec<usize>) {
     let revision = format!("Revision: {} @ {}", discovery.branch, short(&discovery.commit));
     let checked = match &file.manifest {
         Ok(checked) => checked,
         Err(error) => {
-            return vec![
+            let lines = vec![
                 ("Invalid manifest".to_owned(), Tone::Red),
                 (format!("File: {}", file.path), Tone::Plain),
                 (revision, Tone::Plain),
@@ -180,6 +180,7 @@ pub fn service_details(
                     Tone::Plain,
                 ),
             ];
+            return (lines, Vec::new());
         }
     };
     let mut lines: Vec<(String, Tone)> = [
@@ -223,14 +224,10 @@ pub fn service_details(
             Tone::Red,
         ));
     }
-    lines.push((
-        format!(
-            "Manifest ({})",
-            if expanded { "ENTER collapses" } else { "ENTER expands" }
-        ),
-        Tone::Dim,
-    ));
-    lines.extend(manifest_lines(checked, expanded));
+    lines.push(("Manifest".to_owned(), Tone::Dim));
+    let (manifest, heads) = manifest_lines(checked, open);
+    let heads = heads.into_iter().map(|at| at + lines.len()).collect();
+    lines.extend(manifest);
     lines.push((String::new(), Tone::Plain));
     let found = checked
         .id
@@ -255,24 +252,39 @@ pub fn service_details(
             Tone::Plain,
         ));
     }
-    lines
+    (lines, heads)
 }
 
-/// The manifest's YAML in section order: collapsed, one line per
-/// top-level section with its error count; expanded, every value with the
-/// faulty ones and their sections red and each issue below its line.
-fn manifest_lines(checked: &Checked, expanded: bool) -> Vec<(String, Tone)> {
+/// The top-level keys of the manifest in the order shown: the sections,
+/// then unknown ones.
+#[must_use]
+pub fn section_names(checked: &Checked) -> Vec<String> {
+    let mut names: Vec<String> = SECTIONS.iter().map(|name| (*name).to_owned()).collect();
+    if let Yaml::Hash(top) = &checked.document {
+        names.extend(
+            top.keys()
+                .filter_map(Yaml::as_str)
+                .filter(|name| !SECTIONS.contains(name))
+                .map(str::to_owned),
+        );
+    }
+    names
+}
+
+/// The manifest's YAML in section order, each section collapsed to one
+/// line with its error count unless it is in `open`; faulty values and
+/// their sections red, each issue below its line. Also the index of each
+/// section's line, in [`section_names`] order.
+fn manifest_lines(checked: &Checked, open: &BTreeSet<String>) -> (Vec<(String, Tone)>, Vec<usize>) {
     let Yaml::Hash(top) = &checked.document else {
-        return Vec::new();
+        return (Vec::new(), Vec::new());
     };
-    let unknown = top
-        .keys()
-        .filter_map(Yaml::as_str)
-        .filter(|name| !SECTIONS.contains(name));
     let mut lines = Vec::new();
-    for name in SECTIONS.into_iter().chain(unknown) {
-        let path = vec![name.to_owned()];
-        let Some(value) = top.get(&Yaml::String(name.to_owned())) else {
+    let mut heads = Vec::new();
+    for name in section_names(checked) {
+        heads.push(lines.len());
+        let path = vec![name.clone()];
+        let Some(value) = top.get(&Yaml::String(name.clone())) else {
             lines.push((format!("  {name}:"), Tone::Red));
             issue_lines(checked, &path, 2, &mut lines);
             continue;
@@ -288,7 +300,7 @@ fn manifest_lines(checked: &Checked, expanded: bool) -> Vec<(String, Tone)> {
                 lines.push((format!("  {name}: (empty: off)"), tone));
                 issue_lines(checked, &path, 2, &mut lines);
             }
-            Yaml::Hash(_) | Yaml::Array(_) if !expanded => {
+            Yaml::Hash(_) | Yaml::Array(_) if !open.contains(&name) => {
                 let note = match errors {
                     0 => String::new(),
                     1 => "  ✗ 1 error".to_owned(),
@@ -308,7 +320,7 @@ fn manifest_lines(checked: &Checked, expanded: bool) -> Vec<(String, Tone)> {
             }
         }
     }
-    lines
+    (lines, heads)
 }
 
 /// The issues exactly at `path`, below its line.
@@ -472,8 +484,10 @@ pub struct SetupBox {
     pub ssh_status: String,
     pub stage: Stage,
     pub details_scroll: usize,
-    /// The highlighted manifest shows its whole YAML, not just its sections.
-    pub manifest_expanded: bool,
+    /// The sections of the highlighted manifest shown open.
+    pub manifest_open: BTreeSet<String>,
+    /// The highlighted section while its sections are browsed.
+    pub manifest_focus: Option<usize>,
     pub notice: Option<Notice>,
     /// The spinner's frame.
     pub frame: usize,
@@ -665,7 +679,8 @@ impl SetupBox {
             ssh_status: if connected { "connected" } else { "not connected" }.to_owned(),
             stage: Stage::Tree,
             details_scroll: 0,
-            manifest_expanded: false,
+            manifest_open: BTreeSet::new(),
+            manifest_focus: None,
             notice: None,
             frame: 0,
         };
@@ -2331,23 +2346,24 @@ impl SetupBox {
 
     /// The details of the highlighted Services row.
     #[must_use]
-    pub fn service_detail_lines(&self) -> Vec<(String, Tone)> {
+    pub fn service_detail_lines(&self) -> (Vec<(String, Tone)>, Vec<usize>) {
         let Some(row) = self.service_cursor_row() else {
             let reason = if self.catalog.repository_error.is_empty() {
                 "No repositories match.".to_owned()
             } else {
                 self.catalog.repository_error.clone()
             };
-            return [SERVICES.to_owned(), String::new(), reason]
+            let lines = [SERVICES.to_owned(), String::new(), reason]
                 .into_iter()
                 .map(|line| (line, Tone::Plain))
                 .collect();
+            return (lines, Vec::new());
         };
         let read = self.discovery(&row.repository);
         if let (Some(index), Some(Ok(found))) = (row.file, read)
             && let Some(file) = found.files.get(index)
         {
-            return service_details(found, file, &self.services, self.manifest_expanded);
+            return service_details(found, file, &self.services, &self.manifest_open);
         }
         let mut lines = vec![row.repository.clone()];
         if let Some(branch) = self.default_branch(&row.repository) {
@@ -2382,7 +2398,7 @@ impl SetupBox {
                 }
             }
         }
-        lines
+        let lines = lines
             .into_iter()
             .map(|line| {
                 let tone =
@@ -2393,7 +2409,59 @@ impl SetupBox {
                     };
                 (line, tone)
             })
-            .collect()
+            .collect();
+        (lines, Vec::new())
+    }
+
+    /// The top-level keys of the highlighted manifest, when it was read.
+    fn manifest_sections(&self) -> Vec<String> {
+        let Some(ServiceRow {
+            repository,
+            file: Some(index),
+        }) = self.service_cursor_row()
+        else {
+            return Vec::new();
+        };
+        match self.discovery(&repository) {
+            Some(Ok(found)) => match found.files.get(index).map(|file| &file.manifest) {
+                Some(Ok(checked)) => section_names(checked),
+                _ => Vec::new(),
+            },
+            _ => Vec::new(),
+        }
+    }
+
+    /// Open or close the section `index` of the highlighted manifest and
+    /// highlight it.
+    pub fn toggle_manifest_section(&mut self, index: usize) {
+        let Some(name) = self.manifest_sections().into_iter().nth(index) else {
+            return;
+        };
+        self.manifest_focus = Some(index);
+        if !self.manifest_open.remove(&name) {
+            self.manifest_open.insert(name);
+        }
+    }
+
+    /// A key while the highlighted manifest's sections are browsed; `None`
+    /// when it is not one of theirs.
+    fn manifest_key(&mut self, focus: usize, code: KeyCode) -> Option<()> {
+        let last = self.manifest_sections().len().saturating_sub(1);
+        match code {
+            KeyCode::Up => self.manifest_focus = Some(focus.saturating_sub(1)),
+            KeyCode::Down => self.manifest_focus = Some((focus + 1).min(last)),
+            KeyCode::Enter | KeyCode::Char(' ') | KeyCode::Right => self.toggle_manifest_section(focus),
+            KeyCode::Left => {
+                if let Some(name) = self.manifest_sections().get(focus) {
+                    self.manifest_open.remove(name);
+                }
+            }
+            KeyCode::Esc => self.manifest_focus = None,
+            _ => return None,
+        }
+        // The details follow the highlighted section.
+        self.details_scroll = 0;
+        Some(())
     }
 
     /// Move the Services highlight by `step` rows.
@@ -2405,7 +2473,8 @@ impl SetupBox {
         let at = self.services_cursor.min(count - 1);
         self.services_cursor = at.saturating_add_signed(step).min(count - 1);
         self.details_scroll = 0;
-        self.manifest_expanded = false;
+        self.manifest_open.clear();
+        self.manifest_focus = None;
     }
 
     /// Open a repository of the Services group: its manifests are read the
@@ -2489,6 +2558,11 @@ impl SetupBox {
             self.services_cursor = 0;
             return None;
         }
+        if let Some(focus) = self.manifest_focus
+            && self.manifest_key(focus, key.code).is_some()
+        {
+            return None;
+        }
         let row = self.service_cursor_row();
         match key.code {
             KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) && !self.busy => {
@@ -2508,8 +2582,8 @@ impl SetupBox {
                 self.deploy_request = self.service_source();
                 return Some(Ask::Manage);
             }
-            KeyCode::Enter if row.as_ref().is_some_and(|row| row.file.is_some()) => {
-                self.manifest_expanded = !self.manifest_expanded;
+            KeyCode::Enter if !self.manifest_sections().is_empty() => {
+                self.manifest_focus = Some(0);
                 self.details_scroll = 0;
             }
             KeyCode::Enter => return self.toggle_repository(),
@@ -2723,6 +2797,10 @@ impl super::state::App {
         setup.filtering = false;
         setup.details_scroll = 0;
         if setup.in_services() {
+            if setup.services_cursor != index {
+                setup.manifest_open.clear();
+                setup.manifest_focus = None;
+            }
             setup.services_cursor = index;
             return (part == 0 || double)
                 .then(|| setup.toggle_repository())
