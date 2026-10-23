@@ -189,9 +189,13 @@ before anything is made, and before every Pangolin step. The temporary Root
 key is never read: it exists only in the wizard's memory. No Pangolin
 credential enters the manifest, plan, PVE metadata, progress or logs.
 
-Root for the credential is the saved access host (`install_host`), opened with
-the existing SSH root access (hardware key, no password or software-key
-fallback). It is used only for credential installation and digest checks.
+No root SSH to Proxmox is used. The credential reaches the new container once,
+through its Proxmox console (`hs_deploy::console`: `termproxy` and its
+websocket, deploy token with `VM.Console`, console mode `shell`), which is a
+shell inside the unprivileged container, not on the node. The installer
+grants `VM.Console` in `HomeStackDeploy`; an existing installation adds it
+with `pveum role modify HomeStackDeploy --append 1 --privs VM.Console`. With it
+the deploy token can open a root shell in every container of its pools.
 
 ### Instance identity and journal
 
@@ -228,10 +232,12 @@ explicitly, never adopted.
    that nice ID. An uncertain result never creates another identity: the next
    run reconciles the Site ID and Newt ID with the journal and reuses the same
    credential.
-4. The container starts. The configuration is sent over the root session's
-   standard input to `pct exec <CTID> -- env HOMESTACK_MANAGED_HOME=1
-   homestack-site-credential` (the selector is explicit; `pct exec` does not
-   inherit PID 1's environment). It writes `/home/app/pangolin-site/site.json`
+4. The container starts. Its console turns echo off, then runs
+   `env HOMESTACK_MANAGED_HOME=1 homestack-site-credential` with the
+   configuration as a here-document (the selector is explicit; a console
+   shell does not inherit PID 1's environment), and prints the installed
+   file's digest behind a marker written in two parts, so the terminal's echo
+   of the command never matches. It writes `/home/app/pangolin-site/site.json`
    (directory 0700, file 0600, owner site), and its SHA-256 must match the
    local configuration.
 5. The worker polls Pangolin until exactly that Site ID is online and checks
@@ -287,8 +293,11 @@ disk would need root SSH to restore the credential, so that path was removed.
   the same credential on resume, never a new identity.
 - Pangolin online status depends on Pangolin's own reporting interval; the
   wait is 180 s.
-- Live behavior is unverified: no real LXC, root `pct exec`, Pangolin Site
-  creation or online transition has been exercised by this integration.
+- The console transfer was checked live on a test container in
+  `homestack-test` (a 10M home, a non-secret configuration, the digest
+  matched in four runs, the container removed afterwards). A real Pangolin
+  Site creation and online transition through common deployment are still
+  unverified.
 
 ### Remaining isolated live verification
 

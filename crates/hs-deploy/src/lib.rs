@@ -4,6 +4,7 @@
 
 pub mod acme;
 pub mod config;
+pub mod console;
 pub mod deploy;
 pub mod dns;
 pub mod node;

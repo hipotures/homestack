@@ -15,9 +15,15 @@ use crate::services::deploy::{SiteInit, SiteReady};
 use crate::system::System;
 use crate::touch::Sounds;
 use crate::tui::pangolin_tunnel::Session as Tunnel;
+use hs_deploy::config::DeployConfig;
 
 /// How long the tunnel may take, a security key's touch included.
 const TUNNEL_LIMIT: Duration = Duration::from_secs(180);
+/// How long the console may take to install the credential.
+const CONSOLE_LIMIT: Duration = Duration::from_secs(60);
+/// Precedes the installed credential's digest in the console; the script
+/// prints it split in two, so the echoed command never matches.
+const MARKER: &str = "HOMESTACK-SITE-DIGEST ";
 
 impl Context {
     /// A managed instance's credential; its journal and lock sit next to it.
@@ -325,22 +331,23 @@ struct Held {
     credential: Credential,
 }
 
-/// The Pangolin context and root access to the cluster: what a new managed
-/// Site container needs once, for its credential.
+/// The Pangolin context and the deploy token: what a new managed Site
+/// container needs once, for its credential, which reaches it through the
+/// Proxmox console (`hs_deploy::console`), never SSH.
 pub struct Initializer {
     pangolin: Pangolin,
-    root: Box<dyn Root>,
-    access: Access,
+    config: DeployConfig,
+    pve: hs_pve::PveClient,
     held: Option<Held>,
 }
 
 impl Initializer {
-    pub fn open(pangolin: Pangolin, mut root: Box<dyn Root>) -> Result<Self, String> {
-        let access = hs_install::probe(root.as_mut()).map_err(|e| e.to_string())?;
+    pub fn open(pangolin: Pangolin, config: DeployConfig) -> Result<Self, String> {
+        let pve = hs_deploy::deploy::deploy_client(&config)?;
         Ok(Self {
             pangolin,
-            root,
-            access,
+            config,
+            pve,
             held: None,
         })
     }
@@ -354,9 +361,8 @@ impl Initializer {
     #[must_use]
     pub fn describe(&self) -> String {
         format!(
-            "{}; credential through root {}",
-            self.pangolin.describe(),
-            self.root.describe()
+            "{}; credential through the Proxmox console of the new container (deploy token, no SSH)",
+            self.pangolin.describe()
         )
     }
 }
@@ -454,11 +460,30 @@ impl SiteInit for Initializer {
             .filter(|held| held.ctid == ctid)
             .ok_or("Site initialization was not prepared")?;
         let content = configuration(&self.pangolin.ctx.url, &held.credential)?;
-        if install(self.root.as_mut(), &self.access, node, ctid, &content, true, say)? {
-            say("  credential installed in /home/app/pangolin-site and verified by its digest");
-        } else {
-            say("  credential already installed in /home/app/pangolin-site");
+        say("  installing the Site credential through the container's console");
+        // Echo off first; the receiver reads the configuration from the here-document.
+        let script = Zeroizing::new(format!(
+            "stty -echo\nenv HOMESTACK_MANAGED_HOME=1 {TOOL} <<'HOMESTACK-SITE'\n{}HOMESTACK-SITE\necho \"HOMESTACK-SITE-\"\"DIGEST $(env HOMESTACK_MANAGED_HOME=1 {TOOL} --digest)\"\nexit\n",
+            content.as_str()
+        ));
+        let output = tokio::runtime::Handle::current().block_on(hs_deploy::console::run(
+            &self.pve,
+            &self.config,
+            node,
+            ctid,
+            &script,
+            MARKER,
+            CONSOLE_LIMIT,
+        ))?;
+        let installed = output
+            .lines()
+            .find_map(|line| line.split_once(MARKER).map(|(_, digest)| digest))
+            .map(str::trim)
+            .unwrap_or_default();
+        if installed != digest(&content) {
+            return Err(format!("CT {ctid}: the installed credential does not match"));
         }
+        say("  credential installed in /home/app/pangolin-site and verified by its digest");
         if held.record.stage < SiteStage::Installed {
             held.record.stage = SiteStage::Installed;
             held.record.at = stamp();

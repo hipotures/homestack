@@ -8,7 +8,7 @@ use std::sync::mpsc::Receiver;
 use hs_deploy::config::DeployConfig;
 use hs_pve::PveClient;
 
-use super::install::{Event, Found, Mark, Method, Setting};
+use super::install::{Event, Found, Mark, Setting};
 use super::installing::{Command, Setup};
 use super::pangolin_sites::managed::{Initializer, Pangolin};
 use super::reinstall::local_time;
@@ -45,14 +45,9 @@ pub(super) fn work(setup: &Setup, commands: &Receiver<Command>, tell: &(dyn Fn(E
         return;
     }
     let mut session: Option<Session> = None;
-    // Root for a Site's credential: the saved access host.
-    let mut host = String::new();
     while let Ok(command) = commands.recv() {
         match command {
             Command::Connect { .. } | Command::Rescan { .. } => {
-                if let Command::Connect { target, .. } = &command {
-                    host.clone_from(target);
-                }
                 let answers = match &command {
                     Command::Rescan { answers, .. } => Some(answers.clone()),
                     _ => None,
@@ -71,7 +66,7 @@ pub(super) fn work(setup: &Setup, commands: &Receiver<Command>, tell: &(dyn Fn(E
                             if source.is_site() {
                                 opened.site = Some(match site {
                                     Some(site) => site,
-                                    None => initializer(setup, &host, tell)?,
+                                    None => initializer(setup, &opened.config, tell)?,
                                 });
                             }
                             Ok((opened, found))
@@ -153,11 +148,12 @@ async fn open(setup: &Setup, source: &Source, kept: Option<&Choice>) -> Result<(
 }
 
 /// A Site connector's trusted context: its own verified Pangolin tunnel and
-/// Step 7 key from the saved settings, and root on `host` for the credential.
-fn initializer(setup: &Setup, host: &str, tell: &(dyn Fn(Event) + Send + Sync)) -> Result<Initializer, String> {
-    if host.is_empty() {
-        return Err("No saved access host for root on the cluster; install HomeStack first.".to_owned());
-    }
+/// Step 7 key from the saved settings; the credential goes through the console.
+fn initializer(
+    setup: &Setup,
+    config: &DeployConfig,
+    tell: &(dyn Fn(Event) + Send + Sync),
+) -> Result<Initializer, String> {
     tell(Event::Busy(
         "Opening the Pangolin API tunnel (touch your key or give its PIN if it asks)".to_owned(),
     ));
@@ -168,11 +164,7 @@ fn initializer(setup: &Setup, host: &str, tell: &(dyn Fn(Event) + Send + Sync)) 
         setup.sounds.clone(),
         &setup.stop,
     )?;
-    tell(Event::Busy(format!(
-        "Connecting to {host} as root for the Site credential (touch your key if it asks)"
-    )));
-    let root = setup.open(Method::Ssh, host).map_err(|e| e.0)?;
-    Initializer::open(pangolin, root)
+    Initializer::open(pangolin, config.clone())
 }
 
 fn gib(bytes: u64) -> u64 {

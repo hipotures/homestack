@@ -977,6 +977,22 @@ async fn initialize_site(
         node::set_env(pve, node, ctid, std::slice::from_ref(&selector), &[]).await?;
         say("  managed runtime selector set before the first start");
     }
+    // The credential reaches the container through its console, a shell inside it.
+    let cfg = pve
+        .get(&format!("/nodes/{node}/lxc/{ctid}/config"), &[])
+        .await
+        .map_err(|_| "cannot read the container configuration")?;
+    if cfg["cmode"].as_str() != Some("shell") {
+        pve.put(
+            &format!("/nodes/{node}/lxc/{ctid}/config"),
+            &[
+                ("cmode", "shell"),
+                ("digest", cfg["digest"].as_str().unwrap_or_default()),
+            ],
+        )
+        .await
+        .map_err(|e| format!("console mode: {e}"))?;
+    }
     tokio::task::block_in_place(|| site.prepare(node, ctid, &instance.hostname, home_volume(home), say))?;
     if pve_status(pve, node, ctid).await? != "running" {
         say(&format!("  starting CT {ctid}"));

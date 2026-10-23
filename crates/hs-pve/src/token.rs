@@ -59,7 +59,7 @@ impl PveToken {
     }
 
     /// Value of the `Authorization` header.
-    pub(crate) fn header_value(&self) -> String {
+    pub fn header_value(&self) -> String {
         format!("PVEAPIToken={}={}", self.id, self.secret)
     }
 }
