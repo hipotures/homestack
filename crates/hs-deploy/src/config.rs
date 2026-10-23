@@ -35,6 +35,8 @@ pub struct DeployConfig {
     pub pve: PveSection,
     pub server: ServerSection,
     pub acme: AcmeSection,
+    /// Explicit targets for standalone deployment commands; services discover theirs in Proxmox.
+    #[serde(default)]
     pub instances: Vec<InstanceSpec>,
 }
 
@@ -161,9 +163,6 @@ impl DeployConfig {
         if !(1..=32).contains(&self.cidr) {
             return Err("cidr must be 1-32".to_owned());
         }
-        if self.instances.is_empty() {
-            return Err("no [[instances]]".to_owned());
-        }
         if self.pve.endpoints.is_empty() {
             return Err("[pve] endpoints is empty".to_owned());
         }
@@ -231,6 +230,9 @@ impl DeployConfig {
 
     /// The instances `only` names, all without it.
     pub fn selected(&self, only: &[String]) -> Result<Vec<&InstanceSpec>, String> {
+        if self.instances.is_empty() {
+            return Err("This command requires explicit [[instances]]; deploy services through the TUI".to_owned());
+        }
         if let Some(unknown) = only
             .iter()
             .find(|name| !self.instances.iter().any(|i| &i.name == *name))

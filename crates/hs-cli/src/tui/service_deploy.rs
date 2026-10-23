@@ -230,8 +230,7 @@ fn connect(
     tell(Event::Busy(
         "Reading the cluster, the instances and the releases".to_owned(),
     ));
-    let config = DeployConfig::load(&setup.token_dir.join("deploy.toml"))
-        .map_err(|error| format!("{error}. Install HomeStack before deploying services."))?;
+    let config = DeployConfig::load(&setup.token_dir.join("deploy.toml"))?;
     let pve = hs_deploy::deploy::deploy_client(&config)?;
     let cluster = setup.handle.block_on(deploy::survey(&config, &pve, source))?;
     if cluster.releases.is_empty() {
