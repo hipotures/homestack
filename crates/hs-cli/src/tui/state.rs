@@ -502,8 +502,20 @@ impl App {
     pub fn set_status(&mut self, status: &Value) {
         let json = status;
         match serde_json::from_value::<GlobalStatus>(status.clone()) {
-            Ok(status) => {
+            Ok(mut status) => {
                 self.status_json = Some(json.clone());
+                // Guest power state cannot be confirmed while its node is
+                // unavailable, even if cluster inventory retains the last value.
+                for entry in status
+                    .gold
+                    .iter_mut()
+                    .chain(&mut status.workspaces)
+                    .chain(&mut status.others)
+                {
+                    if entry.node_status != "online" {
+                        entry.status = "unknown".to_owned();
+                    }
+                }
                 self.status = Some(status);
                 self.apply_api_updates();
                 self.share_services();

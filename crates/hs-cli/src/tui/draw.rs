@@ -429,6 +429,21 @@ fn cluster(buf: &mut Buffer, area: Rect, app: &App, mut controls: Vec<Control>) 
     }
 }
 
+/// Distinguish inaccessible guests from confirmed stopped guests.
+fn instance_state_symbol(entry: &StatusEntry) -> &'static str {
+    if entry.node_status != "online" {
+        "✗"
+    } else if entry.status.starts_with('◐') {
+        "◐"
+    } else {
+        match entry.status.as_str() {
+            "running" => "●",
+            "stopped" => "○",
+            _ => "?",
+        }
+    }
+}
+
 /// A list column: heading, width and how a row fills it.
 struct Column {
     /// Its name in the settings: one of [`COLUMNS`].
@@ -495,16 +510,7 @@ fn columns(app: &App, width: usize, tag_width: usize, name_width: usize) -> Vec<
             heading: "STATE",
             width: 9,
             right: false,
-            value: |entry| {
-                if entry.status.starts_with('◐') {
-                    // The busy dot under the middle of STATE; the action's
-                    // name is in its box.
-                    return "  ◐".to_owned();
-                }
-                let symbol = if entry.status == "running" { "●" } else { "○" };
-                // Under the middle of STATE.
-                format!("  {symbol}")
-            },
+            value: |entry| format!("  {}", instance_state_symbol(entry)),
         },
         Column {
             key: "ADDRESS",
@@ -669,7 +675,8 @@ fn list_line(columns: &[Column], cell: impl Fn(&Column) -> String) -> String {
 fn workspace_actions(app: &App) -> Vec<Control> {
     let selected = app.selected_entry();
     let running = selected.is_some_and(|entry| entry.status == "running");
-    let free = selected.is_some() && app.action.is_none() && app.setup.is_none();
+    let free =
+        selected.is_some_and(|entry| entry.node_status == "online") && app.action.is_none() && app.setup.is_none();
     // A service container no workflow manages yet: nothing to act on.
     let favorite = Control::key(if selected.is_some_and(|entry| app.favorites.contains(&entry.vmid)) {
         "un&favorite"
@@ -1176,31 +1183,24 @@ fn workspaces(buf: &mut Buffer, area: Rect, app: &App, mut controls: Vec<Control
             let x = list.x + 1 + u16::try_from(at).unwrap_or(0);
             write(buf, x, y, 1, "■", style.fg(tag_color(palette, tag)));
         }
-        // The state dot in its colour.
-        if let Some(at) = line.find(['●', '○', '◐']) {
-            let x = list.x + u16::try_from(line[..at].chars().count()).unwrap_or(0);
-            let busy = shown.status.starts_with('◐');
-            let color: Color = if busy {
+        // Place the state symbol by its column, independently of names or tags.
+        if columns.iter().any(|column| column.key == "STATE") {
+            let offset: usize = columns
+                .iter()
+                .take_while(|column| column.key != "STATE")
+                .map(|column| column.width + 1)
+                .sum();
+            let x = list.x + u16::try_from(offset + 3).unwrap_or(0);
+            let color = if entry.node_status != "online" {
+                palette.error
+            } else if shown.status.starts_with('◐') {
                 palette.info
             } else if entry.status == "running" {
                 palette.ok
             } else {
                 palette.muted
             };
-            write(
-                buf,
-                x,
-                y,
-                1,
-                if busy {
-                    "◐"
-                } else if entry.status == "running" {
-                    "●"
-                } else {
-                    "○"
-                },
-                style.fg(color),
-            );
+            write(buf, x, y, 1, instance_state_symbol(&shown), style.fg(color));
         }
     }
     let bar_area = Rect::new(area.x, list.y, area.width, list.height + 1);
