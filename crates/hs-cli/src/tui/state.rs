@@ -756,6 +756,26 @@ impl App {
         self.install = Some(self.sites_install());
     }
 
+    /// Setup of this desktop; with `services`, straight on the Services tab
+    /// (F9), where services are deployed and maintained.
+    fn open_desktop_setup(&mut self, services: bool) -> Option<Request> {
+        if self.action.is_some() || self.setup.is_some() {
+            return None;
+        }
+        let mut setup = super::setup::SetupBox::loading(
+            crate::setup::Settings::default(),
+            crate::setup::Target {
+                name: "this desktop".to_owned(),
+                local: true,
+                ..crate::setup::Target::default()
+            },
+            "Reading this desktop",
+        );
+        setup.services_first = services;
+        self.open_setup_box(setup);
+        Some(Request::Setup(None))
+    }
+
     /// The deployment of a service: its settings come from the cluster.
     pub fn open_service_deploy(&mut self) {
         let mut install = super::install::Install::new(super::install::Mode::Service, false);
@@ -2028,6 +2048,7 @@ impl App {
             KeyCode::Char('q') => return Some(Request::Quit),
             KeyCode::Char('m') => self.overlay = Some(Overlay::Menu { index: 0 }),
             KeyCode::F(10) => self.overlay = Some(Overlay::Settings { section: 0 }),
+            KeyCode::F(9) => return self.open_desktop_setup(true),
             KeyCode::Esc if self.view != 0 => {
                 self.view = 0;
                 self.shown = VIEWS[0].1;
@@ -2201,21 +2222,7 @@ impl App {
                     }
                     4 => self.overlay = Some(Overlay::Settings { section: 0 }),
                     5 => self.overlay = Some(Overlay::Help),
-                    6 => {
-                        if self.action.is_some() || self.setup.is_some() {
-                            return None;
-                        }
-                        self.open_setup_box(super::setup::SetupBox::loading(
-                            crate::setup::Settings::default(),
-                            crate::setup::Target {
-                                name: "this desktop".to_owned(),
-                                local: true,
-                                ..crate::setup::Target::default()
-                            },
-                            "Reading this desktop",
-                        ));
-                        return Some(Request::Setup(None));
-                    }
+                    6 => return self.open_desktop_setup(false),
                     7 => return Some(Request::UpdateApi),
                     _ => return Some(Request::Quit),
                 },

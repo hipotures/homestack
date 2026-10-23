@@ -282,6 +282,8 @@ pub struct SetupBox {
     pub cursor: String,
     /// The group shown.
     pub section: usize,
+    /// Opened with F9: show Services once the catalog is read.
+    pub services_first: bool,
     pub nodes: HashMap<String, Node>,
     pub action_states: HashMap<String, String>,
     /// The last item state of the run (`ID: state`), shown with the target.
@@ -494,6 +496,7 @@ impl SetupBox {
             deploy_request: None,
             discoveries: HashMap::new(),
             services_open: BTreeSet::new(),
+            services_first: false,
             services_cursor: 0,
             last_click: None,
             services: Vec::new(),
@@ -511,7 +514,11 @@ impl SetupBox {
     /// The worker connected and read the state.
     pub fn ready(&mut self, catalog: Catalog, state: Value, target: Target, settings: Settings) {
         let mut ready = Self::new(settings, target, catalog, Some(state));
-        ready.section = self.section;
+        if self.services_first {
+            ready.show_section(ready.services_tab());
+        } else {
+            ready.section = self.section;
+        }
         ready.services = std::mem::take(&mut self.services);
         *self = ready;
     }

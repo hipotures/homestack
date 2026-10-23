@@ -140,6 +140,7 @@ fn draw_into(buf: &mut Buffer, area: Rect, app: &App) {
         Control::plain(&format!("profile: {}", app.profile)),
         Control::key("&menu"),
         Control::key(&format!("&view {}", VIEWS[app.view].0)),
+        Control::named("F9", "services", crossterm::event::KeyCode::F(9)),
         Control::named("F10", "settings", crossterm::event::KeyCode::F(10)),
     ];
     if let Some(label) = app.api_update_label() {
