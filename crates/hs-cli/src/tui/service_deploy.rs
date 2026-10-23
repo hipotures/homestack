@@ -47,6 +47,8 @@ struct Session {
     cluster: Cluster,
     instances: Vec<Instance>,
     settings: Vec<Setting>,
+    /// Values read from the cluster before restoring the operator's edits.
+    original_settings: Vec<Setting>,
     /// The environment the settings started from.
     shown: String,
     reviewed: Option<Reviewed>,
@@ -310,6 +312,7 @@ fn connect(
         .unwrap_or_default();
     let mut settings = settings(source, &cluster, &instances, &automatic, &naming, &shown, setup.offset);
     settings.extend(service_pangolin::settings(source, catalog.as_ref()));
+    let original_settings = settings.clone();
     if let Some((previous, answers)) = kept {
         restore(&mut settings, &previous, &answers);
     }
@@ -321,6 +324,7 @@ fn connect(
             cluster,
             instances,
             settings,
+            original_settings,
             shown,
             reviewed: None,
             site,
@@ -795,12 +799,27 @@ fn review(setup: &Setup, source: &Source, s: &mut Session, answers: &[Answer]) -
             .iter()
             .filter(|i| chosen.selected.contains(&i.ctid))
             .collect();
+        // Displayed defaults also serve new instances. Existing instances only
+        // receive values that the operator changed from the displayed defaults.
+        let changed = |title: &str, value: &str| {
+            let original = s
+                .original_settings
+                .iter()
+                .find(|setting| setting.title == title)
+                .and_then(|setting| setting.text.as_deref())
+                .unwrap_or_default();
+            if value.trim() == original.trim() {
+                String::new()
+            } else {
+                value.to_owned()
+            }
+        };
         let choice = lifecycle::Choice {
             ctids: chosen.selected.clone(),
-            cores: chosen.deploy.cores.clone(),
-            memory_mib: chosen.deploy.memory_mib.clone(),
-            root_mib: chosen.deploy.root_mib.clone(),
-            home_mib: chosen.deploy.home_mib.clone(),
+            cores: changed(CORES, &chosen.deploy.cores),
+            memory_mib: changed(MEMORY, &chosen.deploy.memory_mib),
+            root_mib: changed(ROOT, &chosen.deploy.root_mib),
+            home_mib: changed(HOME, &chosen.deploy.home_mib),
             environment: chosen.deploy.environment.clone(),
             shown_environment: s.shown.clone(),
             remove: String::new(),

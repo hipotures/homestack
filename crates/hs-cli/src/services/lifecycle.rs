@@ -25,7 +25,7 @@ pub fn shown_environment(source: &Source, instance: &Instance) -> String {
     instance
         .environment
         .iter()
-        .filter(|(key, _)| key != "PATH" && !deploy::secret_name(key))
+        .filter(|(key, _)| key != "PATH" && key != MANAGED && !deploy::secret_name(key))
         .filter(|(key, _)| {
             !source.is_api()
                 || !matches!(
