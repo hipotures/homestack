@@ -174,7 +174,7 @@ pub static PARALLEL: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicU
 
 /// The list's columns in their order, and whether one is shown without a
 /// choice in `tui.toml`.
-pub const COLUMNS: [(&str, bool); 18] = [
+pub const COLUMNS: [(&str, bool); 20] = [
     ("TAGS", true),
     ("VMID", true),
     ("TYPE", true),
@@ -190,7 +190,9 @@ pub const COLUMNS: [(&str, bool); 18] = [
     ("ROOT FREE", true),
     ("STORAGE", false),
     ("POOL", false),
-    ("LOAD", false),
+    ("CPU", false),
+    ("MEM", false),
+    ("IO", false),
     ("SERVICE", false),
     ("IMAGE", false),
 ];

@@ -15,7 +15,7 @@
         "tags": [
           "health"
         ],
-        "summary": "Cached measurements of this service's own mount namespace.",
+        "summary": "On-demand measurements of this service's own mount namespace and cgroup.\n`pass` is the same verdict as `/health/live`.",
         "operationId": "service_status",
         "responses": {
           "200": {
@@ -1847,6 +1847,104 @@
         },
         "additionalProperties": false
       },
+      "Container": {
+        "type": "object",
+        "description": "Resource usage of the cgroup v2 the service process runs in.",
+        "properties": {
+          "cpu": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Cpu"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`cgroup_unavailable` or `host_cgroup`; every member is then `null`."
+          },
+          "io": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Io"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "memory": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Memory"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "pressure": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Pressure"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "Cpu": {
+        "type": "object",
+        "required": [
+          "usage_usec",
+          "user_usec",
+          "system_usec"
+        ],
+        "properties": {
+          "capacity_cpus": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Logical CPUs the cgroup may use: its cpuset, lowered by any visible\n`cpu.max` quota."
+          },
+          "system_usec": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "throttling": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Throttling",
+                "description": "`null` when the cpu controller is not enabled for the cgroup."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "usage_usec": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Cumulative kernel counters; consumers compute rates between reports.",
+            "minimum": 0
+          },
+          "user_usec": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
       "DeployedService": {
         "type": "object",
         "description": "A manifest-defined service in a container, as HomeStack's description\nrecords it; an observation, never ownership proof.",
@@ -2405,6 +2503,38 @@
           "unknown"
         ]
       },
+      "Io": {
+        "type": "object",
+        "description": "Cumulative block I/O counters, summed over devices.",
+        "required": [
+          "read_bytes",
+          "write_bytes",
+          "read_ops",
+          "write_ops"
+        ],
+        "properties": {
+          "read_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "read_ops": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "write_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "write_ops": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
       "Job": {
         "type": "object",
         "description": "`GET /v1/jobs/{id}`",
@@ -2672,30 +2802,95 @@
           "ok"
         ]
       },
-      "LoadAverage": {
+      "Memory": {
         "type": "object",
         "required": [
-          "scope",
-          "one",
-          "five",
-          "fifteen"
+          "usage_bytes"
         ],
         "properties": {
-          "fifteen": {
-            "type": "number",
-            "format": "double"
+          "anon_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Anonymous memory of all processes in the cgroup.",
+            "minimum": 0
           },
-          "five": {
-            "type": "number",
-            "format": "double"
+          "events": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/MemoryEvents",
+                "description": "Cumulative `memory.events` counters."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
-          "one": {
-            "type": "number",
-            "format": "double"
+          "file_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Page cache, mostly reclaimable.",
+            "minimum": 0
           },
-          "scope": {
-            "type": "string",
-            "description": "`system`: kernel/procfs view, not asserted to be container-local."
+          "limit_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The lowest visible `memory.max`; `null` when unlimited or set outside\nthe visible hierarchy.",
+            "minimum": 0
+          },
+          "process_rss_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Resident set of the service process alone.",
+            "minimum": 0
+          },
+          "usage_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "`memory.current`: everything charged to the cgroup, page cache included.",
+            "minimum": 0
+          }
+        }
+      },
+      "MemoryEvents": {
+        "type": "object",
+        "required": [
+          "high",
+          "max",
+          "oom",
+          "oom_kill"
+        ],
+        "properties": {
+          "high": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "max": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "oom": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "oom_kill": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
           }
         }
       },
@@ -3040,6 +3235,42 @@
           }
         }
       },
+      "Pressure": {
+        "type": "object",
+        "description": "Pressure stall information: time stalled on contention, not utilization.\nA resource is `null` when the kernel does not provide PSI for it.",
+        "properties": {
+          "cpu": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Psi"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "io": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Psi"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "memory": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Psi"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
       "Privilege": {
         "type": "object",
         "description": "A Proxmox privilege on an ACL path.",
@@ -3058,6 +3289,56 @@
           }
         },
         "additionalProperties": false
+      },
+      "Psi": {
+        "type": "object",
+        "required": [
+          "some"
+        ],
+        "properties": {
+          "full": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PsiLine"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "some": {
+            "$ref": "#/components/schemas/PsiLine"
+          }
+        }
+      },
+      "PsiLine": {
+        "type": "object",
+        "required": [
+          "avg10",
+          "avg60",
+          "avg300",
+          "total_usec"
+        ],
+        "properties": {
+          "avg10": {
+            "type": "number",
+            "format": "double",
+            "description": "Percent of wall time stalled over the last 10, 60 and 300 seconds."
+          },
+          "avg300": {
+            "type": "number",
+            "format": "double"
+          },
+          "avg60": {
+            "type": "number",
+            "format": "double"
+          },
+          "total_usec": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
       },
       "PveVersion": {
         "type": "object",
@@ -3088,9 +3369,13 @@
           "schema",
           "status",
           "uptime_seconds",
-          "filesystems"
+          "filesystems",
+          "container"
         ],
         "properties": {
+          "container": {
+            "$ref": "#/components/schemas/Container"
+          },
           "error": {
             "type": [
               "string",
@@ -3104,22 +3389,21 @@
               "$ref": "#/components/schemas/Filesystem"
             }
           },
-          "load_average": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/LoadAverage"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
           "sample_age_seconds": {
             "type": [
               "integer",
               "null"
             ],
             "format": "int64",
+            "minimum": 0
+          },
+          "sample_uptime_usec": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Monotonic microseconds since process start when the returned\nmeasurement began; `null` while none exists.",
             "minimum": 0
           },
           "schema": {
@@ -3134,8 +3418,58 @@
           "uptime_seconds": {
             "type": "integer",
             "format": "int64",
-            "description": "Seconds since this application's telemetry sampler was initialized.",
+            "description": "Seconds since this application process started, on a monotonic clock.",
             "minimum": 0
+          }
+        }
+      },
+      "ServiceRates": {
+        "type": "object",
+        "description": "Counter deltas of two service reports divided by the time between their\nmeasurements. A metric is `null` when either report lacks its counter.",
+        "required": [
+          "interval_seconds"
+        ],
+        "properties": {
+          "cpu_percent": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "CPU time per wall time of the cgroup; 100 is one logical CPU busy."
+          },
+          "interval_seconds": {
+            "type": "number",
+            "format": "double",
+            "description": "Seconds between the two measurements."
+          },
+          "read_bytes_per_second": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "read_ops_per_second": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "write_bytes_per_second": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "write_ops_per_second": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
           }
         }
       },
@@ -3258,6 +3592,17 @@
               {
                 "$ref": "#/components/schemas/DeployedService",
                 "description": "The service HomeStack deployed in this container, from its description."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "service_rates": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ServiceRates",
+                "description": "Rates derived from this and the previous `service_status` of the same\nprocess; `null` until a valid pair exists."
               },
               {
                 "type": "null"
@@ -3509,6 +3854,31 @@
           "running",
           "stopped"
         ]
+      },
+      "Throttling": {
+        "type": "object",
+        "required": [
+          "periods",
+          "throttled_periods",
+          "throttled_usec"
+        ],
+        "properties": {
+          "periods": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "throttled_periods": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "throttled_usec": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
       },
       "TlsCertificate": {
         "type": "object",

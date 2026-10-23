@@ -55,6 +55,10 @@ pub struct StatusEntry {
     /// Optional in-container measurements; observations, never ownership proof.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub service_status: Option<hs_service_status::Report>,
+    /// Rates derived from this and the previous `service_status` of the same
+    /// process; `null` until a valid pair exists.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service_rates: Option<ServiceRates>,
     pub role_tag_ok: bool,
     pub warning: Option<String>,
     /// The OCI image recorded by HomeStack in the container description.
@@ -65,6 +69,20 @@ pub struct StatusEntry {
     /// The service HomeStack deployed in this container, from its description.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub service: Option<DeployedService>,
+}
+
+/// Counter deltas of two service reports divided by the time between their
+/// measurements. A metric is `null` when either report lacks its counter.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct ServiceRates {
+    /// Seconds between the two measurements.
+    pub interval_seconds: f64,
+    /// CPU time per wall time of the cgroup; 100 is one logical CPU busy.
+    pub cpu_percent: Option<f64>,
+    pub read_bytes_per_second: Option<f64>,
+    pub write_bytes_per_second: Option<f64>,
+    pub read_ops_per_second: Option<f64>,
+    pub write_ops_per_second: Option<f64>,
 }
 
 /// A manifest-defined service in a container, as HomeStack's description

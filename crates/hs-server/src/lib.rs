@@ -210,7 +210,7 @@ struct AppState {
     ops: Arc<OpsState>,
     instance: Arc<Instance>,
     image_updates: Arc<image_updates::ImageUpdates>,
-    service_status: hs_service_status::Sampler,
+    service_status: hs_service_status::Telemetry,
 }
 
 impl AppState {
@@ -254,7 +254,8 @@ pub fn app_with(config: ServerConfig, options: AppOptions) -> Result<Router, Sta
         ops: Arc::new(OpsState::new(options, instance.name.clone())),
         instance: Arc::new(instance),
         image_updates: Arc::default(),
-        service_status: hs_service_status::Sampler::start().map_err(StartError::Telemetry)?,
+        service_status: hs_service_status::Telemetry::start(std::time::Instant::now())
+            .map_err(StartError::Telemetry)?,
     };
     image_updates::start(&state.pve, &state.image_updates);
     let v1 = routes::v1().route_layer(middleware::from_fn_with_state(state.clone(), auth::require_bearer));

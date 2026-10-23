@@ -464,6 +464,102 @@ fn percent(value: Option<f64>) -> String {
     value.map_or_else(|| "—".to_owned(), |percent| format!("{percent:.0}%"))
 }
 
+/// Bytes per second, short: `0`, `12K`, `1.2M`, `34M`.
+fn rate(bytes: f64) -> String {
+    let (value, unit) = [("K", 1024.0), ("M", 1_048_576.0), ("G", 1_073_741_824.0)]
+        .into_iter()
+        .rev()
+        .find(|(_, scale)| bytes >= *scale)
+        .map_or((bytes, ""), |(unit, scale)| (bytes / scale, unit));
+    if unit.is_empty() {
+        format!("{value:.0}")
+    } else if value < 10.0 {
+        format!("{value:.1}{unit}")
+    } else {
+        format!("{value:.0}{unit}")
+    }
+}
+
+/// The memory of a service's cgroup, when it reports one.
+fn service_memory(entry: &StatusEntry) -> Option<&hs_service_status::Memory> {
+    entry.service_status.as_ref()?.container.memory.as_ref()
+}
+
+/// A service's own measurements, after its `service` line in the details.
+fn telemetry_pairs(entry: &StatusEntry, pairs: &mut Vec<(&'static str, String)>) {
+    let Some(report) = &entry.service_status else {
+        return;
+    };
+    let dash = || "—".to_owned();
+    let rates = entry.service_rates.as_ref();
+    let container = &report.container;
+    if let Some(error) = &container.error {
+        pairs.push(("cgroup", error.replace('_', " ")));
+    }
+    if let Some(cpu) = &container.cpu {
+        let capacity = cpu
+            .capacity_cpus
+            .map_or_else(String::new, |cpus| format!(" of {cpus} CPU"));
+        pairs.push((
+            "cpu",
+            format!("{}{capacity}", percent(rates.and_then(|rates| rates.cpu_percent))),
+        ));
+    }
+    if let Some(memory) = &container.memory {
+        let mut text = size(memory.usage_bytes);
+        for (label, value) in [
+            ("limit", memory.limit_bytes),
+            ("anon", memory.anon_bytes),
+            ("cache", memory.file_bytes),
+            ("rss", memory.process_rss_bytes),
+        ] {
+            if let Some(value) = value {
+                text.push_str(&format!("  {label} {}", size(value)));
+            }
+        }
+        if let Some(events) = memory.events.as_ref().filter(|events| events.oom_kill > 0) {
+            text.push_str(&format!("  oom kills {}", events.oom_kill));
+        }
+        pairs.push(("memory", text));
+    }
+    if container.io.is_some() {
+        let per_second = |value: Option<f64>| value.map_or_else(dash, |value| format!("{}/s", rate(value)));
+        pairs.push((
+            "io",
+            format!(
+                "read {}  write {}",
+                per_second(rates.and_then(|rates| rates.read_bytes_per_second)),
+                per_second(rates.and_then(|rates| rates.write_bytes_per_second))
+            ),
+        ));
+    }
+    // Share of the last 10 s some task waited for the resource: contention,
+    // not utilization.
+    if let Some(pressure) = &container.pressure {
+        let stalled = |psi: &Option<hs_service_status::Psi>| {
+            psi.as_ref().map_or_else(dash, |psi| format!("{:.1}%", psi.some.avg10))
+        };
+        pairs.push((
+            "stalls",
+            format!(
+                "cpu {}  memory {}  io {}",
+                stalled(&pressure.cpu),
+                stalled(&pressure.memory),
+                stalled(&pressure.io)
+            ),
+        ));
+    }
+    let uptime = report.uptime_seconds;
+    pairs.push((
+        "uptime",
+        match (uptime / 86_400, uptime / 3600 % 24, uptime / 60 % 60) {
+            (0, 0, minutes) => format!("{minutes}m"),
+            (0, hours, minutes) => format!("{hours}h {minutes}m"),
+            (days, hours, _) => format!("{days}d {hours}h"),
+        },
+    ));
+}
+
 /// The list's columns the settings show for `width` cells: first, without
 /// a heading, a square for each of up to `tag_width` tags; NAME as wide as
 /// `name_width`, the longest name, and never narrower than its 12.
@@ -576,16 +672,32 @@ fn columns(app: &App, width: usize, tag_width: usize, name_width: usize) -> Vec<
             value: |entry| entry.pool.clone().unwrap_or_else(|| "—".to_owned()),
         },
         Column {
-            key: "LOAD",
-            heading: "LOAD",
+            key: "CPU",
+            heading: "CPU",
             width: 5,
             right: true,
+            // 100% is one logical CPU busy.
+            value: |entry| percent(entry.service_rates.as_ref().and_then(|rates| rates.cpu_percent)),
+        },
+        Column {
+            key: "MEM",
+            heading: "MEM",
+            width: 5,
+            right: true,
+            value: |entry| bytes(service_memory(entry).map(|memory| memory.usage_bytes)),
+        },
+        Column {
+            key: "IO",
+            heading: "IO/s",
+            width: 5,
+            right: true,
+            // Reads and writes of the container's block devices together.
             value: |entry| {
                 entry
-                    .service_status
+                    .service_rates
                     .as_ref()
-                    .and_then(|report| report.load_average.as_ref())
-                    .map_or_else(|| "—".to_owned(), |load| format!("{:.2}", load.one))
+                    .and_then(|rates| Some(rates.read_bytes_per_second? + rates.write_bytes_per_second?))
+                    .map_or_else(|| "—".to_owned(), rate)
             },
         },
         Column {
@@ -751,6 +863,7 @@ fn detail_pairs(app: &App, entry: &StatusEntry) -> Vec<(&'static str, String)> {
     let mut pairs = vec![("", format!("{} on {}", entry.status, entry.node))];
     if entry.role == "CT" {
         pairs.push(("service", container_service(app, entry)));
+        telemetry_pairs(entry, &mut pairs);
     }
     if let Some(image) = &entry.image {
         let tag = |image: &str| image.rsplit_once(':').map_or(image, |(_, tag)| tag).to_owned();

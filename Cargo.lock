@@ -927,6 +927,7 @@ dependencies = [
  "hs-install",
  "hs-model",
  "hs-pve",
+ "hs-service-status",
  "ratatui",
  "ratcn",
  "reqwest",
@@ -1115,6 +1116,7 @@ version = "0.1.0"
 dependencies = [
  "rustix",
  "serde",
+ "tokio",
  "utoipa",
 ]
 

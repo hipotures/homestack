@@ -663,6 +663,7 @@ pub async fn global_status(pve: &impl Pve, cfg: &Config, parallel: usize) -> Res
                 root: gold_cfg.get(&cfg.root_disk).map(|option| sized(option)),
                 home: None,
                 service_status: None,
+                service_rates: None,
                 role_tag_ok,
                 warning,
                 image: None,
@@ -754,6 +755,7 @@ pub async fn global_status(pve: &impl Pve, cfg: &Config, parallel: usize) -> Res
             home,
             image: None,
             service_status: None,
+            service_rates: None,
             image_update: None,
             service: None,
             role_tag_ok: !tags.contains(GOLD_TAG) && !(alien && tags.contains(WORKSPACE_TAG)),
@@ -891,6 +893,9 @@ pub async fn global_status(pve: &impl Pve, cfg: &Config, parallel: usize) -> Res
             root_storage,
             root,
             home,
+            service_rates: service_status
+                .as_ref()
+                .and_then(|report| crate::service_status::rates(item.vmid, report)),
             service_status,
             role_tag_ok: true,
             warning: None,
