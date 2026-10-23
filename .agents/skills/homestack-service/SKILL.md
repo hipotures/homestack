@@ -12,30 +12,31 @@ published image and a manifest, then creates and manages unprivileged
 Proxmox LXC application containers. The application agent does not need
 to understand HomeStack internals or operate the Proxmox cluster.
 
-## Compatibility: read before touching a manifest
+## Authoring target and current reader compatibility
 
-- **Currently deployable:** [manifest-schema.md](manifest-schema.md)
-  defines `schema: 1`, the only format the HomeStack parser currently
-  accepts. Unknown YAML fields or `schema: 2` are rejected.
-- **Next Deployment contract:** [manifest-schema-v2-draft.md](manifest-schema-v2-draft.md)
-  specifies proposed exact resource sizes, explicit optional persistence,
-  desired production instance count and placement, and future reconciliation
-  semantics. **It is not yet implemented in HomeStack.**
-- **Local validation:** [image-build-preflight.md](image-build-preflight.md)
-  specifies how to choose an image base, build the actual OCI artifact,
-  execute it with realistic limits (preferably also in local LXC/Incus),
-  measure resources and check replacement safety.
-- **Runtime telemetry:** [service-status.md](service-status.md) specifies
-  the current HTTP status endpoint independently from manifest version.
+- **Phase 1: MIGRATE THE REAL MANIFEST NOW.** Use
+  [manifest-schema-v2.md](manifest-schema-v2.md) as the authoritative
+  schema-2 authoring contract. When adapting an application to this skill,
+  update the actual `.homestack/<id>.yaml` **in place to `schema: 2`**,
+  including exact proposed CPU, RAM, swap, disposable root and persistent
+  volume (where needed), production instance count and placement.
+  Do not leave the production file at schema 1, create a detached example
+  or postpone this YAML migration to phase 2.
+- **Temporary reader incompatibility:** [manifest-schema.md](manifest-schema.md)
+  documents legacy schema 1. The current HomeStack CLI parser accepts only
+  schema 1 and will reject the newly migrated YAML until phase 2 updates
+  the consumer. This is a known phase boundary, not a reason to suppress
+  the migration. Report it explicitly; never claim that current HomeStack
+  successfully parsed or deployed schema 2.
+- **Local build and measurements:** [image-build-preflight.md](image-build-preflight.md)
+  covers choosing the runtime base image, producing a real OCI image,
+  running tests (preferably including LXC/Incus) and measuring resources.
+- **Telemetry:** [service-status.md](service-status.md) defines the
+  existing runtime HTTP protocol independently of manifest version.
 
-Never silently switch a deployable schema-1 service to schema 2. Until
-HomeStack supports schema 2, keep the production `.homestack/*.yaml`
-compatible with schema 1 and prepare any future version as a reviewed
-draft **outside** `.homestack/*.yaml`. If the owner specifically chooses
-early migration, explain that the current Deployment reader will reject
-the new manifest. Do not assert schema-2 validation/deployment passed.
-Application code, Containerfile and local build/preflight can be updated
-now; schema-2 adoption belongs to the later HomeStack phase.
+Phase 1 modifies application repositories and their YAML manifests.
+Phase 2 modifies the HomeStack CLI and combines Deploy/Manage under one
+Deployment reconciliation flow. Do not mutate production guests in phase 1.
 
 ## Division of responsibility
 
@@ -47,8 +48,8 @@ now; schema-2 adoption belongs to the later HomeStack phase.
   entrypoint, health/telemetry handlers and persistence layout.
 - A reproducible release workflow, the portable service manifest and
   representative local runtime/resource verification.
-- Concrete **proposed** resource values and production topology in a
-  future schema-2 manifest, grounded in actual application behavior.
+- Concrete measured proposed resource values and production topology in
+  the actual schema-2 `.homestack/<id>.yaml`.
 - Documentation of any deployment-time configuration variable names
   and bootstrap needs, **never** their secret values.
 
@@ -117,12 +118,16 @@ adapting an application repository.
    application runtime through Incus when available, then isolated
    PVE integration only when separately authorized. Record evidence,
    limitations and resource values. Do not call Docker an LXC test.
-9. **Write the manifest appropriate to the implementation stage.**
-   Maintain a working schema-1 manifest for today's HomeStack.
-   Prepare the proposed future schema-2 manifest using its separate
-   draft contract, with exact sizes and desired production instance
-   topology, but do not move it into the active discovery path yet.
-   The operator, not the agent, decides when the new schema is deployed.
+9. **Migrate the active manifest in place.** Read
+   [manifest-schema-v2.md](manifest-schema-v2.md). Keep the service ID and
+   image repository, but replace the existing `.homestack/<id>.yaml` with
+   complete `schema: 2` YAML. Populate all resource/persistence/topology
+   values using real application facts and preflight evidence, not the
+   example numbers in the contract. Validate YAML syntax and the
+   schema-2 contract independently; the old HomeStack CLI is not
+   a schema-2 validator. Do not create only a draft outside `.homestack/`.
+   Document the temporary parser incompatibility; do not revert the
+   manifest to schema 1 merely to pass the obsolete consumer.
 10. **Document and release.** Document entrypoint, image base,
     architecture, runtime paths, port, persistence decision, test
     observations, non-secret deployment settings, and image-publishing
@@ -151,7 +156,7 @@ but prefer direct native configuration. Handle UID/GID ownership safely
 for unprivileged LXC; never use world-writable modes to hide errors.
 Send routine logs to stdout/stderr unless retention is required.
 
-**Stateless or reconstructible service:** The proposed schema 2 may use
+**Stateless or reconstructible service:** Schema 2 supports
 `persistence.mode: none`. HomeStack would then create no `mp0`.
 The app must start safely on a new root with its deployment settings,
 tokens and other transient configuration re-injected through the
@@ -160,11 +165,12 @@ irreplaceable data or credentials are available only on the discarded
 root. Do not infer a persistent mount merely because the service
 temporarily stores its injected configuration on root.
 
-**Current schema-1 limitation:** The active format requires
-`persistence.mount: /home/app` and current HomeStack creation attaches
-`mp0`. Do not put `mode: none` into schema 1. Moving to optional
-persistence requires actual HomeStack runtime and parser changes,
-and possibly an entrypoint/initializer change for existing services.
+**Legacy schema-1 limitation:** The current HomeStack CLI requires
+`persistence.mount: /home/app` and always creates `mp0`. The phase-1
+manifest migration nevertheless MUST use the new schema-2 shape, including
+`persistence.mode: none` where appropriate. Do not force new semantics
+into schema 1. The later reader/deployer/initializer implementation
+must make these declarations operational.
 
 Replacement must retain a stateful service's *original* home volume.
 Never substitute an empty home when trying to recover a missing
@@ -174,11 +180,12 @@ is not permission for destructive volume cleanup.
 
 ## Instance topology and deployment defaults
 
-Current schema 1 has `deployment.multi_node` and
-`deployment.state_model`. Preserve their supported values today;
-do not claim they already enforce a globally reconciled replica count.
+Legacy schema 1 has `deployment.multi_node` and
+`deployment.state_model`, but these fields are not the desired-state
+engine. During phase-1 migration, replace the legacy shape with the
+schema-2 fields.
 
-In the proposed schema 2:
+In schema 2:
 
 - `deployment.instances` is the **desired production count**, e.g.
   1 for one stateful SQLite instance or 3 for three independently
@@ -333,5 +340,6 @@ should not be introduced without an explicit decision.
 - Treating a second empty SQLite service as a synchronized
   replica, or prohibiting separately isolated manual tests
   based on the declared production instance count.
-- Changing schema-1 manifests to schema 2 before the HomeStack
-  consumer supports it without explicitly reporting the break.
+- Failing to migrate the actual `.homestack/<id>.yaml` to schema 2
+  when adopting this skill in phase 1, or claiming the current
+  HomeStack CLI already supports that file.
