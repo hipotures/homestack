@@ -463,15 +463,17 @@ pub async fn apply(
         if let Some(bootstrap) = &bootstrap {
             bootstrap.validate_instance(&api_spec(target)?)?;
         }
-        let line = one(pve, source, plan, target, site, bootstrap.as_ref(), say)
+        let done = one(pve, source, plan, target, site, bootstrap.as_ref(), say)
             .await
             .map_err(|error| {
                 format!(
                     "{error}\nUpdate paused. Update the image again to finish it; it continues from what Proxmox shows."
                 )
             })?;
-        say(&line);
-        lines.push(line);
+        for line in &done {
+            say(line);
+        }
+        lines.extend(done);
     }
     Ok(lines)
 }
@@ -528,7 +530,7 @@ async fn one(
     site: Option<&dyn SiteReady>,
     bootstrap: Option<&ApiBootstrap>,
     say: &(dyn Fn(&str) + Send + Sync),
-) -> Result<String, String> {
+) -> Result<Vec<String>, String> {
     let (ctid, node) = (target.ctid, target.node.as_str());
     let now = instance::read_on(pve, node, ctid).await?;
     if deploy::initializing(&now.description) {
@@ -649,11 +651,13 @@ async fn one(
     deploy::set_heartbeat(pve, node, ctid, &source.manifest).await?;
     say(&format!("{node}: CT {ctid} · Start"));
     let start = target.running || target.onboot;
+    let readiness;
     if let Some(bootstrap) = bootstrap {
         say(&format!("{node}: CT {ctid} · Initialize API"));
         bootstrap
             .initialize(pve, &api_spec(target)?, false, &|line| say(line))
             .await?;
+        readiness = "HTTPS /health/live: response OK; uploaded configuration version verified".to_owned();
         if !start {
             node::power(pve, node, ctid, "stop").await?;
         }
@@ -661,7 +665,9 @@ async fn one(
         if !new.running {
             node::power(pve, node, ctid, "start").await?;
         }
-        say(&deploy::ready(source, site, ctid, &target.address, say).await?);
+        readiness = deploy::ready(source, site, ctid, &target.address, say).await?;
+    } else {
+        readiness = "Health check skipped: container left stopped".to_owned();
     }
     // Restore autostart after volume reassignment and API initialization.
     if new.onboot != target.onboot {
@@ -683,17 +689,20 @@ async fn one(
         say(line)
     })
     .await;
-    Ok(format!(
-        "{node}: {} · CT {ctid} · {} · home {}{}",
-        target.hostname,
-        plan.image,
-        if new.home_volume.is_empty() {
-            "none"
-        } else {
-            &new.home_volume
-        },
-        if start { "" } else { " · stopped" }
-    ))
+    Ok(vec![
+        format!(
+            "{node}: {} · CT {ctid} · {} · home {}{}",
+            target.hostname,
+            plan.image,
+            if new.home_volume.is_empty() {
+                "none"
+            } else {
+                &new.home_volume
+            },
+            if start { "" } else { " · stopped" }
+        ),
+        format!("{node}: CT {ctid} · {readiness}"),
+    ])
 }
 
 #[cfg(test)]
