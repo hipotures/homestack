@@ -614,6 +614,9 @@ fn settings(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
                 .unwrap_or(0)
         })
         .collect();
+    // Long entries must not push every other entry's details outside the panel.
+    let compact = widths.iter().sum::<usize>() + columns.saturating_sub(1) * 2
+        > usize::from(choices_area.width.saturating_sub(8));
     let mut lines: Vec<(String, bool)> = rows
         .iter()
         .enumerate()
@@ -631,9 +634,18 @@ fn settings(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
             let cells: Vec<String> = row
                 .iter()
                 .zip(&widths)
-                .map(|(word, width)| format!("{word:<width$}"))
+                .map(|(word, width)| {
+                    if compact {
+                        (*word).to_owned()
+                    } else {
+                        format!("{word:<width$}")
+                    }
+                })
                 .collect();
-            let line = format!("{mark} {tick} {}", cells.join("  ").trim_end());
+            let line = format!(
+                "{mark} {tick} {}",
+                cells.join(if compact { " " } else { "  " }).trim_end()
+            );
             (
                 if setting.list {
                     line.replacen("  ", " ", 1)

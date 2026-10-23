@@ -92,9 +92,9 @@ pub(super) fn settings(source: &Source, catalog: Option<&Catalog>) -> Vec<Settin
     if let Some(catalog) = catalog {
         settings.extend([
             setting("Pangolin resource", "The existing public HTTP resource. Its domain and access policies stay as configured in Pangolin.",
-                catalog.resources.iter().map(|r| (r.id.to_string(), format!("{} · {}", r.domain, r.name))).collect(), None),
+                catalog.resources.iter().map(|r| (r.id.to_string(), format!("{} · {}", r.name, r.domain))).collect(), None),
             setting("Pangolin Site", "An online Site that can reach the selected container's IP address. F5 refreshes the list after Site recreation.",
-                catalog.sites.iter().map(|s| (s.id.to_string(), format!("{} · {}", s.name, s.nice))).collect(), None),
+                catalog.sites.iter().map(|s| (s.id.to_string(), if s.name == s.nice { s.name.clone() } else { format!("{} · {}", s.name, s.nice) })).collect(), None),
             setting("Pangolin port", "The port the application listens on inside the existing container (1–65535). Its IP is read from Proxmox.", Vec::new(),
                 Some(source.manifest.ports.first().map(|p| p.port.to_string()).unwrap_or_default())),
             setting("Pangolin protocol", "HTTP or HTTPS between the Site and the application; this does not change the public domain's TLS configuration.",
