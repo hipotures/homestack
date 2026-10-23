@@ -1,5 +1,6 @@
 //! Drawing the install screen (mockups 02–08, 18) and ssh's question box.
 
+use crossterm::event::KeyCode;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
@@ -152,28 +153,26 @@ pub(super) fn buttons(install: &Install) -> Vec<Control> {
             }),
             Control::key("back Esc"),
         ],
-        Stage::Settings => vec![
-            Control::key("box Tab"),
-            Control::key("&Review Enter"),
-            Control::key("back Esc"),
-        ],
+        Stage::Settings => settings_buttons(install),
         Stage::Review => {
             let ready = install.reviewed && install.problems.is_empty();
+            let back = Control::named("ESC", "back", KeyCode::Esc);
+            let scroll = Control::named("↑↓", "scroll", KeyCode::Down);
             match install.mode {
                 Mode::Install => vec![
-                    Control::key("scroll ↑↓"),
-                    Control::key("&Install Enter").enabled(ready),
-                    Control::key("back Esc"),
+                    scroll,
+                    Control::named("I", "install", KeyCode::Char('i')).enabled(ready),
+                    back,
                 ],
-                Mode::Service => vec![
-                    Control::key("scroll ↑↓"),
-                    Control::key("&Apply Enter").enabled(ready),
-                    Control::key("back Esc"),
+                Mode::Service if install.removing => vec![
+                    scroll,
+                    Control::named("DEL", "remove", KeyCode::Delete).enabled(ready),
+                    back,
                 ],
-                Mode::Sites => vec![
-                    Control::key("scroll ↑↓"),
-                    Control::key("&Deploy Enter").enabled(ready),
-                    Control::key("back Esc"),
+                Mode::Service | Mode::Sites => vec![
+                    scroll,
+                    Control::named("D", "deploy", KeyCode::Char('d')).enabled(ready),
+                    back,
                 ],
                 Mode::Uninstall => {
                     let (remove, cancel) = if install.remove_focused {
@@ -193,6 +192,49 @@ pub(super) fn buttons(install: &Install) -> Vec<Control> {
         Stage::Done if install.ok => vec![Control::key("&Open HomeStack Enter"), Control::key("&Quit")],
         Stage::Done => vec![Control::key("&back to the review Enter or Esc"), Control::key("&Quit")],
     }
+}
+
+/// The keys of the settings: on the list, or in a setting's box.
+fn settings_buttons(install: &Install) -> Vec<Control> {
+    let esc = |action: &str| Control::named("ESC", action, KeyCode::Esc);
+    if !install.chooser {
+        let mut keys = vec![
+            Control::named("↑↓", "setting", KeyCode::Down),
+            Control::named("ENTER", "edit", KeyCode::Enter),
+            Control::named("R", "review", KeyCode::Char('r')),
+            Control::named("F5", "rescan", KeyCode::F(5)),
+        ];
+        if install.mode == Mode::Service {
+            keys.push(Control::named("DEL", "remove ticked", KeyCode::Delete));
+        }
+        keys.extend([Control::named("?", "help", KeyCode::Char('?')), esc("back")]);
+        return keys;
+    }
+    let setting = install
+        .settings
+        .get(install.row)
+        .filter(|_| !(install.domain.is_some() && install.row == install.settings.len()));
+    let mut keys = Vec::new();
+    match setting {
+        Some(setting) if setting.list => keys.extend([
+            Control::named("+", "add", KeyCode::Char('+')),
+            Control::named("-", "remove", KeyCode::Char('-')),
+        ]),
+        Some(setting) if setting.text.is_none() && setting.multiple => {
+            keys.push(Control::named("SPACE", "tick", KeyCode::Char(' ')));
+        }
+        _ => {}
+    }
+    let keep = match setting {
+        Some(setting) if setting.text.is_none() && !setting.list && !setting.multiple => "choose",
+        _ => "keep",
+    };
+    keys.extend([
+        Control::named("ENTER", keep, KeyCode::Enter),
+        Control::named("TAB", "next", KeyCode::Tab),
+        esc("cancel"),
+    ]);
+    keys
 }
 
 /// Paragraph lines from `y`, wrapped to the inside; the rows used.
@@ -485,31 +527,6 @@ fn settings(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
             muted,
         );
     }
-    // How to change them, always shown under the list, in two columns.
-    let help = [
-        ("↑ ↓", "a setting"),
-        ("Tab", "into its box and out"),
-        ("Space", "tick in the box"),
-        ("letters", "edit a text setting"),
-        ("Enter", "review"),
-        ("F5", "rescan cluster"),
-        ("?", "help: what each one is"),
-    ];
-    for (row, (key, what)) in help.iter().enumerate().take(if narrow {
-        0
-    } else {
-        usize::from(inner.height).saturating_sub(rows.len() + 5)
-    }) {
-        let line = format!("{key:<9}{what}");
-        write(
-            buf,
-            x + 2,
-            at(inner.y, rows.len() + 4 + row),
-            left - 3,
-            &cut(&line, usize::from(left - 3)),
-            muted,
-        );
-    }
     let choices_area = if narrow {
         let offset = u16::try_from(visible + 2).unwrap_or(inner.height).min(inner.height);
         Rect::new(
@@ -564,11 +581,10 @@ fn settings(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
     };
     if let Some(value) = &setting.text {
         // The field over as many rows as its text takes, so its end and the
-        // cursor stay in sight; a blank row; the note, wrapped as `paragraph`
-        // wraps it.
+        // cursor stay in sight.
         let typed: Vec<char> = format!("{value}▏").chars().collect();
         let field: Vec<String> = typed.chunks(44).map(|chunk| chunk.iter().collect()).collect();
-        let rect = fit(48, field.len() + 1 + wrap(&setting.note, 48).len());
+        let rect = fit(48, field.len());
         let box_inner = frame(
             buf,
             rect,
@@ -589,7 +605,6 @@ fn settings(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
                 focus,
             );
         }
-        paragraph(buf, box_inner, at(box_inner.y, 2 + field.len()), &setting.note, muted);
         return;
     }
     // The choices only; what a setting is for is in the help. The value and
@@ -659,22 +674,10 @@ fn settings(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
     if let Some(typed) = &install.adding {
         lines.push((format!("+ {typed}▏"), true));
     }
-    let key = if setting.multiple { "tick Space" } else { "choose Space" };
-    let keys = if setting.list {
-        vec![
-            Control::named("-", "remove", crossterm::event::KeyCode::Char('-')),
-            Control::named("+", "add", crossterm::event::KeyCode::Char('+')),
-        ]
-    } else {
-        vec![Control::key(key)]
-    };
     let content = lines
         .iter()
         .map(|(line, _)| line.chars().count())
-        .chain([
-            setting.title.chars().count(),
-            if setting.list { 20 } else { key.chars().count() + 2 },
-        ])
+        .chain([setting.title.chars().count(), 20])
         .max()
         .unwrap_or(0);
     let box_inner = frame(
@@ -683,7 +686,6 @@ fn settings(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
         palette,
         &Sides {
             top_left: vec![Control::plain(&setting.title)],
-            bottom_left: keys,
             focused: install.chooser,
             ..Sides::default()
         },

@@ -106,8 +106,6 @@ pub enum Ask {
     Services,
     /// Open the deployment of `deploy_request`.
     Deploy,
-    /// Open maintenance of the selected service's containers.
-    Manage,
     /// Esc while it runs.
     Cancel,
     /// The box closes: the connection ends.
@@ -2525,13 +2523,6 @@ impl SetupBox {
         self.service_source()
     }
 
-    /// `m` maintains the instances of a deployed service.
-    #[must_use]
-    pub fn manageable(&self) -> bool {
-        self.service_source()
-            .is_some_and(|s| !instances(&self.services, &s.repository, &s.manifest.id).is_empty())
-    }
-
     /// `d`: deploy the highlighted service.
     fn deploy(&mut self) -> Option<Ask> {
         self.deploy_request = Some(self.deployable()?);
@@ -2587,10 +2578,6 @@ impl SetupBox {
             KeyCode::Left | KeyCode::BackTab => self.show_section(self.section + self.groups().len() - 1),
             KeyCode::Char('f') => self.filtering = true,
             KeyCode::Char('d') => return self.deploy(),
-            KeyCode::Char('m') if self.manageable() => {
-                self.deploy_request = self.service_source();
-                return Some(Ask::Manage);
-            }
             KeyCode::Char(' ') if !self.manifest_sections().is_empty() => {
                 self.manifest_focus = Some(0);
                 self.details_scroll = 0;

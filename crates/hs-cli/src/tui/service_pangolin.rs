@@ -17,11 +17,12 @@ use crate::services::{
     manifest::Healthcheck,
 };
 
-pub(super) const ACTION: usize = 5;
-const RESOURCE: usize = 6;
-const SITE: usize = 7;
-const PORT: usize = 8;
-const SCHEME: usize = 9;
+/// The Pangolin settings follow the deployment's nine.
+pub(super) const ACTION: usize = 9;
+const RESOURCE: usize = 10;
+const SITE: usize = 11;
+const PORT: usize = 12;
+const SCHEME: usize = 13;
 const PAGE: usize = 100;
 
 #[derive(Clone, PartialEq)]
@@ -74,7 +75,7 @@ fn setting(title: &str, note: &str, choices: Vec<(String, String)>, text: Option
 }
 
 pub(super) fn settings(source: &Source, catalog: Option<&Catalog>) -> Vec<Setting> {
-    if source.is_site() {
+    if source.is_site() || source.manifest.pangolin.is_none() {
         return Vec::new();
     }
     let mut action = setting(
@@ -101,7 +102,9 @@ pub(super) fn settings(source: &Source, catalog: Option<&Catalog>) -> Vec<Settin
             setting("Pangolin protocol", "HTTP or HTTPS between the Site and the application; this does not change the public domain's TLS configuration.",
                 vec![("http".to_owned(), String::new()), ("https".to_owned(), String::new())], None),
         ]);
-        settings.last_mut().unwrap().picked = vec![0];
+        if let Some(protocol) = settings.last_mut() {
+            protocol.picked = vec![0];
+        }
     }
     settings
 }

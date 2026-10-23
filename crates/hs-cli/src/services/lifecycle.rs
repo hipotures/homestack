@@ -36,6 +36,8 @@ pub fn shown_environment(instance: &Instance) -> String {
 #[derive(Debug, Clone, Default)]
 pub struct Choice {
     pub ctids: Vec<u32>,
+    pub cores: String,
+    pub memory_mib: String,
     pub root_mib: String,
     pub home_mib: String,
     pub environment: String,
@@ -43,8 +45,6 @@ pub struct Choice {
     pub shown_environment: String,
     /// The selected containers' names, typed to remove them.
     pub remove: String,
-    /// A separately reviewed Pangolin attachment accompanies these settings.
-    pub attach: bool,
 }
 
 /// The reviewed changes.
@@ -52,6 +52,8 @@ pub struct Choice {
 pub struct Plan {
     pub targets: Vec<Instance>,
     pub remove: bool,
+    pub cores: Option<u32>,
+    pub memory_mib: Option<u32>,
     pub root_mib: Option<u32>,
     pub home_mib: Option<u32>,
     pub set: Vec<(String, String)>,
@@ -98,10 +100,6 @@ pub async fn plan(pve: &impl Pve, repository: &str, service: &str, choice: &Choi
         }
     }
     if !choice.remove.trim().is_empty() {
-        if choice.attach {
-            plan.problems
-                .push("Pangolin attachment cannot be combined with removal".to_owned());
-        }
         let wanted = names(&plan.targets);
         if choice.remove.trim() != wanted {
             plan.problems.push(format!(
@@ -130,6 +128,20 @@ pub async fn plan(pve: &impl Pve, repository: &str, service: &str, choice: &Choi
         }
         (root, home) => plan.problems.extend([root.err(), home.err()].into_iter().flatten()),
     }
+    for (text, what, range, slot) in [
+        (&choice.cores, "Cores", 1..=64, &mut plan.cores),
+        (&choice.memory_mib, "Memory (MiB)", 64..=1_048_576, &mut plan.memory_mib),
+    ] {
+        match text.trim() {
+            "" => {}
+            text => match text.parse::<u32>().ok().filter(|value| range.contains(value)) {
+                Some(value) => *slot = Some(value),
+                None => plan
+                    .problems
+                    .push(format!("{what} is a whole number {}–{}", range.start(), range.end())),
+            },
+        }
+    }
     if choice.environment.trim() != choice.shown_environment.trim() {
         match deploy::environment(&choice.environment) {
             Ok(entries) => {
@@ -154,6 +166,15 @@ pub async fn plan(pve: &impl Pve, repository: &str, service: &str, choice: &Choi
     }
     for target in &plan.targets {
         let mut changes = Vec::new();
+        for (what, now, wanted) in [
+            ("Cores", target.cores, plan.cores),
+            ("Memory", target.memory_mib, plan.memory_mib),
+        ] {
+            if let Some(wanted) = wanted.filter(|wanted| *wanted != now) {
+                let unit = if what == "Memory" { " MiB" } else { "" };
+                changes.push(format!("  {what} {now}{unit} → {wanted}{unit}"));
+            }
+        }
         for (what, now, wanted) in [
             ("Root", target.root_mib, plan.root_mib),
             ("Home", target.home_mib, plan.home_mib),
@@ -205,10 +226,6 @@ pub async fn plan(pve: &impl Pve, repository: &str, service: &str, choice: &Choi
                 .push(format!("CT {} {} on {}", target.ctid, target.hostname, target.node));
             plan.lines.extend(changes);
         }
-    }
-    if plan.lines.is_empty() && plan.problems.is_empty() && !choice.attach {
-        plan.problems
-            .push("Nothing changes: change a size or the environment, or type the names to remove".to_owned());
     }
     plan
 }
@@ -298,6 +315,29 @@ pub async fn apply(
                 .await
                 .map_err(|e| format!("resize CT {ctid} {disk}: {e}"))?;
             task(pve, &upid, &format!("resize CT {ctid} {disk}")).await?;
+        }
+        let cores = plan
+            .cores
+            .filter(|cores| *cores != now.cores)
+            .map(|cores| cores.to_string());
+        let memory = plan
+            .memory_mib
+            .filter(|memory| *memory != now.memory_mib)
+            .map(|memory| memory.to_string());
+        let mut limits: Vec<(&str, &str)> = Vec::new();
+        if let Some(cores) = &cores {
+            limits.push(("cores", cores));
+        }
+        if let Some(memory) = &memory {
+            limits.push(("memory", memory));
+        }
+        if !limits.is_empty() {
+            say(&format!("CT {ctid} · cores and memory"));
+            let upid = pve
+                .put(&format!("/nodes/{node}/lxc/{ctid}/config"), &limits)
+                .await
+                .map_err(|e| format!("configure CT {ctid}: {e}"))?;
+            task(pve, &upid, &format!("configure CT {ctid}")).await?;
         }
         if !plan.set.is_empty() || !plan.unset.is_empty() {
             let unset: Vec<&str> = plan.unset.iter().map(String::as_str).collect();

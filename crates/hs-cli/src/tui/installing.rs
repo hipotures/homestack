@@ -37,6 +37,10 @@ pub enum Command {
         answers: Vec<Answer>,
         domain: Option<String>,
     },
+    /// Plan removing the selected instances of a service (Del).
+    Remove {
+        answers: Vec<Answer>,
+    },
     /// Apply the last review.
     Apply,
     /// Let root go; the worker ends.
@@ -65,7 +69,6 @@ pub struct Setup {
     pub sites: Option<super::pangolin_sites::Context>,
     /// Service mode: the manifest revision to deploy.
     pub service: Option<crate::services::deploy::Source>,
-    pub service_manage: bool,
     /// Seconds east of UTC, for the times shown.
     pub offset: i64,
 }
@@ -142,6 +145,8 @@ fn work(setup: &Setup, commands: &Receiver<Command>, tell: &(dyn Fn(Event) + Sen
     let mut kept: Option<Kept> = None;
     while let Ok(command) = commands.recv() {
         match command {
+            // Removing instances belongs to a service deployment.
+            Command::Remove { .. } => {}
             Command::Connect { method, target } => match connect(setup, method, &target, tell) {
                 Ok((started, found, first)) => {
                     session = Some(started);

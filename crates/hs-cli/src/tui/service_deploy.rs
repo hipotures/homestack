@@ -1,38 +1,89 @@
-//! The worker of the install screen in Service mode: the deployment of a
-//! manifest-defined service through the deploy token
-//! (`crate::services::deploy`). It reads the cluster and the published
-//! releases, plans the settings and applies the reviewed plan.
+//! The worker of the install screen in Service mode: one Deployment of a
+//! manifest-defined service through the deploy token. The settings start
+//! from what the cluster has (its instances) or what the manifest declares;
+//! the review shows only what changes: new instances on the ticked nodes
+//! (`crate::services::deploy`), the selected instances' image
+//! (`crate::services::update`), sizes and environment
+//! (`crate::services::lifecycle`), or with Del their removal.
 
 use std::sync::mpsc::Receiver;
 
 use hs_deploy::config::DeployConfig;
+use hs_deploy::node::show_size;
 use hs_pve::PveClient;
 
 use super::install::{Event, Found, Mark, Setting};
 use super::installing::{Command, Setup};
 use super::pangolin_sites::managed::{Initializer, Pangolin};
 use super::reinstall::local_time;
+use super::service_pangolin;
 use crate::install_flow::Answer;
-use crate::services::deploy::{self, Choice, Cluster, Plan, SiteInit, Source};
-use crate::services::manifest::MOUNT;
+use crate::services::deploy::{self, Cluster, SiteInit, SiteReady, Source};
+use crate::services::instance::{self, Instance};
+use crate::services::manifest::show_mib;
+use crate::services::{lifecycle, update};
 
-const VERSION: usize = 0;
-const PLACEMENT: usize = 1;
-const CTIDS: usize = 2;
-const CORES: usize = 3;
-const MEMORY: usize = 4;
-const ROOT_GIB: usize = 5;
-const HOME_GIB: usize = 6;
-const ENVIRONMENT: usize = 7;
+const INSTANCES: usize = 0;
+const VERSION: usize = 1;
+const PLACEMENT: usize = 2;
+const CTIDS: usize = 3;
+const CORES: usize = 4;
+const MEMORY: usize = 5;
+const ROOT: usize = 6;
+const HOME: usize = 7;
+const ENVIRONMENT: usize = 8;
 
 struct Session {
     config: DeployConfig,
     pve: PveClient,
     cluster: Cluster,
+    instances: Vec<Instance>,
     settings: Vec<Setting>,
-    reviewed: Option<Plan>,
+    /// The environment the settings started from.
+    shown: String,
+    reviewed: Option<Reviewed>,
     /// A Pangolin Site connector: the verified Pangolin context and root.
     site: Option<Initializer>,
+    /// Another service published through Pangolin: its verified context.
+    pangolin: Option<Pangolin>,
+    catalog: Option<service_pangolin::Catalog>,
+}
+
+impl Session {
+    /// The verified Pangolin context, when one is open.
+    fn ready(&self) -> Option<&dyn SiteReady> {
+        match (&self.site, &self.pangolin) {
+            (Some(site), _) => Some(site.pangolin() as &dyn SiteReady),
+            (None, Some(pangolin)) => Some(pangolin as &dyn SiteReady),
+            (None, None) => None,
+        }
+    }
+
+    fn context(&self) -> Option<&Pangolin> {
+        self.site.as_ref().map(Initializer::pangolin).or(self.pangolin.as_ref())
+    }
+}
+
+enum Reviewed {
+    Remove(lifecycle::Plan),
+    Change(Box<Changes>),
+}
+
+/// The reviewed parts of a deployment, applied in this order.
+struct Changes {
+    update: Option<update::Plan>,
+    change: Option<lifecycle::Plan>,
+    create: Option<deploy::Plan>,
+    attach: Option<service_pangolin::Plan>,
+}
+
+/// The review's sections, its problems and what applying it does.
+type Review = (Vec<(String, Vec<String>)>, Vec<String>, Reviewed);
+
+/// What the operator left in the settings.
+struct Chosen {
+    selected: Vec<u32>,
+    deploy: deploy::Choice,
 }
 
 pub(super) fn work(setup: &Setup, commands: &Receiver<Command>, tell: &(dyn Fn(Event) + Send + Sync)) {
@@ -40,38 +91,16 @@ pub(super) fn work(setup: &Setup, commands: &Receiver<Command>, tell: &(dyn Fn(E
         tell(Event::Failed("No service was chosen.".to_owned()));
         return;
     };
-    if setup.service_manage {
-        super::service_lifecycle::work(setup, &source, commands, tell);
-        return;
-    }
     let mut session: Option<Session> = None;
     while let Ok(command) = commands.recv() {
         match command {
             Command::Connect { .. } | Command::Rescan { .. } => {
-                let answers = match &command {
-                    Command::Rescan { answers, .. } => Some(answers.clone()),
+                let kept = match &command {
+                    Command::Rescan { answers, .. } => session.as_ref().map(|s| (s.settings.clone(), answers.clone())),
                     _ => None,
                 };
-                tell(Event::Busy("Reading the cluster and the published releases".to_owned()));
-                let kept = session
-                    .as_ref()
-                    .zip(answers.as_ref())
-                    .map(|(s, answers)| choice(&s.settings, answers));
-                let site = session.take().and_then(|s| s.site).filter(Initializer::alive);
-                let opened =
-                    setup
-                        .handle
-                        .block_on(open(setup, &source, kept.as_ref()))
-                        .and_then(|(mut opened, found)| {
-                            if source.is_site() {
-                                opened.site = Some(match site {
-                                    Some(site) => site,
-                                    None => initializer(setup, &opened.config, tell)?,
-                                });
-                            }
-                            Ok((opened, found))
-                        });
-                match opened {
+                let previous = session.take();
+                match connect(setup, &source, previous, kept, tell) {
                     Ok((opened, found)) => {
                         session = Some(opened);
                         tell(Event::Connected(found));
@@ -81,24 +110,87 @@ pub(super) fn work(setup: &Setup, commands: &Receiver<Command>, tell: &(dyn Fn(E
             }
             Command::Review { answers, .. } => {
                 let Some(s) = session.as_mut() else { continue };
+                if service_pangolin::requested(&answers) && s.catalog.is_none() {
+                    // The resources and Sites are read once attach is chosen.
+                    tell(Event::Busy("Loading Pangolin resources and Sites".to_owned()));
+                    let loaded = s
+                        .context()
+                        .ok_or_else(|| "The Pangolin context is unavailable".to_owned())
+                        .and_then(|p| service_pangolin::load(p, &setup.stop));
+                    match loaded {
+                        Ok(catalog) => {
+                            s.catalog = Some(catalog);
+                            let previous = s.settings.clone();
+                            s.settings.truncate(service_pangolin::ACTION);
+                            s.settings
+                                .extend(service_pangolin::settings(&source, s.catalog.as_ref()));
+                            restore(&mut s.settings, &previous, &answers);
+                            tell(Event::Connected(found(&s.config, &s.cluster, &s.settings)));
+                        }
+                        Err(error) => tell(Event::Reviewed {
+                            sections: Vec::new(),
+                            problems: vec![error],
+                        }),
+                    }
+                    continue;
+                }
                 tell(Event::Busy("Checking the plan against the cluster".to_owned()));
-                let choice = choice(&s.settings, &answers);
-                let site = s.site.as_mut().map(|site| site as &mut dyn SiteInit);
-                let plan = setup
-                    .handle
-                    .block_on(deploy::plan(&s.config, &s.pve, &source, &s.cluster, &choice, site));
+                let (sections, problems, reviewed) = review(setup, &source, s, &answers);
+                tell(Event::Reviewed { sections, problems });
+                s.reviewed = Some(reviewed);
+            }
+            Command::Remove { answers } => {
+                let Some(s) = session.as_mut() else { continue };
+                tell(Event::Busy("Reading what would be removed".to_owned()));
+                let chosen = chosen(&s.settings, &answers);
+                let mut plan = lifecycle::Plan::default();
+                if chosen.selected.is_empty() {
+                    plan.problems
+                        .push("Tick the instances to remove under Instances first".to_owned());
+                } else {
+                    let targets: Vec<Instance> = s
+                        .instances
+                        .iter()
+                        .filter(|i| chosen.selected.contains(&i.ctid))
+                        .cloned()
+                        .collect();
+                    let choice = lifecycle::Choice {
+                        ctids: chosen.selected.clone(),
+                        remove: lifecycle::names(&targets),
+                        ..lifecycle::Choice::default()
+                    };
+                    plan = setup.handle.block_on(lifecycle::plan(
+                        &s.pve,
+                        &source.repository,
+                        &source.manifest.id,
+                        &choice,
+                    ));
+                    if source.is_site() {
+                        match s.ready() {
+                            Some(site) => {
+                                for target in &plan.targets {
+                                    match site.removal(target.ctid) {
+                                        Ok(line) => plan.lines.push(line),
+                                        Err(error) => plan.problems.push(error),
+                                    }
+                                }
+                            }
+                            None => plan
+                                .problems
+                                .push("Removing a Site requires the verified Pangolin context".to_owned()),
+                        }
+                    }
+                }
                 tell(Event::Reviewed {
-                    sections: sections(&source, &s.cluster, &plan, s.site.as_ref(), setup.offset),
+                    sections: vec![("Remove".to_owned(), plan.lines.clone())],
                     problems: plan.problems.clone(),
                 });
-                s.reviewed = Some(plan);
+                s.reviewed = Some(Reviewed::Remove(plan));
             }
             Command::Apply => {
                 let Some(s) = session.as_mut() else { continue };
-                let Some(plan) = s.reviewed.take() else { continue };
-                let say = |line: &str| tell(Event::Line(line.to_owned()));
-                let site = s.site.as_mut().map(|site| site as &mut dyn SiteInit);
-                let (ok, lines) = setup.handle.block_on(deploy::apply(&s.pve, &source, &plan, site, &say));
+                let Some(reviewed) = s.reviewed.take() else { continue };
+                let (ok, lines) = apply(setup, &source, s, reviewed, tell);
                 tell(Event::Done { ok, lines });
             }
             Command::Cancel => return,
@@ -106,99 +198,151 @@ pub(super) fn work(setup: &Setup, commands: &Receiver<Command>, tell: &(dyn Fn(E
     }
 }
 
-/// The deploy token's client, the cluster, and the settings: those of
-/// `kept` (a rescan), else defaults.
-async fn open(setup: &Setup, source: &Source, kept: Option<&Choice>) -> Result<(Session, Found), String> {
+/// The deploy token's client, the cluster, the service's instances, the
+/// Pangolin context it needs, and the settings (those of `kept`, a rescan).
+fn connect(
+    setup: &Setup,
+    source: &Source,
+    previous: Option<Session>,
+    kept: Option<(Vec<Setting>, Vec<Answer>)>,
+    tell: &(dyn Fn(Event) + Send + Sync),
+) -> Result<(Session, Found), String> {
+    tell(Event::Busy(
+        "Reading the cluster, the instances and the releases".to_owned(),
+    ));
     let config = DeployConfig::load(&setup.token_dir.join("deploy.toml"))
         .map_err(|error| format!("{error}. Install HomeStack before deploying services."))?;
     let pve = hs_deploy::deploy::deploy_client(&config)?;
-    let cluster = deploy::survey(&config, &pve, source).await?;
+    let cluster = setup.handle.block_on(deploy::survey(&config, &pve, source))?;
     if cluster.releases.is_empty() {
         return Err(format!(
             "{} has no published release (a numeric X.Y.Z tag); dev images are not offered.",
             source.manifest.image_repository
         ));
     }
-    let settings = settings(source, &cluster, kept, setup.offset);
-    let check = vec![
-        (
-            Mark::Ok,
-            "access".to_owned(),
-            format!("deploy token, pool {}", config.pool),
+    let instances = setup
+        .handle
+        .block_on(instance::of_service(&pve, &source.repository, &source.manifest.id))?;
+    let (site, pangolin, catalog) = match previous {
+        Some(p) => (
+            p.site.filter(Initializer::alive),
+            p.pangolin.filter(Pangolin::alive),
+            p.catalog,
         ),
-        (Mark::Ok, "nodes".to_owned(), cluster.nodes.join(", ")),
-    ];
-    let found = Found {
-        root: format!("deploy token · PVE {}", cluster.version),
-        check,
-        settings: settings.clone(),
-        domain: None,
+        None => (None, None, None),
     };
+    // A Site or a service published through Pangolin needs its verified
+    // context from the start: what Pangolin has is part of the state.
+    let (site, pangolin) = if source.is_site() {
+        let site = match site {
+            Some(site) => site,
+            None => Initializer::open(open_pangolin(setup, tell)?, config.clone())?,
+        };
+        (Some(site), None)
+    } else if source.manifest.pangolin.is_some() {
+        let pangolin = match pangolin {
+            Some(pangolin) => pangolin,
+            None => open_pangolin(setup, tell)?,
+        };
+        (None, Some(pangolin))
+    } else {
+        (None, None)
+    };
+    let shown = instances.first().map(lifecycle::shown_environment).unwrap_or_default();
+    let mut settings = settings(source, &cluster, &instances, &shown, setup.offset);
+    settings.extend(service_pangolin::settings(source, catalog.as_ref()));
+    if let Some((previous, answers)) = kept {
+        restore(&mut settings, &previous, &answers);
+    }
+    let found = found(&config, &cluster, &settings);
     Ok((
         Session {
             config,
             pve,
             cluster,
+            instances,
             settings,
+            shown,
             reviewed: None,
-            site: None,
+            site,
+            pangolin,
+            catalog,
         },
         found,
     ))
 }
 
-/// A Site connector's trusted context: its own verified Pangolin tunnel and
-/// Step 7 key from the saved settings; the credential goes through the console.
-fn initializer(
-    setup: &Setup,
-    config: &DeployConfig,
-    tell: &(dyn Fn(Event) + Send + Sync),
-) -> Result<Initializer, String> {
+fn found(config: &DeployConfig, cluster: &Cluster, settings: &[Setting]) -> Found {
+    Found {
+        root: format!("deploy token · PVE {}", cluster.version),
+        check: vec![
+            (
+                Mark::Ok,
+                "access".to_owned(),
+                format!("deploy token, pool {}", config.pool),
+            ),
+            (Mark::Ok, "nodes".to_owned(), cluster.nodes.join(", ")),
+        ],
+        settings: settings.to_vec(),
+        domain: None,
+    }
+}
+
+/// The verified Pangolin context through its SSH tunnel.
+fn open_pangolin(setup: &Setup, tell: &(dyn Fn(Event) + Send + Sync)) -> Result<Pangolin, String> {
     tell(Event::Busy(
         "Opening the Pangolin API tunnel (touch your key or give its PIN if it asks)".to_owned(),
     ));
-    let pangolin = Pangolin::open(
+    Pangolin::open(
         &setup.token_dir,
         std::sync::Arc::clone(&setup.system),
         setup.ssh_prefix.clone(),
         setup.sounds.clone(),
         &setup.stop,
-    )?;
-    Initializer::open(pangolin, config.clone())
+    )
 }
 
 fn gib(bytes: u64) -> u64 {
     bytes / (1024 * 1024 * 1024)
 }
 
-#[allow(clippy::too_many_lines)]
-fn settings(source: &Source, cluster: &Cluster, kept: Option<&Choice>, offset: i64) -> Vec<Setting> {
+/// The release tag of `image`.
+fn tag(image: &str) -> &str {
+    image.rsplit_once(':').map_or("", |(_, tag)| tag)
+}
+
+fn setting(title: &str, note: &str, choices: Vec<(String, String)>, multiple: bool, text: Option<String>) -> Setting {
+    Setting {
+        list: false,
+        title: title.to_owned(),
+        note: note.to_owned(),
+        multiple,
+        choices,
+        picked: Vec::new(),
+        text,
+    }
+}
+
+/// The settings: the instances (none ticked), then the values of the first
+/// instance, or the manifest's for a service not deployed yet.
+fn settings(source: &Source, cluster: &Cluster, instances: &[Instance], shown: &str, offset: i64) -> Vec<Setting> {
     let manifest = &source.manifest;
-    let picked = |choices: &[(String, String)], wanted: &[String]| -> Vec<usize> {
-        wanted
-            .iter()
-            .filter_map(|value| choices.iter().position(|(choice, _)| choice == value))
-            .collect()
-    };
+    let first = instances.first();
     let releases: Vec<(String, String)> = cluster
         .releases
         .iter()
         .map(|release| {
-            let tag = release.image.rsplit_once(':').map_or("", |(_, tag)| tag).to_owned();
             let made = release
                 .created
                 .as_deref()
                 .and_then(|at| local_time(at, offset))
                 .unwrap_or_else(|| "—".to_owned());
-            (tag, made)
+            (tag(&release.image).to_owned(), made)
         })
         .collect();
-    let version = kept
-        .map(|k| picked(&releases, std::slice::from_ref(&k.version)))
-        .filter(|p| !p.is_empty())
-        .unwrap_or_else(|| vec![0]);
-    // One row per node and storage, the nodes in order: the node gets an
-    // instance whose disk and home volume are made on that storage.
+    let version = first
+        .and_then(|i| releases.iter().position(|(tag_, _)| tag_ == tag(&i.image)))
+        .unwrap_or(0);
     let mut rows: Vec<&deploy::NodeStorage> = cluster.storages.iter().collect();
     rows.sort_by(|a, b| (&a.node, &a.storage).cmp(&(&b.node, &b.storage)));
     let placements: Vec<(String, String)> = rows
@@ -210,114 +354,106 @@ fn settings(source: &Source, cluster: &Cluster, kept: Option<&Choice>, offset: i
             )
         })
         .collect();
-    let text = |value: Option<&String>, default: &str| {
-        Some(
-            value
-                .filter(|v| !v.is_empty())
-                .cloned()
-                .unwrap_or_else(|| default.to_owned()),
-        )
+    let resources = manifest.resources;
+    let home = match (first, &manifest.persistence) {
+        (Some(i), _) if i.home_mib > 0 => show_size(i.home_mib),
+        (_, Some(persistence)) => show_mib(persistence.size_mib),
+        _ => String::new(),
     };
+    let mut version_setting = setting(
+        "Version",
+        "A published release of the image, newest first; dev images are never offered. Selected instances \
+         with another version are made again from it, their home kept.",
+        releases,
+        false,
+        None,
+    );
+    version_setting.picked = vec![version];
     vec![
+        setting(
+            "Instances",
+            "The service's containers in the cluster. Tick the ones the changes below apply to; Del removes the \
+             ticked ones with their homes.",
+            instances
+                .iter()
+                .map(|i| {
+                    (
+                        i.ctid.to_string(),
+                        format!(
+                            "{} {} {} {}",
+                            i.hostname,
+                            i.address,
+                            if i.running { "running" } else { "stopped" },
+                            i.node
+                        ),
+                    )
+                })
+                .collect(),
+            true,
+            None,
+        ),
+        version_setting,
+        setting(
+            "New on nodes",
+            "Tick a storage on each node that gets a new instance; its container and home volume are made there.",
+            placements,
+            true,
+            None,
+        ),
+        setting(
+            "New CTIDs",
+            "Empty: the first free CTIDs. Or one CTID per ticked node, in the nodes' order, separated by commas.",
+            Vec::new(),
+            false,
+            Some(String::new()),
+        ),
+        setting(
+            "Cores",
+            "CPU cores of each container.",
+            Vec::new(),
+            false,
+            Some(first.map_or(resources.cores, |i| i.cores).to_string()),
+        ),
+        setting(
+            "Memory (MiB)",
+            "Memory of each container, without swap.",
+            Vec::new(),
+            false,
+            Some(first.map_or(resources.memory_mib, |i| i.memory_mib).to_string()),
+        ),
+        setting(
+            "Root",
+            "The root disk, a number with M or G; it holds the image and no data. It only grows.",
+            Vec::new(),
+            false,
+            Some(first.map_or_else(|| show_mib(resources.rootfs_mib), |i| show_size(i.root_mib))),
+        ),
+        setting(
+            "Home",
+            "The home volume at /home/app, a number with M or G; it keeps the service's data and only grows.",
+            Vec::new(),
+            false,
+            Some(home),
+        ),
         Setting {
-            list: false,
-            title: "Version".to_owned(),
-            note: format!(
-                "A published release of {}: numeric X.Y.Z tags only, newest first; dev images are never offered. \
-                 The review resolves its digest and checks its linux/amd64 image.",
-                manifest.image_repository
-            ),
-            multiple: false,
-            choices: releases,
-            picked: version,
-            text: None,
-        },
-        Setting {
-            list: false,
-            title: "Nodes".to_owned(),
-            note:
-                "Tick one storage on each node that gets a new instance: its container, disk and home volume are made \
-                   there, new volumes of the sizes below; nothing on the storage is changed. Instances are \
-                   independent: each keeps its own data, nothing is shared or balanced between them. Each is an \
-                   unprivileged container in pool homestack-service with tag homestack-server, its health checked \
-                   from this desktop after the start and again after one restart. The first failure stops the run \
-                   and nothing is removed. Existing containers are not touched."
-                    .to_owned(),
-            multiple: true,
-            picked: kept.map(|k| picked(&placements, &k.placements)).unwrap_or_default(),
-            choices: placements,
-            text: None,
-        },
-        Setting {
-            list: false,
-            title: "CTID".to_owned(),
-            note: "Empty: the first free CTIDs, shown in the review. Or one CTID per ticked node, in the order of \
-                   the nodes, separated by commas. The address follows from it: 102240 is .102.240. To resume an \
-                   interrupted API initialization, give its CTID and retain the same version, node and sizes."
-                .to_owned(),
-            multiple: false,
-            choices: Vec::new(),
-            picked: Vec::new(),
-            text: text(kept.map(|k| &k.ctids), ""),
-        },
-        Setting {
-            list: false,
-            title: "Cores".to_owned(),
-            note: "CPU cores of each container.".to_owned(),
-            multiple: false,
-            choices: Vec::new(),
-            picked: Vec::new(),
-            text: text(kept.map(|k| &k.cores), "1"),
-        },
-        Setting {
-            list: false,
-            title: "Memory (MiB)".to_owned(),
-            note: "Memory of each container, without swap.".to_owned(),
-            multiple: false,
-            choices: Vec::new(),
-            picked: Vec::new(),
-            text: text(kept.map(|k| &k.memory_mib), "512"),
-        },
-        Setting {
-            list: false,
-            title: "Disk".to_owned(),
-            note: "Size of each container's root disk, a number with M or G (e.g. 512M, 1G); it is replaced with \
-                   the image and holds no data."
-                .to_owned(),
-            multiple: false,
-            choices: Vec::new(),
-            picked: Vec::new(),
-            text: text(kept.map(|k| &k.root_mib), "1G"),
-        },
-        Setting {
-            list: false,
-            title: "Home".to_owned(),
-            note: format!(
-                "Size of each instance's home volume at {MOUNT}, where the service keeps its data, a number with M \
-                 or G (e.g. 10M, 2G)."
-            ),
-            multiple: false,
-            choices: Vec::new(),
-            picked: Vec::new(),
-            // A Site keeps only its credential there.
-            text: text(kept.map(|k| &k.home_mib), if source.is_site() { "10M" } else { "1G" }),
-        },
-        Setting {
-            list: false,
-            title: "Environment".to_owned(),
-            note: "KEY=value entries separated by spaces, as the application's documentation asks (the manifest \
-                   declares none). They are kept in the container configuration, readable in Proxmox: no secrets."
-                .to_owned(),
-            multiple: false,
-            choices: Vec::new(),
-            picked: Vec::new(),
-            text: text(kept.map(|k| &k.environment), ""),
+            list: true,
+            ..setting(
+                "Environment",
+                "The containers' variables, one per entry (KEY=value). No secrets: the configuration is \
+                 readable in Proxmox. A running container restarts to read a change.",
+                shown
+                    .split_whitespace()
+                    .map(|entry| (entry.to_owned(), String::new()))
+                    .collect(),
+                false,
+                None,
+            )
         },
     ]
 }
 
-/// The answers as a choice.
-fn choice(settings: &[Setting], answers: &[Answer]) -> Choice {
+/// The answers as what the operator chose.
+fn chosen(settings: &[Setting], answers: &[Answer]) -> Chosen {
     let picked = |index: usize| -> Vec<String> {
         match (settings.get(index), answers.get(index)) {
             (Some(setting), Some(Answer::Picked(picked))) => picked
@@ -332,29 +468,247 @@ fn choice(settings: &[Setting], answers: &[Answer]) -> Choice {
         Some(Answer::Text(text)) => text.trim().to_owned(),
         _ => String::new(),
     };
-    Choice {
-        version: picked(VERSION).into_iter().next().unwrap_or_default(),
-        // `NODE:STORAGE` in the list's order (by node), as the CTIDs are given.
-        placements: picked(PLACEMENT),
-        ctids: text(CTIDS),
-        cores: text(CORES),
-        memory_mib: text(MEMORY),
-        root_mib: text(ROOT_GIB),
-        home_mib: text(HOME_GIB),
-        environment: text(ENVIRONMENT),
+    Chosen {
+        selected: picked(INSTANCES).iter().filter_map(|id| id.parse().ok()).collect(),
+        deploy: deploy::Choice {
+            version: picked(VERSION).into_iter().next().unwrap_or_default(),
+            // `NODE:STORAGE` in the list's order (by node), as the CTIDs are given.
+            placements: picked(PLACEMENT),
+            ctids: text(CTIDS),
+            cores: text(CORES),
+            memory_mib: text(MEMORY),
+            root_mib: text(ROOT),
+            home_mib: text(HOME),
+            environment: text(ENVIRONMENT),
+        },
     }
 }
 
-/// The review: what is made, nothing else.
-fn sections(
+/// Review the changes to the selected instances, the new instances and a
+/// Pangolin attachment; only what changes is listed.
+fn review(setup: &Setup, source: &Source, s: &mut Session, answers: &[Answer]) -> Review {
+    let chosen = chosen(&s.settings, answers);
+    let attach_requested = service_pangolin::requested(answers);
+    let mut sections = Vec::new();
+    let mut problems = Vec::new();
+    let (mut update_plan, mut change, mut create, mut attach) = (None, None, None, None);
+    if chosen.selected.is_empty() && chosen.deploy.placements.is_empty() {
+        problems.push("Tick instances to change, or nodes for new instances".to_owned());
+    }
+    if !chosen.selected.is_empty() {
+        let targets: Vec<&Instance> = s
+            .instances
+            .iter()
+            .filter(|i| chosen.selected.contains(&i.ctid))
+            .collect();
+        let choice = lifecycle::Choice {
+            ctids: chosen.selected.clone(),
+            cores: chosen.deploy.cores.clone(),
+            memory_mib: chosen.deploy.memory_mib.clone(),
+            root_mib: chosen.deploy.root_mib.clone(),
+            home_mib: chosen.deploy.home_mib.clone(),
+            environment: chosen.deploy.environment.clone(),
+            shown_environment: s.shown.clone(),
+            remove: String::new(),
+        };
+        let mut plan = setup.handle.block_on(lifecycle::plan(
+            &s.pve,
+            &source.repository,
+            &source.manifest.id,
+            &choice,
+        ));
+        if source.is_site() && lifecycle::restarts(&plan) {
+            match s.ready() {
+                Some(site) => {
+                    for target in plan.targets.iter().filter(|t| t.running) {
+                        if let Err(error) = site.identity(target.ctid) {
+                            plan.problems.push(error);
+                        }
+                    }
+                }
+                None => plan
+                    .problems
+                    .push("Restarting a Site requires the verified Pangolin context".to_owned()),
+            }
+        }
+        let other_version: Vec<u32> = targets
+            .iter()
+            .filter(|i| tag(&i.image) != chosen.deploy.version)
+            .map(|i| i.ctid)
+            .collect();
+        if !other_version.is_empty() {
+            if plan.lines.is_empty() {
+                let up = setup.handle.block_on(update::plan(
+                    &s.pve,
+                    &s.config,
+                    source,
+                    &other_version,
+                    &chosen.deploy.version,
+                    "",
+                    s.ready(),
+                ));
+                sections.push(("Update".to_owned(), up.lines.clone()));
+                problems.extend(up.problems.clone());
+                update_plan = Some(up);
+            } else {
+                problems.push("Change the version in a separate deployment from sizes and the environment".to_owned());
+            }
+        }
+        problems.extend(plan.problems.clone());
+        if !plan.lines.is_empty() {
+            sections.push(("Change".to_owned(), plan.lines.clone()));
+            change = Some(plan);
+        }
+    }
+    if !chosen.deploy.placements.is_empty() {
+        let site = s.site.as_mut().map(|site| site as &mut dyn SiteInit);
+        let plan = setup.handle.block_on(deploy::plan(
+            &s.config,
+            &s.pve,
+            source,
+            &s.cluster,
+            &chosen.deploy,
+            site,
+        ));
+        sections.extend(new_sections(source, &s.cluster, &plan, s.site.as_ref(), setup.offset));
+        problems.extend(plan.problems.clone());
+        create = Some(plan);
+    }
+    if attach_requested {
+        if !sections.is_empty() {
+            problems.push("Attach to Pangolin in a separate deployment from other changes".to_owned());
+        } else {
+            let targets: Vec<Instance> = s
+                .instances
+                .iter()
+                .filter(|i| chosen.selected.contains(&i.ctid))
+                .cloned()
+                .collect();
+            let checked = s
+                .context()
+                .ok_or_else(|| "The Pangolin context is unavailable".to_owned())
+                .and_then(|p| {
+                    service_pangolin::review(
+                        source,
+                        p,
+                        &setup.stop,
+                        s.catalog.as_ref(),
+                        &s.settings,
+                        answers,
+                        &targets,
+                    )
+                });
+            match checked {
+                Ok(checked) => {
+                    sections.push(("Pangolin attachment".to_owned(), checked.lines()));
+                    attach = Some(checked);
+                }
+                Err(error) => problems.push(error),
+            }
+        }
+    }
+    if sections.is_empty() && problems.is_empty() {
+        problems.push("Nothing changes: the selected instances already have these values".to_owned());
+    }
+    (
+        sections,
+        problems,
+        Reviewed::Change(Box::new(Changes {
+            update: update_plan,
+            change,
+            create,
+            attach,
+        })),
+    )
+}
+
+/// Apply the reviewed changes in order: the image, sizes and environment,
+/// new instances, then the Pangolin attachment; the first failure stops.
+fn apply(
+    setup: &Setup,
+    source: &Source,
+    s: &mut Session,
+    reviewed: Reviewed,
+    tell: &(dyn Fn(Event) + Send + Sync),
+) -> (bool, Vec<String>) {
+    let say = |line: &str| tell(Event::Line(line.to_owned()));
+    let mut lines = Vec::new();
+    let fail = |mut lines: Vec<String>, error: String| {
+        lines.push(error);
+        (false, lines)
+    };
+    match reviewed {
+        Reviewed::Remove(plan) => {
+            match setup
+                .handle
+                .block_on(lifecycle::apply(&s.pve, source, &plan, s.ready(), &say))
+            {
+                Ok(done) => (true, done),
+                Err(error) => fail(lines, error),
+            }
+        }
+        Reviewed::Change(changes) => {
+            let Changes {
+                update: update_plan,
+                change,
+                create,
+                attach,
+            } = *changes;
+            if let Some(plan) = update_plan {
+                match setup
+                    .handle
+                    .block_on(update::apply(&s.pve, source, &plan, s.ready(), &say))
+                {
+                    Ok(done) => lines.extend(done),
+                    Err(error) => return fail(lines, error),
+                }
+            }
+            if let Some(plan) = change {
+                match setup
+                    .handle
+                    .block_on(lifecycle::apply(&s.pve, source, &plan, s.ready(), &say))
+                {
+                    Ok(done) => lines.extend(done),
+                    Err(error) => return fail(lines, error),
+                }
+            }
+            if let Some(plan) = create {
+                let site = s.site.as_mut().map(|site| site as &mut dyn SiteInit);
+                let (ok, done) = setup.handle.block_on(deploy::apply(&s.pve, source, &plan, site, &say));
+                lines.extend(done);
+                if !ok {
+                    return (false, lines);
+                }
+            }
+            if let Some(plan) = attach {
+                let result = match s.context() {
+                    Some(pangolin) => {
+                        setup
+                            .handle
+                            .block_on(service_pangolin::apply(&s.pve, pangolin, &setup.stop, &plan))
+                    }
+                    None => Err("The Pangolin context is unavailable; review again".to_owned()),
+                };
+                match result {
+                    Ok(done) => lines.extend(done),
+                    Err(error) => return fail(lines, error),
+                }
+            }
+            (true, lines)
+        }
+    }
+}
+
+/// The review of new instances: what is made, nothing else.
+fn new_sections(
     source: &Source,
     cluster: &Cluster,
-    plan: &Plan,
+    plan: &deploy::Plan,
     site: Option<&Initializer>,
     offset: i64,
 ) -> Vec<(String, Vec<String>)> {
     let manifest = &source.manifest;
-    let version = plan.image.rsplit_once(':').map_or("", |(_, tag)| tag);
+    let version = tag(&plan.image);
     let made = cluster
         .releases
         .iter()
@@ -372,13 +726,13 @@ fn sections(
             ));
         }
         lines.push(format!(
-            "{}  CT {}  {}  {}  disk {} + home {} on {}  {} CPU  {} MiB",
+            "{}  CT {}  {}  {}  root {} + home {} on {}  {} CPU  {} MiB",
             i.node,
             i.ctid,
             i.hostname,
             i.address,
-            hs_deploy::node::show_size(i.root_mib),
-            hs_deploy::node::show_size(i.home_mib),
+            show_size(i.root_mib),
+            show_size(i.home_mib),
             i.root_storage,
             i.cores,
             i.memory_mib
@@ -398,7 +752,7 @@ fn sections(
             steps.extend([
                 format!("1. {ct}"),
                 format!("2. Pangolin: {site_step}"),
-                format!("3. start it; its credential goes into {MOUNT}/pangolin-site through its console (no SSH)"),
+                "3. start it; its credential goes into /home/app/pangolin-site through its console (no SSH)".to_owned(),
                 format!(
                     "4. wait until Site {} is online, then turn autostart on",
                     deploy::site_name(&i.hostname, i.ctid)
@@ -406,18 +760,41 @@ fn sections(
             ]);
         }
         lines.extend(site.map(Initializer::describe));
-        return vec![
-            ("Deploy".to_owned(), lines),
-            ("Steps".to_owned(), steps),
-            (
-                "Not changed".to_owned(),
-                vec!["other containers, other Sites and Resources".to_owned()],
-            ),
-        ];
+        return vec![("New".to_owned(), lines), ("Steps".to_owned(), steps)];
     }
     lines.push(format!("then: {}", deploy::health_text(manifest)));
     if source.is_api() {
         lines.push("API: reuse the configured desktop certificate and credentials; initialize /home/app/homestack, verify authenticated HTTPS, remove TLS bootstrap values, reboot and verify stored configuration, PVE access and the guest home mount".to_owned());
     }
-    vec![("Deploy".to_owned(), lines)]
+    vec![("New".to_owned(), lines)]
+}
+
+/// Preserve edits across F5, matching choices by their stable values. Recreated
+/// Sites have new IDs, so a stale selection is cleared rather than reused.
+fn restore(settings: &mut [Setting], previous: &[Setting], answers: &[Answer]) {
+    for (at, setting) in settings.iter_mut().enumerate() {
+        let Some(old) = previous.get(at).filter(|old| old.title == setting.title) else {
+            continue;
+        };
+        match answers.get(at) {
+            Some(Answer::Text(text)) if setting.list => {
+                setting.choices = text.split_whitespace().map(|v| (v.to_owned(), String::new())).collect();
+            }
+            Some(Answer::Text(text)) if setting.text.is_some() => setting.text = Some(text.clone()),
+            Some(Answer::Picked(indices)) => {
+                let values: Vec<_> = indices
+                    .iter()
+                    .filter_map(|i| old.choices.get(*i))
+                    .map(|(v, _)| v)
+                    .collect();
+                setting.picked = setting
+                    .choices
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, (value, _))| values.contains(&value).then_some(i))
+                    .collect();
+            }
+            _ => {}
+        }
+    }
 }

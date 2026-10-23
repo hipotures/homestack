@@ -1515,6 +1515,7 @@ impl App {
                         if let Some(install) = self.install.as_mut() {
                             install.row = row;
                             install.chooser = false;
+                            install.before = None;
                             install.adding = None;
                         }
                         return None;
@@ -1522,9 +1523,8 @@ impl App {
                     Some(Hit::Choice(choice)) => {
                         let mut list = false;
                         if let Some(install) = self.install.as_mut() {
-                            install.chooser = true;
+                            install.begin_edit();
                             install.cursor = choice;
-                            install.adding = None;
                             list = install.settings.get(install.row).is_some_and(|setting| setting.list);
                         }
                         // A list's entry is highlighted; a choice is ticked.

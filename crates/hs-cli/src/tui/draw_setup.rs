@@ -79,14 +79,12 @@ pub(super) fn setup_box(buf: &mut Buffer, area: Rect, app: &App, setup: &SetupBo
             Control::named("ENTER", "deploy", KeyCode::Enter).enabled(setup.deployable().is_some()),
             Control::named("SPACE", "sections", KeyCode::Char(' ')),
             Control::named("F5", "refresh", KeyCode::F(5)),
-            Control::named("M", "manage", KeyCode::Char('m')).enabled(setup.manageable()),
             Control::named("ESC", "cancel", KeyCode::Esc),
         ],
         Stage::Tree if setup.in_services() => vec![
             Control::named("←→", "group", KeyCode::Right),
             Control::named("ENTER", "open", KeyCode::Enter),
             Control::named("F5", "refresh", KeyCode::F(5)),
-            Control::named("M", "manage", KeyCode::Char('m')).enabled(setup.manageable()),
             Control::named("ESC", "cancel", KeyCode::Esc),
         ],
         Stage::Tree => {

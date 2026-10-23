@@ -24,7 +24,6 @@ pub mod pangolin_tunnel;
 pub mod reinstall;
 pub mod run;
 pub mod service_deploy;
-mod service_lifecycle;
 mod service_pangolin;
 pub mod setup;
 pub mod setup_work;

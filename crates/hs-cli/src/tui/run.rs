@@ -605,7 +605,6 @@ struct Installing {
     sites: Option<super::pangolin_sites::Context>,
     /// Service mode: the manifest revision to deploy.
     service: Option<crate::services::deploy::Source>,
-    service_manage: bool,
 }
 
 impl Installing {
@@ -656,13 +655,12 @@ impl Installing {
 
     fn start(&mut self, app: &mut App, ctx: &Context, updates: &mpsc::UnboundedSender<Update>) {
         let mode = app.install.as_ref().map_or(Mode::Install, |install| install.mode);
-        // Site deployment and service routing use the Pangolin SSH tunnel.
+        // A Site and a service published through Pangolin use its SSH tunnel.
         let quiet = mode == Mode::Service
-            && !self.service_manage
             && !self
                 .service
                 .as_ref()
-                .is_some_and(crate::services::deploy::Source::is_site);
+                .is_some_and(|source| source.is_site() || source.manifest.pangolin.is_some());
         if !quiet {
             self.bridge(app, updates);
         }
@@ -693,7 +691,6 @@ impl Installing {
             handle: tokio::runtime::Handle::current(),
             sites: (mode == Mode::Sites).then(|| self.sites.clone()).flatten(),
             service: (mode == Mode::Service).then(|| self.service.clone()).flatten(),
-            service_manage: self.service_manage,
             offset: app.utc_offset,
         };
         let (sender, receiver) = std::sync::mpsc::channel();
@@ -1356,8 +1353,7 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
                                         .as_mut()
                                         .and_then(|setup| setup.pending_plan.take())
                                         .map(|plan| Work::Execute(Box::new(plan))),
-                                    Ask::Deploy | Ask::Manage => {
-                                        installing.service_manage = ask == Ask::Manage;
+                                    Ask::Deploy => {
                                         if let Some(source) = app.setup.as_mut().and_then(|setup| setup.deploy_request.take()) {
                                             app.open_service_deploy();
                                             installing.service = Some(source);

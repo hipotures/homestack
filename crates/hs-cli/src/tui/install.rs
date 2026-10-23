@@ -30,7 +30,7 @@ impl Mode {
             Self::Install => &["access", "check", "settings", "review", "install"],
             Self::Uninstall => &["access", "check", "review", "remove"],
             Self::Sites => &["access", "settings", "review", "deploy"],
-            Self::Service => &["settings", "review", "apply"],
+            Self::Service => &["settings", "review", "deploy"],
         }
     }
 }
@@ -136,6 +136,13 @@ impl Setting {
             self.picked = vec![index];
         }
     }
+}
+
+/// A setting as it was when its box opened.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Edited {
+    Setting(Setting),
+    Domain(String),
 }
 
 /// What the worker found once root was reached.
@@ -250,6 +257,10 @@ pub struct Install {
     pub domain: Option<String>,
     pub row: usize,
     pub chooser: bool,
+    /// The value the open box started from, restored by Esc.
+    pub before: Option<Edited>,
+    /// The review is of removing the selected instances (Del).
+    pub removing: bool,
     pub cursor: usize,
     /// The entry typed after `+` in a list's box.
     pub adding: Option<String>,
@@ -304,6 +315,8 @@ impl Install {
             domain: None,
             row: 0,
             chooser: false,
+            before: None,
+            removing: false,
             adding: None,
             cursor: 0,
             sections: Vec::new(),
@@ -506,6 +519,7 @@ impl Install {
                 // holds what it made.
                 KeyCode::Enter | KeyCode::Esc if self.mode == Mode::Service => {
                     self.stage = Stage::Settings;
+                    self.removing = false;
                     self.lines.clear();
                     (false, None)
                 }
@@ -698,105 +712,93 @@ impl Install {
             .collect()
     }
 
+    /// Whether the highlighted row is the server domain.
+    fn on_domain(&self) -> bool {
+        self.domain.is_some() && self.row == self.settings.len()
+    }
+
+    /// Enter the highlighted setting's box; Esc there restores this value.
+    pub fn begin_edit(&mut self) {
+        if self.chooser {
+            return;
+        }
+        self.chooser = true;
+        self.adding = None;
+        self.before = if self.on_domain() {
+            self.domain.clone().map(Edited::Domain)
+        } else {
+            self.settings.get(self.row).cloned().map(Edited::Setting)
+        };
+        self.cursor = self
+            .settings
+            .get(self.row)
+            .and_then(|setting| setting.picked.first().copied())
+            .unwrap_or(0);
+    }
+
+    /// Leave the box: keep the value, or restore the one it had.
+    fn end_edit(&mut self, keep: bool) {
+        self.chooser = false;
+        self.adding = None;
+        match self.before.take() {
+            Some(Edited::Setting(before)) if !keep => {
+                if let Some(setting) = self.settings.get_mut(self.row) {
+                    *setting = before;
+                }
+            }
+            Some(Edited::Domain(before)) if !keep => self.domain = Some(before),
+            _ => {}
+        }
+    }
+
+    /// Plan the answers: the review.
+    fn review(&mut self) -> (bool, Option<Request>) {
+        self.stage = Stage::Review;
+        self.reviewed = false;
+        self.busy = Some("Reading the plan".to_owned());
+        (
+            false,
+            Some(Request::Install(Command::Review {
+                answers: self.answers(),
+                domain: self.domain.clone(),
+            })),
+        )
+    }
+
+    /// The settings: ↑↓ a setting, Enter into its box, Tab the next one, R
+    /// the review. In a box Enter keeps the value and Esc restores it.
     fn settings_key(&mut self, code: KeyCode) -> (bool, Option<Request>) {
-        // ? opens the help (a domain has no ?); any key closes it.
+        // ? opens the help; any key closes it.
         if self.help {
             self.help = false;
             return (false, None);
         }
-        if code == KeyCode::Char('?') {
-            self.help = true;
-            return (false, None);
+        if self.chooser {
+            return self.edit_key(code);
         }
-        let on_domain = self.domain.is_some() && self.row == self.settings.len();
-        if let Some(typed) = self.adding.as_mut() {
-            match code {
-                KeyCode::Char(c) => typed.push(c),
-                KeyCode::Backspace => {
-                    typed.pop();
-                }
-                KeyCode::Enter => {
-                    let entry = typed.trim().to_owned();
-                    self.adding = None;
-                    if let Some(setting) = self.settings.get_mut(self.row)
-                        && !entry.is_empty()
-                    {
-                        setting.choices.push((entry, String::new()));
-                        self.cursor = setting.choices.len() - 1;
-                    }
-                }
-                KeyCode::Esc => self.adding = None,
-                _ => {}
-            }
-            return (false, None);
-        }
-        // A list: + and - work on its row and in its box.
-        if let Some(setting) = self.settings.get_mut(self.row).filter(|setting| setting.list) {
-            match code {
-                KeyCode::Char('+') => {
-                    self.chooser = true;
-                    self.adding = Some(String::new());
-                    return (false, None);
-                }
-                KeyCode::Char('-') if self.chooser && self.cursor < setting.choices.len() => {
-                    setting.choices.remove(self.cursor);
-                    self.cursor = self.cursor.min(setting.choices.len().saturating_sub(1));
-                    return (false, None);
-                }
-                KeyCode::Char('-') => {
-                    self.chooser = true;
-                    self.cursor = 0;
-                    return (false, None);
-                }
-                _ => {}
-            }
-        }
-        if let Some(text) = self
-            .settings
-            .get_mut(self.row)
-            .and_then(|setting| setting.text.as_mut())
-        {
-            match code {
-                KeyCode::Char(c) => {
-                    text.push(c);
-                    return (false, None);
-                }
-                KeyCode::Backspace => {
-                    text.pop();
-                    return (false, None);
-                }
-                KeyCode::Tab | KeyCode::BackTab => return (false, None),
-                _ => {}
-            }
-        }
+        let last = self.rows().saturating_sub(1);
         match code {
-            KeyCode::Esc | KeyCode::Char('b') if !self.chooser && self.mode == Mode::Sites && !on_domain => {
-                self.stage = Stage::Access;
-                self.found = None;
-                return (false, Some(Request::Install(Command::Cancel)));
-            }
-            KeyCode::Esc if !self.chooser && self.mode == Mode::Service => {
-                return (true, Some(Request::Install(Command::Cancel)));
-            }
-            KeyCode::Esc if !self.chooser => self.stage = Stage::Check,
-            KeyCode::Esc => self.chooser = false,
-            KeyCode::Char('r') if !on_domain => return self.settings_key(KeyCode::Enter),
-            KeyCode::Enter => {
+            KeyCode::Char('?') => self.help = true,
+            KeyCode::Up => self.row = self.row.saturating_sub(1),
+            KeyCode::Down | KeyCode::Tab => self.row = (self.row + 1).min(last),
+            KeyCode::BackTab => self.row = self.row.saturating_sub(1),
+            KeyCode::Enter => self.begin_edit(),
+            KeyCode::Char('r' | 'R') => return self.review(),
+            KeyCode::Delete if self.mode == Mode::Service => {
                 self.stage = Stage::Review;
                 self.reviewed = false;
-                self.busy = Some("Reading the plan".to_owned());
+                self.removing = true;
+                self.busy = Some("Reading what would be removed".to_owned());
                 return (
                     false,
-                    Some(Request::Install(Command::Review {
+                    Some(Request::Install(Command::Remove {
                         answers: self.answers(),
-                        domain: self.domain.clone(),
                     })),
                 );
             }
             // Rescan cluster: what changed in Proxmox since the connection
             // (a VM taken out of its pool) is offered, the choices kept.
             KeyCode::F(5) => {
-                self.chooser = false;
                 self.busy = Some("Rescanning the cluster".to_owned());
                 return (
                     false,
@@ -806,81 +808,135 @@ impl Install {
                     })),
                 );
             }
-            KeyCode::Tab | KeyCode::BackTab if !on_domain => {
-                self.chooser = !self.chooser;
-                self.cursor = self
-                    .settings
-                    .get(self.row)
-                    .and_then(|setting| setting.picked.first().copied())
-                    .unwrap_or(0);
+            KeyCode::Esc if self.mode == Mode::Sites => {
+                self.stage = Stage::Access;
+                self.found = None;
+                return (false, Some(Request::Install(Command::Cancel)));
             }
-            KeyCode::Down | KeyCode::Up if self.chooser => {
-                let count = self
-                    .settings
-                    .get(self.row)
-                    .map_or(1, |setting| setting.choices.len().max(1));
-                self.cursor = if code == KeyCode::Down {
-                    (self.cursor + 1).min(count - 1)
-                } else {
-                    self.cursor.saturating_sub(1)
-                };
+            KeyCode::Esc if self.mode == Mode::Service => {
+                return (true, Some(Request::Install(Command::Cancel)));
             }
-            KeyCode::Char(' ') if self.chooser => {
-                let cursor = self.cursor;
-                if let Some(setting) = self.settings.get_mut(self.row) {
-                    setting.toggle(cursor);
-                }
-            }
-            KeyCode::Down => self.row = (self.row + 1).min(self.rows().saturating_sub(1)),
-            KeyCode::Up => self.row = self.row.saturating_sub(1),
-            KeyCode::Char(c) if on_domain => {
-                if let Some(domain) = self.domain.as_mut() {
-                    domain.push(c);
-                }
-            }
-            KeyCode::Backspace if on_domain => {
-                if let Some(domain) = self.domain.as_mut() {
-                    domain.pop();
-                }
-            }
-            KeyCode::Char('b') if !self.chooser => self.stage = Stage::Check,
+            KeyCode::Esc => self.stage = Stage::Check,
             _ => {}
         }
         (false, None)
     }
 
+    /// A key in the highlighted setting's box.
+    fn edit_key(&mut self, code: KeyCode) -> (bool, Option<Request>) {
+        match code {
+            KeyCode::Esc if self.adding.is_some() => {
+                self.adding = None;
+                return (false, None);
+            }
+            KeyCode::Esc => {
+                self.end_edit(false);
+                return (false, None);
+            }
+            KeyCode::Tab | KeyCode::BackTab => {
+                self.end_edit(true);
+                let last = self.rows().saturating_sub(1);
+                self.row = if code == KeyCode::Tab {
+                    (self.row + 1).min(last)
+                } else {
+                    self.row.saturating_sub(1)
+                };
+                return (false, None);
+            }
+            _ => {}
+        }
+        if self.on_domain() {
+            let domain = self.domain.get_or_insert_with(String::new);
+            match code {
+                KeyCode::Char(c) => domain.push(c),
+                KeyCode::Backspace => {
+                    domain.pop();
+                }
+                KeyCode::Enter => self.end_edit(true),
+                _ => {}
+            }
+            return (false, None);
+        }
+        let cursor = self.cursor;
+        let Some(setting) = self.settings.get_mut(self.row) else {
+            self.end_edit(true);
+            return (false, None);
+        };
+        if let Some(typed) = self.adding.as_mut() {
+            match code {
+                KeyCode::Char(c) => typed.push(c),
+                KeyCode::Backspace => {
+                    typed.pop();
+                }
+                KeyCode::Enter => {
+                    let entry = typed.trim().to_owned();
+                    self.adding = None;
+                    if !entry.is_empty() {
+                        setting.choices.push((entry, String::new()));
+                        self.cursor = setting.choices.len() - 1;
+                    }
+                }
+                _ => {}
+            }
+            return (false, None);
+        }
+        if let Some(text) = setting.text.as_mut() {
+            match code {
+                KeyCode::Char(c) => text.push(c),
+                KeyCode::Backspace => {
+                    text.pop();
+                }
+                KeyCode::Enter => self.end_edit(true),
+                _ => {}
+            }
+            return (false, None);
+        }
+        let count = setting.choices.len().max(1);
+        match code {
+            KeyCode::Down => self.cursor = (cursor + 1).min(count - 1),
+            KeyCode::Up => self.cursor = cursor.saturating_sub(1),
+            KeyCode::Char('+') if setting.list => self.adding = Some(String::new()),
+            KeyCode::Char('-') if setting.list && cursor < setting.choices.len() => {
+                setting.choices.remove(cursor);
+                self.cursor = cursor.min(setting.choices.len().saturating_sub(1));
+            }
+            KeyCode::Char(' ') if !setting.list => setting.toggle(cursor),
+            // A single choice is the one under the cursor.
+            KeyCode::Enter => {
+                if !setting.list && !setting.multiple {
+                    setting.toggle(cursor);
+                }
+                self.end_edit(true);
+            }
+            _ => {}
+        }
+        (false, None)
+    }
+
+    /// The review: a letter applies it (D deploy, I install), never Enter;
+    /// a removal is confirmed with Del again.
     fn review_key(&mut self, code: KeyCode) -> (bool, Option<Request>) {
         let ready = self.reviewed && self.problems.is_empty();
+        let apply = |install: &mut Self| {
+            install.stage = Stage::Run;
+            install.lines.clear();
+            (false, Some(Request::Install(Command::Apply)))
+        };
         match (self.mode, code) {
-            (Mode::Install | Mode::Sites | Mode::Service, KeyCode::Esc) => self.stage = Stage::Settings,
+            (Mode::Install | Mode::Sites | Mode::Service, KeyCode::Esc) => {
+                self.stage = Stage::Settings;
+                self.removing = false;
+            }
             (Mode::Uninstall, KeyCode::Esc) => self.stage = Stage::Check,
             (_, KeyCode::Down) => self.scroll += 1,
             (_, KeyCode::Up) => self.scroll = self.scroll.saturating_sub(1),
-            (Mode::Sites, KeyCode::Enter | KeyCode::Char('d')) if ready => {
-                self.stage = Stage::Run;
-                self.lines.clear();
-                return (false, Some(Request::Install(Command::Apply)));
-            }
-            (Mode::Sites | Mode::Service, KeyCode::Char('b')) => self.stage = Stage::Settings,
-            (Mode::Service, KeyCode::Enter | KeyCode::Char('d')) if ready => {
-                self.stage = Stage::Run;
-                self.lines.clear();
-                return (false, Some(Request::Install(Command::Apply)));
-            }
-            (Mode::Install, KeyCode::Enter | KeyCode::Char('i')) if ready => {
-                self.stage = Stage::Run;
-                self.lines.clear();
-                return (false, Some(Request::Install(Command::Apply)));
-            }
-            (Mode::Install, KeyCode::Char('b')) => self.stage = Stage::Settings,
+            (Mode::Service, KeyCode::Delete) if self.removing && ready => return apply(self),
+            (Mode::Service | Mode::Sites, KeyCode::Char('d' | 'D')) if !self.removing && ready => return apply(self),
+            (Mode::Install, KeyCode::Char('i' | 'I')) if ready => return apply(self),
             (Mode::Uninstall, KeyCode::Left | KeyCode::Right | KeyCode::Tab) => {
                 self.remove_focused = !self.remove_focused;
             }
-            (Mode::Uninstall, KeyCode::Enter) if self.remove_focused && ready => {
-                self.stage = Stage::Run;
-                self.lines.clear();
-                return (false, Some(Request::Install(Command::Apply)));
-            }
+            (Mode::Uninstall, KeyCode::Enter) if self.remove_focused && ready => return apply(self),
             (Mode::Uninstall, KeyCode::Enter) if !self.remove_focused => {
                 return (true, Some(Request::Install(Command::Cancel)));
             }

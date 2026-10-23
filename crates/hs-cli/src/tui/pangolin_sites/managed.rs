@@ -344,6 +344,11 @@ pub struct Initializer {
 }
 
 impl Initializer {
+    /// The verified Pangolin context it initializes Sites through.
+    pub fn pangolin(&self) -> &Pangolin {
+        &self.pangolin
+    }
+
     pub fn open(pangolin: Pangolin, config: DeployConfig) -> Result<Self, String> {
         let pve = hs_deploy::deploy::deploy_client(&config)?;
         Ok(Self {
