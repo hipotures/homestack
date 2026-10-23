@@ -851,7 +851,7 @@ fn review(setup: &Setup, source: &Source, s: &mut Session, answers: &[Answer]) -
         if let Err(error) = &s.dns {
             problems.push(error.clone());
         }
-        sections.extend(new_sections(source, &s.cluster, &plan, s.site.as_ref(), setup.offset));
+        sections.extend(new_sections(source, &plan));
         problems.extend(plan.problems.clone());
         create = Some(plan);
     }
@@ -996,30 +996,12 @@ fn apply(
 }
 
 /// The review of new instances: what is made, nothing else.
-fn new_sections(
-    source: &Source,
-    cluster: &Cluster,
-    plan: &deploy::Plan,
-    site: Option<&Initializer>,
-    offset: i64,
-) -> Vec<(String, Vec<String>)> {
-    let manifest = &source.manifest;
+fn new_sections(source: &Source, plan: &deploy::Plan) -> Vec<(String, Vec<String>)> {
     let version = tag(&plan.image);
-    let made = cluster
-        .releases
-        .iter()
-        .find(|r| r.image == plan.image)
-        .and_then(|r| r.created.as_deref())
-        .and_then(|at| local_time(at, offset))
-        .map(|made| format!(", made {made}"))
-        .unwrap_or_default();
-    let mut lines = vec![format!("{} {version}{made}", manifest.name)];
+    let mut lines = vec![format!("{} {version}", source.manifest.name)];
     for i in &plan.instances {
         if i.resume.is_some() {
-            lines.push(format!(
-                "Resume initialization in CT {} using its existing home; no container or volume is created",
-                i.ctid
-            ));
+            lines.push(format!("CT {}: resume initialization", i.ctid));
         }
         let home = if i.home_mib > 0 {
             format!(" + home {}", show_size(i.home_mib))
@@ -1041,32 +1023,11 @@ fn new_sections(
     for (key, value) in &plan.environment {
         lines.push(format!("{key}={value}"));
     }
-    if source.is_site() {
-        let mut steps = Vec::new();
-        for (i, site_step) in plan.instances.iter().zip(&plan.sites) {
-            let ct = if i.resume.is_some() {
-                format!("CT {} exists; it is kept with its home", i.ctid)
-            } else {
-                format!("create CT {} (stopped, autostart off)", i.ctid)
-            };
-            steps.extend([
-                format!("1. {ct}"),
-                format!("2. Pangolin: {site_step}"),
-                "3. start it; its credential goes into /home/app/pangolin-site through its console (no SSH)".to_owned(),
-                format!(
-                    "4. wait until Site {} is online, then turn autostart on",
-                    deploy::site_name(&i.hostname, i.ctid)
-                ),
-            ]);
-        }
-        lines.extend(site.map(Initializer::describe));
-        return vec![("New".to_owned(), lines), ("Steps".to_owned(), steps)];
+    let mut sections = vec![("New".to_owned(), lines)];
+    if !plan.sites.is_empty() {
+        sections.push(("Pangolin".to_owned(), plan.sites.clone()));
     }
-    lines.push(format!("then: {}", deploy::health_text(manifest)));
-    if source.is_api() {
-        lines.push("API: reuse the configured desktop certificate and credentials; initialize /home/app/homestack, verify authenticated HTTPS, remove TLS bootstrap values, reboot and verify stored configuration, PVE access and the guest home mount".to_owned());
-    }
-    vec![("New".to_owned(), lines)]
+    sections
 }
 
 /// Preserve edits across F5, matching choices by their stable values. Recreated

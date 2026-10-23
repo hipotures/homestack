@@ -810,26 +810,6 @@ fn port(manifest: &Manifest, name: &str) -> Option<u16> {
     manifest.ports.iter().find(|p| p.name == name).map(|p| p.port)
 }
 
-/// What the health check of `manifest` is, for the review.
-#[must_use]
-pub fn health_text(manifest: &Manifest) -> String {
-    match &manifest.healthcheck {
-        Some(Healthcheck::Http {
-            port: name,
-            path,
-            expected_status,
-        }) => format!(
-            "HTTP GET {path} on port {} expects {expected_status}",
-            port(manifest, name).unwrap_or_default()
-        ),
-        Some(Healthcheck::Tcp { port: name }) => format!(
-            "TCP connect to port {} (the port opens; application readiness unverified)",
-            port(manifest, name).unwrap_or_default()
-        ),
-        None => "unverified: the manifest declares no health check".to_owned(),
-    }
-}
-
 /// One probe of the health check; what it showed.
 async fn probe(manifest: &Manifest, address: &str) -> Result<String, String> {
     match &manifest.healthcheck {

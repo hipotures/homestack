@@ -151,12 +151,6 @@ impl Pangolin {
         Ok((&self.ctx, self.key()?))
     }
 
-    /// What the context is, for the review.
-    #[must_use]
-    pub fn describe(&self) -> String {
-        format!("organization {} on {}", self.ctx.organization, self.ctx.target)
-    }
-
     /// The Step 7 key over the live, verified tunnel, reading exactly this
     /// organization; checked again before every step.
     fn key(&self) -> Result<Credential, String> {
@@ -363,11 +357,6 @@ impl Initializer {
     #[must_use]
     pub fn alive(&self) -> bool {
         self.pangolin.alive()
-    }
-
-    #[must_use]
-    pub fn describe(&self) -> String {
-        format!("Pangolin: {}", self.pangolin.describe())
     }
 }
 
