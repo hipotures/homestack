@@ -486,6 +486,10 @@ pub enum Hit {
     /// A choice of the parallel reads in the System section of the settings.
     Parallel(usize),
     SystemOption(usize),
+    /// A sort row in the General section of the settings (its level).
+    SortOption(usize),
+    /// A key of the open sort row's list.
+    SortKey(usize),
     PangolinStep(usize),
     PangolinPrerequisite(usize),
     PangolinDiscovery(usize),

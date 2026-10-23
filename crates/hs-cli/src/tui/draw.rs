@@ -11,8 +11,8 @@ use super::action::Action;
 use super::chrome::{Carousel, Control, Hit, Scrolls, Sides, alert_style, frame, register, scrollbar, text_style};
 use super::layout::{MIN_HEIGHT, MIN_WIDTH, arrange};
 use super::state::{
-    APPEARANCE, App, COLUMNS, INTEGRATIONS, MACHINES, MENU, Overlay, PARALLEL, PARALLEL_CHOICES, SETTINGS, SYSTEM,
-    VIEWS,
+    APPEARANCE, App, COLUMNS, GENERAL, INTEGRATIONS, MACHINES, MENU, Overlay, PARALLEL, PARALLEL_CHOICES, SETTINGS,
+    SORT_KEYS, SYSTEM, VIEWS,
 };
 use super::theme::{Palette, THEMES};
 
@@ -1862,17 +1862,25 @@ fn draw_settings(buf: &mut Buffer, area: Rect, app: &App, section: usize, themes
         Some(Overlay::Parallel { index }) => Some(index),
         _ => None,
     };
+    let sorting = match app.overlay {
+        Some(Overlay::Sort { level, index }) => Some((level, index)),
+        _ => None,
+    };
     let sections_focused = themes.is_none()
         && picking.is_none()
         && choosing.is_none()
-        && !matches!(app.overlay, Some(Overlay::Integrations { .. } | Overlay::System { .. }));
+        && sorting.is_none()
+        && !matches!(
+            app.overlay,
+            Some(Overlay::Integrations { .. } | Overlay::System { .. } | Overlay::General { .. })
+        );
     let bottom = if themes.is_some() {
         vec![
             Control::key("preview ↑↓"),
             Control::key("save ↵"),
             Control::key("back esc"),
         ]
-    } else if choosing.is_some() {
+    } else if choosing.is_some() || sorting.is_some() {
         vec![
             Control::key("select ↑↓"),
             Control::key("save ↵"),
@@ -1947,10 +1955,28 @@ fn draw_settings(buf: &mut Buffer, area: Rect, app: &App, section: usize, themes
                 lines.push(vec![(item, style)]);
             }
         }
-        (0, _) => {
+        (GENERAL, _) => {
             lines.push(line("Profile", &app.profile, None));
             lines.push(line("Language", "English", None));
             lines.push(line("Confirmations", "On", None));
+            lines.push(Vec::new());
+            lines.push(vec![("Sorting".to_owned(), heading)]);
+            let selected = match app.overlay {
+                Some(Overlay::General { index }) => Some(index),
+                Some(Overlay::Sort { level, .. }) => Some(level),
+                _ => None,
+            };
+            for (level, label) in ["Machines 1st", "Machines 2nd"].iter().enumerate() {
+                let label = format!("{label:<17}{} ▾", SORT_KEYS[app.sort[level]]);
+                let (item, style) = unfocused_item(palette, &label, selected == Some(level), selected.is_some());
+                lines.push(vec![(item, style)]);
+            }
+            if let Some((_, index)) = sorting {
+                for (at, key) in SORT_KEYS.iter().enumerate() {
+                    let (item, style) = list_item(palette, key, at == index);
+                    lines.push(vec![(" ".repeat(17), text), (item, style)]);
+                }
+            }
         }
         (MACHINES, _) => {}
         (SYSTEM, _) => {
@@ -2050,6 +2076,24 @@ fn draw_settings(buf: &mut Buffer, area: Rect, app: &App, section: usize, themes
         }
         if section == APPEARANCE && (first..first + THEMES.len()).contains(&row) {
             super::chrome::register(Rect::new(x, y, width, 1), super::chrome::Hit::Theme(row - first));
+        }
+    }
+    if section == GENERAL {
+        // The sort rows under Profile, Language, Confirmations and the heading.
+        let y = inner.y + 1 + u16::try_from(first + 5).unwrap_or(0);
+        for level in 0..2 {
+            let y = y + u16::try_from(level).unwrap_or(0);
+            if y < inner.bottom() {
+                super::chrome::register(Rect::new(x, y, width, 1), super::chrome::Hit::SortOption(level));
+            }
+        }
+        if sorting.is_some() {
+            for at in 0..SORT_KEYS.len() {
+                let y = y + 2 + u16::try_from(at).unwrap_or(0);
+                if y < inner.bottom() {
+                    super::chrome::register(Rect::new(x, y, width, 1), super::chrome::Hit::SortKey(at));
+                }
+            }
         }
     }
     if section == SYSTEM {
@@ -2331,6 +2375,7 @@ fn draw_overlay(buf: &mut Buffer, area: Rect, app: &App, overlay: &Overlay) {
         Overlay::Integrations { .. } => return draw_settings(buf, area, app, INTEGRATIONS, None),
         Overlay::Columns { .. } => return draw_settings(buf, area, app, MACHINES, None),
         Overlay::System { .. } | Overlay::Parallel { .. } => return draw_settings(buf, area, app, SYSTEM, None),
+        Overlay::General { .. } | Overlay::Sort { .. } => return draw_settings(buf, area, app, GENERAL, None),
         Overlay::Integration(editor) => return draw_integration(buf, area, app, editor),
         Overlay::Pangolin(wizard) => return super::draw_pangolin::screen(buf, area, app, wizard),
         Overlay::Themes { index, .. } => return draw_settings(buf, area, app, APPEARANCE, Some(*index)),
@@ -2363,6 +2408,8 @@ fn draw_overlay(buf: &mut Buffer, area: Rect, app: &App, overlay: &Overlay) {
         | Overlay::Columns { .. }
         | Overlay::Parallel { .. }
         | Overlay::System { .. }
+        | Overlay::General { .. }
+        | Overlay::Sort { .. }
         | Overlay::Integration(_)
         | Overlay::Pangolin(_) => {
             return;

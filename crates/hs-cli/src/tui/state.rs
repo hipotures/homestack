@@ -157,6 +157,8 @@ impl Power {
 
 /// The sections of the settings box, in order.
 pub const SETTINGS: [&str; 6] = ["General", "Appearance", "Machines", "System", "Refresh", "Integrations"];
+/// The section of [`SETTINGS`] that holds the sorting.
+pub const GENERAL: usize = 0;
 /// The section of [`SETTINGS`] that holds the theme.
 pub const APPEARANCE: usize = 1;
 /// The section of [`SETTINGS`] that holds the list's columns.
@@ -171,6 +173,12 @@ pub const PARALLEL_CHOICES: [usize; 6] = [1, 2, 4, 8, 16, 32];
 /// How many Proxmox requests a server reads at a time for the status, as
 /// `tui.toml` keeps it; the status reader asks with it.
 pub static PARALLEL: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(8);
+
+/// The keys the machine list sorts by.
+pub const SORT_KEYS: [&str; 7] = ["NAME", "NODE", "VMID", "TYPE", "STATE", "POOL", "SERVICE"];
+/// The machine list's first and second key of [`SORT_KEYS`] without a
+/// choice in `tui.toml`.
+const SORT_DEFAULT: [usize; 2] = [0, 1];
 
 /// The list's columns in their order, and whether one is shown without a
 /// choice in `tui.toml`.
@@ -221,6 +229,17 @@ pub enum Overlay {
         index: usize,
     },
     System {
+        index: usize,
+    },
+    /// The sort rows of the General section; `index` is the first (0) or
+    /// the second (1) key.
+    General {
+        index: usize,
+    },
+    /// The open list of a sort row; `level` is the row, `index` one of
+    /// [`SORT_KEYS`].
+    Sort {
+        level: usize,
         index: usize,
     },
     Integration(Box<super::integrations::Editor>),
@@ -298,6 +317,23 @@ fn read_tail(path: &std::path::Path, most: u64) -> Option<String> {
     })
 }
 
+/// The order of two machines by `key` of [`SORT_KEYS`].
+fn compare(key: &str, a: &StatusEntry, b: &StatusEntry) -> std::cmp::Ordering {
+    match key {
+        "NAME" => a.name.cmp(&b.name),
+        "NODE" => a.node.cmp(&b.node),
+        "TYPE" => (a.role == "CT").cmp(&(b.role == "CT")),
+        "STATE" => a.status.cmp(&b.status),
+        "POOL" => a.pool.cmp(&b.pool),
+        "SERVICE" => a
+            .service
+            .as_ref()
+            .map(|service| &service.id)
+            .cmp(&b.service.as_ref().map(|service| &service.id)),
+        _ => a.vmid.cmp(&b.vmid),
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct App {
     pub profile: String,
@@ -331,6 +367,8 @@ pub struct App {
     pub power: Power,
     /// Whether each of [`COLUMNS`] is shown.
     pub columns: [bool; COLUMNS.len()],
+    /// The machine list's first and second key of [`SORT_KEYS`].
+    pub sort: [usize; 2],
     /// The node carousel: `None` is every node.
     pub node: Option<usize>,
     /// The group carousel: `None` is all, else a pool's ID.
@@ -430,6 +468,21 @@ impl App {
             PARALLEL.store(parallel, std::sync::atomic::Ordering::SeqCst);
         }
         let columns = COLUMNS.map(|(key, shown)| chosen.as_ref().map_or(shown, |chosen| chosen.contains(&key)));
+        let sort = preferences
+            .table
+            .get("sort")
+            .and_then(toml::Value::as_table)
+            .and_then(|sort| sort.get("machines"))
+            .and_then(toml::Value::as_array)
+            .and_then(|keys| {
+                let keys: Vec<usize> = keys
+                    .iter()
+                    .filter_map(toml::Value::as_str)
+                    .filter_map(|key| SORT_KEYS.iter().position(|known| *known == key))
+                    .collect();
+                <[usize; 2]>::try_from(keys).ok()
+            })
+            .unwrap_or(SORT_DEFAULT);
         let favorites = preferences
             .table
             .get("favorites")
@@ -467,6 +520,7 @@ impl App {
             filtering: false,
             power: Power::All,
             columns,
+            sort,
             node: None,
             group: None,
             on_group: true,
@@ -1156,14 +1210,21 @@ impl App {
         let node = self.node_name();
         let filter = self.filter.to_lowercase();
         // Everything of the HomeStack pools: Gold, the workspaces and the
-        // others, by VMID.
+        // others, by the chosen keys and then by VMID.
         let mut entries: Vec<&StatusEntry> = status
             .gold
             .iter()
             .chain(&status.workspaces)
             .chain(&status.others)
             .collect();
-        entries.sort_by_key(|entry| entry.vmid);
+        entries.sort_by(|a, b| {
+            self.sort
+                .iter()
+                .fold(std::cmp::Ordering::Equal, |order, key| {
+                    order.then_with(|| compare(SORT_KEYS[*key], a, b))
+                })
+                .then(a.vmid.cmp(&b.vmid))
+        });
         entries
             .into_iter()
             .filter(|entry| !self.starred || self.favorites.contains(&entry.vmid))
@@ -1365,6 +1426,32 @@ impl App {
             "parallel".to_owned(),
             toml::Value::Integer(i64::try_from(parallel).unwrap_or(8)),
         );
+        match self.preferences.write(&table) {
+            Ok(()) => self.preferences.table = table,
+            Err(error) => self.log("", &error.0),
+        }
+    }
+
+    /// Sort the machine list's `level` row by `key` of [`SORT_KEYS`], kept
+    /// in `tui.toml`.
+    fn save_sort(&mut self, level: usize, key: usize) {
+        self.sort[level] = key;
+        let mut table = self.preferences.table.clone();
+        let mut sort = table
+            .get("sort")
+            .and_then(toml::Value::as_table)
+            .cloned()
+            .unwrap_or_default();
+        sort.insert(
+            "machines".to_owned(),
+            toml::Value::Array(
+                self.sort
+                    .iter()
+                    .map(|key| toml::Value::String(SORT_KEYS[*key].to_owned()))
+                    .collect(),
+            ),
+        );
+        table.insert("sort".to_owned(), toml::Value::Table(sort));
         match self.preferences.write(&table) {
             Ok(()) => self.preferences.table = table,
             Err(error) => self.log("", &error.0),
@@ -1598,6 +1685,17 @@ impl App {
                         self.overlay = Some(Overlay::System { index });
                         return press(self, KeyCode::Enter);
                     }
+                    Some(Hit::SortOption(level)) => {
+                        self.overlay = Some(Overlay::General { index: level });
+                        return press(self, KeyCode::Enter);
+                    }
+                    Some(Hit::SortKey(item)) => {
+                        if let Some(Overlay::Sort { level, .. }) = self.overlay {
+                            self.save_sort(level, item);
+                            self.overlay = Some(Overlay::General { index: level });
+                        }
+                        return None;
+                    }
                     Some(Hit::Parallel(item)) => {
                         if let Some(parallel) = PARALLEL_CHOICES.get(item) {
                             self.save_parallel(*parallel);
@@ -1730,13 +1828,15 @@ impl App {
                     Some(Hit::Item(item)) => {
                         match &mut self.overlay {
                             Some(Overlay::Menu { index }) => *index = item,
-                            // A section of the settings is chosen; Appearance and
-                            // Machines open at once, their list being all they have.
+                            // A section of the settings is chosen; General, Appearance,
+                            // Machines and System open at once on their choices.
                             Some(
                                 Overlay::Integrations { .. }
                                 | Overlay::Columns { .. }
                                 | Overlay::Parallel { .. }
-                                | Overlay::System { .. },
+                                | Overlay::System { .. }
+                                | Overlay::General { .. }
+                                | Overlay::Sort { .. },
                             ) => {
                                 self.overlay = Some(Overlay::Settings {
                                     section: item.min(SETTINGS.len() - 1),
@@ -1745,7 +1845,7 @@ impl App {
                             }
                             Some(Overlay::Settings { section }) => {
                                 *section = item.min(SETTINGS.len() - 1);
-                                return if [APPEARANCE, MACHINES, SYSTEM].contains(section) {
+                                return if [GENERAL, APPEARANCE, MACHINES, SYSTEM].contains(section) {
                                     press(self, KeyCode::Enter)
                                 } else {
                                     None
@@ -2296,6 +2396,9 @@ impl App {
                         section: (section + SETTINGS.len() - 1) % SETTINGS.len(),
                     });
                 }
+                KeyCode::Enter | KeyCode::Right if section == GENERAL => {
+                    self.overlay = Some(Overlay::General { index: 0 });
+                }
                 KeyCode::Enter | KeyCode::Right if section == APPEARANCE => {
                     let current = THEMES.iter().position(|name| *name == self.palette.name).unwrap_or(0);
                     self.overlay = Some(Overlay::Themes {
@@ -2341,6 +2444,41 @@ impl App {
                     _ => {}
                 }
                 self.overlay = Some(Overlay::System { index });
+            }
+            Overlay::General { mut index } => {
+                match code {
+                    KeyCode::Down | KeyCode::Up | KeyCode::Tab => index = 1 - index,
+                    KeyCode::Enter | KeyCode::Right | KeyCode::Char(' ') => {
+                        self.overlay = Some(Overlay::Sort {
+                            level: index,
+                            index: self.sort[index],
+                        });
+                        return None;
+                    }
+                    KeyCode::Esc | KeyCode::Left => {
+                        self.overlay = Some(Overlay::Settings { section: GENERAL });
+                        return None;
+                    }
+                    _ => {}
+                }
+                self.overlay = Some(Overlay::General { index });
+            }
+            Overlay::Sort { level, mut index } => {
+                match code {
+                    KeyCode::Down => index = (index + 1).min(SORT_KEYS.len() - 1),
+                    KeyCode::Up => index = index.saturating_sub(1),
+                    KeyCode::Enter => {
+                        self.save_sort(level, index);
+                        self.overlay = Some(Overlay::General { index: level });
+                        return None;
+                    }
+                    KeyCode::Esc | KeyCode::Left => {
+                        self.overlay = Some(Overlay::General { index: level });
+                        return None;
+                    }
+                    _ => {}
+                }
+                self.overlay = Some(Overlay::Sort { level, index });
             }
             Overlay::Parallel { mut index } => {
                 match code {
