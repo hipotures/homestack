@@ -73,6 +73,11 @@ changes during review. Then, for each container:
 4. Start the service when it ran before or starts on boot, and check the
    manifest's health probe. Remove the pulled archive.
 
+Pangolin Site image replacement follows this same path: its credential and
+data stay on the original home volume, and its HTTP readiness endpoint checks
+the tunnel. No SSH connection, Pangolin API operation or desktop Site journal
+is needed to replace the root image.
+
 An interrupted update is finished by updating again: every step starts from
 what Proxmox shows. While only the holder is left, the holder appears in the
 list as the service, and Enter on it updates the container it holds.

@@ -312,11 +312,13 @@ Updates use the existing `hs_deploy::recreate` replacement unchanged. It keeps
 the CTID, address, MAC, original `mp0` and environment (`HOMESTACK_MANAGED_HOME=1`
 included), so the credential on the persistent home stays. The Site
 initializer is not called: no Site is created, no credential rotated or
-reinstalled, no root session opened. Review opens the same verified Pangolin
-context and requires a completed (`Online`) journal whose Site, IDs and saved
-credential match Pangolin; after the replacement the connector's own Site must
-be online. Migration and restarts after environment changes use the same Site
-readiness instead of the manifest health check. Containers still initializing
+reinstalled, no root session opened. Image review and replacement use only the
+Proxmox API and the manifest's HTTP health check after start. They require no
+SSH tunnel, Pangolin API connection or desktop Site journal: the existing Site
+identity and credential remain on the same persistent home. Opening the service
+screen also requires no Pangolin connection; operations that need its API open
+the context when reviewed. Migration and restarts after environment changes
+still verify the Site through Pangolin. Containers still initializing
 cannot be updated or migrated, and the managed selector cannot be edited in
 maintenance. Step 8 connectors have no image update at all: replacing their root
 disk would need root SSH to restore the credential, so that path was removed.

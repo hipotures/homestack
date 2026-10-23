@@ -51,7 +51,9 @@ The heartbeat counts actual successful ICMP probes through Newt's userspace
 WireGuard tunnel, at most once per configured interval. It adds no periodic
 timer, disk writes or synthetic progress. A stuck or disconnected tunnel
 cannot advance it. HomeStack also verifies the Site is online through the
-Pangolin API during deployment and updates.
+Pangolin API during initial deployment. Image replacement preserves the existing
+home and credential and verifies HTTP readiness directly, without connecting
+to the Pangolin API or opening an SSH tunnel.
 
 Telemetry wakes a single idle measurement worker only when requested and
 reuses completed samples for two seconds. HTTP waits at most 700 ms, within

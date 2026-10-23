@@ -228,11 +228,10 @@ pub async fn work(
     decisions: &mut mpsc::UnboundedReceiver<Decision>,
     progress: &(dyn Fn(Progress) + Send + Sync),
     say: &(dyn Fn(&str) + Send + Sync),
-    site_access: Option<SiteAccess>,
 ) {
     let parameters = &start.parameters;
     if parameters.get("service").is_some() {
-        common_work(&deploy_toml, &start, decisions, progress, say, site_access).await;
+        common_work(&deploy_toml, &start, decisions, progress, say).await;
         return;
     }
     let image = parameters["image"].as_str().unwrap_or_default().to_owned();
@@ -448,7 +447,6 @@ async fn common_work(
     decisions: &mut mpsc::UnboundedReceiver<Decision>,
     progress: &(dyn Fn(Progress) + Send + Sync),
     say: &(dyn Fn(&str) + Send + Sync),
-    site_access: Option<SiteAccess>,
 ) {
     use crate::services::update;
     let result = async {
@@ -464,9 +462,7 @@ async fn common_work(
         }
         let config = DeployConfig::load(path)?;
         let pve = hs_deploy::deploy::deploy_client(&config)?;
-        let pangolin = site_context(path, &source, site_access)?;
-        let site = pangolin.as_ref().map(|p| p as &dyn SiteReady);
-        let plan = update::plan(&pve, &config, &source, &ids, version, "", site).await;
+        let plan = update::plan(&pve, &config, &source, &ids, version, "").await;
         progress(Progress::Plan {
             lines: plan.lines.clone(),
             question: "Apply this service image update?".to_owned(),
@@ -510,7 +506,7 @@ async fn common_work(
             }
             progress(Progress::Steps(steps.clone()));
         };
-        let lines = update::apply(&pve, &source, &plan, site, &said).await?;
+        let lines = update::apply(&pve, &source, &plan, &said).await?;
         Ok(Some(lines))
     }
     .await;

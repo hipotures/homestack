@@ -13,7 +13,7 @@ use hs_deploy::{
 };
 use serde_json::Value;
 
-use super::deploy::{self, SiteReady, Source};
+use super::deploy::{self, Source};
 use super::instance::{self, Instance};
 
 /// Configuration the new container keeps from the old one.
@@ -258,7 +258,6 @@ pub async fn plan(
     ctids: &[u32],
     version: &str,
     backup: &str,
-    site: Option<&dyn SiteReady>,
 ) -> Plan {
     let mut plan = Plan {
         image: source.image(version),
@@ -271,7 +270,7 @@ pub async fn plan(
         lines: Vec::new(),
         problems: Vec::new(),
     };
-    if let Err(error) = review(pve, config, source, ctids, version, site, &mut plan).await {
+    if let Err(error) = review(pve, config, source, ctids, version, &mut plan).await {
         plan.problems.push(error);
     }
     for target in &plan.targets {
@@ -336,7 +335,6 @@ pub async fn plan(
             .push(format!("Backup: stopped container and home → {}", plan.backup_storage));
     }
     plan.lines.push(match &source.manifest.healthcheck {
-        _ if source.is_site() => "Readiness: HTTP health check passes and its own Pangolin Site is online.".to_owned(),
         None => "Health check: not provided by this service.".to_owned(),
         Some(_) => "Health check: automatic after update.".to_owned(),
     });
@@ -349,7 +347,6 @@ async fn review(
     source: &Source,
     ctids: &[u32],
     version: &str,
-    site: Option<&dyn SiteReady>,
     plan: &mut Plan,
 ) -> Result<(), String> {
     if ctids.is_empty() {
@@ -396,10 +393,6 @@ async fn review(
                 return Err("API initialization requires system-trusted PVE certificates".to_owned());
             }
             bootstrap.validate_instance(&api_spec(&target)?)?;
-        }
-        if source.is_site() {
-            let site = site.ok_or("Site updates require the verified Pangolin context")?;
-            plan.lines.push(tokio::task::block_in_place(|| site.identity(*ctid))?);
         }
         if !target.held {
             let cfg = pve
@@ -450,7 +443,6 @@ pub async fn apply(
     pve: &impl Pve,
     source: &Source,
     plan: &Plan,
-    site: Option<&dyn SiteReady>,
     say: &(dyn Fn(&str) + Send + Sync),
 ) -> Result<Vec<String>, String> {
     if !plan.problems.is_empty() {
@@ -458,10 +450,6 @@ pub async fn apply(
     }
     let mut lines = Vec::new();
     for target in &plan.targets {
-        if source.is_site() {
-            let site = site.ok_or("Site updates require the verified Pangolin context")?;
-            tokio::task::block_in_place(|| site.identity(target.ctid))?;
-        }
         let bootstrap = if target.home_volume.is_empty() {
             plan.api_config.as_ref().map(ApiBootstrap::load).transpose()?
         } else {
@@ -470,7 +458,7 @@ pub async fn apply(
         if let Some(bootstrap) = &bootstrap {
             bootstrap.validate_instance(&api_spec(target)?)?;
         }
-        let done = one(pve, source, plan, target, site, bootstrap.as_ref(), say)
+        let done = one(pve, source, plan, target, bootstrap.as_ref(), say)
             .await
             .map_err(|error| {
                 format!(
@@ -590,7 +578,6 @@ async fn one(
     source: &Source,
     plan: &Plan,
     target: &Instance,
-    site: Option<&dyn SiteReady>,
     bootstrap: Option<&ApiBootstrap>,
     say: &(dyn Fn(&str) + Send + Sync),
 ) -> Result<Vec<String>, String> {
@@ -745,7 +732,7 @@ async fn one(
         if !new.running {
             node::power(pve, node, ctid, "start").await?;
         }
-        readiness = deploy::ready(source, site, ctid, &target.address, say).await?;
+        readiness = deploy::healthy(&source.manifest, &target.address).await?;
     } else {
         readiness = "Health check skipped: container left stopped".to_owned();
     }

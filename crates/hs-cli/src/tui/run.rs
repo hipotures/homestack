@@ -1203,16 +1203,6 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
                             decide = Some(sender);
                             let updates = updates.clone();
                             let deploy_toml = deploy_toml(ctx);
-                            let site_access = if start.parameters["service"][1] == "pangolin" {
-                                let prefix = installing.bridge(&mut app, &updates);
-                                if prefix.is_empty() {
-                                    app.progress(Progress::Done { ok: false, lines: vec!["Could not start SSH authentication prompts".to_owned()] });
-                                    continue;
-                                }
-                                let sounds = config::load(&config::default_path(&ctx.home, ctx.config_home.as_deref()))
-                                    .map(|loaded| Sounds::from_table(loaded.client.sounds.as_ref())).unwrap_or_default();
-                                Some(super::reinstall::SiteAccess { system: Arc::clone(&ctx.system), prefix, sounds })
-                            } else { None };
                             tokio::spawn(async move {
                                 let told = updates.clone();
                                 let tell = move |progress: Progress| {
@@ -1221,7 +1211,7 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
                                 let say = move |line: &str| {
                                     let _ = updates.send(Update::Log(line.trim().to_owned()));
                                 };
-                                super::reinstall::work(deploy_toml, start, &mut decisions, &tell, &say, site_access).await;
+                                super::reinstall::work(deploy_toml, start, &mut decisions, &tell, &say).await;
                             });
                         }
                         Request::UpdateApi => {

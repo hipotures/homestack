@@ -53,7 +53,7 @@ struct Session {
     /// The environment the settings started from.
     shown: String,
     reviewed: Option<Reviewed>,
-    /// A Pangolin Site connector: the verified Pangolin context and root.
+    /// Opened only when an operation needs the Pangolin API or Site initialization.
     site: Option<Initializer>,
     /// Another service published through Pangolin: its verified context.
     pangolin: Option<Pangolin>,
@@ -135,6 +135,17 @@ pub(super) fn work(setup: &Setup, commands: &Receiver<Command>, tell: &(dyn Fn(E
             }
             Command::Review { answers, .. } => {
                 let Some(s) = session.as_mut() else { continue };
+                s.reviewed = None;
+                let chosen = chosen(&s.settings, &answers, s.instances.len());
+                let needs_pangolin = (source.is_site() && !chosen.deploy.placements.is_empty())
+                    || service_pangolin::requested(&s.settings, &answers);
+                if needs_pangolin && let Err(error) = ensure_pangolin(setup, &source, s, tell) {
+                    tell(Event::Reviewed {
+                        sections: Vec::new(),
+                        problems: vec![error],
+                    });
+                    continue;
+                }
                 if service_pangolin::requested(&s.settings, &answers) && s.catalog.is_none() {
                     // The resources and Sites are read once attach is chosen.
                     tell(Event::Busy("Loading Pangolin resources and Sites".to_owned()));
@@ -161,14 +172,25 @@ pub(super) fn work(setup: &Setup, commands: &Receiver<Command>, tell: &(dyn Fn(E
                     continue;
                 }
                 tell(Event::Busy("Checking the plan against the cluster".to_owned()));
-                let (sections, problems, reviewed) = review(setup, &source, s, &answers);
+                let (sections, problems, reviewed) = review(setup, &source, s, &answers, tell);
                 tell(Event::Reviewed { sections, problems });
                 s.reviewed = Some(reviewed);
             }
             Command::Remove { answers } => {
                 let Some(s) = session.as_mut() else { continue };
+                s.reviewed = None;
                 tell(Event::Busy("Reading what would be removed".to_owned()));
                 let chosen = chosen(&s.settings, &answers, s.instances.len());
+                if source.is_site()
+                    && !chosen.selected.is_empty()
+                    && let Err(error) = ensure_pangolin(setup, &source, s, tell)
+                {
+                    tell(Event::Reviewed {
+                        sections: Vec::new(),
+                        problems: vec![error],
+                    });
+                    continue;
+                }
                 let mut plan = lifecycle::Plan::default();
                 if chosen.selected.is_empty() {
                     plan.problems
@@ -236,8 +258,8 @@ pub(super) fn work(setup: &Setup, commands: &Receiver<Command>, tell: &(dyn Fn(E
     }
 }
 
-/// The deploy token's client, the cluster, the service's instances, the
-/// Pangolin context it needs, and the settings (those of `kept`, a rescan).
+/// The deploy token's client, cluster, service instances, any already open
+/// Pangolin context, and the settings (those of `kept`, a rescan).
 fn connect(
     setup: &Setup,
     source: &Source,
@@ -267,23 +289,6 @@ fn connect(
             p.catalog,
         ),
         None => (None, None, None),
-    };
-    // A Site or a service published through Pangolin needs its verified
-    // context from the start: what Pangolin has is part of the state.
-    let (site, pangolin) = if source.is_site() {
-        let site = match site {
-            Some(site) => site,
-            None => Initializer::open(open_pangolin(setup, tell)?, config.clone())?,
-        };
-        (Some(site), None)
-    } else if source.manifest.pangolin.is_some() {
-        let pangolin = match pangolin {
-            Some(pangolin) => pangolin,
-            None => open_pangolin(setup, tell)?,
-        };
-        (None, Some(pangolin))
-    } else {
-        (None, None)
     };
     let shown = instances
         .first()
@@ -367,6 +372,25 @@ fn open_pangolin(setup: &Setup, tell: &(dyn Fn(Event) + Send + Sync)) -> Result<
         setup.sounds.clone(),
         &setup.stop,
     )
+}
+
+/// Open the Pangolin API only for operations that actually use it.
+fn ensure_pangolin(
+    setup: &Setup,
+    source: &Source,
+    session: &mut Session,
+    tell: &(dyn Fn(Event) + Send + Sync),
+) -> Result<(), String> {
+    if session.context().is_some_and(Pangolin::alive) {
+        return Ok(());
+    }
+    let pangolin = open_pangolin(setup, tell)?;
+    if source.is_site() {
+        session.site = Some(Initializer::open(pangolin, session.config.clone())?);
+    } else {
+        session.pangolin = Some(pangolin);
+    }
+    Ok(())
 }
 
 fn gib(bytes: u64) -> u64 {
@@ -783,7 +807,13 @@ fn chosen(settings: &[Setting], answers: &[Answer], existing: usize) -> Chosen {
 
 /// Review the changes to the selected instances, the new instances and a
 /// Pangolin attachment; only what changes is listed.
-fn review(setup: &Setup, source: &Source, s: &mut Session, answers: &[Answer]) -> Review {
+fn review(
+    setup: &Setup,
+    source: &Source,
+    s: &mut Session,
+    answers: &[Answer],
+    tell: &(dyn Fn(Event) + Send + Sync),
+) -> Review {
     let chosen = chosen(&s.settings, answers, s.instances.len());
     let attach_requested = service_pangolin::requested(&s.settings, answers);
     let mut sections = Vec::new();
@@ -806,11 +836,6 @@ fn review(setup: &Setup, source: &Source, s: &mut Session, answers: &[Answer]) -
         );
     }
     if !chosen.selected.is_empty() {
-        let targets: Vec<&Instance> = s
-            .instances
-            .iter()
-            .filter(|i| chosen.selected.contains(&i.ctid))
-            .collect();
         // Displayed defaults also serve new instances. Existing instances only
         // receive values that the operator changed from the displayed defaults.
         let changed = |title: &str, value: &str| {
@@ -843,6 +868,9 @@ fn review(setup: &Setup, source: &Source, s: &mut Session, answers: &[Answer]) -
             &choice,
         ));
         if source.is_site() && lifecycle::restarts(&plan) {
+            if let Err(error) = ensure_pangolin(setup, source, s, tell) {
+                plan.problems.push(error);
+            }
             match s.ready() {
                 Some(site) => {
                     for target in plan.targets.iter().filter(|t| t.running) {
@@ -863,9 +891,14 @@ fn review(setup: &Setup, source: &Source, s: &mut Session, answers: &[Answer]) -
             .map(Setting::value)
             .unwrap_or_default();
         let replace_image = chosen.reinstall || chosen.deploy.version != original_version;
-        let image_targets: Vec<u32> = targets
+        let image_targets: Vec<u32> = s
+            .instances
             .iter()
-            .filter(|i| replace_image && (chosen.reinstall || tag(&i.image) != chosen.deploy.version))
+            .filter(|i| {
+                chosen.selected.contains(&i.ctid)
+                    && replace_image
+                    && (chosen.reinstall || tag(&i.image) != chosen.deploy.version)
+            })
             .map(|i| i.ctid)
             .collect();
         if !image_targets.is_empty() {
@@ -877,7 +910,6 @@ fn review(setup: &Setup, source: &Source, s: &mut Session, answers: &[Answer]) -
                     &image_targets,
                     &chosen.deploy.version,
                     "",
-                    s.ready(),
                 ));
                 sections.push(("Update".to_owned(), up.lines.clone()));
                 problems.extend(up.problems.clone());
@@ -990,7 +1022,7 @@ async fn apply(
                 attach,
             } = *changes;
             if let Some(plan) = update_plan {
-                match update::apply(&s.pve, source, &plan, s.ready(), &say).await {
+                match update::apply(&s.pve, source, &plan, &say).await {
                     Ok(done) => lines.extend(done),
                     Err(error) => return fail(lines, error),
                 }
