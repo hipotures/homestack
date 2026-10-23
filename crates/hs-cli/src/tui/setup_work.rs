@@ -204,7 +204,12 @@ fn open(start: &Start, tell: &Tell) -> Result<(Session, Catalog, Value), AppErro
     let (target, mut catalog) = match start.vmid {
         None => {
             settings = local_settings(settings)?;
-            (local_target_of(&settings), load_catalog(&settings, None))
+            // The Services tab lists the owner's repositories here too.
+            tell(Event::Loading("Loading setup catalog".to_owned()));
+            (
+                local_target_of(&settings),
+                catalog_with_repositories(start.system.as_ref(), &settings),
+            )
         }
         Some(vmid) => {
             tell(Event::Loading("Resolving workspace".to_owned()));
