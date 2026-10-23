@@ -358,14 +358,14 @@ pub async fn apply(
         if &found != snapshot {
             return Err("Site connector changed since review; review again".to_owned());
         }
-        let running = node::container(&pve, snapshot.ctid)
+        node::container(&pve, snapshot.ctid)
             .await?
-            .ok_or("Connector disappeared")?
-            .status
-            == "running";
+            .ok_or("Connector disappeared")?;
+        // The node's own state: the cluster view lags behind a replacement.
+        let live = running(&pve, &snapshot.node, snapshot.ctid).await?;
         if image_of(&original)? == image {
             // Already replaced, also by an interrupted run: finish it, never replace it again.
-            if running && installed(root, &access, &snapshot.node, snapshot.ctid, false)? == expected {
+            if live && installed(root, &access, &snapshot.node, snapshot.ctid, false)? == expected {
                 lines.push(format!(
                     "{}: CT {} already uses {image}; kept",
                     snapshot.site, snapshot.ctid
@@ -385,10 +385,7 @@ pub async fn apply(
             }
             replace(&pve, &config, snapshot, &original, &ostemplate, image, say).await?;
         }
-        if node::container(&pve, snapshot.ctid)
-            .await?
-            .is_none_or(|ct| ct.status != "running")
-        {
+        if !running(&pve, &snapshot.node, snapshot.ctid).await? {
             node::power(&pve, &snapshot.node, snapshot.ctid, "start").await?;
         }
         let mut ready = false;
@@ -454,6 +451,15 @@ pub async fn apply(
         .await;
     }
     Ok(lines)
+}
+
+/// Whether `ctid` runs, as its node reports it now.
+async fn running(pve: &impl Pve, node: &str, ctid: u32) -> Result<bool, String> {
+    let status = pve
+        .get(&format!("/nodes/{node}/lxc/{ctid}/status/current"), &[])
+        .await
+        .map_err(|e| format!("CT {ctid}: cannot read its state: {e}"))?;
+    Ok(status["status"] == "running")
 }
 
 /// Replace the connector's container from `ostemplate`, keeping its CTID,
