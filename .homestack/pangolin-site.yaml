@@ -4,13 +4,23 @@ name: Pangolin Site
 image:
   repository: ghcr.io/hipotures/homestack-pangolin-site
 runtime:
+  # Running connectors use about 10–20 MiB of memory and under 40 MiB of root.
+  resources:
+    cores: 1
+    memory: 128M
+    swap: 0M
+    rootfs: 128M
   # Outbound connector: verify container running and Pangolin Site online.
   ports: []
 persistence:
   mount: /home/app
+  size: 10M
   directories:
     - pangolin-site
 deployment:
-  # Each instance requires its own Site identity and private local credential.
-  multi_node: false
+  # One connector per node; each has its own Site identity and local credential.
+  instances: 3
+  placement: spread
   state_model: local
+# The connector itself is the Pangolin tunnel; it exposes no resource.
+exposure:

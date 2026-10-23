@@ -4,6 +4,12 @@ name: HomeStack API
 image:
   repository: ghcr.io/hipotures/homestack-server
 runtime:
+  # Running instances use about 20 MiB of memory and under 100 MiB of root.
+  resources:
+    cores: 1
+    memory: 256M
+    swap: 0M
+    rootfs: 256M
   ports:
     - name: https
       port: 443
@@ -13,9 +19,10 @@ runtime:
     type: tcp
     port: https
 persistence:
-  mount: /home/app
-  directories:
-    - homestack
 deployment:
-  multi_node: false
-  state_model: local
+  # Independent API instances, one per node; clients switch between them.
+  instances: 3
+  placement: spread
+  state_model: stateless
+# Used by clients inside the LAN only, never published through Pangolin.
+exposure:
