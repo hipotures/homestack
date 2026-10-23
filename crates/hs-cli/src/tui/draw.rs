@@ -2131,11 +2131,12 @@ fn draw_settings(buf: &mut Buffer, area: Rect, app: &App, section: usize, themes
         }
     }
     if section == MACHINES {
-        // The columns as checkboxes, top to bottom and then in the next
-        // column as far as the box is high.
+        // The columns as checkboxes, top to bottom in as few columns as the
+        // box's height allows, each as long as the others.
         const CELL: u16 = 17;
         let top = inner.y + 1 + u16::try_from(first).unwrap_or(0);
-        let rows = usize::from(inner.bottom().saturating_sub(top)).max(1);
+        let fit = usize::from(inner.bottom().saturating_sub(top)).max(1);
+        let rows = COLUMNS.len().div_ceil(COLUMNS.len().div_ceil(fit));
         for (at, ((key, _), shown)) in COLUMNS.iter().zip(app.columns).enumerate() {
             let cell_x = x + CELL * u16::try_from(at / rows).unwrap_or(0);
             let y = top + u16::try_from(at % rows).unwrap_or(0);
