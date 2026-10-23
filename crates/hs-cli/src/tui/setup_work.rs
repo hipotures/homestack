@@ -16,7 +16,7 @@ use serde_json::Value;
 use crate::AppError;
 use crate::config::Loaded;
 use crate::services::github::Discovery;
-use crate::setup::catalog::{Catalog, load_catalog, save_snapshot};
+use crate::setup::catalog::{Catalog, save_snapshot};
 use crate::setup::cli::{
     catalog_with_repositories, connect, connect_asking, key_advice, key_label, local_settings, local_target_of,
     resolve_target, settings_of,
@@ -337,11 +337,7 @@ fn run(start: &Start, tell: &Tell, cancel: &Arc<AtomicBool>, commands: &Receiver
                 Err(error) => tell(Event::Notice(format!("State refresh failed: {}", error.0), true)),
             },
             Command::Catalog => {
-                catalog = if session.target.local {
-                    load_catalog(&session.settings, None)
-                } else {
-                    catalog_with_repositories(system, &session.settings)
-                };
+                catalog = catalog_with_repositories(system, &session.settings);
                 session.entries.clone_from(&catalog.entries);
                 let state = match session.inspect(system) {
                     Ok(state) => Some(state),

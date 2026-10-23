@@ -263,7 +263,6 @@ pub fn local_settings(mut settings: Settings) -> Result<Settings, AppError> {
     settings.user = name;
     settings.uid = uid;
     settings.gid = rustix::process::getgid().as_raw();
-    settings.repo.owner = None;
     settings.setup.items.retain(|entry| entry.handler == "backup");
     let groups: Vec<String> = settings.setup.items.iter().map(|entry| entry.group.clone()).collect();
     settings.setup.groups.retain(|group| groups.contains(&group.id));
