@@ -1527,15 +1527,20 @@ impl super::pangolin::Wizard {
         if !self.permanent_destination().is_file() {
             return Err("Pangolin Step 7 has not saved the HomeStack organization key. Complete it first.".to_owned());
         }
+        // Discovery's app.dashboard_url, else the one Site deployments used for
+        // this server and organization.
+        let saved = self
+            .sites
+            .as_ref()
+            .filter(|s| s.target == self.target && s.organization == self.bootstrap.organization && valid_url(&s.url));
         let url = self
             .discovery
             .as_ref()
             .filter(|d| d.target == self.target)
             .and_then(|d| d.known("dashboard_url"))
-            .unwrap_or_default();
-        if !valid_url(url) {
-            return Err("Pangolin Step 3 discovery has no valid HTTPS app.dashboard_url. Discover again.".to_owned());
-        }
+            .filter(|url| valid_url(url))
+            .or_else(|| saved.map(|s| s.url.as_str()))
+            .ok_or("Pangolin's public HTTPS address (app.dashboard_url) is unknown. Run Step 3 discovery again.")?;
         Ok(Context {
             image: String::new(),
             endpoint,
