@@ -667,7 +667,7 @@ fn check_nameserver(text: &str) -> Result<(), String> {
     text.trim()
         .parse::<std::net::Ipv4Addr>()
         .map(|_| ())
-        .map_err(|_| "An IPv4 address such as 192.168.1.1".to_owned())
+        .map_err(|_| "An IPv4 address such as 192.0.2.53".to_owned())
 }
 
 /// `name` without a trailing instance number (`-1`, `-2`…).
