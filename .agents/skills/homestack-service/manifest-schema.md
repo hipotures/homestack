@@ -1,8 +1,13 @@
-# HomeStack service manifest, schema 1
+# HomeStack service manifest, schema 1 (legacy reader contract)
 
-The exact contract between an application repository and HomeStack. HomeStack
-reads it; the application repository only declares portable facts about its
-image and runtime.
+**For new phase-1 application migrations, follow [manifest-schema-v2.md](manifest-schema-v2.md) and update the actual `.homestack/<id>.yaml` to `schema: 2`.**
+This page documents what the *current, not-yet-updated HomeStack parser* accepts;
+it is not an instruction to keep the application manifest at schema 1.
+Migrated manifests will be unsupported by the old Deployment reader until
+HomeStack phase 2 adds schema-2 support.
+
+The legacy contract between an application repository and the current HomeStack
+reader declares portable facts about its image and runtime.
 
 ## Discovery
 
