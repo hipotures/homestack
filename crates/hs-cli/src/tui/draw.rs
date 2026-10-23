@@ -888,7 +888,7 @@ fn workspaces(buf: &mut Buffer, area: Rect, app: &App, mut controls: Vec<Control
     } else {
         top_left.push(Control::key("&/filter"));
     }
-    top_left.push(Control::plain(&format!("‹ {} ›", app.power.word())).carousel(Carousel::Power));
+    top_left.push(Control::plain(&format!("‹ state: {} ›", app.power.word())).carousel(Carousel::Power));
     let node = app.node_name().unwrap_or_else(|| "all".to_owned());
     let position = app.selected_index().map_or(0, |index| index + 1);
     let sides = Sides {
