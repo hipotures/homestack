@@ -389,18 +389,24 @@ fn cluster(buf: &mut Buffer, area: Rect, app: &App, mut controls: Vec<Control>) 
     for (row, node) in nodes.iter().enumerate().take(usize::from(inner.height - 1)) {
         let here: Vec<&StatusEntry> = workspaces.iter().filter(|entry| entry.node == node.node).collect();
         let running = here.iter().filter(|entry| entry.status == "running").count();
+        let stopped = here.iter().filter(|entry| entry.status == "stopped").count();
         let y = inner.y + 1 + u16::try_from(row).unwrap_or(0);
         let (symbol, style) = dot(palette, Some(node.online));
         let mut parts = vec![
             (format!(" {}  ", pad(&node.node, name_width)), text),
             (symbol, style),
             (format!(" {} ", pad(&node.status, 8)), text),
-            // Running and stopped as dots with their counts.
-            ("● ".to_owned(), text.fg(palette.ok)),
-            (format!("{running:<3}"), text),
-            ("○ ".to_owned(), text.fg(palette.muted)),
-            (format!("{:<3}  ", here.len() - running), text),
         ];
+        if node.online {
+            parts.extend([
+                ("● ".to_owned(), text.fg(palette.ok)),
+                (format!("{running:<3}"), text),
+                ("○ ".to_owned(), muted),
+                (format!("{stopped:<3}  "), text),
+            ]);
+        } else {
+            parts.push((pad("—", 12), muted));
+        }
         let cores = node.maxcpu.map_or_else(String::new, |n| n.to_string());
         parts.extend(load(palette, columns, node.cpu.map(|cpu| 100.0 * cpu), &cores));
         parts.extend(load(
