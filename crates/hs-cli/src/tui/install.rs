@@ -302,7 +302,7 @@ impl Install {
             Mode::Install => "HomeStack reinstall".to_owned(),
             Mode::Uninstall => "HomeStack uninstall".to_owned(),
             Mode::Sites => "Pangolin Site connectors".to_owned(),
-            Mode::Service => format!("Deploy {}", self.subject.as_deref().unwrap_or("service")),
+            Mode::Service => format!("{} Deployment", self.subject.as_deref().unwrap_or("Service")),
         }
     }
     #[must_use]
