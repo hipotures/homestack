@@ -827,6 +827,21 @@ fn port(manifest: &Manifest, name: &str) -> Option<u16> {
     manifest.ports.iter().find(|p| p.name == name).map(|p| p.port)
 }
 
+/// Pass the manifest's heartbeat interval to the HTTP service before starting it.
+pub(super) async fn set_heartbeat(pve: &impl Pve, node: &str, ctid: u32, manifest: &Manifest) -> Result<(), String> {
+    if let Some(Healthcheck::Http { heartbeat_seconds, .. }) = &manifest.healthcheck {
+        node::set_env(
+            pve,
+            node,
+            ctid,
+            &[("HOMESTACK_HEARTBEAT_SECONDS".to_owned(), heartbeat_seconds.to_string())],
+            &[],
+        )
+        .await?;
+    }
+    Ok(())
+}
+
 /// One probe of the health check; what it showed.
 async fn probe(manifest: &Manifest, address: &str) -> Result<String, String> {
     match &manifest.healthcheck {
@@ -834,6 +849,7 @@ async fn probe(manifest: &Manifest, address: &str) -> Result<String, String> {
             port: name,
             path,
             expected_status,
+            ..
         }) => {
             let number = port(manifest, name).ok_or("the health check's port is not declared")?;
             let client = reqwest::Client::builder()
@@ -1415,6 +1431,7 @@ async fn run(
             node::set_env(pve, &node, ctid, &plan.environment, &[]).await?;
             say(&format!("  environment: {}", keys.join(", ")));
         }
+        set_heartbeat(pve, &node, ctid, manifest).await?;
         say(&format!("  starting CT {ctid}"));
         node::power(pve, &node, ctid, "start").await?;
         let first = healthy(manifest, &instance.address).await?;

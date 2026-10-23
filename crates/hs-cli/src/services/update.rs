@@ -601,6 +601,7 @@ async fn one(
         .await
         .map_err(|e| format!("CT {ctid} autostart: {e}"))?;
     }
+    deploy::set_heartbeat(pve, node, ctid, &source.manifest).await?;
     say(&format!("{node}: CT {ctid} · Start"));
     let start = target.running || target.onboot;
     if start {

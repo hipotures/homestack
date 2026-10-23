@@ -391,6 +391,7 @@ pub(super) fn review(
         port: health_port,
         path,
         expected_status,
+        ..
     }) = &source.manifest.healthcheck
     else {
         return Err("Pangolin HTTP monitoring requires an HTTP health check in the service manifest".to_owned());

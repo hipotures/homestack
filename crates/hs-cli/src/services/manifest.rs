@@ -60,6 +60,7 @@ pub enum Healthcheck {
         port: String,
         path: String,
         expected_status: u16,
+        heartbeat_seconds: u32,
     },
     /// Only that the port accepts connections, not application health.
     Tcp { port: String },
@@ -539,7 +540,11 @@ fn port_of(check: &mut Check, entry: &Yaml, path: &[String]) -> Option<Port> {
 }
 
 fn healthcheck_of(check: &mut Check, value: &Yaml, path: &[String], ports: &[Port]) -> Option<Healthcheck> {
-    let fields = check.mapping(value, path, &["type", "port", "path", "expected_status"])?;
+    let fields = check.mapping(
+        value,
+        path,
+        &["type", "port", "path", "expected_status", "heartbeat_seconds"],
+    )?;
     let port = check
         .required(fields, path, "port")
         .and_then(|value| check.string(value, &at(path, "port")));
@@ -554,7 +559,7 @@ fn healthcheck_of(check: &mut Check, value: &Yaml, path: &[String], ports: &[Por
         .required(fields, path, "type")
         .and_then(|value| check.choice(value, &at(path, "type"), &[("http", true), ("tcp", false)]))?;
     if !kind {
-        for name in ["path", "expected_status"] {
+        for name in ["path", "expected_status", "heartbeat_seconds"] {
             if field(fields, name).is_some() {
                 check.fail(&at(path, name), "only for type http");
             }
@@ -574,10 +579,15 @@ fn healthcheck_of(check: &mut Check, value: &Yaml, path: &[String], ports: &[Por
     let status = check
         .required(fields, path, "expected_status")
         .and_then(|value| check.integer(value, &at(path, "expected_status"), 100..=599));
+    let heartbeat_seconds = match field(fields, "heartbeat_seconds") {
+        Some(value) => check.integer(value, &at(path, "heartbeat_seconds"), 10..=3600)?,
+        None => 60,
+    };
     Some(Healthcheck::Http {
         port: port?,
         path: probe?,
         expected_status: u16::try_from(status?).ok()?,
+        heartbeat_seconds: u32::try_from(heartbeat_seconds).ok()?,
     })
 }
 

@@ -2418,10 +2418,24 @@ pub(super) fn wrap(line: &str, width: usize) -> Vec<String> {
 /// buttons in the bottom border.
 /// The reinstall form under its choice: the image each server was made
 /// from, and the images published lately, the chosen one marked.
-fn reinstall_lines(app: &App, chosen: usize, text: Style, muted: Style, lines: &mut Vec<(String, Style)>) {
+fn reinstall_lines(
+    app: &App,
+    chosen: usize,
+    width: usize,
+    text: Style,
+    muted: Style,
+    lines: &mut Vec<(String, Style)>,
+) {
     let images = match &app.images {
         None => return lines.push(("reading the images".to_owned(), muted)),
-        Some(Err(error)) => return lines.push((error.clone(), text.fg(app.palette.error))),
+        Some(Err(error)) => {
+            for line in error.lines() {
+                for piece in wrap(line, width) {
+                    lines.push((piece, text.fg(app.palette.error)));
+                }
+            }
+            return;
+        }
         Some(Ok(images)) => images,
     };
     lines.push((String::new(), text));
@@ -2684,7 +2698,7 @@ fn action_box(buf: &mut Buffer, area: Rect, app: &App, action: &Action) {
                     lines.push((format!("{:<11}{}", "IP", shown(ip.map(|ip| ip.to_string()))), muted));
                 }
                 if action.kind == Kind::Reinstall {
-                    reinstall_lines(app, field.index(), text, muted, &mut lines);
+                    reinstall_lines(app, field.index(), width, text, muted, &mut lines);
                 }
             }
             if action.kind == Kind::Addkey {

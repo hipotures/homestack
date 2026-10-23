@@ -384,10 +384,32 @@ async fn common_source(repository: &str, id: &str) -> Result<crate::services::de
     let id = id.to_owned();
     tokio::task::spawn_blocking(move || {
         let found = crate::services::github::discover(&crate::system::RealSystem::default(), &repository, None)?;
-        let (file, manifest) = found
-            .services()
-            .find(|(_, m)| m.id == id)
-            .ok_or("The service has no valid manifest on the default branch")?;
+        let (file, manifest) = found.services().find(|(_, m)| m.id == id).ok_or_else(|| {
+            let mut lines = vec![format!(
+                "No valid manifest for service {id} in {repository} on branch {}.",
+                found.branch
+            )];
+            if let Some(problem) = &found.problem {
+                lines.push(problem.clone());
+            }
+            if found.files.is_empty() {
+                lines.push("No .homestack/*.yaml manifests were found.".to_owned());
+            }
+            for file in &found.files {
+                match &file.manifest {
+                    Err(error) => lines.push(format!("{}: {error}", file.path)),
+                    Ok(checked) => {
+                        for issue in &checked.issues {
+                            lines.push(format!("{}: {}: {}", file.path, issue.path.join("."), issue.message));
+                        }
+                        if let Some(manifest) = &checked.manifest {
+                            lines.push(format!("{} declares service {}.", file.path, manifest.id));
+                        }
+                    }
+                }
+            }
+            lines.join("\n")
+        })?;
         Ok(crate::services::deploy::Source {
             repository,
             branch: found.branch.clone(),
