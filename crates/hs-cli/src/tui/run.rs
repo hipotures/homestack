@@ -763,12 +763,7 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
             .ok()
             .and_then(|id| id.parse().ok());
     }
-    let log_dir = config::default_path(&ctx.home, ctx.config_home.as_deref())
-        .parent()
-        .map_or_else(|| ctx.home.clone(), std::path::Path::to_path_buf);
-    if std::fs::create_dir_all(&log_dir).is_ok() {
-        app.log_file = Some(log_dir.join("tui.log"));
-    }
+    app.log_file = Some(std::path::PathBuf::from("/tmp/tui.log"));
     let clock = Clock::new();
     app.clock = clock.now();
     app.today = clock.today();
