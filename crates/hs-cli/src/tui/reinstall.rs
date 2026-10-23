@@ -186,6 +186,25 @@ pub async fn read(deploy_toml: &Path, vmids: &[u32], offset: i64) -> Result<Imag
     })
 }
 
+/// The API containers: the common `homestack-api` service instances in the
+/// cluster, or the legacy instances of `deploy.toml` when there are none.
+pub async fn api_servers(config: &DeployConfig) -> Result<Vec<(u32, String)>, String> {
+    let pve = hs_deploy::deploy::deploy_client(config)?;
+    let common = crate::services::instance::of_service(&pve, "hipotures/homestack", "homestack-api").await?;
+    Ok(if common.is_empty() {
+        config
+            .instances
+            .iter()
+            .map(|instance| (instance.ctid, instance.name.clone()))
+            .collect()
+    } else {
+        common
+            .into_iter()
+            .map(|instance| (instance.ctid, instance.hostname))
+            .collect()
+    })
+}
+
 /// Set `image` in `deploy.toml`, keeping the rest of the file as it is.
 fn keep_image(path: &Path, image: &str) -> Result<(), String> {
     hs_deploy::config::save_image(path, image)

@@ -921,7 +921,11 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
             tokio::spawn(async move {
                 let check = async {
                     let config = hs_deploy::config::DeployConfig::load(&deployment)?;
-                    let targets: Vec<_> = config.instances.iter().map(|instance| instance.ctid).collect();
+                    let targets: Vec<_> = super::reinstall::api_servers(&config)
+                        .await?
+                        .into_iter()
+                        .map(|(ctid, _)| ctid)
+                        .collect();
                     super::reinstall::read(&deployment, &targets, offset).await
                 };
                 let result = tokio::time::timeout(Duration::from_secs(120), check)
@@ -1224,7 +1228,15 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
                             let path = deploy_toml(ctx);
                             match hs_deploy::config::DeployConfig::load(&path) {
                                 Ok(config) => {
-                                    let servers = config.instances.iter().map(|instance| (instance.ctid, instance.name.clone())).collect();
+                                    // The startup check found the API containers in the cluster.
+                                    let servers = match &app.api_updates {
+                                        Some(Ok(images)) if !images.servers.is_empty() => images
+                                            .servers
+                                            .iter()
+                                            .map(|server| (server.vmid, server.name.clone()))
+                                            .collect(),
+                                        _ => config.instances.iter().map(|instance| (instance.ctid, instance.name.clone())).collect(),
+                                    };
                                     if let Some(Request::Images(targets)) = app.open_image_update(servers) {
                                         let updates = updates.clone();
                                         let offset = clock.offset;
