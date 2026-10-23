@@ -12,10 +12,9 @@ use tokio::sync::mpsc;
 use super::action::{Decision, Kind, Progress, Start, Step, StepState};
 use crate::services::deploy::SiteReady;
 
-/// Root SSH access used only to restore an existing connector credential.
+/// SSH prompts for the Pangolin tunnel that verifies a managed Site connector.
 pub struct SiteAccess {
     pub system: std::sync::Arc<dyn crate::system::System>,
-    pub home: PathBuf,
     pub prefix: Vec<String>,
     pub sounds: crate::touch::Sounds,
 }
@@ -57,7 +56,6 @@ pub struct Images {
     pub servers: Vec<Server>,
     /// Newest first.
     pub published: Vec<Image>,
-    pub sites: Vec<super::pangolin_sites::images::Snapshot>,
     pub common: Option<(String, String)>,
     /// The recorded containers of an interrupted update, shown in the selector.
     pub resume: Option<String>,
@@ -123,9 +121,6 @@ pub async fn read(deploy_toml: &Path, vmids: &[u32], offset: i64) -> Result<Imag
     if let Some(images) = common_images(deploy_toml, vmids, offset).await? {
         return Ok(images);
     }
-    if let Some(images) = super::pangolin_sites::images::read(deploy_toml, vmids, offset).await? {
-        return Ok(images);
-    }
     let config = DeployConfig::load(deploy_toml)?;
     let made = hs_deploy::deploy::images(&config).await?;
     let mut chosen = Vec::new();
@@ -176,7 +171,6 @@ pub async fn read(deploy_toml: &Path, vmids: &[u32], offset: i64) -> Result<Imag
     Ok(Images {
         servers,
         published,
-        sites: Vec::new(),
         common: None,
         resume: None,
     })
@@ -214,7 +208,6 @@ pub async fn work(
     }
     let image = parameters["image"].as_str().unwrap_or_default().to_owned();
     let servers = strings(&parameters["servers"]);
-    let sites = parameters["sites"] == true;
     progress(Progress::Plan {
         lines: strings(&parameters["plan"]),
         question: Kind::Reinstall.question(false).to_owned(),
@@ -232,54 +225,6 @@ pub async fn work(
         None => return,
     }
     let failed = |lines: Vec<String>| progress(Progress::Done { ok: false, lines });
-    if sites {
-        let snapshots: Vec<super::pangolin_sites::images::Snapshot> =
-            match serde_json::from_value(parameters["servers"].clone()) {
-                Ok(snapshots) => snapshots,
-                Err(_) => return failed(vec!["Invalid Site image replacement plan".to_owned()]),
-            };
-        let Some(access) = site_access else {
-            return failed(vec!["Root SSH access is unavailable".to_owned()]);
-        };
-        let report = |line: &str| {
-            say(line);
-            progress(Progress::Steps(vec![Step {
-                name: line.to_owned(),
-                state: StepState::Running,
-            }]));
-        };
-        report("Connecting to Proxmox and checking Site credentials");
-        let handle = tokio::runtime::Handle::current();
-        let result = tokio::task::block_in_place(|| {
-            let node = super::pangolin_sites::images::root_target(&snapshots)?;
-            let mut root = crate::root_ssh::SshRoot::open_asking(
-                access.system,
-                &access.home,
-                &node,
-                None,
-                &access.sounds,
-                access.prefix,
-                std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            )
-            .map_err(|error| {
-                format!(
-                    "Cannot open root SSH access to {node} to restore Site credentials: {}",
-                    error.0
-                )
-            })?;
-            handle.block_on(super::pangolin_sites::images::apply(
-                &deploy_toml,
-                &snapshots,
-                &image,
-                &mut root,
-                &report,
-            ))
-        });
-        return match result {
-            Ok(lines) => progress(Progress::Done { ok: true, lines }),
-            Err(error) => failed(vec![error]),
-        };
-    }
     let mut config = match DeployConfig::load(&deploy_toml) {
         Ok(config) => config,
         Err(error) => return failed(vec![error]),
@@ -419,7 +364,6 @@ async fn common_images(path: &Path, ids: &[u32], offset: i64) -> Result<Option<I
     Ok(Some(Images {
         servers,
         published,
-        sites: Vec::new(),
         common: Some((repository, service)),
         resume: (!held.is_empty()).then(|| held.join(", ")),
     }))

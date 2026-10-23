@@ -307,8 +307,6 @@ pub struct App {
     pub storage_overview: Option<Result<hs_model::status::StorageOverview, String>>,
     pub api_updates: Option<Result<super::reinstall::Images, String>>,
     pub api_updates_checking: bool,
-    /// Step 8 Site connectors, checked with the API images; `None` inside: no connectors.
-    pub site_updates: Option<Result<Option<super::reinstall::Images>, String>>,
     pub startup_message: Option<&'static str>,
     /// Every server: its URL and why it did not answer, if it did not.
     pub servers: Vec<(String, Option<String>)>,
@@ -445,7 +443,6 @@ impl App {
             storage_overview: None,
             api_updates: None,
             api_updates_checking: false,
-            site_updates: None,
             api_instances: std::collections::BTreeSet::new(),
             startup_message: None,
             servers: Vec::new(),
@@ -669,57 +666,12 @@ impl App {
         }
     }
 
-    /// The Step 8 Site connectors' image check, logged like the API's.
-    pub fn set_site_updates(&mut self, result: Result<Option<super::reinstall::Images>, String>) {
-        let message = match &result {
-            Ok(None) => None,
-            Ok(Some(images)) => {
-                let updates: Vec<_> = images
-                    .servers
-                    .iter()
-                    .filter_map(|server| {
-                        images
-                            .update_for(server)
-                            .map(|image| format!("{} → {}", server.name, image.tag()))
-                    })
-                    .collect();
-                Some(if updates.is_empty() {
-                    "Site image check complete: no newer image found".to_owned()
-                } else {
-                    format!(
-                        "Site update available: {}. Select the connectors and press Enter.",
-                        updates.join(", ")
-                    )
-                })
-            }
-            Err(error) => Some(format!("Cannot check Site image updates: {error}")),
-        };
-        self.site_updates = Some(result);
-        self.apply_api_updates();
-        if let Some(message) = message {
-            let clock = self.clock.clone();
-            self.log(&clock, &message);
-        }
-    }
-
     fn apply_api_updates(&mut self) {
-        let Some(status) = &mut self.status else {
+        let (Some(status), Some(Ok(images))) = (&mut self.status, &self.api_updates) else {
             return;
         };
-        let api = self.api_updates.as_ref().and_then(|result| result.as_ref().ok());
-        let sites = self
-            .site_updates
-            .as_ref()
-            .and_then(|result| result.as_ref().ok())
-            .and_then(Option::as_ref);
         for entry in &mut status.others {
-            let Some((images, server)) = api.into_iter().chain(sites).find_map(|images| {
-                images
-                    .servers
-                    .iter()
-                    .find(|server| server.vmid == entry.vmid)
-                    .map(|server| (images, server))
-            }) else {
+            let Some(server) = images.servers.iter().find(|server| server.vmid == entry.vmid) else {
                 continue;
             };
             // A later status may already describe a container updated elsewhere.

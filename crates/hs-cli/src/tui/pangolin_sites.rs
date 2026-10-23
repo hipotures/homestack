@@ -7,7 +7,6 @@
 //! the root SSH session's standard input (`pct exec`), never a command
 //! line, the environment, a description or a log.
 
-pub mod images;
 pub mod managed;
 
 use std::collections::BTreeSet;
@@ -173,8 +172,6 @@ enum CtStep {
     Keep,
     Start,
     Create,
-    /// Managed, but made from another image or network.
-    Recreate,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -971,9 +968,13 @@ async fn node_plan(
                 ));
             }
             let same = node::unchanged(pve, name, guest.vmid, &wanted, &net, &say).await?;
-            let step = if !same {
-                CtStep::Recreate
-            } else if guest.status == "running" {
+            if !same {
+                return Err(format!(
+                    "CT {} was made from another image or network; Step 8 never replaces a connector",
+                    guest.vmid
+                ));
+            }
+            let step = if guest.status == "running" {
                 CtStep::Keep
             } else {
                 CtStep::Start
@@ -996,7 +997,7 @@ async fn node_plan(
         }
     };
     taken.insert(ctid);
-    let pull = if matches!(container, CtStep::Create | CtStep::Recreate) {
+    let pull = if container == CtStep::Create {
         let volid = format!("{template}:vztmpl/{}", node::image_file(&ctx.image)?);
         let content = pve
             .get(
@@ -1083,10 +1084,6 @@ fn sections(ctx: &Context, plan: &Plan) -> Vec<(String, Vec<String>)> {
             CtStep::Keep => "running: install its credential and restart the connector".to_owned(),
             CtStep::Start => "stopped: start it, then check its credential".to_owned(),
             CtStep::Create => format!("new container on {}, then its credential", n.storage),
-            CtStep::Recreate => format!(
-                "image or network changed: recreate it on {} (MAC kept), then restore its credential",
-                n.storage
-            ),
         };
         containers.push(format!("{}  CT {}  {}", n.node, n.ctid, what));
         if n.pull {
@@ -1213,20 +1210,8 @@ async fn deploy_node(
     let name = n.node.as_str();
     let host = hostname(name);
     let net = net0(&plan.bridge);
-    if matches!(n.container, CtStep::Create | CtStep::Recreate) {
-        // The image first: a replaced container is down only while it is remade.
+    if n.container == CtStep::Create {
         let ostemplate = node::ensure_image(pve, name, &plan.template, &ctx.image, say).await?;
-        let mut net = net.clone();
-        if n.container == CtStep::Recreate {
-            let found = node::container(pve, n.ctid)
-                .await?
-                .ok_or_else(|| format!("CT {} is no longer visible", n.ctid))?;
-            if let Some(mac) = node::hwaddr(pve, name, n.ctid).await? {
-                say(&format!("  keeping MAC address {mac}"));
-                net.push_str(&format!(",hwaddr={mac}"));
-            }
-            node::destroy(pve, &found, n.ctid, say).await?;
-        }
         let spec = NewContainer {
             node: name,
             ctid: n.ctid,

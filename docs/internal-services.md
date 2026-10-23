@@ -263,7 +263,8 @@ credential match Pangolin; after the replacement the connector's own Site must
 be online. Migration and restarts after environment changes use the same Site
 readiness instead of the manifest health check. Containers still initializing
 cannot be updated or migrated, and the managed selector cannot be edited in
-maintenance. Legacy Step 8 deployment and Site image updates are unchanged.
+maintenance. Step 8 connectors have no image update at all: replacing their root
+disk would need root SSH to restore the credential, so that path was removed.
 
 ### Known limitations
 

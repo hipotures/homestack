@@ -674,15 +674,7 @@ impl App {
             return Ok(json!({"image":image.image,"instances":ids,"service":identity}));
         }
         let mut plan = vec![
-            format!(
-                "Update {} containers from {}",
-                if images.sites.is_empty() {
-                    "API"
-                } else {
-                    "Pangolin Site"
-                },
-                image.tag()
-            ),
+            format!("Update API containers from {}", image.tag()),
             format!("made {}", image.made),
             String::new(),
         ];
@@ -705,12 +697,6 @@ impl App {
             ));
         }
         plan.push(String::new());
-        if !images.sites.is_empty() {
-            plan.push("Site identities and credentials are retained; the network and MAC are preserved.".to_owned());
-            plan.push("Root SSH access to a Proxmox node restores credentials over standard input.".to_owned());
-            plan.push("Each connector is briefly offline while its container is recreated.".to_owned());
-            return Ok(json!({"image": image.image, "servers": images.sites, "plan": plan, "sites": true}));
-        }
         let names: Vec<&str> = images.servers.iter().map(|server| server.name.as_str()).collect();
         Ok(json!({"image": image.image, "servers": names, "plan": plan}))
     }

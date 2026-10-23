@@ -636,7 +636,7 @@ container in the `homestack-service` pool with `onboot`, the sizes of
 and are kept in the journal. Only a container that carries the tag, the expected
 name and node, a matching description and is visible to the deploy token is
 treated as managed; anything else stops that node. A managed container with
-another image or network is recreated with its MAC address kept. The container
+another image or network stops that node too: Step 8 never replaces a connector. The container
 list of the main screen does not count connectors as HomeStack servers.
 
 The credential reaches only its own container: `pct exec <ctid> --
@@ -644,8 +644,7 @@ homestack-site-credential` runs on the node (through the node's own root SSH for
 other nodes) with the configuration on standard input. Inside, it is written
 atomically to `/var/lib/pangolin-site/site.json`, mode 0600, owned by the
 unprivileged `site` account that runs the connector. HomeStack compares only its
-SHA-256 (`--digest`) and reinstalls it when it differs, for example after
-recreation. It never enters the image, Git, Proxmox descriptions or environment,
+SHA-256 (`--digest`) and reinstalls it when it differs. It never enters the image, Git, Proxmox descriptions or environment,
 command lines, logs or progress messages, and no SSH key is copied to Proxmox.
 
 Repeated deployment is idempotent: existing Sites, credentials and healthy
@@ -666,21 +665,11 @@ private configuration file, with self-update and SSH features disabled. It has
 no credentials, health server or extra capabilities. Its releases are separate
 from the API image: a `pangolin-site-X.Y.Z` tag publishes
 `homestack-pangolin-site:X.Y.Z`, and the image reference HomeStack deploys is
-initially pinned in `crates/hs-cli/src/tui/pangolin_sites.rs`. An image selected
-through the container update dialog is saved in `integrations/pangolin-sites.toml`
-and reused by later Site deployments.
+initially pinned in `crates/hs-cli/src/tui/pangolin_sites.rs`; the image last
+saved in `integrations/pangolin-sites.toml` is reused by later Site deployments.
 
-Enter on a managed Site connector opens its image replacement dialog, using
-numeric releases from the connector repository rather than the API repository.
-Space selects multiple connectors; API containers and Site connectors are never
-updated together. The review precedes all writes. Replacement verifies the
-container pool, node, ownership tags, description, local Site journal and
-configuration revision, then checks the installed credential digest. Root SSH
-to one selected Proxmox node restores the existing credential through standard
-input after recreation. The CTID, root disk storage and size, resource limits,
-network configuration, MAC address and Site identity are retained. Image boot
-settings come from the selected image. Additional disks, devices or custom boot
-environments require separate review and are not silently discarded. The final
-result verifies the restored credential and running connector service; it does
-not claim to have verified the Site's online state in the Pangolin API. No Site
-or public resource is created, deleted or rotated by this workflow.
+HomeStack has no image update for Step 8 connectors: an update would replace the
+root disk that holds their credential, and restoring it needs root SSH. Only
+connectors deployed through common service deployment, whose credential stays
+on their `/home/app` volume, are updated (deploy token only; see
+[internal-services.md](internal-services.md)).
