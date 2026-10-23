@@ -6,7 +6,9 @@
 //! (`crate::services::update`), sizes and environment
 //! (`crate::services::lifecycle`), or with Del their removal.
 
+use std::sync::atomic::Ordering;
 use std::sync::mpsc::Receiver;
+use std::time::Duration;
 
 use hs_deploy::config::DeployConfig;
 use hs_deploy::node::show_size;
@@ -210,7 +212,19 @@ pub(super) fn work(setup: &Setup, commands: &Receiver<Command>, tell: &(dyn Fn(E
             Command::Apply => {
                 let Some(s) = session.as_mut() else { continue };
                 let Some(reviewed) = s.reviewed.take() else { continue };
-                let (ok, lines) = apply(setup, &source, s, reviewed, tell);
+                let (ok, lines) = setup.handle.block_on(async {
+                    tokio::select! {
+                        biased;
+                        () = async {
+                            while !setup.stop.load(Ordering::SeqCst) {
+                                tokio::time::sleep(Duration::from_millis(50)).await;
+                            }
+                        } => (false, vec![
+                            "Operation cancelled. Submitted Proxmox tasks may still finish; rescan before continuing.".to_owned()
+                        ]),
+                        result = apply(setup, &source, s, reviewed, tell) => result,
+                    }
+                });
                 tell(Event::Done { ok, lines });
             }
             Command::Cancel => return,
@@ -907,7 +921,7 @@ fn review(setup: &Setup, source: &Source, s: &mut Session, answers: &[Answer]) -
 
 /// Apply the reviewed changes in order: the image, sizes and environment,
 /// new instances, then the Pangolin attachment; the first failure stops.
-fn apply(
+async fn apply(
     setup: &Setup,
     source: &Source,
     s: &mut Session,
@@ -921,19 +935,14 @@ fn apply(
         (false, lines)
     };
     match reviewed {
-        Reviewed::Remove(plan) => {
-            match setup
-                .handle
-                .block_on(lifecycle::apply(&s.pve, source, &plan, s.ready(), &say))
-            {
-                Ok(done) => {
-                    lines.extend(done);
-                    let ok = forget(setup, source, s, &plan.targets, &mut lines);
-                    (ok, lines)
-                }
-                Err(error) => fail(lines, error),
+        Reviewed::Remove(plan) => match lifecycle::apply(&s.pve, source, &plan, s.ready(), &say).await {
+            Ok(done) => {
+                lines.extend(done);
+                let ok = forget(setup, source, s, &plan.targets, &mut lines).await;
+                (ok, lines)
             }
-        }
+            Err(error) => fail(lines, error),
+        },
         Reviewed::Change(changes) => {
             let Changes {
                 update: update_plan,
@@ -942,19 +951,13 @@ fn apply(
                 attach,
             } = *changes;
             if let Some(plan) = update_plan {
-                match setup
-                    .handle
-                    .block_on(update::apply(&s.pve, source, &plan, s.ready(), &say))
-                {
+                match update::apply(&s.pve, source, &plan, s.ready(), &say).await {
                     Ok(done) => lines.extend(done),
                     Err(error) => return fail(lines, error),
                 }
             }
             if let Some(plan) = change {
-                match setup
-                    .handle
-                    .block_on(lifecycle::apply(&s.pve, source, &plan, s.ready(), &say))
-                {
+                match lifecycle::apply(&s.pve, source, &plan, s.ready(), &say).await {
                     Ok(done) => lines.extend(done),
                     Err(error) => return fail(lines, error),
                 }
@@ -962,9 +965,7 @@ fn apply(
             if let Some(plan) = create {
                 let site = s.site.as_mut().map(|site| site as &mut dyn SiteInit);
                 let dns = s.dns.as_ref().ok().and_then(Option::as_ref);
-                let (ok, done) = setup
-                    .handle
-                    .block_on(deploy::apply(&s.pve, source, &plan, site, dns, &say));
+                let (ok, done) = deploy::apply(&s.pve, source, &plan, site, dns, &say).await;
                 lines.extend(done);
                 if !ok {
                     return (false, lines);
@@ -980,11 +981,7 @@ fn apply(
             }
             if let Some(plan) = attach {
                 let result = match s.context() {
-                    Some(pangolin) => {
-                        setup
-                            .handle
-                            .block_on(service_pangolin::apply(&s.pve, pangolin, &setup.stop, &plan))
-                    }
+                    Some(pangolin) => service_pangolin::apply(&s.pve, pangolin, &setup.stop, &plan).await,
                     None => Err("The Pangolin context is unavailable; review again".to_owned()),
                 };
                 match result {
@@ -1064,7 +1061,7 @@ fn restore(settings: &mut [Setting], previous: &[Setting], answers: &[Answer]) {
 
 /// After removing `targets`: their names leave the local DNS and, for the
 /// API, the client's servers. Whether that worked.
-fn forget(setup: &Setup, source: &Source, s: &Session, targets: &[Instance], lines: &mut Vec<String>) -> bool {
+async fn forget(setup: &Setup, source: &Source, s: &Session, targets: &[Instance], lines: &mut Vec<String>) -> bool {
     let dns = s.dns.as_ref().ok().and_then(Option::as_ref);
     let mut ok = true;
     let mut gone = Vec::new();
@@ -1074,7 +1071,7 @@ fn forget(setup: &Setup, source: &Source, s: &Session, targets: &[Instance], lin
         };
         let fqdn = format!("{}.{domain}", target.hostname);
         if let Some(dns) = dns.filter(|dns| dns.covers(&fqdn)) {
-            match setup.handle.block_on(dns.remove(&fqdn)) {
+            match dns.remove(&fqdn).await {
                 Ok(()) => lines.push(format!("{fqdn} removed from the local DNS")),
                 Err(error) => {
                     ok = false;

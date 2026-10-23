@@ -19,12 +19,9 @@ use crate::node::{self, NewContainer};
 use crate::recreate;
 
 /// How long a new instance may take to answer over TLS.
-const HEALTH_LIMIT: Duration = Duration::from_secs(180);
+const HEALTH_LIMIT: Duration = Duration::from_secs(15);
 /// Pause between two `/health/live` probes while waiting for an instance.
 const HEALTH_RETRY: Duration = Duration::from_millis(250);
-/// Initial warm-up window during which transient `/health/live` failures are
-/// not logged unless the overall deadline has already expired.
-const HEALTH_QUIET: Duration = Duration::from_secs(3);
 /// Variables that carry the certificate; removed once the server stored it.
 const TLS_VARIABLES: [&str; 2] = ["HOMESTACK_TLS_CERT_B64", "HOMESTACK_TLS_KEY_B64"];
 
@@ -124,69 +121,32 @@ async fn wait_health(
     limit: Duration,
     say: &impl Fn(&str),
 ) -> Result<(), String> {
-    wait_health_with(client, instance, phase, limit, HEALTH_QUIET, HEALTH_RETRY, say)
-        .await
-        .map_err(|error| format!("{instance}: HTTPS health {phase}: {error}"))
-}
-
-async fn wait_health_with(
-    client: &Client,
-    instance: &str,
-    phase: &str,
-    limit: Duration,
-    quiet: Duration,
-    retry: Duration,
-    say: &impl Fn(&str),
-) -> Result<(), String> {
     let started = Instant::now();
     let deadline = tokio::time::Instant::now() + limit;
-    let mut attempt = 0_u64;
+    let mut reason = "request timed out".to_owned();
     say(&format!(
-        "  {instance}: HTTPS health {phase} started (GET /health/live, limit {} ms, retry {} ms)",
-        limit.as_millis(),
-        retry.as_millis()
+        "  {instance}: waiting for HTTPS {phase} (up to {} s)",
+        limit.as_secs()
     ));
     loop {
-        attempt += 1;
-        let probe_started = Instant::now();
-        if started.elapsed() >= quiet {
-            say(&format!(
-                "  {instance}: HTTPS health {phase} attempt {attempt} started (elapsed {} ms)",
-                started.elapsed().as_millis()
-            ));
-        }
-        match client.get_on(0, "/health/live").await {
-            Ok(_) => {
+        match tokio::time::timeout_at(deadline, client.get_on(0, "/health/live")).await {
+            Ok(Ok(_)) => {
                 say(&format!(
-                    "  {instance}: HTTPS health {phase} attempt {attempt} succeeded after {} ms (elapsed {} ms)",
-                    probe_started.elapsed().as_millis(),
+                    "  {instance}: HTTPS ready {phase} ({} ms)",
                     started.elapsed().as_millis()
                 ));
                 return Ok(());
             }
-            Err(error) => {
-                let reason = health_error(&error);
-                let elapsed = started.elapsed();
-                let expired = tokio::time::Instant::now() >= deadline;
-                if elapsed >= quiet || expired {
-                    say(&format!(
-                        "  {instance}: HTTPS health {phase} attempt {attempt} failed after {} ms (elapsed {} ms): {reason}",
-                        probe_started.elapsed().as_millis(),
-                        elapsed.as_millis()
-                    ));
-                }
-                if expired {
-                    return Err(format!("no answer over TLS within {} s: {reason}", limit.as_secs()));
-                }
-                if elapsed >= quiet {
-                    say(&format!(
-                        "  {instance}: HTTPS health {phase} retrying in {} ms",
-                        retry.as_millis()
-                    ));
-                }
-                tokio::time::sleep(retry).await;
-            }
+            Ok(Err(error)) => reason = health_error(&error),
+            Err(_) => {}
         }
+        if tokio::time::Instant::now() >= deadline {
+            return Err(format!(
+                "{instance}: HTTPS health {phase}: no answer over TLS within {} s: {reason}",
+                limit.as_secs()
+            ));
+        }
+        tokio::time::sleep_until((tokio::time::Instant::now() + HEALTH_RETRY).min(deadline)).await;
     }
 }
 

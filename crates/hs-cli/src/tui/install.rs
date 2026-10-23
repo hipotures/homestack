@@ -529,6 +529,9 @@ impl Install {
             },
             Stage::Settings => self.settings_key(code),
             Stage::Review => self.review_key(code),
+            Stage::Run if self.mode == Mode::Service && code == KeyCode::Esc => {
+                (true, Some(Request::Install(Command::Cancel)))
+            }
             Stage::Run => (false, None),
             Stage::Done => match code {
                 KeyCode::Enter | KeyCode::Esc if self.mode == Mode::Service && self.ok => {
