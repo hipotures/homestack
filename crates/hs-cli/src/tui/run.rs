@@ -43,6 +43,7 @@ enum Update {
     Status(String, Value),
     StatusRejected(String),
     ApiUpdates(u64, Result<super::reinstall::Images, String>),
+    SiteUpdates(u64, Result<Option<super::reinstall::Images>, String>),
     Storage(Result<Value, String>),
     Servers(Vec<(String, Option<String>)>),
     Unreachable(Vec<(String, String)>),
@@ -898,6 +899,21 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
                     .await
                     .unwrap_or_else(|_| Err("API image check timed out".to_owned()));
                 let _ = updates.send(Update::ApiUpdates(generation, result));
+                // Step 8 Site connectors: their own image, through the deploy token only.
+                let sites = async {
+                    let summary = deployment.with_file_name("integrations/pangolin-sites.toml");
+                    let targets: Vec<u32> = super::pangolin_sites::Summary::load(&summary)
+                        .map(|summary| summary.deployed.iter().map(|d| d.ctid).collect())
+                        .unwrap_or_default();
+                    if targets.is_empty() {
+                        return Ok(None);
+                    }
+                    super::pangolin_sites::images::read(&deployment, &targets, offset).await
+                };
+                let sites = tokio::time::timeout(Duration::from_secs(120), sites)
+                    .await
+                    .unwrap_or_else(|_| Err("Site image check timed out".to_owned()));
+                let _ = updates.send(Update::SiteUpdates(generation, sites));
             });
         }
         let visible = matches!(app.view, 2 | 3);
@@ -1506,6 +1522,11 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
                         connected = Some(host);
                     }
                     app.set_status(&status);
+                }
+                Update::SiteUpdates(generation, result) => {
+                    if generation == api_check_generation {
+                        app.set_site_updates(result);
+                    }
                 }
                 Update::ApiUpdates(generation, result) => {
                     if generation == api_check_generation {

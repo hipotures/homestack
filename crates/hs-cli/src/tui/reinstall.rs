@@ -261,7 +261,12 @@ pub async fn work(
                 access.prefix,
                 std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             )
-            .map_err(|_| "Cannot open root SSH access to restore Site credentials".to_owned())?;
+            .map_err(|error| {
+                format!(
+                    "Cannot open root SSH access to {node} to restore Site credentials: {}",
+                    error.0
+                )
+            })?;
             handle.block_on(super::pangolin_sites::images::apply(
                 &deploy_toml,
                 &snapshots,
