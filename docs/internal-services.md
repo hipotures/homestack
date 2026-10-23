@@ -165,7 +165,7 @@ or later: `0.1.1` predates the managed runtime selector. Environment must be
 empty. Defaults are a 1G root disk and a 10M home: sizes are typed as a number
 with M or G for every service (deployment and maintenance), and Proxmox stores
 a 10M home as `size=10M`. Containers of every service are named `<id>-<n>`
-from 1 (`pangolin-1`, `pangolin-2`, …).
+from 1 (`pangolin-1`, `pangolin-2`, …); a 128M root or 10M home is listed as such, not 0G.
 
 Site images are numbered `<Pangolin CLI version>-<build>`, e.g. `0.18.1-1`,
 from Git tags `pangolin-site-0.18.1-1`; CI refuses a tag whose version is not
@@ -199,9 +199,9 @@ the deploy token can open a root shell in every container of its pools.
 
 ### Instance identity and journal
 
-Each instance's Site has the container's name (name and nice ID, e.g.
-`pangolin-1`); the journal keeps that name, so renaming the container later is
-refused rather than followed. Its
+Each instance's Site is `homestack-<n>` for container `pangolin-<n>` (name and
+nice ID, e.g. `homestack-1`); the journal keeps that name, so renaming the
+container later is refused rather than followed. Its
 credential is `secrets/pangolin-managed-site-<identity>-<CTID>.key` (mode
 0600), with `.recovery.json` and `.lock` beside it; `<identity>` is the Step 7
 SHA-256 of server and organization. Two instances, also on one node, therefore

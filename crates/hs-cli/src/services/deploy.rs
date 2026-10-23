@@ -247,6 +247,16 @@ pub struct Plan {
     api_config: Option<DeployConfig>,
 }
 
+/// The Pangolin Site of connector container `hostname`: `homestack-<n>` for
+/// `<id>-<n>`, else after its CTID.
+#[must_use]
+pub fn site_name(hostname: &str, ctid: u32) -> String {
+    match hostname.rsplit_once('-') {
+        Some((_, n)) if !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()) => format!("homestack-{n}"),
+        _ => format!("homestack-{ctid}"),
+    }
+}
+
 /// The first of `id-1`, `id-2`… no container in `taken` is named.
 fn hostname(id: &str, taken: &BTreeSet<String>) -> String {
     (1..)
@@ -667,7 +677,7 @@ pub async fn plan(
         }
         if let Some(site) = site.as_deref_mut() {
             let home = instance.resume.as_ref().map(|resume| home_volume(&resume.home_mount));
-            match site.review(ctid, &instance.hostname, home) {
+            match site.review(ctid, &site_name(&instance.hostname, ctid), home) {
                 Ok(line) => plan.sites.push(line),
                 Err(error) => problems.push(error),
             }
@@ -993,7 +1003,9 @@ async fn initialize_site(
         .await
         .map_err(|e| format!("console mode: {e}"))?;
     }
-    tokio::task::block_in_place(|| site.prepare(node, ctid, &instance.hostname, home_volume(home), say))?;
+    tokio::task::block_in_place(|| {
+        site.prepare(node, ctid, &site_name(&instance.hostname, ctid), home_volume(home), say)
+    })?;
     if pve_status(pve, node, ctid).await? != "running" {
         say(&format!("  starting CT {ctid}"));
         node::power(pve, node, ctid, "start").await?;
@@ -1073,7 +1085,7 @@ async fn run(
         // The Pangolin context, key and Site state are verified again before anything is made.
         for (instance, reviewed) in plan.instances.iter().zip(&plan.sites) {
             let home = instance.resume.as_ref().map(|resume| home_volume(&resume.home_mount));
-            if site.review(instance.ctid, &instance.hostname, home)? != *reviewed {
+            if site.review(instance.ctid, &site_name(&instance.hostname, instance.ctid), home)? != *reviewed {
                 return Err("Pangolin Site state changed since review; review again".to_owned());
             }
         }

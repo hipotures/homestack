@@ -70,7 +70,10 @@ fn size(bytes: u64) -> String {
     const GIB: f64 = 1_073_741_824.0;
     #[allow(clippy::cast_precision_loss)]
     let gib = bytes as f64 / GIB;
-    if gib >= 1024.0 {
+    if gib < 1.0 {
+        // A small volume (a 10M home, a 128M root) is not 0G.
+        format!("{:.0}M", gib * 1024.0)
+    } else if gib >= 1024.0 {
         format!("{:.1}T", gib / 1024.0)
     } else {
         format!("{gib:.0}G")

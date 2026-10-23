@@ -399,7 +399,10 @@ fn sections(
                 format!("1. {ct}"),
                 format!("2. Pangolin: {site_step}"),
                 format!("3. start it; its credential goes into {MOUNT}/pangolin-site through its console (no SSH)"),
-                format!("4. wait until Site {} is online, then turn autostart on", i.hostname),
+                format!(
+                    "4. wait until Site {} is online, then turn autostart on",
+                    deploy::site_name(&i.hostname, i.ctid)
+                ),
             ]);
         }
         lines.extend(site.map(Initializer::describe));
