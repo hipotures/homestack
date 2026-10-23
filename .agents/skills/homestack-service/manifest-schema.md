@@ -56,6 +56,15 @@ Unknown fields are rejected, so a typo does not silently change meaning.
 | `exposure.pangolin.name` | string | yes | Pangolin resource name, 1–64 characters |
 | `exposure.pangolin.subdomain` | string | yes | DNS label `^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`; the domain is chosen at deployment |
 
+Optional sections switch a feature on only when present; omitting one is a
+valid, deliberate choice, not a missing value:
+
+- no `runtime.healthcheck`: health is shown as `unverified`;
+- no `persistence`: no home volume is created;
+- no `exposure` (or no `exposure.pangolin`): the service is not published
+  through Pangolin and is reachable only inside the LAN, e.g. a management
+  API used by clients on the private network.
+
 A **size** is a string of a positive decimal integer followed by `M` (MiB) or
 `G` (GiB), e.g. `256M`, `2G`. No bare numbers, fractions or other units.
 
