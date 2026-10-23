@@ -108,15 +108,18 @@ pub async fn plan(pve: &impl Pve, repository: &str, service: &str, choice: &Choi
         }
         plan.remove = true;
         for target in &plan.targets {
+            let home = if target.home_volume.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    " and home {} ({})",
+                    target.home_volume,
+                    node::show_size(target.home_mib)
+                )
+            };
             plan.lines.push(format!(
-                "CT {} {} on {} · {}: removed with root {} and home {} ({}); its data is gone",
-                target.ctid,
-                target.hostname,
-                target.node,
-                target.address,
-                target.root_volume,
-                target.home_volume,
-                node::show_size(target.home_mib)
+                "CT {} {} on {} · {}: remove with root {}{home}",
+                target.ctid, target.hostname, target.node, target.address, target.root_volume,
             ));
         }
         return plan;
@@ -283,7 +286,7 @@ pub async fn apply(
                 say(&format!("CT {ctid} · stopping"));
                 node::power(pve, node, ctid, "stop").await?;
             }
-            say(&format!("CT {ctid} · removing with its home"));
+            say(&format!("CT {ctid} · removing"));
             let upid = pve
                 .delete(
                     &format!("/nodes/{node}/lxc/{ctid}"),
@@ -292,9 +295,14 @@ pub async fn apply(
                 .await
                 .map_err(|e| format!("remove CT {ctid}: {e}"))?;
             task(pve, &upid, &format!("remove CT {ctid}")).await?;
+            let home = if now.home_volume.is_empty() {
+                String::new()
+            } else {
+                format!(" and home {}", now.home_volume)
+            };
             lines.push(format!(
-                "CT {ctid} {} removed with root {} and home {}",
-                target.hostname, target.root_volume, target.home_volume
+                "CT {ctid} {} removed with root {}{home}",
+                now.hostname, now.root_volume
             ));
             continue;
         }
