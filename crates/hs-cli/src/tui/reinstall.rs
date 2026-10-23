@@ -121,6 +121,16 @@ pub async fn read(deploy_toml: &Path, vmids: &[u32], offset: i64) -> Result<Imag
     if let Some(images) = common_images(deploy_toml, vmids, offset).await? {
         return Ok(images);
     }
+    let summary = deploy_toml.with_file_name("integrations/pangolin-sites.toml");
+    if let Some(site) = super::pangolin_sites::Summary::load(&summary)
+        .and_then(|summary| summary.deployed.into_iter().find(|d| vmids.contains(&d.ctid)))
+    {
+        return Err(format!(
+            "CT {} ({}) is a Step 8 Pangolin Site connector, not yet a common service; it updates like \
+             every other service only after its one-time conversion",
+            site.ctid, site.site
+        ));
+    }
     let config = DeployConfig::load(deploy_toml)?;
     let made = hs_deploy::deploy::images(&config).await?;
     let mut chosen = Vec::new();
