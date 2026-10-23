@@ -1,4 +1,4 @@
-# HomeStack service telemetry, version 1
+# HomeStack service telemetry, version 2
 
 This is HomeStack's application-side wire contract, independent of language
 or web framework. It needs no manifest field. HTTP services serve
@@ -27,11 +27,11 @@ Example (illustrative values):
 
 ```json
 {
-  "schema": 1,
+  "schema": 2,
   "status": "pass",
   "uptime_seconds": 1760,
-  "sample_age_seconds": 2,
-  "load_average": null,
+  "sample_uptime_usec": 1760042118,
+  "sample_age_seconds": 0,
   "filesystems": [
     {
       "mount": "/",
@@ -57,12 +57,10 @@ Example (illustrative values):
   "container": {
     "cpu": {
       "capacity_cpus": 2.0,
-      "interval_seconds": 5.001,
-      "usage_percent": 0.08,
-      "capacity_percent": 0.04,
-      "user_percent": 0.05,
-      "system_percent": 0.03,
-      "throttling": { "periods": 0, "throttled_periods": 0, "throttled_seconds": 0.0 }
+      "usage_usec": 18734512,
+      "user_usec": 12011034,
+      "system_usec": 6723478,
+      "throttling": { "periods": 0, "throttled_periods": 0, "throttled_usec": 0 }
     },
     "memory": {
       "usage_bytes": 120451072,
@@ -81,11 +79,10 @@ Example (illustrative values):
       "io": null
     },
     "io": {
-      "interval_seconds": 5.001,
-      "read_bytes_per_second": 0.0,
-      "write_bytes_per_second": 819.2,
-      "read_ops_per_second": 0.0,
-      "write_ops_per_second": 0.2
+      "read_bytes": 52441088,
+      "write_bytes": 7340032,
+      "read_ops": 1893,
+      "write_ops": 412
     },
     "error": null
   },
@@ -93,21 +90,23 @@ Example (illustrative values):
 }
 ```
 
-- `schema`: integer `1`. Consumers ignore additional fields but reject an
+- `schema`: integer `2`. Consumers ignore additional fields but reject an
   unsupported version or malformed fields. This is separate from YAML schema.
-- `status`: `pass` or `fail`, supplied by the application.
+- `status`: `pass` or `fail`, the same verdict as `/health/live`, including
+  the heartbeat age.
 - `uptime_seconds`: nonnegative integer seconds since this application
   process started, using a monotonic clock. Not host uptime or CT lifetime.
-  Initialize the sampler once during process startup; never once per request.
-- `sample_age_seconds`: nonnegative integer age of the oldest measurement,
-  measured from the beginning of collection with a monotonic clock; `null`
-  before the first completed sample. Consumers discard measurements older
-  than 30 seconds. Never reset the age just because an HTTP response is sent.
-- `load_average`: always `null`. Without LXCFS load virtualization,
-  `/proc/loadavg` in a Proxmox LXC container is the host's load, and an idle
-  container then reports the host's numbers. The field stays for schema 1
-  compatibility; container load is reported in `container`. Never substitute
-  host boot time for process uptime.
+- `sample_uptime_usec`: integer monotonic microseconds since process start at
+  the moment the returned measurement began; `null` while none exists.
+  Consumers compute rates as counter deltas divided by the delta of this
+  field between two reports; a lower `uptime_seconds` means a restart and
+  starts a new series.
+- `sample_age_seconds`: nonnegative integer age of the returned measurement,
+  normally `0`; `null` while none exists. Consumers discard measurements
+  older than 30 seconds. Never reset the age just because a response is sent.
+- Never read `/proc/loadavg`: without LXCFS load virtualization it is the
+  Proxmox host's load. Container load is reported in `container`. Never
+  substitute host boot time for process uptime.
 - `container`: resource usage of the cgroup v2 the service process runs in,
   described under "Container measurements". It is an object even when
   unavailable: then all its members are `null` and `error` is
@@ -173,17 +172,16 @@ appears as `/`. Reject paths outside the mount root and `..` components.
 Refuse a directory without `cgroup.type`: only the real hierarchy root lacks
 it. Resolve once and again only when the directory stops answering.
 
-- `cpu`: from `cpu.stat`. `usage_percent` (100 = one logical CPU busy),
-  `user_percent` and `system_percent` are deltas of `usage_usec`,
-  `user_usec` and `system_usec` over the monotonic time between two samples;
-  `capacity_percent` divides by `capacity_cpus`. Capacity is the size of
-  `cpuset.cpus.effective` (otherwise the process's available parallelism),
-  lowered by the smallest `cpu.max` quota on the cgroup or a visible ancestor.
-  `throttling` holds the deltas of `nr_periods`, `nr_throttled` and
-  `throttled_usec` over the interval, `null` without the cpu controller.
-  Interval fields are `null` on the first sample, after a counter decreases,
-  and for intervals under 0.5 s (the older counters are then kept). Never
-  infer CPU usage from load average.
+- `cpu`: from `cpu.stat`, as reported by the kernel: cumulative
+  `usage_usec`, `user_usec` and `system_usec`, and `throttling` with
+  cumulative `nr_periods`, `nr_throttled` and `throttled_usec` as
+  `periods`, `throttled_periods` and `throttled_usec` (`null` without the
+  cpu controller). The service computes no percentages; the
+  consumer derives them from two reports (100 % = one logical CPU busy) and
+  discards a pair in which a counter decreased. `capacity_cpus` is the size
+  of `cpuset.cpus.effective` (otherwise the process's available
+  parallelism), lowered by the smallest `cpu.max` quota on the cgroup or a
+  visible ancestor. Never infer CPU usage from load average.
 - `memory`: `null` without `memory.current`. `usage_bytes` is
   `memory.current` (page cache included); `limit_bytes` the smallest numeric
   `memory.max` on the cgroup or a visible ancestor, `null` for `max`;
@@ -195,9 +193,11 @@ it. Resolve once and again only when the directory stops answering.
   (percent of wall time stalled) and cumulative `total_usec`. PSI measures
   stalls caused by contention, not utilization; never combine it with CPU
   usage into a load figure. A missing or unreadable file is `null`, not zero.
-- `io`: rates from `io.stat` deltas summed over devices (device numbers are
-  not reported), `null` without the io controller or before two samples.
-  Filesystem capacity is not I/O activity.
+- `io`: cumulative `rbytes`, `wbytes`, `rios` and `wios` from `io.stat`
+  summed over devices as `read_bytes`, `write_bytes`, `read_ops` and
+  `write_ops` (device numbers are not reported), `null` without the io
+  controller. The consumer derives rates from two reports. Filesystem
+  capacity is not I/O activity.
 
 Limits a container manager sets above the cgroup namespace (Proxmox sets
 `memory.max` and `cpu.max` on the parent of the container's namespace root)
@@ -205,11 +205,16 @@ are invisible from inside: `limit_bytes` is then `null`, and `capacity_cpus`
 reflects only the cpuset. Read only these interface files; never write to the
 cgroup, run commands or substitute host-wide values when one is unavailable.
 
-Collect in one bounded background worker, at most once every five seconds,
-and return cached measurements immediately. A hung NFS/FUSE call must not
-block the HTTP handler, create more workers per request, or make old data
-appear fresh. Keep the response at most 64 KiB. Inventory/parse failures
-are telemetry failures, not application readiness failures.
+Measure only on demand. No timer, sampler or polling loop runs while no
+request arrives: a service may go unobserved for days. A request wakes one
+bounded measurement worker, which is idle otherwise, and waits for it at
+most two seconds; requests within two seconds of a completed measurement
+reuse it. A hung NFS/FUSE call must not block the HTTP handler beyond that
+wait, create more workers per request, or make old data appear fresh: while
+the worker is stuck, return the last measurement with its true age, or
+top-level `error: pending` when there is none. Keep the response at most
+64 KiB. Inventory/parse failures are telemetry failures, not application
+readiness failures.
 
 ## HomeStack consumption
 
@@ -220,6 +225,11 @@ an address calculated from CTID. No probing every port, redirects, proxies,
 credential forwarding or TLS-verification bypasses. Old records without
 that metadata remain unavailable until an explicitly approved deployment
 operation; discovery does not rewrite their configurations.
+
+HomeStack queries a service only while a client is requesting status (TUI or
+web interface open); it never polls services in the background. It keeps the
+previous report of each process to compute CPU and I/O rates, and shows them
+as unknown until a second report arrives.
 
 HomeStack bounds timeout, response size and mount count, checks version,
 types, freshness, unique paths and arithmetic, and uses `/home/app` only if

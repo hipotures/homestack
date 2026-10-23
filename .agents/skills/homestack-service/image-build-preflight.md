@@ -69,7 +69,9 @@ Never use production containers, data or credentials for these tests.
 Check:
 
 1. Cold start, `/health/live`, `/health/ready` and the telemetry endpoint on
-   the declared port.
+   the declared port; the heartbeat count grows every heartbeat interval, and a
+   stalled main path turns both health endpoints into `503` within three
+   intervals (test with a short `HOMESTACK_HEARTBEAT_SECONDS`).
 2. Representative work, not just an idle process: typical requests, a burst
    of concurrent ones and the expected error paths.
 3. Stop and start again; for a stateful service, a fresh container with the

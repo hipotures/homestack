@@ -67,6 +67,7 @@ until the manifest is fixed. Unknown keys are never ignored silently.
 | `runtime.healthcheck.port` | string | yes | name of an entry in `runtime.ports` |
 | `runtime.healthcheck.path` | string | `http` only | absolute URL path starting with `/` |
 | `runtime.healthcheck.expected_status` | integer | `http` only | 100–599 |
+| `runtime.healthcheck.heartbeat_seconds` | integer | no (default `60`), `http` only | heartbeat interval, 10–3600; passed to the container as `HOMESTACK_HEARTBEAT_SECONDS`; health fails after three missed beats |
 | `persistence` | mapping or empty | yes | empty: no home volume, the service is stateless |
 | `persistence.mount` | string | yes | exactly `/home/app` |
 | `persistence.size` | size | yes | default size of a new home volume, at least `1M` |
@@ -97,7 +98,9 @@ Cross-field rules:
 For HTTP services the healthcheck path is the readiness endpoint of the health
 endpoint standard in [SKILL.md](SKILL.md) (`/health/ready`,
 `application/health+json`). HomeStack judges health by the status code; the
-body is for people and tools. `tcp` health means only that the port accepts
+body is for people and tools. The endpoint fails when the service's heartbeat
+is older than three `heartbeat_seconds` intervals, so a stuck service is
+detected by status code alone. `tcp` health means only that the port accepts
 connections; HomeStack shows it as such, not as an application-level healthy
 result.
 

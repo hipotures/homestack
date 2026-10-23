@@ -134,14 +134,49 @@ declares an HTTP port.
 HTTP services expose health in the "Health Check Response Format for HTTP
 APIs" (draft-inadarei-api-health-check), never as free text:
 
-- `GET /health/live`: the process answers; checks no dependencies.
-  `200` `{"status":"pass"}`.
-- `GET /health/ready`: the service can do its job (database and other
-  required dependencies reachable). `200` with `"status":"pass"`, or `503`
+- `GET /health/live`: the process answers and its heartbeat (below) is
+  fresh; checks no dependencies directly. `200` with `"status":"pass"`.
+- `GET /health/ready`: the service can do its job (fresh heartbeat, database
+  and other required dependencies reachable). `200` with `"status":"pass"`, or `503`
   with `"status":"fail"`; each dependency under `checks`, e.g.
   `{"status":"pass","checks":{"database:connection":[{"status":"pass"}]}}`.
 - `Content-Type: application/health+json`, a JSON object, no secrets or
   internal error details in the body.
+
+An open port or a page that still loads does not prove the service works:
+the main worker can hang while the listener keeps answering. Every HTTP
+service therefore runs a heartbeat:
+
+- Every heartbeat interval the service performs one real, cheap unit of
+  work through its main serving path, normally an HTTP request to its own listener on a
+  lightweight route that goes through the same workers and required
+  dependencies (e.g. one trivial database read). On success it records the
+  time with a monotonic clock and increments a counter that starts at 0 at
+  process start.
+- A timer that only increments a value without passing through the main path
+  is not a heartbeat. The heartbeat writes nothing to disk.
+- The interval comes from the manifest's `runtime.healthcheck.heartbeat_seconds`
+  (default 60). HomeStack passes it to the container as
+  `HOMESTACK_HEARTBEAT_SECONDS`; the service reads it at start and uses 60
+  when it is absent.
+- The heartbeat age is the time since the last success, or since process
+  start before the first one. Above three intervals (three missed beats) both
+  `/health/live` and `/health/ready` return `503` with `"status":"fail"`.
+- Both endpoints report the heartbeat as checks: `heartbeat:age` (integer
+  seconds, `observedUnit` `s`) and `heartbeat:count`. Report the age, not a
+  wall-clock timestamp, so time zones and clock offsets never matter. A count
+  lower than before means the process restarted; an age that keeps growing
+  means it is stuck.
+- When health is served by a component next to an application you cannot
+  modify, that component sends the heartbeat request to the application's
+  own listener.
+
+Consumers judge health only by the status code, so Pangolin and HomeStack
+detect a stuck service without parsing the body; a process that does not
+answer at all fails by timeout.
+
+Example `/health/live` body:
+`{"status":"pass","checks":{"heartbeat:age":[{"status":"pass","observedValue":12,"observedUnit":"s"}],"heartbeat:count":[{"status":"pass","observedValue":4211}]}}`
 
 The manifest's `runtime.healthcheck` uses `/health/ready` with
 `expected_status: 200`; HomeStack and the Pangolin resource both use it. Use
@@ -168,19 +203,25 @@ of `/` and `/home/app`.
 
 Implement it inside the service with the language's native OS APIs, on the
 existing HTTP server; no additional daemon, SSH, shell commands or framework
-replacement. Telemetry must cost next to nothing: one background sampler at
-most every five seconds reads a handful of small files, and the handler
-returns the cached result without doing any work. Never sample per request.
+replacement. Telemetry is measured only on demand: nobody may be looking for
+days, so no timer or background sampler runs while no request arrives. A
+request reads a handful of small files; the kernel already keeps the
+counters. Report CPU and I/O as cumulative counters and let HomeStack compute
+rates from two consecutive reports. The heartbeat is the only
+periodic work a service does for HomeStack.
 
-Never report `/proc/loadavg`: in a Proxmox LXC it is the host's load, so
-`load_average` is always `null`. Detect mounts instead of assuming ext4.
+Never report `/proc/loadavg`: in a Proxmox LXC it is the host's load.
+Detect mounts instead of assuming ext4.
 Without a home volume, report `/home/app` as not mounted, never as root's
 numbers. Missing mounts, failed measurements and stale data must remain
 distinguishable from zero.
 
 Verify with local HTTP requests: compare filesystem values with `df -B1` and
 container values with the files under `/sys/fs/cgroup`; also check an absent
-`/home/app`, a missing PSI file and a measurement failure.
+`/home/app`, a missing PSI file and a measurement failure. Check that an idle
+service does no telemetry work between requests, and that a stalled main
+path (blocked dependency or paused worker) turns both health endpoints into
+`503` within three heartbeat intervals.
 
 ## Release standard
 
