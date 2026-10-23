@@ -255,6 +255,9 @@ pub struct NewContainer<'a> {
     pub net0: Option<String>,
     pub onboot: bool,
     pub nameserver: Option<String>,
+    /// The DNS search domain.
+    pub searchdomain: Option<String>,
+    pub swap_mib: u32,
     pub description: String,
     /// The tag that marks what made it ([`SERVER_TAG`] for a server).
     pub tag: Option<&'a str>,
@@ -285,6 +288,7 @@ pub async fn create_task(pve: &impl Pve, spec: &NewContainer<'_>) -> Result<Valu
     let rootfs = format!("{}:{}", spec.storage, gib(spec.disk_mib));
     let memory = spec.memory_mib.to_string();
     let cores = spec.cores.to_string();
+    let swap = spec.swap_mib.to_string();
     let mut form = vec![
         ("vmid", ctid.as_str()),
         ("ostemplate", spec.ostemplate),
@@ -292,7 +296,7 @@ pub async fn create_task(pve: &impl Pve, spec: &NewContainer<'_>) -> Result<Valu
         ("pool", spec.pool),
         ("rootfs", rootfs.as_str()),
         ("memory", memory.as_str()),
-        ("swap", "0"),
+        ("swap", swap.as_str()),
         ("cores", cores.as_str()),
         ("unprivileged", "1"),
         ("onboot", if spec.onboot { "1" } else { "0" }),
@@ -303,6 +307,9 @@ pub async fn create_task(pve: &impl Pve, spec: &NewContainer<'_>) -> Result<Valu
     }
     if let Some(nameserver) = &spec.nameserver {
         form.push(("nameserver", nameserver.as_str()));
+    }
+    if let Some(searchdomain) = &spec.searchdomain {
+        form.push(("searchdomain", searchdomain.as_str()));
     }
     if let Some(mp0) = &spec.mp0 {
         form.push(("mp0", mp0.as_str()));

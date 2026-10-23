@@ -19,6 +19,7 @@ use super::reinstall::local_time;
 use super::service_pangolin;
 use crate::install_flow::Answer;
 use crate::services::deploy::{self, Cluster, SiteInit, SiteReady, Source};
+use crate::services::dns::Dns;
 use crate::services::instance::{self, Instance};
 use crate::services::manifest::{Manifest, Placement, show_mib};
 use crate::services::{lifecycle, update};
@@ -34,6 +35,9 @@ const MEMORY: &str = "Memory (MiB)";
 const ROOT: &str = "Root";
 const HOME: &str = "Home";
 const ENVIRONMENT: &str = "Environment";
+const HOSTNAME: &str = "Hostname";
+const DOMAIN: &str = "Domain";
+const DNS_SERVER: &str = "DNS server";
 
 struct Session {
     config: DeployConfig,
@@ -49,6 +53,19 @@ struct Session {
     /// Another service published through Pangolin: its verified context.
     pangolin: Option<Pangolin>,
     catalog: Option<service_pangolin::Catalog>,
+    /// The local DNS the instances' names go into, or why it is unusable.
+    dns: Result<Option<Dns>, String>,
+    /// The name, domain and DNS server the settings started from.
+    naming: Naming,
+}
+
+/// How the instances are named and resolve names: read from an instance,
+/// else the manifest's host name and the local DNS or the deployment.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Naming {
+    hostname: String,
+    domain: String,
+    nameserver: String,
 }
 
 impl Session {
@@ -145,7 +162,7 @@ pub(super) fn work(setup: &Setup, commands: &Receiver<Command>, tell: &(dyn Fn(E
             Command::Remove { answers } => {
                 let Some(s) = session.as_mut() else { continue };
                 tell(Event::Busy("Reading what would be removed".to_owned()));
-                let chosen = chosen(&s.settings, &answers);
+                let chosen = chosen(&s.settings, &answers, s.instances.len());
                 let mut plan = lifecycle::Plan::default();
                 if chosen.selected.is_empty() {
                     plan.problems
@@ -252,12 +269,30 @@ fn connect(
         (None, None)
     };
     let shown = instances.first().map(lifecycle::shown_environment).unwrap_or_default();
+    let dns = Dns::load(&setup.token_dir);
+    let local = dns.as_ref().ok().and_then(Option::as_ref);
+    let first = instances.first();
+    let naming = Naming {
+        hostname: first.map_or_else(
+            || source.manifest.deployment.hostname.clone(),
+            |i| base_name(&i.hostname),
+        ),
+        domain: first
+            .and_then(|i| i.searchdomain.clone())
+            .or_else(|| local.map(|dns| dns.zone.clone()))
+            .unwrap_or_else(|| config.domain.clone()),
+        nameserver: first
+            .and_then(|i| i.nameserver.clone())
+            .or_else(|| local.map(|dns| dns.server.clone()))
+            .or_else(|| config.nameserver.map(|ip| ip.to_string()))
+            .unwrap_or_default(),
+    };
     // The CTIDs an empty New CTIDs gives, one per node at most.
     let automatic = setup
         .handle
         .block_on(deploy::automatic(&config, &pve, cluster.nodes.len()))
         .unwrap_or_default();
-    let mut settings = settings(source, &cluster, &instances, &automatic, &shown, setup.offset);
+    let mut settings = settings(source, &cluster, &instances, &automatic, &naming, &shown, setup.offset);
     settings.extend(service_pangolin::settings(source, catalog.as_ref()));
     if let Some((previous, answers)) = kept {
         restore(&mut settings, &previous, &answers);
@@ -275,6 +310,8 @@ fn connect(
             site,
             pangolin,
             catalog,
+            dns,
+            naming,
         },
         found,
     ))
@@ -340,6 +377,7 @@ fn settings(
     cluster: &Cluster,
     instances: &[Instance],
     automatic: &[u32],
+    naming: &Naming,
     shown: &str,
     offset: i64,
 ) -> Vec<Setting> {
@@ -434,6 +472,37 @@ fn settings(
                 Some(String::new()),
             ),
             check_ctids,
+        ),
+        checked(
+            setting(
+                HOSTNAME,
+                "The instances' name: alone for one instance, numbered (-1, -2…) for several. It is the \
+                 container's host name and, with the domain, its name in the local DNS.",
+                Vec::new(),
+                false,
+                Some(naming.hostname.clone()),
+            ),
+            check_hostname,
+        ),
+        checked(
+            setting(
+                DOMAIN,
+                "The DNS domain of the names, also the containers' search domain.",
+                Vec::new(),
+                false,
+                Some(naming.domain.clone()),
+            ),
+            check_domain,
+        ),
+        checked(
+            setting(
+                DNS_SERVER,
+                "The DNS server the containers use.",
+                Vec::new(),
+                false,
+                Some(naming.nameserver.clone()),
+            ),
+            check_nameserver,
         ),
         checked(
             setting(
@@ -567,6 +636,52 @@ fn check_ctids(text: &str) -> Result<(), String> {
     }
 }
 
+/// A DNS label: a-z, 0-9 and inner -.
+fn check_hostname(text: &str) -> Result<(), String> {
+    if is_label(text.trim()) {
+        Ok(())
+    } else {
+        Err("A DNS label: a-z, 0-9 and inner -, up to 63 characters".to_owned())
+    }
+}
+
+fn is_label(text: &str) -> bool {
+    (1..=63).contains(&text.len())
+        && text
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+        && !text.starts_with('-')
+        && !text.ends_with('-')
+}
+
+fn check_domain(text: &str) -> Result<(), String> {
+    let text = text.trim();
+    if text.split('.').count() >= 2 && text.split('.').all(is_label) {
+        Ok(())
+    } else {
+        Err("A DNS domain such as example.com".to_owned())
+    }
+}
+
+fn check_nameserver(text: &str) -> Result<(), String> {
+    text.trim()
+        .parse::<std::net::Ipv4Addr>()
+        .map(|_| ())
+        .map_err(|_| "An IPv4 address such as 192.168.1.1".to_owned())
+}
+
+/// `name` without a trailing instance number (`-1`, `-2`…).
+fn base_name(name: &str) -> String {
+    match name.rsplit_once('-') {
+        Some((base, number))
+            if !base.is_empty() && !number.is_empty() && number.bytes().all(|b| b.is_ascii_digit()) =>
+        {
+            base.to_owned()
+        }
+        _ => name.to_owned(),
+    }
+}
+
 /// One `KEY=value` entry.
 fn check_entry(text: &str) -> Result<(), String> {
     match deploy::environment(text) {
@@ -596,7 +711,7 @@ fn default_nodes(manifest: &Manifest, rows: &[&deploy::NodeStorage]) -> Vec<usiz
 }
 
 /// The answers as what the operator chose.
-fn chosen(settings: &[Setting], answers: &[Answer]) -> Chosen {
+fn chosen(settings: &[Setting], answers: &[Answer], existing: usize) -> Chosen {
     let at = |title: &str| settings.iter().position(|setting| setting.title == title);
     let picked = |title: &str| -> Vec<String> {
         let Some(index) = at(title) else { return Vec::new() };
@@ -625,6 +740,10 @@ fn chosen(settings: &[Setting], answers: &[Answer]) -> Chosen {
             root_mib: text(ROOT),
             home_mib: text(HOME),
             environment: text(ENVIRONMENT),
+            hostname: text(HOSTNAME),
+            domain: text(DOMAIN),
+            nameserver: text(DNS_SERVER),
+            existing,
         },
     }
 }
@@ -632,7 +751,7 @@ fn chosen(settings: &[Setting], answers: &[Answer]) -> Chosen {
 /// Review the changes to the selected instances, the new instances and a
 /// Pangolin attachment; only what changes is listed.
 fn review(setup: &Setup, source: &Source, s: &mut Session, answers: &[Answer]) -> Review {
-    let chosen = chosen(&s.settings, answers);
+    let chosen = chosen(&s.settings, answers, s.instances.len());
     let attach_requested = service_pangolin::requested(&s.settings, answers);
     let mut sections = Vec::new();
     let mut problems = Vec::new();
@@ -643,6 +762,15 @@ fn review(setup: &Setup, source: &Source, s: &mut Session, answers: &[Answer]) -
         } else {
             "Tick instances to change under Instances, or nodes for new ones under Nodes".to_owned()
         });
+    }
+    let renamed = chosen.deploy.hostname != s.naming.hostname
+        || chosen.deploy.domain != s.naming.domain
+        || chosen.deploy.nameserver != s.naming.nameserver;
+    if renamed && !chosen.selected.is_empty() {
+        problems.push(
+            "Hostname, Domain and DNS server apply to new instances; untick the instances to change them, or keep their values"
+                .to_owned(),
+        );
     }
     if !chosen.selected.is_empty() {
         let targets: Vec<&Instance> = s
@@ -718,7 +846,11 @@ fn review(setup: &Setup, source: &Source, s: &mut Session, answers: &[Answer]) -
             &s.cluster,
             &chosen.deploy,
             site,
+            s.dns.as_ref().ok().and_then(Option::as_ref),
         ));
+        if let Err(error) = &s.dns {
+            problems.push(error.clone());
+        }
         sections.extend(new_sections(source, &s.cluster, &plan, s.site.as_ref(), setup.offset));
         problems.extend(plan.problems.clone());
         create = Some(plan);
@@ -792,7 +924,11 @@ fn apply(
                 .handle
                 .block_on(lifecycle::apply(&s.pve, source, &plan, s.ready(), &say))
             {
-                Ok(done) => (true, done),
+                Ok(done) => {
+                    lines.extend(done);
+                    let ok = forget(setup, source, s, &plan.targets, &mut lines);
+                    (ok, lines)
+                }
                 Err(error) => fail(lines, error),
             }
         }
@@ -823,10 +959,21 @@ fn apply(
             }
             if let Some(plan) = create {
                 let site = s.site.as_mut().map(|site| site as &mut dyn SiteInit);
-                let (ok, done) = setup.handle.block_on(deploy::apply(&s.pve, source, &plan, site, &say));
+                let dns = s.dns.as_ref().ok().and_then(Option::as_ref);
+                let (ok, done) = setup
+                    .handle
+                    .block_on(deploy::apply(&s.pve, source, &plan, site, dns, &say));
                 lines.extend(done);
                 if !ok {
                     return (false, lines);
+                }
+                // Clients reach new API instances by their names only.
+                if source.is_api() {
+                    let urls: Vec<String> = plan.instances.iter().map(|i| format!("https://{}", i.fqdn)).collect();
+                    match client_urls(&setup.client_path, &urls, &[]) {
+                        Ok(line) => lines.push(line),
+                        Err(error) => return fail(lines, error),
+                    }
                 }
             }
             if let Some(plan) = attach {
@@ -883,7 +1030,7 @@ fn new_sections(
             "{}  CT {}  {}  {}  root {}{home} on {}  {} CPU  {} MiB",
             i.node,
             i.ctid,
-            i.hostname,
+            i.fqdn,
             i.address,
             show_size(i.root_mib),
             i.root_storage,
@@ -950,4 +1097,70 @@ fn restore(settings: &mut [Setting], previous: &[Setting], answers: &[Answer]) {
             _ => {}
         }
     }
+}
+
+/// After removing `targets`: their names leave the local DNS and, for the
+/// API, the client's servers. Whether that worked.
+fn forget(setup: &Setup, source: &Source, s: &Session, targets: &[Instance], lines: &mut Vec<String>) -> bool {
+    let dns = s.dns.as_ref().ok().and_then(Option::as_ref);
+    let mut ok = true;
+    let mut gone = Vec::new();
+    for target in targets {
+        let Some(domain) = &target.searchdomain else {
+            continue;
+        };
+        let fqdn = format!("{}.{domain}", target.hostname);
+        if let Some(dns) = dns.filter(|dns| dns.covers(&fqdn)) {
+            match setup.handle.block_on(dns.remove(&fqdn)) {
+                Ok(()) => lines.push(format!("{fqdn} removed from the local DNS")),
+                Err(error) => {
+                    ok = false;
+                    lines.push(format!("{fqdn}: {error}"));
+                }
+            }
+        }
+        gone.push(format!("https://{fqdn}"));
+    }
+    if source.is_api() && !gone.is_empty() {
+        match client_urls(&setup.client_path, &[], &gone) {
+            Ok(line) => lines.push(line),
+            Err(error) => {
+                ok = false;
+                lines.push(error);
+            }
+        }
+    }
+    ok
+}
+
+/// Add and remove server URLs in the client's `[server] urls`; the rest of
+/// `client.toml` stays as it is.
+fn client_urls(path: &std::path::Path, add: &[String], remove: &[String]) -> Result<String, String> {
+    let text = std::fs::read_to_string(path).map_err(|error| format!("Cannot read {}: {error}", path.display()))?;
+    let mut document: toml_edit::DocumentMut = text
+        .parse()
+        .map_err(|_| format!("{} is not valid TOML", path.display()))?;
+    let urls = document["server"]["urls"]
+        .as_array_mut()
+        .ok_or_else(|| format!("{} has no [server] urls", path.display()))?;
+    let mut kept: Vec<String> = urls
+        .iter()
+        .filter_map(|url| url.as_str().map(str::to_owned))
+        .filter(|url| !remove.contains(url))
+        .collect();
+    for url in add {
+        if !kept.contains(url) {
+            kept.push(url.clone());
+        }
+    }
+    if kept.is_empty() {
+        return Err("The client would have no server left; client.toml is unchanged".to_owned());
+    }
+    *urls = kept.iter().map(String::as_str).collect();
+    let temporary = path.with_extension("toml.new");
+    std::fs::write(&temporary, document.to_string())
+        .and_then(|()| std::fs::set_permissions(&temporary, std::fs::metadata(path)?.permissions()))
+        .and_then(|()| std::fs::rename(&temporary, path))
+        .map_err(|error| format!("Cannot write {}: {error}", path.display()))?;
+    Ok(format!("client servers: {}", kept.join(", ")))
 }

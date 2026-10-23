@@ -18,6 +18,7 @@ use hs_deploy::deploy::ApiBootstrap;
 use hs_deploy::node::{self, NewContainer};
 use serde_json::Value;
 
+use super::dns::Dns;
 use super::manifest::{Healthcheck, MOUNT, Manifest};
 
 /// How long a started instance may take to pass its health check.
@@ -132,7 +133,9 @@ impl Source {
 
     /// The PVE marker of an unfinished initialization of this service.
     fn marker(&self) -> Option<&'static str> {
-        if self.is_api() {
+        if self.manifest.persistence.is_none() {
+            None
+        } else if self.is_api() {
             Some(API_INIT_HOME)
         } else if self.is_site() {
             Some(SITE_INIT_HOME)
@@ -185,6 +188,14 @@ pub struct Choice {
     pub home_mib: String,
     /// `KEY=value` entries separated by spaces.
     pub environment: String,
+    /// The host name the instances are named after.
+    pub hostname: String,
+    /// Their DNS domain (search domain and the domain of their names).
+    pub domain: String,
+    /// The DNS server they use; empty: the deployment's.
+    pub nameserver: String,
+    /// How many instances the service has already: one alone is not numbered.
+    pub existing: usize,
 }
 
 /// A container a plan makes.
@@ -193,6 +204,8 @@ pub struct NewInstance {
     pub node: String,
     pub ctid: u32,
     pub hostname: String,
+    /// `hostname.domain`, its record in the local DNS.
+    pub fqdn: String,
     pub address: String,
     pub cores: u32,
     pub memory_mib: u32,
@@ -240,6 +253,9 @@ pub struct Plan {
     pub template_storage: String,
     /// The pool the containers join.
     pub pool: String,
+    /// The instances' DNS search domain.
+    pub domain: String,
+    pub swap_mib: u32,
     pub problems: Vec<String>,
     /// What the Site initializer reviewed for each instance, in order.
     pub sites: Vec<String>,
@@ -257,12 +273,31 @@ pub fn site_name(hostname: &str, ctid: u32) -> String {
     }
 }
 
-/// The first of `id-1`, `id-2`… no container in `taken` is named.
-fn hostname(id: &str, taken: &BTreeSet<String>) -> String {
+/// `name` for a service of one instance (`total`); otherwise the first of
+/// `name-1`, `name-2`… no container in `taken` is named.
+fn hostname(name: &str, taken: &BTreeSet<String>, total: usize) -> String {
+    if total == 1 {
+        return name.to_owned();
+    }
     (1..)
-        .map(|n| format!("{id}-{n}"))
-        .find(|name| !taken.contains(name))
+        .map(|n| format!("{name}-{n}"))
+        .find(|candidate| !taken.contains(candidate))
         .unwrap_or_default()
+}
+
+/// A DNS label: a-z, 0-9 and inner `-`, 1–63 characters.
+fn valid_label(text: &str) -> bool {
+    (1..=63).contains(&text.len())
+        && text
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+        && !text.starts_with('-')
+        && !text.ends_with('-')
+}
+
+/// Two or more DNS labels separated by dots.
+fn valid_domain(text: &str) -> bool {
+    text.len() <= 253 && text.split('.').count() >= 2 && text.split('.').all(valid_label)
 }
 
 pub(super) fn description(source: &Source, image: &str, digest: &str) -> String {
@@ -459,6 +494,7 @@ pub async fn plan(
     cluster: &Cluster,
     choice: &Choice,
     mut site: Option<&mut dyn SiteInit>,
+    dns: Option<&Dns>,
 ) -> Plan {
     let manifest = &source.manifest;
     let mut plan = Plan {
@@ -469,8 +505,27 @@ pub async fn plan(
         nameserver: config.nameserver.map(|ip| ip.to_string()),
         template_storage: config.template_storage.clone(),
         pool: config.pool.clone(),
+        domain: choice.domain.trim().to_owned(),
+        swap_mib: manifest.resources.swap_mib,
         ..Plan::default()
     };
+    match choice.nameserver.trim() {
+        "" => {}
+        text => match text.parse::<Ipv4Addr>() {
+            Ok(server) => plan.nameserver = Some(server.to_string()),
+            Err(_) => plan.problems.push(format!("DNS server {text} is not an IPv4 address")),
+        },
+    }
+    if !valid_domain(&plan.domain) {
+        plan.problems.push(format!(
+            "Domain {:?} is not a DNS domain such as example.com",
+            plan.domain
+        ));
+    }
+    if !valid_label(choice.hostname.trim()) {
+        plan.problems
+            .push("Hostname is a DNS label: a-z, 0-9 and inner -, up to 63 characters".to_owned());
+    }
     if source.is_api() {
         plan.api_config = Some(config.clone());
     }
@@ -498,9 +553,15 @@ pub async fn plan(
         }
     }
     if source.is_api() {
-        if choice.placements.len() > 1 {
+        if source.marker().is_some() && choice.placements.len() > 1 {
             problems
-                .push("The HomeStack API is initialized one instance at a time: tick one node under Nodes".to_owned());
+                .push("An API with a home is initialized one instance at a time: tick one node under Nodes".to_owned());
+        }
+        if plan.domain != config.domain {
+            problems.push(format!(
+                "The API certificate covers *.{}; use that domain",
+                config.domain
+            ));
         }
         if hs_core::registry::version(&choice.version).is_none_or(|version| version < (0, 2, 10, 0)) {
             problems.push("Managed API deployment requires API image 0.2.10 or later".to_owned());
@@ -525,12 +586,6 @@ pub async fn plan(
         if site.is_none() {
             problems.push("The verified Pangolin context (Step 5 tunnel, Step 7 key) is not open".to_owned());
         }
-    }
-    if manifest.persistence.is_none() {
-        problems.push(format!(
-            "{} declares no home volume (its persistence is empty); deploying without one is not implemented yet, so nothing can be deployed from this manifest",
-            manifest.name
-        ));
     }
     if choice.placements.is_empty() {
         problems.push("Tick at least one node and storage".to_owned());
@@ -640,7 +695,8 @@ pub async fn plan(
         let mut instance = NewInstance {
             node: node.clone(),
             ctid,
-            hostname: hostname(&manifest.id, &taken),
+            hostname: hostname(choice.hostname.trim(), &taken, choice.existing + placements.len()),
+            fqdn: String::new(),
             address: ip.to_string(),
             cores,
             memory_mib,
@@ -693,8 +749,35 @@ pub async fn plan(
                 Err(error) => problems.push(error),
             }
         }
+        instance.fqdn = format!("{}.{}", instance.hostname, plan.domain);
         taken.insert(instance.hostname.clone());
         plan.instances.push(instance);
+    }
+    match dns {
+        Some(dns) => {
+            if let Err(error) = dns.check().await {
+                plan.problems.push(error);
+            }
+            for instance in &plan.instances {
+                if !dns.covers(&instance.fqdn) {
+                    plan.problems
+                        .push(format!("{} is outside the local DNS zone {}", instance.fqdn, dns.zone));
+                    continue;
+                }
+                match dns.addresses(&instance.fqdn).await {
+                    Ok(found) if found.is_empty() || found == [instance.address.clone()] => {}
+                    Ok(found) => {
+                        plan.problems
+                            .push(format!("{} already points to {}", instance.fqdn, found.join(", ")))
+                    }
+                    Err(error) => plan.problems.push(error),
+                }
+            }
+        }
+        None if source.is_api() => plan
+            .problems
+            .push("Clients reach the API by name: set up Local DNS (TSIG) under Integrations".to_owned()),
+        None => {}
     }
     let file = node::image_file(&plan.image).unwrap_or_default();
     let volid = format!("{}:vztmpl/{file}", config.template_storage);
@@ -828,7 +911,12 @@ fn verify(instance: &NewInstance, config: &Value) -> Result<(String, String, Str
             .as_str()
             .ok_or_else(|| format!("CT {ctid} has no root disk"))?,
     );
-    let (home, options) = volume(config["mp0"].as_str().ok_or_else(|| format!("CT {ctid} has no mp0"))?);
+    let mounted = match config["mp0"].as_str() {
+        None if instance.home_mib == 0 => None,
+        None => return Err(format!("CT {ctid} has no mp0")),
+        Some(mp0) if instance.home_mib == 0 => return Err(format!("CT {ctid} has an unplanned mp0 {mp0}")),
+        Some(mp0) => Some(volume(mp0)),
+    };
     let owned = |volid: &str, storage: &str| {
         volid
             .split_once(':')
@@ -840,14 +928,16 @@ fn verify(instance: &NewInstance, config: &Value) -> Result<(String, String, Str
             instance.root_storage
         ));
     }
-    if !owned(home, &instance.home_storage) || home == root {
-        return Err(format!(
-            "CT {ctid}: home volume {home} is not its own on {}",
-            instance.home_storage
-        ));
-    }
-    if !options.contains(&("mp", MOUNT)) {
-        return Err(format!("CT {ctid}: mp0 is not mounted at {MOUNT}"));
+    if let Some((home, options)) = &mounted {
+        if !owned(home, &instance.home_storage) || *home == root {
+            return Err(format!(
+                "CT {ctid}: home volume {home} is not its own on {}",
+                instance.home_storage
+            ));
+        }
+        if !options.contains(&("mp", MOUNT)) {
+            return Err(format!("CT {ctid}: mp0 is not mounted at {MOUNT}"));
+        }
     }
     if config["unprivileged"].as_u64() != Some(1) {
         return Err(format!("CT {ctid} is not unprivileged"));
@@ -856,7 +946,8 @@ fn verify(instance: &NewInstance, config: &Value) -> Result<(String, String, Str
         .as_str()
         .and_then(node::extract_hwaddr)
         .ok_or_else(|| format!("CT {ctid} has no MAC address"))?;
-    Ok((root.to_owned(), home.to_owned(), mac))
+    let home = mounted.map_or_else(|| "none".to_owned(), |(home, _)| format!("{home} at {MOUNT}"));
+    Ok((root.to_owned(), home, mac))
 }
 
 async fn set_description(pve: &impl Pve, instance: &NewInstance, cfg: &Value, description: &str) -> Result<(), String> {
@@ -1040,10 +1131,11 @@ pub async fn apply(
     source: &Source,
     plan: &Plan,
     site: Option<&mut dyn SiteInit>,
+    dns: Option<&Dns>,
     say: &(dyn Fn(&str) + Send + Sync),
 ) -> (bool, Vec<String>) {
     let mut lines = Vec::new();
-    match run(pve, source, plan, site, say, &mut lines).await {
+    match run(pve, source, plan, site, dns, say, &mut lines).await {
         Ok(()) => (true, lines),
         Err(error) => {
             lines.push(error);
@@ -1066,6 +1158,7 @@ async fn run(
     source: &Source,
     plan: &Plan,
     mut site: Option<&mut dyn SiteInit>,
+    dns: Option<&Dns>,
     say: &(dyn Fn(&str) + Send + Sync),
     lines: &mut Vec<String>,
 ) -> Result<(), String> {
@@ -1107,11 +1200,11 @@ async fn run(
     }
     let bootstrap = if source.is_api() {
         let config = plan.api_config.as_ref().ok_or("API initialization was not reviewed")?;
-        if plan.instances.len() != 1
+        if (source.marker().is_some() && plan.instances.len() != 1)
             || source.image(version) != plan.image
             || hs_core::registry::version(version).is_none_or(|version| version < (0, 2, 10, 0))
         {
-            return Err("Review one API instance with a managed-runtime image release".to_owned());
+            return Err("Review the API instances with a managed-runtime image release".to_owned());
         }
         if config.pve.ca_file.is_some() || !plan.environment.is_empty() {
             return Err(
@@ -1179,15 +1272,20 @@ async fn run(
             cores: instance.cores,
             net0: Some(net0(&instance.address)),
             // A host reboot must not start an API or Site before its initialization completes.
-            onboot: source.marker().is_none(),
+            onboot: source.marker().is_none() && !source.is_api(),
             nameserver: plan.nameserver.clone(),
+            searchdomain: Some(plan.domain.clone()),
+            swap_mib: plan.swap_mib,
             description: text.clone(),
             tag: Some(node::SERVER_TAG),
-            mp0: Some(format!(
-                "{}:{},mp={MOUNT},backup=1",
-                instance.home_storage,
-                node::gib(instance.home_mib)
-            )),
+            // The manifest decides: an empty persistence has no home.
+            mp0: (instance.home_mib > 0).then(|| {
+                format!(
+                    "{}:{},mp={MOUNT},backup=1",
+                    instance.home_storage,
+                    node::gib(instance.home_mib)
+                )
+            }),
         };
         if !existing {
             if !free(pve, ctid).await? {
@@ -1200,7 +1298,11 @@ async fn run(
             .await
             .map_err(|e| format!("CT {ctid} config: {e}"))?;
         let (root, home, mac) = verify(instance, &current)?;
-        say(&format!("  root {root}, home {home} at {MOUNT}, MAC {mac}"));
+        say(&format!("  root {root}, home {home}, MAC {mac}"));
+        if let Some(dns) = dns {
+            dns.set(&instance.fqdn, &instance.address).await?;
+            say(&format!("  {} → {} in the local DNS", instance.fqdn, instance.address));
+        }
         if let Some(marker) = source.marker() {
             if let Some(expected) = &instance.resume {
                 check_resume(instance, &current, expected)?;
@@ -1283,6 +1385,32 @@ async fn run(
             .await
             .map_err(|e| format!("CT {ctid} console: {e}"))?;
         }
+        // An API without a home: its configuration, PVE token and certificate
+        // come from this desktop, as for every new or replaced instance.
+        if let Some(bootstrap) = &bootstrap {
+            bootstrap
+                .initialize(pve, &instance.api_spec()?, false, &|line| say(line))
+                .await
+                .map_err(|error| format!("CT {ctid}: API initialization failed: {error}"))?;
+            let after = pve
+                .get(&format!("/nodes/{node}/lxc/{ctid}/config"), &[])
+                .await
+                .map_err(|_| format!("CT {ctid}: cannot read its configuration"))?;
+            pve.put(
+                &format!("/nodes/{node}/lxc/{ctid}/config"),
+                &[
+                    ("onboot", "1"),
+                    ("digest", after["digest"].as_str().unwrap_or_default()),
+                ],
+            )
+            .await
+            .map_err(|_| format!("CT {ctid}: cannot turn autostart on"))?;
+            lines.push(format!(
+                "{node}: CT {ctid} {} ({}) initialized: configuration, PVE token and certificate sent; autostart on",
+                instance.fqdn, instance.address
+            ));
+            continue;
+        }
         if !plan.environment.is_empty() {
             node::set_env(pve, &node, ctid, &plan.environment, &[]).await?;
             say(&format!("  environment: {}", keys.join(", ")));
@@ -1300,7 +1428,7 @@ async fn run(
             "{node}: CT {ctid} {} at {} runs {}; {second}",
             instance.hostname, instance.address, plan.image
         ));
-        lines.push(format!("{node}: CT {ctid} home {home} at {MOUNT}"));
+        lines.push(format!("{node}: CT {ctid} {} home {home}", instance.fqdn));
     }
     Ok(())
 }

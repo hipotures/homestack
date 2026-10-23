@@ -20,6 +20,8 @@ pub struct Instance {
     /// `net0` as Proxmox has it.
     pub network: String,
     pub nameserver: Option<String>,
+    /// The DNS search domain, the domain of its name.
+    pub searchdomain: Option<String>,
     pub cores: u32,
     pub memory_mib: u32,
     pub root_volume: String,
@@ -95,6 +97,9 @@ pub fn note(instance: &Instance) -> String {
     if let Some(nameserver) = &instance.nameserver {
         note.push_str(&format!("\nnameserver {nameserver}"));
     }
+    if let Some(searchdomain) = &instance.searchdomain {
+        note.push_str(&format!("\nsearchdomain {searchdomain}"));
+    }
     note
 }
 
@@ -116,6 +121,7 @@ pub fn parse(ctid: u32, node: &str, pool: &str, cfg: &Value, running: bool) -> R
         mac: String::new(),
         network: text(cfg, "net0").to_owned(),
         nameserver: cfg["nameserver"].as_str().map(str::to_owned),
+        searchdomain: cfg["searchdomain"].as_str().map(str::to_owned),
         cores: cfg["cores"].as_u64().and_then(|n| u32::try_from(n).ok()).unwrap_or(1),
         memory_mib: cfg["memory"]
             .as_u64()
@@ -153,6 +159,7 @@ pub fn parse(ctid: u32, node: &str, pool: &str, cfg: &Value, running: bool) -> R
         instance.pool = value("pool")?.to_owned();
         instance.network = value("net0")?.to_owned();
         instance.nameserver = line(&description, "nameserver").map(str::to_owned);
+        instance.searchdomain = line(&description, "searchdomain").map(str::to_owned);
         instance.running = line(&description, "running") == Some("1");
         instance.onboot = line(&description, "onboot") == Some("1");
         instance.ctid = recreate::holder_of(&description).ok_or("holder: no CTID")?;

@@ -173,6 +173,8 @@ async fn prepare_holder(
         node::create(
             pve,
             &NewContainer {
+                searchdomain: None,
+                swap_mib: 0,
                 node,
                 ctid: id,
                 hostname: &name,
@@ -453,6 +455,8 @@ mod tests {
 
     fn spec(description: &str) -> NewContainer<'_> {
         NewContainer {
+            searchdomain: None,
+            swap_mib: 0,
             node: "pve3",
             ctid: 120,
             hostname: "app",

@@ -75,6 +75,7 @@ until the manifest is fixed. Unknown keys are never ignored silently.
 | `persistence.mappings` | list | no | application paths the image itself redirects into the mount; metadata for review only |
 | `persistence.mappings[].source` | string | yes | absolute path inside the container, outside `/home/app` |
 | `persistence.mappings[].destination` | string | yes | relative path inside the mount; must be one of `persistence.directories` or below one |
+| `deployment.hostname` | string | no (default the `id`) | DNS label `^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`; the instances' host name: alone for one instance, `<hostname>-1`, `<hostname>-2`… for several; the domain is chosen at deployment |
 | `deployment.instances` | integer | yes | production instances one deployment creates, 1–16 |
 | `deployment.placement` | string | no (default `spread`) | `spread` (one instance per node) or `single` (all on one node) |
 | `deployment.state_model` | string | yes | `stateless`, `local` or `external` |
@@ -115,7 +116,10 @@ never shrinks an existing one.
 
 ## Instances
 
-Hostnames are `<id>-1` … `<id>-<instances>`. With `placement: spread` each
+One instance is named `<hostname>`, several `<hostname>-1` … `<hostname>-<n>`
+(`deployment.hostname`, by default the `id`). The name is the container's host
+name and, under the domain chosen at deployment, its record in the local DNS;
+clients reach a service by that name, never by its address or CTID. With `placement: spread` each
 instance goes to a different node; a cluster with fewer nodes gets one
 instance per available node, never two on one node. With `placement: single`
 all instances go to the node the operator selects. The operator can add

@@ -18,6 +18,7 @@ persistence:
   directories:
     - pangolin-site
 deployment:
+  hostname: pangolin
   # One connector per node; each has its own Site identity and local credential.
   instances: 3
   placement: spread

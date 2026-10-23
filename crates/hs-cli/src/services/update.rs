@@ -541,6 +541,8 @@ async fn one(
             .join("\n")
     );
     let spec = node::NewContainer {
+        searchdomain: None,
+        swap_mib: 0,
         node,
         ctid,
         hostname: &target.hostname,

@@ -20,6 +20,7 @@ runtime:
     port: https
 persistence:
 deployment:
+  hostname: hs-api
   # Independent API instances, one per node; clients switch between them.
   instances: 3
   placement: spread

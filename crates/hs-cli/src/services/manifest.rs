@@ -78,8 +78,11 @@ pub struct Mapping {
     pub destination: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Deployment {
+    /// The instances' host name: alone for one instance, `<hostname>-<n>`
+    /// for several; the manifest `id` when not declared.
+    pub hostname: String,
     pub instances: u32,
     pub placement: Placement,
     pub state_model: StateModel,
@@ -386,7 +389,7 @@ pub fn parse(text: &str) -> Result<Checked, String> {
     let image = field(top, "image").and_then(|value| image_of(&mut check, value));
     let runtime = field(top, "runtime").and_then(|value| runtime_of(&mut check, value));
     let persistence = field(top, "persistence").and_then(|value| persistence_of(&mut check, value));
-    let deployment = field(top, "deployment").and_then(|value| deployment_of(&mut check, value));
+    let deployment = field(top, "deployment").and_then(|value| deployment_of(&mut check, value, id.as_deref()));
     let pangolin = field(top, "exposure").and_then(|value| exposure_of(&mut check, value, runtime.as_ref()));
     if let (Some(deployment), Some(persistence)) = (&deployment, &persistence) {
         let path = vec!["deployment".to_owned(), "state_model".to_owned()];
@@ -652,9 +655,20 @@ fn persistence_of(check: &mut Check, value: &Yaml) -> Option<Option<Persistence>
     }))
 }
 
-fn deployment_of(check: &mut Check, value: &Yaml) -> Option<Deployment> {
+fn deployment_of(check: &mut Check, value: &Yaml, id: Option<&str>) -> Option<Deployment> {
     let path = vec!["deployment".to_owned()];
-    let fields = check.mapping(value, &path, &["instances", "placement", "state_model"])?;
+    let fields = check.mapping(value, &path, &["hostname", "instances", "placement", "state_model"])?;
+    let hostname = match field(fields, "hostname") {
+        None => id.map(str::to_owned),
+        Some(value) => match check.string(value, &at(&path, "hostname")) {
+            Some(name) if valid_subdomain(&name) => Some(name),
+            Some(_) => {
+                check.fail(&at(&path, "hostname"), "expected a DNS label: a-z, 0-9 and inner -");
+                None
+            }
+            None => None,
+        },
+    };
     let instances = check
         .required(fields, &path, "instances")
         .and_then(|value| check.integer(value, &at(&path, "instances"), 1..=16));
@@ -678,6 +692,7 @@ fn deployment_of(check: &mut Check, value: &Yaml) -> Option<Deployment> {
         )
     });
     Some(Deployment {
+        hostname: hostname?,
         instances: u32::try_from(instances?).ok()?,
         placement: placement?,
         state_model: state_model?,

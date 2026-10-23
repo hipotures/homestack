@@ -297,19 +297,39 @@ impl Clock {
 }
 
 /// Every server's answer to `/v1/config/version`: the URL and why it did
-/// not answer or has no configuration yet.
+/// not answer, has no configuration yet, or holds another configuration
+/// than the others (a client switching to it would get other behaviour).
 async fn health(client: &Client) -> Vec<(String, Option<String>)> {
     let urls: Vec<String> = client.urls().map(ToString::to_string).collect();
-    let mut servers = Vec::new();
+    let mut answers = Vec::new();
     for (index, url) in urls.into_iter().enumerate() {
-        let error = match client.config_version_on(index).await {
-            Ok(Some(_)) => None,
-            Ok(None) => Some("The server has no configuration yet; upload one with PUT /v1/config.".to_owned()),
-            Err(error) => Some(client_error(error).0),
-        };
-        servers.push((url, error));
+        answers.push((url, client.config_version_on(index).await));
     }
-    servers
+    // The version most servers hold is the expected one.
+    let held: Vec<&String> = answers
+        .iter()
+        .filter_map(|(_, answer)| answer.as_ref().ok().and_then(Option::as_ref))
+        .collect();
+    let common = held
+        .iter()
+        .max_by_key(|version| held.iter().filter(|other| other == version).count())
+        .map(|version| (*version).clone());
+    answers
+        .into_iter()
+        .map(|(url, answer)| {
+            let error = match answer {
+                Ok(Some(version)) if common.as_ref().is_none_or(|common| *common == version) => None,
+                Ok(Some(version)) => Some(format!(
+                    "This server holds configuration {}, the others {}; send the same server.toml to every server.",
+                    &version[..12.min(version.len())],
+                    common.as_deref().map_or("", |common| &common[..12.min(common.len())])
+                )),
+                Ok(None) => Some("The server has no configuration yet; upload one with PUT /v1/config.".to_owned()),
+                Err(error) => Some(client_error(error).0),
+            };
+            (url, error)
+        })
+        .collect()
 }
 
 /// Read the status and the servers' health once; nothing is told once

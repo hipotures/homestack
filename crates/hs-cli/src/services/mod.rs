@@ -3,6 +3,7 @@
 //! containers in Proxmox, which alone record what HomeStack deployed.
 
 pub mod deploy;
+pub mod dns;
 pub mod github;
 pub mod instance;
 pub mod lifecycle;

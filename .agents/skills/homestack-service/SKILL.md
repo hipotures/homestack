@@ -97,7 +97,9 @@ Logs go to stdout/stderr unless there is a real reason to keep them.
 ## Instances and placement
 
 `deployment.instances` is how many production instances one deployment
-creates, named `<id>-1`, `<id>-2`, … . `deployment.placement` says how they
+creates. `deployment.hostname` names them: `<hostname>` for one instance,
+`<hostname>-1`, `<hostname>-2`, … for several; clients reach them by that name
+in the local DNS, never by address. `deployment.placement` says how they
 are spread over the Proxmox cluster:
 
 - `spread`: one instance per node. On a cluster with fewer nodes than
