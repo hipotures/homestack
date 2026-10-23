@@ -1940,9 +1940,7 @@ fn draw_settings(buf: &mut Buffer, area: Rect, app: &App, section: usize, themes
         // The focus belongs to the sections or the active section's list.
         let (line, style) = unfocused_item(palette, name, row == section, sections_focused);
         write(buf, inner.x + 1, y, SECTIONS - 1, &line, style);
-        if themes.is_none() {
-            super::chrome::register(Rect::new(inner.x, y, SECTIONS, 1), super::chrome::Hit::Item(row));
-        }
+        super::chrome::register(Rect::new(inner.x, y, SECTIONS, 1), super::chrome::Hit::Item(row));
     }
     let x = divider + 3;
     let width = inner.right().saturating_sub(x + 1);

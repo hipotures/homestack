@@ -1833,38 +1833,37 @@ impl App {
                         return press(self, KeyCode::Enter);
                     }
                     Some(Hit::Item(item)) => {
-                        match &mut self.overlay {
-                            Some(Overlay::Menu { index }) => *index = item,
-                            // A section of the settings is chosen; General, Appearance,
-                            // Machines and System open at once on their choices.
+                        match self.overlay.take() {
+                            Some(Overlay::Menu { .. }) => {
+                                self.overlay = Some(Overlay::Menu { index: item });
+                                return press(self, KeyCode::Enter);
+                            }
+                            // A section of the settings is chosen from wherever the
+                            // settings are; its choices are clicked in turn. A theme
+                            // being previewed is given up, as with Esc.
                             Some(
-                                Overlay::Integrations { .. }
+                                overlay @ (Overlay::Settings { .. }
+                                | Overlay::Integrations { .. }
                                 | Overlay::Columns { .. }
                                 | Overlay::Parallel { .. }
                                 | Overlay::System { .. }
                                 | Overlay::General { .. }
-                                | Overlay::Sort { .. },
+                                | Overlay::Sort { .. }
+                                | Overlay::Themes { .. }),
                             ) => {
+                                if let Overlay::Themes { previous, .. } = overlay {
+                                    self.palette = *previous;
+                                }
                                 self.overlay = Some(Overlay::Settings {
                                     section: item.min(SETTINGS.len() - 1),
                                 });
                                 return None;
                             }
-                            Some(Overlay::Settings { section }) => {
-                                *section = item.min(SETTINGS.len() - 1);
-                                return if [GENERAL, APPEARANCE, MACHINES, SYSTEM].contains(section) {
-                                    press(self, KeyCode::Enter)
-                                } else {
-                                    None
-                                };
+                            other => {
+                                self.overlay = other;
+                                return None;
                             }
-                            Some(Overlay::Themes { index, .. }) => *index = item,
-                            _ => return None,
                         }
-                        if matches!(self.overlay, Some(Overlay::Themes { .. })) {
-                            self.preview(item);
-                        }
-                        return press(self, KeyCode::Enter);
                     }
                     None => {}
                 }
