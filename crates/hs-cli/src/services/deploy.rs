@@ -449,14 +449,78 @@ async fn free(pve: &impl Pve, ctid: u32) -> Result<bool, String> {
     }
 }
 
+/// Configured static IPv4 addresses, including stopped guests and both current
+/// and pending network settings visible to the token. This cannot discover
+/// DHCP leases, in-guest-only addresses or devices outside Proxmox.
+/// An unreadable guest must not look unallocated.
+async fn addresses(pve: &impl Pve) -> Result<BTreeSet<(Ipv4Addr, u32)>, String> {
+    let resources = pve
+        .get("/cluster/resources", &[("type", "vm")])
+        .await
+        .map_err(|error| format!("Cannot check allocated IP addresses: {error}"))?;
+    let guests = resources
+        .as_array()
+        .ok_or("Cannot read the guest inventory to check IP addresses")?;
+    let mut used = BTreeSet::new();
+    for guest in guests {
+        let kind = guest["type"].as_str().ok_or("Guest inventory is missing its type")?;
+        let prefix = match kind {
+            "lxc" => "net",
+            "qemu" => "ipconfig",
+            _ => return Err(format!("Cannot check IP addresses of guest type {kind}")),
+        };
+        let id = guest["vmid"]
+            .as_u64()
+            .and_then(|id| u32::try_from(id).ok())
+            .ok_or("Guest inventory is missing its VMID")?;
+        let node = guest["node"].as_str().ok_or("Guest inventory is missing its node")?;
+        let settings = pve
+            .get(&format!("/nodes/{node}/{kind}/{id}/pending"), &[])
+            .await
+            .map_err(|error| format!("Guest {id} on {node}: cannot check allocated IP addresses: {error}"))?;
+        let settings = settings
+            .as_array()
+            .ok_or_else(|| format!("Guest {id} on {node}: invalid pending configuration"))?;
+        for setting in settings {
+            if !setting["key"].as_str().is_some_and(|key| {
+                key.strip_prefix(prefix)
+                    .is_some_and(|slot| !slot.is_empty() && slot.bytes().all(|b| b.is_ascii_digit()))
+            }) {
+                continue;
+            }
+            for value in ["value", "pending"].into_iter().filter_map(|key| setting[key].as_str()) {
+                for ip in value.split(',').filter_map(|field| field.strip_prefix("ip=")) {
+                    if let Ok(ip) = ip.split('/').next().unwrap_or_default().parse::<Ipv4Addr>() {
+                        used.insert((ip, id));
+                    }
+                }
+            }
+        }
+    }
+    Ok(used)
+}
+
+fn check_address(used: &BTreeSet<(Ipv4Addr, u32)>, ip: Ipv4Addr, ctid: u32) -> Result<(), String> {
+    if let Some((_, owner)) = used.iter().find(|(address, owner)| *address == ip && *owner != ctid) {
+        return Err(format!(
+            "CT {ctid}: IP {ip} is already configured on guest {owner}; choose another CTID"
+        ));
+    }
+    Ok(())
+}
+
 /// Free CTIDs in the current service's address block, or the gateway's
-/// block for a new service. Every candidate must belong to the network.
+/// block for a new service. Both the CTID and its derived IP must be free.
 pub async fn automatic(
     config: &DeployConfig,
     pve: &impl Pve,
     instances: &[super::instance::Instance],
     count: usize,
 ) -> Result<Vec<u32>, String> {
+    if count == 0 {
+        return Ok(Vec::new());
+    }
+    let used = addresses(pve).await?;
     let first = instances
         .iter()
         .map(|instance| instance.ctid)
@@ -470,12 +534,15 @@ pub async fn automatic(
         if found.len() == count {
             break;
         }
-        if address(config, ctid).is_some_and(|ip| ip != config.gateway) && free(pve, ctid).await? {
+        if address(config, ctid)
+            .is_some_and(|ip| ip != config.gateway && !used.iter().any(|(address, _)| *address == ip))
+            && free(pve, ctid).await?
+        {
             found.push(ctid);
         }
     }
     if found.len() < count {
-        return Err(format!("No free CTID from {first}; give them in CTID"));
+        return Err(format!("No free CTID with an unallocated IP from {first}"));
     }
     Ok(found)
 }
@@ -675,6 +742,13 @@ pub async fn plan(
             BTreeSet::new()
         }
     };
+    let allocated = match addresses(pve).await {
+        Ok(allocated) => allocated,
+        Err(error) => {
+            problems.push(error);
+            return plan;
+        }
+    };
     let gib = 1024 * 1024 * 1024;
     // What the planned instances take of each storage.
     let mut used: std::collections::BTreeMap<(String, String), u64> = std::collections::BTreeMap::new();
@@ -701,6 +775,14 @@ pub async fn plan(
             ));
             continue;
         };
+        if ip == config.gateway {
+            problems.push(format!("CT {ctid}: IP {ip} is the gateway; choose another CTID"));
+            continue;
+        }
+        if let Err(error) = check_address(&allocated, ip, ctid) {
+            problems.push(error);
+            continue;
+        }
         if !cluster.templates.contains(node) {
             problems.push(format!(
                 "{node}: the image storage {} is not there",
@@ -1188,6 +1270,14 @@ async fn run(
     if !plan.problems.is_empty() || plan.instances.is_empty() {
         return Err("The plan has problems; review it again".to_owned());
     }
+    let allocated = addresses(pve).await?;
+    for instance in &plan.instances {
+        check_address(
+            &allocated,
+            instance.address.parse().map_err(|_| "Invalid planned IP address")?,
+            instance.ctid,
+        )?;
+    }
     let resolved = plan.resolved.as_ref().ok_or("The release was not resolved")?;
     let version = plan
         .image
@@ -1307,10 +1397,17 @@ async fn run(
                 )
             }),
         };
+        if !existing && !free(pve, ctid).await? {
+            return Err(format!("CT {ctid} was taken after review; nothing was made"));
+        }
+        // Image pulls and operator review may take time. Re-read allocation
+        // before creating a guest or resuming its initialization/start.
+        check_address(
+            &addresses(pve).await?,
+            instance.address.parse().map_err(|_| "Invalid planned IP address")?,
+            ctid,
+        )?;
         if !existing {
-            if !free(pve, ctid).await? {
-                return Err(format!("CT {ctid} was taken after review; nothing was made"));
-            }
             node::create(pve, &spec, &|line| say(line)).await?;
         }
         let current = pve
