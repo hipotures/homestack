@@ -19,14 +19,25 @@ pub fn restarts(plan: &Plan) -> bool {
     !plan.remove && (!plan.set.is_empty() || !plan.unset.is_empty())
 }
 
-/// The entries the environment setting shows: neither `PATH` nor anything
-/// named like a secret.
+/// Editable environment entries, excluding secrets and API bootstrap settings.
 #[must_use]
-pub fn shown_environment(instance: &Instance) -> String {
+pub fn shown_environment(source: &Source, instance: &Instance) -> String {
     instance
         .environment
         .iter()
         .filter(|(key, _)| key != "PATH" && !deploy::secret_name(key))
+        .filter(|(key, _)| {
+            !source.is_api()
+                || !matches!(
+                    key.as_str(),
+                    "HOMESTACK_INSTANCE"
+                        | "HOMESTACK_PVE_ENDPOINTS"
+                        | "HOMESTACK_PVE_POOL"
+                        | "HOMESTACK_PVE_GOLD_POOL"
+                        | "HOMESTACK_MANAGED_HOME"
+                        | "HOMESTACK_TLS_CERT_B64"
+                )
+        })
         .map(|(key, value)| format!("{key}={value}"))
         .collect::<Vec<_>>()
         .join(" ")

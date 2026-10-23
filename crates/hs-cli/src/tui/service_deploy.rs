@@ -267,7 +267,10 @@ fn connect(
     } else {
         (None, None)
     };
-    let shown = instances.first().map(lifecycle::shown_environment).unwrap_or_default();
+    let shown = instances
+        .first()
+        .map(|instance| lifecycle::shown_environment(source, instance))
+        .unwrap_or_default();
     let dns = Dns::load(&setup.token_dir);
     let local = dns.as_ref().ok().and_then(Option::as_ref);
     let first = instances.first();
@@ -289,7 +292,7 @@ fn connect(
     // The CTIDs an empty New CTIDs gives, one per node at most.
     let automatic = setup
         .handle
-        .block_on(deploy::automatic(&config, &pve, cluster.nodes.len()))
+        .block_on(deploy::automatic(&config, &pve, &instances, cluster.nodes.len()))
         .unwrap_or_default();
     let mut settings = settings(source, &cluster, &instances, &automatic, &naming, &shown, setup.offset);
     settings.extend(service_pangolin::settings(source, catalog.as_ref()));

@@ -449,21 +449,28 @@ async fn free(pve: &impl Pve, ctid: u32) -> Result<bool, String> {
     }
 }
 
-/// `count` free CTIDs from the start of the API servers' block (102001
-/// for servers at 102001-102003), each with an address in the network.
-pub async fn automatic(config: &DeployConfig, pve: &impl Pve, count: usize) -> Result<Vec<u32>, String> {
-    let first = config
-        .instances
+/// Free CTIDs in the current service's address block, or the gateway's
+/// block for a new service. Every candidate must belong to the network.
+pub async fn automatic(
+    config: &DeployConfig,
+    pve: &impl Pve,
+    instances: &[super::instance::Instance],
+    count: usize,
+) -> Result<Vec<u32>, String> {
+    let first = instances
         .iter()
         .map(|instance| instance.ctid)
         .min()
-        .map_or(1001, |ctid| ctid / 1000 * 1000 + 1);
+        .unwrap_or_else(|| hs_model::address::vmid_of(config.gateway))
+        / 1000
+        * 1000
+        + 1;
     let mut found = Vec::new();
     for ctid in first..first + 999 {
         if found.len() == count {
             break;
         }
-        if address(config, ctid).is_some() && free(pve, ctid).await? {
+        if address(config, ctid).is_some_and(|ip| ip != config.gateway) && free(pve, ctid).await? {
             found.push(ctid);
         }
     }
@@ -632,9 +639,19 @@ pub async fn plan(
         .map(str::to_owned)
         .collect();
     if ctids.is_empty() {
-        match automatic(config, pve, placements.len()).await {
+        let instances = match super::instance::of_service(pve, &source.repository, &manifest.id).await {
+            Ok(instances) => instances,
+            Err(error) => {
+                problems.push(error);
+                return plan;
+            }
+        };
+        match automatic(config, pve, &instances, placements.len()).await {
             Ok(found) => ctids = found.iter().map(u32::to_string).collect(),
-            Err(error) => problems.push(error),
+            Err(error) => {
+                problems.push(error);
+                return plan;
+            }
         }
     }
     if ctids.len() != placements.len() {
