@@ -1134,7 +1134,10 @@ fn workspaces(buf: &mut Buffer, area: Rect, app: &App, mut controls: Vec<Control
                 y,
                 "⭐",
                 2,
-                style.fg(palette.warning),
+                style
+                    .fg(palette.warning)
+                    .remove_modifier(Modifier::BOLD)
+                    .add_modifier(Modifier::DIM),
             );
         }
         // Little free space in the cluster panel's colours: yellow from 75 %

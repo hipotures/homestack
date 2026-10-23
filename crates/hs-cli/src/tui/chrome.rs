@@ -258,7 +258,10 @@ fn draw_control(
         let chosen = if in_key {
             key_style
         } else if c == '⭐' {
-            style.fg(palette.warning)
+            style
+                .fg(palette.warning)
+                .remove_modifier(Modifier::BOLD)
+                .add_modifier(Modifier::DIM)
         } else {
             style
         };
