@@ -64,8 +64,8 @@ read and does not depend on the API server's hourly image cache. The panel borde
 shows `API ↑N` when N containers have an update, or `API ?` when the check cannot
 be completed; the log gives details. Checking never starts a deployment.
 
-An installed profile opens its normal status view. Menu **Reinstall HomeStack**
-opens the full installation form with its saved settings. Menu **Update API
+An installed profile opens its normal status view. Settings › General › **Reinstall
+HomeStack** opens the full installation form with its saved settings. Menu **Update API
 containers** uses the instances, credentials and network in `deploy.toml`,
 asks for an image and confirmation, and updates the containers without root
 access or repeating Proxmox account, role and pool installation. This action

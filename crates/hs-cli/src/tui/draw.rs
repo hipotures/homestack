@@ -1996,6 +1996,12 @@ fn draw_settings(buf: &mut Buffer, area: Rect, app: &App, section: usize, themes
                     lines.push(vec![(" ".repeat(17), text), (item, style)]);
                 }
             }
+            lines.push(Vec::new());
+            let (item, style) = unfocused_item(palette, "Reinstall HomeStack", selected == Some(2), selected.is_some());
+            lines.push(vec![(item, style)]);
+            lines.push(Vec::new());
+            let (item, style) = unfocused_item(palette, "Uninstall HomeStack", selected == Some(3), selected.is_some());
+            lines.push(vec![(item, style.fg(palette.error))]);
         }
         (MACHINES, _) => {}
         (SYSTEM, _) => {
@@ -2103,7 +2109,7 @@ fn draw_settings(buf: &mut Buffer, area: Rect, app: &App, section: usize, themes
         for level in 0..2 {
             let y = y + u16::try_from(level).unwrap_or(0);
             if y < inner.bottom() {
-                super::chrome::register(Rect::new(x, y, width, 1), super::chrome::Hit::SortOption(level));
+                super::chrome::register(Rect::new(x, y, width, 1), super::chrome::Hit::GeneralOption(level));
             }
         }
         if sorting.is_some() {
@@ -2112,6 +2118,15 @@ fn draw_settings(buf: &mut Buffer, area: Rect, app: &App, section: usize, themes
                 if y < inner.bottom() {
                     super::chrome::register(Rect::new(x, y, width, 1), super::chrome::Hit::SortKey(at));
                 }
+            }
+        }
+        // Reinstall and Uninstall, each after a blank line, under the sort
+        // rows and an open list.
+        let open = if sorting.is_some() { SORT_KEYS.len() } else { 0 };
+        for (option, gap) in [(2, 3), (3, 5)] {
+            let y = y + gap + u16::try_from(open).unwrap_or(0);
+            if y < inner.bottom() {
+                super::chrome::register(Rect::new(x, y, width, 1), super::chrome::Hit::GeneralOption(option));
             }
         }
     }

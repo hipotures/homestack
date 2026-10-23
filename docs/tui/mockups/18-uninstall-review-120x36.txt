@@ -1,4 +1,4 @@
-18  Menu › Uninstall: the install screen in uninstall mode, review (120 x 36)
+18  Settings › General › Uninstall HomeStack: the install screen in uninstall mode, review (120 x 36)
     Same screen and steps as the install: access › check › review › remove.
     Root on one node is needed again. It never removes a VM, a container or a
     volume, and says so. Focus starts on cancel.

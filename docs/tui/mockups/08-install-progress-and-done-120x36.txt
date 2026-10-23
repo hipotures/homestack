@@ -2,7 +2,7 @@
     Running: ✓ done, ◐ running (animated), · waiting; the overall bar sits in a
     small box inside the panel. Esc asks before it stops.
     Done (second frame): ↵ opens the main screen; the install screen is gone
-    and comes back only through Menu › Reconfigure or Menu › Uninstall.
+    and comes back only through Settings › General › Reinstall HomeStack or Uninstall HomeStack.
 
 ╭─ HomeStack install ─ ✓access ─ ✓check ─ ✓settings ─ ✓review ─┌install┐ ──────────────── ssh root@pve2.lan · PVE 9.2 ─╮
 │                                                                                                                      │

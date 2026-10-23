@@ -114,11 +114,9 @@ pub const VIEWS: [(&str, Shown); 5] = [
 ];
 
 /// The items of the menu, in order.
-pub const MENU: [&str; 9] = [
+pub const MENU: [&str; 7] = [
     "Check the servers",
     "Check this desktop",
-    "Reinstall HomeStack",
-    "Uninstall",
     "Settings",
     "Help: every key",
     "Set up this desktop (backup)",
@@ -1692,7 +1690,7 @@ impl App {
                         self.overlay = Some(Overlay::System { index });
                         return press(self, KeyCode::Enter);
                     }
-                    Some(Hit::SortOption(level)) => {
+                    Some(Hit::GeneralOption(level)) => {
                         self.overlay = Some(Overlay::General { index: level });
                         return press(self, KeyCode::Enter);
                     }
@@ -2373,18 +2371,10 @@ impl App {
                         });
                         return Some(Request::Discover);
                     }
-                    2 | 3 => {
-                        let mode = if index == 2 {
-                            super::install::Mode::Install
-                        } else {
-                            super::install::Mode::Uninstall
-                        };
-                        return self.open_install(mode, false);
-                    }
-                    4 => self.overlay = Some(Overlay::Settings { section: 0 }),
-                    5 => self.overlay = Some(Overlay::Help),
-                    6 => return self.open_desktop_setup(false),
-                    7 => return Some(Request::UpdateApi),
+                    2 => self.overlay = Some(Overlay::Settings { section: 0 }),
+                    3 => self.overlay = Some(Overlay::Help),
+                    4 => return self.open_desktop_setup(false),
+                    5 => return Some(Request::UpdateApi),
                     _ => return Some(Request::Quit),
                 },
                 KeyCode::Char('q') => return Some(Request::Quit),
@@ -2421,7 +2411,7 @@ impl App {
                 KeyCode::Enter | KeyCode::Right if section == INTEGRATIONS => {
                     self.overlay = Some(Overlay::Integrations { index: 0 });
                 }
-                KeyCode::Esc => self.overlay = Some(Overlay::Menu { index: 4 }),
+                KeyCode::Esc => self.overlay = Some(Overlay::Menu { index: 2 }),
                 _ => self.overlay = Some(Overlay::Settings { section }),
             },
             Overlay::Integration(_) | Overlay::Pangolin(_) => self.overlay = Some(overlay),
@@ -2451,10 +2441,14 @@ impl App {
                 }
                 self.overlay = Some(Overlay::System { index });
             }
+            // The two sort levels, Reinstall, then Uninstall.
             Overlay::General { mut index } => {
                 match code {
-                    KeyCode::Down | KeyCode::Up | KeyCode::Tab => index = 1 - index,
-                    KeyCode::Enter | KeyCode::Right | KeyCode::Char(' ') => {
+                    KeyCode::Down | KeyCode::Tab => index = (index + 1) % 4,
+                    KeyCode::Up => index = (index + 3) % 4,
+                    KeyCode::Enter if index == 2 => return self.open_install(super::install::Mode::Install, false),
+                    KeyCode::Enter if index == 3 => return self.open_install(super::install::Mode::Uninstall, false),
+                    KeyCode::Enter | KeyCode::Right | KeyCode::Char(' ') if index < 2 => {
                         self.overlay = Some(Overlay::Sort {
                             level: index,
                             index: self.sort[index],

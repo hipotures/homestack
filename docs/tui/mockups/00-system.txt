@@ -61,7 +61,7 @@ splits the panel top and bottom instead (09b, 12).
 
 A. Install screen (02–08; 18 is the uninstall)
    It opens by itself when there is no client.toml. Later it opens only
-   from Menu › Reconfigure or Menu › Uninstall.
+   from Settings › General › Reinstall HomeStack or Uninstall HomeStack.
    The steps are in the top border, the current one raised:
        ✓access ─ ✓check ─┌settings┐─ review ─ install
    The buttons of the step are in the bottom border.
@@ -180,7 +180,7 @@ The only boxes over the screen are for things that stop everything:
   homestack                  opens the TUI
   homestack --help           the help, as today
   install                    install screen (02–08)
-  uninstall                  Menu › Uninstall (18)
+  uninstall                  Settings › General › Uninstall HomeStack (18)
   discover                   Menu › Check this desktop (25)
   transport                  Menu › Check the servers (26)
   status                     main screen (09–11)
