@@ -2,7 +2,7 @@
 
 This reference is part of the canonical `homestack-service` skill. Read it
 **before** choosing a Containerfile and before recording resource sizes in a
-future schema-2 manifest. The app author is responsible for actually
+schema-2 `.homestack/<id>.yaml` manifest. The app author is responsible for actually
 building and executing the final image, not merely producing valid YAML.
 
 ## 1. Establish the real runtime and propose an image base
@@ -151,7 +151,7 @@ observed workload and the owner's preference, but emit exactly one
 chosen size per resource. There is no schema-level minimum/recommended
 pair. Future operational measurements can justify resizing later.
 
-Do not use example values from the schema draft as evidence of a
+Do not use example values from the schema-2 contract as evidence of a
 real application's requirements.
 
 ## 6. Publish and hand off
