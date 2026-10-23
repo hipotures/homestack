@@ -30,6 +30,7 @@ use crate::services::{lifecycle, update};
 // for a service with persistence.
 const INSTANCES: &str = "Instances";
 const VERSION: &str = "Version";
+const REINSTALL: &str = "Reinstall image";
 const NODES: &str = "Nodes";
 const CTIDS: &str = "New CTIDs";
 const CORES: &str = "Cores";
@@ -106,6 +107,7 @@ type Review = (Vec<(String, Vec<String>)>, Vec<String>, Reviewed);
 /// What the operator left in the settings.
 struct Chosen {
     selected: Vec<u32>,
+    reinstall: bool,
     deploy: deploy::Choice,
 }
 
@@ -438,8 +440,7 @@ fn settings(
     let mut version_setting = setting(
         VERSION,
         "A published release of the image, newest first; dev images are never offered. Ticked instances \
-         are made again from it, including the same version, with existing persistent volumes kept. \
-         Size or environment changes at the current version are applied without reinstalling.",
+         are updated only when you change this version or enable Reinstall image. Existing persistent volumes are kept.",
         releases,
         false,
         None,
@@ -481,8 +482,18 @@ fn settings(
             None,
         ));
     }
+    settings.push(version_setting);
+    if !instances.is_empty() {
+        settings.push(setting(
+            REINSTALL,
+            "Explicitly replace the selected instances' root disks, including the same image version. \
+             Existing persistent volumes are kept. Disabled by default.",
+            vec![("enabled".to_owned(), "replace selected root disks".to_owned())],
+            true,
+            None,
+        ));
+    }
     settings.extend([
-        version_setting,
         nodes,
         checked(
             setting(
@@ -751,6 +762,7 @@ fn chosen(settings: &[Setting], answers: &[Answer], existing: usize) -> Chosen {
     };
     Chosen {
         selected: picked(INSTANCES).iter().filter_map(|id| id.parse().ok()).collect(),
+        reinstall: !picked(REINSTALL).is_empty(),
         deploy: deploy::Choice {
             version: picked(VERSION).into_iter().next().unwrap_or_default(),
             // `NODE:STORAGE` in the list's order (by node), as the CTIDs are given.
@@ -844,10 +856,16 @@ fn review(setup: &Setup, source: &Source, s: &mut Session, answers: &[Answer]) -
                     .push("Restarting a Site requires the verified Pangolin context".to_owned()),
             }
         }
-        let reinstall = plan.lines.is_empty() && !attach_requested && chosen.deploy.placements.is_empty();
+        let original_version = s
+            .original_settings
+            .iter()
+            .find(|setting| setting.title == VERSION)
+            .map(Setting::value)
+            .unwrap_or_default();
+        let replace_image = chosen.reinstall || chosen.deploy.version != original_version;
         let image_targets: Vec<u32> = targets
             .iter()
-            .filter(|i| reinstall || tag(&i.image) != chosen.deploy.version)
+            .filter(|i| replace_image && (chosen.reinstall || tag(&i.image) != chosen.deploy.version))
             .map(|i| i.ctid)
             .collect();
         if !image_targets.is_empty() {

@@ -275,6 +275,13 @@ pub async fn plan(
         plan.problems.push(error);
     }
     for target in &plan.targets {
+        let (was_running, was_onboot) = match original_power(target) {
+            Ok(state) => state,
+            Err(error) => {
+                plan.problems.push(error);
+                continue;
+            }
+        };
         let current = target.image.rsplit_once(':').map_or("unknown", |(_, v)| v);
         let state = if target.running { "running" } else { "stopped" };
         plan.lines.extend([
@@ -306,12 +313,12 @@ pub async fn plan(
             format!("  Name/pool  {} · {}", target.hostname, target.pool),
             format!(
                 "  State      {state} → {} · autostart {}",
-                if target.running || target.onboot {
+                if was_running || was_onboot {
                     "running"
                 } else {
                     "stopped"
                 },
-                if target.onboot { "on" } else { "off" }
+                if was_onboot { "on" } else { "off" }
             ),
             String::new(),
         ]);
@@ -481,6 +488,62 @@ pub async fn apply(
 /// Distinguish a reviewed reinstall from a root already made by that operation.
 /// The temporary holder carries the operation through interrupted replacement.
 const REPLACEMENT_OPERATION: &str = "replacement-operation ";
+const REPLACEMENT_RUNNING: &str = "replacement-running ";
+const REPLACEMENT_ONBOOT: &str = "replacement-onboot ";
+
+/// Intended power settings survive a stopped replacement and a process restart.
+fn original_power(target: &Instance) -> Result<(bool, bool), String> {
+    let flag = |prefix: &str, current: bool| match target.description.lines().find_map(|line| line.strip_prefix(prefix))
+    {
+        None => Ok(current),
+        Some("0") => Ok(false),
+        Some("1") => Ok(true),
+        Some(_) => Err(format!("CT {}: invalid replacement power metadata", target.ctid)),
+    };
+    Ok((
+        flag(REPLACEMENT_RUNNING, target.running)?,
+        flag(REPLACEMENT_ONBOOT, target.onboot)?,
+    ))
+}
+
+/// PVE can reorder mount options and report the allocated size after moving a
+/// volume. Verify the mount settings and refuse a smaller persistent home.
+fn same_home(new: &Instance, target: &Instance) -> bool {
+    let options = |mount: &str| -> std::collections::BTreeMap<String, String> {
+        mount
+            .split(',')
+            .skip(1)
+            .filter_map(|part| part.split_once('='))
+            .filter(|(key, _)| *key != "size")
+            .map(|(key, value)| (key.to_owned(), value.to_owned()))
+            .collect()
+    };
+    new.home_volume.is_empty() == target.home_volume.is_empty()
+        && new.home_storage == target.home_storage
+        && new.home_mib >= target.home_mib
+        && options(&new.home_mount) == options(&target.home_mount)
+        && (new.home_volume.is_empty() || new.home_volume.contains(&format!("-{}-", target.ctid)))
+}
+
+async fn restore_autostart(pve: &impl Pve, node: &str, ctid: u32, enabled: bool) -> Result<(), String> {
+    let path = format!("/nodes/{node}/lxc/{ctid}/config");
+    let cfg = pve
+        .get(&path, &[])
+        .await
+        .map_err(|e| format!("CT {ctid} config: {e}"))?;
+    if (cfg["onboot"].as_u64() == Some(1)) != enabled {
+        pve.put(
+            &path,
+            &[
+                ("onboot", if enabled { "1" } else { "0" }),
+                ("digest", text(&cfg, "digest")),
+            ],
+        )
+        .await
+        .map_err(|e| format!("CT {ctid} autostart: {e}"))?;
+    }
+    Ok(())
+}
 
 async fn replacement_operation(pve: &impl Pve, node: &str, ctid: u32) -> Result<String, String> {
     let containers = pve
@@ -541,10 +604,13 @@ async fn one(
     if now.mac != target.mac || !node::same_net(&now.network, &target.network) {
         return Err(format!("CT {ctid} changed since review; review again"));
     }
+    let (was_running, was_onboot) = original_power(target)?;
     let operation = replacement_operation(pve, node, ctid).await?;
+    let completed_description = deploy::description(source, &plan.image, &plan.digest);
     let description = format!(
-        "{}\n{REPLACEMENT_OPERATION}{operation}",
-        deploy::description(source, &plan.image, &plan.digest)
+        "{completed_description}\n{REPLACEMENT_OPERATION}{operation}\n{REPLACEMENT_RUNNING}{}\n{REPLACEMENT_ONBOOT}{}",
+        u8::from(was_running),
+        u8::from(was_onboot)
     );
     // Pull the release once per digest; the file is removed after the update.
     let short = plan.digest.trim_start_matches("sha256:").get(..12).unwrap_or_default();
@@ -634,23 +700,37 @@ async fn one(
     )
     .await?;
     let new = instance::read_on(pve, node, ctid).await?;
-    let options = |mount: &str| mount.split_once(',').map(|(_, rest)| rest.to_owned());
-    if new.held
-        || new.description.trim_end() != description.trim_end()
-        || new.hostname != target.hostname
-        || new.mac != target.mac
-        || !node::same_net(&new.network, &target.network)
-        || options(&new.home_mount) != options(&target.home_mount)
-        || (target.home_volume.is_empty() != new.home_volume.is_empty())
-        || (!new.home_volume.is_empty() && !new.home_volume.contains(&format!("-{ctid}-")))
-    {
+    let differences: Vec<&str> = [
+        (new.held, "persistent volumes still in holder"),
+        (
+            new.description.trim_end() != description.trim_end(),
+            "replacement identity",
+        ),
+        (new.hostname != target.hostname, "hostname"),
+        (new.mac != target.mac, "MAC address"),
+        (!node::same_net(&new.network, &target.network), "network configuration"),
+        (
+            !same_home(&new, target),
+            "home storage, mount options, ownership or size",
+        ),
+    ]
+    .into_iter()
+    .filter_map(|(different, field)| different.then_some(field))
+    .collect();
+    if !differences.is_empty() {
         return Err(format!(
-            "CT {ctid}: the new container's home, network or identity differs from the old one"
+            "CT {ctid}: replacement verification failed: {}",
+            differences.join(", ")
         ));
+    }
+    // Once persistent volumes and identity are verified, a health-check failure
+    // must not silently disable the original autostart setting.
+    if bootstrap.is_none() {
+        restore_autostart(pve, node, ctid, was_onboot).await?;
     }
     deploy::set_heartbeat(pve, node, ctid, &source.manifest).await?;
     say(&format!("{node}: CT {ctid} · Start"));
-    let start = target.running || target.onboot;
+    let start = was_running || was_onboot;
     let readiness;
     if let Some(bootstrap) = bootstrap {
         say(&format!("{node}: CT {ctid} · Initialize API"));
@@ -669,22 +749,23 @@ async fn one(
     } else {
         readiness = "Health check skipped: container left stopped".to_owned();
     }
-    // Restore autostart after volume reassignment and API initialization.
-    if new.onboot != target.onboot {
-        let cfg = pve
-            .get(&format!("/nodes/{node}/lxc/{ctid}/config"), &[])
-            .await
-            .map_err(|e| format!("CT {ctid} config: {e}"))?;
-        pve.put(
-            &format!("/nodes/{node}/lxc/{ctid}/config"),
-            &[
-                ("onboot", if target.onboot { "1" } else { "0" }),
-                ("digest", text(&cfg, "digest")),
-            ],
-        )
+    restore_autostart(pve, node, ctid, was_onboot).await?;
+    // Only successful initialization and readiness complete the operation.
+    // Until then its intended power settings remain available for the next run.
+    let path = format!("/nodes/{node}/lxc/{ctid}/config");
+    let cfg = pve
+        .get(&path, &[])
         .await
-        .map_err(|e| format!("CT {ctid} autostart: {e}"))?;
-    }
+        .map_err(|e| format!("CT {ctid} config: {e}"))?;
+    pve.put(
+        &path,
+        &[
+            ("description", completed_description.as_str()),
+            ("digest", text(&cfg, "digest")),
+        ],
+    )
+    .await
+    .map_err(|e| format!("CT {ctid}: cannot complete replacement metadata: {e}"))?;
     node::remove_old_images(pve, node, &plan.template_storage, &format!("hs-{ctid}-"), "", &|line| {
         say(line)
     })
@@ -711,6 +792,61 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    fn instance_with_home(home: &str, description: &str) -> Instance {
+        instance::parse(120, "pve3", "services", &json!({
+            "hostname": "app", "rootfs": "local-lvm:vm-120-disk-0,size=128M",
+            "mp0": home, "onboot": 0,
+                "net0": "name=eth0,bridge=vmbr0,ip=192.0.2.10/24,hwaddr=02:00:00:00:00:10",
+            "description": format!("HomeStack service app\nrepository owner/app\nimage registry/app:1.0.0\ndigest sha256:abc\nmade by homestack\n{description}"),
+        }), false).unwrap()
+    }
+
+    #[test]
+    fn persistent_home_verification_accepts_allocation_rounding_but_rejects_loss() {
+        let original = instance_with_home("local-lvm:vm-120-disk-1,mp=/home/app,backup=1,size=10M", "");
+        let actual = instance_with_home("local-lvm:vm-120-disk-1,size=12M,backup=1,mp=/home/app", "");
+        assert!(same_home(&actual, &original));
+        for mount in [
+            "local-lvm:vm-120-disk-1,mp=/home/app,backup=1,size=8M",
+            "local-lvm:vm-120-disk-1,mp=/other,backup=1,size=12M",
+            "other:vm-120-disk-1,mp=/home/app,backup=1,size=12M",
+            "local-lvm:vm-999-disk-1,mp=/home/app,backup=1,size=12M",
+            "local-lvm:vm-120-disk-1,mp=/home/app,backup=0,size=12M",
+            "",
+        ] {
+            assert!(!same_home(&instance_with_home(mount, ""), &original), "{mount}");
+        }
+        let stateless = instance_with_home("", "");
+        assert!(same_home(&stateless, &stateless));
+        assert!(!same_home(&actual, &stateless));
+    }
+
+    #[test]
+    fn interrupted_replacement_keeps_intended_power_through_holder_recovery() {
+        let pending = instance_with_home("", "replacement-running 1\nreplacement-onboot 1");
+        assert!(!pending.running && !pending.onboot);
+        assert_eq!(original_power(&pending).unwrap(), (true, true));
+        let note = instance::note(&pending);
+        let recovered = instance::parse(
+            recreate::HOLDER_ID,
+            "pve3",
+            "services",
+            &json!({
+                "description": format!("HomeStack holder for CT 120\n{note}"),
+                "rootfs": "local-lvm:vm-999999-disk-0,size=1G",
+            }),
+            false,
+        )
+        .unwrap();
+        assert!(recovered.held);
+        assert_eq!(recovered.ctid, 120);
+        assert_eq!(original_power(&recovered).unwrap(), (true, true));
+        let stopped = instance_with_home("", "replacement-running 0\nreplacement-onboot 0");
+        assert_eq!(original_power(&stopped).unwrap(), (false, false));
+        let invalid = instance_with_home("", "replacement-onboot invalid");
+        assert!(original_power(&invalid).is_err());
+    }
 
     #[test]
     fn permissions_distinguish_presence_from_propagation() {
