@@ -1,6 +1,7 @@
 //! Managed Site initialization for common service deployment
 //! (`services::deploy`): a new connector container gets its own Site, named
-//! after its CTID, with its own credential and journal, through the same
+//! as the container (`pangolin-1`, …), with its own credential and journal
+//! kept per CTID, through the same
 //! Step 5 tunnel, Step 7 organization key and Step 8 credential, recovery
 //! and installation logic. The trusted context is opened here from the saved
 //! Pangolin settings with a tunnel of its own, never borrowed from the
@@ -18,12 +19,6 @@ use crate::tui::pangolin_tunnel::Session as Tunnel;
 /// How long the tunnel may take, a security key's touch included.
 const TUNNEL_LIMIT: Duration = Duration::from_secs(180);
 
-/// A managed instance's Site: unique per CTID, never a legacy `pangolin-<node>`.
-#[must_use]
-pub fn site_name(ctid: u32) -> String {
-    format!("homestack-site-{ctid}")
-}
-
 impl Context {
     /// A managed instance's credential; its journal and lock sit next to it.
     fn managed_key(&self, ctid: u32) -> PathBuf {
@@ -34,11 +29,7 @@ impl Context {
 
 /// The journal belongs to this server, organization and container.
 fn owned(ctx: &Context, record: &SiteRecord, ctid: u32) -> Result<(), String> {
-    if record.target != ctx.target
-        || record.organization != ctx.organization
-        || record.site != site_name(ctid)
-        || record.ctid != Some(ctid)
-    {
+    if record.target != ctx.target || record.organization != ctx.organization || record.ctid != Some(ctid) {
         return Err(format!(
             "The Site journal of CT {ctid} belongs to another server, organization or container; nothing is changed"
         ));
@@ -46,19 +37,19 @@ fn owned(ctx: &Context, record: &SiteRecord, ctid: u32) -> Result<(), String> {
     Ok(())
 }
 
-/// The Site step for CT `ctid` from its journal, its saved credential and
-/// Pangolin's own Site of that name. `home` is the home volume of an existing
+/// The step for Site `nice` of CT `ctid` from its journal, its saved credential
+/// and Pangolin's own Site of that name. `home` is the home volume of an existing
 /// container; without one, anything saved for this CTID is an earlier
 /// instance's and is refused rather than adopted.
 fn reconcile(
     ctx: &Context,
     key: &Credential,
     ctid: u32,
+    nice: &str,
     home: Option<&str>,
     record: Option<&SiteRecord>,
     credential: Option<&Credential>,
 ) -> Result<SiteStep, String> {
-    let nice = site_name(ctid);
     if home.is_none() && (record.is_some() || credential.is_some()) {
         return Err(format!(
             "A Site journal or credential for CT {ctid} remains from an earlier instance; nothing is changed. \
@@ -67,6 +58,12 @@ fn reconcile(
     }
     if let Some(record) = record {
         owned(ctx, record, ctid)?;
+        if record.site != nice {
+            return Err(format!(
+                "CT {ctid} is now named {nice}, but its Site is {}; nothing is changed",
+                record.site
+            ));
+        }
         if record.home.as_deref() != home {
             return Err(format!(
                 "CT {ctid}: its home differs from the one its Site journal recorded; recovery refused"
@@ -76,7 +73,7 @@ fn reconcile(
             return Err("The saved Site credential does not match its journal; nothing is changed".to_owned());
         }
     }
-    let remote = site(&ctx.endpoint, key, &ctx.organization, &nice)?;
+    let remote = site(&ctx.endpoint, key, &ctx.organization, nice)?;
     if let (Some(record), Some((id, _))) = (record, &remote)
         && record.site_id.is_some_and(|saved| saved != *id)
     {
@@ -84,7 +81,7 @@ fn reconcile(
             "Site {nice} has another ID than its journal records; nothing is changed"
         ));
     }
-    site_step(record, remote.as_ref(), credential.and_then(|c| c.key_id().ok()), &nice)
+    site_step(record, remote.as_ref(), credential.and_then(|c| c.key_id().ok()), nice)
 }
 
 /// The verified Step 5 tunnel to the saved Pangolin server and its Step 7
@@ -169,13 +166,13 @@ impl Pangolin {
     /// The completed Site of `ctid`: its journal, saved credential and
     /// Pangolin's own Site agree. Its name and ID.
     fn completed(&self, key: &Credential, ctid: u32) -> Result<(String, u64), String> {
-        let nice = site_name(ctid);
         let path = self.ctx.managed_key(ctid);
         let storage = Storage::open(&path)?;
         let record: SiteRecord = storage
             .load()?
             .ok_or_else(|| format!("CT {ctid} has no managed Site journal on this desktop"))?;
         owned(&self.ctx, &record, ctid)?;
+        let nice = record.site.clone();
         if record.stage != SiteStage::Online {
             return Err(format!(
                 "CT {ctid}: its Site initialization is unfinished; resume the deployment first"
@@ -240,6 +237,83 @@ impl SiteReady for Pangolin {
         let (nice, id) = self.completed(&key, ctid)?;
         self.wait_online(&key, &nice, id, say)
     }
+
+    fn removal(&self, ctid: u32) -> Result<String, String> {
+        let key = self.key()?;
+        let storage = Storage::open(&self.ctx.managed_key(ctid))?;
+        Ok(match self.owned_site(&key, &storage, ctid)? {
+            Some((nice, Some(id))) => format!(
+                "CT {ctid}: Site {nice} (id {id}) is deleted from Pangolin, its credential and journal from this desktop"
+            ),
+            Some((nice, None)) => format!(
+                "CT {ctid}: Site {nice} is not in Pangolin; its credential and journal are deleted from this desktop"
+            ),
+            None => format!("CT {ctid}: no Site journal on this desktop; nothing in Pangolin is changed"),
+        })
+    }
+
+    fn remove(&self, ctid: u32, say: &dyn Fn(&str)) -> Result<String, String> {
+        let key = self.key()?;
+        // Held until the files are gone: no other HomeStack run touches this Site.
+        let storage = Storage::open(&self.ctx.managed_key(ctid))?;
+        let Some((nice, id)) = self.owned_site(&key, &storage, ctid)? else {
+            return Ok(format!("CT {ctid}: no Site journal on this desktop"));
+        };
+        if let Some(id) = id {
+            say(&format!("CT {ctid} · deleting Site {nice} from Pangolin"));
+            let stop = AtomicBool::new(false);
+            let deleted = client(&self.ctx.endpoint, &key, &stop).request(
+                "DELETE",
+                &format!("/v1/site/{id}"),
+                None,
+                Probe::Organization,
+            );
+            if site(&self.ctx.endpoint, &key, &self.ctx.organization, &nice)?.is_some() {
+                return Err(match deleted {
+                    Ok((403, _)) => {
+                        "The HomeStack API key may not delete Sites (deleteSite); refresh Step 7".to_owned()
+                    }
+                    Ok((status, _)) => {
+                        format!("Pangolin refused to delete Site {nice} (HTTP {status}); nothing else is removed")
+                    }
+                    Err(problem) => format!(
+                        "Site {nice} was not deleted ({}); nothing else is removed",
+                        explain(problem)
+                    ),
+                });
+            }
+        }
+        storage.remove()?;
+        Ok(format!(
+            "CT {ctid}: Site {nice} deleted from Pangolin, its credential and journal from this desktop"
+        ))
+    }
+}
+
+impl Pangolin {
+    /// The Site the journal of `ctid` names, if there is a journal: its name
+    /// and, when Pangolin still has it with the journal's IDs, its ID.
+    fn owned_site(
+        &self,
+        key: &Credential,
+        storage: &Storage,
+        ctid: u32,
+    ) -> Result<Option<(String, Option<u64>)>, String> {
+        let Some(record) = storage.load::<SiteRecord>()? else {
+            return Ok(None);
+        };
+        owned(&self.ctx, &record, ctid)?;
+        match site(&self.ctx.endpoint, key, &self.ctx.organization, &record.site)? {
+            Some((id, newt)) if Some(id) == record.site_id && newt == record.newt_id => {
+                Ok(Some((record.site, Some(id))))
+            }
+            Some(_) => Err(format!(
+                "Site {} in Pangolin is not the one its journal records; nothing is removed",
+                record.site
+            )),
+            None => Ok(Some((record.site, None))),
+        }
+    }
 }
 
 /// The instance under initialization; its journal stays locked from
@@ -288,11 +362,10 @@ impl Initializer {
 }
 
 impl SiteInit for Initializer {
-    fn review(&mut self, ctid: u32, home: Option<&str>) -> Result<String, String> {
+    fn review(&mut self, ctid: u32, nice: &str, home: Option<&str>) -> Result<String, String> {
         self.held = None;
         let key = self.pangolin.key()?;
         let ctx = &self.pangolin.ctx;
-        let nice = site_name(ctid);
         let path = ctx.managed_key(ctid);
         let storage = Storage::open(&path)?;
         let record: Option<SiteRecord> = storage.load()?;
@@ -303,7 +376,7 @@ impl SiteInit for Initializer {
         };
         drop(storage);
         Ok(
-            match reconcile(ctx, &key, ctid, home, record.as_ref(), credential.as_ref())? {
+            match reconcile(ctx, &key, ctid, nice, home, record.as_ref(), credential.as_ref())? {
                 SiteStep::Create if credential.is_some() => {
                     format!("Site {nice}: create it with the credential the interrupted run saved (never a new one)")
                 }
@@ -317,11 +390,10 @@ impl SiteInit for Initializer {
         )
     }
 
-    fn prepare(&mut self, node: &str, ctid: u32, home: &str, say: &dyn Fn(&str)) -> Result<(), String> {
+    fn prepare(&mut self, node: &str, ctid: u32, nice: &str, home: &str, say: &dyn Fn(&str)) -> Result<(), String> {
         self.held = None;
         let key = self.pangolin.key()?;
         let ctx = &self.pangolin.ctx;
-        let nice = site_name(ctid);
         let path = ctx.managed_key(ctid);
         let storage = Storage::open(&path)?;
         let record: Option<SiteRecord> = storage.load()?;
@@ -330,7 +402,7 @@ impl SiteInit for Initializer {
         } else {
             None
         };
-        let step = reconcile(ctx, &key, ctid, Some(home), record.as_ref(), credential.as_ref())?;
+        let step = reconcile(ctx, &key, ctid, nice, Some(home), record.as_ref(), credential.as_ref())?;
         let (mut record, credential) = journal(
             &storage,
             &path,
@@ -338,7 +410,7 @@ impl SiteInit for Initializer {
                 target: ctx.target.clone(),
                 organization: ctx.organization.clone(),
                 node: node.to_owned(),
-                site: nice.clone(),
+                site: nice.to_owned(),
                 newt_id,
                 site_id: None,
                 ctid: Some(ctid),
@@ -349,6 +421,9 @@ impl SiteInit for Initializer {
             say,
         )?;
         owned(ctx, &record, ctid)?;
+        if record.site != nice {
+            return Err("The Site journal names another Site; nothing is changed".to_owned());
+        }
         let site_id = match step {
             SiteStep::Reuse(id) | SiteStep::Adopt(id) => id,
             SiteStep::Create => create_site(ctx, &key, &storage, &mut record, &credential, say)?,

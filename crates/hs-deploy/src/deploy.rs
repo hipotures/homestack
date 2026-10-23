@@ -605,7 +605,7 @@ pub async fn apply(config: &DeployConfig, only: &[String], say: &impl Fn(&str)) 
             ostemplate: &ostemplate,
             pool: &config.pool,
             storage: &instance.storage,
-            disk_gib: config.disk_gib,
+            disk_mib: config.disk_gib * 1024,
             memory_mib: config.memory_mib,
             cores: config.cores,
             net0: Some(net0),

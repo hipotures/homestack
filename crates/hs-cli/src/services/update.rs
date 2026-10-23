@@ -210,7 +210,7 @@ async fn preflight(pve: &impl Pve, cfg: &DeployConfig, instance: &Instance, back
         if id == &instance.root_storage
             && entry["avail"]
                 .as_u64()
-                .is_none_or(|n| n < u64::from(instance.root_gib) * 1024 * 1024 * 1024)
+                .is_none_or(|n| n < u64::from(instance.root_mib) * 1024 * 1024)
         {
             return Err("Insufficient verified free space for the new root".to_owned());
         }
@@ -272,13 +272,18 @@ pub async fn plan(
                 "  Image      {current} → {version}{}",
                 if current == version { " (reinstall)" } else { "" }
             ),
-            format!("  Root       new {} GiB on {}", target.root_gib, target.root_storage),
+            format!(
+                "  Root       new {} on {}",
+                node::show_size(target.root_mib),
+                target.root_storage
+            ),
             String::new(),
             "Preserved".to_owned(),
             format!("  Container  CT {}", target.ctid),
             format!(
-                "  Home       {} · {} GiB · /home/app",
-                target.home_volume, target.home_gib
+                "  Home       {} · {} · /home/app",
+                target.home_volume,
+                node::show_size(target.home_mib)
             ),
             format!("  Network    {} · MAC {}", target.address, target.mac),
             format!("  Name/pool  {} · {}", target.hostname, target.pool),
@@ -542,7 +547,7 @@ async fn one(
         ostemplate: &ostemplate,
         pool: &target.pool,
         storage: &target.root_storage,
-        disk_gib: target.root_gib,
+        disk_mib: target.root_mib,
         memory_mib: target.memory_mib,
         cores: target.cores,
         net0: Some(target.network.clone()),

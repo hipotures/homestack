@@ -1,5 +1,5 @@
 schema: 1
-id: pangolin-site
+id: pangolin
 name: Pangolin Site
 image:
   repository: ghcr.io/hipotures/homestack-pangolin-site

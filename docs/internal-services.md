@@ -156,13 +156,21 @@ review/apply worker and `services/deploy.rs::{plan,apply}` as other services:
 published numeric release and digest, reviewed node/storage/CTID/address and
 sizes, scoped deploy token, unprivileged LXC, disposable rootfs and a separate
 persistent `mp0` at `/home/app`, with the common `HomeStack service
-pangolin-site` identity, repository, manifest revision, image and digest. The
+pangolin` identity (manifest id `pangolin`), repository, manifest revision, image and digest. The
 legacy Step 8 description and tag are not used. Only the canonical
 `.homestack/pangolin-site.yaml` of `hipotures/homestack` is initialized;
 another manifest id, path or repository using the Site image is refused. One
 instance is deployed per review. The operator must choose Site image `0.1.2`
 or later: `0.1.1` predates the managed runtime selector. Environment must be
-empty.
+empty. Defaults are a 1G root disk and a 10M home: sizes are typed as a number
+with M or G for every service (deployment and maintenance), and Proxmox stores
+a 10M home as `size=10M`. Containers of every service are named `<id>-<n>`
+from 1 (`pangolin-1`, `pangolin-2`, …).
+
+Site images are numbered `<Pangolin CLI version>-<build>`, e.g. `0.18.1-1`,
+from Git tags `pangolin-site-0.18.1-1`; CI refuses a tag whose version is not
+the `PANGOLIN_CLI_VERSION` of `deploy/pangolin-site/Containerfile`. Version
+order is the release, then the build; a release without a build sorts first.
 
 ### Authenticated context
 
@@ -187,8 +195,9 @@ fallback). It is used only for credential installation and digest checks.
 
 ### Instance identity and journal
 
-Each instance's Site is `homestack-site-<CTID>` (name and nice ID), distinct
-from legacy `pangolin-<node>` Sites, whose identities are unchanged. Its
+Each instance's Site has the container's name (name and nice ID, e.g.
+`pangolin-1`); the journal keeps that name, so renaming the container later is
+refused rather than followed. Its
 credential is `secrets/pangolin-managed-site-<identity>-<CTID>.key` (mode
 0600), with `.recovery.json` and `.lock` beside it; `<identity>` is the Step 7
 SHA-256 of server and organization. Two instances, also on one node, therefore
@@ -268,9 +277,12 @@ disk would need root SSH to restore the credential, so that path was removed.
 
 ### Known limitations
 
-- Removing an instance in maintenance deletes its container and home but leaves
-  its Pangolin Site and desktop journal; delete the Site in Pangolin and the
-  journal files explicitly before reusing that CTID.
+- Removing an instance in maintenance first deletes its Site from Pangolin
+  (`DELETE /v1/site/{siteId}`, `deleteSite`, only when Pangolin's Site has the
+  journal's IDs), then its credential, journal and lock files, then the
+  container with its root and home. A failure before the container is deleted
+  leaves it listed, so removal can be repeated. It needs the Pangolin tunnel,
+  not root SSH.
 - The Site's dashboard URL comes from Step 3 discovery; a changed URL rewrites
   the same credential on resume, never a new identity.
 - Pangolin online status depends on Pangolin's own reporting interval; the
@@ -332,7 +344,7 @@ common identity takes priority for newly managed instances.
 
 API numeric Git tags and `scripts/tag-api.py`, Site prefixed Git tags and numeric
 OCI versions are unchanged. The Site integration changes client/deployer code,
-not the API server; no API image release is required. Its managed runtime is
-first published as `ghcr.io/hipotures/homestack-pangolin-site:0.1.2` from Git
-tag `pangolin-site-0.1.2`; `0.1.1` remains the legacy Step 8 default.
+not the API server; no API image release is required. Its managed runtime was
+first published as `ghcr.io/hipotures/homestack-pangolin-site:0.1.2`; later
+releases use `<CLI version>-<build>` (`0.18.1-1`).
 Publishing any image authorizes no production deployment.

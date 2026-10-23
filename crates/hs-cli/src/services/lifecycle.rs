@@ -36,8 +36,8 @@ pub fn shown_environment(instance: &Instance) -> String {
 #[derive(Debug, Clone, Default)]
 pub struct Choice {
     pub ctids: Vec<u32>,
-    pub root_gib: String,
-    pub home_gib: String,
+    pub root_mib: String,
+    pub home_mib: String,
     pub environment: String,
     /// What the environment setting showed.
     pub shown_environment: String,
@@ -50,24 +50,23 @@ pub struct Choice {
 pub struct Plan {
     pub targets: Vec<Instance>,
     pub remove: bool,
-    pub root_gib: Option<u32>,
-    pub home_gib: Option<u32>,
+    pub root_mib: Option<u32>,
+    pub home_mib: Option<u32>,
     pub set: Vec<(String, String)>,
     pub unset: Vec<String>,
     pub lines: Vec<String>,
     pub problems: Vec<String>,
 }
 
+/// A size typed as `10M` or `2G` (a bare number is GiB), in MiB; empty: unchanged.
 fn size(text: &str, what: &str) -> Result<Option<u32>, String> {
-    let text = text.trim().trim_end_matches(['G', 'g']);
-    if text.is_empty() {
+    if text.trim().is_empty() {
         return Ok(None);
     }
-    text.parse::<u32>()
-        .ok()
-        .filter(|n| (1..=16_384).contains(n))
+    node::parse_size(text)
+        .filter(|mib| *mib <= 16_384 * 1024)
         .map(Some)
-        .ok_or_else(|| format!("{what} is a whole number of GiB from 1 to 16384"))
+        .ok_or_else(|| format!("{what} is a whole number followed by M or G, up to 16384G"))
 }
 
 /// The names that confirm removing `targets`.
@@ -106,22 +105,22 @@ pub async fn plan(pve: &impl Pve, repository: &str, service: &str, choice: &Choi
         plan.remove = true;
         for target in &plan.targets {
             plan.lines.push(format!(
-                "CT {} {} on {} · {}: removed with root {} and home {} ({} GiB); its data is gone",
+                "CT {} {} on {} · {}: removed with root {} and home {} ({}); its data is gone",
                 target.ctid,
                 target.hostname,
                 target.node,
                 target.address,
                 target.root_volume,
                 target.home_volume,
-                target.home_gib
+                node::show_size(target.home_mib)
             ));
         }
         return plan;
     }
-    match (size(&choice.root_gib, "Root"), size(&choice.home_gib, "Home")) {
+    match (size(&choice.root_mib, "Root"), size(&choice.home_mib, "Home")) {
         (Ok(root), Ok(home)) => {
-            plan.root_gib = root;
-            plan.home_gib = home;
+            plan.root_mib = root;
+            plan.home_mib = home;
         }
         (root, home) => plan.problems.extend([root.err(), home.err()].into_iter().flatten()),
     }
@@ -150,16 +149,20 @@ pub async fn plan(pve: &impl Pve, repository: &str, service: &str, choice: &Choi
     for target in &plan.targets {
         let mut changes = Vec::new();
         for (what, now, wanted) in [
-            ("Root", target.root_gib, plan.root_gib),
-            ("Home", target.home_gib, plan.home_gib),
+            ("Root", target.root_mib, plan.root_mib),
+            ("Home", target.home_mib, plan.home_mib),
         ] {
             match wanted {
-                Some(wanted) if wanted < now => plan
-                    .problems
-                    .push(format!("CT {}: {what} is {now} GiB; a disk only grows", target.ctid)),
+                Some(wanted) if wanted < now => plan.problems.push(format!(
+                    "CT {}: {what} is {}; a disk only grows",
+                    target.ctid,
+                    node::show_size(now)
+                )),
                 Some(wanted) if wanted > now => {
                     changes.push(format!(
-                        "  {what} {now} GiB → {wanted} GiB, the filesystem grows online"
+                        "  {what} {} → {}, the filesystem grows online",
+                        node::show_size(now),
+                        node::show_size(wanted)
                     ));
                 }
                 _ => {}
@@ -238,6 +241,9 @@ pub async fn apply(
             tokio::task::block_in_place(|| site.identity(target.ctid))?;
         }
     }
+    if source.is_site() && plan.remove && site.is_none() {
+        return Err("Removing a Site requires the verified Pangolin context".to_owned());
+    }
     let mut lines = Vec::new();
     for target in &plan.targets {
         let (ctid, node) = (target.ctid, target.node.as_str());
@@ -246,6 +252,10 @@ pub async fn apply(
             return Err(format!("CT {ctid} changed since review; review again"));
         }
         if plan.remove {
+            // Its Site first: a failure leaves the container listed, so removal can be repeated.
+            if let Some(site) = site.filter(|_| source.is_site()) {
+                say(&tokio::task::block_in_place(|| site.remove(ctid, say))?);
+            }
             if now.running {
                 say(&format!("CT {ctid} · stopping"));
                 node::power(pve, node, ctid, "stop").await?;
@@ -265,15 +275,15 @@ pub async fn apply(
             ));
             continue;
         }
-        for (disk, now_gib, wanted) in [
-            ("rootfs", now.root_gib, plan.root_gib),
-            ("mp0", now.home_gib, plan.home_gib),
+        for (disk, now_mib, wanted) in [
+            ("rootfs", now.root_mib, plan.root_mib),
+            ("mp0", now.home_mib, plan.home_mib),
         ] {
-            let Some(wanted) = wanted.filter(|wanted| *wanted > now_gib) else {
+            let Some(wanted) = wanted.filter(|wanted| *wanted > now_mib) else {
                 continue;
             };
-            say(&format!("CT {ctid} · {disk} → {wanted} GiB"));
-            let size = format!("{wanted}G");
+            let size = node::show_size(wanted);
+            say(&format!("CT {ctid} · {disk} → {size}"));
             let upid = pve
                 .put(
                     &format!("/nodes/{node}/lxc/{ctid}/resize"),
@@ -296,10 +306,10 @@ pub async fn apply(
             say(&deploy::ready(source, site, ctid, &target.address, say).await?);
         }
         lines.push(format!(
-            "CT {ctid} {}: root {} GiB, home {} GiB{}",
+            "CT {ctid} {}: root {}, home {}{}",
             target.hostname,
-            after.root_gib,
-            after.home_gib,
+            node::show_size(after.root_mib),
+            node::show_size(after.home_mib),
             if restarted {
                 ", environment set, restarted, healthy"
             } else if after.environment != now.environment {

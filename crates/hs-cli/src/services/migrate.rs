@@ -98,12 +98,12 @@ pub async fn plan(pve: &impl Pve, target: &Target) -> Result<Plan, String> {
             if storage["active"].as_u64() != Some(1) || !text(storage, "content").split(',').any(|c| c == "rootdir") {
                 problems.push(format!("Storage {} is inactive or lacks rootdir", target.storage));
             }
-            let need = u64::from(instance.root_gib + instance.home_gib) * 1024 * 1024 * 1024;
+            let need = u64::from(instance.root_mib + instance.home_mib) * 1024 * 1024;
             if storage["avail"].as_u64().is_none_or(|avail| avail < need) {
                 problems.push(format!(
-                    "Storage {} has less than {} GiB free",
+                    "Storage {} has less than {} free",
                     target.storage,
-                    instance.root_gib + instance.home_gib
+                    hs_deploy::node::show_size(instance.root_mib + instance.home_mib)
                 ));
             }
         }
@@ -119,12 +119,16 @@ pub async fn plan(pve: &impl Pve, target: &Target) -> Result<Plan, String> {
         );
     }
     lines.push(format!(
-        "Root {} ({} GiB) → {}",
-        instance.root_volume, instance.root_gib, target.storage
+        "Root {} ({}) → {}",
+        instance.root_volume,
+        hs_deploy::node::show_size(instance.root_mib),
+        target.storage
     ));
     lines.push(format!(
-        "Home {} ({} GiB) → {}",
-        instance.home_volume, instance.home_gib, target.storage
+        "Home {} ({}) → {}",
+        instance.home_volume,
+        hs_deploy::node::show_size(instance.home_mib),
+        target.storage
     ));
     lines.push(if instance.running {
         "Restart migration: the service stops, its disks move, it starts again and its health is checked.".to_owned()

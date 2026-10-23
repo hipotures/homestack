@@ -126,6 +126,7 @@ pub(super) struct Storage {
     key: String,
     pending: String,
     recovery: String,
+    lock: String,
 }
 impl Storage {
     pub fn open(path: &Path) -> Result<Self> {
@@ -171,6 +172,7 @@ impl Storage {
             key: name,
             pending,
             recovery,
+            lock: lock_name,
         })
     }
     pub fn load<T: serde::de::DeserializeOwned>(&self) -> Result<Option<T>> {
@@ -263,6 +265,18 @@ impl Storage {
         .map_err(|_| IO)?;
         fs::fsync(&self.dir).map_err(|_| IO)?;
         fs::unlinkat(&self.dir, self.pending.as_str(), AtFlags::empty()).map_err(|_| IO)?;
+        fs::fsync(&self.dir).map_err(|_| IO)?;
+        Ok(())
+    }
+    /// Delete the credential, any pending credential, the recovery record and
+    /// the lock's name (the lock itself is held until this is dropped).
+    pub fn remove(&self) -> Result<()> {
+        for name in [&self.key, &self.pending, &self.recovery, &self.lock] {
+            match fs::unlinkat(&self.dir, name.as_str(), AtFlags::empty()) {
+                Ok(()) | Err(rustix::io::Errno::NOENT) => {}
+                Err(_) => return Err(IO.into()),
+            }
+        }
         fs::fsync(&self.dir).map_err(|_| IO)?;
         Ok(())
     }

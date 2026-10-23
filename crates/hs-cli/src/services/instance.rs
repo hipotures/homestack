@@ -24,10 +24,10 @@ pub struct Instance {
     pub memory_mib: u32,
     pub root_volume: String,
     pub root_storage: String,
-    pub root_gib: u32,
+    pub root_mib: u32,
     pub home_volume: String,
     pub home_storage: String,
-    pub home_gib: u32,
+    pub home_mib: u32,
     /// `mp0` as Proxmox has it.
     pub home_mount: String,
     pub running: bool,
@@ -57,12 +57,13 @@ fn line<'a>(description: &'a str, key: &str) -> Option<&'a str> {
         .map(str::trim)
 }
 
-/// The size of a volume option (`size=4G`) in whole GiB.
-fn gib(option: &str) -> Option<u32> {
+/// The size of a volume option (`size=4G`, `size=10M`) in whole MiB.
+fn mib(option: &str) -> Option<u32> {
     let size = option.split(',').find_map(|v| v.strip_prefix("size="))?;
     let (number, factor) = match size.as_bytes().last()? {
-        b'T' => (&size[..size.len() - 1], 1024),
-        b'G' => (&size[..size.len() - 1], 1),
+        b'T' => (&size[..size.len() - 1], 1024 * 1024),
+        b'G' => (&size[..size.len() - 1], 1024),
+        b'M' => (&size[..size.len() - 1], 1),
         _ => return None,
     };
     number.parse::<u32>().ok().map(|n| n * factor)
@@ -85,7 +86,7 @@ pub fn note(instance: &Instance) -> String {
         instance.cores,
         instance.memory_mib,
         instance.root_storage,
-        instance.root_gib,
+        node::show_size(instance.root_mib),
         instance.pool,
         instance.network,
         u8::from(instance.running),
@@ -104,7 +105,7 @@ pub fn parse(ctid: u32, node: &str, pool: &str, cfg: &Value, running: bool) -> R
         .ok_or_else(|| format!("CT {ctid} is not a service HomeStack deployed"))?;
     let held = recreate::holder_of(&description).is_some();
     let (root_volume, mut root_storage) = volume(text(cfg, "rootfs"));
-    let mut root_gib = gib(text(cfg, "rootfs")).unwrap_or_default();
+    let mut root_mib = mib(text(cfg, "rootfs")).unwrap_or_default();
     let (home_volume, home_storage) = volume(text(cfg, "mp0"));
     let mut instance = Instance {
         ctid,
@@ -122,10 +123,10 @@ pub fn parse(ctid: u32, node: &str, pool: &str, cfg: &Value, running: bool) -> R
             .unwrap_or(512),
         root_volume,
         root_storage: root_storage.clone(),
-        root_gib,
+        root_mib,
         home_volume,
         home_storage,
-        home_gib: gib(text(cfg, "mp0")).unwrap_or_default(),
+        home_mib: mib(text(cfg, "mp0")).unwrap_or_default(),
         home_mount: text(cfg, "mp0").to_owned(),
         running,
         onboot: cfg["onboot"].as_u64() == Some(1),
@@ -145,9 +146,9 @@ pub fn parse(ctid: u32, node: &str, pool: &str, cfg: &Value, running: bool) -> R
         instance.memory_mib = value("memory")?.parse().map_err(|_| "holder: bad memory")?;
         let (storage, size) = value("rootfs")?.split_once(' ').ok_or("holder: bad rootfs")?;
         storage.clone_into(&mut root_storage);
-        root_gib = size.parse().map_err(|_| "holder: bad rootfs size")?;
+        root_mib = node::parse_size(size).ok_or("holder: bad rootfs size")?;
         instance.root_storage = root_storage;
-        instance.root_gib = root_gib;
+        instance.root_mib = root_mib;
         instance.root_volume.clear();
         instance.pool = value("pool")?.to_owned();
         instance.network = value("net0")?.to_owned();

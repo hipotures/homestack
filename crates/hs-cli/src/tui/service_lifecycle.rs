@@ -96,19 +96,19 @@ pub(super) fn work(
                         None,
                     ),
                     setting(
-                        "Root (GiB)",
-                        "The size of the root disk. A larger number grows it, online; a disk never shrinks.",
+                        "Root",
+                        "The size of the root disk, a number with M or G (e.g. 2G). A larger size grows it, online; a disk never shrinks.",
                         Vec::new(),
                         false,
-                        Some(only.map(|i| i.root_gib.to_string()).unwrap_or_default()),
+                        Some(only.map(|i| hs_deploy::node::show_size(i.root_mib)).unwrap_or_default()),
                     ),
                     setting(
-                        "Home (GiB)",
-                        "The size of the home volume at /home/app. A larger number grows it, online; its data \
+                        "Home",
+                        "The size of the home volume at /home/app, a number with M or G (e.g. 10M). A larger size grows it, online; its data \
                          stays; a volume never shrinks.",
                         Vec::new(),
                         false,
-                        Some(only.map(|i| i.home_gib.to_string()).unwrap_or_default()),
+                        Some(only.map(|i| hs_deploy::node::show_size(i.home_mib)).unwrap_or_default()),
                     ),
                     Setting {
                         list: true,
@@ -173,8 +173,8 @@ pub(super) fn work(
                 };
                 let choice = Choice {
                     ctids: selected(0).iter().filter_map(|id| id.parse().ok()).collect(),
-                    root_gib: text(1),
-                    home_gib: text(2),
+                    root_mib: text(1),
+                    home_mib: text(2),
                     environment: text(3),
                     shown_environment: shown.clone(),
                     remove: text(4),
@@ -183,11 +183,17 @@ pub(super) fn work(
                     setup
                         .handle
                         .block_on(lifecycle::plan(&pve, &source.repository, &source.manifest.id, &choice));
-                if source.is_site() && lifecycle::restarts(&plan) && plan.targets.iter().any(|t| t.running) {
+                let restart = lifecycle::restarts(&plan) && plan.targets.iter().any(|t| t.running);
+                if source.is_site() && (restart || plan.remove) {
                     match site_context(setup, &mut pangolin, tell) {
                         Ok(site) => {
-                            for target in plan.targets.iter().filter(|t| t.running) {
-                                match site.identity(target.ctid) {
+                            for target in plan.targets.iter().filter(|t| plan.remove || t.running) {
+                                let checked = if plan.remove {
+                                    site.removal(target.ctid)
+                                } else {
+                                    site.identity(target.ctid)
+                                };
+                                match checked {
                                     Ok(line) => plan.lines.push(line),
                                     Err(error) => plan.problems.push(error),
                                 }

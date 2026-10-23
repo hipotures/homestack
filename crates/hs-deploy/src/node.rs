@@ -204,6 +204,42 @@ pub async fn destroy(pve: &impl Pve, found: &Container, ctid: u32, say: &impl Fn
     Ok(())
 }
 
+/// A size in MiB as Proxmox takes it for a new volume: GiB, fractional when
+/// needed (10 MiB is `0.009765625`, which Proxmox stores as `size=10M`).
+#[must_use]
+pub fn gib(mib: u32) -> String {
+    if mib.is_multiple_of(1024) {
+        (mib / 1024).to_string()
+    } else {
+        (f64::from(mib) / 1024.0).to_string()
+    }
+}
+
+/// A size as typed: a whole number of `M` or `G` (MiB or GiB), e.g. `10M`;
+/// a bare number is GiB. In MiB.
+#[must_use]
+pub fn parse_size(text: &str) -> Option<u32> {
+    let text = text.trim().to_ascii_uppercase();
+    let text = text.strip_suffix('B').unwrap_or(&text);
+    let (number, factor) = match text.as_bytes().last()? {
+        b'M' => (&text[..text.len() - 1], 1),
+        b'G' => (&text[..text.len() - 1], 1024),
+        _ => (text, 1024),
+    };
+    let number: u32 = number.trim().parse().ok()?;
+    number.checked_mul(factor).filter(|mib| *mib > 0)
+}
+
+/// A size in MiB as shown and typed: `10M`, `1G`.
+#[must_use]
+pub fn show_size(mib: u32) -> String {
+    if mib.is_multiple_of(1024) {
+        format!("{}G", mib / 1024)
+    } else {
+        format!("{mib}M")
+    }
+}
+
 /// What a new container gets.
 pub struct NewContainer<'a> {
     pub node: &'a str,
@@ -212,7 +248,8 @@ pub struct NewContainer<'a> {
     pub ostemplate: &'a str,
     pub pool: &'a str,
     pub storage: &'a str,
-    pub disk_gib: u32,
+    /// Root disk size in MiB.
+    pub disk_mib: u32,
     pub memory_mib: u32,
     pub cores: u32,
     pub net0: Option<String>,
@@ -221,7 +258,7 @@ pub struct NewContainer<'a> {
     pub description: String,
     /// The tag that marks what made it ([`SERVER_TAG`] for a server).
     pub tag: Option<&'a str>,
-    /// A new volume made with the container, `STORAGE:GIB,mp=PATH,…`.
+    /// A new volume made with the container, `STORAGE:GIB,mp=PATH,…` ([`gib`]).
     pub mp0: Option<String>,
 }
 
@@ -245,7 +282,7 @@ pub async fn create(pve: &impl Pve, spec: &NewContainer<'_>, say: &impl Fn(&str)
 /// Start creation separately so a caller can journal the task before waiting.
 pub async fn create_task(pve: &impl Pve, spec: &NewContainer<'_>) -> Result<Value, String> {
     let ctid = spec.ctid.to_string();
-    let rootfs = format!("{}:{}", spec.storage, spec.disk_gib);
+    let rootfs = format!("{}:{}", spec.storage, gib(spec.disk_mib));
     let memory = spec.memory_mib.to_string();
     let cores = spec.cores.to_string();
     let mut form = vec![

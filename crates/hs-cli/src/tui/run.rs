@@ -1169,7 +1169,7 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
                             decide = Some(sender);
                             let updates = updates.clone();
                             let deploy_toml = deploy_toml(ctx);
-                            let site_access = if start.parameters["service"][1] == "pangolin-site" {
+                            let site_access = if start.parameters["service"][1] == "pangolin" {
                                 let prefix = installing.bridge(&mut app, &updates);
                                 if prefix.is_empty() {
                                     app.progress(Progress::Done { ok: false, lines: vec!["Could not start SSH authentication prompts".to_owned()] });

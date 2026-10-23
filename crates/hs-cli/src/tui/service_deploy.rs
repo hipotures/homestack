@@ -288,21 +288,27 @@ fn settings(source: &Source, cluster: &Cluster, kept: Option<&Choice>, offset: i
         },
         Setting {
             list: false,
-            title: "Disk (GiB)".to_owned(),
-            note: "Size of each container's root disk; it is replaced with the image and holds no data.".to_owned(),
+            title: "Disk".to_owned(),
+            note: "Size of each container's root disk, a number with M or G (e.g. 512M, 1G); it is replaced with \
+                   the image and holds no data."
+                .to_owned(),
             multiple: false,
             choices: Vec::new(),
             picked: Vec::new(),
-            text: text(kept.map(|k| &k.root_gib), "1"),
+            text: text(kept.map(|k| &k.root_mib), "1G"),
         },
         Setting {
             list: false,
-            title: "Home (GiB)".to_owned(),
-            note: format!("Size of each instance's home volume at {MOUNT}, where the service keeps its data."),
+            title: "Home".to_owned(),
+            note: format!(
+                "Size of each instance's home volume at {MOUNT}, where the service keeps its data, a number with M \
+                 or G (e.g. 10M, 2G)."
+            ),
             multiple: false,
             choices: Vec::new(),
             picked: Vec::new(),
-            text: text(kept.map(|k| &k.home_gib), "1"),
+            // A Site keeps only its credential there.
+            text: text(kept.map(|k| &k.home_mib), if source.is_site() { "10M" } else { "1G" }),
         },
         Setting {
             list: false,
@@ -341,8 +347,8 @@ fn choice(settings: &[Setting], answers: &[Answer]) -> Choice {
         ctids: text(CTIDS),
         cores: text(CORES),
         memory_mib: text(MEMORY),
-        root_gib: text(ROOT_GIB),
-        home_gib: text(HOME_GIB),
+        root_mib: text(ROOT_GIB),
+        home_mib: text(HOME_GIB),
         environment: text(ENVIRONMENT),
     }
 }
@@ -374,8 +380,16 @@ fn sections(
             ));
         }
         lines.push(format!(
-            "{}  CT {}  {}  {}  disk {} GiB + home {} GiB on {}  {} CPU  {} MiB",
-            i.node, i.ctid, i.hostname, i.address, i.root_gib, i.home_gib, i.root_storage, i.cores, i.memory_mib
+            "{}  CT {}  {}  {}  disk {} + home {} on {}  {} CPU  {} MiB",
+            i.node,
+            i.ctid,
+            i.hostname,
+            i.address,
+            hs_deploy::node::show_size(i.root_mib),
+            hs_deploy::node::show_size(i.home_mib),
+            i.root_storage,
+            i.cores,
+            i.memory_mib
         ));
     }
     for (key, value) in &plan.environment {

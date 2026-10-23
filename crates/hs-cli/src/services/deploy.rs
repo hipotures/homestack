@@ -30,7 +30,7 @@ const SITE_IMAGE: &str = "ghcr.io/hipotures/homestack-pangolin-site";
 const API_INIT_HOME: &str = "api-initialization-home ";
 const SITE_INIT_HOME: &str = "site-initialization-home ";
 /// The first Site image whose runtime selects `/home/app/pangolin-site`.
-const SITE_MANAGED: (u64, u64, u64) = (0, 1, 2);
+const SITE_MANAGED: (u64, u64, u64, u64) = (0, 1, 2, 0);
 
 /// A non-secret PVE marker for unfinished initialization, never an instance registry.
 pub(super) fn initializing(description: &str) -> bool {
@@ -44,25 +44,30 @@ pub(super) fn initializing(description: &str) -> bool {
 /// Step 8 credential journal) and root access for the credential only.
 /// Blocking; nothing here creates, replaces or destroys a container.
 pub trait SiteInit {
-    /// Read only: the Site CT `ctid` gets, or why it cannot; `home` is the
+    /// Read only: Site `name` of CT `ctid`, or why it cannot be; `home` is the
     /// home volume of an existing CT whose initialization resumes.
-    fn review(&mut self, ctid: u32, home: Option<&str>) -> Result<String, String>;
+    fn review(&mut self, ctid: u32, name: &str, home: Option<&str>) -> Result<String, String>;
     /// Revalidate the context, then the journal, credential and Site, before
     /// the container starts.
-    fn prepare(&mut self, node: &str, ctid: u32, home: &str, say: &dyn Fn(&str)) -> Result<(), String>;
+    fn prepare(&mut self, node: &str, ctid: u32, name: &str, home: &str, say: &dyn Fn(&str)) -> Result<(), String>;
     /// Install the credential into the running container's persistent home.
     fn install(&mut self, node: &str, ctid: u32, say: &dyn Fn(&str)) -> Result<(), String>;
     /// Wait until exactly this Site is online; the journal records it.
     fn online(&mut self, ctid: u32, say: &dyn Fn(&str)) -> Result<String, String>;
 }
 
-/// A managed Site's readiness: an outbound connector has no inbound health
-/// endpoint, so its own Pangolin Site must be online. Blocking.
+/// A managed Site's readiness and removal: an outbound connector has no
+/// inbound health endpoint, so its own Pangolin Site must be online; the Site
+/// HomeStack made for it goes with it. Blocking.
 pub trait SiteReady: Sync {
     /// Read only: CT `ctid` is a completed managed Site of the verified organization.
     fn identity(&self, ctid: u32) -> Result<String, String>;
     /// Wait until its Site is online.
     fn ready(&self, ctid: u32, say: &dyn Fn(&str)) -> Result<String, String>;
+    /// Read only: what removing CT `ctid` removes from Pangolin and this desktop.
+    fn removal(&self, ctid: u32) -> Result<String, String>;
+    /// Delete its Site from Pangolin, then its credential and journal here.
+    fn remove(&self, ctid: u32, say: &dyn Fn(&str)) -> Result<String, String>;
 }
 
 /// The service's readiness after a start: its own Site online for a Pangolin
@@ -105,7 +110,7 @@ impl Source {
             }
             SITE_IMAGE
                 if self.repository != "hipotures/homestack"
-                    || self.manifest.id != "pangolin-site"
+                    || self.manifest.id != "pangolin"
                     || self.path != ".homestack/pangolin-site.yaml" =>
             {
                 Some("Site initialization requires the canonical Pangolin Site manifest from hipotures/homestack.")
@@ -176,8 +181,8 @@ pub struct Choice {
     pub ctids: String,
     pub cores: String,
     pub memory_mib: String,
-    pub root_gib: String,
-    pub home_gib: String,
+    pub root_mib: String,
+    pub home_mib: String,
     /// `KEY=value` entries separated by spaces.
     pub environment: String,
 }
@@ -192,9 +197,9 @@ pub struct NewInstance {
     pub cores: u32,
     pub memory_mib: u32,
     pub root_storage: String,
-    pub root_gib: u32,
+    pub root_mib: u32,
     pub home_storage: String,
-    pub home_gib: u32,
+    pub home_mib: u32,
     /// Non-secret observed identity of an interrupted API initialization.
     pub resume: Option<Resume>,
 }
@@ -242,10 +247,10 @@ pub struct Plan {
     api_config: Option<DeployConfig>,
 }
 
-/// The first of `id`, `id-2`, `id-3`… no container in `taken` is named.
+/// The first of `id-1`, `id-2`… no container in `taken` is named.
 fn hostname(id: &str, taken: &BTreeSet<String>) -> String {
-    std::iter::once(id.to_owned())
-        .chain((2..).map(|n| format!("{id}-{n}")))
+    (1..)
+        .map(|n| format!("{id}-{n}"))
         .find(|name| !taken.contains(name))
         .unwrap_or_default()
 }
@@ -339,6 +344,17 @@ fn number(text: &str, what: &str, range: std::ops::RangeInclusive<u32>) -> Resul
                 range.end()
             )
         })
+}
+
+/// A size typed as `10M` or `1G` (a bare number is GiB), in MiB within `range`.
+fn size(text: &str, what: &str, range: std::ops::RangeInclusive<u32>) -> Result<u32, String> {
+    node::parse_size(text).filter(|mib| range.contains(mib)).ok_or_else(|| {
+        format!(
+            "{what} is a whole number followed by M or G, from {} to {}",
+            node::show_size(*range.start()),
+            node::show_size(*range.end())
+        )
+    })
 }
 
 /// Names that look like secrets: the container configuration is readable
@@ -475,7 +491,7 @@ pub async fn plan(
         if choice.placements.len() > 1 {
             problems.push("Deploy one independently configured API instance at a time".to_owned());
         }
-        if hs_core::registry::version(&choice.version).is_none_or(|version| version < (0, 2, 10)) {
+        if hs_core::registry::version(&choice.version).is_none_or(|version| version < (0, 2, 10, 0)) {
             problems.push("Managed API deployment requires API image 0.2.10 or later".to_owned());
         }
         if config.pve.ca_file.is_some() {
@@ -505,10 +521,10 @@ pub async fn plan(
     let sizes = (
         number(&choice.cores, "Cores", 1..=64),
         number(&choice.memory_mib, "Memory (MiB)", 64..=1_048_576),
-        number(&choice.root_gib, "Container disk (GiB)", 1..=1024),
-        number(&choice.home_gib, "Home volume (GiB)", 1..=16_384),
+        size(&choice.root_mib, "Container disk", 64..=1024 * 1024),
+        size(&choice.home_mib, "Home volume", 1..=16_384 * 1024),
     );
-    let (cores, memory_mib, root_gib, home_gib) = match sizes {
+    let (cores, memory_mib, root_mib, home_mib) = match sizes {
         (Ok(cores), Ok(memory), Ok(root), Ok(home)) => (cores, memory, root, home),
         (cores, memory, root, home) => {
             problems.extend(
@@ -608,9 +624,9 @@ pub async fn plan(
             cores,
             memory_mib,
             root_storage: storage.clone(),
-            root_gib,
+            root_mib,
             home_storage: storage.clone(),
-            home_gib,
+            home_mib,
             resume: None,
         };
         match free(pve, ctid).await {
@@ -638,7 +654,7 @@ pub async fn plan(
         }
         if instance.resume.is_none() {
             let wanted = used.entry((node.clone(), storage.clone())).or_default();
-            *wanted += u64::from(root_gib + home_gib) * gib;
+            *wanted += u64::from(root_mib + home_mib) * 1024 * 1024;
             if free_bytes < *wanted {
                 problems.push(format!("{node}: {storage} has {} GiB free", free_bytes / gib));
             }
@@ -651,7 +667,7 @@ pub async fn plan(
         }
         if let Some(site) = site.as_deref_mut() {
             let home = instance.resume.as_ref().map(|resume| home_volume(&resume.home_mount));
-            match site.review(ctid, home) {
+            match site.review(ctid, &instance.hostname, home) {
                 Ok(line) => plan.sites.push(line),
                 Err(error) => problems.push(error),
             }
@@ -914,8 +930,8 @@ async fn resumable(
         || current.address != instance.address
         || current.cores != instance.cores
         || current.memory_mib != instance.memory_mib
-        || current.root_gib != instance.root_gib
-        || current.home_gib != instance.home_gib
+        || current.root_mib != instance.root_mib
+        || current.home_mib != instance.home_mib
         || hs_deploy::recreate::mounts(&cfg)? != ["mp0"]
         || cfg.get("hookscript").is_some()
     {
@@ -961,7 +977,7 @@ async fn initialize_site(
         node::set_env(pve, node, ctid, std::slice::from_ref(&selector), &[]).await?;
         say("  managed runtime selector set before the first start");
     }
-    tokio::task::block_in_place(|| site.prepare(node, ctid, home_volume(home), say))?;
+    tokio::task::block_in_place(|| site.prepare(node, ctid, &instance.hostname, home_volume(home), say))?;
     if pve_status(pve, node, ctid).await? != "running" {
         say(&format!("  starting CT {ctid}"));
         node::power(pve, node, ctid, "start").await?;
@@ -1041,7 +1057,7 @@ async fn run(
         // The Pangolin context, key and Site state are verified again before anything is made.
         for (instance, reviewed) in plan.instances.iter().zip(&plan.sites) {
             let home = instance.resume.as_ref().map(|resume| home_volume(&resume.home_mount));
-            if site.review(instance.ctid, home)? != *reviewed {
+            if site.review(instance.ctid, &instance.hostname, home)? != *reviewed {
                 return Err("Pangolin Site state changed since review; review again".to_owned());
             }
         }
@@ -1054,7 +1070,7 @@ async fn run(
         let config = plan.api_config.as_ref().ok_or("API initialization was not reviewed")?;
         if plan.instances.len() != 1
             || source.image(version) != plan.image
-            || hs_core::registry::version(version).is_none_or(|version| version < (0, 2, 10))
+            || hs_core::registry::version(version).is_none_or(|version| version < (0, 2, 10, 0))
         {
             return Err("Review one API instance with a managed-runtime image release".to_owned());
         }
@@ -1119,7 +1135,7 @@ async fn run(
             ostemplate: &ostemplate,
             pool: &plan.pool,
             storage: &instance.root_storage,
-            disk_gib: instance.root_gib,
+            disk_mib: instance.root_mib,
             memory_mib: instance.memory_mib,
             cores: instance.cores,
             net0: Some(net0(&instance.address)),
@@ -1130,7 +1146,8 @@ async fn run(
             tag: Some(node::SERVER_TAG),
             mp0: Some(format!(
                 "{}:{},mp={MOUNT},backup=1",
-                instance.home_storage, instance.home_gib
+                instance.home_storage,
+                node::gib(instance.home_mib)
             )),
         };
         if !existing {

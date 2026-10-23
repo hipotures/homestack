@@ -1219,7 +1219,7 @@ async fn deploy_node(
             ostemplate: &ostemplate,
             pool: &config.pool,
             storage: &n.storage,
-            disk_gib: config.disk_gib,
+            disk_mib: config.disk_gib * 1024,
             memory_mib: config.memory_mib,
             cores: config.cores,
             net0: Some(net),

@@ -205,19 +205,28 @@ pub fn deployed_service(config: &Value) -> Option<hs_model::status::DeployedServ
     })
 }
 
-/// HomeStack publication order: `<major>.<minor>.<patch>`.
+/// HomeStack publication order: `<major>.<minor>.<patch>`, optionally
+/// `-<build>` (a packaging of an upstream release, e.g. `0.18.1-2`); a tag
+/// without a build sorts as build 0.
 #[must_use]
-pub fn version(tag: &str) -> Option<(u64, u64, u64)> {
-    if tag.split('.').any(|part| {
-        part.is_empty() || !part.bytes().all(|byte| byte.is_ascii_digit()) || (part.len() > 1 && part.starts_with('0'))
-    }) {
-        return None;
-    }
-    let mut parts = tag.split('.');
+pub fn version(tag: &str) -> Option<(u64, u64, u64, u64)> {
+    let number = |part: &str| {
+        (!part.is_empty()
+            && part.bytes().all(|byte| byte.is_ascii_digit())
+            && !(part.len() > 1 && part.starts_with('0')))
+        .then(|| part.parse().ok())
+        .flatten()
+    };
+    let (release, build) = match tag.split_once('-') {
+        Some((release, build)) => (release, number(build).filter(|build| *build > 0)?),
+        None => (tag, 0),
+    };
+    let mut parts = release.split('.');
     let result = (
-        parts.next()?.parse().ok()?,
-        parts.next()?.parse().ok()?,
-        parts.next()?.parse().ok()?,
+        number(parts.next()?)?,
+        number(parts.next()?)?,
+        number(parts.next()?)?,
+        build,
     );
     parts.next().is_none().then_some(result)
 }
