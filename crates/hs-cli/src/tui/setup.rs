@@ -2413,6 +2413,12 @@ impl SetupBox {
         (lines, Vec::new())
     }
 
+    /// Whether a manifest file of a repository is highlighted.
+    #[must_use]
+    pub fn on_manifest(&self) -> bool {
+        self.service_cursor_row().is_some_and(|row| row.file.is_some())
+    }
+
     /// The top-level keys of the highlighted manifest, when it was read.
     fn manifest_sections(&self) -> Vec<String> {
         let Some(ServiceRow {
@@ -2450,7 +2456,7 @@ impl SetupBox {
         match code {
             KeyCode::Up => self.manifest_focus = Some(focus.saturating_sub(1)),
             KeyCode::Down => self.manifest_focus = Some((focus + 1).min(last)),
-            KeyCode::Enter | KeyCode::Char(' ') | KeyCode::Right => self.toggle_manifest_section(focus),
+            KeyCode::Char(' ') | KeyCode::Right => self.toggle_manifest_section(focus),
             KeyCode::Left => {
                 if let Some(name) = self.manifest_sections().get(focus) {
                     self.manifest_open.remove(name);
@@ -2582,10 +2588,11 @@ impl SetupBox {
                 self.deploy_request = self.service_source();
                 return Some(Ask::Manage);
             }
-            KeyCode::Enter if !self.manifest_sections().is_empty() => {
+            KeyCode::Char(' ') if !self.manifest_sections().is_empty() => {
                 self.manifest_focus = Some(0);
                 self.details_scroll = 0;
             }
+            KeyCode::Enter if row.as_ref().is_some_and(|row| row.file.is_some()) => return self.deploy(),
             KeyCode::Enter => return self.toggle_repository(),
             KeyCode::F(5) => {
                 // Not while the last read is still under way.
