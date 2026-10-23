@@ -1,9 +1,9 @@
 //! Service manifest schema 1 (`.agents/skills/homestack-service/manifest-schema.md`):
-//! one `.homestack/<file>.yaml` document describes one service. Every
-//! top-level section is required; a missing or unknown one, or an invalid
-//! `schema`, `id` or `name`, refuses the whole file. Inside the sections
-//! every unknown field and invalid value is collected as an [`Issue`] at its
-//! path: the file is still shown, but it yields no deployable [`Manifest`].
+//! one `.homestack/<file>.yaml` document describes one service. A file that
+//! is not one YAML mapping is refused. Otherwise every missing or unknown
+//! top-level section, unknown field and invalid value is collected as an
+//! [`Issue`] at its path: the file is still shown, but it yields no
+//! deployable [`Manifest`].
 //! Nothing in a manifest is ever executed or interpolated.
 
 use yaml_rust2::{Yaml, YamlLoader};
@@ -129,8 +129,9 @@ pub struct Issue {
 /// inside its sections, and the manifest when there are none.
 #[derive(Debug, Clone)]
 pub struct Checked {
-    pub id: String,
-    pub name: String,
+    /// `None` when missing or invalid.
+    pub id: Option<String>,
+    pub name: Option<String>,
     pub document: Yaml,
     pub issues: Vec<Issue>,
     pub manifest: Option<Manifest>,
@@ -336,8 +337,7 @@ fn within(path: &str, directory: &str) -> bool {
     path == directory || path.strip_prefix(directory).is_some_and(|rest| rest.starts_with('/'))
 }
 
-/// Read one manifest file's text: `Err` when the file itself is refused
-/// (YAML, size, the top-level keys, `schema`, `id` or `name`).
+/// Read one manifest file's text: `Err` when it is not one YAML mapping.
 pub fn parse(text: &str) -> Result<Checked, String> {
     if text.len() as u64 > MAX_BYTES {
         return Err(format!("larger than {MAX_BYTES} bytes"));
@@ -350,41 +350,44 @@ pub fn parse(text: &str) -> Result<Checked, String> {
     let Yaml::Hash(top) = &document else {
         return Err("expected a mapping of the top-level sections".to_owned());
     };
-    let mut unknown = Vec::new();
+    let mut check = Check::default();
     for key in top.keys() {
         match key.as_str() {
             Some(name) if SECTIONS.contains(&name) => {}
-            Some(name) => unknown.push(name.to_owned()),
+            Some(name) => check.fail(&[name.to_owned()], "unknown section"),
             None => return Err("top-level field names must be strings".to_owned()),
         }
     }
-    if !unknown.is_empty() {
-        return Err(format!("unknown top-level section {}", unknown.join(", ")));
+    for name in SECTIONS {
+        if field(top, name).is_none() {
+            check.fail(&[name.to_owned()], "missing section");
+        }
     }
-    let missing: Vec<&str> = SECTIONS.into_iter().filter(|name| field(top, name).is_none()).collect();
-    if !missing.is_empty() {
-        return Err(format!("missing top-level section {}", missing.join(", ")));
+    if field(top, "schema").is_some_and(|schema| *schema != Yaml::Integer(1)) {
+        check.fail(&["schema".to_owned()], "must be 1");
     }
-    if field(top, "schema") != Some(&Yaml::Integer(1)) {
-        return Err("schema: must be 1".to_owned());
-    }
-    let id = field(top, "id")
-        .and_then(Yaml::as_str)
-        .filter(|id| valid_id(id))
-        .ok_or("id: must match ^[a-z0-9][a-z0-9-]{0,62}$")?
-        .to_owned();
-    let name = field(top, "name")
-        .and_then(Yaml::as_str)
-        .filter(|name| (1..=64).contains(&name.chars().count()))
-        .ok_or("name: must be 1–64 characters")?
-        .to_owned();
-    let mut check = Check::default();
-    let section = |name: &str| field(top, name).unwrap_or(&Yaml::Null);
-    let image = image_of(&mut check, section("image"));
-    let runtime = runtime_of(&mut check, section("runtime"));
-    let persistence = persistence_of(&mut check, section("persistence"));
-    let deployment = deployment_of(&mut check, section("deployment"));
-    let pangolin = exposure_of(&mut check, section("exposure"), runtime.as_ref());
+    let id = field(top, "id").and_then(|value| {
+        let id = value.as_str().filter(|id| valid_id(id)).map(str::to_owned);
+        if id.is_none() {
+            check.fail(&["id".to_owned()], "must match ^[a-z0-9][a-z0-9-]{0,62}$");
+        }
+        id
+    });
+    let name = field(top, "name").and_then(|value| {
+        let name = value
+            .as_str()
+            .filter(|name| (1..=64).contains(&name.chars().count()))
+            .map(str::to_owned);
+        if name.is_none() {
+            check.fail(&["name".to_owned()], "must be 1–64 characters");
+        }
+        name
+    });
+    let image = field(top, "image").and_then(|value| image_of(&mut check, value));
+    let runtime = field(top, "runtime").and_then(|value| runtime_of(&mut check, value));
+    let persistence = field(top, "persistence").and_then(|value| persistence_of(&mut check, value));
+    let deployment = field(top, "deployment").and_then(|value| deployment_of(&mut check, value));
+    let pangolin = field(top, "exposure").and_then(|value| exposure_of(&mut check, value, runtime.as_ref()));
     if let (Some(deployment), Some(persistence)) = (&deployment, &persistence) {
         let path = vec!["deployment".to_owned(), "state_model".to_owned()];
         match (deployment.state_model, persistence) {
@@ -393,16 +396,26 @@ pub fn parse(text: &str) -> Result<Checked, String> {
             _ => {}
         }
     }
-    let manifest = match (image, runtime, persistence, deployment, pangolin) {
+    let manifest = match (
+        id.clone(),
+        name.clone(),
+        image,
+        runtime,
+        persistence,
+        deployment,
+        pangolin,
+    ) {
         (
+            Some(id),
+            Some(name),
             Some(image_repository),
             Some((resources, ports, healthcheck)),
             Some(persistence),
             Some(deployment),
             Some(pangolin),
         ) if check.issues.is_empty() => Some(Manifest {
-            id: id.clone(),
-            name: name.clone(),
+            id,
+            name,
             image_repository,
             resources,
             ports,

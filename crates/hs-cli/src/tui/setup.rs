@@ -134,7 +134,14 @@ fn short(sha: &str) -> &str {
 pub fn service_row(file: &ManifestFile) -> (String, Tone) {
     match &file.manifest {
         Ok(checked) => (
-            format!("{}  {}", checked.id, checked.name),
+            format!(
+                "{}  {}",
+                checked
+                    .id
+                    .as_deref()
+                    .unwrap_or(file.path.trim_start_matches(".homestack/")),
+                checked.name.as_deref().unwrap_or_default()
+            ),
             if checked.manifest.is_some() {
                 Tone::Plain
             } else {
@@ -176,7 +183,11 @@ pub fn service_details(
         }
     };
     let mut lines: Vec<(String, Tone)> = [
-        format!("{} ({})", checked.name, checked.id),
+        format!(
+            "{} ({})",
+            checked.name.as_deref().unwrap_or("Unnamed service"),
+            checked.id.as_deref().unwrap_or("no valid id")
+        ),
         format!("Repository: {}", discovery.repository),
         format!("File: {}", file.path),
         revision,
@@ -221,7 +232,11 @@ pub fn service_details(
     ));
     lines.extend(manifest_lines(checked, expanded));
     lines.push((String::new(), Tone::Plain));
-    let found = instances(services, &discovery.repository, &checked.id);
+    let found = checked
+        .id
+        .as_deref()
+        .map(|id| instances(services, &discovery.repository, id))
+        .unwrap_or_default();
     if found.is_empty() {
         lines.push(("Status: not deployed".to_owned(), Tone::Plain));
     }
@@ -250,12 +265,18 @@ fn manifest_lines(checked: &Checked, expanded: bool) -> Vec<(String, Tone)> {
     let Yaml::Hash(top) = &checked.document else {
         return Vec::new();
     };
+    let unknown = top
+        .keys()
+        .filter_map(Yaml::as_str)
+        .filter(|name| !SECTIONS.contains(name));
     let mut lines = Vec::new();
-    for name in SECTIONS {
+    for name in SECTIONS.into_iter().chain(unknown) {
+        let path = vec![name.to_owned()];
         let Some(value) = top.get(&Yaml::String(name.to_owned())) else {
+            lines.push((format!("  {name}:"), Tone::Red));
+            issue_lines(checked, &path, 2, &mut lines);
             continue;
         };
-        let path = vec![name.to_owned()];
         let errors = checked
             .issues
             .iter()
@@ -263,7 +284,10 @@ fn manifest_lines(checked: &Checked, expanded: bool) -> Vec<(String, Tone)> {
             .count();
         let tone = if errors > 0 { Tone::Red } else { Tone::Plain };
         match value {
-            Yaml::Null => lines.push((format!("  {name}: (empty: off)"), tone)),
+            Yaml::Null => {
+                lines.push((format!("  {name}: (empty: off)"), tone));
+                issue_lines(checked, &path, 2, &mut lines);
+            }
             Yaml::Hash(_) | Yaml::Array(_) if !expanded => {
                 let note = match errors {
                     0 => String::new(),
@@ -271,13 +295,17 @@ fn manifest_lines(checked: &Checked, expanded: bool) -> Vec<(String, Tone)> {
                     n => format!("  ✗ {n} errors"),
                 };
                 lines.push((format!("▸ {name}{note}"), tone));
+                issue_lines(checked, &path, 2, &mut lines);
             }
             Yaml::Hash(_) | Yaml::Array(_) => {
                 lines.push((format!("▾ {name}:"), tone));
                 issue_lines(checked, &path, 2, &mut lines);
                 yaml_lines(checked, value, &path, 4, &mut lines);
             }
-            scalar => lines.push((format!("  {name}: {}", scalar_text(scalar)), tone)),
+            scalar => {
+                lines.push((format!("  {name}: {}", scalar_text(scalar)), tone));
+                issue_lines(checked, &path, 2, &mut lines);
+            }
         }
     }
     lines
@@ -2283,7 +2311,11 @@ impl SetupBox {
             Err(_) => ("invalid".to_owned(), tone),
             Ok(checked) if checked.manifest.is_none() => ("errors".to_owned(), tone),
             Ok(checked) => {
-                let found = instances(&self.services, &row.repository, &checked.id);
+                let found = instances(
+                    &self.services,
+                    &row.repository,
+                    checked.id.as_deref().unwrap_or_default(),
+                );
                 let running = found.iter().filter(|entry| entry.status == "running").count();
                 match (found.len(), running) {
                     (0, _) => ("not deployed".to_owned(), Tone::Dim),
@@ -2341,8 +2373,10 @@ impl SetupBox {
                 }
                 for file in &found.files {
                     lines.push(match &file.manifest {
-                        Ok(checked) if checked.manifest.is_some() => format!("Service: {} ({})", checked.id, file.path),
-                        Ok(checked) => format!("Errors: {} ({})", checked.id, file.path),
+                        Ok(checked) if checked.manifest.is_some() => {
+                            format!("Service: {} ({})", checked.id.as_deref().unwrap_or_default(), file.path)
+                        }
+                        Ok(_) => format!("Errors: {}", file.path),
                         Err(_) => format!("Invalid: {}", file.path),
                     });
                 }

@@ -172,13 +172,14 @@ pub fn discover(system: &dyn System, repository: &str, branch: Option<&str>) -> 
     let ids: Vec<String> = discovery
         .files
         .iter()
-        .filter_map(|file| file.manifest.as_ref().ok().map(|checked| checked.id.clone()))
+        .filter_map(|file| file.manifest.as_ref().ok().and_then(|checked| checked.id.clone()))
         .collect();
     for file in &mut discovery.files {
         if let Ok(checked) = &file.manifest
-            && ids.iter().filter(|id| **id == checked.id).count() > 1
+            && let Some(id) = &checked.id
+            && ids.iter().filter(|known| *known == id).count() > 1
         {
-            file.manifest = Err(format!("id {} is declared by more than one file", checked.id));
+            file.manifest = Err(format!("id {id} is declared by more than one file"));
         }
     }
     Ok(discovery)
