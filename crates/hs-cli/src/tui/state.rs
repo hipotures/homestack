@@ -218,6 +218,9 @@ pub enum Overlay {
     Parallel {
         index: usize,
     },
+    System {
+        index: usize,
+    },
     Integration(Box<super::integrations::Editor>),
     Pangolin(Box<super::pangolin::Wizard>),
     /// The theme list in the Appearance section; `previous` comes back with Esc.
@@ -299,6 +302,7 @@ pub struct App {
     /// The isolated lab's Gold shell can also start its stopped source VM.
     pub lab_gold_vmid: Option<u32>,
     pub preferences: Preferences,
+    pub ssh_sounds: bool,
     pub palette: Palette,
     no_color: bool,
     pub status: Option<GlobalStatus>,
@@ -396,6 +400,10 @@ pub struct App {
 impl App {
     pub fn new(preferences: Preferences, no_color: bool) -> Result<Self, AppError> {
         let palette = preferences.palette(no_color)?;
+        let client_path = preferences.path.with_file_name("client.toml");
+        let ssh_sounds = crate::config::load(&client_path)
+            .map(|loaded| crate::touch::Sounds::from_table(loaded.client.sounds.as_ref()).enabled)
+            .unwrap_or(false);
         let view = preferences
             .table
             // "preset" is the name of before 2026-10-15.
@@ -435,6 +443,7 @@ impl App {
             lab_gold_vmid: None,
             profile: "default".to_owned(),
             preferences,
+            ssh_sounds,
             palette,
             no_color,
             status: None,
@@ -1348,6 +1357,19 @@ impl App {
         }
     }
 
+    fn toggle_ssh_sounds(&mut self) {
+        let path = self.preferences.path.with_file_name("client.toml");
+        match crate::config::save_ssh_sounds(&path, !self.ssh_sounds) {
+            Ok(()) => self.ssh_sounds = !self.ssh_sounds,
+            Err(error) => {
+                self.overlay = Some(Overlay::Report {
+                    title: "SSH sounds".to_owned(),
+                    lines: vec![error.0],
+                });
+            }
+        }
+    }
+
     fn save_view(&mut self) {
         let mut table = self.preferences.table.clone();
         table.remove("preset");
@@ -1558,6 +1580,10 @@ impl App {
                         return None;
                     }
                     Some(Hit::Log { .. } | Hit::Bar(_)) => return None,
+                    Some(Hit::SystemOption(index)) => {
+                        self.overlay = Some(Overlay::System { index });
+                        return press(self, KeyCode::Enter);
+                    }
                     Some(Hit::Parallel(item)) => {
                         if let Some(parallel) = PARALLEL_CHOICES.get(item) {
                             self.save_parallel(*parallel);
@@ -1692,7 +1718,12 @@ impl App {
                             Some(Overlay::Menu { index }) => *index = item,
                             // A section of the settings is chosen; Appearance and
                             // Machines open at once, their list being all they have.
-                            Some(Overlay::Integrations { .. } | Overlay::Columns { .. } | Overlay::Parallel { .. }) => {
+                            Some(
+                                Overlay::Integrations { .. }
+                                | Overlay::Columns { .. }
+                                | Overlay::Parallel { .. }
+                                | Overlay::System { .. },
+                            ) => {
                                 self.overlay = Some(Overlay::Settings {
                                     section: item.min(SETTINGS.len() - 1),
                                 });
@@ -2262,13 +2293,7 @@ impl App {
                     self.overlay = Some(Overlay::Columns { index: 0 });
                 }
                 KeyCode::Enter | KeyCode::Right if section == SYSTEM => {
-                    let current = PARALLEL.load(std::sync::atomic::Ordering::SeqCst);
-                    self.overlay = Some(Overlay::Parallel {
-                        index: PARALLEL_CHOICES
-                            .iter()
-                            .position(|choice| *choice == current)
-                            .unwrap_or(3),
-                    });
+                    self.overlay = Some(Overlay::System { index: 0 });
                 }
                 KeyCode::Enter | KeyCode::Right if section == INTEGRATIONS => {
                     self.overlay = Some(Overlay::Integrations { index: 0 });
@@ -2277,17 +2302,43 @@ impl App {
                 _ => self.overlay = Some(Overlay::Settings { section }),
             },
             Overlay::Integration(_) | Overlay::Pangolin(_) => self.overlay = Some(overlay),
+            Overlay::System { mut index } => {
+                match code {
+                    KeyCode::Down | KeyCode::Up | KeyCode::Tab => index = 1 - index,
+                    KeyCode::Enter | KeyCode::Right | KeyCode::Char(' ') => {
+                        self.overlay = Some(Overlay::System { index });
+                        if index == 1 {
+                            self.toggle_ssh_sounds();
+                        } else {
+                            let current = PARALLEL.load(std::sync::atomic::Ordering::SeqCst);
+                            self.overlay = Some(Overlay::Parallel {
+                                index: PARALLEL_CHOICES
+                                    .iter()
+                                    .position(|choice| *choice == current)
+                                    .unwrap_or(3),
+                            });
+                        }
+                        return None;
+                    }
+                    KeyCode::Esc | KeyCode::Left => {
+                        self.overlay = Some(Overlay::Settings { section: SYSTEM });
+                        return None;
+                    }
+                    _ => {}
+                }
+                self.overlay = Some(Overlay::System { index });
+            }
             Overlay::Parallel { mut index } => {
                 match code {
                     KeyCode::Down => index = (index + 1).min(PARALLEL_CHOICES.len() - 1),
                     KeyCode::Up => index = index.saturating_sub(1),
                     KeyCode::Enter => {
                         self.save_parallel(PARALLEL_CHOICES[index]);
-                        self.overlay = Some(Overlay::Settings { section: SYSTEM });
+                        self.overlay = Some(Overlay::System { index: 0 });
                         return None;
                     }
                     KeyCode::Esc | KeyCode::Left => {
-                        self.overlay = Some(Overlay::Settings { section: SYSTEM });
+                        self.overlay = Some(Overlay::System { index: 0 });
                         return None;
                     }
                     _ => {}

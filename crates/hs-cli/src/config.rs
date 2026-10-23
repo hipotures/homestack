@@ -105,3 +105,23 @@ fn read_private(path: &Path, what: &str) -> Result<String, AppError> {
     std::fs::read_to_string(path)
         .map_err(|error| AppError::new(format!("Could not read the {what} file {}: {error}", path.display())))
 }
+
+/// Save the SSH sound switch while preserving the rest of client.toml.
+pub fn save_ssh_sounds(path: &Path, enabled: bool) -> Result<(), AppError> {
+    use std::io::Write;
+
+    let save = || -> Result<(), Box<dyn std::error::Error>> {
+        let text = std::fs::read_to_string(path)?;
+        let mut document: toml_edit::DocumentMut = text.parse()?;
+        document["sounds"]["enabled"] = toml_edit::value(enabled);
+        ClientConfig::parse(&document.to_string())?;
+        let parent = path.parent().unwrap_or(Path::new("."));
+        std::fs::create_dir_all(parent)?;
+        let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
+        temporary.write_all(document.to_string().as_bytes())?;
+        temporary.as_file().sync_all()?;
+        temporary.persist(path)?;
+        Ok(())
+    };
+    save().map_err(|_| AppError::new(format!("Could not save SSH sounds in {}", path.display())))
+}

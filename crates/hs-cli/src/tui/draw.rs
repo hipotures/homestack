@@ -1746,7 +1746,7 @@ fn draw_settings(buf: &mut Buffer, area: Rect, app: &App, section: usize, themes
     let sections_focused = themes.is_none()
         && picking.is_none()
         && choosing.is_none()
-        && !matches!(app.overlay, Some(Overlay::Integrations { .. }));
+        && !matches!(app.overlay, Some(Overlay::Integrations { .. } | Overlay::System { .. }));
     let bottom = if themes.is_some() {
         vec![
             Control::key("preview ↑↓"),
@@ -1836,9 +1836,29 @@ fn draw_settings(buf: &mut Buffer, area: Rect, app: &App, section: usize, themes
         (MACHINES, _) => {}
         (SYSTEM, _) => {
             let parallel = PARALLEL.load(std::sync::atomic::Ordering::SeqCst);
-            let mut parts = line("Parallel reads", &parallel.to_string(), None);
-            parts.push((" ▾".to_owned(), muted));
-            lines.push(parts);
+            let selected = match app.overlay {
+                Some(Overlay::System { index }) => Some(index),
+                _ => None,
+            };
+            for (index, label) in [
+                format!("Parallel reads   {parallel} ▾"),
+                format!("SSH sounds       {}", if app.ssh_sounds { "On" } else { "Off" }),
+            ]
+            .iter()
+            .enumerate()
+            {
+                let (item, style) = unfocused_item(palette, label, selected == Some(index), selected.is_some());
+                lines.push(vec![(item, style)]);
+            }
+            lines.push(Vec::new());
+            lines.push(vec![(
+                "SSH sounds: key touch, connection success and failure.".to_owned(),
+                muted,
+            )]);
+            lines.push(vec![(
+                "Off by default. Enter or Space toggles the selected switch.".to_owned(),
+                muted,
+            )]);
             if let Some(index) = choosing {
                 for (at, choice) in PARALLEL_CHOICES.iter().enumerate() {
                     let (item, style) = list_item(palette, &choice.to_string(), at == index);
@@ -1915,10 +1935,11 @@ fn draw_settings(buf: &mut Buffer, area: Rect, app: &App, section: usize, themes
     }
     if section == SYSTEM {
         let y = inner.y + 1 + u16::try_from(first).unwrap_or(0);
-        super::chrome::register(Rect::new(x, y, width, 1), super::chrome::Hit::Item(SYSTEM));
+        super::chrome::register(Rect::new(x, y, width, 1), super::chrome::Hit::SystemOption(0));
+        super::chrome::register(Rect::new(x, y + 1, width, 1), super::chrome::Hit::SystemOption(1));
         if choosing.is_some() {
             for at in 0..PARALLEL_CHOICES.len() {
-                let y = y + 1 + u16::try_from(at).unwrap_or(0);
+                let y = y + 5 + u16::try_from(at).unwrap_or(0);
                 if y < inner.bottom() {
                     super::chrome::register(Rect::new(x, y, width, 1), super::chrome::Hit::Parallel(at));
                 }
@@ -2190,7 +2211,7 @@ fn draw_overlay(buf: &mut Buffer, area: Rect, app: &App, overlay: &Overlay) {
         Overlay::Settings { section } => return draw_settings(buf, area, app, *section, None),
         Overlay::Integrations { .. } => return draw_settings(buf, area, app, INTEGRATIONS, None),
         Overlay::Columns { .. } => return draw_settings(buf, area, app, MACHINES, None),
-        Overlay::Parallel { .. } => return draw_settings(buf, area, app, SYSTEM, None),
+        Overlay::System { .. } | Overlay::Parallel { .. } => return draw_settings(buf, area, app, SYSTEM, None),
         Overlay::Integration(editor) => return draw_integration(buf, area, app, editor),
         Overlay::Pangolin(wizard) => return super::draw_pangolin::screen(buf, area, app, wizard),
         Overlay::Themes { index, .. } => return draw_settings(buf, area, app, APPEARANCE, Some(*index)),
@@ -2222,6 +2243,7 @@ fn draw_overlay(buf: &mut Buffer, area: Rect, app: &App, overlay: &Overlay) {
         | Overlay::Integrations { .. }
         | Overlay::Columns { .. }
         | Overlay::Parallel { .. }
+        | Overlay::System { .. }
         | Overlay::Integration(_)
         | Overlay::Pangolin(_) => {
             return;

@@ -62,7 +62,7 @@ pub struct Sounds {
 impl Default for Sounds {
     fn default() -> Self {
         Self {
-            enabled: true,
+            enabled: false,
             player: Vec::new(),
             files: DEFAULT_FILES
                 .iter()

@@ -67,7 +67,9 @@ establishes a fresh authenticated SSH connection and executes only `true`.
 It uses the existing HomeStack askpass UI for host-key confirmation, PIN,
 passphrase and hardware-key touch prompts. The existing `touch::touch_wait`
 mechanism uses `[sounds]` settings for waiting, success and failure cues (including
-the existing terminal-bell fallback). Instant success stays silent as in other
+the existing terminal-bell fallback). SSH sounds are off by default; toggle them in
+Settings → System → SSH sounds. The choice is saved as `[sounds].enabled` in
+`client.toml` and applies to subsequent SSH connections. Instant success stays silent as in other
 HomeStack SSH flows. Host verification remains enabled;
 configurations disabling it are refused. Password and keyboard-interactive
 fallbacks remain disabled, consistent with the existing HomeStack SSH flow.

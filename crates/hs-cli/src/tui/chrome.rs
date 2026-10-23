@@ -485,6 +485,7 @@ pub enum Hit {
     Turn(Carousel, bool),
     /// A choice of the parallel reads in the System section of the settings.
     Parallel(usize),
+    SystemOption(usize),
     PangolinStep(usize),
     PangolinPrerequisite(usize),
     PangolinDiscovery(usize),
