@@ -7,6 +7,7 @@
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::Span;
 
 use super::theme::Palette;
 
@@ -150,7 +151,7 @@ impl Control {
     /// Cells taken with the frame characters.
     #[must_use]
     pub fn width(&self) -> u16 {
-        let cells = self.text.chars().count() + usize::from(self.digit.is_some()) + 2;
+        let cells = Span::raw(&self.text).width() + usize::from(self.digit.is_some()) + 2;
         u16::try_from(cells).unwrap_or(u16::MAX)
     }
 }
@@ -256,13 +257,17 @@ fn draw_control(
         // The favorites' star is gold wherever it is.
         let chosen = if in_key {
             key_style
-        } else if c == '★' {
+        } else if c == '⭐' {
             style.fg(palette.warning)
         } else {
             style
         };
-        put(buf, at, y, c, chosen);
-        at += 1;
+        let text = if c.is_control() { " ".to_owned() } else { c.to_string() };
+        let width = Span::raw(&text).width();
+        if buf.area.contains(ratatui::layout::Position { x: at, y }) {
+            buf.set_stringn(at, y, &text, width, chosen);
+        }
+        at += u16::try_from(width).unwrap_or(0);
     }
     put(buf, at, y, ends.1, border);
     at + 1 - x

@@ -1111,11 +1111,11 @@ impl App {
             .collect()
     }
 
-    /// The group shown: `★` (the favorites), `all` or a pool's name.
+    /// The group shown: `⭐` (the favorites), `all` or a pool's name.
     #[must_use]
     pub fn group_name(&self) -> String {
         if self.starred {
-            return "★".to_owned();
+            return "⭐".to_owned();
         }
         let groups = self.groups();
         self.group

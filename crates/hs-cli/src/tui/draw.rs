@@ -1129,12 +1129,11 @@ fn workspaces(buf: &mut Buffer, area: Rect, app: &App, mut controls: Vec<Control
                 .position(|column| column.heading == "STATE")
                 .map(|at| columns[..at].iter().map(|column| column.width + 1).sum::<usize>())
         {
-            write(
-                buf,
+            buf.set_stringn(
                 list.x + 1 + u16::try_from(state_x + 6).unwrap_or(0),
                 y,
-                1,
-                "★",
+                "⭐",
+                2,
                 style.fg(palette.warning),
             );
         }
@@ -2349,7 +2348,7 @@ const HELP: [&str; 28] = [
     "F3          copy loaded JSON data to clipboard (terminal OSC 52 support required)",
     "↑ ↓         select a workspace; PgUp PgDn Home End",
     "i           details of the selected workspace (again: hide them)",
-    "← →         ★ (favorites), all or one pool (after tab: one node or all)",
+    "← →         ⭐ (favorites), all or one pool (after tab: one node or all)",
     "f           star or unstar the selected workspace (kept in tui.toml)",
     "/           filter by name or VMID; ↵ keeps it, esc clears it",
     "o           all, online or offline machines; a click on ‹ › turns it too",
