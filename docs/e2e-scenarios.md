@@ -221,3 +221,10 @@ Cloud-Init completes before fixture mutation; encrypted root boot uses its LUKS
 UUID. The cancellation driver recognizes the installer access screen and the
 client history uses `$XDG_STATE_HOME/homestack/tui.log` (default
 `~/.local/state/homestack/tui.log`), within the isolated E2E profile.
+
+Node-outage checks wait for two stable observations of surviving quorum.
+Recovery remains pending until two observations show all three nodes quorate
+and the installed APIs/snippets are ready. Failed recovery blocks subsequent
+mutations. Capacity, migration and resize workers require the verified Gold
+and safe infrastructure; their independently scoped local API does not depend
+on the suite API containers remaining installed after a reinstall failure.

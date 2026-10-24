@@ -188,7 +188,7 @@ fn registry() -> Vec<Scenario> {
         "workspace.capacity",
         "Refuse allocation before and after storage capacity changes",
         0,
-        "installed",
+        "gold",
         "existing capacity fixture, owned tmpfs storage",
         1200,
         false,
@@ -200,7 +200,7 @@ fn registry() -> Vec<Scenario> {
         "workspace.migrate",
         "Running/stopped migrations, persistence and target capacity refusal",
         3,
-        "installed",
+        "gold",
         "existing migration fixture; owned tiny target storage",
         2400,
         false,
@@ -246,15 +246,15 @@ fn registry() -> Vec<Scenario> {
     );
     add(
         "cluster.node-recovery",
-        "Suspend one owned Proxmox node, verify quorum, then resume it",
+        "Suspend one owned Proxmox node, wait for surviving quorum, then verify recovery",
         3,
         "installed",
         "owned pve3 QEMU process",
-        300,
+        600,
         false,
         Action::NodeRecovery,
         "PVE reports pve3 offline with remaining quorum, then all nodes online",
-        "resume the same guarded QEMU process even on failure",
+        "resume the guarded QEMU process; verify stable three-node quorum and API readiness even on failure",
     );
     add(
         "installation.reinstall",
@@ -318,7 +318,7 @@ fn registry() -> Vec<Scenario> {
         ] {
             cases.push(Scenario {
                 id: format!("storage.resize.{role}.{layout}"), description: "Existing resize matrix: growth/refusal, same-size recovery and persistence", nodes: 0,
-                baseline: "installed", fixtures: "existing run-owned resize base and guest layout", timeout: 2400, smoke: false,
+                baseline: "gold", fixtures: "Gold 100 and existing run-owned resize base; independently scoped local server", timeout: 2400, smoke: false,
                 action: Action::Legacy("resize"), verification: "existing guest filesystem size/UUID/marker/ownership assertions; PVE volumes; interruption barrier", cleanup: "existing guarded resize cleanup",
             });
         }
@@ -559,7 +559,7 @@ struct Context {
     foreign: bool,
     permission_vm: bool,
     restart_ct: Option<(String, u64)>,
-    suspended_node: bool,
+    node_recovery_pending: bool,
 }
 
 impl Context {
@@ -1606,9 +1606,9 @@ async fn uninstall(ctx: &mut Context) -> Result<()> {
 
 async fn cleanup_case(ctx: &mut Context) -> Result<()> {
     let mut errors = Vec::new();
-    if ctx.suspended_node {
-        match node_signal(ctx, "-CONT").await {
-            Ok(()) => ctx.suspended_node = false,
+    if ctx.node_recovery_pending {
+        match restore_node(ctx).await {
+            Ok(()) => {}
             Err(error) => errors.push(error.to_string()),
         }
     }
@@ -1945,7 +1945,7 @@ pub async fn run(options: &Options, dir: &Path, artifacts: &Path, report: &mut V
         foreign: false,
         permission_vm: false,
         restart_ct: None,
-        suspended_node: false,
+        node_recovery_pending: false,
     };
     let mut installed = false;
     let mut safe = true;
@@ -2192,46 +2192,61 @@ async fn node_signal(ctx: &mut Context, signal: &str) -> Result<()> {
     )
 }
 
-async fn node_recovery(ctx: &mut Context) -> Result<()> {
-    // Infrastructure fault injection, not a HomeStack cluster-membership operation.
-    ctx.suspended_node = true;
-    node_signal(ctx, "-STOP").await?;
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(100);
-    loop {
-        let status = ctx.pve(&["get", "/cluster/status"]).await?;
-        let entries = status.as_array().ok_or("invalid cluster status")?;
-        if entries.iter().any(|e| e["name"] == "pve3" && e["online"] == 0) {
-            ensure(
-                entries.iter().any(|e| e["type"] == "cluster" && e["quorate"] == 1),
-                "remaining two nodes lost quorum",
-            )?;
-            ctx.evidence.push(json!({"suspended_node_cluster_status":status}));
-            break;
-        }
+async fn restore_node(ctx: &mut Context) -> Result<()> {
+    // Keep recovery pending after CONT until the shared baseline is usable.
+    // Cleanup must retry/verify recovery when the outage assertion itself fails.
+    let resumed_at = tokio::time::Instant::now();
+    node_signal(ctx, "-CONT").await?;
+    let deadline = resumed_at + Duration::from_secs(120);
+    let mut stable = 0;
+    while stable < 2 {
+        stable = if cluster(ctx).await.is_ok() { stable + 1 } else { 0 };
         ensure(
             tokio::time::Instant::now() < deadline,
-            "suspended node never became unavailable",
+            "resumed nodes did not recover stable three-node quorum",
         )?;
-        tokio::time::sleep(Duration::from_secs(2)).await;
+        if stable < 2 {
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        }
+    }
+    ctx.ready().await?;
+    ctx.evidence
+        .push(json!({"node_recovery_seconds":resumed_at.elapsed().as_secs_f64(),"stable_quorum_samples":2}));
+    ctx.node_recovery_pending = false;
+    Ok(())
+}
+
+async fn node_recovery(ctx: &mut Context) -> Result<()> {
+    // Infrastructure fault injection, not a HomeStack cluster-membership operation.
+    ctx.node_recovery_pending = true;
+    let stopped_at = tokio::time::Instant::now();
+    node_signal(ctx, "-STOP").await?;
+    let deadline = stopped_at + Duration::from_secs(100);
+    let mut stable = 0;
+    while stable < 2 {
+        let status = ctx.pve(&["get", "/cluster/status"]).await?;
+        let entries = status.as_array().ok_or("invalid cluster status")?;
+        let down = entries.iter().any(|e| e["name"] == "pve3" && e["online"] == 0);
+        let survivors = ["pve1", "pve2"]
+            .iter()
+            .all(|name| entries.iter().any(|e| e["name"] == *name && e["online"] == 1));
+        let quorate = entries.iter().any(|e| e["type"] == "cluster" && e["quorate"] == 1);
+        stable = if down && survivors && quorate { stable + 1 } else { 0 };
+        ensure(
+            tokio::time::Instant::now() < deadline,
+            "node outage did not converge to two surviving members with quorum",
+        )?;
+        if stable == 2 {
+            ctx.evidence.push(json!({"unavailable_node_cluster_status":status,"surviving_quorum_convergence_seconds":stopped_at.elapsed().as_secs_f64()}));
+        } else {
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        }
     }
     ensure(
         ctx.api_at("api1", "GET", "/v1/status", None, true).await?.0 == 200,
         "HomeStack API unavailable during node outage",
     )?;
-    node_signal(ctx, "-CONT").await?;
-    ctx.suspended_node = false;
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(120);
-    loop {
-        if cluster(ctx).await.is_ok() {
-            break;
-        }
-        ensure(
-            tokio::time::Instant::now() < deadline,
-            "resumed node did not rejoin quorum",
-        )?;
-        tokio::time::sleep(Duration::from_secs(2)).await;
-    }
-    ctx.ready().await
+    restore_node(ctx).await
 }
 
 async fn authorize_ssh(ctx: &mut Context) -> Result<()> {
