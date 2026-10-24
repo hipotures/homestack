@@ -763,7 +763,14 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
             .ok()
             .and_then(|id| id.parse().ok());
     }
-    app.log_file = Some(std::path::PathBuf::from("/tmp/tui.log"));
+    let state = ctx
+        .state_home
+        .clone()
+        .unwrap_or_else(|| ctx.home.join(".local/state"))
+        .join("homestack");
+    std::fs::create_dir_all(&state)
+        .map_err(|error| AppError(format!("Cannot create client state directory: {error}")))?;
+    app.log_file = Some(state.join("tui.log"));
     let clock = Clock::new();
     app.clock = clock.now();
     app.today = clock.today();

@@ -335,12 +335,13 @@ class Matrix:
             self.qm("set", VMID, "--scsi1", home + ",serial=HS_HOME_240")
         self.qm("cloudinit", "update", VMID)
         self.boot(VMID)
+        self.guest(VMID, "cloud-init status --wait")
         if role == "root":
-            self.guest(VMID, "e2label /dev/sdb HS_HOME_240")
+            self.guest_helper("relabel-home")
         self.guest(VMID, "sed -i s/HS_HOME_241/HS_HOME_240/g /etc/fstab; systemctl daemon-reload")
         if role == "root":
-            self.qm("set", VMID, "--scsi2", "local:8,format=qcow2,discard=on")
-            self.guest(VMID, "udevadm settle; test -b /dev/sdc")
+            self.qm("set", VMID, "--scsi2", "local:8,format=qcow2,discard=on,serial=HS_ROOT_240")
+            self.guest(VMID, "udevadm settle")
         public = self.guest_key.with_suffix(".pub").read_text().strip()
         self.guest(VMID, "timeout 180 sh -c 'until test -f /run/cloud-init/result.json; do sleep 1; done'")
         self.guest(VMID, shlex.join(["python3", "-c", GUEST, "authorize", public]))

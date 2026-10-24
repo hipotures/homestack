@@ -24,7 +24,7 @@ def wait_for(text, limit=45):
         if select.select([master], [], [], .1)[0]:
             output.extend(os.read(master, 65536))
         plain = re.sub(rb"\x1b\[[0-?]*[ -/]*[@-~]", b"", bytes(output)).decode(errors="replace")
-        if text in plain:
+        if re.sub(r"\s+", "", text).casefold() in re.sub(r"\s+", "", plain).casefold():
             return
         if child.poll() is not None:
             break
@@ -38,7 +38,8 @@ try:
     os.write(master, b"\r")
     wait_for("Reinstall")
     os.write(master, b"\x1b[B\x1b[B\r")
-    wait_for("HomeStack reinstall")
+    wait_for("USER@HOST")
+    wait_for("step 1 of 5")
     os.write(master, b"\x1b")  # Cancel on access, before opening root.
     time.sleep(.2)
     os.write(master, b"\x11")  # Ctrl+Q: quit the actual TUI.

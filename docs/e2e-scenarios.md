@@ -213,3 +213,11 @@ Workspace cleanup queries image content explicitly and checks both native owner
 VMID and the reviewed disk volume IDs. Proxmox's `vmid` query filter does not
 exclude unrelated snippets and templates from an unrestricted content listing.
 Sanitized root PVE observations are retained in each scenario's evidence.
+
+Resize fixtures resolve the newly allocated home/root preparation disks by
+unique QEMU serial, refuse the active root ancestry and reject a nonblank new
+baseline home. Guest device names such as `/dev/sdb` are not disk identity.
+Cloud-Init completes before fixture mutation; encrypted root boot uses its LUKS
+UUID. The cancellation driver recognizes the installer access screen and the
+client history uses `$XDG_STATE_HOME/homestack/tui.log` (default
+`~/.local/state/homestack/tui.log`), within the isolated E2E profile.

@@ -6,6 +6,7 @@ import pathlib
 import shutil
 import subprocess
 import sys
+import time
 
 PASSPHRASE = "hs-resize-fixture-passphrase"
 
@@ -17,9 +18,37 @@ def run(*args, data=None):
     return result.stdout.strip()
 
 
+def disk_by_serial(serial):
+    deadline = time.monotonic() + 30
+    while True:
+        devices = json.loads(run("lsblk", "-d", "-J", "-p", "-o", "PATH,SERIAL"))["blockdevices"]
+        matches = [item["path"] for item in devices if (item.get("serial") or "").strip() == serial]
+        assert len(matches) <= 1, f"Ambiguous fixture disk serial {serial}"
+        if matches:
+            disk = matches[0]
+            break
+        assert time.monotonic() < deadline, f"Fixture disk serial {serial} did not appear"
+        time.sleep(.1)
+    assert pathlib.Path(disk).is_block_device(), "Fixture serial does not identify a block device"
+    source = run("findmnt", "-nro", "SOURCE", "-M", "/").split("[", 1)[0]
+    ancestry = json.loads(run("lsblk", "-s", "-J", "-p", "-o", "PATH", source))
+    def paths(items):
+        for item in items:
+            yield item["path"]
+            yield from paths(item.get("children", []))
+    assert disk not in set(paths(ancestry["blockdevices"])), "Refusing to format the active root disk"
+    return disk
+
+
+def relabel_home():
+    disk = disk_by_serial("HS_HOME_240")
+    run("e2label", disk, "HS_HOME_240")
+    print(json.dumps({"home_disk": disk}))
+
+
 def prepare(role, layout):
     assert role in ("root", "home")
-    disk = "/dev/sdc" if role == "root" else "/dev/sdb"
+    disk = disk_by_serial("HS_ROOT_240" if role == "root" else "HS_HOME_240")
     mount = "/mnt/hst-newroot" if role == "root" else "/home/user"
     assert pathlib.Path(disk).is_block_device()
     if role == "home":
@@ -52,7 +81,7 @@ def prepare(role, layout):
             stream.write(f"{mapper} UUID={uuid} {key_field} luks\n")
         if role == "root":
             hook = pathlib.Path("/etc/initramfs-tools/scripts/init-premount/hst-resize")
-            hook.write_text(hook.read_text().replace("/dev/sda", "/dev/disk/by-uuid/" + uuid))
+            hook.write_text(hook.read_text().replace("@HST_ROOT_DEVICE@", "/dev/disk/by-uuid/" + uuid))
             run("update-initramfs", "-u", "-k", run("uname", "-r"))
         device = "/dev/mapper/" + mapper
     if layout in ("lvm", "luks-key-lvm", "luks-pass-lvm", "lvm-multi"):
@@ -108,6 +137,10 @@ def authorize(public_key):
 
 
 def baseline(public_key):
+    run("cloud-init", "status", "--wait")
+    disk = disk_by_serial("HS_HOME_241")
+    blank = subprocess.run(["blkid", "-p", disk], capture_output=True)
+    assert blank.returncode == 2, "Refusing to format a nonblank new baseline home"
     log = open("/root/hst-resize-packages.log", "w")
     pathlib.Path("/etc/cryptsetup-initramfs").mkdir(parents=True, exist_ok=True)
     pathlib.Path("/etc/cryptsetup-initramfs/conf-hook").write_text("CRYPTSETUP=y\n")
@@ -115,9 +148,9 @@ def baseline(public_key):
     hook.parent.mkdir(parents=True, exist_ok=True)
     hook.write_text("#!/bin/sh\nPREREQ=\ncase \"$1\" in prereqs) exit 0;; esac\n"
                     "case \" $(cat /proc/cmdline) \" in *' hst.crypt=1 '*)\n"
-                    "  n=0; while [ ! -b /dev/sda ] && [ $n -lt 100 ]; do sleep .1; n=$((n+1)); done\n"
+                    "  n=0; while [ ! -b @HST_ROOT_DEVICE@ ] && [ $n -lt 100 ]; do sleep .1; n=$((n+1)); done\n"
                     "  modprobe dm_crypt\n"
-                    f"  printf %s {PASSPHRASE} | cryptsetup open --key-file - /dev/sda hsrootcrypt\n"
+                    f"  printf %s {PASSPHRASE} | cryptsetup open --key-file - @HST_ROOT_DEVICE@ hsrootcrypt\n"
                     "esac\n")
     hook.chmod(0o755)
     env = dict(os.environ, DEBIAN_FRONTEND="noninteractive")
@@ -136,9 +169,9 @@ def baseline(public_key):
     run("systemctl", "stop", "user@1000.service")
     # Cloud-Init may already have this fixture key with a forced login command.
     authorize(public_key)
-    run("mkfs.ext4", "-F", "-L", "HS_HOME_241", "/dev/sdb")
+    run("mkfs.ext4", "-F", "-L", "HS_HOME_241", disk)
     pathlib.Path("/mnt/hst-home").mkdir(exist_ok=True)
-    run("mount", "/dev/sdb", "/mnt/hst-home")
+    run("mount", disk, "/mnt/hst-home")
     run("cp", "-a", "/home/user/.", "/mnt/hst-home/")
     run("umount", "/mnt/hst-home")
     with open("/etc/fstab", "a") as stream:
@@ -199,6 +232,8 @@ if __name__ == "__main__":
     action, *args = sys.argv[1:]
     if action == "baseline":
         baseline(*args)
+    elif action == "relabel-home":
+        relabel_home()
     elif action == "authorize":
         authorize(*args)
     elif action == "prepare":
