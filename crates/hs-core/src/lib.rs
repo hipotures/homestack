@@ -30,5 +30,6 @@ pub mod service_status;
 pub mod status;
 pub mod tasks;
 pub mod verify;
+mod workspace_destroy;
 
 pub use error::CoreError;

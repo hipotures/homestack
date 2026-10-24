@@ -604,6 +604,21 @@ pub fn destroy_plan(plan: &Value, style: &Style) -> String {
     let mut body: Vec<String> = vm.render(style).lines().map(str::to_owned).collect();
     body.push(String::new());
     body.extend(disks.render(style).lines().map(str::to_owned));
+    if let Some(identity) = plan["destructive_identity"].as_object() {
+        body.push(String::new());
+        body.push(format!("Authorized pool: {}", text(&identity["pool"])));
+        body.push(format!("Role: {}", text(&identity["role"])));
+        body.push(format!("PVE digest: {}", text(&identity["config"]["digest"])));
+        body.push("Exact VM-managed volumes to delete:".to_owned());
+        for disk in identity["disks"].as_array().into_iter().flatten() {
+            body.push(format!(
+                "  {} ({}): {}",
+                text(&disk["slot"]),
+                text(&disk["role"]),
+                text(&disk["config"])
+            ));
+        }
+    }
     let storages: Vec<&Value> = plan["storage_status"].as_array().into_iter().flatten().collect();
     if !storages.is_empty() {
         let mut table = Table::new(&["STORAGE", "FREE NOW", "TOTAL"]).right(&[1, 2]);

@@ -279,8 +279,8 @@ pub(crate) async fn post_task(
     .await
 }
 
-/// `DELETE` that starts a task, then wait for it; tried again like
-/// [`post_task`].
+/// Send DELETE exactly once. A lock failure, lost response or task failure
+/// must never replay destruction against a potentially changed/reused VMID.
 async fn delete_task(
     pve: &impl Pve,
     path: &str,
@@ -289,7 +289,7 @@ async fn delete_task(
     wait: &TaskWait,
     observer: &impl Observer,
 ) -> Result<(), CoreError> {
-    retry_while_locked(wait.poll, || async {
+    let outcome = async {
         let answer = pve.delete(path, query).await?;
         let result = wait_task(pve, &upid(&answer)?, wait, observer).await?;
         if result.ok() {
@@ -297,8 +297,11 @@ async fn delete_task(
         } else {
             Err(CoreError::Failed(format!("{what} failed: {}", result.exitstatus)))
         }
-    })
-    .await
+    }
+    .await;
+    outcome.map_err(|error: CoreError| CoreError::Failed(format!(
+        "{error}. DELETE was sent once and will not be retried. Inspect the VM, storage and task outcome explicitly before reviewing a new destroy plan."
+    )))
 }
 
 pub(crate) fn step_started(observer: &impl Observer, name: &str) {
@@ -1061,6 +1064,12 @@ async fn attach_home(
 pub async fn plan_destroy(pve: &impl Pve, cfg: &Config, pool: &str, vmid: u32) -> Result<Value, CoreError> {
     require_pool(pve, vmid, pool).await?;
     let info = resolve_existing_workspace(pve, cfg, vmid).await?;
+    let identity = crate::workspace_destroy::review(pve, cfg, pool, vmid).await?;
+    if identity["config"] != json!(info.vm_config) || identity["node"] != info.node {
+        return Err(CoreError::Refused(
+            "Workspace changed while planning destruction; review a new plan".to_owned(),
+        ));
+    }
     let usage = &info.home_usage;
     let percent = match (usage.size_bytes, usage.used_bytes) {
         #[allow(clippy::cast_precision_loss, reason = "a percentage")]
@@ -1076,10 +1085,12 @@ pub async fn plan_destroy(pve: &impl Pve, cfg: &Config, pool: &str, vmid: u32) -
         "name": info.name,
         "node": info.node,
         "pool": pool,
-        "status": info.status,
+        "status": identity["status"],
+        "destructive_identity": identity,
         "ip": derive_ip(cfg, vmid).ok(),
         "root_disk": cfg.root_disk,
         "root_storage": root_storage,
+        "root_volume": info.root_volume,
         "root_size_gib": size_gib(&cfg.root_disk),
         "home_disk": cfg.home_disk,
         "home_storage": home_storage,
@@ -1125,29 +1136,49 @@ pub async fn destroy_workspace(
     let node = text(plan, "node")?;
     let name = text(plan, "name")?;
 
-    require_pool(pve, vmid, pool).await?;
-    resolve_existing_workspace(pve, cfg, vmid).await?;
+    crate::workspace_destroy::validate(pve, cfg, pool, plan, false).await?;
 
     let step = "Shutdown";
     step_started(observer, step);
-    let stopped = shutdown_vm(pve, node, vmid, SHUTDOWN_TIMEOUT_SECS, &timing.wait(600), observer).await;
+    // Use the existing graceful shutdown contract, but send it only once.
+    // Retrying even a lock failure would require a new ownership validation.
+    let stopped = async {
+        if plan["status"] == "running" {
+            let timeout = SHUTDOWN_TIMEOUT_SECS.to_string();
+            let answer = pve
+                .post(
+                    &format!("/nodes/{node}/qemu/{vmid}/status/shutdown"),
+                    &[("timeout", &timeout)],
+                )
+                .await?;
+            let result = wait_task(
+                pve,
+                &upid(&answer)?,
+                &timing.wait(u64::from(SHUTDOWN_TIMEOUT_SECS) + 30),
+                observer,
+            )
+            .await?;
+            if !result.ok() {
+                return Err(CoreError::Failed(format!(
+                    "Workspace shutdown failed: {}. No automatic retry; inspect the VM before reviewing a new plan.",
+                    result.exitstatus
+                )));
+            }
+        }
+        Ok(())
+    }
+    .await;
     step_finished(observer, step, stopped.is_ok());
     stopped?;
 
     let step = "Destroy";
     step_started(observer, step);
     let destroyed = async {
-        let current = resolve_existing_workspace(pve, cfg, vmid).await?;
-        require_pool(pve, vmid, pool).await?;
-        if Some(current.home_label.as_str()) != plan.get("home_label").and_then(Value::as_str) {
-            return Err(CoreError::Failed(
-                "Persistent home identity changed after destroy confirmation".to_owned(),
-            ));
-        }
+        crate::workspace_destroy::validate(pve, cfg, pool, plan, true).await?;
         delete_task(
             pve,
             &format!("/nodes/{node}/qemu/{vmid}"),
-            &[("purge", "1")],
+            &[("purge", "0"), ("destroy-unreferenced-disks", "0")],
             &format!("Destroying VM {vmid}"),
             &timing.wait(600),
             observer,
@@ -1156,6 +1187,7 @@ pub async fn destroy_workspace(
         if cluster_vm_resources(pve).await?.iter().any(|r| r.vmid == vmid) {
             return Err(CoreError::Failed(format!("VM {vmid} still exists after qm destroy")));
         }
+        crate::workspace_destroy::confirm_absent(pve, plan).await?;
         Ok(())
     }
     .await;
