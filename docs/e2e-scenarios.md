@@ -101,7 +101,7 @@ on a live host. See the actual run report for evidence.
 | Missing bearer, invalid inputs and foreign destroy refusal: `POST /v1/plans` | `api.refusals` | Both; foreign VM 243 | HTTP 401 without bearer, 422 for invalid inputs, and 404 for a foreign VM hidden from the runtime token; unchanged config, stable inventory, volume identities and jobs |
 | CLI create/status and API start/stop/destroy | `workspace.lifecycle` | Both; new workspace 242 | PVE identity, node/pool/power state, QGA, Cloud-Init, pinned guest SSH, persistent marker, final VM/volume absence |
 | Refresh: `workspace.refresh` plans/jobs | `workspace.refresh` | Both; disposable root and persistent home | Root-only marker removed; same home volume, filesystem UUID, content, owner and mode |
-| Add-key: `workspace.addkey` plans/jobs | `workspace.addkey` | Both; synthetic temporary key | Guest authorized_keys and an actual SSH read through the isolated jump |
+| Add-key: `workspace.addkey` plans/jobs | `workspace.addkey` | Both; synthetic temporary key | New key absent before addition, then present in authorized_keys; actual SSH read using only the new disposable identity through the isolated jump |
 | Stale-plan refusal | `workspace.stale-plan` | Both; run-owned VM name mutation | HTTP 409, same root/home disks and persistence marker |
 | Setup and file copy: `homestack setup` | `workspace.setup-files` | Both; synthetic `.gitconfig`, isolated client SSH alias | Guest bytes, owner and mode; no personal source files |
 | Create admission before/after free-space change | `workspace.capacity` | Both; existing capacity fixture and tiny tmpfs storage | No VM, disk or accepted job after refusal |

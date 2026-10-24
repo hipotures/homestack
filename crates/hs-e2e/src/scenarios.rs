@@ -1436,7 +1436,23 @@ async fn workspace(ctx: &mut Context, kind: &str) -> Result<()> {
             )?;
         }
         "addkey" => {
-            let key = std::fs::read_to_string(ctx.dir.join("client/home/.ssh/e2e-workspace.pub"))?;
+            let key_dir = tempfile::Builder::new()
+                .prefix("scenario-addkey-")
+                .tempdir_in(&ctx.dir)?;
+            let identity = key_dir.path().join("identity");
+            let status = Command::new("ssh-keygen")
+                .args(["-q", "-t", "ed25519", "-N", "", "-C", "homestack-e2e-addkey", "-f"])
+                .arg(&identity)
+                .stdin(Stdio::null())
+                .status()
+                .await?;
+            ensure(status.success(), "could not generate disposable add-key identity")?;
+            let key = std::fs::read_to_string(identity.with_extension("pub"))?;
+            let blob = key.split_whitespace().nth(1).ok_or("invalid synthetic key")?;
+            ensure(
+                !guest(ctx, "cat /home/user/.ssh/authorized_keys").await?.contains(blob),
+                "new add-key identity was already authorized",
+            )?;
             ctx.operation("workspace.addkey", json!({"vmid":242,"key":key.trim(),"restart":false}))
                 .await?;
             ensure(
@@ -1445,7 +1461,8 @@ async fn workspace(ctx: &mut Context, kind: &str) -> Result<()> {
                     .contains(key.split_whitespace().nth(1).ok_or("invalid synthetic key")?),
                 "added SSH key absent in guest",
             )?;
-            verify_ssh(ctx).await?;
+            verify_ssh(ctx, &identity).await?;
+            key_dir.close()?;
         }
         "stale" => {
             let plan = ctx.plan("workspace.destroy", json!({"vmid":242})).await?;
@@ -1772,17 +1789,23 @@ async fn legacy(ctx: &mut Context, case: &Scenario, kind: &str) -> Result<()> {
         std::fs::remove_file(&result)?;
     }
     let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").canonicalize()?;
+    let suite_report =
+        Path::new(ctx.report["artifacts"].as_str().ok_or("missing suite artifacts")?).join("report.json");
+    let stdout = private.with_file_name(format!("{}.stdout.log", case.id));
+    let stderr = private.with_file_name(format!("{}.stderr.log", case.id));
+    service::write_private(&stdout, b"")?;
+    service::write_private(&stderr, b"")?;
     let mut child = Command::new("python3")
         .args(["-c", include_str!("scenario-worker.py")])
         .arg(&repo)
-        .arg(ctx.artifacts.join("report.json"))
+        .arg(suite_report)
         .arg(&private)
         .arg(&result)
         .arg(kind)
         .arg(&case.id)
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stdout(Stdio::from(std::fs::File::create(&stdout)?))
+        .stderr(Stdio::from(std::fs::File::create(&stderr)?))
         .process_group(0)
         .kill_on_drop(true)
         .spawn()?;
@@ -1810,9 +1833,33 @@ async fn legacy(ctx: &mut Context, case: &Scenario, kind: &str) -> Result<()> {
             }
         }
     };
-    let evidence: Value = serde_json::from_slice(
-        &std::fs::read(&result).map_err(|_| "worker exited without a result; fixture cleanup is unconfirmed")?,
-    )?;
+    let bytes = match std::fs::read(&result) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            let mut diagnostic = ctx.redact(&std::fs::read_to_string(&stderr)?);
+            for name in ["api-token", "pve-token"] {
+                if let Ok(secret) = std::fs::read_to_string(private.join(name)) {
+                    let secret = secret.trim();
+                    if !secret.is_empty() {
+                        diagnostic = diagnostic.replace(secret, "[REDACTED]");
+                        if let Some((_, value)) = secret.split_once('=') {
+                            diagnostic = diagnostic.replace(value, "[REDACTED]");
+                        }
+                    }
+                }
+            }
+            diagnostic = diagnostic.replace("hs-resize-fixture-passphrase", "[REDACTED]");
+            ctx.evidence.push(json!({"worker_exit_code":status.code(),"error_category":"worker_initialization","stderr":diagnostic,"result_error":error.to_string()}));
+            ctx.flush()?;
+            return Err(format!(
+                "worker exited without a result ({}); fixture cleanup is unconfirmed: {}",
+                status,
+                diagnostic.lines().last().unwrap_or("no diagnostic output")
+            )
+            .into());
+        }
+    };
+    let evidence: Value = serde_json::from_slice(&bytes)?;
     if evidence["cleanup"]["status"] == "PASSED" {
         group.0 = None;
     }
@@ -2191,10 +2238,11 @@ async fn authorize_ssh(ctx: &mut Context) -> Result<()> {
     let key = std::fs::read_to_string(ctx.dir.join("client/home/.ssh/e2e-workspace.pub"))?;
     ctx.operation("workspace.addkey", json!({"vmid":242,"key":key.trim(),"restart":false}))
         .await?;
-    verify_ssh(ctx).await
+    let identity = ctx.dir.join("client/home/.ssh/e2e-workspace");
+    verify_ssh(ctx, &identity).await
 }
 
-async fn verify_ssh(ctx: &mut Context) -> Result<()> {
+async fn verify_ssh(ctx: &mut Context, identity: &Path) -> Result<()> {
     let key = guest(ctx, "cat /etc/ssh/ssh_host_ed25519_key.pub").await?;
     let hosts = ctx.dir.join("scenario-guest-hosts");
     service::write_private(&hosts, format!("10.77.0.242 {}\n", key.trim()).as_bytes())?;
@@ -2223,7 +2271,7 @@ async fn verify_ssh(ctx: &mut Context) -> Result<()> {
             "-o",
             &format!("ProxyCommand={jump}"),
             "-i",
-            &ctx.dir.join("client/home/.ssh/e2e-workspace").display().to_string(),
+            &identity.display().to_string(),
             "user@10.77.0.242",
             "cat /home/user/hst-marker",
         ])
@@ -2231,6 +2279,8 @@ async fn verify_ssh(ctx: &mut Context) -> Result<()> {
         .kill_on_drop(true)
         .output()
         .await?;
+    ctx.evidence.push(json!({"guest_ssh_attempt":{"exit_code":output.status.code(),"stderr":ctx.redact(&String::from_utf8_lossy(&output.stderr))}}));
+    ctx.flush()?;
     ensure(output.status.success(), "isolated guest SSH authentication failed")?;
     ensure(
         String::from_utf8(output.stdout)?.trim()
