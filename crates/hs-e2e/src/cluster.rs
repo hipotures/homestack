@@ -235,8 +235,42 @@ pub async fn configure(vms: &mut [Vm], run_id: &str, password: &str) -> Result<V
         wait_quorum(primary).await?;
         wait_quorum(vm).await?;
     }
+    pin_peer_ssh(vms, run_id).await?;
     let nodes = verify(vms, run_id).await?;
     Ok(json!({"nodes":vms.len(),"mode":"cluster","members":nodes}))
+}
+
+// The installer runs peer SSH from the first PVE node. Trust the exact host
+// keys injected by this run's seeds, rather than accepting a discovered key.
+async fn pin_peer_ssh(vms: &[Vm], run_id: &str) -> Result<()> {
+    let mut known = String::new();
+    for peer in vms {
+        let key = std::fs::read_to_string(peer.dir.join("host-key.pub"))?;
+        known.push_str(&format!(
+            "pve{0},pve{0}.e2e.homestack.app,10.77.0.{0} {1}\n",
+            peer.index,
+            key.trim()
+        ));
+    }
+    for vm in vms {
+        let mut script = format!(
+            "set -eu\npython3 -c 'import json; assert json.load(open(\"/etc/homestack-e2e.json\"))[\"run_id\"] == \"{run_id}\"'\numask 077\nmkdir -p /root/.ssh\ntest ! -L /root/.ssh/known_hosts\nprintf %s {} >> /root/.ssh/known_hosts\n",
+            shell_quote(&known)
+        );
+        for peer in vms.iter().filter(|peer| peer.index != vm.index) {
+            let proof = format!(
+                "python3 -c 'import json; assert json.load(open(\"/etc/homestack-e2e.json\"))[\"run_id\"] == \"{run_id}\"'; hostname -s"
+            );
+            script.push_str(&format!("test \"$(ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=10 -o HostKeyAlias=pve{0} root@10.77.0.{0} {1})\" = pve{0}\n",peer.index,shell_quote(&format!("set -eu; {proof}"))));
+        }
+        vm.checked_ssh(
+            &script,
+            Duration::from_secs(90),
+            &vm.artifacts.join("cluster-peer-ssh.log"),
+        )
+        .await?;
+    }
+    Ok(())
 }
 
 pub async fn verify(vms: &[Vm], run_id: &str) -> Result<Value> {

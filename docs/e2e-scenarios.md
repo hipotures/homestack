@@ -203,3 +203,8 @@ and exact foreign VM configuration remain part of refusal checks.
 Installer discovery can address cluster peers by their private IPs. The isolated
 SSH inventory pins both peer names and `10.77.0.1` through `10.77.0.3` to the
 owned nodes' loopback forwards, using the existing synthetic keys and host pins.
+
+Cluster bootstrap also pins the seed-injected public host keys inside every
+disposable PVE node and verifies authenticated peer SSH in both directions.
+The installer uses this node-to-node SSH to provision snippets. Host-key
+checking stays enabled; no personal private key is copied into the lab.
