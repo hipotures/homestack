@@ -9,4 +9,5 @@ pub mod instance;
 pub mod lifecycle;
 pub mod manifest;
 pub mod migrate;
+mod removal;
 pub mod update;

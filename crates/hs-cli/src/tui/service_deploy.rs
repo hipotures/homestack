@@ -209,6 +209,7 @@ pub(super) fn work(setup: &Setup, commands: &Receiver<Command>, tell: &(dyn Fn(E
                     };
                     plan = setup.handle.block_on(lifecycle::plan(
                         &s.pve,
+                        &s.config.pool,
                         &source.repository,
                         &source.manifest.id,
                         &choice,
@@ -863,6 +864,7 @@ fn review(
         };
         let mut plan = setup.handle.block_on(lifecycle::plan(
             &s.pve,
+            &s.config.pool,
             &source.repository,
             &source.manifest.id,
             &choice,

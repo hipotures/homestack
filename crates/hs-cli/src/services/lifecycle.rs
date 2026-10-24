@@ -10,6 +10,7 @@ use serde_json::Value;
 
 use super::deploy::{self, SiteReady, Source};
 use super::instance::{self, Instance};
+use super::removal;
 
 /// The managed runtime selector of initialized API and Site instances.
 const MANAGED: &str = "HOMESTACK_MANAGED_HOME";
@@ -62,6 +63,7 @@ pub struct Choice {
 #[derive(Debug, Clone, Default)]
 pub struct Plan {
     pub targets: Vec<Instance>,
+    removals: Vec<removal::Reviewed>,
     pub remove: bool,
     pub cores: Option<u32>,
     pub memory_mib: Option<u32>,
@@ -94,13 +96,26 @@ pub fn names(targets: &[Instance]) -> String {
         .join(" ")
 }
 
-pub async fn plan(pve: &impl Pve, repository: &str, service: &str, choice: &Choice) -> Plan {
+pub async fn plan(pve: &impl Pve, pool: &str, repository: &str, service: &str, choice: &Choice) -> Plan {
     let mut plan = Plan::default();
     if choice.ctids.is_empty() {
         plan.problems.push("Select at least one instance".to_owned());
     }
     for ctid in &choice.ctids {
-        match instance::read(pve, *ctid).await {
+        if !choice.remove.trim().is_empty() && choice.ctids.iter().filter(|id| *id == ctid).count() != 1 {
+            plan.problems.push(format!("CT {ctid} selected more than once"));
+            continue;
+        }
+        let target = if choice.remove.trim().is_empty() {
+            instance::read(pve, *ctid).await
+        } else {
+            removal::review(pve, pool, *ctid).await.map(|reviewed| {
+                let target = reviewed.target.clone();
+                plan.removals.push(reviewed);
+                target
+            })
+        };
+        match target {
             Ok(target) if target.repository == repository && target.service == service && !target.held => {
                 plan.targets.push(target);
             }
@@ -119,19 +134,27 @@ pub async fn plan(pve: &impl Pve, repository: &str, service: &str, choice: &Choi
         }
         plan.remove = true;
         for target in &plan.targets {
-            let home = if target.home_volume.is_empty() {
-                String::new()
-            } else {
-                format!(
-                    " and home {} ({})",
-                    target.home_volume,
-                    node::show_size(target.home_mib)
-                )
-            };
             plan.lines.push(format!(
-                "CT {} {} on {} · {}: remove with root {}{home}",
-                target.ctid, target.hostname, target.node, target.address, target.root_volume,
+                "CT {} {} on {} · pool {} · {}: remove",
+                target.ctid, target.hostname, target.node, target.pool, target.address,
             ));
+            plan.lines.push(format!(
+                "  Delete root {} · storage {} · {}",
+                target.root_volume,
+                target.root_storage,
+                node::show_size(target.root_mib),
+            ));
+            if target.home_volume.is_empty() {
+                plan.lines.push("  Stateless: no persistent home".to_owned());
+            } else {
+                plan.lines.push(format!(
+                    "  Delete home {} · storage {} · {}",
+                    target.home_volume,
+                    target.home_storage,
+                    node::show_size(target.home_mib),
+                ));
+                plan.lines.push(format!("  Home mount: {}", target.home_mount));
+            }
         }
         return plan;
     }
@@ -281,41 +304,68 @@ pub async fn apply(
     if source.is_site() && plan.remove && site.is_none() {
         return Err("Removing a Site requires the verified Pangolin context".to_owned());
     }
-    let mut lines = Vec::new();
-    for target in &plan.targets {
-        let (ctid, node) = (target.ctid, target.node.as_str());
-        let now = instance::read_on(pve, node, ctid).await?;
-        if now.mac != target.mac || now.home_volume != target.home_volume {
-            return Err(format!("CT {ctid} changed since review; review again"));
+    if plan.remove {
+        if plan.removals.len() != plan.targets.len() || plan.targets.is_empty() {
+            return Err("Incomplete removal authorization; review removal again".to_owned());
         }
+        // Validate the whole selection before changing any Site or LXC.
+        for (target, reviewed) in plan.targets.iter().zip(&plan.removals) {
+            if target != &reviewed.target
+                || target.repository != source.repository
+                || target.service != source.manifest.id
+            {
+                return Err(format!(
+                    "CT {}: reviewed service identity differs; review removal again",
+                    target.ctid
+                ));
+            }
+            reviewed.revalidate(pve, false).await?;
+            if let Some(site) = site.filter(|_| source.is_site()) {
+                tokio::task::block_in_place(|| site.removal(target.ctid))?;
+            }
+        }
+    }
+    let mut lines = Vec::new();
+    for (index, target) in plan.targets.iter().enumerate() {
+        let (ctid, node) = (target.ctid, target.node.as_str());
         if plan.remove {
+            let reviewed = &plan.removals[index];
+            reviewed.revalidate(pve, false).await?;
             // Its Site first: a failure leaves the container listed, so removal can be repeated.
             if let Some(site) = site.filter(|_| source.is_site()) {
                 say(&tokio::task::block_in_place(|| site.remove(ctid, say))?);
+                reviewed.revalidate(pve, false).await?;
             }
-            if now.running {
+            if target.running {
                 say(&format!("CT {ctid} · stopping"));
                 node::power(pve, node, ctid, "stop").await?;
             }
             say(&format!("CT {ctid} · removing"));
+            // DELETE has no digest/conditional identity parameter. Keep this
+            // complete read adjacent to it; it is not a transaction or lock.
+            reviewed.revalidate(pve, true).await?;
             let upid = pve
                 .delete(
                     &format!("/nodes/{node}/lxc/{ctid}"),
-                    &[("purge", "1"), ("destroy-unreferenced-disks", "1")],
+                    &[("purge", "0"), ("destroy-unreferenced-disks", "0")],
                 )
                 .await
                 .map_err(|e| format!("remove CT {ctid}: {e}"))?;
             task(pve, &upid, &format!("remove CT {ctid}")).await?;
-            let home = if now.home_volume.is_empty() {
+            let home = if target.home_volume.is_empty() {
                 String::new()
             } else {
-                format!(" and home {}", now.home_volume)
+                format!(" and home {}", target.home_volume)
             };
             lines.push(format!(
                 "CT {ctid} {} removed with root {}{home}",
-                now.hostname, now.root_volume
+                target.hostname, target.root_volume
             ));
             continue;
+        }
+        let now = instance::read_on(pve, node, ctid).await?;
+        if now.mac != target.mac || now.home_volume != target.home_volume {
+            return Err(format!("CT {ctid} changed since review; review again"));
         }
         for (disk, now_mib, wanted) in [
             ("rootfs", now.root_mib, plan.root_mib),
