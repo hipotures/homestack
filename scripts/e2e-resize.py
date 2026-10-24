@@ -226,7 +226,9 @@ class Matrix:
         print(json.dumps({"stage": "boot-base"}), flush=True)
         self.boot(BASE)
         print(json.dumps({"stage": "install-layout-tools"}), flush=True)
-        kernel = self.guest_helper("baseline", public, vmid=BASE)["kernel"]
+        baseline = self.guest_helper("baseline", public, vmid=BASE)
+        (self.output / "baseline.json").write_text(json.dumps(baseline, indent=2) + "\n")
+        kernel = baseline["kernel"]
         print(json.dumps({"stage": "capture-boot-files"}), flush=True)
         # Transfer the fixture kernel/initrd through the authenticated guest connection.
         proxy = shlex.join(["/usr/bin/ssh", "-F", self.report["ssh_config"], "pve-e2e", "-W", "%h:%p"])
@@ -335,7 +337,8 @@ class Matrix:
             self.qm("set", VMID, "--scsi1", home + ",serial=HS_HOME_240")
         self.qm("cloudinit", "update", VMID)
         self.boot(VMID)
-        self.guest(VMID, "cloud-init status --wait")
+        cloud_init = self.guest_helper("cloud-init-ready")
+        (self.output / "cloud-init.json").write_text(json.dumps(cloud_init, indent=2) + "\n")
         if role == "root":
             self.guest_helper("relabel-home")
         self.guest(VMID, "sed -i s/HS_HOME_241/HS_HOME_240/g /etc/fstab; systemctl daemon-reload")

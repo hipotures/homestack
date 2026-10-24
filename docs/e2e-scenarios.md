@@ -228,3 +228,8 @@ and the installed APIs/snippets are ready. Failed recovery blocks subsequent
 mutations. Capacity, migration and resize workers require the verified Gold
 and safe infrastructure; their independently scoped local API does not depend
 on the suite API containers remaining installed after a reinstall failure.
+
+Fixture Cloud-Init readiness requires JSON status `done`, no stage errors and
+no recoverable error classes except `DEPRECATED`. Proxmox-generated deprecated
+user-data notices (exit status 2) are retained in fixture evidence; fatal errors
+and WARNING/ERROR classes fail preparation.

@@ -18,6 +18,19 @@ def run(*args, data=None):
     return result.stdout.strip()
 
 
+def wait_cloud_init():
+    result = subprocess.run(["cloud-init", "status", "--wait", "--format", "json"],
+                            text=True, capture_output=True, timeout=240)
+    state = json.loads(result.stdout)
+    assert result.returncode in (0, 2) and state["status"] == "done", f"Cloud-Init did not complete: {state}"
+    for section in [state, *(state[name] for name in ("init-local", "init", "modules-config", "modules-final"))]:
+        assert section["errors"] == [], f"Cloud-Init errors: {state}"
+        # Proxmox's generated user-data still emits a deprecated `user` field.
+        # Preserve those notices; do not accept WARNING/ERROR or fatal failures.
+        assert set(section["recoverable_errors"]) <= {"DEPRECATED"}, f"Cloud-Init recoverable errors: {state}"
+    return state
+
+
 def disk_by_serial(serial):
     deadline = time.monotonic() + 30
     while True:
@@ -137,7 +150,7 @@ def authorize(public_key):
 
 
 def baseline(public_key):
-    run("cloud-init", "status", "--wait")
+    cloud_init = wait_cloud_init()
     disk = disk_by_serial("HS_HOME_241")
     blank = subprocess.run(["blkid", "-p", disk], capture_output=True)
     assert blank.returncode == 2, "Refusing to format a nonblank new baseline home"
@@ -177,7 +190,7 @@ def baseline(public_key):
     with open("/etc/fstab", "a") as stream:
         stream.write("\nLABEL=HS_HOME_241 /home/user ext4 defaults,nofail,x-systemd.device-timeout=1s 0 2\n")
     run("mount", "/home/user")
-    print(json.dumps({"kernel": run("uname", "-r")}))
+    print(json.dumps({"kernel": run("uname", "-r"), "cloud_init": cloud_init}))
 
 
 def snapshot(role):
@@ -232,6 +245,8 @@ if __name__ == "__main__":
     action, *args = sys.argv[1:]
     if action == "baseline":
         baseline(*args)
+    elif action == "cloud-init-ready":
+        print(json.dumps(wait_cloud_init()))
     elif action == "relabel-home":
         relabel_home()
     elif action == "authorize":

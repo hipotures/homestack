@@ -78,7 +78,7 @@ finally:
         result["cleanup"]["status"] = "PASSED"
     except Exception as error:
         result["cleanup"]["error"] = str(error)
-    for name in ("results.json", "jobs.json", "cleanup.json", "migration-cleanup.json"):
+    for name in ("baseline.json", "cloud-init.json", "results.json", "jobs.json", "cleanup.json", "migration-cleanup.json"):
         path = output / name
         if path.is_file():
             result["observations"].append({"source": name, "evidence": json.loads(path.read_text())})
