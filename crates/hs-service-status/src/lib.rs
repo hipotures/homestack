@@ -445,43 +445,44 @@ fn collect(cgroup: &mut Option<Cgroup>) -> Sample {
 }
 
 fn filesystems(mountinfo: Option<&str>) -> (Vec<Filesystem>, Option<&'static str>) {
-    let mut mounts = BTreeMap::new();
-    let mut text_bytes = 0;
-    let mut error = None;
-    match mountinfo
+    let Some(entries) = mountinfo
         .and_then(mountinfo_entries)
-        .filter(|entries| !entries.is_empty())
-    {
-        Some(entries) => {
-            for (_, path, kind) in entries {
-                // File bind mounts are excluded, but an unreadable mount remains visible.
-                if data_mount(&path, kind) && !std::fs::metadata(&path).is_ok_and(|metadata| !metadata.is_dir()) {
-                    text_bytes += path.len() + kind.len();
-                    // Leave room for the two required entries and JSON fields.
-                    if mounts.len() >= MAX_FILESYSTEMS - 2 || text_bytes > 4 * 1024 {
-                        error = Some("too_many_mounts");
-                        break;
-                    }
-                    // Later stacked mounts are the visible ones.
-                    mounts.insert(path, kind.to_owned());
-                }
-            }
-        }
-        None => error = Some("mount_inventory_unavailable"),
-    }
-    let mut filesystems: Vec<Filesystem> = mounts.iter().map(|(path, kind)| measure(path, kind)).collect();
-    // Never silently report the root's free space as /home/app's free space.
+        .filter(|entries| entries.iter().any(|(_, path, _)| path == "/"))
+    else {
+        return (
+            ["/", "/home/app"]
+                .map(|path| unmounted(path, "mount_inventory_unavailable"))
+                .into(),
+            Some("mount_inventory_unavailable"),
+        );
+    };
+    // Resolve stacked mounts before filtering or limiting the response. The
+    // complete inventory was already bounded to 1 MiB by the caller.
+    let mut mounts: BTreeMap<_, _> = entries.into_iter().map(|(_, path, kind)| (path, kind)).collect();
+    let mut filesystems = Vec::new();
+    let mut text_bytes = 0;
+    // Reserve both required entries first, regardless of their inventory order
+    // or filesystem type. Absence is known even when other mounts are omitted.
     for required in ["/", "/home/app"] {
-        if !mounts.contains_key(required) {
-            filesystems.push(unmounted(
-                required,
-                if error.is_some() {
-                    "mount_inventory_unavailable"
-                } else {
-                    "not_mounted"
-                },
-            ));
+        filesystems.push(if let Some(kind) = mounts.remove(required) {
+            text_bytes += required.len() + kind.len();
+            measure(required, kind)
+        } else {
+            unmounted(required, "not_mounted")
+        });
+    }
+    let mut error = None;
+    for (path, kind) in mounts {
+        // File bind mounts are excluded, but an unreadable mount remains visible.
+        if !data_mount(&path, kind) || std::fs::metadata(&path).is_ok_and(|metadata| !metadata.is_dir()) {
+            continue;
         }
+        if filesystems.len() >= MAX_FILESYSTEMS || text_bytes + path.len() + kind.len() > 4 * 1024 {
+            error = Some("too_many_mounts");
+            continue;
+        }
+        text_bytes += path.len() + kind.len();
+        filesystems.push(measure(&path, kind));
     }
     filesystems.sort_by(|a, b| a.mount.cmp(&b.mount));
     (filesystems, error)
