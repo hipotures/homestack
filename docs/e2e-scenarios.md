@@ -14,8 +14,13 @@ python3 scripts/cargo.py build --locked -p hs-e2e -p hs-cli -p hs-deploy -p hs-s
 target/debug/homestack-e2e list-scenarios
 ```
 
-Prepare a server image from the **same clean Git commit** being tested, with OCI
-label `org.opencontainers.image.revision` equal to that full commit. Push it to a
+Use a server image with OCI label `org.opencontainers.image.revision` naming its
+full source commit. Prefer an image built from the clean commit being tested.
+An existing release is also accepted when Git independently confirms that all
+server sources, dependency declarations, lockfile and image/build inputs are
+identical to the tested revision and current working tree. Harness-only or
+documentation commits therefore do not require republishing unchanged API code.
+The report records both revisions and the compared paths. Push a new image to a
 registry accessible through the existing E2E registry proxy. Use an explicit tag
 and its expected `sha256:` manifest digest. For example, an owner can use the
 existing API image workflow or build the repository `Containerfile` target `node`
@@ -23,8 +28,8 @@ with that label. Ordinary harness-only branch pushes do not publish API releases
 Never create a numeric API release merely to test harness changes.
 
 The controller resolves the tag, requires its expected digest, records the
-linux/amd64 platform digest, verifies its OCI revision label through the node's
-`skopeo`, and checks that the tag did not change during installation. The current
+linux/amd64 platform digest, reads its OCI revision label through the node's `skopeo`, verifies source
+provenance with Git, and checks that the tag did not change during installation. The current
 product deployer uses tagged OCI archives, so these checks detect tag changes;
 they do not add digest-reference support to the product. There is no automatic
 selection of the newest published image for scenario runs. Existing infrastructure

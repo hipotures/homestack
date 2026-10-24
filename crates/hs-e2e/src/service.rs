@@ -94,6 +94,49 @@ pub async fn workspace_keys(dir: &Path) -> Result<()> {
     Ok(())
 }
 
+fn verify_image_source(revision: &str, tested: &str) -> Result<Value> {
+    for revision in [revision, tested] {
+        if revision.len() != 40 || !revision.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err("image and tested revisions must be full Git commit IDs".into());
+        }
+    }
+    // Harness and documentation commits do not require republishing an unchanged
+    // API. Compare all server sources, dependencies and image build inputs.
+    let inputs = [
+        "Cargo.toml",
+        "Cargo.lock",
+        "Containerfile",
+        ".dockerignore",
+        ".cargo",
+        "rust-toolchain",
+        "rust-toolchain.toml",
+        ".github/workflows/ci.yml",
+        "deploy/image",
+        "deploy/lxc",
+        "crates/hs-server",
+        "crates/hs-core",
+        "crates/hs-model",
+        "crates/hs-pve",
+        "crates/hs-config",
+        "crates/hs-service-status",
+    ];
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    for against in [Some(revision), None] {
+        let mut command = std::process::Command::new("git");
+        command.arg("-C").arg(&source).args(["diff", "--quiet"]);
+        if let Some(revision) = against {
+            command.arg(revision);
+        }
+        command.arg(tested).arg("--").args(inputs);
+        if !command.status()?.success() {
+            return Err("selected image's server source or build inputs differ from the tested revision; build an image from the tested source".into());
+        }
+    }
+    Ok(
+        json!({"image_revision":revision,"tested_revision":tested,"server_inputs_identical":true,"compared_paths":inputs}),
+    )
+}
+
 pub async fn prepare(options: &Options, dir: &Path, artifacts: &Path, report: &Value) -> Result<Value> {
     let run_id = uuid::Uuid::parse_str(report["run_id"].as_str().ok_or("run has no ID")?)?;
     let log = artifacts.join("service-preparation.log");
@@ -214,6 +257,7 @@ pub async fn prepare(options: &Options, dir: &Path, artifacts: &Path, report: &V
     let registry = crate::registry_proxy::start().await?;
     let mut tunnel = crate::tunnel::Tunnel::start(dir, registry.port).await?;
     eprintln!("Checking the native Proxmox OCI image cache for {image}");
+    let mut provenance = Value::Null;
     let result = async {
         for entry in nodes {
             let node_dir = Path::new(entry["directory"].as_str().ok_or("missing node directory")?);
@@ -226,15 +270,16 @@ pub async fn prepare(options: &Options, dir: &Path, artifacts: &Path, report: &V
         if options.suite.is_some() || options.scenario.is_some() {
             let script = format!("export HTTPS_PROXY=http://10.77.0.1:3129 https_proxy=http://10.77.0.1:3129\nskopeo inspect --config docker://{}\n", crate::phases::shell_quote(&image));
             let config: Value = serde_json::from_slice(&checked_ssh(dir, &script, &log).await?)?;
-            if config["config"]["Labels"]["org.opencontainers.image.revision"] != report["tested_commit"] {
-                return Err("selected image OCI revision label does not match the tested Git commit".into());
-            }
+            provenance = verify_image_source(
+                config["config"]["Labels"]["org.opencontainers.image.revision"].as_str().ok_or("selected image has no source revision label")?,
+                report["tested_commit"].as_str().ok_or("run has no tested revision")?,
+            )?;
         }
         Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
     }.await;
     tunnel.stop().await?;
     result?;
-    let metadata = json!({"run_id": run_id.to_string(), "image": image, "digest":resolved.digest,"platform_digest":resolved.platform,"tested_commit":report["tested_commit"], "hostname": crate::service_fixture::HOST,
+    let metadata = json!({"run_id": run_id.to_string(), "image": image, "digest":resolved.digest,"platform_digest":resolved.platform,"provenance":provenance,"tested_commit":report["tested_commit"], "hostname": crate::service_fixture::HOST,
         "address": crate::service_fixture::ADDRESS, "certificate_not_after": stored.not_after,
         "certificate_names": stored.names, "image_volume": volume,
         "fixture_directory": fixture.dir, "profile": profile, "prepared_at_ms": crate::phases::now_ms()});
