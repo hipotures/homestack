@@ -168,15 +168,20 @@ execution, but pending applicable cases become blocked and cleanup still runs.
 Exit is nonzero for failed/blocked required scenarios or incomplete cleanup.
 A host preflight failure also creates reports without allocating lab resources.
 
-The current development host lacks `/dev/kvm` and `qemu-system-x86_64`. Both
-requested topology attempts must therefore be reported as blocked, with no live
-scenario passes. Reproduce the prerequisite check with:
+Initial sandboxed attempts could not see `/dev/kvm`. This was a restriction of
+the execution session, not an absence of KVM on the host: an unsandboxed check
+successfully opened the device and found the existing private QEMU cache.
+Both unsandboxed topology retries passed host preflight, then stopped because
+the retained DNS fixture requires `--local-dns 192.168.100.1`. No Proxmox VM or
+product scenario started. The original commands were:
 
 ```sh
 target/debug/homestack-e2e run --nodes 1 --suite full --artifacts /tmp/homestack-e2e-check-one
 target/debug/homestack-e2e run --nodes 3 --suite full --artifacts /tmp/homestack-e2e-check-three
 ```
 
-Once KVM and the existing authorized DNS prerequisites are available, supply the
-revision-matched image/digest and use the full commands above. Routine runs never
-invoke `cleanup --all`.
+Run from an environment with access to host KVM and supply the DNS server
+recorded by the retained fixture. For this host, add `--local-dns 192.168.100.1`
+to both commands. Complete functional runs also require the explicit
+revision-matched image and expected digest described above. Use new artifact
+directories for each retry. Routine runs never invoke `cleanup --all`.

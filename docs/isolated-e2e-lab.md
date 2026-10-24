@@ -68,6 +68,9 @@ Conflicting records are refused, never overwritten.
 The implementation must be built with `scripts/cargo.py`. Listing scenarios,
 syntax checks, Clippy and prerequisite-refusal checks validate the harness only.
 A live product pass requires executing the real laboratory and inspecting its
-report. The development host for this change has no `/dev/kvm` and no QEMU binary,
-so neither topology has live product evidence. The scenario guide identifies
-remaining manifest-service coverage gaps; those are separate from host blockers.
+report. Initial sandboxed attempts could not see `/dev/kvm`; a subsequent
+unsandboxed check confirmed usable host KVM and the existing private QEMU cache.
+Both topology retries outside the sandbox passed host preflight and stopped at
+the retained fixture's requirement for `--local-dns 192.168.100.1`. Neither retry
+started a Proxmox VM or ran a product scenario. The scenario guide identifies
+remaining manifest-service coverage gaps separately from execution prerequisites.
