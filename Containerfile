@@ -2,7 +2,7 @@
 #
 #   docker build -f Containerfile -t homestack-server .
 #
-# Configuration and secrets: docs/migration/deploy.md.
+# Configuration and secrets: docs/internal-services.md.
 
 FROM docker.io/library/rust:1.99.0-alpine3.24 AS build
 # Lets scripts remove this stage (about 2 GB) after a build.
@@ -18,7 +18,7 @@ RUN cargo build --release --locked --target x86_64-unknown-linux-musl -p hs-serv
 
 # The node image (`--target node`), published as
 # ghcr.io/hipotures/homestack-server and run by homestack-deploy as a
-# Proxmox container from this OCI image (phase 11): runit starts the server
+# Proxmox container from this OCI image: runit starts the server
 # on 127.0.0.1:8080 and Caddy on :443 in front of it (deploy/lxc).
 FROM docker.io/library/alpine:3.24.2 AS node
 RUN apk add --no-cache ca-certificates caddy runit \

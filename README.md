@@ -52,7 +52,14 @@ HomeStack identifies and guards VMs and containers using Proxmox tags:
 | `homestack-ws` | QEMU VM | Managed workspace with disposable `scsi0` root and persistent `scsi1` home (`HS_HOME_<VMID>`). |
 | `homestack-lock` | QEMU VM | Optional tag added alongside `homestack-ws` to block `refresh` and protect customized roots. |
 | `homestack-alien` | QEMU VM | Existing non-HomeStack VM opted into `homestack setup`, `repo`, and `addkey` while lifecycle operations remain disabled. |
-| `homestack-api` | LXC container | HomeStack API server instance (`api1`, `api2`, …) deployed and updated by the installer. |
+| `homestack-server` | LXC container | Image-backed service container, including installer API instances (`api1`, `api2`, …) and common service deployments. |
+
+Common deployments identify the service in their Proxmox description, for example
+`HomeStack service homestack-api` or `HomeStack service pangolin`. The API manifest
+ID `homestack-api` is distinct from the `homestack-server` tag and image name.
+See [internal services](docs/internal-services.md) for API and Pangolin deployment
+and [service replacement](docs/service-replacement.md) for optional persistent
+home, image updates, recovery and explicit deletion.
 
 ---
 
@@ -60,7 +67,9 @@ HomeStack identifies and guards VMs and containers using Proxmox tags:
 
 ### 1. Build the binary
 
-Build with Rust 1.99 or newer (Python 3 is used only by the repository's build wrapper; there is no Python runtime in the client or server):
+Build with Rust 1.99 or newer. The client and server are Rust binaries. Python 3
+runs the repository build wrapper, embedded guest setup programs and remote
+Pangolin integration helpers; retain it on the hosts used by those workflows:
 
 ```sh
 python3 scripts/cargo.py build --locked -p hs-cli --bin homestack
@@ -411,6 +420,8 @@ apt-get install -y rsync git
 
 - **Architecture & Operations:**
   - [Client profiles](docs/client-profiles.md)
+  - [Service replacement and deletion](docs/service-replacement.md)
+  - [Managed API and Pangolin services](docs/internal-services.md)
   - [OpenAPI specification](docs/openapi.json)
   - [Isolated E2E bootstrap](docs/e2e-bootstrap.md) & [E2E laboratory design](docs/isolated-e2e-lab.md)
 

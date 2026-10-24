@@ -783,4 +783,4 @@ With profile `e2e` paused after verification, `python3 scripts/e2e-migrate.py --
 
 The user can inspect the same cluster after automated scenario cleanup. Keep the controller paused until that inspection is finished. Resuming proceeds to graceful shutdown and removes the complete topology. SIGINT/SIGTERM also trigger full cleanup, including a partially prepared cluster.
 
-The [recorded cluster verification](e2e-cluster-results.json) covers a fresh three-node bootstrap, nine migration/capacity/inventory checks, preserved Gold configuration and interrupted-run cleanup for both topologies. [Phase 17](migration/phase-17.md) records the migration power-state and plan-digest regressions found by these live checks.
+The [recorded cluster verification](e2e-cluster-results.json) covers a fresh three-node bootstrap, nine migration/capacity/inventory checks, preserved Gold configuration and interrupted-run cleanup for both topologies. The report preserves the dated results; current migration behavior is described in [the workspace lifecycle reference](../README.md#storage--lifecycle-invariants).

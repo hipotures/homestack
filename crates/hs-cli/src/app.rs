@@ -173,11 +173,11 @@ fn help(config: &Path) -> String {
         ),
         (
             "homestack setup [OPTIONS]",
-            "Workspace setup; still in the Python client (phase 14).",
+            "Provision workspace or local user tools and files; use setup list to see the catalog.",
         ),
         (
             "homestack repo VMID|NAME [OWNER/REPO]",
-            "Repository deploy keys; still in the Python client (phase 14).",
+            "Inspect or configure a workspace repository and its GitHub deploy key.",
         ),
         (
             "homestack status",

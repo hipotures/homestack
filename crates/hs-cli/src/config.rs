@@ -28,8 +28,9 @@ pub fn load(path: &Path) -> Result<Loaded, AppError> {
     let text = std::fs::read_to_string(path).map_err(|error| {
         if error.kind() == std::io::ErrorKind::NotFound {
             AppError::new(format!(
-                "Configuration file {} was not found. Create it with `hs-config split --server-url https://api.example.net` \
-or write it by hand (docs/migration/phase-13.md).",
+                "Configuration file {} was not found. Run `homestack install` to generate client.toml; \
+see README.md (First-time installation) and docs/client-profiles.md. \
+To split an existing config.toml, use `hs-config split --server-url https://api.example.net`.",
                 path.display()
             ))
         } else {
