@@ -72,6 +72,7 @@ fn prepare(dir: &Path, program: &Path, ssh: &Path, image: &str, argv: &[String])
     let guests = root.join("home/.ssh/config.d/homestack");
     std::fs::create_dir_all(&guests)?;
     write(&root.join("guest-connect.py"), include_str!("guest-connect.py"), 0o600)?;
+    write(&root.join("guest-ping.py"), include_str!("guest-ping.py"), 0o600)?;
     write(
         &config,
         &format!(
@@ -92,6 +93,16 @@ fn prepare(dir: &Path, program: &Path, ssh: &Path, image: &str, argv: &[String])
             "#!/bin/sh\nexec {} -F {} \"$@\"\n",
             shell_quote(&ssh.display().to_string()),
             shell_quote(&config.display().to_string())
+        ),
+        0o700,
+    )?;
+    write(
+        &root.join("bin/ping"),
+        &format!(
+            "#!/bin/sh\nexec python3 {} {} {} \"$@\"\n",
+            shell_quote(&root.join("guest-ping.py").display().to_string()),
+            shell_quote(&dir.display().to_string()),
+            shell_quote(&ssh.display().to_string()),
         ),
         0o700,
     )?;

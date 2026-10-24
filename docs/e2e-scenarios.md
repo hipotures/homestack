@@ -59,6 +59,11 @@ target/debug/homestack-e2e run --nodes 3 --scenario workspace.migrate \
 Use a new artifact directory for every run. Supply the existing `--local-dns`,
 `--tsig-file`, `--spaceship-file`, and `--fixtures` options where needed by the
 execution host. API2/API3 DNS aliases use the persistent ownership journal.
+The isolated client also routes the deployer's bounded single-packet `ping`
+through pinned SSH to the owned primary Proxmox node, checking its run marker
+before sending real ICMP to the guest. No host routes or additional privileges
+are required. All nodes, including the primary, have the uniform
+`pve-e2e-pveN` SSH alias used by independent observers.
 File provisioning also requires `rsync` on the execution host and guest.
 The bootstrap timeout covers infrastructure phases; scenario timeouts are
 separate, so a full resize matrix can take substantially longer.

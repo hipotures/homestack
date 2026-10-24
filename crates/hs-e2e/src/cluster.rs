@@ -78,7 +78,7 @@ pub fn write_ssh_inventory(dir: &Path, report: &Value) -> Result<()> {
     use std::io::Write;
     let primary = std::fs::read_to_string(dir.join("ssh_config"))?.replace(
         "Host pve-e2e\n",
-        "Host pve-e2e pve1 pve1.e2e.homestack.app pve.e2e.homestack.app\n",
+        "Host pve-e2e pve-e2e-pve1 pve1 pve1.e2e.homestack.app pve.e2e.homestack.app\n",
     );
     std::fs::write(dir.join("ssh_config"), primary)?;
     let mut config = std::fs::OpenOptions::new().append(true).open(dir.join("ssh_config"))?;
