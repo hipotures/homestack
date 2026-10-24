@@ -12,7 +12,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use hs_core::capabilities::{evaluate, installation, probe_paths};
 use hs_model::capabilities::Capabilities;
-use hs_model::health::Liveness;
+use hs_model::health::{Liveness, LivenessStatus};
 use hs_model::pve::{NodeStatus, PveVersion};
 use hs_model::server_config::{ConfigUpdated, ConfigVersion};
 use hs_model::{ErrorCode, NodeName};
@@ -27,6 +27,8 @@ pub const MAX_CONFIG_BYTES: usize = 256 * 1024;
 pub fn public() -> Router<AppState> {
     Router::new()
         .route("/health/live", get(live))
+        .route("/health/ready", get(ready))
+        .route(crate::health::PROBE_PATH, get(heartbeat_probe))
         .route(hs_service_status::PATH, get(service_status))
 }
 
@@ -34,7 +36,12 @@ pub fn public() -> Router<AppState> {
 /// `pass` is the same verdict as `/health/live`.
 #[utoipa::path(get, path = "/.well-known/homestack/status", tag = "health", responses((status = 200, body = hs_service_status::Report)))]
 pub async fn service_status(State(state): State<AppState>) -> Json<hs_service_status::Report> {
-    Json(state.service_status.report(hs_service_status::Status::Pass).await)
+    let mut report = state.service_status.report(hs_service_status::Status::Pass).await;
+    report.status = match state.heartbeat.snapshot().status {
+        LivenessStatus::Pass => hs_service_status::Status::Pass,
+        LivenessStatus::Fail => hs_service_status::Status::Fail,
+    };
+    Json(report)
 }
 
 pub fn v1() -> Router<AppState> {
@@ -73,10 +80,44 @@ pub fn v1() -> Router<AppState> {
         .merge(crate::secrets::routes())
 }
 
-/// The HTTP server answers. Does not contact Proxmox.
-#[utoipa::path(get, path = "/health/live", tag = "health", responses((status = 200, body = Liveness)))]
-pub async fn live() -> Json<Liveness> {
-    Json(Liveness::OK)
+/// The process answers and its serving-path heartbeat is fresh.
+#[utoipa::path(get, path = "/health/live", tag = "health", responses(
+    (status = 200, body = Liveness, content_type = "application/health+json"),
+    (status = 503, body = Liveness, content_type = "application/health+json"),
+))]
+pub async fn live(State(state): State<AppState>) -> Response {
+    health_response(&state)
+}
+
+/// The API can serve requests, including configuration during bootstrap.
+/// Proxmox availability is reported by the operations that need it.
+#[utoipa::path(get, path = "/health/ready", tag = "health", responses(
+    (status = 200, body = Liveness, content_type = "application/health+json"),
+    (status = 503, body = Liveness, content_type = "application/health+json"),
+))]
+pub async fn ready(State(state): State<AppState>) -> Response {
+    health_response(&state)
+}
+
+fn health_response(state: &AppState) -> Response {
+    let health = state.heartbeat.snapshot();
+    let status = match health.status {
+        LivenessStatus::Pass => StatusCode::OK,
+        LivenessStatus::Fail => StatusCode::SERVICE_UNAVAILABLE,
+    };
+    (
+        status,
+        [(header::CONTENT_TYPE, "application/health+json")],
+        Json(health),
+    )
+        .into_response()
+}
+
+async fn heartbeat_probe(State(state): State<AppState>) -> StatusCode {
+    // The same in-memory configuration read used by /v1/config/version;
+    // an unconfigured bootstrap API is still a functioning process.
+    let _ = state.config.current();
+    StatusCode::NO_CONTENT
 }
 
 /// Proxmox VE version, from `GET /version` on the first reachable endpoint.

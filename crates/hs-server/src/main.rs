@@ -45,6 +45,7 @@ async fn main() -> ExitCode {
         .as_ref()
         .map_or_else(|| "(sent through the API)".to_owned(), |token| token.id().to_owned());
     let instance = settings.server.instance.name.clone();
+    let heartbeat = settings.server.heartbeat.clone();
     let app = match hs_server::app(settings.server) {
         Ok(app) => app,
         Err(error) => {
@@ -59,14 +60,24 @@ async fn main() -> ExitCode {
             return ExitCode::from(1);
         }
     };
+    let address = match listener.local_addr() {
+        Ok(address) => address,
+        Err(error) => {
+            tracing::error!(%error, "cannot determine listener address");
+            return ExitCode::from(1);
+        }
+    };
+    let heartbeat_task = tokio::spawn(heartbeat.run(address));
     tracing::info!(listen = %settings.listen, instance, ?endpoints, pve_token = token_id, "homestack-server started");
     if let Err(error) = axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await
     {
+        heartbeat_task.abort();
         tracing::error!(%error, "server failed");
         return ExitCode::from(1);
     }
+    heartbeat_task.abort();
     tracing::info!("homestack-server stopped");
     ExitCode::SUCCESS
 }

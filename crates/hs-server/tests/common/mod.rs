@@ -119,6 +119,7 @@ impl Server {
         let mut pve = PveClientConfig::new(endpoints, PveToken::parse(pve_token)?);
         pve.extra_ca_pem = Some(sim.ca_pem().to_owned());
         let app = hs_server::app(ServerConfig {
+            heartbeat: std::sync::Arc::default(),
             api_token: ApiToken::parse(API_TOKEN)?.into(),
             pve: pve.into(),
             config_file: config_file.to_owned(),

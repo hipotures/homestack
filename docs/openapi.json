@@ -35,12 +35,50 @@
         "tags": [
           "health"
         ],
-        "summary": "The HTTP server answers. Does not contact Proxmox.",
+        "summary": "The process answers and its serving-path heartbeat is fresh.",
         "operationId": "live",
         "responses": {
           "200": {
             "content": {
-              "application/json": {
+              "application/health+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Liveness"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/health+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Liveness"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health/ready": {
+      "get": {
+        "tags": [
+          "health"
+        ],
+        "summary": "The API can serve requests, including configuration during bootstrap.\nProxmox availability is reported by the operations that need it.",
+        "operationId": "ready",
+        "responses": {
+          "200": {
+            "content": {
+              "application/health+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Liveness"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/health+json": {
                 "schema": {
                   "$ref": "#/components/schemas/Liveness"
                 }
@@ -2294,6 +2332,29 @@
           }
         }
       },
+      "HeartbeatObservation": {
+        "type": "object",
+        "required": [
+          "status",
+          "observedValue"
+        ],
+        "properties": {
+          "observedUnit": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "observedValue": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "status": {
+            "$ref": "#/components/schemas/LivenessStatus"
+          }
+        }
+      },
       "HomeUsage": {
         "type": "object",
         "description": "Persistent home capacity/usage. Without filesystem measurements only\n`size_bytes` from the VM disk or LXC mount configuration is known.",
@@ -2786,11 +2847,24 @@
       },
       "Liveness": {
         "type": "object",
-        "description": "Body of `GET /health/live`. It only says the HTTP server answers; it does\nnot check Proxmox.",
+        "description": "Body of the health endpoints. Remote dependencies are not liveness checks.",
         "required": [
-          "status"
+          "status",
+          "checks"
         ],
         "properties": {
+          "checks": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/HeartbeatObservation"
+              }
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
           "status": {
             "$ref": "#/components/schemas/LivenessStatus"
           }
@@ -2799,7 +2873,8 @@
       "LivenessStatus": {
         "type": "string",
         "enum": [
-          "ok"
+          "pass",
+          "fail"
         ]
       },
       "Memory": {

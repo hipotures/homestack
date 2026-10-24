@@ -7,6 +7,7 @@
 mod auth;
 pub mod config_store;
 mod error;
+pub mod health;
 mod image_updates;
 mod jobs;
 pub mod lifecycle;
@@ -41,6 +42,8 @@ pub use secrets::TlsPair;
 /// Everything the server needs to run.
 #[derive(Debug, Clone)]
 pub struct ServerConfig {
+    /// Shared with the heartbeat task on the actual HTTP listener.
+    pub heartbeat: Arc<health::Heartbeat>,
     /// What clients must present.
     pub api_token: ApiAuth,
     /// How to reach Proxmox.
@@ -203,6 +206,7 @@ impl PveHandle {
 
 #[derive(Clone)]
 struct AppState {
+    heartbeat: Arc<health::Heartbeat>,
     pve: Arc<PveHandle>,
     api_token: Arc<ApiAuth>,
     pools: Arc<Pools>,
@@ -247,6 +251,7 @@ pub fn app_with(config: ServerConfig, options: AppOptions) -> Result<Router, Sta
         tracing::warn!("no Proxmox token yet; send one with PUT /v1/secrets/pve-token");
     }
     let state = AppState {
+        heartbeat: config.heartbeat,
         pve: Arc::new(pve),
         pools: Arc::new(config.pools),
         api_token: Arc::new(config.api_token),

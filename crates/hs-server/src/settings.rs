@@ -7,6 +7,7 @@
 //! | Variable | Meaning |
 //! |---|---|
 //! | `HOMESTACK_LISTEN` | Listen address, default `127.0.0.1:8080` |
+//! | `HOMESTACK_HEARTBEAT_SECONDS` | Serving-path heartbeat interval, 1 to 3600 seconds; default 60 |
 //! | `HOMESTACK_API_TOKEN_FILE` | File with the client bearer token |
 //! | `HOMESTACK_API_TOKEN_SHA256` | Or the SHA-256 (hex) of that token; one of the two is required |
 //! | `HOMESTACK_PVE_ENDPOINTS` | Comma-separated Proxmox API origins, tried in order (required) |
@@ -94,6 +95,18 @@ pub fn from_env(var: impl Fn(&str) -> Option<String>) -> Result<Settings, String
     Ok(Settings {
         listen,
         server: ServerConfig {
+            heartbeat: std::sync::Arc::new(crate::health::Heartbeat::new(std::time::Duration::from_secs(
+                set("HOMESTACK_HEARTBEAT_SECONDS")
+                    .map(|value| {
+                        value
+                            .parse::<u64>()
+                            .ok()
+                            .filter(|seconds| (1..=3600).contains(seconds))
+                            .ok_or_else(|| "HOMESTACK_HEARTBEAT_SECONDS must be an integer from 1 to 3600".to_owned())
+                    })
+                    .transpose()?
+                    .unwrap_or(60),
+            ))),
             api_token,
             pve,
             config_file: set("HOMESTACK_CONFIG_FILE").map_or_else(|| state_dir.join("server.toml"), PathBuf::from),

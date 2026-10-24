@@ -9,6 +9,7 @@ use utoipa::{Modify, OpenApi};
     info(title = "HomeStack server API", description = "Proxmox workspace lifecycle service."),
     paths(
         crate::routes::live,
+        crate::routes::ready,
         crate::routes::service_status,
         crate::routes::pve_version,
         crate::routes::pve_node_status,
