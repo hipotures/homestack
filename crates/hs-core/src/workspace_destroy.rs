@@ -33,6 +33,28 @@ fn array<'a>(value: &'a Value, what: &str) -> Result<&'a Vec<Value>, CoreError> 
         .ok_or_else(|| refused(format!("incomplete {what} inventory")))
 }
 
+fn storage_identity(value: &Value) -> Result<BTreeMap<String, Value>, CoreError> {
+    let mut stores = BTreeMap::new();
+    for entry in array(value, "storage configuration")? {
+        let id = text(entry, "storage")?.to_owned();
+        let mut entry = entry.clone();
+        // Proxmox enumerates storage rows and these sets in arbitrary order.
+        // Retain every backend attribute, while comparing set-valued fields by
+        // their members rather than the order returned by a worker process.
+        for key in ["content", "nodes"] {
+            if let Some(Value::String(value)) = entry.get_mut(key) {
+                let mut members: Vec<_> = value.split(',').collect();
+                members.sort_unstable();
+                *value = members.join(",");
+            }
+        }
+        if stores.insert(id, entry).is_some() {
+            return Err(refused("duplicate storage identity"));
+        }
+    }
+    Ok(stores)
+}
+
 async fn placement(pve: &impl Pve, vmid: u32, pool: &str) -> Result<String, CoreError> {
     let resources = cluster_vm_resources(pve).await?;
     let mut matches = resources.iter().filter(|r| r.vmid == vmid);
@@ -187,7 +209,7 @@ pub(crate) async fn review(pve: &impl Pve, cfg: &Config, pool: &str, vmid: u32) 
     if !array(&replication, "replication")?.is_empty() {
         return Err(refused("replication jobs"));
     }
-    let storage = pve.get("/storage", &[]).await?;
+    let storage = storage_identity(&pve.get("/storage", &[]).await?)?;
     let mut stores = BTreeMap::new();
     let mut volumes = BTreeMap::new();
     let expected: BTreeSet<&str> = array(&disks, "disk")?
@@ -196,7 +218,7 @@ pub(crate) async fn review(pve: &impl Pve, cfg: &Config, pool: &str, vmid: u32) 
         .collect();
     // Inspect all node-available image stores, not only the configured layout.
     // This also rejects detached owned volumes and left-over fleecing images.
-    for store in array(&storage, "storage configuration")? {
+    for store in storage.values() {
         let id = text(store, "storage")?;
         if !text(store, "content")?.split(',').any(|c| c == "images")
             || store["disable"].as_u64() == Some(1)
@@ -248,7 +270,7 @@ pub(crate) async fn review(pve: &impl Pve, cfg: &Config, pool: &str, vmid: u32) 
         return Err(refused("VM placement changed while reading inventory"));
     }
     require_membership(pve, &node, pool, vmid).await?;
-    if pve.get("/storage", &[]).await? != storage {
+    if storage_identity(&pve.get("/storage", &[]).await?)? != storage {
         return Err(refused("storage backend configuration changed while reading inventory"));
     }
     let final_status = pve.get(&format!("{base}/status/current"), &[]).await?;

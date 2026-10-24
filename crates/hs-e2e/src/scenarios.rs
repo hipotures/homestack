@@ -665,7 +665,39 @@ impl Context {
     }
 
     async fn inventory(&mut self) -> Result<Value> {
-        self.pve(&["get", "/cluster/resources", "--type", "vm"]).await
+        let mut rows = self.pve(&["get", "/cluster/resources", "--type", "vm"]).await?;
+        for row in rows.as_array_mut().ok_or("invalid VM inventory")? {
+            row.as_object_mut().ok_or("invalid VM inventory row")?.retain(|key, _| {
+                matches!(
+                    key.as_str(),
+                    "vmid"
+                        | "name"
+                        | "node"
+                        | "type"
+                        | "pool"
+                        | "status"
+                        | "template"
+                        | "tags"
+                        | "maxmem"
+                        | "maxcpu"
+                        | "maxdisk"
+                )
+            });
+        }
+        ordered_rows(rows)
+    }
+
+    async fn volume_inventory(&mut self) -> Result<Value> {
+        let rows = self.pve(&["get", "/nodes/pve1/storage/local/content"]).await?;
+        let mut identities = Vec::new();
+        for row in rows.as_array().ok_or("invalid volume inventory")? {
+            ensure(
+                row["volid"].as_str().is_some_and(|id| !id.is_empty()),
+                "volume identity missing",
+            )?;
+            identities.push(json!({"volid":row["volid"],"vmid":row["vmid"],"format":row["format"],"content":row["content"],"size":row["size"]}));
+        }
+        ordered_rows(json!(identities))
     }
 
     async fn config(&mut self, node: &str, kind: &str, vmid: u64) -> Result<Value> {
@@ -884,6 +916,14 @@ fn ensure(condition: bool, message: &str) -> Result<()> {
     }
 }
 
+fn ordered_rows(mut value: Value) -> Result<Value> {
+    value
+        .as_array_mut()
+        .ok_or("invalid inventory collection")?
+        .sort_by_cached_key(Value::to_string);
+    Ok(value)
+}
+
 fn sanitize(mut value: Value) -> Value {
     match &mut value {
         Value::Object(map) => {
@@ -937,9 +977,9 @@ async fn install(ctx: &mut Context) -> Result<()> {
 }
 
 async fn authorization_snapshot(ctx: &mut Context) -> Result<Value> {
-    let roles = ctx.pve(&["get", "/access/roles"]).await?;
-    let acl = ctx.pve(&["get", "/access/acl"]).await?;
-    let tokens = ctx.pve(&["get", "/access/users/homestack@pve/token"]).await?;
+    let roles = ordered_rows(ctx.pve(&["get", "/access/roles"]).await?)?;
+    let acl = ordered_rows(ctx.pve(&["get", "/access/acl"]).await?)?;
+    let tokens = ordered_rows(ctx.pve(&["get", "/access/users/homestack@pve/token"]).await?)?;
     Ok(json!({"roles":roles,"acl":acl,"tokens":tokens}))
 }
 
@@ -1149,10 +1189,33 @@ async fn reads(ctx: &mut Context) -> Result<()> {
         "API service telemetry schema or health is incorrect",
     )?;
     let config = ctx.config("pve1", "lxc", 101).await?;
+    let cgroup = String::from_utf8(
+        ctx.node(
+            "pve1",
+            &[
+                "pct",
+                "exec",
+                "101",
+                "--",
+                "/bin/sh",
+                "-c",
+                "cat /proc/1/cgroup; cat /sys/fs/cgroup/memory.max",
+            ],
+        )
+        .await?,
+    )?;
+    let visible = cgroup.lines().last().ok_or("guest cgroup limit missing")?;
+    let limit = if visible == "max" {
+        None
+    } else {
+        Some(visible.parse::<u64>()?)
+    };
+    ctx.evidence.push(
+        json!({"guest_cgroup":cgroup,"configured_memory_mib":config["memory"],"visible_memory_limit_bytes":limit}),
+    );
     ensure(
-        telemetry["container"]["memory"]["limit_bytes"].as_u64()
-            == config["memory"].as_u64().map(|mib| mib * 1024 * 1024),
-        "service memory telemetry disagrees with actual PVE configuration",
+        telemetry["container"]["memory"]["limit_bytes"].as_u64() == limit,
+        "service memory telemetry disagrees with the independently observed visible cgroup limit",
     )?;
     for path in [
         "/v1/config/version",
@@ -1194,7 +1257,7 @@ async fn refusals(ctx: &mut Context) -> Result<()> {
     foreign(ctx).await?;
     let before = ctx.config("pve1", "qemu", 243).await?;
     let resources = ctx.inventory().await?;
-    let volumes = ctx.pve(&["get", "/nodes/pve1/storage/local/content"]).await?;
+    let volumes = ctx.volume_inventory().await?;
     let jobs = ctx.api("GET", "/v1/jobs", None).await?;
     let (status, _) = ctx
         .api_at(
@@ -1207,7 +1270,7 @@ async fn refusals(ctx: &mut Context) -> Result<()> {
         .await?;
     ensure(status == 401, "missing bearer token must return 401")?;
     for (operation, parameters, expected) in [
-        ("workspace.destroy", json!({"vmid":243}), 409),
+        ("workspace.destroy", json!({"vmid":243}), 404),
         (
             "workspace.create",
             json!({"vmid":242,"name":"hst-invalid","pool":"foreign"}),
@@ -1215,7 +1278,7 @@ async fn refusals(ctx: &mut Context) -> Result<()> {
         ),
         ("workspace.resize", json!({"vmid":"invalid"}), 422),
     ] {
-        let (status, _) = ctx
+        let (status, body) = ctx
             .api_at(
                 "api1",
                 "POST",
@@ -1228,14 +1291,19 @@ async fn refusals(ctx: &mut Context) -> Result<()> {
             status == expected,
             &format!("{operation} refusal expected {expected}, got {status}"),
         )?;
+        if operation == "workspace.destroy" {
+            ensure(
+                body["error"]["code"] == "not_found",
+                "foreign VM refusal must not disclose its identity",
+            )?;
+        }
     }
     ensure(
         ctx.config("pve1", "qemu", 243).await? == before && ctx.inventory().await? == resources,
         "refusal changed PVE configuration",
     )?;
     ensure(
-        ctx.pve(&["get", "/nodes/pve1/storage/local/content"]).await? == volumes
-            && ctx.api("GET", "/v1/jobs", None).await? == jobs,
+        ctx.volume_inventory().await? == volumes && ctx.api("GET", "/v1/jobs", None).await? == jobs,
         "refusal allocated a volume or job",
     )?;
     Ok(())
@@ -1938,8 +2006,8 @@ pub async fn run(options: &Options, dir: &Path, artifacts: &Path, report: &mut V
 
 async fn preinstall_snapshot(ctx: &mut Context) -> Result<Value> {
     Ok(
-        json!({"roles":ctx.pve(&["get","/access/roles"]).await?, "acl":ctx.pve(&["get","/access/acl"]).await?,
-        "users":ctx.pve(&["get","/access/users"]).await?, "guests":ctx.inventory().await?, "gold":ctx.config("pve1","qemu",100).await?}),
+        json!({"roles":ordered_rows(ctx.pve(&["get","/access/roles"]).await?)?, "acl":ordered_rows(ctx.pve(&["get","/access/acl"]).await?)?,
+        "users":ordered_rows(ctx.pve(&["get","/access/users"]).await?)?, "guests":ctx.inventory().await?, "gold":ctx.config("pve1","qemu",100).await?}),
     )
 }
 

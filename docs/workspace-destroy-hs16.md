@@ -35,7 +35,10 @@ Each complete identity read requires:
   applicable to that node are inspected, including stores outside the configured
   HomeStack layout. Every reviewed volume must appear with authoritative owner
   VMID equal to the target; ownership is not inferred from its filename.
-- Storage backend configuration and all returned volume attributes except
+- Storage backend configuration, compared by unique storage ID with order-independent
+  `content` and `nodes` members. Backend attributes remain exact; reordered API
+  collections do not imply changed storage. Duplicate IDs are rejected.
+- All returned volume attributes except
   dynamic `used` bytes. Unexpected owned volumes, including detached volumes and
   visible fleecing leftovers, are rejected. Missing volumes or ownership are
   rejected.
