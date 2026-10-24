@@ -1345,7 +1345,7 @@ async fn guest(ctx: &mut Context, command: &str) -> Result<String> {
                 "--mount=/proc/1/ns/mnt",
                 "--",
                 "/bin/sh",
-                "-lc",
+                "-lec",
                 command,
             ],
         )
@@ -1429,7 +1429,7 @@ async fn workspace(ctx: &mut Context, kind: &str) -> Result<()> {
             let after = ctx.config("pve1", "qemu", 242).await?;
             ensure(after["scsi1"] == cfg["scsi1"], "refresh replaced home volume")?;
             ensure(
-                guest(ctx, "test ! -e /root/hst-root-marker; echo root-replaced")
+                guest(ctx, "test ! -e /root/hst-root-marker && echo root-replaced")
                     .await?
                     .contains("root-replaced"),
                 "disposable root was retained",
