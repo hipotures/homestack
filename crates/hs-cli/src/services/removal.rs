@@ -328,12 +328,17 @@ impl Reviewed {
     pub async fn revalidate(&self, pve: &impl Pve, stopped: bool) -> Result<(), String> {
         let ctid = self.target.ctid;
         let current = review(pve, &self.target.pool, ctid).await?;
-        let changed = self
+        let reviewed_config = self
             .config
             .as_object()
-            .unwrap()
+            .ok_or("Incomplete reviewed container configuration")?;
+        let current_config = current
+            .config
+            .as_object()
+            .ok_or("Incomplete current container configuration")?;
+        let changed = reviewed_config
             .keys()
-            .chain(current.config.as_object().unwrap().keys())
+            .chain(current_config.keys())
             .find(|key| self.config[*key] != current.config[*key]);
         let reason = if let Some(key) = changed {
             Some(format!("configuration field {key} changed"))
