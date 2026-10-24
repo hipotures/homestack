@@ -187,6 +187,8 @@ pub fn rates(vmid: u32, report: &Report) -> Option<ServiceRates> {
         && previous.uptime_seconds <= report.uptime_seconds
     {
         // The service answered from the measurement it already reported.
+        // Liveness uptime still advances while a cached measurement is reused.
+        previous.uptime_seconds = report.uptime_seconds;
         previous.seen = now;
         return previous.rates.clone();
     }
