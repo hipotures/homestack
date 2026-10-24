@@ -78,7 +78,7 @@ pub fn write_ssh_inventory(dir: &Path, report: &Value) -> Result<()> {
     use std::io::Write;
     let primary = std::fs::read_to_string(dir.join("ssh_config"))?.replace(
         "Host pve-e2e\n",
-        "Host pve-e2e pve-e2e-pve1 pve1 pve1.e2e.homestack.app pve.e2e.homestack.app\n",
+        "Host pve-e2e pve-e2e-pve1 pve1 pve1.e2e.homestack.app pve.e2e.homestack.app 10.77.0.1\n",
     );
     std::fs::write(dir.join("ssh_config"), primary)?;
     let mut config = std::fs::OpenOptions::new().append(true).open(dir.join("ssh_config"))?;
@@ -89,10 +89,11 @@ pub fn write_ssh_inventory(dir: &Path, report: &Value) -> Result<()> {
         .skip(1)
     {
         let name = node["name"].as_str().ok_or("missing node name")?;
+        let address = node["address"].as_str().ok_or("missing node address")?;
         let source = Path::new(node["directory"].as_str().ok_or("missing node directory")?).join("ssh_config");
         let entry = std::fs::read_to_string(source)?.replace(
             "Host pve-e2e\n",
-            &format!("Host pve-e2e-{name} {name} {name}.e2e.homestack.app\n"),
+            &format!("Host pve-e2e-{name} {name} {name}.e2e.homestack.app {address}\n"),
         );
         writeln!(config, "\n{entry}")?;
     }

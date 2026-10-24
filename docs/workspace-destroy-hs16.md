@@ -39,7 +39,10 @@ Each complete identity read requires:
   `content` and `nodes` members. Backend attributes remain exact; reordered API
   collections do not imply changed storage. Duplicate IDs are rejected.
 - All returned volume attributes except
-  dynamic `used` bytes. Unexpected owned volumes, including detached volumes and
+  dynamic `used` bytes and filesystem-backed `ctime` (the file status change
+  time, updated by normal guest writes). Stable creation time on non-filesystem
+  backends remains checked. Volume IDs, owners, formats, capacities, parents and
+  other attributes remain exact. Unexpected owned volumes, including detached volumes and
   visible fleecing leftovers, are rejected. Missing volumes or ownership are
   rejected.
 - Placement, pool membership, node inventory, storage configuration, power/HA

@@ -76,7 +76,7 @@ fn prepare(dir: &Path, program: &Path, ssh: &Path, image: &str, argv: &[String])
     write(
         &config,
         &format!(
-            "Host pve-e2e pve-e2e-pve* pve[123] pve[123].e2e.homestack.app pve.e2e.homestack.app\n  ProxyCommand none\nHost *\nInclude {}\nHost *\nInclude {}\nHost 10.77.0.*\n  IdentityFile {}\nHost *\n  ProxyCommand python3 {} {} {} %h %p\n  IdentityAgent none\n  IdentitiesOnly yes\n  StrictHostKeyChecking accept-new\n  UserKnownHostsFile {}\n  GlobalKnownHostsFile /dev/null\n  ConnectTimeout 10\n",
+            "Host pve-e2e pve-e2e-pve* pve[123] pve[123].e2e.homestack.app pve.e2e.homestack.app 10.77.0.[123]\n  ProxyCommand none\nHost *\nInclude {}\nHost *\nInclude {}\nHost 10.77.0.*\n  IdentityFile {}\nHost *\n  ProxyCommand python3 {} {} {} %h %p\n  IdentityAgent none\n  IdentitiesOnly yes\n  StrictHostKeyChecking accept-new\n  UserKnownHostsFile {}\n  GlobalKnownHostsFile /dev/null\n  ConnectTimeout 10\n",
             ssh_quote(&guests.join("*.conf")),
             ssh_quote(&dir.join("ssh_config")),
             ssh_quote(&root.join("home/.ssh/e2e-workspace")),

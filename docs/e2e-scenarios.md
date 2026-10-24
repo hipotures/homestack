@@ -199,3 +199,7 @@ directories for each retry. Routine runs never invoke `cleanup --all`.
 Inventory comparisons sort unordered Proxmox collections and omit live usage
 counters. Identity, placement, power state, configured allocations, volume IDs
 and exact foreign VM configuration remain part of refusal checks.
+
+Installer discovery can address cluster peers by their private IPs. The isolated
+SSH inventory pins both peer names and `10.77.0.1` through `10.77.0.3` to the
+owned nodes' loopback forwards, using the existing synthetic keys and host pins.

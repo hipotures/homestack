@@ -253,10 +253,18 @@ pub(crate) async fn review(pve: &impl Pve, cfg: &Config, pool: &str, vmid: u32) 
                 return Err(refused(format!("unexpected detached or ambiguous volume {volid}")));
             }
             let mut identity = entry.clone();
-            identity
+            let attributes = identity
                 .as_object_mut()
-                .ok_or_else(|| refused("invalid volume identity"))?
-                .remove("used");
+                .ok_or_else(|| refused("invalid volume identity"))?;
+            attributes.remove("used");
+            // Filesystem plugins expose stat(2) change time, which normal guest
+            // writes update. Other backends may expose a stable creation time.
+            if matches!(
+                store["type"].as_str(),
+                Some("dir" | "nfs" | "cifs" | "cephfs" | "glusterfs" | "btrfs")
+            ) {
+                attributes.remove("ctime");
+            }
             text(&identity, "format")?;
             volumes.insert(volid.to_owned(), identity);
         }
@@ -327,9 +335,14 @@ pub(crate) async fn validate(
         current["status"] = reviewed["status"].clone();
     }
     if &current != reviewed {
-        return Err(refused(
-            "VM configuration, placement, power state or exact storage identity changed",
-        ));
+        let changed: Vec<_> = current
+            .as_object()
+            .ok_or_else(|| refused("invalid current identity"))?
+            .keys()
+            .filter(|key| current[*key] != reviewed[*key])
+            .map(String::as_str)
+            .collect();
+        return Err(refused(format!("reviewed identity changed in {}", changed.join(", "))));
     }
     Ok(())
 }
