@@ -162,9 +162,12 @@ def snapshot(role):
     disk = disks.pop()
     stat = os.statvfs(mount)
     marker = pathlib.Path(mount) / "hst-resize-marker"
+    identity = marker.stat()
     print(json.dumps({"disk_bytes": int(run("blockdev", "--getsize64", disk)),
                       "filesystem_bytes": stat.f_frsize * stat.f_blocks,
                       "marker": marker.read_text(),
+                      "filesystem_uuid": run("findmnt", "-nro", "UUID", "-M", mount),
+                      "marker_identity": [identity.st_uid, identity.st_gid, identity.st_mode & 0o7777],
                       "mount": json.loads(run("findmnt", "-J", "-M", mount)),
                       "block": json.loads(run("lsblk", "-J", "-b", "-o", "NAME,TYPE,SIZE,FSTYPE,MOUNTPOINTS"))}))
 

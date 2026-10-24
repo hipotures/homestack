@@ -148,6 +148,40 @@ fn executable(name: &str) -> Result<PathBuf> {
         .ok_or_else(|| format!("missing host tool {name}").into())
 }
 
+/// The same isolated profile and SSH routing as inspection, without a pause.
+pub fn automation(dir: &Path, program: &str, argv: &[String]) -> Result<tokio::process::Command> {
+    let metadata: Value = serde_json::from_slice(&std::fs::read(dir.join("service.json"))?)?;
+    let executable = std::env::current_exe()?.with_file_name(program);
+    if !executable.is_file() {
+        return Err(format!(
+            "build the required executable {} through scripts/cargo.py",
+            executable.display()
+        )
+        .into());
+    }
+    let command = prepare(
+        dir,
+        &executable,
+        &self::executable("ssh")?,
+        metadata["image"].as_str().ok_or("missing image")?,
+        argv,
+    )?;
+    let mut command = tokio::process::Command::from(command);
+    for (key, _) in std::env::vars_os() {
+        let name = key.to_string_lossy();
+        if name.starts_with("HOMESTACK_")
+            || name.starts_with("PVE_")
+            || name.starts_with("GH_")
+            || name.starts_with("GITHUB_")
+        {
+            command.env_remove(key);
+        }
+    }
+    command.env("HOMESTACK_ACTIVE_PROFILE", "e2e");
+    command.kill_on_drop(true);
+    Ok(command)
+}
+
 fn paused_run(artifacts: &Path) -> Result<Value> {
     let bytes = std::fs::read(artifacts.join("report.json")).map_err(|error| {
         format!(

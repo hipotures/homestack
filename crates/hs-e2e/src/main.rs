@@ -1,4 +1,4 @@
-//! Minimal disposable PVE bootstrap. This does not run the HomeStack catalogue.
+//! Disposable Proxmox laboratory and sequential functional scenario controller.
 
 mod access;
 mod client;
@@ -13,6 +13,7 @@ mod network;
 mod phases;
 mod proxy;
 mod registry_proxy;
+mod scenarios;
 mod seed;
 mod service;
 mod service_fixture;
@@ -37,9 +38,13 @@ fn state_root() -> Result<PathBuf> {
         .join("homestack-e2e"))
 }
 
-const USAGE: &str = "homestack-e2e run [--nodes 1|3] [--memory-mib N] [--cpus N] [--disk-gib N]\n                  [--timeout-seconds N] [--message TEXT] [--artifacts DIRECTORY]\n                  [--pause-after PHASE[,PHASE]] [--pause-on-failure]\n                  [--web-bind IPV4] [--web-port PORT]\n                  [--fixtures DIRECTORY] [--spaceship-file FILE]\n                  [--local-dns IPV4] [--tsig-file FILE]\n                  [--runner-ssh DESTINATION] [--runner-ssh-port PORT]\nhomestack-e2e resume --artifacts DIRECTORY\nhomestack-e2e profile --artifacts DIRECTORY (register an already paused lab as profile e2e)\nhomestack --profil e2e [COMMAND]\nhomestack-e2e prepare --artifacts DIRECTORY [--local-dns IPV4] [--spaceship-file FILE] [--tsig-file FILE]\nhomestack-e2e cleanup --all [--fixtures DIRECTORY] [--spaceship-file FILE] [--tsig-file FILE]\n\nPhases: preflight, domain, image, boot, kernel, proxmox, network, cluster, gold, homestack, verify, shutdown; cleanup always runs.\nDefaults: 1 node; per node: 1 vCPU, 4096 MiB RAM, 12 GiB sparse disk; 1800 active seconds.\nInspection pauses have no time limit and require an explicit resume.\nThe panel uses pve.e2e.homestack.app with a public Let's Encrypt certificate.\nDNS and certificate fixtures persist until cleanup --all.\nThe web forward binds to 127.0.0.1 on a free port unless explicitly configured.\nDownloads Debian 13 qcow2, installs Proxmox, verifies SSH, HTTPS and web login,\npowers off, and deletes all temporary VM data. No host network changes.\nRequires Linux x86_64, /dev/kvm, qemu-system-x86_64, qemu-img,\nssh, ssh-keygen, scp, mkfs.vfat, mcopy, openssl, python3 and ip; dig/nsupdate for local DNS.\nNo host root privileges required.";
+const USAGE: &str = "homestack-e2e run [--nodes 1|3] [--memory-mib N] [--cpus N] [--disk-gib N]\n                  [--timeout-seconds N] [--message TEXT] [--artifacts DIRECTORY]\n                  [--pause-after PHASE[,PHASE]] [--pause-on-failure]\n                  [--suite smoke|full | --scenario ID]\n                  [--server-image REGISTRY/PATH:TAG --server-image-digest sha256:HEX]\n                  [--web-bind IPV4] [--web-port PORT]\n                  [--fixtures DIRECTORY] [--spaceship-file FILE]\n                  [--local-dns IPV4] [--tsig-file FILE]\n                  [--runner-ssh DESTINATION] [--runner-ssh-port PORT]\nhomestack-e2e list-scenarios\nhomestack-e2e resume --artifacts DIRECTORY\nhomestack-e2e profile --artifacts DIRECTORY (register an already paused lab as profile e2e)\nhomestack --profil e2e [COMMAND]\nhomestack-e2e prepare --artifacts DIRECTORY [--local-dns IPV4] [--spaceship-file FILE] [--tsig-file FILE]\nhomestack-e2e cleanup --all [--fixtures DIRECTORY] [--spaceship-file FILE] [--tsig-file FILE]\n\nPhases: preflight, domain, image, boot, kernel, proxmox, network, cluster, gold, homestack, verify, shutdown; cleanup always runs.\nDefaults: 1 node; per node: 1 vCPU, 4096 MiB RAM, 12 GiB sparse disk; 1800 active seconds.\nInspection pauses have no time limit and require an explicit resume.\nThe panel uses pve.e2e.homestack.app with a public Let's Encrypt certificate.\nDNS and certificate fixtures persist until cleanup --all.\nThe web forward binds to 127.0.0.1 on a free port unless explicitly configured.\nDownloads Debian 13 qcow2, installs Proxmox, verifies SSH, HTTPS and web login,\npowers off, and deletes all temporary VM data. No host network changes.\nRequires Linux x86_64, /dev/kvm, qemu-system-x86_64, qemu-img,\nssh, ssh-keygen, scp, mkfs.vfat, mcopy, openssl, python3 and ip; dig/nsupdate for local DNS.\nNo host root privileges required.";
 
 struct Options {
+    suite: Option<String>,
+    scenario: Option<String>,
+    server_image: Option<String>,
+    server_image_digest: Option<String>,
     nodes: u8,
     memory: u32,
     cpus: u32,
@@ -70,6 +75,10 @@ impl Options {
             .map_or_else(|| home.join(".config"), PathBuf::from)
             .join("homestack");
         let mut options = Self {
+            suite: None,
+            scenario: None,
+            server_image: None,
+            server_image_digest: None,
             nodes: 1,
             memory: 4096,
             cpus: 1,
@@ -106,6 +115,10 @@ impl Options {
             }
             let value = rest.next().ok_or_else(|| format!("{flag} needs a value"))?;
             match flag.as_str() {
+                "--suite" => options.suite = Some(value.clone()),
+                "--scenario" => options.scenario = Some(value.clone()),
+                "--server-image" => options.server_image = Some(value.clone()),
+                "--server-image-digest" => options.server_image_digest = Some(value.clone()),
                 "--nodes" => options.nodes = value.parse()?,
                 "--memory-mib" => options.memory = value.parse()?,
                 "--cpus" => options.cpus = value.parse()?,
@@ -148,6 +161,14 @@ impl Options {
         if cleanup && !all {
             return Err("cleanup requires --all; normal run cleanup retains DNS and certificates".into());
         }
+        if options.suite.is_some() || options.scenario.is_some() {
+            if !args.iter().any(|arg| arg == "--disk-gib") {
+                options.disk = 32;
+            }
+            if !args.iter().any(|arg| arg == "--timeout-seconds") {
+                options.timeout = 7200;
+            }
+        }
         if !matches!(options.nodes, 1 | 3) {
             return Err("--nodes must be 1 or 3".into());
         }
@@ -163,6 +184,7 @@ impl Options {
         if options.web_bind.is_unspecified() || options.web_bind.is_multicast() || options.web_bind.is_broadcast() {
             return Err("--web-bind must name a specific local unicast IPv4 address".into());
         }
+        scenarios::validate(&options)?;
         Ok(options)
     }
 }
@@ -172,6 +194,9 @@ async fn main() -> ExitCode {
     match execute().await {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
+            if let Err(report_error) = scenarios::early_failure(&describe(error.as_ref())) {
+                eprintln!("Cannot finalize scenario report: {report_error}");
+            }
             eprintln!("homestack-e2e: {}", describe(error.as_ref()));
             ExitCode::FAILURE
         }
@@ -180,6 +205,9 @@ async fn main() -> ExitCode {
 
 async fn execute() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args == ["list-scenarios"] {
+        return scenarios::list();
+    }
     if args.first().is_some_and(|arg| arg == "gold-shell") {
         if args.len() != 3 || args[1] != "--artifacts" {
             return Err("Gold shell must be opened through the E2E application's SSH action".into());
@@ -302,6 +330,7 @@ async fn execute() -> Result<()> {
         "artifacts": artifacts, "temporary_directory": private_path,
         "phases": {}, "web_bind": options.web_bind.to_string(),
     });
+    scenarios::initialize(&options, &mut report)?;
     save_report(&artifacts, &report)?;
     eprintln!("Run {run_id}; artifacts: {}", artifacts.display());
     let outcome = tokio::select! {
@@ -361,6 +390,7 @@ async fn execute() -> Result<()> {
     report["error"] = json!(outcome.as_ref().err().map(|error| describe(error.as_ref())));
     report["retained_fixture_directory"] = json!(options.fixtures);
     phases::finish(&mut report, "cleanup", &cleanup, cleanup_started.elapsed());
+    scenarios::finish_pending(&mut report, "bootstrap or shared baseline unavailable");
     save_report(&artifacts, &report)?;
     outcome?;
     cleanup?;
@@ -372,6 +402,7 @@ fn save_report(dir: &Path, value: &Value) -> Result<()> {
     let temporary = dir.join("report.json.tmp");
     std::fs::write(&temporary, serde_json::to_vec_pretty(value)?)?;
     std::fs::rename(temporary, dir.join("report.json"))?;
+    scenarios::write_summary(dir, value)?;
     Ok(())
 }
 
@@ -641,12 +672,19 @@ async fn run(
             Ok(())
         })
         .await?;
-    progress
+    let preparation = progress
         .execute("homestack", report, async |report| {
             report["service"] = service::prepare(options, dir, artifacts, report).await?;
             Ok(())
         })
-        .await?;
+        .await;
+    if let Err(error) = preparation {
+        if options.suite.is_none() && options.scenario.is_none() {
+            return Err(error);
+        }
+        report["service_preparation_error"] = json!(describe(error.as_ref()));
+        save_report(artifacts, report)?;
+    }
     progress.execute("verify", report, async |report| {
             report["cluster_nodes"] = cluster::verify(slot, run_id).await?;
             let vm = slot.first_mut().ok_or("VM handle is unavailable")?;
@@ -761,6 +799,11 @@ async fn run(
             save_report(artifacts, report)?;
             Ok(())
         }).await?;
+    let suite_outcome = if options.suite.is_some() || options.scenario.is_some() {
+        scenarios::run(options, dir, artifacts, report).await
+    } else {
+        Ok(())
+    };
     progress
         .execute("shutdown", report, async |_| {
             eprintln!("PVE verified. Requesting graceful poweroff");
@@ -774,7 +817,7 @@ async fn run(
         internet.stop().await?;
     }
     drop(proxy);
-    Ok(())
+    suite_outcome
 }
 
 fn web_url(vm: &vm::Vm, hostname: &str) -> String {
@@ -811,6 +854,10 @@ fn save_access(
 }
 
 fn show_access(dir: &Path, vm: &vm::Vm, options: &Options, hostname: &str, password: &str, web_ready: bool) {
+    if options.suite.is_some() || options.scenario.is_some() {
+        eprintln!("Private inspection credentials: {}", dir.join("access.json").display());
+        return;
+    }
     eprintln!(
         "SSH on the runner host: ssh -F {} pve-e2e",
         phases::shell_quote(&dir.join("ssh_config").display().to_string())

@@ -44,6 +44,14 @@ struct Journal {
     pending_txt: Option<String>,
 }
 
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Alias {
+    index: u8,
+    public_owned: bool,
+    local_owned: Option<Ipv4Addr>,
+}
+
 pub struct Fixture {
     pub dir: PathBuf,
     _lock: File,
@@ -62,6 +70,106 @@ fn private_dir(path: &Path) -> Result<()> {
 }
 
 impl Fixture {
+    fn aliases(&self) -> Result<Vec<Alias>> {
+        let path = self.dir.join("aliases.json");
+        if path.is_symlink() {
+            return Err("refusing a symlinked API alias journal".into());
+        }
+        let aliases: Vec<Alias> = match std::fs::read(path) {
+            Ok(bytes) => serde_json::from_slice(&bytes)?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+            Err(error) => return Err(error.into()),
+        };
+        if aliases.iter().any(|alias| !matches!(alias.index, 2 | 3)) {
+            return Err("API alias journal names an unauthorized fixture".into());
+        }
+        Ok(aliases)
+    }
+
+    fn save_aliases(&self, aliases: &[Alias]) -> Result<()> {
+        crate::service::write_private(&self.dir.join("aliases.json"), &serde_json::to_vec_pretty(aliases)?)
+    }
+
+    /// Additional API names use the same persistent ownership contract as api1.
+    pub async fn prepare_aliases(&mut self, nodes: u8, local_dns: Option<Ipv4Addr>) -> Result<()> {
+        let mut aliases = self.aliases()?;
+        for index in 2..=nodes {
+            let sub = format!("api{index}.e2e");
+            let host = format!("{sub}.{ZONE}");
+            let address = Ipv4Addr::new(10, 77, 0, 100 + index);
+            if !aliases.iter().any(|alias| alias.index == index) {
+                aliases.push(Alias {
+                    index,
+                    public_owned: false,
+                    local_owned: None,
+                });
+            }
+            let at = aliases
+                .iter()
+                .position(|alias| alias.index == index)
+                .ok_or("missing alias journal")?;
+            let records = self.spaceship().records(ZONE).await?;
+            let existing: Vec<_> = records
+                .iter()
+                .filter(|record| named(record, &sub) && matches!(record["type"].as_str(), Some("A" | "AAAA" | "CNAME")))
+                .collect();
+            if existing.is_empty() {
+                aliases[at].public_owned = true;
+                self.save_aliases(&aliases)?;
+                self.spaceship().add_address(ZONE, &sub, address).await?;
+            } else if !(existing.len() == 1
+                && existing[0]["type"] == "A"
+                && existing[0]["address"] == address.to_string())
+            {
+                return Err(format!("{host} has conflicting records; refusing replacement").into());
+            }
+            if aliases[at].local_owned.is_some_and(|server| Some(server) != local_dns) {
+                return Err("API alias local DNS server changed; clean the owned fixture first".into());
+            }
+            if let Some(server) = local_dns {
+                for kind in ["AAAA", "CNAME"] {
+                    if !tool(
+                        "dig",
+                        &["+short", "+time=3", "+tries=1", &format!("@{server}"), &host, kind],
+                    )
+                    .await?
+                    .is_empty()
+                    {
+                        return Err(format!("{host} has conflicting local DNS records").into());
+                    }
+                }
+                let existing = tool(
+                    "dig",
+                    &["+short", "+time=3", "+tries=1", &format!("@{server}"), &host, "A"],
+                )
+                .await?;
+                if existing.is_empty() {
+                    aliases[at].local_owned = Some(server);
+                    self.save_aliases(&aliases)?;
+                    self.nsupdate(server,&format!("prereq nxrrset {host}. A\nprereq nxrrset {host}. AAAA\nprereq nxrrset {host}. CNAME\nupdate add {host}. 60 A {address}\n")).await?;
+                } else if String::from_utf8_lossy(&existing).trim() != address.to_string() {
+                    return Err(format!("{host} has a conflicting local A record").into());
+                }
+            }
+            let _ = Command::new("resolvectl")
+                .args(["query", "--cache=no", "--type=ANY", &host])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .await;
+            let resolved: Vec<_> = tokio::net::lookup_host((host.as_str(), 443))
+                .await?
+                .map(|a| a.ip())
+                .collect();
+            if resolved.is_empty() || resolved.iter().any(|found| *found != std::net::IpAddr::V4(address)) {
+                return Err(
+                    format!("system DNS does not resolve {host} exclusively to its isolated guest address").into(),
+                );
+            }
+        }
+        Ok(())
+    }
+
     pub fn open(parent: &Path, credentials: &Path, tsig: &Path) -> Result<Self> {
         let dir = parent.join("service");
         private_dir(&dir)?;
@@ -353,6 +461,27 @@ impl Fixture {
 
     pub async fn reset(&mut self) -> Result<()> {
         self.cleanup_challenge().await?;
+        let mut aliases = self.aliases()?;
+        for at in 0..aliases.len() {
+            let index = aliases[at].index;
+            let sub = format!("api{index}.e2e");
+            let host = format!("{sub}.{ZONE}");
+            let address = Ipv4Addr::new(10, 77, 0, 100 + index);
+            if let Some(server) = aliases[at].local_owned {
+                self.nsupdate(server, &format!("update delete {host}. A {address}\n"))
+                    .await?;
+                aliases[at].local_owned = None;
+                self.save_aliases(&aliases)?;
+            }
+            if aliases[at].public_owned {
+                self.spaceship().remove_address(ZONE, &sub, address).await?;
+                aliases[at].public_owned = false;
+                self.save_aliases(&aliases)?;
+            }
+        }
+        if self.dir.join("aliases.json").exists() {
+            std::fs::remove_file(self.dir.join("aliases.json"))?;
+        }
         if let Some(server) = self.journal.local_owned {
             self.nsupdate(server, &format!("update delete {HOST}. A {ADDRESS}\n"))
                 .await?;

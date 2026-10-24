@@ -1,11 +1,16 @@
 # Disposable Proxmox bootstrap
 
-`hs-e2e` implements the first executable part of the
-[isolated E2E laboratory design](isolated-e2e-lab.md): download a Debian qcow2,
-initialize one or three VMs, install Proxmox, prepare the HomeStack install inputs, verify
-the lab, power it off and delete it. The HomeStack container installation is
-confirmed manually in the real TUI. The runner automatically prepares and validates
-a Debian reference Gold; explicit workspace scenarios run against the paused lab as described below.
+`hs-e2e` provisions the real disposable one-node or three-node Proxmox laboratory.
+Without scenario selection it prepares installation inputs and verifies infrastructure;
+`--pause-after verify` preserves the existing manual inspection workflow.
+`--suite smoke`, `--suite full`, or `--scenario ID` additionally invokes the actual
+noninteractive installer, exercises the selected functional scenarios, removes
+HomeStack, and cleans up the lab without a manual confirmation.
+
+See [scenario execution and coverage](e2e-scenarios.md) for image prerequisites,
+implemented cases, explicit coverage gaps and report semantics. A full run currently
+reports missing manifest-service drivers as `BLOCKED`; it cannot claim full product
+coverage. No live success is implied by compiling the controller.
 
 The runner prepares `pve.e2e.homestack.app` through the existing Spaceship and
 ACME implementation in `hs-deploy`. It installs a public Let's Encrypt
@@ -34,13 +39,14 @@ run the controller if the invoking user can open `/dev/kvm`.
 From the repository root:
 
 ```sh
-cargo run --locked -p hs-e2e -- run
+python3 scripts/cargo.py build --locked -p hs-e2e -p hs-cli -p hs-deploy -p hs-server
+target/debug/homestack-e2e run
 ```
 
 Select the topology with `--nodes 1|3`; the default is one node. Resource flags apply **per node**. A three-node run with defaults reserves 12 GiB RAM and three vCPUs. Use `--disk-gib 24` in either topology for full-clone workspace tests; migration tests also need that capacity on every destination:
 
 ```sh
-cargo run --locked -p hs-e2e -- run \
+target/debug/homestack-e2e run \
   --nodes 3 --disk-gib 24 --timeout-seconds 7200 \
   --local-dns 192.168.100.1 --pause-after verify --pause-on-failure
 ```
@@ -59,7 +65,7 @@ Credentials remain on the controller and are never copied into the guest.
 On this workspace, start the lab with:
 
 ```sh
-cargo run --locked -p hs-e2e -- run \
+target/debug/homestack-e2e run \
   --local-dns 192.168.100.1 --pause-after verify
 ```
 
@@ -104,7 +110,7 @@ running the controller there.
 Supply a message to verify custom initialization data:
 
 ```sh
-cargo run --locked -p hs-e2e -- run \
+target/debug/homestack-e2e run \
   --message "Disposable PVE lifecycle check" \
   --artifacts $HOME/.local/state/homestack-e2e/runs/my-bootstrap
 ```
@@ -225,7 +231,7 @@ to `report.json` before the next phase starts:
 Request pauses only where manual inspection is useful:
 
 ```sh
-cargo run --locked -p hs-e2e -- run \
+target/debug/homestack-e2e run \
   --pause-after boot,kernel,proxmox,network,gold,homestack,verify \
   --pause-on-failure \
   --artifacts $HOME/.local/state/homestack-e2e/runs/inspection
@@ -245,7 +251,7 @@ password and keyboard-interactive login stay disabled.
 Resume from another terminal on the **runner host**:
 
 ```sh
-cargo run --locked -p hs-e2e -- resume --artifacts $HOME/.local/state/homestack-e2e/runs/inspection
+target/debug/homestack-e2e resume --artifacts $HOME/.local/state/homestack-e2e/runs/inspection
 ```
 
 Resume uses a private Unix socket; it does not adopt a VM, signal a stored PID
@@ -282,7 +288,7 @@ For an unattended runner, or to use an existing client SSH alias, set the
 destination explicitly. For this workspace's runner:
 
 ```sh
-cargo run --locked -p hs-e2e -- run \
+target/debug/homestack-e2e run \
   --local-dns 192.168.100.1 --pause-after verify \
   --runner-ssh user@192.168.1.100
 ```
@@ -606,7 +612,7 @@ was issued, verified and cached.
 To deliberately reset the fixture after all controllers have stopped:
 
 ```sh
-cargo run --locked -p hs-e2e -- cleanup --all
+target/debug/homestack-e2e cleanup --all
 ```
 
 Supply the same `--fixtures` and credential path overrides, if used for `run`.

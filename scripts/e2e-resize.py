@@ -53,6 +53,7 @@ class Matrix:
         self.server = None
         self.tunnel = None
         self.results = []
+        self.jobs = []
         self.owned = set()
         self.created_pool = False
         self.created_role = False
@@ -313,6 +314,8 @@ class Matrix:
         while time.monotonic() < deadline:
             _, state = self.api("GET", "/v1/jobs/" + job["id"])
             if state["state"] in ("succeeded", "failed"):
+                self.jobs.append(state)
+                (self.output / "jobs.json").write_text(json.dumps(self.jobs, indent=2) + "\n")
                 check(state["state"] == "succeeded", f"Resize job failed: {state}")
                 return state
             time.sleep(.25)
@@ -399,12 +402,19 @@ class Matrix:
                 result.update(status="passed", refusal=plan, before=before, after=after)
                 return
             check(status == 201, f"Resize plan refused: {plan}")
+            status, shrink = self.plan(role, before["disk_bytes"] // MIB - 1)
+            check(status == 409 and "Shrinking is not supported" in json.dumps(shrink),
+                  f"Shrink did not return the documented refusal: {status}: {shrink}")
+            check(before == self.snapshot(role), "Refused shrink changed disk or guest state")
+            result["shrink_refusal"] = shrink
             self.finish(self.apply(plan))
             grown = self.snapshot(role)
             result["grown"] = grown
             check(grown["disk_bytes"] == size * MIB, "Incorrect grown disk size")
             check(grown["filesystem_bytes"] > before["filesystem_bytes"] + GROWTH_MIB * MIB * .8, "Filesystem did not grow")
             check(grown["marker"] == before["marker"], "Data marker changed")
+            for field in ("filesystem_uuid", "marker_identity"):
+                check(grown[field] == before[field], f"Resize changed {field}")
             print(json.dumps({"role": role, "layout": layout, "stage": "grown"}), flush=True)
             status, plan = self.plan(role, size)
             check(status == 201, f"Repeated resize plan refused: {plan}")
@@ -440,16 +450,24 @@ class Matrix:
             check(resumed["disk_bytes"] == interrupted["disk_bytes"], "Resume enlarged the disk again")
             check(resumed["filesystem_bytes"] > interrupted["filesystem_bytes"] + GROWTH_MIB * MIB * .8, "Resume did not finish filesystem growth")
             check(resumed["marker"] == before["marker"], "Data marker changed after resume")
+            for field in ("filesystem_uuid", "marker_identity"):
+                check(resumed[field] == before[field], f"Recovery changed {field}")
             result.update(status="passed", resumed=resumed)
         except Exception as error:
             result.update(status="failed", error=str(error))
             raise
         finally:
             self.results.append(result)
-            (self.output / "results.json").write_text(json.dumps(self.results, indent=2))
             print(json.dumps({"role": role, "layout": layout, "status": result.get("status")}), flush=True)
-            if VMID in self.owned:
-                self.destroy(VMID)
+            try:
+                if VMID in self.owned:
+                    self.destroy(VMID)
+            except Exception as error:
+                result["cleanup_error"] = str(error)
+                if result.get("status") != "failed":
+                    raise
+            finally:
+                (self.output / "results.json").write_text(json.dumps(self.results, indent=2))
 
     def cleanup(self, retain_base=False):
         self.stop_server()

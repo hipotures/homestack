@@ -124,6 +124,9 @@ pub async fn prepare(options: &Options, dir: &Path, artifacts: &Path, report: &V
     let cleanup = fixture.cleanup_challenge().await;
     let stored = outcome?;
     cleanup?;
+    fixture
+        .prepare_aliases(u8::try_from(nodes.len())?, options.local_dns)
+        .await?;
     eprintln!("Preparing internal DNS and the Proxmox OCI image tools");
     for entry in nodes {
         let node_dir = Path::new(entry["directory"].as_str().ok_or("missing node directory")?);
@@ -187,6 +190,10 @@ pub async fn prepare(options: &Options, dir: &Path, artifacts: &Path, report: &V
             .as_str()
             .ok_or("service settings have no image")?
             .to_owned()
+    } else if let Some(image) = &options.server_image {
+        image.clone()
+    } else if options.suite.is_some() || options.scenario.is_some() {
+        return Err("automated scenarios require --server-image REGISTRY/PATH:TAG and --server-image-digest sha256:HEX for the tested revision".into());
     } else {
         eprintln!("Selecting the newest published HomeStack server image");
         hs_core::registry::recent("ghcr.io/hipotures/homestack-server:latest", 10, &[])
@@ -197,6 +204,12 @@ pub async fn prepare(options: &Options, dir: &Path, artifacts: &Path, report: &V
             .image
     };
     let volume = format!("local:vztmpl/{}", hs_deploy::node::image_file(&image)?);
+    let resolved = hs_core::registry::resolve(&image).await?;
+    if (options.suite.is_some() || options.scenario.is_some())
+        && options.server_image_digest.as_deref() != Some(&resolved.digest)
+    {
+        return Err("selected server image does not match --server-image-digest".into());
+    }
     let pull = include_str!("service-image.py");
     let registry = crate::registry_proxy::start().await?;
     let mut tunnel = crate::tunnel::Tunnel::start(dir, registry.port).await?;
@@ -210,11 +223,18 @@ pub async fn prepare(options: &Options, dir: &Path, artifacts: &Path, report: &V
                 crate::phases::shell_quote(&image), crate::phases::shell_quote(node), crate::phases::shell_quote(&volume));
             crate::install::run(ssh(node_dir), &script, Duration::from_secs(950), &log).await?;
         }
+        if options.suite.is_some() || options.scenario.is_some() {
+            let script = format!("export HTTPS_PROXY=http://10.77.0.1:3129 https_proxy=http://10.77.0.1:3129\nskopeo inspect --config docker://{}\n", crate::phases::shell_quote(&image));
+            let config: Value = serde_json::from_slice(&checked_ssh(dir, &script, &log).await?)?;
+            if config["config"]["Labels"]["org.opencontainers.image.revision"] != report["tested_commit"] {
+                return Err("selected image OCI revision label does not match the tested Git commit".into());
+            }
+        }
         Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
     }.await;
     tunnel.stop().await?;
     result?;
-    let metadata = json!({"run_id": run_id.to_string(), "image": image, "hostname": crate::service_fixture::HOST,
+    let metadata = json!({"run_id": run_id.to_string(), "image": image, "digest":resolved.digest,"platform_digest":resolved.platform,"tested_commit":report["tested_commit"], "hostname": crate::service_fixture::HOST,
         "address": crate::service_fixture::ADDRESS, "certificate_not_after": stored.not_after,
         "certificate_names": stored.names, "image_volume": volume,
         "fixture_directory": fixture.dir, "profile": profile, "prepared_at_ms": crate::phases::now_ms()});
