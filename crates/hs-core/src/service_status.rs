@@ -7,7 +7,7 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use hs_model::status::ServiceRates;
-use hs_service_status::{Io, MAX_AGE_SECONDS, MAX_BYTES, MAX_FILESYSTEMS, PATH, Report, SCHEMA};
+use hs_service_status::{Cpu, Io, MAX_AGE_SECONDS, MAX_BYTES, MAX_FILESYSTEMS, PATH, Report, SCHEMA};
 use serde_json::Value;
 
 /// Absence, stale samples, unsupported producers and failed reads all mean
@@ -190,7 +190,7 @@ fn valid(report: &Report) -> bool {
 struct Previous {
     uptime_seconds: u64,
     sample_usec: u64,
-    cpu_usec: Option<u64>,
+    cpu: Option<Cpu>,
     io: Option<Io>,
     rates: Option<ServiceRates>,
     seen: Instant,
@@ -214,11 +214,13 @@ pub fn rates(vmid: u32, report: &Report) -> Option<ServiceRates> {
         history.remove(&vmid);
         return None;
     };
-    let cpu_usec = report.container.cpu.as_ref().map(|cpu| cpu.usage_usec);
+    let cpu = report.container.cpu.clone();
     let io = report.container.io.clone();
     if let Some(previous) = history.get_mut(&vmid)
         && previous.sample_usec == sample_usec
         && previous.uptime_seconds <= report.uptime_seconds
+        && previous.cpu == cpu
+        && previous.io == io
     {
         // The service answered from the measurement it already reported.
         // Liveness uptime still advances while a cached measurement is reused.
@@ -234,12 +236,34 @@ pub fn rates(vmid: u32, report: &Report) -> Option<ServiceRates> {
         if !(MIN_INTERVAL_USEC..=MAX_INTERVAL_USEC).contains(&interval) {
             return None;
         }
+        if let Some((before, after)) = previous.cpu.as_ref().zip(cpu.as_ref()) {
+            let cpu_rollback = after.usage_usec < before.usage_usec
+                || after.user_usec < before.user_usec
+                || after.system_usec < before.system_usec;
+            let throttling_rollback =
+                before
+                    .throttling
+                    .as_ref()
+                    .zip(after.throttling.as_ref())
+                    .is_some_and(|(before, after)| {
+                        after.periods < before.periods
+                            || after.throttled_periods < before.throttled_periods
+                            || after.throttled_usec < before.throttled_usec
+                    });
+            if cpu_rollback || throttling_rollback {
+                return None;
+            }
+        }
         let delta = |before: Option<u64>, after: Option<u64>| match (before, after) {
             (Some(before), Some(after)) => after.checked_sub(before).map(Some).ok_or(()),
             _ => Ok(None),
         };
         let field = |pick: fn(&Io) -> u64| delta(previous.io.as_ref().map(pick), io.as_ref().map(pick));
-        let cpu = delta(previous.cpu_usec, cpu_usec).ok()?;
+        let cpu = delta(
+            previous.cpu.as_ref().map(|cpu| cpu.usage_usec),
+            cpu.as_ref().map(|cpu| cpu.usage_usec),
+        )
+        .ok()?;
         let read_bytes = field(|io| io.read_bytes).ok()?;
         let write_bytes = field(|io| io.write_bytes).ok()?;
         let read_ops = field(|io| io.read_ops).ok()?;
@@ -260,7 +284,7 @@ pub fn rates(vmid: u32, report: &Report) -> Option<ServiceRates> {
         Previous {
             uptime_seconds: report.uptime_seconds,
             sample_usec,
-            cpu_usec,
+            cpu,
             io,
             rates: rates.clone(),
             seen: now,
