@@ -21,6 +21,16 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
+/// Nullable measurements must be present on the wire, even when unavailable.
+/// A custom deserializer makes Serde reject a missing Option field.
+fn required_option<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::deserialize(deserializer)
+}
+
 pub const PATH: &str = "/.well-known/homestack/status";
 pub const SCHEMA: u32 = 2;
 pub const MAX_BYTES: usize = 64 * 1024;
@@ -43,11 +53,17 @@ pub struct Report {
     pub uptime_seconds: u64,
     /// Monotonic microseconds since process start when the returned
     /// measurement began; `null` while none exists.
+    #[serde(deserialize_with = "required_option")]
+    #[cfg_attr(feature = "openapi", schema(required = true))]
     pub sample_uptime_usec: Option<u64>,
+    #[serde(deserialize_with = "required_option")]
+    #[cfg_attr(feature = "openapi", schema(required = true))]
     pub sample_age_seconds: Option<u64>,
     pub filesystems: Vec<Filesystem>,
     pub container: Container,
     /// A stable error code; never a raw OS error containing private paths.
+    #[serde(deserialize_with = "required_option")]
+    #[cfg_attr(feature = "openapi", schema(required = true))]
     pub error: Option<String>,
 }
 
@@ -63,14 +79,26 @@ pub enum Status {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct Filesystem {
     pub mount: String,
+    #[serde(deserialize_with = "required_option")]
+    #[cfg_attr(feature = "openapi", schema(required = true))]
     pub filesystem: Option<String>,
     /// Whether mountinfo confirms this exact path as a mount point.
     pub mounted: bool,
+    #[serde(deserialize_with = "required_option")]
+    #[cfg_attr(feature = "openapi", schema(required = true))]
     pub total_bytes: Option<u64>,
+    #[serde(deserialize_with = "required_option")]
+    #[cfg_attr(feature = "openapi", schema(required = true))]
     pub used_bytes: Option<u64>,
+    #[serde(deserialize_with = "required_option")]
+    #[cfg_attr(feature = "openapi", schema(required = true))]
     pub free_bytes: Option<u64>,
     /// Free space available to an unprivileged application user.
+    #[serde(deserialize_with = "required_option")]
+    #[cfg_attr(feature = "openapi", schema(required = true))]
     pub available_bytes: Option<u64>,
+    #[serde(deserialize_with = "required_option")]
+    #[cfg_attr(feature = "openapi", schema(required = true))]
     pub error: Option<String>,
 }
 
@@ -78,11 +106,21 @@ pub struct Filesystem {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct Container {
+    #[serde(deserialize_with = "required_option")]
+    #[cfg_attr(feature = "openapi", schema(required = true))]
     pub cpu: Option<Cpu>,
+    #[serde(deserialize_with = "required_option")]
+    #[cfg_attr(feature = "openapi", schema(required = true))]
     pub memory: Option<Memory>,
+    #[serde(deserialize_with = "required_option")]
+    #[cfg_attr(feature = "openapi", schema(required = true))]
     pub pressure: Option<Pressure>,
+    #[serde(deserialize_with = "required_option")]
+    #[cfg_attr(feature = "openapi", schema(required = true))]
     pub io: Option<Io>,
     /// `cgroup_unavailable` or `host_cgroup`; every member is then `null`.
+    #[serde(deserialize_with = "required_option")]
+    #[cfg_attr(feature = "openapi", schema(required = true))]
     pub error: Option<String>,
 }
 
@@ -91,12 +129,16 @@ pub struct Container {
 pub struct Cpu {
     /// Logical CPUs the cgroup may use: its cpuset, lowered by any visible
     /// `cpu.max` quota.
+    #[serde(deserialize_with = "required_option")]
+    #[cfg_attr(feature = "openapi", schema(required = true))]
     pub capacity_cpus: Option<f64>,
     /// Cumulative kernel counters; consumers compute rates between reports.
     pub usage_usec: u64,
     pub user_usec: u64,
     pub system_usec: u64,
     /// `null` when the cpu controller is not enabled for the cgroup.
+    #[serde(deserialize_with = "required_option")]
+    #[cfg_attr(feature = "openapi", schema(required = true))]
     pub throttling: Option<Throttling>,
 }
 
@@ -115,14 +157,24 @@ pub struct Memory {
     pub usage_bytes: u64,
     /// The lowest visible `memory.max`; `null` when unlimited or set outside
     /// the visible hierarchy.
+    #[serde(deserialize_with = "required_option")]
+    #[cfg_attr(feature = "openapi", schema(required = true))]
     pub limit_bytes: Option<u64>,
     /// Anonymous memory of all processes in the cgroup.
+    #[serde(deserialize_with = "required_option")]
+    #[cfg_attr(feature = "openapi", schema(required = true))]
     pub anon_bytes: Option<u64>,
     /// Page cache, mostly reclaimable.
+    #[serde(deserialize_with = "required_option")]
+    #[cfg_attr(feature = "openapi", schema(required = true))]
     pub file_bytes: Option<u64>,
     /// Resident set of the service process alone.
+    #[serde(deserialize_with = "required_option")]
+    #[cfg_attr(feature = "openapi", schema(required = true))]
     pub process_rss_bytes: Option<u64>,
     /// Cumulative `memory.events` counters.
+    #[serde(deserialize_with = "required_option")]
+    #[cfg_attr(feature = "openapi", schema(required = true))]
     pub events: Option<MemoryEvents>,
 }
 
@@ -140,8 +192,14 @@ pub struct MemoryEvents {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct Pressure {
+    #[serde(deserialize_with = "required_option")]
+    #[cfg_attr(feature = "openapi", schema(required = true))]
     pub cpu: Option<Psi>,
+    #[serde(deserialize_with = "required_option")]
+    #[cfg_attr(feature = "openapi", schema(required = true))]
     pub memory: Option<Psi>,
+    #[serde(deserialize_with = "required_option")]
+    #[cfg_attr(feature = "openapi", schema(required = true))]
     pub io: Option<Psi>,
 }
 
@@ -149,6 +207,7 @@ pub struct Pressure {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct Psi {
     pub some: PsiLine,
+    /// Only available where the kernel reports a full-stall line.
     pub full: Option<PsiLine>,
 }
 
@@ -202,7 +261,9 @@ impl Telemetry {
         let shared = Arc::new(RwLock::new(Shared {
             sample: Sample {
                 at: None,
-                filesystems: Vec::new(),
+                filesystems: ["/", "/home/app"]
+                    .map(|path| unmounted(path, "mount_inventory_unavailable"))
+                    .into(),
                 container: Container {
                     error: Some("cgroup_unavailable".to_owned()),
                     ..Container::default()
@@ -412,27 +473,31 @@ fn filesystems(mountinfo: Option<&str>) -> (Vec<Filesystem>, Option<&'static str
     // Never silently report the root's free space as /home/app's free space.
     for required in ["/", "/home/app"] {
         if !mounts.contains_key(required) {
-            filesystems.push(Filesystem {
-                mount: required.to_owned(),
-                filesystem: None,
-                mounted: false,
-                total_bytes: None,
-                used_bytes: None,
-                free_bytes: None,
-                available_bytes: None,
-                error: Some(
-                    if error.is_some() {
-                        "mount_inventory_unavailable"
-                    } else {
-                        "not_mounted"
-                    }
-                    .to_owned(),
-                ),
-            });
+            filesystems.push(unmounted(
+                required,
+                if error.is_some() {
+                    "mount_inventory_unavailable"
+                } else {
+                    "not_mounted"
+                },
+            ));
         }
     }
     filesystems.sort_by(|a, b| a.mount.cmp(&b.mount));
     (filesystems, error)
+}
+
+fn unmounted(path: &str, error: &str) -> Filesystem {
+    Filesystem {
+        mount: path.to_owned(),
+        filesystem: None,
+        mounted: false,
+        total_bytes: None,
+        used_bytes: None,
+        free_bytes: None,
+        available_bytes: None,
+        error: Some(error.to_owned()),
+    }
 }
 
 fn measure(path: &str, kind: &str) -> Filesystem {

@@ -72,38 +72,68 @@ pub async fn read(config: &Value, ip: &str) -> Option<Report> {
     valid(&report).then_some(report)
 }
 
-/// A stable error code: short lowercase words, never a raw OS message.
-fn code(error: Option<&String>) -> bool {
-    error.is_none_or(|code| {
-        (1..=64).contains(&code.len()) && code.bytes().all(|byte| byte.is_ascii_lowercase() || byte == b'_')
-    })
-}
-
 /// Schema 2 with a fresh measurement whose numbers are consistent. Unknown
 /// fields were already ignored; a `null` measurement stays unknown.
 fn valid(report: &Report) -> bool {
-    let (Some(sample_usec), Some(age)) = (report.sample_uptime_usec, report.sample_age_seconds) else {
-        return false;
-    };
     if report.schema != SCHEMA
-        || age > MAX_AGE_SECONDS
-        || sample_usec / 1_000_000 > report.uptime_seconds
         || report.filesystems.len() > MAX_FILESYSTEMS
-        || !code(report.error.as_ref())
+        || !matches!(
+            report.error.as_deref(),
+            None | Some("pending" | "mount_inventory_unavailable" | "too_many_mounts")
+        )
     {
         return false;
+    }
+    match (report.sample_uptime_usec, report.sample_age_seconds) {
+        (Some(sample_usec), Some(age)) => {
+            let Some(elapsed) = report.uptime_seconds.checked_sub(sample_usec / 1_000_000) else {
+                return false;
+            };
+            // The uptime and age are independently rounded down to seconds.
+            if age > MAX_AGE_SECONDS
+                || !(elapsed == age || age.checked_add(1) == Some(elapsed))
+                || report.error.as_deref() == Some("pending")
+            {
+                return false;
+            }
+        }
+        (None, None) if report.error.as_deref() == Some("pending") => {
+            if report.filesystems.iter().any(|fs| fs.mounted) || report.container.error.is_none() {
+                return false;
+            }
+        }
+        _ => return false,
     }
     let mut seen = std::collections::BTreeSet::new();
     for fs in &report.filesystems {
         if !fs.mount.starts_with('/')
             || fs.mount.len() > 4096
-            || !seen.insert(&fs.mount)
-            || fs.filesystem.as_ref().is_some_and(|kind| kind.len() > 64)
-            || !code(fs.error.as_ref())
+            || fs.mount.contains('\0')
+            || fs.mount.split('/').any(|part| matches!(part, "." | ".."))
+            || !seen.insert(fs.mount.as_str())
         {
             return false;
         }
         let counts = [fs.total_bytes, fs.used_bytes, fs.free_bytes, fs.available_bytes];
+        if fs.mounted {
+            if fs
+                .filesystem
+                .as_ref()
+                .is_none_or(|kind| kind.is_empty() || kind.len() > 64)
+                || !matches!(
+                    fs.error.as_deref(),
+                    None | Some("measurement_unavailable" | "invalid_statistics")
+                )
+            {
+                return false;
+            }
+        } else if fs.filesystem.is_some()
+            || !matches!(fs.error.as_deref(), Some("not_mounted" | "mount_inventory_unavailable"))
+            || (fs.mount != "/" && fs.mount != "/home/app")
+            || (fs.mount == "/" && fs.error.as_deref() == Some("not_mounted"))
+        {
+            return false;
+        }
         if fs.mounted && fs.error.is_none() {
             let [Some(total), Some(used), Some(free), Some(available)] = counts else {
                 return false;
@@ -115,8 +145,14 @@ fn valid(report: &Report) -> bool {
             return false;
         }
     }
+    if !seen.contains("/") || !seen.contains("/home/app") {
+        return false;
+    }
     let container = &report.container;
-    if !code(container.error.as_ref()) {
+    if !matches!(
+        container.error.as_deref(),
+        None | Some("cgroup_unavailable" | "host_cgroup")
+    ) {
         return false;
     }
     if container.error.is_some() {
@@ -134,11 +170,6 @@ fn valid(report: &Report) -> bool {
                 .throttling
                 .as_ref()
                 .is_some_and(|throttling| throttling.throttled_periods > throttling.periods))
-    {
-        return false;
-    }
-    if let Some(memory) = &container.memory
-        && memory.limit_bytes == Some(0)
     {
         return false;
     }
@@ -176,10 +207,13 @@ const MAX_INTERVAL_USEC: u64 = 600_000_000;
 /// interval starts a new series without rates.
 pub fn rates(vmid: u32, report: &Report) -> Option<ServiceRates> {
     static HISTORY: Mutex<BTreeMap<u32, Previous>> = Mutex::new(BTreeMap::new());
-    let sample_usec = report.sample_uptime_usec?;
     let now = Instant::now();
     let mut history = HISTORY.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     history.retain(|_, previous| now.duration_since(previous.seen) < Duration::from_micros(MAX_INTERVAL_USEC));
+    let Some(sample_usec) = report.sample_uptime_usec else {
+        history.remove(&vmid);
+        return None;
+    };
     let cpu_usec = report.container.cpu.as_ref().map(|cpu| cpu.usage_usec);
     let io = report.container.io.clone();
     if let Some(previous) = history.get_mut(&vmid)

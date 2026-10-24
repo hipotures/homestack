@@ -1888,6 +1888,13 @@
       "Container": {
         "type": "object",
         "description": "Resource usage of the cgroup v2 the service process runs in.",
+        "required": [
+          "cpu",
+          "memory",
+          "pressure",
+          "io",
+          "error"
+        ],
         "properties": {
           "cpu": {
             "oneOf": [
@@ -1941,9 +1948,11 @@
       "Cpu": {
         "type": "object",
         "required": [
+          "capacity_cpus",
           "usage_usec",
           "user_usec",
-          "system_usec"
+          "system_usec",
+          "throttling"
         ],
         "properties": {
           "capacity_cpus": {
@@ -2130,7 +2139,13 @@
         "type": "object",
         "required": [
           "mount",
-          "mounted"
+          "filesystem",
+          "mounted",
+          "total_bytes",
+          "used_bytes",
+          "free_bytes",
+          "available_bytes",
+          "error"
         ],
         "properties": {
           "available_bytes": {
@@ -2880,7 +2895,12 @@
       "Memory": {
         "type": "object",
         "required": [
-          "usage_bytes"
+          "usage_bytes",
+          "limit_bytes",
+          "anon_bytes",
+          "file_bytes",
+          "process_rss_bytes",
+          "events"
         ],
         "properties": {
           "anon_bytes": {
@@ -3313,6 +3333,11 @@
       "Pressure": {
         "type": "object",
         "description": "Pressure stall information: time stalled on contention, not utilization.\nA resource is `null` when the kernel does not provide PSI for it.",
+        "required": [
+          "cpu",
+          "memory",
+          "io"
+        ],
         "properties": {
           "cpu": {
             "oneOf": [
@@ -3374,7 +3399,8 @@
           "full": {
             "oneOf": [
               {
-                "$ref": "#/components/schemas/PsiLine"
+                "$ref": "#/components/schemas/PsiLine",
+                "description": "Only available where the kernel reports a full-stall line."
               },
               {
                 "type": "null"
@@ -3444,8 +3470,11 @@
           "schema",
           "status",
           "uptime_seconds",
+          "sample_uptime_usec",
+          "sample_age_seconds",
           "filesystems",
-          "container"
+          "container",
+          "error"
         ],
         "properties": {
           "container": {
