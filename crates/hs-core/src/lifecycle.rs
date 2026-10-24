@@ -14,6 +14,7 @@ use std::time::Duration;
 use hs_model::NodeName;
 use hs_model::config::Config;
 use hs_model::jobs::JobEvent;
+use hs_pve::PveError;
 use serde_json::{Map, Value, json};
 
 use crate::cloudinit::{HomeFormat, cloud_init_settings};
@@ -32,7 +33,7 @@ use crate::keys::{parse_authorized_key_records, workspace_authorized_keys};
 use crate::power::{SHUTDOWN_TIMEOUT_SECS, START_TIMEOUT_SECS, shutdown_vm, start_vm};
 use crate::pve::Pve;
 use crate::status::resolve_existing_workspace;
-use crate::tasks::{Observer, TaskWait, retry_while_locked, wait_task};
+use crate::tasks::{Observer, TaskResult, TaskWait, retry_while_locked, upid_node, wait_task};
 use crate::verify::{GuestExpectation, VerifyTimeouts, verify_guest};
 
 /// Pauses and limits of the operations.
@@ -507,7 +508,8 @@ pub(crate) fn vmid_of(plan: &Value) -> Result<u32, CoreError> {
 /// How far a create got, for the cleanup.
 #[derive(Default)]
 struct Progress {
-    cloned: bool,
+    clone_task: Option<String>,
+    cleanup: Option<CloneCleanup>,
     started: bool,
 }
 
@@ -539,51 +541,186 @@ pub async fn create_workspace(
             if progress.started {
                 return Err(error);
             }
-            let mut cleanup = Vec::new();
-            if progress.cloned
-                && let Err(failure) = remove_failed_clone(pve, vmid, name, text(plan, "pool")?, timing, observer).await
-            {
-                cleanup.push(format!("VM cleanup failed: {failure}"));
-            }
-            if cleanup.is_empty() {
-                Err(error)
-            } else {
-                Err(CoreError::Failed(format!(
-                    "{error}. Cleanup report: {}",
-                    cleanup.join("; ")
-                )))
+            let Some(task) = &progress.clone_task else {
+                return Err(error);
+            };
+            let cleanup = match &progress.cleanup {
+                Some(clone) => remove_failed_clone(pve, cfg, plan, clone, timing, observer).await,
+                None => Err(CoreError::Failed(
+                    "clone configuration or location is uncertain".to_owned(),
+                )),
+            };
+            match cleanup {
+                Ok(()) => Err(error),
+                Err(failure) => Err(CoreError::Failed(format!(
+                    "{error}. Cleanup of VM {vmid} ({name}), clone task {task}, was refused or incomplete: \
+                     {failure}. Inspect the VM and task before explicit recovery."
+                ))),
             }
         }
     }
 }
 
-/// Destroy a clone that was never started, after checking it is the one
-/// this create made, on whichever node it is (a failed migration leaves it
-/// on Gold's).
+/// Submit exactly once: a failed or ambiguous clone never grants cleanup
+/// authority, even if a matching target VM is visible. Only the returned
+/// task's confirmed success permits subsequent failed-create cleanup.
+async fn clone_task(
+    pve: &impl Pve,
+    path: &str,
+    form: &[(&str, &str)],
+    source: &str,
+    vmid: u32,
+    wait: &TaskWait,
+    observer: &impl Observer,
+) -> Result<String, CoreError> {
+    let context = format!("Clone submission on {source} ({path}, target VMID {vmid})");
+    let answer = pve.post(path, form).await.map_err(|error| {
+        let outcome = match &error {
+            PveError::Config(_) | PveError::Unreachable(_) => "request not sent",
+            PveError::Unauthorized | PveError::Forbidden { .. } | PveError::Api { .. } => "request rejected",
+            PveError::NodeUnreachable { .. } | PveError::Response(_) => "submission outcome unknown",
+        };
+        CoreError::Failed(format!(
+            "{context}: {outcome}: {error}. No clone task was established; target presence and allocation \
+             are unconfirmed. No automatic cleanup or retry; inspect Proxmox tasks and the target VM before explicit recovery."
+        ))
+    })?;
+    let task = upid(&answer).map_err(|error| {
+        CoreError::Failed(format!(
+            "{context}: {error}. Clone outcome unknown; no automatic cleanup or retry. Manual reconciliation required."
+        ))
+    })?;
+    if upid_node(&task).as_deref() != Some(source) {
+        return Err(CoreError::Failed(format!(
+            "{context} returned unexpected task {task}; clone outcome unknown. No automatic cleanup or retry; manual reconciliation required."
+        )));
+    }
+    let result = match wait_task(pve, &task, wait, observer).await {
+        Ok(result) => result,
+        Err(error) => {
+            // A lost log/status response or timeout is not a failed clone.
+            // Inspect only this submission's task, never infer from the VM.
+            let status = pve.get(&format!("/nodes/{source}/tasks/{task}/status"), &[]).await;
+            let exit = status.as_ref().ok().and_then(|status| {
+                (status["status"] == "stopped")
+                    .then(|| status["exitstatus"].as_str())
+                    .flatten()
+            });
+            match exit {
+                Some(exitstatus) if !exitstatus.is_empty() && exitstatus != "unknown" => {
+                    observer.event(JobEvent::TaskFinished {
+                        upid: task.clone(),
+                        exitstatus: exitstatus.to_owned(),
+                    });
+                    TaskResult {
+                        upid: task.clone(),
+                        exitstatus: exitstatus.to_owned(),
+                    }
+                }
+                _ => {
+                    return Err(CoreError::Failed(format!(
+                        "{context}, task {task}: {error}. Clone outcome unknown after task inspection; \
+                     no automatic cleanup or retry. Manual reconciliation required."
+                    )));
+                }
+            }
+        }
+    };
+    if result.ok() {
+        Ok(task)
+    } else {
+        let outcome = if result.exitstatus.is_empty() || result.exitstatus == "unknown" {
+            "outcome unknown"
+        } else {
+            "confirmed failed"
+        };
+        Err(CoreError::Failed(format!(
+            "{context}, task {task}: {outcome} ({}). No automatic cleanup or retry; \
+             inspect the task and target VM before explicit recovery.",
+            result.exitstatus
+        )))
+    }
+}
+
+/// This snapshot supplements successful task ownership; it never grants it.
+struct CloneCleanup {
+    node: String,
+    config: VmConfig,
+}
+
+/// Ignore only fields changed by the create Cloud-Init step and the digest.
+/// Keep all disks, role/identity fields and other attachments; any unexpected
+/// change makes cleanup fail closed. PVE adds disk sizes when attaching home.
+fn cleanup_config(config: &VmConfig) -> VmConfig {
+    config
+        .iter()
+        .filter_map(|(key, value)| {
+            if matches!(
+                key.as_str(),
+                "digest" | "ipconfig0" | "nameserver" | "ciuser" | "ciupgrade" | "sshkeys" | "cicustom"
+            ) {
+                return None;
+            }
+            let value = if is_volume_slot(key) {
+                let mut fields = value.split(',');
+                let volume = fields.next().unwrap_or_default();
+                let mut fields: Vec<&str> = fields.filter(|field| !field.starts_with("size=")).collect();
+                fields.sort_unstable();
+                std::iter::once(volume).chain(fields).collect::<Vec<_>>().join(",")
+            } else {
+                value.clone()
+            };
+            Some((key.clone(), value))
+        })
+        .collect()
+}
+
+/// Destroy only a positively owned clone whose location, identity and disk
+/// mapping still match the last confirmed preparation step. Never retry the
+/// DELETE: another attempt would need fresh validation.
 async fn remove_failed_clone(
     pve: &impl Pve,
-    vmid: u32,
-    name: &str,
-    pool: &str,
+    cfg: &Config,
+    plan: &Value,
+    clone: &CloneCleanup,
     timing: &LifecycleTiming,
     observer: &impl Observer,
 ) -> Result<(), CoreError> {
+    let vmid = vmid_of(plan)?;
+    let name = text(plan, "name")?;
+    let pool = text(plan, "pool")?;
     let Some(resource) = cluster_vm_resources(pve).await?.into_iter().find(|r| r.vmid == vmid) else {
-        return Ok(());
-    };
-    require_pool(pve, vmid, pool).await?;
-    let node = resource.node.as_str();
-    let vm_cfg = vm_config(pve, node, vmid).await?;
-    if vm_cfg.get("name").map(String::as_str) != Some(name) {
         return Err(CoreError::Failed(format!(
-            "VM {vmid} is not the clone named {name}; left alone"
+            "VM {vmid} is not visible; target absence is unconfirmed"
+        )));
+    };
+    if resource.node != clone.node || resource.pool.as_deref() != Some(pool) {
+        return Err(CoreError::Failed(format!("VM {vmid} node or pool changed; left alone")));
+    }
+    let node = clone.node.as_str();
+    let vm_cfg = vm_config(pve, node, vmid).await?;
+    if vm_cfg.get("name").map(String::as_str) != Some(name) || cleanup_config(&vm_cfg) != clone.config {
+        return Err(CoreError::Failed(format!(
+            "VM {vmid} identity, disks or attachments changed; left alone"
+        )));
+    }
+    if vm_cfg.contains_key("lock")
+        || !matches!(vm_cfg.get("template").map_or("0", String::as_str), "0" | "false" | "no")
+        || vm_cfg
+            .get(&cfg.root_disk)
+            .is_none_or(|value| matches!(disk_volume(value), "" | "none"))
+    {
+        return Err(CoreError::Failed(format!(
+            "VM {vmid} is locked, a template or missing its root disk; left alone"
         )));
     }
     for (slot, value) in &vm_cfg {
-        let unused = slot
-            .strip_prefix("unused")
-            .is_some_and(|index| !index.is_empty() && index.bytes().all(|byte| byte.is_ascii_digit()));
-        if !is_volume_slot(slot) && !unused {
+        if slot.starts_with("unused") {
+            return Err(CoreError::Failed(format!(
+                "VM {vmid} has an unexpected unused disk; left alone"
+            )));
+        }
+        if !is_volume_slot(slot) {
             continue;
         }
         let volume = disk_volume(value);
@@ -597,15 +734,18 @@ async fn remove_failed_clone(
     if status != "stopped" {
         return Err(CoreError::Failed(format!("VM {vmid} is {status}; left alone")));
     }
-    delete_task(
-        pve,
-        &format!("/nodes/{node}/qemu/{vmid}"),
-        &[("purge", "1"), ("destroy-unreferenced-disks", "1")],
-        &format!("Destroying VM {vmid}"),
-        &timing.wait(600),
-        observer,
-    )
-    .await
+    let answer = pve
+        .delete(&format!("/nodes/{node}/qemu/{vmid}"), &[("purge", "1")])
+        .await?;
+    let result = wait_task(pve, &upid(&answer)?, &timing.wait(600), observer).await?;
+    if result.ok() {
+        Ok(())
+    } else {
+        Err(CoreError::Failed(format!(
+            "Destroying VM {vmid} failed: {}",
+            result.exitstatus
+        )))
+    }
 }
 
 async fn create_steps(
@@ -647,7 +787,7 @@ async fn create_steps(
     let step = "Full clone";
     step_started(observer, step);
     let gold = crate::gold::configured_gold(cfg)?.to_string();
-    let cloned = post_task(
+    let cloned = clone_task(
         pve,
         &format!("/nodes/{source}/qemu/{gold}/clone"),
         &[
@@ -657,19 +797,31 @@ async fn create_steps(
             ("storage", clone_storage),
             ("pool", pool),
         ],
-        &format!("Cloning Gold VM {gold} to {vmid}"),
+        source,
+        vmid,
         &timing.wait(3600),
         observer,
     )
     .await;
-    // A failed clone task may still have left the VM; the cleanup checks.
-    progress.cloned = true;
     step_finished(observer, step, cloned.is_ok());
-    cloned?;
+    progress.clone_task = Some(cloned?);
+    let clone_config = vm_config(pve, source, vmid).await?;
+    if clone_config.contains_key(&cfg.home_disk) {
+        return Err(CoreError::Failed(
+            "Clone unexpectedly contains a persistent home; manual reconciliation required".to_owned(),
+        ));
+    }
+    progress.cleanup = Some(CloneCleanup {
+        node: source.to_owned(),
+        config: cleanup_config(&clone_config),
+    });
 
     if migrated {
         let step = "Migrate to target node";
         step_started(observer, step);
+        // A failed/ambiguous migration can leave disks on either node.
+        // Do not search for a similar VM and destroy it there.
+        let original = progress.cleanup.take();
         let moved = migrate_clone(pve, cfg, plan, timing, observer).await;
         step_finished(observer, step, moved.is_ok());
         moved?;
@@ -679,6 +831,24 @@ async fn create_steps(
         let checked = verify_migrated_clone(pve, cfg, plan).await;
         step_finished(observer, step, checked.is_ok());
         checked?;
+        let migrated_config = cleanup_config(&vm_config(pve, node, vmid).await?);
+        if let Some(mut original) = original {
+            let identity = |config: &VmConfig| -> VmConfig {
+                config
+                    .iter()
+                    .filter(|(key, _)| !is_volume_slot(key))
+                    .map(|(key, value)| (key.clone(), value.clone()))
+                    .collect()
+            };
+            if identity(&original.config) != identity(&migrated_config) {
+                return Err(CoreError::Failed(
+                    "Clone identity changed during migration; manual reconciliation required".to_owned(),
+                ));
+            }
+            original.node = node.to_owned();
+            original.config = migrated_config;
+            progress.cleanup = Some(original);
+        }
     }
 
     let step = "Persistent home disk";
@@ -696,7 +866,11 @@ async fn create_steps(
     )
     .await;
     step_finished(observer, step, home.is_ok());
-    home?;
+    let home = home?;
+    if let Some(clone) = &mut progress.cleanup {
+        clone.config.insert(cfg.home_disk.clone(), home);
+        clone.config = cleanup_config(&clone.config);
+    }
 
     let step = "Clone identity";
     step_started(observer, step);
@@ -710,6 +884,9 @@ async fn create_steps(
             observer,
         )
         .await?;
+        if let Some(clone) = &mut progress.cleanup {
+            clone.config.insert("tags".to_owned(), workspace_tags(pool));
+        }
         let vm_cfg = vm_config(pve, node, vmid).await?;
         verify_workspace_role_tags(vmid, &vm_cfg)?;
         let net0 = vm_cfg
@@ -760,9 +937,9 @@ async fn create_steps(
 
     let step = "Boot";
     step_started(observer, step);
+    // A lost start response may still have booted and formatted home.
+    progress.started = true;
     let started = start_vm(pve, node, vmid, &timing.wait(START_TIMEOUT_SECS), observer).await;
-    // After a start request nothing is removed, as in Python.
-    progress.started = started.is_ok();
     step_finished(observer, step, started.is_ok());
     started?;
 
@@ -831,8 +1008,8 @@ async fn create_steps(
     Ok(Value::Object(result))
 }
 
-/// `allocate_named_raw_volume` and `qm set --<home>`; the volume is freed
-/// when it cannot be attached.
+/// `allocate_named_raw_volume` and `qm set --<home>`; retain the volume
+/// for inspection when attachment is unconfirmed.
 #[allow(clippy::too_many_arguments, reason = "the steps of one Python block")]
 async fn attach_home(
     pve: &impl Pve,
@@ -844,7 +1021,7 @@ async fn attach_home(
     label: &str,
     timing: &LifecycleTiming,
     observer: &impl Observer,
-) -> Result<(), CoreError> {
+) -> Result<String, CoreError> {
     let filename = home_volume_name(vmid, &cfg.user.name)?;
     let id = vmid.to_string();
     let size = format!("{size_mib}M");
@@ -873,19 +1050,11 @@ async fn attach_home(
     )
     .await;
     if let Err(error) = attached {
-        // `pvesm free`, whose result Python ignores.
-        let _ = delete_task(
-            pve,
-            &format!("/nodes/{node}/storage/{storage}/content/{volume}"),
-            &[],
-            &format!("Freeing {volume}"),
-            &timing.wait(600),
-            observer,
-        )
-        .await;
-        return Err(error);
+        return Err(CoreError::Failed(format!(
+            "{error}. Home attachment is unconfirmed; volume {volume} was left for explicit inspection."
+        )));
     }
-    Ok(())
+    Ok(spec)
 }
 
 /// `build_destroy_plan` for a workspace in `pool`.
