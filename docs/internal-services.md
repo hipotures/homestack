@@ -233,8 +233,10 @@ No root SSH to Proxmox is used. The credential reaches the new container once,
 through its Proxmox console (`hs_deploy::console`: `termproxy` and its
 websocket, deploy token with `VM.Console`, console mode `shell`), which is a
 shell inside the unprivileged container, not on the node. The installer
-grants `VM.Console` in `HomeStackDeploy`; an existing installation adds it
-with `pveum role modify HomeStackDeploy --append 1 --privs VM.Console`. With it
+grants `VM.Console` in `HomeStackDeploy`. For an existing installation, review
+and apply the updated installer's permission plan; a manual role addition alone
+can be removed by an older installer. See [Proxmox permissions](proxmox-permissions.md)
+for exact role reconciliation and user/token ACL requirements. With this privilege
 the deploy token can open a root shell in every container of its pools.
 
 ### Instance identity and journal

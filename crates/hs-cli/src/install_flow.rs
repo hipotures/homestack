@@ -454,7 +454,7 @@ fn grouped_changes(plan: &Plan, home: &std::path::Path) -> Vec<(String, Vec<Stri
                             members.push(line);
                         }
                     }
-                    ["acl", action, path, _, who, "--roles", roles_given] => {
+                    ["acl", action, path, _, who, "--roles", roles_given, ..] => {
                         let short = who
                             .strip_prefix("homestack@pve!")
                             .map_or_else(|| "the user homestack@pve".to_owned(), |token| format!("token {token}"));

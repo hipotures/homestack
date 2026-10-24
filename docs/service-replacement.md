@@ -63,15 +63,18 @@ changes during review. Then, for each container:
    is there. PVE 9.2 accepts tagged pull references; the registry's index and
    amd64 digests are verified before and after the pull and changed tags are
    refused.
-2. If selected, back up the container including its home (`vzdump`, stop mode).
-3. Replace the container as described above, with a graceful shutdown that never
+2. Replace the container as described above, with a graceful shutdown that never
    forces a stop. The holder's description also carries the service's identity
    and the container's settings (name, CPU, memory, root, pool, `net0`, power
    state), so the update can finish while the old container is gone. Verify the
    new container's description, home under the original mount options, and
    original network and MAC.
-4. Start the service when it ran before or starts on boot, and check the
+3. Start the service when it ran before or starts on boot, and check the
    manifest's health probe. Remove the pulled archive.
+
+The current interface does not select a pre-update `vzdump` backup. See
+[Proxmox permissions](proxmox-permissions.md) for the deploy role requirements,
+template-storage deletion authority and permission repair procedure.
 
 Pangolin Site image replacement follows this same path: its credential and
 data stay on the original home volume, and its HTTP readiness endpoint checks
@@ -101,7 +104,8 @@ upgrade requires a consistent backup, and restoring it is a separate action.
 ## Moving a service container
 
 Migrate (`g`) on a service container moves it to another node with
-the deploy token (`VM.Migrate` in its `HomeStackDeploy` role): a restart
+the deploy token (`VM.Migrate` in its `HomeStackDeploy` role, disk configuration
+on the container and allocation on the selected target storage): a restart
 migration of root and home onto one storage of the target node. The form offers
 only storages of the type the root is on now, since Proxmox moves volumes only
 between storages of the same type. The CTID, address and MAC stay. A running

@@ -95,6 +95,9 @@ homestack uninstall       # Remove HomeStack roles, pools, tokens, and unused ve
 > [!TIP]
 > `config.minimal.toml` is an optional installation seed, not an active client configuration. After confirmation, the installer generates `client.toml`, `server.toml`, and scoped tokens under `~/.config/homestack/`.
 
+See [Proxmox permissions](docs/proxmox-permissions.md) for the installer's exact
+role lists, ACL scopes, token privilege separation and permission repair.
+
 ### 3. Client profiles
 
 The default profile lives under `~/.config/homestack` (or `$XDG_CONFIG_HOME/homestack`). Named profiles keep independent credentials, SSH aliases, and UI preferences:

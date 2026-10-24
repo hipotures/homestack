@@ -40,7 +40,7 @@
 # owner and is only checked: PVE version, storages and their content types,
 # Gold and its bridge, tag rules, the nodes' API certificates and names.
 # Uninstall never removes a VM, a container, a volume or Gold.
-# docs/migration/phase-4b.md has the details.
+# docs/proxmox-permissions.md has the permission and scope details.
 set -euo pipefail
 shopt -s extglob
 
@@ -53,9 +53,9 @@ declare -Ar ROLE_PRIVS=(
     [HomeStackGold]='Pool.Audit,VM.Audit,VM.Clone,VM.Config.Options,VM.GuestAgent.Audit,VM.GuestAgent.FileRead,VM.GuestAgent.Unrestricted,VM.PowerMgmt'
     [HomeStackCluster]='Sys.Audit'
     [HomeStackStorage]='Datastore.AllocateSpace,Datastore.Audit'
-    [HomeStackDeploy]='Pool.Audit,VM.Allocate,VM.Audit,VM.Config.CPU,VM.Config.Disk,VM.Config.Memory,VM.Config.Network,VM.Config.Options,VM.Console,VM.PowerMgmt'
+    [HomeStackDeploy]='Pool.Audit,VM.Allocate,VM.Audit,VM.Config.CPU,VM.Config.Disk,VM.Config.Memory,VM.Config.Network,VM.Config.Options,VM.Console,VM.Migrate,VM.PowerMgmt'
     [HomeStackDeployNodes]='Sys.AccessNetwork'
-    [HomeStackDeployTemplates]='Datastore.AllocateSpace,Datastore.AllocateTemplate,Datastore.Audit'
+    [HomeStackDeployTemplates]='Datastore.Allocate,Datastore.AllocateSpace,Datastore.AllocateTemplate,Datastore.Audit'
 )
 # Roles made by hand before this script (phases 0-4); removed once unused.
 readonly LEGACY_ROLES=(HomeStackServerDisks HomeStackServerGoldGuest HomeStackTest HomeStackTestGold HomeStackTestStorage)
@@ -161,6 +161,7 @@ declare -A storage_type=() storage_content=() storage_nodes=() storage_shared=()
 declare -A role_privs=()
 declare -A pool_members=()
 acl_all=
+acl_nonpropagating=
 user_exists=0
 declare -A token_privsep=()
 
@@ -202,7 +203,11 @@ load_state() {
         role_privs[$id]=$(sort_list "$privs")
     done < <(pveum role list --output-format json | json roleid privs | fields)
 
-    acl_all=$(pveum acl list --output-format json | json path type ugid roleid | sort -u)
+    local acl_json
+    acl_json=$(pveum acl list --output-format json)
+    acl_all=$(json path type ugid roleid <<< "$acl_json" | sort -u)
+    acl_nonpropagating=$(json path type ugid roleid propagate <<< "$acl_json" |
+        awk -F'\t' '$5 == 0 { print $1 "\t" $2 "\t" $3 "\t" $4 }' | sort -u)
 
     if pveum user list --output-format json | json userid | grep -qx "$HS_USER"; then
         user_exists=1
@@ -861,11 +866,14 @@ target_acl() {
 # Plan ACL changes from the current to the target entries, grouped per path
 # and principal: additions for the user first, removals for tokens first.
 plan_acl() {
-    local target=$1 current changes kind path type ugid roles flag
+    local target=$1 inherit=${2:-} current changes kind path type ugid roles flag
     current=$(managed_acl | sort -u)
     for kind in add del; do
         if [[ $kind == add ]]; then
-            changes=$(comm -13 <(printf '%s\n' "$current") <(printf '%s\n' "$target") | sed '/^$/d')
+            # Repair inheritance on retained target entries as well as adding missing ones.
+            changes=$({ comm -13 <(printf '%s\n' "$current") <(printf '%s\n' "$target")
+                comm -12 <(printf '%s\n' "$acl_nonpropagating") <(printf '%s\n' "$inherit")
+            } | sed '/^$/d' | sort -u)
         else
             changes=$(comm -23 <(printf '%s\n' "$current") <(printf '%s\n' "$target") | sed '/^$/d')
         fi
@@ -874,7 +882,7 @@ plan_acl() {
             flag=--users
             [[ $type == token ]] && flag=--tokens
             if [[ $kind == add ]]; then
-                plan "give $ugid $roles on $path" pveum acl modify "$path" "$flag" "$ugid" --roles "$roles"
+                plan "give $ugid $roles on $path (propagate=1)" pveum acl modify "$path" "$flag" "$ugid" --roles "$roles" --propagate 1
             else
                 plan "take $roles on $path from $ugid" pveum acl delete "$path" "$flag" "$ugid" --roles "$roles"
             fi
@@ -911,7 +919,7 @@ plan_token() {
 }
 
 plan_install() {
-    local role target used name node
+    local role target inherit used name node
     ((user_exists)) || plan "create user $HS_USER" pveum user add "$HS_USER" --comment 'HomeStack server'
     for role in "${ROLES[@]}"; do
         if [[ -z ${role_privs[$role]+set} ]]; then
@@ -936,7 +944,10 @@ plan_install() {
     plan_token "$TOKEN" "HomeStack $PART"
     plan_token "$DEPLOY_TOKEN" 'HomeStack deploy'
     target=$(target_acl 1 "$TOKEN" "$DEPLOY_TOKEN")
-    plan_acl "$target"
+    # Leave the inheritance of other tokens alone.
+    inherit=$({ token_target_acl "$TOKEN" "$POOL"; deploy_target_acl; } | sort -u)
+    inherit=$({ printf '%s\n' "$inherit"; user_acl <<< "$inherit"; } | sort -u)
+    plan_acl "$target" "$inherit"
     used=$(roles_in_use "$target")
     for role in "${LEGACY_ROLES[@]}"; do
         if [[ -n ${role_privs[$role]+set} ]] && ! grep -qx "$role" <<< "$used"; then

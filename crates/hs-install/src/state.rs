@@ -79,6 +79,8 @@ pub struct State {
     pub storages: BTreeMap<String, Storage>,
     pub roles: BTreeMap<String, BTreeSet<String>>,
     pub acl: BTreeSet<Acl>,
+    /// Existing entries whose inheritance must be repaired if retained in the target.
+    pub nonpropagating_acl: BTreeSet<Acl>,
     pub user_exists: bool,
     /// Tokens of the user and whether their privileges are separated.
     pub tokens: BTreeMap<String, bool>,
@@ -159,13 +161,18 @@ impl State {
         }
 
         let mut acl = BTreeSet::new();
+        let mut nonpropagating_acl = BTreeSet::new();
         for item in array(pveum_json(root, "acl list")?) {
-            acl.insert(Acl::new(
+            let entry = Acl::new(
                 &text(item.get("path")),
                 &text(item.get("type")),
                 &text(item.get("ugid")),
                 &text(item.get("roleid")),
-            ));
+            );
+            if item.get("propagate").is_some_and(|value| !flag(Some(value))) {
+                nonpropagating_acl.insert(entry.clone());
+            }
+            acl.insert(entry);
         }
 
         let user_exists = array(pveum_json(root, "user list")?)
@@ -212,6 +219,7 @@ impl State {
             storages,
             roles,
             acl,
+            nonpropagating_acl,
             user_exists,
             tokens,
             pools,

@@ -10,7 +10,6 @@ use serde_json::Value;
 
 use super::deploy::{self, SiteReady, Source};
 use super::instance::{self, Instance};
-use super::update::permit;
 
 /// Copying the disks takes as long as their used data.
 const MIGRATE_LIMIT: Duration = Duration::from_secs(3600);
@@ -108,15 +107,27 @@ pub async fn plan(pve: &impl Pve, target: &Target) -> Result<Plan, String> {
             }
         }
     }
-    let permissions = pve.get("/access/permissions", &[]).await.map_err(|e| e.to_string())?;
-    if !permit(&permissions, &format!("/vms/{}", target.ctid), "VM.Migrate")
-        && !permit(&permissions, &format!("/pool/{}", instance.pool), "VM.Migrate")
-    {
-        problems.push(
-            "The deploy token lacks VM.Migrate: as root run pveum role modify HomeStackDeploy with VM.Migrate added, \
-             or run the installer again"
-                .to_owned(),
-        );
+    // Ask PVE for each effective path: pool membership, NoAccess and the
+    // intersection with the owning user's ACL cannot be inferred from a pool grant.
+    for (path, privileges) in [
+        (format!("/vms/{}", target.ctid), &["VM.Migrate", "VM.Config.Disk"][..]),
+        (format!("/storage/{}", target.storage), &["Datastore.AllocateSpace"][..]),
+    ] {
+        let permissions = pve
+            .get("/access/permissions", &[("path", path.as_str())])
+            .await
+            .map_err(|e| e.to_string())?;
+        for privilege in privileges {
+            // A present value of 0 means granted here without propagation.
+            if permissions[&path][*privilege].as_u64().is_none_or(|value| value > 1) {
+                problems.push(format!(
+                    "The deploy token lacks {privilege} on {path}. Review permissions with the updated HomeStack \
+                     installer (Settings > General > Reinstall HomeStack) or deploy/pve/homestack-pve.sh install \
+                     --dry-run using the configured storage selections. Apply the reviewed plan; verify the \
+                     container's pool and both user and privilege-separated token ACLs."
+                ));
+            }
+        }
     }
     lines.push(format!(
         "Root {} ({}) → {}",

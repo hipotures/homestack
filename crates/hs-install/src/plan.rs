@@ -32,7 +32,7 @@ const ROLES: [(&str, &str); 7] = [
     ("HomeStackStorage", "Datastore.AllocateSpace,Datastore.Audit"),
     (
         "HomeStackDeploy",
-        "Pool.Audit,VM.Allocate,VM.Audit,VM.Config.CPU,VM.Config.Disk,VM.Config.Memory,VM.Config.Network,VM.Config.Options,VM.Migrate,VM.PowerMgmt",
+        "Pool.Audit,VM.Allocate,VM.Audit,VM.Config.CPU,VM.Config.Disk,VM.Config.Memory,VM.Config.Network,VM.Config.Options,VM.Console,VM.Migrate,VM.PowerMgmt",
     ),
     ("HomeStackDeployNodes", "Sys.AccessNetwork"),
     (
@@ -340,12 +340,17 @@ fn target_acl(state: &State, names: &Names, command: Command, keep_user: bool, s
 /// Plan ACL changes from the current to the target entries, grouped per
 /// path and principal: additions for the user first, removals for tokens
 /// first.
-fn plan_acl(state: &State, target: &BTreeSet<Acl>) -> Vec<Step> {
+fn plan_acl(state: &State, target: &BTreeSet<Acl>, inherit: &BTreeSet<Acl>) -> Vec<Step> {
     let current = state.managed_acl();
     let mut steps = Vec::new();
     for add in [true, false] {
         let changes: Vec<&Acl> = if add {
-            target.difference(&current).collect()
+            target
+                .iter()
+                .filter(|entry| {
+                    !current.contains(entry) || (inherit.contains(entry) && state.nonpropagating_acl.contains(entry))
+                })
+                .collect()
         } else {
             current.difference(target).collect()
         };
@@ -364,8 +369,18 @@ fn plan_acl(state: &State, target: &BTreeSet<Acl>) -> Vec<Step> {
             let flag = if kind == "token" { "--tokens" } else { "--users" };
             steps.push(if add {
                 pveum(
-                    format!("give {who} {roles} on {path}"),
-                    &["acl", "modify", &path, flag, &who, "--roles", &roles],
+                    format!("give {who} {roles} on {path} (propagate=1)"),
+                    &[
+                        "acl",
+                        "modify",
+                        &path,
+                        flag,
+                        &who,
+                        "--roles",
+                        &roles,
+                        "--propagate",
+                        "1",
+                    ],
                 )
             } else {
                 pveum(
@@ -564,7 +579,11 @@ fn plan_install(ctx: &Context) -> Result<Vec<Step>, InstallError> {
     plan_token(ctx, ctx.token, &format!("HomeStack {}", ctx.part), &mut steps)?;
     plan_token(ctx, DEPLOY_TOKEN, "HomeStack deploy", &mut steps)?;
     let target = target_acl(state, &ctx.names, Command::Install, true, &[ctx.token, DEPLOY_TOKEN]);
-    steps.extend(plan_acl(state, &target));
+    // Repair only this installation's ACLs, preserving other tokens' inheritance.
+    let mut inherit = token_target_acl(&ctx.names);
+    inherit.extend(deploy_target_acl(&ctx.names));
+    inherit.extend(user_acl(&inherit));
+    steps.extend(plan_acl(state, &target, &inherit));
     let used = roles_in_use(state, &target);
     for role in LEGACY_ROLES {
         if state.roles.contains_key(role) && !used.contains(role) {
@@ -631,7 +650,7 @@ fn plan_uninstall(root: &mut dyn Root, ctx: &Context, kept: &mut Vec<String>) ->
         )
     };
     let target = target_acl(state, &ctx.names, Command::Uninstall, ctx.settings.test, &scope);
-    steps.extend(plan_acl(state, &target));
+    steps.extend(plan_acl(state, &target, &BTreeSet::new()));
     for name in &scope {
         if state.tokens.contains_key(*name) {
             steps.push(pveum(

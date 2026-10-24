@@ -88,13 +88,14 @@ cleanly.
 ### 2. Destruction does not verify the instance's identity — Rejected (not applicable)
 
 **Why rejected:** `homestack-deploy` authenticates exclusively with the
-`!deploy` token (`HomeStackDeploy`), whose Proxmox ACL is scoped solely
-to `/pool/homestack-service`. That pool is dedicated exclusively to the
-HomeStack API server containers (`api1`, `api2`, `api3`); workspace VMs
-and LXCs live in `/pool/homestack` and gold templates in
-`/pool/homestack-gold`. Proxmox neither exposes nor permits stopping or
-deleting any container outside `/pool/homestack-service` with the deploy
-token, even if a CTID were to collide elsewhere.
+`!deploy` token (`HomeStackDeploy`), whose VM authority is scoped to
+`/pool/homestack-service` and `/pool/homestack-test`. The service pool contains
+API servers and deployed services; production workspace VMs live in
+`/pool/homestack` and Gold in `/pool/homestack-gold`. Proxmox limits container
+visibility and stop/delete authority to members of the two authorized pools,
+so this boundary does not isolate individual services or guests inside the
+test pool. See [Proxmox permissions](proxmox-permissions.md) for the separate
+storage authority and privilege-separated user/token intersection.
 
 ### 3. TUI batch validation runs before the batch is complete — Resolved
 
