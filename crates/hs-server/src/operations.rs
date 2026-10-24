@@ -281,12 +281,25 @@ impl OpsState {
         ctx: &OpContext,
         job: &str,
         operation: &str,
-        targets: &[u32],
+        planned: &mut Planned,
     ) -> Result<(), CoreError> {
         let running = |id: &str| self.running(id);
-        for (index, vmid) in targets.iter().enumerate() {
-            if let Err(error) = lease::acquire(ctx.pve.as_ref(), *vmid, &self.holder(job, operation, &running)).await {
-                self.release_leases(ctx, job, &targets[..index]).await;
+        for (index, vmid) in planned.targets.iter().enumerate() {
+            let result = async {
+                let acquired = lease::acquire(ctx.pve.as_ref(), *vmid, &self.holder(job, operation, &running)).await?;
+                if operation == "workspace.destroy" {
+                    let acquired = acquired.ok_or_else(|| {
+                        CoreError::Refused("Workspace disappeared before its destroy lease was acquired".to_owned())
+                    })?;
+                    hs_core::lifecycle::authorize_destroy_lease(&mut planned.summary, &acquired)?;
+                }
+                Ok(())
+            }
+            .await;
+            if let Err(error) = result {
+                // Acquisition may have written its lease before a later read
+                // or identity check failed. Release this job's leases only.
+                self.release_leases(ctx, job, &planned.targets[..=index]).await;
                 return Err(error);
             }
         }
@@ -387,7 +400,7 @@ impl OpsState {
             inner.busy.extend(found.0.targets.iter().copied());
             found
         };
-        let planned = match operation.plan(&ctx, &parameters).await {
+        let mut planned = match operation.plan(&ctx, &parameters).await {
             Ok(planned) => planned,
             Err(failure) => {
                 self.release(&plan.targets);
@@ -399,10 +412,7 @@ impl OpsState {
             return Err(ApplyRefusal::Changed);
         }
         let job_id = uuid::Uuid::new_v4().to_string();
-        if let Err(error) = self
-            .acquire_leases(&ctx, &job_id, &plan.operation, &planned.targets)
-            .await
-        {
+        if let Err(error) = self.acquire_leases(&ctx, &job_id, &plan.operation, &mut planned).await {
             self.release(&plan.targets);
             return Err(match error {
                 CoreError::Busy(message) => ApplyRefusal::Busy(Some(message)),

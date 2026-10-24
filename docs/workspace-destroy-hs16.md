@@ -48,6 +48,16 @@ Each complete identity read requires:
 - Placement, pool membership, node inventory, storage configuration, power/HA
   state and VM configuration are checked again at the end of the read.
 
+The server acquires its job lease after revalidating the confirmed plan. The
+lease changes the VM description and PVE config digest. For destroy, execution
+adopts that write only when the complete pre-acquisition configuration equals
+the reviewed snapshot and the complete post-acquisition configuration differs
+only in the exact description generated for this instance/job's lease and its
+nonempty PVE digest. Any other change refuses execution. The adopted full
+configuration, including that lease, remains required until deletion; arbitrary
+description or digest changes are never ignored. A failed acquisition or
+adoption releases only the current job's leases.
+
 Execution compares this entire identity with the reviewed snapshot before any
 shutdown, then rereads and compares it immediately before DELETE. The final read
 requires stopped state. Only this operation's running-to-stopped transition is

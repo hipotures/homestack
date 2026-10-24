@@ -45,6 +45,14 @@ pub struct Lease {
     pub expires_at: u64,
 }
 
+/// The exact configuration transition made while acquiring a job lease.
+pub struct Acquisition {
+    pub vmid: u32,
+    pub before: VmConfig,
+    pub after: VmConfig,
+    pub lease: Lease,
+}
+
 /// Who asks for a lease, and which jobs it runs now.
 pub struct Holder<'a> {
     pub instance: &'a str,
@@ -143,9 +151,9 @@ pub async fn check_free(pve: &impl Pve, vmid: u32, holder: &Holder<'_>) -> Resul
 
 /// Write `holder`'s lease on the VM. A VM that does not exist yet is not
 /// leased (`create`: a second clone of its VMID fails in Proxmox).
-pub async fn acquire(pve: &impl Pve, vmid: u32, holder: &Holder<'_>) -> Result<(), CoreError> {
+pub async fn acquire(pve: &impl Pve, vmid: u32, holder: &Holder<'_>) -> Result<Option<Acquisition>, CoreError> {
     let Some(node) = node_of(pve, vmid).await? else {
-        return Ok(());
+        return Ok(None);
     };
     let now = seconds(holder.now);
     let lease = Lease {
@@ -167,7 +175,14 @@ pub async fn acquire(pve: &impl Pve, vmid: u32, holder: &Holder<'_>) -> Result<(
         }
         let digest = vm_cfg.get("digest").map(String::as_str);
         match set_vm_config(pve, &node, vmid, &[("description", &description)], digest).await {
-            Ok(()) => return Ok(()),
+            Ok(()) => {
+                return Ok(Some(Acquisition {
+                    vmid,
+                    before: vm_cfg,
+                    after: vm_config(pve, &node, vmid).await?,
+                    lease,
+                }));
+            }
             Err(error) if lost_race(&error) => {}
             Err(error) => return Err(error),
         }

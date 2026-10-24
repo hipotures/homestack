@@ -1105,6 +1105,46 @@ pub async fn plan_destroy(pve: &impl Pve, cfg: &Config, pool: &str, vmid: u32) -
     }))
 }
 
+/// Adopt only the exact description/digest change made by this destroy job's
+/// lease. Every reviewed configuration field must match before acquisition;
+/// every other field must remain unchanged afterwards. The full new snapshot
+/// remains checked before shutdown and immediately before deletion.
+pub fn authorize_destroy_lease(plan: &mut Value, acquired: &crate::lease::Acquisition) -> Result<(), CoreError> {
+    let refuse =
+        || CoreError::Refused("Workspace changed while acquiring its destroy lease; review a new plan".to_owned());
+    if vmid_of(plan)? != acquired.vmid
+        || acquired.lease.operation != "workspace.destroy"
+        || acquired.lease.instance.is_empty()
+        || acquired.lease.job.is_empty()
+    {
+        return Err(refuse());
+    }
+    let reviewed = plan
+        .get_mut("destructive_identity")
+        .and_then(|identity| identity.get_mut("config"))
+        .ok_or_else(refuse)?;
+    if *reviewed != json!(acquired.before) {
+        return Err(refuse());
+    }
+    let mut expected = acquired.before.clone();
+    let description = crate::lease::description_with(
+        expected.get("description").map_or("", String::as_str),
+        Some(&acquired.lease),
+    )?;
+    expected.insert("description".into(), description);
+    let digest = acquired
+        .after
+        .get("digest")
+        .filter(|digest| !digest.is_empty())
+        .ok_or_else(refuse)?;
+    expected.insert("digest".into(), digest.clone());
+    if expected != acquired.after {
+        return Err(refuse());
+    }
+    *reviewed = json!(acquired.after);
+    Ok(())
+}
+
 /// The files Python wrote on the nodes for a workspace it made (its four
 /// snippets, named in `cicustom`, and maybe a refresh journal), which the
 /// API cannot delete. Empty for a workspace made by the server.
