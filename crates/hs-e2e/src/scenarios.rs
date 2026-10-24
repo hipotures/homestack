@@ -657,11 +657,16 @@ impl Context {
     async fn pve(&mut self, args: &[&str]) -> Result<Value> {
         let args = [vec!["pvesh"], args.to_vec(), vec!["--output-format", "json"]].concat();
         let bytes = self.node("pve1", &args).await?;
-        Ok(if bytes.is_empty() {
+        let value: Value = if bytes.is_empty() {
             Value::Null
         } else {
             serde_json::from_slice(&bytes)?
-        })
+        };
+        let redacted: Value = serde_json::from_str(&self.redact(&value.to_string()))?;
+        self.evidence
+            .push(json!({"interface":"pve-root","command":args,"response":sanitize(redacted)}));
+        self.flush()?;
+        Ok(value)
     }
 
     async fn inventory(&mut self) -> Result<Value> {
@@ -940,6 +945,7 @@ fn sanitize(mut value: Value) -> Value {
                 ]
                 .iter()
                 .any(|word| key.eq_ignore_ascii_case(word))
+                    || key.to_ascii_lowercase().contains("password")
                     || key.contains("passphrase")
                     || key.contains("private_key")
                 {
@@ -1612,6 +1618,7 @@ async fn cleanup_case(ctx: &mut Context) -> Result<()> {
                 identity["pending"] != true,
                 "create result is ambiguous; fixture cleanup is unconfirmed",
             )?;
+            let mut reviewed = identity.clone();
             let inventory = ctx.inventory().await?;
             if let Some(vm) = inventory
                 .as_array()
@@ -1626,6 +1633,7 @@ async fn cleanup_case(ctx: &mut Context) -> Result<()> {
                         && vm["pool"] == "homestack",
                     "workspace cleanup ownership changed",
                 )?;
+                reviewed = config;
                 ctx.operation("workspace.destroy", json!({"vmid":242})).await?;
             }
             ensure(
@@ -1637,12 +1645,41 @@ async fn cleanup_case(ctx: &mut Context) -> Result<()> {
             )?;
             for entry in ctx.report["nodes"].as_array().ok_or("missing nodes")?.clone() {
                 let node = entry["name"].as_str().ok_or("missing node")?;
+                // --vmid filters images, but still includes unrelated snippets
+                // and templates unless content is restricted explicitly.
                 let volumes = ctx
-                    .pve(&["get", &format!("/nodes/{node}/storage/local/content"), "--vmid", "242"])
+                    .pve(&[
+                        "get",
+                        &format!("/nodes/{node}/storage/local/content"),
+                        "--content",
+                        "images",
+                    ])
                     .await?;
+                let known: Vec<_> = ["scsi0", "scsi1", "ide2"]
+                    .iter()
+                    .flat_map(|slot| [&identity[*slot], &reviewed[*slot]])
+                    .filter_map(|value| value.as_str().and_then(|spec| spec.split(',').next()))
+                    .collect();
                 ensure(
-                    volumes.as_array().is_some_and(Vec::is_empty),
-                    "workspace volumes remain after destroy",
+                    volumes.as_array().is_some_and(|rows| {
+                        rows.iter().all(|volume| {
+                            volume["volid"].as_str().is_some_and(|id| !id.is_empty())
+                                && volume["vmid"].as_u64().is_some()
+                        })
+                    }),
+                    "incomplete image identity or native owner in storage inventory",
+                )?;
+                let leftovers: Vec<_> = volumes
+                    .as_array()
+                    .ok_or("invalid storage content inventory")?
+                    .iter()
+                    .filter(|volume| {
+                        volume["vmid"] == 242 || volume["volid"].as_str().is_some_and(|id| known.contains(&id))
+                    })
+                    .collect();
+                ensure(
+                    leftovers.is_empty(),
+                    &format!("workspace volumes remain after destroy on {node}: {}", json!(leftovers)),
                 )?;
             }
             Ok(())

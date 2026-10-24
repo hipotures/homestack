@@ -208,3 +208,8 @@ Cluster bootstrap also pins the seed-injected public host keys inside every
 disposable PVE node and verifies authenticated peer SSH in both directions.
 The installer uses this node-to-node SSH to provision snippets. Host-key
 checking stays enabled; no personal private key is copied into the lab.
+
+Workspace cleanup queries image content explicitly and checks both native owner
+VMID and the reviewed disk volume IDs. Proxmox's `vmid` query filter does not
+exclude unrelated snippets and templates from an unrestricted content listing.
+Sanitized root PVE observations are retained in each scenario's evidence.
