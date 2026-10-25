@@ -304,7 +304,7 @@ Listings include category index, stable ID, label, file path or repository ident
 Service IP allocation checks current and pending static IPv4 settings on all LXC interfaces and VM Cloud-Init interfaces visible to the deploy token, including stopped guests. An unreadable guest blocks allocation. Manual CTIDs are checked during review, and addresses are checked again before creation or initialization recovery. Addresses configured only inside guests or on devices outside this inventory require separate network address management.
 
 #### State registry and pre-apply snapshots
-Setup state lives inside the workspace's persistent home at `~/.local/state/homestack/setup.json`, so destroying a workspace and its home cleanly removes its setup state. Before overwriting any existing declared path, HomeStack creates an operation snapshot under `~/.local/state/homestack/YYYYMMDD_HHMMSS/` containing pre-change files, SHA-256 metadata (`snapshot.json`), and `setup.before.json`.
+Setup state lives inside the workspace's persistent home at `~/.local/state/homestack/setup.json`, so destroying a workspace and its home cleanly removes its setup state. Copying or restoring the home to another workspace preserves its setup history even when the VMID changes. Setup verifies the current target independently; the next recorded action updates the registry's workspace metadata. Before overwriting any existing declared path, HomeStack creates an operation snapshot under `~/.local/state/homestack/YYYYMMDD_HHMMSS/` containing pre-change files, SHA-256 metadata (`snapshot.json`), and `setup.before.json`.
 
 </details>
 

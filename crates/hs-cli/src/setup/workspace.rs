@@ -157,7 +157,7 @@ impl LocalWorkspace {
             return Err(refused());
         }
         let registry = self.local_guest(&serde_json::json!({
-            "home": self.home.display().to_string(), "operation": "state-read", "vmid": 0, "name": "",
+            "home": self.home.display().to_string(), "operation": "state-read",
         }))?;
         let answer: Value = serde_json::from_str(&registry).unwrap_or(Value::Null);
         if answer["ok"] != Value::Bool(true) {

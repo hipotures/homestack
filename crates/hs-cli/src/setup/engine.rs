@@ -385,12 +385,7 @@ pub fn inspect_workspace_state_with(
     let entries = expand_config_entries(entries);
     require_tool(workspace, settings, "python3", &[])?;
     verify_identity(workspace, settings, target)?;
-    let state_doc = guest(
-        workspace,
-        settings,
-        "state-read",
-        guest_args! {"vmid": target.vmid, "name": target.name},
-    )?;
+    let state_doc = guest(workspace, settings, "state-read", Map::new())?;
     let registry = state_doc
         .get("registry")
         .filter(|r| truthy(r))

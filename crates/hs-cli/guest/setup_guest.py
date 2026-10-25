@@ -1094,7 +1094,8 @@ def _registry_path(home: Path) -> Path:
     return safe_path(home, STATE_FILE)
 
 
-def load_registry(home: Path, *, vmid: int | None = None, name: str | None = None) -> dict | None:
+def load_registry(home: Path) -> dict | None:
+    """Read history carried with this home, including copies from another workspace."""
     path = _registry_path(home)
     if path.is_symlink():
         raise GuestError("HomeStack setup state is a symlink")
@@ -1106,9 +1107,6 @@ def load_registry(home: Path, *, vmid: int | None = None, name: str | None = Non
         raise GuestError("HomeStack setup state is invalid") from exc
     if not isinstance(data, dict) or data.get("version") != 1 or not isinstance(data.get("items", {}), dict):
         raise GuestError("Unsupported HomeStack setup state")
-    workspace = data.get("workspace", {})
-    if vmid is not None and workspace and workspace.get("vmid") != vmid:
-        raise GuestError("HomeStack setup state belongs to another workspace")
     return data
 
 
@@ -1126,7 +1124,7 @@ def create_snapshot(home: Path, paths: list[str], item_ids: list[str], *, vmid: 
         metadata.append(item)
         if item["exists"]:
             existing.append(relative)
-    registry = load_registry(home, vmid=vmid, name=name)
+    registry = load_registry(home)
     if not existing:
         return {"created": False, "path": None, "id": None}
     root = _state_root(home, create=True)
@@ -1163,9 +1161,8 @@ def create_snapshot(home: Path, paths: list[str], item_ids: list[str], *, vmid: 
 
 def record_item(home: Path, data: dict) -> dict:
     vmid, name = int(data["vmid"]), str(data["name"])
-    registry = load_registry(home, vmid=vmid, name=name) or {
+    registry = load_registry(home) or {
         "version": 1,
-        "workspace": {"vmid": vmid, "name": name, "home": str(home), "home_label": f"HS_HOME_{vmid}"},
         "items": {},
     }
     now = iso_now()
@@ -1348,7 +1345,7 @@ def run(data: dict) -> dict:
         verify_identity(data)
         return {"ok": True}
     if op == "state-read":
-        registry = load_registry(home, vmid=int(data["vmid"]), name=str(data["name"]))
+        registry = load_registry(home)
         return {"ok": True, "registry": registry, "state_path": "~/" + STATE_FILE}
     if op == "metadata":
         return {"ok": True, "items": [path_metadata(home, relative) for relative in data.get("paths", [])]}
