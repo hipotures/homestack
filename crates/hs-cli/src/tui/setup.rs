@@ -693,8 +693,10 @@ impl SetupBox {
     /// The worker connected and read the state.
     pub fn ready(&mut self, catalog: Catalog, state: Value, target: Target, settings: Settings) {
         let mut ready = Self::new(settings, target, catalog, Some(state));
-        if self.services_first {
-            ready.show_section(ready.services_tab());
+        if self.services_first
+            && let Some(tab) = ready.services_tab()
+        {
+            ready.show_section(tab);
         } else {
             ready.section = self.section;
         }
@@ -709,25 +711,29 @@ impl SetupBox {
             .map(|group| group.id.clone())
     }
 
-    /// The tab of the Services group: right after Repositories.
+    /// The global Services tab, available only in desktop setup after Repositories.
     #[must_use]
-    pub fn services_tab(&self) -> usize {
+    pub fn services_tab(&self) -> Option<usize> {
         let groups = &self.settings.setup.groups;
-        groups
-            .iter()
-            .position(|group| group.id == "repo")
-            .map_or(groups.len(), |at| at + 1)
+        (self.target.local && !groups.is_empty()).then(|| {
+            groups
+                .iter()
+                .position(|group| group.id == "repo")
+                .map_or(groups.len(), |at| at + 1)
+        })
     }
 
     /// Whether the Services group is shown.
     #[must_use]
     pub fn in_services(&self) -> bool {
-        !self.settings.setup.groups.is_empty() && self.section == self.services_tab()
+        self.services_tab() == Some(self.section)
     }
 
     /// The configured group at tab `tab`.
     fn group_index(&self, tab: usize) -> Option<usize> {
-        let services = self.services_tab();
+        let Some(services) = self.services_tab() else {
+            return Some(tab);
+        };
         match tab.cmp(&services) {
             std::cmp::Ordering::Less => Some(tab),
             std::cmp::Ordering::Equal => None,
@@ -737,7 +743,11 @@ impl SetupBox {
 
     /// The tab of configured group `group`.
     fn tab_of(&self, group: usize) -> usize {
-        if group >= self.services_tab() { group + 1 } else { group }
+        if self.services_tab().is_some_and(|tab| group >= tab) {
+            group + 1
+        } else {
+            group
+        }
     }
 
     /// Of the group `id`: its items with something selected, and its items.
@@ -766,8 +776,8 @@ impl SetupBox {
             .iter()
             .map(|group| group.label.clone())
             .collect();
-        if !labels.is_empty() {
-            labels.insert(self.services_tab(), SERVICES.to_owned());
+        if let Some(tab) = self.services_tab() {
+            labels.insert(tab, SERVICES.to_owned());
         }
         labels
     }
