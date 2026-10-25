@@ -278,13 +278,22 @@ async fn read(pve: &impl Pve, pool: &str, ctid: u32) -> Result<Reviewed, String>
             if !volid.starts_with(&format!("{id}:")) || volumes.contains_key(volid) {
                 return Err(format!("Ambiguous storage inventory for {volid}"));
             }
-            // Used bytes change during normal operation; all other attributes,
-            // including any creation time, parent, size and format, must match.
+            // Match workspace destroy: filesystem ctime is stat(2) change
+            // time, while other backends may expose stable creation time.
             let mut identity = entry.clone();
             identity
                 .as_object_mut()
                 .ok_or("Invalid volume attributes")?
                 .remove("used");
+            if matches!(
+                store["type"].as_str(),
+                Some("dir" | "nfs" | "cifs" | "cephfs" | "glusterfs" | "btrfs")
+            ) {
+                identity
+                    .as_object_mut()
+                    .ok_or("Invalid volume attributes")?
+                    .remove("ctime");
+            }
             text(&identity, "format")?;
             volumes.insert(volid.to_owned(), identity);
         }
