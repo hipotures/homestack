@@ -168,9 +168,14 @@ pub async fn status(
 ) -> Result<Json<GlobalStatus>, ApiError> {
     let stored = configuration(&state)?;
     let parallel = scope.parallel.unwrap_or(8).clamp(1, 32);
-    let mut status = global_status(state.pve()?.as_ref(), &stored.config, parallel)
-        .await
-        .map_err(|e| core_error(e, "No such resource."))?;
+    let mut status = global_status(
+        state.pve()?.as_ref(),
+        &stored.config,
+        parallel,
+        &state.status_observations,
+    )
+    .await
+    .map_err(|e| core_error(e, "No such resource."))?;
     for entry in &mut status.others {
         state.image_updates.annotate(entry);
     }

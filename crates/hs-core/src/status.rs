@@ -602,8 +602,13 @@ impl Inventory {
 }
 
 /// `global_status`, with Proxmox read `parallel` requests at a time.
-pub async fn global_status(pve: &impl Pve, cfg: &Config, parallel: usize) -> Result<GlobalStatus, CoreError> {
-    let pve = &crate::prefetch::Prefetch::new(pve, parallel);
+pub async fn global_status(
+    pve: &impl Pve,
+    cfg: &Config,
+    parallel: usize,
+    observations: &crate::prefetch::Observations,
+) -> Result<GlobalStatus, CoreError> {
+    let pve = &crate::prefetch::Prefetch::new(pve, parallel, observations);
     prefetch_status(pve, cfg).await?;
     let inventory = Inventory::read(pve, cfg).await?;
     let nodes: BTreeMap<String, NodeState> = inventory.nodes.iter().map(|n| (n.node.clone(), n.clone())).collect();
@@ -718,6 +723,9 @@ pub async fn global_status(pve: &impl Pve, cfg: &Config, parallel: usize) -> Res
                 known_free += free;
             }
             home = Some(usage);
+        }
+        if pve.used_previous_guest_data(&format!("/nodes/{}/qemu/{}", item.node, item.vmid)) {
+            problems.push("guest data is temporarily unavailable; showing the last successful observation".to_owned());
         }
         let warning = (!problems.is_empty()).then(|| problems.join("; "));
         if let Some(warning) = &warning {
@@ -978,6 +986,13 @@ async fn prefetch_status<P: Pve>(pve: &crate::prefetch::Prefetch<'_, P>, cfg: &C
     let nodes = cluster_node_statuses(pve).await?;
     let containers = cluster_container_resources(pve).await.unwrap_or_default();
     let online = |node: &str| nodes.iter().any(|state| state.node == node && state.online);
+    pve.retain_guests(
+        &resources
+            .iter()
+            .filter(|item| online(&item.node) && item.status.as_deref() == Some("running"))
+            .map(|item| format!("/nodes/{}/qemu/{}", item.node, item.vmid))
+            .collect(),
+    );
     let mut requests: Vec<(String, Vec<(&str, &str)>)> =
         vec![("/pools".to_owned(), vec![]), ("/cluster/status".to_owned(), vec![])];
     for item in resources.iter().filter(|item| online(&item.node)) {

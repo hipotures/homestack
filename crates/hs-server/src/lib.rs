@@ -214,6 +214,7 @@ struct AppState {
     ops: Arc<OpsState>,
     instance: Arc<Instance>,
     image_updates: Arc<image_updates::ImageUpdates>,
+    status_observations: Arc<hs_core::prefetch::Observations>,
     service_status: hs_service_status::Telemetry,
 }
 
@@ -259,6 +260,7 @@ pub fn app_with(config: ServerConfig, options: AppOptions) -> Result<Router, Sta
         ops: Arc::new(OpsState::new(options, instance.name.clone())),
         instance: Arc::new(instance),
         image_updates: Arc::default(),
+        status_observations: Arc::default(),
         service_status: hs_service_status::Telemetry::start(std::time::Instant::now())
             .map_err(StartError::Telemetry)?,
     };
