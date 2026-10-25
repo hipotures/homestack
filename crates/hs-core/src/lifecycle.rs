@@ -8,7 +8,7 @@
 //! Plans and results are JSON objects, as Python's dicts are;
 //! `docs/migration/phase-5.md` lists what differs.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use hs_model::NodeName;
@@ -20,7 +20,6 @@ use serde_json::{Map, Value, json};
 use crate::cloudinit::{HomeFormat, cloud_init_settings};
 use crate::create_transfer::{
     is_volume_slot, migrate_clone, revalidate_source, validate_cross_node_create, verify_migrated_clone,
-    volume_belongs_to_vm,
 };
 use crate::error::CoreError;
 use crate::gold::extract_mac;
@@ -678,6 +677,23 @@ fn cleanup_config(config: &VmConfig) -> VmConfig {
         .collect()
 }
 
+/// Names and paths are not ownership evidence. Require one exact native
+/// inventory record with the target VMID; unsupported metadata fails closed.
+fn require_clone_volume_owner(inventory: &Value, volume: &str, vmid: u32) -> Result<(), CoreError> {
+    let refused = || {
+        CoreError::Refused(format!(
+            "VM {vmid} volume {volume} ownership is missing, conflicting or ambiguous; cleanup skipped"
+        ))
+    };
+    let entries = inventory.as_array().ok_or_else(refused)?;
+    let mut matches = entries.iter().filter(|entry| entry["volid"].as_str() == Some(volume));
+    let entry = matches.next().ok_or_else(refused)?;
+    if matches.next().is_some() || entry["vmid"].as_u64() != Some(u64::from(vmid)) {
+        return Err(refused());
+    }
+    Ok(())
+}
+
 /// Destroy only a positively owned clone whose location, identity and disk
 /// mapping still match the last confirmed preparation step. Never retry the
 /// DELETE: another attempt would need fresh validation.
@@ -717,6 +733,7 @@ async fn remove_failed_clone(
             "VM {vmid} is locked, a template or missing its root disk; left alone"
         )));
     }
+    let mut volumes = BTreeMap::<&str, BTreeSet<&str>>::new();
     for (slot, value) in &vm_cfg {
         if slot.starts_with("unused") {
             return Err(CoreError::Failed(format!(
@@ -727,18 +744,50 @@ async fn remove_failed_clone(
             continue;
         }
         let volume = disk_volume(value);
-        if !matches!(volume, "" | "none") && !volume_belongs_to_vm(volume, vmid) {
-            return Err(CoreError::Failed(format!(
-                "VM {vmid} volume {volume} does not have target VM ownership; cleanup skipped"
+        if matches!(volume, "" | "none") {
+            continue;
+        }
+        let (storage, _) = volume
+            .split_once(':')
+            .filter(|(s, n)| !s.is_empty() && !n.is_empty())
+            .ok_or_else(|| CoreError::Refused(format!("VM {vmid} has a non-storage disk; cleanup skipped")))?;
+        volumes.entry(storage).or_default().insert(volume);
+    }
+    for (storage, volumes) in volumes {
+        let base = format!("/nodes/{node}/storage/{storage}");
+        let state = pve.get(&format!("{base}/status"), &[]).await?;
+        if state["active"].as_u64() != Some(1) || state["enabled"].as_u64() != Some(1) {
+            return Err(CoreError::Refused(format!(
+                "Storage {storage} unavailable; cleanup skipped"
             )));
         }
+        let inventory = pve.get(&format!("{base}/content"), &[("content", "images")]).await?;
+        for volume in volumes {
+            require_clone_volume_owner(&inventory, volume, vmid)?;
+        }
+    }
+    // Storage reads must not let a changed placement or attachment slip past
+    // the original guards. DELETE is submitted once, after fresh validation.
+    let resources = cluster_vm_resources(pve).await?;
+    let mut matches = resources.iter().filter(|r| r.vmid == vmid);
+    let current = matches.next();
+    if matches.next().is_some()
+        || current.is_none_or(|r| r.node != node || r.pool.as_deref() != Some(pool))
+        || vm_config(pve, node, vmid).await? != vm_cfg
+    {
+        return Err(CoreError::Refused(format!(
+            "VM {vmid} changed during ownership review; left alone"
+        )));
     }
     let status = vm_status(pve, node, vmid).await;
     if status != "stopped" {
         return Err(CoreError::Failed(format!("VM {vmid} is {status}; left alone")));
     }
     let answer = pve
-        .delete(&format!("/nodes/{node}/qemu/{vmid}"), &[("purge", "1")])
+        .delete(
+            &format!("/nodes/{node}/qemu/{vmid}"),
+            &[("purge", "1"), ("destroy-unreferenced-disks", "0")],
+        )
         .await?;
     let result = wait_task(pve, &upid(&answer)?, &timing.wait(600), observer).await?;
     if result.ok() {
@@ -1342,4 +1391,35 @@ pub async fn power_vm(
         }),
     );
     Ok(Value::Object(result))
+}
+
+#[cfg(test)]
+mod clone_ownership_tests {
+    use super::require_clone_volume_owner;
+    use serde_json::json;
+
+    #[test]
+    fn cleanup_requires_unique_native_owner_even_when_name_matches() {
+        let volume = "local:123/vm-123-disk-0.qcow2";
+        for inventory in [
+            json!(null),
+            json!([]),
+            json!([{"volid": volume}]),
+            json!([{"volid": volume, "vmid": 456}]),
+            json!([{"volid": volume, "vmid": 123}, {"volid": volume, "vmid": 123}]),
+            json!([{"volid": volume, "vmid": 123}, {"volid": volume, "vmid": 456}]),
+        ] {
+            assert!(
+                require_clone_volume_owner(&inventory, volume, 123).is_err(),
+                "{inventory}"
+            );
+        }
+    }
+
+    #[test]
+    fn cleanup_accepts_native_owner_without_assuming_backend_naming() {
+        for volume in ["local:123/vm-123-disk-0.qcow2", "lvm:vm-123-disk-0", "store:opaque-id"] {
+            assert!(require_clone_volume_owner(&json!([{"volid": volume, "vmid": 123}]), volume, 123).is_ok());
+        }
+    }
 }
