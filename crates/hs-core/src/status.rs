@@ -2,11 +2,10 @@
 //! workspace targets (`status.py`, `proxmox.orphaned_homestack_volumes`,
 //! `lifecycle.resolve_workspace_target`).
 //!
-//! The guest is read at `VM.GuestAgent.Audit` level: `ping`, `get-host-name`,
+//! Guest statistics use `VM.GuestAgent.Audit`: `ping`, `get-host-name`,
 //! `network-get-interfaces` and `get-fsinfo` stand in for Python's `exec` of
 //! `hostname`, `ip`, `findmnt`, `blkid` and `df` (mapping A2, D3). The home
-//! mount is identified by the QEMU drive of the home slot, because
-//! `get-fsinfo` has no filesystem label.
+//! filesystem label is read from its ext4 superblock with `VM.GuestAgent.FileRead`.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -360,17 +359,10 @@ pub async fn orphaned_volumes(
     (found.into_values().collect(), warnings, complete)
 }
 
-/// `guest.workspace_home_usage` at audit level: the size from the VM config,
-/// and usage from `get-fsinfo` when the VM runs, the agent answers and
-/// `/home/<user>` is on the home slot's drive.
-pub async fn workspace_home_usage(
-    pve: &impl Pve,
-    cfg: &Config,
-    node: &str,
-    vmid: u32,
-    status: &str,
-    home_cfg: &str,
-) -> HomeUsage {
+/// `guest.workspace_home_usage`: the size from the VM config,
+/// and usage from `get-fsinfo` for the mounted filesystem labeled
+/// `HS_HOME_<vmid>`, regardless of its device type, slot or mountpoint.
+pub async fn workspace_home_usage(pve: &impl Pve, node: &str, vmid: u32, status: &str, home_cfg: &str) -> HomeUsage {
     #[allow(
         clippy::cast_possible_truncation,
         clippy::cast_sign_loss,
@@ -386,12 +378,9 @@ pub async fn workspace_home_usage(
     if status != "running" {
         return usage;
     }
-    let Some(fs) = home_filesystem(pve, cfg, node, vmid).await else {
+    let Some(fs) = home_filesystem(pve, node, vmid).await else {
         return usage;
     };
-    if !fs.on_home_slot {
-        return usage;
-    }
     let (Some(used), Some(total)) = (fs.used, fs.total) else {
         return usage;
     };
@@ -469,10 +458,9 @@ pub fn df_percent(used: u64, avail: u64) -> u64 {
     u64::try_from((u128::from(used) * 100).div_ceil(total)).unwrap_or(100)
 }
 
-/// The filesystem at `/home/<user>` as `get-fsinfo` reports it.
+/// The mounted filesystem with the workspace's persistent home label.
 struct HomeFilesystem {
     mount: String,
-    on_home_slot: bool,
     used: Option<u64>,
     /// Used plus what unprivileged users may still use.
     total: Option<u64>,
@@ -480,30 +468,38 @@ struct HomeFilesystem {
     total_privileged: Option<u64>,
 }
 
-async fn home_filesystem(pve: &impl Pve, cfg: &Config, node: &str, vmid: u32) -> Option<HomeFilesystem> {
+async fn home_filesystem(pve: &impl Pve, node: &str, vmid: u32) -> Option<HomeFilesystem> {
     let info = pve
         .get(&format!("/nodes/{node}/qemu/{vmid}/agent/get-fsinfo"), &[])
         .await
         .ok()?;
-    let mountpoint = format!("/home/{}", cfg.user.name);
-    let fs = info
-        .get("result")?
-        .as_array()?
-        .iter()
-        .find(|fs| fs.get("mountpoint").and_then(Value::as_str) == Some(mountpoint.as_str()))?;
-    let drive = format!("drive-{}", cfg.home_disk);
-    let on_home_slot = fs.get("disk").and_then(Value::as_array).is_some_and(|disks| {
-        disks.iter().any(|disk| {
-            disk.get("serial")
-                .and_then(Value::as_str)
-                .is_some_and(|serial| serial.ends_with(&drive))
-        })
-    });
-    let name = fs.get("name").map(py_str).unwrap_or_default();
+    let expected = home_label(vmid).ok()?;
+    let mut matched = None;
+    for fs in info.get("result")?.as_array()? {
+        if fs.get("type").and_then(Value::as_str) != Some("ext4") {
+            continue;
+        }
+        let Some(name) = fs.get("name").and_then(Value::as_str) else {
+            continue;
+        };
+        let device = if name.starts_with("/dev/") {
+            name.to_owned()
+        } else {
+            format!("/dev/{name}")
+        };
+        let label = crate::guest::ext4_label(pve, node, vmid, &device).await.ok().flatten();
+        if label.as_deref() == Some(expected.as_str()) {
+            if matched.is_some() {
+                return None;
+            }
+            matched = Some((fs, device));
+        }
+    }
+    let (fs, device) = matched?;
+    let mountpoint = fs.get("mountpoint")?.as_str()?;
     let fstype = fs.get("type").map(py_str).unwrap_or_default();
     Some(HomeFilesystem {
-        mount: format!("/dev/{name} {fstype} {mountpoint}"),
-        on_home_slot,
+        mount: format!("{device} {fstype} {mountpoint}"),
         used: u64_value(fs.get("used-bytes")),
         total: u64_value(fs.get("total-bytes")),
         total_privileged: u64_value(fs.get("total-bytes-privileged")),
@@ -694,24 +690,19 @@ pub async fn global_status(pve: &impl Pve, cfg: &Config, parallel: usize) -> Res
         let home_cfg = vm_cfg.get(&cfg.home_disk).map(String::as_str).unwrap_or_default();
         let mut home = None;
         if alien || !node_online {
-        } else if home_cfg.is_empty() {
-            problems.push(format!("missing {}", cfg.home_disk));
-            missing += 1;
         } else {
-            let expected = home_label(item.vmid)?;
-            let serial = disk_option(home_cfg, "serial");
-            if serial.as_deref() != Some(expected.as_str()) {
-                problems.push(format!(
-                    "{} serial {} != {}",
-                    cfg.home_disk,
-                    py_repr(serial.as_deref()),
-                    py_repr(Some(&expected))
-                ));
-            }
             let status = item.status.as_deref().unwrap_or("unknown");
-            let usage = workspace_home_usage(pve, cfg, &item.node, item.vmid, status, home_cfg).await;
+            let usage = workspace_home_usage(pve, &item.node, item.vmid, status, home_cfg).await;
             if let Some(size) = usage.size_bytes {
                 total_home += size;
+            } else {
+                missing += 1;
+                if status == "running" {
+                    problems.push(format!(
+                        "cannot read mounted home filesystem with label '{}'",
+                        home_label(item.vmid)?
+                    ));
+                }
             }
             if let (Some(used), Some(free)) = (usage.used_bytes, usage.free_bytes) {
                 known_count += 1;
@@ -1175,18 +1166,18 @@ pub async fn workspace_status_of(
                 .await
                 .ok()
                 .and_then(|info| first_ipv4(&info, vm_cfg.get("net0")?));
-            home = home_filesystem(pve, cfg, &node, vmid).await;
+            home = home_filesystem(pve, &node, vmid).await;
         }
     }
     let home_mount = home.as_ref().map(|fs| fs.mount.clone());
-    let home_mount_ok = (!alien).then(|| {
-        expected_label.is_some()
-            && home
-                .as_ref()
-                .is_some_and(|fs| fs.on_home_slot && fs.mount.contains("ext4"))
-    });
-    let home_identity_ok =
-        (!alien).then(|| expected_label.is_some() && home_serial.is_some() && home_serial == expected_label);
+    let home_mount_ok = (!alien && qga).then(|| expected_label.is_some() && home.is_some());
+    let home_identity_ok = home_mount_ok;
+    #[allow(clippy::cast_precision_loss, reason = "Disk sizes are displayed in GiB")]
+    let home_size_gb = home
+        .as_ref()
+        .and_then(|fs| fs.total_privileged.or(fs.total))
+        .map(|bytes| bytes as f64 / 1024.0_f64.powi(3))
+        .or(home_size_gb);
     Ok(WorkspaceStatus {
         vmid,
         name: (!name.is_empty()).then_some(name),
@@ -1338,7 +1329,7 @@ pub async fn resolve_existing_workspace(
             py_repr(serial.as_deref())
         )));
     }
-    let home_usage = workspace_home_usage(pve, cfg, &node, vmid, &status, &home_cfg).await;
+    let home_usage = workspace_home_usage(pve, &node, vmid, &status, &home_cfg).await;
     Ok(ExistingWorkspace {
         vmid,
         name,

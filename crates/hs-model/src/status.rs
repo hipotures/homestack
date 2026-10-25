@@ -311,9 +311,9 @@ pub struct WorkspaceStatus {
     /// `serial=` of the home disk in the VM config.
     pub home_serial: Option<String>,
     pub home_identity_ok: Option<bool>,
-    /// `<device> <type> <mountpoint>` of the filesystem at `/home/<user>`.
+    /// `<device> <type> <mountpoint>` of the filesystem labeled `HS_HOME_<vmid>`.
     pub home_mount: Option<String>,
-    /// The home filesystem is ext4 on the VM's home disk.
+    /// A mounted ext4 filesystem has the expected home label.
     pub home_mount_ok: Option<bool>,
     pub ssh: SshCommands,
 }

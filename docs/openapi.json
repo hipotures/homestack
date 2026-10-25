@@ -4093,14 +4093,14 @@
               "string",
               "null"
             ],
-            "description": "`<device> <type> <mountpoint>` of the filesystem at `/home/<user>`."
+            "description": "`<device> <type> <mountpoint>` of the filesystem labeled `HS_HOME_<vmid>`."
           },
           "home_mount_ok": {
             "type": [
               "boolean",
               "null"
             ],
-            "description": "The home filesystem is ext4 on the VM's home disk."
+            "description": "A mounted ext4 filesystem has the expected home label."
           },
           "home_serial": {
             "type": [
