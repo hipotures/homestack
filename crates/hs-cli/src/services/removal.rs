@@ -16,7 +16,7 @@ use super::manifest::MOUNT;
 pub(super) struct Reviewed {
     pub target: Instance,
     config: Value,
-    storage: Value,
+    storage: BTreeMap<String, Value>,
     volumes: BTreeMap<String, Value>,
 }
 
@@ -36,6 +36,27 @@ fn text<'a>(value: &'a Value, key: &str) -> Result<&'a str, String> {
         .as_str()
         .filter(|v| !v.is_empty())
         .ok_or_else(|| format!("Missing or invalid {key}"))
+}
+
+// Keep the same identity policy as workspace_destroy::storage_identity:
+// normalize only enumeration order, retaining every backend attribute.
+fn storage_identity(value: &Value) -> Result<BTreeMap<String, Value>, String> {
+    let mut stores = BTreeMap::new();
+    for entry in array(value, "Storage configuration")? {
+        let id = text(entry, "storage")?.to_owned();
+        let mut entry = entry.clone();
+        for key in ["content", "nodes"] {
+            if let Some(Value::String(value)) = entry.get_mut(key) {
+                let mut members: Vec<_> = value.split(',').collect();
+                members.sort_unstable();
+                *value = members.join(",");
+            }
+        }
+        if stores.insert(id, entry).is_some() {
+            return Err("Duplicate storage identity".to_owned());
+        }
+    }
+    Ok(stores)
 }
 
 /// Cluster location, explicit pool membership and the node's own inventory
@@ -238,10 +259,9 @@ async fn read(pve: &impl Pve, pool: &str, ctid: u32) -> Result<Reviewed, String>
     }
     // Read storage configuration as well as content: reusing a storage ID for
     // another backend must invalidate the reviewed destructive identity.
-    let storage = get(pve, "/storage", &[]).await?;
-    let stores = array(&storage, "Storage configuration")?;
+    let storage = storage_identity(&get(pve, "/storage", &[]).await?)?;
     let mut volumes = BTreeMap::new();
-    for store in stores {
+    for store in storage.values() {
         let id = text(store, "storage")?;
         if !text(store, "content")?.split(',').any(|c| c == "rootdir")
             || store["disable"].as_u64() == Some(1)
@@ -310,6 +330,9 @@ async fn read(pve: &impl Pve, pool: &str, ctid: u32) -> Result<Reviewed, String>
     }
     if placement(pve, ctid, pool).await? != node {
         return Err("Node changed while reading removal inventory".to_owned());
+    }
+    if storage_identity(&get(pve, "/storage", &[]).await?)? != storage {
+        return Err("Storage backend configuration changed while reading removal inventory".to_owned());
     }
     let final_status = get(pve, &format!("{base}/status/current"), &[]).await?;
     if final_status["status"] != status["status"] || final_status["ha"] != status["ha"] {
