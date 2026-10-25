@@ -1174,7 +1174,7 @@ pub async fn workspace_status_of(
                 .get(&format!("/nodes/{node}/qemu/{vmid}/agent/network-get-interfaces"), &[])
                 .await
                 .ok()
-                .and_then(|info| first_ipv4(&info, "eth0"));
+                .and_then(|info| first_ipv4(&info, vm_cfg.get("net0")?));
             home = home_filesystem(pve, cfg, &node, vmid).await;
         }
     }
@@ -1217,12 +1217,18 @@ pub async fn workspace_status_of(
     })
 }
 
-/// `address/prefix` of the first IPv4 address of `interface`.
-fn first_ipv4(info: &Value, interface: &str) -> Option<String> {
+/// `address/prefix` of the primary virtual NIC, matched by its MAC address.
+fn first_ipv4(info: &Value, net0: &str) -> Option<String> {
+    let (_, mac) = net0.split(',').next()?.split_once('=')?;
     info.get("result")?
         .as_array()?
         .iter()
-        .find(|i| i.get("name").and_then(Value::as_str) == Some(interface))?
+        .find(|interface| {
+            interface
+                .get("hardware-address")
+                .and_then(Value::as_str)
+                .is_some_and(|address| address.eq_ignore_ascii_case(mac))
+        })?
         .get("ip-addresses")?
         .as_array()?
         .iter()

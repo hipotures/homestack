@@ -4061,7 +4061,7 @@
               "string",
               "null"
             ],
-            "description": "`address/prefix` of the first IPv4 address on `eth0`."
+            "description": "`address/prefix` of the first IPv4 address on the primary virtual NIC (`net0`)."
           },
           "configured_ip": {
             "type": [

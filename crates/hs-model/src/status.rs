@@ -297,7 +297,7 @@ pub struct WorkspaceStatus {
     pub configured_ip: Option<String>,
     /// From the guest agent, when the VM runs and the agent answers.
     pub actual_hostname: Option<String>,
-    /// `address/prefix` of the first IPv4 address on `eth0`.
+    /// `address/prefix` of the first IPv4 address on the primary virtual NIC (`net0`).
     pub actual_ip: Option<String>,
     /// Whether the guest agent answered.
     pub qga: bool,

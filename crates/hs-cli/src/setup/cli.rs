@@ -182,7 +182,7 @@ async fn resolve(
         .or_else(|| found["configured_ip"].as_str())
         .ok_or_else(|| {
             AppError::new(format!(
-                "VMID {vmid} has no workspace address: the guest agent reported no IPv4 address on eth0 and the API has no configured address"
+                "VMID {vmid} has no workspace address: the guest agent reported no IPv4 address for the primary network interface and the API has no configured address"
             ))
         })?
         .to_owned();
