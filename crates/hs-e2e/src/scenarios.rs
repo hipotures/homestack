@@ -890,18 +890,29 @@ impl Context {
             let cfg = self
                 .config(node["name"].as_str().ok_or("missing node name")?, "lxc", ctid)
                 .await?;
-            let resources = self.inventory().await?;
-            ensure(
-                resources.as_array().is_some_and(|vms| {
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(120);
+            loop {
+                let current = self
+                    .pve(&["get", &format!("/nodes/{node_name}/lxc/{ctid}/status/current")])
+                    .await?;
+                let resources = self.inventory().await?;
+                let matches = resources.as_array().is_some_and(|vms| {
                     vms.iter().any(|vm| {
                         vm["vmid"] == ctid
                             && vm["pool"] == "homestack-service"
                             && vm["node"] == node["name"]
                             && vm["status"] == "running"
                     })
-                }),
-                "API CT pool, placement or state is incorrect",
-            )?;
+                });
+                if current["status"] == "running" && matches {
+                    break;
+                }
+                ensure(
+                    tokio::time::Instant::now() < deadline,
+                    "API CT pool, placement or state did not converge within 120 seconds",
+                )?;
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            }
             self.evidence
                 .push(json!({"ctid":ctid,"node":node["name"],"config":sanitize(cfg)}));
         }
