@@ -174,10 +174,18 @@ async fn resolve(
     if status != "running" {
         return Err(AppError::new(stopped(vmid, &status)));
     }
-    let ip = hs_model::address::address_of(vmid, &server.network)
-        .map(|ip| ip.to_string())
-        .or_else(|| found["configured_ip"].as_str().map(str::to_owned))
-        .ok_or_else(|| AppError::new(format!("VMID {vmid} has no workspace address")))?;
+    // Imported workspaces need not encode their address in the VMID.
+    // The guest agent reports the actual address with a CIDR prefix.
+    let ip = found["actual_ip"]
+        .as_str()
+        .and_then(|ip| ip.split('/').next())
+        .or_else(|| found["configured_ip"].as_str())
+        .ok_or_else(|| {
+            AppError::new(format!(
+                "VMID {vmid} has no workspace address: the guest agent reported no IPv4 address on eth0 and the API has no configured address"
+            ))
+        })?
+        .to_owned();
     Ok(Target {
         vmid,
         name,
