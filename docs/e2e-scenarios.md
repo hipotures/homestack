@@ -233,3 +233,35 @@ Fixture Cloud-Init readiness requires JSON status `done`, no stage errors and
 no recoverable error classes except `DEPRECATED`. Proxmox-generated deprecated
 user-data notices (exit status 2) are retained in fixture evidence; fatal errors
 and WARNING/ERROR classes fail preparation.
+
+Installed API readiness also waits up to 120 seconds for both the direct LXC
+status and cluster inventory to show the expected running container, pool and
+node. An HTTPS-ready container can precede the cluster inventory update.
+
+## Live validation on 2026-10-25
+
+Both full topologies were executed with two CPUs and 8192 MiB per PVE node,
+the retained local DNS server, and API image `0.2.22` pinned to manifest digest
+`sha256:1c92a4139b692a325868d70370950eab0318396e40a59473606ced97d6010ee4`.
+
+| Report directory | Passed | Failed | Blocked | Out of scope |
+|---|---:|---:|---:|---:|
+| `/tmp/e2e-one-full-r9` | 33 | 1 | 3 | 5 |
+| `/tmp/e2e-three-full-r6` | 37 | 1 | 4 | 0 |
+
+All 20 resize cases passed in each topology. Both final HomeStack uninstalls,
+all scenario cleanups and both complete laboratory cleanups passed; persistent
+DNS/TLS fixtures were retained. Each directory contains `report.json`,
+`scenarios.json`, `summary.txt` and per-scenario evidence.
+
+The single-node reinstall failed on stale cluster inventory after HTTPS became
+ready. Independent follow-up confirmed the correct running container. The
+bounded readiness fix in `8e50013` was built before the three-node run, whose
+reinstall passed. The original single-node failure remains in its report.
+
+The three-node outage failed: while the owned pve3 QEMU process was suspended,
+pve1 also observed pve2 offline and could not retain quorum. Recovery verified
+stable three-node quorum and API readiness before continuing. The cause of this
+failure remains unresolved; these results do not establish node-failure
+tolerance. The four manifest-service coverage gaps listed above remain blocked
+(service migration is out of scope on one node), so neither full suite passed.
