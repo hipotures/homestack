@@ -468,6 +468,11 @@ pub enum Hit {
     SetupRow(usize, u8),
     /// The details of the setup box (the wheel scrolls them).
     SetupDetails,
+    /// The action plan or result: its rendered offset and farthest scroll position.
+    ActionDetails {
+        offset: usize,
+        most: usize,
+    },
     /// A section of the manifest in the setup box's details (its index).
     ManifestSection(usize),
     /// A row of the install's settings.

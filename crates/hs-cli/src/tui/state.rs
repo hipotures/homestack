@@ -1597,6 +1597,20 @@ impl App {
             }
             (MouseEventKind::ScrollDown, Some(Hit::Bar(bar))) => return self.scroll_to(bar, bar.wheel(3)),
             (MouseEventKind::ScrollUp, Some(Hit::Bar(bar))) => return self.scroll_to(bar, bar.wheel(-3)),
+            (MouseEventKind::ScrollDown | MouseEventKind::ScrollUp, Some(Hit::ActionDetails { offset, most })) => {
+                if let Some(action) = self.action.as_mut()
+                    && let super::action::Stage::Plan { scroll, .. } | super::action::Stage::Done { scroll, .. } =
+                        &mut action.stage
+                {
+                    let step = if event.kind == MouseEventKind::ScrollDown {
+                        3
+                    } else {
+                        -3
+                    };
+                    *scroll = offset.saturating_add_signed(step).min(most);
+                }
+                return None;
+            }
             // A line of the log clicked: it is highlighted.
             (MouseEventKind::Down(MouseButton::Left), Some(Hit::Log { line: Some(line), .. })) => {
                 self.log_cursor = Some(line);
@@ -1678,7 +1692,7 @@ impl App {
                         };
                     }
                     Some(Hit::SetupRow(index, part)) => return self.setup_click(index, part),
-                    Some(Hit::SetupDetails) => return None,
+                    Some(Hit::SetupDetails | Hit::ActionDetails { .. }) => return None,
                     Some(Hit::ManifestSection(index)) => {
                         if let Some(setup) = self.setup.as_mut() {
                             setup.toggle_manifest_section(index);

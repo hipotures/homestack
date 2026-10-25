@@ -3022,6 +3022,15 @@ fn action_box(buf: &mut Buffer, area: Rect, app: &App, action: &Action) {
     }
     let height = usize::from(inner.height).saturating_sub(key_footer.len());
     let scroll = scroll.min(lines.len().saturating_sub(height));
+    if matches!(action.stage, Stage::Plan { .. } | Stage::Done { .. }) {
+        register(
+            inner,
+            Hit::ActionDetails {
+                offset: scroll,
+                most: lines.len().saturating_sub(height),
+            },
+        );
+    }
     for (line, field) in &field_rows {
         if *line < scroll || *line >= scroll + height {
             continue;
