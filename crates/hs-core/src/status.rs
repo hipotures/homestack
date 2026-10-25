@@ -468,6 +468,19 @@ struct HomeFilesystem {
     total_privileged: Option<u64>,
 }
 
+/// The guest device whose ext4 label can identify a home filesystem.
+fn home_label_device(fs: &Value) -> Option<String> {
+    if fs.get("type").and_then(Value::as_str) != Some("ext4") {
+        return None;
+    }
+    let name = fs.get("name")?.as_str()?;
+    Some(if name.starts_with("/dev/") {
+        name.to_owned()
+    } else {
+        format!("/dev/{name}")
+    })
+}
+
 async fn home_filesystem(pve: &impl Pve, node: &str, vmid: u32) -> Option<HomeFilesystem> {
     let info = pve
         .get(&format!("/nodes/{node}/qemu/{vmid}/agent/get-fsinfo"), &[])
@@ -476,16 +489,8 @@ async fn home_filesystem(pve: &impl Pve, node: &str, vmid: u32) -> Option<HomeFi
     let expected = home_label(vmid).ok()?;
     let mut matched = None;
     for fs in info.get("result")?.as_array()? {
-        if fs.get("type").and_then(Value::as_str) != Some("ext4") {
+        let Some(device) = home_label_device(fs) else {
             continue;
-        }
-        let Some(name) = fs.get("name").and_then(Value::as_str) else {
-            continue;
-        };
-        let device = if name.starts_with("/dev/") {
-            name.to_owned()
-        } else {
-            format!("/dev/{name}")
         };
         let label = crate::guest::ext4_label(pve, node, vmid, &device).await.ok().flatten();
         if label.as_deref() == Some(expected.as_str()) {
@@ -998,6 +1003,50 @@ async fn prefetch_status<P: Pve>(pve: &crate::prefetch::Prefetch<'_, P>, cfg: &C
         }
     }
     pve.warm(requests).await;
+    // Labels require guest file reads. Fetch them with the same concurrency
+    // and deadline as other agent data instead of waiting on each disk in turn.
+    let mut devices = Vec::new();
+    for item in status_resources(&resources, cfg).into_iter().filter(|item| {
+        Some(item.vmid) != cfg.gold_vmid
+            && !has_tag(item.tags.as_deref(), ALIEN_WORKSPACE_TAG)
+            && online(&item.node)
+            && item.status.as_deref() == Some("running")
+    }) {
+        let Ok(info) = pve
+            .get(
+                &format!("/nodes/{}/qemu/{}/agent/get-fsinfo", item.node, item.vmid),
+                &[],
+            )
+            .await
+        else {
+            continue;
+        };
+        for fs in info.get("result").and_then(Value::as_array).into_iter().flatten() {
+            if let Some(device) = home_label_device(fs) {
+                devices.push((
+                    format!("/nodes/{}/qemu/{}/agent/file-read", item.node, item.vmid),
+                    device,
+                ));
+            }
+        }
+    }
+    pve.warm(
+        devices
+            .iter()
+            .map(|(path, device)| {
+                (
+                    path.clone(),
+                    vec![
+                        ("file", device.as_str()),
+                        ("offset", "1024"),
+                        ("count", "256"),
+                        ("decode", "0"),
+                    ],
+                )
+            })
+            .collect(),
+    )
+    .await;
     Ok(())
 }
 
