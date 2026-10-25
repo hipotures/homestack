@@ -4086,21 +4086,21 @@
               "string",
               "null"
             ],
-            "description": "`HS_HOME_<vmid>` for workspaces."
+            "description": "Expected `HS_HOME_<vmid>` filesystem label or virtiofs tag."
           },
           "home_mount": {
             "type": [
               "string",
               "null"
             ],
-            "description": "`<device> <type> <mountpoint>` of the filesystem labeled `HS_HOME_<vmid>`."
+            "description": "`<device-or-tag> <type> <mountpoint>` of the HOME filesystem."
           },
           "home_mount_ok": {
             "type": [
               "boolean",
               "null"
             ],
-            "description": "A mounted ext4 filesystem has the expected home label."
+            "description": "A mounted filesystem has the expected ext4 label or virtiofs tag."
           },
           "home_serial": {
             "type": [

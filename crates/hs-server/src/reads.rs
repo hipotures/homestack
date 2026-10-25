@@ -168,14 +168,13 @@ pub async fn status(
 ) -> Result<Json<GlobalStatus>, ApiError> {
     let stored = configuration(&state)?;
     let parallel = scope.parallel.unwrap_or(8).clamp(1, 32);
-    let mut status = global_status(
-        state.pve()?.as_ref(),
-        &stored.config,
-        parallel,
-        &state.status_observations,
-    )
-    .await
-    .map_err(|e| core_error(e, "No such resource."))?;
+    let pve = state.pve()?;
+    let (mut status, virtiofs) = global_status(pve.as_ref(), &stored.config, parallel, &state.status_observations)
+        .await
+        .map_err(|e| core_error(e, "No such resource."))?;
+    state
+        .virtiofs
+        .global(pve, &state.pools.workspaces, &mut status, virtiofs);
     for entry in &mut status.others {
         state.image_updates.annotate(entry);
     }
@@ -232,10 +231,13 @@ pub async fn workspace(
         .find(|r| r.vmid == vmid)
         .ok_or(ApiError::new(ErrorCode::NotFound, not_found))?;
     require_pools(&state, vmid, resource.pool.as_deref())?;
-    workspace_status_of(pve, &stored.config, resource)
+    let (mut status, target) = workspace_status_of(pve, &stored.config, resource)
         .await
-        .map(Json)
-        .map_err(|e| core_error(e, not_found))
+        .map_err(|e| core_error(e, not_found))?;
+    state
+        .virtiofs
+        .workspace(pve_client, &state.pools.workspaces, &mut status, target);
+    Ok(Json(status))
 }
 
 /// Capacity of every storage of every node's `homestack-storage-<N>` layout.

@@ -1,9 +1,10 @@
 //! The QEMU guest agent (mapping T6, D1): commands, pings and file reads.
 //!
 //! `guest_exec` ports `guest._complete_guest_exec` onto `agent/exec` and
-//! `agent/exec-status`, which need `VM.GuestAgent.Unrestricted`; the server
-//! uses it only for Gold (E2). Workspaces are read with `ping`, the `get-*`
-//! commands and `file-read` (decision 5).
+//! `agent/exec-status`, which need `VM.GuestAgent.Unrestricted`. Native
+//! filesystem statistics use audit commands and `file-read`; virtiofs
+//! statistics use a bounded read-only guest command because `get-fsinfo`
+//! does not report those mounts.
 
 use std::time::Duration;
 

@@ -18,6 +18,7 @@ mod reads;
 mod routes;
 mod secrets;
 pub mod settings;
+mod virtiofs;
 
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
@@ -215,6 +216,7 @@ struct AppState {
     instance: Arc<Instance>,
     image_updates: Arc<image_updates::ImageUpdates>,
     status_observations: Arc<hs_core::prefetch::Observations>,
+    virtiofs: Arc<virtiofs::Reports>,
     service_status: hs_service_status::Telemetry,
 }
 
@@ -261,6 +263,7 @@ pub fn app_with(config: ServerConfig, options: AppOptions) -> Result<Router, Sta
         instance: Arc::new(instance),
         image_updates: Arc::default(),
         status_observations: Arc::default(),
+        virtiofs: Arc::default(),
         service_status: hs_service_status::Telemetry::start(std::time::Instant::now())
             .map_err(StartError::Telemetry)?,
     };

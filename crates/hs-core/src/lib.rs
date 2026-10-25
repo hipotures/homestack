@@ -30,6 +30,7 @@ pub mod service_status;
 pub mod status;
 pub mod tasks;
 pub mod verify;
+pub mod virtiofs;
 mod workspace_destroy;
 
 pub use error::CoreError;

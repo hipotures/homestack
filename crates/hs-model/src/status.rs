@@ -306,14 +306,14 @@ pub struct WorkspaceStatus {
     pub home_disk: Option<String>,
     pub home_storage: Option<String>,
     pub home_size_gb: Option<f64>,
-    /// `HS_HOME_<vmid>` for workspaces.
+    /// Expected `HS_HOME_<vmid>` filesystem label or virtiofs tag.
     pub home_label: Option<String>,
     /// `serial=` of the home disk in the VM config.
     pub home_serial: Option<String>,
     pub home_identity_ok: Option<bool>,
-    /// `<device> <type> <mountpoint>` of the filesystem labeled `HS_HOME_<vmid>`.
+    /// `<device-or-tag> <type> <mountpoint>` of the HOME filesystem.
     pub home_mount: Option<String>,
-    /// A mounted ext4 filesystem has the expected home label.
+    /// A mounted filesystem has the expected ext4 label or virtiofs tag.
     pub home_mount_ok: Option<bool>,
     pub ssh: SshCommands,
 }

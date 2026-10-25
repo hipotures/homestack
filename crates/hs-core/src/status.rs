@@ -607,7 +607,7 @@ pub async fn global_status(
     cfg: &Config,
     parallel: usize,
     observations: &crate::prefetch::Observations,
-) -> Result<GlobalStatus, CoreError> {
+) -> Result<(GlobalStatus, Vec<crate::virtiofs::Target>), CoreError> {
     let pve = &crate::prefetch::Prefetch::new(pve, parallel, observations);
     prefetch_status(pve, cfg).await?;
     let inventory = Inventory::read(pve, cfg).await?;
@@ -680,6 +680,7 @@ pub async fn global_status(
     };
 
     let mut workspaces = Vec::new();
+    let mut virtiofs = Vec::new();
     let (mut total_home, mut known_used, mut known_free, mut known_count, mut missing) =
         (0_u64, 0_u64, 0_u64, 0_u64, 0_u64);
     let managed = status_resources(&inventory.resources, cfg);
@@ -702,8 +703,15 @@ pub async fn global_status(
         } else {
             vm_cfg.get(&cfg.home_disk).map(String::as_str).unwrap_or_default()
         };
+        let shared_home = crate::virtiofs::Target::of(item, vm_cfg);
+        if node_online
+            && item.status.as_deref() == Some("running")
+            && let Some(target) = shared_home.clone()
+        {
+            virtiofs.push(target);
+        }
         let mut home = None;
-        if node_online {
+        if node_online && shared_home.is_none() {
             let status = item.status.as_deref().unwrap_or("unknown");
             let usage = workspace_home_usage(pve, &item.node, item.vmid, status, home_cfg).await;
             if let Some(size) = usage.size_bytes {
@@ -950,32 +958,35 @@ pub async fn global_status(
     let free_percent = (all_known && total_home != 0).then(|| 100.0 * known_free as f64 / total_home as f64);
     let running = workspaces.iter().filter(|w| w.status == "running").count() as u64;
     let stopped = workspaces.iter().filter(|w| w.status == "stopped").count() as u64;
-    Ok(GlobalStatus {
-        gold,
-        summary: StatusSummary {
-            workspace_count: workspaces.len() as u64,
-            running,
-            stopped,
-            root_storage,
-            storage_layouts: layouts,
-            nodes: inventory.nodes.clone(),
-            homes: HomesSummary {
-                used_bytes: (known_count > 0).then_some(known_used),
-                quota_bytes: total_home,
-                free_bytes: all_known.then_some(known_free),
-                free_percent,
-                physical_available_bytes: None,
-                missing_count: missing,
+    Ok((
+        GlobalStatus {
+            gold,
+            summary: StatusSummary {
+                workspace_count: workspaces.len() as u64,
+                running,
+                stopped,
+                root_storage,
+                storage_layouts: layouts,
+                nodes: inventory.nodes.clone(),
+                homes: HomesSummary {
+                    used_bytes: (known_count > 0).then_some(known_used),
+                    quota_bytes: total_home,
+                    free_bytes: all_known.then_some(known_free),
+                    free_percent,
+                    physical_available_bytes: None,
+                    missing_count: missing,
+                },
+                orphaned_volumes: orphans,
+                orphan_scan_complete: orphan_complete,
+                quorum: cluster_quorum(pve).await,
             },
-            orphaned_volumes: orphans,
-            orphan_scan_complete: orphan_complete,
-            quorum: cluster_quorum(pve).await,
+            workspaces,
+            others,
+            pools,
+            warnings,
         },
-        workspaces,
-        others,
-        pools,
-        warnings,
-    })
+        virtiofs,
+    ))
 }
 
 /// Everything [`global_status`] reads after the cluster's guests and nodes:
@@ -1027,6 +1038,11 @@ async fn prefetch_status<P: Pve>(pve: &crate::prefetch::Prefetch<'_, P>, cfg: &C
     for item in status_resources(&resources, cfg).into_iter().filter(|item| {
         Some(item.vmid) != cfg.gold_vmid && online(&item.node) && item.status.as_deref() == Some("running")
     }) {
+        if let Ok(config) = vm_config(pve, &item.node, item.vmid).await
+            && crate::virtiofs::Target::of(item, &config).is_some()
+        {
+            continue;
+        }
         let Ok(info) = pve
             .get(
                 &format!("/nodes/{}/qemu/{}/agent/get-fsinfo", item.node, item.vmid),
@@ -1136,7 +1152,9 @@ pub async fn workspace_status(pve: &impl Pve, cfg: &Config, vmid: u32) -> Result
     let Some(resource) = cluster_vm_resources(pve).await?.into_iter().find(|r| r.vmid == vmid) else {
         return Ok(None);
     };
-    workspace_status_of(pve, cfg, resource).await.map(Some)
+    workspace_status_of(pve, cfg, resource)
+        .await
+        .map(|(status, _)| Some(status))
 }
 
 /// [`workspace_status`] for a resource already read from
@@ -1145,7 +1163,7 @@ pub async fn workspace_status_of(
     pve: &impl Pve,
     cfg: &Config,
     resource: StatusResource,
-) -> Result<WorkspaceStatus, CoreError> {
+) -> Result<(WorkspaceStatus, Option<crate::virtiofs::Target>), CoreError> {
     let vmid = resource.vmid;
     let node = resource.node.clone();
     let vm_cfg = vm_config(pve, &node, vmid).await?;
@@ -1199,6 +1217,9 @@ pub async fn workspace_status_of(
     } else {
         None
     };
+    let shared_home = expected_label
+        .as_ref()
+        .and_then(|_| crate::virtiofs::Target::of(&resource, &vm_cfg));
     let home_serial = (!home_cfg.is_empty())
         .then(|| disk_option(home_cfg, "serial"))
         .flatten();
@@ -1230,7 +1251,9 @@ pub async fn workspace_status_of(
                 .await
                 .ok()
                 .and_then(|info| first_ipv4(&info, vm_cfg.get("net0")?));
-            home = home_filesystem(pve, &node, vmid).await;
+            if shared_home.is_none() {
+                home = home_filesystem(pve, &node, vmid).await;
+            }
         }
     }
     let home_mount = home.as_ref().map(|fs| fs.mount.clone());
@@ -1242,34 +1265,38 @@ pub async fn workspace_status_of(
         .and_then(|fs| fs.total_privileged.or(fs.total))
         .map(|bytes| bytes as f64 / 1024.0_f64.powi(3))
         .or(home_size_gb);
-    Ok(WorkspaceStatus {
-        vmid,
-        name: (!name.is_empty()).then_some(name),
-        role: role.map(str::to_owned),
-        tags: tags.into_iter().collect(),
-        role_tag_ok,
-        role_warning,
-        status,
-        node,
-        configured_ip: ip.clone(),
-        actual_hostname,
-        actual_ip,
-        qga,
-        root_storage: disk_storage(vm_cfg.get(&cfg.root_disk).map(String::as_str)),
-        volumes: vm_volume_inventory(&vm_cfg, cfg),
-        home_disk: (!home_cfg.is_empty()).then(|| cfg.home_disk.clone()),
-        home_storage,
-        home_size_gb,
-        home_label: expected_label,
-        home_serial,
-        home_identity_ok,
-        home_mount,
-        home_mount_ok,
-        ssh: SshCommands {
-            root: ip.as_ref().map(|ip| format!("ssh root@{ip}")),
-            user: ip.as_ref().map(|ip| format!("ssh {}@{ip}", cfg.user.name)),
+    let target = shared_home.filter(|_| status == "running");
+    Ok((
+        WorkspaceStatus {
+            vmid,
+            name: (!name.is_empty()).then_some(name),
+            role: role.map(str::to_owned),
+            tags: tags.into_iter().collect(),
+            role_tag_ok,
+            role_warning,
+            status,
+            node,
+            configured_ip: ip.clone(),
+            actual_hostname,
+            actual_ip,
+            qga,
+            root_storage: disk_storage(vm_cfg.get(&cfg.root_disk).map(String::as_str)),
+            volumes: vm_volume_inventory(&vm_cfg, cfg),
+            home_disk: (!home_cfg.is_empty()).then(|| cfg.home_disk.clone()),
+            home_storage,
+            home_size_gb,
+            home_label: expected_label,
+            home_serial,
+            home_identity_ok,
+            home_mount,
+            home_mount_ok,
+            ssh: SshCommands {
+                root: ip.as_ref().map(|ip| format!("ssh root@{ip}")),
+                user: ip.as_ref().map(|ip| format!("ssh {}@{ip}", cfg.user.name)),
+            },
         },
-    })
+        target,
+    ))
 }
 
 /// `address/prefix` of the primary virtual NIC, matched by its MAC address.
