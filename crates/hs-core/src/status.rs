@@ -692,10 +692,13 @@ pub async fn global_status(pve: &impl Pve, cfg: &Config, parallel: usize) -> Res
         if alien && tags.contains(WORKSPACE_TAG) {
             problems.push("conflicting workspace role tags".to_owned());
         }
-        let home_cfg = vm_cfg.get(&cfg.home_disk).map(String::as_str).unwrap_or_default();
-        let mut home = None;
-        if alien || !node_online {
+        let home_cfg = if alien {
+            ""
         } else {
+            vm_cfg.get(&cfg.home_disk).map(String::as_str).unwrap_or_default()
+        };
+        let mut home = None;
+        if node_online {
             let status = item.status.as_deref().unwrap_or("unknown");
             let usage = workspace_home_usage(pve, &item.node, item.vmid, status, home_cfg).await;
             if let Some(size) = usage.size_bytes {
@@ -930,7 +933,7 @@ pub async fn global_status(pve: &impl Pve, cfg: &Config, parallel: usize) -> Res
             },
         );
 
-    let managed_homes = workspaces.iter().filter(|w| w.role == "WS").count() as u64;
+    let managed_homes = workspaces.len() as u64;
     let all_known = known_count == managed_homes && managed_homes > 0;
     #[allow(
         clippy::cast_precision_loss,
@@ -1007,10 +1010,7 @@ async fn prefetch_status<P: Pve>(pve: &crate::prefetch::Prefetch<'_, P>, cfg: &C
     // and deadline as other agent data instead of waiting on each disk in turn.
     let mut devices = Vec::new();
     for item in status_resources(&resources, cfg).into_iter().filter(|item| {
-        Some(item.vmid) != cfg.gold_vmid
-            && !has_tag(item.tags.as_deref(), ALIEN_WORKSPACE_TAG)
-            && online(&item.node)
-            && item.status.as_deref() == Some("running")
+        Some(item.vmid) != cfg.gold_vmid && online(&item.node) && item.status.as_deref() == Some("running")
     }) {
         let Ok(info) = pve
             .get(
@@ -1179,7 +1179,7 @@ pub async fn workspace_status_of(
     } else {
         vm_cfg.get(&cfg.home_disk).map(String::as_str).unwrap_or_default()
     };
-    let expected_label = if role == Some("WS") {
+    let expected_label = if matches!(role, Some("WS" | "ALIEN")) {
         Some(home_label(vmid)?)
     } else {
         None
@@ -1219,7 +1219,7 @@ pub async fn workspace_status_of(
         }
     }
     let home_mount = home.as_ref().map(|fs| fs.mount.clone());
-    let home_mount_ok = (!alien && qga).then(|| expected_label.is_some() && home.is_some());
+    let home_mount_ok = (expected_label.is_some() && qga).then(|| home.is_some());
     let home_identity_ok = home_mount_ok;
     #[allow(clippy::cast_precision_loss, reason = "Disk sizes are displayed in GiB")]
     let home_size_gb = home
