@@ -556,6 +556,7 @@ async fn run(
             let proxy = proxy::start().await?;
             report["nodes"] = json!([]);
             let backbone = cluster::Backbone::start(dir, artifacts, options.nodes).await?;
+            report["backbone_pid"] = json!(backbone.as_ref().map(cluster::Backbone::pid));
             for index in 1..=options.nodes {
                 let node_dir = cluster::directory(dir, index);
                 let node_artifacts = cluster::directory(artifacts, index);

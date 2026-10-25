@@ -21,6 +21,10 @@ pub struct Backbone {
 }
 
 impl Backbone {
+    pub fn pid(&self) -> u32 {
+        self.child.id()
+    }
+
     pub async fn start(dir: &Path, artifacts: &Path, nodes: u8) -> Result<Option<Self>> {
         if nodes == 1 {
             return Ok(None);

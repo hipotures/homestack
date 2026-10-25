@@ -222,6 +222,19 @@ UUID. The cancellation driver recognizes the installer access screen and the
 client history uses `$XDG_STATE_HOME/homestack/tui.log` (default
 `~/.local/state/homestack/tui.log`), within the isolated E2E profile.
 
+`cluster.node-recovery` records bounded read-only diagnostics before suspension,
+after the outage assertion (including failure, before pve3 resumes), and after
+recovery. Each survivor is queried through its independent host SSH forward:
+boot ID/uptime and pressure, cluster/quorum and Knet link state, interface
+counters, routes/neighbors, UDP sockets, a peer ping, and recent Corosync/kernel
+journals. Commands have individual deadlines; errors are evidence and do not
+prevent observing the other survivor. Host evidence includes the run-owned QEMU
+and backbone process states and Unix socket send/receive queues. The report now
+records `backbone_pid`. Compare direct pve2 responsiveness and boot identity
+with peer ping, Corosync links and socket queues to distinguish guest failure,
+general L2 failure and Corosync-only disruption. Diagnostics do not change the
+fault injection, quorum expectations or convergence deadline.
+
 Node-outage checks wait for two stable observations of surviving quorum.
 Recovery remains pending until two observations show all three nodes quorate
 and the installed APIs/snippets are ready. Failed recovery blocks subsequent
@@ -265,3 +278,21 @@ stable three-node quorum and API readiness before continuing. The cause of this
 failure remains unresolved; these results do not establish node-failure
 tolerance. The four manifest-service coverage gaps listed above remain blocked
 (service migration is out of scope on one node), so neither full suite passed.
+
+Investigation of the retained three-node report found 35 pve1 status samples
+with both peers offline and quorum lost. QEMU node logs were empty; the backbone
+log contained only its startup warning. No Corosync journals, direct pve2 outage
+probes or socket-queue observations were retained. Post-recovery observations
+cannot establish whether pve2 was responsive during the outage.
+
+The private backbone uses one QEMU process with three Unix stream hub ports;
+SIGSTOP leaves pve3's connection open. This makes queued traffic a hypothesis,
+not a confirmed cause. Upstream [QEMU hub code](https://github.com/qemu/qemu/blob/master/net/hub.c)
+broadcasts to the other ports but permits receive readiness when any peer can
+accept traffic. Its [stream code](https://github.com/qemu/qemu/blob/master/net/stream_data.c)
+handles blocked writes through a writable callback. That source review does not
+prove a global forwarding stall or reproduce the recorded QEMU 11.1.2 failure.
+No networking or quorum correction is justified by the existing evidence.
+The added diagnostics require a future isolated `cluster.node-recovery` run;
+no live scenario was run during this investigation because the current execution
+environment lacks `qemu-system-x86_64`.

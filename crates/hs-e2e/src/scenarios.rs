@@ -2203,6 +2203,91 @@ async fn node_signal(ctx: &mut Context, signal: &str) -> Result<()> {
     )
 }
 
+// Diagnostics never authorize a mutation or replace quorum assertions.
+async fn node_recovery_diagnostics(ctx: &mut Context, phase: &str) -> Result<()> {
+    let step = ctx.step.clone();
+    let mut processes = Vec::new();
+    let mut pids = Vec::new();
+    let mut targets = vec![(
+        "backbone".to_owned(),
+        ctx.report["backbone_pid"].as_u64(),
+        ctx.dir.join("backbone-1.sock"),
+    )];
+    if let Some(nodes) = ctx.report["nodes"].as_array() {
+        for node in nodes {
+            if let (Some(name), Some(directory)) = (node["name"].as_str(), node["directory"].as_str()) {
+                targets.push((
+                    name.to_owned(),
+                    node["qemu_pid"].as_u64(),
+                    Path::new(directory).join("disk.qcow2"),
+                ));
+            }
+        }
+    }
+    for (name, pid, identity) in targets {
+        let observation = (|| -> Result<Value> {
+            let pid = pid.ok_or("missing process PID")?;
+            ensure(identity.starts_with(&ctx.dir), "process identity outside owned lab")?;
+            let cmdline = std::fs::read(format!("/proc/{pid}/cmdline"))?;
+            ensure(
+                cmdline
+                    .split(|b| *b == 0)
+                    .any(|arg| String::from_utf8_lossy(arg).contains(&identity.display().to_string())),
+                "process no longer matches owned lab",
+            )?;
+            pids.push(pid);
+            let mut state = json!({"name":name,"pid":pid});
+            for field in ["status", "stat", "wchan"] {
+                state[field] =
+                    json!(std::fs::read_to_string(format!("/proc/{pid}/{field}")).unwrap_or_else(|e| e.to_string()));
+            }
+            Ok(state)
+        })();
+        processes.push(observation.unwrap_or_else(|error| json!({"name":name,"error":error.to_string()})));
+    }
+    let sockets = match tokio::time::timeout(
+        Duration::from_secs(3),
+        Command::new("ss").args(["-xapn"]).kill_on_drop(true).output(),
+    )
+    .await
+    {
+        Ok(Ok(output)) => {
+            json!({"exit_code":output.status.code(),"owned_socket_queues":String::from_utf8_lossy(&output.stdout).lines().filter(|line| {
+            line.contains(&ctx.dir.display().to_string()) || pids.iter().any(|pid| line.contains(&format!("pid={pid},")))
+        }).collect::<Vec<_>>(),"stderr":ctx.redact(&String::from_utf8_lossy(&output.stderr))})
+        }
+        other => json!({"error":format!("socket observation unavailable: {other:?}")}),
+    };
+    ctx.evidence.push(json!({"node_recovery_diagnostics":phase,"observed_at_ms":phases::now_ms(),"host_processes":processes,"host_unix_sockets":sockets}));
+    ctx.flush()?;
+    for node in ["pve1", "pve2"] {
+        // ctx.node uses host-to-node SSH forwards, not the shared L2 network.
+        // An unreachable survivor must not prevent observing the other one.
+        let observed = tokio::time::timeout(
+            Duration::from_secs(25),
+            ctx.node(
+                node,
+                &["python3", "-c", include_str!("node-recovery-diagnostics.py"), node],
+            ),
+        )
+        .await;
+        let observation = match observed {
+            Ok(Ok(bytes)) => match serde_json::from_slice::<Value>(&bytes) {
+                Ok(value) => sanitize(value),
+                Err(error) => json!({"error":error.to_string()}),
+            },
+            Ok(Err(error)) => json!({"error":ctx.redact(&error.to_string())}),
+            Err(_) => json!({"error":"independent SSH diagnostic deadline exceeded"}),
+        };
+        let observation: Value = serde_json::from_str(&ctx.redact(&observation.to_string()))?;
+        ctx.evidence
+            .push(json!({"node_recovery_diagnostics":phase,"node":node,"observation":observation}));
+        ctx.flush()?;
+    }
+    ctx.step = step;
+    Ok(())
+}
+
 async fn restore_node(ctx: &mut Context) -> Result<()> {
     // Keep recovery pending after CONT until the shared baseline is usable.
     // Cleanup must retry/verify recovery when the outage assertion itself fails.
@@ -2224,39 +2309,55 @@ async fn restore_node(ctx: &mut Context) -> Result<()> {
     ctx.evidence
         .push(json!({"node_recovery_seconds":resumed_at.elapsed().as_secs_f64(),"stable_quorum_samples":2}));
     ctx.node_recovery_pending = false;
+    node_recovery_diagnostics(ctx, "recovered").await?;
     Ok(())
 }
 
 async fn node_recovery(ctx: &mut Context) -> Result<()> {
     // Infrastructure fault injection, not a HomeStack cluster-membership operation.
+    node_recovery_diagnostics(ctx, "before-stop").await?;
     ctx.node_recovery_pending = true;
     let stopped_at = tokio::time::Instant::now();
     node_signal(ctx, "-STOP").await?;
-    let deadline = stopped_at + Duration::from_secs(100);
-    let mut stable = 0;
-    while stable < 2 {
-        let status = ctx.pve(&["get", "/cluster/status"]).await?;
-        let entries = status.as_array().ok_or("invalid cluster status")?;
-        let down = entries.iter().any(|e| e["name"] == "pve3" && e["online"] == 0);
-        let survivors = ["pve1", "pve2"]
-            .iter()
-            .all(|name| entries.iter().any(|e| e["name"] == *name && e["online"] == 1));
-        let quorate = entries.iter().any(|e| e["type"] == "cluster" && e["quorate"] == 1);
-        stable = if down && survivors && quorate { stable + 1 } else { 0 };
-        ensure(
-            tokio::time::Instant::now() < deadline,
-            "node outage did not converge to two surviving members with quorum",
-        )?;
-        if stable == 2 {
-            ctx.evidence.push(json!({"unavailable_node_cluster_status":status,"surviving_quorum_convergence_seconds":stopped_at.elapsed().as_secs_f64()}));
-        } else {
-            tokio::time::sleep(Duration::from_secs(2)).await;
+    let outage: Result<()> = async {
+        let deadline = stopped_at + Duration::from_secs(100);
+        let mut stable = 0;
+        while stable < 2 {
+            let status = ctx.pve(&["get", "/cluster/status"]).await?;
+            let entries = status.as_array().ok_or("invalid cluster status")?;
+            let down = entries.iter().any(|e| e["name"] == "pve3" && e["online"] == 0);
+            let survivors = ["pve1", "pve2"]
+                .iter()
+                .all(|name| entries.iter().any(|e| e["name"] == *name && e["online"] == 1));
+            let quorate = entries.iter().any(|e| e["type"] == "cluster" && e["quorate"] == 1);
+            stable = if down && survivors && quorate { stable + 1 } else { 0 };
+            ensure(
+                tokio::time::Instant::now() < deadline,
+                "node outage did not converge to two surviving members with quorum",
+            )?;
+            if stable == 2 {
+                ctx.evidence.push(json!({"unavailable_node_cluster_status":status,"surviving_quorum_convergence_seconds":stopped_at.elapsed().as_secs_f64()}));
+            } else {
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            }
         }
-    }
-    ensure(
-        ctx.api_at("api1", "GET", "/v1/status", None, true).await?.0 == 200,
-        "HomeStack API unavailable during node outage",
-    )?;
+        ensure(
+            ctx.api_at("api1", "GET", "/v1/status", None, true).await?.0 == 200,
+            "HomeStack API unavailable during node outage",
+        )?;
+        Ok(())
+    }.await;
+    // Capture the failed state before cleanup resumes pve3 and erases it.
+    node_recovery_diagnostics(
+        ctx,
+        if outage.is_ok() {
+            "outage-passed"
+        } else {
+            "outage-failed"
+        },
+    )
+    .await?;
+    outage?;
     restore_node(ctx).await
 }
 
