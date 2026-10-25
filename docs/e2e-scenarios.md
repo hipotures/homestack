@@ -227,13 +227,34 @@ after the outage assertion (including failure, before pve3 resumes), and after
 recovery. Each survivor is queried through its independent host SSH forward:
 boot ID/uptime and pressure, cluster/quorum and Knet link state, interface
 counters, routes/neighbors, UDP sockets, a peer ping, and recent Corosync/kernel
-journals. Commands have individual deadlines; errors are evidence and do not
-prevent observing the other survivor. Host evidence includes the run-owned QEMU
-and backbone process states and Unix socket send/receive queues. The report now
-records `backbone_pid`. Compare direct pve2 responsiveness and boot identity
-with peer ping, Corosync links and socket queues to distinguish guest failure,
-general L2 failure and Corosync-only disruption. Diagnostics do not change the
-fault injection, quorum expectations or convergence deadline.
+journals. Commands have individual two-second deadlines. Both survivor
+SSH probes run concurrently with independent 25-second deadlines; host socket
+inspection has a three-second deadline. Guest observations are flushed as JSON
+lines after the initial boot/pressure snapshot and each command, retaining
+completed observations when a later command or SSH connection fails. Failed
+commands, partial timeout output, malformed JSON (including raw output), missing
+observations and SSH errors remain explicit evidence.
+
+Diagnostics return no functional error and never change the current scenario
+step. Evidence write failures are logged and retained in memory for later writes
+or the scenario report; they do not skip either survivor or guarded node recovery.
+Diagnostic phases run outside the existing functional and cleanup time budgets.
+The outage result is retained before diagnostics, and cleanup attempts guarded
+SIGCONT before any mandatory scenario evidence write. Recovery remains pending
+until stable membership and API readiness succeed; recovered diagnostics run
+after cleanup, outside its deadline.
+
+Host evidence includes the run-owned QEMU and backbone process states and Unix
+socket send/receive queues; `backbone_pid` identifies the hub. Compare direct
+pve2 responsiveness and boot identity with peer ping, Corosync links and socket
+queues to distinguish guest failure, general L2 failure and Corosync-only
+disruption. A failed independent SSH probe alone cannot distinguish guest
+unresponsiveness from failure of its SSH service/forward. Socket-queue snapshots
+can support a backlog hypothesis but do not prove that it stalled forwarding;
+these probes are observations at different instants, not a packet trace. No
+additional network probe or networking change is justified without the live
+observations. Fault injection, quorum expectations and convergence deadlines
+remain unchanged.
 
 Node-outage checks wait for two stable observations of surviving quorum.
 Recovery remains pending until two observations show all three nodes quorate

@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
 
 use crate::{Options, Result, phases, save_report, service};
@@ -620,6 +620,18 @@ impl Context {
 
     async fn node(&mut self, node: &str, args: &[&str]) -> Result<Vec<u8>> {
         self.step = format!("PVE observation {}", args.first().unwrap_or(&""));
+        let output = self.node_command(node, args)?.output().await?;
+        ensure(
+            output.status.success(),
+            &format!(
+                "guarded PVE observation failed: {}",
+                self.redact(&String::from_utf8_lossy(&output.stderr))
+            ),
+        )?;
+        Ok(output.stdout)
+    }
+
+    fn node_command(&self, node: &str, args: &[&str]) -> Result<Command> {
         ensure(
             self.report["nodes"]
                 .as_array()
@@ -636,22 +648,14 @@ impl Context {
             .map(|a| phases::shell_quote(a))
             .collect::<Vec<_>>()
             .join(" ");
-        let output = Command::new("ssh")
+        let mut command = Command::new("ssh");
+        command
             .arg("-F")
             .arg(self.dir.join("ssh_config"))
             .args(["-o", "BatchMode=yes", &format!("pve-e2e-{node}"), &remote])
             .stdin(Stdio::null())
-            .kill_on_drop(true)
-            .output()
-            .await?;
-        ensure(
-            output.status.success(),
-            &format!(
-                "guarded PVE observation failed: {}",
-                self.redact(&String::from_utf8_lossy(&output.stderr))
-            ),
-        )?;
-        Ok(output.stdout)
+            .kill_on_drop(true);
+        Ok(command)
     }
 
     async fn pve(&mut self, args: &[&str]) -> Result<Value> {
@@ -1999,7 +2003,11 @@ pub async fn run(options: &Options, dir: &Path, artifacts: &Path, report: &mut V
         if matches!(case.action, Action::Install) {
             installation_attempted = true;
         }
-        let (result, timed_out) =
+        if matches!(case.action, Action::NodeRecovery) {
+            node_recovery_diagnostics(&mut ctx, "before-stop").await;
+        }
+        let functional_started = tokio::time::Instant::now();
+        let (mut result, mut timed_out) =
             match tokio::time::timeout(Duration::from_secs(case.timeout), execute_case(&mut ctx, case)).await {
                 Ok(result) => (result, false),
                 Err(_) => (
@@ -2007,11 +2015,43 @@ pub async fn run(options: &Options, dir: &Path, artifacts: &Path, report: &mut V
                     true,
                 ),
             };
+        if matches!(case.action, Action::NodeRecovery) {
+            let remaining = Duration::from_secs(case.timeout).saturating_sub(functional_started.elapsed());
+            // Save the functional result before diagnostics, including on timeout.
+            node_recovery_diagnostics(
+                &mut ctx,
+                if result.is_ok() {
+                    "outage-passed"
+                } else {
+                    "outage-failed"
+                },
+            )
+            .await;
+            if result.is_ok() {
+                match tokio::time::timeout(remaining, restore_node(&mut ctx)).await {
+                    Ok(recovery) => result = recovery,
+                    Err(_) => {
+                        result = Err("scenario deadline exceeded; node recovery is unconfirmed".into());
+                        timed_out = true;
+                    }
+                }
+            }
+        }
         let failed_step = ctx.step.clone();
-        ctx.flush()?;
+        // Evidence persistence must not bypass fault-injection recovery.
+        if !matches!(case.action, Action::NodeRecovery) {
+            ctx.flush()?;
+        }
         let cleanup = tokio::time::timeout(Duration::from_secs(180), cleanup_case(&mut ctx))
             .await
             .unwrap_or_else(|_| Err("scenario cleanup deadline exceeded".into()));
+        if matches!(case.action, Action::NodeRecovery) {
+            // Post-recovery diagnostics run outside the functional/cleanup deadlines.
+            if !ctx.node_recovery_pending && ctx.evidence.iter().any(|e| e["node_recovery_seconds"].is_number()) {
+                node_recovery_diagnostics(&mut ctx, "recovered").await;
+            }
+            persist_node_diagnostics(&mut ctx);
+        }
         let worker_cleanup_unsafe = matches!(case.action, Action::Legacy(_))
             && result.is_err()
             && ctx.evidence.last().is_none_or(|e| e["cleanup"]["status"] != "PASSED");
@@ -2204,8 +2244,7 @@ async fn node_signal(ctx: &mut Context, signal: &str) -> Result<()> {
 }
 
 // Diagnostics never authorize a mutation or replace quorum assertions.
-async fn node_recovery_diagnostics(ctx: &mut Context, phase: &str) -> Result<()> {
-    let step = ctx.step.clone();
+async fn node_recovery_diagnostics(ctx: &mut Context, phase: &str) {
     let mut processes = Vec::new();
     let mut pids = Vec::new();
     let mut targets = vec![(
@@ -2238,8 +2277,10 @@ async fn node_recovery_diagnostics(ctx: &mut Context, phase: &str) -> Result<()>
             pids.push(pid);
             let mut state = json!({"name":name,"pid":pid});
             for field in ["status", "stat", "wchan"] {
-                state[field] =
-                    json!(std::fs::read_to_string(format!("/proc/{pid}/{field}")).unwrap_or_else(|e| e.to_string()));
+                state[field] = match std::fs::read_to_string(format!("/proc/{pid}/{field}")) {
+                    Ok(value) => json!(value),
+                    Err(error) => json!({"error":error.to_string()}),
+                };
             }
             Ok(state)
         })();
@@ -2259,33 +2300,88 @@ async fn node_recovery_diagnostics(ctx: &mut Context, phase: &str) -> Result<()>
         other => json!({"error":format!("socket observation unavailable: {other:?}")}),
     };
     ctx.evidence.push(json!({"node_recovery_diagnostics":phase,"observed_at_ms":phases::now_ms(),"host_processes":processes,"host_unix_sockets":sockets}));
-    ctx.flush()?;
-    for node in ["pve1", "pve2"] {
-        // ctx.node uses host-to-node SSH forwards, not the shared L2 network.
-        // An unreachable survivor must not prevent observing the other one.
-        let observed = tokio::time::timeout(
-            Duration::from_secs(25),
-            ctx.node(
-                node,
-                &["python3", "-c", include_str!("node-recovery-diagnostics.py"), node],
-            ),
-        )
-        .await;
-        let observation = match observed {
-            Ok(Ok(bytes)) => match serde_json::from_slice::<Value>(&bytes) {
-                Ok(value) => sanitize(value),
-                Err(error) => json!({"error":error.to_string()}),
-            },
-            Ok(Err(error)) => json!({"error":ctx.redact(&error.to_string())}),
-            Err(_) => json!({"error":"independent SSH diagnostic deadline exceeded"}),
-        };
-        let observation: Value = serde_json::from_str(&ctx.redact(&observation.to_string()))?;
+    persist_node_diagnostics(ctx);
+    // Immutable access avoids changing ctx.step, including on cancellation.
+    // Independent SSH forwards do not depend on the shared L2 backbone.
+    let (first, second) = tokio::join!(survivor_diagnostics(ctx, "pve1"), survivor_diagnostics(ctx, "pve2"));
+    for (node, observation) in [("pve1", first), ("pve2", second)] {
+        let mut observation = sanitize(observation);
+        redact_diagnostic(ctx, &mut observation);
         ctx.evidence
             .push(json!({"node_recovery_diagnostics":phase,"node":node,"observation":observation}));
-        ctx.flush()?;
+        persist_node_diagnostics(ctx);
     }
-    ctx.step = step;
-    Ok(())
+}
+
+fn redact_diagnostic(ctx: &Context, value: &mut Value) {
+    match value {
+        Value::String(text) => *text = ctx.redact(text),
+        Value::Array(values) => values.iter_mut().for_each(|v| redact_diagnostic(ctx, v)),
+        Value::Object(values) => values.values_mut().for_each(|v| redact_diagnostic(ctx, v)),
+        _ => {}
+    }
+}
+
+fn persist_node_diagnostics(ctx: &mut Context) {
+    if let Err(error) = ctx.flush() {
+        let error = ctx.redact(&crate::describe(error.as_ref()));
+        eprintln!("Node recovery evidence persistence failed: {error}");
+        // Retain in memory for the scenario report or a later successful flush.
+        ctx.evidence
+            .push(json!({"node_recovery_diagnostics_error":"evidence persistence failed","error":error}));
+    }
+}
+
+async fn survivor_diagnostics(ctx: &Context, node: &str) -> Value {
+    let result: Result<Value> = async {
+        let command = ctx.node_command(
+            node,
+            &["python3", "-c", include_str!("node-recovery-diagnostics.py"), node],
+        )?;
+        diagnostic_output(command, Duration::from_secs(25)).await
+    }
+    .await;
+    result.unwrap_or_else(|error| json!({"error":error.to_string()}))
+}
+
+async fn diagnostic_output(mut command: Command, limit: Duration) -> Result<Value> {
+    let mut child = command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()?;
+    let mut stdout = child.stdout.take().ok_or("diagnostic stdout unavailable")?;
+    let mut stderr = child.stderr.take().ok_or("diagnostic stderr unavailable")?;
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+    let result = tokio::time::timeout(limit, async {
+        tokio::try_join!(stdout.read_to_end(&mut out), stderr.read_to_end(&mut err), child.wait())
+    })
+    .await;
+    let mut observation = json!({"stderr":String::from_utf8_lossy(&err),"observations":[]});
+    match result {
+        Ok(Ok((_, _, status))) => {
+            observation["exit_code"] = json!(status.code());
+            if !status.success() {
+                observation["error"] = json!("diagnostic SSH command failed");
+            }
+        }
+        Ok(Err(error)) => observation["error"] = json!(error.to_string()),
+        Err(_) => observation["error"] = json!("independent SSH diagnostic deadline exceeded"),
+    }
+    // JSON lines preserve completed commands even on SSH failure or timeout.
+    let mut records = Vec::new();
+    for line in out.split(|byte| *byte == b'\n').filter(|line| !line.is_empty()) {
+        records.push(
+            serde_json::from_slice::<Value>(line)
+                .unwrap_or_else(|error| json!({"error":error.to_string(),"raw_stdout":String::from_utf8_lossy(line)})),
+        );
+    }
+    if records.is_empty() {
+        observation["output_error"] = json!("no diagnostic observations received");
+    }
+    observation["observations"] = json!(records);
+    Ok(observation)
 }
 
 async fn restore_node(ctx: &mut Context) -> Result<()> {
@@ -2309,56 +2405,40 @@ async fn restore_node(ctx: &mut Context) -> Result<()> {
     ctx.evidence
         .push(json!({"node_recovery_seconds":resumed_at.elapsed().as_secs_f64(),"stable_quorum_samples":2}));
     ctx.node_recovery_pending = false;
-    node_recovery_diagnostics(ctx, "recovered").await?;
     Ok(())
 }
 
 async fn node_recovery(ctx: &mut Context) -> Result<()> {
     // Infrastructure fault injection, not a HomeStack cluster-membership operation.
-    node_recovery_diagnostics(ctx, "before-stop").await?;
     ctx.node_recovery_pending = true;
     let stopped_at = tokio::time::Instant::now();
     node_signal(ctx, "-STOP").await?;
-    let outage: Result<()> = async {
-        let deadline = stopped_at + Duration::from_secs(100);
-        let mut stable = 0;
-        while stable < 2 {
-            let status = ctx.pve(&["get", "/cluster/status"]).await?;
-            let entries = status.as_array().ok_or("invalid cluster status")?;
-            let down = entries.iter().any(|e| e["name"] == "pve3" && e["online"] == 0);
-            let survivors = ["pve1", "pve2"]
-                .iter()
-                .all(|name| entries.iter().any(|e| e["name"] == *name && e["online"] == 1));
-            let quorate = entries.iter().any(|e| e["type"] == "cluster" && e["quorate"] == 1);
-            stable = if down && survivors && quorate { stable + 1 } else { 0 };
-            ensure(
-                tokio::time::Instant::now() < deadline,
-                "node outage did not converge to two surviving members with quorum",
-            )?;
-            if stable == 2 {
-                ctx.evidence.push(json!({"unavailable_node_cluster_status":status,"surviving_quorum_convergence_seconds":stopped_at.elapsed().as_secs_f64()}));
-            } else {
-                tokio::time::sleep(Duration::from_secs(2)).await;
-            }
-        }
+    let deadline = stopped_at + Duration::from_secs(100);
+    let mut stable = 0;
+    while stable < 2 {
+        let status = ctx.pve(&["get", "/cluster/status"]).await?;
+        let entries = status.as_array().ok_or("invalid cluster status")?;
+        let down = entries.iter().any(|e| e["name"] == "pve3" && e["online"] == 0);
+        let survivors = ["pve1", "pve2"]
+            .iter()
+            .all(|name| entries.iter().any(|e| e["name"] == *name && e["online"] == 1));
+        let quorate = entries.iter().any(|e| e["type"] == "cluster" && e["quorate"] == 1);
+        stable = if down && survivors && quorate { stable + 1 } else { 0 };
         ensure(
-            ctx.api_at("api1", "GET", "/v1/status", None, true).await?.0 == 200,
-            "HomeStack API unavailable during node outage",
+            tokio::time::Instant::now() < deadline,
+            "node outage did not converge to two surviving members with quorum",
         )?;
-        Ok(())
-    }.await;
-    // Capture the failed state before cleanup resumes pve3 and erases it.
-    node_recovery_diagnostics(
-        ctx,
-        if outage.is_ok() {
-            "outage-passed"
+        if stable == 2 {
+            ctx.evidence.push(json!({"unavailable_node_cluster_status":status,"surviving_quorum_convergence_seconds":stopped_at.elapsed().as_secs_f64()}));
         } else {
-            "outage-failed"
-        },
-    )
-    .await?;
-    outage?;
-    restore_node(ctx).await
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        }
+    }
+    ensure(
+        ctx.api_at("api1", "GET", "/v1/status", None, true).await?.0 == 200,
+        "HomeStack API unavailable during node outage",
+    )?;
+    Ok(())
 }
 
 async fn authorize_ssh(ctx: &mut Context) -> Result<()> {
@@ -2450,4 +2530,136 @@ async fn setup_files(ctx: &mut Context) -> Result<()> {
         guest(ctx, "stat -c '%u:%g:%a' /home/user/.gitconfig").await?.trim() == "1000:1000:600",
         "setup file ownership or permissions changed",
     )
+}
+
+#[cfg(test)]
+mod node_diagnostic_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn node_diagnostics_preserve_partial_output_on_failure_and_timeout() -> Result<()> {
+        for (script, limit, exit_code) in [
+            (
+                "import sys; print('{\"uptime\":\"42\"}', flush=True); print('broken JSON', flush=True); print('SSH failed', file=sys.stderr); sys.exit(255)",
+                Duration::from_secs(5),
+                Some(255),
+            ),
+            (
+                "import time; print('{\"uptime\":\"42\"}', flush=True); time.sleep(60)",
+                Duration::from_secs(1),
+                None,
+            ),
+        ] {
+            let mut command = Command::new("python3");
+            command.args(["-c", script]);
+            let observation = diagnostic_output(command, limit).await?;
+            assert!(observation["error"].is_string());
+            assert_eq!(observation["exit_code"].as_i64(), exit_code);
+            assert_eq!(observation["observations"][0]["uptime"], "42");
+            if exit_code.is_some() {
+                assert_eq!(observation["observations"][1]["raw_stdout"], "broken JSON");
+                assert!(observation["observations"][1]["error"].is_string());
+                assert!(
+                    observation["stderr"]
+                        .as_str()
+                        .ok_or("missing stderr")?
+                        .contains("SSH failed")
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn node_diagnostics_failures_do_not_skip_survivors_or_recovery() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let artifacts = dir.path().join("unwritable-artifacts");
+        std::fs::write(&artifacts, b"not a directory")?;
+        let mut ctx = Context {
+            dir: dir.path().into(),
+            artifacts: artifacts.clone(),
+            // pve1 fails inventory validation; pve2 fails run identity validation.
+            report: json!({"run_id":"invalid","nodes":[{"name":"pve2"},{"name":"pve3"}]}),
+            client: reqwest::Client::new(),
+            token: String::new(),
+            version: String::new(),
+            evidence: Vec::new(),
+            step: "original quorum failure".into(),
+            workspace: None,
+            foreign: false,
+            permission_vm: false,
+            restart_ct: None,
+            node_recovery_pending: true,
+        };
+        node_recovery_diagnostics(&mut ctx, "outage-failed").await;
+        assert_eq!(ctx.step, "original quorum failure");
+        assert!(ctx.node_recovery_pending);
+        for node in ["pve1", "pve2"] {
+            let record = ctx
+                .evidence
+                .iter()
+                .find(|e| e["node"] == node)
+                .ok_or("survivor observation missing")?;
+            assert!(record["observation"]["error"].is_string());
+        }
+        assert!(
+            ctx.evidence
+                .iter()
+                .any(|e| e["node_recovery_diagnostics_error"].is_string())
+        );
+        // Cleanup still reaches the guarded CONT path; no process is signaled.
+        let error = cleanup_case(&mut ctx)
+            .await
+            .err()
+            .ok_or("cleanup did not attempt node recovery")?;
+        assert!(error.to_string().contains("missing QEMU PID"));
+        assert!(ctx.node_recovery_pending);
+        assert_eq!(ctx.step, "original quorum failure");
+        // A later successful write preserves earlier errors and partial evidence.
+        std::fs::remove_file(&artifacts)?;
+        persist_node_diagnostics(&mut ctx);
+        let persisted: Value = serde_json::from_slice(&std::fs::read(artifacts.join("evidence.json"))?)?;
+        assert_eq!(persisted, json!(ctx.evidence));
+        // String redaction cannot invalidate the surrounding JSON.
+        service::write_private(&ctx.profile().join("api-token"), b"\\")?;
+        let mut observation = json!({"stdout":"a\\b", "password":"secret"});
+        observation = sanitize(observation);
+        redact_diagnostic(&ctx, &mut observation);
+        assert_eq!(observation, json!({"stdout":"a[REDACTED]b", "password":"[REDACTED]"}));
+        Ok(())
+    }
+
+    #[test]
+    fn node_diagnostics_guest_commands_keep_errors_and_partial_evidence() -> Result<()> {
+        let script = format!(
+            r#"
+import contextlib, io, json, subprocess, sys
+from types import SimpleNamespace
+from unittest.mock import patch
+source = {source}
+outputs = [
+    FileNotFoundError('missing ping'),
+    subprocess.TimeoutExpired(['pvesh'], 2, output=b'partial status', stderr=b'partial error'),
+    SimpleNamespace(returncode=1, stdout='no quorum', stderr='command failed'),
+] + [SimpleNamespace(returncode=0, stdout='observed', stderr='')] * 8
+stream = io.StringIO()
+with patch.object(sys, 'argv', ['diagnostics', 'pve1']), \
+     patch('pathlib.Path.read_text', side_effect=OSError('unavailable proc')), \
+     patch('subprocess.run', side_effect=outputs), contextlib.redirect_stdout(stream):
+    exec(source)
+records = [json.loads(line) for line in stream.getvalue().splitlines()]
+assert len(records) == 12, records
+assert records[0]['uptime']['error'] == 'unavailable proc'
+assert 'missing ping' in records[1]['commands'][0]['error']
+assert records[2]['commands'][0]['stdout'] == 'partial status'
+assert records[2]['commands'][0]['stderr'] == 'partial error'
+assert records[3]['commands'][0]['exit_code'] == 1
+assert records[-1]['commands'][0]['stdout'] == 'observed'
+"#,
+            source = serde_json::to_string(include_str!("node-recovery-diagnostics.py"))?,
+        );
+        let output = std::process::Command::new("python3").args(["-c", &script]).output()?;
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        Ok(())
+    }
 }
