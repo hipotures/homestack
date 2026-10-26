@@ -77,6 +77,7 @@ fn setting(title: &str, note: &str, choices: Vec<(String, String)>, text: Option
         list: false,
         check: None,
         application_input: None,
+        auto_text: false,
         hint: None,
         multiple: false,
         picked: Vec::new(),

@@ -90,12 +90,22 @@ pub struct Setting {
     /// an error keeps the box open and is shown in it.
     pub check: Option<Check>,
     pub application_input: Option<Box<crate::services::schema3::Input>>,
+    /// Radio choice between automatic allocation and an explicit text value.
+    pub auto_text: bool,
     /// Shown for an empty text value: what an empty one means.
     pub hint: Option<String>,
 }
 
 impl Setting {
     pub fn validate_text(&self, text: &str) -> Option<String> {
+        if self.auto_text {
+            if self.picked.first() != Some(&1) {
+                return None;
+            }
+            if text.trim().is_empty() {
+                return Some(format!("{}: enter a value or choose Auto", self.title));
+            }
+        }
         self.check.and_then(|check| check(text).err()).or_else(|| {
             self.application_input
                 .as_ref()
@@ -106,6 +116,14 @@ impl Setting {
     /// The value in the list: what is chosen, a VMID with its name.
     #[must_use]
     pub fn value(&self) -> String {
+        if self.auto_text {
+            if self.picked.first() != Some(&1) {
+                return "Auto".into();
+            }
+            if self.text.as_deref().is_none_or(str::is_empty) {
+                return "Manual".into();
+            }
+        }
         if let Some(text) = &self.text {
             if text.is_empty()
                 && let Some(hint) = &self.hint
@@ -735,6 +753,9 @@ impl Install {
                     let entries: Vec<&str> = setting.choices.iter().map(|(entry, _)| entry.as_str()).collect();
                     return Answer::Text(entries.join(" "));
                 }
+                if setting.auto_text && setting.picked.first() != Some(&1) {
+                    return Answer::Text(String::new());
+                }
                 setting.text.as_ref().map_or_else(
                     || Answer::Picked(setting.picked.clone()),
                     |text| Answer::Text(text.clone()),
@@ -922,6 +943,40 @@ impl Install {
             self.end_edit(true);
             return (false, None);
         };
+        if setting.auto_text {
+            match code {
+                KeyCode::Up => self.cursor = 0,
+                KeyCode::Down => self.cursor = 1,
+                KeyCode::Char(' ') if cursor == 0 => {
+                    setting.picked = vec![0];
+                    self.invalid = None;
+                }
+                KeyCode::Char(' ') | KeyCode::Enter if cursor == 1 && setting.picked.first() != Some(&1) => {
+                    setting.picked = vec![1];
+                    self.invalid = None;
+                }
+                KeyCode::Enter if cursor == 0 => {
+                    setting.picked = vec![0];
+                    self.end_edit(true);
+                }
+                KeyCode::Enter => match setting.validate_text(setting.text.as_deref().unwrap_or_default()) {
+                    Some(error) => self.invalid = Some(error),
+                    None => self.end_edit(true),
+                },
+                KeyCode::Char(c) if cursor == 1 && setting.picked.first() == Some(&1) => {
+                    setting.text.get_or_insert_with(String::new).push(c);
+                    self.invalid = None;
+                }
+                KeyCode::Backspace if cursor == 1 && setting.picked.first() == Some(&1) => {
+                    if let Some(text) = setting.text.as_mut() {
+                        text.pop();
+                    }
+                    self.invalid = None;
+                }
+                _ => {}
+            }
+            return (false, None);
+        }
         if let Some(typed) = self.adding.as_mut() {
             match code {
                 KeyCode::Char(c) => typed.push(c),

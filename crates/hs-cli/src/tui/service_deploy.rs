@@ -574,6 +574,7 @@ fn setting(title: &str, note: &str, choices: Vec<(String, String)>, multiple: bo
         list: false,
         check: None,
         application_input: None,
+        auto_text: false,
         hint: None,
         title: title.to_owned(),
         note: note.to_owned(),
@@ -690,7 +691,7 @@ fn settings(
         checked(
             setting(
                 CTIDS,
-                "Empty: the first free CTIDs. Or one CTID per ticked node, in the nodes' order, separated by commas.",
+                "Auto selects free CTIDs. Choose Manual to enter one CTID per new instance, separated by commas.",
                 Vec::new(),
                 false,
                 Some(String::new()),
@@ -809,6 +810,8 @@ fn settings(
         )
     });
     if let Some(ctids) = settings.iter_mut().find(|setting| setting.title == CTIDS) {
+        ctids.auto_text = true;
+        ctids.picked = vec![0];
         ctids.hint = Some(if automatic.is_empty() {
             "auto: the first free".to_owned()
         } else {
@@ -1451,7 +1454,12 @@ fn restore(settings: &mut [Setting], previous: &[Setting], answers: &[Answer]) {
             Some(Answer::Text(text)) if setting.list => {
                 setting.choices = text.split_whitespace().map(|v| (v.to_owned(), String::new())).collect();
             }
-            Some(Answer::Text(text)) if setting.text.is_some() => setting.text = Some(text.clone()),
+            Some(Answer::Text(text)) if setting.text.is_some() => {
+                setting.text = Some(text.clone());
+                if setting.auto_text {
+                    setting.picked = vec![usize::from(!text.is_empty())];
+                }
+            }
             Some(Answer::Picked(indices)) => {
                 let values: Vec<_> = indices
                     .iter()

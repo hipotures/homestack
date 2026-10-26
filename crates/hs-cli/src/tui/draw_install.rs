@@ -220,6 +220,7 @@ fn settings_buttons(install: &Install) -> Vec<Control> {
         .filter(|_| !(install.domain.is_some() && install.row == install.settings.len()));
     let mut keys = Vec::new();
     match setting {
+        Some(setting) if setting.auto_text => keys.push(Control::named("SPACE", "select", KeyCode::Char(' '))),
         Some(setting) if setting.list => keys.extend([
             Control::named("+", "add", KeyCode::Char('+')),
             Control::named("-", "remove", KeyCode::Char('-')),
@@ -585,6 +586,79 @@ fn settings(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
     let Some(setting) = install.settings.get(install.row) else {
         return;
     };
+    if setting.auto_text {
+        let error = install.invalid.as_deref().map(|e| wrap(e, 44)).unwrap_or_default();
+        let rect = fit(48, 3 + error.len());
+        let box_inner = frame(
+            buf,
+            rect,
+            palette,
+            &Sides {
+                top_left: vec![Control::plain(&setting.title)],
+                focused: install.chooser,
+                ..Sides::default()
+            },
+        );
+        let manual = setting.picked.first() == Some(&1);
+        let auto = format!("({}) Auto", if manual { " " } else { "*" });
+        let width = box_inner.width.saturating_sub(4);
+        write(
+            buf,
+            box_inner.x + 2,
+            at(box_inner.y, 1),
+            width,
+            &auto,
+            if install.chooser && install.cursor == 0 {
+                focus
+            } else {
+                text
+            },
+        );
+        let cursor = if manual && install.chooser && install.cursor == 1 {
+            "▏"
+        } else {
+            ""
+        };
+        let value = setting.text.as_deref().unwrap_or_default();
+        let room = usize::from(width.saturating_sub(16));
+        let tail: String = value
+            .chars()
+            .rev()
+            .take(room)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
+        let line = format!("({}) Manual [ {tail}{cursor} ]", if manual { "*" } else { " " });
+        write(
+            buf,
+            box_inner.x + 2,
+            at(box_inner.y, 2),
+            width,
+            &line,
+            if install.chooser && install.cursor == 1 {
+                focus
+            } else if manual {
+                text
+            } else {
+                muted
+            },
+        );
+        if let Some(hint) = &setting.hint {
+            write(buf, box_inner.x + 2, at(box_inner.y, 3), width, hint, muted);
+        }
+        for (row, line) in error.iter().enumerate() {
+            write(
+                buf,
+                box_inner.x + 2,
+                at(box_inner.y, 4 + row),
+                width,
+                line,
+                text.fg(palette.error),
+            );
+        }
+        return;
+    }
     if let Some(value) = &setting.text {
         // The field over as many rows as its text takes, so its end and the
         // cursor stay in sight.
