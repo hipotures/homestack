@@ -1198,28 +1198,28 @@ fn review(
             })
             .map(|i| i.ctid)
             .collect();
-        if !image_targets.is_empty() {
-            if plan.lines.is_empty() {
-                let up = setup.handle.block_on(update::plan(
-                    &s.pve,
-                    &s.config,
-                    source,
-                    &image_targets,
-                    &chosen.deploy.version,
-                    "",
-                    &setup.token_dir,
-                ));
-                sections.push(("Update".to_owned(), up.lines.clone()));
-                problems.extend(up.problems.clone());
-                update_plan = Some(up);
-            } else {
-                problems.push("Change the version in a separate deployment from sizes and the environment".to_owned());
-            }
-        }
+        let changes = !plan.lines.is_empty();
         problems.extend(plan.problems.clone());
-        if !plan.lines.is_empty() {
+        if changes {
             sections.push(("Change".to_owned(), plan.lines.clone()));
             change = Some(plan);
+        }
+        if !image_targets.is_empty() {
+            // Apply makes the change first; the image replacement then
+            // checks the reconciled environment against the saved values.
+            let up = setup.handle.block_on(update::plan(
+                &s.pve,
+                &s.config,
+                source,
+                &image_targets,
+                &chosen.deploy.version,
+                "",
+                &setup.token_dir,
+                changes,
+            ));
+            sections.push(("Update".to_owned(), up.lines.clone()));
+            problems.extend(up.problems.clone());
+            update_plan = Some(up);
         }
     }
     if !chosen.deploy.placements.is_empty() {
@@ -1288,7 +1288,7 @@ fn review(
     )
 }
 
-/// Apply the reviewed changes in order: the image, sizes and environment,
+/// Apply the reviewed changes in order: sizes and environment, the image,
 /// new instances, then the Pangolin attachment; the first failure stops.
 async fn apply(
     setup: &Setup,
@@ -1349,14 +1349,14 @@ async fn apply(
             {
                 return fail(lines, error);
             }
-            if let Some(plan) = update_plan {
-                match update::apply(&s.pve, source, &plan, &say).await {
+            if let Some(plan) = change {
+                match lifecycle::apply(&s.pve, source, &plan, s.ready(), &say).await {
                     Ok(done) => lines.extend(done),
                     Err(error) => return fail(lines, error),
                 }
             }
-            if let Some(plan) = change {
-                match lifecycle::apply(&s.pve, source, &plan, s.ready(), &say).await {
+            if let Some(plan) = update_plan {
+                match update::apply(&s.pve, source, &plan, &say).await {
                     Ok(done) => lines.extend(done),
                     Err(error) => return fail(lines, error),
                 }

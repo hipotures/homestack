@@ -252,6 +252,7 @@ async fn preflight(pve: &impl Pve, cfg: &DeployConfig, instance: &Instance, back
 }
 
 /// Review updating `ctids` to `version`; nothing changes.
+#[allow(clippy::too_many_arguments, reason = "the parts of one review")]
 pub async fn plan(
     pve: &impl Pve,
     config: &DeployConfig,
@@ -260,6 +261,7 @@ pub async fn plan(
     version: &str,
     backup: &str,
     selection_root: &std::path::Path,
+    reconciling: bool,
 ) -> Plan {
     let mut plan = Plan {
         selection_root: selection_root.to_owned(),
@@ -278,7 +280,9 @@ pub async fn plan(
     }
     if source.manifest.schema3.is_some() {
         plan.lines.push("Image replacement discards all rootfs-local application data, including any unsent exporter queue. Ordinary CT restarts preserve it.".into());
-        for target in &plan.targets {
+        // A change applied first in the same operation reconciles the
+        // environment; apply checks it again before replacing anything.
+        for target in plan.targets.iter().filter(|_| !reconciling) {
             if let Err(error) = saved_environment(&plan.selection_root, source, target) {
                 plan.problems.push(error);
             }

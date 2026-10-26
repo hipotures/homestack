@@ -2,7 +2,7 @@
 //!
 //! | Variable | Meaning |
 //! | --- | --- |
-//! | `HOMESTACK_PROMETHEUS_URL` | Prometheus base URL, `http` only, e.g. `http://prom:9090` |
+//! | `HOMESTACK_PROMETHEUS_URL` | Prometheus URL, `http` only, e.g. `http://prom:9090`; any path is ignored |
 //! | `HOMESTACK_HEARTBEAT_SECONDS` | Serving-path heartbeat interval, 1 to 3600 seconds; default 60 |
 //!
 //! The page queries Prometheus through this service, which forwards only the
@@ -106,7 +106,10 @@ async fn main() -> ExitCode {
 
 fn settings(env: impl Fn(&str) -> Option<String>) -> Result<(url::Url, Duration), String> {
     let raw = env("HOMESTACK_PROMETHEUS_URL").ok_or("HOMESTACK_PROMETHEUS_URL is required")?;
-    let prometheus = url::Url::parse(&raw).map_err(|error| format!("HOMESTACK_PROMETHEUS_URL: {error}"))?;
+    let mut prometheus = url::Url::parse(&raw).map_err(|error| format!("HOMESTACK_PROMETHEUS_URL: {error}"))?;
+    prometheus.set_path("");
+    prometheus.set_query(None);
+    prometheus.set_fragment(None);
     if prometheus.scheme() != "http" || prometheus.host().is_none() {
         return Err("HOMESTACK_PROMETHEUS_URL must be an http URL with a host".to_owned());
     }
@@ -124,7 +127,7 @@ fn settings(env: impl Fn(&str) -> Option<String>) -> Result<(url::Url, Duration)
 /// Forward one read-only Prometheus request, keeping its status and body.
 async fn forward(State(state): State<AppState>, path: &'static str, RawQuery(query): RawQuery) -> Response {
     let mut target = state.prometheus.clone();
-    target.set_path(&format!("{}{path}", state.prometheus.path().trim_end_matches('/')));
+    target.set_path(path);
     target.set_query(query.as_deref());
     let response = match state.client.get(target).send().await {
         Ok(response) => response,
