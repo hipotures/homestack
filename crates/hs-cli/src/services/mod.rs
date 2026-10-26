@@ -4,6 +4,7 @@
 
 pub mod deploy;
 pub mod dns;
+pub mod draft;
 pub mod github;
 pub mod instance;
 pub mod lifecycle;

@@ -13,6 +13,7 @@ use std::time::Duration;
 use hs_deploy::config::DeployConfig;
 use hs_deploy::node::show_size;
 use hs_pve::PveClient;
+use serde_json::Value;
 
 use super::install::{Check, Event, Found, Mark, Setting};
 use super::installing::{Command, Setup};
@@ -24,7 +25,7 @@ use crate::services::deploy::{self, Cluster, SiteInit, SiteReady, Source};
 use crate::services::dns::Dns;
 use crate::services::instance::{self, Instance};
 use crate::services::manifest::{Manifest, Placement, show_mib};
-use crate::services::{lifecycle, update};
+use crate::services::{draft, lifecycle, update};
 
 // The settings by title: Instances only once there are some, Home only
 // for a service with persistence.
@@ -139,6 +140,9 @@ pub(super) fn work(setup: &Setup, commands: &Receiver<Command>, tell: &(dyn Fn(E
             Command::Review { answers, .. } => {
                 let Some(s) = session.as_mut() else { continue };
                 s.reviewed = None;
+                if let Err(error) = draft::save(&setup.token_dir, &source, &draft_of(&s.settings, &answers)) {
+                    tell(Event::Line(error));
+                }
                 let chosen = chosen(&s.settings, &answers, s.instances.len());
                 match switch_deployment(setup, &source, s, &chosen.selected, &answers) {
                     Ok(true) => {
@@ -244,6 +248,9 @@ pub(super) fn work(setup: &Setup, commands: &Receiver<Command>, tell: &(dyn Fn(E
                         result = apply(setup, &source, s, reviewed, tell) => result,
                     }
                 });
+                if ok {
+                    draft::remove(&setup.token_dir, &source);
+                }
                 tell(Event::Done { ok, lines });
             }
             Command::Cancel => return,
@@ -457,8 +464,9 @@ fn connect(
     }
     settings.extend(service_pangolin::settings(source));
     let original_settings = settings.clone();
-    if let Some((previous, answers)) = kept {
-        restore(&mut settings, &previous, &answers);
+    match kept {
+        Some((previous, answers)) => restore(&mut settings, &previous, &answers),
+        None => apply_draft(&mut settings, &draft::load(&setup.token_dir, source)),
     }
     let found = found(&config, &cluster, &settings);
     Ok((
@@ -1409,6 +1417,59 @@ fn new_sections(source: &Source, plan: &deploy::Plan) -> Vec<(String, Vec<String
         sections.push(("Pangolin".to_owned(), plan.sites.clone()));
     }
     sections
+}
+
+/// The form as a draft: each setting's text or chosen values, without
+/// secrets.
+fn draft_of(settings: &[Setting], answers: &[Answer]) -> draft::Values {
+    settings
+        .iter()
+        .zip(answers)
+        .filter(|(setting, _)| {
+            setting
+                .application_input
+                .as_ref()
+                .is_none_or(|input| input.kind != crate::services::schema3::Kind::Secret)
+        })
+        .map(|(setting, answer)| {
+            let value = match answer {
+                Answer::Text(text) => Value::from(text.clone()),
+                Answer::Picked(indices) => indices
+                    .iter()
+                    .filter_map(|i| setting.choices.get(*i))
+                    .map(|(value, _)| Value::from(value.clone()))
+                    .collect(),
+            };
+            (setting.title.clone(), value)
+        })
+        .collect()
+}
+
+/// Fill the form from a saved draft, matching settings by title and choices
+/// by their stable values; values the form no longer offers are skipped.
+fn apply_draft(settings: &mut [Setting], draft: &draft::Values) {
+    for setting in settings {
+        match draft.get(&setting.title) {
+            Some(Value::String(text)) if setting.list => {
+                setting.choices = text.split_whitespace().map(|v| (v.to_owned(), String::new())).collect();
+            }
+            Some(Value::String(text)) if setting.text.is_some() => {
+                setting.text = Some(text.clone());
+                if setting.auto_text {
+                    setting.picked = vec![usize::from(!text.is_empty())];
+                }
+            }
+            Some(Value::Array(values)) => {
+                setting.picked = setting
+                    .choices
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, (value, _))| values.iter().any(|v| v == value.as_str()).then_some(i))
+                    .collect();
+            }
+            _ => {}
+        }
+    }
 }
 
 /// Preserve edits across F5, matching choices by their stable values. Recreated
