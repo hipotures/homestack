@@ -25,7 +25,7 @@ use crate::services::deploy::{self, Cluster, SiteInit, SiteReady, Source};
 use crate::services::dns::Dns;
 use crate::services::instance::{self, Instance};
 use crate::services::manifest::{Manifest, Placement, show_mib};
-use crate::services::{draft, lifecycle, update};
+use crate::services::{draft, lifecycle, public_dns, update};
 
 // The settings by title: Instances only once there are some, Home only
 // for a service with persistence.
@@ -103,6 +103,8 @@ struct Changes {
     change: Option<lifecycle::Plan>,
     create: Option<deploy::Plan>,
     attach: Option<service_pangolin::Plan>,
+    /// The public DNS record the published name still needs.
+    record: Option<public_dns::Record>,
 }
 
 /// The review's sections, its problems and what applying it does.
@@ -1051,7 +1053,7 @@ fn review(
             }
         }
     }
-    let (mut update_plan, mut change, mut create, mut attach) = (None, None, None, None);
+    let (mut update_plan, mut change, mut create, mut attach, mut record) = (None, None, None, None, None);
     if chosen.selected.is_empty() && chosen.deploy.placements.is_empty() {
         problems.push(if s.instances.is_empty() {
             "Tick the nodes for the new instances under Nodes".to_owned()
@@ -1244,6 +1246,22 @@ fn review(
         match checked {
             Ok(checked) => {
                 sections.push(("Pangolin attachment".to_owned(), checked.lines()));
+                match public_record(setup, s, checked.domain()) {
+                    Ok(missing) => {
+                        sections.push((
+                            "Public DNS".to_owned(),
+                            vec![format!(
+                                "{} CNAME {} → {} in {}; wait for public DNS before Pangolin",
+                                if missing.exists { "Verify" } else { "Add" },
+                                missing.name(),
+                                missing.target,
+                                missing.provider_name()
+                            )],
+                        ));
+                        record = Some(missing);
+                    }
+                    Err(error) => problems.push(error),
+                }
                 attach = Some(checked);
             }
             Err(error) => problems.push(error),
@@ -1262,6 +1280,7 @@ fn review(
             change,
             create,
             attach,
+            record,
         })),
     )
 }
@@ -1298,6 +1317,7 @@ async fn apply(
                 change,
                 create,
                 attach,
+                record,
             } = *changes;
             if !problems.is_empty() {
                 return fail(lines, "Resolve Review problems before Apply".into());
@@ -1354,6 +1374,29 @@ async fn apply(
                         Ok(line) => lines.push(line),
                         Err(error) => return fail(lines, error),
                     }
+                }
+            }
+            if let Some(record) = record {
+                let current_target = match pangolin_host(s) {
+                    Ok(target) => target,
+                    Err(error) => return fail(lines, error),
+                };
+                if !current_target
+                    .trim_end_matches('.')
+                    .eq_ignore_ascii_case(&record.target)
+                {
+                    return fail(
+                        lines,
+                        "Pangolin's public address changed since review; review again".into(),
+                    );
+                }
+                say(&format!(
+                    "Preparing public DNS for {}; waiting for propagation",
+                    record.name()
+                ));
+                match public_dns::apply(&setup.token_dir, &record).await {
+                    Ok(line) => lines.push(line),
+                    Err(error) => return fail(lines, error),
                 }
             }
             if let Some(plan) = attach {
@@ -1470,6 +1513,25 @@ fn apply_draft(settings: &mut [Setting], draft: &draft::Values) {
             _ => {}
         }
     }
+}
+
+fn pangolin_host(s: &Session) -> Result<String, String> {
+    let (ctx, _) = s
+        .context()
+        .ok_or("The Pangolin context is unavailable")?
+        .api_context()?;
+    url::Url::parse(&ctx.url)
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_owned))
+        .ok_or_else(|| "The Pangolin server has no public host name".to_owned())
+}
+
+/// Review the public DNS record needed by the Pangolin resource.
+fn public_record(setup: &Setup, s: &Session, domain: &str) -> Result<public_dns::Record, String> {
+    let target = pangolin_host(s)?;
+    setup
+        .handle
+        .block_on(public_dns::review(&setup.token_dir, domain, &target))
 }
 
 /// Preserve edits across F5, matching choices by their stable values. Recreated

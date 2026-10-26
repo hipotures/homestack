@@ -8,13 +8,12 @@ deployment. No existing internal container is adopted or modified.
 ## Attach an existing application to Pangolin
 
 In the service's maintenance settings, select one running instance, choose
-**Pangolin → attach**, and press Enter. HomeStack opens its verified SSH API
-tunnel and loads existing enabled HTTP resources and online Site connectors.
-Choose the resource, Site, application port and HTTP/HTTPS backend protocol,
-then review and apply. F5 refreshes the lists and preserves edits; a recreated
-Site's new ID requires selecting it again.
+**Pangolin → Publish**, and review and apply. HomeStack opens its verified SSH
+API tunnel, finds or creates the manifest's resource and routes it through an
+online Site to the manifest's application port. F5 refreshes the lists and
+preserves edits.
 
-This operation creates a missing backend target or updates the resource's one
+This operation creates a missing resource and backend target or updates the resource's one
 existing target. It enables monitoring from the service manifest's HTTP health
 check: the declared port, path and expected status, with GET requests every
 30 seconds and a five-second timeout. Reattaching also repairs a target whose
@@ -24,6 +23,20 @@ and performs only reads against Proxmox. It never deploys, replaces, restarts
 or removes the application or its volumes. Save disk/environment changes
 separately; attachment cannot be combined with removal. Resources with multiple
 targets require managing their routing in Pangolin.
+
+When publishing, HomeStack identifies the public DNS zone and its provider from
+the public NS delegation. OVH and Spaceship are supported; configure the
+corresponding DNS integration with access to that zone. Review shows the CNAME
+from the resource name to the Pangolin dashboard hostname. That hostname must
+resolve to the public entry point serving the resource. HomeStack refuses an
+existing conflicting record instead of replacing it. Apply creates the missing
+record and waits until both public resolvers see it before saving Pangolin
+routing. If propagation times out, the record remains in place; review and apply
+again later. Publishing an already existing resource follows the same path and
+can repair a missing DNS record without replacing the container.
+
+The DNS check does not verify certificate issuance or public application access.
+The Pangolin server needs the appropriate public ports and certificate setup.
 
 Review and apply both verify organization membership, current Site identity
 and target configuration. Apply rechecks the container's identity and address,

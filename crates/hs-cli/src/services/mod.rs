@@ -10,6 +10,7 @@ pub mod instance;
 pub mod lifecycle;
 pub mod manifest;
 pub mod migrate;
+pub mod public_dns;
 mod removal;
 pub mod update;
 

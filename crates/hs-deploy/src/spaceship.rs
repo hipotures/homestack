@@ -180,6 +180,16 @@ impl SpaceshipClient {
         .await
     }
 
+    /// Add a CNAME without replacing conflicting records.
+    pub async fn add_cname(&self, zone: &str, sub: &str, target: &str) -> Result<(), String> {
+        self.call(
+            reqwest::Method::PUT,
+            zone,
+            &json!({"force": false, "items": [{"type": "CNAME", "name": sub, "cname": target, "ttl": 600}]}),
+        )
+        .await
+    }
+
     /// Delete only this exact A record.
     pub async fn remove_address(&self, zone: &str, sub: &str, address: std::net::Ipv4Addr) -> Result<(), String> {
         self.call(

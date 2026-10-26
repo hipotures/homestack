@@ -8,6 +8,7 @@ use std::net::{IpAddr, Ipv4Addr};
 use hickory_resolver::Resolver;
 use hickory_resolver::config::{NameServerConfig, ResolverConfig};
 use hickory_resolver::net::runtime::TokioRuntimeProvider;
+use hickory_resolver::proto::rr::{RData, RecordType};
 
 use crate::config::AcmeSection;
 use crate::ovh::{OvhClient, OvhCredentials};
@@ -99,6 +100,49 @@ pub async fn public_zone(domain: &str) -> Result<(String, DnsHost), String> {
         }
     }
     Err(format!("no public zone holds {domain}"))
+}
+
+/// Wait for both public resolvers to return the expected CNAME and an address
+/// for its target. A timeout leaves the record in place for a later retry.
+pub async fn wait_for_public_cname(name: &str, target: &str) -> Result<(), String> {
+    let resolvers = PUBLIC.into_iter().map(public_resolver).collect::<Result<Vec<_>, _>>()?;
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(180);
+    loop {
+        let mut found = true;
+        for resolver in &resolvers {
+            let result = tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                resolver.lookup(format!("{name}."), RecordType::CNAME),
+            )
+            .await;
+            if !result.ok().and_then(Result::ok).is_some_and(|answer| answer.answers().iter().any(|record|
+                matches!(&record.data, RData::CNAME(cname) if cname.to_string().trim_end_matches('.').eq_ignore_ascii_case(target.trim_end_matches('.')))
+            )) {
+                found = false;
+            }
+            let addresses = tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                resolver.lookup_ip(format!("{target}.")),
+            )
+            .await;
+            if !addresses
+                .ok()
+                .and_then(Result::ok)
+                .is_some_and(|answer| answer.iter().next().is_some())
+            {
+                found = false;
+            }
+        }
+        if found {
+            return Ok(());
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err(format!(
+                "{name} → {target} and its address are not visible on both public DNS resolvers; review and apply again later"
+            ));
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+    }
 }
 
 /// The API that writes the DNS-01 record.

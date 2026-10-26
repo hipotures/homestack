@@ -174,6 +174,54 @@ impl OvhClient {
         Ok(id)
     }
 
+    /// The records named `sub` in `zone`.
+    pub async fn records(&self, zone: &str, sub: &str) -> Result<Vec<Value>, String> {
+        let ids = self
+            .call(
+                reqwest::Method::GET,
+                &format!("/domain/zone/{zone}/record?subDomain={sub}"),
+                None,
+            )
+            .await?;
+        let ids = ids
+            .as_array()
+            .ok_or("Invalid OVH record listing")?
+            .iter()
+            .map(|id| id.as_u64().ok_or_else(|| "Invalid OVH record id".to_owned()))
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut records = Vec::with_capacity(ids.len());
+        for id in ids {
+            let record = self
+                .call(reqwest::Method::GET, &format!("/domain/zone/{zone}/record/{id}"), None)
+                .await?;
+            if record["subDomain"].as_str() != Some(sub)
+                || !record["fieldType"].is_string()
+                || !record["target"].is_string()
+            {
+                return Err("Invalid OVH record details".to_owned());
+            }
+            records.push(record);
+        }
+        Ok(records)
+    }
+
+    /// Add a CNAME record `sub` → `target` in `zone` and apply the zone; the
+    /// record's id.
+    pub async fn add_cname(&self, zone: &str, sub: &str, target: &str) -> Result<u64, String> {
+        let record = self
+            .call(
+                reqwest::Method::POST,
+                &format!("/domain/zone/{zone}/record"),
+                Some(&json!({"fieldType": "CNAME", "subDomain": sub, "target": format!("{target}."), "ttl": 60})),
+            )
+            .await?;
+        let id = record["id"]
+            .as_u64()
+            .ok_or_else(|| format!("OVH gave no record id: {record}"))?;
+        self.refresh(zone).await?;
+        Ok(id)
+    }
+
     /// Remove record `id` from `zone` and apply the zone.
     pub async fn remove(&self, zone: &str, id: u64) -> Result<(), String> {
         self.call(
@@ -199,7 +247,7 @@ impl OvhClient {
             .collect())
     }
 
-    async fn refresh(&self, zone: &str) -> Result<(), String> {
+    pub async fn refresh(&self, zone: &str) -> Result<(), String> {
         self.call(reqwest::Method::POST, &format!("/domain/zone/{zone}/refresh"), None)
             .await
             .map(drop)

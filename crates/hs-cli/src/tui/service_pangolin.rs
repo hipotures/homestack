@@ -461,6 +461,11 @@ pub(super) fn review(
 }
 
 impl Plan {
+    /// The full domain the service is published under.
+    pub(super) fn domain(&self) -> &str {
+        &self.domain
+    }
+
     pub(super) fn lines(&self) -> Vec<String> {
         vec![
             format!(
@@ -479,9 +484,7 @@ impl Plan {
                 self.body["hcPath"].as_str().unwrap_or_default(),
                 self.body["hcStatus"]
             ),
-            "Only Pangolin routing changes. Access policies of an existing resource, the container, disks and \
-             /home/app are preserved."
-                .to_owned(),
+            "Access policies of an existing resource, the container, disks and /home/app are preserved.".to_owned(),
         ]
     }
 }
