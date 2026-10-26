@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="pl">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -67,7 +67,8 @@ th { color: var(--ink-2); font-weight: 600; position: sticky; top: 0; background
 <main>
   <header>
     <h1>Claude Code &amp; Codex</h1>
-    <div class="ranges" role="group" aria-label="Zakres czasu"></div>
+    <div class="ranges" role="group" aria-label="Tool" id="tools"></div>
+    <div class="ranges" role="group" aria-label="Time range" id="ranges"></div>
     <span class="updated" id="updated"></span>
   </header>
   <div class="error" id="error" hidden></div>
@@ -79,9 +80,14 @@ th { color: var(--ink-2); font-weight: 600; position: sticky; top: 0; background
 "use strict";
 const RANGES = [
   { id: "24h", label: "24 h", seconds: 86400, step: 3600 },
-  { id: "7d", label: "7 dni", seconds: 7 * 86400, step: 6 * 3600 },
-  { id: "30d", label: "30 dni", seconds: 30 * 86400, step: 86400 },
-  { id: "90d", label: "90 dni", seconds: 90 * 86400, step: 86400 },
+  { id: "7d", label: "7 days", seconds: 7 * 86400, step: 6 * 3600 },
+  { id: "30d", label: "30 days", seconds: 30 * 86400, step: 86400 },
+  { id: "90d", label: "90 days", seconds: 90 * 86400, step: 86400 },
+];
+const TOOLS = [
+  { id: "all", label: "All" },
+  { id: "claude", label: "Claude Code" },
+  { id: "codex", label: "Codex" },
 ];
 const SERIES = ["--s1", "--s2", "--s3", "--s4", "--s5"];
 // Each process exports its own cumulative series (new instance label), so
@@ -92,8 +98,12 @@ const growth = (metric, by, window) =>
   `sum by (${by}) (clamp_min(last_over_time(${metric}[${LOOKBACK}]) - ` +
   `(last_over_time(${metric}[${LOOKBACK}] offset ${window}s) or last_over_time(${metric}[${LOOKBACK}]) * 0), 0))`;
 
-let range = RANGES[0];
-try { range = RANGES.find(r => r.id === localStorage.getItem("range")) || range; } catch (_) {}
+let range = RANGES[0], tool = TOOLS[0];
+try {
+  range = RANGES.find(r => r.id === localStorage.getItem("range")) || range;
+  tool = TOOLS.find(t => t.id === localStorage.getItem("tool")) || tool;
+} catch (_) {}
+const shows = id => tool.id === "all" || tool.id === id;
 const tables = new Set();
 
 async function prom(path, params) {
@@ -127,31 +137,31 @@ const TOKEN_TYPES = { input: "input", output: "output", cacheRead: "cache read",
 
 function panels(codex, step) {
   const list = [
-    { title: "Tokeny w czasie", unit: "Claude i Codex", format: fmt.tokens, parts: [
-      { query: growth("claude_code_token_usage_tokens_total", "", step), name: () => "Claude Code" },
-      codex.tokens && { query: growth(codexTokens(codex), "", step), name: () => "Codex" },
+    { title: "Tokens over time", unit: tool.id === "all" ? "Claude Code and Codex" : tool.label, format: fmt.tokens, parts: [
+      { tool: "claude", query: growth("claude_code_token_usage_tokens_total", "", step), name: () => "Claude Code" },
+      codex.tokens && { tool: "codex", query: growth(codexTokens(codex), "", step), name: () => "Codex" },
     ] },
-    { title: "Tokeny Claude Code", unit: "według typu", format: fmt.tokens, parts: [
-      { query: growth("claude_code_token_usage_tokens_total", "type", step), name: m => TOKEN_TYPES[m.type] || m.type },
+    { title: "Claude Code tokens", unit: "by type", format: fmt.tokens, parts: [
+      { tool: "claude", query: growth("claude_code_token_usage_tokens_total", "type", step), name: m => TOKEN_TYPES[m.type] || m.type },
     ] },
-    codex.tokens && { title: "Tokeny Codex", unit: "według typu", format: fmt.tokens, parts: [
-      { query: growth(codexTokens(codex), "token_type", step), name: m => TOKEN_TYPES[m.token_type] || m.token_type },
+    { title: "Codex tokens", unit: "by type", format: fmt.tokens, parts: [
+      codex.tokens && { tool: "codex", query: growth(codexTokens(codex), "token_type", step), name: m => TOKEN_TYPES[m.token_type] || m.token_type },
     ] },
-    { title: "Koszt Claude Code", unit: "USD według modelu", format: fmt.usd, parts: [
-      { query: growth("claude_code_cost_usage_USD_total", "model", step), name: m => m.model || "?" },
+    { title: "Claude Code cost", unit: "USD by model", format: fmt.usd, parts: [
+      { tool: "claude", query: growth("claude_code_cost_usage_USD_total", "model", step), name: m => m.model || "?" },
     ] },
-    { title: "Sesje", unit: "nowe sesje", format: fmt.count, parts: [
-      { query: growth("claude_code_session_count_total", "", step), name: () => "Claude Code" },
-      codex.threads && { query: growth(codex.threads, "", step), name: () => "Codex" },
+    { title: "Sessions", unit: "new sessions", format: fmt.count, scale: "integer", parts: [
+      { tool: "claude", query: growth("claude_code_session_count_total", "", step), name: () => "Claude Code" },
+      codex.threads && { tool: "codex", query: growth(codex.threads, "", step), name: () => "Codex" },
     ] },
-    { title: "Aktywny czas Claude Code", unit: "według rodzaju", format: fmt.hours, parts: [
-      { query: growth("claude_code_active_time_seconds_total", "type", step), name: m => m.type === "user" ? "użytkownik" : m.type === "cli" ? "Claude" : m.type || "?" },
+    { title: "Claude Code active time", unit: "by kind", format: fmt.hours, scale: "time", parts: [
+      { tool: "claude", query: growth("claude_code_active_time_seconds_total", "type", step), name: m => m.type === "user" ? "user" : m.type === "cli" ? "Claude" : m.type || "?" },
     ] },
-    { title: "Linie kodu", unit: "Claude Code", format: fmt.lines, parts: [
-      { query: growth("claude_code_lines_of_code_count_total", "type", step), name: m => m.type === "added" ? "dodane" : m.type === "removed" ? "usunięte" : m.type || "?" },
+    { title: "Lines of code", unit: "Claude Code", format: fmt.lines, parts: [
+      { tool: "claude", query: growth("claude_code_lines_of_code_count_total", "type", step), name: m => m.type === "added" ? "added" : m.type === "removed" ? "removed" : m.type || "?" },
     ] },
   ];
-  return list.filter(Boolean).map(p => ({ ...p, parts: p.parts.filter(Boolean) }));
+  return list.map(p => ({ ...p, parts: p.parts.filter(part => part && shows(part.tool)) })).filter(p => p.parts.length);
 }
 // Codex reports a "total" token type besides its components; summing it would double-count.
 const codexTokens = codex => codex.tokens + `{token_type!="total"}`;
@@ -169,37 +179,42 @@ async function load() {
       return { ...panel, series: fold(results.flat()) };
     }));
     const total = metric => instant(growth(metric, "", range.seconds)).then(r => r.reduce((a, x) => a + Number(x.value[1]), 0));
-    const [cost, claudeTokens, codexTokens, claudeSessions, codexSessions, active, commits, prs] = await Promise.all([
-      total("claude_code_cost_usage_USD_total"),
-      total("claude_code_token_usage_tokens_total"),
-      codex.tokens ? total(codexTokens(codex)) : null,
-      total("claude_code_session_count_total"),
-      codex.threads ? total(codex.threads) : null,
-      total("claude_code_active_time_seconds_total"),
-      total("claude_code_commit_count_total"),
-      total("claude_code_pull_request_count_total"),
+    const claude = shows("claude"), withCodex = shows("codex");
+    const [cost, claudeTokens, codexTotal, claudeSessions, codexSessions, active, commits, prs] = await Promise.all([
+      claude && total("claude_code_cost_usage_USD_total"),
+      claude && total("claude_code_token_usage_tokens_total"),
+      withCodex && codex.tokens ? total(codexTokens(codex)) : null,
+      claude && total("claude_code_session_count_total"),
+      withCodex && codex.threads ? total(codex.threads) : null,
+      claude && total("claude_code_active_time_seconds_total"),
+      claude && total("claude_code_commit_count_total"),
+      claude && total("claude_code_pull_request_count_total"),
     ]);
+    const missing = "no Codex metrics";
     renderTiles([
-      { label: "Koszt Claude Code", value: fmt.usd(cost), note: "Codex nie raportuje kosztu" },
-      { label: "Tokeny Claude Code", value: fmt.tokens(claudeTokens) },
-      { label: "Tokeny Codex", value: codexTokens == null ? "—" : fmt.tokens(codexTokens), note: codexTokens == null ? "brak metryk Codex" : "" },
-      { label: "Sesje", value: fmt.count(claudeSessions + (codexSessions || 0)), note: `Claude ${fmt.count(claudeSessions)} · Codex ${codexSessions == null ? "—" : fmt.count(codexSessions)}` },
-      { label: "Aktywny czas Claude Code", value: fmt.hours(active) },
-      { label: "Commity · PR", value: `${fmt.count(commits)} · ${fmt.count(prs)}`, note: "Claude Code" },
-    ]);
+      claude && { label: "Claude Code cost", value: fmt.usd(cost), note: withCodex ? "Codex reports no cost" : "" },
+      claude && { label: "Claude Code tokens", value: fmt.tokens(claudeTokens) },
+      withCodex && { label: "Codex tokens", value: codexTotal == null ? "—" : fmt.tokens(codexTotal), note: codexTotal == null ? missing : "" },
+      tool.id === "all"
+        ? { label: "Sessions", value: fmt.count(claudeSessions + (codexSessions || 0)), note: `Claude ${fmt.count(claudeSessions)} · Codex ${codexSessions == null ? "—" : fmt.count(codexSessions)}` }
+        : claude ? { label: "Sessions", value: fmt.count(claudeSessions) }
+        : { label: "Codex sessions", value: codexSessions == null ? "—" : fmt.count(codexSessions), note: codexSessions == null ? missing : "" },
+      claude && { label: "Claude Code active time", value: fmt.hours(active) },
+      claude && { label: "Commits · PRs", value: `${fmt.count(commits)} · ${fmt.count(prs)}`, note: "Claude Code" },
+    ].filter(Boolean));
     renderCharts(charts, start, end);
     document.getElementById("error").hidden = true;
-    document.getElementById("updated").textContent = "Odświeżono " + new Date().toLocaleTimeString("pl-PL");
+    document.getElementById("updated").textContent = "Updated " + new Date().toLocaleTimeString("en-GB");
   } catch (error) {
     const box = document.getElementById("error");
-    box.textContent = "Nie można odczytać danych: " + error.message;
+    box.textContent = "Cannot read data: " + error.message;
     box.hidden = false;
   } finally {
     document.getElementById("cards").classList.remove("loading");
   }
 }
 
-// Same-name results are merged; past the palette, the smallest fold into "inne".
+// Same-name results are merged; past the palette, the smallest fold into "other".
 function fold(list) {
   const byName = new Map();
   for (const s of list) {
@@ -212,7 +227,7 @@ function fold(list) {
   if (out.length > SERIES.length) {
     const rest = out.slice(SERIES.length - 1), values = new Map();
     for (const s of rest) for (const [t, v] of s.values) values.set(t, (values.get(t) || 0) + v);
-    out = [...out.slice(0, SERIES.length - 1), { name: "inne", values, sum: rest.reduce((a, s) => a + s.sum, 0) }];
+    out = [...out.slice(0, SERIES.length - 1), { name: "other", values, sum: rest.reduce((a, s) => a + s.sum, 0) }];
   }
   return out.map((s, i) => ({ ...s, color: `var(${SERIES[i]})` }));
 }
@@ -230,15 +245,20 @@ function renderTiles(tiles) {
 function renderCharts(charts, start, end) {
   const times = [];
   for (let t = start; t <= end; t += range.step) times.push(t);
-  document.getElementById("cards").replaceChildren(...charts.map(chart => {
+  const cards = document.getElementById("cards");
+  if (!charts.length) {
+    cards.replaceChildren(el("div", "empty", "No Codex metrics in Prometheus"));
+    return;
+  }
+  cards.replaceChildren(...charts.map(chart => {
     const card = el("article", "card");
     const head = el("div", "card-head");
-    const toggle = el("button", "toggle", tables.has(chart.title) ? "wykres" : "tabela");
+    const toggle = el("button", "toggle", tables.has(chart.title) ? "chart" : "table");
     toggle.onclick = () => { tables.has(chart.title) ? tables.delete(chart.title) : tables.add(chart.title); renderCharts(charts, start, end); };
     head.append(el("h2", "", chart.title), el("span", "unit", chart.unit), toggle);
     card.append(head);
     if (!chart.series.length) {
-      card.append(el("div", "empty", "Brak danych w tym zakresie"));
+      card.append(el("div", "empty", "No data in this range"));
       return card;
     }
     if (chart.series.length > 1) {
@@ -257,7 +277,7 @@ function renderCharts(charts, start, end) {
 
 function table(chart, times) {
   const wrap = el("div", "table-wrap"), t = el("table"), head = el("tr");
-  head.append(el("th", "", "Czas"), ...chart.series.map(s => el("th", "", s.name)));
+  head.append(el("th", "", "Time"), ...chart.series.map(s => el("th", "", s.name)));
   t.append(head);
   for (const time of [...times].reverse()) {
     const row = el("tr");
@@ -272,7 +292,7 @@ const NS = "http://www.w3.org/2000/svg";
 function bars(chart, times) {
   const W = 640, H = 220, left = 52, right = 8, top = 8, bottom = 24;
   const totals = times.map(t => chart.series.reduce((a, s) => a + (s.values.get(t) || 0), 0));
-  const max = nice(Math.max(...totals, 0));
+  const max = scaleMax(Math.max(...totals, 0), chart.scale);
   const svg = svgEl("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": chart.title });
   const y = v => top + (H - top - bottom) * (1 - v / max);
   for (let i = 0; i <= 4; i++) {
@@ -332,10 +352,16 @@ const hideTip = () => { document.getElementById("tip").hidden = true; };
 function label(time, long) {
   const d = new Date((time - range.step) * 1000);
   if (range.step < 86400) {
-    const hm = d.toLocaleTimeString("pl-PL", { hour: "2-digit", minute: "2-digit" });
-    return long || range.step > 3600 || d.getHours() === 0 ? d.toLocaleDateString("pl-PL", { day: "numeric", month: "short" }) + " " + hm : hm;
+    const hm = d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
+    return long || range.step > 3600 || d.getHours() === 0 ? d.toLocaleDateString("en-GB", { day: "numeric", month: "short" }) + " " + hm : hm;
   }
-  return d.toLocaleDateString("pl-PL", { day: "numeric", month: "short" });
+  return d.toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+}
+// Ticks at quarters of the maximum: whole numbers for counts, round minutes or hours for time.
+function scaleMax(v, scale) {
+  if (scale === "integer") return Math.max(4, Math.ceil(nice(v) / 4) * 4);
+  if (scale === "time") return v >= 7200 ? nice(v / 3600) * 3600 : Math.max(4, Math.ceil(nice(v / 60) / 4) * 4) * 60;
+  return nice(v);
 }
 function nice(v) {
   if (v <= 0) return 1;
@@ -354,18 +380,22 @@ function svgEl(tag, attrs) {
   return node;
 }
 
-const group = document.querySelector(".ranges");
-for (const r of RANGES) {
-  const button = el("button", "", r.label);
-  button.setAttribute("aria-pressed", String(r === range));
-  button.onclick = () => {
-    range = r;
-    try { localStorage.setItem("range", r.id); } catch (_) {}
-    for (const b of group.children) b.setAttribute("aria-pressed", String(b === button));
-    load();
-  };
-  group.append(button);
+function choices(id, options, current, choose) {
+  const group = document.getElementById(id);
+  for (const option of options) {
+    const button = el("button", "", option.label);
+    button.setAttribute("aria-pressed", String(option === current));
+    button.onclick = () => {
+      choose(option);
+      try { localStorage.setItem(id === "tools" ? "tool" : "range", option.id); } catch (_) {}
+      for (const b of group.children) b.setAttribute("aria-pressed", String(b === button));
+      load();
+    };
+    group.append(button);
+  }
 }
+choices("tools", TOOLS, tool, t => { tool = t; });
+choices("ranges", RANGES, range, r => { range = r; });
 load();
 setInterval(load, 60000);
 </script>
