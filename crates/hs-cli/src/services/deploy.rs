@@ -1000,26 +1000,26 @@ pub async fn plan(
         plan.instances.push(instance);
     }
     match dns {
-        Some(dns) => {
-            if let Err(error) = dns.check().await {
-                plan.problems.push(error);
-            }
-            for instance in &plan.instances {
-                if !dns.covers(&instance.fqdn) {
-                    plan.problems
-                        .push(format!("{} is outside the local DNS zone {}", instance.fqdn, dns.zone));
-                    continue;
-                }
-                match dns.addresses(&instance.fqdn).await {
-                    Ok(found) if found.is_empty() || found == [instance.address.clone()] => {}
-                    Ok(found) => {
+        Some(dns) => match dns.check().await {
+            Err(error) => plan.problems.push(error),
+            Ok(()) => {
+                for instance in &plan.instances {
+                    if !dns.covers(&instance.fqdn) {
                         plan.problems
-                            .push(format!("{} already points to {}", instance.fqdn, found.join(", ")))
+                            .push(format!("{} is outside the local DNS zone {}", instance.fqdn, dns.zone));
+                        continue;
                     }
-                    Err(error) => plan.problems.push(error),
+                    match dns.addresses(&instance.fqdn).await {
+                        Ok(found) if found.is_empty() || found == [instance.address.clone()] => {}
+                        Ok(found) => {
+                            plan.problems
+                                .push(format!("{} already points to {}", instance.fqdn, found.join(", ")))
+                        }
+                        Err(error) => plan.problems.push(error),
+                    }
                 }
             }
-        }
+        },
         None if source.is_api() => plan
             .problems
             .push("Clients reach the API by name: set up Local DNS (TSIG) under Integrations".to_owned()),

@@ -75,6 +75,12 @@ impl Dns {
 
     /// The zone answers, signed by the key.
     pub async fn check(&self) -> Result<(), String> {
+        if ["dig", "nsupdate"]
+            .iter()
+            .any(|tool| crate::system::which(tool).is_none())
+        {
+            return Err("Local DNS requires dig and nsupdate (BIND client tools); install them on this desktop".into());
+        }
         if self.dig(&self.zone, "SOA").await?.trim().is_empty() {
             return Err(format!("Local DNS {} does not serve zone {}", self.server, self.zone));
         }

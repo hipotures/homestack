@@ -755,14 +755,6 @@ impl Install {
         true
     }
 
-    pub fn text_with_cursor(&self, value: &str, active: bool) -> String {
-        if !active {
-            return value.to_owned();
-        }
-        let at = Self::char_byte_at(value, self.text_caret);
-        format!("{}▏{}", &value[..at], &value[at..])
-    }
-
     /// The byte index of character `index` of the host.
     fn byte_at(&self, index: usize) -> usize {
         Self::char_byte_at(&self.host, index)

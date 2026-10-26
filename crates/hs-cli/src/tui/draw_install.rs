@@ -11,6 +11,20 @@ use super::install::{AskView, Install, Method, Mode, Stage};
 use super::state::App;
 use crate::askpass::Kind;
 
+/// Highlight the existing character cell; never insert a cursor character
+/// into the value and shift the text around it.
+fn text_cursor(buf: &mut Buffer, area: Rect, offset: usize, style: Style) {
+    let width = usize::from(area.width);
+    if width == 0 || offset >= width * usize::from(area.height) {
+        return;
+    }
+    let x = area.x + u16::try_from(offset % width).unwrap_or(0);
+    let y = area.y + u16::try_from(offset / width).unwrap_or(0);
+    if buf.area.contains(ratatui::layout::Position::new(x, y)) {
+        buf[(x, y)].set_style(style.add_modifier(Modifier::REVERSED));
+    }
+}
+
 /// Seconds ssh gives a security key, shown counting down.
 const TOUCH_SECONDS: u64 = 30;
 
@@ -628,7 +642,7 @@ fn settings(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
     let on_domain = install.domain.is_some() && install.row == install.settings.len();
     if on_domain {
         let domain = install.domain.clone().unwrap_or_default();
-        let field = format!("[ {} ]", install.text_with_cursor(&domain, install.chooser));
+        let field = format!("[ {domain} ]");
         // Room to type a longer one.
         let rect = fit(field.chars().count().max(40), 1);
         let box_inner = frame(
@@ -649,6 +663,19 @@ fn settings(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
             &field,
             if install.chooser { focus } else { text },
         );
+        if install.chooser {
+            text_cursor(
+                buf,
+                Rect::new(
+                    box_inner.x + 2,
+                    at(box_inner.y, 1),
+                    box_inner.width.saturating_sub(4),
+                    1,
+                ),
+                2 + install.text_caret,
+                focus,
+            );
+        }
         return;
     }
     let Some(setting) = install.settings.get(install.row) else {
@@ -683,14 +710,14 @@ fn settings(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
             },
         );
         let value = setting.text.as_deref().unwrap_or_default();
-        let typed = install.text_with_cursor(value, manual && install.chooser && install.cursor == 1);
+        let active = manual && install.chooser && install.cursor == 1;
         let room = usize::from(width.saturating_sub(15)).max(1);
         let start = if install.chooser && manual {
             install.text_caret.saturating_sub(room - 1)
         } else {
             0
         };
-        let shown: String = typed.chars().skip(start).take(room).collect();
+        let shown: String = value.chars().skip(start).take(room).collect();
         let line = format!("({}) Manual [ {shown} ]", if manual { "*" } else { " " });
         write(
             buf,
@@ -706,6 +733,14 @@ fn settings(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
                 muted
             },
         );
+        if active {
+            text_cursor(
+                buf,
+                Rect::new(box_inner.x + 2, at(box_inner.y, 2), width, 1),
+                13 + install.text_caret.saturating_sub(start),
+                focus,
+            );
+        }
         if let Some(hint) = &setting.hint {
             write(buf, box_inner.x + 2, at(box_inner.y, 3), width, hint, muted);
         }
@@ -724,8 +759,12 @@ fn settings(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
     if let Some(value) = &setting.text {
         // The field over as many rows as its text takes, so its end and the
         // cursor stay in sight.
-        let typed: Vec<char> = install.text_with_cursor(value, install.chooser).chars().collect();
-        let field: Vec<String> = typed.chunks(44).map(|chunk| chunk.iter().collect()).collect();
+        let mut typed: Vec<char> = value.chars().collect();
+        if install.chooser {
+            typed.push(' ');
+        }
+        let wrap_width = usize::from(choices_area.width.saturating_sub(6)).clamp(1, 44);
+        let field: Vec<String> = typed.chunks(wrap_width).map(|chunk| chunk.iter().collect()).collect();
         // Why Enter did not keep it, below the field.
         let error: Vec<String> = install
             .invalid
@@ -743,7 +782,17 @@ fn settings(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
                 ..Sides::default()
             },
         );
-        for (row, line) in field.iter().enumerate() {
+        let visible = usize::from(box_inner.height.saturating_sub(2))
+            .saturating_sub(error.len())
+            .max(1);
+        let cursor_line = install.text_caret / wrap_width;
+        let start = if install.chooser {
+            (cursor_line + 1).saturating_sub(visible)
+        } else {
+            0
+        };
+        let shown = field.len().saturating_sub(start).min(visible);
+        for (row, line) in field.iter().skip(start).take(visible).enumerate() {
             write(
                 buf,
                 box_inner.x + 2,
@@ -753,11 +802,24 @@ fn settings(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
                 if install.chooser { focus } else { text },
             );
         }
+        if install.chooser {
+            text_cursor(
+                buf,
+                Rect::new(
+                    box_inner.x + 2,
+                    at(box_inner.y, 1),
+                    u16::try_from(wrap_width).unwrap_or(1),
+                    u16::try_from(shown).unwrap_or(0),
+                ),
+                install.text_caret.saturating_sub(start * wrap_width),
+                focus,
+            );
+        }
         for (row, line) in error.iter().enumerate() {
             write(
                 buf,
                 box_inner.x + 2,
-                at(box_inner.y, 1 + field.len() + row),
+                at(box_inner.y, 1 + shown + row),
                 box_inner.width.saturating_sub(4),
                 line,
                 text.fg(palette.error),
@@ -830,7 +892,7 @@ fn settings(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
         })
         .collect();
     if let Some(typed) = &install.adding {
-        lines.push((format!("+ {}", install.text_with_cursor(typed, true)), true));
+        lines.push((format!("+ {typed} "), true));
     }
     if let Some(error) = &install.invalid {
         lines.push((format!("✗ {error}"), false));
@@ -876,6 +938,14 @@ fn settings(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
                 text
             },
         );
+        if install.adding.is_some() && index == setting.choices.len() {
+            text_cursor(
+                buf,
+                Rect::new(box_inner.x + 1, at(box_inner.y, 1 + index - start), width, 1),
+                2 + install.text_caret,
+                focus,
+            );
+        }
         super::chrome::register(
             Rect::new(box_inner.x, at(box_inner.y, 1 + index - start), box_inner.width, 1),
             super::chrome::Hit::Choice(index),
