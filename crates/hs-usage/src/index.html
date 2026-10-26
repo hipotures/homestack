@@ -1,0 +1,373 @@
+<!doctype html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI usage</title>
+<style>
+:root {
+  color-scheme: light;
+  --page: #f9f9f7; --surface: #fcfcfb; --ink: #0b0b0b; --ink-2: #52514e; --muted: #898781;
+  --grid: #e1e0d9; --axis: #c3c2b7; --ring: rgba(11,11,11,0.10); --wash: rgba(11,11,11,0.05);
+  --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100; --s5: #e87ba4;
+  --critical: #d03b3b;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface: #1a1a19; --ink: #f0efec; --ink-2: #c3c2b7; --muted: #898781;
+    --grid: #2c2c2a; --axis: #383835; --ring: rgba(255,255,255,0.10); --wash: rgba(255,255,255,0.06);
+    --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--page); color: var(--ink); font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
+main { max-width: 1200px; margin: 0 auto; padding: 24px 16px 48px; }
+header { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 24px; margin-bottom: 16px; }
+h1 { font-size: 20px; margin: 0; font-weight: 600; }
+.ranges { display: flex; gap: 4px; }
+.ranges button { font: inherit; color: var(--ink-2); background: none; border: 1px solid var(--ring); border-radius: 6px; padding: 4px 10px; cursor: pointer; }
+.ranges button:hover { background: var(--wash); }
+.ranges button[aria-pressed="true"] { color: var(--ink); border-color: var(--ink-2); font-weight: 600; }
+.updated { color: var(--muted); font-size: 12px; margin-left: auto; }
+.error { border: 1px solid var(--critical); border-radius: 8px; padding: 8px 12px; margin-bottom: 16px; }
+.error::before { content: "⚠ "; color: var(--critical); }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; margin-bottom: 16px; }
+.tile, .card { background: var(--surface); border: 1px solid var(--ring); border-radius: 10px; }
+.tile { padding: 12px 14px; }
+.tile .label { color: var(--ink-2); font-size: 12px; }
+.tile .value { font-size: 24px; font-weight: 600; margin-top: 2px; }
+.tile .note { color: var(--muted); font-size: 12px; }
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 520px), 1fr)); gap: 12px; }
+.card { padding: 14px 14px 10px; min-width: 0; }
+.card-head { display: flex; align-items: baseline; gap: 8px; }
+.card h2 { font-size: 14px; font-weight: 600; margin: 0; }
+.card .unit { color: var(--muted); font-size: 12px; }
+.card .toggle { margin-left: auto; font: inherit; font-size: 12px; color: var(--ink-2); background: none; border: none; cursor: pointer; text-decoration: underline; }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 6px 0 4px; color: var(--ink-2); font-size: 12px; }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+.empty { color: var(--muted); padding: 40px 0; text-align: center; }
+svg { display: block; width: 100%; height: auto; overflow: visible; }
+svg text { fill: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.loading { opacity: 0.5; transition: opacity 0.2s; }
+.table-wrap { overflow-x: auto; max-height: 260px; overflow-y: auto; }
+table { border-collapse: collapse; font-size: 12px; width: 100%; font-variant-numeric: tabular-nums; }
+th, td { text-align: right; padding: 3px 8px; border-bottom: 1px solid var(--grid); white-space: nowrap; }
+th:first-child, td:first-child { text-align: left; }
+th { color: var(--ink-2); font-weight: 600; position: sticky; top: 0; background: var(--surface); }
+#tip { position: fixed; pointer-events: none; background: var(--surface); border: 1px solid var(--ring); border-radius: 8px; padding: 8px 10px; font-size: 12px; box-shadow: 0 4px 16px rgba(0,0,0,0.15); z-index: 10; min-width: 140px; }
+#tip .when { color: var(--ink-2); margin-bottom: 4px; }
+#tip .row { display: flex; align-items: center; gap: 8px; }
+#tip .row b { margin-left: auto; padding-left: 12px; font-variant-numeric: tabular-nums; }
+#tip .key { width: 12px; height: 2px; display: inline-block; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Claude Code &amp; Codex</h1>
+    <div class="ranges" role="group" aria-label="Zakres czasu"></div>
+    <span class="updated" id="updated"></span>
+  </header>
+  <div class="error" id="error" hidden></div>
+  <section class="tiles" id="tiles"></section>
+  <section class="cards" id="cards"></section>
+</main>
+<div id="tip" hidden></div>
+<script>
+"use strict";
+const RANGES = [
+  { id: "24h", label: "24 h", seconds: 86400, step: 3600 },
+  { id: "7d", label: "7 dni", seconds: 7 * 86400, step: 6 * 3600 },
+  { id: "30d", label: "30 dni", seconds: 30 * 86400, step: 86400 },
+  { id: "90d", label: "90 dni", seconds: 90 * 86400, step: 86400 },
+];
+const SERIES = ["--s1", "--s2", "--s3", "--s4", "--s5"];
+// Each process exports its own cumulative series (new instance label), so
+// usage in a window is the growth of every series' last value, with series
+// that did not exist before the window counted from zero.
+const LOOKBACK = "100d";
+const growth = (metric, by, window) =>
+  `sum by (${by}) (clamp_min(last_over_time(${metric}[${LOOKBACK}]) - ` +
+  `(last_over_time(${metric}[${LOOKBACK}] offset ${window}s) or last_over_time(${metric}[${LOOKBACK}]) * 0), 0))`;
+
+let range = RANGES[0];
+try { range = RANGES.find(r => r.id === localStorage.getItem("range")) || range; } catch (_) {}
+const tables = new Set();
+
+async function prom(path, params) {
+  const response = await fetch(path + "?" + new URLSearchParams(params));
+  const body = await response.json().catch(() => null);
+  if (!response.ok || !body || body.status !== "success") {
+    throw new Error(body && body.error ? body.error : `Prometheus: HTTP ${response.status}`);
+  }
+  return body.data;
+}
+const instant = query => prom("/api/v1/query", { query }).then(d => d.result);
+const series = (query, start, end, step) =>
+  prom("/api/v1/query_range", { query, start, end, step }).then(d => d.result);
+
+// Codex metric names depend on its exporter's unit and instrument type.
+async function codexMetrics() {
+  const names = await prom("/api/v1/label/__name__/values", {});
+  const pick = re => names.find(n => re.test(n) && n.endsWith("_total")) || names.find(n => re.test(n) && n.endsWith("_sum"));
+  return { tokens: pick(/^codex_turn_token_usage/), threads: pick(/^codex_thread_started/) };
+}
+
+const fmt = {
+  tokens: v => v >= 1e9 ? (v / 1e9).toFixed(2) + " G" : v >= 1e6 ? (v / 1e6).toFixed(1) + " M" : v >= 1e3 ? (v / 1e3).toFixed(1) + " k" : String(Math.round(v)),
+  usd: v => "$" + (v >= 100 ? v.toFixed(0) : v.toFixed(2)),
+  count: v => String(Math.round(v)),
+  hours: v => v >= 3600 ? (v / 3600).toFixed(1) + " h" : Math.round(v / 60) + " min",
+  lines: v => v >= 1e3 ? (v / 1e3).toFixed(1) + " k" : String(Math.round(v)),
+};
+const TOKEN_TYPES = { input: "input", output: "output", cacheRead: "cache read", cacheCreation: "cache write",
+  cached_input: "cached input", reasoning_output: "reasoning" };
+
+function panels(codex, step) {
+  const list = [
+    { title: "Tokeny w czasie", unit: "Claude i Codex", format: fmt.tokens, parts: [
+      { query: growth("claude_code_token_usage_tokens_total", "", step), name: () => "Claude Code" },
+      codex.tokens && { query: growth(codexTokens(codex), "", step), name: () => "Codex" },
+    ] },
+    { title: "Tokeny Claude Code", unit: "według typu", format: fmt.tokens, parts: [
+      { query: growth("claude_code_token_usage_tokens_total", "type", step), name: m => TOKEN_TYPES[m.type] || m.type },
+    ] },
+    codex.tokens && { title: "Tokeny Codex", unit: "według typu", format: fmt.tokens, parts: [
+      { query: growth(codexTokens(codex), "token_type", step), name: m => TOKEN_TYPES[m.token_type] || m.token_type },
+    ] },
+    { title: "Koszt Claude Code", unit: "USD według modelu", format: fmt.usd, parts: [
+      { query: growth("claude_code_cost_usage_USD_total", "model", step), name: m => m.model || "?" },
+    ] },
+    { title: "Sesje", unit: "nowe sesje", format: fmt.count, parts: [
+      { query: growth("claude_code_session_count_total", "", step), name: () => "Claude Code" },
+      codex.threads && { query: growth(codex.threads, "", step), name: () => "Codex" },
+    ] },
+    { title: "Aktywny czas Claude Code", unit: "według rodzaju", format: fmt.hours, parts: [
+      { query: growth("claude_code_active_time_seconds_total", "type", step), name: m => m.type === "user" ? "użytkownik" : m.type === "cli" ? "Claude" : m.type || "?" },
+    ] },
+    { title: "Linie kodu", unit: "Claude Code", format: fmt.lines, parts: [
+      { query: growth("claude_code_lines_of_code_count_total", "type", step), name: m => m.type === "added" ? "dodane" : m.type === "removed" ? "usunięte" : m.type || "?" },
+    ] },
+  ];
+  return list.filter(Boolean).map(p => ({ ...p, parts: p.parts.filter(Boolean) }));
+}
+// Codex reports a "total" token type besides its components; summing it would double-count.
+const codexTokens = codex => codex.tokens + `{token_type!="total"}`;
+
+async function load() {
+  const end = Math.floor(Date.now() / 1000 / range.step) * range.step + range.step;
+  const start = end - range.seconds + range.step;
+  document.getElementById("cards").classList.add("loading");
+  try {
+    const codex = await codexMetrics();
+    const list = panels(codex, range.step);
+    const charts = await Promise.all(list.map(async panel => {
+      const results = await Promise.all(panel.parts.map(async part =>
+        (await series(part.query, start, end, range.step)).map(r => ({ name: part.name(r.metric), values: r.values }))));
+      return { ...panel, series: fold(results.flat()) };
+    }));
+    const total = metric => instant(growth(metric, "", range.seconds)).then(r => r.reduce((a, x) => a + Number(x.value[1]), 0));
+    const [cost, claudeTokens, codexTokens, claudeSessions, codexSessions, active, commits, prs] = await Promise.all([
+      total("claude_code_cost_usage_USD_total"),
+      total("claude_code_token_usage_tokens_total"),
+      codex.tokens ? total(codexTokens(codex)) : null,
+      total("claude_code_session_count_total"),
+      codex.threads ? total(codex.threads) : null,
+      total("claude_code_active_time_seconds_total"),
+      total("claude_code_commit_count_total"),
+      total("claude_code_pull_request_count_total"),
+    ]);
+    renderTiles([
+      { label: "Koszt Claude Code", value: fmt.usd(cost), note: "Codex nie raportuje kosztu" },
+      { label: "Tokeny Claude Code", value: fmt.tokens(claudeTokens) },
+      { label: "Tokeny Codex", value: codexTokens == null ? "—" : fmt.tokens(codexTokens), note: codexTokens == null ? "brak metryk Codex" : "" },
+      { label: "Sesje", value: fmt.count(claudeSessions + (codexSessions || 0)), note: `Claude ${fmt.count(claudeSessions)} · Codex ${codexSessions == null ? "—" : fmt.count(codexSessions)}` },
+      { label: "Aktywny czas Claude Code", value: fmt.hours(active) },
+      { label: "Commity · PR", value: `${fmt.count(commits)} · ${fmt.count(prs)}`, note: "Claude Code" },
+    ]);
+    renderCharts(charts, start, end);
+    document.getElementById("error").hidden = true;
+    document.getElementById("updated").textContent = "Odświeżono " + new Date().toLocaleTimeString("pl-PL");
+  } catch (error) {
+    const box = document.getElementById("error");
+    box.textContent = "Nie można odczytać danych: " + error.message;
+    box.hidden = false;
+  } finally {
+    document.getElementById("cards").classList.remove("loading");
+  }
+}
+
+// Same-name results are merged; past the palette, the smallest fold into "inne".
+function fold(list) {
+  const byName = new Map();
+  for (const s of list) {
+    const values = byName.get(s.name) || new Map();
+    for (const [t, v] of s.values) values.set(t, (values.get(t) || 0) + Number(v));
+    byName.set(s.name, values);
+  }
+  let out = [...byName].map(([name, values]) => ({ name, values, sum: [...values.values()].reduce((a, b) => a + b, 0) }))
+    .filter(s => s.sum > 0).sort((a, b) => b.sum - a.sum);
+  if (out.length > SERIES.length) {
+    const rest = out.slice(SERIES.length - 1), values = new Map();
+    for (const s of rest) for (const [t, v] of s.values) values.set(t, (values.get(t) || 0) + v);
+    out = [...out.slice(0, SERIES.length - 1), { name: "inne", values, sum: rest.reduce((a, s) => a + s.sum, 0) }];
+  }
+  return out.map((s, i) => ({ ...s, color: `var(${SERIES[i]})` }));
+}
+
+function renderTiles(tiles) {
+  const root = document.getElementById("tiles");
+  root.replaceChildren(...tiles.map(t => {
+    const tile = el("div", "tile");
+    tile.append(el("div", "label", t.label), el("div", "value", t.value));
+    if (t.note) tile.append(el("div", "note", t.note));
+    return tile;
+  }));
+}
+
+function renderCharts(charts, start, end) {
+  const times = [];
+  for (let t = start; t <= end; t += range.step) times.push(t);
+  document.getElementById("cards").replaceChildren(...charts.map(chart => {
+    const card = el("article", "card");
+    const head = el("div", "card-head");
+    const toggle = el("button", "toggle", tables.has(chart.title) ? "wykres" : "tabela");
+    toggle.onclick = () => { tables.has(chart.title) ? tables.delete(chart.title) : tables.add(chart.title); renderCharts(charts, start, end); };
+    head.append(el("h2", "", chart.title), el("span", "unit", chart.unit), toggle);
+    card.append(head);
+    if (!chart.series.length) {
+      card.append(el("div", "empty", "Brak danych w tym zakresie"));
+      return card;
+    }
+    if (chart.series.length > 1) {
+      const legend = el("div", "legend");
+      for (const s of chart.series) {
+        const key = el("i"); key.style.background = s.color;
+        const item = el("span"); item.append(key, document.createTextNode(s.name));
+        legend.append(item);
+      }
+      card.append(legend);
+    }
+    card.append(tables.has(chart.title) ? table(chart, times) : bars(chart, times));
+    return card;
+  }));
+}
+
+function table(chart, times) {
+  const wrap = el("div", "table-wrap"), t = el("table"), head = el("tr");
+  head.append(el("th", "", "Czas"), ...chart.series.map(s => el("th", "", s.name)));
+  t.append(head);
+  for (const time of [...times].reverse()) {
+    const row = el("tr");
+    row.append(el("td", "", label(time, true)), ...chart.series.map(s => el("td", "", chart.format(s.values.get(time) || 0))));
+    t.append(row);
+  }
+  wrap.append(t);
+  return wrap;
+}
+
+const NS = "http://www.w3.org/2000/svg";
+function bars(chart, times) {
+  const W = 640, H = 220, left = 52, right = 8, top = 8, bottom = 24;
+  const totals = times.map(t => chart.series.reduce((a, s) => a + (s.values.get(t) || 0), 0));
+  const max = nice(Math.max(...totals, 0));
+  const svg = svgEl("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": chart.title });
+  const y = v => top + (H - top - bottom) * (1 - v / max);
+  for (let i = 0; i <= 4; i++) {
+    const v = max * i / 4;
+    svg.append(svgEl("line", { x1: left, x2: W - right, y1: y(v), y2: y(v), stroke: i ? "var(--grid)" : "var(--axis)", "stroke-width": 1 }));
+    const tick = svgEl("text", { x: left - 6, y: y(v) + 4, "text-anchor": "end" }); tick.textContent = chart.format(v);
+    svg.append(tick);
+  }
+  const band = (W - left - right) / times.length, width = Math.max(2, Math.min(28, band - 2));
+  const every = Math.ceil(times.length / 8);
+  times.forEach((time, i) => {
+    const x = left + band * i + (band - width) / 2;
+    let base = 0;
+    const stack = chart.series.map(s => ({ s, v: s.values.get(time) || 0 })).filter(p => p.v > 0);
+    stack.forEach((p, k) => {
+      const y0 = y(base), y1 = y(base + p.v), last = k === stack.length - 1;
+      const h = Math.max(0, y0 - y1 - (last ? 0 : 2));
+      const top1 = y0 - h, r = last ? Math.min(4, width / 2, h) : 0;
+      svg.append(svgEl("path", { fill: p.s.color, d:
+        `M${x},${y0}V${top1 + r}${r ? `Q${x},${top1} ${x + r},${top1}` : ""}H${x + width - r}${r ? `Q${x + width},${top1} ${x + width},${top1 + r}` : ""}V${y0}Z` }));
+      base += p.v;
+    });
+    if (i % every === 0) {
+      const t = svgEl("text", { x: x + width / 2, y: H - 6, "text-anchor": "middle" }); t.textContent = label(time, false);
+      svg.append(t);
+    }
+    const hit = svgEl("rect", { x: left + band * i, y: top, width: band, height: H - top - bottom, fill: "transparent", tabindex: 0 });
+    const show = event => {
+      hit.setAttribute("fill", "var(--wash)");
+      tooltip(event, label(time, true), chart.series.map(s => [s, s.values.get(time) || 0]), chart.format);
+    };
+    hit.addEventListener("pointermove", show);
+    hit.addEventListener("focus", show);
+    for (const name of ["pointerleave", "blur"]) hit.addEventListener(name, () => { hit.setAttribute("fill", "transparent"); hideTip(); });
+    svg.append(hit);
+  });
+  return svg;
+}
+
+function tooltip(event, when, rows, format) {
+  const tip = document.getElementById("tip");
+  tip.replaceChildren(el("div", "when", when), ...rows.map(([s, v]) => {
+    const row = el("div", "row"), key = el("span", "key");
+    key.style.background = s.color;
+    row.append(key, document.createTextNode(s.name), el("b", "", format(v)));
+    return row;
+  }));
+  tip.hidden = false;
+  const box = event.clientX !== undefined ? { x: event.clientX, y: event.clientY } : (() => { const r = event.target.getBoundingClientRect(); return { x: r.right, y: r.top }; })();
+  const w = tip.offsetWidth, h = tip.offsetHeight;
+  tip.style.left = Math.min(box.x + 14, innerWidth - w - 8) + "px";
+  tip.style.top = Math.max(8, Math.min(box.y - h - 10, innerHeight - h - 8)) + "px";
+}
+const hideTip = () => { document.getElementById("tip").hidden = true; };
+
+// The bucket ending at `time` started one step earlier.
+function label(time, long) {
+  const d = new Date((time - range.step) * 1000);
+  if (range.step < 86400) {
+    const hm = d.toLocaleTimeString("pl-PL", { hour: "2-digit", minute: "2-digit" });
+    return long || range.step > 3600 || d.getHours() === 0 ? d.toLocaleDateString("pl-PL", { day: "numeric", month: "short" }) + " " + hm : hm;
+  }
+  return d.toLocaleDateString("pl-PL", { day: "numeric", month: "short" });
+}
+function nice(v) {
+  if (v <= 0) return 1;
+  const p = 10 ** Math.floor(Math.log10(v)), n = v / p;
+  return (n <= 1 ? 1 : n <= 2 ? 2 : n <= 4 ? 4 : n <= 5 ? 5 : 10) * p;
+}
+function el(tag, cls, text) {
+  const node = document.createElement(tag);
+  if (cls) node.className = cls;
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
+function svgEl(tag, attrs) {
+  const node = document.createElementNS(NS, tag);
+  for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, v);
+  return node;
+}
+
+const group = document.querySelector(".ranges");
+for (const r of RANGES) {
+  const button = el("button", "", r.label);
+  button.setAttribute("aria-pressed", String(r === range));
+  button.onclick = () => {
+    range = r;
+    try { localStorage.setItem("range", r.id); } catch (_) {}
+    for (const b of group.children) b.setAttribute("aria-pressed", String(b === button));
+    load();
+  };
+  group.append(button);
+}
+load();
+setInterval(load, 60000);
+</script>
+</body>
+</html>

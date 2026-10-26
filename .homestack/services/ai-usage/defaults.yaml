@@ -1,0 +1,13 @@
+schema: 3
+service: ai-usage
+# The server uses about 10 MiB of memory; the image is about 20 MB.
+resources:
+  cores: 1
+  memory: 64M
+  swap: 0M
+  rootfs: 128M
+deployment:
+  hostname: ai-usage
+  instances: 1
+  placement: single
+  state_model: stateless

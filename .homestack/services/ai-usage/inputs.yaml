@@ -1,0 +1,12 @@
+schema: 3
+service: ai-usage
+inputs:
+  - id: prometheus_url
+    label: Prometheus URL
+    description: Base URL of the Prometheus server that receives Claude Code and Codex metrics.
+    type: url
+    required: true
+    allowed_schemes: [http]
+    target:
+      type: environment
+      variable: HOMESTACK_PROMETHEUS_URL

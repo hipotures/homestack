@@ -96,3 +96,8 @@ This future system is not yet specified. Do not build it, redesign E2E, create p
 - The derived OpenTelemetry Collector image has an independent release line: annotated Git tag `otel-X.Y.Z` publishes `ghcr.io/hipotures/homestack-otel:X.Y.Z` as a single `linux/amd64` image. The pinned upstream distribution version and digest are build inputs, not the image version.
 - After building, verifying, committing and pushing an image-affecting change under `deploy/otel/`, run `python3 scripts/tag-image.py --service otel`. It automatically selects the next patch release, starting at `0.1.0`, and requires clean, already pushed HEAD. Never manually choose, move or overwrite release tags or published image tags.
 - GitHub Actions validates the built image, nonroot queue ownership/mode, configuration, health and ordinary restart before publication. Ordinary pushes run checks only; explicit manual runs publish `dev-<commit>` images. Manifest-only, CLI/TUI, documentation, E2E and tooling changes do not require a new Collector image.
+
+# AI usage dashboard image releases
+
+- The Claude Code and Codex usage dashboard (`crates/hs-usage`, manifest `.homestack/services/ai-usage/`) has an independent release line: annotated Git tag `ai-usage-X.Y.Z` publishes `ghcr.io/hipotures/homestack-ai-usage:X.Y.Z` as a single `linux/amd64` image.
+- After building, verifying, committing and pushing a change to `crates/hs-usage/`, `deploy/ai-usage/` or a shared crate it uses, run `python3 scripts/tag-image.py --service ai-usage`. It automatically selects the next patch release, starting at `0.1.0`, and requires a clean, already pushed HEAD. Manifest-only changes need no image release.

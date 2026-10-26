@@ -1,0 +1,19 @@
+schema: 3
+id: ai-usage
+name: AI Usage
+image:
+  repository: ghcr.io/hipotures/homestack-ai-usage
+runtime:
+  ports:
+    - name: http
+      port: 8080
+      protocol: tcp
+  healthcheck:
+    type: http
+    port: http
+    path: /health/ready
+    expected_status: 200
+    heartbeat_seconds: 60
+# Charts read Prometheus on every page load; nothing is stored locally.
+persistence: {}
+exposure: {}

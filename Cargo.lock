@@ -1123,6 +1123,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "hs-usage"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "hs-model",
+ "hs-service-status",
+ "reqwest",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+]
+
+[[package]]
 name = "http"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
