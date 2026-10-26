@@ -821,13 +821,14 @@ fn workspace_actions(app: &App) -> Vec<Control> {
         return vec![Control::key("&info"), favorite];
     }
     if selected.is_some_and(|entry| app.image_container(entry)) {
-        return vec![
+        let service = selected.is_some_and(|entry| app.common_service(entry).is_some());
+        let mut controls = vec![
             Control::key("&info"),
             favorite,
             Control::named("␣", "select", KeyCode::Char(' ')),
             Control::named(
                 "↵",
-                if selected.is_some_and(|entry| app.common_service(entry).is_some()) {
+                if service {
                     "update service"
                 } else if selected.is_some_and(super::acting::is_site) {
                     "update Site"
@@ -838,6 +839,10 @@ fn workspace_actions(app: &App) -> Vec<Control> {
             )
             .enabled(free),
         ];
+        if service {
+            controls.push(Control::key("mi&grate").enabled(free));
+        }
+        return controls;
     }
     vec![
         Control::key("&info").enabled(selected.is_some()),
