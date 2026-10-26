@@ -16,4 +16,10 @@ runtime:
     heartbeat_seconds: 60
 # Charts read Prometheus on every page load; nothing is stored locally.
 persistence: {}
-exposure: {}
+# Browsers force HTTPS for .app and other HSTS-preloaded domains; Pangolin
+# terminates TLS and authenticates viewers.
+exposure:
+  pangolin:
+    port: http
+    name: AI Usage
+    subdomain: ai-usage
