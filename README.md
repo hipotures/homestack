@@ -390,7 +390,8 @@ apt-get install -y cloud-init qemu-guest-agent network-manager openssh-server e2
 apt-get install -y rsync git
 ```
 
-- **Accounts:** Keep `root` (with a valid `/root/.ssh/authorized_keys`) and the workspace account matching `[user]` (default `user`, `UID 1000`, `GID 1000`). The workspace user must **not** have `sudo` privileges, and there must be no other regular users in `UID 1000–65533`.
+- **Accounts:** Keep `root` (with a valid `/root/.ssh/authorized_keys`) and the workspace account matching `[user]` (default `user`, `UID 1000`, `GID 1000`). There must be no other regular users in `UID 1000–65533`.
+- **Sudo:** Access is controlled by the image owner; Gold readiness does not enforce or verify a sudo authentication policy. For hardware-key-only sudo over SSH, install sudo and `pam_rssh` on Gold's root disk, keep an explicit hardware-key allowlist owned by root, configure PAM without password authentication, and set `timestamp_timeout=0`. Agent forwarding must work on every SSH hop. New workspaces and refreshed roots inherit these system files; existing roots keep their current policy until refreshed.
 - **Services:** Enable the required services before shutting Gold down:
   ```bash
   systemctl enable qemu-guest-agent NetworkManager ssh

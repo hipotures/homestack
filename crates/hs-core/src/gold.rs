@@ -4,7 +4,7 @@
 //! The guest contract runs read-only shell commands through `exec`, which needs
 //! `VM.GuestAgent.Unrestricted` on Gold (decisions.md); without it the
 //! contract is reported as skipped. A stopped Gold is never started.
-//! Sudo may be installed; the workspace account must have no sudo privileges.
+//! Sudo access is configured by the image owner and is not a readiness condition.
 
 use hs_model::config::User;
 use hs_model::status::{GoldCheck, GoldReadiness};
@@ -148,21 +148,14 @@ fn pve_ssh_keys(vm_cfg: &VmConfig) -> (bool, String) {
     }
 }
 
-const GUEST_SKIPS: [(&str, &str, &str); 6] = [
+const GUEST_SKIPS: [(&str, &str, &str); 5] = [
     ("guest", "Required guest tools", "required"),
     ("guest", "Workspace account", "required"),
     ("security", "Regular user policy", "required"),
-    ("security", "No sudo privileges", "required"),
     ("security", "Root authorized_keys", "required"),
     ("security", "Workspace public-key source", "required"),
 ];
 
-fn sudo_policy_command(user: &str) -> String {
-    let user = shell_quote(user);
-    format!(
-        "if ! command -v sudo >/dev/null 2>&1; then echo DENIED; else policy=$(LC_ALL=C sudo -n -l -U {user} 2>&1); case \"$policy\" in \"User \"{user}\" is not allowed to run sudo on \"*.) echo DENIED;; *) echo UNVERIFIED;; esac; fi"
-    )
-}
 const OPTIONAL_SKIPS: [(&str, &str, &str); 2] = [
     ("guest", "rsync for Setup Files", "optional"),
     ("guest", "git/ssh-keygen for homestack repo", "optional"),
@@ -299,17 +292,6 @@ async fn guest_contract(
             "none".to_owned()
         } else {
             regular.join(", ")
-        },
-    ));
-    let sudo = guest_value(pve, node, vmid, &sudo_policy_command(&user.name)).await?;
-    checks.push(verdict(
-        "security",
-        "No sudo privileges",
-        sudo == "DENIED",
-        if sudo == "DENIED" {
-            "no permitted sudo commands"
-        } else {
-            "sudo privileges present or policy could not be verified"
         },
     ));
     let root_keys = guest_value(

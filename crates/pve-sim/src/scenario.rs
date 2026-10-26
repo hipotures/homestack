@@ -345,9 +345,6 @@ pub struct GuestSpec {
     /// import `yaml`.
     #[serde(default = "default_commands")]
     pub commands: Vec<String>,
-    /// Whether the workspace account has any sudo permissions.
-    #[serde(default)]
-    pub sudo_allowed: bool,
     /// Further files by absolute path (e.g. `authorized_keys`).
     #[serde(default)]
     pub files: BTreeMap<String, String>,
