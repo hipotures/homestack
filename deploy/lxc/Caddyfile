@@ -12,3 +12,14 @@
 	tls {$HOMESTACK_STATE_DIR}/tls/cert.pem {$HOMESTACK_STATE_DIR}/tls/key.pem
 	reverse_proxy 127.0.0.1:8080
 }
+
+# Private management HTTP: never forward API or secret-management routes.
+:80 {
+	@management path /health/live /health/ready /.well-known/homestack/status
+	handle @management {
+		reverse_proxy 127.0.0.1:8080
+	}
+	handle {
+		respond 404
+	}
+}

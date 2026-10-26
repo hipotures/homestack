@@ -19,7 +19,7 @@ RUN cargo build --release --locked --target x86_64-unknown-linux-musl -p hs-serv
 # The node image (`--target node`), published as
 # ghcr.io/hipotures/homestack-server and run by homestack-deploy as a
 # Proxmox container from this OCI image: runit starts the server
-# on 127.0.0.1:8080 and Caddy on :443 in front of it (deploy/lxc).
+# on 127.0.0.1:8080 and Caddy on :443, with health/telemetry on :80 (deploy/lxc).
 FROM docker.io/library/alpine:3.24.2 AS node
 RUN apk add --no-cache ca-certificates caddy runit \
     && adduser -S -D -H -h /var/lib/homestack -s /sbin/nologin homestack \
@@ -28,7 +28,7 @@ RUN apk add --no-cache ca-certificates caddy runit \
 COPY --from=build /src/target/x86_64-unknown-linux-musl/release/homestack-server /usr/local/bin/homestack-server
 COPY deploy/lxc/Caddyfile /etc/caddy/Caddyfile
 COPY deploy/lxc/service /etc/service
-EXPOSE 443
+EXPOSE 80 443
 STOPSIGNAL SIGTERM
 ENTRYPOINT ["runsvdir", "-P", "/etc/service"]
 

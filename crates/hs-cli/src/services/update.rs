@@ -355,6 +355,9 @@ async fn review(
     if hs_core::registry::version(version).is_none() {
         return Err("Choose a published numeric SemVer release".to_owned());
     }
+    if let Some(problem) = source.image_blocker(version) {
+        return Err(problem.to_owned());
+    }
     let release = hs_core::registry::resolve(&plan.image).await?;
     plan.digest = release.digest;
     plan.platform = release.platform;

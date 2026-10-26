@@ -27,6 +27,8 @@ const HEALTH_RETRY: Duration = Duration::from_secs(2);
 /// How many published releases are offered.
 const RELEASES: usize = 10;
 const API_IMAGE: &str = "ghcr.io/hipotures/homestack-server";
+/// The first API image with private HTTP health and telemetry.
+const API_MANAGED: (u64, u64, u64, u64) = (0, 2, 31, 0);
 const SITE_IMAGE: &str = "ghcr.io/hipotures/homestack-pangolin-site";
 const API_INIT_HOME: &str = "api-initialization-home ";
 const SITE_INIT_HOME: &str = "site-initialization-home ";
@@ -125,6 +127,11 @@ impl Source {
     #[must_use]
     pub fn is_api(&self) -> bool {
         self.manifest.image_repository == API_IMAGE
+    }
+
+    pub(super) fn image_blocker(&self, version: &str) -> Option<&'static str> {
+        (self.is_api() && hs_core::registry::version(version).is_none_or(|version| version < API_MANAGED))
+            .then_some("Managed API deployment requires HTTP health and telemetry (API image 0.2.31 or later)")
     }
 
     /// The Pangolin Site connector, whose readiness is its own Site online.
@@ -650,8 +657,8 @@ pub async fn plan(
                 config.domain
             ));
         }
-        if hs_core::registry::version(&choice.version).is_none_or(|version| version < (0, 2, 10, 0)) {
-            problems.push("Managed API deployment requires API image 0.2.10 or later".to_owned());
+        if let Some(problem) = source.image_blocker(&choice.version) {
+            problems.push(problem.to_owned());
         }
         if config.pve.ca_file.is_some() {
             problems.push("Managed API initialization cannot install a custom PVE CA file; endpoints must use system-trusted certificates".to_owned());
@@ -1331,7 +1338,7 @@ async fn run(
         let config = plan.api_config.as_ref().ok_or("API initialization was not reviewed")?;
         if (source.marker().is_some() && plan.instances.len() != 1)
             || source.image(version) != plan.image
-            || hs_core::registry::version(version).is_none_or(|version| version < (0, 2, 10, 0))
+            || source.image_blocker(version).is_some()
         {
             return Err("Review the API instances with a managed-runtime image release".to_owned());
         }

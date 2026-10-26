@@ -14,10 +14,15 @@ runtime:
     - name: https
       port: 443
       protocol: tcp
-  # Connectivity only; authenticated HTTPS /health/live remains authoritative.
+    - name: management
+      port: 80
+      protocol: tcp
+  # Only health and telemetry are available over private management HTTP.
   healthcheck:
-    type: tcp
-    port: https
+    type: http
+    port: management
+    path: /health/ready
+    expected_status: 200
 persistence:
 deployment:
   hostname: hs-api

@@ -57,9 +57,16 @@ Common ownership is `HomeStack service homestack-api`, plus repository,
 manifest revision, image and digest in the PVE description. `homestack-api`
 is the manifest ID; `homestack-server` is the container tag and OCI image name.
 There is no desktop deployment registry. Only the canonical API manifest from
-`hipotures/homestack` is accepted for this initializer. Choose image `0.2.10`
-or later. The manifest's TCP 443 check means connectivity only; bootstrap and
-stateless API image updates also perform authenticated HTTPS checks.
+`hipotures/homestack` is accepted for this initializer. Choose image `0.2.31`
+or later. Private HTTP port 80 serves only `/health/live`, `/health/ready`
+and `/.well-known/homestack/status`; all other HTTP paths return 404.
+The manifest uses HTTP readiness on this port, so common deployment and image
+replacement record `status-port 80` in the container description. The schema-2
+telemetry then supplies CPU, memory and I/O to the container view. Existing
+instances need an image update with the current manifest to receive the HTTP
+listener and telemetry metadata. API operations and secret management remain
+on HTTPS port 443. Bootstrap and stateless API image updates also perform
+authenticated HTTPS checks.
 
 ### Prerequisites checked before creation
 
