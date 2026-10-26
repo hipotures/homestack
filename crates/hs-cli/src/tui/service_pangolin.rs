@@ -12,7 +12,7 @@ use super::pangolin_key::{Client, Credential, Probe};
 use super::pangolin_sites::{Context, managed::Pangolin};
 use crate::install_flow::Answer;
 use crate::services::{
-    deploy::Source,
+    deploy::{NewInstance, Source},
     instance::{self, Instance},
     manifest::Healthcheck,
 };
@@ -50,7 +50,14 @@ pub(super) struct Catalog {
 }
 
 pub(super) struct Plan {
-    instance: Instance,
+    ctid: u32,
+    node: String,
+    address: String,
+    repository: String,
+    service: String,
+    /// The existing container's reviewed identity; `None` for an instance
+    /// this deployment creates before attaching.
+    existing: Option<Instance>,
     resource: Resource,
     site: Site,
     previous: Option<Target>,
@@ -90,12 +97,12 @@ pub(super) fn settings(source: &Source, catalog: Option<&Catalog>) -> Vec<Settin
     }
     let mut action = setting(
         ACTION,
-        "Choose attach, then Enter to load current resources and online Sites. Select one existing instance, \
-         a resource and a Site, set the application's port and protocol, then review. This changes only \
+        "Choose attach, then Enter to load current resources and online Sites. Select one existing instance \
+         or create one new instance, a resource and a Site, set the application's port and protocol, then review. This changes only \
          Pangolin routing; the container and /home/app are preserved. Unchanged makes no Pangolin request.",
         vec![
             ("unchanged".to_owned(), "Keep current routing".to_owned()),
-            ("attach".to_owned(), "Attach an existing instance".to_owned()),
+            ("attach".to_owned(), "Attach one instance".to_owned()),
         ],
         None,
     );
@@ -325,6 +332,7 @@ pub(super) fn load(pangolin: &Pangolin, stop: &AtomicBool) -> Result<Catalog, St
     Ok(catalog)
 }
 
+#[allow(clippy::too_many_arguments, reason = "the parts of one review")]
 pub(super) fn review(
     source: &Source,
     pangolin: &Pangolin,
@@ -333,14 +341,29 @@ pub(super) fn review(
     settings: &[Setting],
     answers: &[Answer],
     instances: &[Instance],
+    created: &[NewInstance],
 ) -> Result<Plan, String> {
     let catalog = catalog.ok_or("Choose attach and press Enter to load Pangolin resources and Sites")?;
-    let [instance] = instances else {
-        return Err("Pangolin attachment requires exactly one selected instance".to_owned());
+    let (ctid, node, address, existing) = match (instances, created) {
+        ([instance], []) => {
+            if !instance.running || instance.held || instance.address.parse::<std::net::IpAddr>().is_err() {
+                return Err("Select a running instance with a known IP address".to_owned());
+            }
+            (
+                instance.ctid,
+                instance.node.clone(),
+                instance.address.clone(),
+                Some(instance.clone()),
+            )
+        }
+        ([], [new]) => (new.ctid, new.node.clone(), new.address.clone(), None),
+        _ => {
+            return Err(
+                "Pangolin attachment needs exactly one instance: select one existing instance or create one new"
+                    .to_owned(),
+            );
+        }
     };
-    if !instance.running || instance.held || instance.address.parse::<std::net::IpAddr>().is_err() {
-        return Err("Select a running instance with a known IP address".to_owned());
-    }
     let base = start(settings).ok_or("The Pangolin settings are missing")?;
     let selected = |at: usize| -> Result<&str, String> {
         match answers.get(at) {
@@ -385,7 +408,7 @@ pub(super) fn review(
         .map(|t| t.body.clone())
         .unwrap_or_else(|| json!({"enabled": true}));
     body["siteId"] = json!(site.id);
-    body["ip"] = json!(instance.address);
+    body["ip"] = json!(address);
     body["mode"] = json!("http");
     body["method"] = json!(scheme);
     body["port"] = json!(port);
@@ -407,7 +430,7 @@ pub(super) fn review(
         .port;
     body["hcEnabled"] = json!(true);
     body["hcMode"] = json!("http");
-    body["hcHostname"] = json!(instance.address);
+    body["hcHostname"] = json!(address);
     body["hcPort"] = json!(health_port);
     body["hcScheme"] = json!(if health_port == port { scheme } else { "http" });
     body["hcPath"] = json!(path);
@@ -420,7 +443,12 @@ pub(super) fn review(
     body["hcHealthyThreshold"] = json!(1);
     body["hcUnhealthyThreshold"] = json!(3);
     Ok(Plan {
-        instance: instance.clone(),
+        ctid,
+        node,
+        address,
+        repository: source.repository.clone(),
+        service: source.manifest.id.clone(),
+        existing,
         resource,
         site,
         previous,
@@ -437,10 +465,10 @@ impl Plan {
                 self.site.name,
                 self.site.id,
                 self.body["method"].as_str().unwrap_or_default(),
-                self.instance.address,
+                self.address,
                 self.body["port"],
-                self.instance.ctid,
-                self.instance.node
+                self.ctid,
+                self.node
             ),
             if let Some(target) = &self.previous {
                 format!("Update existing backend target {}", target.id)
@@ -450,7 +478,7 @@ impl Plan {
             format!(
                 "Monitoring enabled: GET {}://{}:{}{} expects HTTP {}",
                 self.body["hcScheme"].as_str().unwrap_or_default(),
-                self.instance.address,
+                self.address,
                 self.body["hcPort"],
                 self.body["hcPath"].as_str().unwrap_or_default(),
                 self.body["hcStatus"]
@@ -467,12 +495,14 @@ pub(super) async fn apply(
     stop: &AtomicBool,
     plan: &Plan,
 ) -> Result<Vec<String>, String> {
-    let now = instance::read(pve, plan.instance.ctid).await?;
-    if now.repository != plan.instance.repository
-        || now.service != plan.instance.service
-        || now.mac != plan.instance.mac
-        || now.home_volume != plan.instance.home_volume
-        || now.address != plan.instance.address
+    let now = instance::read(pve, plan.ctid).await?;
+    if now.repository != plan.repository
+        || now.service != plan.service
+        || now.address != plan.address
+        || plan
+            .existing
+            .as_ref()
+            .is_some_and(|known| now.mac != known.mac || now.home_volume != known.home_volume)
         || !now.running
         || now.held
     {
@@ -521,8 +551,8 @@ pub(super) async fn apply(
             return Err("Saved Pangolin target does not match the review; inspect routing before retrying".to_owned());
         }
         Ok(vec![format!(
-            "{} attached through {} to {}:{}; existing container and /home/app preserved",
-            plan.resource.domain, plan.site.name, plan.instance.address, plan.body["port"]
+            "{} attached through {} to {}:{}; container and /home/app preserved",
+            plan.resource.domain, plan.site.name, plan.address, plan.body["port"]
         )])
     })
 }

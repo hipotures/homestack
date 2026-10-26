@@ -1240,8 +1240,8 @@ fn review(
         problems.extend(plan.problems.clone());
         create = Some(plan);
     }
-    // Apply attaches last, after the instance is changed and restarted, and
-    // checks again that it runs with the reviewed identity and address.
+    // Apply attaches last, after the instance is changed, restarted or
+    // created, and checks again that it runs with the reviewed address.
     if attach_requested {
         let targets: Vec<Instance> = s
             .instances
@@ -1261,6 +1261,10 @@ fn review(
                     &s.settings,
                     answers,
                     &targets,
+                    create
+                        .as_ref()
+                        .map(|plan| plan.instances.as_slice())
+                        .unwrap_or_default(),
                 )
             });
         match checked {
