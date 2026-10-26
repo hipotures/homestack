@@ -10,7 +10,7 @@
   --page: #f9f9f7; --surface: #fcfcfb; --ink: #0b0b0b; --ink-2: #52514e; --muted: #898781;
   --grid: #e1e0d9; --axis: #c3c2b7; --ring: rgba(11,11,11,0.10); --wash: rgba(11,11,11,0.05);
   --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100; --s5: #e87ba4;
-  --critical: #d03b3b;
+  --critical: #d03b3b; --spike: rgba(208,59,59,0.12);
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -38,6 +38,21 @@ h1 { font-size: 20px; margin: 0; font-weight: 600; }
 .tile .label { color: var(--ink-2); font-size: 12px; }
 .tile .value { font-size: 24px; font-weight: 600; margin-top: 2px; }
 .tile .note { color: var(--muted); font-size: 12px; }
+.tile .row { display: flex; align-items: baseline; gap: 8px; }
+.tile .delta { margin-left: auto; color: var(--ink-2); font-size: 12px; font-variant-numeric: tabular-nums; }
+.tile svg { margin-top: 6px; height: 28px; }
+.insights { list-style: none; margin: 8px 0 0; padding: 0; }
+.insights li { display: flex; align-items: baseline; gap: 10px; padding: 7px 0; border-bottom: 1px solid var(--grid); }
+.insights li:last-child { border-bottom: none; }
+.insights .when { color: var(--muted); font-size: 12px; min-width: 52px; font-variant-numeric: tabular-nums; }
+.badge { font-size: 11px; font-weight: 600; border: 1px solid var(--critical); border-radius: 4px; padding: 0 6px; }
+.badge::before { content: "▲ "; color: var(--critical); }
+.heat { display: grid; grid-template-columns: 34px repeat(24, 1fr); gap: 2px; margin-top: 10px; font-size: 11px; color: var(--muted); }
+.heat .cell { aspect-ratio: 1; border-radius: 2px; background: var(--grid); }
+.heat .cell:hover, .heat .cell:focus { outline: 2px solid var(--ink-2); outline-offset: -1px; }
+.heat-scale { display: flex; align-items: center; gap: 3px; margin-top: 8px; color: var(--muted); font-size: 11px; }
+.heat-scale i { width: 12px; height: 12px; border-radius: 2px; display: inline-block; }
+.spike-key { border: 1px solid var(--critical); background: var(--spike) !important; }
 .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 520px), 1fr)); gap: 12px; }
 .card { padding: 14px 14px 10px; min-width: 0; }
 .card-head { display: flex; align-items: baseline; gap: 8px; }
@@ -114,7 +129,7 @@ async function prom(path, params) {
   }
   return body.data;
 }
-const instant = query => prom("/api/v1/query", { query }).then(d => d.result);
+const instant = (query, time) => prom("/api/v1/query", { query, time }).then(d => d.result);
 const series = (query, start, end, step) =>
   prom("/api/v1/query_range", { query, start, end, step }).then(d => d.result);
 
@@ -130,6 +145,7 @@ const fmt = {
   usd: v => "$" + (v >= 100 ? v.toFixed(0) : v.toFixed(2)),
   count: v => String(Math.round(v)),
   hours: v => v >= 3600 ? (v / 3600).toFixed(1) + " h" : Math.round(v / 60) + " min",
+  percent: v => (v * 100).toFixed(1) + "%",
   lines: v => v >= 1e3 ? (v / 1e3).toFixed(1) + " k" : String(Math.round(v)),
 };
 const TOKEN_TYPES = { input: "input", output: "output", cacheRead: "cache read", cacheCreation: "cache write",
@@ -137,7 +153,7 @@ const TOKEN_TYPES = { input: "input", output: "output", cacheRead: "cache read",
 
 function panels(codex, step) {
   const list = [
-    { title: "Tokens over time", unit: tool.id === "all" ? "Claude Code and Codex" : tool.label, format: fmt.tokens, parts: [
+    { title: "Tokens over time", unit: tool.id === "all" ? "Claude Code and Codex" : tool.label, format: fmt.tokens, spikes: true, parts: [
       { tool: "claude", query: growth("claude_code_token_usage_tokens_total", "", step), name: () => "Claude Code" },
       codex.tokens && { tool: "codex", query: growth(codexTokens(codex), "", step), name: () => "Codex" },
     ] },
@@ -178,31 +194,31 @@ async function load() {
         (await series(part.query, start, end, range.step)).map(r => ({ name: part.name(r.metric), values: r.values }))));
       return { ...panel, series: fold(results.flat()) };
     }));
-    const total = metric => instant(growth(metric, "", range.seconds)).then(r => r.reduce((a, x) => a + Number(x.value[1]), 0));
     const claude = shows("claude"), withCodex = shows("codex");
-    const [cost, claudeTokens, codexTotal, claudeSessions, codexSessions, active, commits, prs] = await Promise.all([
-      claude && total("claude_code_cost_usage_USD_total"),
-      claude && total("claude_code_token_usage_tokens_total"),
-      withCodex && codex.tokens ? total(codexTokens(codex)) : null,
-      claude && total("claude_code_session_count_total"),
-      withCodex && codex.threads ? total(codex.threads) : null,
-      claude && total("claude_code_active_time_seconds_total"),
-      claude && total("claude_code_commit_count_total"),
-      claude && total("claude_code_pull_request_count_total"),
-    ]);
-    const missing = "no Codex metrics";
-    renderTiles([
-      claude && { label: "Claude Code cost", value: fmt.usd(cost), note: withCodex ? "Codex reports no cost" : "" },
-      claude && { label: "Claude Code tokens", value: fmt.tokens(claudeTokens) },
-      withCodex && { label: "Codex tokens", value: codexTotal == null ? "—" : fmt.tokens(codexTotal), note: codexTotal == null ? missing : "" },
-      tool.id === "all"
-        ? { label: "Sessions", value: fmt.count(claudeSessions + (codexSessions || 0)), note: `Claude ${fmt.count(claudeSessions)} · Codex ${codexSessions == null ? "—" : fmt.count(codexSessions)}` }
-        : claude ? { label: "Sessions", value: fmt.count(claudeSessions) }
-        : { label: "Codex sessions", value: codexSessions == null ? "—" : fmt.count(codexSessions), note: codexSessions == null ? missing : "" },
-      claude && { label: "Claude Code active time", value: fmt.hours(active) },
-      claude && { label: "Commits · PRs", value: `${fmt.count(commits)} · ${fmt.count(prs)}`, note: "Claude Code" },
-    ].filter(Boolean));
-    renderCharts(charts, start, end);
+    const tokens = [claude && "claude_code_token_usage_tokens_total", withCodex && codex.tokens && codexTokens(codex)].filter(Boolean);
+    const sessions = [claude && "claude_code_session_count_total", withCodex && codex.threads].filter(Boolean);
+    const now = Math.floor(Date.now() / 1000);
+    const measure = selectors => trend(selectors, now, start, end);
+    const codexMissing = withCodex && !codex.tokens;
+    const tileSpecs = [
+      claude && { label: "Claude Code cost", format: fmt.usd, data: measure(["claude_code_cost_usage_USD_total"]),
+        note: withCodex ? "Codex reports no cost" : "" },
+      tokens.length && { label: tool.id === "all" ? "Tokens" : tool.label + " tokens", format: fmt.tokens, data: measure(tokens),
+        note: codexMissing ? "no Codex metrics" : "" },
+      sessions.length && { label: "Sessions", format: fmt.count, data: measure(sessions), note: codexMissing ? "no Codex metrics" : "" },
+      claude && { label: "Claude Code active time", format: fmt.hours, data: measure(["claude_code_active_time_seconds_total"]) },
+      claude && { label: "Claude Code cache hit", format: fmt.percent, ratio: true, data: Promise.all([
+        measure(['claude_code_token_usage_tokens_total{type="cacheRead"}']),
+        measure(['claude_code_token_usage_tokens_total{type=~"input|cacheRead|cacheCreation"}']),
+      ]).then(([hit, all]) => ratio(hit, all)) },
+      claude && { label: "Commits", format: fmt.count, data: measure(["claude_code_commit_count_total"]),
+        note: "Claude Code" },
+    ].filter(Boolean);
+    const tiles = await Promise.all(tileSpecs.map(async t => ({ ...t, data: await t.data })));
+    const daily = await dailyTokens(tokens, now);
+    const heat = await hourly(tokens, now);
+    renderTiles(tiles, start, end);
+    renderCharts(charts, start, end, [insightsCard(daily), heatCard(heat)]);
     document.getElementById("error").hidden = true;
     document.getElementById("updated").textContent = "Updated " + new Date().toLocaleTimeString("en-GB");
   } catch (error) {
@@ -232,17 +248,142 @@ function fold(list) {
   return out.map((s, i) => ({ ...s, color: `var(${SERIES[i]})` }));
 }
 
-function renderTiles(tiles) {
-  const root = document.getElementById("tiles");
-  root.replaceChildren(...tiles.map(t => {
-    const tile = el("div", "tile");
-    tile.append(el("div", "label", t.label), el("div", "value", t.value));
+// Usage in the selected window, in the window before it, and per bucket.
+async function trend(selectors, now, start, end) {
+  const sum = rows => rows.reduce((a, r) => a + Number(r.value[1]), 0);
+  const parts = await Promise.all(selectors.map(sel => Promise.all([
+    instant(growth(sel, "", range.seconds), now).then(sum),
+    instant(growth(sel, "", range.seconds), now - range.seconds).then(sum),
+    series(growth(sel, "", range.step), start, end, range.step),
+  ])));
+  const buckets = new Map();
+  for (const [, , rows] of parts) for (const r of rows) for (const [t, v] of r.values) buckets.set(t, (buckets.get(t) || 0) + Number(v));
+  return { now: parts.reduce((a, p) => a + p[0], 0), before: parts.reduce((a, p) => a + p[1], 0), buckets };
+}
+function ratio(hit, all) {
+  const share = (h, a) => a > 0 ? h / a : null;
+  const buckets = new Map();
+  for (const [t, a] of all.buckets) if (a > 0) buckets.set(t, (hit.buckets.get(t) || 0) / a);
+  return { now: share(hit.now, all.now), before: share(hit.before, all.before), buckets };
+}
+
+function renderTiles(tiles, start, end) {
+  const times = [];
+  for (let t = start; t <= end; t += range.step) times.push(t);
+  document.getElementById("tiles").replaceChildren(...tiles.map(t => {
+    const tile = el("div", "tile"), row = el("div", "row");
+    const { now, before, buckets } = t.data;
+    row.append(el("div", "value", now == null ? "—" : t.format(now)));
+    let delta = "";
+    if (now != null && before != null) {
+      if (t.ratio) delta = `${now >= before ? "▲" : "▼"} ${Math.abs((now - before) * 100).toFixed(1)} pp`;
+      else if (before > 0) delta = `${now >= before ? "▲" : "▼"} ${Math.abs((now - before) / before * 100).toFixed(0)}%`;
+      else if (now > 0) delta = "new";
+    }
+    if (delta) {
+      const d = el("span", "delta", delta);
+      d.title = "Compared with the previous " + range.label;
+      row.append(d);
+    }
+    tile.append(el("div", "label", t.label), row, spark(times.map(time => buckets.get(time) || 0)));
     if (t.note) tile.append(el("div", "note", t.note));
     return tile;
   }));
 }
+function spark(values) {
+  const W = 160, H = 28, max = Math.max(...values, 0) || 1;
+  const svg = svgEl("svg", { viewBox: `0 0 ${W} ${H}`, preserveAspectRatio: "none", "aria-hidden": "true" });
+  const points = values.map((v, i) => `${(i / Math.max(1, values.length - 1)) * W},${H - 2 - (v / max) * (H - 4)}`).join(" ");
+  svg.append(svgEl("polyline", { points, fill: "none", stroke: "var(--s1)", "stroke-width": 2, "vector-effect": "non-scaling-stroke", "stroke-linejoin": "round" }));
+  return svg;
+}
 
-function renderCharts(charts, start, end) {
+// Daily token totals for the window plus the week before it, for spike detection.
+async function dailyTokens(selectors, now) {
+  const day = 86400, end = Math.floor(now / day) * day + day, days = Math.max(7, Math.round(range.seconds / day));
+  const totals = new Map();
+  await Promise.all(selectors.map(async sel => {
+    for (const r of await series(growth(sel, "", day), end - (days + 7) * day + day, end, day))
+      for (const [t, v] of r.values) totals.set(t, (totals.get(t) || 0) + Number(v));
+  }));
+  const list = [];
+  for (let t = end - (days + 7) * day + day; t <= end; t += day) list.push([t, totals.get(t) || 0]);
+  return { list, days };
+}
+const SPIKE = 2.5;
+function spikes(values, window) {
+  return values.map((v, i) => {
+    if (i < window) return null;
+    const avg = values.slice(i - window, i).reduce((a, b) => a + b, 0) / window;
+    return avg > 0 && v > SPIKE * avg ? v / avg : null;
+  });
+}
+function insightsCard({ list, days }) {
+  const card = el("article", "card"), head = el("div", "card-head");
+  head.append(el("h2", "", "To check"), el("span", "unit", `token spikes over ${SPIKE}× the 7-day average`));
+  card.append(head);
+  const factors = spikes(list.map(([, v]) => v), 7);
+  const items = list.map(([t, v], i) => ({ t, v, f: factors[i] })).slice(-days).filter(x => x.f).reverse().slice(0, 6);
+  if (!items.length) {
+    card.append(el("div", "empty", "No spikes in this range"));
+    return card;
+  }
+  const ul = el("ul", "insights");
+  for (const x of items) {
+    const li = el("li");
+    li.append(el("span", "when", new Date((x.t - 86400) * 1000).toLocaleDateString("en-GB", { day: "numeric", month: "short" })),
+      el("span", "badge", "Spike"), el("span", "", `${fmt.tokens(x.v)} tokens, ${x.f.toFixed(1)}× the 7-day average`));
+    ul.append(li);
+  }
+  card.append(ul);
+  return card;
+}
+
+// Hourly token totals over at least a week, folded into weekday × hour.
+async function hourly(selectors, now) {
+  const hour = 3600, end = Math.floor(now / hour) * hour + hour, span = Math.max(range.seconds, 7 * 86400);
+  const grid = Array.from({ length: 7 }, () => new Array(24).fill(0));
+  await Promise.all(selectors.map(async sel => {
+    for (const r of await series(growth(sel, "", hour), end - span + hour, end, hour))
+      for (const [t, v] of r.values) {
+        const d = new Date((t - hour) * 1000);
+        grid[(d.getDay() + 6) % 7][d.getHours()] += Number(v);
+      }
+  }));
+  return { grid, days: Math.round(span / 86400) };
+}
+const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+const HEAT = [20, 40, 60, 80, 100].map(p => `color-mix(in oklab, var(--s1) ${p}%, var(--surface))`);
+function heatCard({ grid, days }) {
+  const card = el("article", "card"), head = el("div", "card-head");
+  head.append(el("h2", "", "Activity by hour"), el("span", "unit", `tokens, last ${days} days`));
+  card.append(head);
+  const max = Math.max(...grid.flat());
+  const box = el("div", "heat");
+  grid.forEach((row, d) => {
+    box.append(el("span", "", WEEKDAYS[d]));
+    row.forEach((v, h) => {
+      const cell = el("span", "cell");
+      if (v > 0) cell.style.background = HEAT[Math.min(4, Math.floor((v / max) * 5))];
+      cell.tabIndex = 0;
+      const show = event => tooltip(event, `${WEEKDAYS[d]} ${String(h).padStart(2, "0")}:00`, [[{ name: "tokens", color: "var(--s1)" }, v]], fmt.tokens);
+      cell.addEventListener("pointermove", show);
+      cell.addEventListener("focus", show);
+      for (const name of ["pointerleave", "blur"]) cell.addEventListener(name, hideTip);
+      box.append(cell);
+    });
+  });
+  box.append(el("span"));
+  for (let h = 0; h < 24; h++) box.append(el("span", "", h % 6 === 0 ? String(h) : ""));
+  const scale = el("div", "heat-scale");
+  scale.append(document.createTextNode("Less"));
+  for (const color of ["var(--grid)", ...HEAT]) { const i = el("i"); i.style.background = color; scale.append(i); }
+  scale.append(document.createTextNode("More"));
+  card.append(box, scale);
+  return card;
+}
+
+function renderCharts(charts, start, end, extras) {
   const times = [];
   for (let t = start; t <= end; t += range.step) times.push(t);
   const cards = document.getElementById("cards");
@@ -250,29 +391,35 @@ function renderCharts(charts, start, end) {
     cards.replaceChildren(el("div", "empty", "No Codex metrics in Prometheus"));
     return;
   }
-  cards.replaceChildren(...charts.map(chart => {
+  const rendered = charts.map(chart => {
     const card = el("article", "card");
     const head = el("div", "card-head");
     const toggle = el("button", "toggle", tables.has(chart.title) ? "chart" : "table");
-    toggle.onclick = () => { tables.has(chart.title) ? tables.delete(chart.title) : tables.add(chart.title); renderCharts(charts, start, end); };
+    toggle.onclick = () => { tables.has(chart.title) ? tables.delete(chart.title) : tables.add(chart.title); renderCharts(charts, start, end, extras); };
     head.append(el("h2", "", chart.title), el("span", "unit", chart.unit), toggle);
     card.append(head);
     if (!chart.series.length) {
       card.append(el("div", "empty", "No data in this range"));
       return card;
     }
-    if (chart.series.length > 1) {
+    const spiky = chart.spikes && range.step === 86400 && spikes(times.map(t => chart.series.reduce((a, s) => a + (s.values.get(t) || 0), 0)), 7);
+    if (chart.series.length > 1 || (spiky && spiky.some(Boolean))) {
       const legend = el("div", "legend");
       for (const s of chart.series) {
         const key = el("i"); key.style.background = s.color;
         const item = el("span"); item.append(key, document.createTextNode(s.name));
         legend.append(item);
       }
+      if (spiky && spiky.some(Boolean)) {
+        const item = el("span"); item.append(el("i", "spike-key"), document.createTextNode("spike day"));
+        legend.append(item);
+      }
       card.append(legend);
     }
-    card.append(tables.has(chart.title) ? table(chart, times) : bars(chart, times));
+    card.append(tables.has(chart.title) ? table(chart, times) : bars(chart, times, spiky || []));
     return card;
-  }));
+  });
+  cards.replaceChildren(rendered[0], ...extras, ...rendered.slice(1));
 }
 
 function table(chart, times) {
@@ -289,7 +436,7 @@ function table(chart, times) {
 }
 
 const NS = "http://www.w3.org/2000/svg";
-function bars(chart, times) {
+function bars(chart, times, spiky) {
   const W = 640, H = 220, left = 52, right = 8, top = 8, bottom = 24;
   const totals = times.map(t => chart.series.reduce((a, s) => a + (s.values.get(t) || 0), 0));
   const max = scaleMax(Math.max(...totals, 0), chart.scale);
@@ -303,6 +450,9 @@ function bars(chart, times) {
   }
   const band = (W - left - right) / times.length, width = Math.max(2, Math.min(28, band - 2));
   const every = Math.ceil(times.length / 8);
+  spiky.forEach((f, i) => {
+    if (f) svg.append(svgEl("rect", { x: left + band * i, y: top, width: band, height: H - top - bottom, fill: "var(--spike)" }));
+  });
   times.forEach((time, i) => {
     const x = left + band * i + (band - width) / 2;
     let base = 0;
