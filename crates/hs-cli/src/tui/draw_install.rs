@@ -473,44 +473,113 @@ fn settings(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
     let muted = text.fg(palette.muted);
     let focus = text.fg(palette.focus).add_modifier(Modifier::BOLD);
     let x = inner.x + 1;
-    let mut rows: Vec<(String, String)> = install
-        .settings
-        .iter()
-        .map(|setting| (setting.title.clone(), setting.value()))
-        .collect();
-    if let Some(domain) = &install.domain {
-        rows.push(("Server domain".to_owned(), domain.clone()));
+    // Section headings are visual rows, never editable settings or hit targets.
+    let mut rows: Vec<(Option<usize>, String, String)> = Vec::new();
+    let mut application_heading = false;
+    for (index, setting) in install.settings.iter().enumerate() {
+        if setting.application_input.is_some() && !application_heading {
+            rows.push((None, "Application configuration".into(), String::new()));
+            application_heading = true;
+        }
+        rows.push((Some(index), setting.display_title().into(), setting.value()));
     }
-    // Stack the choices below the complete setting list in narrow panes.
-    // Wide panes can show the list and choices side by side.
-    let longest =
-        |pick: fn(&(String, String)) -> &String| rows.iter().map(|row| pick(row).chars().count()).max().unwrap_or(0);
+    if let Some(domain) = &install.domain {
+        rows.push((Some(install.settings.len()), "Server domain".into(), domain.clone()));
+    }
     let narrow = inner.width < 110;
-    let label_width = if narrow { 17 } else { longest(|row| &row.0) + 2 };
-    // Keep the choice panel anchored while selected values change length.
     let left = if narrow { inner.width } else { (inner.width / 2).min(64) };
+    let label_width = if narrow {
+        17
+    } else {
+        (rows
+            .iter()
+            .filter(|r| r.0.is_some())
+            .map(|r| r.1.chars().count())
+            .max()
+            .unwrap_or(0)
+            + 2)
+        .min(usize::from(left.saturating_sub(3)) / 2)
+        .max(1)
+    };
+    let value_width = usize::from(left.saturating_sub(3)).saturating_sub(label_width).max(1);
+    let rows: Vec<_> = rows
+        .into_iter()
+        .flat_map(|(index, title, value)| {
+            if index.is_none() {
+                return vec![(index, title, value)];
+            }
+            let labels = wrap(&title, label_width.saturating_sub(2).max(1));
+            let values = wrap(if value.is_empty() { "not set" } else { &value }, value_width);
+            (0..labels.len().max(values.len()))
+                .map(|line| {
+                    (
+                        index,
+                        labels.get(line).cloned().unwrap_or_default(),
+                        values.get(line).cloned().unwrap_or_default(),
+                    )
+                })
+                .collect()
+        })
+        .collect();
+    write(
+        buf,
+        x + 2,
+        inner.y,
+        u16::try_from(label_width).unwrap_or(0),
+        "Setting",
+        muted,
+    );
+    write(
+        buf,
+        x + 2 + u16::try_from(label_width).unwrap_or(0),
+        inner.y,
+        u16::try_from(value_width).unwrap_or(0),
+        "Value",
+        muted,
+    );
     let visible = if narrow {
         rows.len().min(usize::from(inner.height.saturating_sub(7) / 2).max(1))
     } else {
         usize::from(inner.height.saturating_sub(5)).max(1)
     };
-    let start = (install.row + 1).saturating_sub(visible);
-    for (row, (title, value)) in rows.iter().enumerate().skip(start).take(visible) {
-        let chosen = row == install.row;
-        let mark = if chosen && !install.chooser { "▶ " } else { "  " };
-        let line = format!("{mark}{:<label_width$}{}", cut(title, label_width - 1), value);
+    let cursor = rows.iter().position(|row| row.0 == Some(install.row)).unwrap_or(0);
+    let last = rows
+        .iter()
+        .rposition(|row| row.0 == Some(install.row))
+        .unwrap_or(cursor);
+    let start = (last + 1).saturating_sub(visible).min(cursor);
+    for (row, (index, title, value)) in rows.iter().enumerate().skip(start).take(visible) {
+        let y = at(inner.y, row - start + 1);
+        let Some(index) = index else {
+            let heading = format!("── {title} ");
+            let separator = "─".repeat(usize::from(left.saturating_sub(1)).saturating_sub(heading.chars().count()));
+            write(
+                buf,
+                x,
+                y,
+                left.saturating_sub(1),
+                &format!("{heading}{separator}"),
+                muted,
+            );
+            continue;
+        };
+        let chosen = *index == install.row;
+        let first = row == 0 || rows[row - 1].0 != Some(*index);
+        let mark = if chosen && !install.chooser && first {
+            "▶ "
+        } else {
+            "  "
+        };
+        let line = format!("{mark}{title:<label_width$}{value}");
         write(
             buf,
             x,
-            at(inner.y, row - start + 1),
+            y,
             left - 1,
             &cut(&line, usize::from(left - 1)),
             if chosen && !install.chooser { focus } else { text },
         );
-        super::chrome::register(
-            Rect::new(x, at(inner.y, row - start + 1), left - 1, 1),
-            super::chrome::Hit::Setting(row),
-        );
+        super::chrome::register(Rect::new(x, y, left - 1, 1), super::chrome::Hit::Setting(*index));
     }
     if !narrow
         && install.mode != Mode::Service
@@ -559,8 +628,7 @@ fn settings(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
     let on_domain = install.domain.is_some() && install.row == install.settings.len();
     if on_domain {
         let domain = install.domain.clone().unwrap_or_default();
-        let cursor = if install.chooser { "▏" } else { "" };
-        let field = format!("[ {domain}{cursor} ]");
+        let field = format!("[ {} ]", install.text_with_cursor(&domain, install.chooser));
         // Room to type a longer one.
         let rect = fit(field.chars().count().max(40), 1);
         let box_inner = frame(
@@ -594,7 +662,7 @@ fn settings(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
             rect,
             palette,
             &Sides {
-                top_left: vec![Control::plain(&setting.title)],
+                top_left: vec![Control::plain(setting.display_title())],
                 focused: install.chooser,
                 ..Sides::default()
             },
@@ -614,22 +682,16 @@ fn settings(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
                 text
             },
         );
-        let cursor = if manual && install.chooser && install.cursor == 1 {
-            "▏"
-        } else {
-            ""
-        };
         let value = setting.text.as_deref().unwrap_or_default();
-        let room = usize::from(width.saturating_sub(16));
-        let tail: String = value
-            .chars()
-            .rev()
-            .take(room)
-            .collect::<Vec<_>>()
-            .into_iter()
-            .rev()
-            .collect();
-        let line = format!("({}) Manual [ {tail}{cursor} ]", if manual { "*" } else { " " });
+        let typed = install.text_with_cursor(value, manual && install.chooser && install.cursor == 1);
+        let room = usize::from(width.saturating_sub(15)).max(1);
+        let start = if install.chooser && manual {
+            install.text_caret.saturating_sub(room - 1)
+        } else {
+            0
+        };
+        let shown: String = typed.chars().skip(start).take(room).collect();
+        let line = format!("({}) Manual [ {shown} ]", if manual { "*" } else { " " });
         write(
             buf,
             box_inner.x + 2,
@@ -662,8 +724,7 @@ fn settings(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
     if let Some(value) = &setting.text {
         // The field over as many rows as its text takes, so its end and the
         // cursor stay in sight.
-        let cursor = if install.chooser { "▏" } else { "" };
-        let typed: Vec<char> = format!("{value}{cursor}").chars().collect();
+        let typed: Vec<char> = install.text_with_cursor(value, install.chooser).chars().collect();
         let field: Vec<String> = typed.chunks(44).map(|chunk| chunk.iter().collect()).collect();
         // Why Enter did not keep it, below the field.
         let error: Vec<String> = install
@@ -677,7 +738,7 @@ fn settings(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
             rect,
             palette,
             &Sides {
-                top_left: vec![Control::plain(&setting.title)],
+                top_left: vec![Control::plain(setting.display_title())],
                 focused: install.chooser,
                 ..Sides::default()
             },
@@ -769,7 +830,7 @@ fn settings(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
         })
         .collect();
     if let Some(typed) = &install.adding {
-        lines.push((format!("+ {typed}▏"), true));
+        lines.push((format!("+ {}", install.text_with_cursor(typed, true)), true));
     }
     if let Some(error) = &install.invalid {
         lines.push((format!("✗ {error}"), false));
@@ -777,7 +838,7 @@ fn settings(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
     let content = lines
         .iter()
         .map(|(line, _)| line.chars().count())
-        .chain([setting.title.chars().count(), 20])
+        .chain([setting.display_title().chars().count(), 20])
         .max()
         .unwrap_or(0);
     let box_inner = frame(
@@ -785,7 +846,7 @@ fn settings(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
         fit(content, lines.len()),
         palette,
         &Sides {
-            top_left: vec![Control::plain(&setting.title)],
+            top_left: vec![Control::plain(setting.display_title())],
             focused: install.chooser,
             ..Sides::default()
         },

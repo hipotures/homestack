@@ -97,6 +97,12 @@ pub struct Setting {
 }
 
 impl Setting {
+    pub fn display_title(&self) -> &str {
+        self.application_input
+            .as_ref()
+            .map_or(&self.title, |input| &input.label)
+    }
+
     pub fn validate_text(&self, text: &str) -> Option<String> {
         if self.auto_text {
             if self.picked.first() != Some(&1) {
@@ -272,6 +278,8 @@ pub struct Install {
     pub host: String,
     /// Where typing goes in `host`, in characters.
     pub caret: usize,
+    /// Character position in the currently edited settings field.
+    pub text_caret: usize,
     /// Herdr tabs: name and title.
     pub tabs: Vec<(String, String)>,
     pub tab: usize,
@@ -343,6 +351,7 @@ impl Install {
             method: Method::Ssh,
             host: String::new(),
             caret: 0,
+            text_caret: 0,
             tabs: Vec::new(),
             tab: 0,
             tab_filter,
@@ -720,6 +729,40 @@ impl Install {
         text.char_indices().nth(index).map_or(text.len(), |(at, _)| at)
     }
 
+    /// Edit at character boundaries, so Unicode values stay valid UTF-8.
+    fn edit_text(value: &mut String, caret: &mut usize, code: KeyCode) -> bool {
+        *caret = (*caret).min(value.chars().count());
+        match code {
+            KeyCode::Char(c) => {
+                value.insert(Self::char_byte_at(value, *caret), c);
+                *caret += 1;
+            }
+            KeyCode::Backspace if *caret > 0 => {
+                *caret -= 1;
+                value.remove(Self::char_byte_at(value, *caret));
+            }
+            KeyCode::Backspace => {}
+            KeyCode::Delete if *caret < value.chars().count() => {
+                value.remove(Self::char_byte_at(value, *caret));
+            }
+            KeyCode::Delete => {}
+            KeyCode::Left => *caret = caret.saturating_sub(1),
+            KeyCode::Right => *caret = (*caret + 1).min(value.chars().count()),
+            KeyCode::Home => *caret = 0,
+            KeyCode::End => *caret = value.chars().count(),
+            _ => return false,
+        }
+        true
+    }
+
+    pub fn text_with_cursor(&self, value: &str, active: bool) -> String {
+        if !active {
+            return value.to_owned();
+        }
+        let at = Self::char_byte_at(value, self.text_caret);
+        format!("{}▏{}", &value[..at], &value[at..])
+    }
+
     /// The byte index of character `index` of the host.
     fn byte_at(&self, index: usize) -> usize {
         Self::char_byte_at(&self.host, index)
@@ -781,6 +824,14 @@ impl Install {
             return;
         }
         self.chooser = true;
+        self.text_caret = if self.on_domain() {
+            self.domain.as_deref()
+        } else {
+            self.settings.get(self.row).and_then(|s| s.text.as_deref())
+        }
+        .unwrap_or_default()
+        .chars()
+        .count();
         self.adding = None;
         self.before = if self.on_domain() {
             self.domain.clone().map(Edited::Domain)
@@ -928,13 +979,10 @@ impl Install {
         }
         if self.on_domain() {
             let domain = self.domain.get_or_insert_with(String::new);
-            match code {
-                KeyCode::Char(c) => domain.push(c),
-                KeyCode::Backspace => {
-                    domain.pop();
-                }
-                KeyCode::Enter => self.end_edit(true),
-                _ => {}
+            if code == KeyCode::Enter {
+                self.end_edit(true);
+            } else {
+                Self::edit_text(domain, &mut self.text_caret, code);
             }
             return (false, None);
         }
@@ -963,14 +1011,10 @@ impl Install {
                     Some(error) => self.invalid = Some(error),
                     None => self.end_edit(true),
                 },
-                KeyCode::Char(c) if cursor == 1 && setting.picked.first() == Some(&1) => {
-                    setting.text.get_or_insert_with(String::new).push(c);
-                    self.invalid = None;
-                }
-                KeyCode::Backspace if cursor == 1 && setting.picked.first() == Some(&1) => {
-                    if let Some(text) = setting.text.as_mut() {
-                        text.pop();
-                    }
+                _ if cursor == 1
+                    && setting.picked.first() == Some(&1)
+                    && Self::edit_text(setting.text.get_or_insert_with(String::new), &mut self.text_caret, code) =>
+                {
                     self.invalid = None;
                 }
                 _ => {}
@@ -979,10 +1023,6 @@ impl Install {
         }
         if let Some(typed) = self.adding.as_mut() {
             match code {
-                KeyCode::Char(c) => typed.push(c),
-                KeyCode::Backspace => {
-                    typed.pop();
-                }
                 KeyCode::Enter => {
                     let entry = typed.trim().to_owned();
                     if let Some(error) = setting.validate_text(&entry) {
@@ -996,26 +1036,26 @@ impl Install {
                         self.cursor = setting.choices.len() - 1;
                     }
                 }
-                _ => {}
+                _ => {
+                    if Self::edit_text(typed, &mut self.text_caret, code) {
+                        self.invalid = None;
+                    }
+                }
             }
             return (false, None);
         }
         let text_error = setting.text.as_deref().and_then(|text| setting.validate_text(text));
         if let Some(text) = setting.text.as_mut() {
             match code {
-                KeyCode::Char(c) => {
-                    text.push(c);
-                    self.invalid = None;
-                }
-                KeyCode::Backspace => {
-                    text.pop();
-                    self.invalid = None;
-                }
                 KeyCode::Enter => match text_error {
                     Some(error) => self.invalid = Some(error),
                     None => self.end_edit(true),
                 },
-                _ => {}
+                _ => {
+                    if Self::edit_text(text, &mut self.text_caret, code) {
+                        self.invalid = None;
+                    }
+                }
             }
             return (false, None);
         }
@@ -1023,7 +1063,10 @@ impl Install {
         match code {
             KeyCode::Down => self.cursor = (cursor + 1).min(count - 1),
             KeyCode::Up => self.cursor = cursor.saturating_sub(1),
-            KeyCode::Char('+') if setting.list => self.adding = Some(String::new()),
+            KeyCode::Char('+') if setting.list => {
+                self.adding = Some(String::new());
+                self.text_caret = 0;
+            }
             KeyCode::Char('-') if setting.list && cursor < setting.choices.len() => {
                 setting.choices.remove(cursor);
                 self.cursor = cursor.min(setting.choices.len().saturating_sub(1));
