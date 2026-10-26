@@ -1240,37 +1240,35 @@ fn review(
         problems.extend(plan.problems.clone());
         create = Some(plan);
     }
+    // Apply attaches last, after the instance is changed and restarted, and
+    // checks again that it runs with the reviewed identity and address.
     if attach_requested {
-        if !sections.is_empty() {
-            problems.push("Attach to Pangolin in a separate deployment from other changes".to_owned());
-        } else {
-            let targets: Vec<Instance> = s
-                .instances
-                .iter()
-                .filter(|i| chosen.selected.contains(&i.ctid))
-                .cloned()
-                .collect();
-            let checked = s
-                .context()
-                .ok_or_else(|| "The Pangolin context is unavailable".to_owned())
-                .and_then(|p| {
-                    service_pangolin::review(
-                        source,
-                        p,
-                        &setup.stop,
-                        s.catalog.as_ref(),
-                        &s.settings,
-                        answers,
-                        &targets,
-                    )
-                });
-            match checked {
-                Ok(checked) => {
-                    sections.push(("Pangolin attachment".to_owned(), checked.lines()));
-                    attach = Some(checked);
-                }
-                Err(error) => problems.push(error),
+        let targets: Vec<Instance> = s
+            .instances
+            .iter()
+            .filter(|i| chosen.selected.contains(&i.ctid))
+            .cloned()
+            .collect();
+        let checked = s
+            .context()
+            .ok_or_else(|| "The Pangolin context is unavailable".to_owned())
+            .and_then(|p| {
+                service_pangolin::review(
+                    source,
+                    p,
+                    &setup.stop,
+                    s.catalog.as_ref(),
+                    &s.settings,
+                    answers,
+                    &targets,
+                )
+            });
+        match checked {
+            Ok(checked) => {
+                sections.push(("Pangolin attachment".to_owned(), checked.lines()));
+                attach = Some(checked);
             }
+            Err(error) => problems.push(error),
         }
     }
     if sections.is_empty() && problems.is_empty() {
