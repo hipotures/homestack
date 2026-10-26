@@ -69,7 +69,7 @@ After committing and pushing, use `python3 scripts/tag-image.py --service otel`
 Existing image tags are refused; validation precedes `docker push`. Manual
 workflow runs publish `dev-<commit>` images. Ordinary branch pushes only check.
 
-`python3 deploy/otel/verify-image.py IMAGE` inspects the built image's command,
+`python3 deploy/otel/verify-image.py IMAGE` inspects the built image's
 user, Alpine distribution metadata and exported directory ownership/mode,
 validates Collector configuration,
 runs at 1 CPU/512 MiB/no swap, sends an OTLP metric to an unreachable export
