@@ -1,17 +1,22 @@
 # HomeStack OpenTelemetry Collector image
 
-`ghcr.io/hipotures/homestack-otel` is a minimal derivative of the official
-`otel/opentelemetry-collector-contrib:0.163.2`, pinned by its OCI index digest
-in the Containerfile. The actual upstream OCI user is `10001:10001` and its
-ENTRYPOINT is `/otelcol-contrib`. The image adds a digest-pinned minimal
-Alpine filesystem so Proxmox recognizes the distribution and configures
-`/etc/hosts` and `/etc/resolv.conf` through its existing Alpine setup plugin.
-The Collector remains PID 1 and runs in the foreground as `10001:10001`;
-no init system, daemonization, runtime helper or custom entrypoint is needed.
-The build copies an empty queue directory owned by that user, mode 0700,
-and adds one read-only configuration. It retains the upstream binary, CA
-certificates and ENTRYPOINT; only CMD selects the configuration. There is
-no `/home/app` volume.
+`ghcr.io/hipotures/homestack-otel` contains a minimal Collector distribution,
+`/otelcol-homestack`, built with the OpenTelemetry Collector Builder (`ocb`)
+from `builder-config.yaml`. It includes only the components used by
+`collector.yaml`: the `otlp` receiver, `batch` processor, `otlp_http`
+exporter, `health_check` and `file_storage` extensions, and the env/file
+configuration providers. The static binary is about 28 MB instead of the
+419 MB `otelcol-contrib` binary. The builder image and the Alpine runtime are
+pinned by digest in the Containerfile.
+
+The runtime is a digest-pinned minimal Alpine filesystem so Proxmox recognizes
+the distribution and configures `/etc/hosts` and `/etc/resolv.conf` through
+its existing Alpine setup plugin. The Collector is the ENTRYPOINT, remains
+PID 1 and runs in the foreground as `10001:10001`; no init system,
+daemonization, runtime helper or custom entrypoint script is needed. The
+queue directory is owned by that user with mode 0700, and CMD selects the
+read-only configuration `/etc/otelcol/homestack.yaml`. There is no
+`/home/app` volume.
 
 A scratch-only rootfs selects Proxmox's unmanaged setup plugin, which skips
 hostname and DNS configuration. The published 0.1.1 image reproduces an immediate exit in local LXC
@@ -23,15 +28,16 @@ No private DNS server, domain or destination is baked into the image.
 See the upstream [unmanaged plugin](https://github.com/proxmox/pve-container/blob/master/src/PVE/LXC/Setup/Unmanaged.pm)
 and [Alpine plugin](https://github.com/proxmox/pve-container/blob/master/src/PVE/LXC/Setup/Alpine.pm).
 
-The distribution's builder manifest at tag `v0.163.2` pins `otlphttpexporter`,
-`healthcheckextension` and `filestorage` to component version `v0.163.0`.
-The runtime configuration uses their actual `otlp_http`, `health_check` and
-`file_storage` names. Release CI validates it with the built binary before
+Component versions match the upstream `otelcol-contrib` 0.163.2 distribution
+manifest. Release CI validates the configuration with the built binary before
 publishing. Upstream sources:
 
 - https://github.com/open-telemetry/opentelemetry-collector-releases/blob/v0.163.2/distributions/otelcol-contrib/manifest.yaml
-- https://github.com/open-telemetry/opentelemetry-collector/blob/v0.163.0/exporter/otlphttpexporter/README.md
-- https://github.com/open-telemetry/opentelemetry-collector-contrib/tree/v0.163.0/extension/storage/filestorage
+- https://github.com/open-telemetry/opentelemetry-collector/tree/v0.163.0/cmd/builder
+
+Proxmox VE can send node, VM, LXC and storage metrics to this Collector with
+its built-in OpenTelemetry metric server (Datacenter → Metric Server) over
+OTLP/HTTP on port 4318.
 
 ## Runtime contract
 

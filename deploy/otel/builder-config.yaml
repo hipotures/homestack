@@ -1,0 +1,26 @@
+# Only the components used by collector.yaml, at the versions pinned by the
+# upstream otelcol-contrib 0.163.2 distribution manifest.
+dist:
+  module: github.com/hipotures/homestack/otel
+  name: otelcol-homestack
+  description: HomeStack OpenTelemetry Collector
+  version: 0.163.2
+  output_path: ./_build
+  build_tags: "grpcnotrace"
+
+receivers:
+  - gomod: go.opentelemetry.io/collector/receiver/otlpreceiver v0.163.0
+
+processors:
+  - gomod: go.opentelemetry.io/collector/processor/batchprocessor v0.163.0
+
+exporters:
+  - gomod: go.opentelemetry.io/collector/exporter/otlphttpexporter v0.163.0
+
+extensions:
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/extension/healthcheckextension v0.163.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/extension/storage/filestorage v0.163.0
+
+providers:
+  - gomod: go.opentelemetry.io/collector/confmap/provider/envprovider v1.69.0
+  - gomod: go.opentelemetry.io/collector/confmap/provider/fileprovider v1.69.0

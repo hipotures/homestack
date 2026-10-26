@@ -23,8 +23,8 @@ def main():
     image = sys.argv[1]
     config = json.loads(docker("image", "inspect", image))[0]["Config"]
     assert config["User"] == "10001:10001", "Collector must retain its nonroot runtime user"
-    assert config["Entrypoint"] == ["/otelcol-contrib"]
-    assert config["Cmd"] == ["--config=/etc/otelcol-contrib/homestack.yaml"]
+    assert config["Entrypoint"] == ["/otelcol-homestack"]
+    assert config["Cmd"] == ["--config=/etc/otelcol/homestack.yaml"]
     # Reserve a host port, but leave the destination unavailable until after
     # restart. Delivery then proves that the queued metric itself survived.
     with socket.socket() as reservation:
@@ -53,7 +53,7 @@ def main():
                 assert queue.isdir() and (queue.uid, queue.gid, queue.mode & 0o7777) == (10001, 10001, 0o700)
                 unpacked = sum(member.size for member in rootfs)
                 assert unpacked < 2 * 1024**3, "Image exceeds declared rootfs size"
-        docker("run", "--rm", "--network=none", *environment, image, "validate", "--config=/etc/otelcol-contrib/homestack.yaml")
+        docker("run", "--rm", "--network=none", *environment, image, "validate", "--config=/etc/otelcol/homestack.yaml")
         docker("start", name)
         health = "http://" + docker("port", name, "13133/tcp").strip() + "/health/live"
         otlp = "http://" + docker("port", name, "4318/tcp").strip() + "/v1/metrics"
