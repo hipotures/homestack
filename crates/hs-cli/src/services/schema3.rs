@@ -354,7 +354,13 @@ impl Input {
             if let Some(pattern) = &self.regex {
                 let regex = regex::Regex::new(pattern).map_err(|_| format!("{}: invalid regex", self.id))?;
                 if !regex.is_match(text) {
-                    return fail("does not match the declared regex");
+                    // The pattern itself means nothing to an operator; the
+                    // field's description says what is expected.
+                    return if self.description.is_empty() {
+                        fail("does not match the declared format")
+                    } else {
+                        fail(&format!("does not match the expected format. {}", self.description))
+                    };
                 }
             }
             if self.kind == Kind::Url {

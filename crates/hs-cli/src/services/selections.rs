@@ -79,12 +79,12 @@ pub fn load(
     {
         return Err("Private application selections have a different deployment identity".into());
     }
-    let contract = source
-        .manifest
-        .schema3
-        .as_ref()
-        .ok_or("Application selections require schema 3")?;
-    contract.resolve(&saved.values)?;
+    // Values are checked against the current manifest where they are used
+    // (Review and image replacement), not here: a value the manifest no
+    // longer accepts must still reach the form so the operator can fix it.
+    if source.manifest.schema3.is_none() {
+        return Err("Application selections require schema 3".into());
+    }
     Ok(Some(saved))
 }
 
