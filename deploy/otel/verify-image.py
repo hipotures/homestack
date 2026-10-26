@@ -78,6 +78,8 @@ def main():
             assert files, "Persistent exporter queue has no backing file"
             names = sorted(p.name for p in files)
         docker("restart", name)
+        # Docker can allocate a new ephemeral published port on restart.
+        health = "http://" + docker("port", name, "13133/tcp").strip() + "/health/live"
         healthy()
         after = json.loads(docker("inspect", name))[0]
         assert before["Id"] == after["Id"] and not after["State"]["OOMKilled"]
@@ -110,6 +112,12 @@ def main():
                           "unpacked_bytes": unpacked, "runtime": "Docker OCI (not Proxmox LXC)",
                           "workload": "one OTLP metric with unreachable exporter and same-container restart",
                           "stats": json.loads(stats), "health": "passed", "queue_restart_and_delivery": "passed"}, indent=2))
+    except Exception:
+        for args in [("logs", "--tail", "100", name),
+                     ("inspect", "--format", "{{json .State}} {{json .NetworkSettings.Ports}}", name)]:
+            diagnostic = subprocess.run(["docker", *args], capture_output=True, text=True, check=False)
+            print(diagnostic.stdout, diagnostic.stderr, file=sys.stderr)
+        raise
     finally:
         subprocess.run(["docker", "rm", "-f", name], capture_output=True, check=False)
 
