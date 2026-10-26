@@ -52,7 +52,7 @@ def main():
                 queue = rootfs.getmember("var/lib/otelcol/queue")
                 assert queue.isdir() and (queue.uid, queue.gid, queue.mode & 0o7777) == (10001, 10001, 0o700)
                 unpacked = sum(member.size for member in rootfs)
-                assert unpacked < 2 * 1024**3, "Image exceeds declared rootfs size"
+                assert unpacked < 512 * 1024**2, "Image exceeds declared rootfs size"
         docker("run", "--rm", "--network=none", *environment, image, "validate", "--config=/etc/otelcol/homestack.yaml")
         docker("start", name)
         health = "http://" + docker("port", name, "13133/tcp").strip() + "/health/live"

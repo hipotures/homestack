@@ -4,7 +4,7 @@ resources:
   cores: 1
   memory: 512M
   swap: 0M
-  rootfs: 2G
+  rootfs: 512M
 deployment:
   hostname: otel
   instances: 3

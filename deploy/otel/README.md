@@ -77,7 +77,7 @@ destination, checks health and backing files, restarts the same container, then 
 local receiver and verifies delivery of the queued metric.
 It prints image size, runtime resource observations and results to the CI log.
 This is a short Docker OCI validation, not Proxmox LXC or capacity evidence.
-The 2 GiB rootfs and 100..10000 queue bounds require workload-specific sizing;
+The 512 MiB rootfs and 100..10000 queue bounds require workload-specific sizing;
 queue capacity counts requests, not a fixed number of bytes. Operators must
 size rootfs for their payloads and outage window.
 
