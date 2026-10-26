@@ -7,7 +7,7 @@ use hs_install::shell;
 use serde_json::{Value, json};
 
 use super::Settings;
-use super::catalog::{gh, github_json};
+use super::catalog::{gh, github_json, github_pages};
 use super::plan::repository_paths;
 use super::text::repository;
 use super::workspace::Workspace;
@@ -121,20 +121,11 @@ fn bootstrap_ssh(key: &str) -> String {
 
 /// The deploy keys of `name` on GitHub.
 fn keys(system: &dyn System, name: &str) -> Result<Vec<Value>, AppError> {
-    let pages = github_json(
-        system,
-        &["--paginate", "--slurp", &format!("repos/{name}/keys?per_page=100")],
-        true,
-    )?;
-    Ok(pages
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_array)
-        .flatten()
-        .filter(|item| item.is_object())
-        .cloned()
-        .collect())
+    let keys = github_pages(system, &format!("repos/{name}/keys?per_page=100"))?;
+    if keys.iter().any(|item| !item.is_object()) {
+        return Err(AppError::new("GitHub returned an invalid deploy-key entry"));
+    }
+    Ok(keys)
 }
 
 fn matching_key(keys: &[Value], public_key: &str) -> Option<Value> {

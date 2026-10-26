@@ -120,15 +120,26 @@ pub fn gh(system: &dyn System, args: &[&str]) -> Result<String, AppError> {
     }
     let mut argv: Vec<String> = ["gh", "api", "--hostname", "github.com"].map(str::to_owned).to_vec();
     argv.extend(args.iter().map(|arg| (*arg).to_owned()));
-    let output = system.run(&argv).map_err(|_| {
-        AppError::new(
-            "Desktop GitHub request failed; check gh authentication and repository administration permissions",
-        )
-    })?;
+    let output = system
+        .run(&argv)
+        .map_err(|error| AppError::new(format!("Could not execute desktop gh: {}", error.kind())))?;
     if output.code != 0 {
-        return Err(AppError::new(
-            "Desktop GitHub request failed; check gh authentication and repository administration permissions",
-        ));
+        // Do not echo arbitrary gh stderr: callers can send credentials in
+        // request fields. Classify known failures without exposing values.
+        let reason = if output.stderr.contains("unknown flag:") {
+            "installed gh does not support a requested command option"
+        } else if output.stderr.contains("HTTP 401") || output.stderr.contains("gh auth login") {
+            "authentication failed; run gh auth login on this desktop"
+        } else if output.stderr.contains("rate limit") {
+            "GitHub API rate limit reached; retry after the limit resets"
+        } else if output.stderr.contains("HTTP 403") {
+            "GitHub denied this request (HTTP 403); check token scope and repository permissions"
+        } else if output.stderr.contains("HTTP 404") {
+            "GitHub resource was not found or is not visible to this account (HTTP 404)"
+        } else {
+            "request failed; check desktop GitHub connectivity and gh authentication"
+        };
+        return Err(AppError::new(format!("Desktop GitHub: {reason}")));
     }
     Ok(output.stdout)
 }
@@ -141,6 +152,24 @@ pub fn github_json(system: &dyn System, args: &[&str], array: bool) -> Result<Va
         return Err(AppError::new("GitHub API returned an unexpected response"));
     }
     Ok(value)
+}
+
+/// Read the consecutive JSON arrays emitted by `gh api --paginate`.
+/// Parse every page before returning entries; malformed pages never produce
+/// a silently incomplete catalog or deploy-key inventory.
+pub fn github_pages(system: &dyn System, endpoint: &str) -> Result<Vec<Value>, AppError> {
+    let text = gh(system, &["--paginate", endpoint])?;
+    let pages = serde_json::Deserializer::from_str(&text).into_iter::<Vec<Value>>();
+    let mut entries = Vec::new();
+    let mut seen = false;
+    for page in pages {
+        seen = true;
+        entries.extend(page.map_err(|_| AppError::new("GitHub pagination returned an invalid JSON array"))?);
+    }
+    if !seen {
+        return Err(AppError::new("GitHub pagination returned no JSON response"));
+    }
+    Ok(entries)
 }
 
 /// The GitHub account of `gh` and the configured owner.
@@ -191,30 +220,20 @@ pub fn discover_repositories(system: &dyn System, settings: &Settings) -> Result
     let identity = github_identity(system, settings)?;
     // This authenticated endpoint includes private repositories,
     // collaborators and organizations.
-    let pages = github_json(
+    let listed = github_pages(
         system,
-        &[
-            "--paginate",
-            "--slurp",
-            "user/repos?per_page=100&affiliation=owner,collaborator,organization_member&visibility=all",
-        ],
-        true,
+        "user/repos?per_page=100&affiliation=owner,collaborator,organization_member&visibility=all",
     )?;
     let mut repos: Vec<(String, Value)> = Vec::new();
-    for page in pages.as_array().into_iter().flatten() {
-        let Some(page) = page.as_array() else {
-            return Err(AppError::new("GitHub pagination returned an invalid page"));
-        };
-        for repo in page {
-            if !repo.is_object() {
-                return Err(AppError::new("GitHub returned an invalid repository"));
-            }
-            let name = repository(repo["full_name"].as_str().unwrap_or_default())?;
-            if name.split('/').next().unwrap_or_default().to_lowercase() == owner.to_lowercase() {
-                match repos.iter_mut().find(|(known, _)| *known == name) {
-                    Some(slot) => slot.1 = repo.clone(),
-                    None => repos.push((name, repo.clone())),
-                }
+    for repo in listed {
+        if !repo.is_object() {
+            return Err(AppError::new("GitHub returned an invalid repository"));
+        }
+        let name = repository(repo["full_name"].as_str().unwrap_or_default())?;
+        if name.split('/').next().unwrap_or_default().to_lowercase() == owner.to_lowercase() {
+            match repos.iter_mut().find(|(known, _)| *known == name) {
+                Some(slot) => slot.1 = repo,
+                None => repos.push((name, repo)),
             }
         }
     }
