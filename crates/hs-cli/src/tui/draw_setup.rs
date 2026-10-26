@@ -424,7 +424,25 @@ fn draw_services(buf: &mut Buffer, area: Rect, app: &App, setup: &SetupBox) {
         } else {
             base
         };
-        write(buf, x, y, state_x.saturating_sub(x + 1), &label, label_style);
+        let label_width = state_x.saturating_sub(x + 1);
+        if row.file.is_some()
+            && tone != Tone::Red
+            && let Some((id, description)) = label.split_once("  ")
+        {
+            let used = write(buf, x, y, label_width, id, label_style).saturating_add(2);
+            if used < label_width {
+                write(
+                    buf,
+                    x + used,
+                    y,
+                    label_width - used,
+                    description,
+                    base.fg(palette.muted).remove_modifier(Modifier::BOLD),
+                );
+            }
+        } else {
+            write(buf, x, y, label_width, &label, label_style);
+        }
         write(
             buf,
             state_x,
