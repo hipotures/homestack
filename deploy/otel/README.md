@@ -3,11 +3,25 @@
 `ghcr.io/hipotures/homestack-otel` is a minimal derivative of the official
 `otel/opentelemetry-collector-contrib:0.163.2`, pinned by its OCI index digest
 in the Containerfile. The actual upstream OCI user is `10001:10001` and its
-ENTRYPOINT is `/otelcol-contrib`. The build copies an empty queue directory
-owned by that user, mode 0700, into the scratch filesystem, and adds one
-read-only configuration. It inherits the binary, CA certificates, libraries
-and ENTRYPOINT; only CMD is changed to select that configuration. No shell,
-package manager, root runtime, helper, hook or `/home/app` volume is added.
+ENTRYPOINT is `/otelcol-contrib`. The image adds a digest-pinned minimal
+Alpine filesystem so Proxmox recognizes the distribution and configures
+`/etc/hosts` and `/etc/resolv.conf` through its existing Alpine setup plugin.
+The Collector remains PID 1 and runs in the foreground as `10001:10001`;
+no init system, daemonization, runtime helper or custom entrypoint is needed.
+The build copies an empty queue directory owned by that user, mode 0700,
+and adds one read-only configuration. It retains the upstream binary, CA
+certificates and ENTRYPOINT; only CMD selects the configuration. There is
+no `/home/app` volume.
+
+A scratch-only rootfs selects Proxmox's unmanaged setup plugin, which skips
+hostname and DNS configuration. The published 0.1.1 image reproduces an immediate exit in local LXC
+when Collector telemetry tries to resolve `localhost:8888`. Without resolver
+configuration, deployment-specific export hostnames cannot resolve either. Docker supplies hosts and
+resolver files itself, masking this incompatibility. Alpine supplies generic
+localhost entries; Proxmox supplies the operator's resolver configuration.
+No private DNS server, domain or destination is baked into the image.
+See the upstream [unmanaged plugin](https://github.com/proxmox/pve-container/blob/master/src/PVE/LXC/Setup/Unmanaged.pm)
+and [Alpine plugin](https://github.com/proxmox/pve-container/blob/master/src/PVE/LXC/Setup/Alpine.pm).
 
 The distribution's builder manifest at tag `v0.163.2` pins `otlphttpexporter`,
 `healthcheckextension` and `filestorage` to component version `v0.163.0`.
@@ -50,7 +64,8 @@ Existing image tags are refused; validation precedes `docker push`. Manual
 workflow runs publish `dev-<commit>` images. Ordinary branch pushes only check.
 
 `python3 deploy/otel/verify-image.py IMAGE` inspects the built image's command,
-user and exported directory ownership/mode, validates Collector configuration,
+user, Alpine distribution metadata and exported directory ownership/mode,
+validates Collector configuration,
 runs at 1 CPU/512 MiB/no swap, sends an OTLP metric to an unreachable export
 destination, checks health and backing files, restarts the same container, then restores a
 local receiver and verifies delivery of the queued metric.
@@ -60,8 +75,29 @@ The 2 GiB rootfs and 100..10000 queue bounds require workload-specific sizing;
 queue capacity counts requests, not a fixed number of bytes. Operators must
 size rootfs for their payloads and outage window.
 
-The implementation environment has no local Docker/Podman runtime. Local
-verification uses the checksum-verified upstream release binary with a
-throwaway queue path; actual built-image validation runs on the GitHub runner.
-The owner performs deployment and integration verification, including the
-isolated scenario in `docs/e2e-schema3.md`.
+Local diagnosis uses unprivileged LXC 6.0.6 with a separate UID/GID mapping,
+OCI images pulled by digest with Skopeo and unpacked with Umoci. The original
+scratch image reproduces the startup failure; overlaying the pinned Alpine
+filesystem makes Collector start and answer its health endpoint. The local
+lab has only isolated loopback networking and does not contact production.
+Docker/Podman is unavailable locally; GitHub Actions builds the Containerfile
+and validates the exact resulting OCI image. Local LXC verification of the
+published result is recorded separately. The owner performs Proxmox deployment
+and integration verification, including `docs/e2e-schema3.md`.
+
+
+### Local LXC diagnosis
+
+The candidate rootfs combines release 0.1.1 with the exact pinned Alpine
+filesystem used by the updated Containerfile (8,417,144 additional file
+bytes before overlapping files). It runs with UID/GID 10001, one CPU,
+512 MiB memory and no swap. Health and OTLP/HTTP ingestion return 200.
+One metric is ingested with the export destination unavailable, then the
+same LXC is stopped and started. An isolated DNS server and HTTP receiver
+are started afterward; the queued metric reaches the receiver through the
+configured DNS hostname. Health remains 200 after restart. Observed memory
+peak on that restart is 40,652,800 bytes, with zero OOM events. This is a
+short diagnostic workload, not a throughput or queue-capacity measurement.
+Resolver settings in this standalone lab are a fixture representing the
+configuration Proxmox's Alpine plugin supplies; no Proxmox deployment was
+performed by the agent.

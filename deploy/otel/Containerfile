@@ -1,10 +1,14 @@
 # The distribution release and immutable upstream index are both pinned.
-FROM docker.io/library/alpine:3.24.2 AS directories
-RUN mkdir -p /rootfs/var/lib/otelcol/queue \
-    && chmod 0700 /rootfs/var/lib/otelcol/queue
+FROM docker.io/library/alpine:3.24.2@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6 AS directories
+RUN mkdir -p /var/lib/otelcol/queue \
+    && chmod 0700 /var/lib/otelcol/queue
 
 FROM docker.io/otel/opentelemetry-collector-contrib:0.163.2@sha256:7f22d2a6748110ffb6a59bc0df448bccbf501cdb667d610ede4c61d3863d5849
-COPY --from=directories --chown=10001:10001 /rootfs/ /
+# Proxmox detects Alpine and supplies hosts/resolver configuration through its
+# existing setup plugin. A scratch-only rootfs is unmanaged and skips DNS setup.
+# No init system is needed: the inherited Collector entrypoint remains PID 1.
+COPY --from=directories / /
+COPY --from=directories --chown=10001:10001 /var/lib/otelcol/ /var/lib/otelcol/
 COPY --chmod=0444 collector.yaml /etc/otelcol-contrib/homestack.yaml
 USER 10001:10001
 EXPOSE 4317 4318 13133

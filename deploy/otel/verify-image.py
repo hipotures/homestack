@@ -41,6 +41,14 @@ def main():
             archive = Path(temporary) / "rootfs.tar"
             docker("export", "-o", str(archive), name)
             with tarfile.open(archive) as rootfs:
+                # Docker injects hosts/resolver files at runtime, while Proxmox
+                # needs a recognized distribution to configure them. Scratch
+                # silently selects its unmanaged plugin, which skips DNS setup.
+                os_release = rootfs.extractfile("etc/os-release").read().decode()
+                assert "ID=alpine\n" in os_release, "Proxmox must recognize the runtime as Alpine"
+                assert rootfs.getmember("etc/alpine-release").isfile()
+                assert rootfs.getmember("etc/network").isdir()
+                assert rootfs.getmember("bin/busybox").isfile()
                 queue = rootfs.getmember("var/lib/otelcol/queue")
                 assert queue.isdir() and (queue.uid, queue.gid, queue.mode & 0o7777) == (10001, 10001, 0o700)
                 unpacked = sum(member.size for member in rootfs)
