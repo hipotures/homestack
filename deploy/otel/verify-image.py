@@ -28,7 +28,7 @@ def main():
     with socket.socket() as reservation:
         reservation.bind(("", 0))
         destination_port = reservation.getsockname()[1]
-    environment = ["-e", f"HOMESTACK_PROMETHEUS_METRICS_ENDPOINT=http://host.docker.internal:{destination_port}/api/v1/otlp/v1/metrics",
+    environment = ["-e", f"HOMESTACK_PROMETHEUS_URL=http://host.docker.internal:{destination_port}",
                    "-e", "HOMESTACK_SENDING_QUEUE_SIZE=1000"]
     name = "hs-otel-verify-" + uuid.uuid4().hex[:12]
     try:

@@ -46,8 +46,9 @@ OTLP/HTTP on port 4318.
   Collector's health endpoint, not HomeStack telemetry schema 2. No extra
   `metrics.yaml` or HomeStack status endpoint is required.
 - Metrics only: OTLP receivers, batch processor, OTLP/HTTP metrics exporter.
-- `HOMESTACK_PROMETHEUS_METRICS_ENDPOINT`: required full destination URL,
-  including the metrics path. No endpoint is baked into the image.
+- `HOMESTACK_PROMETHEUS_URL`: required base URL of the Prometheus server,
+  without a path; the Collector exports to its `/api/v1/otlp/v1/metrics`
+  receiver. No server is baked into the image.
 - `HOMESTACK_SENDING_QUEUE_SIZE`: integer export-request capacity, default
   1000; the deployment form permits 100..10000.
 - `file_storage` backs the exporter queue under `/var/lib/otelcol/queue`.

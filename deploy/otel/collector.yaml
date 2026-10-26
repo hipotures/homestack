@@ -20,7 +20,7 @@ extensions:
 
 exporters:
   otlp_http:
-    metrics_endpoint: ${env:HOMESTACK_PROMETHEUS_METRICS_ENDPOINT}
+    metrics_endpoint: ${env:HOMESTACK_PROMETHEUS_URL}/api/v1/otlp/v1/metrics
     sending_queue:
       enabled: true
       queue_size: ${env:HOMESTACK_SENDING_QUEUE_SIZE:-1000}

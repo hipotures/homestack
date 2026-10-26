@@ -1,15 +1,16 @@
 schema: 3
 service: otel
 inputs:
-  - id: prometheus_metrics_endpoint
-    label: Prometheus OTLP/HTTP metrics endpoint
-    description: Full URL of the Prometheus OTLP metrics receiver, including its metrics path.
+  - id: prometheus_url
+    label: Prometheus URL
+    description: Base URL of the Prometheus server with its OTLP receiver enabled, without a path.
     type: url
     required: true
     allowed_schemes: [http, https]
+    regex: '^[a-z]+://[^/?#]+$'
     target:
       type: environment
-      variable: HOMESTACK_PROMETHEUS_METRICS_ENDPOINT
+      variable: HOMESTACK_PROMETHEUS_URL
   - id: sending_queue_size
     label: Persistent export queue size
     description: Maximum export requests queued on the disposable root filesystem.
