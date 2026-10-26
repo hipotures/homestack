@@ -1,5 +1,6 @@
-//! Attach an existing service to an existing Pangolin HTTP resource. This path
-//! reads Proxmox and changes only the resource's backend target through Step 7.
+//! Publish a service through Pangolin: find or create the HTTP resource its
+//! manifest names and point the resource's backend target at one instance.
+//! This reads Proxmox and changes only Pangolin routing through Step 7.
 
 use std::sync::atomic::AtomicBool;
 use std::time::Instant;
@@ -17,17 +18,8 @@ use crate::services::{
     manifest::Healthcheck,
 };
 
-/// The title of the first Pangolin setting; the others follow it.
+/// The title of the Pangolin setting.
 pub(super) const ACTION: &str = "Pangolin";
-const RESOURCE: usize = 1;
-const SITE: usize = 2;
-const PORT: usize = 3;
-const SCHEME: usize = 4;
-
-/// Where the Pangolin settings start among `settings`.
-pub(super) fn start(settings: &[Setting]) -> Option<usize> {
-    settings.iter().position(|setting| setting.title == ACTION)
-}
 const PAGE: usize = 100;
 
 #[derive(Clone, PartialEq)]
@@ -44,9 +36,15 @@ struct Site {
     nice: String,
 }
 
-pub(super) struct Catalog {
+struct Domain {
+    id: String,
+    base: String,
+}
+
+struct Catalog {
     resources: Vec<Resource>,
     sites: Vec<Site>,
+    domains: Vec<Domain>,
 }
 
 pub(super) struct Plan {
@@ -58,7 +56,11 @@ pub(super) struct Plan {
     /// The existing container's reviewed identity; `None` for an instance
     /// this deployment creates before attaching.
     existing: Option<Instance>,
-    resource: Resource,
+    /// The resource's full domain.
+    domain: String,
+    /// The existing resource; `None` when Apply creates it from `create`.
+    resource: Option<Resource>,
+    create: Option<Value>,
     site: Site,
     previous: Option<Target>,
     body: Value,
@@ -71,59 +73,39 @@ struct Target {
 }
 
 pub(super) fn requested(settings: &[Setting], answers: &[Answer]) -> bool {
-    start(settings)
+    settings
+        .iter()
+        .position(|setting| setting.title == ACTION)
         .is_some_and(|at| matches!(answers.get(at), Some(Answer::Picked(indices)) if indices.as_slice() == [1]))
 }
 
-fn setting(title: &str, note: &str, choices: Vec<(String, String)>, text: Option<String>) -> Setting {
-    Setting {
-        title: title.to_owned(),
-        note: note.to_owned(),
-        choices,
-        text,
+pub(super) fn settings(source: &Source) -> Vec<Setting> {
+    let Some(exposure) = source.manifest.pangolin.as_ref().filter(|_| !source.is_site()) else {
+        return Vec::new();
+    };
+    vec![Setting {
+        title: ACTION.to_owned(),
+        note: format!(
+            "Publish reuses or creates the Pangolin HTTP resource {sub} on the organization's domain (with \
+             several, the one most resources use), routes it through an online Site to one instance (the \
+             selected one, or the one this deployment creates) on its {port} port and monitors its health \
+             check. Unchanged makes no Pangolin request.",
+            sub = exposure.subdomain,
+            port = exposure.port,
+        ),
+        choices: vec![
+            ("unchanged".to_owned(), "Keep current routing".to_owned()),
+            ("attach".to_owned(), format!("Publish {}", exposure.subdomain)),
+        ],
+        text: None,
         list: false,
         check: None,
         application_input: None,
         auto_text: false,
         hint: None,
         multiple: false,
-        picked: Vec::new(),
-    }
-}
-
-pub(super) fn settings(source: &Source, catalog: Option<&Catalog>) -> Vec<Setting> {
-    if source.is_site() || source.manifest.pangolin.is_none() {
-        return Vec::new();
-    }
-    let mut action = setting(
-        ACTION,
-        "Choose attach, then Enter to load current resources and online Sites. Select one existing instance \
-         or create one new instance, a resource and a Site, set the application's port and protocol, then review. This changes only \
-         Pangolin routing; the container and /home/app are preserved. Unchanged makes no Pangolin request.",
-        vec![
-            ("unchanged".to_owned(), "Keep current routing".to_owned()),
-            ("attach".to_owned(), "Attach one instance".to_owned()),
-        ],
-        None,
-    );
-    action.picked = vec![0];
-    let mut settings = vec![action];
-    if let Some(catalog) = catalog {
-        settings.extend([
-            setting("Pangolin resource", "The existing public HTTP resource. Its domain and access policies stay as configured in Pangolin.",
-                catalog.resources.iter().map(|r| (r.id.to_string(), format!("{} · {}", r.name, r.domain))).collect(), None),
-            setting("Pangolin Site", "An online Site that can reach the selected container's IP address. F5 refreshes the list after Site recreation.",
-                catalog.sites.iter().map(|s| (s.id.to_string(), if s.name == s.nice { s.name.clone() } else { format!("{} · {}", s.name, s.nice) })).collect(), None),
-            setting("Pangolin port", "The port the application listens on inside the existing container (1–65535). Its IP is read from Proxmox.", Vec::new(),
-                Some(source.manifest.ports.first().map(|p| p.port.to_string()).unwrap_or_default())),
-            setting("Pangolin protocol", "HTTP or HTTPS between the Site and the application; this does not change the public domain's TLS configuration.",
-                vec![("http".to_owned(), String::new()), ("https".to_owned(), String::new())], None),
-        ]);
-        if let Some(protocol) = settings.last_mut() {
-            protocol.picked = vec![0];
-        }
-    }
-    settings
+        picked: vec![0],
+    }]
 }
 
 struct Api<'a> {
@@ -202,9 +184,27 @@ impl<'a> Api<'a> {
                 });
             }
         }
+        let mut domains = Vec::new();
+        let listed = self.get(&format!("/v1/org/{}/domains", self.ctx.organization))?;
+        for row in listed["domains"]
+            .as_array()
+            .ok_or("Unexpected Pangolin domain listing")?
+        {
+            if row["verified"] == true {
+                domains.push(Domain {
+                    id: text(row, "domainId")?,
+                    base: text(row, "baseDomain")?,
+                });
+            }
+        }
         resources.sort_by(|a, b| a.domain.cmp(&b.domain));
         sites.sort_by(|a, b| a.name.cmp(&b.name));
-        Ok(Catalog { resources, sites })
+        domains.sort_by(|a, b| a.base.cmp(&b.base));
+        Ok(Catalog {
+            resources,
+            sites,
+            domains,
+        })
     }
 
     fn resource(&self, row: &Value) -> Result<Resource, String> {
@@ -218,18 +218,21 @@ impl<'a> Api<'a> {
         })
     }
 
-    fn validate(&self, resource: &Resource, site: &Site) -> Result<(), String> {
-        let current_resource = self.get(&format!("/v1/resource/{}", resource.id))?;
+    fn validate(&self, resource: Option<&Resource>, site: &Site) -> Result<(), String> {
+        if let Some(resource) = resource {
+            let current = self.get(&format!("/v1/resource/{}", resource.id))?;
+            if current["orgId"] != self.ctx.organization || self.resource(&current)? != *resource {
+                return Err("Pangolin resource identity changed; review again".to_owned());
+            }
+        }
         let current_site = self.get(&format!("/v1/site/{}", site.id))?;
-        if current_resource["orgId"] != self.ctx.organization
-            || current_site["orgId"] != self.ctx.organization
-            || self.resource(&current_resource)? != *resource
+        if current_site["orgId"] != self.ctx.organization
             || id(&current_site, "siteId")? != site.id
             || current_site["niceId"] != site.nice
             || current_site["online"] != true
             || current_site["type"] != "newt"
         {
-            return Err("Pangolin resource or Site identity changed; refresh and review again".to_owned());
+            return Err("Pangolin Site identity changed; review again".to_owned());
         }
         Ok(())
     }
@@ -318,32 +321,42 @@ fn text(row: &Value, key: &str) -> Result<String, String> {
         .ok_or_else(|| format!("Unexpected Pangolin {key}"))
 }
 
-pub(super) fn load(pangolin: &Pangolin, stop: &AtomicBool) -> Result<Catalog, String> {
-    let catalog = Api::open(pangolin, stop)?.catalog()?;
-    if catalog.resources.is_empty() {
-        return Err(
-            "Pangolin has no enabled HTTP resources. Create a resource in Pangolin before attaching an instance"
-                .to_owned(),
-        );
-    }
-    if catalog.sites.is_empty() {
-        return Err("Pangolin has no online Sites. Start a Site connector before attaching an instance".to_owned());
-    }
-    Ok(catalog)
+/// The full domain of `subdomain` on the organization's domain: the one
+/// with a resource of that name, else the one most resources use.
+fn full_domain(catalog: &Catalog, subdomain: &str) -> Result<(String, String), String> {
+    let used = |base: &str| {
+        catalog
+            .resources
+            .iter()
+            .filter(|r| r.domain.ends_with(&format!(".{base}")) || r.domain == base)
+            .count()
+    };
+    let domain = catalog
+        .domains
+        .iter()
+        .find(|d| {
+            catalog
+                .resources
+                .iter()
+                .any(|r| r.domain == format!("{subdomain}.{}", d.base))
+        })
+        .or_else(|| catalog.domains.iter().rev().max_by_key(|d| used(&d.base)))
+        .ok_or("Pangolin has no verified domain; add one in Pangolin first")?;
+    Ok((domain.id.clone(), format!("{subdomain}.{}", domain.base)))
 }
 
-#[allow(clippy::too_many_arguments, reason = "the parts of one review")]
 pub(super) fn review(
     source: &Source,
     pangolin: &Pangolin,
     stop: &AtomicBool,
-    catalog: Option<&Catalog>,
-    settings: &[Setting],
-    answers: &[Answer],
     instances: &[Instance],
     created: &[NewInstance],
 ) -> Result<Plan, String> {
-    let catalog = catalog.ok_or("Choose attach and press Enter to load Pangolin resources and Sites")?;
+    let exposure = source
+        .manifest
+        .pangolin
+        .as_ref()
+        .ok_or("The service manifest declares no Pangolin exposure")?;
     let (ctid, node, address, existing) = match (instances, created) {
         ([instance], []) => {
             if !instance.running || instance.held || instance.address.parse::<std::net::IpAddr>().is_err() {
@@ -359,50 +372,39 @@ pub(super) fn review(
         ([], [new]) => (new.ctid, new.node.clone(), new.address.clone(), None),
         _ => {
             return Err(
-                "Pangolin attachment needs exactly one instance: select one existing instance or create one new"
-                    .to_owned(),
+                "Publishing needs exactly one instance: select one existing instance or create one new".to_owned(),
             );
         }
     };
-    let base = start(settings).ok_or("The Pangolin settings are missing")?;
-    let selected = |at: usize| -> Result<&str, String> {
-        match answers.get(at) {
-            Some(Answer::Picked(indices)) if indices.len() == 1 => settings
-                .get(at)
-                .and_then(|s| s.choices.get(indices[0]))
-                .map(|(key, _)| key.as_str())
-                .ok_or("Invalid Pangolin selection".to_owned()),
-            _ => Err("Select a Pangolin resource, Site and protocol".to_owned()),
-        }
-    };
-    let resource = catalog
-        .resources
+    let port = source
+        .manifest
+        .ports
         .iter()
-        .find(|r| r.id.to_string() == selected(base + RESOURCE).unwrap_or_default())
-        .ok_or("Select a Pangolin resource")?
-        .clone();
+        .find(|p| p.name == exposure.port)
+        .ok_or("The manifest's Pangolin exposure refers to an undeclared port")?
+        .port;
+    let api = Api::open(pangolin, stop)?;
+    let catalog = api.catalog()?;
+    let (domain_id, domain) = full_domain(&catalog, &exposure.subdomain)?;
+    let resource = catalog.resources.iter().find(|r| r.domain == domain).cloned();
     let site = catalog
         .sites
-        .iter()
-        .find(|s| s.id.to_string() == selected(base + SITE).unwrap_or_default())
-        .ok_or("Select an online Pangolin Site")?
-        .clone();
-    let port = match answers.get(base + PORT) {
-        Some(Answer::Text(value)) => value.trim().parse::<u16>().ok().filter(|p| *p > 0),
-        _ => None,
-    }
-    .ok_or("Pangolin port must be a number between 1 and 65535")?;
-    let scheme = selected(base + SCHEME)?;
-    if !["http", "https"].contains(&scheme) {
-        return Err("Choose HTTP or HTTPS".to_owned());
-    }
-    let api = Api::open(pangolin, stop)?;
-    let current = api.catalog()?;
-    if !current.resources.contains(&resource) || !current.sites.contains(&site) {
-        return Err("Pangolin resources or Sites changed; press F5 and select again".to_owned());
-    }
-    api.validate(&resource, &site)?;
-    let previous = api.target(resource.id)?;
+        .first()
+        .cloned()
+        .ok_or("Pangolin has no online Sites; start a Site connector first")?;
+    api.validate(resource.as_ref(), &site)?;
+    let previous = match &resource {
+        Some(resource) => api.target(resource.id)?,
+        None => None,
+    };
+    let create = resource.is_none().then(|| {
+        json!({
+            "name": exposure.name,
+            "subdomain": exposure.subdomain,
+            "domainId": domain_id,
+            "mode": "http",
+        })
+    });
     let mut body = previous
         .as_ref()
         .map(|t| t.body.clone())
@@ -410,7 +412,7 @@ pub(super) fn review(
     body["siteId"] = json!(site.id);
     body["ip"] = json!(address);
     body["mode"] = json!("http");
-    body["method"] = json!(scheme);
+    body["method"] = json!("http");
     body["port"] = json!(port);
     let Some(Healthcheck::Http {
         port: health_port,
@@ -432,7 +434,7 @@ pub(super) fn review(
     body["hcMode"] = json!("http");
     body["hcHostname"] = json!(address);
     body["hcPort"] = json!(health_port);
-    body["hcScheme"] = json!(if health_port == port { scheme } else { "http" });
+    body["hcScheme"] = json!("http");
     body["hcPath"] = json!(path);
     body["hcMethod"] = json!("GET");
     body["hcStatus"] = json!(expected_status);
@@ -449,7 +451,9 @@ pub(super) fn review(
         repository: source.repository.clone(),
         service: source.manifest.id.clone(),
         existing,
+        domain,
         resource,
+        create,
         site,
         previous,
         body,
@@ -460,30 +464,23 @@ impl Plan {
     pub(super) fn lines(&self) -> Vec<String> {
         vec![
             format!(
-                "{} → Site {} (ID {}) → {}://{}:{} · CT {} on {}",
-                self.resource.domain,
-                self.site.name,
-                self.site.id,
-                self.body["method"].as_str().unwrap_or_default(),
-                self.address,
-                self.body["port"],
-                self.ctid,
-                self.node
+                "https://{} → Site {} (ID {}) → http://{}:{} · CT {} on {}",
+                self.domain, self.site.name, self.site.id, self.address, self.body["port"], self.ctid, self.node
             ),
-            if let Some(target) = &self.previous {
-                format!("Update existing backend target {}", target.id)
-            } else {
-                "Create the missing backend target".to_owned()
+            match (&self.resource, &self.previous) {
+                (None, _) => "Create the resource with Pangolin's default access policy (Pangolin login)".to_owned(),
+                (Some(_), Some(target)) => format!("Update existing backend target {}", target.id),
+                (Some(_), None) => "Create the missing backend target".to_owned(),
             },
             format!(
-                "Monitoring enabled: GET {}://{}:{}{} expects HTTP {}",
-                self.body["hcScheme"].as_str().unwrap_or_default(),
+                "Monitoring enabled: GET http://{}:{}{} expects HTTP {}",
                 self.address,
                 self.body["hcPort"],
                 self.body["hcPath"].as_str().unwrap_or_default(),
                 self.body["hcStatus"]
             ),
-            "Only Pangolin routing changes. Resource access policies, container, disks and /home/app are preserved."
+            "Only Pangolin routing changes. Access policies of an existing resource, the container, disks and \
+             /home/app are preserved."
                 .to_owned(),
         ]
     }
@@ -511,19 +508,47 @@ pub(super) async fn apply(
     tokio::task::block_in_place(|| {
         let api = Api::open(pangolin, stop)?;
         let catalog = api.catalog()?;
-        if !catalog.resources.contains(&plan.resource)
+        let listed = catalog.resources.iter().find(|r| r.domain == plan.domain);
+        if listed != plan.resource.as_ref()
             || !catalog.sites.contains(&plan.site)
-            || api.target(plan.resource.id)? != plan.previous
+            || plan.resource.as_ref().map(|r| api.target(r.id)).transpose()?.flatten() != plan.previous
         {
-            return Err("Pangolin routing changed since review; refresh and review again".to_owned());
+            return Err("Pangolin routing changed since review; review again".to_owned());
         }
-        api.validate(&plan.resource, &plan.site)?;
+        api.validate(plan.resource.as_ref(), &plan.site)?;
+        let mut lines = Vec::new();
+        let resource = match (&plan.resource, &plan.create) {
+            (Some(resource), _) => resource.id,
+            (None, Some(create)) => {
+                let path = format!("/v1/org/{}/resource", api.ctx.organization);
+                // Never retry a mutation: a lost response may still mean it was applied.
+                let (status, response) = api
+                    .client()
+                    .request("PUT", &path, Some(&create.to_string()), Probe::Organization)
+                    .map_err(|_| "Pangolin resource creation outcome is unknown; review again".to_owned())?;
+                let created = serde_json::from_slice::<Value>(&response).unwrap_or_default();
+                if ![200, 201].contains(&status)
+                    || created["success"] != true
+                    || created["data"]["fullDomain"] != plan.domain.as_str()
+                {
+                    return Err(match status {
+                        403 => "The HomeStack key may not create resources (createResource); refresh Step 7".to_owned(),
+                        _ => format!(
+                            "Pangolin did not create resource {} (HTTP {status}); review again",
+                            plan.domain
+                        ),
+                    });
+                }
+                lines.push(format!("Resource {} created", plan.domain));
+                id(&created["data"], "resourceId")?
+            }
+            (None, None) => return Err("The reviewed plan has no resource".to_owned()),
+        };
         let (method, path) = match &plan.previous {
             Some(target) => ("POST", format!("/v1/target/{}", target.id)),
-            None => ("PUT", format!("/v1/resource/{}/target", plan.resource.id)),
+            None => ("PUT", format!("/v1/resource/{resource}/target")),
         };
         let body = plan.body.to_string();
-        // Never retry a mutation: a lost response may still mean it was applied.
         let (status, response) = api
             .client()
             .request(method, &path, Some(&body), Probe::Organization)
@@ -540,7 +565,7 @@ pub(super) async fn apply(
             ));
         }
         let saved = api
-            .target(plan.resource.id)?
+            .target(resource)?
             .ok_or("Pangolin did not return the saved target; refresh before retrying")?;
         if plan.previous.as_ref().is_some_and(|old| old.id != saved.id)
             || plan
@@ -550,9 +575,10 @@ pub(super) async fn apply(
         {
             return Err("Saved Pangolin target does not match the review; inspect routing before retrying".to_owned());
         }
-        Ok(vec![format!(
-            "{} attached through {} to {}:{}; container and /home/app preserved",
-            plan.resource.domain, plan.site.name, plan.address, plan.body["port"]
-        )])
+        lines.push(format!(
+            "https://{} routed through {} to {}:{}; container and /home/app preserved",
+            plan.domain, plan.site.name, plan.address, plan.body["port"]
+        ));
+        Ok(lines)
     })
 }

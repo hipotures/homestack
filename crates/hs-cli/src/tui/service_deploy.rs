@@ -59,7 +59,6 @@ struct Session {
     site: Option<Initializer>,
     /// Another service published through Pangolin: its verified context.
     pangolin: Option<Pangolin>,
-    catalog: Option<service_pangolin::Catalog>,
     /// The local DNS the instances' names go into, or why it is unusable.
     dns: Result<Option<Dns>, String>,
     /// The name, domain and DNS server the settings started from.
@@ -162,31 +161,6 @@ pub(super) fn work(setup: &Setup, commands: &Receiver<Command>, tell: &(dyn Fn(E
                         sections: Vec::new(),
                         problems: vec![error],
                     });
-                    continue;
-                }
-                if service_pangolin::requested(&s.settings, &answers) && s.catalog.is_none() {
-                    // The resources and Sites are read once attach is chosen.
-                    tell(Event::Busy("Loading Pangolin resources and Sites".to_owned()));
-                    let loaded = s
-                        .context()
-                        .ok_or_else(|| "The Pangolin context is unavailable".to_owned())
-                        .and_then(|p| service_pangolin::load(p, &setup.stop));
-                    match loaded {
-                        Ok(catalog) => {
-                            s.catalog = Some(catalog);
-                            let previous = s.settings.clone();
-                            let end = service_pangolin::start(&s.settings).unwrap_or(s.settings.len());
-                            s.settings.truncate(end);
-                            s.settings
-                                .extend(service_pangolin::settings(&source, s.catalog.as_ref()));
-                            restore(&mut s.settings, &previous, &answers);
-                            tell(Event::Connected(found(&s.config, &s.cluster, &s.settings)));
-                        }
-                        Err(error) => tell(Event::Reviewed {
-                            sections: Vec::new(),
-                            problems: vec![error],
-                        }),
-                    }
                     continue;
                 }
                 tell(Event::Busy("Checking the plan against the cluster".to_owned()));
@@ -395,13 +369,9 @@ fn connect(
     let instances = setup
         .handle
         .block_on(instance::of_service(&pve, &source.repository, &source.manifest.id))?;
-    let (site, pangolin, catalog) = match previous {
-        Some(p) => (
-            p.site.filter(Initializer::alive),
-            p.pangolin.filter(Pangolin::alive),
-            p.catalog,
-        ),
-        None => (None, None, None),
+    let (site, pangolin) = match previous {
+        Some(p) => (p.site.filter(Initializer::alive), p.pangolin.filter(Pangolin::alive)),
+        None => (None, None),
     };
     let shown = instances
         .first()
@@ -485,7 +455,7 @@ fn connect(
             settings.push(row);
         }
     }
-    settings.extend(service_pangolin::settings(source, catalog.as_ref()));
+    settings.extend(service_pangolin::settings(source));
     let original_settings = settings.clone();
     if let Some((previous, answers)) = kept {
         restore(&mut settings, &previous, &answers);
@@ -503,7 +473,6 @@ fn connect(
             reviewed: None,
             site,
             pangolin,
-            catalog,
             dns,
             naming,
         },
@@ -1257,9 +1226,6 @@ fn review(
                     source,
                     p,
                     &setup.stop,
-                    s.catalog.as_ref(),
-                    &s.settings,
-                    answers,
                     &targets,
                     create
                         .as_ref()
