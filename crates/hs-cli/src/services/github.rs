@@ -169,10 +169,61 @@ pub fn discover(system: &dyn System, repository: &str, branch: Option<&str>) -> 
             releases: None,
         });
     }
+    if let Some(services) = entries(&tree).into_iter().find(|entry| entry["path"] == "services") {
+        let groups = match read_tree(system, &base, &services, ".homestack/services") {
+            Ok(groups) => groups,
+            Err(error) => {
+                discovery.problem = Some(error);
+                Vec::new()
+            }
+        };
+        if discovery.files.len() + groups.len() > MAX_FILES {
+            return Err(format!("More than {MAX_FILES} service definitions"));
+        }
+        for group in groups {
+            let id = group["path"].as_str().unwrap_or_default();
+            let directory = format!(".homestack/services/{id}");
+            let manifest = (|| {
+                let members = read_tree(system, &base, &group, &directory)?;
+                if members.iter().filter_map(|m| m["path"].as_str()).any(|name| {
+                    name.ends_with(".yaml") && !["service.yaml", "defaults.yaml", "inputs.yaml"].contains(&name)
+                }) {
+                    return Err(format!("{directory}: unexpected YAML member"));
+                }
+                let mut texts = Vec::new();
+                for name in ["service.yaml", "defaults.yaml", "inputs.yaml"] {
+                    let member = members
+                        .iter()
+                        .find(|entry| entry["path"] == name)
+                        .ok_or_else(|| format!("{directory}/{name}: missing member"))?;
+                    texts.push(read_regular(system, &base, member).map_err(|e| format!("{directory}/{name}: {e}"))?);
+                }
+                super::schema3::parse(&texts[0], &texts[1], &texts[2], id)
+            })();
+            discovery.files.push(ManifestFile {
+                path: format!("{directory}/service.yaml"),
+                // The immutable directory tree binds all three component blobs.
+                blob: group["sha"].as_str().unwrap_or_default().to_owned(),
+                manifest,
+                releases: None,
+            });
+        }
+    }
     let ids: Vec<String> = discovery
         .files
         .iter()
-        .filter_map(|file| file.manifest.as_ref().ok().and_then(|checked| checked.id.clone()))
+        .filter_map(|file| {
+            file.manifest
+                .as_ref()
+                .ok()
+                .and_then(|checked| checked.id.clone())
+                .or_else(|| {
+                    file.path
+                        .strip_prefix(".homestack/services/")
+                        .and_then(|p| p.strip_suffix("/service.yaml"))
+                        .map(str::to_owned)
+                })
+        })
         .collect();
     for file in &mut discovery.files {
         if let Ok(checked) = &file.manifest
@@ -201,4 +252,29 @@ fn read_blob(system: &dyn System, base: &str, sha: &str) -> Result<String, Strin
         return Err(format!("larger than {MAX_BYTES} bytes"));
     }
     String::from_utf8(bytes).map_err(|_| "not UTF-8 text".to_owned())
+}
+
+fn read_tree(system: &dyn System, base: &str, entry: &Value, path: &str) -> Result<Vec<Value>, String> {
+    if entry["mode"] != "040000" || entry["type"] != "tree" {
+        return Err(format!("{path}: expected a real directory; symlinks are refused"));
+    }
+    let tree = get(system, &format!("{base}/git/trees/{}", text(entry, "/sha")?))?
+        .ok_or_else(|| format!("{path}: tree unavailable"))?;
+    if tree["truncated"] == true {
+        return Err(format!("{path}: truncated tree"));
+    }
+    tree["tree"]
+        .as_array()
+        .cloned()
+        .ok_or_else(|| format!("{path}: invalid tree"))
+}
+
+fn read_regular(system: &dyn System, base: &str, entry: &Value) -> Result<String, String> {
+    if !matches!(entry["mode"].as_str(), Some("100644" | "100755")) || entry["type"] != "blob" {
+        return Err("not a regular file; symlinks are refused".into());
+    }
+    if entry["size"].as_u64().is_none_or(|size| size > MAX_BYTES) {
+        return Err(format!("missing size or larger than {MAX_BYTES} bytes"));
+    }
+    read_blob(system, base, text(entry, "/sha")?)
 }

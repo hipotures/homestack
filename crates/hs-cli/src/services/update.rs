@@ -34,6 +34,7 @@ const KEEP: &[&str] = &[
 /// The reviewed update.
 #[derive(Debug, Clone)]
 pub struct Plan {
+    selection_root: std::path::PathBuf,
     pub image: String,
     pub digest: String,
     pub platform: String,
@@ -258,8 +259,10 @@ pub async fn plan(
     ctids: &[u32],
     version: &str,
     backup: &str,
+    selection_root: &std::path::Path,
 ) -> Plan {
     let mut plan = Plan {
+        selection_root: selection_root.to_owned(),
         image: source.image(version),
         digest: String::new(),
         platform: String::new(),
@@ -272,6 +275,14 @@ pub async fn plan(
     };
     if let Err(error) = review(pve, config, source, ctids, version, &mut plan).await {
         plan.problems.push(error);
+    }
+    if source.manifest.schema3.is_some() {
+        plan.lines.push("Image replacement discards all rootfs-local application data, including any unsent exporter queue. Ordinary CT restarts preserve it.".into());
+        for target in &plan.targets {
+            if let Err(error) = saved_environment(&plan.selection_root, source, target) {
+                plan.problems.push(error);
+            }
+        }
     }
     for target in &plan.targets {
         let (was_running, was_onboot) = match original_power(target) {
@@ -451,6 +462,11 @@ pub async fn apply(
     if !plan.problems.is_empty() {
         return Err("Resolve the review problems first".to_owned());
     }
+    if source.manifest.schema3.is_some() {
+        for target in &plan.targets {
+            saved_environment(&plan.selection_root, source, target)?;
+        }
+    }
     let mut lines = Vec::new();
     for target in &plan.targets {
         let bootstrap = if target.home_volume.is_empty() {
@@ -474,6 +490,31 @@ pub async fn apply(
         lines.extend(done);
     }
     Ok(lines)
+}
+
+fn saved_environment(root: &std::path::Path, source: &Source, target: &Instance) -> Result<(), String> {
+    let hostname = super::selections::base_name(&target.hostname);
+    let saved = super::selections::load(
+        root,
+        source,
+        hostname,
+        target.searchdomain.as_deref().unwrap_or_default(),
+        true,
+    )?
+    .ok_or("Private application selections are unavailable")?;
+    let expected = source
+        .manifest
+        .schema3
+        .as_ref()
+        .ok_or("Expected schema 3")?
+        .resolve(&saved.values)?;
+    if expected.iter().any(|entry| !target.environment.contains(entry)) {
+        return Err(format!(
+            "CT {}: reconcile Application configuration before replacing its image",
+            target.ctid
+        ));
+    }
+    Ok(())
 }
 
 /// Distinguish a reviewed reinstall from a root already made by that operation.
@@ -590,6 +631,9 @@ async fn one(
         return Err(format!(
             "CT {ctid}: initialization is unfinished; image replacement is refused"
         ));
+    }
+    if source.manifest.schema3.is_some() {
+        saved_environment(&plan.selection_root, source, &now)?;
     }
     if now.mac != target.mac || !node::same_net(&now.network, &target.network) {
         return Err(format!("CT {ctid} changed since review; review again"));

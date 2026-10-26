@@ -1,0 +1,25 @@
+schema: 3
+id: otel
+name: OpenTelemetry Collector
+image:
+  repository: ghcr.io/hipotures/homestack-otel
+runtime:
+  ports:
+    - name: otlp-grpc
+      port: 4317
+      protocol: tcp
+    - name: otlp-http
+      port: 4318
+      protocol: tcp
+    - name: health
+      port: 13133
+      protocol: tcp
+  healthcheck:
+    type: http
+    port: health
+    path: /health/live
+    expected_status: 200
+# The image owns its rootfs-local queue. It survives CT restarts but is
+# discarded by image replacement; there is no persistent home volume.
+persistence: {}
+exposure: {}

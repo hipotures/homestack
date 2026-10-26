@@ -1,0 +1,40 @@
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch:
+    timeout: 5s
+
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+    path: /health/live
+  file_storage:
+    directory: /var/lib/otelcol/queue
+    create_directory: false
+
+exporters:
+  otlp_http:
+    metrics_endpoint: ${env:HOMESTACK_PROMETHEUS_METRICS_ENDPOINT}
+    sending_queue:
+      enabled: true
+      queue_size: ${env:HOMESTACK_SENDING_QUEUE_SIZE:-1000}
+      storage: file_storage
+    retry_on_failure:
+      enabled: true
+      initial_interval: 5s
+      max_interval: 30s
+      max_elapsed_time: 0s
+
+service:
+  extensions: [health_check, file_storage]
+  pipelines:
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlp_http]

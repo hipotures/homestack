@@ -26,6 +26,7 @@ pub const SECTIONS: [&str; 8] = [
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Manifest {
+    pub schema3: Option<super::schema3::Contract>,
     pub id: String,
     pub name: String,
     pub image_repository: String,
@@ -418,6 +419,7 @@ pub fn parse(text: &str) -> Result<Checked, String> {
             Some(deployment),
             Some(pangolin),
         ) if check.issues.is_empty() => Some(Manifest {
+            schema3: None,
             id,
             name,
             image_repository,

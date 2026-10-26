@@ -26,6 +26,13 @@ pub fn shown_environment(source: &Source, instance: &Instance) -> String {
     instance
         .environment
         .iter()
+        .filter(|(key, _)| {
+            !source
+                .manifest
+                .schema3
+                .as_ref()
+                .is_some_and(|c| c.owns_environment(key))
+        })
         .filter(|(key, _)| key != "PATH" && key != MANAGED && !deploy::secret_name(key))
         .filter(|(key, _)| {
             !source.is_api()
@@ -295,6 +302,9 @@ pub async fn apply(
     if !plan.problems.is_empty() {
         return Err("Resolve the review problems first".to_owned());
     }
+    if source.manifest.schema3.is_some() {
+        super::schema3::validate_environment(&plan.set)?;
+    }
     if source.is_site() && restarts(plan) {
         let site = site.ok_or("Restarting a Site requires the verified Pangolin context")?;
         for target in plan.targets.iter().filter(|target| target.running) {
@@ -411,7 +421,12 @@ pub async fn apply(
         if !plan.set.is_empty() || !plan.unset.is_empty() {
             let unset: Vec<&str> = plan.unset.iter().map(String::as_str).collect();
             say(&format!("CT {ctid} · environment"));
-            node::set_env(pve, node, ctid, &plan.set, &unset).await?;
+            if source.manifest.schema3.is_some() {
+                super::schema3::validate_environment(&plan.set)?;
+                deploy::set_application_environment(pve, node, ctid, &plan.set, &unset).await?;
+            } else {
+                node::set_env(pve, node, ctid, &plan.set, &unset).await?;
+            }
         }
         let after = instance::read_on(pve, node, ctid).await?;
         let restarted = after.environment != now.environment && now.running;

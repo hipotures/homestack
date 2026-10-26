@@ -270,6 +270,11 @@ fn registry() -> Vec<Scenario> {
     );
     for (id, reason, nodes) in [
         (
+            "service.schema3",
+            "Schema-3 service deployment/reconciliation and image replacement require the TUI service driver; follow docs/e2e-schema3.md in an isolated lab",
+            0,
+        ),
+        (
             "service.manifest",
             "Manifest deployment/reconciliation is currently TUI-only; automated TUI driver is not implemented",
             0,

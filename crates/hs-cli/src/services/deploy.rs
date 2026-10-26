@@ -186,6 +186,9 @@ pub struct Cluster {
 /// What the operator chose; numbers as typed.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Choice {
+    pub application: std::collections::BTreeMap<String, String>,
+    pub instance_count: String,
+    pub swap_mib: String,
     pub version: String,
     /// `NODE:STORAGE` entries; each node gets one instance.
     pub placements: Vec<String>,
@@ -249,6 +252,7 @@ impl NewInstance {
 /// What applying would do; nothing is changed by making it.
 #[derive(Debug, Clone, Default)]
 pub struct Plan {
+    pub application: std::collections::BTreeMap<String, Value>,
     pub image: String,
     pub resolved: Option<Resolved>,
     pub instances: Vec<NewInstance>,
@@ -294,6 +298,86 @@ fn hostname(name: &str, taken: &BTreeSet<String>, total: usize) -> String {
         .unwrap_or_default()
 }
 
+/// Validate the final merged PVE value, keeping the image's PATH and defaults.
+/// Error messages deliberately exclude runtime values and API response bodies.
+pub(super) async fn set_application_environment(
+    pve: &impl Pve,
+    node: &str,
+    ctid: u32,
+    set: &[(String, String)],
+    remove: &[&str],
+) -> Result<(), String> {
+    let path = format!("/nodes/{node}/lxc/{ctid}/config");
+    let config = pve
+        .get(&path, &[])
+        .await
+        .map_err(|_| "Cannot read runtime environment")?;
+    let merged = node::merge_env(
+        &node::parse_env(config["env"].as_str().unwrap_or_default()),
+        set,
+        remove,
+    );
+    super::schema3::validate_environment(&node::parse_env(&merged))?;
+    let digest = config["digest"]
+        .as_str()
+        .ok_or("PVE configuration revision is missing")?;
+    pve.put(&path, &[("env", merged.as_str()), ("digest", digest)])
+        .await
+        .map_err(|_| "Cannot apply runtime environment; review the container configuration")?;
+    Ok(())
+}
+
+/// Schema 3 does not reuse tag-named template caches across release digests.
+async fn schema3_image(pve: &impl Pve, node: &str, plan: &Plan) -> Result<String, String> {
+    let reviewed = plan.resolved.as_ref().ok_or("Image digest was not reviewed")?;
+    let file = format!("hs-{}.tar", reviewed.platform.replace(':', "-"));
+    let volid = format!("{}:vztmpl/{file}", plan.template_storage);
+    let path = format!("/nodes/{node}/storage/{}", plan.template_storage);
+    let content = pve
+        .get(&format!("{path}/content"), &[("content", "vztmpl")])
+        .await
+        .map_err(|e| e.to_string())?;
+    let present = content
+        .as_array()
+        .is_some_and(|a| a.iter().any(|v| v["volid"] == volid));
+    if !present {
+        if hs_core::registry::resolve(&plan.image).await? != *reviewed {
+            return Err("Image changed before pull".into());
+        }
+        let filename = file.trim_end_matches(".tar");
+        let task = pve
+            .post(
+                &format!("{path}/oci-registry-pull"),
+                &[("reference", plan.image.as_str()), ("filename", filename)],
+            )
+            .await
+            .map_err(|e| e.to_string())?;
+        hs_core::tasks::wait_task(
+            pve,
+            task.as_str().ok_or("Missing OCI pull task")?,
+            &hs_core::tasks::TaskWait::up_to(std::time::Duration::from_secs(900)),
+            &hs_core::tasks::NoObserver,
+        )
+        .await
+        .map_err(|e| e.to_string())
+        .and_then(|r| {
+            if r.ok() {
+                Ok(())
+            } else {
+                Err("OCI image pull failed".into())
+            }
+        })?;
+        if hs_core::registry::resolve(&plan.image).await? != *reviewed {
+            // A failed check must not leave an unverified cache under this digest.
+            pve.delete(&format!("{path}/content/{}", volid.replace('/', "%2F")), &[])
+                .await
+                .map_err(|_| "Image changed; cannot remove unverified template")?;
+            return Err("Image changed during pull; unverified template removed".into());
+        }
+    }
+    Ok(volid)
+}
+
 /// A DNS label: a-z, 0-9 and inner `-`, 1–63 characters.
 fn valid_label(text: &str) -> bool {
     (1..=63).contains(&text.len())
@@ -310,11 +394,15 @@ fn valid_domain(text: &str) -> bool {
 }
 
 pub(super) fn description(source: &Source, image: &str, digest: &str) -> String {
-    let telemetry = match &source.manifest.healthcheck {
-        Some(Healthcheck::Http { port: name, .. }) => port(&source.manifest, name)
-            .map(|port| format!("\nstatus-port {port}"))
-            .unwrap_or_default(),
-        _ => String::new(),
+    let telemetry = if source.manifest.schema3.is_some() {
+        String::new()
+    } else {
+        match &source.manifest.healthcheck {
+            Some(Healthcheck::Http { port: name, .. }) => port(&source.manifest, name)
+                .map(|port| format!("\nstatus-port {port}"))
+                .unwrap_or_default(),
+            _ => String::new(),
+        }
     };
     format!(
         "HomeStack service {}\nrepository {}\nmanifest {} {}\ncommit {}\nimage {image}\ndigest {digest}\nmade by homestack{telemetry}",
@@ -620,6 +708,24 @@ pub async fn plan(
         }
         Err(error) => plan.problems.push(error),
     }
+    if let Some(contract) = &manifest.schema3 {
+        match contract.values(&choice.application).and_then(|values| {
+            let environment = contract.resolve(&values)?;
+            if plan.environment.iter().any(|(key, _)| contract.owns_environment(key)) {
+                return Err("Application variables must be edited in Application configuration".into());
+            }
+            plan.environment.extend(environment);
+            plan.application = values;
+            super::schema3::validate_environment(&plan.environment)
+        }) {
+            Ok(()) => {}
+            Err(error) => plan.problems.push(error),
+        }
+        match number(&choice.swap_mib, "Swap (MiB)", 0..=1_048_576) {
+            Ok(swap) => plan.swap_mib = swap,
+            Err(error) => plan.problems.push(error),
+        }
+    }
     if source.is_api() {
         plan.api_config = Some(config.clone());
     }
@@ -707,7 +813,7 @@ pub async fn plan(
             return plan;
         }
     };
-    let placements: Vec<(String, String)> = choice
+    let mut placements: Vec<(String, String)> = choice
         .placements
         .iter()
         .filter_map(|p| p.split_once(':'))
@@ -716,6 +822,18 @@ pub async fn plan(
     let nodes: BTreeSet<&String> = placements.iter().map(|(node, _)| node).collect();
     if nodes.len() != placements.len() {
         problems.push("Tick one storage on each node; a node gets one instance".to_owned());
+    }
+    if manifest.schema3.is_some() {
+        match number(&choice.instance_count, "New instance count", 1..=64) {
+            Ok(count) if !placements.is_empty() => {
+                let selected = placements.clone();
+                placements = (0..count as usize)
+                    .map(|i| selected[i % selected.len()].clone())
+                    .collect();
+            }
+            Ok(_) => {}
+            Err(error) => problems.push(error),
+        }
     }
     let mut ctids: Vec<String> = choice
         .ctids
@@ -812,7 +930,15 @@ pub async fn plan(
         let mut instance = NewInstance {
             node: node.clone(),
             ctid,
-            hostname: hostname(choice.hostname.trim(), &taken, choice.existing + placements.len()),
+            hostname: hostname(
+                choice.hostname.trim(),
+                &taken,
+                if manifest.schema3.as_ref().is_some_and(|c| c.always_numbered) {
+                    2
+                } else {
+                    choice.existing + placements.len()
+                },
+            ),
             fqdn: String::new(),
             address: ip.to_string(),
             cores,
@@ -866,6 +992,9 @@ pub async fn plan(
                 Err(error) => problems.push(error),
             }
         }
+        if manifest.schema3.is_some() && !valid_label(&instance.hostname) {
+            problems.push("Numbered instance hostname exceeds DNS label limits; choose a shorter hostname".into());
+        }
         instance.fqdn = format!("{}.{}", instance.hostname, plan.domain);
         taken.insert(instance.hostname.clone());
         plan.instances.push(instance);
@@ -896,7 +1025,14 @@ pub async fn plan(
             .push("Clients reach the API by name: set up Local DNS (TSIG) under Integrations".to_owned()),
         None => {}
     }
-    let file = node::image_file(&plan.image).unwrap_or_default();
+    let file = if manifest.schema3.is_some() {
+        plan.resolved
+            .as_ref()
+            .map(|r| format!("hs-{}.tar", r.platform.replace(':', "-")))
+            .unwrap_or_default()
+    } else {
+        node::image_file(&plan.image).unwrap_or_default()
+    };
     let volid = format!("{}:vztmpl/{file}", config.template_storage);
     for instance in &plan.instances {
         if plan.pulls.contains(&instance.node) {
@@ -929,6 +1065,9 @@ fn port(manifest: &Manifest, name: &str) -> Option<u16> {
 
 /// Pass the manifest's heartbeat interval to the HTTP service before starting it.
 pub(super) async fn set_heartbeat(pve: &impl Pve, node: &str, ctid: u32, manifest: &Manifest) -> Result<(), String> {
+    if manifest.schema3.is_some() {
+        return Ok(());
+    }
     if let Some(Healthcheck::Http { heartbeat_seconds, .. }) = &manifest.healthcheck {
         node::set_env(
             pve,
@@ -1296,6 +1435,18 @@ async fn run(
     if !plan.problems.is_empty() || plan.instances.is_empty() {
         return Err("The plan has problems; review it again".to_owned());
     }
+    if let Some(contract) = &source.manifest.schema3 {
+        let expected = contract.resolve(&plan.application)?;
+        if expected.iter().any(|entry| !plan.environment.contains(entry)) {
+            return Err("Application configuration changed since Review".into());
+        }
+        super::schema3::validate_environment(&plan.environment)?;
+        let resolved = plan.resolved.as_ref().ok_or("Image digest was not reviewed")?;
+        let current = hs_core::registry::resolve(&plan.image).await?;
+        if current != *resolved {
+            return Err("Image changed since Review".into());
+        }
+    }
     let allocated = addresses(pve).await?;
     for instance in &plan.instances {
         check_address(
@@ -1393,6 +1544,8 @@ async fn run(
         }
         let ostemplate = if existing {
             String::new()
+        } else if source.manifest.schema3.is_some() {
+            schema3_image(pve, &node, plan).await?
         } else {
             node::ensure_image(pve, &node, &plan.template_storage, &plan.image, &|line| say(line)).await?
         };
@@ -1408,7 +1561,7 @@ async fn run(
             cores: instance.cores,
             net0: Some(net0(&instance.address)),
             // A host reboot must not start an API or Site before its initialization completes.
-            onboot: source.marker().is_none() && !source.is_api(),
+            onboot: source.marker().is_none() && !source.is_api() && source.manifest.schema3.is_none(),
             nameserver: plan.nameserver.clone(),
             searchdomain: Some(plan.domain.clone()),
             swap_mib: plan.swap_mib,
@@ -1522,7 +1675,7 @@ async fn run(
             continue;
         }
         // The console opens a root shell; an image has no getty to log in.
-        if current["cmode"].as_str() != Some("shell") {
+        if manifest.schema3.is_none() && current["cmode"].as_str() != Some("shell") {
             let digest = current["digest"].as_str().unwrap_or_default();
             pve.put(
                 &format!("/nodes/{node}/lxc/{ctid}/config"),
@@ -1558,10 +1711,32 @@ async fn run(
             continue;
         }
         if !plan.environment.is_empty() {
-            node::set_env(pve, &node, ctid, &plan.environment, &[]).await?;
+            if manifest.schema3.is_some() {
+                set_application_environment(pve, &node, ctid, &plan.environment, &[]).await?;
+            } else {
+                node::set_env(pve, &node, ctid, &plan.environment, &[]).await?;
+            }
             say(&format!("  environment: {}", keys.join(", ")));
         }
         set_heartbeat(pve, &node, ctid, manifest).await?;
+        if manifest.schema3.is_some() {
+            let cfg = pve
+                .get(&format!("/nodes/{node}/lxc/{ctid}/config"), &[])
+                .await
+                .map_err(|_| "Cannot read container startup settings")?;
+            pve.put(
+                &format!("/nodes/{node}/lxc/{ctid}/config"),
+                &[
+                    ("onboot", "1"),
+                    (
+                        "digest",
+                        cfg["digest"].as_str().ok_or("PVE configuration revision missing")?,
+                    ),
+                ],
+            )
+            .await
+            .map_err(|_| "Cannot enable container autostart")?;
+        }
         say(&format!("  starting CT {ctid}"));
         node::power(pve, &node, ctid, "start").await?;
         let first = healthy(manifest, &instance.address).await?;

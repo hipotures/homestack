@@ -11,3 +11,6 @@ pub mod manifest;
 pub mod migrate;
 mod removal;
 pub mod update;
+
+pub mod schema3;
+pub mod selections;

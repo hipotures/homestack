@@ -89,11 +89,20 @@ pub struct Setting {
     /// Checks a typed value (or a list's new entry) when Enter keeps it:
     /// an error keeps the box open and is shown in it.
     pub check: Option<Check>,
+    pub application_input: Option<Box<crate::services::schema3::Input>>,
     /// Shown for an empty text value: what an empty one means.
     pub hint: Option<String>,
 }
 
 impl Setting {
+    pub fn validate_text(&self, text: &str) -> Option<String> {
+        self.check.and_then(|check| check(text).err()).or_else(|| {
+            self.application_input
+                .as_ref()
+                .and_then(|input| input.value(text).err())
+        })
+    }
+
     /// The value in the list: what is chosen, a VMID with its name.
     #[must_use]
     pub fn value(&self) -> String {
@@ -784,7 +793,7 @@ impl Install {
     fn value_error(&self) -> Option<String> {
         let setting = self.settings.get(self.row).filter(|_| !self.on_domain())?;
         let text = setting.text.as_ref()?;
-        setting.check.and_then(|check| check(text).err())
+        setting.validate_text(text)
     }
 
     /// Plan the answers: the review.
@@ -792,10 +801,7 @@ impl Install {
         // A missing or wrong value is fixed in its box first.
         let wrong = self.settings.iter().enumerate().find_map(|(row, setting)| {
             let text = setting.text.as_ref()?;
-            setting
-                .check
-                .and_then(|check| check(text).err())
-                .map(|error| (row, error))
+            setting.validate_text(text).map(|error| (row, error))
         });
         if let Some((row, error)) = wrong {
             self.row = row;
@@ -924,7 +930,7 @@ impl Install {
                 }
                 KeyCode::Enter => {
                     let entry = typed.trim().to_owned();
-                    if let Some(error) = setting.check.and_then(|check| check(&entry).err()) {
+                    if let Some(error) = setting.validate_text(&entry) {
                         self.invalid = Some(error);
                         return (false, None);
                     }
@@ -939,6 +945,7 @@ impl Install {
             }
             return (false, None);
         }
+        let text_error = setting.text.as_deref().and_then(|text| setting.validate_text(text));
         if let Some(text) = setting.text.as_mut() {
             match code {
                 KeyCode::Char(c) => {
@@ -949,7 +956,7 @@ impl Install {
                     text.pop();
                     self.invalid = None;
                 }
-                KeyCode::Enter => match setting.check.and_then(|check| check(text).err()) {
+                KeyCode::Enter => match text_error {
                     Some(error) => self.invalid = Some(error),
                     None => self.end_edit(true),
                 },

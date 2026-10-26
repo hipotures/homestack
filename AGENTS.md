@@ -90,3 +90,9 @@ This future system is not yet specified. Do not build it, redesign E2E, create p
 - The Pangolin Site image has an independent SemVer line: annotated Git tag `pangolin-X.Y.Z` publishes `ghcr.io/hipotures/homestack-pangolin-site:X.Y.Z` as a single `linux/amd64` image. The pinned upstream CLI version is a build input, not the image version.
 - After building, verifying, committing and pushing an image-affecting change, run `python3 scripts/tag-image.py` to automatically publish its next patch release. The script requires a clean, already pushed HEAD and refuses a HEAD already released. Never choose version numbers manually or replace an existing release.
 - Changes confined to manifests, documentation, tests, CI or development tooling need no image release. Ordinary pushes run checks only; a manual workflow run publishes a `dev-<commit>` image.
+
+# Collector image releases
+
+- The derived OpenTelemetry Collector image has an independent release line: annotated Git tag `otel-X.Y.Z` publishes `ghcr.io/hipotures/homestack-otel:X.Y.Z` as a single `linux/amd64` image. The pinned upstream distribution version and digest are build inputs, not the image version.
+- After building, verifying, committing and pushing an image-affecting change under `deploy/otel/`, run `python3 scripts/tag-image.py --service otel`. It automatically selects the next patch release, starting at `0.1.0`, and requires clean, already pushed HEAD. Never manually choose, move or overwrite release tags or published image tags.
+- GitHub Actions validates the built image, nonroot queue ownership/mode, configuration, health and ordinary restart before publication. Ordinary pushes run checks only; explicit manual runs publish `dev-<commit>` images. Manifest-only, CLI/TUI, documentation, E2E and tooling changes do not require a new Collector image.

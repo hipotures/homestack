@@ -129,6 +129,7 @@ this implementation. Their registry entries are `BLOCKED` with category
 
 | Scenario | Missing functional coverage |
 |---|---|
+| `service.schema3` | Three-file manifests, typed inputs, private configuration, queue/restart and image replacement; detailed owner-run procedure in [e2e-schema3.md](e2e-schema3.md) |
 | `service.manifest` | Actual TUI manifest deployment/reconciliation, multiple manifest instances, health/telemetry and removal |
 | `service.resources` | TUI CPU, memory, root and persistent disk resource reconciliation |
 | `service.image-persistence` | TUI image replacement with actual CT identity and `/home/app` persistence checks; purpose-built versioned service image fixture |

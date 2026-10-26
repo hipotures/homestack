@@ -462,7 +462,16 @@ async fn common_work(
         }
         let config = DeployConfig::load(path)?;
         let pve = hs_deploy::deploy::deploy_client(&config)?;
-        let plan = update::plan(&pve, &config, &source, &ids, version, "").await;
+        let plan = update::plan(
+            &pve,
+            &config,
+            &source,
+            &ids,
+            version,
+            "",
+            path.parent().ok_or("Deployment profile directory is missing")?,
+        )
+        .await;
         progress(Progress::Plan {
             lines: plan.lines.clone(),
             question: "Apply this service image update?".to_owned(),

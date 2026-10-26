@@ -1,0 +1,23 @@
+schema: 3
+service: otel
+inputs:
+  - id: prometheus_metrics_endpoint
+    label: Prometheus OTLP/HTTP metrics endpoint
+    description: Full URL of the Prometheus OTLP metrics receiver, including its metrics path.
+    type: url
+    required: true
+    allowed_schemes: [http, https]
+    target:
+      type: environment
+      variable: HOMESTACK_PROMETHEUS_METRICS_ENDPOINT
+  - id: sending_queue_size
+    label: Persistent export queue size
+    description: Maximum export requests queued on the disposable root filesystem.
+    type: integer
+    required: true
+    default: 1000
+    min: 100
+    max: 10000
+    target:
+      type: environment
+      variable: HOMESTACK_SENDING_QUEUE_SIZE

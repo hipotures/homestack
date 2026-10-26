@@ -12,6 +12,13 @@ telemetry endpoints and a portable manifest that tells HomeStack how to
 deploy it. The exact manifest contract is in
 [manifest-schema.md](manifest-schema.md); follow it literally.
 
+Manifest schema 1 remains supported without migration. Schema 3 opts into
+three files at `.homestack/services/<id>/{service,defaults,inputs}.yaml`:
+invariant service requirements, operator-overridable deployment defaults,
+and typed application inputs. Read the schema-3 section of the contract
+before authoring these files. Manifest schema 3 and HTTP service-status
+telemetry schema 2 are independent contracts.
+
 This contract does not depend on the application's language or framework.
 It describes how the application behaves when HomeStack deploys it; it does
 not change what the application does.
@@ -61,6 +68,13 @@ not change what the application does.
     settings HomeStack must provide at deployment time (never their values).
 
 ## Persistence
+
+Prepare fixed nonroot writable directories in the OCI image with their
+actual runtime UID/GID and restricted modes. HomeStack does not create or
+chown arbitrary paths on Proxmox root filesystems. For a scratch runtime,
+use a build stage and `COPY --chown`. Rootfs-local queues survive an ordinary
+CT restart and are lost on image replacement; disclose this in the image's
+runtime documentation and Review. They do not imply a persistent home.
 
 The root filesystem is disposable: HomeStack recreates it from the image on
 every update. Durable data lives only on the optional home volume mounted at
@@ -196,6 +210,13 @@ services that are only used inside the LAN or have no inbound port.
 
 ## Service telemetry
 
+For schema-3 third-party images, keep the application's actual declared
+health endpoint. HomeStack does not infer a status telemetry endpoint or
+inject a HomeStack heartbeat. Do not require an upstream application to
+implement HomeStack telemetry schema 2. Proxmox resource metrics remain
+available independently. The following native telemetry requirements apply
+to HomeStack-integrated applications, including existing schema-1 services.
+
 HTTP services implement `GET /.well-known/homestack/status`, returning
 `application/json` according to [service-status.md](service-status.md). Read
 that contract when implementing or reviewing the endpoint. The path is fixed
@@ -226,6 +247,15 @@ path (blocked dependency or paused worker) turns both health endpoints into
 `503` within three heartbeat intervals.
 
 ## Release standard
+
+In this repository, the derived Collector image is built from
+`deploy/otel/Containerfile`, pins the official distribution by version and
+digest, and uses independent `otel-X.Y.Z` Git tags to publish
+`ghcr.io/hipotures/homestack-otel:X.Y.Z`. Run
+`python3 scripts/tag-image.py --service otel` on clean, pushed HEAD for its
+next release. Image validation runs before publication. Ordinary branch
+pushes do not publish it. Use the image's baked configuration and OCI
+startup command; supply only declared application environment values.
 
 Every service has its own independent SemVer version line:
 

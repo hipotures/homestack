@@ -41,6 +41,8 @@ const ENVIRONMENT: &str = "Environment";
 const HOSTNAME: &str = "Hostname";
 const DOMAIN: &str = "Domain";
 const DNS_SERVER: &str = "DNS server";
+const COUNT: &str = "New instance count";
+const SWAP: &str = "Swap (MiB)";
 
 struct Session {
     config: DeployConfig,
@@ -95,6 +97,8 @@ enum Reviewed {
 
 /// The reviewed parts of a deployment, applied in this order.
 struct Changes {
+    problems: Vec<String>,
+    application: Option<(String, String, std::collections::BTreeMap<String, serde_json::Value>)>,
     update: Option<update::Plan>,
     change: Option<lifecycle::Plan>,
     create: Option<deploy::Plan>,
@@ -137,6 +141,20 @@ pub(super) fn work(setup: &Setup, commands: &Receiver<Command>, tell: &(dyn Fn(E
                 let Some(s) = session.as_mut() else { continue };
                 s.reviewed = None;
                 let chosen = chosen(&s.settings, &answers, s.instances.len());
+                match switch_deployment(setup, &source, s, &chosen.selected, &answers) {
+                    Ok(true) => {
+                        tell(Event::Connected(found(&s.config, &s.cluster, &s.settings)));
+                        continue;
+                    }
+                    Ok(false) => {}
+                    Err(error) => {
+                        tell(Event::Reviewed {
+                            sections: Vec::new(),
+                            problems: vec![error],
+                        });
+                        continue;
+                    }
+                }
                 let needs_pangolin = (source.is_site() && !chosen.deploy.placements.is_empty())
                     || service_pangolin::requested(&s.settings, &answers);
                 if needs_pangolin && let Err(error) = ensure_pangolin(setup, &source, s, tell) {
@@ -259,6 +277,100 @@ pub(super) fn work(setup: &Setup, commands: &Receiver<Command>, tell: &(dyn Fn(E
     }
 }
 
+/// Selecting another named deployment reloads that deployment's private
+/// values before Review. Values are never inferred from another instance.
+fn switch_deployment(
+    setup: &Setup,
+    source: &Source,
+    session: &mut Session,
+    selected: &[u32],
+    answers: &[Answer],
+) -> Result<bool, String> {
+    if source.manifest.schema3.is_none() {
+        return Ok(false);
+    }
+    let Some(target) = session.instances.iter().find(|i| selected.contains(&i.ctid)) else {
+        return Ok(false);
+    };
+    let hostname = base_name(&target.hostname);
+    let domain = target
+        .searchdomain
+        .as_deref()
+        .ok_or("Selected deployment has no domain")?
+        .to_owned();
+    if session
+        .instances
+        .iter()
+        .filter(|i| selected.contains(&i.ctid))
+        .any(|i| base_name(&i.hostname) != hostname || i.searchdomain.as_deref() != Some(&domain))
+    {
+        return Err("Select instances from one named deployment at a time".into());
+    }
+    if session.naming.hostname == hostname && session.naming.domain == domain {
+        return Ok(false);
+    }
+    let saved = crate::services::selections::load(&setup.token_dir, source, &hostname, &domain, true)?
+        .ok_or("Private application selections are unavailable")?;
+    let previous = session.settings.clone();
+    restore(&mut session.settings, &previous, answers);
+    session.shown = lifecycle::shown_environment(source, target);
+    session.naming = Naming {
+        hostname,
+        domain,
+        nameserver: target.nameserver.clone().unwrap_or_default(),
+    };
+    for setting in &mut session.settings {
+        let value = match setting.title.as_str() {
+            HOSTNAME => Some(session.naming.hostname.clone()),
+            DOMAIN => Some(session.naming.domain.clone()),
+            DNS_SERVER => Some(session.naming.nameserver.clone()),
+            CORES => Some(target.cores.to_string()),
+            MEMORY => Some(target.memory_mib.to_string()),
+            ROOT => Some(show_size(target.root_mib)),
+            HOME => Some(show_size(target.home_mib)),
+            _ => None,
+        };
+        if let Some(value) = value {
+            setting.text = Some(value);
+        }
+        if setting.title == VERSION {
+            setting.picked = setting
+                .choices
+                .iter()
+                .position(|(v, _)| v == tag(&target.image))
+                .into_iter()
+                .collect();
+        }
+        if setting.title == ENVIRONMENT {
+            setting.choices = session
+                .shown
+                .split_whitespace()
+                .map(|v| (v.into(), String::new()))
+                .collect();
+        }
+        if let Some(input) = &setting.application_input {
+            let value = saved
+                .values
+                .get(&input.id)
+                .or(input.default.as_ref())
+                .map(crate::services::schema3::display)
+                .unwrap_or_default();
+            if setting.text.is_some() {
+                setting.text = Some(value);
+            } else {
+                setting.picked = setting
+                    .choices
+                    .iter()
+                    .position(|(v, _)| v == &value)
+                    .into_iter()
+                    .collect();
+            }
+        }
+    }
+    session.original_settings = session.settings.clone();
+    Ok(true)
+}
+
 /// The deploy token's client, cluster, service instances, any already open
 /// Pangolin context, and the settings (those of `kept`, a rescan).
 fn connect(
@@ -319,6 +431,60 @@ fn connect(
         .block_on(deploy::automatic(&config, &pve, &instances, cluster.nodes.len()))
         .unwrap_or_default();
     let mut settings = settings(source, &cluster, &instances, &automatic, &naming, &shown, setup.offset);
+    if let Some(contract) = &source.manifest.schema3 {
+        let saved = crate::services::selections::load(
+            &setup.token_dir,
+            source,
+            &naming.hostname,
+            &naming.domain,
+            !instances.is_empty(),
+        )?;
+        for input in &contract.inputs {
+            let value = saved
+                .as_ref()
+                .and_then(|s| s.values.get(&input.id))
+                .or(input.default.as_ref());
+            let mut row = setting(
+                &input.title(),
+                &input.description,
+                Vec::new(),
+                false,
+                Some(value.map(crate::services::schema3::display).unwrap_or_default()),
+            );
+            row.application_input = Some(Box::new(input.clone()));
+            if input.kind == crate::services::schema3::Kind::Secret {
+                row.text = None;
+                row.choices = vec![(
+                    "unavailable".into(),
+                    "Protected secret delivery is not configured".into(),
+                )];
+            }
+
+            if matches!(
+                input.kind,
+                crate::services::schema3::Kind::Enum | crate::services::schema3::Kind::Boolean
+            ) {
+                let choices = if input.kind == crate::services::schema3::Kind::Boolean {
+                    vec!["true".into(), "false".into()]
+                } else {
+                    input.choices.clone()
+                };
+                row.choices = choices.into_iter().map(|v| (v, String::new())).collect();
+                if !input.required && input.default.is_none() {
+                    row.choices.insert(0, (String::new(), "Omit optional value".into()));
+                }
+
+                row.picked = row
+                    .choices
+                    .iter()
+                    .position(|(v, _)| row.text.as_deref() == Some(v))
+                    .into_iter()
+                    .collect();
+                row.text = None;
+            }
+            settings.push(row);
+        }
+    }
     settings.extend(service_pangolin::settings(source, catalog.as_ref()));
     let original_settings = settings.clone();
     if let Some((previous, answers)) = kept {
@@ -407,6 +573,7 @@ fn setting(title: &str, note: &str, choices: Vec<(String, String)>, multiple: bo
     Setting {
         list: false,
         check: None,
+        application_input: None,
         hint: None,
         title: title.to_owned(),
         note: note.to_owned(),
@@ -604,6 +771,28 @@ fn settings(
             check_home,
         ));
     }
+    if manifest.schema3.is_some() {
+        settings.push(checked(
+            setting(
+                COUNT,
+                "Number of new containers; distributed across the selected nodes and storages in order.",
+                Vec::new(),
+                false,
+                Some(manifest.deployment.instances.to_string()),
+            ),
+            check_count,
+        ));
+        settings.push(checked(
+            setting(
+                SWAP,
+                "Swap limit per new container, in MiB; zero disables swap.",
+                Vec::new(),
+                false,
+                Some(manifest.resources.swap_mib.to_string()),
+            ),
+            check_swap,
+        ));
+    }
     settings.push(Setting {
         list: true,
         check: Some(check_entry),
@@ -661,6 +850,13 @@ fn number_in(text: &str, min: u32, max: u32) -> Result<(), String> {
         Ok(number) if (min..=max).contains(&number) => Ok(()),
         _ => Err(format!("A whole number from {min} to {max}")),
     }
+}
+
+fn check_count(text: &str) -> Result<(), String> {
+    number_in(text, 1, 64)
+}
+fn check_swap(text: &str) -> Result<(), String> {
+    number_in(text, 0, 1_048_576)
 }
 
 fn check_cores(text: &str) -> Result<(), String> {
@@ -789,6 +985,25 @@ fn chosen(settings: &[Setting], answers: &[Answer], existing: usize) -> Chosen {
         selected: picked(INSTANCES).iter().filter_map(|id| id.parse().ok()).collect(),
         reinstall: !picked(REINSTALL).is_empty(),
         deploy: deploy::Choice {
+            application: settings
+                .iter()
+                .enumerate()
+                .filter_map(|(index, setting)| {
+                    let input = setting.application_input.as_ref()?;
+                    let value = match answers.get(index) {
+                        Some(Answer::Text(value)) => value.clone(),
+                        Some(Answer::Picked(indices)) => indices
+                            .first()
+                            .and_then(|i| setting.choices.get(*i))
+                            .map(|(v, _)| v.clone())
+                            .unwrap_or_default(),
+                        _ => String::new(),
+                    };
+                    Some((input.id.clone(), value))
+                })
+                .collect(),
+            instance_count: text(COUNT),
+            swap_mib: text(SWAP),
             version: picked(VERSION).into_iter().next().unwrap_or_default(),
             // `NODE:STORAGE` in the list's order (by node), as the CTIDs are given.
             placements: picked(NODES),
@@ -819,6 +1034,43 @@ fn review(
     let attach_requested = service_pangolin::requested(&s.settings, answers);
     let mut sections = Vec::new();
     let mut problems = Vec::new();
+    let application =
+        source
+            .manifest
+            .schema3
+            .as_ref()
+            .and_then(|contract| match contract.values(&chosen.deploy.application) {
+                Ok(values) => Some((chosen.deploy.hostname.clone(), chosen.deploy.domain.clone(), values)),
+                Err(error) => {
+                    problems.push(error);
+                    None
+                }
+            });
+    if let Some(contract) = &source.manifest.schema3 {
+        match deploy::environment(&chosen.deploy.environment) {
+            Ok(entries) if entries.iter().any(|(key, _)| contract.owns_environment(key)) => {
+                problems.push("Application variables must be edited in Application configuration".into())
+            }
+            Err(error) => problems.push(error),
+            _ => {}
+        }
+        for target in s.instances.iter().filter(|i| chosen.selected.contains(&i.ctid)) {
+            if base_name(&target.hostname) != chosen.deploy.hostname
+                || target.searchdomain.as_deref() != Some(chosen.deploy.domain.as_str())
+            {
+                problems.push("Select instances from the deployment whose hostname and domain are shown; different deployments require their own local configuration".into());
+            }
+            if let Err(error) = crate::services::selections::load(
+                &setup.token_dir,
+                source,
+                &base_name(&target.hostname),
+                target.searchdomain.as_deref().unwrap_or_default(),
+                true,
+            ) {
+                problems.push(error);
+            }
+        }
+    }
     let (mut update_plan, mut change, mut create, mut attach) = (None, None, None, None);
     if chosen.selected.is_empty() && chosen.deploy.placements.is_empty() {
         problems.push(if s.instances.is_empty() {
@@ -869,6 +1121,46 @@ fn review(
             &source.manifest.id,
             &choice,
         ));
+        if let (Some(contract), Some((_, _, values))) = (&source.manifest.schema3, &application) {
+            match contract.resolve(values) {
+                Ok(environment) => {
+                    for target in &plan.targets {
+                        if environment.iter().any(|entry| !target.environment.contains(entry)) {
+                            plan.lines.push(format!(
+                                "CT {}: apply Application configuration; restart if running",
+                                target.ctid
+                            ));
+                        }
+                    }
+                    plan.set.extend(environment);
+                    plan.unset
+                        .extend(contract.inputs.iter().filter_map(|input| match &input.target {
+                            crate::services::schema3::Target::Environment { variable }
+                                if !plan.set.iter().any(|(key, _)| key == variable) =>
+                            {
+                                Some(variable.clone())
+                            }
+                            _ => None,
+                        }));
+                    for target in &plan.targets {
+                        if plan
+                            .unset
+                            .iter()
+                            .any(|key| target.environment.iter().any(|(k, _)| k == key))
+                        {
+                            plan.lines.push(format!(
+                                "CT {}: remove optional application variables; restart if running",
+                                target.ctid
+                            ));
+                        }
+                    }
+                    if let Err(error) = crate::services::schema3::validate_environment(&plan.set) {
+                        plan.problems.push(error);
+                    }
+                }
+                Err(error) => plan.problems.push(error),
+            }
+        }
         if source.is_site() && lifecycle::restarts(&plan) {
             if let Err(error) = ensure_pangolin(setup, source, s, tell) {
                 plan.problems.push(error);
@@ -912,6 +1204,7 @@ fn review(
                     &image_targets,
                     &chosen.deploy.version,
                     "",
+                    &setup.token_dir,
                 ));
                 sections.push(("Update".to_owned(), up.lines.clone()));
                 problems.extend(up.problems.clone());
@@ -982,8 +1275,10 @@ fn review(
     }
     (
         sections,
-        problems,
+        problems.clone(),
         Reviewed::Change(Box::new(Changes {
+            problems: problems.clone(),
+            application,
             update: update_plan,
             change,
             create,
@@ -1018,11 +1313,41 @@ async fn apply(
         },
         Reviewed::Change(changes) => {
             let Changes {
+                problems,
+                application,
                 update: update_plan,
                 change,
                 create,
                 attach,
             } = *changes;
+            if !problems.is_empty() {
+                return fail(lines, "Resolve Review problems before Apply".into());
+            }
+            if source.manifest.schema3.is_some() {
+                let targets = update_plan
+                    .as_ref()
+                    .map(|p| p.targets.as_slice())
+                    .unwrap_or_default()
+                    .iter()
+                    .chain(change.as_ref().map(|p| p.targets.as_slice()).unwrap_or_default());
+                for target in targets {
+                    if let Err(error) = crate::services::selections::load(
+                        &setup.token_dir,
+                        source,
+                        &base_name(&target.hostname),
+                        target.searchdomain.as_deref().unwrap_or_default(),
+                        true,
+                    ) {
+                        return fail(lines, error);
+                    }
+                }
+            }
+            if let Some((hostname, domain, values)) = application
+                && let Err(error) =
+                    crate::services::selections::save(&setup.token_dir, source, &hostname, &domain, &values)
+            {
+                return fail(lines, error);
+            }
             if let Some(plan) = update_plan {
                 match update::apply(&s.pve, source, &plan, &say).await {
                     Ok(done) => lines.extend(done),
@@ -1092,8 +1417,21 @@ fn new_sections(source: &Source, plan: &deploy::Plan) -> Vec<(String, Vec<String
             i.memory_mib
         ));
     }
+    if let Some(resolved) = &plan.resolved {
+        lines.push(format!(
+            "Image digest: {} · linux/amd64 {}",
+            resolved.digest, resolved.platform
+        ));
+    }
     for (key, value) in &plan.environment {
-        lines.push(format!("{key}={value}"));
+        if source.manifest.schema3.is_some() {
+            lines.push(format!("{key}: configured"));
+        } else {
+            lines.push(format!("{key}={value}"));
+        }
+    }
+    if source.manifest.schema3.is_some() {
+        lines.push("Rootfs-local application data survives restarts and is discarded by image replacement.".into());
     }
     let mut sections = vec![("New".to_owned(), lines)];
     if !plan.sites.is_empty() {

@@ -1,4 +1,9 @@
-# HomeStack service manifest, schema 1
+# HomeStack service manifests, schemas 1 and 3
+
+Schema 1 remains supported with the rules below. It requires no migration.
+Schema 3 is an additional, opt-in three-file contract documented at the end
+of this file. Neither manifest version changes the independent HTTP
+service-status telemetry response schema 2.
 
 The contract between an application repository and HomeStack: portable facts
 about the service's image, its default resources, persistence, instance
@@ -235,3 +240,110 @@ exposure:
 ```
 
 The values in these examples are illustrative, not measurements.
+
+## Manifest schema 3
+
+One service consists of exactly these YAML members under one directory:
+
+```
+.homestack/services/<id>/service.yaml
+.homestack/services/<id>/defaults.yaml
+.homestack/services/<id>/inputs.yaml
+```
+
+Discovery reads the directory and all blobs from the same immutable Git
+commit/tree. Its tree SHA is the combined source revision. Components are
+never separate services. Directories and members cannot be symlinks;
+members must be regular UTF-8 files, each at most 64 KiB. Additional YAML
+members, missing members, conflicting identifiers, invalid types and unknown
+fields are refused. IDs must also be unique across legacy schema-1 files.
+The existing `.homestack/*.yaml` discovery and schema-1 release policy remain
+unchanged.
+
+`service.yaml` requires `schema: 3`, `id` equal to the directory name, `name`,
+`image: {repository: REGISTRY/PATH}`, `runtime`, `persistence` and `exposure`.
+Runtime supports the same `ports` and `healthcheck` fields as schema 1, plus
+optional structured configuration delivery below. Resources belong only in
+defaults. Empty persistence/exposure can be `{}` or null. Nonempty sections
+follow schema-1 rules. The image owns its command, runtime user and writable
+directories; no arbitrary commands, hooks or directory preparation are
+accepted from the manifest.
+
+`defaults.yaml` requires `schema: 3`, `service: <id>`, `resources` with the
+schema-1 size/core fields, and `deployment` with the schema-1 fields.
+`deployment.instance_naming` optionally selects `always-numbered` or
+`automatic` (the default). Always-numbered names remain `<hostname>-1` even
+for one instance; numbering never incorporates the Proxmox node. Operators
+can override the hostname, domain, network, resources, count (1..64) and
+selected nodes/storages. Each selected node has one selected storage; new
+instances distribute across these selections in order, including several
+instances on one node. Placement and instance defaults are suggestions.
+Standard deployment fields do not belong in application inputs.
+
+`inputs.yaml` requires `schema: 3`, `service: <id>`, and `inputs`, a list of
+at most 64 fields. Each field accepts exactly:
+
+| Field | Meaning |
+| --- | --- |
+| `id` | Unique application ID: lowercase letter, then lowercase letters, digits, `_` or `-`, maximum 64 characters |
+| `label`, `description` | Required nonempty display label; optional printable description |
+| `type` | `string`, `integer`, `number`, `boolean`, `url`, `enum` (alias `select`), or protected-only `secret` (alias `password`) |
+| `required` | Boolean, default false |
+| `default` | Optional value of the declared type; secret defaults are forbidden |
+| `min`, `max` | Numeric bounds, for integer/number only |
+| `min_length`, `max_length`, `regex` | Text constraints; regex uses Rust regex syntax |
+| `choices` | Required nonempty unique string list for enum only |
+| `allowed_schemes` | Explicit nonempty subset of `http`, `https` for URL only |
+| `target` | One unique destination, described below |
+
+URLs require a host and forbid embedded credentials and fragments. Input
+values and defaults are validated on editing, Review and Apply; numeric and
+boolean choices stay typed in private storage. Empty optional fields are
+omitted; empty defaulted fields select their declared default. Unknown input
+IDs or targets, inverted/inapplicable constraints and unresolved required
+values are errors. Secret/password delivery is deliberately refused until
+a protected runtime secret mechanism exists; it never falls back to plain
+PVE environment. Do not disguise credentials as ordinary string inputs.
+
+Environment delivery is `target: {type: environment, variable: APP_SETTING}`.
+Names are unique ASCII environment identifiers. Values are serialized as
+plain text for strings/URLs and JSON scalars for numbers/booleans. Control
+characters are forbidden, and the final merged environment is limited to
+64 KiB. Existing OCI environment entries, including PATH, are preserved.
+
+Optional `runtime.configuration` contains exactly `delivery` and `document`.
+Delivery is `{type: environment-json, variable: APP_CONFIG}`. An input may
+instead target `{type: config-json-pointer, pointer: /path/to/existing/leaf}`.
+RFC 6901 pointers must resolve to existing scalar/null leaves and cannot
+collide. Required unresolved null leaves are refused. Resolved documents are
+serialized as single-line compact JSON, never multiline YAML. There is no
+expression or script evaluation. The derived Collector uses individual
+environment inputs and a baked configuration, so it needs neither this
+structured delivery option nor runtime entrypoint overrides.
+
+The application section is generated dynamically, after the standard
+controls. Actual operator selections are atomically stored in owner-only
+JSON files under the active XDG HomeStack profile's `services/` directory
+(normally `$XDG_CONFIG_HOME/homestack/services/`). Names are hashes of source
+repository, service ID, deployment hostname and domain. Files contain typed
+nonsecret values and the combined source revision. Directory/file modes are
+0700/0600. Missing or invalid configuration for existing instances is an
+explicit error: restore the private file before maintenance or update.
+Do not commit these files or copy their values into PVE descriptions or logs.
+
+Review shows image and linux/amd64 digests. The existing published numeric
+release policy and PVE OCI import are retained. Schema-3 creation uses a
+digest-named template cache and rechecks resolution before/after pulling;
+replacement retains its existing reviewed digest protections. The derived
+image carries its complete OCI command: PVE combines its inherited
+ENTRYPOINT with its baked CMD. No shell or runtime command override is added.
+Only individual instance FQDNs are managed by DNS integration. An
+always-numbered service never claims the owner's shared unnumbered
+round-robin record. That record does not imply high availability.
+
+Image replacement keeps the CTID, instance identity and selected environment.
+Review explicitly warns that rootfs-local data (such as an exporter queue)
+is discarded; normal CT restart keeps the same rootfs. Reconcile changed
+application values before changing the image. The example under
+`.homestack/services/otel/` and `deploy/otel/README.md` describe the concrete
+Collector runtime; `docs/e2e-schema3.md` records the isolated-lab scenario.

@@ -1,0 +1,13 @@
+schema: 3
+service: otel
+resources:
+  cores: 1
+  memory: 512M
+  swap: 0M
+  rootfs: 2G
+deployment:
+  hostname: otel
+  instances: 3
+  instance_naming: always-numbered
+  placement: spread
+  state_model: stateless

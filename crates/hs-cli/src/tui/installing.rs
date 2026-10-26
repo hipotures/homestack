@@ -278,6 +278,7 @@ fn survey(setup: &Setup, session: &mut Session, tell: &(dyn Fn(Event) + Send + S
         .map(|question| Setting {
             list: false,
             check: None,
+            application_input: None,
             hint: None,
             title: question.title.clone(),
             note: question.note.clone(),

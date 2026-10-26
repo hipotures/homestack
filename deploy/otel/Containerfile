@@ -1,0 +1,12 @@
+# The distribution release and immutable upstream index are both pinned.
+FROM docker.io/library/alpine:3.24.2 AS directories
+RUN mkdir -p /rootfs/var/lib/otelcol/queue \
+    && chmod 0700 /rootfs/var/lib/otelcol/queue
+
+FROM docker.io/otel/opentelemetry-collector-contrib:0.163.2@sha256:7f22d2a6748110ffb6a59bc0df448bccbf501cdb667d610ede4c61d3863d5849
+COPY --from=directories --chown=10001:10001 /rootfs/ /
+COPY --chmod=0444 collector.yaml /etc/otelcol-contrib/homestack.yaml
+USER 10001:10001
+EXPOSE 4317 4318 13133
+# Preserve the upstream /otelcol-contrib ENTRYPOINT and replace its CMD.
+CMD ["--config=/etc/otelcol-contrib/homestack.yaml"]
