@@ -1531,9 +1531,15 @@ impl SetupBox {
         let state = live["state"].as_str();
         let status = self.status(entry);
         let application = entry.application();
-        let mut lines = vec![
-            format!("Status: {status}"),
-            String::new(),
+        let mut lines = vec![format!("Status: {status}"), String::new()];
+        // What will change comes first, before anything to scroll past.
+        let diff = strings(&live["diff"]);
+        if matches!(entry.params, Params::Environment { .. }) && !diff.is_empty() {
+            lines.push("Changes on the workspace:".to_owned());
+            lines.extend(diff);
+            lines.push(String::new());
+        }
+        lines.extend([
             entry.label.clone(),
             entry.description.clone(),
             String::new(),
@@ -1547,7 +1553,7 @@ impl SetupBox {
                 },
                 state.unwrap_or("unknown")
             ),
-        ];
+        ]);
         if application.is_some() {
             let (selected, total) = self.config_selection_count(&entry.id);
             lines.push(format!(
@@ -1567,12 +1573,6 @@ impl SetupBox {
         if matches!(entry.params, Params::Backup) {
             lines.push(String::new());
             lines.extend(self.backup_details());
-        }
-        let diff = strings(&live["diff"]);
-        if matches!(entry.params, Params::Environment { .. }) && !diff.is_empty() {
-            lines.push(String::new());
-            lines.push("Changes on the workspace:".to_owned());
-            lines.extend(diff);
         }
         let changed = strings(&live["changed_since_apply"]);
         if !changed.is_empty() {
