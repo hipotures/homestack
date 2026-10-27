@@ -24,7 +24,7 @@ pub const THEMES: [&str; 7] = [
 ];
 
 /// The roles `[colors]` may override.
-pub const ROLES: [&str; 15] = [
+pub const ROLES: [&str; 17] = [
     "background",
     "surface",
     "foreground",
@@ -36,8 +36,10 @@ pub const ROLES: [&str; 15] = [
     "ok",
     "info",
     "warning",
+    "warning_text",
     "alert",
     "error",
+    "error_text",
     "hotkey",
     "selection",
 ];
@@ -65,10 +67,16 @@ pub struct Palette {
     pub ok: Color,
     /// Work in progress.
     pub info: Color,
+    /// Bar fills from 75 % load.
     pub warning: Color,
+    /// Text from 75 % load, as bright as `foreground`.
+    pub warning_text: Color,
     /// An update or other notice that needs prominent emphasis.
     pub alert: Color,
+    /// Bar fills from 90 % load.
     pub error: Color,
+    /// Text from 90 % load, as bright as `foreground`.
+    pub error_text: Color,
     /// The key letter of a control, red as in btop.
     pub hotkey: Color,
     /// The fill of the selected row.
@@ -114,8 +122,10 @@ impl Palette {
             "ok" => &mut self.ok,
             "info" => &mut self.info,
             "warning" => &mut self.warning,
+            "warning_text" => &mut self.warning_text,
             "alert" => &mut self.alert,
             "error" => &mut self.error,
+            "error_text" => &mut self.error_text,
             "hotkey" => &mut self.hotkey,
             "selection" => &mut self.selection,
             _ => return,
@@ -140,8 +150,10 @@ fn homestack() -> Palette {
         ok: Color::Rgb(53, 114, 101),
         info: Color::Rgb(125, 207, 255),
         warning: Color::Rgb(118, 103, 66),
+        warning_text: Color::Rgb(214, 188, 124),
         alert: Color::Rgb(255, 215, 95),
         error: Color::Rgb(126, 57, 67),
+        error_text: Color::Rgb(226, 124, 134),
         hotkey: Color::Rgb(240, 98, 112),
         selection: Color::Rgb(30, 38, 56),
     }
@@ -162,8 +174,10 @@ fn from_ratcn(theme: &ratcn::Theme, ok: Color, info: Option<Color>) -> Palette {
         ok,
         info: info.unwrap_or(theme.primary),
         warning: theme.warning,
+        warning_text: theme.warning,
         alert: theme.warning,
         error: theme.destructive,
+        error_text: theme.destructive,
         hotkey: theme.destructive,
         selection: theme.secondary,
     }

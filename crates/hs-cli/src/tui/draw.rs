@@ -1388,8 +1388,8 @@ fn workspaces(buf: &mut Buffer, area: Rect, app: &App, mut controls: Vec<Control
                 );
             }
         }
-        // Little free space in the cluster panel's colours: yellow from 75 %
-        // used, red from 90 %.
+        // Little free space at the cluster panel's thresholds: yellow from
+        // 75 % used, red from 90 %.
         let mut x = list.x;
         for column in &columns {
             x += 1;
@@ -1398,7 +1398,11 @@ fn workspaces(buf: &mut Buffer, area: Rect, app: &App, mut controls: Vec<Control
                 if let Some(free) = text.strip_suffix('%').and_then(|percent| percent.parse::<f64>().ok())
                     && free <= 25.0
                 {
-                    let color = load_color(palette, 100.0 - free);
+                    let color = if free <= 10.0 {
+                        palette.error_text
+                    } else {
+                        palette.warning_text
+                    };
                     let cell = pad_right(&text, column.width);
                     write(
                         buf,
