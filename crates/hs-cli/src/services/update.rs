@@ -76,16 +76,24 @@ async fn safe_config(pve: &impl Pve, instance: &Instance, cfg: &Value) -> Result
     if cfg["unprivileged"].as_u64() != Some(1) {
         return Err("Replacement requires an unprivileged container".to_owned());
     }
-    if cfg.as_object().is_none_or(|fields| {
-        fields.keys().any(|k| {
-            (k.starts_with("mp") && k != "mp0")
-                || (k.starts_with("net") && k != "net0")
+    let extra: Vec<&str> = cfg
+        .as_object()
+        .ok_or("Container configuration is unreadable")?
+        .keys()
+        .map(String::as_str)
+        .filter(|k| {
+            (k.starts_with("mp") && *k != "mp0")
+                || (k.starts_with("net") && *k != "net0")
                 || k.starts_with("unused")
                 || k.starts_with("dev")
-                || k == "hookscript"
+                || *k == "hookscript"
         })
-    }) {
-        return Err("Extra disks, networks, devices or hooks require manual review".to_owned());
+        .collect();
+    if !extra.is_empty() {
+        return Err(format!(
+            "Extra disks, networks, devices or hooks require manual review: {}",
+            extra.join(", ")
+        ));
     }
     let allowed_lxc = [
         "lxc.init.uid",
