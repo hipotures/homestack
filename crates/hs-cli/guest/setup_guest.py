@@ -1476,15 +1476,13 @@ def run(data: dict) -> dict:
                                         input=content, capture_output=True, text=True)
                 if parsed.returncode or parsed.stdout.strip() != "true":
                     raise GuestError(f"Nushell startup syntax check failed at ~/{relative}")
-        current = {relative: (home / relative).read_text() if (home / relative).exists() else ""
-                   for relative in updates}
         changed = [relative for relative, content in updates.items()
-                   if not (home / relative).exists() or current[relative] != content]
-        diff = [line for relative in changed for line in file_diff(relative, current[relative], updates[relative])]
+                   if not (home / relative).exists()
+                   or (home / relative).read_text() != content]
         if data.get("apply"):
             for relative in changed:
                 atomic_write(safe_path(home, relative), updates[relative])
-        return {"ok": True, "paths": list(updates), "changed": changed, "diff": diff}
+        return {"ok": True, "paths": list(updates), "changed": changed}
     if op == "exports":
         path = safe_path(home, ".bashrc")
         current = path.read_text() if path.exists() else ""

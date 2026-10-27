@@ -1534,7 +1534,7 @@ impl SetupBox {
         let mut lines = vec![format!("Status: {status}"), String::new()];
         // What will change comes first, before anything to scroll past.
         let diff = strings(&live["diff"]);
-        if matches!(entry.params, Params::Environment { .. } | Params::Exports { .. }) && !diff.is_empty() {
+        if matches!(entry.params, Params::Exports { .. }) && !diff.is_empty() {
             lines.push("Changes on the workspace:".to_owned());
             lines.extend(diff);
             lines.push(String::new());
