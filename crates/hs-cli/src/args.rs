@@ -76,6 +76,10 @@ pub enum Command {
         target: Option<String>,
     },
     Transport,
+    /// Update every API container to `version`, the newest release when omitted.
+    UpdateApi {
+        version: Option<String>,
+    },
 }
 
 /// `homestack setup`: Python's arguments.
@@ -110,6 +114,7 @@ impl Command {
             Self::Repo { .. } => "repo",
             Self::Status { .. } => "status",
             Self::Transport => "transport",
+            Self::UpdateApi { .. } => "update-api",
         }
     }
 }
@@ -140,7 +145,7 @@ impl std::fmt::Display for UsageError {
 impl std::error::Error for UsageError {}
 
 const USAGE: &str = "usage: homestack [-h] [--profile NAME | --profil NAME] [--config CONFIG] [--json] [-y] \
-{discover,install,uninstall,create,refresh,resize,addkey,destroy,migrate,setup,repo,status,transport} [OPTIONS]\n       homestack tui [--ssh USER@HOST] [--server-domain DOMAIN] [--server-image IMAGE]";
+{discover,install,uninstall,create,refresh,resize,addkey,destroy,migrate,setup,repo,status,transport,update-api} [OPTIONS]\n       homestack tui [--ssh USER@HOST] [--server-domain DOMAIN] [--server-image IMAGE]";
 
 fn usage_of(command: &str) -> String {
     let rest = match command {
@@ -158,6 +163,7 @@ fn usage_of(command: &str) -> String {
         "setup" => "[--local] [--json] [-y] [--catalog CATALOG] [--dry-run] [--non-interactive] [target] [SELECTORS]",
         "repo" => "TARGET [REPOSITORY] [--json]",
         "status" => "[TARGET] [--json]",
+        "update-api" => "[VERSION] [-y]",
         _ => "[--json]",
     };
     format!("usage: homestack {command} {rest}")
@@ -532,11 +538,16 @@ pub fn parse(argv: &[String]) -> Result<Args, UsageError> {
             let target = words.positionals(&["target"], 1)?[0].clone();
             (words, Command::Status { target })
         }
+        "update-api" => {
+            let words = words(name, rest, &[], &["--yes", "--help"])?;
+            let version = words.positionals(&["version"], 1)?[0].clone();
+            (words, Command::UpdateApi { version })
+        }
         other => {
             return Err(error(
                 USAGE.to_owned(),
                 format!(
-                    "argument command: invalid choice: '{other}' (choose from discover, install, uninstall, create, refresh, resize, addkey, destroy, migrate, setup, repo, status, transport)"
+                    "argument command: invalid choice: '{other}' (choose from discover, install, uninstall, create, refresh, resize, addkey, destroy, migrate, setup, repo, status, transport, update-api)"
                 ),
             ));
         }

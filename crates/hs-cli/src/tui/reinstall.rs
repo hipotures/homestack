@@ -397,7 +397,7 @@ async fn common_images(path: &Path, ids: &[u32], offset: i64) -> Result<Option<I
     }))
 }
 
-async fn common_source(repository: &str, id: &str) -> Result<crate::services::deploy::Source, String> {
+pub(crate) async fn common_source(repository: &str, id: &str) -> Result<crate::services::deploy::Source, String> {
     let repository = repository.to_owned();
     let id = id.to_owned();
     tokio::task::spawn_blocking(move || {
