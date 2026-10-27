@@ -1459,13 +1459,18 @@ def run(data: dict) -> dict:
                                         input=content, capture_output=True, text=True)
                 if parsed.returncode or parsed.stdout.strip() != "true":
                     raise GuestError(f"Nushell startup syntax check failed at ~/{relative}")
+        import difflib
+        current = {relative: (home / relative).read_text() if (home / relative).exists() else ""
+                   for relative in updates}
         changed = [relative for relative, content in updates.items()
-                   if not (home / relative).exists()
-                   or (home / relative).read_text() != content]
+                   if not (home / relative).exists() or current[relative] != content]
+        diff = [line for relative in changed
+                for line in difflib.unified_diff(current[relative].splitlines(), updates[relative].splitlines(),
+                                                 f"~/{relative}", f"~/{relative}", lineterm="")]
         if data.get("apply"):
             for relative in changed:
                 atomic_write(safe_path(home, relative), updates[relative])
-        return {"ok": True, "paths": list(updates), "changed": changed}
+        return {"ok": True, "paths": list(updates), "changed": changed, "diff": diff}
     if op == "paths":
         for item in data["paths"]:
             safe_path(home, item["relative"], directory=item.get("directory", False), recursive=item.get("recursive", False))

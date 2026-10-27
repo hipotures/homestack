@@ -605,6 +605,7 @@ fn inspect_item(
                 // The files that differ from what the setup writes (the TUI marks
                 // them; Python kept the list to itself).
                 item["differs"] = json!(changed);
+                item["diff"] = desired.get("diff").cloned().unwrap_or(json!([]));
             }
         }
         Params::Application(p) => {
