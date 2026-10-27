@@ -1,5 +1,8 @@
 # HomeStack PVE agent
 
+For the short operational guide, see
+[metrics flow, releases and PVE node updates](../../docs/pve-metrics-operations.md).
+
 `crates/hs-pve-agent` builds `homestack-pve-agent`, a standalone Linux application
 installed on each PVE node. It reads local VM/LXC cgroup v2 counters, LXC
 filesystems through `/proc`, and VM filesystems through QEMU Guest Agent (QGA).
