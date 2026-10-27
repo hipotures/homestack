@@ -947,7 +947,12 @@ fn apply_entry(
     match &entry.params {
         Params::Exports { exports } => {
             observer.activity(Some(id), "Write exports to ~/.bashrc");
-            let result = guest(workspace, settings, "exports", guest_args! {"exports": exports, "apply": true})?;
+            let result = guest(
+                workspace,
+                settings,
+                "exports",
+                guest_args! {"exports": exports, "apply": true},
+            )?;
             if !truthy(&result["changed"]) {
                 observer.activity(Some(id), "Exports already match");
                 return done("already-ready", "Exports already match; no files changed");
