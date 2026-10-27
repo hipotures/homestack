@@ -1368,12 +1368,19 @@ impl App {
 
     /// `f`: star the selection, or unstar it; kept in `tui.toml`.
     fn toggle_favorite(&mut self) {
-        let Some(vmid) = self.selected_entry().map(|entry| entry.vmid) else {
+        let Some((vmid, name)) = self
+            .selected_entry()
+            .map(|entry| (entry.vmid, entry.name.clone().unwrap_or_default()))
+        else {
             return;
         };
-        if !self.favorites.remove(&vmid) {
+        let added = !self.favorites.remove(&vmid);
+        if added {
             self.favorites.insert(vmid);
         }
+        let time = self.clock.clone();
+        let change = if added { "added to" } else { "removed from" };
+        self.log(&time, &format!("{vmid} {name}: {change} favorites"));
         self.save_favorites();
         self.keep_selection();
     }
