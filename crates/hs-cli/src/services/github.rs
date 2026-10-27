@@ -95,6 +95,124 @@ fn text<'a>(value: &'a Value, pointer: &str) -> Result<&'a str, String> {
         .ok_or_else(|| "GitHub API returned an unexpected response".to_owned())
 }
 
+/// A newer HomeStack image release that has a Git tag but is not yet in
+/// the registry. Publication status is advisory; only registry images can
+/// be deployed. This reads the latest attempt, including workflow reruns.
+pub fn image_publication(
+    system: &dyn System,
+    repository: &str,
+    service: &str,
+    published: Option<&str>,
+) -> Result<Option<String>, String> {
+    let prefix = match service {
+        "homestack-api" => "",
+        "pangolin" => "pangolin-",
+        "otel" => "otel-",
+        "ai-usage" => "ai-usage-",
+        _ => return Ok(None),
+    };
+    let base = format!("repos/{repository}");
+    let refs = get(system, &format!("{base}/git/matching-refs/tags/{prefix}"))?.ok_or("Release tags were not found")?;
+    let refs = refs.as_array().ok_or("GitHub returned invalid release tags")?;
+    let newest = refs
+        .iter()
+        .filter_map(|entry| {
+            let tag = entry["ref"].as_str()?.strip_prefix("refs/tags/")?;
+            let number = tag.strip_prefix(prefix)?;
+            // Release scripts publish exactly X.Y.Z; ignore development tags.
+            if number.contains('-') || number.split('.').count() != 3 {
+                return None;
+            }
+            Some((hs_core::registry::version(number)?, number, tag))
+        })
+        .max_by_key(|(number, _, _)| *number);
+    let Some((number, release, tag)) = newest else {
+        return Ok(None);
+    };
+    if published
+        .and_then(hs_core::registry::version)
+        .is_some_and(|current| number <= current)
+    {
+        return Ok(None);
+    }
+    let runs = get(
+        system,
+        &format!(
+            "{base}/actions/workflows/ci.yml/runs?event=push&branch={}&per_page=1",
+            segment(tag)
+        ),
+    )?
+    .ok_or("Image publication workflow was not found")?;
+    let runs = runs["workflow_runs"]
+        .as_array()
+        .ok_or("GitHub returned invalid workflow runs")?;
+    let Some(run) = runs.first() else {
+        return Ok(Some(format!(
+            "release {release}: publication workflow has not started; https://github.com/{repository}/actions"
+        )));
+    };
+    let id = run["id"].as_u64().ok_or("GitHub returned an invalid workflow run ID")?;
+    let jobs = get(
+        system,
+        &format!("{base}/actions/runs/{id}/jobs?filter=latest&per_page=100"),
+    )?
+    .ok_or("Image publication jobs were not found")?;
+    Ok(Some(publication_status(release, run, &jobs)?))
+}
+
+fn publication_status(release: &str, run: &Value, jobs: &Value) -> Result<String, String> {
+    let status = text(run, "/status")?;
+    let state = if status == "completed" {
+        match text(run, "/conclusion")? {
+            "success" => "workflow succeeded; image not yet available in registry",
+            "failure" => "publication failed",
+            "cancelled" => "publication cancelled",
+            "timed_out" => "publication timed out",
+            "action_required" => "publication requires action",
+            other => other,
+        }
+    } else {
+        match status {
+            "in_progress" => "publication in progress",
+            "queued" => "publication queued",
+            "waiting" | "pending" | "requested" => "publication waiting",
+            other => other,
+        }
+    };
+    let jobs = jobs["jobs"]
+        .as_array()
+        .ok_or("GitHub returned invalid publication jobs")?;
+    let job = jobs.iter().find(|job| {
+        if status == "completed" {
+            matches!(job["conclusion"].as_str(), Some("failure" | "timed_out" | "cancelled"))
+        } else {
+            job["status"] == "in_progress"
+        }
+    });
+    let mut detail = String::new();
+    if let Some(job) = job {
+        detail.push_str(text(job, "/name")?);
+        if let Some(step) = job["steps"].as_array().and_then(|steps| {
+            steps.iter().find(|step| {
+                step["status"] == "in_progress"
+                    || matches!(step["conclusion"].as_str(), Some("failure" | "timed_out" | "cancelled"))
+            })
+        }) {
+            detail.push_str(" / ");
+            detail.push_str(text(step, "/name")?);
+        }
+    }
+    let detail = if detail.is_empty() {
+        detail
+    } else {
+        format!(" ({detail})")
+    };
+    Ok(format!(
+        "release {release}: {state}{detail}; {}",
+        text(run, "/html_url")?
+    ))
+}
+
 /// The manifests of `repository` at the head of `branch` (its default
 /// branch; read from GitHub when the catalog did not say).
 pub fn discover(system: &dyn System, repository: &str, branch: Option<&str>) -> Result<Discovery, String> {

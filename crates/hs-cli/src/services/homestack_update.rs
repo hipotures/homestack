@@ -1,6 +1,7 @@
 //! `homestack update`: every HomeStack service whose containers run an older
 //! image than its newest release, reviewed and replaced as the services
-//! screen does. Manifests come from GitHub, releases from the registry.
+//! screen does. Manifests and publication status come from GitHub; only
+//! images already published in the registry are offered for deployment.
 use std::io::{BufRead, IsTerminal, Write};
 use std::path::Path;
 
@@ -58,17 +59,33 @@ pub async fn run(
             continue;
         }
         let newest = match hs_core::registry::recent(&source.image("latest"), 1, &[]).await {
-            Ok(releases) => match releases.first() {
-                Some(release) => tag(&release.image).to_owned(),
-                None => {
-                    say(&format!("{id}: no published release"));
-                    continue;
-                }
-            },
+            Ok(releases) => releases.first().map(|release| tag(&release.image).to_owned()),
             Err(error) => {
                 say(&format!("{id}: releases unavailable: {error}"));
                 continue;
             }
+        };
+        let service = id.clone();
+        let published = newest.clone();
+        let publication = tokio::task::spawn_blocking(move || {
+            github::image_publication(
+                &crate::system::RealSystem::default(),
+                REPOSITORY,
+                &service,
+                published.as_deref(),
+            )
+        })
+        .await
+        .map_err(|error| error.to_string())
+        .and_then(|result| result);
+        match publication {
+            Ok(Some(status)) => say(&format!("{id}: {status}")),
+            Ok(None) => {}
+            Err(error) => say(&format!("{id}: publication status unavailable: {error}")),
+        }
+        let Some(newest) = newest else {
+            say(&format!("{id}: no published release"));
+            continue;
         };
         // Only older images; a container on a newer build stays as it is.
         let targets: Vec<u32> = deployed
@@ -80,7 +97,10 @@ pub async fn run(
             .map(|i| i.ctid)
             .collect();
         if targets.is_empty() {
-            say(&format!("{id}: {} up to date on {newest}", deployed.len()));
+            say(&format!(
+                "{id}: {} containers; no newer published image (latest: {newest})",
+                deployed.len()
+            ));
             continue;
         }
         let plan = update::plan(&pve, &config, &source, &targets, &newest, "", root, false).await;
@@ -91,7 +111,7 @@ pub async fn run(
         });
     }
     if pending.is_empty() {
-        say("Nothing to update.");
+        say("No published image updates to apply.");
         return Ok(());
     }
     for (number, update) in pending.iter().enumerate() {
