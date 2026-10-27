@@ -651,7 +651,7 @@ fn settings(
     let mut version_setting = setting(
         VERSION,
         "A published release of the image, newest first; dev images are never offered. Ticked instances \
-         are updated only when you change this version or enable Reinstall image. Existing persistent volumes are kept.",
+         not on this version are updated to it; Reinstall image replaces the others too. Existing persistent volumes are kept.",
         releases,
         false,
         None,
@@ -1199,20 +1199,12 @@ fn review(
                     .push("Restarting a Site requires the verified Pangolin context".to_owned()),
             }
         }
-        let original_version = s
-            .original_settings
-            .iter()
-            .find(|setting| setting.title == VERSION)
-            .map(Setting::value)
-            .unwrap_or_default();
-        let replace_image = chosen.reinstall || chosen.deploy.version != original_version;
+        // Each ticked instance is compared with the chosen version itself.
         let image_targets: Vec<u32> = s
             .instances
             .iter()
             .filter(|i| {
-                chosen.selected.contains(&i.ctid)
-                    && replace_image
-                    && (chosen.reinstall || tag(&i.image) != chosen.deploy.version)
+                chosen.selected.contains(&i.ctid) && (chosen.reinstall || tag(&i.image) != chosen.deploy.version)
             })
             .map(|i| i.ctid)
             .collect();
