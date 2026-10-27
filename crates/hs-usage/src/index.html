@@ -94,6 +94,7 @@ th { color: var(--ink-2); font-weight: 600; position: sticky; top: 0; background
     <button class="scope theme" id="theme" type="button"></button>
   </header>
   <div class="error" id="error" hidden></div>
+  <div class="error" id="coverage" hidden></div>
   <section class="tiles" id="tiles"></section>
   <section class="cards" id="cards"></section>
 </main>
@@ -156,7 +157,18 @@ async function codexMetrics() {
   const names = await prom("/api/v1/label/__name__/values", {});
   const pick = re => names.find(n => re.test(n) && n.endsWith("_total")) || names.find(n => re.test(n) && n.endsWith("_sum"));
   return { tokens: pick(/^codex_turn_token_usage/), threads: pick(/^codex_thread_started/),
-    prices: null, missing: new Set() };
+    prices: null, missing: new Set(), coverage: "" };
+}
+
+// A globally present metric can still have no attribution for the selected
+// server/project. Keep missing data distinct from measured zero usage.
+function coverageNote(rows) {
+  const selected = SCOPES.filter(s => scope[s.id] !== ANY);
+  if (!rows.length || !selected.length || rows.some(r => selected.every(s => r.metric[s.label] === scope[s.id]))) return "";
+  const missing = selected.filter(s => !rows.some(r => r.metric[s.label]));
+  if (missing.length) return "Codex metrics have no " + missing.map(s => s.id === "host" ? "server (host_name)" : "project").join(" or ") +
+    " label. Usage cannot be attributed to this selection; choose All servers / All projects to see unattributed usage.";
+  return "No Codex metrics match the selected server and project. Missing data is not zero usage.";
 }
 
 const fmt = {
@@ -218,7 +230,7 @@ function costRows(rows, codex) {
     const type = r.metric.token_type;
     if (!["input", "cached_input", "cache_write_input", "output"].includes(type)) return [];
     const samples = r.values || [r.value];
-    if (!samples.some(([, v]) => Number(v) > 0)) return [];
+    if (!samples.some(([, v]) => Number(v) > 0)) return [r];
     const model = (r.metric.model || "").replace(/^openai\//, "");
     const price = codex.prices?.[model];
     const input = price?.input_cost_per_token, output = price?.output_cost_per_token;
@@ -235,6 +247,7 @@ function costRows(rows, codex) {
   }).filter(r => !codex.missing.has((r.metric.model || "unknown model").replace(/^openai\//, "")));
 }
 function costNote(codex) {
+  if (codex.coverage) return codex.coverage;
   if (!codex.prices) return "Pricing unavailable; restart container to retry";
   if (codex.missing.size) return "Incomplete estimate; missing prices: " + [...codex.missing].sort().join(", ");
   return "API equivalent, not subscription billing; excludes tier and long-context adjustments. Prices refresh on container restart.";
@@ -250,6 +263,14 @@ async function load() {
       const response = await fetch("/api/pricing");
       if (response.ok) codex.prices = await response.json();
     }
+    if (shows("codex") && codex.tokens) {
+      const rows = await instant(`group by (host_name,project) (last_over_time(${codex.tokens}{token_type="total"}[${LOOKBACK}]))`,
+        Math.floor(Date.now() / 1000));
+      codex.coverage = coverageNote(rows);
+    }
+    const coverage = document.getElementById("coverage");
+    coverage.textContent = codex.coverage;
+    coverage.hidden = !codex.coverage;
     const list = panels(codex, range.step);
     const charts = await Promise.all(list.map(async panel => {
       const results = await Promise.all(panel.parts.map(async part => {
@@ -263,14 +284,14 @@ async function load() {
     const sessions = [claude && "claude_code_session_count_total", withCodex && codex.threads].filter(Boolean);
     const now = Math.floor(Date.now() / 1000);
     const measure = selectors => trend(selectors, now, start, end);
-    const codexMissing = withCodex && !codex.tokens;
+    const codexMissing = withCodex && (!codex.tokens || codex.coverage);
     const tileSpecs = [
       claude && { label: "Claude Code cost", format: fmt.usd, data: measure(["claude_code_cost_usage_USD_total"]) },
       withCodex && codex.tokens && { label: "Codex estimated cost", format: fmt.usd, cost: true,
         data: trend([codex.tokens], now, start, end, "model,token_type", rows => costRows(rows, codex)) },
       tokens.length && { label: tool.id === "all" ? "Tokens" : tool.label + " tokens", format: fmt.tokens, data: measure(tokens),
-        note: codexMissing ? "no Codex metrics" : "" },
-      sessions.length && { label: "Sessions", format: fmt.count, data: measure(sessions), note: codexMissing ? "no Codex metrics" : "" },
+        note: codexMissing ? "Codex data unavailable for this selection" : "" },
+      sessions.length && { label: "Sessions", format: fmt.count, data: measure(sessions), note: codexMissing ? "Codex data unavailable for this selection" : "" },
       claude && { label: "Claude Code active time", format: fmt.hours, data: measure(["claude_code_active_time_seconds_total"]) },
       claude && { label: "Claude Code cache hit", format: fmt.percent, ratio: true, data: Promise.all([
         measure(['claude_code_token_usage_tokens_total{type="cacheRead"}']),
@@ -286,8 +307,8 @@ async function load() {
     const tiles = await Promise.all(tileSpecs.map(async t => ({ ...t, data: await t.data })));
     for (const tile of tiles.filter(t => t.cost)) {
       tile.detail = costNote(codex);
-      tile.note = codex.prices && !codex.missing.size ? "Standard API estimate · LiteLLM" : tile.detail;
-      if (!codex.prices || codex.missing.size) tile.data.now = tile.data.before = null;
+      tile.note = !codex.coverage && codex.prices && !codex.missing.size ? "Standard API estimate · LiteLLM" : tile.detail;
+      if (codex.coverage || !codex.prices || codex.missing.size) tile.data.now = tile.data.before = null;
     }
     for (const chart of charts.filter(c => c.cost)) chart.note = costNote(codex);
     const daily = await dailyTokens(tokens, now);
@@ -325,7 +346,7 @@ function fold(list) {
 
 // Usage in the selected window, in the window before it, and per bucket.
 async function trend(selectors, now, start, end, by = "", transform = rows => rows) {
-  const sum = rows => rows.reduce((a, r) => a + Number(r.value[1]), 0);
+  const sum = rows => rows.length ? rows.reduce((a, r) => a + Number(r.value[1]), 0) : null;
   const parts = await Promise.all(selectors.map(sel => Promise.all([
     instant(growth(sel, by, range.seconds), now).then(transform).then(sum),
     instant(growth(sel, by, range.seconds), now - range.seconds).then(transform).then(sum),
@@ -333,7 +354,8 @@ async function trend(selectors, now, start, end, by = "", transform = rows => ro
   ])));
   const buckets = new Map();
   for (const [, , rows] of parts) for (const r of rows) for (const [t, v] of r.values) buckets.set(t, (buckets.get(t) || 0) + Number(v));
-  return { now: parts.reduce((a, p) => a + p[0], 0), before: parts.reduce((a, p) => a + p[1], 0), buckets };
+  const total = index => parts.some(p => p[index] !== null) ? parts.reduce((a, p) => a + (p[index] || 0), 0) : null;
+  return { now: total(0), before: total(1), buckets };
 }
 function ratio(hit, all) {
   const share = (h, a) => a > 0 ? h / a : null;
@@ -360,7 +382,8 @@ function renderTiles(tiles, start, end) {
       d.title = "Compared with the previous " + range.label;
       row.append(d);
     }
-    tile.append(el("div", "label", t.label), row, spark(times.map(time => buckets.get(time) || 0)));
+    tile.append(el("div", "label", t.label), row);
+    if (now != null) tile.append(spark(times.map(time => buckets.get(time) || 0)));
     if (t.note) {
       const note = el("div", "note", t.note);
       note.title = t.detail || t.note;
