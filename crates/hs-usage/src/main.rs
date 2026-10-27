@@ -70,7 +70,7 @@ async fn main() -> ExitCode {
     };
     let heartbeat = Arc::new(Heartbeat::new(interval));
     let mut app = Router::new()
-        .route("/", get(|| async { Html(PAGE) }))
+        .route("/", get(|| async { ([(header::CACHE_CONTROL, "no-store")], Html(PAGE)) }))
         .route("/health/live", get(health))
         .route("/health/ready", get(health))
         .route(PROBE_PATH, get(|| async { StatusCode::NO_CONTENT }))

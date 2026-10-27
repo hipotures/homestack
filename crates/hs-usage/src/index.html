@@ -13,23 +13,26 @@
   --critical: #d03b3b; --spike: rgba(208,59,59,0.12);
 }
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     color-scheme: dark;
     --page: #0d0d0d; --surface: #1a1a19; --ink: #f0efec; --ink-2: #c3c2b7; --muted: #898781;
     --grid: #2c2c2a; --axis: #383835; --ring: rgba(255,255,255,0.10); --wash: rgba(255,255,255,0.06);
     --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181;
   }
 }
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #0d0d0d; --surface: #1a1a19; --ink: #f0efec; --ink-2: #c3c2b7; --muted: #898781;
+  --grid: #2c2c2a; --axis: #383835; --ring: rgba(255,255,255,0.10); --wash: rgba(255,255,255,0.06);
+  --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181;
+}
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--page); color: var(--ink); font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
-main { max-width: 1200px; margin: 0 auto; padding: 24px 16px 48px; }
+main { max-width: 2400px; margin: 0 auto; padding: 24px 16px 48px; }
 header { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 24px; margin-bottom: 16px; }
 h1 { font-size: 20px; margin: 0; font-weight: 600; }
-.ranges { display: flex; gap: 4px; }
-.ranges button { font: inherit; color: var(--ink-2); background: none; border: 1px solid var(--ring); border-radius: 6px; padding: 4px 10px; cursor: pointer; }
-.ranges button:hover { background: var(--wash); }
-.ranges button[aria-pressed="true"] { color: var(--ink); border-color: var(--ink-2); font-weight: 600; }
 .scope { font: inherit; color: var(--ink); background: var(--surface); border: 1px solid var(--ring); border-radius: 6px; padding: 4px 6px; max-width: 180px; }
+.theme { cursor: pointer; padding: 4px 10px; }
 .updated { color: var(--muted); font-size: 12px; margin-left: auto; }
 .error { border: 1px solid var(--critical); border-radius: 8px; padding: 8px 12px; margin-bottom: 16px; }
 .error::before { content: "⚠ "; color: var(--critical); }
@@ -54,7 +57,7 @@ h1 { font-size: 20px; margin: 0; font-weight: 600; }
 .heat-scale { display: flex; align-items: center; gap: 3px; margin-top: 8px; color: var(--muted); font-size: 11px; }
 .heat-scale i { width: 12px; height: 12px; border-radius: 2px; display: inline-block; }
 .spike-key { border: 1px solid var(--critical); background: var(--spike) !important; }
-.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 520px), 1fr)); gap: 12px; }
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, max(380px, (100% - 24px) / 3)), 1fr)); gap: 12px; }
 .card { padding: 14px 14px 10px; min-width: 0; }
 .card-head { display: flex; align-items: baseline; gap: 8px; }
 .card h2 { font-size: 14px; font-weight: 600; margin: 0; }
@@ -83,11 +86,12 @@ th { color: var(--ink-2); font-weight: 600; position: sticky; top: 0; background
 <main>
   <header>
     <h1>Claude Code &amp; Codex</h1>
-    <div class="ranges" role="group" aria-label="Tool" id="tools"></div>
-    <div class="ranges" role="group" aria-label="Time range" id="ranges"></div>
+    <select class="scope" id="tool" aria-label="Agent"></select>
     <select class="scope" id="host" aria-label="Server"></select>
     <select class="scope" id="project" aria-label="Project"></select>
+    <select class="scope" id="range" aria-label="Time range"></select>
     <span class="updated" id="updated"></span>
+    <button class="scope theme" id="theme" type="button"></button>
   </header>
   <div class="error" id="error" hidden></div>
   <section class="tiles" id="tiles"></section>
@@ -103,7 +107,7 @@ const RANGES = [
   { id: "90d", label: "90 days", seconds: 90 * 86400, step: 86400 },
 ];
 const TOOLS = [
-  { id: "all", label: "All" },
+  { id: "all", label: "All agents" },
   { id: "claude", label: "Claude Code" },
   { id: "codex", label: "Codex" },
 ];
@@ -117,7 +121,7 @@ const growth = (selector, by, window, metric = scoped(selector)) =>
   `(last_over_time(${metric}[${LOOKBACK}] offset ${window}s) or last_over_time(${metric}[${LOOKBACK}]) * 0), 0))`;
 
 // Server and project are OTEL resource attributes; ANY keeps every series,
-// "" selects series without the label (Codex sends neither).
+// including those without the label.
 const SCOPES = [{ id: "host", label: "host_name", all: "All servers" }, { id: "project", label: "project", all: "All projects" }];
 const ANY = "*";
 let range = RANGES[0], tool = TOOLS[0];
@@ -125,7 +129,7 @@ const scope = { host: ANY, project: ANY };
 try {
   range = RANGES.find(r => r.id === localStorage.getItem("range")) || range;
   tool = TOOLS.find(t => t.id === localStorage.getItem("tool")) || tool;
-  for (const s of SCOPES) scope[s.id] = localStorage.getItem(s.id) ?? ANY;
+  for (const s of SCOPES) scope[s.id] = localStorage.getItem(s.id) || ANY;
 } catch (_) {}
 function scoped(selector) {
   const matchers = SCOPES.filter(s => scope[s.id] !== ANY).map(s => `${s.label}=${JSON.stringify(scope[s.id])}`).join(",");
@@ -544,43 +548,48 @@ function svgEl(tag, attrs) {
   return node;
 }
 
-function choices(id, options, current, choose) {
-  const group = document.getElementById(id);
-  for (const option of options) {
-    const button = el("button", "", option.label);
-    button.setAttribute("aria-pressed", String(option === current));
-    button.onclick = () => {
-      choose(option);
-      try { localStorage.setItem(id === "tools" ? "tool" : "range", option.id); } catch (_) {}
-      for (const b of group.children) b.setAttribute("aria-pressed", String(b === button));
-      load();
-    };
-    group.append(button);
-  }
+// Every header list: its choice is remembered under its id.
+function selector(id, options, current, choose) {
+  const select = document.getElementById(id);
+  select.replaceChildren(...options.map(([value, text]) => {
+    const option = el("option", "", text);
+    option.value = value;
+    option.selected = value === current;
+    return option;
+  }));
+  select.onchange = () => {
+    choose(select.value);
+    try { localStorage.setItem(id, select.value); } catch (_) {}
+    load();
+  };
 }
 // The servers and projects that reported agent metrics within the lookback.
 async function scopes() {
   await Promise.all(SCOPES.map(async s => {
     const rows = await instant(`group by (${s.label}) (last_over_time({__name__=~"(claude_code|codex)_.+"}[${LOOKBACK}]))`,
       Math.floor(Date.now() / 1000));
-    const values = [...new Set(rows.map(r => r.metric[s.label] || ""))].sort();
+    const values = [...new Set(rows.map(r => r.metric[s.label]).filter(Boolean))].sort();
     if (scope[s.id] !== ANY && !values.includes(scope[s.id])) values.push(scope[s.id]);
-    const select = document.getElementById(s.id);
-    select.replaceChildren(...[ANY, ...values].map(value => {
-      const option = el("option", "", value === ANY ? s.all : value || "not set");
-      option.value = value;
-      option.selected = value === scope[s.id];
-      return option;
-    }));
-    select.onchange = () => {
-      scope[s.id] = select.value;
-      try { localStorage.setItem(s.id, select.value); } catch (_) {}
-      load();
-    };
+    selector(s.id, [[ANY, s.all], ...values.map(value => [value, value])], scope[s.id], value => { scope[s.id] = value; });
   }));
 }
-choices("tools", TOOLS, tool, t => { tool = t; });
-choices("ranges", RANGES, range, r => { range = r; });
+selector("tool", TOOLS.map(t => [t.id, t.label]), tool.id, id => { tool = TOOLS.find(t => t.id === id); });
+selector("range", RANGES.map(r => [r.id, r.label]), range.id, id => { range = RANGES.find(r => r.id === id); });
+// Light or dark; the system preference until the switch is used.
+const switcher = document.getElementById("theme");
+function theme(value) {
+  document.documentElement.dataset.theme = value;
+  switcher.textContent = value === "dark" ? "☀ Light" : "☾ Dark";
+  switcher.setAttribute("aria-label", `Switch to ${value === "dark" ? "light" : "dark"} theme`);
+}
+let current = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+try { current = ["light", "dark"].find(v => v === localStorage.getItem("theme")) || current; } catch (_) {}
+theme(current);
+switcher.onclick = () => {
+  current = current === "dark" ? "light" : "dark";
+  theme(current);
+  try { localStorage.setItem("theme", current); } catch (_) {}
+};
 scopes().catch(() => {});
 load();
 setInterval(load, 60000);
