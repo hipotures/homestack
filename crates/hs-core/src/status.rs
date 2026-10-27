@@ -619,16 +619,20 @@ pub async fn global_status(
     prefetched?;
     let inventory = Inventory::read(pve, cfg).await?;
     let containers = cluster_container_resources(pve).await.unwrap_or_default();
-    // The last space measured in the machines that are not running.
-    let stopped: Vec<u32> = inventory
+    // The last space measured in the machines that are not running, and in
+    // every VM, whose guest reads can fail between two status requests.
+    let measured_before: Vec<u32> = inventory
         .resources
         .iter()
-        .chain(&containers)
-        .filter(|item| item.status.as_deref() != Some("running"))
+        .chain(
+            containers
+                .iter()
+                .filter(|item| item.status.as_deref() != Some("running")),
+        )
         .map(|item| item.vmid)
         .collect();
     let last = match prometheus {
-        Some(url) => crate::service_status::last_space(url, &stopped).await,
+        Some(url) => crate::service_status::last_space(url, &measured_before).await,
         None => BTreeMap::new(),
     };
     let last_root = |vmid: u32| last.get(&vmid).and_then(|mounts| mounts.get("/").cloned());
@@ -733,8 +737,9 @@ pub async fn global_status(
             virtiofs.push(target);
         }
         let mut home = None;
-        // A virtiofs home of a running VM is measured in the background.
-        if shared_home.is_some() && item.status.as_deref() != Some("running") {
+        // A running VM's virtiofs home is also measured in the background,
+        // and that newer reading replaces this one when there is one.
+        if shared_home.is_some() {
             home = last
                 .get(&item.vmid)
                 .and_then(|mounts| crate::service_status::last_home(mounts, false, item.vmid, None));
@@ -742,7 +747,7 @@ pub async fn global_status(
         if node_online && shared_home.is_none() {
             let status = item.status.as_deref().unwrap_or("unknown");
             let mut usage = workspace_home_usage(pve, &item.node, item.vmid, status, home_cfg).await;
-            if status != "running"
+            if (status != "running" || usage.used_bytes.is_none())
                 && let Some(previous) = last
                     .get(&item.vmid)
                     .and_then(|mounts| crate::service_status::last_home(mounts, false, item.vmid, usage.size_bytes))
