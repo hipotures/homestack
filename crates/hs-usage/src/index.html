@@ -35,7 +35,7 @@ h1 { font-size: 20px; margin: 0; font-weight: 600; }
 .scope { font: inherit; color: var(--ink); background: var(--surface); border: 1px solid var(--ring); border-radius: 6px; padding: 4px 6px; max-width: 180px; }
 .mode { display: inline-flex; gap: 8px; align-items: center; cursor: pointer; }
 .mode input { accent-color: var(--s1); }
-.compare { --metric-width: 260px; --agent-width: 200px; width: calc(var(--metric-width) + var(--agent-count, 2) * var(--agent-width) + 38px); max-width: 100%; padding: 18px; overflow-x: auto; }
+.compare { --metric-width: 260px; --agent-width: 200px; width: calc(var(--metric-width) + var(--agent-count, 2) * var(--agent-width) + 38px); max-width: 100%; margin-inline: auto; padding: 18px; overflow-x: auto; }
 .compare table { font-size: 14px; width: calc(var(--metric-width) + var(--agent-count, 2) * var(--agent-width)); table-layout: fixed; }
 .compare th:first-child { width: var(--metric-width); }
 .compare td .note, .compare thead .note { margin-left: auto; }
