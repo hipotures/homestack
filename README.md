@@ -276,6 +276,10 @@ homestack setup hermes env=bash app=codex --yes --non-interactive --json
   ]
   ```
 
+- For per-project Codex usage telemetry, see [AI telemetry attribution](docs/ai-telemetry.md).
+  A shared Codex daemon does not inherit a new terminal client's direnv environment;
+  Prometheus must also promote the server and project resource attributes.
+
 - Select comma-separated 1-based indices or stable IDs. `0` or `all` selects the entire explicitly named category.
 - Without selectors, an interactive terminal opens the full-screen TUI selector. With selectors, HomeStack prints a plan and asks for confirmation (`--yes` accepts the plan; `--dry-run` validates locally without opening guest SSH).
 - `--non-interactive` and `--json` disallow interactive third-party installers unless a verified `non_interactive` recipe is configured. Hardware security keys may still require a physical touch.
