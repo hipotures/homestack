@@ -30,13 +30,28 @@
 body { margin: 0; background: var(--page); color: var(--ink); font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
 main { max-width: 2400px; margin: 0 auto; padding: 24px 16px 48px; }
 header { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 24px; margin-bottom: 16px; }
+[hidden] { display: none !important; }
 h1 { font-size: 20px; margin: 0; font-weight: 600; }
 .scope { font: inherit; color: var(--ink); background: var(--surface); border: 1px solid var(--ring); border-radius: 6px; padding: 4px 6px; max-width: 180px; }
+.mode { display: inline-flex; gap: 8px; align-items: center; cursor: pointer; }
+.mode input { accent-color: var(--s1); }
+.compare { padding: 18px; overflow-x: auto; }
+.compare table { font-size: 14px; min-width: 560px; }
+.compare caption { text-align: left; font-weight: 600; font-size: 18px; padding-bottom: 8px; }
+.compare th, .compare td { padding: 12px 16px; vertical-align: top; }
+.compare thead th { z-index: 1; }
+.compare tbody th { position: static; font-weight: 400; }
+.compare .primary { font-size: 18px; font-weight: 600; }
+.compare .note { display: block; white-space: normal; max-width: 360px; margin-top: 4px; }
+.compare .compare-footer { margin-top: 14px; max-width: none; }
+.compare tbody th:first-child { position: sticky; left: 0; z-index: 1; background: var(--surface); }
 .theme { cursor: pointer; padding: 4px 10px; }
 .updated { color: var(--muted); font-size: 12px; margin-left: auto; }
 .error { border: 1px solid var(--critical); border-radius: 8px; padding: 8px 12px; margin-bottom: 16px; }
 .error::before { content: "⚠ "; color: var(--critical); }
-.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; margin-bottom: 16px; }
+.tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 16px; }
+@media (max-width: 900px) { .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 480px) { .tiles { grid-template-columns: minmax(0, 1fr); } }
 .tile, .card { background: var(--surface); border: 1px solid var(--ring); border-radius: 10px; }
 .tile { padding: 12px 14px; }
 .tile .label { color: var(--ink-2); font-size: 12px; }
@@ -85,16 +100,18 @@ th { color: var(--ink-2); font-weight: 600; position: sticky; top: 0; background
 <body>
 <main>
   <header>
-    <h1>Claude Code &amp; Codex</h1>
+    <h1>AI usage</h1>
     <select class="scope" id="tool" aria-label="Agent"></select>
     <select class="scope" id="host" aria-label="Server"></select>
     <select class="scope" id="project" aria-label="Project"></select>
     <select class="scope" id="range" aria-label="Time range"></select>
+    <label class="scope mode"><input id="compare" type="checkbox" role="switch"> Compare agents</label>
     <span class="updated" id="updated"></span>
     <button class="scope theme" id="theme" type="button"></button>
   </header>
   <div class="error" id="error" hidden></div>
   <div class="error" id="coverage" hidden></div>
+  <section class="card compare" id="comparison" aria-label="Agent comparison" hidden></section>
   <section class="tiles" id="tiles"></section>
   <section class="cards" id="cards"></section>
 </main>
@@ -107,11 +124,25 @@ const RANGES = [
   { id: "30d", label: "30 days", seconds: 30 * 86400, step: 86400 },
   { id: "90d", label: "90 days", seconds: 90 * 86400, step: 86400 },
 ];
-const TOOLS = [
-  { id: "all", label: "All agents" },
-  { id: "claude", label: "Claude Code" },
-  { id: "codex", label: "Codex" },
+// Add an adapter here to expose another agent in both views. Unreported
+// capabilities stay absent instead of inventing comparable measurements.
+const AGENTS = [
+  { id: "claude", label: "Claude Code", prefix: "claude_code", metrics: () => ({
+    tokens: "claude_code_token_usage_tokens_total", tokenLabel: "type",
+    types: { input: "input", cached: "cacheRead", written: "cacheCreation", output: "output" },
+    cost: "claude_code_cost_usage_USD_total", sessions: "claude_code_session_count_total",
+    active: "claude_code_active_time_seconds_total", commits: "claude_code_commit_count_total",
+    lines: "claude_code_lines_of_code_count_total",
+  }) },
+  { id: "codex", label: "Codex", prefix: "codex", metrics: c => ({
+    tokens: c.tokens, tokenLabel: "token_type", inclusiveInput: true,
+    types: { total: "total", input: "input", cached: "cached_input", written: "cache_write_input", output: "output", reasoning: "reasoning_output" },
+    estimated: true, convertCost: rows => costRows(rows, c), costNote: () => costNote(c),
+    costUnavailable: () => c.coverage || !c.prices || c.missing.size > 0,
+    sessions: c.threads,
+  }) },
 ];
+const TOOLS = [{ id: "all", label: "All agents" }, ...AGENTS.map(({id, label}) => ({id, label}))];
 const SERIES = ["--s1", "--s2", "--s3", "--s4", "--s5"];
 // Each process exports its own cumulative series (new instance label), so
 // usage in a window is the growth of every series' last value, with series
@@ -125,9 +156,11 @@ const growth = (selector, by, window, metric = scoped(selector)) =>
 // including those without the label.
 const SCOPES = [{ id: "host", label: "host_name", all: "All servers" }, { id: "project", label: "project", all: "All projects" }];
 const ANY = "*";
-let range = RANGES[0], tool = TOOLS[0];
+let range = RANGES[0], tool = TOOLS[0], comparison = false;
+let loadVersion = 0;
 const scope = { host: ANY, project: ANY };
 try {
+  comparison = localStorage.getItem("comparison") === "true";
   range = RANGES.find(r => r.id === localStorage.getItem("range")) || range;
   tool = TOOLS.find(t => t.id === localStorage.getItem("tool")) || tool;
   for (const s of SCOPES) scope[s.id] = localStorage.getItem(s.id) || ANY;
@@ -173,55 +206,123 @@ function coverageNote(rows) {
 
 const fmt = {
   tokens: v => v >= 1e9 ? (v / 1e9).toFixed(2) + " G" : v >= 1e6 ? (v / 1e6).toFixed(1) + " M" : v >= 1e3 ? (v / 1e3).toFixed(1) + " k" : String(Math.round(v)),
-  usd: v => "$" + (v >= 100 ? v.toFixed(0) : v.toFixed(2)),
+  usd: v => v > 0 && v < 0.01 ? "<$0.01" : "$" + v.toFixed(2),
+  exact: v => Math.round(v).toLocaleString("en-GB"),
   count: v => String(Math.round(v)),
   hours: v => v >= 3600 ? (v / 3600).toFixed(1) + " h" : Math.round(v / 60) + " min",
   percent: v => (v * 100).toFixed(1) + "%",
   lines: v => v >= 1e3 ? (v / 1e3).toFixed(1) + " k" : String(Math.round(v)),
 };
-const TOKEN_TYPES = { input: "input", output: "output", cacheRead: "cache read", cacheCreation: "cache write",
-  cached_input: "cached input", cache_write_input: "cache write", reasoning_output: "reasoning" };
-
-function panels(codex, step) {
-  const list = [
-    { title: "Tokens over time", unit: tool.id === "all" ? "Claude Code and Codex" : tool.label, format: fmt.tokens, spikes: true, parts: [
-      { tool: "claude", query: growth("claude_code_token_usage_tokens_total", "", step), name: () => "Claude Code" },
-      codex.tokens && { tool: "codex", query: growth(codexTokens(codex), "", step), name: () => "Codex" },
-    ] },
-    { title: "Claude Code tokens", unit: "by type", format: fmt.tokens, parts: [
-      { tool: "claude", query: growth("claude_code_token_usage_tokens_total", "type", step), name: m => TOKEN_TYPES[m.type] || m.type },
-    ] },
-    { title: "Codex tokens", unit: "by type", format: fmt.tokens, parts: [
-      codex.tokens && { tool: "codex", query: growth(codex.tokens + `{token_type!="total"}`, "token_type", step), transform: tokenBreakdown, name: m => TOKEN_TYPES[m.token_type] || m.token_type },
-    ] },
-    { title: "Claude Code cost", unit: "USD by model", format: fmt.usd, parts: [
-      { tool: "claude", query: growth("claude_code_cost_usage_USD_total", "model", step), name: m => m.model || "?" },
-    ] },
-    { title: "Codex estimated cost", unit: "USD by model · current standard API rates", format: fmt.usd, cost: true, parts: [
-      codex.tokens && { tool: "codex", query: growth(codex.tokens, "model,token_type", step),
-        transform: rows => costRows(rows, codex), name: m => m.model || "?" },
-    ] },
-    { title: "Sessions", unit: "new sessions", format: fmt.count, scale: "integer", parts: [
-      { tool: "claude", query: growth("claude_code_session_count_total", "", step), name: () => "Claude Code" },
-      codex.threads && { tool: "codex", query: growth(codex.threads, "", step), name: () => "Codex" },
-    ] },
-    { title: "Claude Code active time", unit: "by kind", format: fmt.hours, scale: "time", parts: [
-      { tool: "claude", query: growth("claude_code_active_time_seconds_total", "type", step), name: m => m.type === "user" ? "user" : m.type === "cli" ? "Claude" : m.type || "?" },
-    ] },
-    { title: "Lines of code", unit: "Claude Code", format: fmt.lines, parts: [
-      { tool: "claude", query: growth("claude_code_lines_of_code_count_total", "type", step), name: m => m.type === "added" ? "added" : m.type === "removed" ? "removed" : m.type || "?" },
-    ] },
-  ];
-  return list.map(p => ({ ...p, parts: p.parts.filter(part => part && shows(part.tool)) })).filter(p => p.parts.length);
+// Normalized comparison rows, in importance order. Output includes reasoning;
+// reasoning is a detail row and is never added to the total a second time.
+const COMPARISON_ROWS = [
+  { id: "cost", label: "Cost", format: fmt.usd },
+  { id: "total", label: "Total tokens", format: fmt.exact },
+  { id: "input", label: "Uncached input tokens", format: fmt.exact },
+  { id: "cached", label: "Cached input tokens", format: fmt.exact },
+  { id: "written", label: "Cache write tokens", format: fmt.exact },
+  { id: "output", label: "Output tokens", detail: "Includes reasoning when reported in output", format: fmt.exact },
+  { id: "reasoning", label: "Reasoning tokens", detail: "Subset of output; not added to total", format: fmt.exact },
+  { id: "cacheHit", label: "Cache hit", format: fmt.percent },
+  { id: "sessions", label: "New sessions", format: fmt.count },
+  { id: "active", label: "Active time", format: fmt.hours },
+  { id: "commits", label: "Commits", format: fmt.count },
+  { id: "added", label: "Lines added", format: fmt.exact },
+  { id: "removed", label: "Lines removed", format: fmt.exact },
+];
+const sumRows = rows => rows.length ? rows.reduce((sum, r) => sum + Number(r.value[1]), 0) : null;
+function tokenValues(rows, metric) {
+  if (!rows.length) return {};
+  const values = new Map(rows.map(r => [r.metric[metric.tokenLabel], Number(r.value[1])]));
+  const get = id => metric.types[id] ? (values.get(metric.types[id]) || 0) : null;
+  const cached = get("cached"), written = get("written"), rawInput = get("input"), output = get("output");
+  const input = metric.inclusiveInput ? Math.max(0, rawInput - (cached || 0) - (written || 0)) : rawInput;
+  const allInput = (input || 0) + (cached || 0) + (written || 0);
+  return { total: metric.types.total ? get("total") : allInput + (output || 0), input, cached, written, output,
+    reasoning: get("reasoning"), cacheHit: allInput > 0 && cached != null ? cached / allInput : null };
 }
-// Cached input and reasoning are subsets, not additional tokens.
-const codexTokens = codex => codex.tokens + `{token_type="total"}`;
-function tokenBreakdown(rows) {
-  const values = type => new Map(rows.find(r => r.metric.token_type === type)?.values || []);
-  const cached = values("cached_input"), written = values("cache_write_input"), reasoning = values("reasoning_output");
-  return rows.map(r => ({ ...r, values: r.values.map(([t, v]) => [t,
-    Math.max(0, Number(v) - (r.metric.token_type === "input" ? Number(cached.get(t) || 0) + Number(written.get(t) || 0) :
-      r.metric.token_type === "output" ? Number(reasoning.get(t) || 0) : 0))]) }));
+const tokenSelector = metric => metric.tokens + (metric.types.total ? `{${metric.tokenLabel}=${JSON.stringify(metric.types.total)}}` : "");
+async function readAgent(agent, codex, now) {
+  const metric = { types: {}, ...agent.metrics(codex) }, values = {}, notes = {};
+  const read = (selector, by = "") => selector ? instant(growth(selector, by, range.seconds), now) : Promise.resolve([]);
+  const [tokens, cost, sessions, active, commits, lines] = await Promise.all([
+    read(metric.tokens, metric.tokenLabel),
+    read(metric.cost || (metric.convertCost && metric.tokens), metric.convertCost ? `model,${metric.tokenLabel}` : ""),
+    read(metric.sessions), read(metric.active), read(metric.commits), read(metric.lines, "type"),
+  ]);
+  Object.assign(values, tokenValues(tokens, metric));
+  values.cost = sumRows(metric.convertCost ? metric.convertCost(cost) : cost);
+  if (metric.costUnavailable?.()) values.cost = null;
+  values.sessions = sumRows(sessions); values.active = sumRows(active); values.commits = sumRows(commits);
+  if (lines.length) for (const type of ["added", "removed"]) values[type] = Number(lines.find(r => r.metric.type === type)?.value[1] || 0);
+  for (const row of COMPARISON_ROWS) {
+    const supported = row.id === "cost" ? metric.cost || metric.convertCost :
+      row.id === "cacheHit" || row.id === "total" ? metric.tokens :
+      ["added", "removed"].includes(row.id) ? metric.lines : metric[row.id] || metric.types[row.id];
+    notes[row.id] = supported ? "No data for the selected filters and time range" : "Not reported by this agent";
+  }
+  if (metric.estimated) notes.cost = metric.costNote();
+  return { ...agent, metric, values, notes };
+}
+function renderComparison(agents, now) {
+  const section = document.getElementById("comparison"), table = el("table"), caption = el("caption", "", "Agent comparison");
+  table.append(caption);
+  const head = el("thead"), heading = el("tr");
+  const first = el("th", "", "Metric"); first.scope = "col"; heading.append(first);
+  for (const agent of agents) {
+    const cell = el("th", "", agent.label); cell.scope = "col";
+    cell.append(el("span", "note", agent.metric.estimated ? "Estimated API cost" : agent.metric.cost ? "Reported cost" : "Cost not reported")); heading.append(cell);
+  }
+  head.append(heading); table.append(head);
+  const body = el("tbody");
+  for (const [index, spec] of COMPARISON_ROWS.entries()) {
+    const row = el("tr", index < 2 ? "primary" : ""), label = el("th", "", spec.label); label.scope = "row";
+    if (spec.detail) label.append(el("span", "note", spec.detail)); row.append(label);
+    for (const agent of agents) {
+      const value = agent.values[spec.id], cell = el("td", "", value == null ? "—" : spec.format(value));
+      cell.title = value == null || spec.id === "cost" && agent.metric.estimated ? agent.notes[spec.id] : spec.format(value);
+      if (value == null) cell.append(el("span", "note", agent.notes[spec.id]));
+      row.append(cell);
+    }
+    body.append(row);
+  }
+  table.append(body);
+  const selection = SCOPES.map(s => scope[s.id] === ANY ? s.all : scope[s.id]).join(" · ");
+  section.replaceChildren(table, el("div", "note compare-footer", `${range.label} · ${selection} · as of ${new Date(now * 1000).toLocaleString("en-GB")}`),
+    el("div", "note compare-footer", "Estimated costs use the startup price catalog at standard API rates, not subscription charges. Unattributed historical data is excluded by server and project filters. — means unavailable, not zero."));
+}
+
+function panels(agents, step) {
+  const shared = (id, title, unit, format, options = {}) => ({ title, unit, format, grouped: true, ...options,
+    parts: agents.flatMap(agent => {
+      const m = agent.metric;
+      if (id === "cost") return m.cost || m.convertCost && m.tokens ? [{ query: growth(m.cost || m.tokens, m.convertCost ? `model,${m.tokenLabel}` : "", step),
+        transform: m.convertCost, name: () => agent.label + (m.estimated ? " (estimated)" : "") }] : [];
+      if (id === "total") return m.tokens ? [{ query: growth(tokenSelector(m), "", step), name: () => agent.label }] : [];
+      if (m.types[id]) return m.tokens ? [{ query: growth(m.tokens, m.tokenLabel, step), name: () => agent.label,
+        transform: rows => {
+          const times = [...new Set(rows.flatMap(r => r.values.map(([t]) => t)))];
+          return [{ metric: {}, values: times.map(t => [t, tokenValues(rows.map(r => ({ metric: r.metric, value: [t, r.values.find(([time]) => time === t)?.[1] || 0] })), m)[id] || 0]) }];
+        } }] : [];
+      return m[id] ? [{ query: growth(m[id], "", step), name: () => agent.label }] : [];
+    }),
+  });
+  const list = [shared("cost", "Cost over time", "USD · estimates labelled", fmt.usd),
+    { title: "Cost by model", unit: "USD · estimates labelled", format: fmt.usd,
+      parts: agents.filter(a => a.metric.cost || a.metric.convertCost && a.metric.tokens).map(a => ({
+        query: growth(a.metric.cost || a.metric.tokens, a.metric.convertCost ? `model,${a.metric.tokenLabel}` : "model", step),
+        transform: a.metric.convertCost, name: m => `${a.label}${a.metric.estimated ? " (estimated)" : ""} · ${m.model || "?"}`,
+      })) },
+    shared("total", "Tokens over time", "all token types", fmt.tokens, { spikes: true }),
+    ...COMPARISON_ROWS.filter(r => ["input", "cached", "written", "output"].includes(r.id)).map(r => shared(r.id, r.label, "by agent", fmt.tokens)),
+    shared("sessions", "Sessions", "new sessions by agent", fmt.count, { scale: "integer" }),
+    shared("active", "Active time", "reported seconds", fmt.hours, { scale: "time" }),
+    shared("commits", "Commits", "by agent", fmt.count, { scale: "integer" }),
+    { title: "Lines of code", unit: "by agent and change", format: fmt.lines, parts: agents.filter(a => a.metric.lines).map(a => ({
+      query: growth(a.metric.lines, "type", step), name: m => `${a.label} · ${m.type || "?"}`,
+    })) },
+  ];
+  return list.filter(p => p.parts.length);
 }
 // LiteLLM rates are USD per token. Apply discounts to the inclusive input
 // count; output already includes reasoning. No model-name guessing.
@@ -254,80 +355,70 @@ function costNote(codex) {
 }
 
 async function load() {
-  const end = Math.floor(Date.now() / 1000 / range.step) * range.step + range.step;
-  const start = end - range.seconds + range.step;
-  document.getElementById("cards").classList.add("loading");
+  const version = ++loadVersion, now = Math.floor(Date.now() / 1000), end = now, start = end - range.seconds + range.step;
+  const tiles = document.getElementById("tiles"), cards = document.getElementById("cards"), comparisonSection = document.getElementById("comparison");
+  tiles.hidden = cards.hidden = comparison;
+  comparisonSection.hidden = !comparison;
+  document.getElementById("tool").disabled = comparison;
+  document.getElementById("tool").value = comparison ? "all" : tool.id;
+  cards.classList.add("loading"); comparisonSection.classList.add("loading");
   try {
     const codex = await codexMetrics();
-    if (shows("codex") && codex.tokens) {
+    if ((comparison || shows("codex")) && codex.tokens) {
       const response = await fetch("/api/pricing");
       if (response.ok) codex.prices = await response.json();
-    }
-    if (shows("codex") && codex.tokens) {
-      const rows = await instant(`group by (host_name,project) (last_over_time(${codex.tokens}{token_type="total"}[${LOOKBACK}]))`,
-        Math.floor(Date.now() / 1000));
+      const rows = await instant(`group by (host_name,project) (last_over_time(${codex.tokens}{token_type="total"}[${LOOKBACK}]))`, now);
       codex.coverage = coverageNote(rows);
     }
-    const coverage = document.getElementById("coverage");
-    coverage.textContent = codex.coverage;
-    coverage.hidden = !codex.coverage;
-    const list = panels(codex, range.step);
-    const charts = await Promise.all(list.map(async panel => {
-      const results = await Promise.all(panel.parts.map(async part => {
-        const rows = await series(part.query, start, end, range.step);
-        return (part.transform ? part.transform(rows) : rows).map(r => ({ name: part.name(r.metric), values: r.values }));
+    const agents = await Promise.all(AGENTS.filter(a => comparison || shows(a.id)).map(a => readAgent(a, codex, now)));
+    if (version !== loadVersion) return;
+    const coverage = document.getElementById("coverage"); coverage.textContent = codex.coverage; coverage.hidden = !codex.coverage;
+    if (comparison) renderComparison(agents, now);
+    else {
+      const list = panels(agents, range.step), queries = new Map();
+      const rangeRows = query => {
+        if (!queries.has(query)) queries.set(query, series(query, start, end, range.step));
+        return queries.get(query);
+      };
+      const charts = await Promise.all(list.map(async panel => {
+        const results = await Promise.all(panel.parts.map(async part => {
+          const rows = await rangeRows(part.query);
+          return (part.transform ? part.transform(rows) : rows).map(r => ({ name: part.name(r.metric), values: r.values }));
+        }));
+        const data = fold(results.flat(), panel.grouped ? Infinity : SERIES.length);
+        if (panel.grouped) {
+          const index = name => AGENTS.findIndex(a => name === a.label || name === a.label + " (estimated)");
+          data.sort((a, b) => index(a.name) - index(b.name));
+          for (const item of data) item.color = `var(${SERIES[index(item.name) % SERIES.length]})`;
+        }
+        return { ...panel, series: data, note: panel.title.startsWith("Cost") && agents.some(a => a.metric.estimated) ? costNote(codex) : "" };
       }));
-      return { ...panel, series: fold(results.flat()) };
-    }));
-    const claude = shows("claude"), withCodex = shows("codex");
-    const tokens = [claude && "claude_code_token_usage_tokens_total", withCodex && codex.tokens && codexTokens(codex)].filter(Boolean);
-    const sessions = [claude && "claude_code_session_count_total", withCodex && codex.threads].filter(Boolean);
-    const now = Math.floor(Date.now() / 1000);
-    const measure = selectors => trend(selectors, now, start, end);
-    const codexMissing = withCodex && (!codex.tokens || codex.coverage);
-    const tileSpecs = [
-      claude && { label: "Claude Code cost", format: fmt.usd, data: measure(["claude_code_cost_usage_USD_total"]) },
-      withCodex && codex.tokens && { label: "Codex estimated cost", format: fmt.usd, cost: true,
-        data: trend([codex.tokens], now, start, end, "model,token_type", rows => costRows(rows, codex)) },
-      tokens.length && { label: tool.id === "all" ? "Tokens" : tool.label + " tokens", format: fmt.tokens, data: measure(tokens),
-        note: codexMissing ? "Codex data unavailable for this selection" : "" },
-      sessions.length && { label: "Sessions", format: fmt.count, data: measure(sessions), note: codexMissing ? "Codex data unavailable for this selection" : "" },
-      claude && { label: "Claude Code active time", format: fmt.hours, data: measure(["claude_code_active_time_seconds_total"]) },
-      claude && { label: "Claude Code cache hit", format: fmt.percent, ratio: true, data: Promise.all([
-        measure(['claude_code_token_usage_tokens_total{type="cacheRead"}']),
-        measure(['claude_code_token_usage_tokens_total{type=~"input|cacheRead|cacheCreation"}']),
-      ]).then(([hit, all]) => ratio(hit, all)) },
-      withCodex && codex.tokens && { label: "Codex cache hit", format: fmt.percent, ratio: true, data: Promise.all([
-        measure([codex.tokens + `{token_type="cached_input"}`]),
-        measure([codex.tokens + `{token_type="input"}`]),
-      ]).then(([hit, all]) => ratio(hit, all)) },
-      claude && { label: "Commits", format: fmt.count, data: measure(["claude_code_commit_count_total"]),
-        note: "Claude Code" },
-    ].filter(Boolean);
-    const tiles = await Promise.all(tileSpecs.map(async t => ({ ...t, data: await t.data })));
-    for (const tile of tiles.filter(t => t.cost)) {
-      tile.detail = costNote(codex);
-      tile.note = !codex.coverage && codex.prices && !codex.missing.size ? "Standard API estimate · LiteLLM" : tile.detail;
-      if (codex.coverage || !codex.prices || codex.missing.size) tile.data.now = tile.data.before = null;
+      const tokens = agents.filter(a => a.metric.tokens).map(a => tokenSelector(a.metric));
+      const [daily, heat] = await Promise.all([dailyTokens(tokens, now), hourly(tokens, now)]);
+      if (version !== loadVersion) return;
+      const specs = [];
+      for (const agent of agents) for (const id of ["cost", "total", "sessions", "cacheHit"]) {
+        const spec = COMPARISON_ROWS.find(r => r.id === id);
+        if (id === "cost" && !agent.metric.cost && !agent.metric.convertCost || id === "sessions" && !agent.metric.sessions) continue;
+        const buckets = (id === "cacheHit" ? null : charts.find(c => c.title === (id === "cost" ? "Cost over time" : id === "total" ? "Tokens over time" : "Sessions")))?.series.find(s => s.name === agent.label || s.name === agent.label + " (estimated)")?.values || new Map();
+        specs.push({ label: `${agent.label} ${id === "cost" && agent.metric.estimated ? "estimated cost" : spec.label.toLowerCase()}`, format: id === "total" ? fmt.tokens : spec.format,
+          data: { now: agent.values[id] ?? null, before: null, buckets }, note: agent.values[id] == null ? agent.notes[id] : id === "cost" && agent.metric.estimated ? "Standard API estimate · LiteLLM" : "" });
+      }
+      renderTiles(specs, start, end);
+      renderCharts(charts, start, end, [insightsCard(daily), heatCard(heat)]);
     }
-    for (const chart of charts.filter(c => c.cost)) chart.note = costNote(codex);
-    const daily = await dailyTokens(tokens, now);
-    const heat = await hourly(tokens, now);
-    renderTiles(tiles, start, end);
-    renderCharts(charts, start, end, [insightsCard(daily), heatCard(heat)]);
     document.getElementById("error").hidden = true;
-    document.getElementById("updated").textContent = "Updated " + new Date().toLocaleTimeString("en-GB");
+    document.getElementById("updated").textContent = "Updated " + new Date(now * 1000).toLocaleTimeString("en-GB");
   } catch (error) {
-    const box = document.getElementById("error");
-    box.textContent = "Cannot read data: " + error.message;
-    box.hidden = false;
+    if (version !== loadVersion) return;
+    const box = document.getElementById("error"); box.textContent = "Cannot read data: " + error.message; box.hidden = false;
   } finally {
-    document.getElementById("cards").classList.remove("loading");
+    if (version === loadVersion) { cards.classList.remove("loading"); comparisonSection.classList.remove("loading"); }
   }
 }
 
 // Same-name results are merged; past the palette, the smallest fold into "other".
-function fold(list) {
+function fold(list, limit = SERIES.length) {
   const byName = new Map();
   for (const s of list) {
     const values = byName.get(s.name) || new Map();
@@ -336,32 +427,12 @@ function fold(list) {
   }
   let out = [...byName].map(([name, values]) => ({ name, values, sum: [...values.values()].reduce((a, b) => a + b, 0) }))
     .filter(s => s.sum > 0).sort((a, b) => b.sum - a.sum);
-  if (out.length > SERIES.length) {
-    const rest = out.slice(SERIES.length - 1), values = new Map();
+  if (out.length > limit) {
+    const rest = out.slice(limit - 1), values = new Map();
     for (const s of rest) for (const [t, v] of s.values) values.set(t, (values.get(t) || 0) + v);
-    out = [...out.slice(0, SERIES.length - 1), { name: "other", values, sum: rest.reduce((a, s) => a + s.sum, 0) }];
+    out = [...out.slice(0, limit - 1), { name: "other", values, sum: rest.reduce((a, s) => a + s.sum, 0) }];
   }
   return out.map((s, i) => ({ ...s, color: `var(${SERIES[i]})` }));
-}
-
-// Usage in the selected window, in the window before it, and per bucket.
-async function trend(selectors, now, start, end, by = "", transform = rows => rows) {
-  const sum = rows => rows.length ? rows.reduce((a, r) => a + Number(r.value[1]), 0) : null;
-  const parts = await Promise.all(selectors.map(sel => Promise.all([
-    instant(growth(sel, by, range.seconds), now).then(transform).then(sum),
-    instant(growth(sel, by, range.seconds), now - range.seconds).then(transform).then(sum),
-    series(growth(sel, by, range.step), start, end, range.step).then(transform),
-  ])));
-  const buckets = new Map();
-  for (const [, , rows] of parts) for (const r of rows) for (const [t, v] of r.values) buckets.set(t, (buckets.get(t) || 0) + Number(v));
-  const total = index => parts.some(p => p[index] !== null) ? parts.reduce((a, p) => a + (p[index] || 0), 0) : null;
-  return { now: total(0), before: total(1), buckets };
-}
-function ratio(hit, all) {
-  const share = (h, a) => a > 0 ? h / a : null;
-  const buckets = new Map();
-  for (const [t, a] of all.buckets) if (a > 0) buckets.set(t, (hit.buckets.get(t) || 0) / a);
-  return { now: share(hit.now, all.now), before: share(hit.before, all.before), buckets };
 }
 
 function renderTiles(tiles, start, end) {
@@ -383,7 +454,7 @@ function renderTiles(tiles, start, end) {
       row.append(d);
     }
     tile.append(el("div", "label", t.label), row);
-    if (now != null) tile.append(spark(times.map(time => buckets.get(time) || 0)));
+    if (now != null && buckets.size) tile.append(spark(times.map(time => buckets.get(time) || 0)));
     if (t.note) {
       const note = el("div", "note", t.note);
       note.title = t.detail || t.note;
@@ -490,7 +561,7 @@ function renderCharts(charts, start, end, extras) {
   for (let t = start; t <= end; t += range.step) times.push(t);
   const cards = document.getElementById("cards");
   if (!charts.length) {
-    cards.replaceChildren(el("div", "empty", "No Codex metrics in Prometheus"));
+    cards.replaceChildren(el("div", "empty", "No usage metrics in Prometheus"));
     return;
   }
   const rendered = charts.map(chart => {
@@ -506,7 +577,7 @@ function renderCharts(charts, start, end, extras) {
       return card;
     }
     const spiky = chart.spikes && range.step === 86400 && spikes(times.map(t => chart.series.reduce((a, s) => a + (s.values.get(t) || 0), 0)), 7);
-    if (chart.series.length > 1 || (spiky && spiky.some(Boolean))) {
+    if (chart.series.length > 1 || chart.grouped || (spiky && spiky.some(Boolean))) {
       const legend = el("div", "legend");
       for (const s of chart.series) {
         const key = el("i"); key.style.background = s.color;
@@ -522,7 +593,7 @@ function renderCharts(charts, start, end, extras) {
     card.append(tables.has(chart.title) ? table(chart, times) : bars(chart, times, spiky || []));
     return card;
   });
-  cards.replaceChildren(rendered[0], ...extras, ...rendered.slice(1));
+  cards.replaceChildren(...rendered, ...extras);
 }
 
 function table(chart, times) {
@@ -542,7 +613,7 @@ const NS = "http://www.w3.org/2000/svg";
 function bars(chart, times, spiky) {
   const W = 640, H = 220, left = 52, right = 8, top = 8, bottom = 24;
   const totals = times.map(t => chart.series.reduce((a, s) => a + (s.values.get(t) || 0), 0));
-  const max = scaleMax(Math.max(...totals, 0), chart.scale);
+  const max = scaleMax(chart.grouped ? Math.max(0, ...chart.series.flatMap(s => [...s.values.values()])) : Math.max(...totals, 0), chart.scale);
   const svg = svgEl("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": chart.title });
   const y = v => top + (H - top - bottom) * (1 - v / max);
   for (let i = 0; i <= 4; i++) {
@@ -551,7 +622,7 @@ function bars(chart, times, spiky) {
     const tick = svgEl("text", { x: left - 6, y: y(v) + 4, "text-anchor": "end" }); tick.textContent = chart.format(v);
     svg.append(tick);
   }
-  const band = (W - left - right) / times.length, width = Math.max(2, Math.min(28, band - 2));
+  const band = (W - left - right) / times.length, groups = chart.grouped ? Math.max(1, chart.series.length) : 1, width = Math.max(1, Math.min(28, (band - 2) / groups));
   const every = Math.ceil(times.length / 8);
   spiky.forEach((f, i) => {
     if (f) svg.append(svgEl("rect", { x: left + band * i, y: top, width: band, height: H - top - bottom, fill: "var(--spike)" }));
@@ -559,13 +630,14 @@ function bars(chart, times, spiky) {
   times.forEach((time, i) => {
     const x = left + band * i + (band - width) / 2;
     let base = 0;
-    const stack = chart.series.map(s => ({ s, v: s.values.get(time) || 0 })).filter(p => p.v > 0);
+    const stack = chart.series.map((s, index) => ({ s, index, v: s.values.get(time) || 0 })).filter(p => p.v > 0);
     stack.forEach((p, k) => {
-      const y0 = y(base), y1 = y(base + p.v), last = k === stack.length - 1;
+      const y0 = y(chart.grouped ? 0 : base), y1 = y((chart.grouped ? 0 : base) + p.v), last = chart.grouped || k === stack.length - 1;
+      const barX = chart.grouped ? left + band * i + (band - width * groups) / 2 + p.index * width : x;
       const h = Math.max(0, y0 - y1 - (last ? 0 : 2));
       const top1 = y0 - h, r = last ? Math.min(4, width / 2, h) : 0;
       svg.append(svgEl("path", { fill: p.s.color, d:
-        `M${x},${y0}V${top1 + r}${r ? `Q${x},${top1} ${x + r},${top1}` : ""}H${x + width - r}${r ? `Q${x + width},${top1} ${x + width},${top1 + r}` : ""}V${y0}Z` }));
+        `M${barX},${y0}V${top1 + r}${r ? `Q${barX},${top1} ${barX + r},${top1}` : ""}H${barX + width - r}${r ? `Q${barX + width},${top1} ${barX + width},${top1 + r}` : ""}V${y0}Z` }));
       base += p.v;
     });
     if (i % every === 0) {
@@ -651,7 +723,7 @@ function selector(id, options, current, choose) {
 // The servers and projects that reported agent metrics within the lookback.
 async function scopes() {
   await Promise.all(SCOPES.map(async s => {
-    const rows = await instant(`group by (${s.label}) (last_over_time({__name__=~"(claude_code|codex)_.+"}[${LOOKBACK}]))`,
+    const rows = await instant(`group by (${s.label}) (last_over_time({__name__=~"(${AGENTS.map(a => a.prefix).join("|")})_.+"}[${LOOKBACK}]))`,
       Math.floor(Date.now() / 1000));
     const values = [...new Set(rows.map(r => r.metric[s.label]).filter(Boolean))].sort();
     if (scope[s.id] !== ANY && !values.includes(scope[s.id])) values.push(scope[s.id]);
@@ -660,6 +732,13 @@ async function scopes() {
 }
 selector("tool", TOOLS.map(t => [t.id, t.label]), tool.id, id => { tool = TOOLS.find(t => t.id === id); });
 selector("range", RANGES.map(r => [r.id, r.label]), range.id, id => { range = RANGES.find(r => r.id === id); });
+const compareSwitch = document.getElementById("compare");
+compareSwitch.checked = comparison;
+compareSwitch.onchange = () => {
+  comparison = compareSwitch.checked;
+  try { localStorage.setItem("comparison", String(comparison)); } catch (_) {}
+  load();
+};
 // Light or dark; the system preference until the switch is used.
 const switcher = document.getElementById("theme");
 function theme(value) {

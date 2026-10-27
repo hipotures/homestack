@@ -66,3 +66,19 @@ dashboard can filter the counters.
 
 References: [Codex CLI](https://learn.chatgpt.com/docs/developer-commands),
 [Prometheus OTLP resource attributes](https://prometheus.io/docs/guides/opentelemetry/#promoting-resource-attributes).
+
+## Comparing agents
+
+The dashboard's `Compare agents` switch replaces the charts with a table for
+all registered agents, using the current server, project and time filters.
+Cost and total tokens come first. Output includes reasoning; its separate
+reasoning row is a subset, not additional usage. Missing measurements and
+unsupported metrics are marked explicitly instead of being displayed as zero.
+
+The `AGENTS` registry in `crates/hs-usage/src/index.html` defines each agent's
+metric selectors, token label names, token categories and optional capabilities.
+Add an adapter there to include another agent in the comparison columns,
+agent selector, scope discovery and shared charts. Declare whether input
+already includes cached and cache-write tokens. Unreported capabilities remain
+absent. Shared charts keep agent colors consistent and show adjacent bars;
+model costs and agent-specific measurements retain their own breakdowns.
