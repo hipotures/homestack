@@ -1279,8 +1279,9 @@ PROFILE_END = "# <<< homestack <<<"
 
 
 def merged_profile(path: Path, block: str, exports: list[str]) -> str:
-    """Keep the user's lines: replace the marked block, else put it first, and
-    replace each export by key or append it."""
+    """Keep the user's lines: replace the marked block, else the unmarked one a
+    whole-file write left at the top, and replace each export by key or
+    append it."""
     import re
     lines = path.read_text().splitlines() if path.exists() else []
     managed = [PROFILE_BEGIN, *block.rstrip().splitlines(), PROFILE_END]
@@ -1288,7 +1289,11 @@ def merged_profile(path: Path, block: str, exports: list[str]) -> str:
         start = lines.index(PROFILE_BEGIN)
         lines[start:lines.index(PROFILE_END, start) + 1] = managed
     else:
-        lines = managed + lines
+        path_line = re.compile(r'^(_hs_bin="\$HOME"/\S+|case ":\$PATH:" in \*":\$_hs_bin:"\*\) ;; \*\) PATH="\$_hs_bin:\$PATH" ;; esac)$')
+        top = 0
+        while top < len(lines) and (lines[top] in managed or path_line.match(lines[top])):
+            top += 1
+        lines = managed + lines[top:]
     for export in exports:
         pattern = re.compile(rf"^\s*export\s+{re.escape(export.split('=', 1)[0])}=")
         hits = [index for index, line in enumerate(lines) if pattern.match(line)]
@@ -1466,7 +1471,7 @@ def run(data: dict) -> dict:
                    if not (home / relative).exists() or current[relative] != content]
         diff = [line for relative in changed
                 for line in difflib.unified_diff(current[relative].splitlines(), updates[relative].splitlines(),
-                                                 f"~/{relative}", f"~/{relative}", lineterm="")]
+                                                 f"~/{relative}", f"~/{relative}", n=1, lineterm="")]
         if data.get("apply"):
             for relative in changed:
                 atomic_write(safe_path(home, relative), updates[relative])
