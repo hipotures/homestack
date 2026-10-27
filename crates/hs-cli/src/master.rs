@@ -188,10 +188,10 @@ impl Master {
             vec!["-F".to_owned(), Self::user_ssh_config(home)]
         };
         // An ssh-agent signs outside the sandbox and would ask every attached
-        // key, so ssh signs by itself unless an agent was chosen explicitly.
-        // Asked in the TUI (`self.prefix`, the askpass bridge) the same: the
-        // agent would ask for the touch on its own, so the TUI never would.
-        let agent_args: Vec<String> = if (!prefix.is_empty() || !self.prefix.is_empty())
+        // key, so with local `fido_devices` ssh signs by itself unless an agent
+        // was chosen explicitly. Without them the agent signs, e.g. one
+        // forwarded from the desktop that holds the keys.
+        let agent_args: Vec<String> = if !prefix.is_empty()
             && !self
                 .options
                 .iter()
