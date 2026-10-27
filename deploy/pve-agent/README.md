@@ -217,6 +217,13 @@ retain VMID order. QGA response reads have a 3-second deadline per VM and a
 older agents without privileged capacity leave `total_bytes`/`free_bytes` null
 and report their available capacity separately.
 
+QGA does not list virtiofs mounts either. For each `virtiofsN` share of a
+running VM (`dirid=<id>` in `/etc/pve/qemu-server/<vmid>.conf`), the agent
+measures the host directory that `/etc/pve/mapping/directory.cfg` maps for
+this node, reported as mount `virtiofs:<id>` with filesystem `virtiofs`,
+whether or not the guest mounted it. A share without a path on this node has
+an `error`.
+
 Debug diagnostics go to stderr: source paths, values, file byte counts, scalar
 counts, errors and durations. Worker counters are merged into the summary.
 `local_collection_usec` and `guest_agent_collection_usec` split per-instance

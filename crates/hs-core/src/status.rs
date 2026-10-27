@@ -733,13 +733,19 @@ pub async fn global_status(
             virtiofs.push(target);
         }
         let mut home = None;
+        // A virtiofs home of a running VM is measured in the background.
+        if shared_home.is_some() && item.status.as_deref() != Some("running") {
+            home = last
+                .get(&item.vmid)
+                .and_then(|mounts| crate::service_status::last_home(mounts, false, item.vmid, None));
+        }
         if node_online && shared_home.is_none() {
             let status = item.status.as_deref().unwrap_or("unknown");
             let mut usage = workspace_home_usage(pve, &item.node, item.vmid, status, home_cfg).await;
             if status != "running"
                 && let Some(previous) = last
                     .get(&item.vmid)
-                    .and_then(|mounts| crate::service_status::last_home(mounts, false, usage.size_bytes))
+                    .and_then(|mounts| crate::service_status::last_home(mounts, false, item.vmid, usage.size_bytes))
             {
                 usage = previous;
             }
@@ -905,7 +911,7 @@ pub async fn global_status(
             && let (Some(home), Some(previous)) = (
                 &mut home,
                 last.get(&item.vmid)
-                    .and_then(|mounts| crate::service_status::last_home(mounts, container, None)),
+                    .and_then(|mounts| crate::service_status::last_home(mounts, container, item.vmid, None)),
             )
         {
             *home = previous;

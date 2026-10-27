@@ -106,7 +106,11 @@ fn stat(root: &OwnedFd, mount: &str) -> Result<Value, String> {
         ResolveFlags::IN_ROOT | ResolveFlags::NO_MAGICLINKS,
     )
     .map_err(|e| e.to_string())?;
-    let metadata = rustix::fs::fstat(&fd).map_err(|e| e.to_string())?;
+    measure(&fd)
+}
+
+fn measure(fd: &OwnedFd) -> Result<Value, String> {
+    let metadata = rustix::fs::fstat(fd).map_err(|e| e.to_string())?;
     if FileType::from_raw_mode(metadata.st_mode) != FileType::Directory {
         return Err("not a directory mount".into());
     }
@@ -257,6 +261,86 @@ fn response(
         trace.record(label, count, started, &value);
         return Ok(value);
     }
+}
+
+/// The host side of VM `id`'s virtiofs shares on `node`, as `virtiofs:<id>`
+/// of the directory mapping that names each share. The share is the host
+/// directory, so its space does not depend on the guest mounting it.
+pub fn virtiofs(id: u32, node: &str, trace: &mut Trace) -> Vec<Value> {
+    let Ok(config) = trace.read(Path::new(&format!("/etc/pve/qemu-server/{id}.conf"))) else {
+        return Vec::new();
+    };
+    // `virtiofsN: dirid=<id>,cache=…`; snapshot and pending sections follow `[`.
+    let shares: Vec<String> = config
+        .lines()
+        .take_while(|line| !line.starts_with('['))
+        .filter_map(|line| {
+            let (key, value) = line.split_once(':')?;
+            key.strip_prefix("virtiofs")?.parse::<u32>().ok()?;
+            let fields: Vec<&str> = value.trim().split(',').collect();
+            let dirid = fields
+                .iter()
+                .find_map(|field| field.strip_prefix("dirid="))
+                .or_else(|| fields.first().filter(|field| !field.contains('=')).copied())?;
+            Some(dirid.to_owned())
+        })
+        .collect();
+    if shares.is_empty() {
+        return Vec::new();
+    }
+    let mappings = trace
+        .read(Path::new("/etc/pve/mapping/directory.cfg"))
+        .unwrap_or_default();
+    shares
+        .into_iter()
+        .map(|share| {
+            let started = Instant::now();
+            let mut record = json!({"mount": format!("virtiofs:{share}"), "filesystem": "virtiofs", "mounted": true,
+                "total_bytes": null, "used_bytes": null, "free_bytes": null, "available_bytes": null, "error": null});
+            let measured = mapped_path(&mappings, &share, node)
+                .ok_or_else(|| "no directory mapping path on this node".to_owned())
+                .and_then(|path| {
+                    record["source"] = json!(path);
+                    let fd = rustix::fs::open(
+                        path.as_str(),
+                        OFlags::PATH | OFlags::DIRECTORY | OFlags::CLOEXEC,
+                        Mode::empty(),
+                    )
+                    .map_err(|e| e.to_string())?;
+                    measure(&fd)
+                });
+            match measured {
+                Ok(values) => {
+                    if let (Some(record), Some(values)) = (record.as_object_mut(), values.as_object()) {
+                        record.extend(values.clone());
+                    }
+                }
+                Err(e) => record["error"] = json!(e),
+            }
+            trace.record(&format!("statvfs:virtiofs:{share}"), 0, started, &record);
+            record
+        })
+        .collect()
+}
+
+/// The `path` of directory mapping `id` on `node`: an unindented ID line
+/// followed by indented `map node=…,path=…` lines.
+fn mapped_path(mappings: &str, id: &str, node: &str) -> Option<String> {
+    let mut current = false;
+    for line in mappings.lines() {
+        if !line.starts_with(char::is_whitespace) {
+            current = line.trim() == id;
+            continue;
+        }
+        let Some(fields) = line.trim().strip_prefix("map ").filter(|_| current) else {
+            continue;
+        };
+        let fields: BTreeMap<&str, &str> = fields.split(',').filter_map(|field| field.split_once('=')).collect();
+        if fields.get("node") == Some(&node) {
+            return fields.get("path").map(|path| (*path).to_owned());
+        }
+    }
+    None
 }
 
 pub fn qemu(id: u32, trace: &mut Trace) -> Value {

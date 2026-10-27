@@ -262,7 +262,7 @@ struct GuestBatch {
     trace: Trace,
 }
 
-fn guest_worker(jobs: &[(usize, u32)], next: &AtomicUsize, debug: bool) -> GuestBatch {
+fn guest_worker(jobs: &[(usize, u32)], next: &AtomicUsize, node: &str, debug: bool) -> GuestBatch {
     let mut trace = Trace {
         debug,
         ..Trace::default()
@@ -270,13 +270,20 @@ fn guest_worker(jobs: &[(usize, u32)], next: &AtomicUsize, debug: bool) -> Guest
     let mut samples = Vec::new();
     while let Some(&(index, id)) = jobs.get(next.fetch_add(1, Ordering::Relaxed)) {
         let started = Instant::now();
-        let report = filesystems::qemu(id, &mut trace);
+        let mut report = filesystems::qemu(id, &mut trace);
+        let shares = filesystems::virtiofs(id, node, &mut trace);
+        if !shares.is_empty() {
+            match report["filesystems"].as_array_mut() {
+                Some(list) => list.extend(shares),
+                None => report["filesystems"] = json!(shares),
+            }
+        }
         samples.push((index, report, started.elapsed().as_micros() as u64));
     }
     GuestBatch { samples, trace }
 }
 
-fn collect_guests(instances: &mut [Value], parallel: usize, trace: &mut Trace) -> Result<(), String> {
+fn collect_guests(instances: &mut [Value], parallel: usize, node: &str, trace: &mut Trace) -> Result<(), String> {
     let jobs: Vec<_> = instances
         .iter()
         .enumerate()
@@ -297,7 +304,7 @@ fn collect_guests(instances: &mut [Value], parallel: usize, trace: &mut Trace) -
         );
     }
     let batches = if workers <= 1 {
-        vec![guest_worker(&jobs, &next, debug)]
+        vec![guest_worker(&jobs, &next, node, debug)]
     } else {
         std::thread::scope(|scope| -> Result<Vec<GuestBatch>, String> {
             let mut handles = Vec::new();
@@ -307,7 +314,7 @@ fn collect_guests(instances: &mut [Value], parallel: usize, trace: &mut Trace) -
                 handles.push(
                     std::thread::Builder::new()
                         .name(format!("qga-{worker}"))
-                        .spawn_scoped(scope, move || guest_worker(jobs, next, debug))
+                        .spawn_scoped(scope, move || guest_worker(jobs, next, node, debug))
                         .map_err(|e| format!("cannot start Guest Agent worker: {e}"))?,
                 );
             }
@@ -421,7 +428,7 @@ fn collect(config: &Config, selection: &Selection, cache: &mut Cache) -> Result<
         }
         cache.retain(|key, _| live.contains(key));
     }
-    collect_guests(&mut instances, config.qga_parallel, &mut trace)?;
+    collect_guests(&mut instances, config.qga_parallel, &config.node()?, &mut trace)?;
     for instance in &mut instances {
         let Some(id) = instance["vmid"].as_u64().and_then(|n| u32::try_from(n).ok()) else {
             continue;

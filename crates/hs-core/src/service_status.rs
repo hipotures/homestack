@@ -185,19 +185,30 @@ pub async fn last_space(prometheus: &Url, vmids: &[u32]) -> BTreeMap<u32, BTreeM
         .collect()
 }
 
-/// The last `/home/app` of a container, or of a VM the guest filesystem
+/// The last `/home/app` of a container; of VM `vmid` its `HS_HOME_<vmid>`
+/// virtiofs share, measured on the host, or else the guest filesystem
 /// within 15 % of its home disk's `size`.
 #[must_use]
-pub fn last_home(mounts: &BTreeMap<String, HomeUsage>, container: bool, size: Option<u64>) -> Option<HomeUsage> {
+pub fn last_home(
+    mounts: &BTreeMap<String, HomeUsage>,
+    container: bool,
+    vmid: u32,
+    size: Option<u64>,
+) -> Option<HomeUsage> {
     if container {
         return mounts.get("/home/app").cloned();
+    }
+    if let Some(share) = mounts.get(&format!("virtiofs:HS_HOME_{vmid}")) {
+        return Some(share.clone());
     }
     let size = size?;
     #[allow(clippy::cast_precision_loss, reason = "a size comparison")]
     let gap = |total: u64| (total as f64 - size as f64).abs() / size as f64;
     mounts
         .iter()
-        .filter(|(mount, usage)| *mount != "/" && usage.size_bytes.is_some_and(|total| gap(total) <= 0.15))
+        .filter(|(mount, usage)| {
+            *mount != "/" && !mount.starts_with("virtiofs:") && usage.size_bytes.is_some_and(|total| gap(total) <= 0.15)
+        })
         .min_by(|(_, a), (_, b)| gap(a.size_bytes.unwrap_or(0)).total_cmp(&gap(b.size_bytes.unwrap_or(0))))
         .map(|(_, usage)| usage.clone())
 }
