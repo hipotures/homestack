@@ -1,0 +1,12 @@
+#!/bin/sh
+set -eu
+case "$1" in
+    remove)
+        deb-systemd-helper mask homestack-pve-agent.service >/dev/null || true
+        if [ -d /run/systemd/system ]; then systemctl daemon-reload; fi
+        ;;
+    purge)
+        deb-systemd-helper purge homestack-pve-agent.service >/dev/null || true
+        deb-systemd-helper unmask homestack-pve-agent.service >/dev/null || true
+        ;;
+esac

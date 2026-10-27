@@ -3,7 +3,7 @@ name: Checks and API release
 on:
   push:
     branches: ['**']
-    tags: ['[0-9]+.[0-9]+.[0-9]+', 'pangolin-[0-9]+.[0-9]+.[0-9]+', 'otel-[0-9]+.[0-9]+.[0-9]+', 'ai-usage-[0-9]+.[0-9]+.[0-9]+']
+    tags: ['[0-9]+.[0-9]+.[0-9]+', 'pangolin-[0-9]+.[0-9]+.[0-9]+', 'otel-[0-9]+.[0-9]+.[0-9]+', 'ai-usage-[0-9]+.[0-9]+.[0-9]+', 'pve-agent-[0-9]+.[0-9]+.[0-9]+']
   pull_request:
   workflow_dispatch:
 
@@ -41,7 +41,7 @@ jobs:
   # Publish immutable API releases, e.g. homestack-server:0.2.0.
   image:
     needs: check
-    if: github.event_name == 'push' && github.ref_type == 'tag' && !startsWith(github.ref_name, 'pangolin-') && !startsWith(github.ref_name, 'otel-') && !startsWith(github.ref_name, 'ai-usage-')
+    if: github.event_name == 'push' && github.ref_type == 'tag' && !startsWith(github.ref_name, 'pangolin-') && !startsWith(github.ref_name, 'otel-') && !startsWith(github.ref_name, 'ai-usage-') && !startsWith(github.ref_name, 'pve-agent-')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -289,3 +289,65 @@ jobs:
         env:
           IMAGE: ghcr.io/hipotures/homestack-ai-usage:${{ steps.tag.outputs.tag }}
         run: docker push "$IMAGE"
+
+  pve-agent-package:
+    needs: check
+    if: github.event_name == 'push' && github.ref_type == 'tag' && startsWith(github.ref_name, 'pve-agent-')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+      - name: Package version
+        id: version
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          [[ "$RELEASE_TAG" =~ ^pve-agent-((0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*))$ ]]
+          echo "version=${BASH_REMATCH[1]}" >> "$GITHUB_OUTPUT"
+      - name: Install build prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends dpkg-dev binutils
+          rustup toolchain install 1.99.0 --profile minimal --target x86_64-unknown-linux-musl
+          rustup default 1.99.0
+      - uses: Swatinem/rust-cache@v2.9.2
+        with:
+          key: musl-pve-agent
+      - name: Build the static application
+        run: deploy/pve-agent/build-static.sh
+      - name: Build the Debian package
+        env:
+          PACKAGE_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)
+          export SOURCE_DATE_EPOCH
+          python3 deploy/pve-agent/build-deb.py --version "$PACKAGE_VERSION" \
+            --binary target/x86_64-unknown-linux-musl/release/homestack-pve-agent --output target/debian
+          dpkg-deb --info "target/debian/homestack-pve-agent_${PACKAGE_VERSION}_amd64.deb"
+      - name: Publish the immutable package release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          PACKAGE_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          cat > /tmp/pve-agent-release-notes.md <<'EOF'
+          Standalone amd64 PVE node agent. Install and update through the signed HomeStack APT repository.
+
+          Instructions: https://github.com/hipotures/homestack/blob/main/deploy/apt/README.md
+          EOF
+          gh release create "$RELEASE_TAG" "target/debian/homestack-pve-agent_${PACKAGE_VERSION}_amd64.deb" \
+            --verify-tag --draft --title "PVE agent $PACKAGE_VERSION" --notes-file /tmp/pve-agent-release-notes.md
+          gh release edit "$RELEASE_TAG" --draft=false
+
+  pve-agent-repository:
+    needs: pve-agent-package
+    if: github.event_name == 'push' && github.ref_type == 'tag' && startsWith(github.ref_name, 'pve-agent-')
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    uses: ./.github/workflows/apt.yml
+    secrets:
+      APT_SIGNING_KEY: ${{ secrets.APT_SIGNING_KEY }}

@@ -1,0 +1,16 @@
+#!/bin/sh
+set -eu
+case "$1" in
+    install)
+        if [ -e /etc/systemd/system/homestack-pve-agent.service ] || [ -e /usr/local/sbin/homestack-pve-agent ]; then
+            echo "Remove the manual homestack-pve-agent installation before installing the Debian package; retain /etc/homestack/pve-agent.toml." >&2
+            exit 1
+        fi
+        ;;
+    upgrade)
+        if [ -e /usr/local/sbin/homestack-pve-agent ]; then
+            echo "Remove /usr/local/sbin/homestack-pve-agent before upgrading the Debian package." >&2
+            exit 1
+        fi
+        ;;
+esac

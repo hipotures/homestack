@@ -101,3 +101,11 @@ This future system is not yet specified. Do not build it, redesign E2E, create p
 
 - The Claude Code and Codex usage dashboard (`crates/hs-usage`, manifest `.homestack/services/ai-usage/`) has an independent release line: annotated Git tag `ai-usage-X.Y.Z` publishes `ghcr.io/hipotures/homestack-ai-usage:X.Y.Z` as a single `linux/amd64` image.
 - After building, verifying, committing and pushing a change to `crates/hs-usage/`, `deploy/ai-usage/` or a shared crate it uses, run `python3 scripts/tag-image.py --service ai-usage`. It automatically selects the next patch release, starting at `0.1.0`, and requires a clean, already pushed HEAD. Manifest-only changes need no image release.
+
+# PVE agent package releases
+
+- The standalone node agent (`crates/hs-pve-agent/`, `deploy/pve-agent/`) has an independent Debian package release line: annotated tag `pve-agent-X.Y.Z`. It does not publish an API or Collector image.
+- After compiling, verifying, reviewing, committing and pushing an application- or package-affecting change, run `python3 scripts/tag-pve-agent.py`. It chooses the next patch version, starting at `0.1.0`, requires clean, pushed HEAD, and refuses a HEAD already released. Never move tags or overwrite package releases.
+- CI checks must succeed before publication. The package is attached to a GitHub Release, then the signed APT archive is rebuilt and published at `https://hipotures.github.io/homestack/apt/` through GitHub Pages. Ordinary branch pushes run checks only.
+- Documentation-only changes need no package release. APT publisher/bootstrap-only changes can republish the archive through the separate `Publish signed APT repository` workflow without creating a new package version.
+- Keep the archive private key only in the maintainer key store and the `APT_SIGNING_KEY` Actions secret. Commit only public keys and fingerprints. Never log or publish private signing material. Clients use the repository-scoped `Signed-By` keyring.

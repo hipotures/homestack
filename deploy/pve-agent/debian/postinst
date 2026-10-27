@@ -1,0 +1,21 @@
+#!/bin/sh
+set -eu
+if [ "$1" = configure ]; then
+    deb-systemd-helper unmask homestack-pve-agent.service >/dev/null || true
+    if deb-systemd-helper debian-installed homestack-pve-agent.service; then
+        if deb-systemd-helper --quiet was-enabled homestack-pve-agent.service; then
+            deb-systemd-helper enable homestack-pve-agent.service >/dev/null || true
+        fi
+    else
+        deb-systemd-helper enable homestack-pve-agent.service >/dev/null || true
+    fi
+    deb-systemd-helper update-state homestack-pve-agent.service >/dev/null || true
+    if [ -d /run/systemd/system ]; then
+        systemctl daemon-reload
+        if /usr/sbin/homestack-pve-agent --check-config --config /etc/homestack/pve-agent.toml >/dev/null 2>&1; then
+            deb-systemd-invoke restart homestack-pve-agent.service || true
+        else
+            echo "Set otlp_endpoint in /etc/homestack/pve-agent.toml, then run: systemctl restart homestack-pve-agent"
+        fi
+    fi
+fi

@@ -31,31 +31,74 @@ libraries or a Rust installation on PVE. A regular local build is also available
 python3 scripts/cargo.py build --locked -p hs-pve-agent --bin homestack-pve-agent
 ```
 
-## Install on each PVE node
+## Install on each PVE node through APT
 
-Copy the static executable and this directory to the node. In the directory
-containing `install.sh`, set the Collector for this node in `pve-agent.toml`, then
-run as root:
+The signed archive is `https://hipotures.github.io/homestack/apt/`, suite
+`stable`, component `main`, architecture `amd64`. Add it once as root on each
+node (requires curl, GnuPG and CA certificates):
 
 ```sh
-./install.sh /root/homestack-pve-agent
+curl -fsSLo /tmp/homestack-apt-setup.sh https://hipotures.github.io/homestack/apt/setup.sh
+bash /tmp/homestack-apt-setup.sh
+apt-get install homestack-pve-agent
 ```
 
-The installer validates configuration before changing installed files, installs
-the application and unit, enables boot startup, and starts/restarts the service.
-Repeated installation updates the binary and unit while preserving an existing
-configuration. The supplied configuration is installed only when none exists.
-When updating an existing installation, add `otlp_endpoint` to
-`/etc/homestack/pve-agent.toml` before running the installer; the installer never
-rewrites existing configuration. Reinstall the updated unit as well as the binary
-to enable the service's IP networking permissions.
+The setup script checks the pinned signing-key fingerprint and writes a scoped
+`Signed-By` source. It never modifies other PVE/Debian repositories. See
+[archive trust and maintenance](../apt/README.md) for the fingerprint and manual
+source configuration.
 
 | Purpose | Installed path |
 | --- | --- |
-| Application | `/usr/local/sbin/homestack-pve-agent` |
-| Configuration | `/etc/homestack/pve-agent.toml` |
-| systemd unit | `/etc/systemd/system/homestack-pve-agent.service` |
+| Application | `/usr/sbin/homestack-pve-agent` |
+| Configuration (dpkg conffile) | `/etc/homestack/pve-agent.toml` |
+| systemd unit | `/usr/lib/systemd/system/homestack-pve-agent.service` |
 | Latest snapshot | `/run/homestack-pve-agent/snapshot.json` |
+
+On a new installation `otlp_endpoint` is empty: set the correct local Collector
+before starting collection. For example, on pve1:
+
+```toml
+otlp_endpoint = "http://otel-1.homestack.app:4318/v1/metrics"
+```
+
+Use `otel-2` on pve2 and `otel-3` on pve3. Then:
+
+```sh
+systemctl restart homestack-pve-agent
+systemctl status homestack-pve-agent
+journalctl -u homestack-pve-agent -n 50
+```
+
+The package enables boot startup. With valid configuration it starts/restarts
+collection on install/upgrade, respecting Debian service policy and a previously
+disabled unit. Configuration is managed as a dpkg conffile; ordinary upgrades
+preserve operator edits, with standard dpkg prompts if a future package also
+changes its template. Subsequent updates require no file copying:
+
+```sh
+apt-get update
+apt-get install --only-upgrade homestack-pve-agent
+```
+
+Remove with `apt-get remove homestack-pve-agent` (retains configuration), or
+`apt-get purge homestack-pve-agent` (removes configuration as well).
+
+If this node has the earlier manual installation, remove those manually
+installed files once before the first package installation. Keep the config:
+
+```sh
+systemctl disable --now homestack-pve-agent.service
+rm /etc/systemd/system/homestack-pve-agent.service
+rm /usr/local/sbin/homestack-pve-agent
+systemctl daemon-reload
+apt-get -o Dpkg::Options::=--force-confold install homestack-pve-agent
+```
+
+The package refuses a conflicting manual installation; it does not silently
+replace `/usr/local` files or an overriding `/etc` unit. Do not remove a custom
+unit you intend to retain without first reviewing it. New package-managed
+customizations should use systemd drop-ins.
 
 The service runs as root to inspect container processes, mount views and QGA
 sockets. systemd makes the filesystem read-only except the runtime directory;
@@ -64,22 +107,10 @@ another directory also requires adapting `ReadWritePaths` and creating that
 directory with suitable permissions. Do not enable namespace restrictions that
 hide `/proc`, PVE files, host cgroups or QGA sockets.
 
-```sh
-systemctl status homestack-pve-agent
-journalctl -u homestack-pve-agent -n 50
-cat /run/homestack-pve-agent/snapshot.json
-```
-
-`DESTDIR=/absolute/staging/path ./install.sh PATH_TO_BINARY` stages the same
-files without root or systemd actions. This is intended for packaging and
-installation checks, not a second runtime location.
-
-To uninstall, run `./uninstall.sh` as root. It stops/disables the service and
-removes the unit and executable, retaining the operator's configuration.
-
 ## Configuration and modes
 
-The supplied TOML configuration has these defaults:
+For pve1, the TOML configuration can use the following values. The package leaves
+`otlp_endpoint` empty until the operator selects a Collector:
 
 ```toml
 cgroup_root = "/sys/fs/cgroup"
