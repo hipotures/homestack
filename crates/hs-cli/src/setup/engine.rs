@@ -551,7 +551,7 @@ fn inspect_item(
             });
             item["source"] = local;
         }
-        Params::Environment { profile } => {
+        Params::Environment { profile, exports } => {
             let test = format!("command -v {} >/dev/null", shell::quote(profile));
             let shell_check = workspace.run(&command_environment(settings, &test, "sh", &[], false), None, false)?;
             let paths = write_paths(settings, entry);
@@ -576,7 +576,7 @@ fn inspect_item(
                     workspace,
                     settings,
                     "environment",
-                    guest_args! {"profile": profile, "bins": all_bins(settings)},
+                    guest_args! {"profile": profile, "bins": all_bins(settings), "exports": exports},
                 )?;
                 let changed: Vec<String> = desired["changed"]
                     .as_array()
@@ -791,13 +791,13 @@ pub fn preflight_entry(
                 "remote": remote, "local": local, "changed": changed,
             }))
         }
-        Params::Environment { profile } => {
+        Params::Environment { profile, exports } => {
             require_tool(workspace, settings, profile, &[])?;
             guest(
                 workspace,
                 settings,
                 "environment",
-                guest_args! {"profile": profile, "bins": all_bins(settings)},
+                guest_args! {"profile": profile, "bins": all_bins(settings), "exports": exports},
             )
         }
         Params::Application(p) => {
@@ -931,13 +931,13 @@ fn apply_entry(
     let id = entry.id.as_str();
     let done = |status: &str, detail: &str| Ok((status.to_owned(), detail.to_owned()));
     match &entry.params {
-        Params::Environment { profile } => {
+        Params::Environment { profile, exports } => {
             observer.activity(Some(id), &format!("Write {} shell configuration", entry.label));
             let result = guest(
                 workspace,
                 settings,
                 "environment",
-                guest_args! {"profile": profile, "bins": all_bins(settings), "apply": true},
+                guest_args! {"profile": profile, "bins": all_bins(settings), "exports": exports, "apply": true},
             )?;
             if !truthy(&result["changed"]) {
                 observer.activity(Some(id), "Shell configuration already matches");

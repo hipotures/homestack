@@ -96,6 +96,8 @@ pub enum Params {
     },
     Environment {
         profile: String,
+        /// Bash only: `KEY=VALUE` lines kept as `export` lines of `.bashrc`.
+        exports: Vec<String>,
     },
     Application(Box<Application>),
     Repository {
@@ -163,8 +165,9 @@ impl Entry {
                     data.insert("application".into(), Value::String(application.clone()));
                 }
             }
-            Params::Environment { profile } => {
+            Params::Environment { profile, exports } => {
                 data.insert("profile".into(), Value::String(profile.clone()));
+                data.insert("exports".into(), string_array(exports));
             }
             Params::Application(p) => {
                 let text = |value: &str| Value::String(value.to_owned());
@@ -296,7 +299,10 @@ pub fn defaults() -> Vec<Entry> {
                 "environment",
                 label,
                 &format!("Prepare {label} startup files and user executable paths."),
-                Params::Environment { profile: id.to_owned() },
+                Params::Environment {
+                    profile: id.to_owned(),
+                    exports: Vec::new(),
+                },
             )
         })
         .collect();
@@ -589,6 +595,31 @@ fn string_list(value: &Value, key: &str) -> Result<Vec<String>, AppError> {
             _ => Err(error()),
         })
         .collect()
+}
+
+/// `exports`: `KEY=VALUE` or `export KEY=VALUE` lines, one per key; the
+/// value is shell text written as given.
+fn exports(value: &Value) -> Result<Vec<String>, AppError> {
+    let mut keys = Vec::new();
+    let mut lines = Vec::new();
+    for line in string_list(value, "exports")? {
+        let line = line.trim();
+        let line = line.strip_prefix("export ").map_or(line, str::trim_start);
+        let (key, _) = line
+            .split_once('=')
+            .ok_or_else(|| AppError::new(format!("Environment export {line} needs KEY=VALUE")))?;
+        let valid = key.chars().next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+            && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+        if !valid || line.contains('\n') {
+            return Err(AppError::new(format!("Environment export {line} is invalid")));
+        }
+        if keys.iter().any(|known| known == key) {
+            return Err(AppError::new(format!("Environment export {key} is repeated")));
+        }
+        keys.push(key.to_owned());
+        lines.push(line.to_owned());
+    }
+    Ok(lines)
 }
 
 /// `_config_values`: tables, arrays and finite scalars; no NUL.
@@ -886,7 +917,7 @@ fn parse_item(data: &Table, groups: &[Group], config_paths: &mut Vec<String>) ->
     let group = text_field(data, "group");
     let fields: &[&str] = match handler {
         Some("file") => &["path"],
-        Some("environment") => &["profile"],
+        Some("environment") => &["profile", "exports"],
         Some("application") => &APPLICATION_FIELDS,
         Some("repository") => &["repository"],
         Some("backup" | "herdr") => &[],
@@ -946,8 +977,14 @@ fn parse_item(data: &Table, groups: &[Group], config_paths: &mut Vec<String>) ->
             let profile = params.get("profile").ok_or_else(invalid)?;
             match profile {
                 Value::String(profile) if ["bash", "zsh", "fish", "nu"].contains(&profile.as_str()) => {
+                    let empty = Value::Array(Vec::new());
+                    let exports = exports(params.get("exports").unwrap_or(&empty))?;
+                    if !exports.is_empty() && profile != "bash" {
+                        return Err(AppError::new("Environment exports are supported only for Bash"));
+                    }
                     Params::Environment {
                         profile: profile.clone(),
+                        exports,
                     }
                 }
                 _ => return Err(AppError::new("Environment profile must be bash, zsh, fish or nu")),

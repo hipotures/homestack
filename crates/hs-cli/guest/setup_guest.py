@@ -1274,7 +1274,34 @@ def posix_paths(bin_dirs: list[str]) -> str:
     return "\n".join(lines + ["export PATH", "unset _hs_bin"])
 
 
-def environment_updates(home: Path, profile: str, bins: list[str]) -> dict[str, str]:
+PROFILE_BEGIN = "# >>> homestack >>>"
+PROFILE_END = "# <<< homestack <<<"
+
+
+def merged_profile(path: Path, block: str, exports: list[str]) -> str:
+    """Keep the user's lines: replace the marked block, else put it first, and
+    replace each export by key or append it."""
+    import re
+    lines = path.read_text().splitlines() if path.exists() else []
+    managed = [PROFILE_BEGIN, *block.rstrip().splitlines(), PROFILE_END]
+    if PROFILE_BEGIN in lines and PROFILE_END in lines[lines.index(PROFILE_BEGIN):]:
+        start = lines.index(PROFILE_BEGIN)
+        lines[start:lines.index(PROFILE_END, start) + 1] = managed
+    else:
+        lines = managed + lines
+    for export in exports:
+        pattern = re.compile(rf"^\s*export\s+{re.escape(export.split('=', 1)[0])}=")
+        hits = [index for index, line in enumerate(lines) if pattern.match(line)]
+        if not hits:
+            lines.append(f"export {export}")
+            continue
+        lines[hits[0]] = f"export {export}"
+        for index in reversed(hits[1:]):
+            del lines[index]
+    return "\n".join(lines) + "\n"
+
+
+def environment_updates(home: Path, profile: str, bins: list[str], exports: list[str]) -> dict[str, str]:
     import shlex
     paths = posix_paths(bins)
     if profile == "bash":
@@ -1285,10 +1312,9 @@ case $- in *i*)
     fi
 ;; esac'''
         login = next((p for p in (".bash_profile", ".bash_login", ".profile") if (home / p).exists() or (home / p).is_symlink()), ".profile")
-        safe_path(home, login)
-        safe_path(home, ".bashrc")
         login_body = paths + '\nif [ -n "${BASH_VERSION:-}" ] && [ -r "$HOME/.bashrc" ]; then\n    . "$HOME/.bashrc"\nfi'
-        return {".bashrc": bashrc.rstrip() + "\n", login: login_body.rstrip() + "\n"}
+        return {".bashrc": merged_profile(safe_path(home, ".bashrc"), bashrc, exports),
+                login: merged_profile(safe_path(home, login), login_body, [])}
     if profile == "zsh":
         specs = {".zshenv": paths,
                  ".zshrc": 'if (( ! $+functions[compdef] )); then\n    autoload -Uz compinit\n    compinit -i\nfi'}
@@ -1418,7 +1444,7 @@ def run(data: dict) -> dict:
                 results[repository] = {"state": "conflict", "ready": False, "exists": True, "detail": str(exc)}
         return {"ok": True, "repositories": results}
     if op == "environment":
-        updates = environment_updates(home, data["profile"], data["bins"])
+        updates = environment_updates(home, data["profile"], data["bins"], data["exports"])
         # Check the actual selected shell parser before any persistent write.
         for relative, content in updates.items():
             safe_path(home, relative)

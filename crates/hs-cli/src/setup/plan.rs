@@ -62,7 +62,7 @@ impl Plan {
                 "source": path,
                 "destination": format!("{}/{}", self.target.home, path.get(2..).unwrap_or_default()),
             }),
-            Params::Environment { profile } => json!({"profile": profile}),
+            Params::Environment { profile, exports } => json!({"profile": profile, "exports": exports}),
             Params::Repository { repository } => json!({"repository": repository}),
             Params::Backup => {
                 let mut extra = json!({
@@ -139,7 +139,7 @@ pub fn write_paths(settings: &Settings, entry: &Entry) -> Vec<String> {
     match &entry.params {
         Params::Structured { config, .. } => vec![config.path.get(2..).unwrap_or_default().to_owned()],
         Params::File { path, .. } => vec![path.get(2..).unwrap_or_default().trim_end_matches('/').to_owned()],
-        Params::Environment { profile } => match profile.as_str() {
+        Params::Environment { profile, .. } => match profile.as_str() {
             "bash" => vec![".bashrc", ".profile", ".bash_profile", ".bash_login"],
             "zsh" => vec![".zshenv", ".zshrc"],
             "fish" => vec![".config/fish/conf.d/homestack.fish"],
