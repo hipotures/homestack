@@ -106,6 +106,9 @@ configuration/runtime permissions are restricted. Changing `snapshot_path` to
 another directory also requires adapting `ReadWritePaths` and creating that
 directory with suitable permissions. Do not enable namespace restrictions that
 hide `/proc`, PVE files, host cgroups or QGA sockets.
+Keep `RestrictSUIDSGID` disabled: systemd's implementation blocks `openat2`
+with `ENOSYS`, preventing the agent's confined filesystem lookups. The unit
+retains `NoNewPrivileges` and its read-only filesystem restrictions.
 
 ## Configuration and modes
 

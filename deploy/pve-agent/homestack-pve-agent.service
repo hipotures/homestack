@@ -22,7 +22,7 @@ ProtectKernelTunables=yes
 ProtectControlGroups=yes
 ReadWritePaths=/run/homestack-pve-agent
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
-RestrictSUIDSGID=yes
+# RestrictSUIDSGID blocks openat2 with ENOSYS; filesystem collection requires it.
 LockPersonality=yes
 
 [Install]
