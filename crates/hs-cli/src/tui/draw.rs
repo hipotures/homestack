@@ -2084,6 +2084,16 @@ fn draw_settings(buf: &mut Buffer, area: Rect, app: &App, section: usize, themes
             let chosen = matches!(app.overlay, Some(Overlay::Integrations { index: 3 }));
             let (item, style) = unfocused_item(palette, &format!("{:<18}", "Pangolin"), chosen, true);
             lines.push(vec![(item, style), ("Setup".to_owned(), muted)]);
+            lines.push(Vec::new());
+            lines.push(vec![("Monitoring".to_owned(), heading)]);
+            let chosen = matches!(app.overlay, Some(Overlay::Integrations { index: 4 }));
+            let (item, style) = unfocused_item(palette, &format!("{:<18}", "Prometheus"), chosen, true);
+            let status = match super::prometheus::current(dir) {
+                Ok(Some(url)) => url.as_str().trim_end_matches('/').to_owned(),
+                Ok(None) => "Missing".to_owned(),
+                Err(_) => "No server".to_owned(),
+            };
+            lines.push(vec![(item, style), (status, muted)]);
         }
     }
     for (row, parts) in lines.iter().enumerate() {
@@ -2097,6 +2107,8 @@ fn draw_settings(buf: &mut Buffer, area: Rect, app: &App, section: usize, themes
                 Some(row - first - 1)
             } else if row == first + 6 {
                 Some(3)
+            } else if row == first + 9 {
+                Some(4)
             } else {
                 None
             };
@@ -2319,6 +2331,68 @@ fn draw_integration(buf: &mut Buffer, area: Rect, app: &App, editor: &super::int
     write(buf, x, inner.bottom() - 1, width, message, text.fg(palette.muted));
 }
 
+fn draw_prometheus(buf: &mut Buffer, area: Rect, app: &App, editor: &super::prometheus::Editor) {
+    use crossterm::event::KeyCode;
+    let palette = &app.palette;
+    let text = text_style(palette);
+    let inner = frame(
+        buf,
+        settings_area(area, app),
+        palette,
+        &Sides {
+            top_left: vec![Control::plain("settings"), Control::plain("Prometheus")],
+            top_right: Vec::new(),
+            bottom_left: vec![
+                Control::named("F5", "Save", KeyCode::F(5)).enabled(editor.has_changes()),
+                Control::named("Esc", "Back", KeyCode::Esc),
+            ],
+            bottom_right: Vec::new(),
+            focused: true,
+        },
+    );
+    if inner.width < 4 || inner.height < 6 {
+        return;
+    }
+    let x = inner.x + 1;
+    let width = inner.width - 2;
+    write(
+        buf,
+        x,
+        inner.y,
+        width,
+        "deploy.toml [server] prometheus_url",
+        text.fg(palette.muted),
+    );
+    let style = text.fg(palette.focus);
+    write(buf, x, inner.y + 1, width, "▸ Prometheus URL", style);
+    let mut chars: Vec<char> = editor.value.chars().collect();
+    chars.push(' ');
+    let start = editor.cursor.saturating_sub(usize::from(width) - 1);
+    for (offset, c) in chars.iter().skip(start).take(usize::from(width)).enumerate() {
+        let cx = x + u16::try_from(offset).unwrap_or(0);
+        let cell_style = if start + offset == editor.cursor {
+            style.add_modifier(Modifier::REVERSED)
+        } else {
+            style
+        };
+        write(buf, cx, inner.y + 2, 1, &c.to_string(), cell_style);
+    }
+    write(
+        buf,
+        x,
+        inner.y + 4,
+        width,
+        "The API reads container telemetry for status from it.",
+        text.fg(palette.muted),
+    );
+    let message = if editor.message.is_empty() {
+        "Empty removes it · Ctrl+U clear field"
+    } else {
+        &editor.message
+    };
+    write(buf, x, inner.bottom() - 1, width, message, text.fg(palette.muted));
+}
+
 fn draw_integration_report(buf: &mut Buffer, area: Rect, app: &App, editor: &super::integrations::Editor) {
     use crossterm::event::KeyCode;
     let Some(report) = &editor.report else {
@@ -2418,6 +2492,7 @@ fn draw_overlay(buf: &mut Buffer, area: Rect, app: &App, overlay: &Overlay) {
         Overlay::General { .. } | Overlay::Sort { .. } => return draw_settings(buf, area, app, GENERAL, None),
         Overlay::Integration(editor) => return draw_integration(buf, area, app, editor),
         Overlay::Pangolin(wizard) => return super::draw_pangolin::screen(buf, area, app, wizard),
+        Overlay::Prometheus(editor) => return draw_prometheus(buf, area, app, editor),
         Overlay::Themes { index, .. } => return draw_settings(buf, area, app, APPEARANCE, Some(*index)),
         _ => {}
     }
@@ -2451,7 +2526,8 @@ fn draw_overlay(buf: &mut Buffer, area: Rect, app: &App, overlay: &Overlay) {
         | Overlay::General { .. }
         | Overlay::Sort { .. }
         | Overlay::Integration(_)
-        | Overlay::Pangolin(_) => {
+        | Overlay::Pangolin(_)
+        | Overlay::Prometheus(_) => {
             return;
         }
         Overlay::Help => (

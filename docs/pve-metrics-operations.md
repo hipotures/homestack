@@ -25,8 +25,10 @@ optional `name`; filesystem metrics also have `mount` and `filesystem`.
 Native Proxmox metric-server data remains separate under `proxmox_`.
 The HomeStack API reads LXC telemetry for `GET /v1/status` from Prometheus with
 one PromQL query per request, so clients never query Prometheus themselves.
-Set `HOMESTACK_PROMETHEUS_URL` (e.g. `http://prom.homestack.app:9090`) in the
-API service environment; without it status has no service telemetry. Values
+Enter the Prometheus URL once in the TUI under Settings → Integrations →
+Prometheus; it is kept as `[server] prometheus_url` in `deploy.toml`, and API
+initialization and updates pass it to every instance as
+`HOMESTACK_PROMETHEUS_URL`. Without it status has no service telemetry. Values
 measure the whole LXC; samples older than 30 seconds are omitted. Uptime is
 the container's (`proxmox_vm_uptime_seconds`) and process RSS is not reported;
 application health remains the service health check.

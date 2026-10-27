@@ -329,6 +329,9 @@ impl ApiBootstrap {
                 self.config.server.gold_pool.clone(),
             ),
         ];
+        if let Some(url) = &self.config.server.prometheus_url {
+            env.push(("HOMESTACK_PROMETHEUS_URL".to_owned(), url.to_string()));
+        }
         if managed {
             env.push(("HOMESTACK_MANAGED_HOME".to_owned(), "1".to_owned()));
         }

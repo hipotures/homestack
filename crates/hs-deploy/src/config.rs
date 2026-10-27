@@ -65,6 +65,9 @@ pub struct ServerSection {
     pub config_file: PathBuf,
     /// The client token; the instances get its SHA-256.
     pub api_token_file: PathBuf,
+    /// `HOMESTACK_PROMETHEUS_URL`, set in Settings → Integrations.
+    #[serde(default)]
+    pub prometheus_url: Option<Url>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -296,20 +299,44 @@ impl DeployConfig {
 
 /// Set `image` in `deploy.toml`, keeping the rest of the file as it is.
 pub fn save_image(path: &Path, image: &str) -> Result<(), String> {
+    edit(path, |document| {
+        match document.get_mut("image").and_then(toml_edit::Item::as_value_mut) {
+            // The comment after it stays.
+            Some(value) => {
+                let decor = value.decor().clone();
+                *value = image.into();
+                *value.decor_mut() = decor;
+            }
+            None => document["image"] = toml_edit::value(image),
+        }
+    })
+}
+
+/// Set or remove `[server] prometheus_url` in `deploy.toml`.
+pub fn save_prometheus_url(path: &Path, url: Option<&Url>) -> Result<(), String> {
+    edit(path, |document| {
+        let Some(server) = document.get_mut("server").and_then(toml_edit::Item::as_table_like_mut) else {
+            return;
+        };
+        match url {
+            Some(url) => {
+                server.insert("prometheus_url", toml_edit::value(url.as_str()));
+            }
+            None => {
+                server.remove("prometheus_url");
+            }
+        }
+    })
+}
+
+/// Change `deploy.toml` in place, keeping its comments and layout.
+fn edit(path: &Path, change: impl FnOnce(&mut toml_edit::DocumentMut)) -> Result<(), String> {
     use std::io::Write;
     use std::os::unix::fs::OpenOptionsExt;
     let fail = |e: std::io::Error| format!("{}: {}", path.display(), e.kind());
     let text = std::fs::read_to_string(path).map_err(fail)?;
     let mut document: toml_edit::DocumentMut = text.parse().map_err(|e| format!("{}: {e}", path.display()))?;
-    match document.get_mut("image").and_then(toml_edit::Item::as_value_mut) {
-        // The comment after it stays.
-        Some(value) => {
-            let decor = value.decor().clone();
-            *value = image.into();
-            *value.decor_mut() = decor;
-        }
-        None => document["image"] = toml_edit::value(image),
-    }
+    change(&mut document);
     let fresh = path.with_extension("toml.new");
     let mut file = std::fs::OpenOptions::new()
         .write(true)

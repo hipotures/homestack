@@ -42,6 +42,7 @@ pub fn shown_environment(source: &Source, instance: &Instance) -> String {
                         | "HOMESTACK_PVE_ENDPOINTS"
                         | "HOMESTACK_PVE_POOL"
                         | "HOMESTACK_PVE_GOLD_POOL"
+                        | "HOMESTACK_PROMETHEUS_URL"
                         | "HOMESTACK_MANAGED_HOME"
                         | "HOMESTACK_TLS_CERT_B64"
                 )

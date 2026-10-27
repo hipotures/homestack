@@ -966,7 +966,11 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
         storage_visible = visible;
         let editing_credentials = matches!(
             app.overlay,
-            Some(super::state::Overlay::Integration(_) | super::state::Overlay::Pangolin(_))
+            Some(
+                super::state::Overlay::Integration(_)
+                    | super::state::Overlay::Pangolin(_)
+                    | super::state::Overlay::Prometheus(_)
+            )
         );
         if editing_credentials != integration_paste {
             if editing_credentials {
@@ -998,6 +1002,7 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
                         match app.overlay.as_mut() {
                             Some(Overlay::Integration(editor)) => editor.paste(&text),
                             Some(Overlay::Pangolin(wizard)) => wizard.paste(&text),
+                            Some(Overlay::Prometheus(editor)) => editor.paste(&text),
                             _ => {}
                         }
                         // Pasted text may be a credential: erase the event buffer.

@@ -21,6 +21,7 @@ pub mod pangolin_permanent;
 pub mod pangolin_sites;
 mod pangolin_store;
 pub mod pangolin_tunnel;
+pub mod prometheus;
 pub mod reinstall;
 pub mod run;
 pub mod service_deploy;

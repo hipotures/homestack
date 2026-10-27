@@ -243,6 +243,7 @@ pub enum Overlay {
     },
     Integration(Box<super::integrations::Editor>),
     Pangolin(Box<super::pangolin::Wizard>),
+    Prometheus(Box<super::prometheus::Editor>),
     /// The theme list in the Appearance section; `previous` comes back with Esc.
     Themes {
         index: usize,
@@ -2124,6 +2125,12 @@ impl App {
             }
             return None;
         }
+        if let Some(Overlay::Prometheus(editor)) = self.overlay.as_mut() {
+            if editor.key(key) {
+                self.overlay = Some(Overlay::Integrations { index: 4 });
+            }
+            return None;
+        }
         if let Some(Overlay::Integration(editor)) = self.overlay.as_mut() {
             if editor.report_open {
                 match key.code {
@@ -2428,7 +2435,7 @@ impl App {
                 KeyCode::Esc => self.overlay = Some(Overlay::Menu { index: 2 }),
                 _ => self.overlay = Some(Overlay::Settings { section }),
             },
-            Overlay::Integration(_) | Overlay::Pangolin(_) => self.overlay = Some(overlay),
+            Overlay::Integration(_) | Overlay::Pangolin(_) | Overlay::Prometheus(_) => self.overlay = Some(overlay),
             Overlay::System { mut index } => {
                 match code {
                     KeyCode::Down | KeyCode::Up | KeyCode::Tab => index = 1 - index,
@@ -2526,8 +2533,8 @@ impl App {
             }
             Overlay::Integrations { mut index } => {
                 match code {
-                    KeyCode::Down => index = (index + 1) % 4,
-                    KeyCode::Up => index = (index + 3) % 4,
+                    KeyCode::Down => index = (index + 1) % 5,
+                    KeyCode::Up => index = (index + 4) % 5,
                     KeyCode::Esc | KeyCode::Left => {
                         self.overlay = Some(Overlay::Settings { section: INTEGRATIONS });
                         return None;
@@ -2538,6 +2545,17 @@ impl App {
                             Ok(wizard) => Overlay::Pangolin(Box::new(wizard)),
                             Err(error) => Overlay::Report {
                                 title: "Pangolin".to_owned(),
+                                lines: vec![error],
+                            },
+                        });
+                        return None;
+                    }
+                    KeyCode::Enter | KeyCode::Right if index == 4 => {
+                        let dir = self.preferences.path.parent().unwrap_or(std::path::Path::new("."));
+                        self.overlay = Some(match super::prometheus::Editor::open(dir) {
+                            Ok(editor) => Overlay::Prometheus(Box::new(editor)),
+                            Err(error) => Overlay::Report {
+                                title: "Prometheus".to_owned(),
                                 lines: vec![error],
                             },
                         });
