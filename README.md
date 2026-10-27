@@ -255,17 +255,17 @@ homestack setup hermes env=bash app=codex --yes --non-interactive --json
 | Group | CLI Keys | Built-in / Configured Items |
 | :--- | :--- | :--- |
 | **Files** | `files`, `f` | User-defined `[[setup.items]]` files and directories (`path = "~/notes/"`). |
-| **Environment** | `env`, `e` | `bash`, `zsh`, `fish`, `nu` (shell startup configs with pre-apply backups; Bash merges a marked block and `exports` into existing files). |
+| **Environment** | `env`, `e` | `bash`, `zsh`, `fish`, `nu` (shell startup configs with pre-apply backups; Bash keeps a marked block in existing files), `exports` (only the `export` lines of `~/.bashrc`). |
 | **Applications** | `app`, `a` | `codex`, `claude`, `herdr`, `opencode`, `opencode-v2`, `pi`, `hermes`, `rust`, plus custom `[[setup.items]]`. |
 | **Credentials** | `cred`, `c` | Explicit credential/file items (always executed last after all other groups). |
 | **Backup** | `backup`, `b` | `bk` (nightly `systemd --user` archive backup + restricted desktop retrieval keys). |
 | **Repositories** | `repo`, `r` | Repositories discovered from GitHub (`[repo] owner`) or explicitly named (`repo=owner/name`). |
 
-- Bash keeps the existing lines of `~/.bashrc` and the login file: the HomeStack block between `# >>> homestack >>>` and `# <<< homestack <<<` is replaced (or put first), and each `exports` line replaces every `export KEY=` line of its key or is appended:
+- Bash keeps the existing lines of `~/.bashrc` and the login file: the HomeStack block between `# >>> homestack >>>` and `# <<< homestack <<<` is replaced (or put first, replacing the unmarked block an earlier setup left at the top). Exports changes nothing but its lines: each one replaces every `export KEY=` line of its key or is appended:
 
   ```toml
   [[setup.items]]
-  id = "bash"
+  id = "exports"
   exports = [
     "OTEL_METRICS_EXPORTER='otlp'",
     "OTEL_RESOURCE_ATTRIBUTES=\"host.name=$(hostname)\"",

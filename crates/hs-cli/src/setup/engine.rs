@@ -400,7 +400,9 @@ pub fn inspect_workspace_state_with(
     let mut repositories: Vec<String> = Vec::new();
     for entry in &entries {
         match &entry.params {
-            Params::File { .. } | Params::Environment { .. } => metadata_paths.extend(write_paths(settings, entry)),
+            Params::File { .. } | Params::Environment { .. } | Params::Exports { .. } => {
+                metadata_paths.extend(write_paths(settings, entry));
+            }
             Params::Application(p) => metadata_paths.extend(
                 p.backup_paths
                     .iter()
@@ -551,7 +553,18 @@ fn inspect_item(
             });
             item["source"] = local;
         }
-        Params::Environment { profile, exports } => {
+        Params::Exports { exports } => {
+            let desired = guest(workspace, settings, "exports", guest_args! {"exports": exports})?;
+            let changed = desired["changed"].as_array().cloned().unwrap_or_default();
+            let ready = changed.is_empty();
+            item["exists"] = json!(remote.get(".bashrc").is_some_and(|m| truthy(&m["exists"])));
+            item["ready"] = json!(ready);
+            item["will_overwrite"] = json!(!ready);
+            item["state"] = json!(if ready { "configured" } else { "needs update" });
+            item["differs"] = json!(changed);
+            item["diff"] = desired.get("diff").cloned().unwrap_or(json!([]));
+        }
+        Params::Environment { profile } => {
             let test = format!("command -v {} >/dev/null", shell::quote(profile));
             let shell_check = workspace.run(&command_environment(settings, &test, "sh", &[], false), None, false)?;
             let paths = write_paths(settings, entry);
@@ -576,7 +589,7 @@ fn inspect_item(
                     workspace,
                     settings,
                     "environment",
-                    guest_args! {"profile": profile, "bins": all_bins(settings), "exports": exports},
+                    guest_args! {"profile": profile, "bins": all_bins(settings)},
                 )?;
                 let changed: Vec<String> = desired["changed"]
                     .as_array()
@@ -692,7 +705,7 @@ pub fn backup_paths_for_entry(settings: &Settings, entry: &Entry, state: &Value)
                 Vec::new()
             }
         }
-        Params::Environment { .. } => strings(&state["changed"]),
+        Params::Environment { .. } | Params::Exports { .. } => strings(&state["changed"]),
         Params::Application(p) => p
             .backup_paths
             .iter()
@@ -728,7 +741,7 @@ fn record_entry_state(
 ) -> Result<Value, AppError> {
     let paths: Vec<String> = match &entry.params {
         Params::File { .. } => write_paths(settings, entry),
-        Params::Environment { .. } => state["paths"]
+        Params::Environment { .. } | Params::Exports { .. } => state["paths"]
             .as_array()
             .into_iter()
             .flatten()
@@ -792,15 +805,16 @@ pub fn preflight_entry(
                 "remote": remote, "local": local, "changed": changed,
             }))
         }
-        Params::Environment { profile, exports } => {
+        Params::Environment { profile } => {
             require_tool(workspace, settings, profile, &[])?;
             guest(
                 workspace,
                 settings,
                 "environment",
-                guest_args! {"profile": profile, "bins": all_bins(settings), "exports": exports},
+                guest_args! {"profile": profile, "bins": all_bins(settings)},
             )
         }
+        Params::Exports { exports } => guest(workspace, settings, "exports", guest_args! {"exports": exports}),
         Params::Application(p) => {
             require_tool(workspace, settings, &p.interpreter, &p.bin_dirs)?;
             let mut installed = false;
@@ -932,13 +946,23 @@ fn apply_entry(
     let id = entry.id.as_str();
     let done = |status: &str, detail: &str| Ok((status.to_owned(), detail.to_owned()));
     match &entry.params {
-        Params::Environment { profile, exports } => {
+        Params::Exports { exports } => {
+            observer.activity(Some(id), "Write exports to ~/.bashrc");
+            let result = guest(workspace, settings, "exports", guest_args! {"exports": exports, "apply": true})?;
+            if !truthy(&result["changed"]) {
+                observer.activity(Some(id), "Exports already match");
+                return done("already-ready", "Exports already match; no files changed");
+            }
+            observer.activity(Some(id), "Exports written");
+            done("succeeded", "Exports verified")
+        }
+        Params::Environment { profile } => {
             observer.activity(Some(id), &format!("Write {} shell configuration", entry.label));
             let result = guest(
                 workspace,
                 settings,
                 "environment",
-                guest_args! {"profile": profile, "bins": all_bins(settings), "exports": exports, "apply": true},
+                guest_args! {"profile": profile, "bins": all_bins(settings), "apply": true},
             )?;
             if !truthy(&result["changed"]) {
                 observer.activity(Some(id), "Shell configuration already matches");

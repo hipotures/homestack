@@ -62,7 +62,7 @@ impl Catalog {
                             }));
                         }
                     }
-                    Params::Environment { .. } => {
+                    Params::Environment { .. } | Params::Exports { .. } => {
                         location = write_paths(settings, entry)
                             .iter()
                             .map(|path| format!("~/{path}"))

@@ -96,7 +96,9 @@ pub enum Params {
     },
     Environment {
         profile: String,
-        /// Bash only: `KEY=VALUE` lines kept as `export` lines of `.bashrc`.
+    },
+    /// `KEY=VALUE` lines kept as `export` lines of `~/.bashrc`.
+    Exports {
         exports: Vec<String>,
     },
     Application(Box<Application>),
@@ -165,8 +167,10 @@ impl Entry {
                     data.insert("application".into(), Value::String(application.clone()));
                 }
             }
-            Params::Environment { profile, exports } => {
+            Params::Environment { profile } => {
                 data.insert("profile".into(), Value::String(profile.clone()));
+            }
+            Params::Exports { exports } => {
                 data.insert("exports".into(), string_array(exports));
             }
             Params::Application(p) => {
@@ -299,13 +303,18 @@ pub fn defaults() -> Vec<Entry> {
                 "environment",
                 label,
                 &format!("Prepare {label} startup files and user executable paths."),
-                Params::Environment {
-                    profile: id.to_owned(),
-                    exports: Vec::new(),
-                },
+                Params::Environment { profile: id.to_owned() },
             )
         })
         .collect();
+    items.push(Entry::new(
+        "exports",
+        "env",
+        "exports",
+        "Exports",
+        "Replace each export KEY= line of ~/.bashrc by key or append it; nothing else changes.",
+        Params::Exports { exports: Vec::new() },
+    ));
     let app = |application: Application| Params::Application(Box::new(application));
     let mut hermes = Application::new(HERMES_RECIPE)
         .non_interactive(
@@ -917,7 +926,8 @@ fn parse_item(data: &Table, groups: &[Group], config_paths: &mut Vec<String>) ->
     let group = text_field(data, "group");
     let fields: &[&str] = match handler {
         Some("file") => &["path"],
-        Some("environment") => &["profile", "exports"],
+        Some("environment") => &["profile"],
+        Some("exports") => &["exports"],
         Some("application") => &APPLICATION_FIELDS,
         Some("repository") => &["repository"],
         Some("backup" | "herdr") => &[],
@@ -977,17 +987,17 @@ fn parse_item(data: &Table, groups: &[Group], config_paths: &mut Vec<String>) ->
             let profile = params.get("profile").ok_or_else(invalid)?;
             match profile {
                 Value::String(profile) if ["bash", "zsh", "fish", "nu"].contains(&profile.as_str()) => {
-                    let empty = Value::Array(Vec::new());
-                    let exports = exports(params.get("exports").unwrap_or(&empty))?;
-                    if !exports.is_empty() && profile != "bash" {
-                        return Err(AppError::new("Environment exports are supported only for Bash"));
-                    }
                     Params::Environment {
                         profile: profile.clone(),
-                        exports,
                     }
                 }
                 _ => return Err(AppError::new("Environment profile must be bash, zsh, fish or nu")),
+            }
+        }
+        "exports" => {
+            let empty = Value::Array(Vec::new());
+            Params::Exports {
+                exports: exports(params.get("exports").unwrap_or(&empty))?,
             }
         }
         "repository" => {

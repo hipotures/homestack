@@ -1278,10 +1278,31 @@ PROFILE_BEGIN = "# >>> homestack >>>"
 PROFILE_END = "# <<< homestack <<<"
 
 
-def merged_profile(path: Path, block: str, exports: list[str]) -> str:
+def merged_exports(lines: list[str], exports: list[str]) -> list[str]:
+    """Replace every `export KEY=` line of each export's key by it, or append it."""
+    import re
+    lines = list(lines)
+    for export in exports:
+        pattern = re.compile(rf"^\s*export\s+{re.escape(export.split('=', 1)[0])}=")
+        hits = [index for index, line in enumerate(lines) if pattern.match(line)]
+        if not hits:
+            lines.append(f"export {export}")
+            continue
+        lines[hits[0]] = f"export {export}"
+        for index in reversed(hits[1:]):
+            del lines[index]
+    return lines
+
+
+def file_diff(relative: str, old: str, new: str) -> list[str]:
+    import difflib
+    return list(difflib.unified_diff(old.splitlines(), new.splitlines(),
+                                     f"~/{relative}", f"~/{relative}", n=1, lineterm=""))
+
+
+def merged_profile(path: Path, block: str) -> str:
     """Keep the user's lines: replace the marked block, else the unmarked one a
-    whole-file write left at the top, and replace each export by key or
-    append it."""
+    whole-file write left at the top."""
     import re
     lines = path.read_text().splitlines() if path.exists() else []
     managed = [PROFILE_BEGIN, *block.rstrip().splitlines(), PROFILE_END]
@@ -1294,19 +1315,10 @@ def merged_profile(path: Path, block: str, exports: list[str]) -> str:
         while top < len(lines) and (lines[top] in managed or path_line.match(lines[top])):
             top += 1
         lines = managed + lines[top:]
-    for export in exports:
-        pattern = re.compile(rf"^\s*export\s+{re.escape(export.split('=', 1)[0])}=")
-        hits = [index for index, line in enumerate(lines) if pattern.match(line)]
-        if not hits:
-            lines.append(f"export {export}")
-            continue
-        lines[hits[0]] = f"export {export}"
-        for index in reversed(hits[1:]):
-            del lines[index]
     return "\n".join(lines) + "\n"
 
 
-def environment_updates(home: Path, profile: str, bins: list[str], exports: list[str]) -> dict[str, str]:
+def environment_updates(home: Path, profile: str, bins: list[str]) -> dict[str, str]:
     import shlex
     paths = posix_paths(bins)
     if profile == "bash":
@@ -1318,8 +1330,8 @@ case $- in *i*)
 ;; esac'''
         login = next((p for p in (".bash_profile", ".bash_login", ".profile") if (home / p).exists() or (home / p).is_symlink()), ".profile")
         login_body = paths + '\nif [ -n "${BASH_VERSION:-}" ] && [ -r "$HOME/.bashrc" ]; then\n    . "$HOME/.bashrc"\nfi'
-        return {".bashrc": merged_profile(safe_path(home, ".bashrc"), bashrc, exports),
-                login: merged_profile(safe_path(home, login), login_body, [])}
+        return {".bashrc": merged_profile(safe_path(home, ".bashrc"), bashrc),
+                login: merged_profile(safe_path(home, login), login_body)}
     if profile == "zsh":
         specs = {".zshenv": paths,
                  ".zshrc": 'if (( ! $+functions[compdef] )); then\n    autoload -Uz compinit\n    compinit -i\nfi'}
@@ -1449,7 +1461,7 @@ def run(data: dict) -> dict:
                 results[repository] = {"state": "conflict", "ready": False, "exists": True, "detail": str(exc)}
         return {"ok": True, "repositories": results}
     if op == "environment":
-        updates = environment_updates(home, data["profile"], data["bins"], data["exports"])
+        updates = environment_updates(home, data["profile"], data["bins"])
         # Check the actual selected shell parser before any persistent write.
         for relative, content in updates.items():
             safe_path(home, relative)
@@ -1464,18 +1476,26 @@ def run(data: dict) -> dict:
                                         input=content, capture_output=True, text=True)
                 if parsed.returncode or parsed.stdout.strip() != "true":
                     raise GuestError(f"Nushell startup syntax check failed at ~/{relative}")
-        import difflib
         current = {relative: (home / relative).read_text() if (home / relative).exists() else ""
                    for relative in updates}
         changed = [relative for relative, content in updates.items()
                    if not (home / relative).exists() or current[relative] != content]
-        diff = [line for relative in changed
-                for line in difflib.unified_diff(current[relative].splitlines(), updates[relative].splitlines(),
-                                                 f"~/{relative}", f"~/{relative}", n=1, lineterm="")]
+        diff = [line for relative in changed for line in file_diff(relative, current[relative], updates[relative])]
         if data.get("apply"):
             for relative in changed:
                 atomic_write(safe_path(home, relative), updates[relative])
         return {"ok": True, "paths": list(updates), "changed": changed, "diff": diff}
+    if op == "exports":
+        path = safe_path(home, ".bashrc")
+        current = path.read_text() if path.exists() else ""
+        content = "\n".join(merged_exports(current.splitlines(), data["exports"])) + "\n"
+        if subprocess.run(["bash", "-n"], input=content, text=True, capture_output=True).returncode:
+            raise GuestError("bash startup syntax check failed at ~/.bashrc")
+        changed = [".bashrc"] if content != current else []
+        if data.get("apply") and changed:
+            atomic_write(path, content)
+        return {"ok": True, "paths": [".bashrc"], "changed": changed,
+                "diff": file_diff(".bashrc", current, content) if changed else []}
     if op == "paths":
         for item in data["paths"]:
             safe_path(home, item["relative"], directory=item.get("directory", False), recursive=item.get("recursive", False))

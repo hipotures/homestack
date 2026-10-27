@@ -1024,7 +1024,7 @@ impl SetupBox {
     pub fn entry_style(&self, entry: &Entry) -> Tone {
         let state = self.state_item(&entry.id);
         let selected = self.selected.contains(&entry.id);
-        if matches!(entry.params, Params::Environment { .. })
+        if matches!(entry.params, Params::Environment { .. } | Params::Exports { .. })
             && (truthy(&state["ready"]) || (truthy(&state["managed"]) && state["state"] == "needs update"))
         {
             if truthy(&state["changed_since_apply"]) || truthy(&state["will_overwrite"]) {
@@ -1534,7 +1534,7 @@ impl SetupBox {
         let mut lines = vec![format!("Status: {status}"), String::new()];
         // What will change comes first, before anything to scroll past.
         let diff = strings(&live["diff"]);
-        if matches!(entry.params, Params::Environment { .. }) && !diff.is_empty() {
+        if matches!(entry.params, Params::Environment { .. } | Params::Exports { .. }) && !diff.is_empty() {
             lines.push("Changes on the workspace:".to_owned());
             lines.extend(diff);
             lines.push(String::new());
@@ -1788,7 +1788,7 @@ impl SetupBox {
     pub fn status(&self, entry: &Entry) -> &'static str {
         let live = self.state_item(&entry.id);
         let state = live["state"].as_str();
-        let environment = matches!(entry.params, Params::Environment { .. });
+        let environment = matches!(entry.params, Params::Environment { .. } | Params::Exports { .. });
         if matches!(entry.params, Params::Structured { .. }) {
             match state {
                 Some("matching") => "NO CHANGES",
@@ -2020,6 +2020,7 @@ impl SetupBox {
                     "Back up modified shell files; overwrite configuration"
                 }
                 Params::Environment { .. } => "Verify shell configuration; write only if changes are needed",
+                Params::Exports { .. } => "Replace or append only the export lines of ~/.bashrc",
                 _ if truthy(&live["ready"]) => "Update / reapply existing state",
                 _ if truthy(&live["will_overwrite"]) => "Overwrite existing configuration",
                 _ => "Install / configure",
