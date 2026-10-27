@@ -428,14 +428,7 @@ pub(crate) async fn common_source(repository: &str, id: &str) -> Result<crate::s
             }
             lines.join("\n")
         })?;
-        Ok(crate::services::deploy::Source {
-            repository,
-            branch: found.branch.clone(),
-            commit: found.commit.clone(),
-            path: file.path.clone(),
-            blob: file.blob.clone(),
-            manifest: manifest.clone(),
-        })
+        Ok(crate::services::deploy::Source::discovered(&found, file, manifest))
     })
     .await
     .map_err(|e| e.to_string())?

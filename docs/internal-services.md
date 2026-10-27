@@ -66,9 +66,12 @@ The DNS refresh and verification have a shared 15-second deadline. After
 starting a new API container, bootstrap waits up to 15 seconds for
 authenticated HTTPS on its address.
 
-`homestack update-api [VERSION]` reviews updating every API container not yet
-on VERSION (the newest release by default) with the same replacement the
-services screen uses; `-y` applies it.
+`homestack update [SERVICE ...]` reads the service manifests of
+`hipotures/homestack` from GitHub and the newest release of each from the
+registry, and reviews replacing every container on an older image (all
+services by default) with the same replacement the services screen uses. It
+then asks which updates to apply, all by default; `-y` applies all without
+asking, and without a terminal it only reviews.
 
 The service browser and review/apply worker use
 `services/deploy.rs::{survey,plan,apply}` and the scoped PVE deploy token.

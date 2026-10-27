@@ -192,8 +192,8 @@ fn help(config: &Path) -> String {
             "Check the HomeStack server instances and the configured Proxmox node.",
         ),
         (
-            "homestack update-api [VERSION] [-y]",
-            "Review updating the API containers to VERSION (the newest release by default); -y applies it.",
+            "homestack update [SERVICE ...] [-y]",
+            "Update HomeStack's services (all by default) to their newest releases; asks which, -y takes all.",
         ),
     ];
     let options: &[(&str, &str)] = &[
@@ -297,10 +297,10 @@ async fn execute(args: &Args, ctx: &mut Context, running: &Running) -> Result<Co
         }
         return Ok(0);
     }
-    if let Command::UpdateApi { version } = &args.command {
+    if let Command::Update { services } = &args.command {
         // The deploy token updates the containers; no API is needed.
         let say = |line: &str| println!("{line}");
-        crate::services::api_update::run(&path.with_file_name("deploy.toml"), version.as_deref(), args.yes, &say)
+        crate::services::homestack_update::run(&path.with_file_name("deploy.toml"), services, args.yes, &say)
             .await
             .map_err(AppError::new)?;
         return Ok(0);
@@ -371,7 +371,7 @@ async fn execute(args: &Args, ctx: &mut Context, running: &Running) -> Result<Co
         Command::Repo { target, repository } => {
             crate::setup::cli::repo(args, target, repository.as_deref(), cli.ctx, cli.loaded, cli.client).await
         }
-        Command::None | Command::Install(_) | Command::Uninstall(_) | Command::UpdateApi { .. } => Ok(0),
+        Command::None | Command::Install(_) | Command::Uninstall(_) | Command::Update { .. } => Ok(0),
     }
 }
 

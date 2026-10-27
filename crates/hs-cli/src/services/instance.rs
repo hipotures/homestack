@@ -273,6 +273,13 @@ pub async fn names(pve: &impl Pve) -> Result<Vec<String>, String> {
 
 /// The containers of `repository`/`service` in the cluster, by CTID.
 pub async fn of_service(pve: &impl Pve, repository: &str, service: &str) -> Result<Vec<Instance>, String> {
+    let mut found = of_repository(pve, repository).await?;
+    found.retain(|instance| instance.service == service);
+    Ok(found)
+}
+
+/// The containers of every service of `repository` in the cluster, by CTID.
+pub async fn of_repository(pve: &impl Pve, repository: &str) -> Result<Vec<Instance>, String> {
     let resources = pve
         .get("/cluster/resources", &[("type", "vm")])
         .await
@@ -291,7 +298,6 @@ pub async fn of_service(pve: &impl Pve, repository: &str, service: &str) -> Resu
         let pool = item["pool"].as_str().unwrap_or_default();
         if let Ok(instance) = fetch(pve, node, pool, ctid).await
             && instance.repository == repository
-            && instance.service == service
         {
             found.push(instance);
         }

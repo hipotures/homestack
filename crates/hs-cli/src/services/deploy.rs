@@ -103,6 +103,22 @@ pub struct Source {
 }
 
 impl Source {
+    /// The revision of a manifest `found` in its repository.
+    pub fn discovered(
+        found: &super::github::Discovery,
+        file: &super::github::ManifestFile,
+        manifest: &Manifest,
+    ) -> Self {
+        Self {
+            repository: found.repository.clone(),
+            branch: found.branch.clone(),
+            commit: found.commit.clone(),
+            path: file.path.clone(),
+            blob: file.blob.clone(),
+            manifest: manifest.clone(),
+        }
+    }
+
     /// Refuse unsupported internal initializers before any creation.
     pub fn initialization_blocker(&self) -> Option<&'static str> {
         match self.manifest.image_repository.as_str() {

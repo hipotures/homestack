@@ -524,8 +524,13 @@ impl Contract {
 
     pub fn resolve(&self, values: &BTreeMap<String, Value>) -> Result<Vec<(String, String)>, String> {
         self.validate()?;
-        if values.keys().any(|id| !self.inputs.iter().any(|input| &input.id == id)) {
-            return Err("Application configuration contains an unknown field ID".into());
+        if let Some(id) = values
+            .keys()
+            .find(|id| !self.inputs.iter().any(|input| &input.id == *id))
+        {
+            return Err(format!(
+                "Application configuration has {id}, which the manifest no longer declares; set it again under Application configuration"
+            ));
         }
         let mut environment = Vec::new();
         let mut document = self.configuration.as_ref().map(|c| c.document.clone());
