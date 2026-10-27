@@ -1367,27 +1367,6 @@ fn workspaces(buf: &mut Buffer, area: Rect, app: &App, mut controls: Vec<Control
         let line = list_line(&columns, |column| (column.value)(&shown));
         let line = format!("{line:<width$}", width = usize::from(list.width));
         write(buf, list.x, y, list.width, &line, style);
-        // Units greyed, so 20G does not read as 200 at a glance.
-        let unit = if chosen {
-            style.add_modifier(Modifier::DIM)
-        } else {
-            style.fg(palette.muted)
-        };
-        let mut start = 0;
-        for column in &columns {
-            start += 1;
-            if column.right {
-                for (at, character) in line.chars().enumerate().skip(start).take(column.width) {
-                    if (character.is_alphabetic() || character == '%')
-                        && let Ok(at) = u16::try_from(at)
-                        && at < list.width
-                    {
-                        buf[(list.x + at, y)].set_style(unit);
-                    }
-                }
-            }
-            start += column.width;
-        }
         if entry
             .image_update
             .as_ref()
@@ -1432,6 +1411,31 @@ fn workspaces(buf: &mut Buffer, area: Rect, app: &App, mut controls: Vec<Control
                 }
             }
             x += u16::try_from(column.width).unwrap_or(0);
+        }
+        // Units greyed, so 20G does not read as 200 at a glance.
+        let unit = if chosen {
+            style.add_modifier(Modifier::DIM)
+        } else {
+            style.fg(palette.muted)
+        };
+        let mut start = 0;
+        for column in &columns {
+            start += 1;
+            if column.right {
+                for (at, character) in line.chars().enumerate().skip(start).take(column.width) {
+                    if (character.is_alphabetic() || character == '%')
+                        && let Ok(at) = u16::try_from(at)
+                        && at < list.width
+                    {
+                        // A yellow or red free space keeps its colour.
+                        let cell = &mut buf[(list.x + at, y)];
+                        if cell.fg == style.fg.unwrap_or(cell.fg) {
+                            cell.set_style(unit);
+                        }
+                    }
+                }
+            }
+            start += column.width;
         }
         // The tags' squares in their colours, from the first column.
         let tags = columns.first().is_some_and(|column| column.key == "TAGS");
