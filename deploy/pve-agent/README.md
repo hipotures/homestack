@@ -124,12 +124,39 @@ snapshot_path = "/run/homestack-pve-agent/snapshot.json"
 otlp_endpoint = "http://otel-1.homestack.app:4318/v1/metrics"
 otlp_timeout_seconds = 3
 node_name = ""
+qga_parallel = 4
+debug = false
+default_mode = "common"
+
+[modes.common]
+interval_seconds = 60
+lxc_filesystem_interval_seconds = 300
+qga_interval_seconds = 600
+
+[modes.realtime]
 interval_seconds = 5
 lxc_filesystem_interval_seconds = 30
 qga_interval_seconds = 60
-qga_parallel = 4
-debug = false
 ```
+
+A mode names how often the agent measures: `interval_seconds` is the cycle of
+cgroups, the snapshot and the export; LXC filesystems and VM filesystems
+(Guest Agent and host virtiofs shares) are measured at their own, longer
+intervals. The daemon always starts in `default_mode`. The slow `common` mode
+suits ordinary monitoring; switch a node to `realtime` while watching live
+charts. The switch lives in memory only, so a restart returns to
+`default_mode`:
+
+```sh
+homestack-pve-agent mode realtime
+homestack-pve-agent mode common
+homestack-pve-agent mode          # the current mode
+```
+
+`mode` talks to the daemon through the root-only socket `control.sock` beside
+`snapshot_path`; a switch starts the next cycle at once. Each export carries
+`hs_pve_agent_interval_seconds{node,mode}`, so readers judge freshness by the
+node's current cycle.
 
 Unknown keys and invalid values are rejected. Intervals accept 1..86400 seconds;
 `qga_parallel` must be positive. `otlp_endpoint` is required for daemon,
@@ -287,6 +314,7 @@ Representative OTLP metric families:
 | `hs_pve_filesystem_total_bytes` / `used_bytes` / `free_bytes` / `available_bytes` | Filesystem capacity and occupancy |
 | `hs_pve_filesystem_sample_age_seconds` | Age of the cached filesystem attempt |
 | `hs_pve_filesystem_collection_success` / `read_success` | Availability of the report / mount measurement |
+| `hs_pve_agent_interval_seconds` | Current mode (`mode` label) and its cycle |
 | `hs_pve_agent_export_success` / `export_failures` | Previous delivery outcome / cumulative failures |
 
 CPU/PSI cumulative microseconds are converted to seconds. All cumulative counters
@@ -297,10 +325,10 @@ changing generation label. Missing readings are omitted, not exported as zeros.
 Unlimited limits have a separate flag and no fabricated numeric byte limit.
 
 Cached filesystem sizes are sent only after a new measurement attempt, with its
-original timestamp. They are not republished every 5 seconds as fresh values.
-The age gauge is updated every cycle. Default 30/60-second filesystem intervals
-stay below Prometheus's normal lookback window; longer intervals may require
-corresponding query/lookback adjustments.
+original timestamp. They are not republished every cycle as fresh values.
+The age gauge is updated every cycle. The `common` mode's filesystem intervals
+exceed Prometheus's five-minute lookback, so instant queries read them with
+`last_over_time`.
 
 The snapshot is written before export. Export failures are logged and counted
 without terminating collection. The next cycle sends the latest counters/gauges

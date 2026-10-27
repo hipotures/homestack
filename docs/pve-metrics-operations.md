@@ -13,8 +13,14 @@ throttling, PSI, I/O and PID counts. It reads LXC filesystem capacity through
 the host's `/proc` and VM filesystems through QEMU Guest Agent, which must be
 enabled and running in the VM. No monitoring process is installed inside LXC.
 
-Defaults: cgroups and export every 5 seconds, LXC filesystems every 30 seconds,
-VM filesystems every 60 seconds. Cached filesystem values retain their actual
+The agent measures in one of the modes named in its configuration. It starts
+in `common`: cgroups and export every 60 seconds, LXC filesystems every 5
+minutes, VM filesystems every 10 minutes. For live charts switch a node to
+`realtime` (5 seconds, 30 seconds, 60 seconds) with
+`homestack-pve-agent mode realtime` and back with `homestack-pve-agent mode
+common`; `homestack-pve-agent mode` shows the current one. The switch lasts
+until the agent restarts, and `hs_pve_agent_interval_seconds{node,mode}`
+exports the current cycle. Cached filesystem values retain their actual
 measurement timestamps. Missing readings are omitted, not reported as zero.
 The latest diagnostic snapshot is `/run/homestack-pve-agent/snapshot.json`.
 The agent has no persistent export queue; the Collector queues accepted data
@@ -23,7 +29,7 @@ on disk, surviving an ordinary restart of the same Collector container.
 Agent metrics use `hs_pve_`, with `node`, `vmid`, `type` (`lxc`/`qemu`) and
 optional `name`; filesystem metrics also have `mount` and `filesystem`.
 Native Proxmox metric-server data remains separate under `proxmox_`.
-The HomeStack API reads LXC telemetry for `GET /v1/status` from Prometheus with
+The HomeStack API reads LXC and VM telemetry for `GET /v1/status` from Prometheus with
 one PromQL query per request, so clients never query Prometheus themselves.
 Enter the Prometheus URL once in the TUI under Settings → Integrations →
 Prometheus; it is kept as `[server] prometheus_url` in `deploy.toml`, and API
@@ -33,7 +39,10 @@ application input delivered as `HOMESTACK_PROMETHEUS_URL` (the Collector's and
 the usage dashboard's) is never asked for or saved with their Application
 configuration, and their deployments and image updates set it from
 Integrations. Without it status has no container telemetry.
-Values measure the whole LXC; samples older than 30 seconds are omitted.
+Values measure the whole LXC or VM; samples older than 2.5 cycles of their
+node's agent are omitted. Rates use the last two samples (`irate` over 5
+minutes) and LXC filesystems their latest measurement within an hour, so the
+API follows each node's mode without configuration.
 Uptime is the container's (`proxmox_vm_uptime_seconds`). Services report only
 liveness and process RSS through their schema-3 status endpoint.
 
@@ -120,13 +129,14 @@ In Prometheus (`http://prom.homestack.app:9090`), check after about a minute:
 ```promql
 time() - timestamp(hs_pve_agent_instances)
 hs_pve_agent_export_success_ratio
+hs_pve_agent_interval_seconds
 hs_pve_filesystem_read_success_ratio{type="lxc",mount="/"}
 hs_pve_filesystem_used_bytes{type="lxc"}
 rate(hs_pve_cpu_usage_seconds_total[5m])
 ```
 
-Expect recent agent samples from each node, export/read success `1`, and actual
-filesystem sizes. Export success describes the previous delivery. For read
+Expect recent agent samples from each node (within its mode's cycle), export/read
+success `1`, and actual filesystem sizes. Export success describes the previous delivery. For read
 failures inspect the local snapshot's per-mount `error`. Version `0.1.1` fixed
 LXC `Function not implemented (os error 38)` by removing systemd's
 `RestrictSUIDSGID`, which blocked the required `openat2` call. Keep that option

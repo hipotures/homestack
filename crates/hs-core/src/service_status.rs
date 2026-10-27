@@ -15,24 +15,27 @@ use reqwest::Url;
 use serde::Deserialize;
 use serde_json::Value;
 
-/// Samples older than this are not shown.
-const MAX_AGE_SECONDS: u64 = 30;
+/// Samples older than this many of their node agent's cycles are not shown.
+const MAX_AGE_CYCLES: f64 = 2.5;
 
-/// Raw series of every LXC, plus derived ones told apart by a `derived`
-/// label: `or` matches label sets without metric names, so a derived series
-/// must not share its labels with a raw one.
+/// Raw series of every LXC and VM, plus derived ones told apart by a
+/// `derived` label: `or` matches label sets without metric names, so a
+/// derived series must not share its labels with a raw one. The agent's mode
+/// sets its cycle: rates use the last two samples, filesystems the last
+/// measurement, which the slow mode takes less often than the lookback.
 const QUERY: &str = concat!(
     r#"{__name__=~"hs_pve_(cpu_capacity|memory_usage_bytes|memory_effective_limit_bytes)"}"#,
     r#" or hs_pve_memory_stat_bytes{kind=~"anon|file"}"#,
     r#" or hs_pve_memory_events_total{event="oom_kill"}"#,
     r#" or hs_pve_pressure_stall_ratio{stall="some",window="10s"}"#,
-    r#" or {__name__=~"hs_pve_filesystem_(total|used|available)_bytes|hs_pve_filesystem_read_success_ratio","#,
-    r#"type="lxc",mount=~"/|/home/app"}"#,
+    r#" or last_over_time({__name__=~"hs_pve_filesystem_(total|used|available)_bytes|hs_pve_filesystem_read_success_ratio","#,
+    r#"type="lxc",mount=~"/|/home/app"}[1h])"#,
     r#" or proxmox_vm_uptime_seconds"#,
     r#" or label_replace(time() - timestamp(hs_pve_memory_usage_bytes), "derived", "age", "", "")"#,
-    r#" or label_replace(sum by (node, vmid) (rate(hs_pve_cpu_usage_seconds_total[1m])), "derived", "cpu_rate", "", "")"#,
-    r#" or label_replace(sum by (node, vmid, operation) (rate(hs_pve_io_bytes_total[1m])), "derived", "io_bytes_rate", "", "")"#,
-    r#" or label_replace(sum by (node, vmid, operation) (rate(hs_pve_io_operations_total[1m])), "derived", "io_ops_rate", "", "")"#,
+    r#" or label_replace(hs_pve_memory_usage_bytes * 0 + on (node) group_left () max by (node) (hs_pve_agent_interval_seconds), "derived", "interval", "", "")"#,
+    r#" or label_replace(sum by (node, vmid) (irate(hs_pve_cpu_usage_seconds_total[5m])), "derived", "cpu_rate", "", "")"#,
+    r#" or label_replace(sum by (node, vmid, operation) (irate(hs_pve_io_bytes_total[5m])), "derived", "io_bytes_rate", "", "")"#,
+    r#" or label_replace(sum by (node, vmid, operation) (irate(hs_pve_io_operations_total[5m])), "derived", "io_ops_rate", "", "")"#,
 );
 
 /// A machine's measurement and, for a container, the `/` and `/home/app`
@@ -91,7 +94,7 @@ fn count(value: f64) -> Option<u64> {
     (value.is_finite() && value >= 0.0).then_some(value as u64)
 }
 
-/// Measurements of running LXCs by node and VMID. An unreachable or failing
+/// Measurements of running LXCs and VMs by node and VMID. An unreachable or failing
 /// Prometheus, and containers without a fresh sample, have none: telemetry
 /// never changes lifecycle ownership or health.
 pub async fn read(prometheus: &Url) -> BTreeMap<(String, u32), Measured> {
@@ -224,10 +227,12 @@ async fn run(prometheus: &Url, query: &str) -> Option<Response> {
     response.json().await.ok()
 }
 
-/// The container's measurement, when the agent sent one recently.
+/// The machine's measurement, when its node's agent sent one within a few
+/// of its cycles.
 fn measured(samples: &Samples) -> Option<Measured> {
     let age = samples.count("age", &[])?;
-    if age > MAX_AGE_SECONDS {
+    #[allow(clippy::cast_precision_loss, reason = "seconds")]
+    if age as f64 > samples.get("interval", &[])? * MAX_AGE_CYCLES {
         return None;
     }
     let memory = samples

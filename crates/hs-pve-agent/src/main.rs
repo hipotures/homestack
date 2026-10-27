@@ -1,9 +1,10 @@
 //! Read-only cgroup v2 and filesystem snapshot. No PVE API, Perl or subprocesses.
 mod config;
+mod control;
 mod filesystems;
 mod limits;
 mod otlp;
-use config::Config;
+use config::{Config, Mode};
 use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
 use std::fs;
@@ -11,18 +12,22 @@ use std::io::{self, Write};
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, PoisonError, mpsc};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const HELP: &str =
     "homestack-pve-agent [--config FILE] [--vmid ID | --path CGROUP] [--root CGROUP_ROOT] [--qga-parallel N] [--debug] [--export]
 homestack-pve-agent --daemon [--config /etc/homestack/pve-agent.toml]
 homestack-pve-agent --check-config --config FILE
+homestack-pve-agent mode [NAME] [--config /etc/homestack/pve-agent.toml]
 
 Default: print one JSON snapshot. --daemon writes the latest snapshot atomically
 to snapshot_path and exports OTLP metrics to the configured Collector.
 --export also exports a one-shot snapshot; set otlp_endpoint using --config.
 --qga-parallel N limits concurrent VM Guest Agent queries (default: 4).
 --debug writes sources, values and timings to stderr. JSON remains on stdout.
+The daemon starts in default_mode; `mode NAME` switches the running daemon to
+another configured mode until it restarts, `mode` alone shows the current one.
 LXC filesystems use /proc; VM filesystems use local QGA sockets (3s deadline).
 Only running instances have cgroups. No PVE API, Perl or subprocesses are used.
 ";
@@ -367,7 +372,7 @@ fn unix_ms() -> Result<u64, String> {
     u64::try_from(elapsed.as_millis()).map_err(|e| e.to_string())
 }
 
-fn collect(config: &Config, selection: &Selection, cache: &mut Cache) -> Result<Value, String> {
+fn collect(config: &Config, mode: (&str, &Mode), selection: &Selection, cache: &mut Cache) -> Result<Value, String> {
     let started = Instant::now();
     let mut trace = Trace {
         debug: config.debug,
@@ -389,9 +394,9 @@ fn collect(config: &Config, selection: &Selection, cache: &mut Cache) -> Result<
             live.push(key);
             let identity = fs::metadata(&path).ok().map(|m| (m.dev(), m.ino()));
             let interval = if kind == "qemu" {
-                config.qga_interval_seconds
+                mode.1.qga_interval_seconds
             } else {
-                config.lxc_filesystem_interval_seconds
+                mode.1.lxc_filesystem_interval_seconds
             };
             let previous = cache.get(&key).filter(|entry| {
                 identity.is_some()
@@ -453,6 +458,7 @@ fn collect(config: &Config, selection: &Selection, cache: &mut Cache) -> Result<
         );
     }
     Ok(json!({"schema": 3, "unix_timestamp_ms": unix_ms()?,
+        "mode": mode.0, "interval_seconds": mode.1.interval_seconds,
         "collection_usec": started.elapsed().as_micros(), "qga_parallel": config.qga_parallel,
         "instance_count": instances.len(), "instances": instances}))
 }
@@ -478,7 +484,40 @@ fn write_snapshot(path: &Path, report: &Value) -> Result<(), String> {
     result
 }
 
+/// `mode [NAME] [--config FILE]`: switch the running daemon, or show its mode.
+fn mode_command(mut args: impl Iterator<Item = String>) -> Result<(), String> {
+    let mut config_path = PathBuf::from(config::DEFAULT_PATH);
+    let mut wanted = None;
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--config" => config_path = args.next().ok_or("missing value for --config")?.into(),
+            _ if arg.starts_with('-') || wanted.is_some() => return Err(format!("unexpected argument: {arg}")),
+            _ => wanted = Some(arg),
+        }
+    }
+    let config = Config::load(&config_path)?;
+    config.validate()?;
+    if let Some(wanted) = &wanted
+        && !config.modes.contains_key(wanted)
+    {
+        let known: Vec<&str> = config.modes.keys().map(String::as_str).collect();
+        return Err(format!("unknown mode {wanted}; modes: {}", known.join(", ")));
+    }
+    let name = control::request(&config.control_socket(), wanted.as_deref())?;
+    match config.modes.get(&name) {
+        Some(mode) => println!(
+            "{name}: every {} s, LXC filesystems {} s, VM filesystems {} s",
+            mode.interval_seconds, mode.lxc_filesystem_interval_seconds, mode.qga_interval_seconds
+        ),
+        None => println!("{name}"),
+    }
+    Ok(())
+}
+
 fn run() -> Result<(), String> {
+    if std::env::args().nth(1).as_deref() == Some("mode") {
+        return mode_command(std::env::args().skip(2));
+    }
     let mut selection = Selection::default();
     let mut config_path = None;
     let mut root = None;
@@ -570,7 +609,8 @@ fn run() -> Result<(), String> {
         None
     };
     if !daemon {
-        let report = collect(&config, &selection, &mut cache)?;
+        let mode = (config.default_mode.as_str(), &config.modes[&config.default_mode]);
+        let report = collect(&config, mode, &selection, &mut cache)?;
         if let Some(exporter) = exporter.as_mut() {
             exporter.export(&report)?;
         }
@@ -580,14 +620,6 @@ fn run() -> Result<(), String> {
         writeln!(output).map_err(|e| e.to_string())?;
         return Ok(());
     }
-    eprintln!(
-        "homestack-pve-agent started: snapshot={} interval={}s lxc_filesystems={}s qga={}s qga_parallel={}",
-        config.snapshot_path.display(),
-        config.interval_seconds,
-        config.lxc_filesystem_interval_seconds,
-        config.qga_interval_seconds,
-        config.qga_parallel
-    );
     let directory = config.snapshot_path.parent().ok_or("snapshot_path has no parent")?;
     fs::create_dir_all(directory).map_err(|e| e.to_string())?;
     let lock_path = directory.join(".homestack-pve-agent.lock");
@@ -601,17 +633,39 @@ fn run() -> Result<(), String> {
         .map_err(|e| format!("{}: {e}", lock_path.display()))?;
     rustix::fs::flock(&lock, rustix::fs::FlockOperation::NonBlockingLockExclusive)
         .map_err(|e| format!("another agent may be using {}: {e}", directory.display()))?;
+    let current = Arc::new(Mutex::new(config.default_mode.clone()));
+    let (switches, switched) = mpsc::channel();
+    control::listen(
+        &config.control_socket(),
+        config.modes.keys().cloned().collect(),
+        Arc::clone(&current),
+        switches,
+    )?;
+    eprintln!(
+        "homestack-pve-agent started: snapshot={} control={} mode={} qga_parallel={}",
+        config.snapshot_path.display(),
+        config.control_socket().display(),
+        config.default_mode,
+        config.qga_parallel
+    );
     loop {
         let started = Instant::now();
-        let report = collect(&config, &selection, &mut cache)?;
+        let name = current.lock().unwrap_or_else(PoisonError::into_inner).clone();
+        let mode = &config.modes[&name];
+        let report = collect(&config, (&name, mode), &selection, &mut cache)?;
         write_snapshot(&config.snapshot_path, &report)?;
         if let Some(exporter) = exporter.as_mut()
             && let Err(error) = exporter.export(&report)
         {
             eprintln!("OTLP export failed: {error}; the next cycle will export the latest measurements");
         }
-        if let Some(remaining) = Duration::from_secs(config.interval_seconds).checked_sub(started.elapsed()) {
-            std::thread::sleep(remaining);
+        // A switch starts the next cycle at once, in the new mode.
+        if let Some(remaining) = Duration::from_secs(mode.interval_seconds).checked_sub(started.elapsed()) {
+            match switched.recv_timeout(remaining) {
+                Ok(name) => eprintln!("mode switched to {name}"),
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => std::thread::sleep(remaining),
+            }
         }
     }
 }

@@ -1,4 +1,5 @@
-# Read by homestack-pve-agent on startup. Restart the service after changes.
+# Read by homestack-pve-agent on startup. Restart the service after changes;
+# `homestack-pve-agent mode NAME` switches the running daemon between modes.
 cgroup_root = "/sys/fs/cgroup"
 snapshot_path = "/run/homestack-pve-agent/snapshot.json"
 
@@ -8,11 +9,21 @@ otlp_timeout_seconds = 3
 # Empty uses the host's short hostname, such as pve1.
 node_name = ""
 
-# The latest JSON snapshot is replaced atomically every collection cycle.
-interval_seconds = 5
-lxc_filesystem_interval_seconds = 30
-qga_interval_seconds = 60
 qga_parallel = 4
 
 # Logs sources, values and timings to the systemd journal.
 debug = false
+
+# The daemon starts in default_mode. interval_seconds is the cycle: cgroups,
+# the JSON snapshot and the export; filesystems are measured less often.
+default_mode = "common"
+
+[modes.common]
+interval_seconds = 60
+lxc_filesystem_interval_seconds = 300
+qga_interval_seconds = 600
+
+[modes.realtime]
+interval_seconds = 5
+lxc_filesystem_interval_seconds = 30
+qga_interval_seconds = 60

@@ -482,6 +482,14 @@ impl Encoder {
             time,
             None,
         );
+        // The cycle length of the current mode, so readers judge freshness.
+        builder.gauge(
+            "hs_pve_agent_interval_seconds",
+            "s",
+            &report["interval_seconds"],
+            &with(&node_labels, "mode", report["mode"].as_str().unwrap_or_default()),
+            time,
+        );
         builder.gauge(
             "hs_pve_agent_export_success",
             "1",
