@@ -1,0 +1,29 @@
+[Unit]
+Description=HomeStack PVE resource and filesystem agent
+After=pve-cluster.service pvestatd.service
+ConditionPathIsDirectory=/etc/pve
+
+[Service]
+Type=simple
+User=root
+Group=root
+ExecStartPre=/usr/local/sbin/homestack-pve-agent --check-config --config /etc/homestack/pve-agent.toml
+ExecStart=/usr/local/sbin/homestack-pve-agent --daemon --config /etc/homestack/pve-agent.toml
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=10s
+RuntimeDirectory=homestack-pve-agent
+RuntimeDirectoryMode=0700
+UMask=0077
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+ReadWritePaths=/run/homestack-pve-agent
+RestrictAddressFamilies=AF_UNIX
+RestrictSUIDSGID=yes
+LockPersonality=yes
+
+[Install]
+WantedBy=multi-user.target

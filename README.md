@@ -78,6 +78,9 @@ python3 scripts/cargo.py build --locked -p hs-cli --bin homestack
 
 Place `homestack` (and `homestack-deploy` if deploying from PATH) in your `PATH`.
 
+For the standalone node-side resource and filesystem agent, see
+[PVE agent installation and configuration](deploy/pve-agent/README.md).
+
 **Desktop prerequisites:**
 - `ssh` / `ssh-keygen` (OpenSSH)
 - `rsync` (for Setup file transfers)

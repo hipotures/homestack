@@ -1081,6 +1081,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "hs-pve-agent"
+version = "0.1.0"
+dependencies = [
+ "rustix",
+ "serde",
+ "serde_json",
+ "toml",
+]
+
+[[package]]
 name = "hs-server"
 version = "0.1.0"
 dependencies = [

@@ -1,0 +1,12 @@
+# Read by homestack-pve-agent on startup. Restart the service after changes.
+cgroup_root = "/sys/fs/cgroup"
+snapshot_path = "/run/homestack-pve-agent/snapshot.json"
+
+# The latest JSON snapshot is replaced atomically every collection cycle.
+interval_seconds = 5
+lxc_filesystem_interval_seconds = 30
+qga_interval_seconds = 60
+qga_parallel = 4
+
+# Logs sources, values and timings to the systemd journal.
+debug = false

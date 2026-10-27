@@ -1,0 +1,20 @@
+[package]
+name = "hs-pve-agent"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "homestack-pve-agent"
+path = "src/main.rs"
+
+[dependencies]
+rustix = { version = "1.1.5", features = ["fs"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+toml = "1.1.8"
