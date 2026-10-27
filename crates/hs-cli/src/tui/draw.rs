@@ -1,7 +1,7 @@
 //! Drawing the main screen (mockups 09–11, 15–17) from an [`App`].
 
 use crossterm::event::KeyCode;
-use hs_model::status::{ContainerTelemetry, LayoutCapacity, StatusEntry};
+use hs_model::status::{ContainerTelemetry, HomeUsage, LayoutCapacity, StatusEntry};
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
@@ -454,11 +454,6 @@ struct Column {
     value: fn(&StatusEntry) -> String,
 }
 
-/// A size in bytes, `—` when unknown.
-fn bytes(value: Option<u64>) -> String {
-    value.map_or_else(|| "—".to_owned(), size)
-}
-
 /// A percentage, `—` when unknown.
 fn percent(value: Option<f64>) -> String {
     value.map_or_else(|| "—".to_owned(), |percent| format!("{percent:.0}%"))
@@ -494,9 +489,47 @@ fn container_telemetry(entry: &StatusEntry) -> Option<&ContainerTelemetry> {
     entry.service_status.as_ref()?.container.as_ref()
 }
 
-/// A stall share with one decimal, `—` when unknown.
-fn stall(value: Option<f64>) -> String {
-    value.map_or_else(|| "—".to_owned(), |percent| format!("{percent:.1}%"))
+/// A stall share with one decimal.
+fn stall(percent: f64) -> String {
+    format!("{percent:.1}%")
+}
+
+fn whole_percent(percent: f64) -> String {
+    format!("{percent:.0}%")
+}
+
+/// Whether the PVE agent measures this entry: a running container.
+fn running_container(entry: &StatusEntry) -> bool {
+    entry.role == "CT" && entry.status == "running"
+}
+
+/// A list cell: empty where nothing applies (no such volume, a VM or a
+/// stopped container, no service), `—` where a value should exist but is
+/// unknown or unmeasurable.
+fn cell<T>(value: Option<&T>, applies: bool, show: impl Fn(&T) -> Option<String>) -> String {
+    match value {
+        Some(value) => show(value).unwrap_or_else(|| "—".to_owned()),
+        None if applies => "—".to_owned(),
+        None => String::new(),
+    }
+}
+
+fn volume(usage: Option<&HomeUsage>, show: impl Fn(&HomeUsage) -> Option<String>) -> String {
+    cell(usage, false, show)
+}
+
+/// The PVE agent's measurement of a running container.
+fn measured(entry: &StatusEntry, show: impl Fn(&ContainerTelemetry) -> Option<String>) -> String {
+    cell(container_telemetry(entry), running_container(entry), show)
+}
+
+/// The report of a running service's application.
+fn reported(entry: &StatusEntry, show: impl Fn(&hs_service_status::Report) -> Option<String>) -> String {
+    cell(
+        application(entry),
+        running_container(entry) && entry.service.is_some(),
+        show,
+    )
 }
 
 /// The application's own report of a service.
@@ -626,42 +659,42 @@ fn columns(app: &App, width: usize, tag_width: usize, name_width: usize) -> Vec<
             heading: "HOME",
             width: 5,
             right: true,
-            value: |entry| bytes(entry.home.as_ref().and_then(|home| home.size_bytes)),
+            value: |entry| volume(entry.home.as_ref(), |home| home.size_bytes.map(size)),
         },
         Column {
             key: "HOME USED",
             heading: "USED",
             width: 5,
             right: true,
-            value: |entry| bytes(entry.home.as_ref().and_then(|home| home.used_bytes)),
+            value: |entry| volume(entry.home.as_ref(), |home| home.used_bytes.map(size)),
         },
         Column {
             key: "HOME FREE",
             heading: "FREE",
             width: 6,
             right: true,
-            value: |entry| percent(entry.home.as_ref().and_then(|home| home.free_percent)),
+            value: |entry| volume(entry.home.as_ref(), |home| home.free_percent.map(whole_percent)),
         },
         Column {
             key: "ROOT",
             heading: "ROOT",
             width: 5,
             right: true,
-            value: |entry| bytes(entry.root.as_ref().and_then(|root| root.size_bytes)),
+            value: |entry| volume(entry.root.as_ref(), |root| root.size_bytes.map(size)),
         },
         Column {
             key: "ROOT USED",
             heading: "USED",
             width: 5,
             right: true,
-            value: |entry| bytes(entry.root.as_ref().and_then(|root| root.used_bytes)),
+            value: |entry| volume(entry.root.as_ref(), |root| root.used_bytes.map(size)),
         },
         Column {
             key: "ROOT FREE",
             heading: "FREE",
             width: 6,
             right: true,
-            value: |entry| percent(entry.root.as_ref().and_then(|root| root.free_percent)),
+            value: |entry| volume(entry.root.as_ref(), |root| root.free_percent.map(whole_percent)),
         },
         Column {
             key: "STORAGE",
@@ -675,7 +708,7 @@ fn columns(app: &App, width: usize, tag_width: usize, name_width: usize) -> Vec<
             heading: "POOL",
             width: 18,
             right: false,
-            value: |entry| entry.pool.clone().unwrap_or_else(|| "—".to_owned()),
+            value: |entry| entry.pool.clone().unwrap_or_default(),
         },
         Column {
             key: "CPU",
@@ -683,16 +716,14 @@ fn columns(app: &App, width: usize, tag_width: usize, name_width: usize) -> Vec<
             width: 5,
             right: true,
             // 100% is one logical CPU busy.
-            value: |entry| percent(container_telemetry(entry).and_then(|container| container.cpu_percent)),
+            value: |entry| measured(entry, |container| container.cpu_percent.map(whole_percent)),
         },
         Column {
             key: "MEM",
             heading: "MEM",
             width: 5,
             right: true,
-            value: |entry| {
-                bytes(container_telemetry(entry).and_then(|container| Some(container.memory.as_ref()?.usage_bytes)))
-            },
+            value: |entry| measured(entry, |container| Some(size(container.memory.as_ref()?.usage_bytes))),
         },
         Column {
             key: "IO",
@@ -701,9 +732,11 @@ fn columns(app: &App, width: usize, tag_width: usize, name_width: usize) -> Vec<
             right: true,
             // Reads and writes of the container's block devices together.
             value: |entry| {
-                container_telemetry(entry)
-                    .and_then(|container| Some(container.read_bytes_per_second? + container.write_bytes_per_second?))
-                    .map_or_else(|| "—".to_owned(), rate)
+                measured(entry, |container| {
+                    Some(rate(
+                        container.read_bytes_per_second? + container.write_bytes_per_second?,
+                    ))
+                })
             },
         },
         Column {
@@ -712,11 +745,7 @@ fn columns(app: &App, width: usize, tag_width: usize, name_width: usize) -> Vec<
             width: 4,
             right: true,
             // Logical CPUs the container may use.
-            value: |entry| {
-                container_telemetry(entry)
-                    .and_then(|container| container.capacity_cpus)
-                    .map_or_else(|| "—".to_owned(), |cpus| format!("{cpus}"))
-            },
+            value: |entry| measured(entry, |container| container.capacity_cpus.map(|cpus| format!("{cpus}"))),
         },
         Column {
             key: "MEM %",
@@ -725,12 +754,12 @@ fn columns(app: &App, width: usize, tag_width: usize, name_width: usize) -> Vec<
             right: true,
             // Of the container's memory limit.
             value: |entry| {
-                percent(container_telemetry(entry).and_then(|container| {
+                measured(entry, |container| {
                     let memory = container.memory.as_ref()?;
                     let limit = memory.limit_bytes.filter(|limit| *limit > 0)?;
                     #[allow(clippy::cast_precision_loss, reason = "a percentage")]
-                    Some(memory.usage_bytes as f64 * 100.0 / limit as f64)
-                }))
+                    Some(whole_percent(memory.usage_bytes as f64 * 100.0 / limit as f64))
+                })
             },
         },
         Column {
@@ -738,9 +767,7 @@ fn columns(app: &App, width: usize, tag_width: usize, name_width: usize) -> Vec<
             heading: "LIMIT",
             width: 5,
             right: true,
-            value: |entry| {
-                bytes(container_telemetry(entry).and_then(|container| container.memory.as_ref()?.limit_bytes))
-            },
+            value: |entry| measured(entry, |container| container.memory.as_ref()?.limit_bytes.map(size)),
         },
         Column {
             key: "RSS",
@@ -748,7 +775,7 @@ fn columns(app: &App, width: usize, tag_width: usize, name_width: usize) -> Vec<
             width: 5,
             right: true,
             // The application process alone, as it reports.
-            value: |entry| bytes(application(entry).and_then(|report| report.process_rss_bytes)),
+            value: |entry| reported(entry, |report| report.process_rss_bytes.map(size)),
         },
         Column {
             key: "CPU STALL",
@@ -756,21 +783,21 @@ fn columns(app: &App, width: usize, tag_width: usize, name_width: usize) -> Vec<
             width: 8,
             right: true,
             // Share of the last 10 s some task waited: contention, not use.
-            value: |entry| stall(container_telemetry(entry).and_then(|container| container.stalls.cpu)),
+            value: |entry| measured(entry, |container| container.stalls.cpu.map(stall)),
         },
         Column {
             key: "MEM STALL",
             heading: "MEM WAIT",
             width: 8,
             right: true,
-            value: |entry| stall(container_telemetry(entry).and_then(|container| container.stalls.memory)),
+            value: |entry| measured(entry, |container| container.stalls.memory.map(stall)),
         },
         Column {
             key: "IO STALL",
             heading: "IO WAIT",
             width: 7,
             right: true,
-            value: |entry| stall(container_telemetry(entry).and_then(|container| container.stalls.io)),
+            value: |entry| measured(entry, |container| container.stalls.io.map(stall)),
         },
         Column {
             key: "SERVICE",
@@ -781,7 +808,8 @@ fn columns(app: &App, width: usize, tag_width: usize, name_width: usize) -> Vec<
                 entry
                     .service
                     .as_ref()
-                    .map_or_else(|| "—".to_owned(), |service| service.id.clone())
+                    .map(|service| service.id.clone())
+                    .unwrap_or_default()
             },
         },
         Column {
@@ -790,10 +818,16 @@ fn columns(app: &App, width: usize, tag_width: usize, name_width: usize) -> Vec<
             width: 6,
             right: false,
             // The application's own liveness verdict.
-            value: |entry| match application(entry).map(|report| report.status) {
-                Some(hs_service_status::Status::Pass) => "pass".to_owned(),
-                Some(hs_service_status::Status::Fail) => "fail".to_owned(),
-                None => "—".to_owned(),
+            value: |entry| {
+                reported(entry, |report| {
+                    Some(
+                        match report.status {
+                            hs_service_status::Status::Pass => "pass",
+                            hs_service_status::Status::Fail => "fail",
+                        }
+                        .to_owned(),
+                    )
+                })
             },
         },
         Column {
@@ -802,11 +836,7 @@ fn columns(app: &App, width: usize, tag_width: usize, name_width: usize) -> Vec<
             width: 7,
             right: true,
             // The container's, which is its application's.
-            value: |entry| {
-                container_telemetry(entry)
-                    .and_then(|container| container.uptime_seconds)
-                    .map_or_else(|| "—".to_owned(), uptime)
-            },
+            value: |entry| measured(entry, |container| container.uptime_seconds.map(uptime)),
         },
         Column {
             key: "IMAGE",
@@ -815,10 +845,9 @@ fn columns(app: &App, width: usize, tag_width: usize, name_width: usize) -> Vec<
             right: false,
             // The image without its registry: `owner/name:version`.
             value: |entry| {
-                container_image(entry).map_or_else(
-                    || "—".to_owned(),
-                    |image| image.split_once('/').map_or(image, |(_, path)| path).to_owned(),
-                )
+                container_image(entry)
+                    .map(|image| image.split_once('/').map_or(image, |(_, path)| path).to_owned())
+                    .unwrap_or_default()
             },
         },
         Column {
@@ -830,7 +859,8 @@ fn columns(app: &App, width: usize, tag_width: usize, name_width: usize) -> Vec<
             value: |entry| {
                 container_image(entry)
                     .and_then(|image| image.rsplit_once(':'))
-                    .map_or_else(|| "—".to_owned(), |(_, tag)| tag.to_owned())
+                    .map(|(_, tag)| tag.to_owned())
+                    .unwrap_or_default()
             },
         },
     ];
