@@ -1,6 +1,7 @@
 //! Read-only cgroup v2 and filesystem snapshot. No PVE API, Perl or subprocesses.
 mod config;
 mod filesystems;
+mod otlp;
 use config::Config;
 use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
@@ -12,12 +13,13 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const HELP: &str =
-    "homestack-pve-agent [--config FILE] [--vmid ID | --path CGROUP] [--root CGROUP_ROOT] [--qga-parallel N] [--debug]
+    "homestack-pve-agent [--config FILE] [--vmid ID | --path CGROUP] [--root CGROUP_ROOT] [--qga-parallel N] [--debug] [--export]
 homestack-pve-agent --daemon [--config /etc/homestack/pve-agent.toml]
 homestack-pve-agent --check-config --config FILE
 
 Default: print one JSON snapshot. --daemon writes the latest snapshot atomically
-to the configured snapshot_path, with separate cgroup/LXC/QGA intervals.
+to snapshot_path and exports OTLP metrics to the configured Collector.
+--export also exports a one-shot snapshot; set otlp_endpoint using --config.
 --qga-parallel N limits concurrent VM Guest Agent queries (default: 4).
 --debug writes sources, values and timings to stderr. JSON remains on stdout.
 LXC filesystems use /proc; VM filesystems use local QGA sockets (3s deadline).
@@ -166,6 +168,7 @@ fn records(text: &str) -> Value {
 
 fn snapshot(path: &Path, id: Option<u32>, kind: &str, trace: &mut Trace, read_filesystems: bool) -> Value {
     let instance_started = Instant::now();
+    let sampled_at_unix_ms = unix_ms().ok();
     let mut metrics = Map::new();
     let mut errors = Map::new();
     for file in [
@@ -239,6 +242,7 @@ fn snapshot(path: &Path, id: Option<u32>, kind: &str, trace: &mut Trace, read_fi
         eprintln!("[debug] local_instance vmid={id:?} type={kind} elapsed_usec={elapsed}");
     }
     json!({"vmid": id, "type": kind, "name": name, "cgroup_path": path,
+        "sampled_at_unix_ms": sampled_at_unix_ms,
         "collection_usec": elapsed, "local_collection_usec": elapsed,
         "guest_agent_collection_usec": null, "metrics": metrics, "read_errors": errors,
         "filesystem_report": filesystems})
@@ -381,6 +385,7 @@ fn collect(config: &Config, selection: &Selection, cache: &mut Cache) -> Result<
             let sample_started = Instant::now();
             let sample_unix_ms = unix_ms()?;
             let mut instance = snapshot(&path, Some(id), kind, &mut trace, previous.is_none());
+            instance["cgroup_identity"] = json!(identity.map(|(device, inode)| format!("{device}:{inode}")));
             if let Some(entry) = previous {
                 instance["filesystem_report"] = entry.report.clone();
                 instance["filesystem_report"]["sample_age_seconds"] = json!(entry.sampled_at.elapsed().as_secs());
@@ -458,6 +463,7 @@ fn run() -> Result<(), String> {
     let mut debug = false;
     let mut daemon = false;
     let mut check_config = false;
+    let mut export = false;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -471,6 +477,10 @@ fn run() -> Result<(), String> {
             }
             "--daemon" => {
                 daemon = true;
+                continue;
+            }
+            "--export" => {
+                export = true;
                 continue;
             }
             "--check-config" => {
@@ -521,13 +531,26 @@ fn run() -> Result<(), String> {
     }
     config.debug |= debug;
     config.validate()?;
+    if (daemon || check_config || export) && config.otlp_endpoint.is_empty() {
+        return Err(
+            "set otlp_endpoint in /etc/homestack/pve-agent.toml to this node's Collector HTTP /v1/metrics URL".into(),
+        );
+    }
     if check_config {
         println!("Configuration is valid");
         return Ok(());
     }
     let mut cache = Cache::new();
+    let mut exporter = if daemon || export {
+        Some(otlp::Exporter::new(&config)?)
+    } else {
+        None
+    };
     if !daemon {
         let report = collect(&config, &selection, &mut cache)?;
+        if let Some(exporter) = exporter.as_mut() {
+            exporter.export(&report)?;
+        }
         let stdout = io::stdout();
         let mut output = stdout.lock();
         serde_json::to_writer_pretty(&mut output, &report).map_err(|e| e.to_string())?;
@@ -559,6 +582,11 @@ fn run() -> Result<(), String> {
         let started = Instant::now();
         let report = collect(&config, &selection, &mut cache)?;
         write_snapshot(&config.snapshot_path, &report)?;
+        if let Some(exporter) = exporter.as_mut()
+            && let Err(error) = exporter.export(&report)
+        {
+            eprintln!("OTLP export failed: {error}; the next cycle will export the latest measurements");
+        }
         if let Some(remaining) = Duration::from_secs(config.interval_seconds).checked_sub(started.elapsed()) {
             std::thread::sleep(remaining);
         }

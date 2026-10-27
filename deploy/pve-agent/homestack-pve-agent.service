@@ -1,6 +1,6 @@
 [Unit]
 Description=HomeStack PVE resource and filesystem agent
-After=pve-cluster.service pvestatd.service
+After=network.target pve-cluster.service pvestatd.service
 ConditionPathIsDirectory=/etc/pve
 
 [Service]
@@ -21,7 +21,7 @@ ProtectHome=read-only
 ProtectKernelTunables=yes
 ProtectControlGroups=yes
 ReadWritePaths=/run/homestack-pve-agent
-RestrictAddressFamilies=AF_UNIX
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 RestrictSUIDSGID=yes
 LockPersonality=yes
 

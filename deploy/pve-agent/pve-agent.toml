@@ -2,6 +2,12 @@
 cgroup_root = "/sys/fs/cgroup"
 snapshot_path = "/run/homestack-pve-agent/snapshot.json"
 
+# Select this node's Collector: otel-1 / otel-2 / otel-3 for pve1 / pve2 / pve3.
+otlp_endpoint = "http://otel-1.homestack.app:4318/v1/metrics"
+otlp_timeout_seconds = 3
+# Empty uses the host's short hostname, such as pve1.
+node_name = ""
+
 # The latest JSON snapshot is replaced atomically every collection cycle.
 interval_seconds = 5
 lxc_filesystem_interval_seconds = 30

@@ -13,6 +13,9 @@ pub struct Config {
     pub qga_interval_seconds: u64,
     pub qga_parallel: usize,
     pub debug: bool,
+    pub otlp_endpoint: String,
+    pub otlp_timeout_seconds: u64,
+    pub node_name: String,
 }
 
 impl Default for Config {
@@ -25,6 +28,9 @@ impl Default for Config {
             qga_interval_seconds: 60,
             qga_parallel: 4,
             debug: false,
+            otlp_endpoint: String::new(),
+            otlp_timeout_seconds: 3,
+            node_name: String::new(),
         }
     }
 }
@@ -43,9 +49,27 @@ impl Config {
             ("interval_seconds", self.interval_seconds),
             ("lxc_filesystem_interval_seconds", self.lxc_filesystem_interval_seconds),
             ("qga_interval_seconds", self.qga_interval_seconds),
+            ("otlp_timeout_seconds", self.otlp_timeout_seconds),
         ] {
             if !(1..=86400).contains(&seconds) {
                 return Err(format!("{name} must be between 1 and 86400 seconds"));
+            }
+        }
+        if !self.otlp_endpoint.is_empty() {
+            let url =
+                reqwest::Url::parse(&self.otlp_endpoint).map_err(|_| "otlp_endpoint must be an HTTP metrics URL")?;
+            if url.scheme() != "http"
+                || url.host_str().is_none()
+                || !url.username().is_empty()
+                || url.password().is_some()
+                || url.query().is_some()
+                || url.fragment().is_some()
+                || url.path() != "/v1/metrics"
+            {
+                return Err(
+                    "otlp_endpoint must be http://COLLECTOR:4318/v1/metrics without credentials, query or fragment"
+                        .into(),
+                );
             }
         }
         if !self.cgroup_root.is_absolute()
@@ -55,5 +79,17 @@ impl Config {
             return Err("cgroup_root and snapshot_path must be absolute paths; snapshot_path must name a file".into());
         }
         Ok(())
+    }
+
+    pub fn node(&self) -> Result<String, String> {
+        if !self.node_name.is_empty() {
+            return Ok(self.node_name.clone());
+        }
+        let hostname = std::fs::read_to_string("/proc/sys/kernel/hostname").map_err(|e| e.to_string())?;
+        let node = hostname.trim().split('.').next().unwrap_or_default();
+        if node.is_empty() {
+            return Err("cannot determine node name; set node_name in config".into());
+        }
+        Ok(node.to_owned())
     }
 }
