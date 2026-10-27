@@ -34,7 +34,7 @@ struct AppState {
     prometheus: url::Url,
     client: reqwest::Client,
     heartbeat: Arc<Heartbeat>,
-    pricing: Option<Arc<serde_json::Value>>,
+    page: Arc<str>,
 }
 
 #[tokio::main]
@@ -66,20 +66,23 @@ async fn main() -> ExitCode {
     let heartbeat = Arc::new(Heartbeat::new(interval));
     // Fetch once per process. Restart the container to refresh prices.
     let pricing = match fetch_pricing(&client).await {
-        Ok(prices) => Some(Arc::new(prices)),
+        Ok(prices) => Some(prices),
         Err(error) => {
             tracing::warn!(%error, "Codex cost estimates unavailable; restart to retry pricing download");
             None
         }
     };
+    // Embed the immutable startup rates in the page; the browser never
+    // downloads a separate catalog on reload or on filter changes.
+    let prices = pricing.map_or_else(
+        || "null".to_owned(),
+        |prices| prices.to_string().replace('<', "\\u003c"),
+    );
+    let page: Arc<str> = Arc::from(PAGE.replace("__HOMESTACK_PRICING__", &prices));
     let mut app = Router::new()
-        .route(
-            "/",
-            get(|| async { ([(header::CACHE_CONTROL, "no-store")], Html(PAGE)) }),
-        )
+        .route("/", get(index))
         .route("/health/live", get(health))
         .route("/health/ready", get(health))
-        .route("/api/pricing", get(pricing_catalog))
         .route(PROBE_PATH, get(|| async { StatusCode::NO_CONTENT }))
         .route(hs_service_status::PATH, get(service_status));
     for path in FORWARDED {
@@ -89,7 +92,7 @@ async fn main() -> ExitCode {
         prometheus: prometheus.clone(),
         client,
         heartbeat: Arc::clone(&heartbeat),
-        pricing,
+        page,
     });
     let listener = match tokio::net::TcpListener::bind(LISTEN).await {
         Ok(listener) => listener,
@@ -122,10 +125,22 @@ async fn fetch_pricing(client: &reqwest::Client) -> Result<serde_json::Value, St
         .await
         .map_err(|error| error.to_string())?;
     let entries = catalog.as_object().ok_or("Invalid LiteLLM pricing catalog")?;
+    let fields = [
+        "input_cost_per_token",
+        "output_cost_per_token",
+        "cache_read_input_token_cost",
+        "cache_creation_input_token_cost",
+    ];
     let prices: serde_json::Map<String, serde_json::Value> = entries
         .iter()
         .filter(|(_, value)| value["litellm_provider"] == "openai")
-        .map(|(name, value)| (name.clone(), value.clone()))
+        .map(|(name, value)| {
+            let rates: serde_json::Map<String, serde_json::Value> = fields
+                .iter()
+                .filter_map(|field| value.get(*field).map(|rate| ((*field).to_owned(), rate.clone())))
+                .collect();
+            (name.clone(), serde_json::Value::Object(rates))
+        })
         .collect();
     if prices.is_empty() {
         return Err("No OpenAI prices in LiteLLM catalog".to_owned());
@@ -134,15 +149,8 @@ async fn fetch_pricing(client: &reqwest::Client) -> Result<serde_json::Value, St
     Ok(serde_json::Value::Object(prices))
 }
 
-async fn pricing_catalog(State(state): State<AppState>) -> Response {
-    match state.pricing {
-        Some(prices) => axum::Json(prices.as_ref().clone()).into_response(),
-        None => (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "Startup pricing download failed; restart to retry",
-        )
-            .into_response(),
-    }
+async fn index(State(state): State<AppState>) -> Response {
+    ([(header::CACHE_CONTROL, "no-store")], Html(state.page.to_string())).into_response()
 }
 
 fn settings(env: impl Fn(&str) -> Option<String>) -> Result<(url::Url, Duration), String> {

@@ -93,3 +93,17 @@ latency, tool calls, failures and tool durations from the available metric
 names. Histogram means divide the duration sum by the observation count and
 convert milliseconds to seconds. Full-turn duration includes tools and waits;
 it is not mapped to Claude Code's active time.
+
+In the chart view, `All agents` also shows total cost and total tokens in a
+separate column to the left of the per-agent tiles. These totals use the same
+scoped snapshot, include estimated costs where applicable, and explicitly name
+unavailable contributors when a sum is partial. The summary moves above the
+agent tiles on narrow screens and is hidden in comparison and single-agent views.
+
+The container downloads prices once at startup and embeds only the four token
+rates needed by the dashboard in the HTML document. There is no separate
+pricing request on page load, refresh or filter changes. Agent-specific
+snapshot queries are skipped when their capabilities are hidden in the current
+view. Metric-name discovery requests only the relevant Codex instruments;
+server and project filters share a single query over usage counters, without
+scanning every tool metric and histogram bucket.

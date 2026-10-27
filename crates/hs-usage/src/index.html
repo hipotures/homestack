@@ -52,7 +52,14 @@ h1 { font-size: 20px; margin: 0; font-weight: 600; }
 .updated { color: var(--muted); font-size: 12px; margin-left: auto; }
 .error { border: 1px solid var(--critical); border-radius: 8px; padding: 8px 12px; margin-bottom: 16px; }
 .error::before { content: "⚠ "; color: var(--critical); }
-.tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 16px; }
+.overview { margin-bottom: 16px; }
+.overview.has-summary { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(0, 4fr); gap: 12px; align-items: stretch; }
+.summary { display: grid; grid-template-rows: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.summary .tile { border-color: color-mix(in oklab, var(--s1) 40%, var(--ring)); }
+.summary .value { font-size: 28px; }
+.tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+@media (max-width: 900px) { .overview.has-summary { grid-template-columns: minmax(0, 1fr); } .summary { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: auto; } }
+@media (max-width: 480px) { .summary { grid-template-columns: minmax(0, 1fr); } }
 @media (max-width: 900px) { .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 480px) { .tiles { grid-template-columns: minmax(0, 1fr); } }
 .tile, .card { background: var(--surface); border: 1px solid var(--ring); border-radius: 10px; }
@@ -69,7 +76,7 @@ h1 { font-size: 20px; margin: 0; font-weight: 600; }
 .insights .when { color: var(--muted); font-size: 12px; min-width: 52px; font-variant-numeric: tabular-nums; }
 .badge { font-size: 11px; font-weight: 600; border: 1px solid var(--critical); border-radius: 4px; padding: 0 6px; }
 .badge::before { content: "▲ "; color: var(--critical); }
-.heat { display: grid; grid-template-columns: 34px repeat(24, 1fr); gap: 2px; margin-top: 10px; font-size: 11px; color: var(--muted); }
+.heat { display: grid; grid-template-columns: 34px repeat(24, minmax(0, 1fr)); gap: 2px; margin-top: 10px; font-size: 11px; color: var(--muted); }
 .heat .cell { aspect-ratio: 1; border-radius: 2px; background: var(--grid); }
 .heat .cell:hover, .heat .cell:focus { outline: 2px solid var(--ink-2); outline-offset: -1px; }
 .heat-scale { display: flex; align-items: center; gap: 3px; margin-top: 8px; color: var(--muted); font-size: 11px; }
@@ -115,12 +122,17 @@ th { color: var(--ink-2); font-weight: 600; position: sticky; top: 0; background
   <div class="error" id="error" hidden></div>
   <div class="error" id="coverage" hidden></div>
   <section class="card compare" id="comparison" aria-label="Agent comparison" hidden></section>
-  <section class="tiles" id="tiles"></section>
+  <section class="overview" id="overview" aria-label="Usage overview">
+    <div class="summary" id="summary" aria-label="All agent totals" hidden></div>
+    <section class="tiles" id="tiles" aria-label="Usage by agent"></section>
+  </section>
   <section class="cards" id="cards"></section>
 </main>
 <div id="tip" hidden></div>
+<script id="pricing" type="application/json">__HOMESTACK_PRICING__</script>
 <script>
 "use strict";
+const PRICES = JSON.parse(document.getElementById("pricing").textContent);
 const RANGES = [
   { id: "24h", label: "24 h", seconds: 86400, step: 3600 },
   { id: "7d", label: "7 days", seconds: 7 * 86400, step: 6 * 3600 },
@@ -130,14 +142,14 @@ const RANGES = [
 // Add an adapter here to expose another agent in both views. Unreported
 // capabilities stay absent instead of inventing comparable measurements.
 const AGENTS = [
-  { id: "claude", label: "Claude Code", prefix: "claude_code", metrics: () => ({
+  { id: "claude", label: "Claude Code", scopeMetric: "claude_code_token_usage_tokens_total", metrics: () => ({
     tokens: "claude_code_token_usage_tokens_total", tokenLabel: "type",
     types: { input: "input", cached: "cacheRead", written: "cacheCreation", output: "output" },
     cost: "claude_code_cost_usage_USD_total", sessions: "claude_code_session_count_total",
     active: "claude_code_active_time_seconds_total", commits: "claude_code_commit_count_total",
     lines: "claude_code_lines_of_code_count_total",
   }) },
-  { id: "codex", label: "Codex", prefix: "codex", metrics: c => ({
+  { id: "codex", label: "Codex", scopeMetric: "codex_turn_token_usage.*_(sum|total)", metrics: c => ({
     tokens: c.tokens, tokenLabel: "token_type", inclusiveInput: true,
     types: { total: "total", input: "input", cached: "cached_input", written: "cache_write_input", output: "output", reasoning: "reasoning_output" },
     estimated: true, convertCost: rows => costRows(rows, c), costNote: () => costNote(c),
@@ -200,7 +212,9 @@ const series = (query, start, end, step) =>
 
 // Codex metric names depend on its exporter's unit and instrument type.
 async function codexMetrics() {
-  const names = await prom("/api/v1/label/__name__/values", {});
+  const names = await prom("/api/v1/label/__name__/values", {
+    "match[]": '{__name__=~"codex_(turn_(token_usage|e2e_duration_ms|ttft_duration_ms|ttfm_duration_ms)|thread_started|conversation_turn_count|tool_call).*_(sum|count|total)"}',
+  });
   const pick = re => names.find(n => re.test(n) && n.endsWith("_total")) || names.find(n => re.test(n) && n.endsWith("_sum"));
   const histogram = prefix => ({ sum: names.find(n => n.startsWith(prefix) && n.endsWith("_sum")),
     count: names.find(n => n.startsWith(prefix) && n.endsWith("_count")) });
@@ -208,7 +222,7 @@ async function codexMetrics() {
     turns: pick(/^codex_conversation_turn_count/), tools: pick(/^codex_tool_call_total$/),
     turn: histogram("codex_turn_e2e_duration_ms"), firstToken: histogram("codex_turn_ttft_duration_ms"),
     firstOutput: histogram("codex_turn_ttfm_duration_ms"), toolTime: histogram("codex_tool_call_duration_ms"),
-    prices: null, missing: new Set(), coverage: "" };
+    prices: PRICES, missing: new Set(), coverage: "" };
 }
 
 // A globally present metric can still have no attribution for the selected
@@ -285,8 +299,8 @@ function tokenValues(rows, metric) {
     reasoning: get("reasoning"), cacheHit: allInput > 0 && cached != null ? cached / allInput : null };
 }
 const tokenSelector = metric => metric.tokens + (metric.types.total ? `{${metric.tokenLabel}=${JSON.stringify(metric.types.total)}}` : "");
-async function readAgent(agent, codex, now) {
-  const metric = { types: {}, ...agent.metrics(codex) }, values = {}, notes = {};
+async function readAgent(agent, now, peers) {
+  const metric = agent.metric, values = {}, notes = {};
   const queries = new Map();
   const query = text => {
     if (!queries.has(text)) queries.set(text, instant(text, now));
@@ -296,14 +310,15 @@ async function readAgent(agent, codex, now) {
   const [tokens, cost, sessions, active, commits, lines] = await Promise.all([
     read(metric.tokens, metric.tokenLabel),
     read(metric.cost || (metric.convertCost && metric.tokens), metric.convertCost ? `model,${metric.tokenLabel}` : ""),
-    read(metric.sessions), read(metric.active), read(metric.commits), read(metric.lines, "type"),
+    read(visibleMetric("sessions", peers) && metric.sessions), read(visibleMetric("active", peers) && metric.active),
+    read(visibleMetric("commits", peers) && metric.commits), read(visibleMetric("lines", peers) && metric.lines, "type"),
   ]);
   Object.assign(values, tokenValues(tokens, metric));
   values.cost = sumRows(metric.convertCost ? metric.convertCost(cost) : cost);
   if (metric.costUnavailable?.()) values.cost = null;
   values.sessions = sumRows(sessions); values.active = sumRows(active); values.commits = sumRows(commits);
   if (lines.length) for (const type of ["added", "removed"]) values[type] = Number(lines.find(r => r.metric.type === type)?.value[1] || 0);
-  await Promise.all((metric.extras || []).filter(e => !e.detail).map(async extra => {
+  await Promise.all((metric.extras || []).filter(e => !e.detail && visibleMetric(e.id, peers)).map(async extra => {
     values[extra.id] = sumRows(await query(extraQuery(extra, range.seconds)));
   }));
   for (const row of [...COMPARISON_ROWS, ...(metric.extras || [])])
@@ -426,8 +441,8 @@ function costNote(codex) {
 
 async function load() {
   const version = ++loadVersion, now = Math.floor(Date.now() / 1000), end = now, start = end - range.seconds + range.step;
-  const tiles = document.getElementById("tiles"), cards = document.getElementById("cards"), comparisonSection = document.getElementById("comparison");
-  tiles.hidden = cards.hidden = comparison;
+  const overview = document.getElementById("overview"), cards = document.getElementById("cards"), comparisonSection = document.getElementById("comparison");
+  overview.hidden = cards.hidden = comparison;
   comparisonSection.hidden = !comparison;
   document.getElementById("tool").disabled = comparison;
   document.getElementById("tool").value = comparison ? "all" : tool.id;
@@ -435,12 +450,11 @@ async function load() {
   try {
     const codex = await codexMetrics();
     if ((comparison || shows("codex")) && codex.tokens) {
-      const response = await fetch("/api/pricing");
-      if (response.ok) codex.prices = await response.json();
       const rows = await instant(`group by (host_name,project) (last_over_time(${codex.tokens}{token_type="total"}[${LOOKBACK}]))`, now);
       codex.coverage = coverageNote(rows);
     }
-    const agents = await Promise.all(AGENTS.filter(a => comparison || shows(a.id)).map(a => readAgent(a, codex, now)));
+    const peers = AGENTS.filter(a => comparison || shows(a.id)).map(a => ({ ...a, metric: { types: {}, ...a.metrics(codex) } }));
+    const agents = await Promise.all(peers.map(a => readAgent(a, now, peers)));
     if (version !== loadVersion) return;
     const coverage = document.getElementById("coverage"); coverage.textContent = codex.coverage; coverage.hidden = !codex.coverage;
     if (comparison) renderComparison(agents, now);
@@ -475,6 +489,10 @@ async function load() {
         specs.push({ label: `${agent.label} ${id === "cost" && agent.metric.estimated ? "estimated cost" : spec.label.toLowerCase()}`, format: id === "total" ? fmt.tokens : spec.format,
           data: { now: agent.values[id] ?? null, before: null, buckets }, note: agent.values[id] == null ? agent.notes[id] : id === "cost" && agent.metric.estimated ? "Standard API estimate · LiteLLM" : "" });
       }
+      const all = tool.id === "all", summary = document.getElementById("summary");
+      overview.classList.toggle("has-summary", all); summary.hidden = !all;
+      if (all) renderTiles(totalTiles(agents, charts), start, end, "summary");
+      else summary.replaceChildren();
       renderTiles(specs, start, end);
       renderCharts(charts, start, end, [insightsCard(daily), heatCard(heat)]);
     }
@@ -506,10 +524,28 @@ function fold(list, limit = SERIES.length) {
   return out.map((s, i) => ({ ...s, color: `var(${SERIES[i]})` }));
 }
 
-function renderTiles(tiles, start, end) {
+// Totals reuse the same scoped snapshot as the individual tiles. Missing
+// contributors are named so a partial sum cannot look like a complete total.
+function totalTiles(agents, charts) {
+  return [{ id: "cost", label: "Total cost", title: "Cost over time", format: fmt.usd },
+    { id: "total", label: "Total tokens", title: "Tokens over time", format: fmt.tokens }].map(spec => {
+    const available = agents.filter(a => a.values[spec.id] != null && Number.isFinite(a.values[spec.id]));
+    const missing = agents.filter(a => !available.includes(a));
+    const buckets = new Map(), names = new Set(available.flatMap(a => [a.label, a.label + " (estimated)"]));
+    for (const series of charts.find(c => c.title === spec.title)?.series || []) if (names.has(series.name))
+      for (const [time, value] of series.values) buckets.set(time, (buckets.get(time) || 0) + value);
+    const value = available.length ? available.reduce((sum, a) => sum + a.values[spec.id], 0) : null;
+    let note = !available.length ? "No data for the selected filters and time range" :
+      missing.length ? "Partial total · unavailable: " + missing.map(a => a.label).join(", ") : "All agents";
+    if (spec.id === "cost" && available.some(a => a.metric.estimated)) note += " · includes estimated API cost";
+    return { label: spec.label, format: spec.format, data: { now: value, before: null, buckets }, note };
+  });
+}
+
+function renderTiles(tiles, start, end, target = "tiles") {
   const times = [];
   for (let t = start; t <= end; t += range.step) times.push(t);
-  document.getElementById("tiles").replaceChildren(...tiles.map(t => {
+  document.getElementById(target).replaceChildren(...tiles.map(t => {
     const tile = el("div", "tile"), row = el("div", "row");
     const { now, before, buckets } = t.data;
     row.append(el("div", "value", now == null ? "—" : t.format(now)));
@@ -793,13 +829,14 @@ function selector(id, options, current, choose) {
 }
 // The servers and projects that reported agent metrics within the lookback.
 async function scopes() {
-  await Promise.all(SCOPES.map(async s => {
-    const rows = await instant(`group by (${s.label}) (last_over_time({__name__=~"(${AGENTS.map(a => a.prefix).join("|")})_.+"}[${LOOKBACK}]))`,
-      Math.floor(Date.now() / 1000));
+  // Scope labels only need usage counters, not every tool metric and histogram bucket.
+  const rows = await instant(`group by (host_name,project) (last_over_time({__name__=~"(${AGENTS.map(a => a.scopeMetric).join("|")})"}[${LOOKBACK}]))`,
+    Math.floor(Date.now() / 1000));
+  for (const s of SCOPES) {
     const values = [...new Set(rows.map(r => r.metric[s.label]).filter(Boolean))].sort();
     if (scope[s.id] !== ANY && !values.includes(scope[s.id])) values.push(scope[s.id]);
     selector(s.id, [[ANY, s.all], ...values.map(value => [value, value])], scope[s.id], value => { scope[s.id] = value; });
-  }));
+  }
 }
 selector("tool", TOOLS.map(t => [t.id, t.label]), tool.id, id => { tool = TOOLS.find(t => t.id === id); });
 selector("range", RANGES.map(r => [r.id, r.label]), range.id, id => { range = RANGES.find(r => r.id === id); });
