@@ -607,9 +607,16 @@ pub async fn global_status(
     cfg: &Config,
     parallel: usize,
     observations: &crate::prefetch::Observations,
+    prometheus: Option<&reqwest::Url>,
 ) -> Result<(GlobalStatus, Vec<crate::virtiofs::Target>), CoreError> {
     let pve = &crate::prefetch::Prefetch::new(pve, parallel, observations);
-    prefetch_status(pve, cfg).await?;
+    let (prefetched, mut telemetry) = futures_util::join!(prefetch_status(pve, cfg), async {
+        match prometheus {
+            Some(url) => crate::service_status::read(url).await,
+            None => BTreeMap::new(),
+        }
+    });
+    prefetched?;
     let inventory = Inventory::read(pve, cfg).await?;
     let nodes: BTreeMap<String, NodeState> = inventory.nodes.iter().map(|n| (n.node.clone(), n.clone())).collect();
     let configs = &inventory.configs;
@@ -854,14 +861,12 @@ pub async fn global_status(
         } else {
             expected_ip(cfg, item.vmid)
         };
-        let service_status = if online && item.status.as_deref() == Some("running") {
-            if let (Some(config), Some(ip)) = (&container_config, &ip) {
-                crate::service_status::read(config, ip).await
-            } else {
-                None
-            }
+        let (service_status, service_rates) = if container && online && item.status.as_deref() == Some("running") {
+            telemetry
+                .remove(&(item.node.clone(), item.vmid))
+                .map_or((None, None), |(report, rates)| (Some(report), rates))
         } else {
-            None
+            (None, None)
         };
         if let Some(report) = &service_status
             && let (Some(home), Some(measured)) = (
@@ -908,10 +913,8 @@ pub async fn global_status(
             root_storage,
             root,
             home,
-            service_rates: service_status
-                .as_ref()
-                .and_then(|report| crate::service_status::rates(item.vmid, report)),
             service_status,
+            service_rates,
             role_tag_ok: true,
             warning: None,
             image,

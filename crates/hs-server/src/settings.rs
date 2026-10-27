@@ -18,6 +18,7 @@
 //! | `HOMESTACK_INSTANCE` | Name of the instance in its leases, default `homestack` |
 //! | `HOMESTACK_TLS_CERT_B64`, `HOMESTACK_TLS_KEY_B64` | Certificate chain and key (PEM, base64), stored at the first start |
 //! | `HOMESTACK_CADDY_ADMIN` | Caddy's admin API, told to load a new certificate |
+//! | `HOMESTACK_PROMETHEUS_URL` | Prometheus with the PVE agents' container measurements, e.g. `http://prom:9090`; any path is ignored |
 //! | `HOMESTACK_PVE_POOL` | Pool the instance changes workspaces in, default `homestack` |
 //! | `HOMESTACK_PVE_GOLD_POOL` | Gold's pool, default `homestack-gold` |
 //! | `HOMESTACK_LOG` | Log filter, default `info` |
@@ -120,10 +121,27 @@ pub fn from_env(var: impl Fn(&str) -> Option<String>) -> Result<Settings, String
                             .map_err(|_| "HOMESTACK_CADDY_ADMIN must be a URL like http://127.0.0.1:2019".to_owned())
                     })
                     .transpose()?,
+                prometheus: set("HOMESTACK_PROMETHEUS_URL")
+                    .map(|url| prometheus(&url))
+                    .transpose()?,
                 state_dir: Some(state_dir),
             },
         },
     })
+}
+
+/// `HOMESTACK_PROMETHEUS_URL`: an `http` or `https` origin.
+fn prometheus(value: &str) -> Result<Url, String> {
+    Url::parse(value.trim())
+        .ok()
+        .filter(|url| matches!(url.scheme(), "http" | "https") && url.host().is_some())
+        .map(|mut url| {
+            url.set_path("");
+            url.set_query(None);
+            url.set_fragment(None);
+            url
+        })
+        .ok_or_else(|| "HOMESTACK_PROMETHEUS_URL must be a URL like http://prom:9090".to_owned())
 }
 
 /// `HOMESTACK_INSTANCE`: a DNS label (it is the instance's host name).

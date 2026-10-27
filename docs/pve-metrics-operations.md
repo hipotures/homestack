@@ -23,9 +23,13 @@ on disk, surviving an ordinary restart of the same Collector container.
 Agent metrics use `hs_pve_`, with `node`, `vmid`, `type` (`lxc`/`qemu`) and
 optional `name`; filesystem metrics also have `mount` and `filesystem`.
 Native Proxmox metric-server data remains separate under `proxmox_`.
-HomeStack API/TUI still read service telemetry endpoints: collecting `hs_pve_`
-does not switch those consumers. Keep service telemetry until they are migrated;
-application health, uptime and process RSS are separate from whole-guest usage.
+The HomeStack API reads LXC telemetry for `GET /v1/status` from Prometheus with
+one PromQL query per request, so clients never query Prometheus themselves.
+Set `HOMESTACK_PROMETHEUS_URL` (e.g. `http://prom.homestack.app:9090`) in the
+API service environment; without it status has no service telemetry. Values
+measure the whole LXC; samples older than 30 seconds are omitted. Uptime is
+the container's (`proxmox_vm_uptime_seconds`) and process RSS is not reported;
+application health remains the service health check.
 
 ## Release from the development machine
 

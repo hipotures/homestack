@@ -169,9 +169,15 @@ pub async fn status(
     let stored = configuration(&state)?;
     let parallel = scope.parallel.unwrap_or(8).clamp(1, 32);
     let pve = state.pve()?;
-    let (mut status, virtiofs) = global_status(pve.as_ref(), &stored.config, parallel, &state.status_observations)
-        .await
-        .map_err(|e| core_error(e, "No such resource."))?;
+    let (mut status, virtiofs) = global_status(
+        pve.as_ref(),
+        &stored.config,
+        parallel,
+        &state.status_observations,
+        state.instance.prometheus.as_ref(),
+    )
+    .await
+    .map_err(|e| core_error(e, "No such resource."))?;
     state
         .virtiofs
         .global(pve, &state.pools.workspaces, &mut status, virtiofs);

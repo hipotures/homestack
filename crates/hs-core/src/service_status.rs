@@ -1,294 +1,339 @@
-//! Read-only, bounded HTTP telemetry. The destination comes from PVE's actual
-//! static net0 and HomeStack-written port metadata, never from a remote URL.
+//! Container telemetry from Prometheus, where `homestack-pve-agent` on each
+//! PVE node sends cgroup and filesystem measurements of its LXCs. The values
+//! keep the shape of the service status contract, so clients read them
+//! unchanged; one query per status request covers every container.
 
 use std::collections::BTreeMap;
-use std::net::Ipv4Addr;
-use std::sync::{Mutex, OnceLock};
-use std::time::{Duration, Instant};
+use std::sync::OnceLock;
+use std::time::Duration;
 
 use hs_model::status::ServiceRates;
-use hs_service_status::{Cpu, Io, MAX_AGE_SECONDS, MAX_BYTES, MAX_FILESYSTEMS, PATH, Report, SCHEMA};
-use serde_json::Value;
+use hs_service_status::{
+    Container, Cpu, Filesystem, Io, MAX_AGE_SECONDS, Memory, MemoryEvents, Pressure, Psi, PsiLine, Report, SCHEMA,
+    Status, Throttling,
+};
+use reqwest::Url;
+use serde::Deserialize;
 
-/// Absence, stale samples, unsupported producers and failed reads all mean
-/// unavailable telemetry. They never change lifecycle ownership or health.
-pub async fn read(config: &Value, ip: &str) -> Option<Report> {
-    let description = config["description"].as_str()?;
-    if !description.lines().any(|line| line == "made by homestack")
-        || !description.lines().any(|line| line.starts_with("HomeStack service "))
-    {
-        return None;
+/// The window of the CPU and I/O rates.
+const RATE_WINDOW_SECONDS: f64 = 60.0;
+
+/// Raw series of every LXC, plus derived ones told apart by a `derived`
+/// label: `or` matches label sets without metric names, so a derived series
+/// must not share its labels with a raw one.
+const QUERY: &str = concat!(
+    r#"{__name__=~"hs_pve_(cpu_capacity|cpu_(usage|user|system|throttled)_seconds_total|cpu_(periods|throttled_periods)_total"#,
+    r#"|memory_usage_bytes|memory_effective_limit_bytes|pressure_stall_ratio|pressure_stall_seconds_total"#,
+    r#"|filesystem_(total|used|free|available)_bytes|filesystem_(mounted|read_success)_ratio)",type="lxc"}"#,
+    r#" or hs_pve_memory_stat_bytes{type="lxc",kind=~"anon|file"}"#,
+    r#" or hs_pve_memory_events_total{type="lxc",event=~"high|max|oom|oom_kill"}"#,
+    r#" or proxmox_vm_uptime_seconds{type="lxc"}"#,
+    r#" or label_replace(sum by (node, vmid, operation) (hs_pve_io_bytes_total{type="lxc"}), "derived", "io_bytes", "", "")"#,
+    r#" or label_replace(sum by (node, vmid, operation) (hs_pve_io_operations_total{type="lxc"}), "derived", "io_ops", "", "")"#,
+    r#" or label_replace(time() - timestamp(hs_pve_memory_usage_bytes{type="lxc"}), "derived", "age", "", "")"#,
+    r#" or label_replace(sum by (node, vmid) (rate(hs_pve_cpu_usage_seconds_total{type="lxc"}[1m])), "derived", "cpu_rate", "", "")"#,
+    r#" or label_replace(sum by (node, vmid, operation) (rate(hs_pve_io_bytes_total{type="lxc"}[1m])), "derived", "io_bytes_rate", "", "")"#,
+    r#" or label_replace(sum by (node, vmid, operation) (rate(hs_pve_io_operations_total{type="lxc"}[1m])), "derived", "io_ops_rate", "", "")"#,
+);
+
+#[derive(Deserialize)]
+struct Response {
+    data: Data,
+}
+
+#[derive(Deserialize)]
+struct Data {
+    result: Vec<Series>,
+}
+
+#[derive(Deserialize)]
+struct Series {
+    metric: BTreeMap<String, String>,
+    value: (f64, String),
+}
+
+/// One container's series: its metric name, labels and value.
+#[derive(Default)]
+struct Samples(Vec<(String, BTreeMap<String, String>, f64)>);
+
+impl Samples {
+    fn all<'a>(&'a self, name: &'a str, labels: &'a [(&str, &str)]) -> impl Iterator<Item = f64> + 'a {
+        self.0
+            .iter()
+            .filter(move |(series, have, _)| {
+                series == name
+                    && labels
+                        .iter()
+                        .all(|(key, value)| have.get(*key).map(String::as_str) == Some(*value))
+            })
+            .map(|(_, _, value)| *value)
     }
-    let port: u16 = description
-        .lines()
-        .find_map(|line| line.strip_prefix("status-port "))?
-        .parse()
-        .ok()?;
-    let address: Ipv4Addr = ip.parse().ok()?;
-    if port == 0
-        || address.is_unspecified()
-        || address.is_loopback()
-        || address.is_multicast()
-        || address.is_broadcast()
-        || address.is_link_local()
-    {
-        return None;
+
+    fn get(&self, name: &str, labels: &[(&str, &str)]) -> Option<f64> {
+        self.all(name, labels).next()
     }
+
+    fn count(&self, name: &str, labels: &[(&str, &str)]) -> Option<u64> {
+        self.get(name, labels).and_then(count)
+    }
+
+    /// Microseconds of a counter in seconds.
+    fn usec(&self, name: &str) -> Option<u64> {
+        self.get(name, &[]).and_then(|seconds| count(seconds * 1_000_000.0))
+    }
+}
+
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "checked finite and non-negative"
+)]
+fn count(value: f64) -> Option<u64> {
+    (value.is_finite() && value >= 0.0).then_some(value as u64)
+}
+
+/// Measurements of running LXCs by node and VMID. An unreachable or failing
+/// Prometheus, and containers without a fresh sample, have none: telemetry
+/// never changes lifecycle ownership or health.
+pub async fn read(prometheus: &Url) -> BTreeMap<(String, u32), (Report, Option<ServiceRates>)> {
+    let Some(response) = query(prometheus).await else {
+        return BTreeMap::new();
+    };
+    let mut containers: BTreeMap<(String, u32), Samples> = BTreeMap::new();
+    for series in response.data.result {
+        let (Some(node), Some(vmid)) = (
+            series.metric.get("node"),
+            series.metric.get("vmid").and_then(|vmid| vmid.parse().ok()),
+        ) else {
+            continue;
+        };
+        let Some(name) = series.metric.get("derived").or_else(|| series.metric.get("__name__")) else {
+            continue;
+        };
+        let Ok(value) = series.value.1.parse::<f64>() else {
+            continue;
+        };
+        containers
+            .entry((node.clone(), vmid))
+            .or_default()
+            .0
+            .push((name.clone(), series.metric, value));
+    }
+    containers
+        .into_iter()
+        .filter_map(|(key, samples)| report(&samples).map(|report| (key, (report, rates(&samples)))))
+        .collect()
+}
+
+async fn query(prometheus: &Url) -> Option<Response> {
     static CLIENT: OnceLock<Option<reqwest::Client>> = OnceLock::new();
     let client = CLIENT
         .get_or_init(|| {
             reqwest::Client::builder()
                 .no_proxy()
                 .redirect(reqwest::redirect::Policy::none())
-                .connect_timeout(Duration::from_millis(300))
-                .timeout(Duration::from_millis(800))
+                .connect_timeout(Duration::from_millis(500))
+                .timeout(Duration::from_secs(3))
                 .build()
                 .ok()
         })
         .as_ref()?;
-    let mut response = client.get(format!("http://{address}:{port}{PATH}")).send().await.ok()?;
-    if response.status() != reqwest::StatusCode::OK
-        || response.content_length().is_some_and(|len| len > MAX_BYTES as u64)
-        || response
-            .headers()
-            .get(reqwest::header::CONTENT_TYPE)?
-            .to_str()
-            .ok()?
-            .split(';')
-            .next()?
-            .trim()
-            != "application/json"
-    {
+    let mut url = prometheus.clone();
+    url.set_path("/api/v1/query");
+    url.query_pairs_mut().clear().append_pair("query", QUERY);
+    let response = client.get(url).send().await.ok()?;
+    if response.status() != reqwest::StatusCode::OK {
         return None;
     }
-    let mut bytes = Vec::new();
-    while let Some(chunk) = response.chunk().await.ok()? {
-        if bytes.len().checked_add(chunk.len())? > MAX_BYTES {
-            return None;
-        }
-        bytes.extend_from_slice(&chunk);
-    }
-    let report: Report = serde_json::from_slice(&bytes).ok()?;
-    valid(&report).then_some(report)
+    response.json().await.ok()
 }
 
-/// Schema 2 with a fresh measurement whose numbers are consistent. Unknown
-/// fields were already ignored; a `null` measurement stays unknown.
-fn valid(report: &Report) -> bool {
-    if report.schema != SCHEMA
-        || report.filesystems.len() > MAX_FILESYSTEMS
-        || !matches!(
-            report.error.as_deref(),
-            None | Some("pending" | "mount_inventory_unavailable" | "too_many_mounts")
-        )
-    {
-        return false;
+/// The container's measurement, when the agent sent one recently.
+fn report(samples: &Samples) -> Option<Report> {
+    let age = samples.get("age", &[]).and_then(count)?;
+    if age > MAX_AGE_SECONDS {
+        return None;
     }
-    match (report.sample_uptime_usec, report.sample_age_seconds) {
-        (Some(sample_usec), Some(age)) => {
-            let Some(elapsed) = report.uptime_seconds.checked_sub(sample_usec / 1_000_000) else {
-                return false;
-            };
-            // The uptime and age are independently rounded down to seconds.
-            if age > MAX_AGE_SECONDS
-                || !(elapsed == age || age.checked_add(1) == Some(elapsed))
-                || report.error.as_deref() == Some("pending")
-            {
-                return false;
-            }
-        }
-        (None, None) if report.error.as_deref() == Some("pending") => {
-            if report.filesystems.iter().any(|fs| fs.mounted) || report.container.error.is_none() {
-                return false;
-            }
-        }
-        _ => return false,
-    }
-    let mut seen = std::collections::BTreeSet::new();
-    for fs in &report.filesystems {
-        if !fs.mount.starts_with('/')
-            || fs.mount.len() > 4096
-            || fs.mount.contains('\0')
-            || fs.mount.split('/').any(|part| matches!(part, "." | ".."))
-            || !seen.insert(fs.mount.as_str())
-        {
-            return false;
-        }
-        let counts = [fs.total_bytes, fs.used_bytes, fs.free_bytes, fs.available_bytes];
-        if fs.mounted {
-            if fs
-                .filesystem
-                .as_ref()
-                .is_none_or(|kind| kind.is_empty() || kind.len() > 64)
-                || !matches!(
-                    fs.error.as_deref(),
-                    None | Some("measurement_unavailable" | "invalid_statistics")
-                )
-            {
-                return false;
-            }
-        } else if fs.filesystem.is_some()
-            || !matches!(fs.error.as_deref(), Some("not_mounted" | "mount_inventory_unavailable"))
-            || (fs.mount != "/" && fs.mount != "/home/app")
-            || (fs.mount == "/" && fs.error.as_deref() == Some("not_mounted"))
-        {
-            return false;
-        }
-        if fs.mounted && fs.error.is_none() {
-            let [Some(total), Some(used), Some(free), Some(available)] = counts else {
-                return false;
-            };
-            if used.checked_add(free) != Some(total) || available > free {
-                return false;
-            }
-        } else if fs.error.is_none() || counts.iter().any(Option::is_some) {
-            return false;
-        }
-    }
-    if !seen.contains("/") || !seen.contains("/home/app") {
-        return false;
-    }
-    let container = &report.container;
-    if !matches!(
-        container.error.as_deref(),
-        None | Some("cgroup_unavailable" | "host_cgroup")
+    let cpu = match (
+        samples.usec("hs_pve_cpu_usage_seconds_total"),
+        samples.usec("hs_pve_cpu_user_seconds_total"),
+        samples.usec("hs_pve_cpu_system_seconds_total"),
     ) {
-        return false;
-    }
-    if container.error.is_some() {
-        return container.cpu.is_none()
-            && container.memory.is_none()
-            && container.pressure.is_none()
-            && container.io.is_none();
-    }
-    if let Some(cpu) = &container.cpu
-        && (cpu
-            .capacity_cpus
-            .is_some_and(|cpus| !cpus.is_finite() || cpus <= 0.0 || cpus > 65_536.0)
-            || cpu.user_usec.checked_add(cpu.system_usec).is_none()
-            || cpu
-                .throttling
-                .as_ref()
-                .is_some_and(|throttling| throttling.throttled_periods > throttling.periods))
-    {
-        return false;
-    }
-    let line = |line: &hs_service_status::PsiLine| {
-        [line.avg10, line.avg60, line.avg300]
-            .iter()
-            .all(|value| value.is_finite() && (0.0..=100.0).contains(value))
+        (Some(usage_usec), Some(user_usec), Some(system_usec)) => Some(Cpu {
+            capacity_cpus: samples.get("hs_pve_cpu_capacity", &[]),
+            usage_usec,
+            user_usec,
+            system_usec,
+            throttling: match (
+                samples.count("hs_pve_cpu_periods_total", &[]),
+                samples.count("hs_pve_cpu_throttled_periods_total", &[]),
+                samples.usec("hs_pve_cpu_throttled_seconds_total"),
+            ) {
+                (Some(periods), Some(throttled_periods), Some(throttled_usec)) => Some(Throttling {
+                    periods,
+                    throttled_periods,
+                    throttled_usec,
+                }),
+                _ => None,
+            },
+        }),
+        _ => None,
     };
-    container.pressure.as_ref().is_none_or(|pressure| {
-        [&pressure.cpu, &pressure.memory, &pressure.io]
-            .into_iter()
-            .flatten()
-            .all(|psi| line(&psi.some) && psi.full.as_ref().is_none_or(line))
+    let event = |event| samples.count("hs_pve_memory_events_total", &[("event", event)]);
+    let memory = samples
+        .count("hs_pve_memory_usage_bytes", &[])
+        .map(|usage_bytes| Memory {
+            usage_bytes,
+            // Omitted while the whole hierarchy is unlimited.
+            limit_bytes: samples.count("hs_pve_memory_effective_limit_bytes", &[]),
+            anon_bytes: samples.count("hs_pve_memory_stat_bytes", &[("kind", "anon")]),
+            file_bytes: samples.count("hs_pve_memory_stat_bytes", &[("kind", "file")]),
+            // The agent measures the container, not one process in it.
+            process_rss_bytes: None,
+            events: match (event("high"), event("max"), event("oom"), event("oom_kill")) {
+                (Some(high), Some(max), Some(oom), Some(oom_kill)) => Some(MemoryEvents {
+                    high,
+                    max,
+                    oom,
+                    oom_kill,
+                }),
+                _ => None,
+            },
+        });
+    let line = |resource, stall| {
+        // The agent sends PSI as ratios; the contract has percent.
+        let window = |window| {
+            samples
+                .get(
+                    "hs_pve_pressure_stall_ratio",
+                    &[("resource", resource), ("stall", stall), ("window", window)],
+                )
+                .map(|ratio| ratio * 100.0)
+        };
+        Some(PsiLine {
+            avg10: window("10s")?,
+            avg60: window("60s")?,
+            avg300: window("300s")?,
+            total_usec: samples
+                .get(
+                    "hs_pve_pressure_stall_seconds_total",
+                    &[("resource", resource), ("stall", stall)],
+                )
+                .and_then(|seconds| count(seconds * 1_000_000.0))?,
+        })
+    };
+    let psi = |resource| {
+        Some(Psi {
+            some: line(resource, "some")?,
+            full: line(resource, "full"),
+        })
+    };
+    let pressure = Pressure {
+        cpu: psi("cpu"),
+        memory: psi("memory"),
+        io: psi("io"),
+    };
+    // Summed over devices by the query.
+    let io = |name, operation| samples.count(name, &[("operation", operation)]);
+    let io = match (
+        io("io_bytes", "read"),
+        io("io_bytes", "write"),
+        io("io_ops", "read"),
+        io("io_ops", "write"),
+    ) {
+        (Some(read_bytes), Some(write_bytes), Some(read_ops), Some(write_ops)) => Some(Io {
+            read_bytes,
+            write_bytes,
+            read_ops,
+            write_ops,
+        }),
+        _ => None,
+    };
+    Some(Report {
+        schema: SCHEMA,
+        // A running container with a fresh sample; the application's own
+        // liveness is its health check's business.
+        status: Status::Pass,
+        // The container's, not its application process's.
+        uptime_seconds: samples.count("proxmox_vm_uptime_seconds", &[]).unwrap_or(0),
+        sample_uptime_usec: None,
+        sample_age_seconds: Some(age),
+        filesystems: filesystems(samples),
+        container: Container {
+            cpu,
+            memory,
+            pressure: (pressure.cpu.is_some() || pressure.memory.is_some() || pressure.io.is_some())
+                .then_some(pressure),
+            io,
+            error: None,
+        },
+        error: None,
     })
 }
 
-/// The previous measurement of one container's service process.
-struct Previous {
-    uptime_seconds: u64,
-    sample_usec: u64,
-    cpu: Option<Cpu>,
-    io: Option<Io>,
-    rates: Option<ServiceRates>,
-    seen: Instant,
+fn filesystems(samples: &Samples) -> Vec<Filesystem> {
+    let mut mounts: BTreeMap<&str, Option<&str>> = BTreeMap::new();
+    for (name, labels, _) in &samples.0 {
+        if name == "hs_pve_filesystem_mounted_ratio"
+            && let Some(mount) = labels.get("mount")
+        {
+            mounts.insert(mount, labels.get("filesystem").map(String::as_str));
+        }
+    }
+    mounts
+        .into_iter()
+        .map(|(mount, filesystem)| {
+            let at = [("mount", mount)];
+            let mounted = samples.get("hs_pve_filesystem_mounted_ratio", &at) == Some(1.0);
+            let bytes = |name| samples.count(name, &at);
+            let measured = mounted && samples.get("hs_pve_filesystem_read_success_ratio", &at) == Some(1.0);
+            let counts = [
+                bytes("hs_pve_filesystem_total_bytes"),
+                bytes("hs_pve_filesystem_used_bytes"),
+                bytes("hs_pve_filesystem_free_bytes"),
+                bytes("hs_pve_filesystem_available_bytes"),
+            ];
+            let [total_bytes, used_bytes, free_bytes, available_bytes] = if measured { counts } else { [None; 4] };
+            Filesystem {
+                mount: mount.to_owned(),
+                filesystem: mounted.then(|| filesystem.map(str::to_owned)).flatten(),
+                mounted,
+                total_bytes,
+                used_bytes,
+                free_bytes,
+                available_bytes,
+                error: if !mounted {
+                    Some("not_mounted".to_owned())
+                } else if measured && counts.iter().all(Option::is_some) {
+                    None
+                } else {
+                    Some("measurement_unavailable".to_owned())
+                },
+            }
+        })
+        .collect()
 }
 
-/// Measurements closer than this are not a meaningful interval.
-const MIN_INTERVAL_USEC: u64 = 1_000_000;
-/// Rates over a longer gap are averages, not current activity.
-const MAX_INTERVAL_USEC: u64 = 600_000_000;
-
-/// CPU and I/O rates between `report` and the previous valid report of
-/// `vmid`'s service. Only status requests call it, so history ages out
-/// while no client asks. A restart, a counter that went back or an invalid
-/// interval starts a new series without rates.
-pub fn rates(vmid: u32, report: &Report) -> Option<ServiceRates> {
-    static HISTORY: Mutex<BTreeMap<u32, Previous>> = Mutex::new(BTreeMap::new());
-    let now = Instant::now();
-    let mut history = HISTORY.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    history.retain(|_, previous| now.duration_since(previous.seen) < Duration::from_micros(MAX_INTERVAL_USEC));
-    let Some(sample_usec) = report.sample_uptime_usec else {
-        history.remove(&vmid);
-        return None;
+/// CPU and I/O rates over the last minute, when Prometheus has enough samples.
+fn rates(samples: &Samples) -> Option<ServiceRates> {
+    let rate = |name, labels: &[(&str, &str)]| samples.get(name, labels).filter(|value| value.is_finite());
+    let rates = ServiceRates {
+        interval_seconds: RATE_WINDOW_SECONDS,
+        // CPU seconds per second; 100 is one logical CPU busy.
+        cpu_percent: rate("cpu_rate", &[]).map(|cpus| cpus * 100.0),
+        read_bytes_per_second: rate("io_bytes_rate", &[("operation", "read")]),
+        write_bytes_per_second: rate("io_bytes_rate", &[("operation", "write")]),
+        read_ops_per_second: rate("io_ops_rate", &[("operation", "read")]),
+        write_ops_per_second: rate("io_ops_rate", &[("operation", "write")]),
     };
-    let cpu = report.container.cpu.clone();
-    let io = report.container.io.clone();
-    if let Some(previous) = history.get_mut(&vmid)
-        && previous.sample_usec == sample_usec
-        && previous.uptime_seconds <= report.uptime_seconds
-        && previous.cpu == cpu
-        && previous.io == io
-    {
-        // The service answered from the measurement it already reported.
-        // Liveness uptime still advances while a cached measurement is reused.
-        previous.uptime_seconds = report.uptime_seconds;
-        previous.seen = now;
-        return previous.rates.clone();
-    }
-    let rates = history.get(&vmid).and_then(|previous| {
-        if report.uptime_seconds < previous.uptime_seconds {
-            return None;
-        }
-        let interval = sample_usec.checked_sub(previous.sample_usec)?;
-        if !(MIN_INTERVAL_USEC..=MAX_INTERVAL_USEC).contains(&interval) {
-            return None;
-        }
-        if let Some((before, after)) = previous.cpu.as_ref().zip(cpu.as_ref()) {
-            let cpu_rollback = after.usage_usec < before.usage_usec
-                || after.user_usec < before.user_usec
-                || after.system_usec < before.system_usec;
-            let throttling_rollback =
-                before
-                    .throttling
-                    .as_ref()
-                    .zip(after.throttling.as_ref())
-                    .is_some_and(|(before, after)| {
-                        after.periods < before.periods
-                            || after.throttled_periods < before.throttled_periods
-                            || after.throttled_usec < before.throttled_usec
-                    });
-            if cpu_rollback || throttling_rollback {
-                return None;
-            }
-        }
-        let delta = |before: Option<u64>, after: Option<u64>| match (before, after) {
-            (Some(before), Some(after)) => after.checked_sub(before).map(Some).ok_or(()),
-            _ => Ok(None),
-        };
-        let field = |pick: fn(&Io) -> u64| delta(previous.io.as_ref().map(pick), io.as_ref().map(pick));
-        let cpu = delta(
-            previous.cpu.as_ref().map(|cpu| cpu.usage_usec),
-            cpu.as_ref().map(|cpu| cpu.usage_usec),
-        )
-        .ok()?;
-        let read_bytes = field(|io| io.read_bytes).ok()?;
-        let write_bytes = field(|io| io.write_bytes).ok()?;
-        let read_ops = field(|io| io.read_ops).ok()?;
-        let write_ops = field(|io| io.write_ops).ok()?;
-        let seconds = interval as f64 / 1_000_000.0;
-        let per_second = |count: Option<u64>| count.map(|count| count as f64 / seconds);
-        Some(ServiceRates {
-            interval_seconds: seconds,
-            cpu_percent: cpu.map(|usec| usec as f64 * 100.0 / interval as f64),
-            read_bytes_per_second: per_second(read_bytes),
-            write_bytes_per_second: per_second(write_bytes),
-            read_ops_per_second: per_second(read_ops),
-            write_ops_per_second: per_second(write_ops),
-        })
-    });
-    history.insert(
-        vmid,
-        Previous {
-            uptime_seconds: report.uptime_seconds,
-            sample_usec,
-            cpu,
-            io,
-            rates: rates.clone(),
-            seen: now,
-        },
-    );
-    rates
+    [
+        rates.cpu_percent,
+        rates.read_bytes_per_second,
+        rates.write_bytes_per_second,
+        rates.read_ops_per_second,
+        rates.write_ops_per_second,
+    ]
+    .iter()
+    .any(Option::is_some)
+    .then_some(rates)
 }

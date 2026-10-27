@@ -121,6 +121,9 @@ pub struct Instance {
     pub tls_bootstrap: Option<TlsPair>,
     /// Caddy's admin API, told to load a new certificate.
     pub caddy_admin: Option<Url>,
+    /// Prometheus with the PVE agents' container measurements; without it
+    /// status has no service telemetry.
+    pub prometheus: Option<Url>,
 }
 
 /// The name of an instance that was given none.
@@ -133,6 +136,7 @@ impl Default for Instance {
             state_dir: None,
             tls_bootstrap: None,
             caddy_admin: None,
+            prometheus: None,
         }
     }
 }
