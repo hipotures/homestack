@@ -108,6 +108,25 @@ impl Metrics<'_> {
     }
 
     fn cgroup(&mut self, instance: &Value, labels: &Attributes, time: u64) {
+        let effective = &instance["effective_limits"];
+        self.gauge(
+            "hs_pve_cpu_capacity",
+            "{cpu}",
+            &effective["cpu_capacity_cpus"],
+            labels,
+            time,
+        );
+        let memory = &effective["memory_limit_bytes"];
+        if memory.is_number() || memory == "max" {
+            self.gauge(
+                "hs_pve_memory_effective_limit_unlimited",
+                "1",
+                &json!(u8::from(memory == "max")),
+                labels,
+                time,
+            );
+            self.gauge("hs_pve_memory_effective_limit_bytes", "By", memory, labels, time);
+        }
         let metrics = &instance["metrics"];
         let generation = instance["cgroup_identity"].as_str().unwrap_or_default();
         for (field, name) in [
@@ -143,7 +162,10 @@ impl Metrics<'_> {
             );
         }
         self.gauge("hs_pve_cpu_weight", "1", &metrics["cpu.weight"], labels, time);
-        if let Some(cpus) = metrics["cpuset.cpus.effective"].as_str().and_then(cpu_count) {
+        if let Some(cpus) = metrics["cpuset.cpus.effective"]
+            .as_str()
+            .and_then(crate::limits::cpu_count)
+        {
             self.gauge("hs_pve_cpu_cpuset_count", "{cpu}", &json!(cpus), labels, time);
         }
         let quota = &metrics["cpu.max"]["quota_usec"];
@@ -429,17 +451,6 @@ impl Metrics<'_> {
             }
         }
     }
-}
-
-fn cpu_count(text: &str) -> Option<u64> {
-    if text.is_empty() {
-        return None;
-    }
-    text.split(',').try_fold(0_u64, |count, range| {
-        let (first, last) = range.split_once('-').unwrap_or((range, range));
-        let (first, last) = (first.parse::<u64>().ok()?, last.parse::<u64>().ok()?);
-        count.checked_add(last.checked_sub(first)?.checked_add(1)?)
-    })
 }
 
 impl Encoder {

@@ -184,8 +184,18 @@ configuration. Unexpected layouts need inspection rather than guessed IDs.
 Cgroup output includes CPU usage/user/system/throttling, quota and cpuset,
 memory current/peak/limits/anon/cache/events/OOM/swap, full PSI, per-device I/O
 byte/operation counters, PID counts and population. Counters are cumulative;
-rates require successive samples and reset handling. Local limit values do not
-account for a stricter ancestor. VM memory is host-side QEMU consumption, not
+rates require successive samples and reset handling. Raw local limits remain in
+`metrics`. The separate `effective_limits` object reports `cpu_capacity_cpus`
+as the minimum of online host CPUs, effective cpusets and every numeric
+`cpu.max` quota/period up to the configured cgroup root. `memory_limit_bytes`
+is the smallest numeric `memory.max` in that hierarchy, or `"max"` if unlimited.
+These are shared upper bounds, not guaranteed allocations: siblings can consume
+an ancestor's CPU or memory budget. The memory limit is a cgroup hard limit,
+not host available RAM. Missing controller interfaces impose no constraint;
+read or parse failures produce null for the affected derived value and a
+`read_errors` entry. `--debug` logs ancestor reads and the derived values.
+For VMs these constraints describe the host QEMU cgroup, not the guest vCPU
+count or configured guest RAM. VM memory is host-side QEMU consumption, not
 guest application RAM usage. Missing files are null with a read error.
 
 LXC filesystem measurements use a nested namespace init PID found in the cgroup
@@ -257,6 +267,9 @@ Representative OTLP metric families:
 | --- | --- |
 | `hs_pve_cpu_usage_seconds` | Cumulative CPU time; use a rate for utilization |
 | `hs_pve_cpu_throttled_seconds` | Cumulative CPU throttling time |
+| `hs_pve_cpu_capacity` | Effective CPU capacity in cores, including ancestor quotas and cpusets |
+| `hs_pve_memory_effective_limit_bytes` | Smallest hard memory limit in the cgroup hierarchy; omitted when unlimited or unknown |
+| `hs_pve_memory_effective_limit_unlimited` | 1 when the complete hierarchy has no hard memory limit, 0 when limited; omitted on error |
 | `hs_pve_memory_usage_bytes` | Current charged memory, including cache |
 | `hs_pve_memory_stat_bytes{kind}` | Anon, file/cache, kernel and other byte categories |
 | `hs_pve_memory_events{event}` | Cumulative OOM, limit and other memory events |

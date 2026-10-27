@@ -1,6 +1,7 @@
 //! Read-only cgroup v2 and filesystem snapshot. No PVE API, Perl or subprocesses.
 mod config;
 mod filesystems;
+mod limits;
 mod otlp;
 use config::Config;
 use serde_json::{Map, Value, json};
@@ -35,9 +36,9 @@ struct Trace {
 }
 
 impl Trace {
-    fn read(&mut self, path: &Path) -> Result<String, String> {
+    fn read_io(&mut self, path: &Path) -> io::Result<String> {
         let started = Instant::now();
-        let result = fs::read_to_string(path).map_err(|e| e.to_string());
+        let result = fs::read_to_string(path);
         self.reads += 1;
         if let Ok(text) = &result {
             self.bytes += text.len();
@@ -48,10 +49,17 @@ impl Trace {
                 path.display(),
                 result.as_ref().map_or(0, |s| s.len()),
                 started.elapsed().as_micros(),
-                result.as_ref().err().map_or("none", String::as_str)
+                result
+                    .as_ref()
+                    .err()
+                    .map_or_else(|| "none".to_owned(), ToString::to_string)
             );
         }
         result
+    }
+
+    fn read(&mut self, path: &Path) -> Result<String, String> {
+        self.read_io(path).map_err(|e| e.to_string())
     }
 
     fn record(&mut self, source: &str, bytes: usize, started: Instant, value: &Value) {
@@ -166,7 +174,7 @@ fn records(text: &str) -> Value {
     )
 }
 
-fn snapshot(path: &Path, id: Option<u32>, kind: &str, trace: &mut Trace, read_filesystems: bool) -> Value {
+fn snapshot(root: &Path, path: &Path, id: Option<u32>, kind: &str, trace: &mut Trace, read_filesystems: bool) -> Value {
     let instance_started = Instant::now();
     let sampled_at_unix_ms = unix_ms().ok();
     let mut metrics = Map::new();
@@ -216,6 +224,7 @@ fn snapshot(path: &Path, id: Option<u32>, kind: &str, trace: &mut Trace, read_fi
             }
         }
     }
+    let effective_limits = limits::collect(root, path, trace);
     // Local-node symlinks supplied by pmxcfs; optional metadata only.
     let name = id.and_then(|id| {
         let (dir, key) = match kind {
@@ -245,7 +254,7 @@ fn snapshot(path: &Path, id: Option<u32>, kind: &str, trace: &mut Trace, read_fi
         "sampled_at_unix_ms": sampled_at_unix_ms,
         "collection_usec": elapsed, "local_collection_usec": elapsed,
         "guest_agent_collection_usec": null, "metrics": metrics, "read_errors": errors,
-        "filesystem_report": filesystems})
+        "filesystem_report": filesystems, "effective_limits": effective_limits})
 }
 
 struct GuestBatch {
@@ -362,7 +371,7 @@ fn collect(config: &Config, selection: &Selection, cache: &mut Cache) -> Result<
         if !path.join("cgroup.events").is_file() {
             return Err(format!("{} is not a readable cgroup v2 directory", path.display()));
         }
-        instances.push(snapshot(path, None, "unknown", &mut trace, true));
+        instances.push(snapshot(&config.cgroup_root, path, None, "unknown", &mut trace, true));
     } else {
         let mut live = Vec::new();
         for (id, kind, path) in discover(&config.cgroup_root)?
@@ -384,7 +393,14 @@ fn collect(config: &Config, selection: &Selection, cache: &mut Cache) -> Result<
             });
             let sample_started = Instant::now();
             let sample_unix_ms = unix_ms()?;
-            let mut instance = snapshot(&path, Some(id), kind, &mut trace, previous.is_none());
+            let mut instance = snapshot(
+                &config.cgroup_root,
+                &path,
+                Some(id),
+                kind,
+                &mut trace,
+                previous.is_none(),
+            );
             instance["cgroup_identity"] = json!(identity.map(|(device, inode)| format!("{device}:{inode}")));
             if let Some(entry) = previous {
                 instance["filesystem_report"] = entry.report.clone();
