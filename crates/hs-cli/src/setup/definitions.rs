@@ -311,7 +311,7 @@ pub fn defaults() -> Vec<Entry> {
         "exports",
         "env",
         "exports",
-        "Exports",
+        "Bash exports",
         "Replace each export KEY= line of ~/.bashrc by key or append it; nothing else changes.",
         Params::Exports { exports: Vec::new() },
     ));
