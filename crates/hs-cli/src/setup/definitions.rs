@@ -307,7 +307,7 @@ pub fn defaults() -> Vec<Entry> {
             )
         })
         .collect();
-    items.insert(1, Entry::new(
+    items.push(Entry::new(
         "exports",
         "env",
         "exports",

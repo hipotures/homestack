@@ -277,15 +277,15 @@ fn tree_stage(buf: &mut Buffer, inner: Rect, app: &App, setup: &SetupBox) {
     if body.height == 0 {
         return;
     }
-    // Tree 3 : details 2 side by side (Python's 3fr / 2fr); below each
-    // other when narrow.
+    // Size the list to its content and give the remaining space to details.
+    // Stack them vertically when narrow.
     let (tree_area, details_area) = if body.width >= 70 {
-        // Services: the list only as wide as its rows, the details the rest.
         let tree_width = if setup.in_services() {
-            services_width(setup).clamp(24, body.width * 3 / 5)
+            services_width(setup)
         } else {
-            body.width * 3 / 5
-        };
+            tree_width(setup)
+        }
+        .clamp(24, body.width * 3 / 5);
         (
             Rect::new(body.x, body.y, tree_width, body.height),
             Rect::new(
@@ -463,6 +463,7 @@ fn draw_tree(buf: &mut Buffer, area: Rect, app: &App, setup: &SetupBox) {
     let height = usize::from(area.height);
     let at = rows.iter().position(|row| row.id == setup.cursor).unwrap_or(0);
     let offset = (at + 1).saturating_sub(height);
+    let column = tree_state_width(setup).min(area.width * 2 / 5);
     for (index, row) in rows.iter().enumerate().skip(offset).take(height) {
         let y = area.y + u16::try_from(index - offset).unwrap_or(0);
         let Some(node) = setup.nodes.get(&row.id) else {
@@ -500,7 +501,6 @@ fn draw_tree(buf: &mut Buffer, area: Rect, app: &App, setup: &SetupBox) {
         }
         register(Rect::new(x, y, 3, 1), Hit::SetupRow(index, 1));
         // The STATE column (mockup 23); the group row heads it.
-        let column = (area.width * 2 / 5).min(32);
         let state_x = area.right().saturating_sub(column);
         let state = if row.depth == 0 {
             Some(("STATE".to_owned(), Tone::Dim))
@@ -535,6 +535,36 @@ fn draw_tree(buf: &mut Buffer, area: Rect, app: &App, setup: &SetupBox) {
     }
     let bar = Rect::new(area.x, area.y.saturating_sub(1), area.width + 1, area.height + 2);
     scrollbar(buf, bar, palette, Scrolls::SetupTree, offset, height, rows.len());
+}
+
+/// The width needed by the visible tree's STATE values.
+fn tree_state_width(setup: &SetupBox) -> u16 {
+    let widest = setup
+        .rows()
+        .iter()
+        .filter_map(|row| setup.row_state(&row.id))
+        .map(|(state, _)| state.chars().count())
+        .chain(["STATE".len()])
+        .max()
+        .unwrap_or(0);
+    u16::try_from(widest + 1).unwrap_or(u16::MAX).min(32)
+}
+
+/// Indentation, arrow, label, gap and STATE, without empty column padding.
+fn tree_width(setup: &SetupBox) -> u16 {
+    let label = setup
+        .rows()
+        .iter()
+        .filter_map(|row| {
+            let node = setup.nodes.get(&row.id)?;
+            let arrow = if row.depth > 0 { 2 } else { 0 };
+            Some(1 + row.depth * 2 + arrow + node.plain().chars().count())
+        })
+        .max()
+        .unwrap_or(0);
+    u16::try_from(label + 2)
+        .unwrap_or(u16::MAX)
+        .saturating_add(tree_state_width(setup))
 }
 
 /// The width of the STATE column of the Services group.

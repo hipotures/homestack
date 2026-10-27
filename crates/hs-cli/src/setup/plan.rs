@@ -378,7 +378,16 @@ pub fn build_plan(
                         Params::Structured { application: a, config: c, .. },
                         Params::Structured { application: b, config: d, .. },
                     ) if a == b && c == d);
-                if shared_document {
+                // Bash writes the profile first; exports then update only
+                // their keys in that profile.
+                let bash_exports = path == ".bashrc"
+                    && path == *previous
+                    && match (&entry.params, &other.params) {
+                        (Params::Environment { profile }, Params::Exports { .. })
+                        | (Params::Exports { .. }, Params::Environment { profile }) => profile == "bash",
+                        _ => false,
+                    };
+                if shared_document || bash_exports {
                     continue;
                 }
                 return Err(AppError::new(format!(

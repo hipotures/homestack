@@ -839,6 +839,24 @@ impl SetupBox {
         self.entries = entries;
     }
 
+    /// Export settings belong to the Bash profile in the same group.
+    fn parent_shell(&self, entry: &Entry) -> Option<&Entry> {
+        if !matches!(entry.params, Params::Exports { .. }) {
+            return None;
+        }
+        self.catalog.entries.iter().find(|shell| {
+            shell.group == entry.group && matches!(&shell.params, Params::Environment { profile } if profile == "bash")
+        })
+    }
+
+    fn shell_children(&self, identity: &str) -> Vec<&Entry> {
+        self.catalog
+            .entries
+            .iter()
+            .filter(|entry| self.parent_shell(entry).is_some_and(|shell| shell.id == identity))
+            .collect()
+    }
+
     fn config_leaves(&self, application: &str, config: &str, prefix: &[String]) -> Vec<&Entry> {
         self.entries
             .iter()
@@ -874,6 +892,11 @@ impl SetupBox {
         if self.entry(identity).is_some_and(|entry| self.matches(entry)) {
             return true;
         }
+        if let Some(parent) = self.entry(identity).and_then(|entry| self.parent_shell(entry))
+            && self.matches(parent)
+        {
+            return true;
+        }
         self.config_nodes.contains_key(identity) && self.config_node_matches(identity)
     }
 
@@ -887,6 +910,13 @@ impl SetupBox {
             return application_children(entry)
                 .iter()
                 .any(|leaf| self.identity_visible(&leaf.id));
+        }
+        if self
+            .shell_children(identity)
+            .iter()
+            .any(|entry| self.identity_visible(&entry.id))
+        {
+            return true;
         }
         if let Some(meta) = self.config_nodes.get(identity) {
             if self
@@ -918,7 +948,9 @@ impl SetupBox {
                 ids.extend(application_children(entry).into_iter().map(|leaf| leaf.id));
                 ids
             } else {
-                vec![entry.id.clone()]
+                let mut ids = vec![entry.id.clone()];
+                ids.extend(self.shell_children(identity).iter().map(|child| child.id.clone()));
+                ids
             }
         } else if let Some(meta) = self.config_nodes.get(identity) {
             self.config_leaves(&meta.application, &meta.config.id, &meta.key)
@@ -982,7 +1014,7 @@ impl SetupBox {
         let application = self
             .entry(identity)
             .is_some_and(|entry| matches!(entry.params, Params::Application(_)));
-        if application || self.config_nodes.contains_key(identity) {
+        if application || !self.shell_children(identity).is_empty() || self.config_nodes.contains_key(identity) {
             let ids = self.descendant_ids(identity, false);
             let count = ids.iter().filter(|id| self.selected.contains(*id)).count();
             return tri(count, ids.len());
@@ -1212,7 +1244,11 @@ impl SetupBox {
                 .filter(|entry| entry.group == group.id)
                 .cloned()
                 .collect();
-            let count = entries
+            let roots: Vec<&Entry> = entries
+                .iter()
+                .filter(|entry| self.parent_shell(entry).is_none())
+                .collect();
+            let count = roots
                 .iter()
                 .filter(|entry| {
                     self.descendant_ids(&entry.id, false)
@@ -1224,7 +1260,7 @@ impl SetupBox {
                 "{} {}  {count}/{}{extra}",
                 self.checkbox(&group.id),
                 group.label,
-                entries.len()
+                roots.len()
             );
             self.add(None, &group.id, true, vec![(text, Tone::Plain)]);
             // The numbers are the catalog's (`repo=N`); the repositories the
@@ -1235,7 +1271,7 @@ impl SetupBox {
                 order.sort_by_key(|(_, entry)| !truthy(&self.state_item(&entry.id)["exists"]));
             }
             for (index, entry) in order {
-                if !self.branch_visible(&entry.id) {
+                if self.parent_shell(entry).is_some() || !self.branch_visible(&entry.id) {
                     continue;
                 }
                 let interaction = match &entry.params {
@@ -1266,6 +1302,26 @@ impl SetupBox {
                             }
                             let label = self.file_leaf_text(&leaf);
                             self.add(Some(&entry.id), &leaf.id, false, label);
+                        }
+                    }
+                    Params::Environment { .. } if !self.shell_children(&entry.id).is_empty() => {
+                        self.add(Some(&group.id), &entry.id, true, label);
+                        let children: Vec<Entry> = self.shell_children(&entry.id).into_iter().cloned().collect();
+                        for child in children {
+                            if !self.identity_visible(&child.id) {
+                                continue;
+                            }
+                            let mut label = vec![
+                                (format!("{} ", self.checkbox(&child.id)), Tone::Plain),
+                                (child.label.clone(), self.entry_style(&child)),
+                            ];
+                            if !self.available(&child) {
+                                label.push((format!(" — {}", self.availability(&child.id)), Tone::Dim));
+                            }
+                            if let Some(action) = self.action_states.get(&child.id) {
+                                label.push((format!(" — {action}"), Tone::Dim));
+                            }
+                            self.add(Some(&entry.id), &child.id, false, label);
                         }
                     }
                     _ => self.add(Some(&group.id), &entry.id, false, label),
