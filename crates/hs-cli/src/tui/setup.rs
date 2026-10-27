@@ -1568,6 +1568,13 @@ impl SetupBox {
             lines.push(String::new());
             lines.extend(self.backup_details());
         }
+        if let Params::Environment { exports, .. } = &entry.params
+            && !exports.is_empty()
+        {
+            lines.push(String::new());
+            lines.push("Exports in ~/.bashrc (replaced by key or appended):".to_owned());
+            lines.extend(exports.iter().map(|export| format!("export {export}")));
+        }
         let changed = strings(&live["changed_since_apply"]);
         if !changed.is_empty() {
             lines.push("Changed since last apply:".to_owned());
