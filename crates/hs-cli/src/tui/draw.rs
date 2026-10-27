@@ -494,6 +494,16 @@ fn container_telemetry(entry: &StatusEntry) -> Option<&ContainerTelemetry> {
     entry.service_status.as_ref()?.container.as_ref()
 }
 
+/// A stall share with one decimal, `—` when unknown.
+fn stall(value: Option<f64>) -> String {
+    value.map_or_else(|| "—".to_owned(), |percent| format!("{percent:.1}%"))
+}
+
+/// The application's own report of a service.
+fn application(entry: &StatusEntry) -> Option<&hs_service_status::Report> {
+    entry.service_status.as_ref()?.application.as_ref()
+}
+
 /// A service's measurements, after its `service` line in the details.
 fn telemetry_pairs(entry: &StatusEntry, pairs: &mut Vec<(&'static str, String)>) {
     let Some(status) = &entry.service_status else {
@@ -548,15 +558,8 @@ fn telemetry_pairs(entry: &StatusEntry, pairs: &mut Vec<(&'static str, String)>)
                 stalled(stalls.io)
             ),
         ));
-        if let Some(uptime) = container.uptime_seconds {
-            pairs.push((
-                "uptime",
-                match (uptime / 86_400, uptime / 3600 % 24, uptime / 60 % 60) {
-                    (0, 0, minutes) => format!("{minutes}m"),
-                    (0, hours, minutes) => format!("{hours}h {minutes}m"),
-                    (days, hours, _) => format!("{days}d {hours}h"),
-                },
-            ));
+        if let Some(seconds) = container.uptime_seconds {
+            pairs.push(("uptime", uptime(seconds)));
         }
     } else if let Some(rss) = application.and_then(|report| report.process_rss_bytes) {
         pairs.push(("memory", format!("rss {}", size(rss))));
@@ -704,6 +707,72 @@ fn columns(app: &App, width: usize, tag_width: usize, name_width: usize) -> Vec<
             },
         },
         Column {
+            key: "CPUS",
+            heading: "CPUS",
+            width: 4,
+            right: true,
+            // Logical CPUs the container may use.
+            value: |entry| {
+                container_telemetry(entry)
+                    .and_then(|container| container.capacity_cpus)
+                    .map_or_else(|| "—".to_owned(), |cpus| format!("{cpus}"))
+            },
+        },
+        Column {
+            key: "MEM %",
+            heading: "MEM%",
+            width: 4,
+            right: true,
+            // Of the container's memory limit.
+            value: |entry| {
+                percent(container_telemetry(entry).and_then(|container| {
+                    let memory = container.memory.as_ref()?;
+                    let limit = memory.limit_bytes.filter(|limit| *limit > 0)?;
+                    #[allow(clippy::cast_precision_loss, reason = "a percentage")]
+                    Some(memory.usage_bytes as f64 * 100.0 / limit as f64)
+                }))
+            },
+        },
+        Column {
+            key: "MEM LIMIT",
+            heading: "LIMIT",
+            width: 5,
+            right: true,
+            value: |entry| {
+                bytes(container_telemetry(entry).and_then(|container| container.memory.as_ref()?.limit_bytes))
+            },
+        },
+        Column {
+            key: "RSS",
+            heading: "RSS",
+            width: 5,
+            right: true,
+            // The application process alone, as it reports.
+            value: |entry| bytes(application(entry).and_then(|report| report.process_rss_bytes)),
+        },
+        Column {
+            key: "CPU STALL",
+            heading: "CPU WAIT",
+            width: 8,
+            right: true,
+            // Share of the last 10 s some task waited: contention, not use.
+            value: |entry| stall(container_telemetry(entry).and_then(|container| container.stalls.cpu)),
+        },
+        Column {
+            key: "MEM STALL",
+            heading: "MEM WAIT",
+            width: 8,
+            right: true,
+            value: |entry| stall(container_telemetry(entry).and_then(|container| container.stalls.memory)),
+        },
+        Column {
+            key: "IO STALL",
+            heading: "IO WAIT",
+            width: 7,
+            right: true,
+            value: |entry| stall(container_telemetry(entry).and_then(|container| container.stalls.io)),
+        },
+        Column {
             key: "SERVICE",
             heading: "SERVICE",
             width: 14,
@@ -713,6 +782,30 @@ fn columns(app: &App, width: usize, tag_width: usize, name_width: usize) -> Vec<
                     .service
                     .as_ref()
                     .map_or_else(|| "—".to_owned(), |service| service.id.clone())
+            },
+        },
+        Column {
+            key: "HEALTH",
+            heading: "HEALTH",
+            width: 6,
+            right: false,
+            // The application's own liveness verdict.
+            value: |entry| match application(entry).map(|report| report.status) {
+                Some(hs_service_status::Status::Pass) => "pass".to_owned(),
+                Some(hs_service_status::Status::Fail) => "fail".to_owned(),
+                None => "—".to_owned(),
+            },
+        },
+        Column {
+            key: "UPTIME",
+            heading: "UPTIME",
+            width: 7,
+            right: true,
+            // The container's, which is its application's.
+            value: |entry| {
+                container_telemetry(entry)
+                    .and_then(|container| container.uptime_seconds)
+                    .map_or_else(|| "—".to_owned(), uptime)
             },
         },
         Column {

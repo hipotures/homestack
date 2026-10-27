@@ -180,7 +180,7 @@ const SORT_DEFAULT: [usize; 2] = [0, 1];
 
 /// The list's columns in their order, and whether one is shown without a
 /// choice in `tui.toml`.
-pub const COLUMNS: [(&str, bool); 21] = [
+pub const COLUMNS: [(&str, bool); 30] = [
     ("TAGS", true),
     ("VMID", true),
     ("TYPE", true),
@@ -199,7 +199,16 @@ pub const COLUMNS: [(&str, bool); 21] = [
     ("CPU", false),
     ("MEM", false),
     ("IO", false),
+    ("CPUS", false),
+    ("MEM %", false),
+    ("MEM LIMIT", false),
+    ("RSS", false),
+    ("CPU STALL", false),
+    ("MEM STALL", false),
+    ("IO STALL", false),
     ("SERVICE", false),
+    ("HEALTH", false),
+    ("UPTIME", false),
     ("IMAGE", false),
     ("TAG", false),
 ];
