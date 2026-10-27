@@ -101,6 +101,17 @@ pub fn save(
         .as_ref()
         .ok_or("Application selections require schema 3")?;
     contract.resolve(values)?;
+    // HomeStack's own settings are read from it each time, never kept here.
+    let values: BTreeMap<String, Value> = values
+        .iter()
+        .filter(|(id, _)| {
+            !contract
+                .inputs
+                .iter()
+                .any(|input| &input.id == *id && input.from_homestack())
+        })
+        .map(|(id, value)| (id.clone(), value.clone()))
+        .collect();
     let path = path(root, source, hostname, domain);
     let parent = path.parent().ok_or("Invalid selections path")?;
     let write = || -> Result<(), Box<dyn std::error::Error>> {

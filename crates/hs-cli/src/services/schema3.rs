@@ -7,6 +7,11 @@ use yaml_rust2::{Yaml, YamlLoader};
 
 use super::manifest::{Checked, MAX_BYTES};
 
+/// HomeStack's own Prometheus URL, set once under Settings → Integrations.
+/// An input delivered as this variable takes that value and is never asked
+/// for or saved with the application's selections.
+pub const PROMETHEUS: &str = "HOMESTACK_PROMETHEUS_URL";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Contract {
     pub inputs: Vec<Input>,
@@ -263,6 +268,11 @@ pub fn parse(service: &str, defaults: &str, inputs: &str, directory: &str) -> Re
 }
 
 impl Input {
+    /// Whether HomeStack supplies the value instead of the operator.
+    pub fn from_homestack(&self) -> bool {
+        matches!(&self.target, Target::Environment { variable } if variable == PROMETHEUS)
+    }
+
     pub fn title(&self) -> String {
         format!("Application configuration · {} ({})", self.label, self.id)
     }
@@ -501,18 +511,43 @@ impl Contract {
         Ok(())
     }
 
-    pub fn values(&self, texts: &BTreeMap<String, String>) -> Result<BTreeMap<String, Value>, String> {
+    pub fn values(
+        &self,
+        texts: &BTreeMap<String, String>,
+        homestack: &hs_deploy::config::DeployConfig,
+    ) -> Result<BTreeMap<String, Value>, String> {
         if texts.keys().any(|id| !self.inputs.iter().any(|input| &input.id == id)) {
             return Err("Unknown application input ID".into());
         }
         let mut values = BTreeMap::new();
-        for input in &self.inputs {
+        for input in self.inputs.iter().filter(|input| !input.from_homestack()) {
             if let Some(value) = input.value(texts.get(&input.id).map_or("", String::as_str))? {
                 values.insert(input.id.clone(), value);
             }
         }
+        self.with_homestack(&mut values, homestack)?;
         self.resolve(&values)?;
         Ok(values)
+    }
+
+    /// Set the inputs HomeStack supplies from its configuration.
+    pub fn with_homestack(
+        &self,
+        values: &mut BTreeMap<String, Value>,
+        homestack: &hs_deploy::config::DeployConfig,
+    ) -> Result<(), String> {
+        for input in self.inputs.iter().filter(|input| input.from_homestack()) {
+            let url = homestack
+                .server
+                .prometheus_url
+                .as_ref()
+                .ok_or("Set Prometheus under Settings → Integrations")?;
+            let value = input
+                .value(url.as_str().trim_end_matches('/'))?
+                .ok_or("Set Prometheus under Settings → Integrations")?;
+            values.insert(input.id.clone(), value);
+        }
+        Ok(())
     }
 
     pub fn owns_environment(&self, key: &str) -> bool {

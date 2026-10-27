@@ -435,7 +435,7 @@ fn connect(
             &naming.domain,
             !instances.is_empty(),
         )?;
-        for input in &contract.inputs {
+        for input in contract.inputs.iter().filter(|input| !input.from_homestack()) {
             let value = saved
                 .as_ref()
                 .and_then(|s| s.values.get(&input.id))
@@ -1055,18 +1055,15 @@ fn review(
     let attach_requested = service_pangolin::requested(&s.settings, answers);
     let mut sections = Vec::new();
     let mut problems = Vec::new();
-    let application =
-        source
-            .manifest
-            .schema3
-            .as_ref()
-            .and_then(|contract| match contract.values(&chosen.deploy.application) {
-                Ok(values) => Some((chosen.deploy.hostname.clone(), chosen.deploy.domain.clone(), values)),
-                Err(error) => {
-                    problems.push(error);
-                    None
-                }
-            });
+    let application = source.manifest.schema3.as_ref().and_then(|contract| {
+        match contract.values(&chosen.deploy.application, &s.config) {
+            Ok(values) => Some((chosen.deploy.hostname.clone(), chosen.deploy.domain.clone(), values)),
+            Err(error) => {
+                problems.push(error);
+                None
+            }
+        }
+    });
     if let Some(contract) = &source.manifest.schema3 {
         match deploy::environment(&chosen.deploy.environment) {
             Ok(entries) if entries.iter().any(|(key, _)| contract.owns_environment(key)) => {

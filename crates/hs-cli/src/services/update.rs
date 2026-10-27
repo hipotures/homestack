@@ -281,10 +281,24 @@ pub async fn plan(
     if source.manifest.schema3.is_some() {
         plan.lines.push("Image replacement discards all rootfs-local application data, including any unsent exporter queue. Ordinary CT restarts preserve it.".into());
         // A change applied first in the same operation reconciles the
-        // environment; apply checks it again before replacing anything.
+        // environment; otherwise the replacement sets it.
         for target in plan.targets.iter().filter(|_| !reconciling) {
-            if let Err(error) = saved_environment(&plan.selection_root, source, target) {
-                plan.problems.push(error);
+            match application_environment(&plan.selection_root, source, target) {
+                Ok(environment) => {
+                    let changed: Vec<&str> = environment
+                        .iter()
+                        .filter(|entry| !target.environment.contains(entry))
+                        .map(|(key, _)| key.as_str())
+                        .collect();
+                    if !changed.is_empty() {
+                        plan.lines.push(format!(
+                            "CT {}: sets {} from Application configuration",
+                            target.ctid,
+                            changed.join(", ")
+                        ));
+                    }
+                }
+                Err(error) => plan.problems.push(error),
             }
         }
     }
@@ -468,7 +482,7 @@ pub async fn apply(
     }
     if source.manifest.schema3.is_some() {
         for target in &plan.targets {
-            saved_environment(&plan.selection_root, source, target)?;
+            application_environment(&plan.selection_root, source, target)?;
         }
     }
     let mut lines = Vec::new();
@@ -496,7 +510,13 @@ pub async fn apply(
     Ok(lines)
 }
 
-fn saved_environment(root: &std::path::Path, source: &Source, target: &Instance) -> Result<(), String> {
+/// The environment the saved application selections and HomeStack's own
+/// settings give a schema-3 container.
+fn application_environment(
+    root: &std::path::Path,
+    source: &Source,
+    target: &Instance,
+) -> Result<Vec<(String, String)>, String> {
     let hostname = super::selections::base_name(&target.hostname);
     let saved = super::selections::load(
         root,
@@ -506,19 +526,10 @@ fn saved_environment(root: &std::path::Path, source: &Source, target: &Instance)
         true,
     )?
     .ok_or("Private application selections are unavailable")?;
-    let expected = source
-        .manifest
-        .schema3
-        .as_ref()
-        .ok_or("Expected schema 3")?
-        .resolve(&saved.values)?;
-    if expected.iter().any(|entry| !target.environment.contains(entry)) {
-        return Err(format!(
-            "CT {}: reconcile Application configuration before replacing its image",
-            target.ctid
-        ));
-    }
-    Ok(())
+    let contract = source.manifest.schema3.as_ref().ok_or("Expected schema 3")?;
+    let mut values = saved.values;
+    contract.with_homestack(&mut values, &DeployConfig::load(&root.join("deploy.toml"))?)?;
+    contract.resolve(&values)
 }
 
 /// Distinguish a reviewed reinstall from a root already made by that operation.
@@ -637,7 +648,12 @@ async fn one(
         ));
     }
     if source.manifest.schema3.is_some() {
-        saved_environment(&plan.selection_root, source, &now)?;
+        let environment = application_environment(&plan.selection_root, source, &now)?;
+        // The replacement keeps the old container's environment.
+        if !now.held && environment.iter().any(|entry| !now.environment.contains(entry)) {
+            say(&format!("{node}: CT {ctid} · Application configuration"));
+            deploy::set_application_environment(pve, node, ctid, &environment, &[]).await?;
+        }
     }
     if now.mac != target.mac || !node::same_net(&now.network, &target.network) {
         return Err(format!("CT {ctid} changed since review; review again"));

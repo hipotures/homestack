@@ -71,7 +71,9 @@ authenticated HTTPS on its address.
 registry, and reviews replacing every container on an older image (all
 services by default) with the same replacement the services screen uses. It
 then asks which updates to apply, all by default; `-y` applies all without
-asking, and without a terminal it only reviews.
+asking, and without a terminal it only reviews. Updating a schema-3 service
+sets the environment its saved Application configuration and HomeStack's
+settings give it, as the review lists, before replacing the image.
 
 The service browser and review/apply worker use
 `services/deploy.rs::{survey,plan,apply}` and the scoped PVE deploy token.

@@ -725,7 +725,7 @@ pub async fn plan(
         Err(error) => plan.problems.push(error),
     }
     if let Some(contract) = &manifest.schema3 {
-        match contract.values(&choice.application).and_then(|values| {
+        match contract.values(&choice.application, config).and_then(|values| {
             let environment = contract.resolve(&values)?;
             if plan.environment.iter().any(|(key, _)| contract.owns_environment(key)) {
                 return Err("Application variables must be edited in Application configuration".into());
