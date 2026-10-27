@@ -41,7 +41,7 @@ h1 { font-size: 20px; margin: 0; font-weight: 600; }
 .tile { padding: 12px 14px; }
 .tile .label { color: var(--ink-2); font-size: 12px; }
 .tile .value { font-size: 24px; font-weight: 600; margin-top: 2px; }
-.tile .note { color: var(--muted); font-size: 12px; }
+.note { color: var(--muted); font-size: 12px; }
 .tile .row { display: flex; align-items: baseline; gap: 8px; }
 .tile .delta { margin-left: auto; color: var(--ink-2); font-size: 12px; font-variant-numeric: tabular-nums; }
 .tile svg { margin-top: 6px; height: 28px; }
@@ -155,7 +155,8 @@ const series = (query, start, end, step) =>
 async function codexMetrics() {
   const names = await prom("/api/v1/label/__name__/values", {});
   const pick = re => names.find(n => re.test(n) && n.endsWith("_total")) || names.find(n => re.test(n) && n.endsWith("_sum"));
-  return { tokens: pick(/^codex_turn_token_usage/), threads: pick(/^codex_thread_started/) };
+  return { tokens: pick(/^codex_turn_token_usage/), threads: pick(/^codex_thread_started/),
+    prices: null, missing: new Set() };
 }
 
 const fmt = {
@@ -167,7 +168,7 @@ const fmt = {
   lines: v => v >= 1e3 ? (v / 1e3).toFixed(1) + " k" : String(Math.round(v)),
 };
 const TOKEN_TYPES = { input: "input", output: "output", cacheRead: "cache read", cacheCreation: "cache write",
-  cached_input: "cached input", reasoning_output: "reasoning" };
+  cached_input: "cached input", cache_write_input: "cache write", reasoning_output: "reasoning" };
 
 function panels(codex, step) {
   const list = [
@@ -179,10 +180,14 @@ function panels(codex, step) {
       { tool: "claude", query: growth("claude_code_token_usage_tokens_total", "type", step), name: m => TOKEN_TYPES[m.type] || m.type },
     ] },
     { title: "Codex tokens", unit: "by type", format: fmt.tokens, parts: [
-      codex.tokens && { tool: "codex", query: growth(codexTokens(codex), "token_type", step), name: m => TOKEN_TYPES[m.token_type] || m.token_type },
+      codex.tokens && { tool: "codex", query: growth(codex.tokens + `{token_type!="total"}`, "token_type", step), transform: tokenBreakdown, name: m => TOKEN_TYPES[m.token_type] || m.token_type },
     ] },
     { title: "Claude Code cost", unit: "USD by model", format: fmt.usd, parts: [
       { tool: "claude", query: growth("claude_code_cost_usage_USD_total", "model", step), name: m => m.model || "?" },
+    ] },
+    { title: "Codex estimated cost", unit: "USD by model · current standard API rates", format: fmt.usd, cost: true, parts: [
+      codex.tokens && { tool: "codex", query: growth(codex.tokens, "model,token_type", step),
+        transform: rows => costRows(rows, codex), name: m => m.model || "?" },
     ] },
     { title: "Sessions", unit: "new sessions", format: fmt.count, scale: "integer", parts: [
       { tool: "claude", query: growth("claude_code_session_count_total", "", step), name: () => "Claude Code" },
@@ -197,8 +202,43 @@ function panels(codex, step) {
   ];
   return list.map(p => ({ ...p, parts: p.parts.filter(part => part && shows(part.tool)) })).filter(p => p.parts.length);
 }
-// Codex reports a "total" token type besides its components; summing it would double-count.
-const codexTokens = codex => codex.tokens + `{token_type!="total"}`;
+// Cached input and reasoning are subsets, not additional tokens.
+const codexTokens = codex => codex.tokens + `{token_type="total"}`;
+function tokenBreakdown(rows) {
+  const values = type => new Map(rows.find(r => r.metric.token_type === type)?.values || []);
+  const cached = values("cached_input"), written = values("cache_write_input"), reasoning = values("reasoning_output");
+  return rows.map(r => ({ ...r, values: r.values.map(([t, v]) => [t,
+    Math.max(0, Number(v) - (r.metric.token_type === "input" ? Number(cached.get(t) || 0) + Number(written.get(t) || 0) :
+      r.metric.token_type === "output" ? Number(reasoning.get(t) || 0) : 0))]) }));
+}
+// LiteLLM rates are USD per token. Apply discounts to the inclusive input
+// count; output already includes reasoning. No model-name guessing.
+function costRows(rows, codex) {
+  return rows.flatMap(r => {
+    const type = r.metric.token_type;
+    if (!["input", "cached_input", "cache_write_input", "output"].includes(type)) return [];
+    const samples = r.values || [r.value];
+    if (!samples.some(([, v]) => Number(v) > 0)) return [];
+    const model = (r.metric.model || "").replace(/^openai\//, "");
+    const price = codex.prices?.[model];
+    const input = price?.input_cost_per_token, output = price?.output_cost_per_token;
+    const cached = price?.cache_read_input_token_cost, written = price?.cache_creation_input_token_cost;
+    const valid = v => Number.isFinite(v) && v >= 0;
+    if (!valid(input) || !valid(output) || (type === "cached_input" && !valid(cached)) ||
+        (type === "cache_write_input" && !valid(written))) {
+      codex.missing.add(model || "unknown model");
+      return [];
+    }
+    const rate = type === "input" ? input : type === "output" ? output : type === "cached_input" ? cached - input : written - input;
+    const convert = ([t, v]) => [t, Number(v) * rate];
+    return [{ ...r, ...(r.values ? { values: samples.map(convert) } : { value: convert(r.value) }) }];
+  }).filter(r => !codex.missing.has((r.metric.model || "unknown model").replace(/^openai\//, "")));
+}
+function costNote(codex) {
+  if (!codex.prices) return "Pricing unavailable; restart container to retry";
+  if (codex.missing.size) return "Incomplete estimate; missing prices: " + [...codex.missing].sort().join(", ");
+  return "API equivalent, not subscription billing; excludes tier and long-context adjustments. Prices refresh on container restart.";
+}
 
 async function load() {
   const end = Math.floor(Date.now() / 1000 / range.step) * range.step + range.step;
@@ -206,10 +246,16 @@ async function load() {
   document.getElementById("cards").classList.add("loading");
   try {
     const codex = await codexMetrics();
+    if (shows("codex") && codex.tokens) {
+      const response = await fetch("/api/pricing");
+      if (response.ok) codex.prices = await response.json();
+    }
     const list = panels(codex, range.step);
     const charts = await Promise.all(list.map(async panel => {
-      const results = await Promise.all(panel.parts.map(async part =>
-        (await series(part.query, start, end, range.step)).map(r => ({ name: part.name(r.metric), values: r.values }))));
+      const results = await Promise.all(panel.parts.map(async part => {
+        const rows = await series(part.query, start, end, range.step);
+        return (part.transform ? part.transform(rows) : rows).map(r => ({ name: part.name(r.metric), values: r.values }));
+      }));
       return { ...panel, series: fold(results.flat()) };
     }));
     const claude = shows("claude"), withCodex = shows("codex");
@@ -219,8 +265,9 @@ async function load() {
     const measure = selectors => trend(selectors, now, start, end);
     const codexMissing = withCodex && !codex.tokens;
     const tileSpecs = [
-      claude && { label: "Claude Code cost", format: fmt.usd, data: measure(["claude_code_cost_usage_USD_total"]),
-        note: withCodex ? "Codex reports no cost" : "" },
+      claude && { label: "Claude Code cost", format: fmt.usd, data: measure(["claude_code_cost_usage_USD_total"]) },
+      withCodex && codex.tokens && { label: "Codex estimated cost", format: fmt.usd, cost: true,
+        data: trend([codex.tokens], now, start, end, "model,token_type", rows => costRows(rows, codex)) },
       tokens.length && { label: tool.id === "all" ? "Tokens" : tool.label + " tokens", format: fmt.tokens, data: measure(tokens),
         note: codexMissing ? "no Codex metrics" : "" },
       sessions.length && { label: "Sessions", format: fmt.count, data: measure(sessions), note: codexMissing ? "no Codex metrics" : "" },
@@ -229,10 +276,20 @@ async function load() {
         measure(['claude_code_token_usage_tokens_total{type="cacheRead"}']),
         measure(['claude_code_token_usage_tokens_total{type=~"input|cacheRead|cacheCreation"}']),
       ]).then(([hit, all]) => ratio(hit, all)) },
+      withCodex && codex.tokens && { label: "Codex cache hit", format: fmt.percent, ratio: true, data: Promise.all([
+        measure([codex.tokens + `{token_type="cached_input"}`]),
+        measure([codex.tokens + `{token_type="input"}`]),
+      ]).then(([hit, all]) => ratio(hit, all)) },
       claude && { label: "Commits", format: fmt.count, data: measure(["claude_code_commit_count_total"]),
         note: "Claude Code" },
     ].filter(Boolean);
     const tiles = await Promise.all(tileSpecs.map(async t => ({ ...t, data: await t.data })));
+    for (const tile of tiles.filter(t => t.cost)) {
+      tile.detail = costNote(codex);
+      tile.note = codex.prices && !codex.missing.size ? "Standard API estimate · LiteLLM" : tile.detail;
+      if (!codex.prices || codex.missing.size) tile.data.now = tile.data.before = null;
+    }
+    for (const chart of charts.filter(c => c.cost)) chart.note = costNote(codex);
     const daily = await dailyTokens(tokens, now);
     const heat = await hourly(tokens, now);
     renderTiles(tiles, start, end);
@@ -267,12 +324,12 @@ function fold(list) {
 }
 
 // Usage in the selected window, in the window before it, and per bucket.
-async function trend(selectors, now, start, end) {
+async function trend(selectors, now, start, end, by = "", transform = rows => rows) {
   const sum = rows => rows.reduce((a, r) => a + Number(r.value[1]), 0);
   const parts = await Promise.all(selectors.map(sel => Promise.all([
-    instant(growth(sel, "", range.seconds), now).then(sum),
-    instant(growth(sel, "", range.seconds), now - range.seconds).then(sum),
-    series(growth(sel, "", range.step), start, end, range.step),
+    instant(growth(sel, by, range.seconds), now).then(transform).then(sum),
+    instant(growth(sel, by, range.seconds), now - range.seconds).then(transform).then(sum),
+    series(growth(sel, by, range.step), start, end, range.step).then(transform),
   ])));
   const buckets = new Map();
   for (const [, , rows] of parts) for (const r of rows) for (const [t, v] of r.values) buckets.set(t, (buckets.get(t) || 0) + Number(v));
@@ -304,7 +361,11 @@ function renderTiles(tiles, start, end) {
       row.append(d);
     }
     tile.append(el("div", "label", t.label), row, spark(times.map(time => buckets.get(time) || 0)));
-    if (t.note) tile.append(el("div", "note", t.note));
+    if (t.note) {
+      const note = el("div", "note", t.note);
+      note.title = t.detail || t.note;
+      tile.append(note);
+    }
     return tile;
   }));
 }
@@ -416,6 +477,7 @@ function renderCharts(charts, start, end, extras) {
     toggle.onclick = () => { tables.has(chart.title) ? tables.delete(chart.title) : tables.add(chart.title); renderCharts(charts, start, end, extras); };
     head.append(el("h2", "", chart.title), el("span", "unit", chart.unit), toggle);
     card.append(head);
+    if (chart.note) card.append(el("div", "note", chart.note));
     if (!chart.series.length) {
       card.append(el("div", "empty", "No data in this range"));
       return card;

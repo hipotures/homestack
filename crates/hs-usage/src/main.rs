@@ -6,7 +6,8 @@
 //! | `HOMESTACK_HEARTBEAT_SECONDS` | Serving-path heartbeat interval, 1 to 3600 seconds; default 60 |
 //!
 //! The page queries Prometheus through this service, which forwards only the
-//! read-only instant, range and metric-name endpoints.
+//! read-only instant, range and metric-name endpoints. LiteLLM OpenAI prices
+//! are downloaded once at startup; restart the container to refresh or retry.
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::process::ExitCode;
@@ -24,6 +25,7 @@ use tracing_subscriber::EnvFilter;
 const LISTEN: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 8080);
 const PROBE_PATH: &str = "/health/heartbeat";
 const PAGE: &str = include_str!("index.html");
+const PRICING_URL: &str = "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json";
 /// Prometheus endpoints the page may read; nothing else is forwarded.
 const FORWARDED: [&str; 3] = ["/api/v1/query", "/api/v1/query_range", "/api/v1/label/__name__/values"];
 
@@ -32,6 +34,7 @@ struct AppState {
     prometheus: url::Url,
     client: reqwest::Client,
     heartbeat: Arc<Heartbeat>,
+    pricing: Option<Arc<serde_json::Value>>,
 }
 
 #[tokio::main]
@@ -61,6 +64,14 @@ async fn main() -> ExitCode {
         }
     };
     let heartbeat = Arc::new(Heartbeat::new(interval));
+    // Fetch once per process. Restart the container to refresh prices.
+    let pricing = match fetch_pricing(&client).await {
+        Ok(prices) => Some(Arc::new(prices)),
+        Err(error) => {
+            tracing::warn!(%error, "Codex cost estimates unavailable; restart to retry pricing download");
+            None
+        }
+    };
     let mut app = Router::new()
         .route(
             "/",
@@ -68,6 +79,7 @@ async fn main() -> ExitCode {
         )
         .route("/health/live", get(health))
         .route("/health/ready", get(health))
+        .route("/api/pricing", get(pricing_catalog))
         .route(PROBE_PATH, get(|| async { StatusCode::NO_CONTENT }))
         .route(hs_service_status::PATH, get(service_status));
     for path in FORWARDED {
@@ -77,6 +89,7 @@ async fn main() -> ExitCode {
         prometheus: prometheus.clone(),
         client,
         heartbeat: Arc::clone(&heartbeat),
+        pricing,
     });
     let listener = match tokio::net::TcpListener::bind(LISTEN).await {
         Ok(listener) => listener,
@@ -96,6 +109,40 @@ async fn main() -> ExitCode {
         return ExitCode::from(1);
     }
     ExitCode::SUCCESS
+}
+
+async fn fetch_pricing(client: &reqwest::Client) -> Result<serde_json::Value, String> {
+    let catalog = client
+        .get(PRICING_URL)
+        .send()
+        .await
+        .and_then(reqwest::Response::error_for_status)
+        .map_err(|error| error.to_string())?
+        .json::<serde_json::Value>()
+        .await
+        .map_err(|error| error.to_string())?;
+    let entries = catalog.as_object().ok_or("Invalid LiteLLM pricing catalog")?;
+    let prices: serde_json::Map<String, serde_json::Value> = entries
+        .iter()
+        .filter(|(_, value)| value["litellm_provider"] == "openai")
+        .map(|(name, value)| (name.clone(), value.clone()))
+        .collect();
+    if prices.is_empty() {
+        return Err("No OpenAI prices in LiteLLM catalog".to_owned());
+    }
+    tracing::info!(models = prices.len(), "downloaded startup pricing catalog");
+    Ok(serde_json::Value::Object(prices))
+}
+
+async fn pricing_catalog(State(state): State<AppState>) -> Response {
+    match state.pricing {
+        Some(prices) => axum::Json(prices.as_ref().clone()).into_response(),
+        None => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Startup pricing download failed; restart to retry",
+        )
+            .into_response(),
+    }
 }
 
 fn settings(env: impl Fn(&str) -> Option<String>) -> Result<(url::Url, Duration), String> {

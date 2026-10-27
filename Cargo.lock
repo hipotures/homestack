@@ -1140,6 +1140,7 @@ dependencies = [
  "hs-model",
  "hs-service-status",
  "reqwest",
+ "serde_json",
  "tokio",
  "tracing",
  "tracing-subscriber",
