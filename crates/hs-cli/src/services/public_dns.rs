@@ -1,4 +1,5 @@
 //! Public DNS for Pangolin resources. The public delegation selects the API.
+use std::net::IpAddr;
 use std::path::Path;
 
 use hs_deploy::dns::{self, DnsHost};
@@ -11,6 +12,48 @@ pub struct Record {
     pub target: String,
     pub provider: DnsHost,
     pub exists: bool,
+}
+
+pub enum Plan {
+    Existing {
+        name: String,
+        target: String,
+        addresses: Vec<IpAddr>,
+    },
+    Managed(Record),
+}
+
+impl Plan {
+    pub fn name(&self) -> String {
+        match self {
+            Self::Existing { name, .. } => name.clone(),
+            Self::Managed(record) => record.name(),
+        }
+    }
+    pub fn target(&self) -> &str {
+        match self {
+            Self::Existing { target, .. } => target,
+            Self::Managed(record) => &record.target,
+        }
+    }
+    pub fn lines(&self) -> Vec<String> {
+        match self {
+            Self::Existing { name, addresses, .. } => vec![
+                format!("Reuse existing public DNS for {name}; no DNS changes"),
+                format!(
+                    "Addresses: {}",
+                    addresses.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ")
+                ),
+            ],
+            Self::Managed(record) => vec![format!(
+                "{} CNAME {} → {} in {}; wait for public DNS before Pangolin",
+                if record.exists { "Publish" } else { "Add" },
+                record.name(),
+                record.target,
+                record.provider_name()
+            )],
+        }
+    }
 }
 
 impl Record {
@@ -104,11 +147,25 @@ fn same_name(a: &str, b: &str) -> bool {
     a.trim_end_matches('.').eq_ignore_ascii_case(b.trim_end_matches('.'))
 }
 
-pub async fn review(root: &Path, name: &str, target: &str) -> Result<Record, String> {
+pub async fn review(root: &Path, name: &str, target: &str) -> Result<Plan, String> {
     let name = name.trim_end_matches('.').to_ascii_lowercase();
     let target = target.trim_end_matches('.').to_ascii_lowercase();
     if same_name(&name, &target) || target.parse::<std::net::IpAddr>().is_ok() {
         return Err("The Pangolin dashboard must have a distinct DNS hostname for the CNAME target".into());
+    }
+    let addresses = dns::public_addresses(&name).await?;
+    if !addresses.is_empty() {
+        let target_addresses = dns::public_addresses(&target).await?;
+        if !addresses.iter().any(|address| target_addresses.contains(address)) {
+            return Err(format!(
+                "Public DNS for {name} shares no address with the Pangolin server {target}; correct DNS before publishing"
+            ));
+        }
+        return Ok(Plan::Existing {
+            name,
+            target,
+            addresses,
+        });
     }
     let (zone, provider) = dns::public_zone(&name).await?;
     let sub = name
@@ -125,10 +182,25 @@ pub async fn review(root: &Path, name: &str, target: &str) -> Result<Record, Str
     };
     let api = client(root, &record.provider).await?;
     record.exists = existing(&api, &record).await?;
-    Ok(record)
+    Ok(Plan::Managed(record))
 }
 
-pub async fn apply(root: &Path, record: &Record) -> Result<String, String> {
+pub async fn apply(root: &Path, plan: &Plan) -> Result<String, String> {
+    let record = match plan {
+        Plan::Existing {
+            name,
+            target,
+            addresses,
+        } => {
+            let now = dns::public_addresses(name).await?;
+            let target_addresses = dns::public_addresses(target).await?;
+            if now != *addresses || !now.iter().any(|address| target_addresses.contains(address)) {
+                return Err("Existing public DNS changed since review; review again".into());
+            }
+            return Ok(format!("Existing public DNS for {name} verified; records preserved"));
+        }
+        Plan::Managed(record) => record,
+    };
     let (zone, provider) = dns::public_zone(&record.name()).await?;
     if zone != record.zone || provider != record.provider {
         return Err("Public DNS delegation changed since review; review again".into());

@@ -11,7 +11,11 @@ In the service's maintenance settings, select one running instance, choose
 **Pangolin → Publish**, and review and apply. HomeStack opens its verified SSH
 API tunnel, finds or creates the manifest's resource and routes it through an
 online Site to the manifest's application port. F5 refreshes the lists and
-preserves edits.
+preserves edits. Open **Pangolin domain** to connect and choose from the
+organization's verified domains, for example `hs.example.com`. If publication
+is requested before a domain is selected, HomeStack opens that selector before
+Review. Publishing under a different base domain creates or reuses that name's
+resource; the old resource is preserved.
 
 This operation creates a missing resource and backend target or updates the resource's one
 existing target. It enables monitoring from the service manifest's HTTP health
@@ -24,16 +28,22 @@ or removes the application or its volumes. Save disk/environment changes
 separately; attachment cannot be combined with removal. Resources with multiple
 targets require managing their routing in Pangolin.
 
-When publishing, HomeStack identifies the public DNS zone and its provider from
-the public NS delegation. OVH and Spaceship are supported; configure the
-corresponding DNS integration with access to that zone. Review shows the CNAME
-from the resource name to the Pangolin dashboard hostname. That hostname must
-resolve to the public entry point serving the resource. HomeStack refuses an
-existing conflicting record instead of replacing it. Apply creates the missing
-record and waits until both public resolvers see it before saving Pangolin
-routing. If propagation times out, the record remains in place; review and apply
-again later. Publishing an already existing resource follows the same path and
-can repair a missing DNS record without replacing the container.
+When publishing, HomeStack first reads public A and AAAA answers from both public
+resolvers. An existing name, including a wildcard or alias at any DNS provider,
+can be reused without DNS credentials when the resolvers agree and its addresses
+include a public address of the Pangolin dashboard. Review shows the full address
+list, including IPv6; the operator must ensure all those addresses serve the
+resource. Apply rechecks the addresses before saving Pangolin routing.
+
+For a name without public addresses, HomeStack identifies the zone and provider
+from the public NS delegation. OVH and Spaceship support creating a missing
+CNAME to the Pangolin dashboard hostname through the corresponding configured
+DNS integration. Other providers require setting up DNS manually. HomeStack
+refuses a conflicting record instead of replacing it. Apply creates the missing
+record and waits until both public resolvers see it before saving Pangolin routing.
+If propagation times out, the record remains in place; review and apply again
+later. Publishing an existing resource can repair a missing DNS record without
+replacing its container.
 
 The DNS check does not verify certificate issuance or public application access.
 The Pangolin server needs the appropriate public ports and certificate setup.

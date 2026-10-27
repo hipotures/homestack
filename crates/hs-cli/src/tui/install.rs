@@ -206,6 +206,8 @@ pub struct Found {
 #[derive(Debug, Clone)]
 pub enum Event {
     Connected(Found),
+    /// The service's Pangolin domains were loaded; open their selector.
+    PangolinDomains(Found),
     /// Root could not be reached, or the cluster read.
     Failed(String),
     Reviewed {
@@ -480,7 +482,7 @@ impl Install {
         if self.cancelling {
             match event {
                 Event::Busy(_) | Event::Line(_) | Event::Reviewed { .. } => {}
-                Event::Connected(_) | Event::Failed(_) | Event::Done { .. } => {
+                Event::Connected(_) | Event::PangolinDomains(_) | Event::Failed(_) | Event::Done { .. } => {
                     self.cancelling = false;
                     self.busy = None;
                     self.found = None;
@@ -491,8 +493,9 @@ impl Install {
             return;
         }
         self.busy = None;
+        let choose_pangolin_domain = matches!(&event, Event::PangolinDomains(_));
         match event {
-            Event::Connected(found) => {
+            Event::Connected(found) | Event::PangolinDomains(found) => {
                 self.error = None;
                 self.settings.clone_from(&found.settings);
                 self.domain.clone_from(&found.domain);
@@ -505,6 +508,15 @@ impl Install {
                     Mode::Install | Mode::Sites | Mode::Service => Stage::Settings,
                     Mode::Uninstall => Stage::Check,
                 };
+                if choose_pangolin_domain
+                    && let Some(row) = self
+                        .settings
+                        .iter()
+                        .position(|s| s.title == super::service_pangolin::DOMAIN)
+                {
+                    self.row = row;
+                    self.begin_edit();
+                }
             }
             Event::Failed(error) => {
                 // In its box, as the setup's failure.
@@ -902,6 +914,21 @@ impl Install {
             KeyCode::Up => self.row = self.row.saturating_sub(1),
             KeyCode::Down | KeyCode::Tab => self.row = (self.row + 1).min(last),
             KeyCode::BackTab => self.row = self.row.saturating_sub(1),
+            KeyCode::Enter
+                if self.mode == Mode::Service
+                    && self
+                        .settings
+                        .get(self.row)
+                        .is_some_and(|setting| setting.title == super::service_pangolin::DOMAIN) =>
+            {
+                self.busy = Some("Loading Pangolin domains".to_owned());
+                return (
+                    false,
+                    Some(Request::Install(Command::PangolinDomains {
+                        answers: self.answers(),
+                    })),
+                );
+            }
             KeyCode::Enter => self.begin_edit(),
             KeyCode::Char('r' | 'R') => return self.review(),
             KeyCode::Delete if self.removable() => {

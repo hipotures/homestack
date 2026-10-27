@@ -69,6 +69,48 @@ fn public_resolver(server: IpAddr) -> Result<Resolver<TokioRuntimeProvider>, Str
     builder.build().map_err(|e| e.to_string())
 }
 
+/// Public A and AAAA addresses, requiring both resolvers to agree. Empty when
+/// the name has no addresses; aliases and wildcard answers are followed.
+pub async fn public_addresses(name: &str) -> Result<Vec<IpAddr>, String> {
+    let mut previous = None;
+    for server in PUBLIC {
+        let resolver = public_resolver(server)?;
+        let mut addresses = std::collections::BTreeSet::new();
+        for kind in [RecordType::A, RecordType::AAAA] {
+            let result = tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                resolver.lookup(format!("{name}."), kind),
+            )
+            .await
+            .map_err(|_| format!("Public DNS lookup for {name} timed out on {server}"))?;
+            match result {
+                Ok(lookup) => {
+                    for record in lookup.answers() {
+                        match &record.data {
+                            RData::A(address) => {
+                                addresses.insert(IpAddr::V4(address.0));
+                            }
+                            RData::AAAA(address) => {
+                                addresses.insert(IpAddr::V6(address.0));
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                Err(error) if error.is_no_records_found() || error.is_nx_domain() => {}
+                Err(error) => return Err(format!("Public DNS for {name} on {server}: {error}")),
+            }
+        }
+        if previous.as_ref().is_some_and(|found| *found != addresses) {
+            return Err(format!(
+                "Public DNS resolvers disagree about {name}; wait for propagation and review again"
+            ));
+        }
+        previous = Some(addresses);
+    }
+    Ok(previous.unwrap_or_default().into_iter().collect())
+}
+
 /// The name servers of `zone` in the public DNS; empty when `zone` is not
 /// a zone there.
 pub async fn public_name_servers(zone: &str) -> Result<Vec<String>, String> {

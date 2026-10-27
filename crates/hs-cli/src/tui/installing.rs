@@ -37,6 +37,10 @@ pub enum Command {
         answers: Vec<Answer>,
         domain: Option<String>,
     },
+    /// Read the verified Pangolin domains for a service's selector.
+    PangolinDomains {
+        answers: Vec<Answer>,
+    },
     /// Plan removing the selected instances of a service (Del).
     Remove {
         answers: Vec<Answer>,
@@ -146,7 +150,7 @@ fn work(setup: &Setup, commands: &Receiver<Command>, tell: &(dyn Fn(Event) + Sen
     while let Ok(command) = commands.recv() {
         match command {
             // Removing instances belongs to a service deployment.
-            Command::Remove { .. } => {}
+            Command::Remove { .. } | Command::PangolinDomains { .. } => {}
             Command::Connect { method, target } => match connect(setup, method, &target, tell) {
                 Ok((started, found, first)) => {
                     session = Some(started);

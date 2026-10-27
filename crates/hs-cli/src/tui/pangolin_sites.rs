@@ -563,7 +563,7 @@ pub(super) fn work(setup: &Setup, commands: &Receiver<Command>, tell: &(dyn Fn(E
                 }
             }
             // Removing instances belongs to a service deployment.
-            Command::Remove { .. } => {}
+            Command::Remove { .. } | Command::PangolinDomains { .. } => {}
             Command::Rescan { answers, .. } => {
                 let Some(s) = session.as_mut() else { continue };
                 tell(Event::Busy("Rescanning the cluster".to_owned()));

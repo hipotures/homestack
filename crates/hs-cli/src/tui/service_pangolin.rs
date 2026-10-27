@@ -20,6 +20,7 @@ use crate::services::{
 
 /// The title of the Pangolin setting.
 pub(super) const ACTION: &str = "Pangolin";
+pub(super) const DOMAIN: &str = "Pangolin domain";
 const PAGE: usize = 100;
 
 #[derive(Clone, PartialEq)]
@@ -58,6 +59,8 @@ pub(super) struct Plan {
     existing: Option<Instance>,
     /// The resource's full domain.
     domain: String,
+    domain_id: String,
+    base_domain: String,
     /// The existing resource; `None` when Apply creates it from `create`.
     resource: Option<Resource>,
     create: Option<Value>,
@@ -79,15 +82,28 @@ pub(super) fn requested(settings: &[Setting], answers: &[Answer]) -> bool {
         .is_some_and(|at| matches!(answers.get(at), Some(Answer::Picked(indices)) if indices.as_slice() == [1]))
 }
 
+pub(super) fn selected_domain<'a>(settings: &'a [Setting], answers: &[Answer]) -> &'a str {
+    let Some((index, setting)) = settings.iter().enumerate().find(|(_, s)| s.title == DOMAIN) else {
+        return "";
+    };
+    let Some(Answer::Picked(indices)) = answers.get(index) else {
+        return "";
+    };
+    indices
+        .first()
+        .and_then(|i| setting.choices.get(*i))
+        .map_or("", |(name, _)| name)
+}
+
 pub(super) fn settings(source: &Source) -> Vec<Setting> {
     let Some(exposure) = source.manifest.pangolin.as_ref().filter(|_| !source.is_site()) else {
         return Vec::new();
     };
-    vec![Setting {
+    let action = Setting {
         title: ACTION.to_owned(),
         note: format!(
-            "Publish reuses or creates the Pangolin HTTP resource {sub} on the organization's domain (with \
-             several, the one most resources use), routes it through an online Site to one instance (the \
+            "Publish reuses or creates the Pangolin HTTP resource {sub} on the selected Pangolin domain, \
+             routes it through an online Site to one instance (the \
              selected one, or the one this deployment creates) on its {port} port and monitors its health \
              check. Unchanged makes no Pangolin request.",
             sub = exposure.subdomain,
@@ -105,7 +121,40 @@ pub(super) fn settings(source: &Source) -> Vec<Setting> {
         hint: None,
         multiple: false,
         picked: vec![0],
-    }]
+    };
+    let mut domain = action.clone();
+    domain.title = DOMAIN.to_owned();
+    domain.note = "Press Enter to connect to Pangolin and choose a verified domain.".to_owned();
+    domain.choices.clear();
+    domain.picked.clear();
+    vec![action, domain]
+}
+
+/// Load verified domains with the same organization-scoped key used for routing.
+pub(super) fn domains(pangolin: &Pangolin, stop: &AtomicBool) -> Result<Vec<String>, String> {
+    let domains = Api::open(pangolin, stop)?.domains()?;
+    if domains.is_empty() {
+        return Err("Pangolin has no verified domain; add one in Pangolin first".to_owned());
+    }
+    Ok(domains.into_iter().map(|d| d.base).collect())
+}
+
+/// Replace the selector's choices, retaining a still-valid selection.
+pub(super) fn set_domains(settings: &mut [Setting], domains: Vec<String>) {
+    let Some(setting) = settings.iter_mut().find(|setting| setting.title == DOMAIN) else {
+        return;
+    };
+    let selected = setting
+        .picked
+        .first()
+        .and_then(|i| setting.choices.get(*i))
+        .map(|(value, _)| value.clone());
+    setting.choices = domains.into_iter().map(|name| (name, String::new())).collect();
+    setting.picked = selected
+        .and_then(|value| setting.choices.iter().position(|(name, _)| *name == value))
+        .or_else(|| (setting.choices.len() == 1).then_some(0))
+        .into_iter()
+        .collect();
 }
 
 struct Api<'a> {
@@ -184,6 +233,17 @@ impl<'a> Api<'a> {
                 });
             }
         }
+        let domains = self.domains()?;
+        resources.sort_by(|a, b| a.domain.cmp(&b.domain));
+        sites.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok(Catalog {
+            resources,
+            sites,
+            domains,
+        })
+    }
+
+    fn domains(&self) -> Result<Vec<Domain>, String> {
         let mut domains = Vec::new();
         let listed = self.get(&format!("/v1/org/{}/domains", self.ctx.organization))?;
         for row in listed["domains"]
@@ -197,14 +257,14 @@ impl<'a> Api<'a> {
                 });
             }
         }
-        resources.sort_by(|a, b| a.domain.cmp(&b.domain));
-        sites.sort_by(|a, b| a.name.cmp(&b.name));
         domains.sort_by(|a, b| a.base.cmp(&b.base));
-        Ok(Catalog {
-            resources,
-            sites,
-            domains,
-        })
+        if domains
+            .windows(2)
+            .any(|pair| pair[0].base.eq_ignore_ascii_case(&pair[1].base))
+        {
+            return Err("Pangolin returned duplicate verified domains; inspect its configuration".into());
+        }
+        Ok(domains)
     }
 
     fn resource(&self, row: &Value) -> Result<Resource, String> {
@@ -321,28 +381,32 @@ fn text(row: &Value, key: &str) -> Result<String, String> {
         .ok_or_else(|| format!("Unexpected Pangolin {key}"))
 }
 
-/// The full domain of `subdomain` on the organization's domain: the one
-/// with a resource of that name, else the one most resources use.
-fn full_domain(catalog: &Catalog, subdomain: &str) -> Result<(String, String), String> {
-    let used = |base: &str| {
+/// Select the verified base domain explicitly whenever more than one is available.
+fn full_domain(catalog: &Catalog, subdomain: &str, selected: &str) -> Result<(String, String, String), String> {
+    let selected = selected.trim().trim_end_matches('.');
+    let domain = if selected.is_empty() {
+        match catalog.domains.as_slice() {
+            [only] => only,
+            [] => return Err("Pangolin has no verified domain; add one in Pangolin first".into()),
+            many => {
+                return Err(format!(
+                    "Choose Pangolin domain: {}",
+                    many.iter().map(|d| d.base.as_str()).collect::<Vec<_>>().join(", ")
+                ));
+            }
+        }
+    } else {
         catalog
-            .resources
+            .domains
             .iter()
-            .filter(|r| r.domain.ends_with(&format!(".{base}")) || r.domain == base)
-            .count()
+            .find(|d| d.base.eq_ignore_ascii_case(selected))
+            .ok_or_else(|| format!("Pangolin domain {selected} is not verified for this organization"))?
     };
-    let domain = catalog
-        .domains
-        .iter()
-        .find(|d| {
-            catalog
-                .resources
-                .iter()
-                .any(|r| r.domain == format!("{subdomain}.{}", d.base))
-        })
-        .or_else(|| catalog.domains.iter().rev().max_by_key(|d| used(&d.base)))
-        .ok_or("Pangolin has no verified domain; add one in Pangolin first")?;
-    Ok((domain.id.clone(), format!("{subdomain}.{}", domain.base)))
+    Ok((
+        domain.id.clone(),
+        domain.base.clone(),
+        format!("{subdomain}.{}", domain.base),
+    ))
 }
 
 pub(super) fn review(
@@ -351,6 +415,7 @@ pub(super) fn review(
     stop: &AtomicBool,
     instances: &[Instance],
     created: &[NewInstance],
+    selected_domain: &str,
 ) -> Result<Plan, String> {
     let exposure = source
         .manifest
@@ -385,7 +450,7 @@ pub(super) fn review(
         .port;
     let api = Api::open(pangolin, stop)?;
     let catalog = api.catalog()?;
-    let (domain_id, domain) = full_domain(&catalog, &exposure.subdomain)?;
+    let (domain_id, base_domain, domain) = full_domain(&catalog, &exposure.subdomain, selected_domain)?;
     let resource = catalog.resources.iter().find(|r| r.domain == domain).cloned();
     let site = catalog
         .sites
@@ -452,6 +517,8 @@ pub(super) fn review(
         service: source.manifest.id.clone(),
         existing,
         domain,
+        domain_id,
+        base_domain,
         resource,
         create,
         site,
@@ -511,6 +578,13 @@ pub(super) async fn apply(
     tokio::task::block_in_place(|| {
         let api = Api::open(pangolin, stop)?;
         let catalog = api.catalog()?;
+        if !catalog
+            .domains
+            .iter()
+            .any(|d| d.id == plan.domain_id && d.base == plan.base_domain)
+        {
+            return Err("The selected Pangolin domain changed since review; review again".into());
+        }
         let listed = catalog.resources.iter().find(|r| r.domain == plan.domain);
         if listed != plan.resource.as_ref()
             || !catalog.sites.contains(&plan.site)

@@ -104,7 +104,7 @@ struct Changes {
     create: Option<deploy::Plan>,
     attach: Option<service_pangolin::Plan>,
     /// The public DNS record the published name still needs.
-    record: Option<public_dns::Record>,
+    record: Option<public_dns::Plan>,
 }
 
 /// The review's sections, its problems and what applying it does.
@@ -139,6 +139,14 @@ pub(super) fn work(setup: &Setup, commands: &Receiver<Command>, tell: &(dyn Fn(E
                     Err(error) => tell(Event::Failed(error)),
                 }
             }
+            Command::PangolinDomains { answers } => {
+                let Some(s) = session.as_mut() else { continue };
+                s.reviewed = None;
+                match load_pangolin_domains(setup, &source, s, &answers, tell) {
+                    Ok(()) => tell(Event::PangolinDomains(found(&s.config, &s.cluster, &s.settings))),
+                    Err(error) => tell(Event::Failed(error)),
+                }
+            }
             Command::Review { answers, .. } => {
                 let Some(s) = session.as_mut() else { continue };
                 s.reviewed = None;
@@ -167,6 +175,15 @@ pub(super) fn work(setup: &Setup, commands: &Receiver<Command>, tell: &(dyn Fn(E
                         sections: Vec::new(),
                         problems: vec![error],
                     });
+                    continue;
+                }
+                if service_pangolin::requested(&s.settings, &answers)
+                    && service_pangolin::selected_domain(&s.settings, &answers).is_empty()
+                {
+                    match load_pangolin_domains(setup, &source, s, &answers, tell) {
+                        Ok(()) => tell(Event::PangolinDomains(found(&s.config, &s.cluster, &s.settings))),
+                        Err(error) => tell(Event::Failed(error)),
+                    }
                     continue;
                 }
                 tell(Event::Busy("Checking the plan against the cluster".to_owned()));
@@ -465,6 +482,11 @@ fn connect(
         }
     }
     settings.extend(service_pangolin::settings(source));
+    if let Some(pangolin) = pangolin.as_ref().filter(|pangolin| pangolin.alive())
+        && let Ok(domains) = service_pangolin::domains(pangolin, &setup.stop)
+    {
+        service_pangolin::set_domains(&mut settings, domains);
+    }
     let original_settings = settings.clone();
     match kept {
         Some((previous, answers)) => restore(&mut settings, &previous, &answers),
@@ -536,6 +558,23 @@ fn ensure_pangolin(
     } else {
         session.pangolin = Some(pangolin);
     }
+    Ok(())
+}
+
+fn load_pangolin_domains(
+    setup: &Setup,
+    source: &Source,
+    session: &mut Session,
+    answers: &[Answer],
+    tell: &(dyn Fn(Event) + Send + Sync),
+) -> Result<(), String> {
+    ensure_pangolin(setup, source, session, tell)?;
+    tell(Event::Busy("Reading verified Pangolin domains".to_owned()));
+    let pangolin = session.context().ok_or("The Pangolin context is unavailable")?;
+    let domains = service_pangolin::domains(pangolin, &setup.stop)?;
+    let previous = session.settings.clone();
+    restore(&mut session.settings, &previous, answers);
+    service_pangolin::set_domains(&mut session.settings, domains);
     Ok(())
 }
 
@@ -1241,6 +1280,7 @@ fn review(
                         .as_ref()
                         .map(|plan| plan.instances.as_slice())
                         .unwrap_or_default(),
+                    service_pangolin::selected_domain(&s.settings, answers),
                 )
             });
         match checked {
@@ -1248,16 +1288,7 @@ fn review(
                 sections.push(("Pangolin attachment".to_owned(), checked.lines()));
                 match public_record(setup, s, checked.domain()) {
                     Ok(missing) => {
-                        sections.push((
-                            "Public DNS".to_owned(),
-                            vec![format!(
-                                "{} CNAME {} → {} in {}; wait for public DNS before Pangolin",
-                                if missing.exists { "Verify" } else { "Add" },
-                                missing.name(),
-                                missing.target,
-                                missing.provider_name()
-                            )],
-                        ));
+                        sections.push(("Public DNS".to_owned(), missing.lines()));
                         record = Some(missing);
                     }
                     Err(error) => problems.push(error),
@@ -1383,7 +1414,7 @@ async fn apply(
                 };
                 if !current_target
                     .trim_end_matches('.')
-                    .eq_ignore_ascii_case(&record.target)
+                    .eq_ignore_ascii_case(record.target())
                 {
                     return fail(
                         lines,
@@ -1527,7 +1558,7 @@ fn pangolin_host(s: &Session) -> Result<String, String> {
 }
 
 /// Review the public DNS record needed by the Pangolin resource.
-fn public_record(setup: &Setup, s: &Session, domain: &str) -> Result<public_dns::Record, String> {
+fn public_record(setup: &Setup, s: &Session, domain: &str) -> Result<public_dns::Plan, String> {
     let target = pangolin_host(s)?;
     setup
         .handle

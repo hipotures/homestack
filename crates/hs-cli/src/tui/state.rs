@@ -892,7 +892,7 @@ impl App {
             Event::Line(line) => self.log(&time, line.trim_start_matches("- ")),
             Event::Busy(text) => self.log(&time, &format!("install: {text}")),
             Event::Failed(error) => self.log(&time, &format!("install: {error}")),
-            Event::Connected(found) => {
+            Event::Connected(found) | Event::PangolinDomains(found) => {
                 self.keep_access();
                 self.log(&time, &format!("install: connected, {}", found.root));
                 let titles: Vec<String> = found
