@@ -72,8 +72,13 @@ References: [Codex CLI](https://learn.chatgpt.com/docs/developer-commands),
 The dashboard's `Compare agents` switch replaces the charts with a table for
 all registered agents, using the current server, project and time filters.
 Cost and total tokens come first. Output includes reasoning; its separate
-reasoning row is a subset, not additional usage. Missing measurements and
-unsupported metrics are marked explicitly instead of being displayed as zero.
+reasoning row is a subset, not additional usage. The comparison table and
+`All agents` charts show only capabilities shared by every registered agent,
+except token categories: those use the union of the agents' categories, so
+reasoning or cache writes stay visible even when only one agent reports them.
+Missing measurements are marked explicitly instead of being displayed as zero.
+Selecting a single agent shows all its available charts, including metrics
+that cannot be compared with another agent.
 
 The `AGENTS` registry in `crates/hs-usage/src/index.html` defines each agent's
 metric selectors, token label names, token categories and optional capabilities.
@@ -82,3 +87,9 @@ agent selector, scope discovery and shared charts. Declare whether input
 already includes cached and cache-write tokens. Unreported capabilities remain
 absent. Shared charts keep agent colors consistent and show adjacent bars;
 model costs and agent-specific measurements retain their own breakdowns.
+Optional `extras` describe agent-specific counters and duration histograms.
+Codex discovers turn counts and durations, first-token and first-output
+latency, tool calls, failures and tool durations from the available metric
+names. Histogram means divide the duration sum by the observation count and
+convert milliseconds to seconds. Full-turn duration includes tools and waits;
+it is not mapped to Claude Code's active time.

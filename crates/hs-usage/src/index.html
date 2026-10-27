@@ -143,6 +143,16 @@ const AGENTS = [
     estimated: true, convertCost: rows => costRows(rows, c), costNote: () => costNote(c),
     costUnavailable: () => c.coverage || !c.prices || c.missing.size > 0,
     sessions: c.threads,
+    extras: [
+      c.turns && { id: "turns", label: "Turns", selector: c.turns, format: fmt.count, scale: "integer" },
+      c.turn.sum && { id: "turnTime", label: "Total turn duration", selector: c.turn.sum, factor: 0.001, format: fmt.hours, scale: "time", unit: "full turns, including tools and waits" },
+      ...[["averageTurn", "Average turn duration", c.turn], ["firstToken", "Time to first token", c.firstToken],
+        ["firstOutput", "Time to first output item", c.firstOutput], ["toolTime", "Average tool duration", c.toolTime]]
+        .filter(([, , h]) => h.sum && h.count).map(([id, label, h]) => ({ id, label, numerator: h.sum, denominator: h.count, factor: 0.001, format: fmt.seconds, unit: "mean seconds" })),
+      c.tools && { id: "toolCalls", label: "Tool calls", selector: c.tools, format: fmt.count, scale: "integer" },
+      c.tools && { id: "toolFailures", label: "Failed tool calls", selector: c.tools + '{success="false"}', zeroWith: c.tools, format: fmt.count, scale: "integer" },
+      c.tools && { id: "toolCallsByTool", label: "Tool calls by tool", selector: c.tools, by: "tool", detail: true, format: fmt.count, scale: "integer" },
+    ].filter(Boolean),
   }) },
 ];
 const TOOLS = [{ id: "all", label: "All agents" }, ...AGENTS.map(({id, label}) => ({id, label}))];
@@ -192,7 +202,12 @@ const series = (query, start, end, step) =>
 async function codexMetrics() {
   const names = await prom("/api/v1/label/__name__/values", {});
   const pick = re => names.find(n => re.test(n) && n.endsWith("_total")) || names.find(n => re.test(n) && n.endsWith("_sum"));
+  const histogram = prefix => ({ sum: names.find(n => n.startsWith(prefix) && n.endsWith("_sum")),
+    count: names.find(n => n.startsWith(prefix) && n.endsWith("_count")) });
   return { tokens: pick(/^codex_turn_token_usage/), threads: pick(/^codex_thread_started/),
+    turns: pick(/^codex_conversation_turn_count/), tools: pick(/^codex_tool_call_total$/),
+    turn: histogram("codex_turn_e2e_duration_ms"), firstToken: histogram("codex_turn_ttft_duration_ms"),
+    firstOutput: histogram("codex_turn_ttfm_duration_ms"), toolTime: histogram("codex_tool_call_duration_ms"),
     prices: null, missing: new Set(), coverage: "" };
 }
 
@@ -212,6 +227,7 @@ const fmt = {
   usd: v => v > 0 && v < 0.01 ? "<$0.01" : "$" + v.toFixed(2),
   exact: v => Math.round(v).toLocaleString("en-GB"),
   count: v => String(Math.round(v)),
+  seconds: v => v < 1 ? Math.round(v * 1000) + " ms" : v.toFixed(1) + " s",
   hours: v => v >= 3600 ? (v / 3600).toFixed(1) + " h" : Math.round(v / 60) + " min",
   percent: v => (v * 100).toFixed(1) + "%",
   lines: v => v >= 1e3 ? (v / 1e3).toFixed(1) + " k" : String(Math.round(v)),
@@ -233,6 +249,30 @@ const COMPARISON_ROWS = [
   { id: "added", label: "Lines added", format: fmt.exact },
   { id: "removed", label: "Lines removed", format: fmt.exact },
 ];
+// Token categories use a union so an agent's extra category stays visible.
+// Every other comparison metric requires the same capability in every agent.
+const TOKEN_METRICS = new Set(["total", "input", "cached", "written", "output", "reasoning", "cacheHit"]);
+function supports(agent, id) {
+  const m = agent.metric;
+  if (id === "cost") return Boolean(m.cost || m.convertCost);
+  if (id === "total") return Boolean(m.tokens);
+  if (id === "cacheHit") return Boolean(m.tokens && m.types.cached && m.types.input);
+  if (["added", "removed", "lines"].includes(id)) return Boolean(m.lines);
+  return Boolean(m[id] || m.tokens && m.types[id] || m.extras?.some(e => e.id === id));
+}
+const visibleMetric = (id, agents) => agents.length > 0 && (TOKEN_METRICS.has(id) ? agents.some(a => supports(a, id)) : agents.every(a => supports(a, id)));
+function comparisonRows(agents) {
+  const rows = [...COMPARISON_ROWS];
+  for (const agent of agents) for (const extra of agent.metric.extras || [])
+    if (!extra.detail && !rows.some(row => row.id === extra.id)) rows.push(extra);
+  return rows.filter(row => visibleMetric(row.id, agents));
+}
+function extraQuery(extra, window) {
+  let query = extra.selector ? growth(extra.selector, extra.by || "", window) :
+    `(${growth(extra.numerator, "", window)}) / (${growth(extra.denominator, "", window)} > 0)`;
+  if (extra.zeroWith) query = `(${query}) or (${growth(extra.zeroWith, "", window)} * 0)`;
+  return extra.factor ? `(${query}) * ${extra.factor}` : query;
+}
 const sumRows = rows => rows.length ? rows.reduce((sum, r) => sum + Number(r.value[1]), 0) : null;
 function tokenValues(rows, metric) {
   if (!rows.length) return {};
@@ -247,7 +287,12 @@ function tokenValues(rows, metric) {
 const tokenSelector = metric => metric.tokens + (metric.types.total ? `{${metric.tokenLabel}=${JSON.stringify(metric.types.total)}}` : "");
 async function readAgent(agent, codex, now) {
   const metric = { types: {}, ...agent.metrics(codex) }, values = {}, notes = {};
-  const read = (selector, by = "") => selector ? instant(growth(selector, by, range.seconds), now) : Promise.resolve([]);
+  const queries = new Map();
+  const query = text => {
+    if (!queries.has(text)) queries.set(text, instant(text, now));
+    return queries.get(text);
+  };
+  const read = (selector, by = "") => selector ? query(growth(selector, by, range.seconds)) : Promise.resolve([]);
   const [tokens, cost, sessions, active, commits, lines] = await Promise.all([
     read(metric.tokens, metric.tokenLabel),
     read(metric.cost || (metric.convertCost && metric.tokens), metric.convertCost ? `model,${metric.tokenLabel}` : ""),
@@ -258,12 +303,11 @@ async function readAgent(agent, codex, now) {
   if (metric.costUnavailable?.()) values.cost = null;
   values.sessions = sumRows(sessions); values.active = sumRows(active); values.commits = sumRows(commits);
   if (lines.length) for (const type of ["added", "removed"]) values[type] = Number(lines.find(r => r.metric.type === type)?.value[1] || 0);
-  for (const row of COMPARISON_ROWS) {
-    const supported = row.id === "cost" ? metric.cost || metric.convertCost :
-      row.id === "cacheHit" || row.id === "total" ? metric.tokens :
-      ["added", "removed"].includes(row.id) ? metric.lines : metric[row.id] || metric.types[row.id];
-    notes[row.id] = supported ? "No data for the selected filters and time range" : "Not reported by this agent";
-  }
+  await Promise.all((metric.extras || []).filter(e => !e.detail).map(async extra => {
+    values[extra.id] = sumRows(await query(extraQuery(extra, range.seconds)));
+  }));
+  for (const row of [...COMPARISON_ROWS, ...(metric.extras || [])])
+    notes[row.id] = supports({ metric }, row.id) ? "No data for the selected filters and time range" : "Not reported by this agent";
   if (metric.estimated) notes.cost = metric.costNote();
   return { ...agent, metric, values, notes };
 }
@@ -279,7 +323,7 @@ function renderComparison(agents, now) {
   }
   head.append(heading); table.append(head);
   const body = el("tbody");
-  for (const [index, spec] of COMPARISON_ROWS.entries()) {
+  for (const [index, spec] of comparisonRows(agents).entries()) {
     const row = el("tr", index < 2 ? "primary" : ""), label = el("th", "", spec.label); label.scope = "row";
     if (spec.detail) label.append(el("span", "note", spec.detail)); row.append(label);
     for (const agent of agents) {
@@ -293,16 +337,27 @@ function renderComparison(agents, now) {
   table.append(body);
   const selection = SCOPES.map(s => scope[s.id] === ANY ? s.all : scope[s.id]).join(" · ");
   section.replaceChildren(table, el("div", "note compare-footer", `${range.label} · ${selection} · as of ${new Date(now * 1000).toLocaleString("en-GB")}`),
-    el("div", "note compare-footer", "Estimated costs use the startup price catalog at standard API rates, not subscription charges. Unattributed historical data is excluded by server and project filters. — means unavailable, not zero."));
+    el("div", "note compare-footer", "Shared metrics are compared; token categories include agent-specific details. Estimated costs use the startup price catalog at standard API rates, not subscription charges. Unattributed historical data is excluded by server and project filters. — means unavailable, not zero."));
 }
 
 function panels(agents, step) {
-  const shared = (id, title, unit, format, options = {}) => ({ title, unit, format, grouped: true, ...options,
+  const shared = (id, title, unit, format, options = {}) => ({ id, title, unit, format, grouped: true, ...options,
     parts: agents.flatMap(agent => {
       const m = agent.metric;
       if (id === "cost") return m.cost || m.convertCost && m.tokens ? [{ query: growth(m.cost || m.tokens, m.convertCost ? `model,${m.tokenLabel}` : "", step),
         transform: m.convertCost, name: () => agent.label + (m.estimated ? " (estimated)" : "") }] : [];
       if (id === "total") return m.tokens ? [{ query: growth(tokenSelector(m), "", step), name: () => agent.label }] : [];
+      if (id === "cacheHit") return supports(agent, id) ? [{
+        query: growth(m.tokens, m.tokenLabel, step), name: () => agent.label,
+        transform: rows => {
+          const times = [...new Set(rows.flatMap(r => r.values.map(([t]) => t)))];
+          const values = times.flatMap(t => {
+            const value = tokenValues(rows.map(r => ({ metric: r.metric, value: [t, r.values.find(([time]) => time === t)?.[1] || 0] })), m).cacheHit;
+            return value == null ? [] : [[t, value]];
+          });
+          return [{ metric: {}, values }];
+        },
+      }] : [];
       if (m.types[id]) return m.tokens ? [{ query: growth(m.tokens, m.tokenLabel, step), name: () => agent.label,
         transform: rows => {
           const times = [...new Set(rows.flatMap(r => r.values.map(([t]) => t)))];
@@ -312,21 +367,32 @@ function panels(agents, step) {
     }),
   });
   const list = [shared("cost", "Cost over time", "USD · estimates labelled", fmt.usd),
-    { title: "Cost by model", unit: "USD · estimates labelled", format: fmt.usd,
+    { id: "cost", title: "Cost by model", unit: "USD · estimates labelled", format: fmt.usd,
       parts: agents.filter(a => a.metric.cost || a.metric.convertCost && a.metric.tokens).map(a => ({
         query: growth(a.metric.cost || a.metric.tokens, a.metric.convertCost ? `model,${a.metric.tokenLabel}` : "model", step),
         transform: a.metric.convertCost, name: m => `${a.label}${a.metric.estimated ? " (estimated)" : ""} · ${m.model || "?"}`,
       })) },
     shared("total", "Tokens over time", "all token types", fmt.tokens, { spikes: true }),
-    ...COMPARISON_ROWS.filter(r => ["input", "cached", "written", "output"].includes(r.id)).map(r => shared(r.id, r.label, "by agent", fmt.tokens)),
+    ...COMPARISON_ROWS.filter(r => ["input", "cached", "written", "output", "reasoning"].includes(r.id)).map(r => shared(r.id, r.label, "by agent", fmt.tokens)),
+    shared("cacheHit", "Cache hit", "cached share of input", fmt.percent, { max: 1 }),
     shared("sessions", "Sessions", "new sessions by agent", fmt.count, { scale: "integer" }),
     shared("active", "Active time", "reported seconds", fmt.hours, { scale: "time" }),
     shared("commits", "Commits", "by agent", fmt.count, { scale: "integer" }),
-    { title: "Lines of code", unit: "by agent and change", format: fmt.lines, parts: agents.filter(a => a.metric.lines).map(a => ({
+    { id: "lines", title: "Lines of code", unit: "by agent and change", format: fmt.lines, parts: agents.filter(a => a.metric.lines).map(a => ({
       query: growth(a.metric.lines, "type", step), name: m => `${a.label} · ${m.type || "?"}`,
     })) },
   ];
-  return list.filter(p => p.parts.length);
+  const extraSpecs = new Map(agents.flatMap(a => (a.metric.extras || []).map(e => [e.id, e])));
+  for (const [id, spec] of extraSpecs) list.push({ id, title: spec.label, unit: spec.unit || "by agent", format: spec.format, scale: spec.scale, grouped: !spec.by,
+    parts: agents.flatMap(a => {
+      const extra = a.metric.extras?.find(e => e.id === id);
+      return extra ? [{ query: extraQuery(extra, step), name: m => a.label + (extra.by ? ` · ${m[extra.by] || "?"}` : "") }] : [];
+    }),
+  });
+  if (agents.length === 1 && agents[0].metric.active) list.push({ id: "active", title: "Active time by kind", unit: agents[0].label, format: fmt.hours, scale: "time",
+    parts: [{ query: growth(agents[0].metric.active, "type", step), name: m => m.type || "?" }],
+  });
+  return list.filter(p => p.parts.length && visibleMetric(p.id, agents));
 }
 // LiteLLM rates are USD per token. Apply discounts to the inclusive input
 // count; output already includes reasoning. No model-name guessing.
@@ -403,6 +469,7 @@ async function load() {
       const specs = [];
       for (const agent of agents) for (const id of ["cost", "total", "sessions", "cacheHit"]) {
         const spec = COMPARISON_ROWS.find(r => r.id === id);
+        if (!visibleMetric(id, agents)) continue;
         if (id === "cost" && !agent.metric.cost && !agent.metric.convertCost || id === "sessions" && !agent.metric.sessions) continue;
         const buckets = (id === "cacheHit" ? null : charts.find(c => c.title === (id === "cost" ? "Cost over time" : id === "total" ? "Tokens over time" : "Sessions")))?.series.find(s => s.name === agent.label || s.name === agent.label + " (estimated)")?.values || new Map();
         specs.push({ label: `${agent.label} ${id === "cost" && agent.metric.estimated ? "estimated cost" : spec.label.toLowerCase()}`, format: id === "total" ? fmt.tokens : spec.format,
@@ -430,7 +497,7 @@ function fold(list, limit = SERIES.length) {
     byName.set(s.name, values);
   }
   let out = [...byName].map(([name, values]) => ({ name, values, sum: [...values.values()].reduce((a, b) => a + b, 0) }))
-    .filter(s => s.sum > 0).sort((a, b) => b.sum - a.sum);
+    .filter(s => s.values.size > 0 && Number.isFinite(s.sum) && s.sum >= 0).sort((a, b) => b.sum - a.sum);
   if (out.length > limit) {
     const rest = out.slice(limit - 1), values = new Map();
     for (const s of rest) for (const [t, v] of s.values) values.set(t, (values.get(t) || 0) + v);
@@ -617,7 +684,7 @@ const NS = "http://www.w3.org/2000/svg";
 function bars(chart, times, spiky) {
   const W = 640, H = 220, left = 52, right = 8, top = 8, bottom = 24;
   const totals = times.map(t => chart.series.reduce((a, s) => a + (s.values.get(t) || 0), 0));
-  const max = scaleMax(chart.grouped ? Math.max(0, ...chart.series.flatMap(s => [...s.values.values()])) : Math.max(...totals, 0), chart.scale);
+  const max = chart.max || scaleMax(chart.grouped ? Math.max(0, ...chart.series.flatMap(s => [...s.values.values()])) : Math.max(...totals, 0), chart.scale);
   const svg = svgEl("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": chart.title });
   const y = v => top + (H - top - bottom) * (1 - v / max);
   for (let i = 0; i <= 4; i++) {
