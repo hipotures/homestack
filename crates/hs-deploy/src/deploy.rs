@@ -2,7 +2,6 @@
 
 use std::future::Future;
 use std::net::SocketAddr;
-use std::process::Stdio;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use base64::Engine;
@@ -113,39 +112,6 @@ fn health_error(error: &hs_client::ClientError) -> String {
         hs_client::ClientError::Api { status, code, .. } => format!("HTTP {status}, code={code}"),
         _ => error.to_string(),
     }
-}
-
-async fn wait_ping(instance: &InstanceSpec, say: &impl Fn(&str)) -> Result<(), String> {
-    let address = instance.address.to_string();
-    say(&format!("  {}: waiting for ping {address} (up to 15 s)", instance.name));
-    tokio::time::timeout(HEALTH_LIMIT, async {
-        loop {
-            let output = tokio::process::Command::new("ping")
-                .args(["-n", "-c", "1", "-W", "1", &address])
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::piped())
-                .kill_on_drop(true)
-                .output()
-                .await
-                .map_err(|error| format!("Cannot run ping for {address}: {error}"))?;
-            if output.status.success() {
-                return Ok(());
-            }
-            if output.status.code() != Some(1) {
-                let reason = String::from_utf8_lossy(&output.stderr);
-                return Err(format!(
-                    "Cannot ping {address}: {}",
-                    reason.lines().next().unwrap_or("ping failed")
-                ));
-            }
-            tokio::time::sleep(HEALTH_RETRY).await;
-        }
-    })
-    .await
-    .map_err(|_| format!("{}: {address} did not answer ping within 15 s", instance.name))??;
-    say(&format!("  {}: {address} answered ping", instance.name));
-    Ok(())
 }
 
 async fn wait_health(
@@ -391,7 +357,6 @@ impl ApiBootstrap {
                 );
             }
         }
-        wait_ping(instance, say).await?;
         let client = instances_client(&self.config, &[instance], self.api_token.expose())?;
         wait_health(&client, &instance.name, "after start", HEALTH_LIMIT, say).await?;
         timed(&instance.name, "remove TLS bootstrap environment", say, async {

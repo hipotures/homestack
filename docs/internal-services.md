@@ -63,9 +63,8 @@ normal resolver returns the planned IPv4 address. The targeted refresh runs
 when `resolvectl` is installed; otherwise the system resolver is checked
 directly. No root access or system-wide cache flush is needed.
 The DNS refresh and verification have a shared 15-second deadline. After
-starting a new API container, bootstrap waits up to 15 seconds for its IP to
-answer `ping`, then checks authenticated HTTPS with its own 15-second limit.
-The desktop needs `ping`; ICMP reachability does not replace HTTPS readiness.
+starting a new API container, bootstrap waits up to 15 seconds for
+authenticated HTTPS on its address.
 
 The service browser and review/apply worker use
 `services/deploy.rs::{survey,plan,apply}` and the scoped PVE deploy token.
