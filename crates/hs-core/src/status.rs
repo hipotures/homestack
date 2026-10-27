@@ -618,6 +618,20 @@ pub async fn global_status(
     });
     prefetched?;
     let inventory = Inventory::read(pve, cfg).await?;
+    let containers = cluster_container_resources(pve).await.unwrap_or_default();
+    // The last space measured in the machines that are not running.
+    let stopped: Vec<u32> = inventory
+        .resources
+        .iter()
+        .chain(&containers)
+        .filter(|item| item.status.as_deref() != Some("running"))
+        .map(|item| item.vmid)
+        .collect();
+    let last = match prometheus {
+        Some(url) => crate::service_status::last_space(url, &stopped).await,
+        None => BTreeMap::new(),
+    };
+    let last_root = |vmid: u32| last.get(&vmid).and_then(|mounts| mounts.get("/").cloned());
     let nodes: BTreeMap<String, NodeState> = inventory.nodes.iter().map(|n| (n.node.clone(), n.clone())).collect();
     let configs = &inventory.configs;
     let mut warnings = Vec::new();
@@ -673,7 +687,9 @@ pub async fn global_status(
                 node: gold_node,
                 ip: expected_ip(cfg, resource.vmid),
                 root_storage: disk_storage(gold_cfg.get(&cfg.root_disk).map(String::as_str)),
-                root: gold_cfg.get(&cfg.root_disk).map(|option| sized(option)),
+                root: gold_cfg
+                    .get(&cfg.root_disk)
+                    .map(|option| last_root(resource.vmid).unwrap_or_else(|| sized(option))),
                 home: None,
                 service_status: None,
                 role_tag_ok,
@@ -719,7 +735,14 @@ pub async fn global_status(
         let mut home = None;
         if node_online && shared_home.is_none() {
             let status = item.status.as_deref().unwrap_or("unknown");
-            let usage = workspace_home_usage(pve, &item.node, item.vmid, status, home_cfg).await;
+            let mut usage = workspace_home_usage(pve, &item.node, item.vmid, status, home_cfg).await;
+            if status != "running"
+                && let Some(previous) = last
+                    .get(&item.vmid)
+                    .and_then(|mounts| crate::service_status::last_home(mounts, false, usage.size_bytes))
+            {
+                usage = previous;
+            }
             if let Some(size) = usage.size_bytes {
                 total_home += size;
             } else {
@@ -760,6 +783,9 @@ pub async fn global_status(
             ip: expected_ip(cfg, item.vmid),
             root_storage: disk_storage(vm_cfg.get(&cfg.root_disk).map(String::as_str)),
             root: match vm_cfg.get(&cfg.root_disk) {
+                Some(option) if item.status.as_deref() != Some("running") => {
+                    Some(last_root(item.vmid).unwrap_or_else(|| sized(option)))
+                }
                 Some(option) if node_online => Some(
                     workspace_root_usage(
                         pve,
@@ -775,7 +801,16 @@ pub async fn global_status(
             },
             home,
             image: None,
-            service_status: None,
+            service_status: if node_online && item.status.as_deref() == Some("running") {
+                telemetry
+                    .remove(&(item.node.clone(), item.vmid))
+                    .map(|measured| ServiceStatus {
+                        application: None,
+                        container: Some(measured.telemetry),
+                    })
+            } else {
+                None
+            },
             image_update: None,
             service: None,
             role_tag_ok: !tags.contains(GOLD_TAG) && !(alien && tags.contains(WORKSPACE_TAG)),
@@ -785,7 +820,6 @@ pub async fn global_status(
 
     // The other guests of the pools the token sees: more Golds, containers.
     let listed: BTreeSet<u32> = managed.iter().map(|item| item.vmid).chain(cfg.gold_vmid).collect();
-    let containers = cluster_container_resources(pve).await.unwrap_or_default();
     let guests = inventory
         .resources
         .iter()
@@ -819,7 +853,7 @@ pub async fn global_status(
                 (Some(used), Some(total)) if total > 0 && item.status.as_deref() == Some("running") => {
                     Some(measured(used, total))
                 }
-                _ => rootfs.map(sized),
+                _ => rootfs.map(|rootfs| last_root(item.vmid).unwrap_or_else(|| sized(rootfs))),
             };
             (disk_storage(rootfs), root)
         } else {
@@ -827,7 +861,13 @@ pub async fn global_status(
             let option = config.as_ref().and_then(|config| config.get(&cfg.root_disk));
             (
                 disk_storage(option.map(String::as_str)),
-                option.map(|option| sized(option)),
+                option.map(|option| {
+                    if item.status.as_deref() == Some("running") {
+                        sized(option)
+                    } else {
+                        last_root(item.vmid).unwrap_or_else(|| sized(option))
+                    }
+                }),
             )
         };
         let role = if container {
@@ -860,7 +900,16 @@ pub async fn global_status(
         } else {
             expected_ip(cfg, item.vmid)
         };
-        let running = container && online && item.status.as_deref() == Some("running");
+        let running = online && item.status.as_deref() == Some("running");
+        if !running
+            && let (Some(home), Some(previous)) = (
+                &mut home,
+                last.get(&item.vmid)
+                    .and_then(|mounts| crate::service_status::last_home(mounts, container, None)),
+            )
+        {
+            *home = previous;
+        }
         let measured = if running {
             telemetry.remove(&(item.node.clone(), item.vmid))
         } else {
@@ -874,7 +923,10 @@ pub async fn global_status(
                 root.clone_from(&measured.root);
             }
         }
-        if running && let (Some(config), Some(ip)) = (container_config.clone(), ip.clone()) {
+        if container
+            && running
+            && let (Some(config), Some(ip)) = (container_config.clone(), ip.clone())
+        {
             let index = others.len();
             applications.push(async move { (index, crate::service_status::application(&config, &ip).await) });
         }

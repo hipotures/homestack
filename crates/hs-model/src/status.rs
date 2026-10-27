@@ -68,18 +68,18 @@ pub struct StatusEntry {
     pub service: Option<DeployedService>,
 }
 
-/// A running container's service, observed two ways.
+/// A running machine, observed two ways.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct ServiceStatus {
     /// The application's own report; `null` when it has no status endpoint
     /// or does not answer.
     pub application: Option<hs_service_status::Report>,
-    /// The PVE agent's measurement of the whole container, through
+    /// The PVE agent's measurement of the whole container or VM, through
     /// Prometheus; `null` without one from the last 30 seconds.
     pub container: Option<ContainerTelemetry>,
 }
 
-/// Resource usage of a whole LXC. Rates are averages over the last minute;
+/// Resource usage of a whole LXC or VM. Rates are averages over the last minute;
 /// a measurement the agent did not send is `null`, never zero.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct ContainerTelemetry {

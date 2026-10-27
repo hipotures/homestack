@@ -498,13 +498,13 @@ fn whole_percent(percent: f64) -> String {
     format!("{percent:.0}%")
 }
 
-/// Whether the PVE agent measures this entry: a running container.
-fn running_container(entry: &StatusEntry) -> bool {
-    entry.role == "CT" && entry.status == "running"
+/// Whether the PVE agent measures this entry: a running machine.
+fn running(entry: &StatusEntry) -> bool {
+    entry.status == "running"
 }
 
-/// A list cell: empty where nothing applies (no such volume, a VM or a
-/// stopped container, no service), `—` where a value should exist but is
+/// A list cell: empty where nothing applies (no such volume, a
+/// stopped machine, no service), `—` where a value should exist but is
 /// unknown or unmeasurable.
 fn cell<T>(value: Option<&T>, applies: bool, show: impl Fn(&T) -> Option<String>) -> String {
     match value {
@@ -518,18 +518,14 @@ fn volume(usage: Option<&HomeUsage>, show: impl Fn(&HomeUsage) -> Option<String>
     cell(usage, false, show)
 }
 
-/// The PVE agent's measurement of a running container.
+/// The PVE agent's measurement of a running machine.
 fn measured(entry: &StatusEntry, show: impl Fn(&ContainerTelemetry) -> Option<String>) -> String {
-    cell(container_telemetry(entry), running_container(entry), show)
+    cell(container_telemetry(entry), running(entry), show)
 }
 
 /// The report of a running service's application.
 fn reported(entry: &StatusEntry, show: impl Fn(&hs_service_status::Report) -> Option<String>) -> String {
-    cell(
-        application(entry),
-        running_container(entry) && entry.service.is_some(),
-        show,
-    )
+    cell(application(entry), running(entry) && entry.service.is_some(), show)
 }
 
 /// The application's own report of a service.

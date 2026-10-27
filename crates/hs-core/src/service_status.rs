@@ -1,8 +1,8 @@
-//! What is observed of running service containers: `homestack-pve-agent` on
-//! each PVE node sends cgroup and filesystem measurements of its LXCs, and
+//! What is observed of running machines: `homestack-pve-agent` on each PVE
+//! node sends cgroup and filesystem measurements of its LXCs and VMs, and
 //! Proxmox their uptime, to Prometheus, read with one query per status
 //! request; the application's own liveness and RSS come from its status
-//! endpoint.
+//! endpoint. A machine that is not running keeps its last measured space.
 
 use std::collections::BTreeMap;
 use std::net::Ipv4Addr;
@@ -22,20 +22,21 @@ const MAX_AGE_SECONDS: u64 = 30;
 /// label: `or` matches label sets without metric names, so a derived series
 /// must not share its labels with a raw one.
 const QUERY: &str = concat!(
-    r#"{__name__=~"hs_pve_(cpu_capacity|memory_usage_bytes|memory_effective_limit_bytes)",type="lxc"}"#,
-    r#" or hs_pve_memory_stat_bytes{type="lxc",kind=~"anon|file"}"#,
-    r#" or hs_pve_memory_events_total{type="lxc",event="oom_kill"}"#,
-    r#" or hs_pve_pressure_stall_ratio{type="lxc",stall="some",window="10s"}"#,
+    r#"{__name__=~"hs_pve_(cpu_capacity|memory_usage_bytes|memory_effective_limit_bytes)"}"#,
+    r#" or hs_pve_memory_stat_bytes{kind=~"anon|file"}"#,
+    r#" or hs_pve_memory_events_total{event="oom_kill"}"#,
+    r#" or hs_pve_pressure_stall_ratio{stall="some",window="10s"}"#,
     r#" or {__name__=~"hs_pve_filesystem_(total|used|available)_bytes|hs_pve_filesystem_read_success_ratio","#,
     r#"type="lxc",mount=~"/|/home/app"}"#,
-    r#" or proxmox_vm_uptime_seconds{type="lxc"}"#,
-    r#" or label_replace(time() - timestamp(hs_pve_memory_usage_bytes{type="lxc"}), "derived", "age", "", "")"#,
-    r#" or label_replace(sum by (node, vmid) (rate(hs_pve_cpu_usage_seconds_total{type="lxc"}[1m])), "derived", "cpu_rate", "", "")"#,
-    r#" or label_replace(sum by (node, vmid, operation) (rate(hs_pve_io_bytes_total{type="lxc"}[1m])), "derived", "io_bytes_rate", "", "")"#,
-    r#" or label_replace(sum by (node, vmid, operation) (rate(hs_pve_io_operations_total{type="lxc"}[1m])), "derived", "io_ops_rate", "", "")"#,
+    r#" or proxmox_vm_uptime_seconds"#,
+    r#" or label_replace(time() - timestamp(hs_pve_memory_usage_bytes), "derived", "age", "", "")"#,
+    r#" or label_replace(sum by (node, vmid) (rate(hs_pve_cpu_usage_seconds_total[1m])), "derived", "cpu_rate", "", "")"#,
+    r#" or label_replace(sum by (node, vmid, operation) (rate(hs_pve_io_bytes_total[1m])), "derived", "io_bytes_rate", "", "")"#,
+    r#" or label_replace(sum by (node, vmid, operation) (rate(hs_pve_io_operations_total[1m])), "derived", "io_ops_rate", "", "")"#,
 );
 
-/// A container's measurement and the `/` and `/home/app` space in it.
+/// A machine's measurement and, for a container, the `/` and `/home/app`
+/// space in it; a VM's space comes from its guest agent.
 pub struct Measured {
     pub telemetry: ContainerTelemetry,
     pub root: Option<HomeUsage>,
@@ -139,9 +140,72 @@ fn client() -> Option<&'static reqwest::Client> {
 }
 
 async fn query(prometheus: &Url) -> Option<Response> {
+    run(prometheus, QUERY).await
+}
+
+/// The last space measured in each data filesystem of the machines `vmids`,
+/// which are not running, within Prometheus' retention: by VMID and mount.
+pub async fn last_space(prometheus: &Url, vmids: &[u32]) -> BTreeMap<u32, BTreeMap<String, HomeUsage>> {
+    if vmids.is_empty() {
+        return BTreeMap::new();
+    }
+    let list: Vec<String> = vmids.iter().map(u32::to_string).collect();
+    let query = format!(
+        r#"last_over_time({{__name__=~"hs_pve_filesystem_(total|used|available)_bytes|hs_pve_filesystem_read_success_ratio",vmid=~"{}",mount!~"/boot(/.*)?|/snap/.*"}}[30d])"#,
+        list.join("|")
+    );
+    let Some(response) = run(prometheus, &query).await else {
+        return BTreeMap::new();
+    };
+    let mut machines: BTreeMap<u32, Samples> = BTreeMap::new();
+    for series in response.data.result {
+        let (Some(vmid), Some(name), Ok(value)) = (
+            series.metric.get("vmid").and_then(|vmid| vmid.parse().ok()),
+            series.metric.get("__name__").cloned(),
+            series.value.1.parse::<f64>(),
+        ) else {
+            continue;
+        };
+        machines.entry(vmid).or_default().0.push((name, series.metric, value));
+    }
+    machines
+        .into_iter()
+        .map(|(vmid, samples)| {
+            let mounts: std::collections::BTreeSet<String> = samples
+                .0
+                .iter()
+                .filter_map(|(_, labels, _)| labels.get("mount").cloned())
+                .collect();
+            let spaces = mounts
+                .into_iter()
+                .filter_map(|mount| space(&samples, &mount).map(|usage| (mount, usage)))
+                .collect();
+            (vmid, spaces)
+        })
+        .collect()
+}
+
+/// The last `/home/app` of a container, or of a VM the guest filesystem
+/// within 15 % of its home disk's `size`.
+#[must_use]
+pub fn last_home(mounts: &BTreeMap<String, HomeUsage>, container: bool, size: Option<u64>) -> Option<HomeUsage> {
+    if container {
+        return mounts.get("/home/app").cloned();
+    }
+    let size = size?;
+    #[allow(clippy::cast_precision_loss, reason = "a size comparison")]
+    let gap = |total: u64| (total as f64 - size as f64).abs() / size as f64;
+    mounts
+        .iter()
+        .filter(|(mount, usage)| *mount != "/" && usage.size_bytes.is_some_and(|total| gap(total) <= 0.15))
+        .min_by(|(_, a), (_, b)| gap(a.size_bytes.unwrap_or(0)).total_cmp(&gap(b.size_bytes.unwrap_or(0))))
+        .map(|(_, usage)| usage.clone())
+}
+
+async fn run(prometheus: &Url, query: &str) -> Option<Response> {
     let mut url = prometheus.clone();
     url.set_path("/api/v1/query");
-    url.query_pairs_mut().clear().append_pair("query", QUERY);
+    url.query_pairs_mut().clear().append_pair("query", query);
     let response = client()?.get(url).send().await.ok()?;
     if response.status() != reqwest::StatusCode::OK {
         return None;

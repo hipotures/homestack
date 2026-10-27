@@ -1935,7 +1935,7 @@
       },
       "ContainerTelemetry": {
         "type": "object",
-        "description": "Resource usage of a whole LXC. Rates are averages over the last minute;\na measurement the agent did not send is `null`, never zero.",
+        "description": "Resource usage of a whole LXC or VM. Rates are averages over the last minute;\na measurement the agent did not send is `null`, never zero.",
         "required": [
           "sample_age_seconds",
           "stalls"
@@ -3229,7 +3229,7 @@
       },
       "ServiceStatus": {
         "type": "object",
-        "description": "A running container's service, observed two ways.",
+        "description": "A running machine, observed two ways.",
         "properties": {
           "application": {
             "oneOf": [
@@ -3246,7 +3246,7 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/ContainerTelemetry",
-                "description": "The PVE agent's measurement of the whole container, through\nPrometheus; `null` without one from the last 30 seconds."
+                "description": "The PVE agent's measurement of the whole container or VM, through\nPrometheus; `null` without one from the last 30 seconds."
               },
               {
                 "type": "null"
