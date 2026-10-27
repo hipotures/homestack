@@ -58,7 +58,6 @@ func startHomeStack(ctx context.Context, n *newtpkg.Newt) (func(), error) {
 	}
 	h := &heartbeat{started: time.Now(), interval: time.Duration(seconds) * time.Second}
 	n.OnTunnelProbe = h.success
-	telemetry := newTelemetry(h.started)
 	mux := http.NewServeMux()
 	health := func(ready bool) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
@@ -96,8 +95,8 @@ func startHomeStack(ctx context.Context, n *newtpkg.Newt) (func(), error) {
 		if !live {
 			status = "fail"
 		}
-		body, err := json.Marshal(telemetry.report(r.Context(), status))
-		if err != nil || len(body) > 64*1024 {
+		body, err := json.Marshal(statusReport(status))
+		if err != nil {
 			http.Error(w, "telemetry unavailable", http.StatusServiceUnavailable)
 			return
 		}
@@ -107,7 +106,6 @@ func startHomeStack(ctx context.Context, n *newtpkg.Newt) (func(), error) {
 	})
 	listener, err := net.Listen("tcp", ":8080")
 	if err != nil {
-		telemetry.close()
 		return nil, fmt.Errorf("HomeStack management listener unavailable")
 	}
 	server := &http.Server{Handler: mux, ReadHeaderTimeout: 2 * time.Second, ReadTimeout: 3 * time.Second,
@@ -120,6 +118,5 @@ func startHomeStack(ctx context.Context, n *newtpkg.Newt) (func(), error) {
 	}()
 	return func() {
 		_ = server.Close()
-		telemetry.close()
 	}, nil
 }

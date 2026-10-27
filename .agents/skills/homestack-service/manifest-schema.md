@@ -3,7 +3,7 @@
 Schema 1 remains supported with the rules below. It requires no migration.
 Schema 3 is an additional, opt-in three-file contract documented at the end
 of this file. Neither manifest version changes the independent HTTP
-service-status telemetry response schema 2.
+service-status telemetry response schema 3.
 
 The contract between an application repository and HomeStack: portable facts
 about the service's image, its default resources, persistence, instance

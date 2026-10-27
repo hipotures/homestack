@@ -11,8 +11,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use hs_model::config::Config;
 use hs_model::status::{
-    Capacity, GlobalStatus, GuestBackup, HomeUsage, HomesSummary, LayoutCapacity, NodeState, OrphanVolume, SshCommands,
-    StatusEntry, StatusSummary, StorageStatus, WorkspaceStatus,
+    Capacity, GlobalStatus, GuestBackup, HomeUsage, HomesSummary, LayoutCapacity, NodeState, OrphanVolume,
+    ServiceStatus, SshCommands, StatusEntry, StatusSummary, StorageStatus, WorkspaceStatus,
 };
 use serde_json::{Map, Value};
 
@@ -676,7 +676,6 @@ pub async fn global_status(
                 root: gold_cfg.get(&cfg.root_disk).map(|option| sized(option)),
                 home: None,
                 service_status: None,
-                service_rates: None,
                 role_tag_ok,
                 warning,
                 image: None,
@@ -777,7 +776,6 @@ pub async fn global_status(
             home,
             image: None,
             service_status: None,
-            service_rates: None,
             image_update: None,
             service: None,
             role_tag_ok: !tags.contains(GOLD_TAG) && !(alien && tags.contains(WORKSPACE_TAG)),
@@ -794,6 +792,7 @@ pub async fn global_status(
         .map(|item| (item, false))
         .chain(containers.iter().map(|item| (item, true)));
     let mut others = Vec::new();
+    let mut applications = Vec::new();
     for (item, container) in guests {
         if item.pool.is_none() || listed.contains(&item.vmid) {
             continue;
@@ -861,45 +860,28 @@ pub async fn global_status(
         } else {
             expected_ip(cfg, item.vmid)
         };
-        let (service_status, service_rates) = if container && online && item.status.as_deref() == Some("running") {
-            telemetry
-                .remove(&(item.node.clone(), item.vmid))
-                .map_or((None, None), |(report, rates)| (Some(report), rates))
+        let running = container && online && item.status.as_deref() == Some("running");
+        let measured = if running {
+            telemetry.remove(&(item.node.clone(), item.vmid))
         } else {
-            (None, None)
+            None
         };
-        if let Some(report) = &service_status
-            && let (Some(home), Some(measured)) = (
-                &mut home,
-                report
-                    .filesystems
-                    .iter()
-                    .find(|fs| fs.mount == "/home/app" && fs.mounted && fs.error.is_none()),
-            )
-        {
-            home.size_bytes = measured.total_bytes;
-            home.used_bytes = measured.used_bytes;
-            home.free_bytes = measured.available_bytes;
-            home.free_percent = measured
-                .total_bytes
-                .zip(measured.available_bytes)
-                .and_then(|(total, available)| (total > 0).then(|| available as f64 * 100.0 / total as f64));
+        if let Some(measured) = &measured {
+            if let (Some(home), Some(space)) = (&mut home, &measured.home) {
+                *home = space.clone();
+            }
+            if measured.root.is_some() {
+                root.clone_from(&measured.root);
+            }
         }
-        // The service's own measurement of `/`, when it reports one.
-        if let Some(report) = &service_status
-            && let Some(fs) = report
-                .filesystems
-                .iter()
-                .find(|fs| fs.mount == "/" && fs.mounted && fs.error.is_none())
-            && let (Some(total), Some(available)) = (fs.total_bytes, fs.available_bytes)
-        {
-            root = Some(HomeUsage {
-                size_bytes: Some(total),
-                used_bytes: fs.used_bytes,
-                free_bytes: Some(available),
-                free_percent: (total > 0).then(|| available as f64 * 100.0 / total as f64),
-            });
+        if running && let (Some(config), Some(ip)) = (container_config.clone(), ip.clone()) {
+            let index = others.len();
+            applications.push(async move { (index, crate::service_status::application(&config, &ip).await) });
         }
+        let service_status = measured.map(|measured| ServiceStatus {
+            application: None,
+            container: Some(measured.telemetry),
+        });
         others.push(StatusEntry {
             vmid: item.vmid,
             role: role.to_owned(),
@@ -914,13 +896,23 @@ pub async fn global_status(
             root,
             home,
             service_status,
-            service_rates,
             role_tag_ok: true,
             warning: None,
             image,
             image_update: None,
             service,
         });
+    }
+    for (index, application) in futures_util::future::join_all(applications).await {
+        if let Some(application) = application {
+            others[index]
+                .service_status
+                .get_or_insert(ServiceStatus {
+                    application: None,
+                    container: None,
+                })
+                .application = Some(application);
+        }
     }
     others.sort_by_key(|entry| entry.vmid);
     let pools = crate::inventory::pools(pve).await;

@@ -15,7 +15,7 @@
         "tags": [
           "health"
         ],
-        "summary": "On-demand measurements of this service's own mount namespace and cgroup.\n`pass` is the same verdict as `/health/live`.",
+        "summary": "This process's liveness and RSS; `pass` is the same verdict as\n`/health/live`.",
         "operationId": "service_status",
         "responses": {
           "200": {
@@ -1885,74 +1885,60 @@
         },
         "additionalProperties": false
       },
-      "Container": {
+      "ContainerMemory": {
         "type": "object",
-        "description": "Resource usage of the cgroup v2 the service process runs in.",
         "required": [
-          "cpu",
-          "memory",
-          "pressure",
-          "io",
-          "error"
+          "usage_bytes"
         ],
         "properties": {
-          "cpu": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/Cpu"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "error": {
+          "anon_bytes": {
             "type": [
-              "string",
+              "integer",
               "null"
             ],
-            "description": "`cgroup_unavailable` or `host_cgroup`; every member is then `null`."
+            "format": "int64",
+            "minimum": 0
           },
-          "io": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/Io"
-              },
-              {
-                "type": "null"
-              }
-            ]
+          "file_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Page cache, mostly reclaimable.",
+            "minimum": 0
           },
-          "memory": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/Memory"
-              },
-              {
-                "type": "null"
-              }
-            ]
+          "limit_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "`null` when unlimited.",
+            "minimum": 0
           },
-          "pressure": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/Pressure"
-              },
-              {
-                "type": "null"
-              }
-            ]
+          "oom_kills": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "usage_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Everything charged to the container, page cache included.",
+            "minimum": 0
           }
         }
       },
-      "Cpu": {
+      "ContainerTelemetry": {
         "type": "object",
+        "description": "Resource usage of a whole LXC. Rates are averages over the last minute;\na measurement the agent did not send is `null`, never zero.",
         "required": [
-          "capacity_cpus",
-          "usage_usec",
-          "user_usec",
-          "system_usec",
-          "throttling"
+          "sample_age_seconds",
+          "stalls"
         ],
         "properties": {
           "capacity_cpus": {
@@ -1961,34 +1947,71 @@
               "null"
             ],
             "format": "double",
-            "description": "Logical CPUs the cgroup may use: its cpuset, lowered by any visible\n`cpu.max` quota."
+            "description": "Logical CPUs the container may use."
           },
-          "system_usec": {
-            "type": "integer",
-            "format": "int64",
-            "minimum": 0
+          "cpu_percent": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "CPU time per wall time; 100 is one logical CPU busy."
           },
-          "throttling": {
+          "memory": {
             "oneOf": [
               {
-                "$ref": "#/components/schemas/Throttling",
-                "description": "`null` when the cpu controller is not enabled for the cgroup."
+                "$ref": "#/components/schemas/ContainerMemory"
               },
               {
                 "type": "null"
               }
             ]
           },
-          "usage_usec": {
+          "read_bytes_per_second": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "read_ops_per_second": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "sample_age_seconds": {
             "type": "integer",
             "format": "int64",
-            "description": "Cumulative kernel counters; consumers compute rates between reports.",
             "minimum": 0
           },
-          "user_usec": {
-            "type": "integer",
+          "stalls": {
+            "$ref": "#/components/schemas/Stalls",
+            "description": "Percent of the last 10 seconds some task waited for each resource:\ncontention, not utilization."
+          },
+          "uptime_seconds": {
+            "type": [
+              "integer",
+              "null"
+            ],
             "format": "int64",
+            "description": "Seconds since the container started: its application's uptime.",
             "minimum": 0
+          },
+          "write_bytes_per_second": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "write_ops_per_second": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
           }
         }
       },
@@ -2134,73 +2157,6 @@
           }
         },
         "additionalProperties": false
-      },
-      "Filesystem": {
-        "type": "object",
-        "required": [
-          "mount",
-          "filesystem",
-          "mounted",
-          "total_bytes",
-          "used_bytes",
-          "free_bytes",
-          "available_bytes",
-          "error"
-        ],
-        "properties": {
-          "available_bytes": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "format": "int64",
-            "description": "Free space available to an unprivileged application user.",
-            "minimum": 0
-          },
-          "error": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "filesystem": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "free_bytes": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "format": "int64",
-            "minimum": 0
-          },
-          "mount": {
-            "type": "string"
-          },
-          "mounted": {
-            "type": "boolean",
-            "description": "Whether mountinfo confirms this exact path as a mount point."
-          },
-          "total_bytes": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "format": "int64",
-            "minimum": 0
-          },
-          "used_bytes": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "format": "int64",
-            "minimum": 0
-          }
-        }
       },
       "GlobalStatus": {
         "type": "object",
@@ -2579,38 +2535,6 @@
           "unknown"
         ]
       },
-      "Io": {
-        "type": "object",
-        "description": "Cumulative block I/O counters, summed over devices.",
-        "required": [
-          "read_bytes",
-          "write_bytes",
-          "read_ops",
-          "write_ops"
-        ],
-        "properties": {
-          "read_bytes": {
-            "type": "integer",
-            "format": "int64",
-            "minimum": 0
-          },
-          "read_ops": {
-            "type": "integer",
-            "format": "int64",
-            "minimum": 0
-          },
-          "write_bytes": {
-            "type": "integer",
-            "format": "int64",
-            "minimum": 0
-          },
-          "write_ops": {
-            "type": "integer",
-            "format": "int64",
-            "minimum": 0
-          }
-        }
-      },
       "Job": {
         "type": "object",
         "description": "`GET /v1/jobs/{id}`",
@@ -2891,103 +2815,6 @@
           "pass",
           "fail"
         ]
-      },
-      "Memory": {
-        "type": "object",
-        "required": [
-          "usage_bytes",
-          "limit_bytes",
-          "anon_bytes",
-          "file_bytes",
-          "process_rss_bytes",
-          "events"
-        ],
-        "properties": {
-          "anon_bytes": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "format": "int64",
-            "description": "Anonymous memory of all processes in the cgroup.",
-            "minimum": 0
-          },
-          "events": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/MemoryEvents",
-                "description": "Cumulative `memory.events` counters."
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "file_bytes": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "format": "int64",
-            "description": "Page cache, mostly reclaimable.",
-            "minimum": 0
-          },
-          "limit_bytes": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "format": "int64",
-            "description": "The lowest visible `memory.max`; `null` when unlimited or set outside\nthe visible hierarchy.",
-            "minimum": 0
-          },
-          "process_rss_bytes": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "format": "int64",
-            "description": "Resident set of the service process alone.",
-            "minimum": 0
-          },
-          "usage_bytes": {
-            "type": "integer",
-            "format": "int64",
-            "description": "`memory.current`: everything charged to the cgroup, page cache included.",
-            "minimum": 0
-          }
-        }
-      },
-      "MemoryEvents": {
-        "type": "object",
-        "required": [
-          "high",
-          "max",
-          "oom",
-          "oom_kill"
-        ],
-        "properties": {
-          "high": {
-            "type": "integer",
-            "format": "int64",
-            "minimum": 0
-          },
-          "max": {
-            "type": "integer",
-            "format": "int64",
-            "minimum": 0
-          },
-          "oom": {
-            "type": "integer",
-            "format": "int64",
-            "minimum": 0
-          },
-          "oom_kill": {
-            "type": "integer",
-            "format": "int64",
-            "minimum": 0
-          }
-        }
       },
       "NetworkCandidate": {
         "type": "object",
@@ -3330,47 +3157,6 @@
           }
         }
       },
-      "Pressure": {
-        "type": "object",
-        "description": "Pressure stall information: time stalled on contention, not utilization.\nA resource is `null` when the kernel does not provide PSI for it.",
-        "required": [
-          "cpu",
-          "memory",
-          "io"
-        ],
-        "properties": {
-          "cpu": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/Psi"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "io": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/Psi"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "memory": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/Psi"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          }
-        }
-      },
       "Privilege": {
         "type": "object",
         "description": "A Proxmox privilege on an ACL path.",
@@ -3389,57 +3175,6 @@
           }
         },
         "additionalProperties": false
-      },
-      "Psi": {
-        "type": "object",
-        "required": [
-          "some"
-        ],
-        "properties": {
-          "full": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/PsiLine",
-                "description": "Only available where the kernel reports a full-stall line."
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "some": {
-            "$ref": "#/components/schemas/PsiLine"
-          }
-        }
-      },
-      "PsiLine": {
-        "type": "object",
-        "required": [
-          "avg10",
-          "avg60",
-          "avg300",
-          "total_usec"
-        ],
-        "properties": {
-          "avg10": {
-            "type": "number",
-            "format": "double",
-            "description": "Percent of wall time stalled over the last 10, 60 and 300 seconds."
-          },
-          "avg300": {
-            "type": "number",
-            "format": "double"
-          },
-          "avg60": {
-            "type": "number",
-            "format": "double"
-          },
-          "total_usec": {
-            "type": "integer",
-            "format": "int64",
-            "minimum": 0
-          }
-        }
       },
       "PveVersion": {
         "type": "object",
@@ -3469,45 +3204,16 @@
         "required": [
           "schema",
           "status",
-          "uptime_seconds",
-          "sample_uptime_usec",
-          "sample_age_seconds",
-          "filesystems",
-          "container",
-          "error"
+          "process_rss_bytes"
         ],
         "properties": {
-          "container": {
-            "$ref": "#/components/schemas/Container"
-          },
-          "error": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "A stable error code; never a raw OS error containing private paths."
-          },
-          "filesystems": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/Filesystem"
-            }
-          },
-          "sample_age_seconds": {
+          "process_rss_bytes": {
             "type": [
               "integer",
               "null"
             ],
             "format": "int64",
-            "minimum": 0
-          },
-          "sample_uptime_usec": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "format": "int64",
-            "description": "Monotonic microseconds since process start when the returned\nmeasurement began; `null` while none exists.",
+            "description": "Resident set of the service process alone; `null` when unavailable.\nA custom deserializer makes Serde reject the field missing.",
             "minimum": 0
           },
           "schema": {
@@ -3518,62 +3224,34 @@
           "status": {
             "$ref": "#/components/schemas/Status",
             "description": "Process liveness, independent of dependency readiness."
-          },
-          "uptime_seconds": {
-            "type": "integer",
-            "format": "int64",
-            "description": "Seconds since this application process started, on a monotonic clock.",
-            "minimum": 0
           }
         }
       },
-      "ServiceRates": {
+      "ServiceStatus": {
         "type": "object",
-        "description": "Counter deltas of two service reports divided by the time between their\nmeasurements. A metric is `null` when either report lacks its counter.",
-        "required": [
-          "interval_seconds"
-        ],
+        "description": "A running container's service, observed two ways.",
         "properties": {
-          "cpu_percent": {
-            "type": [
-              "number",
-              "null"
-            ],
-            "format": "double",
-            "description": "CPU time per wall time of the cgroup; 100 is one logical CPU busy."
+          "application": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Report",
+                "description": "The application's own report; `null` when it has no status endpoint\nor does not answer."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
-          "interval_seconds": {
-            "type": "number",
-            "format": "double",
-            "description": "Seconds between the two measurements."
-          },
-          "read_bytes_per_second": {
-            "type": [
-              "number",
-              "null"
-            ],
-            "format": "double"
-          },
-          "read_ops_per_second": {
-            "type": [
-              "number",
-              "null"
-            ],
-            "format": "double"
-          },
-          "write_bytes_per_second": {
-            "type": [
-              "number",
-              "null"
-            ],
-            "format": "double"
-          },
-          "write_ops_per_second": {
-            "type": [
-              "number",
-              "null"
-            ],
-            "format": "double"
+          "container": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ContainerTelemetry",
+                "description": "The PVE agent's measurement of the whole container, through\nPrometheus; `null` without one from the last 30 seconds."
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         }
       },
@@ -3591,6 +3269,32 @@
               "string",
               "null"
             ]
+          }
+        }
+      },
+      "Stalls": {
+        "type": "object",
+        "properties": {
+          "cpu": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "io": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "memory": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
           }
         }
       },
@@ -3702,22 +3406,11 @@
               }
             ]
           },
-          "service_rates": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/ServiceRates",
-                "description": "Rates derived from this and the previous `service_status` of the same\nprocess; `null` until a valid pair exists."
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
           "service_status": {
             "oneOf": [
               {
-                "$ref": "#/components/schemas/Report",
-                "description": "Optional in-container measurements; observations, never ownership proof."
+                "$ref": "#/components/schemas/ServiceStatus",
+                "description": "What is observed of a running container's service; observations,\nnever ownership proof."
               },
               {
                 "type": "null"
@@ -3958,31 +3651,6 @@
           "running",
           "stopped"
         ]
-      },
-      "Throttling": {
-        "type": "object",
-        "required": [
-          "periods",
-          "throttled_periods",
-          "throttled_usec"
-        ],
-        "properties": {
-          "periods": {
-            "type": "integer",
-            "format": "int64",
-            "minimum": 0
-          },
-          "throttled_periods": {
-            "type": "integer",
-            "format": "int64",
-            "minimum": 0
-          },
-          "throttled_usec": {
-            "type": "integer",
-            "format": "int64",
-            "minimum": 0
-          }
-        }
       },
       "TlsCertificate": {
         "type": "object",

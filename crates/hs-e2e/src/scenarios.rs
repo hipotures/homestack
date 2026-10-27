@@ -1211,37 +1211,8 @@ async fn permissions(ctx: &mut Context) -> Result<()> {
 async fn reads(ctx: &mut Context) -> Result<()> {
     let telemetry = ctx.api("GET", "/.well-known/homestack/status", None).await?;
     ensure(
-        telemetry["schema"] == 2 && telemetry["status"] == "pass",
-        "API service telemetry schema or health is incorrect",
-    )?;
-    let config = ctx.config("pve1", "lxc", 101).await?;
-    let cgroup = String::from_utf8(
-        ctx.node(
-            "pve1",
-            &[
-                "pct",
-                "exec",
-                "101",
-                "--",
-                "/bin/sh",
-                "-c",
-                "cat /proc/1/cgroup; cat /sys/fs/cgroup/memory.max",
-            ],
-        )
-        .await?,
-    )?;
-    let visible = cgroup.lines().last().ok_or("guest cgroup limit missing")?;
-    let limit = if visible == "max" {
-        None
-    } else {
-        Some(visible.parse::<u64>()?)
-    };
-    ctx.evidence.push(
-        json!({"guest_cgroup":cgroup,"configured_memory_mib":config["memory"],"visible_memory_limit_bytes":limit}),
-    );
-    ensure(
-        telemetry["container"]["memory"]["limit_bytes"].as_u64() == limit,
-        "service memory telemetry disagrees with the independently observed visible cgroup limit",
+        telemetry["schema"] == 3 && telemetry["status"] == "pass" && telemetry["process_rss_bytes"].as_u64().is_some(),
+        "API service telemetry schema, health or RSS is incorrect",
     )?;
     for path in [
         "/v1/config/version",

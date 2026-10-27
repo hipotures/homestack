@@ -1,7 +1,7 @@
 //! Drawing the main screen (mockups 09–11, 15–17) from an [`App`].
 
 use crossterm::event::KeyCode;
-use hs_model::status::{LayoutCapacity, StatusEntry};
+use hs_model::status::{ContainerTelemetry, LayoutCapacity, StatusEntry};
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
@@ -489,84 +489,78 @@ fn container_image(entry: &StatusEntry) -> Option<&str> {
         .or_else(|| entry.service.as_ref().map(|service| service.image.as_str()))
 }
 
-/// The memory of a service's cgroup, when it reports one.
-fn service_memory(entry: &StatusEntry) -> Option<&hs_service_status::Memory> {
-    entry.service_status.as_ref()?.container.memory.as_ref()
+/// The PVE agent's measurement of a service's container.
+fn container_telemetry(entry: &StatusEntry) -> Option<&ContainerTelemetry> {
+    entry.service_status.as_ref()?.container.as_ref()
 }
 
-/// A service's own measurements, after its `service` line in the details.
+/// A service's measurements, after its `service` line in the details.
 fn telemetry_pairs(entry: &StatusEntry, pairs: &mut Vec<(&'static str, String)>) {
-    let Some(report) = &entry.service_status else {
+    let Some(status) = &entry.service_status else {
         return;
     };
     let dash = || "—".to_owned();
-    let rates = entry.service_rates.as_ref();
-    let container = &report.container;
-    if let Some(error) = &container.error {
-        pairs.push(("cgroup", error.replace('_', " ")));
+    let application = status.application.as_ref();
+    if application.is_some_and(|report| report.status == hs_service_status::Status::Fail) {
+        pairs.push(("health", "fail".to_owned()));
     }
-    if let Some(cpu) = &container.cpu {
-        let capacity = cpu
+    if let Some(container) = &status.container {
+        let capacity = container
             .capacity_cpus
             .map_or_else(String::new, |cpus| format!(" of {cpus} CPU"));
-        pairs.push((
-            "cpu",
-            format!("{}{capacity}", percent(rates.and_then(|rates| rates.cpu_percent))),
-        ));
-    }
-    if let Some(memory) = &container.memory {
-        let mut text = size(memory.usage_bytes);
-        for (label, value) in [
-            ("limit", memory.limit_bytes),
-            ("anon", memory.anon_bytes),
-            ("cache", memory.file_bytes),
-            ("rss", memory.process_rss_bytes),
-        ] {
-            if let Some(value) = value {
-                text.push_str(&format!("  {label} {}", size(value)));
+        pairs.push(("cpu", format!("{}{capacity}", percent(container.cpu_percent))));
+        if let Some(memory) = &container.memory {
+            let mut text = size(memory.usage_bytes);
+            for (label, value) in [
+                ("limit", memory.limit_bytes),
+                ("anon", memory.anon_bytes),
+                ("cache", memory.file_bytes),
+                ("rss", application.and_then(|report| report.process_rss_bytes)),
+            ] {
+                if let Some(value) = value {
+                    text.push_str(&format!("  {label} {}", size(value)));
+                }
             }
+            if let Some(kills) = memory.oom_kills.filter(|kills| *kills > 0) {
+                text.push_str(&format!("  oom kills {kills}"));
+            }
+            pairs.push(("memory", text));
         }
-        if let Some(events) = memory.events.as_ref().filter(|events| events.oom_kill > 0) {
-            text.push_str(&format!("  oom kills {}", events.oom_kill));
-        }
-        pairs.push(("memory", text));
-    }
-    if container.io.is_some() {
         let per_second = |value: Option<f64>| value.map_or_else(dash, |value| format!("{}/s", rate(value)));
         pairs.push((
             "io",
             format!(
                 "read {}  write {}",
-                per_second(rates.and_then(|rates| rates.read_bytes_per_second)),
-                per_second(rates.and_then(|rates| rates.write_bytes_per_second))
+                per_second(container.read_bytes_per_second),
+                per_second(container.write_bytes_per_second)
             ),
         ));
-    }
-    // Share of the last 10 s some task waited for the resource: contention,
-    // not utilization.
-    if let Some(pressure) = &container.pressure {
-        let stalled = |psi: &Option<hs_service_status::Psi>| {
-            psi.as_ref().map_or_else(dash, |psi| format!("{:.1}%", psi.some.avg10))
-        };
+        // Share of the last 10 s some task waited for the resource:
+        // contention, not utilization.
+        let stalled = |value: Option<f64>| value.map_or_else(dash, |value| format!("{value:.1}%"));
+        let stalls = &container.stalls;
         pairs.push((
             "stalls",
             format!(
                 "cpu {}  memory {}  io {}",
-                stalled(&pressure.cpu),
-                stalled(&pressure.memory),
-                stalled(&pressure.io)
+                stalled(stalls.cpu),
+                stalled(stalls.memory),
+                stalled(stalls.io)
             ),
         ));
+        if let Some(uptime) = container.uptime_seconds {
+            pairs.push((
+                "uptime",
+                match (uptime / 86_400, uptime / 3600 % 24, uptime / 60 % 60) {
+                    (0, 0, minutes) => format!("{minutes}m"),
+                    (0, hours, minutes) => format!("{hours}h {minutes}m"),
+                    (days, hours, _) => format!("{days}d {hours}h"),
+                },
+            ));
+        }
+    } else if let Some(rss) = application.and_then(|report| report.process_rss_bytes) {
+        pairs.push(("memory", format!("rss {}", size(rss))));
     }
-    let uptime = report.uptime_seconds;
-    pairs.push((
-        "uptime",
-        match (uptime / 86_400, uptime / 3600 % 24, uptime / 60 % 60) {
-            (0, 0, minutes) => format!("{minutes}m"),
-            (0, hours, minutes) => format!("{hours}h {minutes}m"),
-            (days, hours, _) => format!("{days}d {hours}h"),
-        },
-    ));
 }
 
 /// The list's columns the settings show for `width` cells: first, without
@@ -686,14 +680,16 @@ fn columns(app: &App, width: usize, tag_width: usize, name_width: usize) -> Vec<
             width: 5,
             right: true,
             // 100% is one logical CPU busy.
-            value: |entry| percent(entry.service_rates.as_ref().and_then(|rates| rates.cpu_percent)),
+            value: |entry| percent(container_telemetry(entry).and_then(|container| container.cpu_percent)),
         },
         Column {
             key: "MEM",
             heading: "MEM",
             width: 5,
             right: true,
-            value: |entry| bytes(service_memory(entry).map(|memory| memory.usage_bytes)),
+            value: |entry| {
+                bytes(container_telemetry(entry).and_then(|container| Some(container.memory.as_ref()?.usage_bytes)))
+            },
         },
         Column {
             key: "IO",
@@ -702,10 +698,8 @@ fn columns(app: &App, width: usize, tag_width: usize, name_width: usize) -> Vec<
             right: true,
             // Reads and writes of the container's block devices together.
             value: |entry| {
-                entry
-                    .service_rates
-                    .as_ref()
-                    .and_then(|rates| Some(rates.read_bytes_per_second? + rates.write_bytes_per_second?))
+                container_telemetry(entry)
+                    .and_then(|container| Some(container.read_bytes_per_second? + container.write_bytes_per_second?))
                     .map_or_else(|| "—".to_owned(), rate)
             },
         },

@@ -42,10 +42,9 @@ Port 8080 serves only these management routes:
   tunnel probe and a fresh heartbeat. Both health routes return 503 after
   three missed intervals, otherwise 200. Readiness does not claim that every
   downstream resource is available.
-- `GET /.well-known/homestack/status`: schema 2 JSON, `Cache-Control: no-store`;
-  process uptime, mount-aware filesystem space, cgroup v2 CPU, memory, PSI and
-  cumulative I/O. Telemetry `status` matches liveness, independent of errors
-  in individual measurements.
+- `GET /.well-known/homestack/status`: schema 3 JSON, `Cache-Control: no-store`;
+  `status` matching liveness and the connector process's RSS. Container
+  resources, filesystems and uptime come from the PVE agent.
 
 The heartbeat counts actual successful ICMP probes through Newt's userspace
 WireGuard tunnel, at most once per configured interval. It adds no periodic
@@ -55,13 +54,8 @@ Pangolin API during initial deployment. Image replacement preserves the existing
 home and credential and verifies HTTP readiness directly, without connecting
 to the Pangolin API or opening an SSH tunnel.
 
-Telemetry wakes a single idle measurement worker only when requested and
-reuses completed samples for two seconds. HTTP waits at most 700 ms, within
-HomeStack's 800 ms request timeout. A stalled filesystem retains the previous
-sample with its true age, or reports `pending`; it cannot accumulate workers.
-Missing mounts, missing controllers/PSI and measurement failures stay distinct
-from zero. No shell commands or subprocesses collect telemetry, and host load
-averages are never read.
+Telemetry reads `/proc/self/status` only when requested; nothing runs in
+between.
 
 New deployments and reviewed updates record `status-port 8080` through the
 HTTP healthcheck in `.homestack/pangolin-site.yaml`. Existing containers need

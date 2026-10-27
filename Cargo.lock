@@ -1128,9 +1128,7 @@ dependencies = [
 name = "hs-service-status"
 version = "0.1.0"
 dependencies = [
- "rustix",
  "serde",
- "tokio",
  "utoipa",
 ]
 

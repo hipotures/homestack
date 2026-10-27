@@ -87,10 +87,10 @@ There is no desktop deployment registry. Only the canonical API manifest from
 or later. Private HTTP port 80 serves only `/health/live`, `/health/ready`
 and `/.well-known/homestack/status`; all other HTTP paths return 404.
 The manifest uses HTTP readiness on this port, so common deployment and image
-replacement record `status-port 80` in the container description. The schema-2
-telemetry then supplies CPU, memory and I/O to the container view. Existing
-instances need an image update with the current manifest to receive the HTTP
-listener and telemetry metadata. API operations and secret management remain
+replacement record `status-port 80` in the container description; its
+schema-3 telemetry supplies liveness and process RSS, while container
+resources come from Prometheus. Existing instances need an image update with
+the current manifest to receive the HTTP listener and telemetry metadata. API operations and secret management remain
 on HTTPS port 443. Bootstrap and stateless API image updates also perform
 authenticated HTTPS checks.
 

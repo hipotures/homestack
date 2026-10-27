@@ -665,7 +665,7 @@ The connector image `ghcr.io/hipotures/homestack-pangolin-site` is built from
 (source archive SHA-256 checked) running `pangolin-cli up site` as `site`,
 reading only its private configuration file, with self-update and SSH features
 disabled. New images require a mounted `/home/app` and serve private management
-HTTP on port 8080: heartbeat health and on-demand container/storage telemetry,
+HTTP on port 8080: heartbeat health and liveness/RSS telemetry,
 compiled into the connector process. They carry no credentials or extra
 capabilities. See [the runtime contract](../deploy/pangolin-site/README.md).
 Their releases are separate from the API image: a `pangolin-X.Y.Z` tag publishes

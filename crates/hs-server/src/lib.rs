@@ -150,8 +150,6 @@ pub enum StartError {
     Config(#[from] StoreError),
     #[error("{0}")]
     Secrets(String),
-    #[error("Could not start service telemetry: {0}")]
-    Telemetry(#[source] std::io::Error),
 }
 
 /// The Proxmox client, replaced when a new token is sent.
@@ -221,7 +219,6 @@ struct AppState {
     image_updates: Arc<image_updates::ImageUpdates>,
     status_observations: Arc<hs_core::prefetch::Observations>,
     virtiofs: Arc<virtiofs::Reports>,
-    service_status: hs_service_status::Telemetry,
 }
 
 impl AppState {
@@ -268,8 +265,6 @@ pub fn app_with(config: ServerConfig, options: AppOptions) -> Result<Router, Sta
         image_updates: Arc::default(),
         status_observations: Arc::default(),
         virtiofs: Arc::default(),
-        service_status: hs_service_status::Telemetry::start(std::time::Instant::now())
-            .map_err(StartError::Telemetry)?,
     };
     image_updates::start(&state.pve, &state.image_updates);
     let v1 = routes::v1().route_layer(middleware::from_fn_with_state(state.clone(), auth::require_bearer));

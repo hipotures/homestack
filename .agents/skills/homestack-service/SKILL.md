@@ -17,7 +17,7 @@ three files at `.homestack/services/<id>/{service,defaults,inputs}.yaml`:
 invariant service requirements, operator-overridable deployment defaults,
 and typed application inputs. Read the schema-3 section of the contract
 before authoring these files. Manifest schema 3 and HTTP service-status
-telemetry schema 2 are independent contracts.
+telemetry schema 3 are independent contracts.
 
 This contract does not depend on the application's language or framework.
 It describes how the application behaves when HomeStack deploys it; it does
@@ -213,38 +213,27 @@ services that are only used inside the LAN or have no inbound port.
 For schema-3 third-party images, keep the application's actual declared
 health endpoint. HomeStack does not infer a status telemetry endpoint or
 inject a HomeStack heartbeat. Do not require an upstream application to
-implement HomeStack telemetry schema 2. Proxmox resource metrics remain
-available independently. The following native telemetry requirements apply
+implement HomeStack telemetry schema 3. Container resource metrics come
+from the PVE agent independently. The following native telemetry requirements apply
 to HomeStack-integrated applications, including existing schema-1 services.
 
 HTTP services implement `GET /.well-known/homestack/status`, returning
 `application/json` according to [service-status.md](service-status.md). Read
 that contract when implementing or reviewing the endpoint. The path is fixed
-and served on the healthcheck's HTTP port; it needs no manifest field. HomeStack
-uses it to show the container's CPU, memory, pressure, I/O and the free space
-of `/` and `/home/app`.
+and served on the healthcheck's HTTP port; it needs no manifest field. It
+reports only liveness and the process's RSS: CPU, memory, pressure, I/O,
+filesystem space and uptime of the container come from `homestack-pve-agent`
+and Proxmox through Prometheus, so the service does not measure them.
 
-Implement it inside the service with the language's native OS APIs, on the
-existing HTTP server; no additional daemon, SSH, shell commands or framework
-replacement. Telemetry is measured only on demand: nobody may be looking for
-days, so no timer or background sampler runs while no request arrives. A
-request reads a handful of small files; the kernel already keeps the
-counters. Report CPU and I/O as cumulative counters and let HomeStack compute
-rates from two consecutive reports. The heartbeat is the only
-periodic work a service does for HomeStack.
+Read the RSS from `/proc/self/status` when a request arrives, on the existing
+HTTP server; no additional daemon, timer, background sampler, SSH or shell
+commands. The heartbeat is the only periodic work a service does for
+HomeStack.
 
-Never report `/proc/loadavg`: in a Proxmox LXC it is the host's load.
-Detect mounts instead of assuming ext4.
-Without a home volume, report `/home/app` as not mounted, never as root's
-numbers. Missing mounts, failed measurements and stale data must remain
-distinguishable from zero.
-
-Verify with local HTTP requests: compare filesystem values with `df -B1` and
-container values with the files under `/sys/fs/cgroup`; also check an absent
-`/home/app`, a missing PSI file and a measurement failure. Check that an idle
-service does no telemetry work between requests, and that a stalled main
-path (blocked dependency or paused worker) turns both health endpoints into
-`503` within three heartbeat intervals.
+Verify with local HTTP requests that the RSS matches `VmRSS`, and that a
+stalled main path (blocked dependency or paused worker) turns both health
+endpoints into `503` and telemetry `status` into `fail` within three
+heartbeat intervals.
 
 ## Release standard
 

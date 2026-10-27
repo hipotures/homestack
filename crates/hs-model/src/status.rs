@@ -52,13 +52,10 @@ pub struct StatusEntry {
     pub root: Option<HomeUsage>,
     /// Home capacity/usage; `null` when no home configuration is available.
     pub home: Option<HomeUsage>,
-    /// Optional in-container measurements; observations, never ownership proof.
+    /// What is observed of a running container's service; observations,
+    /// never ownership proof.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub service_status: Option<hs_service_status::Report>,
-    /// Rates derived from this and the previous `service_status` of the same
-    /// process; `null` until a valid pair exists.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub service_rates: Option<ServiceRates>,
+    pub service_status: Option<ServiceStatus>,
     pub role_tag_ok: bool,
     pub warning: Option<String>,
     /// The OCI image recorded by HomeStack in the container description.
@@ -71,18 +68,55 @@ pub struct StatusEntry {
     pub service: Option<DeployedService>,
 }
 
-/// Counter deltas of two service reports divided by the time between their
-/// measurements. A metric is `null` when either report lacks its counter.
+/// A running container's service, observed two ways.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
-pub struct ServiceRates {
-    /// Seconds between the two measurements.
-    pub interval_seconds: f64,
-    /// CPU time per wall time of the cgroup; 100 is one logical CPU busy.
+pub struct ServiceStatus {
+    /// The application's own report; `null` when it has no status endpoint
+    /// or does not answer.
+    pub application: Option<hs_service_status::Report>,
+    /// The PVE agent's measurement of the whole container, through
+    /// Prometheus; `null` without one from the last 30 seconds.
+    pub container: Option<ContainerTelemetry>,
+}
+
+/// Resource usage of a whole LXC. Rates are averages over the last minute;
+/// a measurement the agent did not send is `null`, never zero.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct ContainerTelemetry {
+    pub sample_age_seconds: u64,
+    /// Seconds since the container started: its application's uptime.
+    pub uptime_seconds: Option<u64>,
+    /// Logical CPUs the container may use.
+    pub capacity_cpus: Option<f64>,
+    /// CPU time per wall time; 100 is one logical CPU busy.
     pub cpu_percent: Option<f64>,
+    pub memory: Option<ContainerMemory>,
     pub read_bytes_per_second: Option<f64>,
     pub write_bytes_per_second: Option<f64>,
     pub read_ops_per_second: Option<f64>,
     pub write_ops_per_second: Option<f64>,
+    /// Percent of the last 10 seconds some task waited for each resource:
+    /// contention, not utilization.
+    pub stalls: Stalls,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct ContainerMemory {
+    /// Everything charged to the container, page cache included.
+    pub usage_bytes: u64,
+    /// `null` when unlimited.
+    pub limit_bytes: Option<u64>,
+    pub anon_bytes: Option<u64>,
+    /// Page cache, mostly reclaimable.
+    pub file_bytes: Option<u64>,
+    pub oom_kills: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct Stalls {
+    pub cpu: Option<f64>,
+    pub memory: Option<f64>,
+    pub io: Option<f64>,
 }
 
 /// A manifest-defined service in a container, as HomeStack's description

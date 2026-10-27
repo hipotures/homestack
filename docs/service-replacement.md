@@ -140,11 +140,9 @@ removal command for its configured instances.
 PVE renames a volume when it moves, so the home's volume ID changes between
 `vm-<ctid>-disk-N` names as ownership moves through the holder and back. The
 container overview reads its IP from `net0` and home capacity from `mp0`.
-Home free space comes from fresh in-container HTTP telemetry when the service
-implements the
-[service status contract](../.agents/skills/homestack-service/service-status.md);
-otherwise it stays unknown, because PVE's `disk`/`maxdisk` counters describe the
-root filesystem.
+Home free space comes from the PVE agent's fresh `/home/app` measurement in
+Prometheus; otherwise it stays unknown, because PVE's `disk`/`maxdisk`
+counters describe the root filesystem.
 
 API configuration and task evidence verify the volume moves, not guest file
 contents. Application health alone does not prove existing data was read.

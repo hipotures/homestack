@@ -13,7 +13,5 @@ workspace = true
 openapi = ["dep:utoipa"]
 
 [dependencies]
-rustix = { version = "1.1.5", features = ["fs"] }
 serde = { version = "1.0.229", features = ["derive"] }
-tokio = { version = "1.53.2", features = ["sync", "time"] }
 utoipa = { version = "6.0.0", optional = true }

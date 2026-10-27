@@ -28,10 +28,10 @@ one PromQL query per request, so clients never query Prometheus themselves.
 Enter the Prometheus URL once in the TUI under Settings → Integrations →
 Prometheus; it is kept as `[server] prometheus_url` in `deploy.toml`, and API
 initialization and updates pass it to every instance as
-`HOMESTACK_PROMETHEUS_URL`. Without it status has no service telemetry. Values
-measure the whole LXC; samples older than 30 seconds are omitted. Uptime is
-the container's (`proxmox_vm_uptime_seconds`) and process RSS is not reported;
-application health remains the service health check.
+`HOMESTACK_PROMETHEUS_URL`. Without it status has no container telemetry.
+Values measure the whole LXC; samples older than 30 seconds are omitted.
+Uptime is the container's (`proxmox_vm_uptime_seconds`). Services report only
+liveness and process RSS through their schema-3 status endpoint.
 
 ## Release from the development machine
 

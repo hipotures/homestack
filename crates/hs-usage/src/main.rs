@@ -32,12 +32,10 @@ struct AppState {
     prometheus: url::Url,
     client: reqwest::Client,
     heartbeat: Arc<Heartbeat>,
-    status: hs_service_status::Telemetry,
 }
 
 #[tokio::main]
 async fn main() -> ExitCode {
-    let started = Instant::now();
     let filter = EnvFilter::try_from_env("HOMESTACK_LOG").unwrap_or_else(|_| EnvFilter::new("info"));
     tracing_subscriber::fmt()
         .with_env_filter(filter)
@@ -50,21 +48,15 @@ async fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let (client, status) = match (
-        reqwest::Client::builder()
-            .no_proxy()
-            .redirect(reqwest::redirect::Policy::none())
-            .timeout(Duration::from_secs(30))
-            .build(),
-        hs_service_status::Telemetry::start(started),
-    ) {
-        (Ok(client), Ok(status)) => (client, status),
-        (Err(error), _) => {
+    let client = match reqwest::Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(Duration::from_secs(30))
+        .build()
+    {
+        Ok(client) => client,
+        Err(error) => {
             tracing::error!(%error, "cannot create the Prometheus client");
-            return ExitCode::from(1);
-        }
-        (_, Err(error)) => {
-            tracing::error!(%error, "cannot start service status");
             return ExitCode::from(1);
         }
     };
@@ -85,7 +77,6 @@ async fn main() -> ExitCode {
         prometheus: prometheus.clone(),
         client,
         heartbeat: Arc::clone(&heartbeat),
-        status,
     });
     let listener = match tokio::net::TcpListener::bind(LISTEN).await {
         Ok(listener) => listener,
@@ -166,12 +157,11 @@ async fn health(State(state): State<AppState>) -> Response {
 }
 
 async fn service_status(State(state): State<AppState>) -> axum::Json<hs_service_status::Report> {
-    let mut report = state.status.report(hs_service_status::Status::Pass).await;
-    report.status = match state.heartbeat.snapshot().status {
+    let status = match state.heartbeat.snapshot().status {
         LivenessStatus::Pass => hs_service_status::Status::Pass,
         LivenessStatus::Fail => hs_service_status::Status::Fail,
     };
-    axum::Json(report)
+    axum::Json(hs_service_status::report(status))
 }
 
 struct Heartbeat {

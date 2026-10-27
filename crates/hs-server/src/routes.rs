@@ -32,16 +32,15 @@ pub fn public() -> Router<AppState> {
         .route(hs_service_status::PATH, get(service_status))
 }
 
-/// On-demand measurements of this service's own mount namespace and cgroup.
-/// `pass` is the same verdict as `/health/live`.
+/// This process's liveness and RSS; `pass` is the same verdict as
+/// `/health/live`.
 #[utoipa::path(get, path = "/.well-known/homestack/status", tag = "health", responses((status = 200, body = hs_service_status::Report)))]
 pub async fn service_status(State(state): State<AppState>) -> Json<hs_service_status::Report> {
-    let mut report = state.service_status.report(hs_service_status::Status::Pass).await;
-    report.status = match state.heartbeat.snapshot().status {
+    let status = match state.heartbeat.snapshot().status {
         LivenessStatus::Pass => hs_service_status::Status::Pass,
         LivenessStatus::Fail => hs_service_status::Status::Fail,
     };
-    Json(report)
+    Json(hs_service_status::report(status))
 }
 
 pub fn v1() -> Router<AppState> {
