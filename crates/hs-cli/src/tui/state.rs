@@ -1198,6 +1198,15 @@ impl App {
             .collect()
     }
 
+    /// Show the pool named `name`, as ← → would reach it.
+    fn show_group(&mut self, name: &str) {
+        if let Some((id, _)) = self.groups().into_iter().find(|(_, group)| group == name) {
+            self.starred = false;
+            self.group = Some(id);
+            self.keep_selection();
+        }
+    }
+
     /// The group shown: `⭐` (the favorites), `all` or a pool's name.
     #[must_use]
     pub fn group_name(&self) -> String {
@@ -2276,6 +2285,8 @@ impl App {
             }
             KeyCode::Char('/') if self.shown.workspaces => self.filtering = true,
             KeyCode::Char('f') if self.shown.workspaces => self.toggle_favorite(),
+            KeyCode::Char('w') if self.shown.workspaces => self.show_group("workspaces"),
+            KeyCode::Char('c') if self.shown.workspaces => self.show_group("containers"),
             KeyCode::Char('o') if self.shown.workspaces => {
                 self.power = self.power.turn(true);
                 self.keep_selection();

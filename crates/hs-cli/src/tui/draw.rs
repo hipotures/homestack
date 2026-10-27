@@ -2766,7 +2766,7 @@ fn list_item(palette: &Palette, label: &str, chosen: bool) -> (String, Style) {
     }
 }
 
-const HELP: [&str; 28] = [
+const HELP: [&str; 29] = [
     "1 2 3 4     view 1 workspaces, 2 cluster+storage, 3 storage, 4 log (again: auto)",
     "0           the standard view: every panel and node, no filter",
     "v           next view (auto, 1, 2, 3, 4)",
@@ -2778,6 +2778,7 @@ const HELP: [&str; 28] = [
     "i           details of the selected workspace (again: hide them)",
     "← →         ⭐ (favorites), all or one pool (after tab: one node or all)",
     "f           star or unstar the selected workspace (kept in tui.toml)",
+    "w c         show the workspaces or the containers pool",
     "/           filter by name or VMID; ↵ keeps it, esc clears it",
     "o           all, online or offline machines; a click on ‹ › turns it too",
     "esc         close a box, return to view 0, then confirm quit (↵ yes, esc cancel)",
