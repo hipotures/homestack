@@ -470,7 +470,7 @@ pub async fn survey(config: &DeployConfig, pve: &impl Pve, source: &Source) -> R
             if content.contains(&"vztmpl") && id == config.template_storage {
                 templates.insert(node.clone());
             }
-            if content.contains(&"rootdir") && may_allocate(id) {
+            if content.contains(&"rootdir") && item["type"] != "zfspool" && may_allocate(id) {
                 storages.push(NodeStorage {
                     node: node.clone(),
                     storage: id.to_owned(),
