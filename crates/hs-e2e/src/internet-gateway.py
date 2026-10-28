@@ -75,6 +75,7 @@ async def serve(args):
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, stop.set)
     children, connections = [], set()
+    # One client owns the NAT stream at a time; a replacement may follow it.
     claimed = False
     try:
         qemu = await asyncio.create_subprocess_exec(args.qemu, "-machine", "none", "-nodefaults", "-display", "none", "-monitor", "none", "-serial", "none",
@@ -130,9 +131,16 @@ async def serve(args):
                 print(f"Lab Internet connection closed: {error}", file=sys.stderr, flush=True)
             finally:
                 writer.close()
+                connections.discard(writer)
                 if upstream:
                     upstream.close()
-                stop.set()
+                    connections.discard(upstream)
+                    try:
+                        # The NAT accepts its next client only after this one is gone.
+                        await upstream.wait_closed()
+                    except OSError:
+                        pass
+                claimed = False
 
         server = await asyncio.start_unix_server(connection, filtered)
         os.chmod(filtered, 0o600)

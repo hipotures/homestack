@@ -36,6 +36,9 @@ def main():
         git("fetch", remote, "--tags")
         if git("rev-parse", "HEAD") != git("rev-parse", "@{upstream}"):
             raise ValueError("Push the branch and resolve any upstream changes before tagging")
+        released = [tag for tag in git("tag", "--points-at", "HEAD").splitlines() if VERSION.fullmatch(tag)]
+        if released:
+            raise ValueError(f"HEAD already has API release {', '.join(released)}")
         tag = next_version(git("tag", "--list").splitlines())
         if not args.dry_run:
             git("tag", "-a", tag, "-m", f"API release {tag}")

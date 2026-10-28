@@ -177,8 +177,10 @@ homestack-pve-agent --qga-parallel 2 --debug > snapshot.json 2> debug.log
 homestack-pve-agent --path /sys/fs/cgroup/lxc/102008
 ```
 
-`--path` inspects an arbitrary cgroup without guessing identity, so only cgroup
-metrics are returned in that mode. `--vmid` filters discovered instances.
+`--path` inspects one cgroup. A canonical guest group under the cgroup root
+(`lxc/ID`, `lxc.payload.ID` or `qemu.slice/ID.scope`) keeps its VMID, type and
+filesystem report as in discovery; any other cgroup is reported as type
+`unknown` with cgroup metrics only. `--vmid` filters discovered instances.
 Neither selector is accepted in daemon mode. `--root` can select another
 cgroup v2 root. The default one-shot mode only prints JSON; `--export` also sends its metrics.
 The daemon does not stream snapshots to the journal; it logs startup, export

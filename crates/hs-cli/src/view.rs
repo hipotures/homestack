@@ -1205,11 +1205,7 @@ pub fn transport_result(result: &Value, style: &Style) -> String {
     let mut sections = Vec::new();
     for instance in result["transport"]["instances"].as_array().into_iter().flatten() {
         let state = if instance["ok"] == true {
-            format!(
-                "{} {}",
-                style.paint("✓", Color::Green),
-                style.paint(&format!("server {}", text(&instance["version"])), Color::Dim)
-            )
+            style.paint("✓ answering", Color::Green)
         } else {
             style.paint(&format!("✗ {}", text(&instance["error"])), Color::Red)
         };

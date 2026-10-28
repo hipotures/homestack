@@ -544,7 +544,7 @@ async fn cluster_resources(
                 "vmid": vm.vmid,
                 "node": vm.node,
                 "status": status,
-                "template": 0,
+                "template": u8::from(vm.config.get("template").is_some_and(truthy_option)),
                 "uptime": 0,
             });
             for key in ["name", "tags"] {
@@ -1438,6 +1438,16 @@ fn size_bytes(text: &str) -> Option<u64> {
     value.checked_mul(factor)
 }
 
+/// A PVE boolean option (`template`, ...) set in a config.
+fn truthy_option(value: &toml::Value) -> bool {
+    match value {
+        toml::Value::Boolean(flag) => *flag,
+        toml::Value::Integer(number) => *number != 0,
+        toml::Value::String(text) => matches!(text.as_str(), "1" | "true" | "yes" | "on"),
+        _ => false,
+    }
+}
+
 fn is_disk_key(key: &str) -> bool {
     ["scsi", "virtio", "sata", "ide", "efidisk", "tpmstate"]
         .iter()
@@ -1627,7 +1637,8 @@ fn remove_from_boot_order(config: &mut toml::Table, key: &str) {
 /// `Datastore.AllocateSpace` on the target storage. A disk set in a slot
 /// that holds another volume moves that volume to the first free `unusedN`,
 /// as observed on a stopped VM; a running VM gets the change at once
-/// (hot-plug), which the probe also saw.
+/// (hot-plug), which the probe also saw. A disk in `delete` is detached as
+/// by `unlink` without `force`.
 async fn vm_config_post(
     State(state): State<Shared>,
     request_token: Option<axum::Extension<TokenSpec>>,
@@ -1757,12 +1768,17 @@ async fn vm_config_post(
     let Some(vm) = state.vms.get_mut(&vmid_number) else {
         return pve_error(500, "VM vanished");
     };
+    let mut detached = Vec::new();
     for (key, value) in values {
         match key.as_str() {
             "digest" => {}
             "delete" => {
                 for key in value.split(',') {
-                    vm.config.remove(key);
+                    if is_disk_key(key) {
+                        detached.push(key.to_owned());
+                    } else {
+                        vm.config.remove(key);
+                    }
                 }
             }
             key => {
@@ -1778,6 +1794,11 @@ async fn vm_config_post(
             }
         }
     }
+    let detached: Vec<&str> = detached.iter().map(String::as_str).collect();
+    detach_disks(&mut state, vmid_number, &detached, false);
+    let Some(vm) = state.vms.get_mut(&vmid_number) else {
+        return pve_error(500, "VM vanished");
+    };
     // PVE's `write_vm_config`: "remove 'unusedX' settings if we re-add a volume".
     let used: Vec<String> = vm
         .config
@@ -1816,20 +1837,29 @@ async fn vm_unlink(
         return parameter_error("idlist", "property is missing and it is not optional");
     };
     let force = matches!(form_value(&form, "force"), Some("1" | "true"));
-    let (vmid_number, node_name) =
-        match reach_vm(&state, token(request_token).as_ref(), &node, &vmid, &["VM.Config.Disk"]) {
-            Ok(vm) => (vm.vmid, vm.node.clone()),
-            Err(failure) => return failure.into_response(),
-        };
-    let mut deleted = Vec::new();
-    let Some(vm) = state.vms.get_mut(&vmid_number) else {
-        return pve_error(500, "VM vanished");
+    let vmid_number = match reach_vm(&state, token(request_token).as_ref(), &node, &vmid, &["VM.Config.Disk"]) {
+        Ok(vm) => vm.vmid,
+        Err(failure) => return failure.into_response(),
     };
-    for key in idlist.split([',', ';', ' ']).filter(|key| !key.is_empty()) {
-        let Some(volume) = vm.config.get(key).and_then(config_volume).map(str::to_owned) else {
+    let keys: Vec<&str> = idlist.split([',', ';', ' ']).filter(|key| !key.is_empty()).collect();
+    detach_disks(&mut state, vmid_number, &keys, force);
+    apply_pending(&mut state, vmid_number);
+    data(Value::Null)
+}
+
+/// PVE's disk deletion in `update_vm_api`, which `unlink` also runs: each
+/// disk leaves the config and the boot order; an `unusedN` or any disk with
+/// `force` is deleted from its storage, other disks become the first free
+/// `unusedN`.
+fn detach_disks(state: &mut ClusterState, vmid: u32, keys: &[&str], force: bool) {
+    let Some(vm) = state.vms.get_mut(&vmid) else { return };
+    let node = vm.node.clone();
+    let mut deleted = Vec::new();
+    for key in keys {
+        let Some(volume) = vm.config.get(*key).and_then(config_volume).map(str::to_owned) else {
             continue;
         };
-        vm.config.remove(key);
+        vm.config.remove(*key);
         remove_from_boot_order(&mut vm.config, key);
         if force || key.starts_with("unused") {
             deleted.push(volume);
@@ -1840,9 +1870,7 @@ async fn vm_unlink(
     }
     state
         .volumes
-        .retain(|v| !(v.node == node_name && deleted.contains(&v.volid)));
-    apply_pending(&mut state, vmid_number);
-    data(Value::Null)
+        .retain(|v| !(v.node == node && deleted.contains(&v.volid)));
 }
 
 /// The volume of a disk config value, with the VMID renamed.
@@ -1919,16 +1947,18 @@ async fn vm_clone(
             let disk_storage = text.split(':').next().unwrap_or_default().to_owned();
             let target_storage = storage.clone().unwrap_or(disk_storage);
             if let Some((volid, value)) = cloned_volume(&text, source, newid, &target_storage) {
+                let original = state
+                    .volumes
+                    .iter()
+                    .find(|v| v.volid == text.split(',').next().unwrap_or_default());
+                // `size=` is optional config metadata; the volume knows its size.
                 let size = text
                     .split(',')
                     .find_map(|o| o.strip_prefix("size="))
                     .and_then(size_bytes)
+                    .or_else(|| original.map(|v| v.size))
                     .unwrap_or(0);
-                let label = state
-                    .volumes
-                    .iter()
-                    .find(|v| v.volid == text.split(',').next().unwrap_or_default())
-                    .and_then(|v| v.label.clone());
+                let label = original.and_then(|v| v.label.clone());
                 volumes.push(VolumeSpec {
                     node: node_name.clone(),
                     storage: target_storage,

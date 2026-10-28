@@ -1361,7 +1361,7 @@ pub async fn workspace_status_of(
 
 /// `address/prefix` of the primary virtual NIC, matched by its MAC address.
 fn first_ipv4(info: &Value, net0: &str) -> Option<String> {
-    let (_, mac) = net0.split(',').next()?.split_once('=')?;
+    let mac = crate::gold::extract_mac(net0)?;
     info.get("result")?
         .as_array()?
         .iter()
@@ -1369,7 +1369,7 @@ fn first_ipv4(info: &Value, net0: &str) -> Option<String> {
             interface
                 .get("hardware-address")
                 .and_then(Value::as_str)
-                .is_some_and(|address| address.eq_ignore_ascii_case(mac))
+                .is_some_and(|address| address.eq_ignore_ascii_case(&mac))
         })?
         .get("ip-addresses")?
         .as_array()?

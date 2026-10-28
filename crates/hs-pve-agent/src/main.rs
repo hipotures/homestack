@@ -94,6 +94,22 @@ fn numeric_id(s: &str) -> Option<u32> {
         .filter(|id| *id > 0)
 }
 
+/// The guest a cgroup belongs to, if `relative` (to the cgroup root) is one
+/// of the canonical PVE guest groups: `lxc/ID`, `lxc.payload.ID` or
+/// `qemu.slice/ID.scope`.
+fn guest_cgroup(relative: &Path) -> Option<(u32, &'static str)> {
+    let parts: Vec<_> = relative
+        .components()
+        .map(|c| c.as_os_str().to_str())
+        .collect::<Option<_>>()?;
+    match parts.as_slice() {
+        ["lxc", id] => Some((numeric_id(id)?, "lxc")),
+        [name] => Some((numeric_id(name.strip_prefix("lxc.payload.")?)?, "lxc")),
+        ["qemu.slice", scope] => Some((numeric_id(scope.strip_suffix(".scope")?)?, "qemu")),
+        _ => None,
+    }
+}
+
 fn discover(root: &Path) -> Result<Vec<(u32, &'static str, PathBuf)>, String> {
     if !root.join("cgroup.controllers").is_file() {
         return Err(format!("{} is not a readable cgroup v2 root", root.display()));
@@ -101,10 +117,8 @@ fn discover(root: &Path) -> Result<Vec<(u32, &'static str, PathBuf)>, String> {
     let mut found = BTreeMap::new();
     // The outer lxc/ID group includes descendant counters. Do not also sum
     // its ns/init.scope descendants or the separate LXC monitor process.
-    for (base, suffix, kind) in [
-        (root.join("lxc"), "", "lxc"),
-        (root.join("qemu.slice"), ".scope", "qemu"),
-    ] {
+    // Some LXC installations use a top-level lxc.payload.ID group instead.
+    for base in [root.join("lxc"), root.join("qemu.slice"), root.to_path_buf()] {
         let entries = match fs::read_dir(&base) {
             Ok(entries) => entries,
             Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
@@ -115,26 +129,10 @@ fn discover(root: &Path) -> Result<Vec<(u32, &'static str, PathBuf)>, String> {
             if !entry.file_type().map_err(|e| e.to_string())?.is_dir() {
                 continue;
             }
-            let name = entry.file_name();
-            let name = name.to_string_lossy();
-            if let Some(id) = name.strip_suffix(suffix).and_then(numeric_id) {
-                found.insert((id, kind), entry.path());
+            let path = entry.path();
+            if let Some(key) = path.strip_prefix(root).ok().and_then(guest_cgroup) {
+                found.entry(key).or_insert(path);
             }
-        }
-    }
-    // Some LXC installations use a top-level payload group instead.
-    for entry in fs::read_dir(root).map_err(|e| e.to_string())? {
-        let entry = entry.map_err(|e| e.to_string())?;
-        if !entry.file_type().map_err(|e| e.to_string())?.is_dir() {
-            continue;
-        }
-        if let Some(id) = entry
-            .file_name()
-            .to_string_lossy()
-            .strip_prefix("lxc.payload.")
-            .and_then(numeric_id)
-        {
-            found.entry((id, "lxc")).or_insert_with(|| entry.path());
         }
     }
     Ok(found.into_iter().map(|((id, kind), path)| (id, kind, path)).collect())
@@ -383,7 +381,12 @@ fn collect(config: &Config, mode: (&str, &Mode), selection: &Selection, cache: &
         if !path.join("cgroup.events").is_file() {
             return Err(format!("{} is not a readable cgroup v2 directory", path.display()));
         }
-        instances.push(snapshot(&config.cgroup_root, path, None, "unknown", &mut trace, true));
+        let (id, kind) = path
+            .strip_prefix(&config.cgroup_root)
+            .ok()
+            .and_then(guest_cgroup)
+            .map_or((None, "unknown"), |(id, kind)| (Some(id), kind));
+        instances.push(snapshot(&config.cgroup_root, path, id, kind, &mut trace, true));
     } else {
         let mut live = Vec::new();
         for (id, kind, path) in discover(&config.cgroup_root)?
