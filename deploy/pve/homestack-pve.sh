@@ -336,7 +336,7 @@ check_gold() {
 }
 
 check_tags() {
-    local options registered access allow allow_list tag tags=(homestack-ws homestack-lock)
+    local options registered access allow allow_list tag tags=(homestack-ws homestack-lock homestack-server)
     ((test_part)) && tags+=(homestack-test)
     options=$(get /cluster/options)
     registered=$(json registered-tags <<< "$options")

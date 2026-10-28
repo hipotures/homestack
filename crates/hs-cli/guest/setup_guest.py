@@ -1318,6 +1318,26 @@ def merged_profile(path: Path, block: str) -> str:
     return "\n".join(lines) + "\n"
 
 
+def merged_shell_profile(path: Path, block: str) -> str:
+    """Own only the marked block; recognize an exact legacy whole-file write."""
+    current = path.read_bytes().decode() if path.exists() else ""
+    body = block.rstrip() + "\n"
+    managed = PROFILE_BEGIN + "\n" + body + PROFILE_END + "\n"
+    lines = current.splitlines(keepends=True)
+    start = next((i for i, line in enumerate(lines)
+                  if line.rstrip("\r\n") == PROFILE_BEGIN), None)
+    if start is not None:
+        end = next((i for i in range(start + 1, len(lines))
+                    if lines[i].rstrip("\r\n") == PROFILE_END), None)
+        if end is not None:
+            return "".join(lines[:start]) + managed + "".join(lines[end + 1:])
+    # Earlier Zsh/Nushell setup wrote exactly this body, including its newline.
+    # Do not guess at old PATH lists or delete merely similar user content.
+    if current == body:
+        return managed
+    return managed + current
+
+
 def environment_updates(home: Path, profile: str, bins: list[str]) -> dict[str, str]:
     import shlex
     paths = posix_paths(bins)
@@ -1349,8 +1369,9 @@ case $- in *i*)
         raise GuestError("Unknown shell profile")
     result = {}
     for relative, body in specs.items():
-        safe_path(home, relative)
-        result[relative] = body.rstrip() + "\n"
+        path = safe_path(home, relative)
+        result[relative] = (body.rstrip() + "\n" if profile == "fish"
+                            else merged_shell_profile(path, body))
     return result
 
 
@@ -1472,13 +1493,13 @@ def run(data: dict) -> dict:
                     raise GuestError(f"{data['profile']} startup syntax check failed at ~/{relative}")
             else:
                 # Nu's parser is available through nu-check without running user configuration.
-                parsed = subprocess.run(["nu", "--no-config-file", "-c", "$in | nu-check"],
+                parsed = subprocess.run(["nu", "--no-config-file", "--stdin", "-c", "$in | nu-check"],
                                         input=content, capture_output=True, text=True)
                 if parsed.returncode or parsed.stdout.strip() != "true":
                     raise GuestError(f"Nushell startup syntax check failed at ~/{relative}")
         changed = [relative for relative, content in updates.items()
                    if not (home / relative).exists()
-                   or (home / relative).read_text() != content]
+                   or (home / relative).read_bytes() != content.encode()]
         if data.get("apply"):
             for relative in changed:
                 atomic_write(safe_path(home, relative), updates[relative])

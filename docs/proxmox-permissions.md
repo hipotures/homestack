@@ -75,6 +75,28 @@ installer does not assign that role to the server token. These existing token
 scope differences are retained; the role privilege lists now agree. The test
 token receives neither deploy-template privileges nor the deploy role.
 
+The test Gold scopes also differ intentionally: the desktop installer selects a
+separate Gold in `homestack-test` and grants its test token both workspace and
+Gold roles there. The standalone script uses the Gold in `homestack-gold`,
+including for `--test`; its test token has `HomeStack` on `homestack-test` and
+`HomeStackGold` on `homestack-gold`. Neither path gives the test token the deploy
+role. The desktop's optional Gold selection and tag-based adoption are separate
+from the standalone script's required Gold workflow.
+
+Both installers check `homestack-ws`, `homestack-lock` and `homestack-server`
+against `registered-tags` and `user-tag-access`, plus `homestack-test` for a test
+installation. A registered or disallowed server tag must stop preflight before
+any changes; `user-allow=existing` retains the warning that each tag must already
+exist. No tag policy or runtime privileges are changed by these checks.
+
+Credential filenames are specific to each entry point. The desktop writes
+`pve-token` (server), `pve-token-test` and `pve-token-deploy` in its selected local
+configuration directory. The standalone script writes
+`homestack-pve-token-{server,test,deploy}` in `--token-dir` on the node running
+it. Their credential content format agrees, but neither installer promises
+interchangeable artifact paths. Existing tokens are reused without writing a
+new secret file; filename parity is not a reason to rotate them.
+
 The installer itself runs administrative `pveum`/`pvesh` commands through the
 owner's root access. Creating users, roles, pools, tokens, ACLs and snippets, or
 adopting existing guests into pools, is not a privilege requirement of a runtime

@@ -214,12 +214,15 @@ async fn health(State(state): State<AppState>) -> Response {
         .into_response()
 }
 
-async fn service_status(State(state): State<AppState>) -> axum::Json<hs_service_status::Report> {
+async fn service_status(State(state): State<AppState>) -> impl IntoResponse {
     let status = match state.heartbeat.snapshot().status {
         LivenessStatus::Pass => hs_service_status::Status::Pass,
         LivenessStatus::Fail => hs_service_status::Status::Fail,
     };
-    axum::Json(hs_service_status::report(status))
+    (
+        [(header::CACHE_CONTROL, "no-store")],
+        axum::Json(hs_service_status::report(status)),
+    )
 }
 
 struct Heartbeat {

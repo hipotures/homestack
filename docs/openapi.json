@@ -19,6 +19,14 @@
         "operationId": "service_status",
         "responses": {
           "200": {
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "no-store"
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {

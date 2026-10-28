@@ -34,13 +34,19 @@ pub fn public() -> Router<AppState> {
 
 /// This process's liveness and RSS; `pass` is the same verdict as
 /// `/health/live`.
-#[utoipa::path(get, path = "/.well-known/homestack/status", tag = "health", responses((status = 200, body = hs_service_status::Report)))]
-pub async fn service_status(State(state): State<AppState>) -> Json<hs_service_status::Report> {
+#[utoipa::path(get, path = "/.well-known/homestack/status", tag = "health", responses(
+    (status = 200, body = hs_service_status::Report,
+        headers(("Cache-Control" = String, description = "no-store")))
+))]
+pub async fn service_status(State(state): State<AppState>) -> impl IntoResponse {
     let status = match state.heartbeat.snapshot().status {
         LivenessStatus::Pass => hs_service_status::Status::Pass,
         LivenessStatus::Fail => hs_service_status::Status::Fail,
     };
-    Json(hs_service_status::report(status))
+    (
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(hs_service_status::report(status)),
+    )
 }
 
 pub fn v1() -> Router<AppState> {
