@@ -22,7 +22,7 @@ use axum::routing::get;
 use hs_model::health::{HeartbeatObservation, Liveness, LivenessStatus};
 use tracing_subscriber::EnvFilter;
 
-const LISTEN: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 8080);
+const LISTEN: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 80);
 const PROBE_PATH: &str = "/health/heartbeat";
 const PAGE: &str = include_str!("index.html");
 const PRICING_URL: &str = "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json";

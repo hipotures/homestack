@@ -277,7 +277,7 @@ jobs:
         env:
           IMAGE: ghcr.io/hipotures/homestack-ai-usage:${{ steps.tag.outputs.tag }}
         run: |
-          docker run -d --name usage --memory=64m --memory-swap=64m -p 127.0.0.1:8080:8080 \
+          docker run -d --name usage --memory=64m --memory-swap=64m -p 127.0.0.1:8080:80 \
             -e HOMESTACK_PROMETHEUS_URL=http://127.0.0.1:9 -e HOMESTACK_HEARTBEAT_SECONDS=1 "$IMAGE"
           sleep 3
           curl -fsS http://127.0.0.1:8080/health/ready
