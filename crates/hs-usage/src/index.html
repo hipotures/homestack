@@ -134,6 +134,7 @@ th { color: var(--ink-2); font-weight: 600; position: sticky; top: 0; background
 "use strict";
 const PRICES = JSON.parse(document.getElementById("pricing").textContent);
 const RANGES = [
+  { id: "1h", label: "1 h", seconds: 3600, step: 60 },
   { id: "24h", label: "24 h", seconds: 86400, step: 3600 },
   { id: "7d", label: "7 days", seconds: 7 * 86400, step: 6 * 3600 },
   { id: "30d", label: "30 days", seconds: 30 * 86400, step: 86400 },
@@ -181,7 +182,7 @@ const growth = (selector, by, window, metric = scoped(selector)) =>
 // including those without the label.
 const SCOPES = [{ id: "host", label: "host_name", all: "All servers" }, { id: "project", label: "project", all: "All projects" }];
 const ANY = "*";
-let range = RANGES[0], tool = TOOLS[0], comparison = false;
+let range = RANGES.find(r => r.id === "24h"), tool = TOOLS[0], comparison = false;
 let loadVersion = 0;
 const scope = { host: ANY, project: ANY };
 try {
