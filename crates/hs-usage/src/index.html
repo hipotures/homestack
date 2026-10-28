@@ -150,7 +150,7 @@ const AGENTS = [
     active: "claude_code_active_time_seconds_total", commits: "claude_code_commit_count_total",
     lines: "claude_code_lines_of_code_count_total",
   }) },
-  { id: "codex", label: "Codex", scopeMetric: "codex_turn_token_usage.*_(sum|total)", metrics: c => ({
+  { id: "codex", label: "Codex", scopeMetric: "codex_response_token_usage", metrics: c => ({
     tokens: c.tokens, tokenLabel: "token_type", inclusiveInput: true,
     types: { total: "total", input: "input", cached: "cached_input", written: "cache_write_input", output: "output", reasoning: "reasoning_output" },
     estimated: true, convertCost: rows => costRows(rows, c), costNote: () => costNote(c),
@@ -170,11 +170,12 @@ const AGENTS = [
 ];
 const TOOLS = [{ id: "all", label: "All agents" }, ...AGENTS.map(({id, label}) => ({id, label}))];
 const SERIES = ["--s1", "--s2", "--s3", "--s4", "--s5"];
-// Each process exports its own cumulative series (new instance label), so
-// usage in a window is the growth of every series' last value, with series
-// that did not exist before the window counted from zero.
+// Codex response gauges contain one delta per pushed batch, summed directly.
+// Other instruments are cumulative per process; new series start from zero.
 const LOOKBACK = "100d";
 const growth = (selector, by, window, metric = scoped(selector)) =>
+  selector.startsWith("codex_response_token_usage") ?
+    `sum by (${by}) (sum_over_time(${metric}[${window}s]))` :
   `sum by (${by}) (clamp_min(last_over_time(${metric}[${LOOKBACK}]) - ` +
   `(last_over_time(${metric}[${LOOKBACK}] offset ${window}s) or last_over_time(${metric}[${LOOKBACK}]) * 0), 0))`;
 
@@ -214,16 +215,18 @@ const series = (query, start, end, step) =>
 // Codex metric names depend on its exporter's unit and instrument type.
 async function codexMetrics() {
   const names = await prom("/api/v1/label/__name__/values", {
-    "match[]": '{__name__=~"codex_(turn_(token_usage|e2e_duration_ms|ttft_duration_ms|ttfm_duration_ms)|thread_started|conversation_turn_count|tool_call).*_(sum|count|total)"}',
+    "match[]": '{__name__=~"codex_(response_token_usage|(turn_(e2e_duration_ms|ttft_duration_ms|ttfm_duration_ms)|thread_started|conversation_turn_count|tool_call).*_(sum|count|total))"}',
   });
   const pick = re => names.find(n => re.test(n) && n.endsWith("_total")) || names.find(n => re.test(n) && n.endsWith("_sum"));
   const histogram = prefix => ({ sum: names.find(n => n.startsWith(prefix) && n.endsWith("_sum")),
     count: names.find(n => n.startsWith(prefix) && n.endsWith("_count")) });
-  return { tokens: pick(/^codex_turn_token_usage/), threads: pick(/^codex_thread_started/),
+  const tokens = names.find(n => n === "codex_response_token_usage");
+  return { tokens, threads: pick(/^codex_thread_started/),
     turns: pick(/^codex_conversation_turn_count/), tools: pick(/^codex_tool_call_total$/),
     turn: histogram("codex_turn_e2e_duration_ms"), firstToken: histogram("codex_turn_ttft_duration_ms"),
     firstOutput: histogram("codex_turn_ttfm_duration_ms"), toolTime: histogram("codex_tool_call_duration_ms"),
-    prices: PRICES, missing: new Set(), coverage: "" };
+    prices: PRICES, missing: new Set(), coverage: tokens ? "" :
+      "Codex response token metrics are unavailable. Enable Codex OTEL log export and deploy the response-aware Collector. History begins when response export is enabled." };
 }
 
 // A globally present metric can still have no attribution for the selected

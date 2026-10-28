@@ -3,11 +3,10 @@
 `ghcr.io/hipotures/homestack-otel` contains a minimal Collector distribution,
 `/otelcol-homestack`, built with the OpenTelemetry Collector Builder (`ocb`)
 from `builder-config.yaml`. It includes only the components used by
-`collector.yaml`: the `otlp` receiver, `batch` processor, `otlp_http`
-exporter, `health_check` and `file_storage` extensions, and the env/file
-configuration providers. The static binary is about 28 MB instead of the
-419 MB `otelcol-contrib` binary. The builder image and the Alpine runtime are
-pinned by digest in the Containerfile.
+`collector.yaml`: the `otlp` receiver, `batch`, `groupbyattrs` and `transform`
+processors, the `sum` connector, `otlp_http` exporter, `health_check` and
+`file_storage` extensions, and the env/file configuration providers. The builder
+image and the Alpine runtime are pinned by digest in the Containerfile.
 
 The runtime is a digest-pinned minimal Alpine filesystem so Proxmox recognizes
 the distribution and configures `/etc/hosts` and `/etc/resolv.conf` through
@@ -45,7 +44,14 @@ OTLP/HTTP on port 4318.
 - Health: `GET /health/live`, TCP 13133, expected status 200. This is the
   Collector's health endpoint, not HomeStack telemetry schema 2. No extra
   `metrics.yaml` or HomeStack status endpoint is required.
-- Metrics only: OTLP receivers, batch processor, OTLP/HTTP metrics exporter.
+- OTLP metrics pass through to the metrics exporter. OTLP logs are accepted
+  only to derive Codex response token metrics; no logs are exported or stored.
+  The `sum` connector selects completed-response usage, `groupbyattrs` compacts
+  duplicate resource/scope groups per batch, and `transform` emits delta gauges
+  named `codex.response.token_usage` with model and token-type dimensions.
+  Prometheus must ingest these directly through OTLP; the dashboard sums the
+  pushed samples rather than treating them as cumulative counters. See
+  [response export setup](../../docs/ai-telemetry.md#response-token-export).
 - `HOMESTACK_PROMETHEUS_URL`: required base URL of the Prometheus server,
   without a path; the Collector exports to its `/api/v1/otlp/v1/metrics`
   receiver. No server is baked into the image.

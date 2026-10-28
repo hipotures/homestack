@@ -6,7 +6,68 @@ receivers:
       http:
         endpoint: 0.0.0.0:4318
 
+# Response usage is exported as delta gauges. Prometheus stores each pushed
+# batch once; the dashboard sums samples instead of differencing counters.
+connectors:
+  sum/codex:
+    logs:
+      codex.response.tokens.total:
+        source_attribute: tool_token_count
+        conditions:
+          - 'attributes["event.name"] == "codex.sse_event" and attributes["event.kind"] == "response.completed" and attributes["tool_token_count"] != nil'
+        attributes:
+          - key: model
+            default_value: unknown
+      codex.response.tokens.input:
+        source_attribute: input_token_count
+        conditions:
+          - 'attributes["event.name"] == "codex.sse_event" and attributes["event.kind"] == "response.completed" and attributes["input_token_count"] != nil'
+        attributes:
+          - key: model
+            default_value: unknown
+      codex.response.tokens.cached_input:
+        source_attribute: cached_token_count
+        conditions:
+          - 'attributes["event.name"] == "codex.sse_event" and attributes["event.kind"] == "response.completed" and attributes["cached_token_count"] != nil'
+        attributes:
+          - key: model
+            default_value: unknown
+      codex.response.tokens.cache_write_input:
+        source_attribute: cache_write_token_count
+        conditions:
+          - 'attributes["event.name"] == "codex.sse_event" and attributes["event.kind"] == "response.completed" and attributes["cache_write_token_count"] != nil'
+        attributes:
+          - key: model
+            default_value: unknown
+      codex.response.tokens.output:
+        source_attribute: output_token_count
+        conditions:
+          - 'attributes["event.name"] == "codex.sse_event" and attributes["event.kind"] == "response.completed" and attributes["output_token_count"] != nil'
+        attributes:
+          - key: model
+            default_value: unknown
+      codex.response.tokens.reasoning_output:
+        source_attribute: reasoning_token_count
+        conditions:
+          - 'attributes["event.name"] == "codex.sse_event" and attributes["event.kind"] == "response.completed" and attributes["reasoning_token_count"] != nil'
+        attributes:
+          - key: model
+            default_value: unknown
+
 processors:
+  # Compact identical resource/scope groups before summing a batch so they
+  # cannot produce several samples for the same series at the same millisecond.
+  groupbyattrs/codex: {}
+  transform/codex:
+    error_mode: propagate
+    metric_statements:
+      - context: datapoint
+        statements:
+          - set(attributes["token_type"], Substring(metric.name, Len("codex.response.tokens."), Len(metric.name) - Len("codex.response.tokens.")))
+      - context: metric
+        statements:
+          - convert_sum_to_gauge()
+          - set(name, "codex.response.token_usage")
   batch:
     timeout: 5s
 
@@ -37,4 +98,12 @@ service:
     metrics:
       receivers: [otlp]
       processors: [batch]
+      exporters: [otlp_http]
+    logs/codex:
+      receivers: [otlp]
+      processors: [batch, groupbyattrs/codex]
+      exporters: [sum/codex]
+    metrics/codex:
+      receivers: [sum/codex]
+      processors: [transform/codex]
       exporters: [otlp_http]

@@ -25,6 +25,59 @@ original backend and environment; finish the active turn before reopening or
 resuming them. This launcher applies to terminal Codex, not to independently
 started IDE, desktop, remote, or managed app servers.
 
+## Response token export
+
+Codex's native `codex.turn.token_usage` histogram is emitted when a turn
+finishes. It does not provide live token accounting for active turns, and
+unfinished turns can be absent. The dashboard uses only completed-response
+usage events for tokens and estimated cost. Native metrics remain enabled for
+turn duration, tool calls and other measurements.
+
+Keep both exporters in the user-level `~/.codex/config.toml`, using the same
+Collector host as the existing metrics endpoint:
+
+```toml
+[otel]
+log_user_prompt = false
+exporter = { otlp-http = { endpoint = "http://COLLECTOR:4318/v1/logs", protocol = "binary" } }
+metrics_exporter = { otlp-http = { endpoint = "http://COLLECTOR:4318/v1/metrics", protocol = "binary" } }
+```
+
+Deploy the updated Collector before enabling log export, then restart the
+Codex backend after finishing its active work. A shared daemon or independently
+started IDE/app backend must also restart to load the configuration. Deploy
+the updated AI Usage image after the new metric appears in Prometheus.
+
+The Collector sums only `codex.sse_event` records with
+`event.kind=response.completed` and token attributes. All other log records
+are discarded rather than forwarded or stored as logs. It groups each batch
+by resource and model, then emits `codex.response.token_usage` gauges with a
+`token_type` label: `total`, `input`, `cached_input`, `cache_write_input`,
+`output` and `reasoning_output`. Input includes cached and cache-write tokens;
+reasoning is already included in output. The event's `tool_token_count` field
+contains total response tokens, despite its name.
+
+Each gauge sample is a batch's token increment, not a cumulative counter.
+Prometheus receives these samples directly through OTLP, not through a scrape.
+The dashboard uses `sum_over_time` for these gauges, so Collector or client
+restarts do not require retaining an in-memory cumulative baseline. Never use
+`rate` or `increase` on these gauges, scrape them as if they were counters, or
+add the old turn histogram to their totals. Other dashboard instruments still
+use cumulative counters. Resource compaction prevents duplicate resource groups
+within a batch from overwriting samples at the same millisecond.
+
+Usage becomes available after each model response completes and both the
+Codex exporter and Collector flush their batches (the Collector timeout is
+five seconds). This is not a token-by-token stream. Later interruption of a
+turn does not remove already delivered response increments. The persistent
+exporter queue protects converted metrics during downstream outages and ordinary
+Collector restarts; log batches and in-flight source events are not a durable
+journal, so abrupt process loss before enqueueing can still lose data.
+
+The new series starts when response export is enabled. There is no historical
+backfill or fallback to turn metrics. Upgrade both Collector and dashboard;
+missing response metrics are reported explicitly instead of using old totals.
+
 ## Prometheus resource labels
 
 Prometheus must promote the resource attributes onto the usage metrics:
@@ -52,11 +105,11 @@ For an existing promotion list, retain its entries and add `host.name` and
 
 Verify `/api/v1/status/config` contains the promotion list and
 `prometheus_config_last_reload_successful` is 1. After a new Codex session
-finishes a turn and exports metrics, query:
+completes a model response and exports events, query:
 
 ```promql
 group by (host_name, project, instance) (
-  codex_turn_token_usage_sum{token_type="total"}
+  codex_response_token_usage{token_type="total"}
 )
 ```
 
@@ -105,5 +158,5 @@ rates needed by the dashboard in the HTML document. There is no separate
 pricing request on page load, refresh or filter changes. Agent-specific
 snapshot queries are skipped when their capabilities are hidden in the current
 view. Metric-name discovery requests only the relevant Codex instruments;
-server and project filters share a single query over usage counters, without
+server and project filters share a single query over usage metrics, without
 scanning every tool metric and histogram bucket.
