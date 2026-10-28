@@ -305,9 +305,23 @@ pub fn exec(guest: &mut GuestSpec, disks: &crate::blocks::Disks, shell: &str, in
     }
 }
 
-/// Append to `<dir>/.ssh/authorized_keys` the `keys` whose blob (second
-/// field) it lacks, after a newline when the file does not end with one;
-/// nothing when `dir` is not a directory (the key step of
+/// The `type blob` of the first key field of an `authorized_keys` line,
+/// options allowed; none for blank, `#` and other lines.
+fn key_identity(line: &str) -> Option<String> {
+    let line = line.trim();
+    if line.starts_with('#') {
+        return None;
+    }
+    let fields: Vec<&str> = line.split_whitespace().collect();
+    let at = fields
+        .iter()
+        .position(|field| ["ssh-", "ecdsa-", "sk-"].iter().any(|prefix| field.starts_with(prefix)))?;
+    Some(format!("{} {}", fields[at], fields.get(at + 1)?))
+}
+
+/// Append to `<dir>/.ssh/authorized_keys` the `keys` whose type and blob
+/// no key line of it has, after a newline when the file does not end with
+/// one; nothing when `dir` is not a directory (the key step of
 /// `hs_core::addkey::ensure_keys_script` and of the vendor snippets).
 pub fn append_missing_keys<'k>(guest: &mut GuestSpec, dir: &str, keys: impl Iterator<Item = &'k str>) {
     if file(guest, dir) != Node::Directory {
@@ -319,8 +333,11 @@ pub fn append_missing_keys<'k>(guest: &mut GuestSpec, dir: &str, keys: impl Iter
         text.push('\n');
     }
     for key in keys.map(str::trim).filter(|key| !key.is_empty()) {
-        let blob = key.split_whitespace().nth(1).unwrap_or_default();
-        if !text.contains(blob) {
+        let id = key.split_whitespace().take(2).collect::<Vec<_>>().join(" ");
+        if !text
+            .lines()
+            .any(|line| key_identity(line).as_deref() == Some(id.as_str()))
+        {
             text.push_str(key);
             text.push('\n');
         }
@@ -328,14 +345,22 @@ pub fn append_missing_keys<'k>(guest: &mut GuestSpec, dir: &str, keys: impl Iter
     guest.files.insert(path, text);
 }
 
-/// `hs_core::addkey::ensure_keys_script`: the keys between the `HS_KEYS`
-/// heredoc markers appended in each directory of its `for dir in` line.
+/// One word of `shlex.quote`: `'...'` with `'"'"'` for a quote, or as is.
+fn shell_word(word: &str) -> Option<String> {
+    let Some(inner) = word.strip_prefix('\'') else {
+        return Some(word.to_owned());
+    };
+    Some(inner.strip_suffix('\'')?.replace(r#"'"'"'"#, "'"))
+}
+
+/// `hs_core::addkey::ensure_keys_script`: the keys of its quoted `keys=`
+/// word appended in each directory of its `for dir in` line.
 fn ensure_keys(guest: &mut GuestSpec, shell: &str) -> Option<ExecResult> {
-    let body = shell.strip_prefix("# HomeStack ensure-keys\nset -eu\nkeys=$(cat <<'HS_KEYS'\n")?;
-    let (keys, rest) = body.split_once("\nHS_KEYS\n)\nfor dir in ")?;
+    let body = shell.strip_prefix("# HomeStack ensure-keys\nset -eu\nkeys=")?;
+    let (keys, rest) = body.split_once("\nfor dir in ")?;
     let (dirs, _) = rest.split_once("; do\n")?;
-    let keys = keys.to_owned();
-    let dirs: Vec<String> = dirs.split_whitespace().map(str::to_owned).collect();
+    let keys = shell_word(keys)?;
+    let dirs: Vec<String> = dirs.split_whitespace().map(shell_word).collect::<Option<_>>()?;
     for dir in &dirs {
         append_missing_keys(guest, dir, keys.lines());
     }

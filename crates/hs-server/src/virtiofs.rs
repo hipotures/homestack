@@ -87,14 +87,17 @@ impl Reports {
         });
     }
 
-    fn cached(&self, target: &Target) -> Option<(Report, bool)> {
+    /// The last measurement younger than [`MAX_AGE`] (`None` inside when
+    /// the guest has no single mount of the share), and whether the latest
+    /// attempt failed; `None` when there is none yet.
+    fn cached(&self, target: &Target) -> Option<(Option<Report>, bool)> {
         let checks = self.checks.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let check = checks.get(&key(target)).filter(|check| check.target == *target)?;
         let measurement = check
             .measurement
             .as_ref()
             .filter(|reading| reading.received.elapsed() < MAX_AGE)?;
-        Some((measurement.report.clone()?, check.failed))
+        Some((measurement.report.clone(), check.failed))
     }
 
     pub fn global(self: &Arc<Self>, pve: Arc<PveClient>, pool: &str, status: &mut GlobalStatus, targets: Vec<Target>) {
@@ -109,7 +112,7 @@ impl Reports {
             .retain(|key, _| active.contains(key));
         for target in targets {
             self.request(Arc::clone(&pve), target.clone());
-            if let Some((report, stale)) = self.cached(&target)
+            if let Some((Some(report), stale)) = self.cached(&target)
                 && let Some(entry) = status
                     .workspaces
                     .iter_mut()
@@ -177,14 +180,20 @@ impl Reports {
         };
         status.home_size_gb = None;
         self.request(pve, target.clone());
-        if let Some((report, _)) = self.cached(&target) {
-            #[allow(clippy::cast_precision_loss, reason = "Disk sizes are displayed in GiB")]
-            {
-                status.home_size_gb = report.usage.size_bytes.map(|size| size as f64 / 1024.0_f64.powi(3));
+        // Without a measurement yet the mount stays unknown; a measurement
+        // without the share mounted once is a failure. The identity of a
+        // virtiofs home stays unknown.
+        match self.cached(&target) {
+            Some((Some(report), _)) => {
+                #[allow(clippy::cast_precision_loss, reason = "Disk sizes are displayed in GiB")]
+                {
+                    status.home_size_gb = report.usage.size_bytes.map(|size| size as f64 / 1024.0_f64.powi(3));
+                }
+                status.home_mount = Some(report.mount);
+                status.home_mount_ok = Some(true);
             }
-            status.home_mount = Some(report.mount);
-            status.home_identity_ok = Some(true);
-            status.home_mount_ok = Some(true);
+            Some((None, _)) => status.home_mount_ok = Some(false),
+            None => {}
         }
     }
 }

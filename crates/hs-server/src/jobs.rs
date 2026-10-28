@@ -185,6 +185,10 @@ pub async fn apply_plan(
                 ErrorCode::PlanChanged,
                 "The cluster changed since the plan was made, or the digest differs; make a new plan.",
             ),
+            ApplyRefusal::ConfigChanged => ApiError::new(
+                ErrorCode::ConfigVersionMismatch,
+                "The configuration changed since the plan was made; make a new plan.",
+            ),
             ApplyRefusal::Applied => ApiError::new(ErrorCode::PlanApplied, "The plan was already applied."),
             ApplyRefusal::Busy(None) => ApiError::new(ErrorCode::Busy, "Another job is working on a VM of this plan."),
             ApplyRefusal::Busy(Some(message)) => ApiError::with_message(ErrorCode::Busy, message),

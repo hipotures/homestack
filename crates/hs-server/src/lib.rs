@@ -199,11 +199,17 @@ impl PveHandle {
         self.settings.token.is_some()
     }
 
-    pub(crate) fn replace(&self, token: PveToken) -> Result<(), PveError> {
+    /// A client for `token`, not yet in use.
+    pub(crate) fn prepare(&self, token: PveToken) -> Result<(Arc<PveClient>, String), PveError> {
         let id = token.id().to_owned();
-        let client = Arc::new(PveClient::new(self.settings.client_config(token))?);
-        *self.current.write().unwrap_or_else(std::sync::PoisonError::into_inner) = Some((client, id));
-        Ok(())
+        Ok((Arc::new(PveClient::new(self.settings.client_config(token))?), id))
+    }
+
+    /// Use a client of [`Self::prepare`] from now on; its token's id.
+    pub(crate) fn install(&self, prepared: (Arc<PveClient>, String)) -> String {
+        let id = prepared.1.clone();
+        *self.current.write().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(prepared);
+        id
     }
 }
 

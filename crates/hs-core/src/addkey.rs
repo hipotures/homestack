@@ -26,9 +26,9 @@ use tokio::time::Instant;
 
 use crate::cloudinit::{HomeFormat, cicustom_value, quote_sshkeys};
 use crate::error::CoreError;
-use crate::guest::{GUEST_EXEC_TIMEOUT, guest_exec, qga_ping, read_text, wait_for_qga};
+use crate::guest::{GUEST_EXEC_TIMEOUT, guest_exec, qga_ping, read_text, shell_quote, wait_for_qga};
 use crate::inventory::vm_config;
-use crate::keys::{parse_authorized_key_records, unquote};
+use crate::keys::{KeyRecord, installed_key_identities, parse_authorized_key_records, unquote};
 use crate::lifecycle::{LifecycleTiming, post_task, require_pool, step_finished, step_started, text, vmid_of};
 use crate::power::{SHUTDOWN_TIMEOUT_SECS, START_TIMEOUT_SECS, shutdown_vm, start_vm};
 use crate::pve::Pve;
@@ -40,11 +40,10 @@ use crate::tasks::Observer;
 pub const ENSURE_MARKER: &str = "# HomeStack ensure-keys";
 /// What the key step prints when it is done (Python's `ENSURE_DONE`).
 pub const ENSURE_DONE: &str = "HomeStack: ensured SSH keys from Cloud-Init";
-/// The terminator of the keys' heredoc (Python's `KEYS_HEREDOC`).
-pub const KEYS_HEREDOC: &str = "HS_KEYS";
-
 /// The loop of the key step over the directories in `$dir`, with the keys
-/// in `$keys`: the same lines as in the vendor snippets.
+/// in `$keys`: the same lines as in the vendor snippets. A key counts as
+/// present only when a key line of the file has its type and blob
+/// ([`installed_key_identities`]).
 pub const ENSURE_LOOP: &str = r#"    [ -d "$dir" ] || continue
     owner=$(stat -c %U "$dir")
     group=$(stat -c %G "$dir")
@@ -54,8 +53,8 @@ pub const ENSURE_LOOP: &str = r#"    [ -d "$dir" ] || continue
     [ -z "$(tail -c1 "$f")" ] || echo >> "$f"
     printf '%s\n' "$keys" | while IFS= read -r key; do
         [ -n "$key" ] || continue
-        blob=$(printf '%s' "$key" | awk '{print $2}')
-        grep -qF "$blob" "$f" || printf '%s\n' "$key" >> "$f"
+        id=$(printf '%s' "$key" | awk '{print $1 " " $2}')
+        awk -v id="$id" '$1 !~ /^#/ { for (i = 1; i < NF; i++) if ($i ~ /^(ssh-|ecdsa-|sk-)/) { if ($i " " $(i + 1) == id) found = 1; break } } END { exit !found }' "$f" || printf '%s\n' "$key" >> "$f"
     done
 "#;
 
@@ -90,7 +89,7 @@ pub struct PublicKey {
 /// `read_public_key` for the text of a `.pub` file: exactly one key, with a
 /// comment. The client reads the file.
 pub fn read_public_key(text: &str) -> Result<PublicKey, CoreError> {
-    let records = parse_authorized_key_records(text)?;
+    let records = checked_records(text)?;
     let [record] = records.as_slice() else {
         return Err(CoreError::Invalid(format!(
             "The public key must be exactly one key, found {}",
@@ -106,53 +105,96 @@ pub fn read_public_key(text: &str) -> Result<PublicKey, CoreError> {
         key_type: record.key_type.clone(),
         blob: record.blob.clone(),
         comment: record.comment.clone(),
-        line: format!("{} {}", record.identity, record.comment),
+        line: key_line(record),
     })
 }
 
-/// The key lines of a VM's `sshkeys` (percent-encoded by Proxmox).
-fn sshkeys_lines(current: &str) -> Vec<String> {
-    unquote(current)
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .map(str::to_owned)
-        .collect()
+/// [`parse_authorized_key_records`] for keys that `addkey` writes into
+/// `sshkeys` and the key step: plain keys whose type and blob have only
+/// the characters of key types and base64, and whose comment has no
+/// control characters.
+fn checked_records(text: &str) -> Result<Vec<KeyRecord>, CoreError> {
+    let records = parse_authorized_key_records(text)?;
+    for record in &records {
+        let type_ok = record
+            .key_type
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"@.-".contains(&b));
+        let blob_ok = record
+            .blob
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"+/=".contains(&b));
+        if !type_ok || !blob_ok {
+            return Err(CoreError::Invalid(format!(
+                "Invalid public key of type '{}'",
+                record.key_type.escape_debug()
+            )));
+        }
+        if record.comment.chars().any(|c| c.is_control() && c != '\t') {
+            return Err(CoreError::Invalid(format!(
+                "The comment of key {} has control characters",
+                record.identity
+            )));
+        }
+    }
+    Ok(records)
 }
 
-/// `merge_sshkeys`: the keys for `sshkeys` with `key` added, and whether it
-/// was already there (by its blob).
-#[must_use]
-pub fn merge_sshkeys(current: &str, key: &PublicKey) -> (Vec<String>, bool) {
-    let lines = sshkeys_lines(current);
-    let present = lines
-        .iter()
-        .any(|line| line.split_whitespace().nth(1) == Some(key.blob.as_str()));
-    if present {
-        return (lines, true);
+/// A key's `type blob comment` line.
+fn key_line(record: &KeyRecord) -> String {
+    if record.comment.is_empty() {
+        record.identity.clone()
+    } else {
+        format!("{} {}", record.identity, record.comment)
     }
-    let mut lines = lines;
-    lines.push(key.line.clone());
-    (lines, false)
+}
+
+/// The keys of a VM's `sshkeys` (percent-encoded by Proxmox), validated;
+/// none when it holds no key lines.
+fn sshkeys_records(vmid: u32, current: &str) -> Result<Vec<KeyRecord>, CoreError> {
+    let text = unquote(current);
+    if text
+        .lines()
+        .map(str::trim)
+        .all(|line| line.is_empty() || line.starts_with('#'))
+    {
+        return Ok(Vec::new());
+    }
+    checked_records(&text)
+        .map_err(|error| CoreError::Refused(format!("The Proxmox sshkeys of VM {vmid} are not usable: {error}")))
+}
+
+/// `merge_sshkeys`: the keys of `current` with `key` added, and whether it
+/// was already there (by its type and blob).
+#[must_use]
+pub fn merge_sshkeys(current: Vec<KeyRecord>, key: &PublicKey) -> (Vec<KeyRecord>, bool) {
+    let identity = format!("{} {}", key.key_type, key.blob);
+    if current.iter().any(|record| record.identity == identity) {
+        return (current, true);
+    }
+    let mut keys = current;
+    keys.push(KeyRecord {
+        key_type: key.key_type.clone(),
+        blob: key.blob.clone(),
+        comment: key.comment.clone(),
+        label: key.comment.clone(),
+        identity,
+    });
+    (keys, false)
 }
 
 /// `ensure_keys_item` as one script for `agent/exec`: append the `keys`
 /// that root's and `user`'s `authorized_keys` lack, creating the file and
-/// its directory with private modes; nothing is removed.
+/// its directory with private modes; nothing is removed. The keys and the
+/// home directory are single-quoted words.
 #[must_use]
-pub fn ensure_keys_script(keys: &[String], user: &str) -> String {
-    let mut script = format!("{ENSURE_MARKER}\nset -eu\nkeys=$(cat <<'{KEYS_HEREDOC}'\n");
-    for key in keys {
-        script.push_str(key);
-        script.push('\n');
-    }
-    script.push_str(KEYS_HEREDOC);
-    script.push_str("\n)\n");
-    script.push_str(&format!("for dir in /root /home/{user}; do\n"));
-    script.push_str(ENSURE_LOOP);
-    script.push_str("done\n");
-    script.push_str(&format!("echo '{ENSURE_DONE}'\n"));
-    script
+pub fn ensure_keys_script(keys: &[KeyRecord], user: &str) -> String {
+    let lines: Vec<String> = keys.iter().map(key_line).collect();
+    format!(
+        "{ENSURE_MARKER}\nset -eu\nkeys={}\nfor dir in /root {}; do\n{ENSURE_LOOP}done\necho '{ENSURE_DONE}'\n",
+        shell_quote(&lines.join("\n")),
+        shell_quote(&format!("/home/{user}")),
+    )
 }
 
 /// `build_addkey_plan` for a workspace of `pool`.
@@ -170,10 +212,11 @@ pub async fn plan_addkey(
     let cicustom = info.vm_config.get("cicustom").map(String::as_str).unwrap_or_default();
     let keep_snippet = cicustom == cicustom_value(cfg, HomeFormat::Keep);
     let current = info.vm_config.get("sshkeys").map(String::as_str).unwrap_or_default();
+    let existing = sshkeys_records(vmid, current)?;
     let (keys, present) = match &key {
-        Some(key) => merge_sshkeys(current, key),
+        Some(key) => merge_sshkeys(existing, key),
         None => {
-            let keys = sshkeys_lines(current);
+            let keys = existing;
             if keys.is_empty() {
                 return Err(CoreError::Refused(format!(
                     "VM {vmid} has no keys in its Proxmox sshkeys; give a key"
@@ -185,7 +228,7 @@ pub async fn plan_addkey(
     let label = key.as_ref().map_or_else(
         || {
             keys.iter()
-                .map(|line| line.split_whitespace().last().unwrap_or_default())
+                .map(|record| record.label.as_str())
                 .collect::<Vec<_>>()
                 .join(", ")
         },
@@ -247,34 +290,33 @@ pub async fn plan_addkey(
         "keep_snippet": keep_snippet,
         "original_cicustom": cicustom,
         "original_sshkeys": current,
-        "keys": keys,
+        "keys": keys.iter().map(key_line).collect::<Vec<_>>(),
         "restart": request.restart,
         "steps": steps,
     }))
 }
 
-/// The keys of `keys` that `path` lacks, by blob; `None` for every key when
-/// the file is missing.
+/// The labels of the `keys` that `path` lacks, by type and blob; every key
+/// when the file is missing.
 async fn missing_keys(
     pve: &impl Pve,
     node: &str,
     vmid: u32,
     path: &str,
-    keys: &[String],
+    keys: &[KeyRecord],
 ) -> Result<Vec<String>, CoreError> {
     let text = read_text(pve, node, vmid, path).await?.unwrap_or_default();
+    let installed = installed_key_identities(&text);
     Ok(keys
         .iter()
-        .filter_map(|line| {
-            let blob = line.split_whitespace().nth(1)?;
-            (!text.contains(blob)).then(|| line.split_whitespace().last().unwrap_or("?").to_owned())
-        })
+        .filter(|record| !installed.contains(&record.identity))
+        .map(|record| record.label.clone())
         .collect())
 }
 
 /// Python's check after the restart: every key in root's and the user's
 /// `authorized_keys`, read with `file-read`.
-async fn verify_keys(pve: &impl Pve, node: &str, vmid: u32, user: &str, keys: &[String]) -> Result<(), CoreError> {
+async fn verify_keys(pve: &impl Pve, node: &str, vmid: u32, user: &str, keys: &[KeyRecord]) -> Result<(), CoreError> {
     let mut lost = Vec::new();
     for path in [
         "/root/.ssh/authorized_keys".to_owned(),
@@ -336,14 +378,16 @@ pub async fn add_key(
     let node = text(plan, "node")?;
     let planned_status = text(plan, "status")?;
     let user = text(plan, "user")?;
-    let keys: Vec<String> = plan
+    let lines: Vec<&str> = plan
         .get("keys")
         .and_then(Value::as_array)
-        .map(|keys| keys.iter().filter_map(Value::as_str).map(str::to_owned).collect())
+        .map(|keys| keys.iter().filter_map(Value::as_str).collect())
         .unwrap_or_default();
-    if keys.is_empty() {
+    if lines.is_empty() {
         return Err(CoreError::Unusable("The plan has no keys".to_owned()));
     }
+    let keys = checked_records(&lines.join("\n"))
+        .map_err(|error| CoreError::Unusable(format!("The plan's keys are not usable: {error}")))?;
     let present = plan
         .get("key_already_in_sshkeys")
         .and_then(Value::as_bool)
@@ -378,7 +422,8 @@ pub async fn add_key(
         let step = "Cloud-Init keys";
         step_started(observer, step);
         let configured = async {
-            let sshkeys = quote_sshkeys(&(keys.join("\n") + "\n"));
+            let lines: Vec<String> = keys.iter().map(key_line).collect();
+            let sshkeys = quote_sshkeys(&(lines.join("\n") + "\n"));
             let cicustom = cicustom_value(cfg, HomeFormat::Keep);
             let mut form: Vec<(&str, &str)> = Vec::new();
             if !present {
@@ -400,7 +445,7 @@ pub async fn add_key(
             )
             .await?;
             let written = vm_config(pve, node, vmid).await?;
-            let written_keys = sshkeys_lines(written.get("sshkeys").map(String::as_str).unwrap_or_default());
+            let written_keys = sshkeys_records(vmid, written.get("sshkeys").map(String::as_str).unwrap_or_default())?;
             if written_keys != keys || written.get("cicustom") != Some(&cicustom) {
                 return Err(CoreError::Failed(format!(
                     "VM {vmid} does not hold the planned sshkeys and keep vendor snippet after the change"

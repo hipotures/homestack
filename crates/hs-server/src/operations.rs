@@ -157,8 +157,9 @@ pub fn timestamp(at: SystemTime) -> String {
     )
 }
 
-/// SHA-256 of the canonical JSON (sorted keys) of what was planned.
-fn digest(operation: &str, parameters: &Value, planned: &Planned) -> String {
+/// SHA-256 of the canonical JSON (sorted keys) of what was planned, under
+/// which configuration version.
+fn digest(operation: &str, parameters: &Value, config_version: Option<&str>, planned: &Planned) -> String {
     let mut summary = planned.summary.clone();
     // Free space changes with unrelated writes. Admission is checked again
     // when replanning and immediately before allocation; required bytes stay signed.
@@ -175,6 +176,7 @@ fn digest(operation: &str, parameters: &Value, planned: &Planned) -> String {
     let canonical = json!({
         "operation": operation,
         "parameters": parameters,
+        "config_version": config_version,
         "targets": planned.targets,
         "summary": summary,
     });
@@ -184,9 +186,17 @@ fn digest(operation: &str, parameters: &Value, planned: &Planned) -> String {
         .collect()
 }
 
+/// The configuration version of an operation context.
+fn config_version(ctx: &OpContext) -> Option<String> {
+    ctx.config.as_ref().map(|stored| stored.version.clone())
+}
+
 struct StoredPlan {
     plan: Plan,
     parameters: Value,
+    /// The configuration version the plan was made with; it is applied only
+    /// under the same one.
+    config_version: Option<String>,
     operation: Arc<dyn Operation>,
     expires: Instant,
     applied: bool,
@@ -196,6 +206,8 @@ struct StoredPlan {
 pub enum ApplyRefusal {
     Unknown,
     Changed,
+    /// The configuration changed since the plan was made.
+    ConfigChanged,
     Applied,
     /// Another job holds a VM of the plan: one of this instance (`None`), or
     /// one of another instance (its lease, described).
@@ -333,10 +345,11 @@ impl OpsState {
             return Some(Err(failure));
         }
         let now = SystemTime::now();
+        let config_version = config_version(ctx);
         let plan = Plan {
             id: uuid::Uuid::new_v4().to_string(),
             operation: name.to_owned(),
-            digest: digest(name, &parameters, &planned),
+            digest: digest(name, &parameters, config_version.as_deref(), &planned),
             created_at: timestamp(now),
             expires_at: timestamp(now + self.options.plan_ttl),
             targets: planned.targets,
@@ -347,6 +360,7 @@ impl OpsState {
             StoredPlan {
                 plan: plan.clone(),
                 parameters,
+                config_version,
                 operation,
                 expires: Instant::now() + self.options.plan_ttl,
                 applied: false,
@@ -360,8 +374,10 @@ impl OpsState {
         self.lock().plans.get(id).map(|stored| stored.plan.clone())
     }
 
-    /// Plan again, compare, and start the job.
+    /// Plan again under the plan's configuration version, compare, and
+    /// start the job.
     pub async fn apply(self: &Arc<Self>, ctx: OpContext, id: &str, client_digest: &str) -> Result<Job, ApplyRefusal> {
+        let config_version = config_version(&ctx);
         let (plan, parameters, operation) = {
             let mut inner = self.lock();
             let stored = inner.plans.get(id).ok_or(ApplyRefusal::Unknown)?;
@@ -370,6 +386,9 @@ impl OpsState {
             }
             if stored.applied {
                 return Err(ApplyRefusal::Applied);
+            }
+            if stored.config_version != config_version {
+                return Err(ApplyRefusal::ConfigChanged);
             }
             let required: BTreeSet<&str> = stored
                 .plan
@@ -407,7 +426,7 @@ impl OpsState {
                 return Err(ApplyRefusal::Failure(failure));
             }
         };
-        if digest(&plan.operation, &parameters, &planned) != plan.digest {
+        if digest(&plan.operation, &parameters, config_version.as_deref(), &planned) != plan.digest {
             self.release(&plan.targets);
             return Err(ApplyRefusal::Changed);
         }

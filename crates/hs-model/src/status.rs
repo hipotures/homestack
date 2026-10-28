@@ -344,10 +344,14 @@ pub struct WorkspaceStatus {
     pub home_label: Option<String>,
     /// `serial=` of the home disk in the VM config.
     pub home_serial: Option<String>,
+    /// The HOME filesystem has the expected ext4 label. `None` while not
+    /// known, and always for a virtiofs home: its host directory carries no
+    /// label HomeStack checks.
     pub home_identity_ok: Option<bool>,
     /// `<device-or-tag> <type> <mountpoint>` of the HOME filesystem.
     pub home_mount: Option<String>,
-    /// A mounted filesystem has the expected ext4 label or virtiofs tag.
+    /// A mounted filesystem has the expected ext4 label or virtiofs tag;
+    /// `None` while not known (e.g. no virtiofs measurement yet).
     pub home_mount_ok: Option<bool>,
     pub ssh: SshCommands,
 }

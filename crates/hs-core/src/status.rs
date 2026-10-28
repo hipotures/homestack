@@ -1315,7 +1315,9 @@ pub async fn workspace_status_of(
         }
     }
     let home_mount = home.as_ref().map(|fs| fs.mount.clone());
-    let home_mount_ok = (expected_label.is_some() && qga).then(|| home.is_some());
+    // A virtiofs home has no labelled filesystem to look for: unknown here,
+    // the server's measurement of the share decides.
+    let home_mount_ok = (expected_label.is_some() && qga && shared_home.is_none()).then(|| home.is_some());
     let home_identity_ok = home_mount_ok;
     #[allow(clippy::cast_precision_loss, reason = "Disk sizes are displayed in GiB")]
     let home_size_gb = home

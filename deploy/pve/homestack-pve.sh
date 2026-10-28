@@ -533,8 +533,8 @@ runcmd:
           [ -z "$(tail -c1 "$f")" ] || echo >> "$f"
           printf '%s\n' "$keys" | while IFS= read -r key; do
               [ -n "$key" ] || continue
-              blob=$(printf '%s' "$key" | awk '{print $2}')
-              grep -qF "$blob" "$f" || printf '%s\n' "$key" >> "$f"
+              id=$(printf '%s' "$key" | awk '{print $1 " " $2}')
+              awk -v id="$id" '$1 !~ /^#/ { for (i = 1; i < NF; i++) if ($i ~ /^(ssh-|ecdsa-|sk-)/) { if ($i " " $(i + 1) == id) found = 1; break } } END { exit !found }' "$f" || printf '%s\n' "$key" >> "$f"
           done
       done
       echo 'HomeStack: ensured SSH keys from Cloud-Init'
@@ -669,8 +669,8 @@ runcmd:
           [ -z "$(tail -c1 "$f")" ] || echo >> "$f"
           printf '%s\n' "$keys" | while IFS= read -r key; do
               [ -n "$key" ] || continue
-              blob=$(printf '%s' "$key" | awk '{print $2}')
-              grep -qF "$blob" "$f" || printf '%s\n' "$key" >> "$f"
+              id=$(printf '%s' "$key" | awk '{print $1 " " $2}')
+              awk -v id="$id" '$1 !~ /^#/ { for (i = 1; i < NF; i++) if ($i ~ /^(ssh-|ecdsa-|sk-)/) { if ($i " " $(i + 1) == id) found = 1; break } } END { exit !found }' "$f" || printf '%s\n' "$key" >> "$f"
           done
       done
       echo 'HomeStack: ensured SSH keys from Cloud-Init'

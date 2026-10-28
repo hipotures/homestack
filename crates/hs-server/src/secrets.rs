@@ -60,29 +60,102 @@ fn secrets_dir(state_dir: &Path) -> PathBuf {
     state_dir.join("secrets")
 }
 
-/// Write `bytes` to `path` atomically, mode `0600`, in a `0700` directory.
-fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    let dir = path
-        .parent()
-        .ok_or_else(|| std::io::Error::other("no parent directory"))?;
-    std::fs::create_dir_all(dir)?;
-    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
-    let name = path
-        .file_name()
-        .ok_or_else(|| std::io::Error::other("no file name"))?
-        .to_string_lossy();
-    let temporary = dir.join(format!(".{name}.tmp"));
-    {
+/// Serializes the secret updates of the API: each one reads, writes and
+/// swaps in its state alone.
+static SECRET_WRITES: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// The new content of a secret file, written and synced next to it under a
+/// unique name; removed when dropped unless [`Staged::commit`] renamed it.
+struct Staged {
+    temporary: PathBuf,
+    path: PathBuf,
+}
+
+impl Staged {
+    /// Write `bytes` for `path`, mode `0600`, in a `0700` directory; the
+    /// file at `path` is not touched.
+    fn new(path: &Path, bytes: &[u8]) -> std::io::Result<Self> {
+        let dir = path
+            .parent()
+            .ok_or_else(|| std::io::Error::other("no parent directory"))?;
+        std::fs::create_dir_all(dir)?;
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
+        let name = path
+            .file_name()
+            .ok_or_else(|| std::io::Error::other("no file name"))?
+            .to_string_lossy();
+        let staged = Self {
+            temporary: dir.join(format!(".{name}.{}.tmp", uuid::Uuid::new_v4())),
+            path: path.to_owned(),
+        };
         let mut file = std::fs::OpenOptions::new()
             .write(true)
-            .create(true)
-            .truncate(true)
+            .create_new(true)
             .mode(0o600)
-            .open(&temporary)?;
+            .open(&staged.temporary)?;
         file.write_all(bytes)?;
         file.sync_all()?;
+        Ok(staged)
     }
-    std::fs::rename(&temporary, path)
+
+    /// Replace the file at `path` with the staged one in one rename. The
+    /// rename is the change: a failed sync of the directory afterwards is
+    /// only logged, so an error always means the old file is still there.
+    fn commit(&self) -> std::io::Result<()> {
+        std::fs::rename(&self.temporary, &self.path)?;
+        if let Some(dir) = self.path.parent()
+            && let Err(error) = std::fs::File::open(dir).and_then(|dir| dir.sync_all())
+        {
+            tracing::warn!(%error, "could not sync the secrets directory");
+        }
+        Ok(())
+    }
+}
+
+impl Drop for Staged {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.temporary);
+    }
+}
+
+/// Write `bytes` to `path` atomically, mode `0600`, in a `0700` directory.
+fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    Staged::new(path, bytes)?.commit()
+}
+
+/// How to put one file of the TLS pair back as it was: its old content
+/// staged, or no file.
+enum Restore {
+    Staged(Staged),
+    Absent(PathBuf),
+}
+
+impl Restore {
+    fn new(path: &Path) -> std::io::Result<Self> {
+        Ok(match read_optional(path)? {
+            Some(text) => Self::Staged(Staged::new(path, text.as_bytes())?),
+            None => Self::Absent(path.to_owned()),
+        })
+    }
+
+    fn apply(&self) -> std::io::Result<()> {
+        match self {
+            Self::Staged(staged) => staged.commit(),
+            Self::Absent(path) => match std::fs::remove_file(path) {
+                Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error),
+                _ => Ok(()),
+            },
+        }
+    }
+}
+
+/// Put the previous key and certificate back after a failed replacement.
+fn restore_pair(restore: &[Restore]) {
+    for file in restore {
+        if let Err(error) = file.apply() {
+            tracing::error!(%error, "could not put the previous certificate back");
+        }
+    }
 }
 
 fn read_optional(path: &Path) -> std::io::Result<Option<String>> {
@@ -166,15 +239,21 @@ pub async fn put_pve_token(State(state): State<AppState>, body: Bytes) -> Result
         )
     })?;
     let line = Secret::new(format!("{}\n", text.expose().trim()));
+    let _writing = SECRET_WRITES.lock().await;
+    // The client is built before anything is stored, and swapped in only
+    // after the token is: a failure leaves the stored and the used token
+    // as they were.
+    let client = state.pve.prepare(token).map_err(ApiError::from)?;
     write_private(&secrets_dir(&dir).join("pve-token"), line.expose().as_bytes()).map_err(|e| stored_error(&e))?;
-    let id = token.id().to_owned();
-    state.pve.replace(token).map_err(ApiError::from)?;
+    let id = state.pve.install(client);
     tracing::info!(pve_token = id, "Proxmox token replaced");
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// Replace the certificate Caddy serves, then make Caddy load it. If Caddy
-/// refuses it, the previous one is put back.
+/// Replace the certificate Caddy serves, then make Caddy load it. The key
+/// and certificate change together: the new files and copies of the old
+/// ones are staged first, and if a rename or Caddy fails, the previous
+/// pair is put back.
 #[utoipa::path(
     put,
     path = "/v1/secrets/tls",
@@ -207,12 +286,17 @@ pub async fn put_tls(State(state): State<AppState>, headers: HeaderMap, body: By
     let dir = tls_dir(&state_dir(&state)?);
     let cert_path = dir.join("cert.pem");
     let key_path = dir.join("key.pem");
-    let previous = (
-        read_optional(&cert_path).map_err(|e| stored_error(&e))?,
-        read_optional(&key_path).map_err(|e| stored_error(&e))?.map(Secret::new),
-    );
-    write_private(&key_path, pair.key.expose().as_bytes()).map_err(|e| stored_error(&e))?;
-    write_private(&cert_path, pair.cert.as_bytes()).map_err(|e| stored_error(&e))?;
+    let _writing = SECRET_WRITES.lock().await;
+    let restore = [
+        Restore::new(&key_path).map_err(|e| stored_error(&e))?,
+        Restore::new(&cert_path).map_err(|e| stored_error(&e))?,
+    ];
+    let key = Staged::new(&key_path, pair.key.expose().as_bytes()).map_err(|e| stored_error(&e))?;
+    let cert = Staged::new(&cert_path, pair.cert.as_bytes()).map_err(|e| stored_error(&e))?;
+    if let Err(error) = key.commit().and_then(|()| cert.commit()) {
+        restore_pair(&restore);
+        return Err(stored_error(&error));
+    }
     let Some(admin) = &state.instance.caddy_admin else {
         tracing::info!("certificate replaced");
         return Ok(StatusCode::NO_CONTENT);
@@ -227,12 +311,9 @@ pub async fn put_tls(State(state): State<AppState>, headers: HeaderMap, body: By
                 error,
                 "Caddy did not load the new certificate; the previous one is put back"
             );
-            if let (Some(cert), Some(key)) = previous {
-                write_private(&key_path, key.expose().as_bytes()).map_err(|e| stored_error(&e))?;
-                write_private(&cert_path, cert.as_bytes()).map_err(|e| stored_error(&e))?;
-                if let Err(error) = reload_caddy(admin).await {
-                    tracing::error!(error, "Caddy did not load the previous certificate either");
-                }
+            restore_pair(&restore);
+            if let Err(error) = reload_caddy(admin).await {
+                tracing::error!(error, "Caddy did not load the previous certificate either");
             }
             Err(ApiError::new(
                 ErrorCode::ValidationFailed,

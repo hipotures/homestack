@@ -1339,7 +1339,7 @@
         "tags": [
           "config"
         ],
-        "summary": "Replace the certificate Caddy serves, then make Caddy load it. If Caddy\nrefuses it, the previous one is put back.",
+        "summary": "Replace the certificate Caddy serves, then make Caddy load it. The key\nand certificate change together: the new files and copies of the old\nones are staged first, and if a rename or Caddy fails, the previous\npair is put back.",
         "operationId": "put_tls",
         "requestBody": {
           "content": {
@@ -3747,7 +3747,8 @@
             "type": [
               "boolean",
               "null"
-            ]
+            ],
+            "description": "The HOME filesystem has the expected ext4 label. `None` while not\nknown, and always for a virtiofs home: its host directory carries no\nlabel HomeStack checks."
           },
           "home_label": {
             "type": [
@@ -3768,7 +3769,7 @@
               "boolean",
               "null"
             ],
-            "description": "A mounted filesystem has the expected ext4 label or virtiofs tag."
+            "description": "A mounted filesystem has the expected ext4 label or virtiofs tag;\n`None` while not known (e.g. no virtiofs measurement yet)."
           },
           "home_serial": {
             "type": [

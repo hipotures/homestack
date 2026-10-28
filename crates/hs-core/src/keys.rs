@@ -114,6 +114,26 @@ pub fn parse_authorized_key_records(text: &str) -> Result<Vec<KeyRecord>, CoreEr
         .collect()
 }
 
+/// The `type blob` identities of the keys in an `authorized_keys` file,
+/// whatever their options and comments: on each line that is not blank or a
+/// `#` comment, the first field starting with `ssh-`, `ecdsa-` or `sk-` and
+/// the field after it. What the key step of the vendor snippets matches, so
+/// a blob in a comment or in other text is no key.
+#[must_use]
+pub fn installed_key_identities(text: &str) -> std::collections::HashSet<String> {
+    text.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .filter_map(|line| {
+            let fields: Vec<&str> = line.split_whitespace().collect();
+            let at = fields
+                .iter()
+                .position(|field| ["ssh-", "ecdsa-", "sk-"].iter().any(|prefix| field.starts_with(prefix)))?;
+            Some(format!("{} {}", fields[at], fields.get(at + 1)?))
+        })
+        .collect()
+}
+
 /// The keys for a new workspace and where they came from.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkspaceKeys {
