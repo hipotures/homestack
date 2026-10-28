@@ -127,7 +127,11 @@ impl Setup {
 
 /// Start the worker; it ends on [`Command::Cancel`], when `commands` closes,
 /// or after an uninstall.
-pub fn spawn(setup: Setup, commands: Receiver<Command>, tell: impl Fn(Event) + Send + Sync + 'static) {
+pub fn spawn(
+    setup: Setup,
+    commands: Receiver<Command>,
+    tell: impl Fn(Event) + Send + Sync + 'static,
+) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
         // The servers' DNS lookups and the deployment use the runtime.
         let _entered = setup.handle.enter();
@@ -136,7 +140,7 @@ pub fn spawn(setup: Setup, commands: Receiver<Command>, tell: impl Fn(Event) + S
             Mode::Service => super::service_deploy::work(&setup, &commands, &tell),
             Mode::Install | Mode::Uninstall => work(&setup, &commands, &tell),
         }
-    });
+    })
 }
 
 /// A review made from these answers and this domain.

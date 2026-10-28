@@ -153,26 +153,7 @@ pub async fn plan_resize(
         )));
     }
     // The growth must fit in the storage's free space (owner, 2026-10-15).
-    let storage = disk_volume(&disk_cfg)
-        .split_once(':')
-        .map(|(storage, _)| storage.to_owned())
-        .unwrap_or_default();
-    #[allow(clippy::cast_precision_loss, reason = "sizes in GiB are small")]
-    let growth_bytes = ((target_gib - current).max(0.0) * 1024.0 * 1024.0 * 1024.0) as u64;
-    if growth_bytes > 0 && !storage.is_empty() {
-        let status = pve
-            .get(&format!("/nodes/{}/storage/{storage}/status", info.node), &[])
-            .await?;
-        if let Some(avail) = status.get("avail").and_then(Value::as_u64)
-            && growth_bytes > avail
-        {
-            return Err(CoreError::Refused(format!(
-                "Not enough space on {storage}: {disk} would grow by {}G, {}G is free",
-                growth_bytes / (1024 * 1024 * 1024),
-                avail / (1024 * 1024 * 1024)
-            )));
-        }
-    }
+    let capacity = require_growth_space(pve, &info.node, disk_volume(&disk_cfg), current, target_gib).await?;
     let guest = inspect_guest(pve, cfg, &info.node, vmid, role, &info.home_label).await?;
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss, reason = "Python's int()")]
     let current_bytes = (current * 1024.0 * 1024.0 * 1024.0) as u64;
@@ -203,7 +184,36 @@ pub async fn plan_resize(
         "target_size_gib": target_gib,
         "guest": guest,
         "secrets_required": secrets,
+        "capacity": capacity,
     }))
+}
+
+/// Admission of growing `volume` on `node` from `current` to `target` GiB:
+/// the whole growth must fit in the free space of the volume's storage. A
+/// resize to the current size (finishing the guest steps) needs none.
+async fn require_growth_space(
+    pve: &impl Pve,
+    node: &str,
+    volume: &str,
+    current: f64,
+    target: f64,
+) -> Result<Value, CoreError> {
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "sizes in GiB are small"
+    )]
+    let bytes = |gib: f64| (gib * 1024.0 * 1024.0 * 1024.0) as u64;
+    let growth = bytes(target).saturating_sub(bytes(current));
+    if growth == 0 {
+        return Ok(Value::Null);
+    }
+    let storage = volume
+        .split_once(':')
+        .map(|(storage, _)| storage)
+        .filter(|storage| !storage.is_empty())
+        .ok_or_else(|| CoreError::Refused(format!("Cannot determine the storage of volume {volume}")))?;
+    crate::capacity::require_space(pve, node, storage, growth).await
 }
 
 fn float(plan: &Value, key: &str) -> Result<f64, CoreError> {
@@ -354,7 +364,11 @@ pub async fn resize_workspace(
     if target > current {
         let step = "Grow the disk in Proxmox";
         step_started(observer, step);
-        let grown = grow_disk(pve, node, vmid, disk, size, &digest, timing, observer).await;
+        let grown = async {
+            require_growth_space(pve, node, volume, current, target).await?;
+            grow_disk(pve, node, vmid, disk, size, &digest, timing, observer).await
+        }
+        .await;
         step_finished(observer, step, grown.is_ok());
         grown?;
     }

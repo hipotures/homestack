@@ -43,7 +43,7 @@ pub struct SshWorkspace {
 impl SshWorkspace {
     /// Open `master` (the touch of a security key happens here).
     pub fn open(system: Arc<dyn System>, home: &Path, mut master: Master) -> Result<Self, AppError> {
-        master.open(system.as_ref(), home)?;
+        master.open(&system, home)?;
         Ok(Self { system, master })
     }
 
@@ -116,12 +116,6 @@ impl Workspace for SshWorkspace {
             )));
         }
         Ok(())
-    }
-}
-
-impl Drop for SshWorkspace {
-    fn drop(&mut self) {
-        self.master.close(self.system.as_ref());
     }
 }
 

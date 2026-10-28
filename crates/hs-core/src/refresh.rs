@@ -664,6 +664,19 @@ fn root_of(cfg: &Config, vm_cfg: &VmConfig) -> String {
 
 // --- plan --------------------------------------------------------------------
 
+/// The size of the root `import-from` copies from Gold's root disk.
+fn replacement_root_bytes(gold_disk_config: &str) -> Result<u64, CoreError> {
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "sizes in GiB are small"
+    )]
+    parse_disk_size_gb(gold_disk_config)
+        .map(|gib| (gib * 1024.0 * 1024.0 * 1024.0) as u64)
+        .filter(|bytes| *bytes > 0)
+        .ok_or_else(|| CoreError::Refused("Cannot determine the size of Gold's root disk".to_owned()))
+}
+
 /// `build_refresh_plan` for a workspace in `pool`. With a journal in the
 /// VM's description the plan is `mode="recover"` and lists every way the VM
 /// disagrees with it; that is refused unless `force` (rule 5 of decision 4).
@@ -759,6 +772,9 @@ pub async fn plan_refresh(
         .get(&cfg.root_disk)
         .filter(|value| !value.is_empty())
         .ok_or_else(|| CoreError::Failed(format!("Gold VM {gold} has no {} disk", cfg.root_disk)))?;
+    let root_bytes = replacement_root_bytes(disk_cfg)?;
+    // The new root is allocated while the old one still exists.
+    let capacity = crate::capacity::require_space(pve, &info.node, &root_storage, root_bytes).await?;
     Ok(json!({
         "command": "refresh",
         "mode": "replace",
@@ -774,6 +790,8 @@ pub async fn plan_refresh(
         "root_storage": root_storage,
         "root_disk": cfg.root_disk,
         "root_disk_gb": parse_disk_size_gb(disk_cfg),
+        "root_bytes": root_bytes,
+        "capacity": capacity,
         "gold_root_disk_config": disk_cfg,
         "gold_root_volume": disk_volume(disk_cfg),
         "home_disk": cfg.home_disk,
@@ -885,6 +903,7 @@ async fn replace<P: Pve, O: Observer>(
     let root_storage = text(plan, "root_storage")?;
     let gold_root = text(plan, "gold_root_volume")?;
     let gold_disk_config = text(plan, "gold_root_disk_config")?;
+    let root_bytes = replacement_root_bytes(gold_disk_config)?;
     let initial = PowerState::parse(text(plan, "status")?).ok_or_else(|| {
         CoreError::Failed(format!(
             "Workspace VM {vmid} has unsupported pre-refresh power state {}",
@@ -951,6 +970,9 @@ async fn replace<P: Pve, O: Observer>(
         rolling_back: false,
     };
     validate_journal(cfg, &journal)?;
+    // Free space may have changed since the plan; check before the journal
+    // so a refused refresh needs no recovery.
+    crate::capacity::require_space(vm.pve, node, root_storage, root_bytes).await?;
     let vm_cfg = vm.write(&vm_cfg, Some(&journal)).await?;
     *journal_slot = Some(journal.clone());
 

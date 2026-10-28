@@ -1,7 +1,9 @@
 //! The workspace SSH master (Python `WorkspaceSSH.__enter__`, I2): one
 //! owned, non-expiring master connection; child connections cannot
-//! authenticate on their own. With `fido_devices` set, the master runs in a
-//! sandbox that shows only the preferred kind of security key.
+//! authenticate on their own. Dropping the [`Master`] stops it with
+//! `ssh -O exit` through its control socket, which never authenticates.
+//! With `fido_devices` set, the master runs in a sandbox that shows only the
+//! preferred kind of security key.
 //!
 //! The commands that use it (`setup`, `repo`) arrive in phase 14; this
 //! module carries the opening, its checks and its messages.
@@ -41,6 +43,8 @@ pub struct Master {
     directory: Option<tempfile::TempDir>,
     control: String,
     opened: bool,
+    /// What opened the master, and stops it.
+    system: Option<Arc<dyn System>>,
 }
 
 impl Master {
@@ -62,6 +66,7 @@ impl Master {
             directory: None,
             control: String::new(),
             opened: false,
+            system: None,
         }
     }
 
@@ -160,8 +165,9 @@ impl Master {
         fido::sandbox_prefix(system, &devices)
     }
 
-    /// Open the master. Nothing is left behind on failure.
-    pub fn open(&mut self, system: &dyn System, home: &Path) -> Result<(), AppError> {
+    /// Open the master. Nothing is left behind on failure; once open, it is
+    /// stopped when the `Master` is dropped.
+    pub fn open(&mut self, system: &Arc<dyn System>, home: &Path) -> Result<(), AppError> {
         if system.which("ssh").is_none() {
             return Err(AppError::new("Required local command 'ssh' was not found"));
         }
@@ -173,9 +179,10 @@ impl Master {
             .map_err(|error| AppError::new(format!("Could not create the SSH control directory: {error}")))?;
         self.control = directory.path().join("master").display().to_string();
         self.directory = Some(directory);
-        let result = self.start(system, home);
+        self.system = Some(Arc::clone(system));
+        let result = self.start(system.as_ref(), home);
         if result.is_err() {
-            self.close(system);
+            self.close();
         }
         result
     }
@@ -279,20 +286,24 @@ impl Master {
         Ok(())
     }
 
-    /// Stop the master and remove its control directory.
-    pub fn close(&mut self, system: &dyn System) {
-        if self.opened || (!self.control.is_empty() && Path::new(&self.control).exists()) {
+    /// Stop the master through its control socket (a control command never
+    /// authenticates), then remove the control directory.
+    fn close(&mut self) {
+        if let Some(system) = self.system.take()
+            && (self.opened || (!self.control.is_empty() && Path::new(&self.control).exists()))
+        {
             let mut exit = vec!["ssh".to_owned()];
             exit.extend(self.child_options());
             exit.extend(["-O".to_owned(), "exit".to_owned(), self.alias.clone()]);
             let _ = system.run(&exit);
         }
-        self.forget();
-    }
-
-    /// Drop the control directory without asking ssh to stop anything.
-    pub fn forget(&mut self) {
         self.opened = false;
         self.directory = None;
+    }
+}
+
+impl Drop for Master {
+    fn drop(&mut self) {
+        self.close();
     }
 }

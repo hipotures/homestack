@@ -190,6 +190,16 @@ impl PveClient {
         self.request(Method::GET, segments, query, &[]).await
     }
 
+    /// The endpoints in the order the next request tries them: the one that
+    /// answered last first, then the rest as configured.
+    #[must_use]
+    pub fn endpoints_in_order(&self) -> Vec<Url> {
+        let start = self.preferred.load(Ordering::Relaxed);
+        (0..self.endpoints.len())
+            .map(|offset| self.endpoints[(start + offset) % self.endpoints.len()].clone())
+            .collect()
+    }
+
     /// Call an API path given as segments below `/api2/json`.
     ///
     /// Endpoints are tried starting with the one that answered last. Only a

@@ -455,8 +455,9 @@ impl SiteInit for Initializer {
         let content = configuration(&self.pangolin.ctx.url, &held.credential)?;
         say("  installing the Site credential through the container's console");
         // Echo off first; the receiver reads the configuration from the here-document.
+        // The marker gets a line of its own: the shell's prompt precedes the output.
         let script = Zeroizing::new(format!(
-            "stty -echo\nenv HOMESTACK_MANAGED_HOME=1 {TOOL} <<'HOMESTACK-SITE'\n{}HOMESTACK-SITE\necho \"HOMESTACK-SITE-\"\"DIGEST $(env HOMESTACK_MANAGED_HOME=1 {TOOL} --digest)\"\nexit\n",
+            "stty -echo\nenv HOMESTACK_MANAGED_HOME=1 {TOOL} <<'HOMESTACK-SITE'\n{}HOMESTACK-SITE\nprintf '\\n%s\\n' \"HOMESTACK-SITE-\"\"DIGEST $(env HOMESTACK_MANAGED_HOME=1 {TOOL} --digest)\"\nexit\n",
             content.as_str()
         ));
         let output = tokio::runtime::Handle::current().block_on(hs_deploy::console::run(

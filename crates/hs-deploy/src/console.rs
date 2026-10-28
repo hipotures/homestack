@@ -10,17 +10,28 @@ use std::time::{Duration, Instant};
 
 use futures_util::{SinkExt, StreamExt};
 use hs_core::pve::Pve;
+use hs_pve::PveClient;
 use rustls::pki_types::{CertificateDer, ServerName, pem::PemObject};
+use tokio::net::TcpStream;
+use tokio_rustls::client::TlsStream;
 use tokio_tungstenite::tungstenite::{Message, client::IntoClientRequest, http::HeaderValue};
+use url::Url;
 
 use crate::config::DeployConfig;
 
-/// Run `script` in CT `ctid`'s console shell; what it printed, up to the
-/// first line that contains `until` (after the shell's prompt, say), which must
-/// appear within `limit`. The script must print `until` without writing it
-/// literally (e.g. `"MARK""ER"`), since the terminal may echo its input.
+/// Run `script` in CT `ctid`'s console shell; what it printed, through the
+/// first complete line that starts with `until`, all within `limit`. The
+/// script must print `until` at the start of a line (after a newline of its
+/// own, since the shell's prompt precedes a command's output) without
+/// writing it literally (e.g. `"MARK""ER"`), since the terminal may echo
+/// its input.
+///
+/// The console's WebSocket goes to the endpoint that answered `termproxy`,
+/// or, if that one cannot be connected to, the next configured one: the
+/// ticket is signed with the cluster's key and `vncwebsocket` is proxied
+/// to `node`, so any endpoint of the cluster accepts it.
 pub async fn run(
-    pve: &impl Pve,
+    pve: &PveClient,
     config: &DeployConfig,
     node: &str,
     ctid: u32,
@@ -29,9 +40,12 @@ pub async fn run(
     limit: Duration,
 ) -> Result<String, String> {
     let fail = |what: &str| format!("CT {ctid} console: {what}");
-    let proxy = pve
-        .post(&format!("/nodes/{node}/lxc/{ctid}/termproxy"), &[])
+    let started = Instant::now();
+    let next = |started: Instant| limit.checked_sub(started.elapsed()).filter(|left| !left.is_zero());
+    let left = next(started).ok_or_else(|| fail("no time left"))?;
+    let proxy = tokio::time::timeout(left, pve.post(&format!("/nodes/{node}/lxc/{ctid}/termproxy"), &[]))
         .await
+        .map_err(|_| fail("termproxy did not answer"))?
         .map_err(|e| fail(&e.to_string()))?;
     let port = proxy["port"]
         .as_u64()
@@ -39,11 +53,26 @@ pub async fn run(
         .ok_or_else(|| fail("no port"))?;
     let ticket = proxy["ticket"].as_str().ok_or_else(|| fail("no ticket"))?;
     let user = proxy["user"].as_str().ok_or_else(|| fail("no user"))?;
-    let endpoint = config.pve.endpoints.first().ok_or("[pve] endpoints is empty")?;
-    let host = endpoint
-        .host_str()
-        .ok_or_else(|| fail("endpoint without host"))?
-        .to_owned();
+    let tls_config = Arc::new(tls_config(config)?);
+    let mut failures = Vec::new();
+    let mut connected = None;
+    for endpoint in pve.endpoints_in_order() {
+        let left = next(started).ok_or_else(|| fail("no endpoint answered in time"))?;
+        let attempt = connect(&endpoint, &tls_config, left.min(hs_pve::DEFAULT_CONNECT_TIMEOUT)).await;
+        match attempt {
+            Ok(tls) => {
+                connected = Some((endpoint, tls));
+                break;
+            }
+            Err(error) => failures.push(format!("{}: {error}", endpoint.origin().ascii_serialization())),
+        }
+    }
+    let (endpoint, tls) = connected.ok_or_else(|| {
+        fail(&format!(
+            "no Proxmox endpoint could be connected to ({})",
+            failures.join("; ")
+        ))
+    })?;
     let mut url = endpoint.clone();
     url.set_scheme("wss").map_err(|()| fail("endpoint is not HTTPS"))?;
     url.set_path(&format!("/api2/json/nodes/{node}/lxc/{ctid}/vncwebsocket"));
@@ -59,23 +88,13 @@ pub async fn run(
     let mut authorization = HeaderValue::from_str(&token.header_value()).map_err(|_| fail("invalid token"))?;
     authorization.set_sensitive(true);
     request.headers_mut().insert("Authorization", authorization);
-
-    let tcp = tokio::net::TcpStream::connect((host.as_str(), endpoint.port_or_known_default().unwrap_or(8006)))
+    // Once the request is sent the ticket may be spent: no other endpoint.
+    let left = next(started).ok_or_else(|| fail("no answer"))?;
+    let (mut socket, _) = tokio::time::timeout(left, tokio_tungstenite::client_async(request, tls))
         .await
-        .map_err(|e| fail(&e.to_string()))?;
-    let tls = tokio_rustls::TlsConnector::from(Arc::new(tls_config(config)?))
-        .connect(
-            ServerName::try_from(host.clone()).map_err(|_| fail("invalid host name"))?,
-            tcp,
-        )
-        .await
-        .map_err(|e| fail(&format!("TLS: {e}")))?;
-    let (mut socket, _) = tokio_tungstenite::client_async(request, tls)
-        .await
+        .map_err(|_| fail("no answer"))?
         .map_err(|e| fail(&e.to_string()))?;
 
-    let started = Instant::now();
-    let next = |started: Instant| limit.checked_sub(started.elapsed()).filter(|left| !left.is_zero());
     socket
         .send(Message::text(format!("{user}:{ticket}\n")))
         .await
@@ -118,9 +137,9 @@ pub async fn run(
             .map_err(|e| fail(&e.to_string()))?;
     }
     loop {
-        if let Some(at) = output.lines().position(|line| line.contains(until)) {
+        if let Some(through) = through_marker(&output, until) {
             let _ = socket.close(None).await;
-            return Ok(output.lines().take(at + 1).collect::<Vec<_>>().join("\n"));
+            return Ok(through);
         }
         let left = next(started).ok_or_else(|| fail("the script did not finish"))?;
         match tokio::time::timeout(left, socket.next()).await {
@@ -129,6 +148,42 @@ pub async fn run(
             Ok(None) | Err(_) => return Err(fail("the script did not finish")),
         }
     }
+}
+
+/// A verified TLS connection to `endpoint`'s host, within `limit`.
+async fn connect(
+    endpoint: &Url,
+    tls_config: &Arc<rustls::ClientConfig>,
+    limit: Duration,
+) -> Result<TlsStream<TcpStream>, String> {
+    let host = endpoint.host_str().ok_or("endpoint without host")?.to_owned();
+    let name = ServerName::try_from(host.clone()).map_err(|_| "invalid host name")?;
+    let port = endpoint.port_or_known_default().unwrap_or(8006);
+    tokio::time::timeout(limit, async {
+        let tcp = TcpStream::connect((host.as_str(), port))
+            .await
+            .map_err(|e| e.to_string())?;
+        tokio_rustls::TlsConnector::from(Arc::clone(tls_config))
+            .connect(name, tcp)
+            .await
+            .map_err(|e| format!("TLS: {e}"))
+    })
+    .await
+    .map_err(|_| "connection timed out".to_owned())?
+}
+
+/// `output` through its first complete line (ended by a newline) that starts
+/// with `until`; a terminal ends lines with `\r\n`.
+fn through_marker(output: &str, until: &str) -> Option<String> {
+    let mut end = 0;
+    for line in output.split_inclusive('\n') {
+        let text = line.strip_suffix('\n')?;
+        end += line.len();
+        if text.trim_matches('\r').starts_with(until) {
+            return Some(output[..end].lines().collect::<Vec<_>>().join("\n"));
+        }
+    }
+    None
 }
 
 /// The system roots and the optional `[pve] ca_file`, as for the API.

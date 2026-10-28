@@ -632,6 +632,8 @@ impl Connection {
 struct Installing {
     bridge: Option<Bridge>,
     worker: Option<std::sync::mpsc::Sender<Command>>,
+    /// The worker's thread, which owns its SSH master.
+    thread: Option<std::thread::JoinHandle<()>>,
     /// The worker's: set, ssh stops connecting.
     stop: Arc<AtomicBool>,
     /// ssh's question waiting for its answer.
@@ -732,10 +734,24 @@ impl Installing {
         };
         let (sender, receiver) = std::sync::mpsc::channel();
         let updates = updates.clone();
-        installing::spawn(setup, receiver, move |event| {
+        self.thread = Some(installing::spawn(setup, receiver, move |event| {
             let _ = updates.send(Update::Install(event));
-        });
+        }));
         self.worker = Some(sender);
+    }
+
+    /// After [`Command::Cancel`], wait a little for the worker, so the
+    /// master connection it keeps does not outlive the TUI.
+    fn wait(&mut self) {
+        let Some(thread) = self.thread.take() else {
+            return;
+        };
+        for _ in 0..30 {
+            if thread.is_finished() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
     }
 }
 
@@ -1020,6 +1036,7 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
                             worker.close();
                         }
                         installing.send(Command::Cancel, &mut app, ctx, &updates);
+                        installing.wait();
                         return Ok(0);
                     }
                     match request {

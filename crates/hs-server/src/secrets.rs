@@ -158,6 +158,23 @@ fn restore_pair(restore: &[Restore]) {
     }
 }
 
+/// Replace the stored key and certificate together. The new files and
+/// copies of the old ones are staged first; if a rename fails, the previous
+/// pair is put back (a file that did not exist is removed). The copies are
+/// returned to put the previous pair back later.
+fn commit_pair(dir: &Path, pair: &TlsPair) -> std::io::Result<[Restore; 2]> {
+    let key_path = dir.join("key.pem");
+    let cert_path = dir.join("cert.pem");
+    let restore = [Restore::new(&key_path)?, Restore::new(&cert_path)?];
+    let key = Staged::new(&key_path, pair.key.expose().as_bytes())?;
+    let cert = Staged::new(&cert_path, pair.cert.as_bytes())?;
+    if let Err(error) = key.commit().and_then(|()| cert.commit()) {
+        restore_pair(&restore);
+        return Err(error);
+    }
+    Ok(restore)
+}
+
 fn read_optional(path: &Path) -> std::io::Result<Option<String>> {
     match std::fs::read_to_string(path) {
         Ok(text) => Ok(Some(text)),
@@ -166,20 +183,30 @@ fn read_optional(path: &Path) -> std::io::Result<Option<String>> {
     }
 }
 
-/// Store the environment's certificate unless one is stored already (a
-/// renewed one must not be replaced by the older one at a restart).
+/// Store the environment's certificate unless a key and certificate are
+/// stored already (a renewed pair must not be replaced by the older one at
+/// a restart). A lone key or certificate is no pair: the environment's pair
+/// replaces it.
 pub fn store_bootstrap_tls(state_dir: &Path, pair: Option<&TlsPair>) -> Result<(), String> {
     let Some(pair) = pair else {
         return Ok(());
     };
     let dir = tls_dir(state_dir);
-    if dir.join("cert.pem").exists() {
-        tracing::info!("a certificate is stored; the one in the environment is not used");
-        return Ok(());
+    let fail =
+        |error: std::io::Error| format!("could not store the certificate in {}: {}", dir.display(), error.kind());
+    let exists = |name: &str| dir.join(name).try_exists().map_err(fail);
+    match (exists("key.pem")?, exists("cert.pem")?) {
+        (true, true) => {
+            tracing::info!("a certificate is stored; the one in the environment is not used");
+            return Ok(());
+        }
+        (false, false) => {}
+        (key, _) => tracing::warn!(
+            stored = if key { "key.pem" } else { "cert.pem" },
+            "only half of a certificate pair is stored; the one in the environment replaces it"
+        ),
     }
-    write_private(&dir.join("key.pem"), pair.key.expose().as_bytes())
-        .and_then(|()| write_private(&dir.join("cert.pem"), pair.cert.as_bytes()))
-        .map_err(|error| format!("could not store the certificate in {}: {}", dir.display(), error.kind()))?;
+    commit_pair(&dir, pair).map_err(fail)?;
     tracing::info!("certificate of the environment stored");
     Ok(())
 }
@@ -284,19 +311,8 @@ pub async fn put_tls(State(state): State<AppState>, headers: HeaderMap, body: By
     let pair =
         TlsPair::checked(request.cert, request.key).map_err(|m| ApiError::new(ErrorCode::ValidationFailed, m))?;
     let dir = tls_dir(&state_dir(&state)?);
-    let cert_path = dir.join("cert.pem");
-    let key_path = dir.join("key.pem");
     let _writing = SECRET_WRITES.lock().await;
-    let restore = [
-        Restore::new(&key_path).map_err(|e| stored_error(&e))?,
-        Restore::new(&cert_path).map_err(|e| stored_error(&e))?,
-    ];
-    let key = Staged::new(&key_path, pair.key.expose().as_bytes()).map_err(|e| stored_error(&e))?;
-    let cert = Staged::new(&cert_path, pair.cert.as_bytes()).map_err(|e| stored_error(&e))?;
-    if let Err(error) = key.commit().and_then(|()| cert.commit()) {
-        restore_pair(&restore);
-        return Err(stored_error(&error));
-    }
+    let restore = commit_pair(&dir, &pair).map_err(|e| stored_error(&e))?;
     let Some(admin) = &state.instance.caddy_admin else {
         tracing::info!("certificate replaced");
         return Ok(StatusCode::NO_CONTENT);

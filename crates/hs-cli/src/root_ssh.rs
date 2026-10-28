@@ -72,7 +72,7 @@ impl SshRoot {
             ]);
         }
         configure(&mut master);
-        master.open(system.as_ref(), home)?;
+        master.open(&system, home)?;
         Ok(Self { system, master, target })
     }
 
@@ -144,11 +144,5 @@ impl Root for SshRoot {
 
     fn describe(&self) -> String {
         format!("ssh {}", self.target)
-    }
-}
-
-impl Drop for SshRoot {
-    fn drop(&mut self) {
-        self.master.close(self.system.as_ref());
     }
 }

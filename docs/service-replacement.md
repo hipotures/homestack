@@ -34,9 +34,12 @@ The container keeps its CTID, so the CTID stays tied to its IP address.
   a holder to retain settings even when there are no mount-point volumes.
 - When volumes or settings must be retained, replacement first creates a
   temporary holder container on the same node, always CT 999999 named
-  `hs-holder-<ctid>`, so only one such update runs in the cluster at a time. The
-  holder is created from `alpine:3.24` with a 1 GiB root while the service still
-  runs, is never started and has no network. The configuration the new container keeps
+  `hs-holder-<ctid>`, so only one such update runs in the cluster at a time.
+  While CTID 999999 is in use on another node the replacement is refused and
+  names that node and, when readable, the CT whose update it holds. The
+  holder is created from the replacement's own template, already on the node,
+  with the new container's root size while the service still runs; no other
+  image is pulled. It is never started and has no network. The configuration the new container keeps
   (environment, features, resource options) is copied into the holder; its
   description then ends with `holder ready`. The replacement journal is PVE
   metadata, not a desktop file.

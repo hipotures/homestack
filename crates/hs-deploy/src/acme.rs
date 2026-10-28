@@ -7,6 +7,7 @@ use std::io::Write;
 use std::net::{IpAddr, SocketAddr};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use hickory_resolver::Resolver;
@@ -56,7 +57,8 @@ pub fn inspect(cert_pem: &str) -> Result<(i64, Vec<String>), String> {
     Ok((cert.validity().not_after.timestamp(), names))
 }
 
-/// The certificate in `dir`, if both files are there.
+/// The certificate in `dir`, if both files are there; read while no
+/// [`store_pair`] runs.
 pub fn stored(dir: &Path) -> Result<Option<Stored>, String> {
     let (_, cert_path, key_path) = paths(dir);
     let read = |path: &Path| match std::fs::read_to_string(path) {
@@ -64,6 +66,16 @@ pub fn stored(dir: &Path) -> Result<Option<Stored>, String> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(format!("{}: {}", path.display(), error.kind())),
     };
+    let lock_path = dir.join(".lock");
+    let lock = match std::fs::OpenOptions::new().read(true).open(&lock_path) {
+        Ok(lock) => Some(lock),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(format!("{}: {}", lock_path.display(), error.kind())),
+    };
+    if let Some(lock) = &lock {
+        lock.lock_shared()
+            .map_err(|e| format!("{}: {}", lock_path.display(), e.kind()))?;
+    }
     let (Some(cert), Some(key)) = (read(&cert_path)?, read(&key_path)?) else {
         return Ok(None);
     };
@@ -83,23 +95,106 @@ pub fn current(stored: &Stored, domain: &str, now: i64) -> bool {
     stored.names.iter().any(|name| *name == format!("*.{domain}")) && stored.not_after - now >= RENEW_DAYS * 86_400
 }
 
-fn write_private(path: &Path, text: &str) -> Result<(), String> {
-    let fail = |e: std::io::Error| format!("{}: {}", path.display(), e.kind());
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir).map_err(fail)?;
-        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)).map_err(fail)?;
+/// The new content of a private file, written and synced next to it under a
+/// name of its own; removed when dropped unless [`Staged::commit`] renamed it.
+struct Staged {
+    temporary: PathBuf,
+    path: PathBuf,
+}
+
+impl Staged {
+    /// Write `text` for `path`, mode `0600`, in a `0700` directory; the file
+    /// at `path` is not touched.
+    fn new(path: &Path, text: &str) -> std::io::Result<Self> {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let dir = path
+            .parent()
+            .ok_or_else(|| std::io::Error::other("no parent directory"))?;
+        std::fs::create_dir_all(dir)?;
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
+        let name = path
+            .file_name()
+            .ok_or_else(|| std::io::Error::other("no file name"))?
+            .to_string_lossy();
+        let staged = Self {
+            temporary: dir.join(format!(
+                ".{name}.{}-{}.tmp",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            )),
+            path: path.to_owned(),
+        };
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&staged.temporary)?;
+        file.write_all(text.as_bytes())?;
+        file.sync_all()?;
+        Ok(staged)
     }
-    let temporary = path.with_extension("tmp");
-    let mut file = std::fs::OpenOptions::new()
+
+    /// Replace the file at `path` in one rename, then sync the directory.
+    fn commit(&self) -> std::io::Result<()> {
+        std::fs::rename(&self.temporary, &self.path)?;
+        if let Some(dir) = self.path.parent() {
+            // The rename is the change; an unsynced directory only risks it
+            // after a crash.
+            let _ = std::fs::File::open(dir).and_then(|dir| dir.sync_all());
+        }
+        Ok(())
+    }
+}
+
+impl Drop for Staged {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.temporary);
+    }
+}
+
+fn write_private(path: &Path, text: &str) -> Result<(), String> {
+    Staged::new(path, text)
+        .and_then(|staged| staged.commit())
+        .map_err(|e| format!("{}: {}", path.display(), e.kind()))
+}
+
+/// Store a key and its certificate in `dir` together, one store at a time
+/// (`.lock`). Both are staged with copies of the files they replace; if a
+/// rename fails, the previous files are put back and a file that did not
+/// exist is removed, so `dir` keeps the previous pair or no pair.
+fn store_pair(dir: &Path, key: &str, cert: &str) -> Result<(), String> {
+    let (_, cert_path, key_path) = paths(dir);
+    let fail = |e: std::io::Error| format!("could not store the certificate in {}: {}", dir.display(), e.kind());
+    std::fs::create_dir_all(dir).map_err(fail)?;
+    let lock = std::fs::OpenOptions::new()
         .write(true)
         .create(true)
-        .truncate(true)
+        .truncate(false)
         .mode(0o600)
-        .open(&temporary)
+        .open(dir.join(".lock"))
         .map_err(fail)?;
-    file.write_all(text.as_bytes()).map_err(fail)?;
-    file.sync_all().map_err(fail)?;
-    std::fs::rename(&temporary, path).map_err(fail)
+    lock.lock().map_err(fail)?;
+    let previous = |path: &Path| match std::fs::read_to_string(path) {
+        Ok(text) => Staged::new(path, &text).map(Some),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error),
+    };
+    let restore = [
+        (key_path.as_path(), previous(&key_path).map_err(fail)?),
+        (cert_path.as_path(), previous(&cert_path).map_err(fail)?),
+    ];
+    let new_key = Staged::new(&key_path, key).map_err(fail)?;
+    let new_cert = Staged::new(&cert_path, cert).map_err(fail)?;
+    if let Err(error) = new_key.commit().and_then(|()| new_cert.commit()) {
+        for (path, old) in &restore {
+            let _ = match old {
+                Some(old) => old.commit(),
+                None => std::fs::remove_file(path),
+            };
+        }
+        return Err(fail(error));
+    }
+    Ok(())
 }
 
 /// Load or create an account in a dedicated private ACME directory.
@@ -267,10 +362,8 @@ pub async fn finish(order: &mut instant_acme::Order, dir: &Path) -> Result<Store
         .poll_certificate(&policy)
         .await
         .map_err(|e| format!("ACME certificate: {e}"))?;
-    let (_, cert_path, key_path) = paths(dir);
-    write_private(&key_path, &key)?;
-    write_private(&cert_path, &cert)?;
     let (not_after, names) = inspect(&cert)?;
+    store_pair(dir, &key, &cert)?;
     Ok(Stored {
         cert,
         key,

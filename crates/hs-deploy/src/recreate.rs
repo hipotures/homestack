@@ -25,10 +25,9 @@ pub struct Replace<'a> {
     pub note: &'a str,
 }
 
-/// The one holder CTID: easy to spot in logs, and PVE refuses a second one.
+/// The one holder CTID: easy to spot in logs, and PVE refuses a second one
+/// anywhere in the cluster.
 pub const HOLDER_ID: u32 = 999_999;
-/// The holder is never started; the smallest image will do.
-const HOLDER_IMAGE: &str = "docker.io/library/alpine:3.24";
 const HOLDER: &str = "HomeStack holder for CT";
 const READY: &str = "holder ready";
 
@@ -110,10 +109,47 @@ async fn on_node(pve: &impl Pve, node: &str) -> Result<Vec<u32>, String> {
         .collect()
 }
 
+/// Refuse while the holder CTID is in use on a node other than `node`. A
+/// CTID is cluster-wide, so no second holder can be made, and a holder
+/// elsewhere is never taken for this one. `/cluster/resources` may lag: a
+/// holder just removed elsewhere delays the replacement, and one just made
+/// elsewhere still makes PVE refuse to create another.
+async fn holder_elsewhere(pve: &impl Pve, node: &str) -> Result<(), String> {
+    let resources = pve
+        .get("/cluster/resources", &[("type", "vm")])
+        .await
+        .map_err(|e| format!("cluster resources: {e}"))?;
+    let Some(item) = resources
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|item| item["vmid"].as_u64() == Some(u64::from(HOLDER_ID)) && item["node"].as_str() != Some(node))
+    else {
+        return Ok(());
+    };
+    let other = item["node"].as_str().unwrap_or("another node");
+    let owner = if item["type"] == "lxc" {
+        config(pve, other, HOLDER_ID)
+            .await
+            .ok()
+            .and_then(|cfg| holder_of(text(&cfg, "description")))
+    } else {
+        None
+    };
+    Err(match owner {
+        Some(owner) => format!(
+            "Holder CT {HOLDER_ID} on {other} keeps the replacement of CT {owner}; finish that update on {other} first"
+        ),
+        None => format!("ID {HOLDER_ID} is in use on {other}; free it before replacing a container"),
+    })
+}
+
 /// Whether the holder on `node` holds `ctid` and is ready; a holder of
-/// another container stops this replacement until that one finishes.
+/// another container, or one on another node, stops this replacement until
+/// that one finishes.
 async fn holder(pve: &impl Pve, node: &str, ctid: u32, cts: &[u32]) -> Result<Option<bool>, String> {
     if !cts.contains(&HOLDER_ID) {
+        holder_elsewhere(pve, node).await?;
         return Ok(None);
     }
     let cfg = config(pve, node, HOLDER_ID).await?;
@@ -158,7 +194,10 @@ fn kept(cfg: &Value, keep: &[&str]) -> Vec<(String, String)> {
 }
 
 /// Make the holder (stopped, never started, no network) and copy the kept
-/// configuration into it; `holder ready` marks the copy as complete.
+/// configuration into it; `holder ready` marks the copy as complete. Its
+/// disposable root comes from the replacement's own template, which the
+/// caller has on the node, at the new container's root size that template
+/// fits in.
 async fn prepare_holder(
     pve: &impl Pve,
     r: &Replace<'_>,
@@ -169,8 +208,6 @@ async fn prepare_holder(
     let (node, ctid, id) = (r.spec.node, r.spec.ctid, HOLDER_ID);
     if !exists {
         let name = holder_name(ctid);
-        let storage = r.spec.ostemplate.split_once(':').map_or("", |(storage, _)| storage);
-        let ostemplate = node::ensure_image(pve, node, storage, HOLDER_IMAGE, say).await?;
         node::create(
             pve,
             &NewContainer {
@@ -179,10 +216,10 @@ async fn prepare_holder(
                 node,
                 ctid: id,
                 hostname: &name,
-                ostemplate: &ostemplate,
+                ostemplate: r.spec.ostemplate,
                 pool: r.spec.pool,
                 storage: r.spec.storage,
-                disk_mib: 1024,
+                disk_mib: r.spec.disk_mib,
                 memory_mib: 64,
                 cores: 1,
                 net0: None,
@@ -371,7 +408,11 @@ mod tests {
             let id = |p: &str| p.split('/').nth(4).and_then(|s| s.parse::<u32>().ok()).unwrap();
             Ok(match path {
                 "/nodes/pve3/lxc" => json!(cts.keys().map(|id| json!({"vmid":id})).collect::<Vec<_>>()),
-                "/nodes/pve3/storage/local/content" => json!([{"volid": "local:vztmpl/alpine_3.24.tar"}]),
+                "/cluster/resources" => json!(
+                    cts.keys()
+                        .map(|id| json!({"vmid":id, "type":"lxc", "node":"pve3"}))
+                        .collect::<Vec<_>>()
+                ),
                 p if p.contains("/tasks/") && p.ends_with("/status") => json!({"status":"stopped", "exitstatus":"OK"}),
                 p if p.contains("/tasks/") => json!([]),
                 p if p.ends_with("/status/current") => {
