@@ -91,6 +91,7 @@ h1 { font-size: 20px; margin: 0; font-weight: 600; }
 .card-actions { margin-left: auto; display: flex; align-items: center; gap: 8px; }
 .card-actions .toggle { margin-left: 0; }
 .copy { font: inherit; font-size: 12px; color: var(--ink-2); background: none; border: 1px solid var(--ring); border-radius: 4px; padding: 2px 6px; cursor: pointer; }
+.copy-all { cursor: pointer; }
 .version { margin-top: 24px; color: var(--muted); font-size: 11px; text-align: center; }
 .legend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 6px 0 4px; color: var(--ink-2); font-size: 12px; }
 .legend span { display: inline-flex; align-items: center; gap: 6px; }
@@ -121,6 +122,7 @@ th { color: var(--ink-2); font-weight: 600; position: sticky; top: 0; background
     <select class="scope" id="range" aria-label="Time range"></select>
     <label class="scope mode"><input id="compare" type="checkbox" role="switch"> Compare agents</label>
     <span class="updated" id="updated"></span>
+    <button class="scope copy-all" id="copy-all" type="button" title="Copy all chart data as JSON Lines" aria-label="Copy all chart data as JSON Lines" hidden>⧉</button>
     <button class="scope theme" id="theme" type="button"></button>
   </header>
   <div class="error" id="error" hidden></div>
@@ -225,6 +227,7 @@ function scoped(selector) {
 }
 const shows = id => tool.id === "all" || tool.id === id;
 const tables = new Set();
+let exported = [];
 
 async function prom(path, params) {
   const response = await fetch(path + "?" + new URLSearchParams(params));
@@ -492,7 +495,7 @@ async function load() {
     const agents = await Promise.all(peers.map(a => readAgent(a, now, peers)));
     if (version !== loadVersion) return;
     const coverage = document.getElementById("coverage"); coverage.textContent = codex.coverage || codex.notice; coverage.hidden = !(codex.coverage || codex.notice);
-    if (comparison) renderComparison(agents, now);
+    if (comparison) { renderComparison(agents, now); exported = []; }
     else {
       const list = panels(agents, range.step), queries = new Map();
       const rangeRows = query => {
@@ -531,7 +534,9 @@ async function load() {
       else summary.replaceChildren();
       renderTiles(specs, start, end);
       renderCharts(charts, start, end, [insightsCard(daily), heatCard(heat)]);
+      exported = charts.map(chartJSON);
     }
+    document.getElementById("copy-all").hidden = !exported.length;
     document.getElementById("error").hidden = true;
     document.getElementById("updated").textContent = "Updated " + new Date(now * 1000).toLocaleTimeString("en-GB");
   } catch (error) {
@@ -742,25 +747,30 @@ function renderCharts(charts, start, end, extras) {
   cards.replaceChildren(...rendered, ...extras);
 }
 
+function chartJSON(chart) {
+  return { chart: chart.title, unit: chart.unit, selection: chart.selection,
+    series: chart.series.map(s => ({ name: s.name, values: [...s.values] })),
+    queries: chart.queries };
+}
+async function copyText(button, text) {
+  const label = button.textContent, title = button.title;
+  try {
+    await navigator.clipboard.writeText(text);
+    button.textContent = "Copied";
+    button.setAttribute("aria-label", "Copied to clipboard");
+  } catch (error) {
+    button.textContent = "Copy failed";
+    button.title = error.message;
+    button.setAttribute("aria-label", "Could not copy: " + error.message);
+  }
+  setTimeout(() => { button.textContent = label; button.title = title; button.setAttribute("aria-label", title); }, 2000);
+}
 function copyJSONButton(chart) {
   const button = el("button", "copy", "⧉");
   button.type = "button";
   button.title = "Copy data as JSON";
   button.setAttribute("aria-label", button.title);
-  button.onclick = async () => {
-    const data = { chart: chart.title, unit: chart.unit, selection: chart.selection,
-      series: chart.series.map(s => ({ name: s.name, values: [...s.values] })),
-      queries: chart.queries };
-    try {
-      await navigator.clipboard.writeText(JSON.stringify(data, null, 2));
-      button.textContent = "Copied";
-      button.setAttribute("aria-label", "JSON copied to clipboard");
-    } catch (error) {
-      button.textContent = "Copy failed";
-      button.title = error.message;
-      button.setAttribute("aria-label", "Could not copy JSON: " + error.message);
-    }
-  };
+  button.onclick = () => copyText(button, JSON.stringify(chartJSON(chart), null, 2));
   return button;
 }
 
@@ -923,6 +933,9 @@ switcher.onclick = () => {
   theme(current);
   try { localStorage.setItem("theme", current); } catch (_) {}
 };
+// One chart per line (JSON Lines), from the last rendered snapshot.
+const copyAll = document.getElementById("copy-all");
+copyAll.onclick = () => copyText(copyAll, exported.map(data => JSON.stringify(data)).join("\n") + "\n");
 scopes().catch(() => {});
 load();
 setInterval(load, 60000);
