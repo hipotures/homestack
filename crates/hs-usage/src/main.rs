@@ -22,7 +22,6 @@ use axum::routing::get;
 use hs_model::health::{HeartbeatObservation, Liveness, LivenessStatus};
 use tracing_subscriber::EnvFilter;
 
-const LISTEN: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 80);
 const PROBE_PATH: &str = "/health/heartbeat";
 const PAGE: &str = include_str!("index.html");
 const PRICING_URL: &str = "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json";
@@ -44,7 +43,7 @@ async fn main() -> ExitCode {
         .with_env_filter(filter)
         .with_writer(std::io::stderr)
         .init();
-    let (prometheus, interval) = match settings(|name| std::env::var(name).ok()) {
+    let (prometheus, interval, listen) = match settings(|name| std::env::var(name).ok()) {
         Ok(settings) => settings,
         Err(error) => {
             tracing::error!(%error, "invalid configuration");
@@ -94,15 +93,15 @@ async fn main() -> ExitCode {
         heartbeat: Arc::clone(&heartbeat),
         page,
     });
-    let listener = match tokio::net::TcpListener::bind(LISTEN).await {
+    let listener = match tokio::net::TcpListener::bind(listen).await {
         Ok(listener) => listener,
         Err(error) => {
-            tracing::error!(%error, listen = %LISTEN, "cannot listen");
+            tracing::error!(%error, listen = %listen, "cannot listen");
             return ExitCode::from(1);
         }
     };
-    let heartbeat_task = tokio::spawn(heartbeat.run(LISTEN));
-    tracing::info!(listen = %LISTEN, prometheus = %prometheus, "homestack-usage started");
+    let heartbeat_task = tokio::spawn(heartbeat.run(listen));
+    tracing::info!(listen = %listen, prometheus = %prometheus, "homestack-usage started");
     let served = axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await;
@@ -153,7 +152,7 @@ async fn index(State(state): State<AppState>) -> Response {
     ([(header::CACHE_CONTROL, "no-store")], Html(state.page.to_string())).into_response()
 }
 
-fn settings(env: impl Fn(&str) -> Option<String>) -> Result<(url::Url, Duration), String> {
+fn settings(env: impl Fn(&str) -> Option<String>) -> Result<(url::Url, Duration, SocketAddr), String> {
     let raw = env("HOMESTACK_PROMETHEUS_URL").ok_or("HOMESTACK_PROMETHEUS_URL is required")?;
     let mut prometheus = url::Url::parse(&raw).map_err(|error| format!("HOMESTACK_PROMETHEUS_URL: {error}"))?;
     prometheus.set_path("");
@@ -170,7 +169,11 @@ fn settings(env: impl Fn(&str) -> Option<String>) -> Result<(url::Url, Duration)
             .filter(|seconds| (1..=3600).contains(seconds))
             .ok_or("HOMESTACK_HEARTBEAT_SECONDS must be an integer from 1 to 3600")?,
     };
-    Ok((prometheus, Duration::from_secs(seconds)))
+    let listen = env("HOMESTACK_LISTEN")
+        .ok_or("HOMESTACK_LISTEN is required")?
+        .parse()
+        .map_err(|error| format!("HOMESTACK_LISTEN: {error}"))?;
+    Ok((prometheus, Duration::from_secs(seconds), listen))
 }
 
 /// Forward one read-only Prometheus request, keeping its status and body.

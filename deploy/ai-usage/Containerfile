@@ -4,5 +4,6 @@
 FROM docker.io/library/alpine:3.24.2@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6
 COPY --chmod=0755 homestack-usage /usr/local/bin/homestack-usage
 # Port 80 needs root; the unprivileged LXC maps it to an unprivileged host user.
+ENV HOMESTACK_LISTEN=0.0.0.0:80
 EXPOSE 80
 ENTRYPOINT ["/usr/local/bin/homestack-usage"]
