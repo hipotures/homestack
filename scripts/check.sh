@@ -28,6 +28,8 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 cd "$root"
 unset VIRTUAL_ENV
 step() { printf '\n== %s\n' "$*"; }
+# Record the artifacts each command uses so the wrapper can drop unused variants.
+cargo() { python3 "$root/scripts/cargo.py" "$@"; }
 
 if ((live)); then
     : "${HOMESTACK_LIVE_IMAGE:?--live requires HOMESTACK_LIVE_IMAGE naming a published API release}"

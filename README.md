@@ -447,7 +447,7 @@ apt-get install -y rsync git
 
 ### Running Checks & Tests
 
-Always use `scripts/cargo.py` (or `scripts/check.sh`) rather than raw `cargo build` / `cargo test`—the wrapper serializes builds and cleans up disposable test binaries while preserving top-level executables and active E2E lab data in `target/`:
+Always use `scripts/cargo.py` (or `scripts/check.sh`) rather than raw `cargo build` / `cargo test`—the wrapper serializes builds and cleans up disposable test binaries and dependency variants the build did not use while preserving top-level executables and active E2E lab data in `target/`:
 
 ```sh
 scripts/check.sh          # Formatting and compiled application binaries
