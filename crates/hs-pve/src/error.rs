@@ -4,7 +4,7 @@
 ///
 /// Messages come from Proxmox or from the TLS/HTTP stack; they never contain
 /// the API token.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum PveError {
     /// The client configuration is unusable.
     #[error("invalid Proxmox client configuration: {0}")]

@@ -284,19 +284,45 @@ pub async fn of_repository(pve: &impl Pve, repository: &str) -> Result<Vec<Insta
         .get("/cluster/resources", &[("type", "vm")])
         .await
         .map_err(|e| format!("cluster resources: {e}"))?;
+    let resources = resources.as_array().map(Vec::as_slice).unwrap_or_default();
+    let present = |node: &str, ctid: u32| {
+        resources
+            .iter()
+            .any(|item| item["type"] == "lxc" && item["node"] == node && item["vmid"].as_u64() == Some(u64::from(ctid)))
+    };
     let mut found = Vec::new();
-    for item in resources.as_array().into_iter().flatten() {
+    for item in resources {
         let (Some(ctid), Some(node)) = (
             item["vmid"].as_u64().and_then(|n| u32::try_from(n).ok()),
             item["node"].as_str(),
         ) else {
             continue;
         };
-        if item["type"] != "lxc" || ctid == recreate::HOLDER_ID || item["status"] == "unknown" {
+        if item["type"] != "lxc" || item["status"] == "unknown" {
             continue;
         }
         let pool = item["pool"].as_str().unwrap_or_default();
-        if let Ok(instance) = fetch(pve, node, pool, ctid).await
+        let ctid = if ctid == recreate::HOLDER_ID {
+            let Ok(holder) = fetch(pve, node, pool, ctid).await else {
+                continue;
+            };
+            // An existing CT is resolved through located below on its own entry.
+            if !holder.held || present(node, holder.ctid) {
+                continue;
+            }
+            holder.ctid
+        } else {
+            ctid
+        };
+        if let Ok(instance) = located(
+            pve,
+            node,
+            pool,
+            ctid,
+            present(node, ctid),
+            present(node, recreate::HOLDER_ID),
+        )
+        .await
             && instance.repository == repository
         {
             found.push(instance);

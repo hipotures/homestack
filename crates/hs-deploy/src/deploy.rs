@@ -404,21 +404,16 @@ impl ApiBootstrap {
                 let started = Instant::now();
                 loop {
                     let report = client
-                        .get_on(0, "/.well-known/homestack/status")
+                        .get_on(0, hs_service_status::PATH)
                         .await
                         .map_err(|e| health_error(&e))?;
-                    if report["schema"] == 2
-                        && report["sample_age_seconds"].as_u64().is_some_and(|age| age <= 30)
-                        && report["filesystems"].as_array().is_some_and(|mounts| {
-                            mounts
-                                .iter()
-                                .any(|m| m["mount"] == "/home/app" && m["mounted"] == true && m["error"].is_null())
-                        })
-                    {
+                    if serde_json::from_value::<hs_service_status::Report>(report).is_ok_and(|report| {
+                        report.schema == hs_service_status::SCHEMA && report.status == hs_service_status::Status::Pass
+                    }) {
                         break;
                     }
                     if started.elapsed() >= Duration::from_secs(15) {
-                        return Err("API bootstrap: guest did not confirm a mounted /home/app".to_owned());
+                        return Err("API bootstrap: guest did not report a live application process".to_owned());
                     }
                     tokio::time::sleep(Duration::from_secs(1)).await;
                 }

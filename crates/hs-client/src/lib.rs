@@ -246,7 +246,7 @@ impl Client {
     /// Send to the first instance that answers; the instance's index and
     /// the body. Instances that are still unconfigured (`config_missing`,
     /// `pve_token_missing`, e.g. during a container replacement) or cannot
-    /// reach Proxmox (`pve_unreachable`) are skipped in favor of a ready
+    /// reach Proxmox (`pve_unavailable`) are skipped in favor of a ready
     /// instance when one is available.
     async fn first(
         &self,
@@ -268,7 +268,7 @@ impl Client {
                 Reply::Api(error)
                     if matches!(
                         error.code(),
-                        Some("config_missing" | "pve_token_missing" | "pve_unreachable")
+                        Some("config_missing" | "pve_token_missing" | "pve_unavailable")
                     ) =>
                 {
                     if let ClientError::Api { message, .. } = &error {

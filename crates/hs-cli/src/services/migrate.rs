@@ -86,7 +86,9 @@ pub async fn plan(pve: &impl Pve, target: &Target) -> Result<Plan, String> {
         None => problems.push(format!("{}: storage {} unavailable", target.node, target.storage)),
         Some(storage) => {
             let to = text(storage, "type");
-            for volume in [&instance.root_volume, &instance.home_volume] {
+            for volume in std::iter::once(&instance.root_volume)
+                .chain((!instance.home_volume.is_empty()).then_some(&instance.home_volume))
+            {
                 let from = kind(&source, storage_of(volume)).unwrap_or_default();
                 if from != to {
                     problems.push(format!(
@@ -135,12 +137,14 @@ pub async fn plan(pve: &impl Pve, target: &Target) -> Result<Plan, String> {
         hs_deploy::node::show_size(instance.root_mib),
         target.storage
     ));
-    lines.push(format!(
-        "Home {} ({}) → {}",
-        instance.home_volume,
-        hs_deploy::node::show_size(instance.home_mib),
-        target.storage
-    ));
+    if !instance.home_volume.is_empty() {
+        lines.push(format!(
+            "Home {} ({}) → {}",
+            instance.home_volume,
+            hs_deploy::node::show_size(instance.home_mib),
+            target.storage
+        ));
+    }
     lines.push(if instance.running {
         "Restart migration: the service stops, its disks move, it starts again and its health is checked.".to_owned()
     } else {
@@ -191,28 +195,31 @@ pub async fn apply(
     let after = instance::read_on(pve, &target.node, ctid).await?;
     if after.mac != before.mac
         || after.description != before.description
-        || after.home_volume.is_empty()
-        || storage_of(&after.home_volume) != target.storage
+        || after.running != before.running
+        || storage_of(&after.root_volume) != target.storage
+        || after.home_volume.is_empty() != before.home_volume.is_empty()
+        || (!before.home_volume.is_empty() && storage_of(&after.home_volume) != target.storage)
     {
         return Err(format!(
             "CT {ctid} on {} differs from the container that moved",
             target.node
         ));
     }
-    say(&format!(
-        "CT {ctid} · root {} · home {}",
-        after.root_volume, after.home_volume
-    ));
+    let home = if after.home_volume.is_empty() {
+        String::new()
+    } else {
+        format!(" · home {}", after.home_volume)
+    };
+    say(&format!("CT {ctid} · root {}{home}", after.root_volume));
     if after.running {
         say(&format!("CT {ctid} · health"));
         say(&deploy::ready(source, site, ctid, &after.address, say).await?);
     }
     Ok(vec![format!(
-        "CT {ctid} {} is on {} · root {} · home {}{}",
+        "CT {ctid} {} is on {} · root {}{home}{}",
         after.hostname,
         target.node,
         after.root_volume,
-        after.home_volume,
         if after.running {
             " · running, healthy"
         } else {

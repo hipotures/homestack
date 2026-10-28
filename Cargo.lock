@@ -1000,6 +1000,7 @@ dependencies = [
  "hs-core",
  "hs-model",
  "hs-pve",
+ "hs-service-status",
  "instant-acme",
  "reqwest",
  "rustls",

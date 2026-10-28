@@ -79,7 +79,7 @@ impl Observations {
 pub struct Prefetch<'a, P> {
     pve: &'a P,
     parallel: usize,
-    cache: Mutex<HashMap<Key, Result<Value, String>>>,
+    cache: Mutex<HashMap<Key, Result<Value, PveError>>>,
     observations: &'a Observations,
     stale: Mutex<HashSet<String>>,
 }
@@ -234,7 +234,7 @@ impl<'a, P: Pve> Prefetch<'a, P> {
             .into_iter()
             .flatten()
             .map(|(key, result)| {
-                let result = self.observe(&key, result).map_err(|error| error.to_string());
+                let result = self.observe(&key, result);
                 (key, result)
             })
             .collect();
@@ -254,7 +254,7 @@ impl<P: Pve> Pve for Prefetch<'_, P> {
             .get(&key(path, query))
             .cloned();
         match cached {
-            Some(result) => result.map_err(PveError::Response),
+            Some(result) => result,
             None => {
                 let key = key(path, query);
                 let result = self.observe(&key, self.pve.get(path, query).await);
