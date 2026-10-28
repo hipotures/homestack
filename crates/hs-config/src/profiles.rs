@@ -140,16 +140,26 @@ impl E2eRun {
         let mut value = toml::Table::new();
         value.insert("artifacts".into(), self.artifacts.display().to_string().into());
         value.insert("run_id".into(), self.run_id.clone().into());
-        // Renaming a private temporary file keeps readers from seeing partial references.
-        let temporary = profile.join(format!(".run-{}.toml", std::process::id()));
-        write_private(
-            &temporary,
-            toml::to_string(&value).map_err(io::Error::other)?.as_bytes(),
-        )?;
-        let result = std::fs::rename(&temporary, profile.join("run.toml"));
-        if result.is_err() {
-            let _ = std::fs::remove_file(temporary);
-        }
-        result
+        let destination = profile.join("run.toml");
+        let refuse_symlink = || {
+            if destination.is_symlink() {
+                Err(io::Error::other("E2E run reference must not be a symlink"))
+            } else {
+                Ok(())
+            }
+        };
+        refuse_symlink()?;
+        let content = toml::to_string(&value).map_err(io::Error::other)?;
+        // create_new, random names, mode 0600, and RAII cleanup on every error.
+        // Persist renames within this directory; readers see a complete document.
+        let mut temporary = tempfile::Builder::new()
+            .prefix(".run-")
+            .suffix(".toml")
+            .tempfile_in(profile)?;
+        use std::io::Write;
+        temporary.write_all(content.as_bytes())?;
+        refuse_symlink()?;
+        temporary.persist(destination).map_err(|error| error.error)?;
+        Ok(())
     }
 }

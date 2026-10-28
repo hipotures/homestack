@@ -68,23 +68,10 @@ fn seconds(at: SystemTime) -> u64 {
     at.duration_since(UNIX_EPOCH).map_or(0, |since| since.as_secs())
 }
 
-/// The description without the lease block, and the block's payload.
-fn split(description: &str) -> Result<(String, Option<&str>), CoreError> {
-    let Some(start) = description.find(LEASE_START) else {
-        return Ok((description.to_owned(), None));
-    };
-    let after = &description[start + LEASE_START.len()..];
-    let end = after
-        .find(LEASE_END)
-        .ok_or_else(|| CoreError::Unusable("The HomeStack lease in the VM description is cut off".to_owned()))?;
-    let rest = format!("{}{}", description[..start].trim_end(), &after[end + LEASE_END.len()..]);
-    Ok((rest, Some(&after[..end])))
-}
-
 /// The lease in a VM's config, if any.
 pub fn read_lease(vm_cfg: &VmConfig) -> Result<Option<Lease>, CoreError> {
     let description = vm_cfg.get("description").map(String::as_str).unwrap_or_default();
-    let (_, Some(payload)) = split(description)? else {
+    let Some((_, payload)) = crate::description::find(description, LEASE_START, LEASE_END, "HomeStack lease")? else {
         return Ok(None);
     };
     let unusable = || CoreError::Unusable("The HomeStack lease in the VM description is not valid".to_owned());
@@ -96,14 +83,12 @@ pub fn read_lease(vm_cfg: &VmConfig) -> Result<Option<Lease>, CoreError> {
 
 /// `description` with `lease` in place of any lease block.
 pub fn description_with(current: &str, lease: Option<&Lease>) -> Result<String, CoreError> {
-    let (rest, _) = split(current)?;
-    let Some(lease) = lease else {
-        return Ok(rest);
-    };
-    let json = serde_json::to_vec(lease).map_err(|error| CoreError::Failed(error.to_string()))?;
-    let payload = base64::engine::general_purpose::STANDARD.encode(json);
-    let separator = if rest.is_empty() { "" } else { "\n" };
-    Ok(format!("{rest}{separator}{LEASE_START}{payload}{LEASE_END}"))
+    let payload = lease
+        .map(serde_json::to_vec)
+        .transpose()
+        .map_err(|error| CoreError::Failed(error.to_string()))?
+        .map(|json| base64::engine::general_purpose::STANDARD.encode(json));
+    crate::description::with_block(current, LEASE_START, LEASE_END, "HomeStack lease", payload.as_deref())
 }
 
 /// Whether `lease` lets `holder` work on the VM: none, its own, expired,

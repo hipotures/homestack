@@ -967,6 +967,7 @@ name = "hs-config"
 version = "0.1.0"
 dependencies = [
  "hs-model",
+ "tempfile",
  "toml",
 ]
 

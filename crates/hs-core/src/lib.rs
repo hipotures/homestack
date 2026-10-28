@@ -10,6 +10,7 @@ pub mod capabilities;
 mod capacity;
 pub mod cloudinit;
 pub mod create_transfer;
+mod description;
 pub mod discovery;
 pub mod error;
 pub mod gold;

@@ -1,9 +1,15 @@
 //! The images a registry publishes and when each was made: the tags of a
 //! repository and the `created` time of each image's configuration, read
-//! through the registry's API (`/v2/`) with an anonymous pull token, as
-//! ghcr.io gives one for a public package.
+//! through the registry's API (`/v2/`), anonymously or with a challenge-driven
+//! anonymous pull token. All endpoints and redirects require HTTPS. A token
+//! realm may have a different origin; bearer tokens go only to the registry.
+//! Tag continuations must keep the exact tag-list endpoint and origin.
 
+use std::collections::{BTreeMap, HashSet};
+use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
+
+use reqwest::{Response, Url, header};
 
 use serde_json::Value;
 
@@ -31,37 +37,224 @@ pub fn split(image: &str) -> Option<(&str, &str, &str)> {
     (!tag.is_empty() && !tag.contains('/') && !path.is_empty()).then_some((host, path, tag))
 }
 
-/// The registry of one repository.
+const MAX_PAGES: usize = 100;
+const MAX_TAGS: usize = 100_000;
+
+/// Parse the quoted auth parameters without treating commas inside quotes as
+/// separators (RFC 6750 / Registry v2 bearer challenge).
+fn bearer_parameters(challenge: &str) -> Result<BTreeMap<String, String>, String> {
+    let invalid = || "Registry returned an invalid bearer challenge".to_owned();
+    let (scheme, mut rest) = challenge.split_once(' ').ok_or_else(invalid)?;
+    if !scheme.eq_ignore_ascii_case("bearer") {
+        return Err(invalid());
+    }
+    let mut parameters = BTreeMap::new();
+    loop {
+        rest = rest.trim_start();
+        let (name, value) = rest.split_once('=').ok_or_else(invalid)?;
+        let name = name.trim().to_ascii_lowercase();
+        if name.is_empty() || !name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') {
+            return Err(invalid());
+        }
+        rest = value.trim_start().strip_prefix('"').ok_or_else(invalid)?;
+        let mut value = String::new();
+        let mut chars = rest.char_indices();
+        let end = loop {
+            match chars.next() {
+                Some((offset, '"')) => break offset + 1,
+                Some((_, '\\')) => value.push(chars.next().ok_or_else(invalid)?.1),
+                Some((_, ch)) if !ch.is_control() => value.push(ch),
+                _ => return Err(invalid()),
+            }
+        };
+        if parameters.insert(name, value).is_some() {
+            return Err(invalid());
+        }
+        rest = rest[end..].trim_start();
+        if rest.is_empty() {
+            return Ok(parameters);
+        }
+        rest = rest.strip_prefix(',').ok_or_else(invalid)?;
+    }
+}
+
+fn secure_url(url: &Url) -> bool {
+    url.scheme() == "https" && url.username().is_empty() && url.password().is_none() && url.fragment().is_none()
+}
+
+/// The registry of one repository. Tokens are ephemeral and never sent to
+/// token services, redirected blob stores, or any unrelated origin.
 struct Registry {
     http: reqwest::Client,
-    base: String,
-    token: Option<String>,
+    base: Url,
+    scope: String,
+    token: Mutex<Option<String>>,
+}
+
+/// Distribution tag pagination uses Link, never the text of a returned tag.
+fn next_page(headers: &header::HeaderMap, current: &Url, endpoint: &Url) -> Result<Option<Url>, String> {
+    let mut next = None;
+    for value in headers.get_all(header::LINK) {
+        let value = value.to_str().map_err(|_| "Invalid registry pagination Link")?;
+        // Commas in the URI are legal; split only after the closing angle bracket.
+        let mut rest = value.trim();
+        while !rest.is_empty() {
+            let link = rest.strip_prefix('<').ok_or("Invalid registry pagination Link")?;
+            let (target, parameters) = link.split_once('>').ok_or("Invalid registry pagination Link")?;
+            let (parameters, remaining) = parameters.split_once(',').unwrap_or((parameters, ""));
+            let is_next = parameters.split(';').skip(1).any(|parameter| {
+                parameter.trim().split_once('=').is_some_and(|(key, value)| {
+                    key.trim().eq_ignore_ascii_case("rel")
+                        && value
+                            .trim()
+                            .trim_matches('"')
+                            .split_whitespace()
+                            .any(|rel| rel == "next")
+                })
+            });
+            if is_next {
+                let url = current
+                    .join(target)
+                    .map_err(|_| "Invalid registry pagination continuation")?;
+                if !secure_url(&url) || url.origin() != endpoint.origin() || url.path() != endpoint.path() {
+                    return Err("Registry pagination continuation left its repository endpoint".to_owned());
+                }
+                if next.replace(url).is_some() {
+                    return Err("Registry returned multiple next continuations".to_owned());
+                }
+            }
+            rest = remaining.trim();
+        }
+    }
+    Ok(next)
 }
 
 impl Registry {
     async fn open(host: &str, path: &str) -> Result<Self, String> {
         let http = reqwest::Client::builder()
             .timeout(Duration::from_secs(20))
+            .redirect(reqwest::redirect::Policy::none())
             .build()
-            .map_err(|error| error.to_string())?;
-        // Without a token a registry may still answer (a local one).
-        let token = match http
-            .get(format!("https://{host}/token?scope=repository:{path}:pull"))
-            .send()
-            .await
-        {
-            Ok(response) if response.status().is_success() => response
-                .json::<Value>()
-                .await
-                .ok()
-                .and_then(|body| body["token"].as_str().map(str::to_owned)),
-            _ => None,
-        };
+            .map_err(|_| "Cannot construct registry client")?;
+        let mut base = Url::parse(&format!("https://{host}")).map_err(|_| "Invalid registry host")?;
+        if !secure_url(&base) || base.path() != "/" || base.query().is_some() {
+            return Err("Invalid registry host".to_owned());
+        }
+        base.path_segments_mut()
+            .map_err(|()| "Invalid registry URL")?
+            .extend(["v2"])
+            .extend(path.split('/'));
         Ok(Self {
             http,
-            base: format!("https://{host}/v2/{path}"),
-            token,
+            base,
+            scope: format!("repository:{path}:pull"),
+            token: Mutex::new(None),
         })
+    }
+
+    fn resource(&self, kind: &str, reference: &str) -> Result<Url, String> {
+        let mut url = self.base.clone();
+        url.path_segments_mut()
+            .map_err(|()| "Invalid registry URL")?
+            .extend([kind, reference]);
+        Ok(url)
+    }
+
+    async fn send(&self, url: Url, accept: Option<&str>, token: Option<&str>) -> Result<Response, String> {
+        // Bound the whole redirect chain with the existing per-request timeout.
+        tokio::time::timeout(Duration::from_secs(20), async {
+            let mut url = url;
+            for _ in 0..=5 {
+                if !secure_url(&url) {
+                    return Err("Registry endpoint or redirect must use HTTPS without URL credentials".to_owned());
+                }
+                let mut request = self.http.get(url.clone());
+                if url.origin() == self.base.origin()
+                    && let Some(token) = token
+                {
+                    request = request.bearer_auth(token);
+                }
+                if let Some(accept) = accept {
+                    request = request.header(header::ACCEPT, accept);
+                }
+                let response = request.send().await.map_err(|_| "Registry request failed")?;
+                if !response.status().is_redirection() {
+                    return Ok(response);
+                }
+                let location = response
+                    .headers()
+                    .get(header::LOCATION)
+                    .and_then(|value| value.to_str().ok())
+                    .ok_or("Registry redirect has no valid location")?;
+                url = url.join(location).map_err(|_| "Invalid registry redirect")?;
+            }
+            Err("Registry redirect limit exceeded".to_owned())
+        })
+        .await
+        .map_err(|_| "Registry request timed out")?
+    }
+
+    async fn response(&self, url: Url, accept: Option<&str>) -> Result<Response, String> {
+        let token = self.token.lock().unwrap_or_else(PoisonError::into_inner).clone();
+        let mut response = self.send(url.clone(), accept, token.as_deref()).await?;
+        if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+            if response.url().origin() != self.base.origin() {
+                return Err("Redirected resource refused anonymous access".to_owned());
+            }
+            let challenge = response
+                .headers()
+                .get_all(header::WWW_AUTHENTICATE)
+                .iter()
+                .filter_map(|value| value.to_str().ok())
+                .find(|value| {
+                    value
+                        .split_whitespace()
+                        .next()
+                        .is_some_and(|scheme| scheme.eq_ignore_ascii_case("bearer"))
+                })
+                .ok_or("Registry returned no bearer challenge")?;
+            let parameters = bearer_parameters(challenge)?;
+            let mut realm = parameters
+                .get("realm")
+                .and_then(|value| Url::parse(value).ok())
+                .filter(secure_url)
+                .ok_or("Registry token realm must use HTTPS without URL credentials")?;
+            if parameters.get("scope").is_some_and(|scope| scope != &self.scope) {
+                return Err("Registry bearer challenge requested an unexpected scope".to_owned());
+            }
+            {
+                let mut query = realm.query_pairs_mut();
+                if let Some(service) = parameters.get("service") {
+                    query.append_pair("service", service);
+                }
+                query.append_pair("scope", &self.scope);
+            }
+            let token_response = self.send(realm, None, None).await?;
+            if !token_response.status().is_success() {
+                return Err(format!("Registry token endpoint: {}", token_response.status()));
+            }
+            let body: Value = token_response
+                .json()
+                .await
+                .map_err(|_| "Invalid registry token response")?;
+            let token = ["token", "access_token"]
+                .into_iter()
+                .find_map(|key| {
+                    body[key]
+                        .as_str()
+                        .filter(|value| !value.is_empty() && value.bytes().all(|b| b.is_ascii_graphic()))
+                })
+                .ok_or("Registry token response contains no usable token")?
+                .to_owned();
+            response = self.send(url, accept, Some(&token)).await?;
+            if response.status().is_success() {
+                *self.token.lock().unwrap_or_else(PoisonError::into_inner) = Some(token);
+            }
+        }
+        if !response.status().is_success() {
+            return Err(format!("Registry resource: {}", response.status()));
+        }
+        Ok(response)
     }
 
     async fn get(&self, tail: &str, accept: Option<&str>) -> Result<Value, String> {
@@ -70,25 +263,54 @@ impl Registry {
 
     /// The body and the registry's `Docker-Content-Digest`.
     async fn get_digest(&self, tail: &str, accept: Option<&str>) -> Result<(Value, Option<String>), String> {
-        let mut request = self.http.get(format!("{}/{tail}", self.base));
-        if let Some(token) = &self.token {
-            request = request.bearer_auth(token);
-        }
-        if let Some(accept) = accept {
-            request = request.header(reqwest::header::ACCEPT, accept);
-        }
-        let response = request.send().await.map_err(|error| error.to_string())?;
-        let status = response.status();
-        if !status.is_success() {
-            return Err(format!("{tail}: {status}"));
-        }
+        let (kind, reference) = tail.split_once('/').ok_or("Invalid registry resource")?;
+        let response = self.response(self.resource(kind, reference)?, accept).await?;
         let digest = response
             .headers()
             .get("docker-content-digest")
             .and_then(|value| value.to_str().ok())
             .map(str::to_owned);
-        let body = response.json().await.map_err(|error| format!("{tail}: {error}"))?;
+        let body = response.json().await.map_err(|_| "Invalid registry resource JSON")?;
         Ok((body, digest))
+    }
+
+    async fn tags(&self) -> Result<Vec<String>, String> {
+        let endpoint = self.resource("tags", "list")?;
+        let mut url = endpoint.clone();
+        url.query_pairs_mut().append_pair("n", "1000");
+        let mut visited = HashSet::new();
+        let mut tags = Vec::new();
+        for _ in 0..MAX_PAGES {
+            // Query ordering must not hide a repeated continuation.
+            let mut query: Vec<_> = url
+                .query_pairs()
+                .map(|(k, v)| (k.into_owned(), v.into_owned()))
+                .collect();
+            query.sort();
+            if !visited.insert(query) {
+                return Err("Registry tag pagination repeated a continuation".to_owned());
+            }
+            let response = self.response(url.clone(), None).await?;
+            if response.url().origin() != endpoint.origin() || response.url().path() != endpoint.path() {
+                return Err("Registry tag list redirected outside its repository endpoint".to_owned());
+            }
+            let next = next_page(response.headers(), &url, &endpoint)?;
+            let body: Value = response.json().await.map_err(|_| "Invalid registry tag list JSON")?;
+            if !body["tags"].is_null() {
+                let page = body["tags"].as_array().ok_or("Registry returned no tag list")?;
+                if tags.len().saturating_add(page.len()) > MAX_TAGS {
+                    return Err(format!("Registry tag pagination exceeded {MAX_TAGS} tags"));
+                }
+                for tag in page {
+                    tags.push(tag.as_str().ok_or("Registry returned a non-string tag")?.to_owned());
+                }
+            } else if body.get("tags").is_none() {
+                return Err("Registry returned no tag list".to_owned());
+            }
+            let Some(next) = next else { return Ok(tags) };
+            url = next;
+        }
+        Err(format!("Registry tag pagination exceeded {MAX_PAGES} pages"))
     }
 
     /// When the image of `tag` was made: its configuration's `created`; an
@@ -248,23 +470,7 @@ pub fn newer(offered: &str, current: &str) -> bool {
 pub async fn recent(image: &str, count: usize, also: &[String]) -> Result<Vec<Published>, String> {
     let (host, path, _) = split(image).ok_or_else(|| format!("{image} is not REGISTRY/PATH:TAG"))?;
     let registry = std::sync::Arc::new(Registry::open(host, path).await?);
-    let mut tags = Vec::new();
-    let mut tail = "tags/list?n=1000".to_owned();
-    loop {
-        let listed = registry.get(&tail, None).await?;
-        if listed.get("tags").is_some_and(Value::is_null) {
-            break;
-        }
-        let page = listed["tags"].as_array().ok_or("Registry returned no tag list")?;
-        let page: Vec<String> = page.iter().filter_map(|tag| tag.as_str().map(str::to_owned)).collect();
-        let Some(last) = page.last() else { break };
-        let next = format!("tags/list?n=1000&last={last}");
-        if next == tail {
-            return Err("Registry tag pagination did not advance".to_owned());
-        }
-        tags.extend(page);
-        tail = next;
-    }
+    let mut tags = registry.tags().await?;
     tags.retain(|tag| version(tag).is_some());
     tags.sort_by_key(|tag| std::cmp::Reverse(version(tag)));
     tags.dedup();

@@ -300,28 +300,11 @@ fn validate_journal(cfg: &Config, journal: &Journal) -> Result<(), CoreError> {
     Ok(())
 }
 
-/// The VM's `description` without the journal block, and the block's
-/// payload.
-fn split_description(description: &str) -> Result<(String, Option<&str>), CoreError> {
-    let Some(start) = description.find(JOURNAL_START) else {
-        return Ok((description.to_owned(), None));
-    };
-    let after = &description[start + JOURNAL_START.len()..];
-    let end = after
-        .find(JOURNAL_END)
-        .ok_or_else(|| CoreError::Unusable("The refresh journal in the VM description is cut off".to_owned()))?;
-    let rest = format!(
-        "{}{}",
-        description[..start].trim_end(),
-        &after[end + JOURNAL_END.len()..]
-    );
-    Ok((rest, Some(&after[..end])))
-}
-
 /// `_read_refresh_journal`: the journal in a VM's config, validated.
 pub fn read_journal(cfg: &Config, vmid: u32, vm_cfg: &VmConfig) -> Result<Option<Journal>, CoreError> {
     let description = vm_cfg.get("description").map(String::as_str).unwrap_or_default();
-    let (_, Some(payload)) = split_description(description)? else {
+    let Some((_, payload)) = crate::description::find(description, JOURNAL_START, JOURNAL_END, "refresh journal")?
+    else {
         return Ok(None);
     };
     let bytes = base64::engine::general_purpose::STANDARD
@@ -340,14 +323,18 @@ pub fn read_journal(cfg: &Config, vmid: u32, vm_cfg: &VmConfig) -> Result<Option
 
 /// `description` with `journal` in place of any journal block.
 fn description_with(current: &str, journal: Option<&Journal>) -> Result<String, CoreError> {
-    let (rest, _) = split_description(current)?;
-    let Some(journal) = journal else {
-        return Ok(rest);
-    };
-    let json = serde_json::to_vec(journal).map_err(|error| CoreError::Failed(error.to_string()))?;
-    let payload = base64::engine::general_purpose::STANDARD.encode(json);
-    let separator = if rest.is_empty() { "" } else { "\n" };
-    Ok(format!("{rest}{separator}{JOURNAL_START}{payload}{JOURNAL_END}"))
+    let payload = journal
+        .map(serde_json::to_vec)
+        .transpose()
+        .map_err(|error| CoreError::Failed(error.to_string()))?
+        .map(|json| base64::engine::general_purpose::STANDARD.encode(json));
+    crate::description::with_block(
+        current,
+        JOURNAL_START,
+        JOURNAL_END,
+        "refresh journal",
+        payload.as_deref(),
+    )
 }
 
 /// `_write_refresh_journal` / `_remove_refresh_journal`: write (or remove)

@@ -10,6 +10,7 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+tempfile = "3.27.0"
 hs-model = { version = "0.1.0", path = "../hs-model" }
 toml = { version = "1.1.8", features = ["preserve_order"] }
 
