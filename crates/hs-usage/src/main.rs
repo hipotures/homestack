@@ -16,6 +16,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use axum::Router;
+use axum::body::Bytes;
 use axum::extract::{RawQuery, State};
 use axum::http::{StatusCode, header};
 use axum::response::{Html, IntoResponse, Response};
@@ -34,7 +35,7 @@ struct AppState {
     prometheus: url::Url,
     client: reqwest::Client,
     heartbeat: Arc<Heartbeat>,
-    page: Arc<str>,
+    page: Bytes,
 }
 
 #[tokio::main]
@@ -78,7 +79,7 @@ async fn main() -> ExitCode {
         || "null".to_owned(),
         |prices| prices.to_string().replace('<', "\\u003c"),
     );
-    let page: Arc<str> = Arc::from(
+    let page = Bytes::from(
         PAGE.replace("__HOMESTACK_PRICING__", &prices)
             .replace(
                 "__HOMESTACK_USAGE_VERSION__",
@@ -157,7 +158,7 @@ async fn fetch_pricing(client: &reqwest::Client) -> Result<serde_json::Value, St
 }
 
 async fn index(State(state): State<AppState>) -> Response {
-    ([(header::CACHE_CONTROL, "no-store")], Html(state.page.to_string())).into_response()
+    ([(header::CACHE_CONTROL, "no-store")], Html(state.page)).into_response()
 }
 
 fn settings(env: impl Fn(&str) -> Option<String>) -> Result<(url::Url, Duration, SocketAddr, f64), String> {

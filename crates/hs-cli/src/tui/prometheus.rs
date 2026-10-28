@@ -24,6 +24,14 @@ pub fn current(dir: &Path) -> Result<Option<url::Url>, String> {
     hs_deploy::config::DeployConfig::load(&path).map(|config| config.server.prometheus_url)
 }
 
+pub fn summary(dir: &Path) -> String {
+    match current(dir) {
+        Ok(Some(url)) => url.as_str().trim_end_matches('/').to_owned(),
+        Ok(None) => "Missing".to_owned(),
+        Err(_) => "No server".to_owned(),
+    }
+}
+
 impl Editor {
     pub fn open(dir: &Path) -> Result<Self, String> {
         let saved = current(dir)?

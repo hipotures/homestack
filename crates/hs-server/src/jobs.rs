@@ -277,7 +277,7 @@ struct Stream {
 }
 
 impl Stream {
-    async fn send(&mut self, kind: StreamMessageType, data: Option<Job>) -> bool {
+    fn encode(&mut self, kind: StreamMessageType, data: Option<&Job>) -> Result<String, serde_json::Error> {
         self.sequence += 1;
         let message = StreamMessage {
             schema_version: SCHEMA_VERSION,
@@ -287,7 +287,11 @@ impl Stream {
             server_time: timestamp(SystemTime::now()),
             data,
         };
-        match serde_json::to_string(&message) {
+        serde_json::to_string(&message)
+    }
+
+    async fn send(&mut self, encoded: Result<String, serde_json::Error>) -> bool {
+        match encoded {
             Ok(text) => self.socket.send(Message::Text(text.into())).await.is_ok(),
             Err(_) => false,
         }
@@ -300,9 +304,14 @@ async fn stream(socket: WebSocket, mut job: watch::Receiver<Job>, instance: Stri
         instance,
         sequence: 0,
     };
-    let snapshot = job.borrow_and_update().clone();
-    let mut finished = snapshot.state.finished();
-    if !out.send(StreamMessageType::Snapshot, Some(snapshot)).await {
+    let (mut finished, encoded) = {
+        let snapshot = job.borrow_and_update();
+        (
+            snapshot.state.finished(),
+            out.encode(StreamMessageType::Snapshot, Some(&snapshot)),
+        )
+    };
+    if !out.send(encoded).await {
         return;
     }
     let mut ticker = tokio::time::interval_at(tokio::time::Instant::now() + heartbeat, heartbeat);
@@ -312,15 +321,19 @@ async fn stream(socket: WebSocket, mut job: watch::Receiver<Job>, instance: Stri
                 if changed.is_err() {
                     break;
                 }
-                let current = job.borrow_and_update().clone();
-                finished = current.state.finished();
-                if !out.send(StreamMessageType::Job, Some(current)).await {
+                let encoded = {
+                    let current = job.borrow_and_update();
+                    finished = current.state.finished();
+                    out.encode(StreamMessageType::Job, Some(&current))
+                };
+                if !out.send(encoded).await {
                     return;
                 }
                 ticker.reset();
             }
             _ = ticker.tick() => {
-                if !out.send(StreamMessageType::Heartbeat, None).await {
+                let encoded = out.encode(StreamMessageType::Heartbeat, None);
+                if !out.send(encoded).await {
                     return;
                 }
             }

@@ -488,11 +488,19 @@ async fn home_filesystem(pve: &impl Pve, node: &str, vmid: u32) -> Option<HomeFi
         .ok()?;
     let expected = home_label(vmid).ok()?;
     let mut matched = None;
+    let mut labels = BTreeMap::new();
     for fs in info.get("result")?.as_array()? {
         let Some(device) = home_label_device(fs) else {
             continue;
         };
-        let label = crate::guest::ext4_label(pve, node, vmid, &device).await.ok().flatten();
+        // A device may be mounted more than once. Read its identity once, but
+        // retain every matching mount below so ambiguity remains visible.
+        let label = if let Some(label) = labels.get(&device) {
+            label
+        } else {
+            let label = crate::guest::ext4_label(pve, node, vmid, &device).await.ok().flatten();
+            labels.entry(device.clone()).or_insert(label)
+        };
         if label.as_deref() == Some(expected.as_str()) {
             if matched.is_some() {
                 return None;

@@ -10,6 +10,7 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+futures-util = "0.3.34"
 hs-service-status = { path = "../hs-service-status", features = ["openapi"] }
 axum = { version = "0.8.9", features = ["ws"] }
 base64 = "0.23.1"
@@ -32,7 +33,6 @@ utoipa = "6.0.0"
 uuid = { version = "1.28.0", features = ["v4"] }
 
 [dev-dependencies]
-futures-util = "0.3.34"
 tokio-tungstenite = "0.29.0"
 hs-config = { path = "../hs-config" }
 pve-sim = { path = "../pve-sim" }

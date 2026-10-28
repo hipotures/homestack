@@ -1317,6 +1317,7 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
                             }
                         }
                         Request::Reload => {
+                            app.reload_settings();
                             details.cancel();
                             app.clear_details();
                             if let Some(client) = connection.client.clone() {

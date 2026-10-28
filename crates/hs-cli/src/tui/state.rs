@@ -444,6 +444,8 @@ pub struct App {
     pub images: Option<Result<super::reinstall::Images, String>>,
     /// The CTIDs `deploy.toml` saves as HomeStack API instances.
     pub api_instances: std::collections::BTreeSet<u32>,
+    pub integration_summaries: [super::integrations::Summary; 3],
+    pub prometheus_summary: String,
 }
 
 impl App {
@@ -502,7 +504,12 @@ impl App {
             .filter_map(toml::Value::as_integer)
             .filter_map(|vmid| u32::try_from(vmid).ok())
             .collect();
+        let dir = preferences.path.parent().unwrap_or(std::path::Path::new("."));
+        let integration_summaries = std::array::from_fn(|at| super::integrations::Summary::load(dir, at));
+        let prometheus_summary = super::prometheus::summary(dir);
         Ok(Self {
+            integration_summaries,
+            prometheus_summary,
             favorites,
             starred: true,
             lab_gold_vmid: None,
@@ -1584,7 +1591,11 @@ impl App {
     /// A mouse event: a click on a workspace selects it, the wheel moves the
     /// selection; a scrollbar is pressed, held and dragged.
     pub fn mouse(&mut self, event: crossterm::event::MouseEvent) -> Option<Request> {
+        let was_settings = self.settings_visible();
         let request = self.mouse_event(event);
+        if !was_settings && self.settings_visible() {
+            self.reload_settings();
+        }
         // The new lines the log was scrolled up to are read.
         self.log_unread = self.log_unread.min(self.log_scroll);
         request
@@ -2016,10 +2027,44 @@ impl App {
                 editor.report = Some(report);
             }
         }
+        self.reload_settings();
     }
 
-    /// Handle one key.
+    fn settings_visible(&self) -> bool {
+        matches!(
+            self.overlay,
+            Some(
+                Overlay::Settings { .. }
+                    | Overlay::Integrations { .. }
+                    | Overlay::Columns { .. }
+                    | Overlay::Parallel { .. }
+                    | Overlay::System { .. }
+                    | Overlay::General { .. }
+                    | Overlay::Sort { .. }
+                    | Overlay::Themes { .. }
+            )
+        )
+    }
+
+    pub fn reload_settings(&mut self) {
+        let dir = self.preferences.path.parent().unwrap_or(std::path::Path::new("."));
+        self.integration_summaries = std::array::from_fn(|at| super::integrations::Summary::load(dir, at));
+        self.prometheus_summary = super::prometheus::summary(dir);
+    }
+
+    /// Handle one key and refresh persisted summaries on Settings lifecycle events.
     pub fn key(&mut self, key: KeyEvent) -> Option<Request> {
+        let was_settings = self.settings_visible();
+        let saving = matches!(self.overlay, Some(Overlay::Integration(_) | Overlay::Prometheus(_)))
+            && matches!(key.code, KeyCode::F(5) | KeyCode::Enter);
+        let request = self.key_event(key);
+        if saving || (!was_settings && self.settings_visible()) {
+            self.reload_settings();
+        }
+        request
+    }
+
+    fn key_event(&mut self, key: KeyEvent) -> Option<Request> {
         // Ctrl+C and Ctrl+Q leave at once, wherever the user is (Ctrl+Q: the
         // owner, 2026-10-15; not in the help).
         if key.modifiers.contains(KeyModifiers::CONTROL) && matches!(key.code, KeyCode::Char('c' | 'q')) {

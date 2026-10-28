@@ -11,6 +11,7 @@ use std::collections::BTreeSet;
 use std::net::Ipv4Addr;
 use std::time::{Duration, Instant};
 
+use futures_util::StreamExt;
 use hs_core::pve::Pve;
 use hs_core::registry::{Published, Resolved};
 use hs_deploy::config::{DeployConfig, InstanceSpec};
@@ -574,41 +575,50 @@ async fn addresses(pve: &impl Pve) -> Result<BTreeSet<(Ipv4Addr, u32)>, String> 
     let guests = resources
         .as_array()
         .ok_or("Cannot read the guest inventory to check IP addresses")?;
-    let mut used = BTreeSet::new();
-    for guest in guests {
-        let kind = guest["type"].as_str().ok_or("Guest inventory is missing its type")?;
-        let prefix = match kind {
-            "lxc" => "net",
-            "qemu" => "ipconfig",
-            _ => return Err(format!("Cannot check IP addresses of guest type {kind}")),
-        };
-        let id = guest["vmid"]
-            .as_u64()
-            .and_then(|id| u32::try_from(id).ok())
-            .ok_or("Guest inventory is missing its VMID")?;
-        let node = guest["node"].as_str().ok_or("Guest inventory is missing its node")?;
-        let settings = pve
-            .get(&format!("/nodes/{node}/{kind}/{id}/pending"), &[])
-            .await
-            .map_err(|error| format!("Guest {id} on {node}: cannot check allocated IP addresses: {error}"))?;
-        let settings = settings
-            .as_array()
-            .ok_or_else(|| format!("Guest {id} on {node}: invalid pending configuration"))?;
-        for setting in settings {
-            if !setting["key"].as_str().is_some_and(|key| {
-                key.strip_prefix(prefix)
-                    .is_some_and(|slot| !slot.is_empty() && slot.bytes().all(|b| b.is_ascii_digit()))
-            }) {
-                continue;
-            }
-            for value in ["value", "pending"].into_iter().filter_map(|key| setting[key].as_str()) {
-                for ip in value.split(',').filter_map(|field| field.strip_prefix("ip=")) {
-                    if let Ok(ip) = ip.split('/').next().unwrap_or_default().parse::<Ipv4Addr>() {
-                        used.insert((ip, id));
+    // Match status's default of eight PVE reads. Ordered buffering preserves
+    // inventory-order errors even when later guests fail sooner.
+    let mut reads = futures_util::stream::iter(guests)
+        .map(|guest| async move {
+            let kind = guest["type"].as_str().ok_or("Guest inventory is missing its type")?;
+            let prefix = match kind {
+                "lxc" => "net",
+                "qemu" => "ipconfig",
+                _ => return Err(format!("Cannot check IP addresses of guest type {kind}")),
+            };
+            let id = guest["vmid"]
+                .as_u64()
+                .and_then(|id| u32::try_from(id).ok())
+                .ok_or("Guest inventory is missing its VMID")?;
+            let node = guest["node"].as_str().ok_or("Guest inventory is missing its node")?;
+            let mut used = BTreeSet::new();
+            let settings = pve
+                .get(&format!("/nodes/{node}/{kind}/{id}/pending"), &[])
+                .await
+                .map_err(|error| format!("Guest {id} on {node}: cannot check allocated IP addresses: {error}"))?;
+            let settings = settings
+                .as_array()
+                .ok_or_else(|| format!("Guest {id} on {node}: invalid pending configuration"))?;
+            for setting in settings {
+                if !setting["key"].as_str().is_some_and(|key| {
+                    key.strip_prefix(prefix)
+                        .is_some_and(|slot| !slot.is_empty() && slot.bytes().all(|b| b.is_ascii_digit()))
+                }) {
+                    continue;
+                }
+                for value in ["value", "pending"].into_iter().filter_map(|key| setting[key].as_str()) {
+                    for ip in value.split(',').filter_map(|field| field.strip_prefix("ip=")) {
+                        if let Ok(ip) = ip.split('/').next().unwrap_or_default().parse::<Ipv4Addr>() {
+                            used.insert((ip, id));
+                        }
                     }
                 }
             }
-        }
+            Ok(used)
+        })
+        .buffered(8);
+    let mut used = BTreeSet::new();
+    while let Some(result) = reads.next().await {
+        used.extend(result?);
     }
     Ok(used)
 }

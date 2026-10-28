@@ -2168,18 +2168,13 @@ fn draw_settings(buf: &mut Buffer, area: Rect, app: &App, section: usize, themes
         }
         _ => {
             lines.push(vec![("DNS".to_owned(), heading)]);
-            let dir = app.preferences.path.parent().unwrap_or(std::path::Path::new("."));
-            for (at, (name, file)) in super::integrations::PROVIDERS.iter().enumerate() {
-                let editor = super::integrations::Editor::open(dir, at);
-                let status = match &editor {
-                    Ok(_) if !dir.join("integrations").join(file).exists() => "Missing",
-                    Ok(editor) if editor.validate().is_ok() => "Saved",
-                    _ => "Incomplete",
-                };
+            for (at, (name, _)) in super::integrations::PROVIDERS.iter().enumerate() {
+                let summary = &app.integration_summaries[at];
+                let status = summary.status;
                 let chosen = matches!(app.overlay, Some(Overlay::Integrations { index }) if index == at);
                 let (item, style) = unfocused_item(palette, &format!("{name:<18}"), chosen, true);
                 let mut parts = vec![(item, style)];
-                if let Some(report) = editor.as_ref().ok().and_then(|editor| editor.report.as_ref()) {
+                if let Some(report) = summary.report.as_ref() {
                     let date = time::OffsetDateTime::parse(&report.at, &time::format_description::well_known::Rfc3339)
                         .map(|date| {
                             let date = date.to_offset(time::UtcOffset::UTC);
@@ -2209,12 +2204,7 @@ fn draw_settings(buf: &mut Buffer, area: Rect, app: &App, section: usize, themes
             lines.push(vec![("Monitoring".to_owned(), heading)]);
             let chosen = matches!(app.overlay, Some(Overlay::Integrations { index: 4 }));
             let (item, style) = unfocused_item(palette, &format!("{:<18}", "Prometheus"), chosen, true);
-            let status = match super::prometheus::current(dir) {
-                Ok(Some(url)) => url.as_str().trim_end_matches('/').to_owned(),
-                Ok(None) => "Missing".to_owned(),
-                Err(_) => "No server".to_owned(),
-            };
-            lines.push(vec![(item, style), (status, muted)]);
+            lines.push(vec![(item, style), (app.prometheus_summary.clone(), muted)]);
         }
     }
     for (row, parts) in lines.iter().enumerate() {

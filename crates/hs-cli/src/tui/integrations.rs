@@ -135,6 +135,28 @@ impl std::fmt::Debug for Editor {
     }
 }
 
+/// Only the non-secret values needed by Settings survive loading an editor.
+#[derive(Debug, Clone)]
+pub struct Summary {
+    pub status: &'static str,
+    pub report: Option<TestReport>,
+}
+
+impl Summary {
+    pub fn load(dir: &Path, provider: usize) -> Self {
+        let editor = Editor::open(dir, provider);
+        let status = match &editor {
+            Ok(editor) if !editor.path.exists() => "Missing",
+            Ok(editor) if editor.validate().is_ok() => "Saved",
+            _ => "Incomplete",
+        };
+        Self {
+            status,
+            report: editor.ok().and_then(|editor| editor.report),
+        }
+    }
+}
+
 impl Editor {
     fn credential_labels(&self) -> &'static [&'static str] {
         match self.provider {

@@ -234,7 +234,7 @@ pub enum StreamMessageType {
 
 /// One message of `GET /v1/jobs/{id}/events`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
-pub struct StreamMessage {
+pub struct StreamMessage<T = Job> {
     pub schema_version: u32,
     #[serde(rename = "type")]
     pub kind: StreamMessageType,
@@ -244,5 +244,5 @@ pub struct StreamMessage {
     pub stream_sequence: u64,
     pub server_time: String,
     /// The job; `null` for heartbeats.
-    pub data: Option<Job>,
+    pub data: Option<T>,
 }

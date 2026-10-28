@@ -10,6 +10,7 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+futures-util = "0.3.34"
 hs-core = { version = "0.1.0", path = "../hs-core" }
 base64 = "0.23.1"
 crossterm = { version = "0.29.0", default-features = false, features = ["events"] }

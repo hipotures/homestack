@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 use axum::Json;
 use axum::extract::{Path, Query, State};
+use futures_util::StreamExt;
 use hs_core::CoreError;
 use hs_core::discovery::{discovery as read_discovery, workspace_networks};
 use hs_core::gold::gold_readiness as read_gold_readiness;
@@ -69,23 +70,45 @@ fn core_error(error: CoreError, not_found: &'static str) -> ApiError {
 /// `VM.Config.Disk` on the VM (`PVE::Storage::check_volume_access`), and a
 /// detached volume's VM may be gone, so only `/vms` covers it.
 async fn listing_gaps(state: &AppState, cfg: &Config, nodes: &[NodeState]) -> Result<Vec<String>, ApiError> {
-    let mut cache: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    let mut privileges = async |path: String| -> Result<BTreeSet<String>, ApiError> {
-        if let Some(known) = cache.get(&path) {
-            return Ok(known.clone());
-        }
-        let found = state.pve()?.permissions(&path).await?;
-        cache.insert(path, found.clone());
-        Ok(found)
+    let paths: BTreeSet<String> = nodes
+        .iter()
+        .filter(|node| node.online)
+        .flat_map(|node| storage_ids_for_node(cfg, &node.node))
+        .map(|storage| format!("/storage/{storage}"))
+        .collect();
+    if paths.is_empty() {
+        return Ok(Vec::new());
+    }
+    let pve = state.pve()?;
+    // Match the default status read parallelism; ordered results keep errors stable.
+    let mut reads = futures_util::stream::iter(paths)
+        .map(|path| {
+            let pve = &pve;
+            async move {
+                let privileges = pve.permissions(&path).await?;
+                Ok::<_, ApiError>((path, privileges))
+            }
+        })
+        .buffered(8);
+    let mut cache = BTreeMap::new();
+    while let Some(result) = reads.next().await {
+        let (path, privileges) = result?;
+        cache.insert(path, privileges);
+    }
+    // Preserve short-circuiting: /vms is required only for a storage without
+    // Datastore.Allocate, and a failure must still fail the whole read.
+    let vm_disks = if cache
+        .values()
+        .any(|privileges| !privileges.contains("Datastore.Allocate"))
+    {
+        pve.permissions("/vms").await?.contains("VM.Config.Disk")
+    } else {
+        false
     };
     let mut gaps = Vec::new();
     for node in nodes.iter().filter(|n| n.online) {
         for storage in storage_ids_for_node(cfg, &node.node) {
-            if privileges(format!("/storage/{storage}"))
-                .await?
-                .contains("Datastore.Allocate")
-                || privileges("/vms".to_owned()).await?.contains("VM.Config.Disk")
-            {
+            if cache[&format!("/storage/{storage}")].contains("Datastore.Allocate") || vm_disks {
                 continue;
             }
             gaps.push(format!(
