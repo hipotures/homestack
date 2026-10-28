@@ -5,5 +5,9 @@ FROM docker.io/library/alpine:3.24.2@sha256:294b683cb724975bec92580e1e685676bd4b
 COPY --chmod=0755 homestack-usage /usr/local/bin/homestack-usage
 # Port 80 needs root; the unprivileged LXC maps it to an unprivileged host user.
 ENV HOMESTACK_LISTEN=0.0.0.0:80
+# First response-token sample in the original deployment (2026-10-28 UTC).
+# A fixed boundary preserves history without counting later turn summaries.
+# Other installations can override this timestamp; zero disables old metrics.
+ENV HOMESTACK_CODEX_HISTORY_END=1793191130.125
 EXPOSE 80
 ENTRYPOINT ["/usr/local/bin/homestack-usage"]

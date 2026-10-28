@@ -155,7 +155,7 @@ const AGENTS = [
     active: "claude_code_active_time_seconds_total", commits: "claude_code_commit_count_total",
     lines: "claude_code_lines_of_code_count_total",
   }) },
-  { id: "codex", label: "Codex", scopeMetric: "codex_response_token_usage", metrics: c => ({
+  { id: "codex", label: "Codex", scopeMetric: "codex_(response_token_usage|turn_token_usage.*_(sum|total))", metrics: c => ({
     tokens: c.tokens, tokenLabel: "token_type", inclusiveInput: true,
     types: { total: "total", input: "input", cached: "cached_input", written: "cache_write_input", output: "output", reasoning: "reasoning_output" },
     estimated: true, convertCost: rows => costRows(rows, c), costNote: () => costNote(c),
@@ -178,11 +178,32 @@ const SERIES = ["--s1", "--s2", "--s3", "--s4", "--s5"];
 // Codex response gauges contain one delta per pushed batch, summed directly.
 // Other instruments are cumulative per process; new series start from zero.
 const LOOKBACK = "100d";
+const CODEX_HISTORY_END = __HOMESTACK_CODEX_HISTORY_END__;
+let codexLegacyTokens;
 const growth = (selector, by, window, metric = scoped(selector)) =>
-  selector.startsWith("codex_response_token_usage") ?
-    `sum by (${by}) (sum_over_time(${metric}[${window}s]))` :
+  selector.startsWith("codex_response_token_usage") || codexLegacyTokens && selector.startsWith(codexLegacyTokens) ?
+    codexGrowth(selector, by, window) :
   `sum by (${by}) (clamp_min(last_over_time(${metric}[${LOOKBACK}]) - ` +
   `(last_over_time(${metric}[${LOOKBACK}] offset ${window}s) or last_over_time(${metric}[${LOOKBACK}]) * 0), 0))`;
+
+// Historical counters stop at the fixed rollout boundary, independent of the
+// selected range, server or project. Later turn summaries are never added.
+function codexGrowth(selector, by, window) {
+  const labels = selector.replace(/^[a-zA-Z_:][a-zA-Z0-9_:]*/, "");
+  const live = `sum by (${by}) (sum_over_time(${scoped("codex_response_token_usage" + labels)}[${window}s]))`;
+  if (!codexLegacyTokens || !CODEX_HISTORY_END) return live;
+  const old = scoped(codexLegacyTokens + labels);
+  const current = `last_over_time(${old}[${LOOKBACK}])`;
+  const frozen = `last_over_time(${old}[${LOOKBACK}] @ ${CODEX_HISTORY_END - 0.001})`;
+  const end = `((${current} and on() (vector(time()) < ${CODEX_HISTORY_END})) or ` +
+    `(${frozen} and on() (vector(time()) >= ${CODEX_HISTORY_END})))`;
+  const start = `last_over_time(${old}[${LOOKBACK}] offset ${window}s)`;
+  const history = `sum by (${by}) (clamp_min(${end} - (${start} or ${end} * 0), 0)) ` +
+    `and on() (vector(time() - ${window}) < ${CODEX_HISTORY_END})`;
+  // Give the two sources distinct labels before union, then sum them. This
+  // preserves rows present in only one source and adds shared model/token rows.
+  return `sum by (${by}) ((${live}) or label_replace((${history}), "homestack_usage_source", "history", "", ""))`;
+}
 
 // Server and project are OTEL resource attributes; ANY keeps every series,
 // including those without the label.
@@ -220,18 +241,21 @@ const series = (query, start, end, step) =>
 // Codex metric names depend on its exporter's unit and instrument type.
 async function codexMetrics() {
   const names = await prom("/api/v1/label/__name__/values", {
-    "match[]": '{__name__=~"codex_(response_token_usage|(turn_(e2e_duration_ms|ttft_duration_ms|ttfm_duration_ms)|thread_started|conversation_turn_count|tool_call).*_(sum|count|total))"}',
+    "match[]": '{__name__=~"codex_(response_token_usage|(turn_(token_usage|e2e_duration_ms|ttft_duration_ms|ttfm_duration_ms)|thread_started|conversation_turn_count|tool_call).*_(sum|count|total))"}',
   });
   const pick = re => names.find(n => re.test(n) && n.endsWith("_total")) || names.find(n => re.test(n) && n.endsWith("_sum"));
   const histogram = prefix => ({ sum: names.find(n => n.startsWith(prefix) && n.endsWith("_sum")),
     count: names.find(n => n.startsWith(prefix) && n.endsWith("_count")) });
-  const tokens = names.find(n => n === "codex_response_token_usage");
-  return { tokens, threads: pick(/^codex_thread_started/),
+  const liveTokens = names.find(n => n === "codex_response_token_usage");
+  codexLegacyTokens = CODEX_HISTORY_END > 0 ? pick(/^codex_turn_token_usage/) : undefined;
+  const tokens = liveTokens || codexLegacyTokens;
+  return { tokens, legacyTokens: codexLegacyTokens, threads: pick(/^codex_thread_started/),
     turns: pick(/^codex_conversation_turn_count/), tools: pick(/^codex_tool_call_total$/),
     turn: histogram("codex_turn_e2e_duration_ms"), firstToken: histogram("codex_turn_ttft_duration_ms"),
     firstOutput: histogram("codex_turn_ttfm_duration_ms"), toolTime: histogram("codex_tool_call_duration_ms"),
     prices: PRICES, missing: new Set(), coverage: tokens ? "" :
-      "Codex response token metrics are unavailable. Enable Codex OTEL log export and deploy the response-aware Collector. History begins when response export is enabled." };
+      "Codex token metrics are unavailable. Enable Codex OTEL log export and deploy the response-aware Collector.",
+    notice: !liveTokens && codexLegacyTokens ? "Showing historical Codex usage. Live response token metrics are not available yet." : "" };
 }
 
 // A globally present metric can still have no attribution for the selected
@@ -460,13 +484,14 @@ async function load() {
   try {
     const codex = await codexMetrics();
     if ((comparison || shows("codex")) && codex.tokens) {
-      const rows = await instant(`group by (host_name,project) (last_over_time(${codex.tokens}{token_type="total"}[${LOOKBACK}]))`, now);
+      const names = [codex.tokens, codex.legacyTokens].filter(Boolean).join("|");
+      const rows = await instant(`group by (host_name,project) (last_over_time({__name__=~"${names}",token_type="total"}[${LOOKBACK}]))`, now);
       codex.coverage = coverageNote(rows);
     }
     const peers = AGENTS.filter(a => comparison || shows(a.id)).map(a => ({ ...a, metric: { types: {}, ...a.metrics(codex) } }));
     const agents = await Promise.all(peers.map(a => readAgent(a, now, peers)));
     if (version !== loadVersion) return;
-    const coverage = document.getElementById("coverage"); coverage.textContent = codex.coverage; coverage.hidden = !codex.coverage;
+    const coverage = document.getElementById("coverage"); coverage.textContent = codex.coverage || codex.notice; coverage.hidden = !(codex.coverage || codex.notice);
     if (comparison) renderComparison(agents, now);
     else {
       const list = panels(agents, range.step), queries = new Map();

@@ -29,8 +29,8 @@ started IDE, desktop, remote, or managed app servers.
 
 Codex's native `codex.turn.token_usage` histogram is emitted when a turn
 finishes. It does not provide live token accounting for active turns, and
-unfinished turns can be absent. The dashboard uses only completed-response
-usage events for tokens and estimated cost. Native metrics remain enabled for
+unfinished turns can be absent. The dashboard uses completed-response
+usage events for live tokens and estimated cost. Native metrics remain enabled for
 turn duration, tool calls and other measurements.
 
 Keep both exporters in the user-level `~/.codex/config.toml`, using the same
@@ -82,9 +82,25 @@ exporter queue protects converted metrics during downstream outages and ordinary
 Collector restarts; log batches and in-flight source events are not a durable
 journal, so abrupt process loss before enqueueing can still lose data.
 
-The new series starts when response export is enabled. There is no historical
-backfill or fallback to turn metrics. Upgrade both Collector and dashboard;
-missing response metrics are reported explicitly instead of using old totals.
+The new series starts when response export is enabled. Historical turn metrics
+are read strictly before `HOMESTACK_CODEX_HISTORY_END`, the first response-token
+sample's Unix timestamp. The AI Usage image defaults to `1793191130.125`
+(2026-10-28 12:38:50.125 UTC), the original deployment's first response sample.
+Other installations must set this environment variable to their own first
+response sample, or set it to `0` to disable historical reads. Bare binaries
+without the variable default to `0`.
+
+This fixed boundary is independent of selected dates, servers and projects and
+does not move as Prometheus retention expires. For a window spanning the
+boundary, the dashboard freezes each historical counter immediately before the
+first response sample and adds live response increments. Turn summaries at or
+after the boundary are never counted, even in quiet response intervals.
+Historical models, token categories, scopes and estimated costs use the same
+queries as the charts, comparison, summaries and JSON exports. No Prometheus
+data is rewritten or backfilled. Missing response metrics do not suppress
+available historical costs; the page reports that only historical data is
+available. Historical measurements retain the original turn accounting's gaps
+and attribution limits.
 
 ## Prometheus resource labels
 

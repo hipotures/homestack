@@ -3,6 +3,7 @@
 //! | Variable | Meaning |
 //! | --- | --- |
 //! | `HOMESTACK_PROMETHEUS_URL` | Prometheus URL, `http` only, e.g. `http://prom:9090`; any path is ignored |
+//! | `HOMESTACK_CODEX_HISTORY_END` | Exclusive end of historical turn usage, Unix seconds; default 0 disables historical reads |
 //! | `HOMESTACK_HEARTBEAT_SECONDS` | Serving-path heartbeat interval, 1 to 3600 seconds; default 60 |
 //!
 //! The page queries Prometheus through this service, which forwards only the
@@ -43,7 +44,7 @@ async fn main() -> ExitCode {
         .with_env_filter(filter)
         .with_writer(std::io::stderr)
         .init();
-    let (prometheus, interval, listen) = match settings(|name| std::env::var(name).ok()) {
+    let (prometheus, interval, listen, history_end) = match settings(|name| std::env::var(name).ok()) {
         Ok(settings) => settings,
         Err(error) => {
             tracing::error!(%error, "invalid configuration");
@@ -77,10 +78,14 @@ async fn main() -> ExitCode {
         || "null".to_owned(),
         |prices| prices.to_string().replace('<', "\\u003c"),
     );
-    let page: Arc<str> = Arc::from(PAGE.replace("__HOMESTACK_PRICING__", &prices).replace(
-        "__HOMESTACK_USAGE_VERSION__",
-        option_env!("HOMESTACK_USAGE_VERSION").unwrap_or("development"),
-    ));
+    let page: Arc<str> = Arc::from(
+        PAGE.replace("__HOMESTACK_PRICING__", &prices)
+            .replace(
+                "__HOMESTACK_USAGE_VERSION__",
+                option_env!("HOMESTACK_USAGE_VERSION").unwrap_or("development"),
+            )
+            .replace("__HOMESTACK_CODEX_HISTORY_END__", &history_end.to_string()),
+    );
     let mut app = Router::new()
         .route("/", get(index))
         .route("/health/live", get(health))
@@ -155,7 +160,7 @@ async fn index(State(state): State<AppState>) -> Response {
     ([(header::CACHE_CONTROL, "no-store")], Html(state.page.to_string())).into_response()
 }
 
-fn settings(env: impl Fn(&str) -> Option<String>) -> Result<(url::Url, Duration, SocketAddr), String> {
+fn settings(env: impl Fn(&str) -> Option<String>) -> Result<(url::Url, Duration, SocketAddr, f64), String> {
     let raw = env("HOMESTACK_PROMETHEUS_URL").ok_or("HOMESTACK_PROMETHEUS_URL is required")?;
     let mut prometheus = url::Url::parse(&raw).map_err(|error| format!("HOMESTACK_PROMETHEUS_URL: {error}"))?;
     prometheus.set_path("");
@@ -176,7 +181,12 @@ fn settings(env: impl Fn(&str) -> Option<String>) -> Result<(url::Url, Duration,
         .ok_or("HOMESTACK_LISTEN is required")?
         .parse()
         .map_err(|error| format!("HOMESTACK_LISTEN: {error}"))?;
-    Ok((prometheus, Duration::from_secs(seconds), listen))
+    let history_end = env("HOMESTACK_CODEX_HISTORY_END")
+        .map_or(Ok(0.0), |value| value.parse::<f64>())
+        .ok()
+        .filter(|value| value.is_finite() && *value >= 0.0)
+        .ok_or("HOMESTACK_CODEX_HISTORY_END must be a finite, nonnegative Unix timestamp")?;
+    Ok((prometheus, Duration::from_secs(seconds), listen, history_end))
 }
 
 /// Forward one read-only Prometheus request, keeping its status and body.
