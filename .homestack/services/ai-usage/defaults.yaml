@@ -1,6 +1,6 @@
 schema: 3
 service: ai-usage
-# The server uses about 10 MiB of memory; the image is about 20 MB.
+# Bounded in-memory datasets; no persistent storage or frontend runtime.
 resources:
   cores: 1
   memory: 64M

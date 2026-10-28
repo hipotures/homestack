@@ -1,0 +1,10 @@
+{
+  "datastar-1.0.4.js": {
+    "url": "https://cdn.jsdelivr.net/gh/starfederation/datastar@v1.0.4/bundles/datastar.js",
+    "sha256": "727844adfc825ee651fb93c544a2a739986f9a21820a94524b35f0cac470cf91"
+  },
+  "echarts-6.1.0.min.js": {
+    "url": "https://cdn.jsdelivr.net/npm/echarts@6.1.0/dist/echarts.min.js",
+    "sha256": "b66b25aeb4df84e33199dc21694014d336d222cbd9deb0e5a7c14bd6aa0d0fd0"
+  }
+}

@@ -14,7 +14,7 @@ runtime:
     path: /health/ready
     expected_status: 200
     heartbeat_seconds: 60
-# Charts read Prometheus on every page load; nothing is stored locally.
+# Shared dashboard snapshots and query caches are bounded and memory-only.
 persistence: {}
 # Browsers force HTTPS for .app and other HSTS-preloaded domains; Pangolin
 # terminates TLS and authenticates viewers.

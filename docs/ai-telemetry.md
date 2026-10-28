@@ -144,59 +144,217 @@ dashboard can filter the counters.
 References: [Codex CLI](https://learn.chatgpt.com/docs/developer-commands),
 [Prometheus OTLP resource attributes](https://prometheus.io/docs/guides/opentelemetry/#promoting-resource-attributes).
 
-## Comparing agents
+## Dashboard architecture
 
-The dashboard's `Compare agents` switch replaces the charts with a table for
-all registered agents, using the current server, project and time filters.
-Cost and total tokens come first. Output includes reasoning; its separate
-reasoning row is a subset, not additional usage. The comparison table and
-`All agents` charts show only capabilities shared by every registered agent,
-except token categories: those use the union of the agents' categories, so
-reasoning or cache writes stay visible even when only one agent reports them.
-Missing measurements are marked explicitly instead of being displayed as zero.
-Selecting a single agent shows all its available charts, including metrics
-that cannot be compared with another agent.
+The Alpine `homestack-usage` binary embeds its HTML, vanilla JavaScript,
+Datastar 1.0.4 and Apache ECharts 6.1.0. Vendor releases, licenses, download
+provenance and SHA-256 checksums are in `crates/hs-usage/assets/`. There are no
+runtime CDN requests. The startup-only LiteLLM download supplies OpenAI token
+prices; a failed download leaves estimated costs explicitly unavailable until
+restart. Claude Code cost comes from its reported USD counter. Pangolin remains
+the HTTPS and authentication boundary. Health, heartbeat, service status and
+stateless deployment contracts are unchanged.
 
-The `AGENTS` registry in `crates/hs-usage/src/index.html` defines each agent's
-metric selectors, token label names, token categories and optional capabilities.
-Add an adapter there to include another agent in the comparison columns,
-agent selector, scope discovery and shared charts. Declare whether input
-already includes cached and cache-write tokens. Unreported capabilities remain
-absent. Shared charts keep agent colors consistent and show adjacent bars;
-model costs and agent-specific measurements retain their own breakdowns.
-Optional `extras` describe agent-specific counters and duration histograms.
-Codex discovers turn counts and durations, first-token and first-output
-latency, tool calls, failures and tool durations from the available metric
-names. Histogram means divide the duration sum by the observation count and
-convert milliseconds to seconds. Full-turn duration includes tools and waits;
-it is not mapped to Claude Code's active time.
+The browser no longer has a Prometheus proxy. Only registered dashboard ranges,
+agents and bounded host/project labels are accepted. Arbitrary PromQL and metric
+selectors are not API inputs. The serving pipeline is:
 
-In the chart view, `All agents` also shows total cost and total tokens in a
-separate column to the left of the per-agent tiles. These totals use the same
-scoped snapshot, include estimated costs where applicable, and explicitly name
-unavailable contributors when a sum is partial. The summary moves above the
-agent tiles on narrow screens and is hidden in comparison and single-agent views.
+1. `registry.rs`: agent adapters and instrument discovery. Claude counters and
+   Codex response increments, frozen turn history, counters and duration
+   sum/count pairs declare their measurement and unit here.
+2. `planner.rs`: stable UTC bucket plans, grouped queries, process-preserving
+   counter subtraction and exact source provenance. Closed history and current
+   partial buckets are independent operations.
+3. `prometheus.rs`: one reused HTTP client, global concurrency **four**, query
+   deduplication, per-key singleflight and bounded response/cache sizes.
+4. `dashboard.rs`: host/project filtering, token normalization, model pricing,
+   comparison totals, weighted duration means, heatmap inputs and spike detection.
+   Calculations are shared across widgets and viewers.
+5. `datasets.rs` and `live.rs`: content versions, coherent snapshots, point
+   changes or replacements, Datastar SSE and exact-snapshot exports.
 
-The container downloads prices once at startup and embeds only the four token
-rates needed by the dashboard in the HTML document. There is no separate
-pricing request on page load, refresh or filter changes. Agent-specific
-snapshot queries are skipped when their capabilities are hidden in the current
-view. Metric-name discovery requests only the relevant Codex instruments;
-server and project filters share a single query over usage metrics, without
-scanning every tool metric and histogram bucket.
+### Datasets and time
 
-## Dashboard version and table export
+A dataset has a stable logical ID such as `codex.tokens`, `claude.cost`,
+`all.summary` or `all.activity`; agent, measurement and unit; validated scope;
+UTC start/end/step and current partial-bucket start; typed dimensions and exact
+numeric points; availability (`available`, `missing`, `unavailable`, `partial`);
+notes; a source-freshness block reference; and a content version. Source query values remain original Prometheus
+strings in export provenance. Presentation rounding never enters accounting.
+A token dataset includes model/category series and shared category, model and
+cache-hit projections. Cost, counters and durations have shared timelines.
+Tables, tiles and charts consume these projections rather than issuing queries.
 
-The footer beneath the charts shows the AI Usage image version. Release CI
-embeds its image tag into the binary through `HOMESTACK_USAGE_VERSION`; local
-builds without that compile-time value show `development`.
+Ranges retain their steps: 1h/60s, 24h/1h, 7d/6h, 30d/1d and 90d/1d.
+The start is the current UTC boundary minus the requested duration. The result
+includes that duration of closed buckets plus the partial current bucket.
+`end` is the next boundary, not a claim that future samples exist. Points are
+identified by bucket start; underlying Prometheus windows are open on the left
+and closed on the right. Axes remain fixed inside a bucket. Display timestamps
+and the weekday/hour heatmap use browser-local time, including local DST rules.
+Durations and accounting windows remain UTC. Heatmap inputs cover at least seven
+and at most thirty days; spike inputs cover the selected days plus seven prior
+days. Reasoning stays a subset of output. Codex inclusive input is split into
+uncached input, cached input and cache writes before pricing.
 
-In each chart's table mode, the copy icon copies JSON from the currently
-loaded snapshot without another request. It contains the selected filters and
-time bounds, the displayed series with unrounded numeric values, and every
-source Prometheus query with its matrix data (`metric` labels and original
-`[timestamp, value]` pairs). Source values remain strings exactly as returned
-by Prometheus. For estimated costs, source queries contain token measurements
-while displayed series contain the calculated USD values. Clipboard access
-uses the browser Clipboard API and requires a secure context (HTTPS or
-localhost); the button reports copy failures.
+### Retention, cache and scheduling
+
+The old `LOOKBACK = "100d"` is removed. Counter baselines use the existing
+**600-day** retention horizon, including inactive processes. A process with an
+old baseline that resumes in the selected period is subtracted against that
+baseline, rather than having its whole retained counter counted as new usage.
+Codex response gauges always use `sum_over_time`; `rate` and `increase` are not
+used. Historical turn usage is frozen strictly before the fixed rollout
+boundary. Later turn summaries cannot fill quiet response intervals or overlap
+live response usage.
+
+Closed range matrices and per-process boundary baselines have six-hour TTLs;
+current partial buckets and normalized global views have thirty-second TTLs.
+The frozen Codex historical endpoint keeps its six-hour TTL.
+Discovery refreshes hourly. Ordinary refreshes within the same UTC bucket reuse
+history/baselines and execute only recent-window queries. Cold views and bucket
+rollovers can require more expensive retention-baseline calculations. This is
+not evidence of full-year performance. Late data in closed buckets becomes
+visible when those cached reads refresh. No recording rules or Prometheus
+configuration changes are required.
+
+Query caches allow 96 entries and 12 MiB of conservatively estimated parsed
+storage; an individual response is limited to 1 MiB. Global calculations retain
+at most two views within an 8 MiB estimate; exact exports retain at most twelve
+snapshots within another 8 MiB estimate. Shared `Arc` data avoids duplicating
+provenance across viewers. Normalized wire snapshots are limited to 512 KiB.
+Oversized results fail explicitly, preserving the browser's last successful
+state instead of silently truncating totals. These are internal safety budgets,
+not public configuration. A global build lock coalesces snapshot misses and
+prevents overlapping expensive refreshes. Queries within a build share the
+four-slot execution semaphore. Cache misses for identical query/time parameters
+coalesce; errors are cached briefly to avoid retry storms. Arbitrary scope
+combinations cannot create unbounded caches or distinct PromQL plans.
+
+### Updates and resynchronization
+
+A page makes five initial requests: HTML, three local scripts and one Datastar
+SSE stream. Vendor scripts have immutable caching and precompressed gzip
+representations. Eligible ordinary responses use negotiated gzip. SSE remains
+unbuffered, uncompressed and sends ten-second keepalive comments; the server
+refreshes selected snapshots every thirty seconds only while subscribed. There
+are at most 32 concurrent streams; excess streams receive HTTP 429 and retry
+with Datastar's bounded backoff. Hidden pages close their stream and reconnect
+when visible. Query work is shared across viewers, independently of rendering.
+
+`/api/dashboard/events` accepts a Datastar selection payload and returns an
+atomic packet signal. Every connection begins with a full snapshot. Later
+packets contain only changed datasets: tiny or structurally changed datasets
+are replaced; compatible larger series use append/update/remove points when
+that encoding is smaller. Unchanged datasets produce no dataset payload and
+no `setOption` calls. Small exact changes are compared with published versions,
+so presentation rounding cannot hide accumulated usage. Metadata heartbeats
+still report checks and source freshness. `source_at`, `history_checked_at`
+and `checked_at` distinguish successful source reads from publication/version
+changes; a version changes only when its dataset representation changes.
+
+The client validates batch base snapshot and dataset versions before applying
+changes. Each selection gets a generation number; responses from old selections
+are ignored. Any mismatch restarts the stream with a full snapshot. Every
+reconnection also starts full; no per-browser replay history is retained.
+Connection state holds only the last snapshot ID. Deltas resolve against the bounded
+shared snapshot cache; eviction automatically sends a full snapshot. A browser
+cannot pin dataset or provenance histories in server memory.
+Prometheus failures keep useful charts visible with an explicit error/freshness
+indicator. The page detects a lost stream even before a source response arrives.
+
+ECharts owns axes, scales, legends, tooltips, zooming and heatmaps. Stable chart
+hosts are excluded from Datastar morphing. Instances are created once and
+updated via `setOption`; table switching hides the instance, resizing uses
+`ResizeObserver`, and removed widgets dispose their instances. Background
+refresh never applies a grey loading overlay or rebuilds the chart grid.
+
+### Comparison, exports and extension
+
+All-agent and single-agent views retain cost/tokens, category breakdowns, model
+costs and tokens, sessions, active time, commits, lines, Codex turn and tool
+metrics, means, heatmap, spikes, themes and responsive layouts. Comparison uses
+shared capabilities, with the union of token categories. Missing and unsupported
+measurements remain explicit rather than zero. Summary totals and comparison
+values come from the same selected datasets as the charts. Cost estimates use
+model names without guessing and report missing rates; partial model costs are
+never presented as complete agent cost. The footer reports the image version.
+
+Chart/table copy and Copy all retain unrounded displayed series, filters, time
+boundaries, original PromQL and source matrices/labels. Copy all emits JSON
+Lines, one chart per line. An explicit `/api/dashboard/export?snapshot=...`
+request obtains provenance for the exact intended displayed snapshot, rather
+than attaching raw matrices to routine updates. Shared query provenance includes
+the global source rows used before server-side scope filtering. Exports carry
+the selected scope and normalized scoped datasets as well. Retention eviction
+returns HTTP 409 instead of quietly exporting newer values; reconnect to obtain
+a current exportable snapshot. Clipboard uses the browser Clipboard API over
+Pangolin HTTPS (or localhost). `/api/dashboard/snapshot` is the same aggregated
+JSON snapshot for diagnostics, with no arbitrary query access.
+
+To add a telemetry source, define its instrument adapter and dimensions in
+`registry.rs`, declare counter versus increment semantics, then normalize into
+existing measurements or a new dataset in `dashboard.rs`. Extend planner kinds
+only when the source accounting actually differs. To add a chart/table, consume
+a dataset projection in `assets/dashboard.js`; do not add PromQL, pricing,
+network polling or custom axes there. New derived calculations belong in Rust.
+The retained raw sources automatically become available to snapshot exports.
+
+### Known limits
+
+Prometheus samples cannot establish lifetime completeness. Missing exports,
+process resets between samples, baselines older than retention, and historical
+host/project labels cannot be reconstructed. Totals explicitly describe retained
+selected UTC buckets, not an audited lifetime ledger. Bucket totals are shared
+with summaries; a counter reset is clamped per bucket, and a reset within a
+bucket can still lose usage. Sources whose responses exceed the safety budgets
+need a separately reviewed cardinality strategy; they fail visibly today.
+
+Cold 90-day plans can scan retained baselines and have a twenty-second
+Prometheus timeout. A full year of dense source data has not been benchmarked.
+Closed-bucket late ingestion may take six hours to appear. All cache/export
+state is memory-only and disappears on restart. Startup pricing is not a
+historical rate ledger, and estimated API charges are not subscription costs.
+The deployment remains at one core and 64 MiB unless measured workloads justify
+a specific increase. Production deployment remains a separate owner action.
+
+### Focused modernization verification (2026-10-29)
+
+Measurements used the native debug binary and headless Chromium against a
+**disposable local Prometheus 3.15.0**, with deterministic Claude/Codex counters,
+response increments, the fixed transition boundary, and a process baseline
+150 days old. They are not a production or full-year capacity benchmark.
+
+| Measurement | Observed |
+| --- | --- |
+| Original browser initial load, same fixture | 23 requests, including 22 Prometheus requests |
+| New browser initial load | 5 requests: page, 3 scripts, 1 SSE stream |
+| New cold all-agent 24h calculation | 18 Prometheus requests, maximum concurrency 4 |
+| Normal unchanged refresh | 0 new browser requests, 4 recent Prometheus queries |
+| Full SSE snapshot | 30,135 bytes, including Datastar envelope |
+| Unchanged SSE update | 702 bytes of metadata, zero dataset changes and zero chart render calls |
+| Changed / removed-point SSE batches | 8,676 / 8,697 bytes; replacements plus point patches |
+| Snapshot JSON / negotiated gzip | 27,025 / 3,454 bytes |
+| Warm refresh HTTP response | 23 ms |
+| Snapshot cache-hit HTTP responses | 1.5–1.6 ms |
+| Cold initial generation | About 35 ms in this small fixture |
+| Twelve simultaneous requests for an uncached 90d view | 9 shared Prometheus requests, one shared snapshot |
+| Native process RSS / high-water after cache/scope/stream pressure | About 33 / 38.2 MiB |
+| Stream bound | 32 accepted, 33rd request returned 429 |
+
+The original and new dashboards agreed on 640 Claude tokens, 1,600 Codex tokens,
+Codex categories (960 uncached input, 320 cached input, 320 output, 80 reasoning),
+and USD 0.00444 Codex cost. The old lookback counted 1,500 sessions for the sparse
+process; the retained 1,000-session baseline makes the new increment correctly
+500. A separate ordinary process contributed four sessions in both dashboards.
+
+Observable checks covered stable chart instance identities, unchanged-render
+suppression, changed values, eight removed points, source outage retention,
+reconnect/full resync, deliberately wrong versions, stale filter generations,
+comparison, JSON/JSON Lines clipboard exports with original source strings,
+Codex-specific views, dark/light themes and a 390px mobile layout without page
+overflow. Vendor hashes/gzip, ETag 304, local licenses, all health/status paths,
+invalid filters and removed proxy routes were checked. Forty arbitrary scope
+requests stayed bounded. The checks were temporary diagnostics, not a new
+permanent test suite. The existing image-validation probe now uses the dataset
+endpoint for its expected upstream-unavailable response.

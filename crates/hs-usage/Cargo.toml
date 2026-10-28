@@ -15,8 +15,10 @@ futures-util = "0.3.34"
 hs-model = { version = "0.1.0", path = "../hs-model" }
 hs-service-status = { path = "../hs-service-status" }
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "json", "stream"] }
+serde = { version = "1.0.229", features = ["derive", "rc"] }
 serde_json = "1.0.154"
 tokio = { version = "1.53.2", features = ["rt-multi-thread", "macros", "net", "signal", "sync", "time"] }
+tower-http = { version = "0.7.1", features = ["compression-gzip"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }
 url = "2.5.8"

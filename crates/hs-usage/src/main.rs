@@ -6,37 +6,39 @@
 //! | `HOMESTACK_CODEX_HISTORY_END` | Exclusive end of historical turn usage, Unix seconds; default 0 disables historical reads |
 //! | `HOMESTACK_HEARTBEAT_SECONDS` | Serving-path heartbeat interval, 1 to 3600 seconds; default 60 |
 //!
-//! The page queries Prometheus through this service, which forwards only the
-//! read-only instant, range and metric-name endpoints. LiteLLM OpenAI prices
-//! are downloaded once at startup; restart the container to refresh or retry.
+//! Purpose-built, shared dashboard datasets with local Datastar and ECharts assets.
 
+mod dashboard;
+mod datasets;
+mod live;
+mod planner;
+mod prometheus;
+mod registry;
+
+use std::hash::{Hash, Hasher};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::process::ExitCode;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use axum::Router;
-use axum::body::{Body, Bytes};
-use axum::extract::{RawQuery, State};
-use axum::http::{StatusCode, header};
+use axum::body::Bytes;
+use axum::extract::{Path, State};
+use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::get;
-use futures_util::TryStreamExt;
 use hs_model::health::{HeartbeatObservation, Liveness, LivenessStatus};
 use tracing_subscriber::EnvFilter;
 
 const PROBE_PATH: &str = "/health/heartbeat";
 const PAGE: &str = include_str!("index.html");
 const PRICING_URL: &str = "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json";
-/// Prometheus endpoints the page may read; nothing else is forwarded.
-const FORWARDED: [&str; 3] = ["/api/v1/query", "/api/v1/query_range", "/api/v1/label/__name__/values"];
-
 #[derive(Clone)]
 struct AppState {
-    prometheus: url::Url,
-    client: reqwest::Client,
+    dashboard: Arc<dashboard::Dashboard>,
     heartbeat: Arc<Heartbeat>,
     page: Bytes,
+    shutdown: tokio::sync::watch::Receiver<bool>,
 }
 
 #[tokio::main]
@@ -74,35 +76,33 @@ async fn main() -> ExitCode {
             None
         }
     };
-    // Embed the immutable startup rates in the page; the browser never
-    // downloads a separate catalog on reload or on filter changes.
-    let prices = pricing.map_or_else(
-        || "null".to_owned(),
-        |prices| prices.to_string().replace('<', "\\u003c"),
-    );
-    let page = Bytes::from(
-        PAGE.replace("__HOMESTACK_PRICING__", &prices)
-            .replace(
-                "__HOMESTACK_USAGE_VERSION__",
-                option_env!("HOMESTACK_USAGE_VERSION").unwrap_or("development"),
-            )
-            .replace("__HOMESTACK_CODEX_HISTORY_END__", &history_end.to_string()),
-    );
-    let mut app = Router::new()
+    let page = Bytes::from(PAGE.replace(
+        "__HOMESTACK_USAGE_VERSION__",
+        option_env!("HOMESTACK_USAGE_VERSION").unwrap_or("development"),
+    ));
+    let dashboard = Arc::new(dashboard::Dashboard::new(
+        prometheus::Prometheus::new(client, prometheus.clone()),
+        pricing,
+        history_end,
+    ));
+    let (shutdown_tx, shutdown) = tokio::sync::watch::channel(false);
+    let app = Router::new()
         .route("/", get(index))
+        .route("/assets/{name}", get(asset))
+        .route("/api/dashboard/events", get(live::events))
+        .route("/api/dashboard/snapshot", get(live::snapshot))
+        .route("/api/dashboard/export", get(live::export))
         .route("/health/live", get(health))
         .route("/health/ready", get(health))
         .route(PROBE_PATH, get(|| async { StatusCode::NO_CONTENT }))
-        .route(hs_service_status::PATH, get(service_status));
-    for path in FORWARDED {
-        app = app.route(path, get(move |state, query| forward(state, path, query)));
-    }
-    let app = app.with_state(AppState {
-        prometheus: prometheus.clone(),
-        client,
-        heartbeat: Arc::clone(&heartbeat),
-        page,
-    });
+        .route(hs_service_status::PATH, get(service_status))
+        .layer(tower_http::compression::CompressionLayer::new())
+        .with_state(AppState {
+            dashboard,
+            heartbeat: Arc::clone(&heartbeat),
+            page,
+            shutdown,
+        });
     let listener = match tokio::net::TcpListener::bind(listen).await {
         Ok(listener) => listener,
         Err(error) => {
@@ -113,7 +113,10 @@ async fn main() -> ExitCode {
     let heartbeat_task = tokio::spawn(heartbeat.run(listen));
     tracing::info!(listen = %listen, prometheus = %prometheus, "homestack-usage started");
     let served = axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
+        .with_graceful_shutdown(async move {
+            shutdown_signal().await;
+            let _ = shutdown_tx.send(true);
+        })
         .await;
     heartbeat_task.abort();
     if let Err(error) = served {
@@ -191,27 +194,67 @@ fn settings(env: impl Fn(&str) -> Option<String>) -> Result<(url::Url, Duration,
     Ok((prometheus, Duration::from_secs(seconds), listen, history_end))
 }
 
-/// Forward one read-only Prometheus request, keeping its status and body.
-async fn forward(State(state): State<AppState>, path: &'static str, RawQuery(query): RawQuery) -> Response {
-    let mut target = state.prometheus.clone();
-    target.set_path(path);
-    target.set_query(query.as_deref());
-    let response = match state.client.get(target).send().await {
-        Ok(response) => response,
-        Err(error) => {
-            tracing::warn!(%error, path, "Prometheus is unreachable");
-            return (StatusCode::BAD_GATEWAY, "Prometheus is unreachable").into_response();
-        }
+/// Versioned vendor assets are embedded in the Alpine binary, including gzip representations.
+async fn asset(Path(name): Path<String>, headers: HeaderMap) -> Response {
+    let gzip = headers
+        .get(header::ACCEPT_ENCODING)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.split(',').any(|s| s.trim() == "gzip" || s.trim() == "gzip;q=1"));
+    let (plain, compressed): (&'static [u8], &'static [u8]) = match name.as_str() {
+        "datastar-1.0.4.js" => (
+            include_bytes!("../assets/datastar-1.0.4.js"),
+            include_bytes!("../assets/datastar-1.0.4.js.gz"),
+        ),
+        "echarts-6.1.0.min.js" => (
+            include_bytes!("../assets/echarts-6.1.0.min.js"),
+            include_bytes!("../assets/echarts-6.1.0.min.js.gz"),
+        ),
+        "dashboard.js" => (include_bytes!("../assets/dashboard.js"), &[]),
+        "datastar-LICENSE.md" => (include_bytes!("../assets/datastar-LICENSE.md"), &[]),
+        "echarts-LICENSE.txt" => (include_bytes!("../assets/echarts-LICENSE.txt"), &[]),
+        "echarts-NOTICE.txt" => (include_bytes!("../assets/echarts-NOTICE.txt"), &[]),
+        _ => return StatusCode::NOT_FOUND.into_response(),
     };
-    let status = StatusCode::from_u16(response.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
-    // Axum polls the upstream only when the downstream is ready: no whole-body
-    // allocation or producer queue. A read failure after headers truncates the
-    // response; never send upstream error details in the JSON body.
-    let body = Body::from_stream(response.bytes_stream().map_err(move |error| {
-        tracing::warn!(%error, path, "Prometheus response failed");
-        std::io::Error::other("Prometheus response failed")
-    }));
-    (status, [(header::CONTENT_TYPE, "application/json")], body).into_response()
+    let vendor = !compressed.is_empty();
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    plain.hash(&mut hasher);
+    let etag = format!("W/\"{:016x}\"", hasher.finish());
+    let unchanged = headers
+        .get(header::IF_NONE_MATCH)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v == etag);
+    let mut response = if unchanged {
+        StatusCode::NOT_MODIFIED.into_response()
+    } else {
+        Bytes::from_static(if gzip && vendor { compressed } else { plain }).into_response()
+    };
+    let headers = response.headers_mut();
+    if let Ok(etag) = header::HeaderValue::from_str(&etag) {
+        headers.insert(header::ETAG, etag);
+    }
+    headers.insert(
+        header::CONTENT_TYPE,
+        (if name.ends_with(".js") {
+            "text/javascript; charset=utf-8"
+        } else {
+            "text/plain; charset=utf-8"
+        })
+        .parse()
+        .unwrap_or_else(|_| header::HeaderValue::from_static("text/javascript")),
+    );
+    headers.insert(
+        header::CACHE_CONTROL,
+        header::HeaderValue::from_static(if vendor {
+            "public, max-age=31536000, immutable"
+        } else {
+            "public, max-age=0, must-revalidate"
+        }),
+    );
+    headers.insert(header::VARY, header::HeaderValue::from_static("Accept-Encoding"));
+    if gzip && vendor {
+        headers.insert(header::CONTENT_ENCODING, header::HeaderValue::from_static("gzip"));
+    }
+    response
 }
 
 /// Liveness and readiness: the serving-path heartbeat is fresh. Prometheus
