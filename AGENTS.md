@@ -52,7 +52,8 @@ The retained ordinary Rust checks protect home/root separation during refresh, r
 - The wrapper serializes commands and cleans up after success. Do not run unwrapped Cargo builds or tests concurrently with wrapped commands; Cargo releases its own lock before running tests.
 - Successful wrapped commands remove disposable hashed executables and incremental state while preserving top-level applications, dependency libraries and E2E data. Failed or interrupted commands retain artifacts for diagnosis.
 - Never replace this cleanup with `cargo clean` or removal of `target/`: it also contains running E2E labs, credentials, fixtures and diagnostic reports.
-- Keep verification output in task-specific files under `/tmp`; inspect failures privately instead of streaming full logs.
+- Do not use `/tmp`, `/dev/shm` or other RAM-backed filesystems for large operations, downloads, dependency environments, archives, database snapshots or build artifacts. `/tmp` is tmpfs on the development VM and consumes RAM needed for compilation. Use a task-specific directory on a disk-backed filesystem, verify its backing filesystem and available space before large operations, and set `TMPDIR` there for tools that create large temporary files.
+- Keep small verification logs in task-specific files under `/tmp`; store large logs on disk. Inspect failures privately instead of streaming full logs.
 - The project-local `.codex/agents/test_runner.toml` agent (`gpt-6-luna`, reasoning effort `high`) is optional. Delegate only when explicitly requested or justified by a critical verification requirement. It returns only `UDANY` or `NIEUDANY`; inspect its log privately on failure. Do not introduce mandatory QA agents.
 
 # E2E and infrastructure safety
