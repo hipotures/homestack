@@ -436,7 +436,7 @@ function costNote(codex) {
   if (codex.coverage) return codex.coverage;
   if (!codex.prices) return "Pricing unavailable; restart container to retry";
   if (codex.missing.size) return "Incomplete estimate; missing prices: " + [...codex.missing].sort().join(", ");
-  return "API equivalent, not subscription billing; excludes tier and long-context adjustments. Prices refresh on container restart.";
+  return "";
 }
 
 async function load() {
