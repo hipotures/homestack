@@ -77,7 +77,10 @@ async fn main() -> ExitCode {
         || "null".to_owned(),
         |prices| prices.to_string().replace('<', "\\u003c"),
     );
-    let page: Arc<str> = Arc::from(PAGE.replace("__HOMESTACK_PRICING__", &prices));
+    let page: Arc<str> = Arc::from(PAGE.replace("__HOMESTACK_PRICING__", &prices).replace(
+        "__HOMESTACK_USAGE_VERSION__",
+        option_env!("HOMESTACK_USAGE_VERSION").unwrap_or("development"),
+    ));
     let mut app = Router::new()
         .route("/", get(index))
         .route("/health/live", get(health))

@@ -256,6 +256,7 @@ jobs:
       - name: Build the server
         env:
           RUSTFLAGS: "-C target-feature=+crt-static"
+          HOMESTACK_USAGE_VERSION: ${{ steps.tag.outputs.tag }}
         run: |
           python3 scripts/cargo.py build --release --locked --target x86_64-unknown-linux-musl -p hs-usage --bin homestack-usage
           ! readelf -l target/x86_64-unknown-linux-musl/release/homestack-usage | grep -q INTERP

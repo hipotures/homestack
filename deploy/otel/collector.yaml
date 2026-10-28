@@ -61,8 +61,13 @@ processors:
   transform/codex:
     error_mode: propagate
     metric_statements:
+      - context: resource
+        statements:
+          # Isolate both token samples and Prometheus-generated target_info.
+          - set(attributes["homestack.collector.instance"], Trim("${file:/etc/hostname}", " \t\r\n"))
       - context: datapoint
         statements:
+          - set(attributes["collector_instance"], resource.attributes["homestack.collector.instance"])
           - set(attributes["token_type"], Substring(metric.name, Len("codex.response.tokens."), Len(metric.name) - Len("codex.response.tokens.")))
       - context: metric
         statements:

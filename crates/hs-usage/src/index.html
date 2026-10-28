@@ -88,6 +88,10 @@ h1 { font-size: 20px; margin: 0; font-weight: 600; }
 .card h2 { font-size: 14px; font-weight: 600; margin: 0; }
 .card .unit { color: var(--muted); font-size: 12px; }
 .card .toggle { margin-left: auto; font: inherit; font-size: 12px; color: var(--ink-2); background: none; border: none; cursor: pointer; text-decoration: underline; }
+.card-actions { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+.card-actions .toggle { margin-left: 0; }
+.copy { font: inherit; font-size: 12px; color: var(--ink-2); background: none; border: 1px solid var(--ring); border-radius: 4px; padding: 2px 6px; cursor: pointer; }
+.version { margin-top: 24px; color: var(--muted); font-size: 11px; text-align: center; }
 .legend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 6px 0 4px; color: var(--ink-2); font-size: 12px; }
 .legend span { display: inline-flex; align-items: center; gap: 6px; }
 .legend i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
@@ -127,6 +131,7 @@ th { color: var(--ink-2); font-weight: 600; position: sticky; top: 0; background
     <section class="tiles" id="tiles" aria-label="Usage by agent"></section>
   </section>
   <section class="cards" id="cards"></section>
+  <footer class="version">AI Usage · __HOMESTACK_USAGE_VERSION__</footer>
 </main>
 <div id="tip" hidden></div>
 <script id="pricing" type="application/json">__HOMESTACK_PRICING__</script>
@@ -445,6 +450,7 @@ function costNote(codex) {
 
 async function load() {
   const version = ++loadVersion, now = Math.floor(Date.now() / 1000), end = now, start = end - range.seconds + range.step;
+  const selection = { agent: tool.id, server: scope.host, project: scope.project, range: range.id, start, end, step: range.step };
   const overview = document.getElementById("overview"), cards = document.getElementById("cards"), comparisonSection = document.getElementById("comparison");
   overview.hidden = cards.hidden = comparison;
   comparisonSection.hidden = !comparison;
@@ -471,15 +477,16 @@ async function load() {
       const charts = await Promise.all(list.map(async panel => {
         const results = await Promise.all(panel.parts.map(async part => {
           const rows = await rangeRows(part.query);
-          return (part.transform ? part.transform(rows) : rows).map(r => ({ name: part.name(r.metric), values: r.values }));
+          return { source: { query: part.query, data: { resultType: "matrix", result: rows } },
+            rows: (part.transform ? part.transform(rows) : rows).map(r => ({ name: part.name(r.metric), values: r.values })) };
         }));
-        const data = fold(results.flat(), panel.grouped ? Infinity : SERIES.length);
+        const data = fold(results.flatMap(result => result.rows), panel.grouped ? Infinity : SERIES.length);
         if (panel.grouped) {
           const index = name => AGENTS.findIndex(a => name === a.label || name === a.label + " (estimated)");
           data.sort((a, b) => index(a.name) - index(b.name));
           for (const item of data) item.color = `var(${SERIES[index(item.name) % SERIES.length]})`;
         }
-        return { ...panel, series: data, note: panel.title.startsWith("Cost") && agents.some(a => a.metric.estimated) ? costNote(codex) : "" };
+        return { ...panel, series: data, selection, queries: results.map(result => result.source), note: panel.title.startsWith("Cost") && agents.some(a => a.metric.estimated) ? costNote(codex) : "" };
       }));
       const tokens = agents.filter(a => a.metric.tokens).map(a => tokenSelector(a.metric));
       const [daily, heat] = await Promise.all([dailyTokens(tokens, now), hourly(tokens, now)]);
@@ -680,7 +687,10 @@ function renderCharts(charts, start, end, extras) {
     const head = el("div", "card-head");
     const toggle = el("button", "toggle", tables.has(chart.title) ? "chart" : "table");
     toggle.onclick = () => { tables.has(chart.title) ? tables.delete(chart.title) : tables.add(chart.title); renderCharts(charts, start, end, extras); };
-    head.append(el("h2", "", chart.title), el("span", "unit", chart.unit), toggle);
+    const actions = el("div", "card-actions");
+    if (tables.has(chart.title)) actions.append(copyJSONButton(chart));
+    actions.append(toggle);
+    head.append(el("h2", "", chart.title), el("span", "unit", chart.unit), actions);
     card.append(head);
     if (chart.note) card.append(el("div", "note", chart.note));
     if (!chart.series.length) {
@@ -705,6 +715,28 @@ function renderCharts(charts, start, end, extras) {
     return card;
   });
   cards.replaceChildren(...rendered, ...extras);
+}
+
+function copyJSONButton(chart) {
+  const button = el("button", "copy", "⧉");
+  button.type = "button";
+  button.title = "Copy data as JSON";
+  button.setAttribute("aria-label", button.title);
+  button.onclick = async () => {
+    const data = { chart: chart.title, unit: chart.unit, selection: chart.selection,
+      series: chart.series.map(s => ({ name: s.name, values: [...s.values] })),
+      queries: chart.queries };
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(data, null, 2));
+      button.textContent = "Copied";
+      button.setAttribute("aria-label", "JSON copied to clipboard");
+    } catch (error) {
+      button.textContent = "Copy failed";
+      button.title = error.message;
+      button.setAttribute("aria-label", "Could not copy JSON: " + error.message);
+    }
+  };
+  return button;
 }
 
 function table(chart, times) {

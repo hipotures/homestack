@@ -64,7 +64,15 @@ restarts do not require retaining an in-memory cumulative baseline. Never use
 `rate` or `increase` on these gauges, scrape them as if they were counters, or
 add the old turn histogram to their totals. Other dashboard instruments still
 use cumulative counters. Resource compaction prevents duplicate resource groups
-within a batch from overwriting samples at the same millisecond.
+within a batch from overwriting samples at the same millisecond. Each Collector
+also adds its container hostname as the `collector_instance` datapoint label,
+read through the file provider from `/etc/hostname`. The same identity is
+stored in `homestack.collector.instance` on the resource to isolate generated
+Prometheus `target_info` series as well. All three deployment
+replicas must use the updated image and have distinct hostnames. Separate
+series prevent a delayed queue on one replica from delivering samples older
+than another replica's latest sample in the same series. The dashboard sums
+across Collector labels without counting a response more than once.
 
 Usage becomes available after each model response completes and both the
 Codex exporter and Collector flush their batches (the Collector timeout is
@@ -160,3 +168,19 @@ snapshot queries are skipped when their capabilities are hidden in the current
 view. Metric-name discovery requests only the relevant Codex instruments;
 server and project filters share a single query over usage metrics, without
 scanning every tool metric and histogram bucket.
+
+## Dashboard version and table export
+
+The footer beneath the charts shows the AI Usage image version. Release CI
+embeds its image tag into the binary through `HOMESTACK_USAGE_VERSION`; local
+builds without that compile-time value show `development`.
+
+In each chart's table mode, the copy icon copies JSON from the currently
+loaded snapshot without another request. It contains the selected filters and
+time bounds, the displayed series with unrounded numeric values, and every
+source Prometheus query with its matrix data (`metric` labels and original
+`[timestamp, value]` pairs). Source values remain strings exactly as returned
+by Prometheus. For estimated costs, source queries contain token measurements
+while displayed series contain the calculated USD values. Clipboard access
+uses the browser Clipboard API and requires a secure context (HTTPS or
+localhost); the button reports copy failures.
