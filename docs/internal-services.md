@@ -175,9 +175,31 @@ same release replaces the root too. See [service replacement](service-replacemen
 Home-backed API instances created with earlier persistent manifests retain
 support in the implementation. With `HOMESTACK_MANAGED_HOME=1`, runit and Caddy
 select `/home/app/homestack`, require the exact mount and reject symlinks. The
-0700 directory holds `server.toml`, `secrets/pve-token` and `tls/{cert,key}.pem`
-with private file modes. Replacement reassigns the original home and keeps the
+0700 directory holds `server.toml`, `secrets/pve-token` and the private `tls/`
+generation store. Replacement reassigns the original home and keeps the
 selector. That support does not make the current manifest stateful.
+
+Persistent TLS uses immutable `tls/generation-<uuid>/{cert,key}.pem` pairs
+(0700 directories, 0600 files). Each chain and key is parsed and checked for a
+matching public key before publication and at startup. Files and their staging
+directory are synced before publication; the generation rename and the single
+`tls/current` symlink switch each sync the TLS directory. A rotation therefore
+selects a complete old or new generation across interruption. Unselected staged
+files never authorize activation. Invalid selected state, unsafe paths or an
+interrupted initial publication without bootstrap input fail closed.
+
+The server reconciles TLS before opening its HTTP listener. Caddy waits for
+that listener, reads the selector once and pins both paths to that immutable
+generation. Runtime rotation pins the new paths in Caddy's reload configuration;
+a rejected reload atomically restores the previous selection and reloads its
+pinned paths. Previous and staged generations remain private for recovery.
+Bootstrap input does not replace an already selected valid generation.
+For an existing `tls/{cert,key}.pem` layout, startup validates the stored pair
+and publishes those exact bytes through the same durable generation selector.
+The original private files remain untouched, allowing the publication to resume
+from disk after any interruption before selection. A partial, mismatched or
+unsafe original pair fails closed even when bootstrap input is available.
+Once a generation is selected, it is authoritative over the original files.
 
 Only home-backed initialization uses `api-initialization-home` to record the
 original `mp0`. Its recovery requires the same CTID, manifest revision, image,

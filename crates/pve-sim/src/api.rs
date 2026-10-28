@@ -1152,7 +1152,12 @@ async fn vm_power(
         }
     };
     let (vmid_number, status, acpi, node_name) = match reach_vm(&state, Some(&token), &node, &vmid, &["VM.PowerMgmt"]) {
-        Ok(vm) => (vm.vmid, vm.status, vm.acpi, vm.node.clone()),
+        Ok(vm) => {
+            if kind == "qmstart" && vm.config.get("template").is_some_and(truthy_option) {
+                return pve_error(500, "you can't start a vm if it's a template\n");
+            }
+            (vm.vmid, vm.status, vm.acpi, vm.node.clone())
+        }
         Err(failure) => return failure.into_response(),
     };
     let (next, error) = match (kind, status) {
@@ -1942,6 +1947,11 @@ async fn vm_clone(
     let mut config = toml::Table::new();
     let mut volumes = Vec::new();
     for (key, value) in &source_config {
+        // A clone is an ordinary VM; the source keeps its template role.
+        // Other supported metadata and disk allocation retain their contract.
+        if key == "template" {
+            continue;
+        }
         let text = value.as_str().map(str::to_owned).unwrap_or_else(|| value.to_string());
         if is_disk_key(key) && !key.starts_with("unused") {
             let disk_storage = text.split(':').next().unwrap_or_default().to_owned();

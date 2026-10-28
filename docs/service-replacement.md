@@ -86,7 +86,25 @@ additional instances use free `<hostname>-1`, `<hostname>-2`… names.
 
 An image update is reviewed first: the selected release and digest, the CTID,
 node, pool, network identity, root storage and the home volume. Nothing
-changes during review. Then, for each container:
+changes during review. Before its first mutation, apply rereads the target and
+any replacement holder, repeats the configuration, mount, HA, replication,
+firewall, snapshot and pending-state checks, and compares the full reviewed
+configuration and power state. PVE's volatile config digest is excluded;
+unordered options are normalized without hiding order-sensitive duplicates.
+Changed ownership, disks, mounts, CPU/memory, autostart, environment or other
+configuration requires a fresh review. Schema-3 environment writes occur only
+after this check. In combined maintenance/image updates, replacement runs before
+the separately reviewed maintenance changes.
+
+Recovery is reviewed as an explicit state of the same operation: the holder
+must have a valid operation UUID, matching service ownership and reconstruction,
+a stopped holder and proven root/home separation. Both the real target and
+holder configurations are bound to that review. A completed replacement root
+retains its operation identity through readiness; it is resumed rather than
+replaced again. Further drift during recovery also requires a fresh review.
+Original power intent comes from the holder/replacement metadata.
+
+Then, for each container:
 
 1. Pull the release into an archive named after the CTID and digest unless it
    is there. PVE 9.2 accepts tagged pull references; the registry's index and

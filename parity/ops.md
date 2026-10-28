@@ -50,3 +50,13 @@ cluster):
 | 2xx | 0 | `data` as compact JSON with sorted keys |
 | 501 (no handler) | 1 | `No 'get' handler defined for '<path>'` |
 | any other error | 255 | the `message` of the error, without the trailing newline |
+
+## VM template cloning
+
+The simulator's full clone creates an ordinary VM, preserving its supported
+non-template metadata and existing disk/resource allocation behavior. The source
+keeps its template flag. Starting an object still marked as a template is
+refused before power state or boot effects change. This follows HomeStack's Gold
+power and failed-create cleanup guards and the upstream
+[Proxmox template contract](https://github.com/proxmox/pve-docs/blob/master/qm.adoc#virtual-machine-templates).
+Simulator evidence does not replace live PVE verification.

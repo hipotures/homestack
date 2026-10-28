@@ -1212,8 +1212,8 @@ fn review(
             change = Some(plan);
         }
         if !image_targets.is_empty() {
-            // Apply makes the change first; the image replacement then
-            // checks the reconciled environment against the saved values.
+            // Replacement validates its original review before configuration changes.
+            // It also applies the saved application environment after that check.
             let up = setup.handle.block_on(update::plan(
                 &s.pve,
                 &s.config,
@@ -1222,7 +1222,6 @@ fn review(
                 &chosen.deploy.version,
                 "",
                 &setup.token_dir,
-                changes,
             ));
             sections.push(("Update".to_owned(), up.lines.clone()));
             problems.extend(up.problems.clone());
@@ -1367,14 +1366,14 @@ async fn apply(
             {
                 return fail(lines, error);
             }
-            if let Some(plan) = change {
-                match lifecycle::apply(&s.pve, source, &plan, s.ready(), &say).await {
+            if let Some(plan) = update_plan {
+                match update::apply(&s.pve, source, &plan, &say).await {
                     Ok(done) => lines.extend(done),
                     Err(error) => return fail(lines, error),
                 }
             }
-            if let Some(plan) = update_plan {
-                match update::apply(&s.pve, source, &plan, &say).await {
+            if let Some(plan) = change {
+                match lifecycle::apply(&s.pve, source, &plan, s.ready(), &say).await {
                     Ok(done) => lines.extend(done),
                     Err(error) => return fail(lines, error),
                 }

@@ -1110,7 +1110,10 @@ dependencies = [
  "hs-pve",
  "hs-service-status",
  "pve-sim",
+ "rcgen",
  "reqwest",
+ "rustix",
+ "rustls",
  "serde",
  "serde_json",
  "sha2",
@@ -1127,6 +1130,7 @@ dependencies = [
  "url",
  "utoipa",
  "uuid",
+ "x509-parser",
 ]
 
 [[package]]

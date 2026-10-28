@@ -463,7 +463,6 @@ async fn common_work(
             version,
             "",
             path.parent().ok_or("Deployment profile directory is missing")?,
-            false,
         )
         .await;
         progress(Progress::Plan {

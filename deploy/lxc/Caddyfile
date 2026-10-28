@@ -9,7 +9,7 @@
 }
 
 :443 {
-	tls {$HOMESTACK_STATE_DIR}/tls/cert.pem {$HOMESTACK_STATE_DIR}/tls/key.pem
+	tls {$HOMESTACK_STATE_DIR}/tls/{$HOMESTACK_TLS_GENERATION}/cert.pem {$HOMESTACK_STATE_DIR}/tls/{$HOMESTACK_TLS_GENERATION}/key.pem
 	reverse_proxy 127.0.0.1:8080
 }
 

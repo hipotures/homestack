@@ -3,7 +3,7 @@
 //!
 //! - `secrets/pve-token`: the Proxmox token, used at once and at every
 //!   start (unless `HOMESTACK_PVE_TOKEN_FILE` names one).
-//! - `tls/cert.pem`, `tls/key.pem`: the certificate Caddy serves. The
+//! - `tls/current`: selects the immutable certificate generation Caddy serves. The
 //!   environment's certificate is stored at the first start only; a new one
 //!   comes through `PUT /v1/secrets/tls`, and Caddy is told to load it.
 
@@ -39,16 +39,30 @@ impl std::fmt::Debug for TlsPair {
 }
 
 impl TlsPair {
-    /// Both PEM blocks, as far as the server can tell; Caddy checks the rest.
+    /// Parse the chain and private key and prove their public keys match.
     pub fn checked(cert: String, key: Secret) -> Result<Self, &'static str> {
-        if !(cert.contains("-----BEGIN CERTIFICATE-----") && cert.contains("-----END CERTIFICATE-----")) {
-            return Err("The certificate must be a PEM certificate chain.");
+        let pair = Self { cert, key };
+        pair.validate()?;
+        Ok(pair)
+    }
+
+    pub(crate) fn validate(&self) -> Result<(), &'static str> {
+        use rustls::pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
+        let certs = CertificateDer::pem_slice_iter(self.cert.as_bytes())
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|_| "The certificate must be a PEM certificate chain.")?;
+        for cert in &certs {
+            let (remaining, _) = x509_parser::parse_x509_certificate(cert.as_ref())
+                .map_err(|_| "The certificate chain contains an invalid certificate.")?;
+            if !remaining.is_empty() {
+                return Err("The certificate chain contains an invalid certificate.");
+            }
         }
-        let key_text = key.expose();
-        if !(key_text.contains("-----BEGIN ") && key_text.contains("PRIVATE KEY-----")) {
-            return Err("The key must be a PEM private key.");
-        }
-        Ok(Self { cert, key })
+        let key = PrivateKeyDer::from_pem_slice(self.key.expose().as_bytes())
+            .map_err(|_| "The key must be a PEM private key.")?;
+        rustls::sign::CertifiedKey::from_der(certs, key, &rustls::crypto::aws_lc_rs::default_provider())
+            .and_then(|key| key.keys_match())
+            .map_err(|_| "The certificate and private key must form a valid matching pair.")
     }
 }
 
@@ -123,58 +137,6 @@ fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     Staged::new(path, bytes)?.commit()
 }
 
-/// How to put one file of the TLS pair back as it was: its old content
-/// staged, or no file.
-enum Restore {
-    Staged(Staged),
-    Absent(PathBuf),
-}
-
-impl Restore {
-    fn new(path: &Path) -> std::io::Result<Self> {
-        Ok(match read_optional(path)? {
-            Some(text) => Self::Staged(Staged::new(path, text.as_bytes())?),
-            None => Self::Absent(path.to_owned()),
-        })
-    }
-
-    fn apply(&self) -> std::io::Result<()> {
-        match self {
-            Self::Staged(staged) => staged.commit(),
-            Self::Absent(path) => match std::fs::remove_file(path) {
-                Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error),
-                _ => Ok(()),
-            },
-        }
-    }
-}
-
-/// Put the previous key and certificate back after a failed replacement.
-fn restore_pair(restore: &[Restore]) {
-    for file in restore {
-        if let Err(error) = file.apply() {
-            tracing::error!(%error, "could not put the previous certificate back");
-        }
-    }
-}
-
-/// Replace the stored key and certificate together. The new files and
-/// copies of the old ones are staged first; if a rename fails, the previous
-/// pair is put back (a file that did not exist is removed). The copies are
-/// returned to put the previous pair back later.
-fn commit_pair(dir: &Path, pair: &TlsPair) -> std::io::Result<[Restore; 2]> {
-    let key_path = dir.join("key.pem");
-    let cert_path = dir.join("cert.pem");
-    let restore = [Restore::new(&key_path)?, Restore::new(&cert_path)?];
-    let key = Staged::new(&key_path, pair.key.expose().as_bytes())?;
-    let cert = Staged::new(&cert_path, pair.cert.as_bytes())?;
-    if let Err(error) = key.commit().and_then(|()| cert.commit()) {
-        restore_pair(&restore);
-        return Err(error);
-    }
-    Ok(restore)
-}
-
 fn read_optional(path: &Path) -> std::io::Result<Option<String>> {
     match std::fs::read_to_string(path) {
         Ok(text) => Ok(Some(text)),
@@ -183,32 +145,11 @@ fn read_optional(path: &Path) -> std::io::Result<Option<String>> {
     }
 }
 
-/// Store the environment's certificate unless a key and certificate are
-/// stored already (a renewed pair must not be replaced by the older one at
-/// a restart). A lone key or certificate is no pair: the environment's pair
-/// replaces it.
+/// Reconcile and validate TLS before the HTTP listener (and therefore Caddy)
+/// starts. A stored valid generation takes precedence over bootstrap input.
 pub fn store_bootstrap_tls(state_dir: &Path, pair: Option<&TlsPair>) -> Result<(), String> {
-    let Some(pair) = pair else {
-        return Ok(());
-    };
-    let dir = tls_dir(state_dir);
-    let fail =
-        |error: std::io::Error| format!("could not store the certificate in {}: {}", dir.display(), error.kind());
-    let exists = |name: &str| dir.join(name).try_exists().map_err(fail);
-    match (exists("key.pem")?, exists("cert.pem")?) {
-        (true, true) => {
-            tracing::info!("a certificate is stored; the one in the environment is not used");
-            return Ok(());
-        }
-        (false, false) => {}
-        (key, _) => tracing::warn!(
-            stored = if key { "key.pem" } else { "cert.pem" },
-            "only half of a certificate pair is stored; the one in the environment replaces it"
-        ),
-    }
-    commit_pair(&dir, pair).map_err(fail)?;
-    tracing::info!("certificate of the environment stored");
-    Ok(())
+    crate::tls_store::bootstrap(state_dir, pair)
+        .map_err(|error| format!("could not prepare persistent TLS: {}", error.kind()))
 }
 
 /// The Proxmox token sent earlier, if any.
@@ -278,9 +219,8 @@ pub async fn put_pve_token(State(state): State<AppState>, body: Bytes) -> Result
 }
 
 /// Replace the certificate Caddy serves, then make Caddy load it. The key
-/// and certificate change together: the new files and copies of the old
-/// ones are staged first, and if a rename or Caddy fails, the previous
-/// pair is put back.
+/// and certificate are an immutable generation selected by one durable rename.
+/// If Caddy refuses it, the prior generation is atomically selected again.
 #[utoipa::path(
     put,
     path = "/v1/secrets/tls",
@@ -312,12 +252,12 @@ pub async fn put_tls(State(state): State<AppState>, headers: HeaderMap, body: By
         TlsPair::checked(request.cert, request.key).map_err(|m| ApiError::new(ErrorCode::ValidationFailed, m))?;
     let dir = tls_dir(&state_dir(&state)?);
     let _writing = SECRET_WRITES.lock().await;
-    let restore = commit_pair(&dir, &pair).map_err(|e| stored_error(&e))?;
+    let rotation = crate::tls_store::rotate(&dir, &pair).map_err(|e| stored_error(&e))?;
     let Some(admin) = &state.instance.caddy_admin else {
         tracing::info!("certificate replaced");
         return Ok(StatusCode::NO_CONTENT);
     };
-    match reload_caddy(admin).await {
+    match reload_caddy(admin, &rotation.active).await {
         Ok(()) => {
             tracing::info!("certificate replaced and loaded by Caddy");
             Ok(StatusCode::NO_CONTENT)
@@ -327,8 +267,10 @@ pub async fn put_tls(State(state): State<AppState>, headers: HeaderMap, body: By
                 error,
                 "Caddy did not load the new certificate; the previous one is put back"
             );
-            restore_pair(&restore);
-            if let Err(error) = reload_caddy(admin).await {
+            crate::tls_store::select(&dir, rotation.previous.as_ref()).map_err(|e| stored_error(&e))?;
+            if let Some(previous) = &rotation.previous
+                && let Err(error) = reload_caddy(admin, previous).await
+            {
                 tracing::error!(error, "Caddy did not load the previous certificate either");
             }
             Err(ApiError::new(
@@ -343,7 +285,7 @@ pub async fn put_tls(State(state): State<AppState>, headers: HeaderMap, body: By
 /// files again: `GET /config/`, then `POST /load` with it and
 /// `Cache-Control: must-revalidate` (Caddy skips an unchanged config
 /// otherwise).
-async fn reload_caddy(admin: &url::Url) -> Result<(), String> {
+async fn reload_caddy(admin: &url::Url, generation: &crate::tls_store::Generation) -> Result<(), String> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
         .build()
@@ -358,11 +300,22 @@ async fn reload_caddy(admin: &url::Url) -> Result<(), String> {
         .bytes()
         .await
         .map_err(|error| format!("reading Caddy's config: {error}"))?;
+    // Pin both files to this immutable generation. Never ask Caddy to resolve
+    // `current` twice: it could change between the key and certificate reads.
+    let mut config: serde_json::Value =
+        serde_json::from_slice(&config).map_err(|_| "Caddy returned an invalid configuration".to_owned())?;
+    let files = config
+        .pointer_mut("/apps/tls/certificates/load_files")
+        .and_then(serde_json::Value::as_array_mut)
+        .filter(|files| files.len() == 1)
+        .ok_or("Caddy has no single managed TLS pair")?;
+    files[0]["certificate"] = serde_json::json!(generation.path("cert.pem"));
+    files[0]["key"] = serde_json::json!(generation.path("key.pem"));
     let response = client
         .post(format!("{base}/load"))
         .header(header::CONTENT_TYPE, "application/json")
         .header(header::CACHE_CONTROL, "must-revalidate")
-        .body(config)
+        .json(&config)
         .send()
         .await
         .map_err(|error| format!("loading Caddy's config: {error}"))?;
@@ -370,8 +323,7 @@ async fn reload_caddy(admin: &url::Url) -> Result<(), String> {
         Ok(())
     } else {
         let status = response.status();
-        let text = response.text().await.unwrap_or_default();
-        Err(format!("Caddy answered {status}: {}", text.trim()))
+        Err(format!("Caddy answered {status}"))
     }
 }
 

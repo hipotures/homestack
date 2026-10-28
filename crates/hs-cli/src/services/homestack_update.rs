@@ -103,7 +103,7 @@ pub async fn run(
             ));
             continue;
         }
-        let plan = update::plan(&pve, &config, &source, &targets, &newest, "", root, false).await;
+        let plan = update::plan(&pve, &config, &source, &targets, &newest, "", root).await;
         pending.push(Pending {
             source,
             version: newest,

@@ -5,13 +5,14 @@
 //! journaled on this desktop: every run starts from what Proxmox shows, so an
 //! interrupted update is finished by updating again.
 
-use hs_core::pve::Pve;
+use hs_core::{CoreError, pve::Pve};
 use hs_deploy::{
     config::{DeployConfig, InstanceSpec},
     deploy::ApiBootstrap,
     node, recreate,
 };
-use serde_json::Value;
+use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 
 use super::deploy::{self, Source};
 use super::instance::{self, Instance};
@@ -42,6 +43,7 @@ pub struct Plan {
     pub backup_storage: String,
     api_config: Option<DeployConfig>,
     pub targets: Vec<Instance>,
+    reviewed: std::collections::BTreeMap<u32, Reviewed>,
     pub lines: Vec<String>,
     pub problems: Vec<String>,
 }
@@ -69,16 +71,23 @@ pub(super) fn permit(perms: &Value, path: &str, privilege: &str) -> bool {
 }
 
 /// What would keep the old container's settings from carrying over.
-async fn safe_config(pve: &impl Pve, instance: &Instance, cfg: &Value) -> Result<(), String> {
-    if cfg.get("lock").is_some() || cfg["protection"].as_u64() == Some(1) || cfg["template"].as_u64() == Some(1) {
-        return Err("Locked, protected or template containers require review".to_owned());
+async fn safe_config(pve: &impl Pve, instance: &Instance, cfg: &Value) -> Result<bool, CoreError> {
+    if cfg.get("lock").is_some()
+        || cfg.get("protection").is_some_and(|v| v.as_u64() != Some(0))
+        || cfg.get("template").is_some_and(|v| v.as_u64() != Some(0))
+    {
+        return Err(CoreError::Refused(
+            "Locked, protected or template containers require review".to_owned(),
+        ));
     }
     if cfg["unprivileged"].as_u64() != Some(1) {
-        return Err("Replacement requires an unprivileged container".to_owned());
+        return Err(CoreError::Refused(
+            "Replacement requires an unprivileged container".to_owned(),
+        ));
     }
     let extra: Vec<&str> = cfg
         .as_object()
-        .ok_or("Container configuration is unreadable")?
+        .ok_or_else(|| CoreError::Refused("Container configuration is unreadable".to_owned()))?
         .keys()
         .map(String::as_str)
         .filter(|k| {
@@ -90,10 +99,10 @@ async fn safe_config(pve: &impl Pve, instance: &Instance, cfg: &Value) -> Result
         })
         .collect();
     if !extra.is_empty() {
-        return Err(format!(
+        return Err(CoreError::Refused(format!(
             "Extra disks, networks, devices or hooks require manual review: {}",
             extra.join(", ")
-        ));
+        )));
     }
     let allowed_lxc = [
         "lxc.init.uid",
@@ -102,71 +111,73 @@ async fn safe_config(pve: &impl Pve, instance: &Instance, cfg: &Value) -> Result
         "lxc.init.cwd",
         "lxc.signal.halt",
     ];
-    if cfg["lxc"].as_array().is_some_and(|entries| {
-        entries
-            .iter()
-            .any(|entry| entry[0].as_str().is_none_or(|key| !allowed_lxc.contains(&key)))
+    if cfg.get("lxc").is_some_and(|lxc| {
+        lxc.as_array().is_none_or(|entries| {
+            entries
+                .iter()
+                .any(|entry| entry[0].as_str().is_none_or(|key| !allowed_lxc.contains(&key)))
+        })
     }) {
-        return Err("Custom LXC configuration requires manual review".to_owned());
+        return Err(CoreError::Refused(
+            "Custom LXC configuration requires manual review".to_owned(),
+        ));
     }
     let base = format!("/nodes/{}/lxc/{}", instance.node, instance.ctid);
-    let status = pve
-        .get(&format!("{base}/status/current"), &[])
-        .await
-        .map_err(|e| e.to_string())?;
+    let status = pve.get(&format!("{base}/status/current"), &[]).await?;
     if status["ha"]["managed"].as_u64() != Some(0) && status["ha"]["managed"].as_bool() != Some(false) {
-        return Err("HA-managed or unknown HA state requires a separate placement plan".to_owned());
+        return Err(CoreError::Refused(
+            "HA-managed or unknown HA state requires a separate placement plan".to_owned(),
+        ));
     }
     let guest = instance.ctid.to_string();
     let replication = pve
         .get(&format!("/nodes/{}/replication", instance.node), &[("guest", &guest)])
-        .await
-        .map_err(|e| format!("Replication inventory unavailable: {e}"))?;
+        .await?;
     if replication.as_array().is_none_or(|jobs| !jobs.is_empty()) {
-        return Err("Replication jobs require a separate placement plan".to_owned());
+        return Err(CoreError::Refused(
+            "Replication jobs require a separate placement plan".to_owned(),
+        ));
     }
     // Do not silently discard security configuration attached to the old CTID.
     for section in ["rules", "aliases", "ipset"] {
-        let data = pve
-            .get(&format!("{base}/firewall/{section}"), &[])
-            .await
-            .map_err(|e| format!("Firewall inventory unavailable: {e}"))?;
+        let data = pve.get(&format!("{base}/firewall/{section}"), &[]).await?;
         if data.as_array().is_none_or(|entries| !entries.is_empty()) {
-            return Err("Custom container firewall configuration requires manual review".to_owned());
+            return Err(CoreError::Refused(
+                "Custom container firewall configuration requires manual review".to_owned(),
+            ));
         }
     }
-    let firewall = pve
-        .get(&format!("{base}/firewall/options"), &[])
-        .await
-        .map_err(|e| format!("Firewall options unavailable: {e}"))?;
+    let firewall = pve.get(&format!("{base}/firewall/options"), &[]).await?;
     if firewall
         .as_object()
         .is_none_or(|options| options.keys().any(|key| key != "digest"))
     {
-        return Err("Custom container firewall options require manual review".to_owned());
+        return Err(CoreError::Refused(
+            "Custom container firewall options require manual review".to_owned(),
+        ));
     }
-    let snapshots = pve
-        .get(&format!("{base}/snapshot"), &[])
-        .await
-        .map_err(|e| e.to_string())?;
+    let snapshots = pve.get(&format!("{base}/snapshot"), &[]).await?;
     if snapshots
         .as_array()
         .is_none_or(|items| items.iter().any(|s| s["name"] != "current"))
     {
-        return Err("Snapshots can prevent home reassignment; inspect them before replacement".to_owned());
+        return Err(CoreError::Refused(
+            "Snapshots can prevent home reassignment; inspect them before replacement".to_owned(),
+        ));
     }
-    let pending = pve
-        .get(&format!("{base}/pending"), &[])
-        .await
-        .map_err(|e| e.to_string())?;
+    let pending = pve.get(&format!("{base}/pending"), &[]).await?;
     if pending.as_array().is_none_or(|items| {
         items
             .iter()
             .any(|i| i.get("pending").is_some() || i["delete"].as_u64() == Some(1))
     }) {
-        return Err("Pending configuration requires review".to_owned());
+        return Err(CoreError::Refused("Pending configuration requires review".to_owned()));
     }
-    Ok(())
+    match status["status"].as_str() {
+        Some("running") => Ok(true),
+        Some("stopped") => Ok(false),
+        _ => Err(CoreError::Refused("Container power state unavailable".to_owned())),
+    }
 }
 
 async fn preflight(pve: &impl Pve, cfg: &DeployConfig, instance: &Instance, backup: &str) -> Result<(), String> {
@@ -260,7 +271,6 @@ async fn preflight(pve: &impl Pve, cfg: &DeployConfig, instance: &Instance, back
 }
 
 /// Review updating `ctids` to `version`; nothing changes.
-#[allow(clippy::too_many_arguments, reason = "the parts of one review")]
 pub async fn plan(
     pve: &impl Pve,
     config: &DeployConfig,
@@ -269,7 +279,6 @@ pub async fn plan(
     version: &str,
     backup: &str,
     selection_root: &std::path::Path,
-    reconciling: bool,
 ) -> Plan {
     let mut plan = Plan {
         selection_root: selection_root.to_owned(),
@@ -280,6 +289,7 @@ pub async fn plan(
         backup_storage: backup.to_owned(),
         api_config: source.is_api().then(|| config.clone()),
         targets: Vec::new(),
+        reviewed: std::collections::BTreeMap::new(),
         lines: Vec::new(),
         problems: Vec::new(),
     };
@@ -288,9 +298,7 @@ pub async fn plan(
     }
     if source.manifest.schema3.is_some() {
         plan.lines.push("Image replacement discards all rootfs-local application data, including any unsent exporter queue. Ordinary CT restarts preserve it.".into());
-        // A change applied first in the same operation reconciles the
-        // environment; otherwise the replacement sets it.
-        for target in plan.targets.iter().filter(|_| !reconciling) {
+        for target in &plan.targets {
             match application_environment(&plan.selection_root, source, target) {
                 Ok(environment) => {
                     let changed: Vec<&str> = environment
@@ -311,7 +319,12 @@ pub async fn plan(
         }
     }
     for target in &plan.targets {
-        let (was_running, was_onboot) = match original_power(target) {
+        let (was_running, was_onboot) = match plan
+            .reviewed
+            .get(&target.ctid)
+            .map(|state| state.power)
+            .map_or_else(|| original_power(target), Ok)
+        {
             Ok(state) => state,
             Err(error) => {
                 plan.problems.push(error);
@@ -439,8 +452,6 @@ async fn review(
                 .get(&format!("/nodes/{}/lxc/{ctid}/config", target.node), &[])
                 .await
                 .map_err(|e| format!("CT {ctid} config: {e}"))?;
-            safe_config(pve, &target, &cfg).await?;
-            recreate::mounts(&cfg)?;
             if !plan.backup_storage.is_empty()
                 && !target.home_volume.is_empty()
                 && !text(&cfg, "mp0").split(',').any(|v| v == "backup=1")
@@ -449,6 +460,10 @@ async fn review(
             }
         }
         preflight(pve, config, &target, &plan.backup_storage).await?;
+        let reviewed = reviewed_state(pve, &target, &plan.image, &plan.digest)
+            .await
+            .map_err(safety_message)?;
+        plan.reviewed.insert(target.ctid, reviewed);
         plan.targets.push(target);
     }
     Ok(())
@@ -600,34 +615,228 @@ async fn restore_autostart(pve: &impl Pve, node: &str, ctid: u32, enabled: bool)
     Ok(())
 }
 
-async fn replacement_operation(pve: &impl Pve, node: &str, ctid: u32) -> Result<String, String> {
-    let containers = pve
-        .get(&format!("/nodes/{node}/lxc"), &[])
-        .await
-        .map_err(|e| format!("Replacement inventory: {e}"))?;
-    let containers = containers.as_array().ok_or("Replacement inventory is unavailable")?;
-    if containers
-        .iter()
-        .any(|entry| entry["vmid"].as_u64() == Some(u64::from(recreate::HOLDER_ID)))
-    {
-        let holder = pve
-            .get(&format!("/nodes/{node}/lxc/{}/config", recreate::HOLDER_ID), &[])
-            .await
-            .map_err(|e| format!("Replacement holder: {e}"))?;
-        let description = text(&holder, "description");
-        if recreate::holder_of(description) != Some(ctid) {
-            return Err("The shared replacement holder is busy; finish its update first".to_owned());
+/// All configuration is bound, not just fields the current reconstruction reads.
+/// Keep only a digest in the plan: configuration can contain application secrets.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Reviewed {
+    fingerprint: [u8; 32],
+    recovery_operation: Option<String>,
+    power: (bool, bool),
+}
+
+fn configuration_identity(mut cfg: Value) -> Result<Value, String> {
+    let fields = cfg.as_object_mut().ok_or("Container configuration is unreadable")?;
+    fields.remove("digest");
+    for (key, value) in fields {
+        let Some(text) = value.as_str() else { continue };
+        let separator = match key.as_str() {
+            "env" => '\0',
+            "tags" => ';',
+            "rootfs" | "mp0" | "net0" | "features" => ',',
+            _ => continue,
+        };
+        let mut parts: Vec<_> = text.split(separator).collect();
+        // A volume's leading value has meaning. Duplicate option/env keys
+        // may be order-sensitive, so do not normalize their order.
+        let offset = usize::from(matches!(key.as_str(), "rootfs" | "mp0"));
+        if let Some(options) = parts.get_mut(offset..) {
+            let keys: std::collections::BTreeSet<_> = options.iter().map(|part| part.split('=').next()).collect();
+            if keys.len() == options.len() {
+                options.sort_unstable();
+            }
         }
-        if let Some(operation) = description
+        *value = Value::String(parts.join(&separator.to_string()));
+    }
+    Ok(cfg)
+}
+
+fn same_instance(left: &Instance, right: &Instance) -> Result<bool, String> {
+    let normalize = |instance: &Instance| -> Result<Instance, String> {
+        let mut instance = instance.clone();
+        let cfg = configuration_identity(json!({"net0": instance.network, "mp0": instance.home_mount,
+            "env": node::merge_env(&instance.environment, &[], &[])}))?;
+        instance.network = text(&cfg, "net0").to_owned();
+        instance.home_mount = text(&cfg, "mp0").to_owned();
+        instance.environment = node::parse_env(text(&cfg, "env"));
+        Ok(instance)
+    };
+    Ok(normalize(left)? == normalize(right)?)
+}
+
+fn operation(description: &str) -> Result<Option<String>, String> {
+    let values: Vec<_> = description
+        .lines()
+        .filter_map(|line| line.strip_prefix(REPLACEMENT_OPERATION))
+        .collect();
+    match values.as_slice() {
+        [] if description
             .lines()
-            .find_map(|line| line.strip_prefix(REPLACEMENT_OPERATION))
+            .any(|line| line.starts_with(REPLACEMENT_RUNNING) || line.starts_with(REPLACEMENT_ONBOOT)) =>
         {
-            return uuid::Uuid::parse_str(operation)
-                .map(|id| id.to_string())
-                .map_err(|_| "Replacement holder has an invalid operation identity".to_owned());
+            Err("Replacement power intent has no operation identity".to_owned())
+        }
+        [] => Ok(None),
+        [value] => uuid::Uuid::parse_str(value)
+            .map(|id| Some(id.to_string()))
+            .map_err(|_| "Invalid replacement operation identity".to_owned()),
+        _ => Err("Ambiguous replacement operation identity".to_owned()),
+    }
+}
+
+/// CLI presentation is the boundary. Infrastructure details never become a
+/// guest/configuration refusal string while the safety checks are running.
+fn safety_message(error: CoreError) -> String {
+    if error.pve_error().is_some() {
+        "Proxmox could not verify replacement safety; no replacement was started. Review again.".to_owned()
+    } else {
+        error.to_string()
+    }
+}
+
+/// Review recovery as its own exact state, including both the real target and
+/// holder. No arbitrary configuration drift is exempted by a recovery flag.
+async fn reviewed_state(pve: &impl Pve, target: &Instance, image: &str, digest: &str) -> Result<Reviewed, CoreError> {
+    let resources = pve.get("/cluster/resources", &[("type", "vm")]).await?;
+    let resources = resources
+        .as_array()
+        .ok_or_else(|| CoreError::Refused("Cluster inventory unavailable".to_owned()))?;
+    for id in [target.ctid, recreate::HOLDER_ID] {
+        let matches: Vec<_> = resources
+            .iter()
+            .filter(|r| r["vmid"].as_u64() == Some(u64::from(id)))
+            .collect();
+        if matches.len() > 1
+            || matches
+                .iter()
+                .any(|r| r["type"] != "lxc" || r["node"] != target.node || r["pool"] != target.pool)
+        {
+            return Err(CoreError::Refused(
+                "Replacement location/pool changed; review again".to_owned(),
+            ));
+        }
+        if id == target.ctid && matches.is_empty() && !target.held {
+            return Err(CoreError::Refused(
+                "Replacement target disappeared; review again".to_owned(),
+            ));
         }
     }
-    Ok(uuid::Uuid::new_v4().to_string())
+    let list = pve.get(&format!("/nodes/{}/lxc", target.node), &[]).await?;
+    let list = list
+        .as_array()
+        .ok_or_else(|| CoreError::Refused("Container inventory unavailable".to_owned()))?;
+    if !target.held
+        && !list
+            .iter()
+            .any(|item| item["vmid"].as_u64() == Some(u64::from(target.ctid)))
+    {
+        return Err(CoreError::Refused(
+            "Target missing from node inventory; review again".to_owned(),
+        ));
+    }
+    let mut states = Vec::new();
+    let mut recovery_operation = None;
+    let mut power = original_power(target).map_err(CoreError::Refused)?;
+    for id in [target.ctid, recreate::HOLDER_ID] {
+        if !list.iter().any(|item| item["vmid"].as_u64() == Some(u64::from(id))) {
+            continue;
+        }
+        let cfg = pve.get(&format!("/nodes/{}/lxc/{id}/config", target.node), &[]).await?;
+        let mut subject = target.clone();
+        subject.ctid = id;
+        let running = safe_config(pve, &subject, &cfg).await?;
+        recreate::mounts(&cfg).map_err(CoreError::Refused)?;
+        let description = text(&cfg, "description");
+        let op = operation(description).map_err(CoreError::Refused)?;
+        if id == recreate::HOLDER_ID {
+            if running || recreate::holder_of(description) != Some(target.ctid) || op.is_none() {
+                return Err(CoreError::Refused(
+                    "Replacement holder ownership/operation is unproven; inspect it before updating".to_owned(),
+                ));
+            }
+            if recovery_operation.is_some() && recovery_operation != op {
+                return Err(CoreError::Refused(
+                    "Target and holder belong to different replacement operations".to_owned(),
+                ));
+            }
+            // Parsing verifies the holder's saved reconstruction and service identity.
+            let held = instance::parse(id, &target.node, &target.pool, &cfg, false).map_err(CoreError::Refused)?;
+            if target.held && !same_instance(&held, target).map_err(CoreError::Refused)? {
+                return Err(CoreError::Refused(
+                    "Holder changed during review; review again".to_owned(),
+                ));
+            }
+            if held.repository != target.repository || held.service != target.service {
+                return Err(CoreError::Refused(
+                    "Replacement holder service ownership changed".to_owned(),
+                ));
+            }
+            if held.hostname != target.hostname
+                || !node::same_net(&held.network, &target.network)
+                || held.mac != target.mac
+                || held.cores != target.cores
+                || held.memory_mib != target.memory_mib
+                || held.root_storage != target.root_storage
+                || held.root_mib != target.root_mib
+                || held.nameserver != target.nameserver
+                || held.searchdomain != target.searchdomain
+                || held.pool != target.pool
+            {
+                return Err(CoreError::Refused(
+                    "Replacement holder reconstruction differs from the reviewed target".to_owned(),
+                ));
+            }
+            power = original_power(&held).map_err(CoreError::Refused)?;
+            recovery_operation = op;
+        } else {
+            let parsed = instance::parse(id, &target.node, &target.pool, &cfg, running).map_err(CoreError::Refused)?;
+            if !target.held && !same_instance(&parsed, target).map_err(CoreError::Refused)? {
+                return Err(CoreError::Refused(
+                    "Target configuration changed during review; review again".to_owned(),
+                ));
+            }
+            if op.is_some() {
+                for prefix in [REPLACEMENT_RUNNING, REPLACEMENT_ONBOOT] {
+                    if description.lines().filter(|line| line.starts_with(prefix)).count() != 1 {
+                        return Err(CoreError::Refused(
+                            "Replacement power intent is missing or ambiguous".to_owned(),
+                        ));
+                    }
+                }
+                if parsed.image != image || parsed.digest != digest {
+                    return Err(CoreError::Refused(
+                        "Finish the pending replacement release before selecting another image".to_owned(),
+                    ));
+                }
+                recovery_operation = op;
+            }
+        }
+        let root = text(&cfg, "rootfs").split(',').next().unwrap_or_default();
+        let home = text(&cfg, "mp0").split(',').next().unwrap_or_default();
+        if root.is_empty() || root == home || root.starts_with('/') || !root.contains(':') {
+            return Err(CoreError::Refused("Unproven root/home volume separation".to_owned()));
+        }
+        if !root.contains(&format!("-{id}-")) || (!home.is_empty() && !home.contains(&format!("-{id}-"))) {
+            return Err(CoreError::Refused("Root/home volume ownership is unproven".to_owned()));
+        }
+        states.push(
+            json!({"id": id, "running": running, "config": configuration_identity(cfg).map_err(CoreError::Refused)?}),
+        );
+    }
+    if target.held && recovery_operation.is_none() {
+        return Err(CoreError::Refused(
+            "Replacement holder operation is unavailable".to_owned(),
+        ));
+    }
+    let bytes = serde_json::to_vec(&json!({
+        "node": target.node, "pool": target.pool, "running": target.running,
+        "states": states,
+    }))
+    .map_err(|_| CoreError::Refused("Cannot bind replacement configuration".to_owned()))?;
+    Ok(Reviewed {
+        fingerprint: Sha256::digest(bytes).into(),
+        recovery_operation,
+        power,
+    })
 }
 
 fn api_spec(target: &Instance) -> Result<InstanceSpec, String> {
@@ -649,25 +858,34 @@ async fn one(
     say: &(dyn Fn(&str) + Send + Sync),
 ) -> Result<Vec<String>, String> {
     let (ctid, node) = (target.ctid, target.node.as_str());
-    let now = instance::read_on(pve, node, ctid).await?;
-    if deploy::initializing(&now.description) {
+    if deploy::initializing(&target.description) {
         return Err(format!(
             "CT {ctid}: initialization is unfinished; image replacement is refused"
         ));
     }
+    let reviewed = plan
+        .reviewed
+        .get(&ctid)
+        .ok_or("No reviewed replacement configuration")?;
+    let current = reviewed_state(pve, target, &plan.image, &plan.digest)
+        .await
+        .map_err(safety_message)?;
+    if current != *reviewed {
+        return Err(format!("CT {ctid} changed since review; review again"));
+    }
+    // Every read/authorization check precedes the first environment or PVE write.
     if source.manifest.schema3.is_some() {
-        let environment = application_environment(&plan.selection_root, source, &now)?;
-        // The replacement keeps the old container's environment.
-        if !now.held && environment.iter().any(|entry| !now.environment.contains(entry)) {
+        let environment = application_environment(&plan.selection_root, source, target)?;
+        if !target.held && environment.iter().any(|entry| !target.environment.contains(entry)) {
             say(&format!("{node}: CT {ctid} · Application configuration"));
             deploy::set_application_environment(pve, node, ctid, &environment, &[]).await?;
         }
     }
-    if now.mac != target.mac || !node::same_net(&now.network, &target.network) {
-        return Err(format!("CT {ctid} changed since review; review again"));
-    }
-    let (was_running, was_onboot) = original_power(target)?;
-    let operation = replacement_operation(pve, node, ctid).await?;
+    let (was_running, was_onboot) = reviewed.power;
+    let operation = reviewed
+        .recovery_operation
+        .clone()
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let completed_description = deploy::description(source, &plan.image, &plan.digest);
     let description = format!(
         "{completed_description}\n{REPLACEMENT_OPERATION}{operation}\n{REPLACEMENT_RUNNING}{}\n{REPLACEMENT_ONBOOT}{}",
@@ -703,7 +921,7 @@ async fn one(
         task(pve, &upid, &format!("pull on {node}")).await?;
         image_matches(plan).await?;
     }
-    let untouched = !now.held && now.description.trim_end() != description.trim_end();
+    let untouched = !target.held && target.description.trim_end() != description.trim_end();
     if untouched && !plan.backup_storage.is_empty() {
         say(&format!("{node}: CT {ctid} · Backup"));
         let id = ctid.to_string();
@@ -920,3 +1138,7 @@ mod tests {
         assert!(!permit(&perms, "/vms/120", "VM.Console"));
     }
 }
+
+#[cfg(test)]
+#[path = "update_safety_tests.rs"]
+mod safety_tests;

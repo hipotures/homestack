@@ -18,6 +18,7 @@ mod reads;
 mod routes;
 mod secrets;
 pub mod settings;
+mod tls_store;
 mod virtiofs;
 
 use std::path::PathBuf;

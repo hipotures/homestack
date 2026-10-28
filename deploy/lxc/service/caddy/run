@@ -1,9 +1,27 @@
 #!/bin/sh
-# runit service: Caddy, once the server has stored the certificate.
+# runit service: wait for TLS reconciliation before starting the front door.
 set -eu
 exec 2>&1
 . /etc/service/state-path
-while [ ! -s "$HOMESTACK_STATE_DIR/tls/cert.pem" ] || [ ! -s "$HOMESTACK_STATE_DIR/tls/key.pem" ]; do
+# The server validates/reconciles persistent TLS before it opens this listener.
+while ! wget -q -O /dev/null http://127.0.0.1:8080/health/live; do
     sleep 1
 done
+while [ ! -L "$HOMESTACK_STATE_DIR/tls/current" ]; do
+    sleep 1
+done
+# Pin one immutable generation for both reads, even if rotation switches current.
+HOMESTACK_TLS_GENERATION=$(readlink "$HOMESTACK_STATE_DIR/tls/current")
+case "$HOMESTACK_TLS_GENERATION" in
+    generation-*) identity=${HOMESTACK_TLS_GENERATION#generation-} ;;
+    *) echo "invalid TLS generation selector" >&2; exit 1 ;;
+esac
+case "$identity" in
+    *[!0-9a-f-]*|'') echo "invalid TLS generation identity" >&2; exit 1 ;;
+esac
+[ "${#identity}" -eq 36 ] || exit 1
+[ ! -L "$HOMESTACK_STATE_DIR/tls/$HOMESTACK_TLS_GENERATION" ] || exit 1
+[ -s "$HOMESTACK_STATE_DIR/tls/$HOMESTACK_TLS_GENERATION/cert.pem" ] || exit 1
+[ -s "$HOMESTACK_STATE_DIR/tls/$HOMESTACK_TLS_GENERATION/key.pem" ] || exit 1
+export HOMESTACK_TLS_GENERATION
 exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile

@@ -82,14 +82,6 @@ pub async fn wait_for_qga(pve: &impl Pve, node: &str, vmid: u32, timeout: Durati
     }
 }
 
-/// A refused call (missing privilege) is an error in every mode.
-fn refused(error: PveError) -> Result<PveError, CoreError> {
-    match error {
-        PveError::Forbidden { .. } | PveError::Unauthorized => Err(error.into()),
-        other => Ok(other),
-    }
-}
-
 fn integer(value: Option<&Value>) -> Option<i64> {
     match value? {
         Value::Number(number) => number.as_i64(),
@@ -125,10 +117,8 @@ pub fn shell_join(words: &[&str]) -> String {
 
 /// `guest._complete_guest_exec`: run `/bin/sh -lc COMMAND`, poll
 /// `exec-status` every 0.2 s until the command has exited or `timeout` has
-/// passed, and check the answer. With `check`, a failed call or a non-zero
-/// exit is an error; without it, a failed call becomes an exit code of 1
-/// with the error as output (Python: `qm`'s code and output). A refused
-/// call (missing privilege) is an error either way.
+/// passed, and check the answer. `check` controls only actual non-zero guest
+/// exits. Invocation/observation failures always retain their typed PVE cause.
 pub async fn guest_exec(
     pve: &impl Pve,
     node: &str,
@@ -155,18 +145,9 @@ pub async fn guest_exec_with_input(
     let context = format!("VM {vmid} on {node}");
     let deadline = Instant::now() + timeout;
     let failed_call = |what: &str, error: PveError| -> Result<ExecResult, CoreError> {
-        let error = refused(error)?;
-        if check {
-            return Err(CoreError::Context {
-                message: format!("QEMU Guest Agent {what} failed for {context}: {error}"),
-                causes: vec![error.into()],
-            });
-        }
-        Ok(ExecResult {
-            exited: true,
-            exitcode: 1,
-            out: error.to_string(),
-            err: String::new(),
+        Err(CoreError::Context {
+            message: format!("QEMU Guest Agent {what} failed for {context}"),
+            causes: vec![error.into()],
         })
     };
     let mut form = vec![("command", "/bin/sh"), ("command", "-lc"), ("command", command)];
@@ -178,8 +159,11 @@ pub async fn guest_exec_with_input(
         Err(error) => return failed_call("exec", error),
     };
     if parsed.get("pid").is_some() && !truthy(parsed.get("exited")) {
-        let pid = integer(parsed.get("pid"))
-            .ok_or_else(|| CoreError::Failed(format!("QEMU Guest Agent returned an invalid pid for {context}")))?;
+        let pid = integer(parsed.get("pid")).ok_or_else(|| {
+            CoreError::Pve(PveError::Response(format!(
+                "QEMU Guest Agent returned an invalid pid for {context}"
+            )))
+        })?;
         let pid = pid.to_string();
         loop {
             if Instant::now() >= deadline {
@@ -199,12 +183,16 @@ pub async fn guest_exec_with_input(
         }
     }
     if !truthy(parsed.get("exited")) || parsed.get("exitcode").is_none() {
-        return Err(CoreError::Failed(format!(
-            "QEMU Guest Agent returned an incomplete response for {context}: {parsed}"
-        )));
+        return Err(PveError::Response(format!(
+            "QEMU Guest Agent returned an incomplete response for {context}"
+        ))
+        .into());
     }
-    let exitcode = integer(parsed.get("exitcode"))
-        .ok_or_else(|| CoreError::Failed(format!("QEMU Guest Agent returned an invalid exit code for {context}")))?;
+    let exitcode = integer(parsed.get("exitcode")).ok_or_else(|| {
+        CoreError::Pve(PveError::Response(format!(
+            "QEMU Guest Agent returned an invalid exit code for {context}"
+        )))
+    })?;
     let result = ExecResult {
         exited: true,
         exitcode,

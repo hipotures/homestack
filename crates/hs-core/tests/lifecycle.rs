@@ -102,3 +102,94 @@ async fn destroy_execution_rejects_alien_before_shutdown() -> TestResult {
     assert!(ops.iter().all(|op| !op.contains("status/shutdown")), "{ops:?}");
     Ok(())
 }
+
+/// Template fidelity also protects the positively owned failed-clone cleanup
+/// boundary: ordinary clones must not be misclassified as source templates.
+#[tokio::test]
+async fn template_clones_are_ordinary_and_failed_create_cleanup_keeps_the_source() -> TestResult {
+    use hs_core::lifecycle::{CreateRequest, create_workspace, plan_create};
+    use pve_sim::scenario::{FaultSpec, VmState};
+    use serde_json::json;
+
+    for template in [false, true] {
+        let mut spec = ClusterSpec::from_scenario(CLUSTER)?;
+        let gold = spec.vms.iter_mut().find(|vm| vm.vmid == 101).ok_or("missing Gold")?;
+        gold.status = VmState::Stopped;
+        gold.config
+            .insert("memory".into(), serde_json::from_value(json!(2048))?);
+        if template {
+            gold.config.insert("template".into(), serde_json::from_value(json!(1))?);
+        }
+        let sim = PveSim::start(spec).await?;
+        let pve = client(&sim, TOKEN)?;
+        let cloned = pve
+            .post_value(
+                &["nodes", NODE, "qemu", "101", "clone"],
+                &[
+                    ("newid", "241"),
+                    ("name", "clone"),
+                    ("full", "1"),
+                    ("pool", POOL),
+                    ("storage", "local-lvm"),
+                ],
+            )
+            .await?;
+        assert!(cloned.is_string());
+        let source = pve.get_value(&["nodes", NODE, "qemu", "101", "config"], &[]).await?;
+        let clone = pve.get_value(&["nodes", NODE, "qemu", "241", "config"], &[]).await?;
+        assert_eq!(source.get("template").is_some(), template);
+        assert!(clone.get("template").is_none());
+        assert_eq!(clone["memory"], json!(2048));
+        assert_eq!(clone["agent"], source["agent"]);
+        assert_eq!(clone["tags"], source["tags"]);
+        assert_eq!(clone["scsi0"], json!("local-lvm:vm-241-disk-0,iothread=1,size=16G"));
+        pve.post_value(&["nodes", NODE, "qemu", "241", "status", "start"], &[])
+            .await?;
+        let state = pve
+            .get_value(&["nodes", NODE, "qemu", "241", "status", "current"], &[])
+            .await?;
+        assert_eq!(state["status"], "running");
+        if template {
+            assert!(
+                pve.post_value(&["nodes", NODE, "qemu", "101", "status", "start"], &[])
+                    .await
+                    .is_err()
+            );
+            let state = pve
+                .get_value(&["nodes", NODE, "qemu", "101", "status", "current"], &[])
+                .await?;
+            assert_eq!(state["status"], "stopped");
+        }
+        let request = CreateRequest {
+            gold_vmid: None,
+            vmid: 240,
+            name: "cleanup-check".into(),
+            home_size: None,
+            storage: None,
+            node: None,
+        };
+        let plan = plan_create(&pve, &config()?, POOL, &request).await?;
+        sim.inject_fault(FaultSpec {
+            op: format!("post{{path=/nodes/{NODE}/storage/local-lvm/content}}"),
+            occurrence: 1,
+            status: 500,
+            message: "synthetic allocation failure".into(),
+            applied: false,
+            hang: false,
+            task: None,
+        })?;
+        let result = create_workspace(&pve, &config()?, &plan, &quick(), &NoObserver).await;
+        assert!(result.is_err());
+        let resources = pve.get_value(&["cluster", "resources"], &[("type", "vm")]).await?;
+        let resources = resources.as_array().ok_or("missing resources")?;
+        assert!(
+            resources.iter().all(|vm| vm["vmid"] != 240),
+            "failed owned clone was not removed: {result:?}"
+        );
+        assert!(resources.iter().any(|vm| vm["vmid"] == 101));
+        let source = pve.get_value(&["nodes", NODE, "qemu", "101", "config"], &[]).await?;
+        assert_eq!(source.get("template").is_some(), template);
+        sim.shutdown().await;
+    }
+    Ok(())
+}
