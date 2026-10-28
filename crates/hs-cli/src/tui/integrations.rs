@@ -3,6 +3,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use zeroize::{Zeroize, Zeroizing};
 
 pub const PROVIDERS: [(&str, &str); 3] = [
     ("OVH", "ovh-dns"),
@@ -111,7 +112,7 @@ impl TestReport {
 pub struct Editor {
     pub provider: usize,
     pub path: PathBuf,
-    pub values: Vec<String>,
+    pub values: Zeroizing<Vec<String>>,
     pub focus: usize,
     pub cursor: usize,
     pub visible: bool,
@@ -121,8 +122,8 @@ pub struct Editor {
     pub report: Option<TestReport>,
     pub report_open: bool,
     pub report_scroll: usize,
-    original: String,
-    saved_values: Vec<String>,
+    original: Zeroizing<String>,
+    saved_values: Zeroizing<Vec<String>>,
     confirm_discard: bool,
 }
 
@@ -194,21 +195,21 @@ impl Editor {
         let mut editor = Self {
             provider,
             path,
-            values: Vec::new(),
+            values: Zeroizing::new(Vec::new()),
             focus: 0,
             cursor: 0,
             visible: false,
             message: String::new(),
-            original,
+            original: Zeroizing::new(original),
             test_id: 0,
             testing: false,
             report: None,
             report_open: false,
             report_scroll: 0,
-            saved_values: Vec::new(),
+            saved_values: Zeroizing::new(Vec::new()),
             confirm_discard: false,
         };
-        editor.values = if provider == 2 {
+        editor.values = Zeroizing::new(if provider == 2 {
             if editor.original.trim().is_empty() {
                 vec![String::new(), "hmac-sha256".to_owned(), String::new()]
             } else {
@@ -234,7 +235,7 @@ impl Editor {
                         })
                 })
                 .collect()
-        };
+        });
         let settings = read_settings(&integration_dir)?;
         let target = settings.get(PROVIDERS[provider].1);
         editor.report = target
@@ -270,7 +271,7 @@ impl Editor {
         if self.on_test_button() || self.report_open {
             return;
         }
-        let clean: String = text.chars().filter(|c| !c.is_control()).collect();
+        let clean = Zeroizing::new(text.chars().filter(|c| !c.is_control()).collect::<String>());
         let byte = self.values[self.focus]
             .char_indices()
             .nth(self.cursor)
@@ -340,12 +341,12 @@ impl Editor {
             KeyCode::Left => self.cursor = self.cursor.saturating_sub(1),
             KeyCode::Right => self.cursor = (self.cursor + 1).min(self.values[self.focus].chars().count()),
             KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.values[self.focus].clear();
+                self.values[self.focus].zeroize();
                 self.cursor = 0;
                 self.changed();
             }
             KeyCode::Backspace | KeyCode::Delete => {
-                let mut chars: Vec<char> = self.values[self.focus].chars().collect();
+                let mut chars = Zeroizing::new(self.values[self.focus].chars().collect::<Vec<char>>());
                 let at = if key.code == KeyCode::Backspace {
                     self.cursor.checked_sub(1)
                 } else {
@@ -354,7 +355,8 @@ impl Editor {
                 if let Some(at) = at.filter(|at| *at < chars.len()) {
                     chars.remove(at);
                     self.cursor = self.cursor.min(at);
-                    self.values[self.focus] = chars.into_iter().collect();
+                    self.values[self.focus].zeroize();
+                    self.values[self.focus] = chars.iter().collect();
                     self.changed();
                 }
             }
@@ -367,7 +369,7 @@ impl Editor {
     }
 
     pub fn validate(&self) -> Result<(), String> {
-        for (label, value) in self.credential_labels().iter().zip(&self.values) {
+        for (label, value) in self.credential_labels().iter().zip(self.values.iter()) {
             if value.is_empty() {
                 return Err(format!("{label} is required"));
             }
@@ -395,16 +397,16 @@ impl Editor {
         Ok(())
     }
 
-    fn serialize(&self) -> String {
+    fn serialize(&self) -> Zeroizing<String> {
         if self.provider == 2 {
-            return format!(
+            return Zeroizing::new(format!(
                 "key \"{}\" {{\n    algorithm {};\n    secret \"{}\";\n}};\n",
                 self.values[0], self.values[1], self.values[2]
-            );
+            ));
         }
         // Preserve comments and unrelated entries; replace every occurrence of edited keys.
         let mut seen = vec![false; self.credential_labels().len()];
-        let mut lines = Vec::new();
+        let mut lines = Zeroizing::new(Vec::new());
         for line in self.original.lines() {
             if let Some(at) = line
                 .trim()
@@ -424,11 +426,13 @@ impl Editor {
                 lines.push(format!("{}=\"{}\"", self.credential_labels()[at], self.values[at]));
             }
         }
-        format!("{}\n", lines.join("\n"))
+        let mut document = Zeroizing::new(lines.join("\n"));
+        document.push('\n');
+        document
     }
 
     pub fn safe_error(&self, error: &str) -> String {
-        let mut text = error.to_owned();
+        let mut text = Zeroizing::new(error.to_owned());
         let mut secrets: Vec<&str> = self
             .values
             .iter()
@@ -438,7 +442,7 @@ impl Editor {
             .collect();
         secrets.sort_by_key(|value| std::cmp::Reverse(value.len()));
         for secret in secrets {
-            text = text.replace(secret, "[redacted]");
+            text = Zeroizing::new(text.replace(secret, "[redacted]"));
         }
         text.chars()
             .filter(|c| !c.is_control() || *c == '\n')
@@ -611,7 +615,7 @@ impl Editor {
 /// Accept one BIND key block. Refuse unfamiliar syntax instead of destroying it.
 fn parse_tsig(text: &str) -> Result<Vec<String>, String> {
     let error = || "Unsupported TSIG file: expected one BIND key block".to_owned();
-    let mut tokens = Vec::new();
+    let mut tokens = Zeroizing::new(Vec::new());
     let mut chars = text.chars().peekable();
     while let Some(c) = chars.next() {
         match c {

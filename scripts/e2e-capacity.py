@@ -79,22 +79,32 @@ class Capacity(fixture.Matrix):
         (self.output / "results.json").write_text(json.dumps(evidence, indent=2) + "\n")
 
     def cleanup(self):
-        self.stop_server()
+        failures = []
+
+        def attempt(name, action):
+            try:
+                action()
+            except Exception as error:
+                failures.append(RuntimeError(f"{name}: {error}"))
+
+        attempt("stop server", self.stop_server)
         token = "root@pam!" + self.token_name
-        if self.gold_acl:
-            self.pve("set", "/access/acl", "--path", "/vms/100", "--tokens", token,
-                     "--roles", self.role_name, "--delete", "1")
-        if self.bridge_acl:
-            self.pve("set", "/access/acl", "--path", "/sdn/zones/localnetwork/vmbr0", "--tokens", token,
-                     "--roles", self.role_name, "--delete", "1")
-        if self.storage_acl:
-            self.pve("set", "/access/acl", "--path", "/storage/" + self.storage, "--tokens", token,
-                     "--roles", self.role_name, "--delete", "1")
+        for owned, name, path in [
+            (self.gold_acl, "Gold ACL", "/vms/100"),
+            (self.bridge_acl, "bridge ACL", "/sdn/zones/localnetwork/vmbr0"),
+            (self.storage_acl, "storage ACL", "/storage/" + self.storage),
+        ]:
+            if owned:
+                attempt(name, lambda path=path: self.pve(
+                    "set", "/access/acl", "--path", path, "--tokens", token,
+                    "--roles", self.role_name, "--delete", "1"))
         if self.storage_created:
-            self.pve("delete", "/storage/" + self.storage)
+            attempt("storage object", lambda: self.pve("delete", "/storage/" + self.storage))
         if self.mounted:
-            self.node_command("umount", self.node_files + "/storage")
-        super().cleanup()
+            attempt("tmpfs mount", lambda: self.node_command("umount", self.node_files + "/storage"))
+        attempt("fixture cleanup", super().cleanup)
+        if failures:
+            raise ExceptionGroup("Capacity cleanup failed", failures)
 
 
 def main():
@@ -116,7 +126,14 @@ def main():
     try:
         matrix.prepare()
         matrix.verify()
-    finally:
+    except BaseException as verification_error:
+        try:
+            matrix.cleanup()
+        except Exception as cleanup_error:
+            raise BaseExceptionGroup("Capacity verification and cleanup failed",
+                                     [verification_error, cleanup_error]) from None
+        raise
+    else:
         matrix.cleanup()
     print(json.dumps({"status": "passed", "checks": 3, "cleanup": "complete"}))
 

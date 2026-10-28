@@ -58,7 +58,10 @@ fn core_error(error: CoreError, not_found: &'static str) -> ApiError {
             ErrorCode::ValidationFailed,
             "The workspace name matches several VMs; use the VMID.",
         ),
-        CoreError::Busy(detail) | CoreError::Unusable(detail) | CoreError::Failed(detail) => {
+        CoreError::Busy(detail)
+        | CoreError::Unusable(detail)
+        | CoreError::Failed(detail)
+        | CoreError::Context { message: detail, .. } => {
             tracing::warn!(detail, "unusable Proxmox data");
             ApiError::new(ErrorCode::PveError, "Proxmox returned data HomeStack cannot use.")
         }

@@ -876,7 +876,7 @@
         "tags": [
           "operations"
         ],
-        "summary": "Plan an operation. Nothing is changed; the plan can be applied until\n`expires_at`.",
+        "summary": "Plan an operation. Nothing is changed; the plan can be applied until\n`expires_at`. At most 128 unapplied plans are held per instance; excess\ncreation returns `409 busy` without evicting a reviewed plan.",
         "operationId": "create_plan",
         "requestBody": {
           "content": {
@@ -971,7 +971,7 @@
         "tags": [
           "operations"
         ],
-        "summary": "A plan made earlier, until it expires.",
+        "summary": "An unapplied plan made earlier, until it expires. Applying removes the\nstored plan; the resulting job retains its plan ID.",
         "operationId": "get_plan",
         "parameters": [
           {
@@ -1027,7 +1027,7 @@
         "tags": [
           "operations"
         ],
-        "summary": "Apply a plan: plan again, check that nothing changed, and start a job.\nThe job runs on the server whatever happens to this request.",
+        "summary": "Apply a plan: plan again, check that nothing changed, and start a job.\nThe job runs on the server whatever happens to this request. At most 32\napplies/jobs are admitted concurrently; excess applies return `409 busy`\nbefore replanning, locking targets or acquiring leases. Reapplying returns\n`plan_applied` while the job is retained, then `404`.",
         "operationId": "apply_plan",
         "parameters": [
           {

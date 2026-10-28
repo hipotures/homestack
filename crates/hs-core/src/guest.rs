@@ -58,11 +58,11 @@ pub async fn qga_ping(pve: &impl Pve, node: &str, vmid: u32) -> Result<(), CoreE
 /// answers or `timeout` has passed; any failure counts as one attempt.
 pub async fn wait_for_qga(pve: &impl Pve, node: &str, vmid: u32, timeout: Duration) -> Result<(), CoreError> {
     let deadline = Instant::now() + timeout;
-    let mut last = String::new();
+    let mut last = None;
     while Instant::now() < deadline {
         match qga_ping(pve, node, vmid).await {
             Ok(()) => return Ok(()),
-            Err(error) => last = error.to_string(),
+            Err(error) => last = Some(error),
         }
         tokio::time::sleep(QGA_RETRY).await;
     }
@@ -70,11 +70,16 @@ pub async fn wait_for_qga(pve: &impl Pve, node: &str, vmid: u32, timeout: Durati
         "VM {vmid} on {node} did not expose a working QEMU Guest Agent within {}s",
         timeout.as_secs()
     );
-    if !last.is_empty() {
+    if let Some(error) = last {
         message.push_str(": ");
-        message.push_str(&last);
+        message.push_str(&error.to_string());
+        Err(CoreError::Context {
+            message,
+            causes: vec![error],
+        })
+    } else {
+        Err(CoreError::Failed(message))
     }
-    Err(CoreError::Failed(message))
 }
 
 /// A refused call (missing privilege) is an error in every mode.
@@ -152,9 +157,10 @@ pub async fn guest_exec_with_input(
     let failed_call = |what: &str, error: PveError| -> Result<ExecResult, CoreError> {
         let error = refused(error)?;
         if check {
-            return Err(CoreError::Failed(format!(
-                "QEMU Guest Agent {what} failed for {context}: {error}"
-            )));
+            return Err(CoreError::Context {
+                message: format!("QEMU Guest Agent {what} failed for {context}: {error}"),
+                causes: vec![error.into()],
+            });
         }
         Ok(ExecResult {
             exited: true,

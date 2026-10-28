@@ -20,7 +20,7 @@ use hs_model::jobs::{Job, JobError, JobEvent, JobProgress, JobState, JobStep, Jo
 use hs_pve::PveClient;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use tokio::sync::watch;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, watch};
 use tokio::time::Instant;
 
 use crate::config_store::Stored;
@@ -72,15 +72,21 @@ impl OpFailure {
 
     /// The job's error: Proxmox failures keep the API's error code.
     fn job_error(&self) -> JobError {
+        if let Self::Core(error) = self
+            && let Some(error) = error.pve_error()
+        {
+            let (code, message) = crate::error::public_pve_error(error);
+            let code = serde_json::to_value(code)
+                .ok()
+                .and_then(|code| code.as_str().map(str::to_owned))
+                .unwrap_or_else(|| "pve_error".to_owned());
+            return JobError {
+                code,
+                message: message.to_owned(),
+            };
+        }
         let (code, message) = match self {
             Self::Invalid(message) | Self::NotFound(message) => ("operation_failed".to_owned(), (*message).to_owned()),
-            Self::Core(CoreError::Pve(error)) => {
-                let code = serde_json::to_value(crate::error::pve_error_code(error))
-                    .ok()
-                    .and_then(|code| code.as_str().map(str::to_owned))
-                    .unwrap_or_else(|| "pve_error".to_owned());
-                (code, error.to_string())
-            }
             Self::Core(error @ CoreError::OutsidePool(_)) => ("outside_pool".to_owned(), error.to_string()),
             Self::Core(error @ CoreError::Busy(_)) => ("busy".to_owned(), error.to_string()),
             Self::Core(error) => ("operation_failed".to_owned(), error.to_string()),
@@ -126,7 +132,7 @@ pub struct AppOptions {
     pub heartbeat: Duration,
     /// How long a plan can be applied.
     pub plan_ttl: Duration,
-    /// Finished jobs kept for `GET /v1/jobs`.
+    /// Finished jobs kept for `GET /v1/jobs`, in addition to all active jobs.
     pub retained_jobs: usize,
 }
 
@@ -199,7 +205,6 @@ struct StoredPlan {
     config_version: Option<String>,
     operation: Arc<dyn Operation>,
     expires: Instant,
-    applied: bool,
 }
 
 /// Why a plan cannot be applied.
@@ -230,6 +235,7 @@ pub struct OpsState {
     /// `HOMESTACK_INSTANCE`, the holder of this instance's leases.
     pub instance: String,
     inner: Mutex<Inner>,
+    slots: Arc<Semaphore>,
 }
 
 impl OpsState {
@@ -239,6 +245,7 @@ impl OpsState {
             options,
             instance_id: uuid::Uuid::new_v4().to_string(),
             instance,
+            slots: Arc::new(Semaphore::new(MAX_CONCURRENT_JOBS)),
             inner: Mutex::new(Inner {
                 plans: HashMap::new(),
                 jobs: VecDeque::new(),
@@ -355,7 +362,13 @@ impl OpsState {
             targets: planned.targets,
             summary: planned.summary,
         };
-        self.lock().plans.insert(
+        let mut inner = self.lock();
+        if inner.plans.len() >= MAX_PLANS {
+            return Some(Err(OpFailure::Core(CoreError::Busy(
+                "This instance already holds 128 plans; apply one or wait for expiry.".to_owned(),
+            ))));
+        }
+        inner.plans.insert(
             plan.id.clone(),
             StoredPlan {
                 plan: plan.clone(),
@@ -363,7 +376,6 @@ impl OpsState {
                 config_version,
                 operation,
                 expires: Instant::now() + self.options.plan_ttl,
-                applied: false,
             },
         );
         Some(Ok(plan))
@@ -377,15 +389,21 @@ impl OpsState {
     /// Plan again under the plan's configuration version, compare, and
     /// start the job.
     pub async fn apply(self: &Arc<Self>, ctx: OpContext, id: &str, client_digest: &str) -> Result<Job, ApplyRefusal> {
+        // Reserve before replanning, target locking or writing any PVE lease.
+        let permit = Arc::clone(&self.slots).try_acquire_owned().map_err(|_| {
+            ApplyRefusal::Busy(Some(
+                "This instance already admits 32 jobs; wait for one to finish.".to_owned(),
+            ))
+        })?;
         let config_version = config_version(&ctx);
         let (plan, parameters, operation) = {
             let mut inner = self.lock();
+            if inner.jobs.iter().any(|job| job.borrow().plan_id == id) {
+                return Err(ApplyRefusal::Applied);
+            }
             let stored = inner.plans.get(id).ok_or(ApplyRefusal::Unknown)?;
             if stored.plan.digest != client_digest {
                 return Err(ApplyRefusal::Changed);
-            }
-            if stored.applied {
-                return Err(ApplyRefusal::Applied);
             }
             if stored.config_version != config_version {
                 return Err(ApplyRefusal::ConfigChanged);
@@ -419,20 +437,22 @@ impl OpsState {
             inner.busy.extend(found.0.targets.iter().copied());
             found
         };
+        let admission = Admission {
+            state: Arc::clone(self),
+            targets: plan.targets.clone(),
+            _permit: permit,
+        };
         let mut planned = match operation.plan(&ctx, &parameters).await {
             Ok(planned) => planned,
             Err(failure) => {
-                self.release(&plan.targets);
                 return Err(ApplyRefusal::Failure(failure));
             }
         };
         if digest(&plan.operation, &parameters, config_version.as_deref(), &planned) != plan.digest {
-            self.release(&plan.targets);
             return Err(ApplyRefusal::Changed);
         }
         let job_id = uuid::Uuid::new_v4().to_string();
         if let Err(error) = self.acquire_leases(&ctx, &job_id, &plan.operation, &mut planned).await {
-            self.release(&plan.targets);
             return Err(match error {
                 CoreError::Busy(message) => ApplyRefusal::Busy(Some(message)),
                 error => ApplyRefusal::Failure(OpFailure::Core(error)),
@@ -456,20 +476,11 @@ impl OpsState {
         let sender = Arc::new(watch::Sender::new(job.clone()));
         {
             let mut inner = self.lock();
-            if let Some(stored) = inner.plans.get_mut(id) {
-                stored.applied = true;
-            }
+            // Applied plans no longer consume plan admission capacity. Duplicate
+            // applies remain recognizable while their job is retained.
+            inner.plans.remove(id);
             inner.jobs.push_front(Arc::clone(&sender));
-            let retained = self.options.retained_jobs.max(1);
-            while inner.jobs.len() > retained {
-                let finished = inner.jobs.iter().rposition(|job| job.borrow().state.finished());
-                match finished {
-                    Some(index) => {
-                        inner.jobs.remove(index);
-                    }
-                    None => break,
-                }
-            }
+            self.trim_jobs(&mut inner);
         }
         let state = Arc::clone(self);
         tokio::spawn(async move {
@@ -495,9 +506,21 @@ impl OpsState {
                     }
                 }
             });
-            state.release(&planned.targets);
+            drop(admission);
         });
         Ok(job)
+    }
+
+    fn trim_jobs(&self, inner: &mut Inner) {
+        let mut finished = 0;
+        // Newest first; keep every active job plus the newest finished jobs.
+        inner.jobs.retain(|job| {
+            if !job.borrow().state.finished() {
+                return true;
+            }
+            finished += 1;
+            finished <= self.options.retained_jobs.max(1)
+        });
     }
 
     fn release(&self, targets: &[u32]) {
@@ -505,6 +528,7 @@ impl OpsState {
         for vmid in targets {
             inner.busy.remove(vmid);
         }
+        self.trim_jobs(&mut inner);
     }
 
     /// The job's channel, for reading or following it.
@@ -521,6 +545,24 @@ impl OpsState {
     #[must_use]
     pub fn jobs(&self) -> Vec<Job> {
         self.lock().jobs.iter().map(|job| job.borrow().clone()).collect()
+    }
+}
+
+/// A small installation can review many alternatives and operate across nodes,
+/// but should not retain thousands of drafts or launch hundreds of PVE tasks.
+const MAX_PLANS: usize = 128;
+const MAX_CONCURRENT_JOBS: usize = 32;
+
+/// Release local admission even if replanning is cancelled or a task unwinds.
+struct Admission {
+    state: Arc<OpsState>,
+    targets: Vec<u32>,
+    _permit: OwnedSemaphorePermit,
+}
+
+impl Drop for Admission {
+    fn drop(&mut self) {
+        self.state.release(&self.targets);
     }
 }
 

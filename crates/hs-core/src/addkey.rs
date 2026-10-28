@@ -465,8 +465,9 @@ pub async fn add_key(
         step_started(observer, step);
         let added = async {
             if let Err(error) = qga_ping(pve, node, vmid).await {
+                tracing::warn!(?error, vmid, "guest agent did not answer during addkey");
                 return Ok(Some(format!(
-                    "The QEMU Guest Agent of VM {vmid} did not answer ({error}); the keys are added at its next start"
+                    "The QEMU Guest Agent of VM {vmid} did not answer; the keys are added at its next start"
                 )));
             }
             guest_exec(

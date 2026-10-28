@@ -16,11 +16,12 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use axum::Router;
-use axum::body::Bytes;
+use axum::body::{Body, Bytes};
 use axum::extract::{RawQuery, State};
 use axum::http::{StatusCode, header};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::get;
+use futures_util::TryStreamExt;
 use hs_model::health::{HeartbeatObservation, Liveness, LivenessStatus};
 use tracing_subscriber::EnvFilter;
 
@@ -203,13 +204,14 @@ async fn forward(State(state): State<AppState>, path: &'static str, RawQuery(que
         }
     };
     let status = StatusCode::from_u16(response.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
-    match response.bytes().await {
-        Ok(body) => (status, [(header::CONTENT_TYPE, "application/json")], body).into_response(),
-        Err(error) => {
-            tracing::warn!(%error, path, "Prometheus response failed");
-            (StatusCode::BAD_GATEWAY, "Prometheus response failed").into_response()
-        }
-    }
+    // Axum polls the upstream only when the downstream is ready: no whole-body
+    // allocation or producer queue. A read failure after headers truncates the
+    // response; never send upstream error details in the JSON body.
+    let body = Body::from_stream(response.bytes_stream().map_err(move |error| {
+        tracing::warn!(%error, path, "Prometheus response failed");
+        std::io::Error::other("Prometheus response failed")
+    }));
+    (status, [(header::CONTENT_TYPE, "application/json")], body).into_response()
 }
 
 /// Liveness and readiness: the serving-path heartbeat is fresh. Prometheus

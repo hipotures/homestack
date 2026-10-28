@@ -298,9 +298,9 @@ async fn delete_task(
         }
     }
     .await;
-    outcome.map_err(|error: CoreError| CoreError::Failed(format!(
+    outcome.map_err(|error: CoreError| CoreError::Context { message: format!(
         "{error}. DELETE was sent once and will not be retried. Inspect the VM, storage and task outcome explicitly before reviewing a new destroy plan."
-    )))
+    ), causes: vec![error] })
 }
 
 pub(crate) fn step_started(observer: &impl Observer, name: &str) {
@@ -554,10 +554,13 @@ pub async fn create_workspace(
             };
             match cleanup {
                 Ok(()) => Err(error),
-                Err(failure) => Err(CoreError::Failed(format!(
-                    "{error}. Cleanup of VM {vmid} ({name}), clone task {task}, was refused or incomplete: \
+                Err(failure) => Err(CoreError::Context {
+                    message: format!(
+                        "{error}. Cleanup of VM {vmid} ({name}), clone task {task}, was refused or incomplete: \
                      {failure}. Inspect the VM and task before explicit recovery."
-                ))),
+                    ),
+                    causes: vec![error, failure],
+                }),
             }
         }
     }
@@ -582,15 +585,16 @@ async fn clone_task(
             PveError::Unauthorized | PveError::Forbidden { .. } | PveError::Api { .. } => "request rejected",
             PveError::NodeUnreachable { .. } | PveError::Response(_) => "submission outcome unknown",
         };
-        CoreError::Failed(format!(
+        CoreError::Context { message: format!(
             "{context}: {outcome}: {error}. No clone task was established; target presence and allocation \
              are unconfirmed. No automatic cleanup or retry; inspect Proxmox tasks and the target VM before explicit recovery."
-        ))
+        ), causes: vec![error.into()] }
     })?;
-    let task = upid(&answer).map_err(|error| {
-        CoreError::Failed(format!(
+    let task = upid(&answer).map_err(|error| CoreError::Context {
+        message: format!(
             "{context}: {error}. Clone outcome unknown; no automatic cleanup or retry. Manual reconciliation required."
-        ))
+        ),
+        causes: vec![error],
     })?;
     if upid_node(&task).as_deref() != Some(source) {
         return Err(CoreError::Failed(format!(
@@ -620,10 +624,13 @@ async fn clone_task(
                     }
                 }
                 _ => {
-                    return Err(CoreError::Failed(format!(
-                        "{context}, task {task}: {error}. Clone outcome unknown after task inspection; \
+                    return Err(CoreError::Context {
+                        message: format!(
+                            "{context}, task {task}: {error}. Clone outcome unknown after task inspection; \
                      no automatic cleanup or retry. Manual reconciliation required."
-                    )));
+                        ),
+                        causes: vec![error],
+                    });
                 }
             }
         }
@@ -1102,9 +1109,12 @@ async fn attach_home(
     )
     .await;
     if let Err(error) = attached {
-        return Err(CoreError::Failed(format!(
-            "{error}. Home attachment is unconfirmed; volume {volume} was left for explicit inspection."
-        )));
+        return Err(CoreError::Context {
+            message: format!(
+                "{error}. Home attachment is unconfirmed; volume {volume} was left for explicit inspection."
+            ),
+            causes: vec![error],
+        });
     }
     Ok(spec)
 }

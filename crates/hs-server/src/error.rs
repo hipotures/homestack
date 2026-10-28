@@ -98,40 +98,33 @@ impl IntoResponse for ApiError {
     }
 }
 
-/// The API error code of a Proxmox failure.
-pub const fn pve_error_code(error: &PveError) -> ErrorCode {
+/// Shared public classification for HTTP errors and asynchronous job failures.
+/// Raw Proxmox/transport details belong only in operator logs.
+pub const fn public_pve_error(error: &PveError) -> (ErrorCode, &'static str) {
     match error {
-        PveError::Unreachable(_) => ErrorCode::PveUnavailable,
-        PveError::Unauthorized => ErrorCode::PveAuthFailed,
-        PveError::Forbidden { .. } => ErrorCode::PvePermissionDenied,
-        PveError::NodeUnreachable { .. } => ErrorCode::PveNodeUnavailable,
-        PveError::Api { .. } | PveError::Response(_) => ErrorCode::PveError,
-        PveError::Config(_) => ErrorCode::Internal,
+        PveError::Unreachable(_) => (ErrorCode::PveUnavailable, "No Proxmox API endpoint is reachable."),
+        PveError::Unauthorized => (ErrorCode::PveAuthFailed, "Proxmox rejected the server's API token."),
+        PveError::Forbidden { .. } => (
+            ErrorCode::PvePermissionDenied,
+            "The server's Proxmox API token lacks a required privilege.",
+        ),
+        PveError::NodeUnreachable { .. } => (
+            ErrorCode::PveNodeUnavailable,
+            "Proxmox could not reach the requested node.",
+        ),
+        PveError::Api { .. } | PveError::Response(_) => (
+            ErrorCode::PveError,
+            "Proxmox returned an error or an unusable response.",
+        ),
+        PveError::Config(_) => (ErrorCode::Internal, "The server is misconfigured."),
     }
 }
 
 impl From<PveError> for ApiError {
-    /// Details stay in the server log (the client already logged each failed
-    /// endpoint); clients get a fixed message.
     fn from(error: PveError) -> Self {
-        tracing::warn!(%error, "Proxmox request failed");
-        match error {
-            PveError::Unreachable(_) => Self::new(ErrorCode::PveUnavailable, "No Proxmox API endpoint is reachable."),
-            PveError::Unauthorized => Self::new(ErrorCode::PveAuthFailed, "Proxmox rejected the server's API token."),
-            PveError::Forbidden { .. } => Self::new(
-                ErrorCode::PvePermissionDenied,
-                "The server's Proxmox API token lacks a required privilege.",
-            ),
-            PveError::NodeUnreachable { .. } => Self::new(
-                ErrorCode::PveNodeUnavailable,
-                "Proxmox could not reach the requested node.",
-            ),
-            PveError::Api { .. } | PveError::Response(_) => Self::new(
-                ErrorCode::PveError,
-                "Proxmox returned an error or an unusable response.",
-            ),
-            PveError::Config(_) => Self::new(ErrorCode::Internal, "The server is misconfigured."),
-        }
+        tracing::warn!(?error, "Proxmox request failed");
+        let (code, message) = public_pve_error(&error);
+        Self::new(code, message)
     }
 }
 

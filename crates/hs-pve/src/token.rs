@@ -2,12 +2,13 @@
 
 use std::fmt;
 use std::path::Path;
+use zeroize::Zeroizing;
 
 /// An API token. `Debug` never shows the secret.
 #[derive(Clone)]
 pub struct PveToken {
     id: String,
-    secret: String,
+    secret: Zeroizing<String>,
 }
 
 /// Why a token was rejected. Messages never include the token text.
@@ -37,7 +38,7 @@ impl PveToken {
         }
         Ok(Self {
             id: id.to_owned(),
-            secret: secret.to_owned(),
+            secret: Zeroizing::new(secret.to_owned()),
         })
     }
 
@@ -48,7 +49,7 @@ impl PveToken {
             reason,
         };
         warn_if_readable_by_others(path);
-        let text = std::fs::read_to_string(path).map_err(|error| file_error(error.kind().to_string()))?;
+        let text = Zeroizing::new(std::fs::read_to_string(path).map_err(|error| file_error(error.kind().to_string()))?);
         Self::parse(&text)
     }
 
@@ -59,8 +60,9 @@ impl PveToken {
     }
 
     /// Value of the `Authorization` header.
-    pub fn header_value(&self) -> String {
-        format!("PVEAPIToken={}={}", self.id, self.secret)
+    pub fn header_value(&self) -> Zeroizing<String> {
+        // Best effort: HeaderValue/HTTP libraries own subsequent copies.
+        Zeroizing::new(format!("PVEAPIToken={}={}", self.id, self.secret.as_str()))
     }
 }
 

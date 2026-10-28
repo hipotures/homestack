@@ -466,11 +466,14 @@ pub async fn migrate_workspace(
     let status = match outcome {
         Ok(status) => status,
         Err(error) if planned.was_running && source_stopped => {
-            let note = recover(pve, &planned, timing, observer).await;
+            let (note, recovery_error) = recover(pve, &planned, timing, observer).await;
             return Err(if note.is_empty() {
                 error
             } else {
-                CoreError::Failed(format!("{error}{note}"))
+                CoreError::Context {
+                    message: format!("{error}{note}"),
+                    causes: std::iter::once(error).chain(recovery_error).collect(),
+                }
             });
         }
         Err(error) => return Err(error),
@@ -628,24 +631,40 @@ pub(crate) async fn migrate_offline(
 
 /// Python's `except` branch: start the VM again on the source node when it
 /// is still there and not running; the note for the error.
-async fn recover(pve: &impl Pve, planned: &Planned<'_>, timing: &LifecycleTiming, observer: &impl Observer) -> String {
+async fn recover(
+    pve: &impl Pve,
+    planned: &Planned<'_>,
+    timing: &LifecycleTiming,
+    observer: &impl Observer,
+) -> (String, Option<CoreError>) {
     let (vmid, source) = (planned.vmid, planned.source);
     let resources = match cluster_vm_resources(pve).await {
         Ok(resources) => resources,
-        Err(error) => return format!("\nRecovery check failed for VM {vmid} on {source}: {error}"),
+        Err(error) => {
+            return (
+                format!("\nRecovery check failed for VM {vmid} on {source}: {error}"),
+                Some(error),
+            );
+        }
     };
     let resource = resources.into_iter().find(|resource| resource.vmid == vmid);
     let node = resource.as_ref().map(|r| r.node.as_str()).unwrap_or_default();
     let status = resource.as_ref().and_then(|r| r.status.as_deref()).unwrap_or_default();
     if node != source || status == "running" {
-        return String::new();
+        return (String::new(), None);
     }
     let step = "Restart workspace on the source node";
     step_started(observer, step);
     let restarted = start_vm(pve, source, vmid, &timing.wait(START_TIMEOUT_SECS), observer).await;
     step_finished(observer, step, restarted.is_ok());
     match restarted {
-        Ok(()) => format!("\nRecovery: VM {vmid} was restarted automatically on {source}."),
-        Err(error) => format!("\nRecovery: VM {vmid} is still on {source}, but automatic restart failed: {error}"),
+        Ok(()) => (
+            format!("\nRecovery: VM {vmid} was restarted automatically on {source}."),
+            None,
+        ),
+        Err(error) => (
+            format!("\nRecovery: VM {vmid} is still on {source}, but automatic restart failed: {error}"),
+            Some(error),
+        ),
     }
 }

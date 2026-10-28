@@ -377,10 +377,13 @@ pub async fn resize_workspace(
     let finished = grow_guest(pve, node, vmid, disk, volume, target, &guest, crypt.as_ref(), timing).await;
     step_finished(observer, step, finished.is_ok());
     if let Err(error) = finished {
-        return Err(CoreError::Failed(format!(
-            "Disk growth may already be applied; filesystem growth is incomplete. \
+        return Err(CoreError::Context {
+            message: format!(
+                "Disk growth may already be applied; filesystem growth is incomplete. \
              Re-run resize {vmid} --{role}-size {size} to finish. {error}"
-        )));
+            ),
+            causes: vec![error],
+        });
     }
     let mut result = plan.as_object().cloned().unwrap_or_default();
     result.insert("ok".to_owned(), json!(true));

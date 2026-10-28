@@ -11,7 +11,7 @@
 #   HOMESTACK_LIVE_TOKEN_FILE      PVE token file (USER@REALM!TOKENID=SECRET)
 #   HOMESTACK_LIVE_PVE_ENDPOINTS   comma-separated https origins (certificate names)
 #
-# Builds Containerfile as homestack-server:check unless
+# Builds the production node target of Containerfile as homestack-server:check unless
 # HOMESTACK_IMAGE names an existing image. Always removes its container.
 set -euo pipefail
 
@@ -36,7 +36,7 @@ image=${HOMESTACK_IMAGE:-}
 if [[ -z $image ]]; then
     image=homestack-server:check
     built=0
-    docker_ build -q -f "$root/Containerfile" -t "$image" "$root" >/dev/null && built=1
+    docker_ build --target node -q -f "$root/Containerfile" -t "$image" "$root" >/dev/null && built=1
     # Without BuildKit the compile stage (about 2 GB) stays behind as untagged
     # images, also after a failed build.
     docker_ image prune -f --filter label=org.homestack.stage=build >/dev/null
@@ -56,8 +56,19 @@ trap cleanup EXIT
 umask 077
 head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' > "$work/api-token"
 cp "$HOMESTACK_LIVE_TOKEN_FILE" "$work/pve-token"
-chmod 0755 "$work"
-chmod 0644 "$work/api-token" "$work/pve-token"
+# Files stay private on the host; a root initializer installs only these two
+# run-owned tokens for the image's unprivileged server account.
+openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=HomeStack-live-test-CA \
+    -keyout "$work/ca-key.pem" -out "$work/ca.pem" >/dev/null 2>&1
+openssl req -newkey rsa:2048 -nodes -subj /CN=localhost \
+    -keyout "$work/key.pem" -out "$work/request.pem" >/dev/null 2>&1
+printf 'subjectAltName=DNS:localhost,IP:127.0.0.1\nextendedKeyUsage=serverAuth\n' > "$work/extensions"
+openssl x509 -req -in "$work/request.pem" -CA "$work/ca.pem" -CAkey "$work/ca-key.pem" \
+    -CAcreateserial -days 1 -extfile "$work/extensions" -out "$work/cert.pem" >/dev/null 2>&1
+{
+    printf 'HOMESTACK_TLS_CERT_B64=%s\n' "$(base64 -w0 "$work/cert.pem")"
+    printf 'HOMESTACK_TLS_KEY_B64=%s\n' "$(base64 -w0 "$work/key.pem")"
+} > "$work/tls.env"
 port=$(python3 -I -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
 
 # Node names may come from this host's /etc/hosts rather than DNS; give the
@@ -74,17 +85,24 @@ done
 # A dead endpoint first: nothing listens on port 1 inside the container.
 endpoints="https://localhost:1,$HOMESTACK_LIVE_PVE_ENDPOINTS"
 docker_ volume create "$volume" >/dev/null
+# shellcheck disable=SC2016 # The initializer expands token inside the container.
+docker_ run --rm --entrypoint sh -v "$work:/run/fixture:ro" \
+    -v "$volume:/var/lib/homestack" "$image" -c '
+        for token in api-token pve-token; do
+            install -o homestack -g nogroup -m 0600 "/run/fixture/$token" "/var/lib/homestack/$token"
+        done'
+management_port=$(python3 -I -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
+front() { curl --noproxy '*' --cacert "$work/ca.pem" "$@"; }
 start() {
-    docker_ run -d --name "$name" --user 65534:65534 -p "127.0.0.1:$port:8080" "${hosts[@]}" \
-        -v "$work/api-token:/run/secrets/api-token:ro" \
-        -v "$work/pve-token:/run/secrets/pve-token:ro" \
+    docker_ run -d --name "$name" -p "127.0.0.1:$port:443" \
+        -p "127.0.0.1:$management_port:80" "${hosts[@]}" --env-file "$work/tls.env" \
         -v "$volume:/var/lib/homestack" \
-        -e HOMESTACK_API_TOKEN_FILE=/run/secrets/api-token \
-        -e HOMESTACK_PVE_TOKEN_FILE=/run/secrets/pve-token \
+        -e HOMESTACK_API_TOKEN_FILE=/var/lib/homestack/api-token \
+        -e HOMESTACK_PVE_TOKEN_FILE=/var/lib/homestack/pve-token \
         -e HOMESTACK_PVE_ENDPOINTS="$endpoints" \
         "$image" >/dev/null
     for _ in $(seq 50); do
-        curl -fsS "http://127.0.0.1:$port/health/live" >/dev/null 2>&1 && return 0
+        front -fsS "https://127.0.0.1:$port/health/live" >/dev/null 2>&1 && return 0
         sleep 0.2
     done
     echo "live-container: the server did not come up" >&2
@@ -101,11 +119,18 @@ api() {
     local method=$1 path=$2 output=$3
     shift 3
     printf 'header = "Authorization: Bearer %s"\n' "$(cat "$work/api-token")" |
-        curl -sS -K - -X "$method" -o "$output" -w '%{http_code}' "$@" "http://127.0.0.1:$port$path"
+        front -sS -K - -X "$method" -o "$output" -w '%{http_code}' "$@" "https://127.0.0.1:$port$path"
 }
 
 start
-curl -fsS "http://127.0.0.1:$port/health/live"
+# Both processes must be under runit, and management HTTP must not proxy API.
+docker_ exec "$name" sv status /etc/service/homestack /etc/service/caddy
+curl --noproxy '*' -fsS "http://127.0.0.1:$management_port/health/live" >/dev/null
+for path in /v1/pve/version /v1/secrets/pve-token /v1/config; do
+    [[ $(curl --noproxy '*' -sS -o /dev/null -w '%{http_code}' "http://127.0.0.1:$management_port$path") == 404 ]] ||
+        fail "management HTTP exposed $path"
+done
+front -fsS "https://127.0.0.1:$port/health/live"
 echo
 
 # Phase 0
@@ -169,8 +194,9 @@ status=$(api GET /v1/config/version "$work/version-after.json")
 after=$(python3 -I -c 'import json, sys; print(json.load(open(sys.argv[1]))["config_version"])' "$work/version-after.json")
 [[ $after == "$uploaded" ]] || fail "configuration version $after after the restart, uploaded $uploaded"
 status=$(api GET /v1/config "$work/server-after.toml")
-[[ $status == 200 ]] && cmp -s "$work/server.toml" "$work/server-after.toml" ||
+if [[ $status != 200 ]] || ! cmp -s "$work/server.toml" "$work/server-after.toml"; then
     fail "GET /v1/config after the restart differs from the upload"
+fi
 echo "live-container: configuration $uploaded survived replacing the container"
 
 status=$(api GET /v1/capabilities "$work/capabilities.json")

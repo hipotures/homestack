@@ -54,6 +54,11 @@ fn json_body<T: DeserializeOwned>(headers: &HeaderMap, body: &Bytes) -> Result<T
 
 /// A failure while planning, as an API error.
 fn plan_error(failure: OpFailure) -> ApiError {
+    if let OpFailure::Core(error) = &failure
+        && let Some(error) = error.pve_error()
+    {
+        return error.clone().into();
+    }
     match failure {
         OpFailure::Invalid(message) => ApiError::new(ErrorCode::ValidationFailed, message),
         OpFailure::NotFound(message) => ApiError::new(ErrorCode::NotFound, message),
@@ -63,9 +68,9 @@ fn plan_error(failure: OpFailure) -> ApiError {
         OpFailure::Core(CoreError::NotFound(message)) => ApiError::with_message(ErrorCode::NotFound, message),
         OpFailure::Core(CoreError::OutsidePool(message)) => ApiError::with_message(ErrorCode::OutsidePool, message),
         OpFailure::Core(CoreError::Busy(message)) => ApiError::with_message(ErrorCode::Busy, message),
-        OpFailure::Core(CoreError::Refused(message) | CoreError::Failed(message)) => {
-            ApiError::with_message(ErrorCode::OperationRefused, message)
-        }
+        OpFailure::Core(
+            CoreError::Refused(message) | CoreError::Failed(message) | CoreError::Context { message, .. },
+        ) => ApiError::with_message(ErrorCode::OperationRefused, message),
         OpFailure::Core(error) => {
             tracing::warn!(%error, "planning failed");
             ApiError::new(
@@ -83,7 +88,8 @@ fn valid_id(id: &str) -> Result<(), ApiError> {
 }
 
 /// Plan an operation. Nothing is changed; the plan can be applied until
-/// `expires_at`.
+/// `expires_at`. At most 128 unapplied plans are held per instance; excess
+/// creation returns `409 busy` without evicting a reviewed plan.
 #[utoipa::path(
     post,
     path = "/v1/plans",
@@ -117,7 +123,8 @@ pub async fn create_plan(
     }
 }
 
-/// A plan made earlier, until it expires.
+/// An unapplied plan made earlier, until it expires. Applying removes the
+/// stored plan; the resulting job retains its plan ID.
 #[utoipa::path(
     get,
     path = "/v1/plans/{id}",
@@ -140,7 +147,10 @@ pub async fn get_plan(State(state): State<AppState>, Path(id): Path<String>) -> 
 }
 
 /// Apply a plan: plan again, check that nothing changed, and start a job.
-/// The job runs on the server whatever happens to this request.
+/// The job runs on the server whatever happens to this request. At most 32
+/// applies/jobs are admitted concurrently; excess applies return `409 busy`
+/// before replanning, locking targets or acquiring leases. Reapplying returns
+/// `plan_applied` while the job is retained, then `404`.
 #[utoipa::path(
     post,
     path = "/v1/plans/{id}/apply",

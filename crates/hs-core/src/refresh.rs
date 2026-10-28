@@ -856,14 +856,20 @@ pub async fn refresh_workspace(
             }
             .await;
             Err(match recovery {
-                Ok(recovery) => CoreError::Failed(format!(
-                    "Refresh failed: {error}. Automatic recovery succeeded: {}.",
-                    recovery.get("recovery").and_then(Value::as_str).unwrap_or_default()
-                )),
-                Err(recovery_error) => CoreError::Failed(format!(
-                    "Refresh failed: {error}. Automatic recovery also failed: {recovery_error}. \
+                Ok(recovery) => CoreError::Context {
+                    message: format!(
+                        "Refresh failed: {error}. Automatic recovery succeeded: {}.",
+                        recovery.get("recovery").and_then(Value::as_str).unwrap_or_default()
+                    ),
+                    causes: vec![error],
+                },
+                Err(recovery_error) => CoreError::Context {
+                    message: format!(
+                        "Refresh failed: {error}. Automatic recovery also failed: {recovery_error}. \
                      Transaction journal retained in the description of VM {vmid}."
-                )),
+                    ),
+                    causes: vec![error, recovery_error],
+                },
             })
         }
     }

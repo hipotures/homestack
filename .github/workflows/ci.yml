@@ -42,6 +42,9 @@ jobs:
   image:
     needs: check
     if: github.event_name == 'push' && github.ref_type == 'tag' && !startsWith(github.ref_name, 'pangolin-') && !startsWith(github.ref_name, 'otel-') && !startsWith(github.ref_name, 'ai-usage-') && !startsWith(github.ref_name, 'pve-agent-')
+    concurrency:
+      group: image-${{ github.event_name == 'workflow_dispatch' && github.sha || github.ref_name }}
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -58,15 +61,31 @@ jobs:
         run: |
           [[ "$RELEASE_TAG" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
           echo "tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+      - uses: docker/login-action@v3.4.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Admit immutable image publication
+        id: publication
+        env:
+          IMAGE: ghcr.io/hipotures/homestack-server:${{ steps.tag.outputs.tag }}
+          REVISION: ${{ github.sha }}
+          VERSION: ${{ steps.tag.outputs.tag }}
+          EVENT: ${{ github.event_name }}
+        run: scripts/image-admission.sh "$IMAGE" "$REVISION" "$VERSION" "$EVENT"
       - name: Install Rust 1.99.0 for musl
+        if: steps.publication.outputs.publish == 'true'
         run: |
           sudo apt-get install -y --no-install-recommends musl-tools
           rustup toolchain install 1.99.0 --profile minimal --target x86_64-unknown-linux-musl
           rustup default 1.99.0
       - uses: Swatinem/rust-cache@v2.9.2
+        if: steps.publication.outputs.publish == 'true'
         with:
           key: musl-server
       - name: Build the server
+        if: steps.publication.outputs.publish == 'true'
         env:
           RUSTFLAGS: "-C target-feature=+crt-static"
         run: |
@@ -76,18 +95,18 @@ jobs:
           cp target/x86_64-unknown-linux-musl/release/homestack-server image/
           cp deploy/lxc/Caddyfile image/
           cp -r deploy/lxc/service image/service
-      - uses: docker/login-action@v3.4.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
       - uses: docker/build-push-action@v6.18.0
+        if: steps.publication.outputs.publish == 'true'
         with:
+          # PVE pulls one deployable amd64 manifest, without an attestation index.
+          platforms: linux/amd64
+          provenance: false
           context: image
           file: deploy/image/Containerfile
           push: true
           tags: ghcr.io/hipotures/homestack-server:${{ steps.tag.outputs.tag }}
           labels: |
+            org.opencontainers.image.title=homestack-server
             org.opencontainers.image.source=https://github.com/hipotures/homestack
             org.opencontainers.image.version=${{ steps.tag.outputs.tag }}
             org.opencontainers.image.revision=${{ github.sha }}
@@ -98,6 +117,9 @@ jobs:
   site-image:
     needs: check
     if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref_type == 'tag' && startsWith(github.ref_name, 'pangolin-'))
+    concurrency:
+      group: site-image-${{ github.event_name == 'workflow_dispatch' && github.sha || github.ref_name }}
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -122,19 +144,16 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Refuse an existing image tag
+      - name: Admit immutable image publication
+        id: publication
         env:
           IMAGE: ghcr.io/hipotures/homestack-pangolin-site:${{ steps.tag.outputs.tag }}
-        run: |
-          if docker manifest inspect "$IMAGE" >/tmp/image-manifest.json 2>/tmp/image-manifest-error; then
-            echo "Image already exists: $IMAGE" >&2
-            exit 1
-          fi
-          grep -Eqi 'manifest unknown|no such manifest|not found' /tmp/image-manifest-error || {
-            cat /tmp/image-manifest-error >&2
-            exit 1
-          }
+          REVISION: ${{ github.sha }}
+          VERSION: ${{ steps.tag.outputs.tag }}
+          EVENT: ${{ github.event_name }}
+        run: scripts/image-admission.sh "$IMAGE" "$REVISION" "$VERSION" "$EVENT"
       - uses: docker/build-push-action@v6.18.0
+        if: steps.publication.outputs.publish == 'true'
         with:
           platforms: linux/amd64
           provenance: false
@@ -143,6 +162,7 @@ jobs:
           push: true
           tags: ghcr.io/hipotures/homestack-pangolin-site:${{ steps.tag.outputs.tag }}
           labels: |
+            org.opencontainers.image.title=homestack-pangolin-site
             org.opencontainers.image.source=https://github.com/hipotures/homestack
             org.opencontainers.image.version=${{ steps.tag.outputs.tag }}
             org.opencontainers.image.revision=${{ github.sha }}
@@ -150,6 +170,9 @@ jobs:
   otel-image:
     needs: check
     if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref_type == 'tag' && startsWith(github.ref_name, 'otel-'))
+    concurrency:
+      group: otel-image-${{ github.event_name == 'workflow_dispatch' && github.sha || github.ref_name }}
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -173,19 +196,16 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Refuse an existing image tag
+      - name: Admit immutable image publication
+        id: publication
         env:
           IMAGE: ghcr.io/hipotures/homestack-otel:${{ steps.tag.outputs.tag }}
-        run: |
-          if docker manifest inspect "$IMAGE" >/tmp/otel-manifest.json 2>/tmp/otel-manifest-error; then
-            echo "Image already exists: $IMAGE" >&2
-            exit 1
-          fi
-          grep -Eqi 'manifest unknown|no such manifest|not found' /tmp/otel-manifest-error || {
-            cat /tmp/otel-manifest-error >&2
-            exit 1
-          }
+          REVISION: ${{ github.sha }}
+          VERSION: ${{ steps.tag.outputs.tag }}
+          EVENT: ${{ github.event_name }}
+        run: scripts/image-admission.sh "$IMAGE" "$REVISION" "$VERSION" "$EVENT"
       - uses: docker/build-push-action@v6.18.0
+        if: steps.publication.outputs.publish == 'true'
         with:
           platforms: linux/amd64
           provenance: false
@@ -194,14 +214,17 @@ jobs:
           load: true
           tags: ghcr.io/hipotures/homestack-otel:${{ steps.tag.outputs.tag }}
           labels: |
+            org.opencontainers.image.title=homestack-otel
             org.opencontainers.image.source=https://github.com/hipotures/homestack
             org.opencontainers.image.version=${{ steps.tag.outputs.tag }}
             org.opencontainers.image.revision=${{ github.sha }}
       - name: Validate the built image before publication
+        if: steps.publication.outputs.publish == 'true'
         env:
           IMAGE: ghcr.io/hipotures/homestack-otel:${{ steps.tag.outputs.tag }}
         run: python3 deploy/otel/verify-image.py "$IMAGE"
       - name: Publish the validated image
+        if: steps.publication.outputs.publish == 'true'
         env:
           IMAGE: ghcr.io/hipotures/homestack-otel:${{ steps.tag.outputs.tag }}
         run: docker push "$IMAGE"
@@ -210,6 +233,9 @@ jobs:
   usage-image:
     needs: check
     if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref_type == 'tag' && startsWith(github.ref_name, 'ai-usage-'))
+    concurrency:
+      group: usage-image-${{ github.event_name == 'workflow_dispatch' && github.sha || github.ref_name }}
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -233,27 +259,26 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Refuse an existing image tag
+      - name: Admit immutable image publication
+        id: publication
         env:
           IMAGE: ghcr.io/hipotures/homestack-ai-usage:${{ steps.tag.outputs.tag }}
-        run: |
-          if docker manifest inspect "$IMAGE" >/tmp/usage-manifest.json 2>/tmp/usage-manifest-error; then
-            echo "Image already exists: $IMAGE" >&2
-            exit 1
-          fi
-          grep -Eqi 'manifest unknown|no such manifest|not found' /tmp/usage-manifest-error || {
-            cat /tmp/usage-manifest-error >&2
-            exit 1
-          }
+          REVISION: ${{ github.sha }}
+          VERSION: ${{ steps.tag.outputs.tag }}
+          EVENT: ${{ github.event_name }}
+        run: scripts/image-admission.sh "$IMAGE" "$REVISION" "$VERSION" "$EVENT"
       - name: Install Rust 1.99.0 for musl
+        if: steps.publication.outputs.publish == 'true'
         run: |
           sudo apt-get install -y --no-install-recommends musl-tools
           rustup toolchain install 1.99.0 --profile minimal --target x86_64-unknown-linux-musl
           rustup default 1.99.0
       - uses: Swatinem/rust-cache@v2.9.2
+        if: steps.publication.outputs.publish == 'true'
         with:
           key: musl-usage
       - name: Build the server
+        if: steps.publication.outputs.publish == 'true'
         env:
           RUSTFLAGS: "-C target-feature=+crt-static"
           HOMESTACK_USAGE_VERSION: ${{ steps.tag.outputs.tag }}
@@ -263,6 +288,7 @@ jobs:
           mkdir -p image
           cp target/x86_64-unknown-linux-musl/release/homestack-usage image/
       - uses: docker/build-push-action@v6.18.0
+        if: steps.publication.outputs.publish == 'true'
         with:
           platforms: linux/amd64
           provenance: false
@@ -271,10 +297,12 @@ jobs:
           load: true
           tags: ghcr.io/hipotures/homestack-ai-usage:${{ steps.tag.outputs.tag }}
           labels: |
+            org.opencontainers.image.title=homestack-ai-usage
             org.opencontainers.image.source=https://github.com/hipotures/homestack
             org.opencontainers.image.version=${{ steps.tag.outputs.tag }}
             org.opencontainers.image.revision=${{ github.sha }}
       - name: Validate the built image before publication
+        if: steps.publication.outputs.publish == 'true'
         env:
           IMAGE: ghcr.io/hipotures/homestack-ai-usage:${{ steps.tag.outputs.tag }}
         run: |
@@ -287,6 +315,7 @@ jobs:
           docker stats --no-stream usage
           docker image inspect --format '{{.Size}}' "$IMAGE"
       - name: Publish the validated image
+        if: steps.publication.outputs.publish == 'true'
         env:
           IMAGE: ghcr.io/hipotures/homestack-ai-usage:${{ steps.tag.outputs.tag }}
         run: docker push "$IMAGE"
