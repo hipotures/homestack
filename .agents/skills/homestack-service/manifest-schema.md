@@ -89,6 +89,7 @@ until the manifest is fixed. Unknown keys are never ignored silently.
 | `exposure.pangolin.port` | string | yes | name of an entry in `runtime.ports` |
 | `exposure.pangolin.name` | string | yes | Pangolin resource name, 1–64 characters |
 | `exposure.pangolin.subdomain` | string | yes | DNS label `^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`; the domain is chosen at deployment |
+| `exposure.pangolin.bypass_paths` | list of strings | no | at most 16 unique Pangolin path patterns starting with `/` (e.g. `/mcp/*`) reachable without Pangolin login |
 
 A **size** is a string of a positive decimal integer followed by `M` (MiB) or
 `G` (GiB), e.g. `256M`, `2G`. No bare numbers, fractions or other units.
@@ -136,7 +137,11 @@ towards `instances` and get their own empty home volume.
 With `exposure.pangolin`, HomeStack creates one Pangolin HTTP resource named
 `name` at `<subdomain>.<domain>`, pointing at the declared port of every
 instance, with the healthcheck as the resource's health check. The telemetry
-path `/.well-known/homestack/status` is never routed publicly.
+path `/.well-known/homestack/status` is never routed publicly. Each
+`bypass_paths` pattern becomes a Pangolin `ACCEPT`/`PATH` rule on the
+resource's own policy, and rule evaluation is turned on; Publish reviews only
+the rules still missing. The service itself must authenticate those paths,
+for example with a generated `key` input.
 
 ## Image versions
 
@@ -287,9 +292,9 @@ at most 64 fields. Each field accepts exactly:
 | --- | --- |
 | `id` | Unique application ID: lowercase letter, then lowercase letters, digits, `_` or `-`, maximum 64 characters |
 | `label`, `description` | Required nonempty display label; optional printable description |
-| `type` | `string`, `integer`, `number`, `boolean`, `url`, `enum` (alias `select`), or protected-only `secret` (alias `password`) |
+| `type` | `string`, `integer`, `number`, `boolean`, `url`, `enum` (alias `select`), `key`, or protected-only `secret` (alias `password`) |
 | `required` | Boolean, default false |
-| `default` | Optional value of the declared type; secret defaults are forbidden |
+| `default` | Optional value of the declared type; secret and key defaults are forbidden |
 | `min`, `max` | Numeric bounds, for integer/number only |
 | `min_length`, `max_length`, `regex` | Text constraints; regex uses Rust regex syntax |
 | `choices` | Required nonempty unique string list for enum only |
@@ -304,6 +309,17 @@ IDs or targets, inverted/inapplicable constraints and unresolved required
 values are errors. Secret/password delivery is deliberately refused until
 a protected runtime secret mechanism exists; it never falls back to plain
 PVE environment. Do not disguise credentials as ordinary string inputs.
+
+A `key` input is a random access key the operator never types: it must be
+`required`, has no text constraints and targets an environment variable,
+whose name may look secret (e.g. `HOMESTACK_ACCESS_KEY`). In the deployment
+form Enter generates 64 hex characters; replacing an existing key needs a
+second Enter after a warning, because URLs carrying it stop working. It is
+stored with the other operator selections and injected on every deployment,
+update and container replacement, so it stays stable. It is visible in the
+container's PVE environment; use it only for URL-path or bearer keys whose
+exposure to Proxmox administrators is acceptable. Services accept 32–256
+characters of `A-Z`, `a-z`, `0-9`, `-` and `_`.
 
 Environment delivery is `target: {type: environment, variable: APP_SETTING}`.
 Names are unique ASCII environment identifiers. Values are serialized as
@@ -326,7 +342,7 @@ controls. Actual operator selections are atomically stored in owner-only
 JSON files under the active XDG HomeStack profile's `services/` directory
 (normally `$XDG_CONFIG_HOME/homestack/services/`). Names are hashes of source
 repository, service ID, deployment hostname and domain. Files contain typed
-nonsecret values and the combined source revision. Directory/file modes are
+nonsecret values, generated keys and the combined source revision. Directory/file modes are
 0700/0600. Missing or invalid configuration for existing instances is an
 explicit error: restore the private file before maintenance or update.
 Do not commit these files or copy their values into PVE descriptions or logs.

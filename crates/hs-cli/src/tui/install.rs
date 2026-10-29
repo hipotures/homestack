@@ -74,6 +74,10 @@ impl Mark {
 /// Checks a typed value; the error says what is expected.
 pub type Check = fn(&str) -> Result<(), String>;
 
+/// The warning a second Enter confirms in a generated key's box.
+const REPLACE_KEY: &str = "Replace this key? Every saved URL or client using it stops working. \
+                           Enter replaces it, Esc keeps it.";
+
 /// One setting and its choices (`value`, what tells it apart).
 #[derive(Debug, Clone)]
 pub struct Setting {
@@ -1059,6 +1063,30 @@ impl Install {
                     if Self::edit_text(typed, &mut self.text_caret, code) {
                         self.invalid = None;
                     }
+                }
+            }
+            return (false, None);
+        }
+        // A key is generated, never typed; replacing one asks first, since
+        // URLs that carry it stop working.
+        if setting
+            .application_input
+            .as_ref()
+            .is_some_and(|input| input.kind == crate::services::schema3::Kind::Key)
+        {
+            if code == KeyCode::Enter {
+                let current = setting.text.as_deref().unwrap_or_default();
+                if current.is_empty() || self.invalid.as_deref() == Some(REPLACE_KEY) {
+                    match crate::services::schema3::generate_key() {
+                        Ok(key) => {
+                            self.text_caret = key.len();
+                            setting.text = Some(key);
+                            self.end_edit(true);
+                        }
+                        Err(error) => self.invalid = Some(error),
+                    }
+                } else {
+                    self.invalid = Some(REPLACE_KEY.into());
                 }
             }
             return (false, None);

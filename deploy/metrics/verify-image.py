@@ -21,6 +21,7 @@ from mcp.shared.exceptions import MCPError
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 
+ACCESS_KEY = "verify-image-access-key-0123456789abcdef"
 EXPECTED = {
     "prometheus_query", "prometheus_query_range", "prometheus_series",
     "prometheus_label_names", "prometheus_label_values", "prometheus_metadata",
@@ -88,7 +89,7 @@ def free_port():
 
 
 async def protocol(base):
-    async with streamable_http_client(base + "/mcp") as (read, write):
+    async with streamable_http_client(base + "/mcp/" + ACCESS_KEY) as (read, write):
         async with ClientSession(read, write) as session:
             initialized = await session.initialize()
             assert initialized.server_info.name == "metrics"
@@ -156,7 +157,7 @@ def main():
     threading.Thread(target=fixture.serve_forever, daemon=True).start()
     port = free_port()
     base = f"http://127.0.0.1:{port}"
-    env = {"HOMESTACK_PROMETHEUS_URL": f"http://127.0.0.1:{fixture.server_port}/ignored?ignored=yes#ignored", "HOMESTACK_HEARTBEAT_SECONDS": "1", "HOMESTACK_LISTEN": f"127.0.0.1:{port}"}
+    env = {"HOMESTACK_ACCESS_KEY": ACCESS_KEY, "HOMESTACK_PROMETHEUS_URL": f"http://127.0.0.1:{fixture.server_port}/ignored?ignored=yes#ignored", "HOMESTACK_HEARTBEAT_SECONDS": "1", "HOMESTACK_LISTEN": f"127.0.0.1:{port}"}
     process = None
     container = None
     try:

@@ -10,3 +10,11 @@ inputs:
     target:
       type: environment
       variable: HOMESTACK_PROMETHEUS_URL
+  - id: access_key
+    label: Access key
+    description: Generated once and kept locally; MCP is served only at /mcp/<key>, so changing it breaks saved client URLs.
+    type: key
+    required: true
+    target:
+      type: environment
+      variable: HOMESTACK_ACCESS_KEY

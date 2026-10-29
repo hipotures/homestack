@@ -16,9 +16,10 @@ runtime:
     heartbeat_seconds: 60
 # Stateless read-only MCP proxy; no response cache.
 persistence: {}
-# Pangolin supplies external TLS and authentication.
+# Pangolin supplies external TLS; only the key-protected MCP path skips its login.
 exposure:
   pangolin:
     port: http
     name: Metrics
     subdomain: metrics
+    bypass_paths: ["/mcp/*"]

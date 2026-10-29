@@ -2,13 +2,15 @@
 
 Metrics is a standalone, stateless, read-only Prometheus MCP service. Any MCP
 client can discover metrics, labels and series, then construct arbitrary PromQL.
-There is no UI, persistent storage, response cache or application authentication.
+There is no UI, persistent storage or response cache. MCP is reachable only at
+`/mcp/<access key>`; the key in the path is the only MCP authentication.
 It is independent of AI Usage and has no agent-specific metric interpretation.
 
 The official Rust MCP SDK (`rmcp` 3.8) serves **stateless Streamable HTTP** at
-`/mcp`, with JSON responses for ordinary request/response calls. MCP clients
+`/mcp/<access key>`, with JSON responses for ordinary request/response calls. MCP clients
 initialize the connection and discover descriptions and JSON input schemas using
-`tools/list`. Legacy HTTP+SSE transport is not used. `GET /` returns 404.
+`tools/list`. Legacy HTTP+SSE transport is not used. `GET /`, bare `/mcp` and
+any path with a wrong key return 404.
 
 | Tool | Fixed upstream endpoint | Inputs |
 | --- | --- | --- |
@@ -39,14 +41,20 @@ parameters. Label path segments are validated before constructing the URL.
 
 The schema-3 service lives in `.homestack/services/metrics/`. HomeStack supplies
 required `HOMESTACK_PROMETHEUS_URL`, an HTTP URL with a host and no credentials.
-Its path, query and fragment are ignored. Redirects and environment proxies are
+Its path, query and fragment are ignored. HomeStack also supplies required
+`HOMESTACK_ACCESS_KEY` (32..256 characters of `A-Z`, `a-z`, `0-9`, `-`, `_`). The
+deployment TUI generates it once, keeps it in the operator's local configuration
+and injects it into every container, so the MCP URL survives replacement. The
+service never logs request paths. Redirects and environment proxies are
 disabled. The service listens on `0.0.0.0:80` by default; `HOMESTACK_LISTEN` can
 override this for local diagnostics. It logs to stderr and writes no state.
 
-There is no TLS inside the container. Pangolin is expected to terminate external
-TLS and provide external authentication separately, forwarding `/mcp` from the
-`metrics` subdomain to port 80. Do not route `/.well-known/homestack/status`
-publicly. No credentials or private domains belong in these manifests. The server
+There is no TLS inside the container. Pangolin terminates external TLS and
+forwards the `metrics` subdomain to port 80. Its manifest bypasses Pangolin login
+only for `/mcp/*`, so MCP clients such as ChatGPT connectors (no authentication
+mode) use `https://metrics.<domain>/mcp/<access key>`; LAN clients use the same
+path. Health and `/.well-known/homestack/status` stay unauthenticated locally and
+behind Pangolin login externally. No credentials or private domains belong in these manifests. The server
 accepts operator-selected Host names and rejects browser Origin headers; native
 MCP clients and server-side MCP Inspector connections need no browser session.
 

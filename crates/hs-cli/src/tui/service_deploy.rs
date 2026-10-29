@@ -455,6 +455,9 @@ fn connect(
                     "Protected secret delivery is not configured".into(),
                 )];
             }
+            if input.kind == crate::services::schema3::Kind::Key {
+                row.hint = Some("none: Enter generates".into());
+            }
 
             if matches!(
                 input.kind,

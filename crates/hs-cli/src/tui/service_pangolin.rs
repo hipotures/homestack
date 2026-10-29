@@ -1,5 +1,6 @@
 //! Publish a service through Pangolin: find or create the HTTP resource its
-//! manifest names and point the resource's backend target at one instance.
+//! manifest names, point the resource's backend target at one instance and
+//! add the manifest's login-bypass path rules.
 //! This reads Proxmox and changes only Pangolin routing through Step 7.
 
 use std::sync::atomic::AtomicBool;
@@ -67,6 +68,17 @@ pub(super) struct Plan {
     site: Site,
     previous: Option<Target>,
     body: Value,
+    bypass_paths: Vec<String>,
+    bypass: Bypass,
+}
+
+/// What the resource lacks of the manifest's login bypass: path rules to add
+/// (from `priority` on) and whether its rule evaluation is still off.
+#[derive(Default, PartialEq)]
+struct Bypass {
+    missing: Vec<String>,
+    enable: bool,
+    priority: i64,
 }
 
 #[derive(PartialEq)]
@@ -297,6 +309,63 @@ impl<'a> Api<'a> {
         Ok(())
     }
 
+    /// The bypass rules `paths` still need on `resource`; all of them for one
+    /// not created yet. Only the resource's own (inline) policy is changed.
+    fn bypass(&self, resource: Option<u64>, paths: &[String]) -> Result<Bypass, String> {
+        if paths.is_empty() {
+            return Ok(Bypass::default());
+        }
+        let Some(resource) = resource else {
+            return Ok(Bypass {
+                missing: paths.to_vec(),
+                enable: true,
+                priority: 1,
+            });
+        };
+        let row = self.get(&format!("/v1/resource/{resource}"))?;
+        if !row["resourcePolicyId"].is_null() {
+            return Err("The resource uses a shared Pangolin policy; add its bypass rules there".to_owned());
+        }
+        let listed = self.get(&format!("/v1/resource/{resource}/rules?limit=1000"))?;
+        let rules = listed["rules"].as_array().ok_or("Unexpected Pangolin rule listing")?;
+        let present = |path: &String| {
+            rules.iter().any(|rule| {
+                rule["action"] == "ACCEPT"
+                    && rule["match"] == "PATH"
+                    && rule["value"] == path.as_str()
+                    && rule["enabled"] == true
+            })
+        };
+        Ok(Bypass {
+            missing: paths.iter().filter(|path| !present(path)).cloned().collect(),
+            enable: row["applyRules"] != true,
+            priority: rules
+                .iter()
+                .filter_map(|rule| rule["priority"].as_i64())
+                .max()
+                .unwrap_or(0)
+                + 1,
+        })
+    }
+
+    /// One mutation, never retried: a lost response may still mean it was applied.
+    fn mutate(&self, method: &str, path: &str, body: &Value) -> Result<(), String> {
+        let (status, response) = self
+            .client()
+            .request(method, path, Some(&body.to_string()), Probe::Organization)
+            .map_err(|_| format!("Pangolin {method} {path} outcome is unknown; refresh before retrying"))?;
+        let accepted = serde_json::from_slice::<Value>(&response)
+            .ok()
+            .is_some_and(|v| v["success"] == true);
+        if ![200, 201].contains(&status) || !accepted {
+            return Err(match status {
+                403 => format!("The HomeStack key may not {method} {path}; refresh Step 7"),
+                _ => format!("Pangolin did not confirm {method} {path} (HTTP {status}); refresh before retrying"),
+            });
+        }
+        Ok(())
+    }
+
     /// Multiple targets require an explicit routing design; never replace them implicitly.
     fn target(&self, resource: u64) -> Result<Option<Target>, String> {
         let rows = self
@@ -462,6 +531,7 @@ pub(super) fn review(
         Some(resource) => api.target(resource.id)?,
         None => None,
     };
+    let bypass = api.bypass(resource.as_ref().map(|r| r.id), &exposure.bypass_paths)?;
     let create = resource.is_none().then(|| {
         json!({
             "name": exposure.name,
@@ -524,6 +594,8 @@ pub(super) fn review(
         site,
         previous,
         body,
+        bypass_paths: exposure.bypass_paths.clone(),
+        bypass,
     })
 }
 
@@ -533,14 +605,21 @@ impl Plan {
         &self.domain
     }
 
+    fn target_unchanged(&self) -> bool {
+        self.previous.as_ref().is_some_and(|target| target.body == self.body)
+    }
+
     pub(super) fn lines(&self) -> Vec<String> {
-        vec![
+        let mut lines = vec![
             format!(
                 "https://{} → Site {} (ID {}) → http://{}:{} · CT {} on {}",
                 self.domain, self.site.name, self.site.id, self.address, self.body["port"], self.ctid, self.node
             ),
             match (&self.resource, &self.previous) {
                 (None, _) => "Create the resource with Pangolin's default access policy (Pangolin login)".to_owned(),
+                (Some(_), Some(target)) if self.target_unchanged() => {
+                    format!("Backend target {} unchanged", target.id)
+                }
                 (Some(_), Some(target)) => format!("Update existing backend target {}", target.id),
                 (Some(_), None) => "Create the missing backend target".to_owned(),
             },
@@ -551,8 +630,21 @@ impl Plan {
                 self.body["hcPath"].as_str().unwrap_or_default(),
                 self.body["hcStatus"]
             ),
-            "Access policies of an existing resource, the container, disks and /home/app are preserved.".to_owned(),
-        ]
+        ];
+        lines.extend(
+            self.bypass
+                .missing
+                .iter()
+                .map(|path| format!("Add rule: {path} bypasses Pangolin login")),
+        );
+        if self.bypass.enable {
+            lines.push("Turn on rule evaluation for the resource".to_owned());
+        }
+        lines.push(
+            "Other access policies of an existing resource, the container, disks and /home/app are preserved."
+                .to_owned(),
+        );
+        lines
     }
 }
 
@@ -621,41 +713,69 @@ pub(super) async fn apply(
             }
             (None, None) => return Err("The reviewed plan has no resource".to_owned()),
         };
-        let (method, path) = match &plan.previous {
-            Some(target) => ("POST", format!("/v1/target/{}", target.id)),
-            None => ("PUT", format!("/v1/resource/{resource}/target")),
-        };
-        let body = plan.body.to_string();
-        let (status, response) = api
-            .client()
-            .request(method, &path, Some(&body), Probe::Organization)
-            .map_err(|_| {
-                "Pangolin save outcome is unknown. Refresh routing before retrying; the container is unchanged"
-                    .to_owned()
-            })?;
-        let accepted = serde_json::from_slice::<Value>(&response)
-            .ok()
-            .is_some_and(|v| v["success"] == true && v["error"] == false);
-        if ![200, 201].contains(&status) || !accepted {
-            return Err(format!(
-                "Pangolin did not confirm saving the target (HTTP {status}). Refresh before retrying; the container is unchanged"
-            ));
+        let bypass = api.bypass(Some(resource), &plan.bypass_paths)?;
+        if plan.resource.is_some() && bypass != plan.bypass {
+            return Err("Pangolin rules changed since review; review again".to_owned());
         }
-        let saved = api
-            .target(resource)?
-            .ok_or("Pangolin did not return the saved target; refresh before retrying")?;
-        if plan.previous.as_ref().is_some_and(|old| old.id != saved.id)
-            || plan
-                .body
-                .as_object()
-                .is_none_or(|expected| expected.iter().any(|(key, value)| saved.body.get(key) != Some(value)))
-        {
-            return Err("Saved Pangolin target does not match the review; inspect routing before retrying".to_owned());
+        if !plan.target_unchanged() {
+            save_target(&api, plan, resource)?;
         }
         lines.push(format!(
             "https://{} routed through {} to {}:{}; container and /home/app preserved",
             plan.domain, plan.site.name, plan.address, plan.body["port"]
         ));
+        for (path, priority) in bypass.missing.iter().zip(bypass.priority..) {
+            let rule =
+                json!({"action": "ACCEPT", "match": "PATH", "value": path, "priority": priority, "enabled": true});
+            api.mutate("PUT", &format!("/v1/resource/{resource}/rule"), &rule)?;
+            lines.push(format!("{path} bypasses Pangolin login"));
+        }
+        if bypass.enable {
+            api.mutate(
+                "POST",
+                &format!("/v1/resource/{resource}"),
+                &json!({"applyRules": true}),
+            )?;
+            lines.push("Rule evaluation turned on".to_owned());
+        }
+        if api.bypass(Some(resource), &plan.bypass_paths)? != Bypass::default() {
+            return Err("Saved Pangolin rules do not match the review; inspect the resource rules".to_owned());
+        }
         Ok(lines)
     })
+}
+
+/// Create or update the backend target, then verify it reads back as reviewed.
+fn save_target(api: &Api, plan: &Plan, resource: u64) -> Result<(), String> {
+    let (method, path) = match &plan.previous {
+        Some(target) => ("POST", format!("/v1/target/{}", target.id)),
+        None => ("PUT", format!("/v1/resource/{resource}/target")),
+    };
+    let body = plan.body.to_string();
+    let (status, response) = api
+        .client()
+        .request(method, &path, Some(&body), Probe::Organization)
+        .map_err(|_| {
+            "Pangolin save outcome is unknown. Refresh routing before retrying; the container is unchanged".to_owned()
+        })?;
+    let accepted = serde_json::from_slice::<Value>(&response)
+        .ok()
+        .is_some_and(|v| v["success"] == true && v["error"] == false);
+    if ![200, 201].contains(&status) || !accepted {
+        return Err(format!(
+            "Pangolin did not confirm saving the target (HTTP {status}). Refresh before retrying; the container is unchanged"
+        ));
+    }
+    let saved = api
+        .target(resource)?
+        .ok_or("Pangolin did not return the saved target; refresh before retrying")?;
+    if plan.previous.as_ref().is_some_and(|old| old.id != saved.id)
+        || plan
+            .body
+            .as_object()
+            .is_none_or(|expected| expected.iter().any(|(key, value)| saved.body.get(key) != Some(value)))
+    {
+        return Err("Saved Pangolin target does not match the review; inspect routing before retrying".to_owned());
+    }
+    Ok(())
 }

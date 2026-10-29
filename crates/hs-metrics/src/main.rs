@@ -1,4 +1,5 @@
-//! Stateless, generic read-only Prometheus MCP service. No UI or authentication.
+//! Stateless, generic read-only Prometheus MCP service. No UI; MCP is served only
+//! below a secret access-key path.
 mod prometheus;
 mod tools;
 
@@ -40,10 +41,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if !(1..=3600).contains(&seconds) {
         return Err("HOMESTACK_HEARTBEAT_SECONDS must be 1..3600".into());
     }
+    let key = std::env::var("HOMESTACK_ACCESS_KEY").map_err(|_| "HOMESTACK_ACCESS_KEY is required")?;
+    if !(32..=256).contains(&key.len()) || !key.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_') {
+        return Err("HOMESTACK_ACCESS_KEY must be 32..256 characters of A-Z, a-z, 0-9, '-' or '_'".into());
+    }
     let heartbeat = Arc::new(Heartbeat::new(Duration::from_secs(seconds)));
     let handler = tools::Metrics::new(upstream);
-    // Hosts are operator-selected (LAN and Pangolin). Browser Origins are denied;
-    // Pangolin owns external authentication. No CORS or browser session support.
+    // Hosts are operator-selected (LAN and Pangolin). Browser Origins are denied.
+    // The access key in the path is the only MCP authentication, on LAN and through
+    // Pangolin alike; every other path, including bare /mcp, is 404. No CORS.
     let mut config = StreamableHttpServerConfig::default()
         .with_legacy_session_mode(false)
         .with_json_response(true)
@@ -56,7 +62,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         config,
     );
     let app = Router::new()
-        .nest_service("/mcp", mcp)
+        .nest_service(&format!("/mcp/{key}"), mcp)
         .route("/health/live", get(health))
         .route("/health/ready", get(health))
         .route(PROBE_PATH, get(|| async { StatusCode::NO_CONTENT }))

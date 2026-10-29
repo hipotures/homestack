@@ -55,6 +55,8 @@ pub enum Kind {
     Enum,
     #[serde(alias = "password")]
     Secret,
+    /// A random access key HomeStack generates once and keeps locally; never typed.
+    Key,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -311,7 +313,7 @@ impl Input {
             Kind::Integer if !(value.is_i64() || value.is_u64()) => return fail("expected an integer"),
             Kind::Number if !value.is_number() => return fail("expected a finite number"),
             Kind::Boolean if !value.is_boolean() => return fail("expected true or false"),
-            Kind::String | Kind::Url | Kind::Enum | Kind::Secret if !value.is_string() => {
+            Kind::String | Kind::Url | Kind::Enum | Kind::Secret | Kind::Key if !value.is_string() => {
                 return fail("expected a string");
             }
             _ => {}
@@ -357,6 +359,9 @@ impl Input {
                 || self.max_length.is_some_and(|max| len > max)
             {
                 return fail("outside the declared length bounds");
+            }
+            if self.kind == Kind::Key && !key(text) {
+                return fail("expected a generated access key; generate one");
             }
             if self.kind == Kind::Enum && !self.choices.iter().any(|v| v == text) {
                 return fail("choose a declared value");
@@ -463,16 +468,26 @@ impl Contract {
             if input.regex.as_ref().is_some_and(|r| regex::Regex::new(r).is_err()) {
                 return fail("invalid regex");
             }
+            if input.kind == Kind::Key
+                && (!input.required
+                    || input.regex.is_some()
+                    || input.min_length.is_some()
+                    || input.max_length.is_some()
+                    || !matches!(input.target, Target::Environment { .. }))
+            {
+                return fail("a key is required, without text constraints, and targets an environment variable");
+            }
             if let Some(value) = &input.default {
-                if input.kind == Kind::Secret {
-                    return fail("secret defaults are forbidden");
+                if matches!(input.kind, Kind::Secret | Kind::Key) {
+                    return fail("secret and key defaults are forbidden");
                 }
                 input.validate_value(value)?;
             }
             let target = match &input.target {
                 Target::Environment { variable } => {
                     if !environment_name(variable)
-                        || (super::deploy::secret_name(&variable.to_ascii_uppercase()) && input.kind != Kind::Secret)
+                        || (super::deploy::secret_name(&variable.to_ascii_uppercase())
+                            && !matches!(input.kind, Kind::Secret | Kind::Key))
                     {
                         return fail("invalid environment variable");
                     }
@@ -609,6 +624,24 @@ impl Contract {
         validate_environment(&environment)?;
         Ok(environment)
     }
+}
+
+/// A new access key: 32 random bytes as 64 lowercase hex characters.
+pub fn generate_key() -> Result<String, String> {
+    use std::io::Read;
+    let mut bytes = [0u8; 32];
+    std::fs::File::open("/dev/urandom")
+        .and_then(|mut random| random.read_exact(&mut bytes))
+        .map_err(|e| format!("Cannot generate an access key: {e}"))?;
+    Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
+}
+
+/// What services accept as a key: 32..256 URL path-safe characters.
+fn key(text: &str) -> bool {
+    (32..=256).contains(&text.len())
+        && text
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
 }
 
 pub fn display(value: &Value) -> String {

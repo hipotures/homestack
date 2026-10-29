@@ -121,6 +121,8 @@ pub struct Pangolin {
     pub port: String,
     pub name: String,
     pub subdomain: String,
+    /// Pangolin path patterns reachable without Pangolin login.
+    pub bypass_paths: Vec<String>,
 }
 
 /// A problem at `path` (field names and list indexes from the top).
@@ -720,7 +722,7 @@ fn exposure_of(check: &mut Check, value: &Yaml, runtime: Option<&Runtime>) -> Op
     let fields = check.mapping(value, &path, &["pangolin"])?;
     let path = at(&path, "pangolin");
     let pangolin = check.required(fields, &["exposure".to_owned()], "pangolin")?;
-    let fields = check.mapping(pangolin, &path, &["port", "name", "subdomain"])?;
+    let fields = check.mapping(pangolin, &path, &["port", "name", "subdomain", "bypass_paths"])?;
     let port = check
         .required(fields, &path, "port")
         .and_then(|value| check.string(value, &at(&path, "port")));
@@ -746,9 +748,31 @@ fn exposure_of(check: &mut Check, value: &Yaml, runtime: Option<&Runtime>) -> Op
     if subdomain.as_ref().is_some_and(|subdomain| !valid_subdomain(subdomain)) {
         check.fail(&at(&path, "subdomain"), "expected a DNS label: a-z, 0-9 and inner -");
     }
+    let mut bypass_paths = Vec::new();
+    if let Some(value) = field(fields, "bypass_paths") {
+        let list_path = at(&path, "bypass_paths");
+        for (index, item) in check.list(value, &list_path).unwrap_or_default().iter().enumerate() {
+            let item_path = at(&list_path, &index.to_string());
+            let Some(pattern) = check.string(item, &item_path) else {
+                continue;
+            };
+            if !pattern.starts_with('/')
+                || pattern.len() > 256
+                || pattern.chars().any(|c| c.is_control() || c.is_whitespace())
+                || bypass_paths.contains(&pattern)
+            {
+                check.fail(&item_path, "expected a unique path pattern starting with /");
+            }
+            bypass_paths.push(pattern);
+        }
+        if bypass_paths.len() > 16 {
+            check.fail(&list_path, "at most 16 paths");
+        }
+    }
     Some(Some(Pangolin {
         port: port?,
         name: name?,
         subdomain: subdomain?,
+        bypass_paths,
     }))
 }
