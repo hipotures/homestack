@@ -1,0 +1,9 @@
+# The context holds the static homestack-metrics binary built by CI
+# (.github/workflows/ci.yml). Proxmox detects Alpine and configures hosts
+# and resolver files, so the Prometheus host name resolves.
+FROM docker.io/library/alpine:3.24.2@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6
+COPY --chmod=0755 homestack-metrics /usr/local/bin/homestack-metrics
+# Port 80 needs root; the unprivileged LXC maps it to an unprivileged host user.
+ENV HOMESTACK_LISTEN=0.0.0.0:80
+EXPOSE 80
+ENTRYPOINT ["/usr/local/bin/homestack-metrics"]

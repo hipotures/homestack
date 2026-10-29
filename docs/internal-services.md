@@ -1,4 +1,10 @@
-# Internal services: API and Pangolin Site
+# Internal services: API, Pangolin Site and Metrics
+
+Metrics is the standalone generic read-only Prometheus MCP service, exposed at
+`/mcp` with tools discovered through `tools/list`. Its schema-3 manifest requires
+`HOMESTACK_PROMETHEUS_URL`, uses no persistence, and relies on Pangolin for
+external TLS/authentication. See [Metrics](../deploy/metrics/README.md) for the
+read-only API boundary, resources, transport, and independent image releases.
 
 The repository declares two portable schema-1 services:
 `.homestack/homestack-api.yaml` and `.homestack/pangolin-site.yaml`.

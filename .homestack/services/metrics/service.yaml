@@ -1,0 +1,24 @@
+schema: 3
+id: metrics
+name: Metrics
+image:
+  repository: ghcr.io/hipotures/homestack-metrics
+runtime:
+  ports:
+    - name: http
+      port: 80
+      protocol: tcp
+  healthcheck:
+    type: http
+    port: http
+    path: /health/ready
+    expected_status: 200
+    heartbeat_seconds: 60
+# Stateless read-only MCP proxy; no response cache.
+persistence: {}
+# Pangolin supplies external TLS and authentication.
+exposure:
+  pangolin:
+    port: http
+    name: Metrics
+    subdomain: metrics

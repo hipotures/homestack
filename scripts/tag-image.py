@@ -14,7 +14,7 @@ def git(*args):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--service", choices=["pangolin", "otel", "ai-usage"], default="pangolin")
+    parser.add_argument("--service", choices=["pangolin", "otel", "ai-usage", "metrics"], default="pangolin")
     parser.add_argument("--dry-run", action="store_true", help="fetch tags and show the next release without publishing")
     args = parser.parse_args()
     version_pattern = re.compile(rf"{args.service}-(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", re.ASCII)

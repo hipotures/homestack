@@ -109,6 +109,7 @@ pub fn image_publication(
         "pangolin" => "pangolin-",
         "otel" => "otel-",
         "ai-usage" => "ai-usage-",
+        "metrics" => "metrics-",
         _ => return Ok(None),
     };
     let base = format!("repos/{repository}");

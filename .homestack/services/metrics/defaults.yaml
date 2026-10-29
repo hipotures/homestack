@@ -1,0 +1,13 @@
+schema: 3
+service: metrics
+# Async proxy with bounded in-flight responses; no persistent storage.
+resources:
+  cores: 1
+  memory: 256M
+  swap: 0M
+  rootfs: 64M
+deployment:
+  hostname: metrics
+  instances: 1
+  placement: single
+  state_model: stateless

@@ -1,0 +1,12 @@
+schema: 3
+service: metrics
+inputs:
+  - id: prometheus_url
+    label: Prometheus URL
+    description: HTTP base URL of Prometheus; path, query and fragment are ignored.
+    type: url
+    required: true
+    allowed_schemes: [http]
+    target:
+      type: environment
+      variable: HOMESTACK_PROMETHEUS_URL

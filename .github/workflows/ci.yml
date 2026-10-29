@@ -3,7 +3,7 @@ name: Checks and API release
 on:
   push:
     branches: ['**']
-    tags: ['[0-9]+.[0-9]+.[0-9]+', 'pangolin-[0-9]+.[0-9]+.[0-9]+', 'otel-[0-9]+.[0-9]+.[0-9]+', 'ai-usage-[0-9]+.[0-9]+.[0-9]+', 'pve-agent-[0-9]+.[0-9]+.[0-9]+']
+    tags: ['[0-9]+.[0-9]+.[0-9]+', 'pangolin-[0-9]+.[0-9]+.[0-9]+', 'otel-[0-9]+.[0-9]+.[0-9]+', 'ai-usage-[0-9]+.[0-9]+.[0-9]+', 'metrics-[0-9]+.[0-9]+.[0-9]+', 'pve-agent-[0-9]+.[0-9]+.[0-9]+']
   pull_request:
   workflow_dispatch:
 
@@ -41,7 +41,7 @@ jobs:
   # Publish immutable API releases, e.g. homestack-server:0.2.0.
   image:
     needs: check
-    if: github.event_name == 'push' && github.ref_type == 'tag' && !startsWith(github.ref_name, 'pangolin-') && !startsWith(github.ref_name, 'otel-') && !startsWith(github.ref_name, 'ai-usage-') && !startsWith(github.ref_name, 'pve-agent-')
+    if: github.event_name == 'push' && github.ref_type == 'tag' && !startsWith(github.ref_name, 'pangolin-') && !startsWith(github.ref_name, 'otel-') && !startsWith(github.ref_name, 'ai-usage-') && !startsWith(github.ref_name, 'metrics-') && !startsWith(github.ref_name, 'pve-agent-')
     concurrency:
       group: image-${{ github.event_name == 'workflow_dispatch' && github.sha || github.ref_name }}
       cancel-in-progress: false
@@ -318,6 +318,90 @@ jobs:
         if: steps.publication.outputs.publish == 'true'
         env:
           IMAGE: ghcr.io/hipotures/homestack-ai-usage:${{ steps.tag.outputs.tag }}
+        run: docker push "$IMAGE"
+
+  # Publish homestack-metrics:X.Y.Z from tag metrics-X.Y.Z.
+  metrics-image:
+    needs: check
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref_type == 'tag' && startsWith(github.ref_name, 'metrics-'))
+    concurrency:
+      group: metrics-image-${{ github.event_name == 'workflow_dispatch' && github.sha || github.ref_name }}
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+      - name: Image tag
+        id: tag
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          if [[ "${{ github.event_name }}" == workflow_dispatch ]]; then
+            echo "tag=dev-${{ github.sha }}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          [[ "$RELEASE_TAG" =~ ^metrics-((0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*))$ ]]
+          echo "tag=${BASH_REMATCH[1]}" >> "$GITHUB_OUTPUT"
+      - uses: docker/login-action@v3.4.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Admit immutable image publication
+        id: publication
+        env:
+          IMAGE: ghcr.io/hipotures/homestack-metrics:${{ steps.tag.outputs.tag }}
+          REVISION: ${{ github.sha }}
+          VERSION: ${{ steps.tag.outputs.tag }}
+          EVENT: ${{ github.event_name }}
+        run: scripts/image-admission.sh "$IMAGE" "$REVISION" "$VERSION" "$EVENT"
+      - name: Install Rust 1.99.0 for musl
+        if: steps.publication.outputs.publish == 'true'
+        run: |
+          sudo apt-get install -y --no-install-recommends musl-tools
+          rustup toolchain install 1.99.0 --profile minimal --target x86_64-unknown-linux-musl
+          rustup default 1.99.0
+      - uses: Swatinem/rust-cache@v2.9.2
+        if: steps.publication.outputs.publish == 'true'
+        with:
+          key: musl-metrics
+      - name: Build the server
+        if: steps.publication.outputs.publish == 'true'
+        env:
+          RUSTFLAGS: "-C target-feature=+crt-static"
+          HOMESTACK_METRICS_VERSION: ${{ steps.tag.outputs.tag }}
+        run: |
+          python3 scripts/cargo.py build --release --locked --target x86_64-unknown-linux-musl -p hs-metrics --bin homestack-metrics
+          ! readelf -l target/x86_64-unknown-linux-musl/release/homestack-metrics | grep -q INTERP
+          mkdir -p image
+          cp target/x86_64-unknown-linux-musl/release/homestack-metrics image/
+      - uses: docker/build-push-action@v6.18.0
+        if: steps.publication.outputs.publish == 'true'
+        with:
+          platforms: linux/amd64
+          provenance: false
+          context: image
+          file: deploy/metrics/Containerfile
+          load: true
+          tags: ghcr.io/hipotures/homestack-metrics:${{ steps.tag.outputs.tag }}
+          labels: |
+            org.opencontainers.image.title=homestack-metrics
+            org.opencontainers.image.source=https://github.com/hipotures/homestack
+            org.opencontainers.image.version=${{ steps.tag.outputs.tag }}
+            org.opencontainers.image.revision=${{ github.sha }}
+      - name: Validate the built image before publication
+        if: steps.publication.outputs.publish == 'true'
+        env:
+          IMAGE: ghcr.io/hipotures/homestack-metrics:${{ steps.tag.outputs.tag }}
+        run: uv run --no-project --with mcp==2.3.0 python deploy/metrics/verify-image.py "$IMAGE"
+      - name: Publish the validated image
+        if: steps.publication.outputs.publish == 'true'
+        env:
+          IMAGE: ghcr.io/hipotures/homestack-metrics:${{ steps.tag.outputs.tag }}
         run: docker push "$IMAGE"
 
   pve-agent-package:

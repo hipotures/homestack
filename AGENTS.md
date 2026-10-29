@@ -103,6 +103,12 @@ This future system is not yet specified. Do not build it, redesign E2E, create p
 - The Claude Code and Codex usage dashboard (`crates/hs-usage`, manifest `.homestack/services/ai-usage/`) has an independent release line: annotated Git tag `ai-usage-X.Y.Z` publishes `ghcr.io/hipotures/homestack-ai-usage:X.Y.Z` as a single `linux/amd64` image.
 - After building, verifying, committing and pushing a change to `crates/hs-usage/`, `deploy/ai-usage/` or a shared crate it uses, run `python3 scripts/tag-image.py --service ai-usage`. It automatically selects the next patch release, starting at `0.1.0`, and requires a clean, already pushed HEAD. Manifest-only changes need no image release.
 
+# Metrics image releases
+
+- Metrics (`crates/hs-metrics/`, `deploy/metrics/`) has an independent release line: annotated tag `metrics-X.Y.Z` publishes `ghcr.io/hipotures/homestack-metrics:X.Y.Z` as a single `linux/amd64` image.
+- After building, verifying, reviewing, committing and pushing image-affecting changes (including shared dependencies), run `python3 scripts/tag-image.py --service metrics`. It selects the next patch, starting at `0.1.0`, on clean, pushed HEAD. Never manually choose, move or overwrite tags/images.
+- Ordinary pushes run checks only. CI validates the image before publishing. Manifest-only and documentation-only changes need no image release.
+
 # PVE agent package releases
 
 - The standalone node agent (`crates/hs-pve-agent/`, `deploy/pve-agent/`) has an independent Debian package release line: annotated tag `pve-agent-X.Y.Z`. It does not publish an API or Collector image.
