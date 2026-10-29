@@ -204,7 +204,10 @@ impl Dashboard {
             let mut matchers = Vec::new();
             for (label, value) in [("host_name", &selection.host), ("project", &selection.project)] {
                 if value != "*" {
-                    matchers.push(format!("{label}=\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\"")));
+                    matchers.push(format!(
+                        "{label}=\"{}\"",
+                        value.replace('\\', "\\\\").replace('"', "\\\"")
+                    ));
                 }
             }
             let range = (global.range.start, global.range.partial_start, global.range.step);
@@ -236,7 +239,10 @@ impl Dashboard {
             .read(
                 "/api/v1/query_range",
                 vec![
-                    ("query".into(), format!("count(last_over_time({}[1d]))", registry::DISCOVERY)),
+                    (
+                        "query".into(),
+                        format!("count(last_over_time({}[1d]))", registry::DISCOVERY),
+                    ),
                     ("start".into(), (day - 599 * 86400).to_string()),
                     ("end".into(), (day + 86400).to_string()),
                     ("step".into(), "86400".into()),
@@ -487,15 +493,7 @@ fn agent_data(
             .into_iter()
             .map(|(name, points)| ((name, "estimated".into()), points))
             .collect();
-        let mut d = make(
-            agent,
-            "cost",
-            "USD",
-            selection,
-            range,
-            series(groups, "kind"),
-            true,
-        );
+        let mut d = make(agent, "cost", "USD", selection, range, series(groups, "kind"), true);
         if prices.is_none() || !missing.is_empty() {
             d.state = Availability::Partial;
             d.total = None;
@@ -640,7 +638,16 @@ fn summary_values(all: &[Dataset]) -> BTreeMap<String, Value> {
         values.insert(agent.to_owned(), json!(v));
     }
     let mut totals = BTreeMap::new();
-    for measurement in ["cost", "total", "input", "cached", "written", "output", "reasoning", "sessions"] {
+    for measurement in [
+        "cost",
+        "total",
+        "input",
+        "cached",
+        "written",
+        "output",
+        "reasoning",
+        "sessions",
+    ] {
         let available: Vec<f64> = values
             .values()
             .filter_map(|v| v.get(measurement).and_then(|v| v["value"].as_f64()))

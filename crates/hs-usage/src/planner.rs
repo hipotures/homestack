@@ -294,7 +294,10 @@ pub async fn quantiles(
     }
     // histogram_quantile reports the largest finite bound for quantiles above it.
     for q in ["p50", "p95"] {
-        let capped = value.get(q).and_then(serde_json::Value::as_f64).is_some_and(|v| top > 0. && v * 1000. >= top);
+        let capped = value
+            .get(q)
+            .and_then(serde_json::Value::as_f64)
+            .is_some_and(|v| top > 0. && v * 1000. >= top);
         value.insert(format!("{q}Capped"), capped.into());
     }
     // Closed buckets only; each point is stamped with its bucket start like the shared blocks.
