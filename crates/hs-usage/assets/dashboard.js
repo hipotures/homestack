@@ -2,7 +2,6 @@
 "use strict";
 (() => {
   const agents = {claude:"Claude Code", codex:"Codex"};
-  const colors = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#8867cc"];
   const widgets = new Map(), datasets = new Map();
   let selection, epoch = 0, snapshot, compare = false, lastPacket = 0, sourceAt = 0;
   let currentTheme = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
@@ -85,6 +84,8 @@
   function theme() {
     document.documentElement.dataset.theme=currentTheme;
     $("theme").textContent=currentTheme==="dark"?"☀ Light":"☾ Dark";
+    // Series colors are resolved from CSS tokens, so charts are redrawn after the theme rebuild.
+    AIUsage.refresh();
     for(const w of widgets.values())if(w.spec)draw(w);
   }
   function definitions() {
@@ -124,7 +125,7 @@
   function render(dirty) {
     if(dirty.has("all.summary"))renderSummary();
     const definitionsNow=definitions(),ids=new Set(definitionsNow.map(s=>s.id));
-    for(const [id,w]of widgets)if(!ids.has(id)){w.observer.disconnect();w.chart?.dispose();w.card.remove();widgets.delete(id);}
+    for(const [id,w]of widgets)if(!ids.has(id)){w.chart?.dispose();w.card.remove();widgets.delete(id);}
     for(const spec of definitionsNow) {
       let w=widgets.get(spec.id);
       if(!w){w=create(spec);widgets.set(spec.id,w);w.spec=spec;draw(w);}
@@ -140,7 +141,6 @@
     const w={card,head,note,copy,host:chartHost,emptyHost,tableHost,table:false,empty:false,spec,chart:null,updates:0};
     toggle.onclick=()=>{w.table=!w.table;toggle.textContent=w.table?"chart":"table";draw(w);if(!w.table&&!w.empty)w.chart?.resize();};
     copy.onclick=()=>copyCharts(copy,[w.spec]);
-    w.observer=new ResizeObserver(()=>{if(!w.table&&!w.empty&&!compare)w.chart?.resize();});w.observer.observe(chartHost);
     return w;
   }
   function draw(w) {
@@ -158,19 +158,20 @@
     w.tableHost.hidden=!w.table;
     if(w.table){renderTable(w);return;}
     if(w.empty)return;
-    if(!w.chart)w.chart=echarts.init(w.host,null,{renderer:"canvas"});
-    const css=getComputedStyle(document.documentElement),ink=css.getPropertyValue("--ink").trim(),grid=css.getPropertyValue("--grid").trim();
+    if(!w.chart)w.chart=AIUsage.init(w.host);
     let option;
     if(spec.heat) {
       const cells=new Map();for(const s of spec.series)for(const [t,v]of s.points){const d=new Date(t*1000),key=`${(d.getDay()+6)%7},${d.getHours()}`;cells.set(key,(cells.get(key)||0)+v);}
       const data=[...cells].map(([key,v])=>{const [day,hour]=key.split(',').map(Number);return [hour,day,v];});
-      option={tooltip:{position:"top"},grid:{left:12,right:16,top:16,bottom:74,containLabel:true},xAxis:{type:"category",axisLabel:{interval:"auto",hideOverlap:true,margin:10},axisTick:{alignWithLabel:true},data:Array.from({length:24},(_,h)=>String(h).padStart(2,"0"))},yAxis:{type:"category",axisLabel:{interval:0,margin:8},data:["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]},visualMap:{min:0,max:Math.max(1,...data.map(v=>v[2])),calculable:true,orient:"horizontal",left:"center",bottom:20,itemWidth:12,itemHeight:120,padding:8,formatter:value=>heatmapScale.format(value).replace(/K$/,"k"),textStyle:{color:ink},inRange:{color:[grid,colors[0]]}},series:[{id:"heat",type:"heatmap",data,emphasis:{itemStyle:{borderColor:ink,borderWidth:1}}}]};
+      option={tooltip:{position:"top"},grid:{left:12,right:16,top:16,bottom:74,containLabel:true},xAxis:{type:"category",axisLabel:{interval:"auto",hideOverlap:true,margin:10},axisTick:{alignWithLabel:true},data:Array.from({length:24},(_,h)=>String(h).padStart(2,"0"))},yAxis:{type:"category",axisLabel:{interval:0,margin:8},data:["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]},visualMap:{min:0,max:Math.max(1,...data.map(v=>v[2])),calculable:true,orient:"horizontal",left:"center",bottom:20,itemWidth:12,itemHeight:120,padding:8,formatter:value=>heatmapScale.format(value).replace(/K$/,"k")},series:[{id:"heat",type:"heatmap",data,emphasis:{itemStyle:{borderWidth:1}}}]};
     } else {
-      option={color:colors,grid:{left:65,right:18,top:55,bottom:55},legend:{type:"scroll",textStyle:{color:ink}},tooltip:{trigger:"axis",axisPointer:{type:"shadow"},valueFormatter:v=>format(v,spec.unit)},xAxis:{type:"time",min:timeRange?timeRange.start*1000:undefined,max:timeRange?timeRange.end*1000:undefined,axisLabel:{hideOverlap:true},axisPointer:{label:{formatter:p=>new Date(p.value).toLocaleString()}}},yAxis:{type:"value",max:spec.max,minInterval:["count","tokens"].includes(spec.unit)?1:undefined,axisLabel:{formatter:v=>spec.unit==="ratio"?`${v*100}%`:number(v)},splitLine:{lineStyle:{color:grid}}},dataZoom:[{type:"inside"}],series:spec.series.map((s,index)=>({id:`${s.dataset}:${s.id}`,name:s.label||s.id,type:spec.unit==="ratio"?"line":"bar",stack:spec.stack?"total":undefined,itemStyle:{color:spec.stack?colors[index%colors.length]:colors[Object.keys(agents).indexOf(s.agent)%colors.length]||colors[index%colors.length]},data:s.points.map(([t,v])=>[t*1000,v]),connectNulls:false}))};
+      option={grid:{left:65,right:18,top:55,bottom:55},legend:{type:"scroll",left:"center",right:"auto",top:"auto",bottom:0},tooltip:{trigger:"axis",axisPointer:{type:"shadow"},valueFormatter:v=>format(v,spec.unit)},xAxis:{type:"time",min:timeRange?timeRange.start*1000:undefined,max:timeRange?timeRange.end*1000:undefined,axisLabel:{hideOverlap:true},axisPointer:{label:{formatter:p=>new Date(p.value).toLocaleString()}}},yAxis:{type:"value",max:spec.max,minInterval:["count","tokens"].includes(spec.unit)?1:undefined,axisLabel:{formatter:v=>spec.unit==="ratio"?`${v*100}%`:number(v)}},dataZoom:[{type:"inside"}],series:spec.series.map(s=>({id:`${s.dataset}:${s.id}`,name:s.label||s.id,type:spec.unit==="ratio"?"line":"bar",stack:spec.stack?"total":undefined,itemStyle:{color:seriesColor(s)},lineStyle:{color:seriesColor(s)},data:s.points.map(([t,v])=>[t*1000,v]),connectNulls:false}))};
     }
-    Object.assign(option,{backgroundColor:"transparent",textStyle:{color:ink},animationDurationUpdate:180,aria:{enabled:true}});
+    Object.assign(option,{animationDurationUpdate:180,aria:{enabled:true}});
     w.chart.setOption(option,{replaceMerge:["series"],lazyUpdate:true});w.updates++;
   }
+  // "Agent · model" (or kind) series get a shade of the agent hue; everything else the agent hue.
+  const seriesColor=s=>AIUsage.colorFor(s.label?.includes(" · ")?s.label:agents[s.agent]||s.label||s.id);
   function renderTable(w) {
     const table=el("table"),head=el("tr");head.append(el("th","","Bucket start (local)"),...w.spec.series.map(s=>el("th","",s.label||s.id)));table.append(head);
     const times=[...new Set(w.spec.series.flatMap(s=>s.points.map(p=>p[0])))].sort((a,b)=>b-a),maps=w.spec.series.map(s=>new Map(s.points));
@@ -218,5 +219,5 @@
     $("copy-all").onclick=()=>copyCharts($("copy-all"),[...widgets.values()].map(w=>w.spec));
     setInterval(()=>{if(lastPacket&&Date.now()-lastPacket>75000){$("error").hidden=false;$("error").textContent="Live connection interrupted. Reconnecting…";}},15000);
   });
-  window.addEventListener("pagehide",()=>widgets.forEach(w=>{w.observer.disconnect();w.chart?.dispose();}));
+  window.addEventListener("pagehide",()=>widgets.forEach(w=>w.chart?.dispose()));
 })();

@@ -11,6 +11,9 @@ update `vendor.json`, asset route, HTML and documentation, and regenerate gzip
 with Python `gzip.compress(data, mtime=0)`. No Node runtime or frontend build
 step is required in the Alpine image. `dashboard.js` is the local presentation
 bridge; it contains no PromQL, pricing or telemetry accounting.
+`aiusage-tokens.css` holds the design tokens (dark and light) and
+`aiusage-echarts-theme.js` builds the ECharts theme and series colors from
+those tokens, so colors are defined in one place.
 
 Upstream references: [Datastar actions](https://data-star.dev/reference/actions),
 [SSE protocol](https://data-star.dev/reference/sse_events),

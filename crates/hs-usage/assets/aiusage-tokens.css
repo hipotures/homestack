@@ -1,0 +1,166 @@
+/* AI Usage — design tokens
+ * Dark is the default. Light: <html data-theme="light"> or the OS preference
+ * (unless data-theme="dark" is set explicitly).
+ * The ECharts theme (aiusage-echarts-theme.js) reads these variables,
+ * so colors live in exactly one place.
+ */
+
+:root {
+  /* surfaces */
+  --bg:            #0b0d10;
+  --surface:       #12151a;
+  --surface-2:     #171a20;   /* cards inside cards, alerts */
+  --surface-3:     #1f242c;   /* tooltip, popover */
+  --track:         #1c2027;   /* empty bar / progress track */
+  --heat-empty:    #1a1e24;
+  --border:        rgba(255, 255, 255, 0.06);
+  --border-strong: rgba(255, 255, 255, 0.12);
+  --grid:          rgba(255, 255, 255, 0.06);
+  --axis:          rgba(255, 255, 255, 0.14);
+
+  /* text */
+  --text:          #e7e9ec;
+  --text-2:        #c5cad1;
+  --muted:         #8b939e;   /* labels, captions — 6:1 on --surface */
+  --faint:         #6b7380;   /* axis ticks, footnotes */
+
+  /* agents — one hue per agent, everywhere */
+  --codex:         #2bb58f;
+  --codex-hi:      #3fd3a8;
+  --codex-lo:      #1d7a61;
+  --claude:        #e0876a;
+  --claude-hi:     #f0a084;
+  --claude-lo:     #b8664c;
+
+  /* models = shades of their agent's hue */
+  --m-gpt-6-1-sol:      var(--codex);
+  --m-claude-opus-5-5:  var(--claude);
+  --m-claude-haiku-5-5: #f0b9a3;
+  --m-claude-sonnet-5-5:var(--claude-lo);
+
+  /* token kinds */
+  --tok-cached:    var(--codex);
+  --tok-uncached:  #7cc8b3;
+  --tok-output:    #6b7380;
+  --tok-reasoning: #a593f0;
+
+  /* status */
+  --up:            #e0876a;   /* cost going up = warm */
+  --down:          #2bb58f;
+  --warn:          #e7c27a;
+  --alert-bg:      rgba(224, 135, 106, 0.08);
+
+  /* type */
+  --font-sans: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --fs-kpi:     44px;
+  --fs-h2:      15px;
+  --fs-body:    14px;
+  --fs-small:   12px;
+  --fs-tick:    11px;
+  --fs-label:   11px;   /* uppercase eyebrow */
+
+  /* shape & rhythm */
+  --radius-card: 16px;
+  --radius-ctl:  10px;
+  --radius-pill: 8px;
+  --gap-section: 28px;
+  --gap-grid:    16px;
+  --pad-card:    22px;
+
+  color-scheme: dark;
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --bg: #f6f7f9; --surface: #ffffff; --surface-2: #f3f4f6; --surface-3: #ffffff;
+    --track: #eceef1; --heat-empty: #eef0f3;
+    --border: rgba(15, 20, 30, 0.07); --border-strong: rgba(15, 20, 30, 0.14);
+    --grid: rgba(15, 20, 30, 0.07); --axis: rgba(15, 20, 30, 0.18);
+    --text: #14171c; --text-2: #3a414b; --muted: #5b6470; --faint: #737b87;
+    --codex: #14936f; --codex-hi: #0f7a5c; --codex-lo: #7fd0b6;
+    --claude: #c96442; --claude-hi: #a84f31; --claude-lo: #e8a58c;
+    --m-claude-haiku-5-5: #e8a58c;
+    --tok-uncached: #5fb39b; --tok-output: #9aa2ad; --tok-reasoning: #7a63d9;
+    --warn: #a87a12; --alert-bg: rgba(201, 100, 66, 0.08);
+    color-scheme: light;
+  }
+}
+:root[data-theme="light"] {
+  --bg: #f6f7f9; --surface: #ffffff; --surface-2: #f3f4f6; --surface-3: #ffffff;
+  --track: #eceef1; --heat-empty: #eef0f3;
+  --border: rgba(15, 20, 30, 0.07); --border-strong: rgba(15, 20, 30, 0.14);
+  --grid: rgba(15, 20, 30, 0.07); --axis: rgba(15, 20, 30, 0.18);
+  --text: #14171c; --text-2: #3a414b; --muted: #5b6470; --faint: #737b87;
+  --codex: #14936f; --codex-hi: #0f7a5c; --codex-lo: #7fd0b6;
+  --claude: #c96442; --claude-hi: #a84f31; --claude-lo: #e8a58c;
+  --m-claude-haiku-5-5: #e8a58c;
+  --tok-uncached: #5fb39b; --tok-output: #9aa2ad; --tok-reasoning: #7a63d9;
+  --warn: #a87a12; --alert-bg: rgba(201, 100, 66, 0.08);
+  color-scheme: light;
+}
+
+/* ---------- base ---------- */
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: var(--fs-body)/1.45 var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+.num, .kpi-value, td.num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+
+/* ---------- components used in the mockup ---------- */
+.card {
+  background: var(--surface);
+  border-radius: var(--radius-card);
+  padding: var(--pad-card);
+  display: flex; flex-direction: column; gap: 16px;
+  min-width: 0;
+}
+.card h2 { margin: 0; font-size: var(--fs-h2); font-weight: 600; }
+.card .sub { font-size: var(--fs-small); color: var(--muted); }
+
+.eyebrow {
+  font-size: var(--fs-label); font-weight: 600;
+  letter-spacing: .08em; text-transform: uppercase; color: var(--muted);
+}
+.kpi-value { font-size: var(--fs-kpi); font-weight: 600; letter-spacing: -.03em; line-height: 1; }
+.delta { font-size: var(--fs-small); font-weight: 600; }
+.delta.up { color: var(--up); }
+.delta.down { color: var(--down); }
+
+.split { display: flex; height: 6px; border-radius: 3px; overflow: hidden; background: var(--track); }
+.split > span { display: block; height: 100%; }
+
+.kpi-grid  { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: var(--gap-grid); }
+.row-2     { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: var(--gap-grid); }
+.chart     { width: 100%; height: 260px; }
+.chart.tall{ height: 320px; }
+
+/* segmented control (range / metric) */
+.seg {
+  display: inline-flex; gap: 2px; padding: 3px;
+  background: var(--surface); border-radius: var(--radius-ctl);
+}
+.seg button {
+  border: 0; min-height: 34px; padding: 0 13px; border-radius: var(--radius-pill);
+  background: transparent; color: var(--muted); font: inherit; font-size: 13px; cursor: pointer;
+}
+.seg button:hover { color: var(--text); }
+.seg button[aria-pressed="true"] { background: var(--surface-3); color: var(--text); font-weight: 600; }
+.seg .sep { width: 1px; margin: 7px 4px; background: var(--border-strong); }
+
+button:focus-visible, a:focus-visible { outline: 2px solid var(--codex); outline-offset: 2px; }
+
+.live-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--codex); box-shadow: 0 0 0 4px color-mix(in srgb, var(--codex) 20%, transparent);
+}
+
+/* phones: range control scrolls instead of wrapping into two lines */
+@media (max-width: 640px) {
+  .seg.scroll { max-width: 100%; overflow-x: auto; scrollbar-width: none; }
+  .seg.scroll::-webkit-scrollbar { display: none; }
+  .kpi-value { font-size: 36px; }
+}

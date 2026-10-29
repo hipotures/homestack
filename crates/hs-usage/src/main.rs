@@ -210,6 +210,8 @@ async fn asset(Path(name): Path<String>, headers: HeaderMap) -> Response {
             include_bytes!("../assets/echarts-6.1.0.min.js.gz"),
         ),
         "dashboard.js" => (include_bytes!("../assets/dashboard.js"), &[]),
+        "aiusage-echarts-theme.js" => (include_bytes!("../assets/aiusage-echarts-theme.js"), &[]),
+        "aiusage-tokens.css" => (include_bytes!("../assets/aiusage-tokens.css"), &[]),
         "datastar-LICENSE.md" => (include_bytes!("../assets/datastar-LICENSE.md"), &[]),
         "echarts-LICENSE.txt" => (include_bytes!("../assets/echarts-LICENSE.txt"), &[]),
         "echarts-NOTICE.txt" => (include_bytes!("../assets/echarts-NOTICE.txt"), &[]),
@@ -236,6 +238,8 @@ async fn asset(Path(name): Path<String>, headers: HeaderMap) -> Response {
         header::CONTENT_TYPE,
         (if name.ends_with(".js") {
             "text/javascript; charset=utf-8"
+        } else if name.ends_with(".css") {
+            "text/css; charset=utf-8"
         } else {
             "text/plain; charset=utf-8"
         })
