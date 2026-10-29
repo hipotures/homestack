@@ -856,10 +856,19 @@ fn enrich(d: &mut Dataset) {
     if d.measurement == "tokens" {
         let mut categories = BTreeMap::<String, BTreeMap<u64, f64>>::new();
         let mut models = BTreeMap::<String, BTreeMap<u64, f64>>::new();
+        let mut inputs = BTreeMap::<String, BTreeMap<u64, [f64; 3]>>::new();
         for s in &d.series {
             let category = &s.dimensions["category"];
+            let slot = ["input", "cached", "written"].iter().position(|c| c == category);
             for (t, v) in &s.points {
                 *categories.entry(category.clone()).or_default().entry(*t).or_default() += v;
+                if let Some(slot) = slot {
+                    inputs
+                        .entry(s.dimensions["model"].clone())
+                        .or_default()
+                        .entry(*t)
+                        .or_default()[slot] += v;
+                }
                 if category == "total" {
                     *models
                         .entry(s.dimensions["model"].clone())
@@ -880,7 +889,25 @@ fn enrich(d: &mut Dataset) {
                 }
             }
         }
-        d.details = json!({"categories":categories.into_iter().map(|(id,p)|json!({"id":id,"label":id,"points":p.into_iter().collect::<Vec<_>>()})).collect::<Vec<_>>(),"models":models.into_iter().map(|(id,p)|json!({"id":id,"label":id,"points":p.into_iter().collect::<Vec<_>>()})).collect::<Vec<_>>(),"cacheHit":hit});
+        // Per-model hit rate over input tokens only. Buckets without input are absent (missing,
+        // not 0%), and the range rate is a ratio of summed tokens, never a mean of bucket rates.
+        let model_hit: Vec<_> = inputs
+            .into_iter()
+            .filter_map(|(model, buckets)| {
+                let mut sums = [0.; 3];
+                let mut points = Vec::new();
+                for (t, [input, cached, written]) in buckets {
+                    sums = [sums[0] + input, sums[1] + cached, sums[2] + written];
+                    let total = input + cached + written;
+                    if total > 0. {
+                        points.push((t, cached / total));
+                    }
+                }
+                let total: f64 = sums.iter().sum();
+                (total > 0.).then(|| json!({"id":model,"label":model,"points":points,"input":sums[0],"cached":sums[1],"written":sums[2],"hit":sums[1]/total}))
+            })
+            .collect();
+        d.details = json!({"categories":categories.into_iter().map(|(id,p)|json!({"id":id,"label":id,"points":p.into_iter().collect::<Vec<_>>()})).collect::<Vec<_>>(),"models":models.into_iter().map(|(id,p)|json!({"id":id,"label":id,"points":p.into_iter().collect::<Vec<_>>()})).collect::<Vec<_>>(),"cacheHit":hit,"modelCacheHit":model_hit});
     } else if !["summary", "activity", "spikes"].contains(&d.measurement.as_str()) {
         for s in &d.series {
             for (t, v) in &s.points {

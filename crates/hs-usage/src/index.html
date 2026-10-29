@@ -32,6 +32,7 @@ a { color: var(--tok-uncached); }
 .card-top > div:first-child { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .card-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; min-width: 0; }
 .card .seg { background: var(--bg); }
+#model-pick { max-width: min(100%, 340px); }
 .legend { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: var(--fs-small); color: var(--text-2); }
 .legend span, .swatch-label { display: inline-flex; align-items: center; gap: 6px; }
 .sw { width: 10px; height: 10px; border-radius: 3px; flex: none; }
@@ -188,6 +189,22 @@ button:focus-visible, select:focus-visible { outline: 2px solid var(--codex); ou
 <div class="chart tall" id="trend-chart" role="img" aria-label="Usage over time, stacked by model"></div>
 </section>
 <div class="row-2"><section class="card" id="composition" aria-label="Token composition"></section><section class="card" id="models" aria-label="Cost by model"></section></div>
+<div class="row-2">
+<section class="card" id="model-tokens" aria-label="Token breakdown of one model over time" hidden>
+<div class="card-top"><div><h2>Model tokens over time</h2><span class="sub" id="model-tokens-sub"></span></div>
+<div class="card-tools"><select class="scope" id="model-pick" aria-label="Model"></select><span class="card-actions"><button class="copy" type="button" hidden title="Copy data as JSON" aria-label="Copy data as JSON">⧉</button><button class="toggle" type="button">table</button></span></div></div>
+<div class="chips" id="model-tokens-chips"></div>
+<div class="chart" id="model-tokens-chart" role="img" aria-label="Token categories of the selected model, stacked per bucket"></div>
+<div class="table-wrap" hidden></div>
+</section>
+<section class="card" id="model-hit" aria-label="Cache hit by model over time" hidden>
+<div class="card-top"><div><h2>Cache hit by model</h2><span class="sub" id="model-hit-sub"></span></div>
+<div class="card-tools"><span class="card-actions"><button class="copy" type="button" hidden title="Copy data as JSON" aria-label="Copy data as JSON">⧉</button><button class="toggle" type="button">table</button></span></div></div>
+<div class="chips" id="model-hit-chips"></div>
+<div class="chart" id="model-hit-chart" role="img" aria-label="Cache hit rate per model and bucket"></div>
+<div class="table-wrap" hidden></div>
+</section>
+</div>
 <div class="row-3">
 <section class="card heat-card" aria-label="Activity by weekday and hour">
 <div class="card-top"><div><h2>When you work</h2><span class="sub" id="heat-sub">tokens by weekday and hour · local time</span></div>

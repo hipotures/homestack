@@ -188,8 +188,8 @@ UTC start/end/step and current partial-bucket start; typed dimensions and exact
 numeric points; availability (`available`, `missing`, `unavailable`, `partial`);
 notes; a source-freshness block reference; and a content version. Source query values remain original Prometheus
 strings in export provenance. Presentation rounding never enters accounting.
-A token dataset includes model/category series and shared category, model and
-cache-hit projections. Cost, counters and durations have shared timelines.
+A token dataset includes model/category series and shared category, model,
+cache-hit and per-model cache-hit projections. Cost, counters and durations have shared timelines.
 Tables, tiles and charts consume these projections rather than issuing queries.
 
 Range steps give 30-90 points per chart and match `AIUsage.RANGES` in the
@@ -293,6 +293,23 @@ measurements remain explicit rather than zero. Summary totals and comparison
 values come from the same selected datasets as the charts. Cost estimates use
 model names without guessing and report missing rates; partial model costs are
 never presented as complete agent cost. The footer reports the image version.
+
+Two overview cards analyze individual models. *Model tokens over time* stacks
+one model's mutually exclusive categories per bucket: uncached input, cached
+input, cache write and output. Its selector lists every active model of the
+selected agents as agent plus model name. The choice is remembered in the
+browser only and never enters the server selection or adds a query. Codex
+reasoning is shown in the tooltip as a subset of output and is never stacked.
+Buckets without any reported sample are shaded and say "no data reported";
+reported idle buckets show zero. *Cache hit by model* draws one line per model,
+on a 0–100% scale, as `cached / (uncached + cached + cache write)`. Output and
+reasoning are excluded. Rust emits only buckets with input, so buckets without
+input are gaps, not 0%. Each model's range rate in the legend is the ratio of
+summed tokens, never a mean of bucket rates. The tooltip lists the exact
+cached, uncached and cache-write counts. Both cards follow the global agent,
+host, project and range filters. They redraw only when a token dataset changes
+and offer the same chart/table switch, copy and Copy all export, with the model
+identity, counts and formula included.
 
 Chart/table copy and Copy all retain unrounded displayed series, filters, time
 boundaries, original PromQL and source matrices/labels. Copy all emits JSON

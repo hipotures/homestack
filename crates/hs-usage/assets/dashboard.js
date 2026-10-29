@@ -78,7 +78,7 @@
     // Series colors are resolved from CSS tokens, so charts are redrawn after the theme rebuild.
     AIUsage.refresh();
     for(const w of widgets.values())if(w.spec)draw(w);
-    if(datasets.size)renderOverview();
+    if(datasets.size){renderOverview();renderModelViews();}
   }
   /** The dataset of a measurement the agent reports; agent capabilities come only from data. */
   const reported=(agent,measurement)=>{const d=datasets.get(`${agent}.${measurement}`);return d&&d.state!=="unavailable"?d:null;};
@@ -113,6 +113,8 @@
   }
   function render(dirty) {
     if(dirty.size)renderOverview();
+    // Per-model views read only token datasets, so other dataset updates leave them untouched.
+    if([...dirty].some(id=>id.endsWith(".tokens")))renderModelViews();
     const definitionsNow=definitions(),ids=new Set(definitionsNow.map(s=>s.id));
     for(const [id,w]of widgets)if(!ids.has(id)){w.chart?.dispose();w.card.remove();widgets.delete(id);}
     for(const spec of definitionsNow) {
@@ -399,20 +401,123 @@
     const latency=LATENCY.map(([m])=>reported(agent,m)).filter(d=>d?.total!=null),quantiles=latency.some(d=>d.details.p50!=null);
     $("agents").innerHTML=`${compare}<div class="agent-bar" role="${both?"":"group"}">${tabs}${chip?`<span class="chip">${chip}</span>`:""}</div><div ${both?`role="tabpanel"`:""} class="agents">${body}</div>${latency.length&&panel.activity?`<p class="note faint" style="margin:0">${quantiles?"Durations are p50 with p95 below, approximated from the histogram buckets; ≥ marks a value in the open top bucket. Bars show p50 per bucket.":"Durations are averages (Σ sum / Σ count) of the duration histograms."}</p>`:""}`;
   }
+  // ---- Per-model views. Categories and hit rates are Rust projections; the browser only picks and lays out. ----
+  let modelKey="";
+  try{modelKey=localStorage.getItem("model")||"";}catch(_){}
+  const modelViews={tokens:{id:"model-tokens",table:false,spec:null,chart:null},hit:{id:"model-hit",table:false,spec:null,chart:null}};
+  const PARTS=TYPES.filter(([id])=>id!=="reasoning");
+  const pointsOf=(d,model,category)=>d.series.find(s=>s.dimensions.model===model&&s.dimensions.category===category)?.points||[];
+  const tip=(t,rows)=>`<div style="color:var(--muted);margin-bottom:4px">${new Date(t*1000).toLocaleString()}</div>${rows.join("")}`;
+  const tipRow=(left,right,faint)=>`<div style="display:flex;justify-content:space-between;gap:16px${faint?";color:var(--faint)":""}"><span>${left}</span><span style="font-family:var(--font-mono)">${right}</span></div>`;
+  /** Bucket runs without any reported sample, drawn as shaded "no data" areas. */
+  function missingAreas(times,seen,range){
+    const runs=[];let run=null;
+    for(const t of times){if(!seen(t)){run=run||[t,t];run[1]=t;}else if(run){runs.push(run);run=null;}}
+    if(run)runs.push(run);
+    return runs.length?{silent:true,label:{position:"insideTop"},data:runs.map(([a,b])=>[{xAxis:(a-range.step/2)*1000,name:(b-a)/range.step>=2?"no data":""},{xAxis:(b+range.step/2)*1000}])}:undefined;
+  }
+  function viewFrame(v,visible){
+    const card=$(v.id);card.hidden=!visible;
+    if(!visible){v.spec=null;return false;}
+    card.querySelector(".copy").hidden=!v.table;$(v.id+"-chart").hidden=v.table;v.tableHost=card.querySelector(".table-wrap");v.tableHost.hidden=!v.table;
+    if(v.table){renderTable(v);return false;}
+    v.chart=v.chart||AIUsage.init($(v.id+"-chart"));
+    return true;
+  }
+  function renderModelViews(){renderModelTokens();renderModelHit();}
+  function renderModelTokens(){
+    const v=modelViews.tokens,list=[];
+    for(const a of chosen()){const d=reported(a,"tokens");if(d)for(const m of d.details.models||[]){const n=total(m.points);if(n>0)list.push({key:`${a}|${m.id}`,agent:a,model:m.id,tokens:n,d});}}
+    list.sort((x,y)=>y.tokens-x.tokens);
+    const current=list.find(m=>m.key===modelKey)||list[0],pick=$("model-pick");
+    if(list.length&&JSON.stringify([...pick.options].map(o=>o.value))!==JSON.stringify(list.map(m=>m.key)))
+      pick.replaceChildren(...list.map(m=>{const o=el("option","",`${m.model||"?"} · ${agents[m.agent]}`);o.value=m.key;return o;}));
+    if(current)pick.value=current.key;
+    // The table/export spec is built before the frame so a table view and Copy all stay current.
+    if(current){
+      const {d,agent,model}=current,codex=agent==="codex";
+      v.spec={title:`Model tokens · ${agents[agent]} · ${model||"?"}`,unit:"tokens",export:{agent,model},
+        series:[...PARTS.map(([id,name])=>({id,label:name,points:pointsOf(d,model,id),dataset:d.id})),...(codex?[{id:"reasoning",label:"Reasoning (subset of output)",points:pointsOf(d,model,"reasoning"),dataset:d.id}]:[]),{id:"total",label:"Total",points:pointsOf(d,model,"total"),dataset:d.id}]};
+    }
+    if(!viewFrame(v,!!current))return;
+    const {d,agent,model}=current,range=d.range,maps=Object.fromEntries(v.spec.series.map(s=>[s.id,new Map(s.points)]));
+    // A bucket without any reported sample is missing; a reported bucket can still be zero.
+    const seen=t=>maps.total.has(t),first=Math.min(...[...maps.total].filter(([,n])=>n>0).map(([t])=>t));
+    const times=buckets(range).filter(t=>t>=first),sum=total(v.spec.series.at(-1).points);
+    const hit=(d.details.modelCacheHit||[]).find(m=>m.id===model);
+    $("model-tokens-sub").textContent=`${bucketLabel(range.step)} · ${F.full(sum)} tokens${hit?` · cache hit ${F.pct(hit.hit*100)}`:""}`;
+    $("model-tokens-chips").innerHTML=first>range.start?`<span class="chip">data since ${timeLabel(first,range)}</span>`:"";
+    const areas=missingAreas(times,seen,range);
+    v.chart.setOption({
+      grid:{left:8,right:8,top:16,bottom:36,containLabel:true},
+      legend:{type:"scroll",left:"center",right:"auto",top:"auto",bottom:0},
+      tooltip:{trigger:"axis",formatter:params=>{
+        const t=params[0].value[0]/1000;
+        if(!seen(t))return tip(t,[`<span style="color:var(--faint)">no data reported</span>`]);
+        const all=PARTS.reduce((n,[id])=>n+(maps[id].get(t)||0),0);
+        const rows=params.map(p=>{const id=PARTS.find(([,name])=>name===p.seriesName)?.[0],n=maps[id]?.get(t)||0;
+          return tipRow(`${p.marker}${p.seriesName}`,`${F.full(n)}${all?` · ${F.pct(n/all*100)}`:""}`)+(id==="output"&&agent==="codex"?tipRow("&nbsp;&nbsp;of which reasoning",F.full(maps.reasoning.get(t)||0),true):"");}).reverse();
+        return tip(t,[...rows,tipRow("<b>Total</b>",`<b>${F.full(maps.total.get(t)||0)}</b>${all?"":" · reported, no usage"}`)]);
+      }},
+      xAxis:{type:"time",min:(times[0]-range.step/2)*1000,max:range.end*1000,axisLabel:{hideOverlap:true}},
+      yAxis:{type:"value",minInterval:1,axisLabel:{formatter:F.tokens}},
+      // Mutually exclusive categories stack to the model's tokens; reasoning stays inside output.
+      series:PARTS.map(([id,name,color],i)=>AIUsage.bar(name,times.map(t=>[t*1000,seen(t)?maps[id].get(t)||0:null]),name,{id,barMaxWidth:28,itemStyle:{color:getComputedStyle(document.documentElement).getPropertyValue(color).trim()},markArea:i===0?areas:undefined})),
+    },{replaceMerge:["series"]});
+  }
+  function renderModelHit(){
+    const v=modelViews.hit,rows=[];
+    for(const a of chosen()){const d=reported(a,"tokens");if(d)for(const m of d.details.modelCacheHit||[])rows.push({...m,name:`${agents[a]} · ${m.label||"?"}`,d});}
+    rows.sort((x,y)=>(y.input+y.cached+y.written)-(x.input+x.cached+x.written));
+    v.spec=null;
+    if(rows.length)v.spec={title:"Cache hit by model",unit:"ratio",export:{formula:"cached_input / (uncached_input + cached_input + cache_write)"},
+      series:rows.map(r=>({id:r.name,label:r.name,points:r.points,dataset:r.d.id,export:{overall:r.hit,uncached_input:r.input,cached_input:r.cached,cache_write:r.written}}))};
+    const spec=v.spec;
+    if(!viewFrame(v,rows.length>0))return;
+    const range=rows[0].d.range,first=Math.min(...rows.flatMap(r=>r.points.map(([t])=>t))),times=buckets(range).filter(t=>t>=first);
+    // Keyed by name: replaceMerge can leave holes in series indices after a model disappears.
+    const counts=new Map(rows.map(r=>[r.name,Object.fromEntries(["input","cached","written","total"].map(c=>[c,new Map(pointsOf(r.d,r.id,c))]))]));
+    const overall=new Map(rows.map(r=>[r.name,r.hit]));
+    $("model-hit-sub").textContent=`${bucketLabel(range.step)} · cached ÷ (uncached + cached + cache write) · gaps have no input`;
+    $("model-hit-chips").innerHTML=first>range.start?`<span class="chip">data since ${timeLabel(first,range)}</span>`:"";
+    v.chart.setOption({
+      grid:{left:8,right:8,top:16,bottom:36,containLabel:true},
+      legend:{type:"scroll",left:"center",right:"auto",top:"auto",bottom:0,formatter:name=>`${name}  ${F.pct(overall.get(name)*100)}`},
+      tooltip:{trigger:"axis",axisPointer:{type:"line"},formatter:params=>{
+        const t=params[0].value[0]/1000;
+        // Buckets with samples but no input say so; models without samples in the bucket are left out.
+        const lines=params.map(p=>{const c=counts.get(p.seriesName);
+          if(p.value[1]==null)return c.total.has(t)?tipRow(`${p.marker}${esc(p.seriesName)}`,"no input tokens",true):"";
+          return tipRow(`${p.marker}${esc(p.seriesName)}`,`<b>${F.pct(p.value[1],2)}</b>`)+tipRow("&nbsp;&nbsp;cached · uncached · write",`${F.full(c.cached.get(t)||0)} · ${F.full(c.input.get(t)||0)} · ${F.full(c.written.get(t)||0)}`,true);
+        }).filter(Boolean);
+        return tip(t,lines.length?lines:[`<span style="color:var(--faint)">no data reported</span>`]);
+      }},
+      xAxis:{type:"time",min:(times[0]-range.step/2)*1000,max:range.end*1000,axisLabel:{hideOverlap:true}},
+      yAxis:{type:"value",min:0,max:100,interval:25,axisLabel:{formatter:v=>`${v}%`}},
+      series:spec.series.map(s=>{const m=new Map(s.points),color=AIUsage.colorFor(s.label);
+        return {id:s.id,name:s.label,type:"line",smooth:false,symbol:"circle",symbolSize:4,connectNulls:false,itemStyle:{color},lineStyle:{color},data:times.map(t=>[t*1000,m.has(t)?m.get(t)*100:null])};}),
+    },{replaceMerge:["series"]});
+  }
   async function copyCharts(button,specs) {
     const id=snapshot,chosen=structuredClone(specs),scope={...selection},label=button.textContent;
     if(!id){button.textContent="Waiting for snapshot";return;}
     try {
       const response=await fetch(`/api/dashboard/export?${new URLSearchParams({snapshot:id})}`),source=await response.json();if(!response.ok)throw Error(source.error||"Export failed");
-      const lines=chosen.map(chart=>JSON.stringify({chart:chart.title,unit:chart.unit,snapshot:id,selection:scope,time_boundaries:source.datasets.find(d=>d.id===chart.series[0]?.dataset)?.range,series:chart.series.map(s=>({name:s.label||s.id,values:s.points})),queries:source.queries,warnings:source.warnings}));
+      const lines=chosen.map(chart=>JSON.stringify({chart:chart.title,unit:chart.unit,snapshot:id,selection:scope,time_boundaries:source.datasets.find(d=>d.id===chart.series[0]?.dataset)?.range,...chart.export,series:chart.series.map(s=>({name:s.label||s.id,values:s.points,...s.export})),queries:source.queries,warnings:source.warnings}));
       await navigator.clipboard.writeText(lines.length===1?JSON.stringify(JSON.parse(lines[0]),null,2):lines.join("\n")+"\n");button.textContent="Copied";
     }catch(error){button.textContent="Copy failed";button.title=error.message;}
     setTimeout(()=>{button.textContent=label;},2200);
   }
-  window.usage={initial,select,apply,restore(){theme();},debug(){return {epoch,snapshot,sourceAt,datasets,widgets};}};
+  window.usage={initial,select,apply,restore(){theme();},debug(){return {epoch,snapshot,sourceAt,datasets,widgets,modelViews};}};
   document.addEventListener("DOMContentLoaded",()=>{
     theme();$("theme").onclick=()=>{currentTheme=currentTheme==="dark"?"light":"dark";try{localStorage.setItem("theme",currentTheme);}catch(_){}theme();};
-    $("copy-all").onclick=()=>copyCharts($("copy-all"),[...widgets.values()].map(w=>w.spec));
+    $("copy-all").onclick=()=>copyCharts($("copy-all"),[...Object.values(modelViews).map(v=>v.spec).filter(Boolean),...[...widgets.values()].map(w=>w.spec)]);
+    $("model-pick").onchange=event=>{modelKey=event.target.value;try{localStorage.setItem("model",modelKey);}catch(_){}renderModelTokens();};
+    for(const v of Object.values(modelViews)){
+      const card=$(v.id),toggle=card.querySelector(".toggle"),copy=card.querySelector(".copy");
+      toggle.onclick=()=>{v.table=!v.table;toggle.textContent=v.table?"chart":"table";if(v===modelViews.tokens)renderModelTokens();else renderModelHit();if(!v.table)v.chart?.resize();};
+      copy.onclick=()=>{if(v.spec)copyCharts(copy,[v.spec]);};
+    }
     for(const b of document.querySelectorAll("[data-metric]"))b.onclick=()=>{metric=b.dataset.metric;try{localStorage.setItem("metric",metric);}catch(_){}if(datasets.size)renderOverview();};
     $("agents").onclick=event=>{
       const tab=event.target.closest("[data-tab]"),goto=event.target.closest("[data-goto]");
