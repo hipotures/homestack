@@ -619,7 +619,7 @@ fn summary_values(all: &[Dataset]) -> BTreeMap<String, Value> {
                             .map(|(_, v)| v)
                             .sum::<f64>()
                     });
-                    v.insert(category.into(), json!({"value":value,"state":if agent=="claude" && category=="reasoning"{Availability::Unavailable}else{d.state.clone()}}));
+                    v.insert(category.into(), json!({"value":value,"state":d.state}));
                 }
             }
         }
