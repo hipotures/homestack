@@ -12,10 +12,10 @@
   const number = v => v == null ? "—" : new Intl.NumberFormat(undefined,{maximumFractionDigits:2}).format(v);
   const format = (v,unit) => v == null ? "—" : unit === "USD" ? new Intl.NumberFormat(undefined,{style:"currency",currency:"USD",maximumFractionDigits:4}).format(v) : unit === "ratio" ? new Intl.NumberFormat(undefined,{style:"percent",maximumFractionDigits:1}).format(v) : number(v);
   function initial() {
-    const out={agent:"all",host:"*",project:"*",range:"24h",_compare:false,_sync:0,_packet:""};
+    const out={agent:"all",host:"*",project:"*",range:"24h",_compare:false,_more:false,_sync:0,_packet:""};
     try {for(const key of ["agent","host","project","range"]) out[key]=localStorage.getItem(key)||out[key];out._compare=localStorage.getItem("comparison")==="true";}catch(_){}
     if(!["all","claude","codex"].includes(out.agent))out.agent="all";
-    if(!["1h","24h","7d","30d","90d"].includes(out.range))out.range="24h";
+    if(!Object.keys(AIUsage.RANGES).includes(out.range))out.range="24h";
     if(out._compare)out.agent="all";
     // Scope options must exist before Datastar binds a remembered selection.
     for(const key of ["host","project"])if(out[key]!=="*"){const o=el("option","",out[key]);o.value=out[key];$(key).append(o);}
@@ -120,7 +120,8 @@
       if(duration?.details.total_seconds!=null)add("turn-time","Total turn duration","seconds",[{id:"total",label:"Total turn duration",dataset:duration.id,points:duration.details.totalTimeline||[]}],{note:`Total: ${number(duration.details.total_seconds)} s`});
     }
     const activity=datasets.get("all.activity");
-    if(activity)add("activity","Activity by local weekday/hour","tokens",activity.series.map(s=>({...s,dataset:activity.id})),{heat:true});
+    // The heatmap reads a separate hourly block capped at 30 days (7 at least), so its window is stated.
+    if(activity)add("activity","Activity by local weekday/hour","tokens",activity.series.map(s=>({...s,dataset:activity.id})),{heat:true,note:`last ${Math.round((activity.range.end-activity.range.start)/86400)} days`});
     return list;
   }
   function render(dirty) {
@@ -163,7 +164,7 @@
       const data=[...cells].map(([key,v])=>{const [day,hour]=key.split(',').map(Number);return [hour,day,v];});
       option={tooltip:{position:"top"},grid:{left:12,right:16,top:16,bottom:74,containLabel:true},xAxis:{type:"category",axisLabel:{interval:"auto",hideOverlap:true,margin:10},axisTick:{alignWithLabel:true},data:Array.from({length:24},(_,h)=>String(h).padStart(2,"0"))},yAxis:{type:"category",axisLabel:{interval:0,margin:8},data:["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]},visualMap:{min:0,max:Math.max(1,...data.map(v=>v[2])),calculable:true,orient:"horizontal",left:"center",bottom:20,itemWidth:12,itemHeight:120,padding:8,formatter:value=>heatmapScale.format(value).replace(/K$/,"k")},series:[{id:"heat",type:"heatmap",data,emphasis:{itemStyle:{borderWidth:1}}}]};
     } else {
-      option={grid:{left:65,right:18,top:55,bottom:55},legend:{type:"scroll",left:"center",right:"auto",top:"auto",bottom:0},tooltip:{trigger:"axis",axisPointer:{type:"shadow"},valueFormatter:v=>format(v,spec.unit)},xAxis:{type:"time",min:timeRange?(since??timeRange.start)*1000:undefined,max:timeRange?timeRange.end*1000:undefined,axisLabel:{hideOverlap:true},axisPointer:{label:{formatter:p=>new Date(p.value).toLocaleString()}}},yAxis:{type:"value",max:spec.max,minInterval:["count","tokens"].includes(spec.unit)?1:undefined,axisLabel:{formatter:v=>spec.unit==="ratio"?`${v*100}%`:number(v)}},dataZoom:[{type:"inside"}],series:spec.series.map(s=>({id:`${s.dataset}:${s.id}`,name:s.label||s.id,type:spec.unit==="ratio"?"line":"bar",stack:spec.stack?"total":undefined,itemStyle:{color:seriesColor(s)},lineStyle:{color:seriesColor(s)},data:s.points.map(([t,v])=>[t*1000,v]),connectNulls:false}))};
+      option={grid:{left:65,right:18,top:55,bottom:55},legend:{type:"scroll",left:"center",right:"auto",top:"auto",bottom:0},tooltip:{trigger:"axis",axisPointer:{type:"shadow"},valueFormatter:v=>format(v,spec.unit)},xAxis:{type:"time",min:timeRange?((since??timeRange.start)-timeRange.step/2)*1000:undefined,max:timeRange?timeRange.end*1000:undefined,axisLabel:{hideOverlap:true},axisPointer:{label:{formatter:p=>new Date(p.value).toLocaleString()}}},yAxis:{type:"value",max:spec.max,minInterval:["count","tokens"].includes(spec.unit)?1:undefined,axisLabel:{formatter:v=>spec.unit==="ratio"?`${v*100}%`:number(v)}},dataZoom:[{type:"inside"}],series:spec.series.map(s=>({id:`${s.dataset}:${s.id}`,name:s.label||s.id,type:spec.unit==="ratio"?"line":"bar",stack:spec.stack?"total":undefined,itemStyle:{color:seriesColor(s)},lineStyle:{color:seriesColor(s)},data:s.points.map(([t,v])=>[t*1000,v]),connectNulls:false}))};
     }
     Object.assign(option,{animationDurationUpdate:180,aria:{enabled:true}});
     w.chart.setOption(option,{replaceMerge:["series"],lazyUpdate:true});w.updates++;

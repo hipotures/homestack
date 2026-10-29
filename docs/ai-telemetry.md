@@ -185,7 +185,12 @@ A token dataset includes model/category series and shared category, model and
 cache-hit projections. Cost, counters and durations have shared timelines.
 Tables, tiles and charts consume these projections rather than issuing queries.
 
-Ranges retain their steps: 1h/60s, 24h/1h, 7d/6h, 30d/1d and 90d/1d.
+Range steps give 30-90 points per chart and match `AIUsage.RANGES` in the
+dashboard theme: 1h/2m, 24h/30m, 7d/3h, 30d/12h, 90d/1d, 180d/3d and 1y/1w.
+`all` starts on the day of the first retained sample (one daily count query over
+the 600-day retention, cached for six hours) and uses the smallest of 1d, 1w,
+2w, 30d and 91d that yields at most 80 points. Multi-day steps are aligned to
+the Unix epoch, so weekly buckets start on Thursdays (UTC).
 The start is the current UTC boundary minus the requested duration. The result
 includes that duration of closed buckets plus the partial current bucket.
 `end` is the next boundary, not a claim that future samples exist. Points are
@@ -193,7 +198,7 @@ identified by bucket start; underlying Prometheus windows are open on the left
 and closed on the right. Axes remain fixed inside a bucket. Display timestamps
 and the weekday/hour heatmap use browser-local time, including local DST rules.
 Durations and accounting windows remain UTC. Heatmap inputs cover at least seven
-and at most thirty days; spike inputs cover the selected days plus seven prior
+and at most thirty days, and the heatmap states its window ("last 30 days") for longer ranges; spike inputs cover the selected days plus seven prior
 days. Reasoning stays a subset of output. Codex inclusive input is split into
 uncached input, cached input and cache writes before pricing.
 

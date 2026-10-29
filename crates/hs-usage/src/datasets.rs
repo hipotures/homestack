@@ -37,16 +37,30 @@ impl Selection {
         }
         Ok(())
     }
-    pub fn timing(&self) -> Result<(u64, u64), String> {
+    /// Range length and bucket in seconds, aiming at 30-90 points per chart; must match
+    /// `AIUsage.RANGES` in `aiusage-echarts-theme.js`. `None` is "all", sized by [`all_timing`].
+    pub fn timing(&self) -> Result<Option<(u64, u64)>, String> {
+        const DAY: u64 = 86400;
         match self.range.as_str() {
-            "1h" => Ok((3600, 60)),
-            "24h" => Ok((86400, 3600)),
-            "7d" => Ok((604800, 21600)),
-            "30d" => Ok((2592000, 86400)),
-            "90d" => Ok((7776000, 86400)),
+            "1h" => Ok(Some((3600, 120))),
+            "24h" => Ok(Some((DAY, 1800))),
+            "7d" => Ok(Some((7 * DAY, 10800))),
+            "30d" => Ok(Some((30 * DAY, 43200))),
+            "90d" => Ok(Some((90 * DAY, DAY))),
+            "180d" => Ok(Some((180 * DAY, 3 * DAY))),
+            "1y" => Ok(Some((365 * DAY, 7 * DAY))),
+            "all" => Ok(None),
             _ => Err("Unknown time range".into()),
         }
     }
+}
+/// "all" spans from the first retained sample; the bucket is the smallest step giving at most
+/// 80 points, as `AIUsage.bucketFor` does. One extra step keeps the first sample inside the
+/// range after the end is aligned down to a bucket boundary.
+pub fn all_timing(span: u64) -> (u64, u64) {
+    let steps = [1, 7, 14, 30, 91].map(|days| days * 86400);
+    let step = steps.into_iter().find(|s| span / s <= 80).unwrap_or(steps[4]);
+    ((span.div_ceil(step) + 1) * step, step)
 }
 #[derive(Clone, Debug, Serialize, PartialEq)]
 pub struct TimeRange {

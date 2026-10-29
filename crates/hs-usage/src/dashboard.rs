@@ -80,7 +80,10 @@ impl Dashboard {
         selection.validate()?;
         let started = Instant::now();
         let timestamp = now();
-        let (seconds, step) = selection.timing()?;
+        let (seconds, step) = match selection.timing()? {
+            Some(timing) => timing,
+            None => crate::datasets::all_timing(timestamp.saturating_sub(self.first_sample(timestamp).await?)),
+        };
         let boundary = timestamp / step * step;
         // This short, bounded shared cache also singleflights global misses; builds never overlap.
         let mut cache = self.cache.lock().await;
@@ -195,6 +198,30 @@ impl Dashboard {
             cache.snapshots.pop_front();
         }
         Ok(snapshot)
+    }
+    /// Start of the day holding the first retained usage sample, or today without samples.
+    async fn first_sample(&self, timestamp: u64) -> Result<u64, String> {
+        let day = timestamp / 86400 * 86400;
+        let source = self
+            .prom
+            .read(
+                "/api/v1/query_range",
+                vec![
+                    ("query".into(), format!("count(last_over_time({}[1d]))", registry::DISCOVERY)),
+                    ("start".into(), (day - 599 * 86400).to_string()),
+                    ("end".into(), (day + 86400).to_string()),
+                    ("step".into(), "86400".into()),
+                    ("timeout".into(), "20s".into()),
+                ],
+                21600,
+            )
+            .await?;
+        // Each point counts samples in the preceding day.
+        Ok(source.data["result"][0]["values"]
+            .as_array()
+            .and_then(|values| values.first())
+            .and_then(|pair| pair[0].as_f64())
+            .map_or(day, |t| t as u64 - 86400))
     }
     pub async fn changes(&self, previous: &str, current: &Snapshot) -> Option<Vec<Value>> {
         let cache = self.cache.lock().await;
@@ -635,8 +662,8 @@ fn normalize(global: &Global, selection: Selection, prices: &Option<Value>, time
         "tokens",
         &selection,
         &TimeRange {
-            start: global.range.partial_start / 3600 * 3600
-                - (selection.timing().map_or(7, |(s, _)| (s / 86400).clamp(7, 30))) * 86400,
+            start: timestamp / 3600 * 3600
+                - ((global.range.end - global.range.step - global.range.start) / 86400).clamp(7, 30) * 86400,
             end: timestamp / 3600 * 3600 + 3600,
             step: 3600,
             partial_start: timestamp / 3600 * 3600,
@@ -647,7 +674,7 @@ fn normalize(global: &Global, selection: Selection, prices: &Option<Value>, time
     activity.total = None;
     all.push(activity);
     let mut spikes = make("all", "spikes", "tokens", &selection, &global.range, Vec::new(), true);
-    let days = selection.timing().map_or(7, |(seconds, _)| (seconds / 86400).max(7));
+    let days = ((global.range.end - global.range.step - global.range.start) / 86400).max(7);
     let day = timestamp / 86400 * 86400;
     let times: Vec<_> = if daily.is_empty() {
         Vec::new()

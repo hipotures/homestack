@@ -22,6 +22,12 @@ h1 { font-size: 20px; margin: 0; font-weight: 600; }
 .compare .compare-footer { margin-top: 14px; max-width: none; }
 .compare tbody th:first-child { position: sticky; left: 0; z-index: 1; background: var(--surface); }
 .theme { cursor: pointer; padding: 4px 10px; }
+.range { position: relative; max-width: 100%; }
+.menu { position: absolute; right: 0; top: calc(100% + 6px); z-index: 5; width: 220px; padding: 6px; background: var(--surface-3); border: 1px solid var(--border-strong); border-radius: 12px; box-shadow: 0 12px 32px rgba(0,0,0,.35); display: flex; flex-direction: column; gap: 2px; }
+.menu button { border: 0; text-align: left; min-height: 38px; padding: 0 12px; border-radius: 8px; background: transparent; color: var(--text); font: inherit; font-size: 13px; cursor: pointer; display: flex; justify-content: space-between; align-items: center; }
+.menu button:hover:not(:disabled), .menu button.active { background: var(--surface-2); }
+.menu button:disabled { color: var(--faint); cursor: not-allowed; }
+.menu .hint { font-size: 11px; color: var(--faint); }
 .updated { color: var(--muted); font-size: 12px; margin-left: auto; }
 .error { border: 1px solid var(--up); border-radius: 8px; padding: 8px 12px; margin-bottom: 16px; }
 .error::before { content: "⚠ "; color: var(--up); }
@@ -77,7 +83,22 @@ button:focus-visible,select:focus-visible {outline:2px solid var(--codex);outlin
 <select class="scope" id="agent" aria-label="Agent" data-bind:agent data-attr:disabled="$_compare"><option value="all">All agents</option><option value="claude">Claude Code</option><option value="codex">Codex</option></select>
 <select class="scope" id="host" aria-label="Server" data-bind:host><option value="*">All servers</option></select>
 <select class="scope" id="project" aria-label="Project" data-bind:project><option value="*">All projects</option></select>
-<select class="scope" id="range" aria-label="Time range" data-bind:range><option value="1h">1 h</option><option value="24h">24 h</option><option value="7d">7 days</option><option value="30d">30 days</option><option value="90d">90 days</option></select>
+<div class="range" data-on:click__outside="$_more=false" data-on:keydown__window="evt.key==='Escape'&&($_more=false)">
+<div class="seg scroll" role="group" aria-label="Time range">
+<button type="button" data-on:click="$range='1h'" data-attr:aria-pressed="String($range==='1h')">1h</button>
+<button type="button" data-on:click="$range='24h'" data-attr:aria-pressed="String($range==='24h')">24h</button>
+<button type="button" data-on:click="$range='7d'" data-attr:aria-pressed="String($range==='7d')">7d</button>
+<button type="button" data-on:click="$range='30d'" data-attr:aria-pressed="String($range==='30d')">30d</button>
+<button type="button" data-on:click="$range='90d'" data-attr:aria-pressed="String($range==='90d')">90d</button>
+<button type="button" id="range-more" aria-haspopup="menu" data-on:click="$_more=!$_more" data-attr:aria-expanded="String($_more)" data-attr:aria-pressed="String(['180d','1y','all'].includes($range))" data-text="({'180d':'180 days','1y':'1 year','all':'All'}[$range]||'More')+' ▾'">More ▾</button>
+</div>
+<div class="menu" role="menu" data-show="$_more" style="display:none">
+<button type="button" role="menuitem" data-on:click="$range='180d';$_more=false" data-class:active="$range==='180d'">180 days</button>
+<button type="button" role="menuitem" data-on:click="$range='1y';$_more=false" data-class:active="$range==='1y'">1 year</button>
+<button type="button" role="menuitem" data-on:click="$range='all';$_more=false" data-class:active="$range==='all'">All <span class="hint">retained history</span></button>
+<button type="button" role="menuitem" disabled title="Custom ranges are not available yet">Custom range…</button>
+</div>
+</div>
 <label class="scope mode"><input id="compare" type="checkbox" role="switch" data-bind:_compare data-on:change="if($_compare) $agent='all'; window.usage.mode($_compare)"> Compare agents</label>
 <span class="updated" id="updated" aria-live="polite">Connecting…</span>
 <button class="scope copy-all" id="copy-all" type="button" title="Copy all chart data as JSON Lines">⧉ Copy all</button>
