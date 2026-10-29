@@ -102,6 +102,8 @@ pub async fn block(
         let sel = selector(&metrics);
         if boundary > start {
             let query = match kind {
+                // Histograms are read only by per-selection quantile queries.
+                Kind::Histogram => continue,
                 Kind::Response => format!(
                     "sum by ({GROUPS}) ({})",
                     format_args!(
@@ -136,6 +138,7 @@ pub async fn block(
         }
         if now > boundary {
             match kind {
+                Kind::Histogram => continue,
                 Kind::Response => {
                     let query = format!(
                         "sum by ({GROUPS}) ({})",
@@ -239,5 +242,67 @@ pub async fn block(
         sources,
         fetched,
     })
+}
+/// Bucket-approximated p50/p95 of a duration histogram for one selection, in seconds.
+/// Shared blocks are selection-independent and filtered in Rust, but quantiles cannot be
+/// combined after the fact, so these small queries carry the host/project matchers.
+pub async fn quantiles(
+    prom: &Prometheus,
+    histogram: &Instrument,
+    matchers: &str,
+    range: (u64, u64, u64),
+    now: u64,
+) -> Result<serde_json::Value, String> {
+    let (start, boundary, step) = range;
+    let name = &histogram.name;
+    let quantile = |q: f64, window: String| {
+        format!("histogram_quantile({q}, sum by (le) (increase({name}{{{matchers}}}[{window}])))")
+    };
+    // The bucket bounds come along so that quantiles in the +Inf bucket can be marked as capped.
+    let total = format!(
+        "label_replace({}, \"q\", \"p50\", \"\", \"\") or label_replace({}, \"q\", \"p95\", \"\", \"\") or label_replace(count by (le) (last_over_time({name}{{{matchers}}}[{}s])), \"q\", \"bound\", \"\", \"\")",
+        quantile(0.5, format!("{}s", now - start)),
+        quantile(0.95, format!("{}s", now - start)),
+        now - start
+    );
+    let timeline = vec![
+        ("query".into(), quantile(0.5, format!("{step}s"))),
+        ("start".into(), (start + step).to_string()),
+        ("end".into(), boundary.to_string()),
+        ("step".into(), step.to_string()),
+        ("timeout".into(), "20s".into()),
+    ];
+    let (total, timeline) = futures_util::try_join!(
+        prom.instant(total, now as f64, 30),
+        prom.read("/api/v1/query_range", timeline, 21600)
+    )?;
+    let mut value = serde_json::Map::new();
+    let mut top = 0f64;
+    for (labels, _, v) in samples(&total) {
+        match labels.get("q").map(String::as_str) {
+            Some("bound") => {
+                let le = labels.get("le").and_then(|le| le.parse::<f64>().ok()).unwrap_or(0.);
+                if le.is_finite() {
+                    top = top.max(le);
+                }
+            }
+            Some(q) => {
+                value.insert(q.into(), (v / 1000.).into());
+            }
+            None => {}
+        }
+    }
+    // histogram_quantile reports the largest finite bound for quantiles above it.
+    for q in ["p50", "p95"] {
+        let capped = value.get(q).and_then(serde_json::Value::as_f64).is_some_and(|v| top > 0. && v * 1000. >= top);
+        value.insert(format!("{q}Capped"), capped.into());
+    }
+    // Closed buckets only; each point is stamped with its bucket start like the shared blocks.
+    let points: Vec<_> = samples(&timeline)
+        .into_iter()
+        .map(|(_, t, v)| (t.saturating_sub(step), v / 1000.))
+        .collect();
+    value.insert("p50Timeline".into(), serde_json::json!(points));
+    Ok(serde_json::Value::Object(value))
 }
 use futures_util::FutureExt;

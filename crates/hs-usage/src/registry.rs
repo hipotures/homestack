@@ -15,9 +15,11 @@ pub enum Kind {
     Counter,
     Response,
     History,
+    /// Cumulative `_bucket` series read only by per-selection quantile queries.
+    Histogram,
 }
 
-pub const DISCOVERY: &str = "{__name__=~\"claude_code_(token_usage_tokens|cost_usage_USD|session_count|active_time_seconds|commit_count|lines_of_code_count)_total|codex_(response_token_usage|(turn_(token_usage|e2e_duration_ms|ttft_duration_ms|ttfm_duration_ms)|thread_started|conversation_turn_count|tool_call).*_(sum|count|total))\"}";
+pub const DISCOVERY: &str = "{__name__=~\"claude_code_(token_usage_tokens|cost_usage_USD|session_count|active_time_seconds|commit_count|lines_of_code_count)_total|codex_(response_token_usage|(turn_(token_usage|e2e_duration_ms|ttft_duration_ms|ttfm_duration_ms)|thread_started|conversation_turn_count|tool_call).*_(sum|count|total)|(turn_(e2e|ttft|ttfm)|tool_call)_duration_ms.*_bucket)\"}";
 
 pub fn instruments(names: &[String], history_end: f64) -> Vec<Instrument> {
     let mut out = Vec::new();
@@ -90,6 +92,12 @@ pub fn instruments(names: &[String], history_end: f64) -> Vec<Instrument> {
             measurement,
             "observations",
             Kind::Counter,
+        );
+        add(
+            names.iter().find(|n| n.starts_with(prefix) && n.ends_with("_bucket")),
+            measurement,
+            "buckets",
+            Kind::Histogram,
         );
     }
     out

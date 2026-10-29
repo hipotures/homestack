@@ -199,7 +199,21 @@ impl Dashboard {
             }
             global
         };
-        let mut snapshot = normalize(&global, selection, &self.prices, timestamp);
+        let mut quantiles = BTreeMap::new();
+        if selection.agent != "claude" {
+            let mut matchers = Vec::new();
+            for (label, value) in [("host_name", &selection.host), ("project", &selection.project)] {
+                if value != "*" {
+                    matchers.push(format!("{label}=\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\"")));
+                }
+            }
+            let range = (global.range.start, global.range.partial_start, global.range.step);
+            for histogram in global.registry.iter().filter(|m| m.kind == registry::Kind::Histogram) {
+                let value = planner::quantiles(&self.prom, histogram, &matchers.join(","), range, timestamp).await?;
+                quantiles.insert(histogram.measurement.to_owned(), value);
+            }
+        }
+        let mut snapshot = normalize(&global, selection, &self.prices, timestamp, &quantiles);
         snapshot.generated_ms = started.elapsed().as_millis();
         let snapshot = Arc::new(snapshot);
         if snapshot.full().to_string().len() > 512 * 1024 {
@@ -648,7 +662,13 @@ fn sum_category(dataset: &Dataset, category: &str) -> Option<f64> {
         .collect();
     (!rows.is_empty()).then(|| rows.iter().flat_map(|s| &s.points).map(|(_, v)| v).sum())
 }
-fn normalize(global: &Global, selection: Selection, prices: &Option<Value>, timestamp: u64) -> Snapshot {
+fn normalize(
+    global: &Global,
+    selection: Selection,
+    prices: &Option<Value>,
+    timestamp: u64,
+    quantiles: &BTreeMap<String, Value>,
+) -> Snapshot {
     // Comparison and total tiles use these same datasets, never independent accounting queries.
     let mut all = Vec::new();
     for agent in ["claude", "codex"] {
@@ -739,6 +759,11 @@ fn normalize(global: &Global, selection: Selection, prices: &Option<Value>, time
     spikes.details = json!(items);
     spikes.state = Availability::Available;
     all.push(spikes);
+    for d in all.iter_mut().filter(|d| d.agent == "codex") {
+        if let (Some(q), Some(details)) = (quantiles.get(&d.measurement), d.details.as_object_mut()) {
+            details.extend(q.as_object().into_iter().flatten().map(|(k, v)| (k.clone(), v.clone())));
+        }
+    }
     for d in &mut all {
         enrich(d);
     }

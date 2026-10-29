@@ -353,8 +353,11 @@
   /** Cards for every measurement this agent reports; returns placeholders for the empty state too. */
   function agentPanel(agent,summary,range) {
     const color=AIUsage.colorFor(agents[agent]),small=[],wide=[],placeholders=[];let activity=summary[agent]?.total?.value>0;
-    for(const [m,label]of LATENCY){const d=reported(agent,m);if(!d)continue;placeholders.push([label,"average duration"]);
-      if(d.total!=null){activity=true;small.push(metricCard(label,F.duration(d.total),"average",miniBars(d.series[0]?.points||[],range,color),`${F.full(Math.round(d.total*1000))} ms`));}}
+    // Histogram quantiles when the agent exports buckets; the Σsum/Σcount mean otherwise.
+    const at=(d,q)=>`${d.details[q+"Capped"]?"≥ ":""}${F.duration(d.details[q])}`;
+    for(const [m,label]of LATENCY){const d=reported(agent,m);if(!d)continue;placeholders.push([label,"median and p95"]);
+      if(d.details.p50!=null){activity=true;small.push(metricCard(label,at(d,"p50"),"p50",`<div class="note">p95 ${at(d,"p95")} · mean ${F.duration(d.total)}</div>`+miniBars(d.details.p50Timeline||[],range,color),`${F.full(Math.round(d.details.p50*1000))} ms`));}
+      else if(d.total!=null){activity=true;small.push(metricCard(label,F.duration(d.total),"average",miniBars(d.series[0]?.points||[],range,color),`${F.full(Math.round(d.total*1000))} ms`));}}
     for(const [m,label,hint]of COUNTS){const d=reported(agent,m);if(!d)continue;placeholders.push([label,hint]);
       const sum=total(d.details?.timeline);if(!sum)continue;activity=true;
       const kinds=d.series.map(s=>[s.dimensions.kind,total(s.points)]).filter(([,v])=>v>0);
@@ -383,8 +386,8 @@
     const longer=["90d","180d","1y","all"].includes(selection.range);
     const body=panel.activity&&panel.html?panel.html:`<div class="card empty"><div><h3>No ${agents[agent]} activity in this range</h3><p>${panel.placeholders.length?"When there is activity, these metrics appear here:":`${agents[agent]} reports no agent-specific metrics.`}</p></div>
       <div class="placeholders">${panel.placeholders.map(([label,hint])=>`<div><span class="eyebrow">${label}</span><span class="num">—</span><span>${hint}</span></div>`).join("")}</div>${longer?"":`<div><button type="button" class="link" data-goto="90d">Show the last 90 days</button></div>`}</div>`;
-    const averages=LATENCY.some(([m])=>reported(agent,m)?.total!=null);
-    $("agents").innerHTML=`${compare}<div class="agent-bar" role="${both?"":"group"}">${tabs}${chip?`<span class="chip">${chip}</span>`:""}</div><div ${both?`role="tabpanel"`:""} class="agents">${body}</div>${averages&&panel.activity?`<p class="note faint" style="margin:0">Durations are averages (Σ sum / Σ count) of the Codex histograms.</p>`:""}`;
+    const latency=LATENCY.map(([m])=>reported(agent,m)).filter(d=>d?.total!=null),quantiles=latency.some(d=>d.details.p50!=null);
+    $("agents").innerHTML=`${compare}<div class="agent-bar" role="${both?"":"group"}">${tabs}${chip?`<span class="chip">${chip}</span>`:""}</div><div ${both?`role="tabpanel"`:""} class="agents">${body}</div>${latency.length&&panel.activity?`<p class="note faint" style="margin:0">${quantiles?"Durations are p50 with p95 below, approximated from the histogram buckets; ≥ marks a value in the open top bucket. Bars show p50 per bucket.":"Durations are averages (Σ sum / Σ count) of the duration histograms."}</p>`:""}`;
   }
   async function copyCharts(button,specs) {
     const id=snapshot,chosen=structuredClone(specs),scope={...selection},label=button.textContent;

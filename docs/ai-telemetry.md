@@ -160,11 +160,18 @@ agents and bounded host/project labels are accepted. Arbitrary PromQL and metric
 selectors are not API inputs. The serving pipeline is:
 
 1. `registry.rs`: agent adapters and instrument discovery. Claude counters and
-   Codex response increments, frozen turn history, counters and duration
-   sum/count pairs declare their measurement and unit here.
+   Codex response increments, frozen turn history, counters, duration
+   sum/count pairs and duration `_bucket` histograms declare their measurement
+   and unit here.
 2. `planner.rs`: stable UTC bucket plans, grouped queries, process-preserving
    counter subtraction and exact source provenance. Closed history and current
-   partial buckets are independent operations.
+   partial buckets are independent operations. Duration p50/p95 are the one
+   per-selection read: quantiles cannot be combined after host/project
+   filtering, so each Codex duration histogram gets one instant
+   `histogram_quantile` query for the range (p50, p95 and the bucket bounds,
+   to mark values in the open `+Inf` bucket) and one closed-bucket p50
+   `query_range`, both with the host/project matchers. They are
+   bucket-approximated; means (Σ sum / Σ count) remain alongside.
 3. `prometheus.rs`: one reused HTTP client, global concurrency **four**, query
    deduplication, per-key singleflight and bounded response/cache sizes.
 4. `dashboard.rs`: host/project filtering, token normalization, model pricing,
