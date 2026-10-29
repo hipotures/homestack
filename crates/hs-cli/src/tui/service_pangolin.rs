@@ -114,16 +114,17 @@ pub(super) fn settings(source: &Source) -> Vec<Setting> {
     let action = Setting {
         title: ACTION.to_owned(),
         note: format!(
-            "Publish reuses or creates the Pangolin HTTP resource {sub} on the selected Pangolin domain, \
-             routes it through an online Site to one instance (the \
-             selected one, or the one this deployment creates) on its {port} port and monitors its health \
-             check. Unchanged makes no Pangolin request.",
+            "Enter attaches: it connects to Pangolin and reads its verified domains; once attached, Enter \
+             refreshes them. Attached, the deployment reuses or creates the Pangolin HTTP resource {sub} on \
+             the selected Pangolin domain, routes it through an online Site to one instance (the selected \
+             one, or the one this deployment creates) on its {port} port and monitors its health check. \
+             Without attaching, no Pangolin request is made.",
             sub = exposure.subdomain,
             port = exposure.port,
         ),
         choices: vec![
-            ("unchanged".to_owned(), "Keep current routing".to_owned()),
-            ("attach".to_owned(), format!("Publish {}", exposure.subdomain)),
+            ("attach".to_owned(), String::new()),
+            ("refresh".to_owned(), String::new()),
         ],
         text: None,
         list: false,
@@ -136,7 +137,7 @@ pub(super) fn settings(source: &Source) -> Vec<Setting> {
     };
     let mut domain = action.clone();
     domain.title = DOMAIN.to_owned();
-    domain.note = "Press Enter to connect to Pangolin and choose a verified domain.".to_owned();
+    domain.note = "Enter chooses a verified domain; it attaches Pangolin first if needed.".to_owned();
     domain.choices.clear();
     domain.picked.clear();
     vec![action, domain]
@@ -149,6 +150,23 @@ pub(super) fn domains(pangolin: &Pangolin, stop: &AtomicBool) -> Result<Vec<Stri
         return Err("Pangolin has no verified domain; add one in Pangolin first".to_owned());
     }
     Ok(domains.into_iter().map(|d| d.base).collect())
+}
+
+/// Mark Pangolin attached: the deployment then publishes through it.
+pub(super) fn attach(settings: &mut [Setting]) {
+    if let Some(setting) = settings.iter_mut().find(|setting| setting.title == ACTION) {
+        setting.picked = vec![1];
+    }
+}
+
+/// Whether Pangolin is attached and its domains are loaded.
+pub(super) fn attached(settings: &[Setting]) -> bool {
+    settings
+        .iter()
+        .any(|setting| setting.title == ACTION && setting.picked.as_slice() == [1])
+        && settings
+            .iter()
+            .any(|setting| setting.title == DOMAIN && !setting.choices.is_empty())
 }
 
 /// Replace the selector's choices, retaining a still-valid selection.
@@ -738,7 +756,8 @@ pub(super) async fn apply(
             )?;
             lines.push("Rule evaluation turned on".to_owned());
         }
-        if api.bypass(Some(resource), &plan.bypass_paths)? != Bypass::default() {
+        let saved = api.bypass(Some(resource), &plan.bypass_paths)?;
+        if !saved.missing.is_empty() || saved.enable {
             return Err("Saved Pangolin rules do not match the review; inspect the resource rules".to_owned());
         }
         Ok(lines)

@@ -578,6 +578,7 @@ fn load_pangolin_domains(
     let previous = session.settings.clone();
     restore(&mut session.settings, &previous, answers);
     service_pangolin::set_domains(&mut session.settings, domains);
+    service_pangolin::attach(&mut session.settings);
     Ok(())
 }
 

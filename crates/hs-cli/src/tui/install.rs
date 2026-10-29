@@ -918,14 +918,17 @@ impl Install {
             KeyCode::Up => self.row = self.row.saturating_sub(1),
             KeyCode::Down | KeyCode::Tab => self.row = (self.row + 1).min(last),
             KeyCode::BackTab => self.row = self.row.saturating_sub(1),
+            // Pangolin attaches (or refreshes) at once; its domain is chosen
+            // directly once attached.
             KeyCode::Enter
                 if self.mode == Mode::Service
-                    && self
-                        .settings
-                        .get(self.row)
-                        .is_some_and(|setting| setting.title == super::service_pangolin::DOMAIN) =>
+                    && self.settings.get(self.row).is_some_and(|setting| {
+                        setting.title == super::service_pangolin::ACTION
+                            || (setting.title == super::service_pangolin::DOMAIN
+                                && !super::service_pangolin::attached(&self.settings))
+                    }) =>
             {
-                self.busy = Some("Loading Pangolin domains".to_owned());
+                self.busy = Some("Attaching Pangolin and reading its domains".to_owned());
                 return (
                     false,
                     Some(Request::Install(Command::PangolinDomains {

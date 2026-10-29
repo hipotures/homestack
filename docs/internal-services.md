@@ -13,14 +13,15 @@ deployment. No existing internal container is adopted or modified.
 
 ## Attach an existing application to Pangolin
 
-In the service's maintenance settings, select one running instance, choose
-**Pangolin → Publish**, and review and apply. HomeStack opens its verified SSH
-API tunnel, finds or creates the manifest's resource and routes it through an
-online Site to the manifest's application port. F5 refreshes the lists and
-preserves edits. Open **Pangolin domain** to connect and choose from the
-organization's verified domains, for example `hs.example.com`. If publication
-is requested before a domain is selected, HomeStack opens that selector before
-Review. Publishing under a different base domain creates or reuses that name's
+In the service's maintenance settings, select one running instance and press
+Enter on **Pangolin → attach**. HomeStack opens its verified SSH API tunnel at
+once, reads the organization's verified domains and opens **Pangolin domain**
+to choose one, for example `hs.example.com`. The row then reads **refresh**:
+Enter reads Pangolin again after changes made there. Review and apply find or
+create the manifest's resource, route it through an online Site to the
+manifest's application port and add the manifest's `bypass_paths` rules.
+Without attaching, no Pangolin request is made. F5 refreshes the lists and
+preserves edits. Publishing under a different base domain creates or reuses that name's
 resource; the old resource is preserved.
 
 This operation creates a missing resource and backend target or updates the resource's one
