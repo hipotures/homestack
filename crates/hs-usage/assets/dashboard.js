@@ -172,7 +172,9 @@
   const two=n=>String(n).padStart(2,"0");
   const chosen=()=>Object.keys(agents).filter(a=>selection.agent==="all"||selection.agent===a);
   let metric="cost",trendChart,heatChart;
-  try{metric=localStorage.getItem("metric")==="tokens"?"tokens":"cost";}catch(_){}
+  try{metric=["tokens","types"].includes(localStorage.getItem("metric"))?localStorage.getItem("metric"):"cost";}catch(_){}
+  // Token types stack to the total: output is drawn without its reasoning part.
+  const TYPES=[["cached","Cached input","--tok-cached"],["input","Uncached input","--tok-uncached"],["written","Cache write","--codex-lo"],["output","Output","--tok-output"],["reasoning","Reasoning","--tok-reasoning"]];
   /** Bucket times of the current range, oldest first. */
   const buckets=range=>{const out=[];for(let t=range.start;t<range.end;t+=range.step)out.push(t);return out;};
   const bucketLabel=step=>step<3600?`${step/60}-minute buckets`:step<86400?`${step/3600}-hour buckets`:step===86400?"daily buckets":step===604800?"weekly buckets":`${step/86400}-day buckets`;
@@ -233,7 +235,12 @@
   }
   function renderTrend(range,firstActive) {
     const sel=chosen(),series=[];
-    for(const a of sel){
+    if(metric==="types"){
+      const kind=id=>sumPoints(sel.map(a=>datasets.get(`${a}.tokens`)).filter(d=>d&&d.state!=="unavailable").map(d=>(d.details.categories||[]).find(c=>c.id===id)?.points));
+      const reasoning=kind("reasoning");
+      for(const [id,name,color]of TYPES)series.push({name,color:getComputedStyle(document.documentElement).getPropertyValue(color).trim(),points:[...kind(id)].map(([t,v])=>[t,id==="output"?v-(reasoning.get(t)||0):v])});
+    }
+    else for(const a of sel){
       const d=datasets.get(`${a}.${metric==="cost"?"cost":"tokens"}`);
       if(!d||d.state==="unavailable")continue;
       const rows=metric==="cost"?d.series.map(s=>({model:s.dimensions.model,points:s.points})):(d.details.models||[]).map(s=>({model:s.id,points:s.points}));
@@ -245,9 +252,9 @@
     const stack=sumPoints(visible.map(s=>s.points)),first=Number.isFinite(firstActive)?firstActive:range.start;
     const fmtShort=metric==="cost"?v=>F.cost(v):F.tokens,fmtFull=metric==="cost"?v=>F.cost(v,true):F.full;
     $("trend-title").textContent=metric==="cost"?"Cost over time":"Tokens over time";
-    $("trend-sub").textContent=`${bucketLabel(range.step)} · stacked by model`;
+    $("trend-sub").textContent=`${bucketLabel(range.step)} · stacked by ${metric==="types"?"token type":"model"}`;
     for(const b of document.querySelectorAll("[data-metric]"))b.setAttribute("aria-pressed",String(b.dataset.metric===metric));
-    $("trend-legend").innerHTML=visible.map(s=>`<span><i class="sw" style="background:${AIUsage.colorFor(s.name)}"></i>${esc(s.name)}</span>`).join("");
+    $("trend-legend").innerHTML=visible.map(s=>`<span><i class="sw" style="background:${s.color||AIUsage.colorFor(s.name)}"></i>${esc(s.name)}</span>`).join("");
     $("trend-chips").innerHTML=first>range.start?`<span class="chip">data since ${timeLabel(first,range)}</span>`:"";
     // Runs of at least three empty buckets inside the data span are marked as gaps.
     const gaps=[];let run=null;
@@ -261,7 +268,7 @@
       yAxis:{type:"value",axisLabel:{formatter:fmtShort}},
       // Stacks on a time axis need identical x values in every series, so all are aligned to the buckets.
       series:visible.map((s,i)=>AIUsage.bar(s.name,(m=>times.filter(t=>t>=first).map(t=>[t*1000,m.get(t)||0]))(new Map(s.points)),s.name,{
-        id:s.name,barMaxWidth:28,
+        id:s.name,barMaxWidth:28,...(s.color?{itemStyle:{color:s.color}}:{}),
         markPoint:i===visible.length-1&&peak[1]>0?{...AIUsage.peak(()=>`peak ${timeLabel(peak[0],range)}  ${fmtShort(peak[1])}`),data:[{coord:[peak[0]*1000,peak[1]]}]}:undefined,
         markArea:i===0&&gaps.length?{...AIUsage.gaps([]),data:gaps.map(([a,b])=>[{xAxis:(a-range.step/2)*1000,name:`gap ${timeLabel(a,range)}–${timeLabel(b+range.step,range)}`},{xAxis:(b+range.step/2)*1000}])}:undefined,
       })),
@@ -322,7 +329,7 @@
   let agentTab="codex";
   try{agentTab=localStorage.getItem("agentTab")||agentTab;}catch(_){}
   const LATENCY=[["firstToken","To first token"],["firstOutput","To first output item"],["turnDuration","Turn duration"],["toolDuration","Tool duration"]];
-  const COUNTS=[["active","Active time","split: user / cli"],["commits","Commits","count in range"],["lines","Lines of code","added / removed"],["sessions","New sessions","started in range"],["turns","Turns","conversation turns"]];
+  const COUNTS=[["active","Active time","split: user / cli"],["commits","Commits","count in range"],["lines","Lines of code","added / removed"],["sessions","New sessions","started in range"],["turns","Turns","conversation turns"],["tools","Tool calls","calls · failed"]];
   const total=points=>(points||[]).reduce((s,[,v])=>s+(v||0),0);
   function miniBars(points,range,color) {
     const first=Math.min(...points.filter(([,v])=>v>0).map(([t])=>t));
@@ -347,9 +354,10 @@
   }
   function toolsCard(d,color) {
     const ranking=d.details.ranking||[],calls=ranking.reduce((s,r)=>s+r.calls,0),failed=ranking.reduce((s,r)=>s+r.failed,0),max=ranking[0]?.calls||0;
+    const row=r=>`<div class="tool"><span title="${esc(r.tool)}">${esc(r.tool)}</span><div class="track" aria-hidden="true"><span style="width:${(r.calls-r.failed)/max*100}%;background:${color}"></span><span style="width:${r.failed?Math.max(1.2,r.failed/max*100):0}%;background:var(--warn)"></span></div><span class="num" title="${F.full(r.failed)} failed">${F.full(r.calls)}</span></div>`;
     return `<div class="card"><div class="card-top"><div><h3>Tool calls</h3><span class="sub">${F.full(calls)} calls · ranking by tool</span></div>${calls?`<span class="badge"><b class="num">${F.full(failed)}</b> failed · ${F.pct(failed/calls*100,2)}</span>`:""}</div>
-      <div class="bars" style="gap:10px">${ranking.slice(0,10).map(r=>`<div class="tool"><span title="${esc(r.tool)}">${esc(r.tool)}</span><div class="track" aria-hidden="true"><span style="width:${(r.calls-r.failed)/max*100}%;background:${color}"></span><span style="width:${r.failed?Math.max(1.2,r.failed/max*100):0}%;background:var(--warn)"></span></div><span class="num" title="${F.full(r.failed)} failed">${F.full(r.calls)}</span></div>`).join("")}</div>
-      ${ranking.length>10?`<div class="note">${ranking.length-10} more ${ranking.length===11?"tool":"tools"} in the raw charts</div>`:""}${failed?`<div class="note faint">the yellow part of a bar is that tool's failed calls</div>`:""}</div>`;
+      <div class="bars" style="gap:10px">${ranking.slice(0,10).map(row).join("")}</div>
+      ${ranking.length>10?`<details class="more-tools"><summary class="note">${ranking.length-10} more ${ranking.length===11?"tool":"tools"}</summary><div class="bars" style="gap:10px">${ranking.slice(10).map(row).join("")}</div></details>`:""}${failed?`<div class="note faint">the yellow part of a bar is that tool's failed calls</div>`:""}</div>`;
   }
   /** Cards for every measurement this agent reports; returns placeholders for the empty state too. */
   function agentPanel(agent,summary,range) {
@@ -363,10 +371,11 @@
       const sum=total(d.details?.timeline);if(!sum)continue;activity=true;
       const kinds=d.series.map(s=>[s.dimensions.kind,total(s.points)]).filter(([,v])=>v>0);
       const value=m==="active"?F.duration(sum):m==="lines"?`+${F.tokens(summary[agent]?.added?.value||0)} / −${F.tokens(summary[agent]?.removed?.value||0)}`:F.full(sum);
-      const note=m==="active"&&kinds.length?kinds.map(([k,v])=>`${esc(k)} ${F.duration(v)}`).join(" · "):m==="lines"?"added / removed":"";
+      const failed=m==="tools"?total(d.details.failures):0;
+      const note=m==="active"&&kinds.length?kinds.map(([k,v])=>`${esc(k)} ${F.duration(v)}`).join(" · "):m==="lines"?"added / removed":m==="tools"?`${F.full(failed)} failed`:"";
       small.push(metricCard(label,value,note,miniBars(d.details.timeline,range,color),m==="active"?`${F.full(Math.round(sum))} s`:F.full(sum)));}
     const turn=reported(agent,"turnDuration");if(turn&&turn.details.total_seconds)wide.push(workCard(turn,range));
-    const tools=reported(agent,"tools");if(tools){placeholders.push(["Tool calls","ranking with failures"]);if(tools.details.ranking?.length){activity=true;wide.push(toolsCard(tools,color));}}
+    const tools=reported(agent,"tools");if(tools?.details.ranking?.length){activity=true;wide.push(toolsCard(tools,color));}
     return {activity,count:placeholders.length,html:small.length||wide.length?`${small.length?`<div class="kpi-grid metrics">${small.join("")}</div>`:""}${wide.length?`<div class="row-2">${wide.join("")}</div>`:""}`:"",placeholders};
   }
   function renderAgents(summary,range) {

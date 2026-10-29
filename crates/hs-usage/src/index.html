@@ -61,6 +61,7 @@ a { color: var(--tok-uncached); }
 .idle { display: flex; justify-content: space-between; align-items: center; gap: 12px; font-size: 13px; color: var(--muted); }
 .idle.first { padding-top: 14px; border-top: 1px solid var(--border); }
 .idle .sw { opacity: .45; }
+.more-tools summary { cursor: pointer; margin-bottom: 10px; }
 .heat-legend { display: flex; align-items: center; gap: 6px; font-size: var(--fs-tick); color: var(--faint); }
 .heat-legend i { width: 12px; height: 12px; border-radius: 3px; }
 .chart.heat { height: 250px; }
@@ -182,7 +183,7 @@ button:focus-visible, select:focus-visible { outline: 2px solid var(--codex); ou
 <section class="card" id="trend" aria-label="Usage over time">
 <div class="card-top"><div><h2 id="trend-title">Cost over time</h2><span class="sub" id="trend-sub"></span></div>
 <div class="card-tools"><div class="legend" id="trend-legend"></div>
-<div class="seg" role="group" aria-label="Metric"><button type="button" data-metric="cost">Cost</button><button type="button" data-metric="tokens">Tokens</button></div></div></div>
+<div class="seg" role="group" aria-label="Metric"><button type="button" data-metric="cost">Cost</button><button type="button" data-metric="tokens">Tokens</button><button type="button" data-metric="types">Token types</button></div></div></div>
 <div class="chips" id="trend-chips"></div>
 <div class="chart tall" id="trend-chart" role="img" aria-label="Usage over time, stacked by model"></div>
 </section>
@@ -197,9 +198,9 @@ button:focus-visible, select:focus-visible { outline: 2px solid var(--codex); ou
 </div>
 <section class="agents" id="agents" aria-label="Agent details"></section>
 </div>
-<footer class="foot"><span>AI Usage __HOMESTACK_USAGE_VERSION__ · Datastar 1.0.4 · Apache ECharts 6.1.0</span><span><a href="/assets/datastar-LICENSE.md">Datastar license</a> · <a href="/assets/echarts-LICENSE.txt">ECharts license</a> · <a href="/assets/echarts-NOTICE.txt">Notices</a> · <button class="link" id="raw-toggle" type="button" aria-controls="raw" aria-expanded="false">Show raw charts</button></span></footer>
+<footer class="foot"><span>AI Usage __HOMESTACK_USAGE_VERSION__ · Datastar 1.0.4 · Apache ECharts 6.1.0</span><span><a href="/assets/datastar-LICENSE.md">Datastar license</a> · <a href="/assets/echarts-LICENSE.txt">ECharts license</a> · <a href="/assets/echarts-NOTICE.txt">Notices</a> · <button class="link" id="copy-all" type="button" title="Copy the data of every chart as JSON Lines, with queries and time boundaries">Copy all data</button> · <button class="link" id="raw-toggle" type="button" aria-controls="raw" aria-expanded="false">Show raw charts</button></span></footer>
 <section class="raw" id="raw" aria-label="Raw charts" hidden data-ignore-morph>
-<div class="raw-head"><h2>Raw charts</h2><button class="scope copy-all" id="copy-all" type="button" title="Copy all chart data as JSON Lines">⧉ Copy all</button></div>
+<div class="raw-head"><h2>Raw charts</h2></div>
 <div class="cards" id="cards" data-ignore></div>
 </section>
 </main></body></html>
