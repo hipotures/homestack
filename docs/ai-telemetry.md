@@ -211,7 +211,9 @@ live response usage.
 Closed range matrices and per-process boundary baselines have six-hour TTLs;
 current partial buckets and normalized global views have thirty-second TTLs.
 The frozen Codex historical endpoint keeps its six-hour TTL.
-Discovery refreshes hourly. Ordinary refreshes within the same UTC bucket reuse
+Discovery refreshes hourly. Server/project options also include labels found
+only in retained process baselines, so inactive scopes remain selectable without
+an additional Prometheus query. Ordinary refreshes within the same UTC bucket reuse
 history/baselines and execute only recent-window queries. Cold views and bucket
 rollovers can require more expensive retention-baseline calculations. This is
 not evidence of full-year performance. Late data in closed buckets becomes

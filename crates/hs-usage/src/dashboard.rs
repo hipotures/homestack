@@ -693,6 +693,24 @@ fn normalize(global: &Global, selection: Selection, prices: &Option<Value>, time
             projects.insert(v.clone());
         }
     }
+    // Inactive scopes can exist only in retained boundary baselines. Keep them
+    // discoverable without issuing another retention-wide label query.
+    for row in global
+        .main
+        .sources
+        .iter()
+        .flat_map(|source| source.data["result"].as_array().into_iter().flatten())
+    {
+        for (label, values) in [("host_name", &mut hosts), ("project", &mut projects)] {
+            if let Some(value) = row["metric"][label].as_str()
+                && !value.is_empty()
+                && value.len() <= 160
+                && !value.chars().any(char::is_control)
+            {
+                values.insert(value.to_owned());
+            }
+        }
+    }
     let mut sources = Vec::new();
     let mut seen = BTreeSet::new();
     for source in global
