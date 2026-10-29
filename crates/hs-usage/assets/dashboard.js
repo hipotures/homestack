@@ -23,7 +23,6 @@
   }
   function select(next,sync) {
     epoch++; selection={...next}; snapshot=undefined;
-    $("selection-status").textContent="Loading selected filters… Previous data remains visible until the snapshot arrives.";
     try {for(const [key,value] of Object.entries(next))localStorage.setItem(key,value);}catch(_){}
     return epoch;
   }
@@ -35,7 +34,7 @@
   function apply(packet) {
     if(packet.epoch!==epoch)return;
     lastPacket=Date.now();
-    if(packet.kind==="error") {$("error").textContent="Prometheus unavailable: "+packet.message+". Retaining the last successful snapshot.";$("error").hidden=false;return;}
+    if(packet.kind==="error") {$("error").textContent="Cannot load data: "+packet.message;$("error").hidden=false;return;}
     const dirty=new Set();
     if(packet.kind==="full") {
       const full=packet.data;
@@ -46,7 +45,7 @@
       for(const [id,d] of Object.entries(full.datasets))if(datasets.get(id)?.version!==d.version)dirty.add(id);
       for(const id of datasets.keys())if(!full.datasets[id])dirty.add(id);
       datasets.clear();for(const [id,d]of Object.entries(full.datasets))datasets.set(id,d);
-      snapshot=full.snapshot;$("coverage").textContent=full.warnings.join(" ");
+      snapshot=full.snapshot;
       scopeOptions("host",full.hosts,"All servers");scopeOptions("project",full.projects,"All projects");
       freshness(full.freshness);
     } else {
@@ -70,11 +69,12 @@
       snapshot=packet.snapshot;freshness(packet.freshness);
       scopeOptions("host",packet.hosts,"All servers");scopeOptions("project",packet.projects,"All projects");
     }
-    $("error").hidden=true;$("selection-status").textContent=`${selection.range} · ${selection.host==="*"?"All servers":selection.host} · ${selection.project==="*"?"All projects":selection.project} · UTC buckets, last bucket partial`;
+    $("error").hidden=true;
     render(dirty);
   }
   function resync() {$("error").hidden=false;$("error").textContent="Synchronizing dataset versions…";$("resync").click();}
-  function freshness(f) {sourceAt=f.source_at;$("updated").title=`History checked ${new Date(f.history_checked_at*1000).toLocaleString()}; snapshot published ${new Date(f.checked_at*1000).toLocaleString()}`;$("updated").textContent=`Source read ${new Date(f.source_at*1000).toLocaleTimeString()} · snapshot ${f.generated_ms} ms`;}
+  function freshness(f) {sourceAt=f.source_at;$("updated").textContent=`Updated ${new Date(f.source_at*1000).toLocaleTimeString()}`;}
+  const missingLabel = value => value?.state==="unavailable" ? "Not reported" : value?.state==="partial" ? "Partial data" : "No measurements";
   function mode(value) {
     compare=value;$("comparison").hidden=!value;$("overview").hidden=$("cards").hidden=value;
     try{localStorage.setItem("comparison",String(value));}catch(_){}
@@ -94,12 +94,12 @@
       return projector(d).map(s=>({...s,label:s.label||agents[agent],agent,dataset:d.id}));
     });
     const supported=(measurement,shared=true)=>!shared||selected.every(a=>datasets.get(`${a}.${measurement}`)?.state!=="unavailable");
-    const add=(id,title,unit,data,options={})=>{if(data.length||options.empty)list.push({id,title,unit,series:data,...options});};
+    const add=(id,title,unit,data,options={})=>{if(data.length||options.empty)list.push({id,title,unit,series:data,sourceIds:[...new Set(data.map(s=>s.dataset))],...options});};
     const timeline=d=>[{id:d.agent,label:agents[d.agent]+(d.agent==="codex"&&d.measurement==="cost"?" (estimated)":""),points:d.details?.timeline||[]}];
-    add("cost","Cost over time","USD",parts("cost",timeline),{empty:true});
+    add("cost","Cost over time","USD",parts("cost",timeline),{empty:true,sourceIds:selected.map(a=>`${a}.cost`)});
     add("models-cost","Cost by model","USD",parts("cost",d=>d.series.map(s=>({...s,label:agents[d.agent]+" · "+s.dimensions.model}))),{stack:true});
     for(const [id,title]of [["total","Tokens over time"],["input","Uncached input tokens"],["cached","Cached input tokens"],["written","Cache write tokens"],["output","Output tokens (includes reasoning)"],["reasoning","Reasoning tokens (subset of output)"]]) {
-      add(id,title,"tokens",parts("tokens",d=>(d.details.categories||[]).filter(s=>s.id===id).map(s=>({...s,id:d.agent,label:agents[d.agent]}))),{empty:id==="total"});
+      add(id,title,"tokens",parts("tokens",d=>(d.details.categories||[]).filter(s=>s.id===id).map(s=>({...s,id:d.agent,label:agents[d.agent]}))),{empty:id==="total",sourceIds:selected.map(a=>`${a}.tokens`)});
     }
     add("models-tokens","Tokens by model","tokens",parts("tokens",d=>(d.details.models||[]).map(s=>({...s,label:agents[d.agent]+" · "+s.label}))),{stack:true});
     add("cacheHit","Cache hit","ratio",parts("tokens",d=>[{id:d.agent,label:agents[d.agent],points:d.details.cacheHit||[]}]),{max:1});
@@ -114,7 +114,7 @@
         add("tools-kind","Tool calls by tool","count",parts("tools",d=>d.details.tools||[]));
       }
       const duration=datasets.get(`${selected[0]}.turnDuration`);
-      if(duration?.details.total_seconds!=null)add("turn-time","Total turn duration","seconds",[{id:"total",label:"Full turns, tools and waits included",dataset:duration.id,points:duration.details.totalTimeline||[]}],{note:`Total full-turn time: ${number(duration.details.total_seconds)} s.`});
+      if(duration?.details.total_seconds!=null)add("turn-time","Total turn duration","seconds",[{id:"total",label:"Total turn duration",dataset:duration.id,points:duration.details.totalTimeline||[]}],{note:`Total: ${number(duration.details.total_seconds)} s`});
     }
     const activity=datasets.get("all.activity");
     if(activity)add("activity","Activity by local weekday/hour","tokens",activity.series.map(s=>({...s,dataset:activity.id})),{heat:true});
@@ -127,37 +127,44 @@
     for(const spec of definitionsNow) {
       let w=widgets.get(spec.id);
       if(!w){w=create(spec);widgets.set(spec.id,w);w.spec=spec;draw(w);}
-      else if(spec.series.some(s=>dirty.has(s.dataset))){w.spec=spec;draw(w);}
+      else if([...w.spec.sourceIds,...spec.sourceIds].some(id=>dirty.has(id))){w.spec=spec;draw(w);}
     }
     if(dirty.has("all.spikes"))renderSpikes();
   }
   function create(spec) {
-    const card=el("article","card"),head=el("div","card-head"),actions=el("div","card-actions"),toggle=el("button","toggle","table"),copy=el("button","copy","⧉"),note=el("div","note"),chartHost=el("div","chart"),tableHost=el("div","table-wrap");
+    const card=el("article","card"),head=el("div","card-head"),actions=el("div","card-actions"),toggle=el("button","toggle","table"),copy=el("button","copy","⧉"),note=el("div","note"),chartHost=el("div","chart"),emptyHost=el("div","chart-empty"),tableHost=el("div","table-wrap");
     card.id="widget-"+spec.id;chartHost.id="chart-"+spec.id;chartHost.setAttribute("data-ignore-morph","");chartHost.setAttribute("role","img");chartHost.setAttribute("aria-label",spec.title);
     copy.type=toggle.type="button";copy.title="Copy chart JSON";copy.setAttribute("aria-label",copy.title);
-    head.append(el("h2","",spec.title),el("span","unit",spec.unit),actions);actions.append(copy,toggle);card.append(head,note,chartHost,tableHost);$("cards").append(card);tableHost.hidden=true;
-    const w={card,head,note,host:chartHost,tableHost,table:false,spec,chart:null,updates:0};
-    toggle.onclick=()=>{w.table=!w.table;toggle.textContent=w.table?"chart":"table";chartHost.hidden=w.table;tableHost.hidden=!w.table;if(w.table)renderTable(w);else {if(!w.chart)draw(w);w.chart?.resize();}};
+    head.append(el("h2","",spec.title),el("span","unit",spec.unit),actions);actions.append(copy,toggle);emptyHost.setAttribute("role","status");emptyHost.hidden=true;card.append(head,note,chartHost,emptyHost,tableHost);$("cards").append(card);tableHost.hidden=true;
+    const w={card,head,note,host:chartHost,emptyHost,tableHost,table:false,empty:false,spec,chart:null,updates:0};
+    toggle.onclick=()=>{w.table=!w.table;toggle.textContent=w.table?"chart":"table";draw(w);if(!w.table&&!w.empty)w.chart?.resize();};
     copy.onclick=()=>copyCharts(copy,[w.spec]);
-    w.observer=new ResizeObserver(()=>{if(!w.table&&!compare)w.chart?.resize();});w.observer.observe(chartHost);
+    w.observer=new ResizeObserver(()=>{if(!w.table&&!w.empty&&!compare)w.chart?.resize();});w.observer.observe(chartHost);
     return w;
   }
   function draw(w) {
     const spec=w.spec;
     const timeRange=datasets.get(spec.series[0]?.dataset)?.range;
-    const warnings=[...new Set(spec.series.flatMap(s=>datasets.get(s.dataset)?.warnings||[]))];
-    if(!spec.series.some(s=>s.points.length))warnings.push("No measurements for this selection. Missing data is not zero.");
-    w.note.textContent=[spec.note,...warnings].filter(Boolean).join(" ");
-    if(w.table)renderTable(w);
+    const sources=spec.sourceIds.map(id=>datasets.get(id)).filter(Boolean);
+    const values=spec.series.flatMap(s=>s.points.map(([,v])=>v)).filter(Number.isFinite);
+    w.empty=!values.some(v=>v!==0);
+    w.emptyHost.textContent=values.length ? "All values are zero" : sources.length&&sources.every(d=>d.state==="unavailable") ? "Telemetry unavailable" : "No measurements";
+    w.note.textContent=[spec.note,sources.some(d=>d.state==="partial")?"Partial data":""].filter(Boolean).join(" · ");
+    w.note.hidden=!w.note.textContent;
+    w.host.hidden=w.table||w.empty;
+    w.emptyHost.hidden=w.table||!w.empty;
+    w.tableHost.hidden=!w.table;
+    if(w.table){renderTable(w);return;}
+    if(w.empty)return;
     if(!w.chart)w.chart=echarts.init(w.host,null,{renderer:"canvas"});
     const css=getComputedStyle(document.documentElement),ink=css.getPropertyValue("--ink").trim(),grid=css.getPropertyValue("--grid").trim();
     let option;
     if(spec.heat) {
       const cells=new Map();for(const s of spec.series)for(const [t,v]of s.points){const d=new Date(t*1000),key=`${(d.getDay()+6)%7},${d.getHours()}`;cells.set(key,(cells.get(key)||0)+v);}
       const data=[...cells].map(([key,v])=>{const [day,hour]=key.split(',').map(Number);return [hour,day,v];});
-      option={tooltip:{position:"top"},grid:{left:50,right:15,top:20,bottom:70},xAxis:{type:"category",data:Array.from({length:24},(_,h)=>String(h).padStart(2,"0"))},yAxis:{type:"category",data:["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]},visualMap:{min:0,max:Math.max(1,...data.map(v=>v[2])),calculable:true,orient:"horizontal",left:"center",bottom:0,inRange:{color:[grid,colors[0]]}},series:[{id:"heat",type:"heatmap",data,emphasis:{itemStyle:{borderColor:ink,borderWidth:1}}}]};
+      option={tooltip:{position:"top"},grid:{left:12,right:16,top:16,bottom:94,containLabel:true},xAxis:{type:"category",axisLabel:{interval:"auto",hideOverlap:true,margin:10},axisTick:{alignWithLabel:true},data:Array.from({length:24},(_,h)=>String(h).padStart(2,"0"))},yAxis:{type:"category",axisLabel:{interval:0,margin:8},data:["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]},visualMap:{min:0,max:Math.max(1,...data.map(v=>v[2])),calculable:true,orient:"horizontal",left:"center",bottom:8,itemWidth:12,itemHeight:120,padding:8,textStyle:{color:ink},inRange:{color:[grid,colors[0]]}},series:[{id:"heat",type:"heatmap",data,emphasis:{itemStyle:{borderColor:ink,borderWidth:1}}}]};
     } else {
-      option={color:colors,grid:{left:65,right:18,top:55,bottom:55},legend:{type:"scroll",textStyle:{color:ink}},tooltip:{trigger:"axis",axisPointer:{type:"shadow"},valueFormatter:v=>format(v,spec.unit)},xAxis:{type:"time",min:timeRange?timeRange.start*1000:undefined,max:timeRange?timeRange.end*1000:undefined,axisLabel:{hideOverlap:true},axisPointer:{label:{formatter:p=>new Date(p.value).toLocaleString()}}},yAxis:{type:"value",max:spec.max,axisLabel:{formatter:v=>spec.unit==="ratio"?`${v*100}%`:number(v)},splitLine:{lineStyle:{color:grid}}},dataZoom:[{type:"inside"}],series:spec.series.map((s,index)=>({id:`${s.dataset}:${s.id}`,name:s.label||s.id,type:spec.unit==="ratio"?"line":"bar",stack:spec.stack?"total":undefined,itemStyle:{color:spec.stack?colors[index%colors.length]:colors[Object.keys(agents).indexOf(s.agent)%colors.length]||colors[index%colors.length]},data:s.points.map(([t,v])=>[t*1000,v]),connectNulls:false}))};
+      option={color:colors,grid:{left:65,right:18,top:55,bottom:55},legend:{type:"scroll",textStyle:{color:ink}},tooltip:{trigger:"axis",axisPointer:{type:"shadow"},valueFormatter:v=>format(v,spec.unit)},xAxis:{type:"time",min:timeRange?timeRange.start*1000:undefined,max:timeRange?timeRange.end*1000:undefined,axisLabel:{hideOverlap:true},axisPointer:{label:{formatter:p=>new Date(p.value).toLocaleString()}}},yAxis:{type:"value",max:spec.max,minInterval:["count","tokens"].includes(spec.unit)?1:undefined,axisLabel:{formatter:v=>spec.unit==="ratio"?`${v*100}%`:number(v)},splitLine:{lineStyle:{color:grid}}},dataZoom:[{type:"inside"}],series:spec.series.map((s,index)=>({id:`${s.dataset}:${s.id}`,name:s.label||s.id,type:spec.unit==="ratio"?"line":"bar",stack:spec.stack?"total":undefined,itemStyle:{color:spec.stack?colors[index%colors.length]:colors[Object.keys(agents).indexOf(s.agent)%colors.length]||colors[index%colors.length]},data:s.points.map(([t,v])=>[t*1000,v]),connectNulls:false}))};
     }
     Object.assign(option,{backgroundColor:"transparent",textStyle:{color:ink},animationDurationUpdate:180,aria:{enabled:true}});
     w.chart.setOption(option,{replaceMerge:["series"],lazyUpdate:true});w.updates++;
@@ -173,19 +180,19 @@
     const tiles=[];
     for(const agent of active)for(const [key,label,unit]of [["cost","cost","USD"],["total","tokens","tokens"],["sessions","new sessions","count"],["cacheHit","cache hit","ratio"]]) {
       const value=summary[agent]?.[key];const tile=el("div","tile");tile.append(el("div","label",`${agents[agent]} ${agent==="codex"&&key==="cost"?"estimated ":""}${label}`),el("div","value",format(value?.value,unit)));
-      tile.append(el("div","note",value?.warnings?.join(" ")||(value?.value==null?"No measurement for this selection; not zero":"")));tiles.push(tile);
+      tile.append(el("div","note",value?.value==null?missingLabel(value):value?.state==="partial"?"Partial data":""));tiles.push(tile);
     }
     $("tiles").replaceChildren(...tiles);$("summary").hidden=selection.agent!=="all";$("overview").classList.toggle("has-summary",selection.agent==="all");
     const totals=[];for(const [key,title,unit]of [["cost","Total cost","USD"],["total","Total tokens","tokens"]]){const available=active.filter(a=>summary[a]?.[key]?.value!=null),missing=active.filter(a=>!available.includes(a)),tile=el("div","tile");
       // Totals are supplied below by the backend summary; no rounded accounting in the browser.
-      const value=summary.totals?.[key];tile.append(el("div","label",title),el("div","value",format(value?.value,unit)),el("div","note",missing.length?"Partial total · unavailable: "+missing.map(a=>agents[a]).join(", "):key==="cost"?"Includes estimated API cost":"All agents"));totals.push(tile);}
+      const value=summary.totals?.[key];tile.append(el("div","label",title),el("div","value",format(value?.value,unit)),el("div","note",missing.length?"Partial total · unavailable: "+missing.map(a=>agents[a]).join(", "):"All agents"));totals.push(tile);}
     $("summary").replaceChildren(...totals);
     const table=el("table"),caption=el("caption","","Agent comparison"),head=el("tr");head.append(el("th","","Metric"),...active.map(a=>el("th","",agents[a])));table.append(caption,head);
     for(const [key,title,unit,token]of [["cost","Cost","USD"],["total","Total tokens","tokens",true],["input","Uncached input tokens","tokens",true],["cached","Cached input tokens","tokens",true],["written","Cache write tokens","tokens",true],["output","Output (includes reasoning)","tokens",true],["reasoning","Reasoning (subset of output)","tokens",true],["cacheHit","Cache hit","ratio",true],["sessions","New sessions","count"],["active","Active time","seconds"],["commits","Commits","count"],["added","Lines added","count"],["removed","Lines removed","count"],["turns","Turns","count"],["turnDuration","Average turn duration","seconds"],["firstToken","Time to first token","seconds"],["firstOutput","Time to first output","seconds"],["tools","Tool calls","count"],["toolDuration","Average tool duration","seconds"]]){
       if(!token&&!active.every(a=>summary[a]?.[key]&&summary[a][key].state!=="unavailable"))continue;
-      const row=el("tr",["cost","total"].includes(key)?"primary":"");row.append(el("th","",title));for(const agent of active){const v=summary[agent]?.[key],cell=el("td","",format(v?.value,unit));if(v?.value==null)cell.append(el("span","note",v?.state==="unavailable"?"Not reported by this agent":"No data for selection"));if(v?.warnings?.length)cell.append(el("span","note",v.warnings.join(" ")));row.append(cell);}table.append(row);
+      const row=el("tr",["cost","total"].includes(key)?"primary":"");row.append(el("th","",title));for(const agent of active){const v=summary[agent]?.[key],cell=el("td","",format(v?.value,unit));if(v?.value==null)cell.append(el("span","note",v?.state==="unavailable"?"Not reported by this agent":"No data for selection"));if(v?.state==="partial")cell.append(el("span","note","Partial data"));row.append(cell);}table.append(row);
     }
-    $("comparison").replaceChildren(table,el("p","note","Shared capabilities are compared. — means missing or unavailable, not zero. Costs include standard API estimates. Output includes reasoning."));
+    $("comparison").replaceChildren(table);
   }
   function renderSpikes() {
     let card=$("spikes");if(!card){card=el("article","card");card.id="spikes";$("cards").append(card);}
@@ -207,7 +214,7 @@
   document.addEventListener("DOMContentLoaded",()=>{
     theme();$("theme").onclick=()=>{currentTheme=currentTheme==="dark"?"light":"dark";try{localStorage.setItem("theme",currentTheme);}catch(_){}theme();};
     $("copy-all").onclick=()=>copyCharts($("copy-all"),[...widgets.values()].map(w=>w.spec));
-    setInterval(()=>{if(lastPacket&&Date.now()-lastPacket>75000){$("error").hidden=false;$("error").textContent="Live connection interrupted. Displaying the last snapshot; Datastar will reconnect automatically.";}},15000);
+    setInterval(()=>{if(lastPacket&&Date.now()-lastPacket>75000){$("error").hidden=false;$("error").textContent="Live connection interrupted. Reconnecting…";}},15000);
   });
   window.addEventListener("pagehide",()=>widgets.forEach(w=>{w.observer.disconnect();w.chart?.dispose();}));
 })();
