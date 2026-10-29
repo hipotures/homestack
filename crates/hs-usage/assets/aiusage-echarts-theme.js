@@ -162,7 +162,7 @@
       scatter: { symbolSize: 6 },
       heatmap: { itemStyle: { borderRadius: 4, borderColor: v('--surface'), borderWidth: 3 } },
       visualMap: {
-        inRange: { color: [v('--heat-empty'), alpha(v('--codex'), 0.35), v('--codex')] },
+        inRange: { color: [v('--heat-empty'), alpha(v('--heat'), 0.35), v('--heat')] },
         textStyle: { color: faint, fontSize: 11 },
         itemWidth: 10, itemHeight: 120,
       },

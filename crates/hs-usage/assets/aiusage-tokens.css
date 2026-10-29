@@ -13,6 +13,7 @@
   --surface-3:     #1f242c;   /* tooltip, popover */
   --track:         #1c2027;   /* empty bar / progress track */
   --heat-empty:    #1a1e24;
+  --heat:          #5b9bd5;   /* agent-neutral: the heatmap sums every agent */
   --border:        rgba(255, 255, 255, 0.06);
   --border-strong: rgba(255, 255, 255, 0.12);
   --grid:          rgba(255, 255, 255, 0.06);
@@ -74,7 +75,7 @@
 @media (prefers-color-scheme: light) {
   :root:not([data-theme="dark"]) {
     --bg: #f6f7f9; --surface: #ffffff; --surface-2: #f3f4f6; --surface-3: #ffffff;
-    --track: #eceef1; --heat-empty: #eef0f3;
+    --track: #eceef1; --heat-empty: #eef0f3; --heat: #2f6fb8;
     --border: rgba(15, 20, 30, 0.07); --border-strong: rgba(15, 20, 30, 0.14);
     --grid: rgba(15, 20, 30, 0.07); --axis: rgba(15, 20, 30, 0.18);
     --text: #14171c; --text-2: #3a414b; --muted: #5b6470; --faint: #737b87;
@@ -88,7 +89,7 @@
 }
 :root[data-theme="light"] {
   --bg: #f6f7f9; --surface: #ffffff; --surface-2: #f3f4f6; --surface-3: #ffffff;
-  --track: #eceef1; --heat-empty: #eef0f3;
+  --track: #eceef1; --heat-empty: #eef0f3; --heat: #2f6fb8;
   --border: rgba(15, 20, 30, 0.07); --border-strong: rgba(15, 20, 30, 0.14);
   --grid: rgba(15, 20, 30, 0.07); --axis: rgba(15, 20, 30, 0.18);
   --text: #14171c; --text-2: #3a414b; --muted: #5b6470; --faint: #737b87;

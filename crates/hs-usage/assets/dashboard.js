@@ -298,14 +298,15 @@
   }
   function renderHeat() {
     const activity=datasets.get("all.activity");if(!activity)return;
-    const cells=new Map();for(const s of activity.series)for(const [t,v]of s.points){const d=new Date(t*1000),key=`${(d.getDay()+6)%7},${d.getHours()}`;cells.set(key,(cells.get(key)||0)+v);}
+    // Cells sum every agent; the tooltip splits each cell back per agent.
+    const cells=new Map(),split=new Map();for(const s of activity.series)for(const [t,v]of s.points){const d=new Date(t*1000),key=`${(d.getDay()+6)%7},${d.getHours()}`,parts=split.get(key)||{};cells.set(key,(cells.get(key)||0)+v);parts[s.dimensions.model]=(parts[s.dimensions.model]||0)+v;split.set(key,parts);}
     const data=[];for(let day=0;day<7;day++)for(let hour=0;hour<24;hour++)data.push([hour,day,cells.get(`${day},${hour}`)||0]);
     const days=["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
     $("heat-chart").closest("section").hidden=!data.some(v=>v[2]>0);
     // The heatmap reads a separate hourly block capped at 30 days (7 at least), so its window is stated.
     $("heat-sub").textContent=`tokens by weekday and hour · local time · last ${Math.round((activity.range.end-activity.range.start)/86400)} days`;
     heatChart=heatChart||AIUsage.init($("heat-chart"));
-    heatChart.setOption({grid:{left:4,right:4,top:4,bottom:4,containLabel:true},tooltip:{trigger:"item",formatter:p=>`${days[p.value[1]]} ${two(p.value[0])}:00 · ${F.full(p.value[2])} tokens`},
+    heatChart.setOption({grid:{left:4,right:4,top:4,bottom:4,containLabel:true},tooltip:{trigger:"item",formatter:p=>{const parts=Object.entries(split.get(`${p.value[1]},${p.value[0]}`)||{}).filter(([,v])=>v>0);return `${days[p.value[1]]} ${two(p.value[0])}:00 · ${F.full(p.value[2])} tokens${parts.map(([a,v])=>`<br><span style="color:${AIUsage.colorFor(agents[a])}">●</span> ${agents[a]} ${F.full(v)}`).join("")}`;}},
       xAxis:{type:"category",data:Array.from({length:24},(_,h)=>two(h)),axisLine:{show:false},axisLabel:{interval:5}},yAxis:{type:"category",inverse:true,data:days,axisLine:{show:false}},
       visualMap:{show:false,min:0,max:Math.max(1,...data.map(v=>v[2]))},series:[{id:"heat",type:"heatmap",data}]});
   }
