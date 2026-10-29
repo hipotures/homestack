@@ -67,6 +67,15 @@
     },
     pct(n, d = 1) { return n == null ? '—' : n.toFixed(d) + '%'; },
     full(n) { return n == null ? '—' : n.toLocaleString('pl-PL'); },
+    /** seconds → "850 ms", "5.3 s", "14 min", "6 h 45 min" */
+    duration(s) {
+      if (s == null) return '—';
+      if (s < 1) return Math.round(s * 1000) + ' ms';
+      if (s < 60) return s.toFixed(s < 10 ? 1 : 0) + ' s';
+      const m = Math.round(s / 60);
+      if (m < 60) return m + ' min';
+      return Math.floor(m / 60) + ' h' + (m % 60 ? ' ' + (m % 60) + ' min' : '');
+    },
   };
 
   /* ---------- range → bucket size (≈ 30–90 points per chart) ---------- */

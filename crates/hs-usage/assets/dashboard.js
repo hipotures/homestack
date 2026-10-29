@@ -3,7 +3,7 @@
 (() => {
   const agents = {claude:"Claude Code", codex:"Codex"};
   const widgets = new Map(), datasets = new Map();
-  let selection, epoch = 0, snapshot, compare = false, lastPacket = 0, sourceAt = 0;
+  let selection, epoch = 0, snapshot, lastPacket = 0, sourceAt = 0;
   let currentTheme = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
   try { currentTheme = localStorage.getItem("theme") || currentTheme; } catch (_) {}
   const el = (tag, cls, text) => { const e=document.createElement(tag); if(cls)e.className=cls; if(text!==undefined)e.textContent=text;return e; };
@@ -12,11 +12,10 @@
   const number = v => v == null ? "—" : new Intl.NumberFormat(undefined,{maximumFractionDigits:2}).format(v);
   const format = (v,unit) => v == null ? "—" : unit === "USD" ? new Intl.NumberFormat(undefined,{style:"currency",currency:"USD",maximumFractionDigits:4}).format(v) : unit === "ratio" ? new Intl.NumberFormat(undefined,{style:"percent",maximumFractionDigits:1}).format(v) : number(v);
   function initial() {
-    const out={agent:"all",host:"*",project:"*",range:"24h",_compare:false,_more:false,_sync:0,_packet:""};
-    try {for(const key of ["agent","host","project","range"]) out[key]=localStorage.getItem(key)||out[key];out._compare=localStorage.getItem("comparison")==="true";}catch(_){}
+    const out={agent:"all",host:"*",project:"*",range:"24h",_more:false,_sync:0,_packet:""};
+    try {for(const key of ["agent","host","project","range"]) out[key]=localStorage.getItem(key)||out[key];}catch(_){}
     if(!["all","claude","codex"].includes(out.agent))out.agent="all";
     if(!Object.keys(AIUsage.RANGES).includes(out.range))out.range="24h";
-    if(out._compare)out.agent="all";
     // Scope options must exist before Datastar binds a remembered selection.
     for(const key of ["host","project"])if(out[key]!=="*"){const o=el("option","",out[key]);o.value=out[key];$(key).append(o);}
     return out;
@@ -74,11 +73,6 @@
   }
   function resync() {$("error").hidden=false;$("error").textContent="Synchronizing dataset versions…";$("resync").click();}
   function freshness(f) {sourceAt=f.source_at;const d=new Date(f.source_at*1000);$("updated-text").textContent=`live · ${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`;$("updated").classList.remove("stale");}
-  function mode(value) {
-    compare=value;$("comparison").hidden=!value;$("overview").hidden=value;$("raw-toggle").parentElement.hidden=value;if(value)$("raw").hidden=true;
-    try{localStorage.setItem("comparison",String(value));}catch(_){}
-    if(datasets.size)render(new Set(datasets.keys()));
-  }
   function theme() {
     document.documentElement.dataset.theme=currentTheme;
     $("theme").textContent=currentTheme==="dark"?"☀ Light":"☾ Dark";
@@ -87,44 +81,38 @@
     for(const w of widgets.values())if(w.spec)draw(w);
     if(datasets.size)renderOverview();
   }
+  /** The dataset of a measurement the agent reports; agent capabilities come only from data. */
+  const reported=(agent,measurement)=>{const d=datasets.get(`${agent}.${measurement}`);return d&&d.state!=="unavailable"?d:null;};
   function definitions() {
-    const list=[], selected=Object.keys(agents).filter(a=>selection.agent==="all"||selection.agent===a);
-    const parts=(measurement,projector,shared=true)=>selected.flatMap(agent=>{
-      const d=datasets.get(`${agent}.${measurement}`);
-      if(!d||d.state==="unavailable")return [];
-      return projector(d).map(s=>({...s,label:s.label||agents[agent],agent,dataset:d.id}));
+    const list=[], selected=chosen();
+    const parts=(measurement,projector)=>selected.flatMap(agent=>{
+      const d=reported(agent,measurement);
+      return d?projector(d).map(s=>({...s,label:s.label||agents[agent],agent,dataset:d.id})):[];
     });
-    const supported=(measurement,shared=true)=>!shared||selected.every(a=>datasets.get(`${a}.${measurement}`)?.state!=="unavailable");
     // Series without a single nonzero value are dropped, and a panel with no series is not shown.
     const add=(id,title,unit,data,options={})=>{data=data.filter(s=>AIUsage.nonEmpty([{data:s.points}]).length);if(data.length)list.push({id,title,unit,series:data,sourceIds:[...new Set(data.map(s=>s.dataset))],...options});};
     const timeline=d=>[{id:d.agent,label:agents[d.agent]+(d.agent==="codex"&&d.measurement==="cost"?" (estimated)":""),points:d.details?.timeline||[]}];
+    const byKind=(key,items)=>d=>items(d).map(s=>({...s,label:agents[d.agent]+" · "+key(s)}));
     add("cost","Cost over time","USD",parts("cost",timeline));
-    add("models-cost","Cost by model","USD",parts("cost",d=>d.series.map(s=>({...s,label:agents[d.agent]+" · "+s.dimensions.model}))),{stack:true});
+    add("models-cost","Cost by model","USD",parts("cost",byKind(s=>s.dimensions.model,d=>d.series)),{stack:true});
     for(const [id,title]of [["total","Tokens over time"],["input","Uncached input tokens"],["cached","Cached input tokens"],["written","Cache write tokens"],["output","Output tokens (includes reasoning)"],["reasoning","Reasoning tokens (subset of output)"]]) {
       add(id,title,"tokens",parts("tokens",d=>(d.details.categories||[]).filter(s=>s.id===id).map(s=>({...s,id:d.agent,label:agents[d.agent]}))));
     }
-    add("models-tokens","Tokens by model","tokens",parts("tokens",d=>(d.details.models||[]).map(s=>({...s,label:agents[d.agent]+" · "+s.label}))),{stack:true});
+    add("models-tokens","Tokens by model","tokens",parts("tokens",byKind(s=>s.label,d=>d.details.models||[])),{stack:true});
     add("cacheHit","Cache hit","ratio",parts("tokens",d=>[{id:d.agent,label:agents[d.agent],points:d.details.cacheHit||[]}]),{max:1});
     for(const [measurement,title,unit]of [["sessions","New sessions","count"],["active","Active time","seconds"],["commits","Commits","count"],["lines","Lines of code","count"],["turns","Turns","count"],["tools","Tool calls","count"],["turnDuration","Average turn duration","seconds"],["firstToken","Time to first token","seconds"],["firstOutput","Time to first output item","seconds"],["toolDuration","Average tool duration","seconds"]]) {
-      if(!supported(measurement))continue;
-      add(measurement,title,unit,parts(measurement,measurement==="lines"?d=>d.series.map(s=>({...s,label:agents[d.agent]+" · "+s.dimensions.kind})):timeline));
+      add(measurement,title,unit,parts(measurement,measurement==="lines"?byKind(s=>s.dimensions.kind,d=>d.series):timeline));
     }
-    if(selected.length===1) {
-      if(supported("active"))add("active-kind","Active time by kind","seconds",parts("active",d=>d.series));
-      if(supported("tools")){
-        add("tool-failures","Failed tool calls","count",parts("tools",d=>[{id:d.agent,points:d.details.failures||[]}]));
-        add("tools-kind","Tool calls by tool","count",parts("tools",d=>d.details.tools||[]));
-      }
-      const duration=datasets.get(`${selected[0]}.turnDuration`);
-      if(duration?.details.total_seconds!=null)add("turn-time","Total turn duration","seconds",[{id:"total",label:"Total turn duration",dataset:duration.id,points:duration.details.totalTimeline||[]}],{note:`Total: ${number(duration.details.total_seconds)} s`});
-    }
+    add("active-kind","Active time by kind","seconds",parts("active",byKind(s=>s.dimensions.kind,d=>d.series)));
+    add("tool-failures","Failed tool calls","count",parts("tools",d=>[{id:d.agent,points:d.details.failures||[]}]));
+    add("tools-kind","Tool calls by tool","count",parts("tools",byKind(s=>s.label,d=>d.details.tools||[])),{stack:true});
+    add("turn-time","Total turn duration","seconds",parts("turnDuration",d=>[{id:"total",label:agents[d.agent]+" · total turn duration",points:d.details.totalTimeline||[]}]));
     const activity=datasets.get("all.activity");
     // The heatmap reads a separate hourly block capped at 30 days (7 at least), so its window is stated.
     if(activity)add("activity","Activity by local weekday/hour","tokens",activity.series.map(s=>({...s,dataset:activity.id})),{heat:true,note:`last ${Math.round((activity.range.end-activity.range.start)/86400)} days`});
     return list;
   }
   function render(dirty) {
-    if(dirty.has("all.summary"))renderSummary();
     if(dirty.size)renderOverview();
     const definitionsNow=definitions(),ids=new Set(definitionsNow.map(s=>s.id));
     for(const [id,w]of widgets)if(!ids.has(id)){w.chart?.dispose();w.card.remove();widgets.delete(id);}
@@ -179,15 +167,6 @@
     for(const t of times){const row=el("tr");row.append(el("td","",new Date(t*1000).toLocaleString()),...maps.map(m=>el("td","",format(m.get(t),w.spec.unit))));table.append(row);}
     w.tableHost.replaceChildren(table);
   }
-  function renderSummary() {
-    const summary=datasets.get("all.summary")?.details||{},active=Object.keys(agents).filter(a=>selection.agent==="all"||selection.agent===a);
-    const table=el("table"),caption=el("caption","","Agent comparison"),head=el("tr");head.append(el("th","","Metric"),...active.map(a=>el("th","",agents[a])));table.append(caption,head);
-    for(const [key,title,unit,token]of [["cost","Cost","USD"],["total","Total tokens","tokens",true],["input","Uncached input tokens","tokens",true],["cached","Cached input tokens","tokens",true],["written","Cache write tokens","tokens",true],["output","Output (includes reasoning)","tokens",true],["reasoning","Reasoning (subset of output)","tokens",true],["cacheHit","Cache hit","ratio",true],["sessions","New sessions","count"],["active","Active time","seconds"],["commits","Commits","count"],["added","Lines added","count"],["removed","Lines removed","count"],["turns","Turns","count"],["turnDuration","Average turn duration","seconds"],["firstToken","Time to first token","seconds"],["firstOutput","Time to first output","seconds"],["tools","Tool calls","count"],["toolDuration","Average tool duration","seconds"]]){
-      if(!token&&!active.every(a=>summary[a]?.[key]&&summary[a][key].state!=="unavailable"))continue;
-      const row=el("tr",["cost","total"].includes(key)?"primary":"");row.append(el("th","",title));for(const agent of active){const v=summary[agent]?.[key],cell=el("td","",format(v?.value,unit));if(v?.value==null)cell.append(el("span","note",v?.state==="unavailable"?"Not reported by this agent":"No data for selection"));if(v?.state==="partial")cell.append(el("span","note","Partial data"));row.append(cell);}table.append(row);
-    }
-    $("comparison").replaceChildren(table);
-  }
   // ---- Overview (main view). Values are backend totals; the browser only lays them out. ----
   const F=AIUsage.fmt, css=name=>`var(${name})`;
   const esc=v=>String(v).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"})[c]);
@@ -230,7 +209,7 @@
     const sel=chosen(),tokens=sel.map(a=>datasets.get(`${a}.tokens`)).filter(d=>d&&d.state!=="unavailable");
     const category=id=>tokens.map(d=>(d.details.categories||[]).find(c=>c.id===id)?.points);
     const lead=sel.length===1?AIUsage.colorFor(agents[sel[0]]):css("--text-2");
-    const kpi=(label,value,deltaHtml,body,title="")=>`<div class="card kpi"><div class="eyebrow" title="${esc(title)}">${label}</div><div class="figure"><span class="kpi-value">${value}</span>${deltaHtml}</div>${body}</div>`;
+    const kpi=(label,value,deltaHtml,body,title="")=>`<div class="card kpi"><div class="eyebrow" title="${esc(title)}">${label}</div><div class="figure"><span class="kpi-value${value==="—"?" faint":""}">${value}</span>${deltaHtml}</div>${body}</div>`;
     const totalSeries=sumPoints(category("total")),firstActive=Math.min(...[...totalSeries].filter(([,v])=>v>0).map(([t])=>t));
     const live=buckets(range).filter(t=>t>=firstActive||!Number.isFinite(firstActive));
     // Cache hit per bucket over all selected agents, drawn on a narrow scale.
@@ -244,14 +223,14 @@
     const output=totals.output?.value,reasoning=totals.reasoning?.value,share=output&&reasoning!=null?reasoning/output:null;
     const outputBody=output?`<div class="stack"><div class="split" aria-hidden="true"><span style="width:${(share||0)*100}%;background:var(--tok-reasoning)"></span><span style="width:${(1-(share||0))*100}%;background:var(--tok-output)"></span></div>
       <div class="legend-row"><span>${share==null?"reasoning not reported":`<span style="color:var(--tok-reasoning)">●</span> reasoning ${F.tokens(reasoning)} · ${Math.round(share*100)}%`}</span><span>response ${F.tokens(output-(reasoning||0))}</span></div></div>`:"";
-    const partial=key=>(totals[key]?.contributors??0)<sel.length?" (partial)":"";
+    const partial=key=>{const n=totals[key]?.contributors??0;return n&&n<sel.length?" (partial)":"";};
     $("kpis").innerHTML=[
       kpi("Cost"+partial("cost"),F.cost(totals.cost?.value),delta(totals.cost?.value,previous.cost),split("cost",summary),"Codex cost is estimated from standard API prices"),
       kpi("Tokens"+partial("total"),F.tokens(totals.total?.value),delta(totals.total?.value,previous.total),sparkline(live.map(t=>[t,totalSeries.get(t)||0]),lead)+split("total",summary)),
       kpi("Cache hit",totals.cacheHit?.value==null?"—":F.pct(totals.cacheHit.value*100),delta(totals.cacheHit?.value,previous.cacheHit,{goodUp:true,points:true}),hitBars),
       kpi("Output",F.tokens(output),delta(output,previous.output),outputBody,"Output includes reasoning tokens"),
     ].join("");
-    renderTrend(range,firstActive);renderComposition(totals);renderModels();renderHeat();renderSpikes(summary,range);
+    renderTrend(range,firstActive);renderComposition(totals);renderModels();renderHeat();renderSpikes(summary,range);renderAgents(summary,range);
   }
   function renderTrend(range,firstActive) {
     const sel=chosen(),series=[];
@@ -262,6 +241,8 @@
       for(const r of rows)series.push({name:`${agents[a]} · ${r.model||"?"}`,points:r.points});
     }
     const visible=AIUsage.nonEmpty(series.map(s=>({...s,data:s.points}))),times=buckets(range);
+    // Panels without any nonempty series are hidden rather than drawn empty.
+    $("trend").hidden=!visible.length;if(!visible.length)return;
     const stack=sumPoints(visible.map(s=>s.points)),first=Number.isFinite(firstActive)?firstActive:range.start;
     const fmtShort=metric==="cost"?v=>F.cost(v):F.tokens,fmtFull=metric==="cost"?v=>F.cost(v,true):F.full;
     $("trend-title").textContent=metric==="cost"?"Cost over time":"Tokens over time";
@@ -293,6 +274,7 @@
       [reasoning==null?"Output":"Output (excl. reasoning)",v("output")-(reasoning||0),"--tok-output"],...(reasoning==null?[]:[["Reasoning",reasoning,"--tok-reasoning"]])];
     const all=rows.reduce((s,r)=>s+r[1],0),shown=rows.filter(r=>r[1]>0);
     const ratio=v("output")?Math.round(v("cached")/v("output")):null;
+    $("composition").hidden=!all;
     $("composition").innerHTML=`<div><h2>Token composition</h2>${ratio!=null?`<div class="sub">each output token comes with <b style="color:var(--text)">${F.full(ratio)}</b> cached input tokens</div>`:""}</div>
       ${all?`<div class="bars">${shown.map(([label,n,color])=>{const p=n/all*100;return `<div class="bar-row"><div class="head"><span>${label}</span><span class="num">${F.full(n)} <span class="faint">${p<1?p.toFixed(2):p.toFixed(1)}%</span></span></div><div class="track" aria-hidden="true"><span style="width:${Math.max(0.8,p)}%;background:var(${color})"></span></div></div>`;}).join("")}</div>`:`<div class="note">No token usage in this range.</div>`}
       ${all&&!v("written")?`<div class="note faint">Cache write: 0, hidden because there is no data in this range.</div>`:""}${reasoning==null&&all?`<div class="note faint">Reasoning is not reported by the selected agents.</div>`:""}`;
@@ -308,6 +290,7 @@
     }
     const active=rows.filter(r=>r.cost>0||r.tokens>0).sort((x,y)=>(y.cost||0)-(x.cost||0)||y.tokens-x.tokens),idle=rows.filter(r=>!active.includes(r));
     const max=Math.max(...active.map(r=>r.cost||0),0);
+    $("models").hidden=!active.length;
     $("models").innerHTML=`<div><h2>Cost by model</h2><div class="sub">${active.length} of ${rows.length} models active in this range</div></div>
       <div class="bars">${active.map(r=>{const key=`${agents[r.agent]} · ${r.model}`,color=AIUsage.colorFor(key);return `<div class="model"><div class="head"><span class="name"><i class="sw" style="background:${color}"></i>${esc(r.model)} <span class="faint">${agents[r.agent]}</span></span><span class="cost" title="${r.cost==null?"":F.cost(r.cost,true)}">${r.cost==null?"—":F.cost(r.cost)}</span></div>
         <div class="track thick" aria-hidden="true"><span style="width:${max&&r.cost?Math.max(1,r.cost/max*100):0}%;background:${color}"></span></div>
@@ -319,6 +302,7 @@
     const cells=new Map();for(const s of activity.series)for(const [t,v]of s.points){const d=new Date(t*1000),key=`${(d.getDay()+6)%7},${d.getHours()}`;cells.set(key,(cells.get(key)||0)+v);}
     const data=[];for(let day=0;day<7;day++)for(let hour=0;hour<24;hour++)data.push([hour,day,cells.get(`${day},${hour}`)||0]);
     const days=["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
+    $("heat-chart").closest("section").hidden=!data.some(v=>v[2]>0);
     // The heatmap reads a separate hourly block capped at 30 days (7 at least), so its window is stated.
     $("heat-sub").textContent=`tokens by weekday and hour · local time · last ${Math.round((activity.range.end-activity.range.start)/86400)} days`;
     heatChart=heatChart||AIUsage.init($("heat-chart"));
@@ -334,6 +318,75 @@
       <div class="spikes">${items.map((v,i)=>{const d=new Date(v.time*1000);return `<div class="spike${i===0&&v.factor>=10?" top":""}"><span class="factor">×${v.factor.toFixed(1)}</span><div><span>${weekday.format(d)}, ${two(d.getDate())}.${two(d.getMonth()+1)}</span><span class="num" title="${F.full(v.tokens)} tokens">${F.tokens(v.tokens)} tokens</span></div></div>`;}).join("")||`<div class="note">No spikes in the daily data for this range.</div>`}</div>
       <div class="agents-now"><div class="eyebrow">Agents in this range</div>${now}</div>`;
   }
+  // ---- Agent details: shared comparison, then one panel per agent built from what it reports. ----
+  let agentTab="codex";
+  try{agentTab=localStorage.getItem("agentTab")||agentTab;}catch(_){}
+  const LATENCY=[["firstToken","To first token"],["firstOutput","To first output item"],["turnDuration","Turn duration"],["toolDuration","Tool duration"]];
+  const COUNTS=[["active","Active time","split: user / cli"],["commits","Commits","count in range"],["lines","Lines of code","added / removed"],["sessions","New sessions","started in range"],["turns","Turns","conversation turns"]];
+  const total=points=>(points||[]).reduce((s,[,v])=>s+(v||0),0);
+  function miniBars(points,range,color) {
+    const first=Math.min(...points.filter(([,v])=>v>0).map(([t])=>t));
+    if(!Number.isFinite(first))return "";
+    const values=new Map(points),times=buckets(range).filter(t=>t>=first),max=Math.max(...times.map(t=>values.get(t)||0));
+    return `<div class="mini" aria-hidden="true">${times.map((t,i)=>`<span title="${timeLabel(t,range)}" style="height:${Math.max(values.get(t)?6:2,Math.round((values.get(t)||0)/max*100))}%;background:${values.get(t)?color:"var(--track)"};opacity:${i===times.length-1?1:.55}"></span>`).join("")}</div>
+      <div class="mini-axis" aria-hidden="true"><span>${timeLabel(times[0],range)}</span><span>${times.length>1?timeLabel(times[times.length-1],range):""}</span></div>`;
+  }
+  const metricCard=(label,value,note,body,title="")=>`<div class="card metric"><div class="eyebrow">${label}</div><div class="figure"><span class="kpi-value" title="${esc(title)}">${value}</span>${note?`<span class="note">${note}</span>`:""}</div>${body}</div>`;
+  function workCard(d,range) {
+    // Turn time is grouped by local day, or by week/month when the range has too many days.
+    const groups=new Map(),days=(range.end-range.start)/86400,unit=days<=14?"day":days<=120?"week":"month";
+    for(const [t,v]of d.details.totalTimeline||[]){
+      const x=new Date(t*1000);if(unit==="week")x.setDate(x.getDate()-(x.getDay()+6)%7);
+      const key=unit==="month"?`${x.getFullYear()}-${two(x.getMonth()+1)}`:`${x.getFullYear()}-${two(x.getMonth()+1)}-${two(x.getDate())}`;
+      groups.set(key,(groups.get(key)||0)+v);
+    }
+    const rows=[...groups].filter(([,v])=>v>0).sort(),max=Math.max(...rows.map(([,v])=>v),0),weekday=new Intl.DateTimeFormat("en",{weekday:"short"});
+    const label=key=>{const [y,m,day]=key.split("-");return unit==="month"?`${m}.${y}`:`${unit==="week"?"wk ":weekday.format(new Date(+y,m-1,+day))+" "}${day}.${m}`;};
+    return `<div class="card"><div class="card-top"><div><h3>Agent working time</h3><span class="sub">Σ turn duration, including tools and waiting · by ${unit}</span></div><span class="kpi-value" style="font-size:28px" title="${F.full(Math.round(d.details.total_seconds))} s">${F.duration(d.details.total_seconds)}</span></div>
+      <div class="bars">${rows.map(([key,v])=>`<div class="work"><span>${label(key)}</span><div class="track" aria-hidden="true"><span style="width:${Math.max(1,v/max*100)}%;background:var(--codex)"></span></div><span class="num">${F.duration(v)}</span></div>`).join("")||`<div class="note">No completed turns in this range.</div>`}</div></div>`;
+  }
+  function toolsCard(d,color) {
+    const ranking=d.details.ranking||[],calls=ranking.reduce((s,r)=>s+r.calls,0),failed=ranking.reduce((s,r)=>s+r.failed,0),max=ranking[0]?.calls||0;
+    return `<div class="card"><div class="card-top"><div><h3>Tool calls</h3><span class="sub">${F.full(calls)} calls · ranking by tool</span></div>${calls?`<span class="badge"><b class="num">${F.full(failed)}</b> failed · ${F.pct(failed/calls*100,2)}</span>`:""}</div>
+      <div class="bars" style="gap:10px">${ranking.slice(0,10).map(r=>`<div class="tool"><span title="${esc(r.tool)}">${esc(r.tool)}</span><div class="track" aria-hidden="true"><span style="width:${(r.calls-r.failed)/max*100}%;background:${color}"></span><span style="width:${r.failed?Math.max(1.2,r.failed/max*100):0}%;background:var(--warn)"></span></div><span class="num" title="${F.full(r.failed)} failed">${F.full(r.calls)}</span></div>`).join("")}</div>
+      ${ranking.length>10?`<div class="note">${ranking.length-10} more ${ranking.length===11?"tool":"tools"} in the raw charts</div>`:""}${failed?`<div class="note faint">the yellow part of a bar is that tool's failed calls</div>`:""}</div>`;
+  }
+  /** Cards for every measurement this agent reports; returns placeholders for the empty state too. */
+  function agentPanel(agent,summary,range) {
+    const color=AIUsage.colorFor(agents[agent]),small=[],wide=[],placeholders=[];let activity=summary[agent]?.total?.value>0;
+    for(const [m,label]of LATENCY){const d=reported(agent,m);if(!d)continue;placeholders.push([label,"average duration"]);
+      if(d.total!=null){activity=true;small.push(metricCard(label,F.duration(d.total),"average",miniBars(d.series[0]?.points||[],range,color),`${F.full(Math.round(d.total*1000))} ms`));}}
+    for(const [m,label,hint]of COUNTS){const d=reported(agent,m);if(!d)continue;placeholders.push([label,hint]);
+      const sum=total(d.details?.timeline);if(!sum)continue;activity=true;
+      const kinds=d.series.map(s=>[s.dimensions.kind,total(s.points)]).filter(([,v])=>v>0);
+      const value=m==="active"?F.duration(sum):m==="lines"?`+${F.tokens(summary[agent]?.added?.value||0)} / −${F.tokens(summary[agent]?.removed?.value||0)}`:F.full(sum);
+      const note=m==="active"&&kinds.length?kinds.map(([k,v])=>`${esc(k)} ${F.duration(v)}`).join(" · "):m==="lines"?"added / removed":"";
+      small.push(metricCard(label,value,note,miniBars(d.details.timeline,range,color),m==="active"?`${F.full(Math.round(sum))} s`:F.full(sum)));}
+    const turn=reported(agent,"turnDuration");if(turn&&turn.details.total_seconds)wide.push(workCard(turn,range));
+    const tools=reported(agent,"tools");if(tools){placeholders.push(["Tool calls","ranking with failures"]);if(tools.details.ranking?.length){activity=true;wide.push(toolsCard(tools,color));}}
+    return {activity,count:placeholders.length,html:small.length||wide.length?`${small.length?`<div class="kpi-grid metrics">${small.join("")}</div>`:""}${wide.length?`<div class="row-2">${wide.join("")}</div>`:""}`:"",placeholders};
+  }
+  function renderAgents(summary,range) {
+    const sel=chosen(),both=sel.length>1;
+    if(!sel.includes(agentTab))agentTab=sel[0];
+    const panels=Object.fromEntries(sel.map(a=>[a,agentPanel(a,summary,range)])),agent=both?agentTab:sel[0],panel=panels[agent];
+    const rows=[["Cost","cost",v=>F.cost(v),v=>F.cost(v,true)],["Tokens","total",F.tokens,F.full],["Cache hit","cacheHit",v=>F.pct(v*100),v=>F.pct(v*100,3)],["Output","output",F.tokens,F.full],["Reasoning","reasoning",F.tokens,F.full],["New sessions","sessions",F.full,F.full]];
+    const compare=both?`<section class="card" aria-label="Agent comparison"><div class="card-top"><h2>Comparison · shared metrics</h2><div class="legend">${sel.map(a=>`<span><span style="color:${AIUsage.colorFor(agents[a])}">●</span> ${agents[a]}</span>`).join("")}</div></div>
+      <div class="compare-rows" style="--agents:${sel.length}">${rows.map(([label,key,short,full])=>{const values=sel.map(a=>summary[a]?.[key]),max=Math.max(...values.map(v=>v?.value||0));
+        return `<div class="compare-row"><span>${label}</span>${sel.map((a,i)=>{const v=values[i],missing=v?.state==="unavailable"||v==null;const text=v?.value!=null?short(v.value):missing?"not reported":key==="cacheHit"?"—":short(0);
+          const width=v?.value?key==="cacheHit"?v.value*100:v.value/max*100:0;
+          return `<div class="cell"><div class="track" aria-hidden="true"><span style="width:${width}%;background:${AIUsage.colorFor(agents[a])}"></span></div><span class="num${v?.value==null?" missing":""}" title="${v?.value!=null?full(v.value):""}">${text}</span></div>`;}).join("")}</div>`;}).join("")}</div></section>`:"";
+    const lists=[...datasets.values()].filter(d=>d.agent===agent&&d.state!=="unavailable").map(d=>d.details?.timeline||d.details?.categories?.find(c=>c.id==="total")?.points||[]);
+    const first=Math.min(...lists.flat().filter(([,v])=>v>0).map(([t])=>t)),days=Math.ceil((range.end-first)/86400);
+    const chip=!panel.activity?"no data in this range":Number.isFinite(first)&&first>range.start?`data since ${timeLabel(first,range)}${range.end-range.start>86400+range.step?` · axis trimmed to ${days} ${days===1?"day":"days"}`:""}`:"";
+    const tabs=both?`<div class="tabs" role="tablist" aria-label="Agent">${sel.map(a=>`<button type="button" role="tab" data-tab="${a}" aria-selected="${a===agent}" style="--tab-color:${AIUsage.colorFor(agents[a])}"><i style="background:${AIUsage.colorFor(agents[a])}"></i>${agents[a]} <span class="count">${panels[a].count} metrics</span></button>`).join("")}</div>`
+      :`<h2 class="agent-title"><i style="background:${AIUsage.colorFor(agents[agent])}"></i>${agents[agent]} · agent metrics</h2>`;
+    const longer=["90d","180d","1y","all"].includes(selection.range);
+    const body=panel.activity&&panel.html?panel.html:`<div class="card empty"><div><h3>No ${agents[agent]} activity in this range</h3><p>${panel.placeholders.length?"When there is activity, these metrics appear here:":`${agents[agent]} reports no agent-specific metrics.`}</p></div>
+      <div class="placeholders">${panel.placeholders.map(([label,hint])=>`<div><span class="eyebrow">${label}</span><span class="num">—</span><span>${hint}</span></div>`).join("")}</div>${longer?"":`<div><button type="button" class="link" data-goto="90d">Show the last 90 days</button></div>`}</div>`;
+    const averages=LATENCY.some(([m])=>reported(agent,m)?.total!=null);
+    $("agents").innerHTML=`${compare}<div class="agent-bar" role="${both?"":"group"}">${tabs}${chip?`<span class="chip">${chip}</span>`:""}</div><div ${both?`role="tabpanel"`:""} class="agents">${body}</div>${averages&&panel.activity?`<p class="note faint" style="margin:0">Durations are averages (Σ sum / Σ count) of the Codex histograms.</p>`:""}`;
+  }
   async function copyCharts(button,specs) {
     const id=snapshot,chosen=structuredClone(specs),scope={...selection},label=button.textContent;
     if(!id){button.textContent="Waiting for snapshot";return;}
@@ -344,11 +397,16 @@
     }catch(error){button.textContent="Copy failed";button.title=error.message;}
     setTimeout(()=>{button.textContent=label;},2200);
   }
-  window.usage={initial,select,apply,mode,restore(){theme();},debug(){return {epoch,snapshot,sourceAt,datasets,widgets};}};
+  window.usage={initial,select,apply,restore(){theme();},debug(){return {epoch,snapshot,sourceAt,datasets,widgets};}};
   document.addEventListener("DOMContentLoaded",()=>{
     theme();$("theme").onclick=()=>{currentTheme=currentTheme==="dark"?"light":"dark";try{localStorage.setItem("theme",currentTheme);}catch(_){}theme();};
     $("copy-all").onclick=()=>copyCharts($("copy-all"),[...widgets.values()].map(w=>w.spec));
     for(const b of document.querySelectorAll("[data-metric]"))b.onclick=()=>{metric=b.dataset.metric;try{localStorage.setItem("metric",metric);}catch(_){}if(datasets.size)renderOverview();};
+    $("agents").onclick=event=>{
+      const tab=event.target.closest("[data-tab]"),goto=event.target.closest("[data-goto]");
+      if(tab){agentTab=tab.dataset.tab;try{localStorage.setItem("agentTab",agentTab);}catch(_){}renderOverview();}
+      if(goto)$("range-"+goto.dataset.goto).click();
+    };
     $("raw-toggle").onclick=()=>{const show=$("raw").hidden;$("raw").hidden=!show;$("raw-toggle").setAttribute("aria-expanded",String(show));$("raw-toggle").textContent=`${show?"Hide":"Show"} raw charts (${widgets.size})`;if(show)$("raw").scrollIntoView({behavior:"smooth"});};
     setInterval(()=>{if(lastPacket&&Date.now()-lastPacket>75000){$("updated").classList.add("stale");$("error").hidden=false;$("error").textContent="Live connection interrupted. Reconnecting…";}},15000);
   });

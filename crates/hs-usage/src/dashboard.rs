@@ -864,16 +864,31 @@ fn enrich(d: &mut Dataset) {
                 .flat_map(|s| s.points.iter().map(|(t, _)| (*t, 0.)))
                 .collect();
             let mut tools = BTreeMap::<String, BTreeMap<u64, f64>>::new();
+            let mut ranking = BTreeMap::<String, (f64, f64)>::new();
             for s in &d.series {
                 let kind = &s.dimensions["kind"];
                 let (tool, success) = kind.rsplit_once(':').unwrap_or((kind, "?"));
                 for (t, v) in &s.points {
                     *tools.entry(tool.into()).or_default().entry(*t).or_default() += v;
+                    let calls = ranking.entry(tool.into()).or_default();
+                    calls.0 += v;
                     if success == "false" {
                         *failures.entry(*t).or_default() += v;
+                        calls.1 += v;
                     }
                 }
             }
+            let mut ranking: Vec<_> = ranking.into_iter().filter(|(_, (calls, _))| *calls > 0.).collect();
+            ranking.sort_by(|a, b| b.1.0.total_cmp(&a.1.0));
+            details.insert(
+                "ranking".into(),
+                json!(
+                    ranking
+                        .into_iter()
+                        .map(|(tool, (calls, failed))| json!({"tool":tool,"calls":calls,"failed":failed}))
+                        .collect::<Vec<_>>()
+                ),
+            );
             details.insert("failures".into(), json!(failures.into_iter().collect::<Vec<_>>()));
             details.insert(
                 "tools".into(),

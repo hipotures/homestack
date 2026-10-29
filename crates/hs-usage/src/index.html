@@ -10,8 +10,6 @@ h1 { font-size: 20px; margin: 0; font-weight: 600; letter-spacing: -.01em; }
 .live.stale .live-dot { background: var(--warn); box-shadow: none; }
 .scope { font: inherit; font-size: 13px; color: var(--text-2); background: transparent; border: 1px solid var(--border-strong); border-radius: var(--radius-ctl); min-height: 40px; padding: 0 10px; max-width: 200px; }
 .scope option { background: var(--surface-3); color: var(--text); }
-.mode { display: inline-flex; gap: 8px; align-items: center; cursor: pointer; }
-.mode input { accent-color: var(--codex); }
 .theme { cursor: pointer; }
 .range { position: relative; max-width: 100%; }
 .menu { position: absolute; right: 0; top: calc(100% + 6px); z-index: 5; width: 220px; padding: 6px; background: var(--surface-3); border: 1px solid var(--border-strong); border-radius: 12px; box-shadow: 0 12px 32px rgba(0,0,0,.35); display: flex; flex-direction: column; gap: 2px; }
@@ -24,6 +22,7 @@ h1 { font-size: 20px; margin: 0; font-weight: 600; letter-spacing: -.01em; }
 a { color: var(--tok-uncached); }
 .link { font: inherit; color: var(--tok-uncached); background: none; border: 0; padding: 0; cursor: pointer; text-decoration: underline; }
 .row-2, .kpi-grid { min-width: 0; }
+.row-2:not(:has(> :not([hidden]))), .row-3:not(:has(> :not([hidden]))) { display: none; }
 .row-3 { display: flex; flex-wrap: wrap; gap: var(--gap-grid); }
 .row-3 > .heat-card { flex: 999 1 640px; }
 .row-3 > .side { flex: 1 1 320px; }
@@ -37,7 +36,7 @@ a { color: var(--tok-uncached); }
 .chips { display: flex; flex-wrap: wrap; gap: 8px; }
 .chip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 12px; border-radius: 999px; background: var(--surface-2); color: var(--text-2); font-size: var(--fs-small); }
 .kpi { gap: 12px; }
-.kpi .figure { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; }
+.kpi .figure, .metric .figure { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; }
 .kpi .legend-row, .bar-row .head { display: flex; justify-content: space-between; gap: 12px; font-size: var(--fs-small); color: var(--muted); }
 .kpi .stack { display: flex; flex-direction: column; gap: 6px; }
 .spark { width: 100%; height: 36px; display: block; }
@@ -76,14 +75,42 @@ a { color: var(--tok-uncached); }
 .raw { display: flex; flex-direction: column; gap: var(--gap-grid); }
 .raw-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .raw-head h2 { margin: 0; font-size: var(--fs-h2); }
-.compare { --metric-width: 260px; --agent-width: 200px; width: calc(var(--metric-width) + var(--agent-count, 2) * var(--agent-width) + 38px); max-width: 100%; margin-inline: auto; padding: 18px; overflow-x: auto; }
-.compare table { font-size: 14px; width: calc(var(--metric-width) + var(--agent-count, 2) * var(--agent-width)); table-layout: fixed; }
-.compare th:first-child { width: var(--metric-width); }
-.compare caption { text-align: left; font-weight: 600; font-size: 18px; padding-bottom: 8px; }
-.compare th, .compare td { padding: 12px 16px; vertical-align: top; }
-.compare tbody th { position: static; font-weight: 400; }
-.compare .primary { font-size: 18px; font-weight: 600; }
-.compare .note { display: block; white-space: normal; max-width: 360px; margin-top: 4px; }
+.agents { display: flex; flex-direction: column; gap: var(--gap-grid); }
+.compare-rows { display: flex; flex-direction: column; }
+.compare-row { display: grid; grid-template-columns: minmax(110px, 180px) repeat(var(--agents, 2), minmax(0, 1fr)); gap: 20px; align-items: center; padding: 11px 0; border-top: 1px solid var(--border); font-size: 13px; }
+.compare-row > span:first-child { color: var(--text-2); }
+.compare-row .cell { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.compare-row .cell .track { flex: 1; height: 6px; }
+.compare-row .cell .num { min-width: 84px; text-align: right; }
+.compare-row .cell .num.missing { color: var(--faint); font-family: var(--font-sans); }
+.agent-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
+.tabs { display: inline-flex; gap: 4px; border-bottom: 1px solid var(--border-strong); max-width: 100%; overflow-x: auto; scrollbar-width: none; }
+.tabs button { border: 0; background: transparent; min-height: 44px; padding: 0 16px; font: inherit; font-size: 14px; color: var(--muted); cursor: pointer; display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; }
+.tabs button[aria-selected="true"] { color: var(--text); font-weight: 600; box-shadow: inset 0 -2px 0 var(--tab-color); }
+.tabs .count { font-size: 11px; color: var(--faint); font-weight: 400; }
+.agent-title { margin: 0; font-size: 18px; font-weight: 600; display: inline-flex; align-items: center; gap: 10px; }
+.agent-title i, .tabs i { width: 8px; height: 8px; border-radius: 50%; }
+.mini { display: flex; align-items: flex-end; gap: 2px; height: 40px; }
+.mini span { flex: 1; border-radius: 2px 2px 0 0; min-width: 1px; }
+.mini-axis { display: flex; justify-content: space-between; font-family: var(--font-mono); font-size: 10px; color: var(--faint); }
+.metric .kpi-value { font-size: 34px; }
+.kpi-grid.metrics { grid-template-columns: repeat(auto-fill, minmax(min(100%, 260px), 1fr)); }
+.metric .figure .note { white-space: nowrap; }
+.work { display: grid; grid-template-columns: minmax(56px, auto) minmax(0, 1fr) 84px; gap: 12px; align-items: center; font-size: 13px; }
+.work .track { height: 14px; border-radius: 4px; }
+.work > span:first-child { color: var(--text-2); }
+.work > span:last-child, .tool > span:last-child { text-align: right; }
+.tool { display: grid; grid-template-columns: minmax(0, 170px) minmax(0, 1fr) 60px; gap: 12px; align-items: center; font-size: 12px; }
+.tool > span:first-child { font-family: var(--font-mono); color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tool .track { height: 10px; border-radius: 3px; }
+.badge { display: inline-flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: 8px; background: color-mix(in srgb, var(--warn) 12%, transparent); font-size: var(--fs-small); color: var(--warn); }
+.empty { padding: 28px; gap: 22px; }
+.empty h3 { margin: 0; font-size: 16px; }
+.empty p { margin: 0; font-size: 13px; color: var(--text-2); }
+.placeholders { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: 12px; }
+.placeholders div { border: 1px dashed var(--border-strong); border-radius: 12px; padding: 16px; display: flex; flex-direction: column; gap: 8px; font-size: var(--fs-small); color: var(--faint); }
+.placeholders .num { font-size: 22px; color: var(--faint); }
+.agents h3 { margin: 0; font-size: var(--fs-h2); font-weight: 600; }
 .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 380px), 1fr)); gap: var(--gap-grid); }
 .cards .card { gap: 10px; }
 .card-head { display: flex; align-items: baseline; gap: 8px; }
@@ -116,7 +143,7 @@ button:focus-visible, select:focus-visible { outline: 2px solid var(--codex); ou
 <button type="button" data-on:click="$range='24h'" data-attr:aria-pressed="String($range==='24h')">24h</button>
 <button type="button" data-on:click="$range='7d'" data-attr:aria-pressed="String($range==='7d')">7d</button>
 <button type="button" data-on:click="$range='30d'" data-attr:aria-pressed="String($range==='30d')">30d</button>
-<button type="button" data-on:click="$range='90d'" data-attr:aria-pressed="String($range==='90d')">90d</button>
+<button type="button" id="range-90d" data-on:click="$range='90d'" data-attr:aria-pressed="String($range==='90d')">90d</button>
 <button type="button" id="range-more" aria-haspopup="menu" data-on:click="$_more=!$_more" data-attr:aria-expanded="String($_more)" data-attr:aria-pressed="String(['180d','1y','all'].includes($range))" data-text="({'180d':'180 days','1y':'1 year','all':'All'}[$range]||'More')+' ▾'">More ▾</button>
 </div>
 <div class="menu" role="menu" data-show="$_more" style="display:none">
@@ -126,17 +153,14 @@ button:focus-visible, select:focus-visible { outline: 2px solid var(--codex); ou
 <button type="button" role="menuitem" disabled title="Custom ranges are not available yet">Custom range…</button>
 </div>
 </div>
-<select class="scope" id="agent" aria-label="Agent" data-bind:agent data-attr:disabled="$_compare"><option value="all">Agents: all</option><option value="claude">Claude Code</option><option value="codex">Codex</option></select>
+<select class="scope" id="agent" aria-label="Agent" data-bind:agent><option value="all">Agents: all</option><option value="claude">Claude Code</option><option value="codex">Codex</option></select>
 <select class="scope" id="host" aria-label="Server" data-bind:host><option value="*">Servers: all</option></select>
 <select class="scope" id="project" aria-label="Project" data-bind:project><option value="*">Projects: all</option></select>
-<label class="scope mode"><input id="compare" type="checkbox" role="switch" data-bind:_compare data-on:change="if($_compare) $agent='all'; window.usage.mode($_compare)"> Compare agents</label>
 <button class="scope theme" id="theme" type="button">Theme</button>
 </div></header>
-<div hidden data-effect="window.usage.mode($_compare)"></div>
 <div hidden data-effect="if($_packet) window.usage.apply(JSON.parse($_packet))"></div>
 <button id="resync" type="button" hidden data-on:click="$_sync++">Resynchronize</button>
 <div class="error" id="error" role="status" hidden></div>
-<section class="card compare" id="comparison" aria-label="Agent comparison" hidden data-ignore-morph></section>
 <div class="overview" id="overview" data-ignore-morph style="display:contents">
 <section class="kpi-grid" id="kpis" aria-label="Summary"></section>
 <section class="card" id="trend" aria-label="Usage over time">
@@ -155,6 +179,7 @@ button:focus-visible, select:focus-visible { outline: 2px solid var(--codex); ou
 </section>
 <section class="card side" id="spikes" aria-label="Usage spikes"></section>
 </div>
+<section class="agents" id="agents" aria-label="Agent details"></section>
 </div>
 <footer class="foot"><span>AI Usage __HOMESTACK_USAGE_VERSION__ · Datastar 1.0.4 · Apache ECharts 6.1.0</span><span><a href="/assets/datastar-LICENSE.md">Datastar license</a> · <a href="/assets/echarts-LICENSE.txt">ECharts license</a> · <a href="/assets/echarts-NOTICE.txt">Notices</a> · <button class="link" id="raw-toggle" type="button" aria-controls="raw" aria-expanded="false">Show raw charts</button></span></footer>
 <section class="raw" id="raw" aria-label="Raw charts" hidden data-ignore-morph>
