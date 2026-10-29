@@ -96,23 +96,24 @@
       return projector(d).map(s=>({...s,label:s.label||agents[agent],agent,dataset:d.id}));
     });
     const supported=(measurement,shared=true)=>!shared||selected.every(a=>datasets.get(`${a}.${measurement}`)?.state!=="unavailable");
-    const add=(id,title,unit,data,options={})=>{if(data.length||options.empty)list.push({id,title,unit,series:data,sourceIds:[...new Set(data.map(s=>s.dataset))],...options});};
+    // Series without a single nonzero value are dropped, and a panel with no series is not shown.
+    const add=(id,title,unit,data,options={})=>{data=data.filter(s=>AIUsage.nonEmpty([{data:s.points}]).length);if(data.length)list.push({id,title,unit,series:data,sourceIds:[...new Set(data.map(s=>s.dataset))],...options});};
     const timeline=d=>[{id:d.agent,label:agents[d.agent]+(d.agent==="codex"&&d.measurement==="cost"?" (estimated)":""),points:d.details?.timeline||[]}];
-    add("cost","Cost over time","USD",parts("cost",timeline),{empty:true,sourceIds:selected.map(a=>`${a}.cost`)});
+    add("cost","Cost over time","USD",parts("cost",timeline));
     add("models-cost","Cost by model","USD",parts("cost",d=>d.series.map(s=>({...s,label:agents[d.agent]+" · "+s.dimensions.model}))),{stack:true});
     for(const [id,title]of [["total","Tokens over time"],["input","Uncached input tokens"],["cached","Cached input tokens"],["written","Cache write tokens"],["output","Output tokens (includes reasoning)"],["reasoning","Reasoning tokens (subset of output)"]]) {
-      add(id,title,"tokens",parts("tokens",d=>(d.details.categories||[]).filter(s=>s.id===id).map(s=>({...s,id:d.agent,label:agents[d.agent]}))),{empty:id==="total",sourceIds:selected.map(a=>`${a}.tokens`)});
+      add(id,title,"tokens",parts("tokens",d=>(d.details.categories||[]).filter(s=>s.id===id).map(s=>({...s,id:d.agent,label:agents[d.agent]}))));
     }
     add("models-tokens","Tokens by model","tokens",parts("tokens",d=>(d.details.models||[]).map(s=>({...s,label:agents[d.agent]+" · "+s.label}))),{stack:true});
     add("cacheHit","Cache hit","ratio",parts("tokens",d=>[{id:d.agent,label:agents[d.agent],points:d.details.cacheHit||[]}]),{max:1});
     for(const [measurement,title,unit]of [["sessions","New sessions","count"],["active","Active time","seconds"],["commits","Commits","count"],["lines","Lines of code","count"],["turns","Turns","count"],["tools","Tool calls","count"],["turnDuration","Average turn duration","seconds"],["firstToken","Time to first token","seconds"],["firstOutput","Time to first output item","seconds"],["toolDuration","Average tool duration","seconds"]]) {
       if(!supported(measurement))continue;
-      add(measurement,title,unit,parts(measurement,measurement==="lines"?d=>d.series.map(s=>({...s,label:agents[d.agent]+" · "+s.dimensions.kind})):timeline),{empty:true});
+      add(measurement,title,unit,parts(measurement,measurement==="lines"?d=>d.series.map(s=>({...s,label:agents[d.agent]+" · "+s.dimensions.kind})):timeline));
     }
     if(selected.length===1) {
       if(supported("active"))add("active-kind","Active time by kind","seconds",parts("active",d=>d.series));
       if(supported("tools")){
-        add("tool-failures","Failed tool calls","count",parts("tools",d=>[{id:d.agent,points:d.details.failures||[]}]),{empty:true});
+        add("tool-failures","Failed tool calls","count",parts("tools",d=>[{id:d.agent,points:d.details.failures||[]}]));
         add("tools-kind","Tool calls by tool","count",parts("tools",d=>d.details.tools||[]));
       }
       const duration=datasets.get(`${selected[0]}.turnDuration`);
@@ -134,12 +135,12 @@
     if(dirty.has("all.spikes"))renderSpikes();
   }
   function create(spec) {
-    const card=el("article","card"),head=el("div","card-head"),actions=el("div","card-actions"),toggle=el("button","toggle","table"),copy=el("button","copy","⧉"),note=el("div","note"),chartHost=el("div","chart"),emptyHost=el("div","chart-empty"),tableHost=el("div","table-wrap");
+    const card=el("article","card"),head=el("div","card-head"),actions=el("div","card-actions"),toggle=el("button","toggle","table"),copy=el("button","copy","⧉"),note=el("div","note"),chartHost=el("div","chart"),tableHost=el("div","table-wrap");
     card.id="widget-"+spec.id;chartHost.id="chart-"+spec.id;chartHost.setAttribute("data-ignore-morph","");chartHost.setAttribute("role","img");chartHost.setAttribute("aria-label",spec.title);
     copy.type=toggle.type="button";copy.hidden=true;copy.title="Copy data as JSON";copy.setAttribute("aria-label",copy.title);
-    head.append(el("h2","",spec.title),el("span","unit",spec.unit),actions);actions.append(copy,toggle);emptyHost.setAttribute("role","status");emptyHost.hidden=true;card.append(head,note,chartHost,emptyHost,tableHost);$("cards").append(card);tableHost.hidden=true;
-    const w={card,head,note,copy,host:chartHost,emptyHost,tableHost,table:false,empty:false,spec,chart:null,updates:0};
-    toggle.onclick=()=>{w.table=!w.table;toggle.textContent=w.table?"chart":"table";draw(w);if(!w.table&&!w.empty)w.chart?.resize();};
+    head.append(el("h2","",spec.title),el("span","unit",spec.unit),actions);actions.append(copy,toggle);card.append(head,note,chartHost,tableHost);$("cards").append(card);tableHost.hidden=true;
+    const w={card,head,note,copy,host:chartHost,tableHost,table:false,spec,chart:null,updates:0};
+    toggle.onclick=()=>{w.table=!w.table;toggle.textContent=w.table?"chart":"table";draw(w);if(!w.table)w.chart?.resize();};
     copy.onclick=()=>copyCharts(copy,[w.spec]);
     return w;
   }
@@ -148,16 +149,13 @@
     w.copy.hidden=!w.table;
     const timeRange=datasets.get(spec.series[0]?.dataset)?.range;
     const sources=spec.sourceIds.map(id=>datasets.get(id)).filter(Boolean);
-    const values=spec.series.flatMap(s=>s.points.map(([,v])=>v)).filter(Number.isFinite);
-    w.empty=!values.some(v=>v!==0);
-    w.emptyHost.textContent=values.length ? "All values are zero" : sources.length&&sources.every(d=>d.state==="unavailable") ? "Telemetry unavailable" : "No measurements";
-    w.note.textContent=[spec.note,sources.some(d=>d.state==="partial")?"Partial data":""].filter(Boolean).join(" · ");
-    w.note.hidden=!w.note.textContent;
-    w.host.hidden=w.table||w.empty;
-    w.emptyHost.hidden=w.table||!w.empty;
+    // The time axis starts at the first bucket with data; a chip tells when that is later than the range.
+    const first=firstData(spec.series),since=!spec.heat&&timeRange&&first>timeRange.start?first:null;
+    w.note.replaceChildren(...[since?el("span","chip",`data since ${sinceLabel(since,timeRange)}`):null,spec.note,sources.some(d=>d.state==="partial")?"Partial data":""].filter(Boolean).map(n=>typeof n==="string"?el("span","",n):n));
+    w.note.hidden=!w.note.childElementCount;
+    w.host.hidden=w.table;
     w.tableHost.hidden=!w.table;
     if(w.table){renderTable(w);return;}
-    if(w.empty)return;
     if(!w.chart)w.chart=AIUsage.init(w.host);
     let option;
     if(spec.heat) {
@@ -165,13 +163,15 @@
       const data=[...cells].map(([key,v])=>{const [day,hour]=key.split(',').map(Number);return [hour,day,v];});
       option={tooltip:{position:"top"},grid:{left:12,right:16,top:16,bottom:74,containLabel:true},xAxis:{type:"category",axisLabel:{interval:"auto",hideOverlap:true,margin:10},axisTick:{alignWithLabel:true},data:Array.from({length:24},(_,h)=>String(h).padStart(2,"0"))},yAxis:{type:"category",axisLabel:{interval:0,margin:8},data:["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]},visualMap:{min:0,max:Math.max(1,...data.map(v=>v[2])),calculable:true,orient:"horizontal",left:"center",bottom:20,itemWidth:12,itemHeight:120,padding:8,formatter:value=>heatmapScale.format(value).replace(/K$/,"k")},series:[{id:"heat",type:"heatmap",data,emphasis:{itemStyle:{borderWidth:1}}}]};
     } else {
-      option={grid:{left:65,right:18,top:55,bottom:55},legend:{type:"scroll",left:"center",right:"auto",top:"auto",bottom:0},tooltip:{trigger:"axis",axisPointer:{type:"shadow"},valueFormatter:v=>format(v,spec.unit)},xAxis:{type:"time",min:timeRange?timeRange.start*1000:undefined,max:timeRange?timeRange.end*1000:undefined,axisLabel:{hideOverlap:true},axisPointer:{label:{formatter:p=>new Date(p.value).toLocaleString()}}},yAxis:{type:"value",max:spec.max,minInterval:["count","tokens"].includes(spec.unit)?1:undefined,axisLabel:{formatter:v=>spec.unit==="ratio"?`${v*100}%`:number(v)}},dataZoom:[{type:"inside"}],series:spec.series.map(s=>({id:`${s.dataset}:${s.id}`,name:s.label||s.id,type:spec.unit==="ratio"?"line":"bar",stack:spec.stack?"total":undefined,itemStyle:{color:seriesColor(s)},lineStyle:{color:seriesColor(s)},data:s.points.map(([t,v])=>[t*1000,v]),connectNulls:false}))};
+      option={grid:{left:65,right:18,top:55,bottom:55},legend:{type:"scroll",left:"center",right:"auto",top:"auto",bottom:0},tooltip:{trigger:"axis",axisPointer:{type:"shadow"},valueFormatter:v=>format(v,spec.unit)},xAxis:{type:"time",min:timeRange?(since??timeRange.start)*1000:undefined,max:timeRange?timeRange.end*1000:undefined,axisLabel:{hideOverlap:true},axisPointer:{label:{formatter:p=>new Date(p.value).toLocaleString()}}},yAxis:{type:"value",max:spec.max,minInterval:["count","tokens"].includes(spec.unit)?1:undefined,axisLabel:{formatter:v=>spec.unit==="ratio"?`${v*100}%`:number(v)}},dataZoom:[{type:"inside"}],series:spec.series.map(s=>({id:`${s.dataset}:${s.id}`,name:s.label||s.id,type:spec.unit==="ratio"?"line":"bar",stack:spec.stack?"total":undefined,itemStyle:{color:seriesColor(s)},lineStyle:{color:seriesColor(s)},data:s.points.map(([t,v])=>[t*1000,v]),connectNulls:false}))};
     }
     Object.assign(option,{animationDurationUpdate:180,aria:{enabled:true}});
     w.chart.setOption(option,{replaceMerge:["series"],lazyUpdate:true});w.updates++;
   }
   // "Agent · model" (or kind) series get a shade of the agent hue; everything else the agent hue.
   const seriesColor=s=>AIUsage.colorFor(s.label?.includes(" · ")?s.label:agents[s.agent]||s.label||s.id);
+  const firstData=series=>Math.min(...series.flatMap(s=>s.points.filter(([,v])=>v>0).map(([t])=>t)));
+  const sinceLabel=(t,range)=>{const d=new Date(t*1000),two=n=>String(n).padStart(2,"0");return range.end-range.start<=86400+range.step?`${two(d.getHours())}:${two(d.getMinutes())}`:`${two(d.getDate())}.${two(d.getMonth()+1)}`;};
   function renderTable(w) {
     const table=el("table"),head=el("tr");head.append(el("th","","Bucket start (local)"),...w.spec.series.map(s=>el("th","",s.label||s.id)));table.append(head);
     const times=[...new Set(w.spec.series.flatMap(s=>s.points.map(p=>p[0])))].sort((a,b)=>b-a),maps=w.spec.series.map(s=>new Map(s.points));
