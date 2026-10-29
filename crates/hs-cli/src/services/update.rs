@@ -534,24 +534,33 @@ pub async fn apply(
 }
 
 /// The environment the saved application selections and HomeStack's own
-/// settings give a schema-3 container.
+/// settings give a schema-3 container. A key input the selections lack
+/// (one the manifest added) is generated and saved once; a saved key is kept.
 fn application_environment(
     root: &std::path::Path,
     source: &Source,
     target: &Instance,
 ) -> Result<Vec<(String, String)>, String> {
     let hostname = super::selections::base_name(&target.hostname);
-    let saved = super::selections::load(
-        root,
-        source,
-        hostname,
-        target.searchdomain.as_deref().unwrap_or_default(),
-        true,
-    )?
-    .ok_or("Private application selections are unavailable")?;
+    let domain = target.searchdomain.as_deref().unwrap_or_default();
+    let saved = super::selections::load(root, source, hostname, domain, true)?
+        .ok_or("Private application selections are unavailable")?;
     let contract = source.manifest.schema3.as_ref().ok_or("Expected schema 3")?;
     let mut values = saved.values;
+    let missing: Vec<&str> = contract
+        .inputs
+        .iter()
+        .filter(|input| input.kind == super::schema3::Kind::Key && !values.contains_key(&input.id))
+        .map(|input| input.id.as_str())
+        .collect();
+    let generated = !missing.is_empty();
+    for id in missing {
+        values.insert(id.to_owned(), super::schema3::generate_key()?.into());
+    }
     contract.with_homestack(&mut values, &DeployConfig::load(&root.join("deploy.toml"))?)?;
+    if generated {
+        super::selections::save(root, source, hostname, domain, &values)?;
+    }
     contract.resolve(&values)
 }
 
