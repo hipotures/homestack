@@ -1,6 +1,8 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>AI usage</title><link rel="icon" href="data:,"><link rel="stylesheet" href="/assets/aiusage-tokens.css"><style>
 * { box-sizing: border-box; }
+body { font-variant-numeric: tabular-nums; overflow-x: hidden; }
+.row-2 { grid-template-columns: repeat(auto-fit, minmax(min(100%, 380px), 1fr)); }
 main { max-width: 1320px; margin: 0 auto; padding: 28px 16px 64px; display: flex; flex-direction: column; gap: var(--gap-section); }
 [hidden] { display: none !important; }
 h1 { font-size: 20px; margin: 0; font-weight: 600; letter-spacing: -.01em; }
@@ -125,6 +127,20 @@ th, td { text-align: right; padding: 3px 8px; border-bottom: 1px solid var(--gri
 th:first-child, td:first-child { text-align: left; }
 th { color: var(--text-2); font-weight: 600; position: sticky; top: 0; background: var(--surface); }
 button:focus-visible, select:focus-visible { outline: 2px solid var(--codex); outline-offset: 2px; }
+/* Phones: switches scroll sideways, grids collapse, the page never scrolls horizontally. */
+@media (max-width: 640px) {
+  .controls, .range { width: 100%; }
+  .controls .scope { flex: 1 1 140px; max-width: none; }
+  .card-tools { width: 100%; justify-content: space-between; }
+  .card .seg { max-width: 100%; overflow-x: auto; scrollbar-width: none; }
+  .compare-row { grid-template-columns: repeat(var(--agents, 2), minmax(0, 1fr)); gap: 6px 14px; }
+  .compare-row > span:first-child { grid-column: 1 / -1; }
+  .compare-row .cell .num { min-width: 0; }
+  .tool { grid-template-columns: minmax(0, 110px) minmax(0, 1fr) 48px; }
+  .work { grid-template-columns: minmax(56px, auto) minmax(0, 1fr) 72px; }
+  .metric .kpi-value { font-size: 30px; }
+  .chart.tall { height: 260px; }
+}
 </style>
 <script defer src="/assets/echarts-6.1.0.min.js"></script>
 <script defer src="/assets/aiusage-echarts-theme.js"></script>

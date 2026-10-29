@@ -8,9 +8,8 @@
   try { currentTheme = localStorage.getItem("theme") || currentTheme; } catch (_) {}
   const el = (tag, cls, text) => { const e=document.createElement(tag); if(cls)e.className=cls; if(text!==undefined)e.textContent=text;return e; };
   const $ = id => document.getElementById(id);
-  const heatmapScale = new Intl.NumberFormat("en",{notation:"compact",maximumFractionDigits:1});
-  const number = v => v == null ? "—" : new Intl.NumberFormat(undefined,{maximumFractionDigits:2}).format(v);
-  const format = (v,unit) => v == null ? "—" : unit === "USD" ? new Intl.NumberFormat(undefined,{style:"currency",currency:"USD",maximumFractionDigits:4}).format(v) : unit === "ratio" ? new Intl.NumberFormat(undefined,{style:"percent",maximumFractionDigits:1}).format(v) : number(v);
+  // Tooltips and tables show full precision; cards use the short AIUsage.fmt forms.
+  const format = (v,unit) => v == null ? "—" : unit === "USD" ? AIUsage.fmt.cost(v,true) : unit === "ratio" ? AIUsage.fmt.pct(v*100,2) : unit === "seconds" ? `${AIUsage.fmt.full(Math.round(v*1000)/1000)} s` : AIUsage.fmt.full(Math.round(v*100)/100);
   function initial() {
     const out={agent:"all",host:"*",project:"*",range:"24h",_more:false,_sync:0,_packet:""};
     try {for(const key of ["agent","host","project","range"]) out[key]=localStorage.getItem(key)||out[key];}catch(_){}
@@ -150,9 +149,9 @@
     if(spec.heat) {
       const cells=new Map();for(const s of spec.series)for(const [t,v]of s.points){const d=new Date(t*1000),key=`${(d.getDay()+6)%7},${d.getHours()}`;cells.set(key,(cells.get(key)||0)+v);}
       const data=[...cells].map(([key,v])=>{const [day,hour]=key.split(',').map(Number);return [hour,day,v];});
-      option={tooltip:{position:"top"},grid:{left:12,right:16,top:16,bottom:74,containLabel:true},xAxis:{type:"category",axisLabel:{interval:"auto",hideOverlap:true,margin:10},axisTick:{alignWithLabel:true},data:Array.from({length:24},(_,h)=>String(h).padStart(2,"0"))},yAxis:{type:"category",axisLabel:{interval:0,margin:8},data:["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]},visualMap:{min:0,max:Math.max(1,...data.map(v=>v[2])),calculable:true,orient:"horizontal",left:"center",bottom:20,itemWidth:12,itemHeight:120,padding:8,formatter:value=>heatmapScale.format(value).replace(/K$/,"k")},series:[{id:"heat",type:"heatmap",data,emphasis:{itemStyle:{borderWidth:1}}}]};
+      option={tooltip:{position:"top"},grid:{left:12,right:16,top:16,bottom:74,containLabel:true},xAxis:{type:"category",axisLabel:{interval:"auto",hideOverlap:true,margin:10},axisTick:{alignWithLabel:true},data:Array.from({length:24},(_,h)=>String(h).padStart(2,"0"))},yAxis:{type:"category",axisLabel:{interval:0,margin:8},data:["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]},visualMap:{min:0,max:Math.max(1,...data.map(v=>v[2])),calculable:true,orient:"horizontal",left:"center",bottom:20,itemWidth:12,itemHeight:120,padding:8,formatter:value=>AIUsage.fmt.tokens(value)},series:[{id:"heat",type:"heatmap",data,emphasis:{itemStyle:{borderWidth:1}}}]};
     } else {
-      option={grid:{left:65,right:18,top:55,bottom:55},legend:{type:"scroll",left:"center",right:"auto",top:"auto",bottom:0},tooltip:{trigger:"axis",axisPointer:{type:"shadow"},valueFormatter:v=>format(v,spec.unit)},xAxis:{type:"time",min:timeRange?((since??timeRange.start)-timeRange.step/2)*1000:undefined,max:timeRange?timeRange.end*1000:undefined,axisLabel:{hideOverlap:true},axisPointer:{label:{formatter:p=>new Date(p.value).toLocaleString()}}},yAxis:{type:"value",max:spec.max,minInterval:["count","tokens"].includes(spec.unit)?1:undefined,axisLabel:{formatter:v=>spec.unit==="ratio"?`${v*100}%`:number(v)}},dataZoom:[{type:"inside"}],series:spec.series.map(s=>({id:`${s.dataset}:${s.id}`,name:s.label||s.id,type:spec.unit==="ratio"?"line":"bar",stack:spec.stack?"total":undefined,itemStyle:{color:seriesColor(s)},lineStyle:{color:seriesColor(s)},data:s.points.map(([t,v])=>[t*1000,v]),connectNulls:false}))};
+      option={grid:{left:65,right:18,top:55,bottom:55},legend:{type:"scroll",left:"center",right:"auto",top:"auto",bottom:0},tooltip:{trigger:"axis",axisPointer:{type:"shadow"},valueFormatter:v=>format(v,spec.unit)},xAxis:{type:"time",min:timeRange?((since??timeRange.start)-timeRange.step/2)*1000:undefined,max:timeRange?timeRange.end*1000:undefined,axisLabel:{hideOverlap:true},axisPointer:{label:{formatter:p=>new Date(p.value).toLocaleString()}}},yAxis:{type:"value",max:spec.max,minInterval:["count","tokens"].includes(spec.unit)?1:undefined,axisLabel:{formatter:v=>spec.unit==="ratio"?`${Math.round(v*100)}%`:spec.unit==="USD"?AIUsage.fmt.cost(v):spec.unit==="seconds"?AIUsage.fmt.duration(v):AIUsage.fmt.tokens(v)}},dataZoom:[{type:"inside"}],series:spec.series.map(s=>({id:`${s.dataset}:${s.id}`,name:s.label||s.id,type:spec.unit==="ratio"?"line":"bar",stack:spec.stack?"total":undefined,itemStyle:{color:seriesColor(s)},lineStyle:{color:seriesColor(s)},data:s.points.map(([t,v])=>[t*1000,v]),connectNulls:false}))};
     }
     Object.assign(option,{animationDurationUpdate:180,aria:{enabled:true}});
     w.chart.setOption(option,{replaceMerge:["series"],lazyUpdate:true});w.updates++;
@@ -209,7 +208,7 @@
     const sel=chosen(),tokens=sel.map(a=>datasets.get(`${a}.tokens`)).filter(d=>d&&d.state!=="unavailable");
     const category=id=>tokens.map(d=>(d.details.categories||[]).find(c=>c.id===id)?.points);
     const lead=sel.length===1?AIUsage.colorFor(agents[sel[0]]):css("--text-2");
-    const kpi=(label,value,deltaHtml,body,title="")=>`<div class="card kpi"><div class="eyebrow" title="${esc(title)}">${label}</div><div class="figure"><span class="kpi-value${value==="—"?" faint":""}">${value}</span>${deltaHtml}</div>${body}</div>`;
+    const kpi=(label,value,deltaHtml,body,title="",full="")=>`<div class="card kpi"><div class="eyebrow" title="${esc(title)}">${label}</div><div class="figure"><span class="kpi-value${value==="—"?" faint":""}" title="${esc(full)}">${value}</span>${deltaHtml}</div>${body}</div>`;
     const totalSeries=sumPoints(category("total")),firstActive=Math.min(...[...totalSeries].filter(([,v])=>v>0).map(([t])=>t));
     const live=buckets(range).filter(t=>t>=firstActive||!Number.isFinite(firstActive));
     // Cache hit per bucket over all selected agents, drawn on a narrow scale.
@@ -225,10 +224,10 @@
       <div class="legend-row"><span>${share==null?"reasoning not reported":`<span style="color:var(--tok-reasoning)">●</span> reasoning ${F.tokens(reasoning)} · ${Math.round(share*100)}%`}</span><span>response ${F.tokens(output-(reasoning||0))}</span></div></div>`:"";
     const partial=key=>{const n=totals[key]?.contributors??0;return n&&n<sel.length?" (partial)":"";};
     $("kpis").innerHTML=[
-      kpi("Cost"+partial("cost"),F.cost(totals.cost?.value),delta(totals.cost?.value,previous.cost),split("cost",summary),"Codex cost is estimated from standard API prices"),
-      kpi("Tokens"+partial("total"),F.tokens(totals.total?.value),delta(totals.total?.value,previous.total),sparkline(live.map(t=>[t,totalSeries.get(t)||0]),lead)+split("total",summary)),
+      kpi("Cost"+partial("cost"),F.cost(totals.cost?.value),delta(totals.cost?.value,previous.cost),split("cost",summary),"Codex cost is estimated from standard API prices",F.cost(totals.cost?.value,true)),
+      kpi("Tokens"+partial("total"),F.tokens(totals.total?.value),delta(totals.total?.value,previous.total),sparkline(live.map(t=>[t,totalSeries.get(t)||0]),lead)+split("total",summary),"",F.full(totals.total?.value)),
       kpi("Cache hit",totals.cacheHit?.value==null?"—":F.pct(totals.cacheHit.value*100),delta(totals.cacheHit?.value,previous.cacheHit,{goodUp:true,points:true}),hitBars),
-      kpi("Output",F.tokens(output),delta(output,previous.output),outputBody,"Output includes reasoning tokens"),
+      kpi("Output",F.tokens(output),delta(output,previous.output),outputBody,"Output includes reasoning tokens",F.full(output)),
     ].join("");
     renderTrend(range,firstActive);renderComposition(totals);renderModels();renderHeat();renderSpikes(summary,range);renderAgents(summary,range);
   }
