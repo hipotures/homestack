@@ -1579,6 +1579,24 @@ impl App {
                     *scroll = offset;
                 }
             }
+            Scrolls::InstallSettings => {
+                if let Some(install) = self.install.as_mut()
+                    && !install.chooser
+                    && let Some(index) = row(Some(install.row))
+                {
+                    install.row =
+                        index.min((install.settings.len() + usize::from(install.domain.is_some())).saturating_sub(1));
+                }
+            }
+            Scrolls::InstallChoices => {
+                if let Some(install) = self.install.as_mut()
+                    && install.chooser
+                    && let Some(setting) = install.settings.get(install.row)
+                    && let Some(index) = row(Some(install.cursor))
+                {
+                    install.cursor = index.min(setting.choices.len().saturating_sub(1));
+                }
+            }
             Scrolls::InstallReview => {
                 if let Some(install) = self.install.as_mut() {
                     install.scroll = offset;

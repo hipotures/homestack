@@ -500,21 +500,16 @@ fn settings(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
     if let Some(domain) = &install.domain {
         rows.push((Some(install.settings.len()), "Server domain".into(), domain.clone()));
     }
-    let narrow = inner.width < 110;
-    let left = if narrow { inner.width } else { (inner.width / 2).min(64) };
-    let label_width = if narrow {
-        17
-    } else {
-        (rows
-            .iter()
-            .filter(|r| r.0.is_some())
-            .map(|r| r.1.chars().count())
-            .max()
-            .unwrap_or(0)
-            + 2)
-        .min(usize::from(left.saturating_sub(3)) / 2)
-        .max(1)
-    };
+    let left = inner.width;
+    let label_width = (rows
+        .iter()
+        .filter(|r| r.0.is_some())
+        .map(|r| r.1.chars().count())
+        .max()
+        .unwrap_or(0)
+        + 2)
+    .min(usize::from(left.saturating_sub(3)) / 2)
+    .max(1);
     let value_width = usize::from(left.saturating_sub(3)).saturating_sub(label_width).max(1);
     let rows: Vec<_> = rows
         .into_iter()
@@ -551,11 +546,47 @@ fn settings(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
         "Value",
         muted,
     );
-    let visible = if narrow {
-        rows.len().min(usize::from(inner.height.saturating_sub(7) / 2).max(1))
+    // Reserve only the editor's content height, anchored to the bottom.
+    // Keep the complete settings list visible whenever both panels fit.
+    let editor_lines = if let Some(setting) = install.settings.get(install.row) {
+        if setting.auto_text {
+            3 + install.invalid.as_deref().map_or(0, |error| wrap(error, 44).len())
+        } else if let Some(value) = &setting.text {
+            let width = usize::from(inner.width.saturating_sub(6)).clamp(1, 44);
+            (value.chars().count() + usize::from(install.chooser)).div_ceil(width)
+                + install
+                    .invalid
+                    .as_deref()
+                    .map_or(0, |error| wrap(&format!("✗ {error}"), 44).len())
+        } else {
+            setting.choices.len() + usize::from(install.adding.is_some()) + usize::from(install.invalid.is_some())
+        }
     } else {
-        usize::from(inner.height.saturating_sub(5)).max(1)
+        1
     };
+    let editor_limit = if install
+        .settings
+        .get(install.row)
+        .is_some_and(|setting| setting.text.is_none())
+    {
+        inner.height.saturating_sub(
+            u16::try_from(rows.len() + 2)
+                .unwrap_or(u16::MAX)
+                .min(inner.height.saturating_sub(5)),
+        )
+    } else {
+        inner.height.saturating_sub(3)
+    };
+    let editor_height = u16::try_from(editor_lines.max(1) + 3)
+        .unwrap_or(u16::MAX)
+        .min(editor_limit);
+    let choices_area = Rect::new(
+        inner.x,
+        inner.bottom().saturating_sub(editor_height),
+        inner.width,
+        editor_height,
+    );
+    let visible = usize::from(inner.height.saturating_sub(editor_height + 2));
     let cursor = rows.iter().position(|row| row.0 == Some(install.row)).unwrap_or(0);
     let last = rows
         .iter()
@@ -595,56 +626,52 @@ fn settings(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
         );
         super::chrome::register(Rect::new(x, y, left - 1, 1), super::chrome::Hit::Setting(*index));
     }
-    if !narrow
-        && install.mode != Mode::Service
-        && rows.len() + 10 < usize::from(inner.height)
+    if install.mode != Mode::Service
+        && rows.len() + 3 < visible
         && let Some(found) = &install.found
     {
         let how = found.root.split(" · ").next().unwrap_or_default();
-        let label = if install.mode == Mode::Service {
-            "Access"
-        } else {
-            "Root access"
-        };
-        let line = format!("  {label}  {how}");
         write(
             buf,
             x,
             at(inner.y, rows.len() + 2),
-            left - 1,
-            &cut(&line, usize::from(left - 1)),
+            left.saturating_sub(1),
+            &format!("  Root access  {how}"),
             muted,
         );
     }
-    let choices_area = if narrow {
-        let offset = u16::try_from(visible + 2).unwrap_or(inner.height).min(inner.height);
-        Rect::new(
-            inner.x,
-            inner.y + offset,
-            inner.width,
-            inner.height.saturating_sub(offset),
-        )
-    } else {
-        Rect::new(inner.x + left, inner.y, inner.width.saturating_sub(left), inner.height)
-    };
+    let shown: Vec<usize> = rows.iter().skip(start).take(visible).filter_map(|row| row.0).collect();
+    let first_setting = shown.first().copied().unwrap_or(0);
+    let visible_settings = shown.last().map_or(0, |last| last - first_setting + 1);
+    scrollbar(
+        buf,
+        Rect::new(inner.x, inner.y, inner.width, choices_area.y.saturating_sub(inner.y)),
+        palette,
+        Scrolls::InstallSettings,
+        first_setting,
+        visible_settings,
+        install.settings.len() + usize::from(install.domain.is_some()),
+    );
     if choices_area.width < 8 || choices_area.height < 4 {
         return;
     }
-    let fit = |content: usize, lines: usize| {
-        let width = if narrow {
-            choices_area.width
-        } else {
-            u16::try_from(content + 6).unwrap_or(u16::MAX).min(choices_area.width)
-        };
-        let height = u16::try_from(lines + 4).unwrap_or(u16::MAX).min(choices_area.height);
-        Rect::new(choices_area.x, choices_area.y, width, height)
+    let fit = |lines: usize| {
+        let height = u16::try_from(lines.max(1) + 3)
+            .unwrap_or(u16::MAX)
+            .min(choices_area.height);
+        Rect::new(
+            choices_area.x,
+            choices_area.bottom() - height,
+            choices_area.width,
+            height,
+        )
     };
     let on_domain = install.domain.is_some() && install.row == install.settings.len();
     if on_domain {
         let domain = install.domain.clone().unwrap_or_default();
         let field = format!("[ {domain} ]");
         // Room to type a longer one.
-        let rect = fit(field.chars().count().max(40), 1);
+        let rect = fit(1);
         let box_inner = frame(
             buf,
             rect,
@@ -683,7 +710,7 @@ fn settings(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
     };
     if setting.auto_text {
         let error = install.invalid.as_deref().map(|e| wrap(e, 44)).unwrap_or_default();
-        let rect = fit(48, 3 + error.len());
+        let rect = fit(3 + error.len());
         let box_inner = frame(
             buf,
             rect,
@@ -771,7 +798,7 @@ fn settings(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
             .as_deref()
             .map(|error| wrap(&format!("✗ {error}"), 44))
             .unwrap_or_default();
-        let rect = fit(48, field.len() + error.len());
+        let rect = fit(field.len() + error.len());
         let box_inner = frame(
             buf,
             rect,
@@ -897,15 +924,9 @@ fn settings(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
     if let Some(error) = &install.invalid {
         lines.push((format!("✗ {error}"), false));
     }
-    let content = lines
-        .iter()
-        .map(|(line, _)| line.chars().count())
-        .chain([setting.display_title().chars().count(), 20])
-        .max()
-        .unwrap_or(0);
     let box_inner = frame(
         buf,
-        fit(content, lines.len()),
+        fit(lines.len()),
         palette,
         &Sides {
             top_left: vec![Control::plain(setting.display_title())],
@@ -923,6 +944,20 @@ fn settings(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
         setting.picked.first().copied().unwrap_or(0)
     };
     let start = selected.saturating_add(1).saturating_sub(visible);
+    scrollbar(
+        buf,
+        Rect::new(
+            box_inner.x - 1,
+            box_inner.y - 1,
+            box_inner.width + 2,
+            box_inner.height + 2,
+        ),
+        palette,
+        Scrolls::InstallChoices,
+        start,
+        visible,
+        lines.len(),
+    );
     for (index, (line, cursor)) in lines.iter().enumerate().skip(start).take(visible) {
         write(
             buf,

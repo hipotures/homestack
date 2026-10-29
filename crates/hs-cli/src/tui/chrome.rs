@@ -334,6 +334,9 @@ pub enum Scrolls {
     SetupTree,
     SetupDetails,
     SetupReview,
+    /// The install settings and the selected setting's choices.
+    InstallSettings,
+    InstallChoices,
     /// The install's review.
     InstallReview,
 }
