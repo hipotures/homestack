@@ -115,7 +115,11 @@ impl Prometheus {
             return error("Prometheus returned an invalid API envelope");
         }
         let count = match endpoint {
-            Endpoint::Query | Endpoint::QueryRange => value["data"]["result"].as_array().map(Vec::len),
+            Endpoint::Query | Endpoint::QueryRange => match value["data"]["resultType"].as_str() {
+                Some("vector" | "matrix") => value["data"]["result"].as_array().map(Vec::len),
+                // Scalar/string results are one sample tuple, not an array of series.
+                _ => None,
+            },
             Endpoint::Metadata => value["data"].as_object().map(serde_json::Map::len),
             _ => value["data"].as_array().map(Vec::len),
         };
