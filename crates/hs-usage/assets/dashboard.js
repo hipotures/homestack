@@ -9,6 +9,7 @@
   try { currentTheme = localStorage.getItem("theme") || currentTheme; } catch (_) {}
   const el = (tag, cls, text) => { const e=document.createElement(tag); if(cls)e.className=cls; if(text!==undefined)e.textContent=text;return e; };
   const $ = id => document.getElementById(id);
+  const heatmapScale = new Intl.NumberFormat("en",{notation:"compact",maximumFractionDigits:1});
   const number = v => v == null ? "—" : new Intl.NumberFormat(undefined,{maximumFractionDigits:2}).format(v);
   const format = (v,unit) => v == null ? "—" : unit === "USD" ? new Intl.NumberFormat(undefined,{style:"currency",currency:"USD",maximumFractionDigits:4}).format(v) : unit === "ratio" ? new Intl.NumberFormat(undefined,{style:"percent",maximumFractionDigits:1}).format(v) : number(v);
   function initial() {
@@ -134,9 +135,9 @@
   function create(spec) {
     const card=el("article","card"),head=el("div","card-head"),actions=el("div","card-actions"),toggle=el("button","toggle","table"),copy=el("button","copy","⧉"),note=el("div","note"),chartHost=el("div","chart"),emptyHost=el("div","chart-empty"),tableHost=el("div","table-wrap");
     card.id="widget-"+spec.id;chartHost.id="chart-"+spec.id;chartHost.setAttribute("data-ignore-morph","");chartHost.setAttribute("role","img");chartHost.setAttribute("aria-label",spec.title);
-    copy.type=toggle.type="button";copy.title="Copy chart JSON";copy.setAttribute("aria-label",copy.title);
+    copy.type=toggle.type="button";copy.hidden=true;copy.title="Copy data as JSON";copy.setAttribute("aria-label",copy.title);
     head.append(el("h2","",spec.title),el("span","unit",spec.unit),actions);actions.append(copy,toggle);emptyHost.setAttribute("role","status");emptyHost.hidden=true;card.append(head,note,chartHost,emptyHost,tableHost);$("cards").append(card);tableHost.hidden=true;
-    const w={card,head,note,host:chartHost,emptyHost,tableHost,table:false,empty:false,spec,chart:null,updates:0};
+    const w={card,head,note,copy,host:chartHost,emptyHost,tableHost,table:false,empty:false,spec,chart:null,updates:0};
     toggle.onclick=()=>{w.table=!w.table;toggle.textContent=w.table?"chart":"table";draw(w);if(!w.table&&!w.empty)w.chart?.resize();};
     copy.onclick=()=>copyCharts(copy,[w.spec]);
     w.observer=new ResizeObserver(()=>{if(!w.table&&!w.empty&&!compare)w.chart?.resize();});w.observer.observe(chartHost);
@@ -144,6 +145,7 @@
   }
   function draw(w) {
     const spec=w.spec;
+    w.copy.hidden=!w.table;
     const timeRange=datasets.get(spec.series[0]?.dataset)?.range;
     const sources=spec.sourceIds.map(id=>datasets.get(id)).filter(Boolean);
     const values=spec.series.flatMap(s=>s.points.map(([,v])=>v)).filter(Number.isFinite);
@@ -162,7 +164,7 @@
     if(spec.heat) {
       const cells=new Map();for(const s of spec.series)for(const [t,v]of s.points){const d=new Date(t*1000),key=`${(d.getDay()+6)%7},${d.getHours()}`;cells.set(key,(cells.get(key)||0)+v);}
       const data=[...cells].map(([key,v])=>{const [day,hour]=key.split(',').map(Number);return [hour,day,v];});
-      option={tooltip:{position:"top"},grid:{left:12,right:16,top:16,bottom:94,containLabel:true},xAxis:{type:"category",axisLabel:{interval:"auto",hideOverlap:true,margin:10},axisTick:{alignWithLabel:true},data:Array.from({length:24},(_,h)=>String(h).padStart(2,"0"))},yAxis:{type:"category",axisLabel:{interval:0,margin:8},data:["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]},visualMap:{min:0,max:Math.max(1,...data.map(v=>v[2])),calculable:true,orient:"horizontal",left:"center",bottom:8,itemWidth:12,itemHeight:120,padding:8,textStyle:{color:ink},inRange:{color:[grid,colors[0]]}},series:[{id:"heat",type:"heatmap",data,emphasis:{itemStyle:{borderColor:ink,borderWidth:1}}}]};
+      option={tooltip:{position:"top"},grid:{left:12,right:16,top:16,bottom:74,containLabel:true},xAxis:{type:"category",axisLabel:{interval:"auto",hideOverlap:true,margin:10},axisTick:{alignWithLabel:true},data:Array.from({length:24},(_,h)=>String(h).padStart(2,"0"))},yAxis:{type:"category",axisLabel:{interval:0,margin:8},data:["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]},visualMap:{min:0,max:Math.max(1,...data.map(v=>v[2])),calculable:true,orient:"horizontal",left:"center",bottom:20,itemWidth:12,itemHeight:120,padding:8,formatter:value=>heatmapScale.format(value).replace(/K$/,"k"),textStyle:{color:ink},inRange:{color:[grid,colors[0]]}},series:[{id:"heat",type:"heatmap",data,emphasis:{itemStyle:{borderColor:ink,borderWidth:1}}}]};
     } else {
       option={color:colors,grid:{left:65,right:18,top:55,bottom:55},legend:{type:"scroll",textStyle:{color:ink}},tooltip:{trigger:"axis",axisPointer:{type:"shadow"},valueFormatter:v=>format(v,spec.unit)},xAxis:{type:"time",min:timeRange?timeRange.start*1000:undefined,max:timeRange?timeRange.end*1000:undefined,axisLabel:{hideOverlap:true},axisPointer:{label:{formatter:p=>new Date(p.value).toLocaleString()}}},yAxis:{type:"value",max:spec.max,minInterval:["count","tokens"].includes(spec.unit)?1:undefined,axisLabel:{formatter:v=>spec.unit==="ratio"?`${v*100}%`:number(v)},splitLine:{lineStyle:{color:grid}}},dataZoom:[{type:"inside"}],series:spec.series.map((s,index)=>({id:`${s.dataset}:${s.id}`,name:s.label||s.id,type:spec.unit==="ratio"?"line":"bar",stack:spec.stack?"total":undefined,itemStyle:{color:spec.stack?colors[index%colors.length]:colors[Object.keys(agents).indexOf(s.agent)%colors.length]||colors[index%colors.length]},data:s.points.map(([t,v])=>[t*1000,v]),connectNulls:false}))};
     }
