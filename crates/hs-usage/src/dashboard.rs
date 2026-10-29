@@ -53,6 +53,8 @@ struct Global {
     hourly: Block,
     daily: Block,
     range: TimeRange,
+    /// Equal-length period before `range` for KPI deltas; `None` for "all".
+    previous: Option<TimeRange>,
 }
 #[derive(Default)]
 struct Cache {
@@ -80,6 +82,7 @@ impl Dashboard {
         selection.validate()?;
         let started = Instant::now();
         let timestamp = now();
+        let all = selection.range == "all";
         let (seconds, step) = match selection.timing()? {
             Some(timing) => timing,
             None => crate::datasets::all_timing(timestamp.saturating_sub(self.first_sample(timestamp).await?)),
@@ -139,7 +142,13 @@ impl Dashboard {
                 budget: Arc::clone(&budget),
             };
             let (main, hourly, daily) = tokio::try_join!(
-                planner::block(&self.prom, &registry, window(boundary - seconds, boundary, step), false),
+                // The main block also covers the previous period of the same length for deltas.
+                planner::block(
+                    &self.prom,
+                    &registry,
+                    window(boundary - if all { seconds } else { 2 * seconds }, boundary, step),
+                    false
+                ),
                 planner::block(
                     &self.prom,
                     &registry,
@@ -174,6 +183,12 @@ impl Dashboard {
                     step,
                     partial_start: boundary,
                 },
+                previous: (!all).then(|| TimeRange {
+                    start: boundary - 2 * seconds,
+                    end: boundary - seconds,
+                    step,
+                    partial_start: boundary - seconds,
+                }),
             });
             cache.global.retain(|(k, _, _)| k != &key);
             cache.global.push_back((key, Instant::now(), Arc::clone(&global)));
@@ -321,10 +336,21 @@ fn make(
         version: String::new(),
     }
 }
-fn agent_data(global: &Global, selection: &Selection, agent: &str, prices: &Option<Value>) -> Vec<Dataset> {
+fn agent_data(
+    global: &Global,
+    range: &TimeRange,
+    selection: &Selection,
+    agent: &str,
+    prices: &Option<Value>,
+) -> Vec<Dataset> {
     let registry: Vec<_> = global.registry.iter().filter(|m| m.agent == agent).collect();
     let mut raw: BTreeMap<String, Groups> = BTreeMap::new();
-    for r in global.main.records.iter().filter(|r| selected(r, selection)) {
+    for r in global
+        .main
+        .records
+        .iter()
+        .filter(|r| (range.start..range.end).contains(&r.time) && selected(r, selection))
+    {
         let Some(m) = registry.iter().find(|m| m.name == r.instrument) else {
             continue;
         };
@@ -410,7 +436,7 @@ fn agent_data(global: &Global, selection: &Selection, agent: &str, prices: &Opti
         "tokens",
         "tokens",
         selection,
-        &global.range,
+        range,
         series(normalized, "category"),
         registry.iter().any(|m| m.measurement == "tokens"),
     );
@@ -452,7 +478,7 @@ fn agent_data(global: &Global, selection: &Selection, agent: &str, prices: &Opti
             "cost",
             "USD",
             selection,
-            &global.range,
+            range,
             series(groups, "kind"),
             true,
         );
@@ -476,7 +502,7 @@ fn agent_data(global: &Global, selection: &Selection, agent: &str, prices: &Opti
             "cost",
             "USD",
             selection,
-            &global.range,
+            range,
             series(raw.remove("cost").unwrap_or_default(), "kind"),
             registry.iter().any(|m| m.measurement == "cost"),
         )
@@ -517,7 +543,7 @@ fn agent_data(global: &Global, selection: &Selection, agent: &str, prices: &Opti
             measurement,
             unit,
             selection,
-            &global.range,
+            range,
             series(groups, "kind"),
             registry.iter().any(|m| m.measurement == measurement),
         );
@@ -558,23 +584,9 @@ fn agent_data(global: &Global, selection: &Selection, agent: &str, prices: &Opti
     }
     output
 }
-fn sum_category(dataset: &Dataset, category: &str) -> Option<f64> {
-    let rows: Vec<_> = dataset
-        .series
-        .iter()
-        .filter(|s| s.dimensions.get("category").is_some_and(|c| c == category))
-        .collect();
-    (!rows.is_empty()).then(|| rows.iter().flat_map(|s| &s.points).map(|(_, v)| v).sum())
-}
-fn normalize(global: &Global, selection: Selection, prices: &Option<Value>, timestamp: u64) -> Snapshot {
-    // Comparison and total tiles use these same datasets, never independent accounting queries.
-    let mut all = Vec::new();
-    for agent in ["claude", "codex"] {
-        if selection.agent == "all" || selection.agent == agent {
-            all.extend(agent_data(global, &selection, agent, prices));
-        }
-    }
-    let mut values = BTreeMap::new();
+/// Per-agent range totals and cross-agent totals shared by KPIs, comparison and deltas.
+fn summary_values(all: &[Dataset]) -> BTreeMap<String, Value> {
+    let mut values: BTreeMap<String, Value> = BTreeMap::new();
     for agent in ["claude", "codex"] {
         let mut v = BTreeMap::new();
         for d in all.iter().filter(|d| d.agent == agent) {
@@ -611,17 +623,48 @@ fn normalize(global: &Global, selection: Selection, prices: &Option<Value>, time
                 }
             }
         }
-        values.insert(agent.to_owned(), v);
+        values.insert(agent.to_owned(), json!(v));
     }
     let mut totals = BTreeMap::new();
-    for measurement in ["cost", "total"] {
+    for measurement in ["cost", "total", "input", "cached", "written", "output", "reasoning", "sessions"] {
         let available: Vec<f64> = values
             .values()
             .filter_map(|v| v.get(measurement).and_then(|v| v["value"].as_f64()))
             .collect();
         totals.insert(measurement.to_owned(),json!({"value":if available.is_empty(){None}else{Some(available.iter().sum::<f64>())},"contributors":available.len()}));
     }
-    values.insert("totals".into(), totals);
+    let total = |key: &str| totals.get(key).and_then(|v: &Value| v["value"].as_f64());
+    let input = total("input").unwrap_or(0.) + total("cached").unwrap_or(0.) + total("written").unwrap_or(0.);
+    let hit = (input > 0.).then(|| total("cached").unwrap_or(0.) / input);
+    totals.insert("cacheHit".into(), json!({ "value": hit }));
+    values.insert("totals".into(), json!(totals));
+    values
+}
+fn sum_category(dataset: &Dataset, category: &str) -> Option<f64> {
+    let rows: Vec<_> = dataset
+        .series
+        .iter()
+        .filter(|s| s.dimensions.get("category").is_some_and(|c| c == category))
+        .collect();
+    (!rows.is_empty()).then(|| rows.iter().flat_map(|s| &s.points).map(|(_, v)| v).sum())
+}
+fn normalize(global: &Global, selection: Selection, prices: &Option<Value>, timestamp: u64) -> Snapshot {
+    // Comparison and total tiles use these same datasets, never independent accounting queries.
+    let mut all = Vec::new();
+    for agent in ["claude", "codex"] {
+        if selection.agent == "all" || selection.agent == agent {
+            all.extend(agent_data(global, &global.range, &selection, agent, prices));
+        }
+    }
+    let mut values = summary_values(&all);
+    if let Some(previous) = &global.previous {
+        let datasets: Vec<_> = ["claude", "codex"]
+            .into_iter()
+            .filter(|agent| selection.agent == "all" || selection.agent == *agent)
+            .flat_map(|agent| agent_data(global, previous, &selection, agent, prices))
+            .collect();
+        values.insert("previous".into(), json!(summary_values(&datasets)));
+    }
     let mut summary = make("all", "summary", "mixed", &selection, &global.range, Vec::new(), true);
     summary.state = Availability::Available;
     summary.details = json!(values);

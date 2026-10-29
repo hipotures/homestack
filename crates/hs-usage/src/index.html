@@ -1,75 +1,103 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>AI usage</title><link rel="icon" href="data:,"><link rel="stylesheet" href="/assets/aiusage-tokens.css"><style>
 * { box-sizing: border-box; }
-main { max-width: 2400px; margin: 0 auto; padding: 24px 16px 48px; }
-header { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 24px; margin-bottom: 16px; }
+main { max-width: 1320px; margin: 0 auto; padding: 28px 16px 64px; display: flex; flex-direction: column; gap: var(--gap-section); }
 [hidden] { display: none !important; }
-h1 { font-size: 20px; margin: 0; font-weight: 600; }
-.scope { font: inherit; color: var(--text); background: var(--surface); border: 1px solid var(--border-strong); border-radius: 6px; padding: 4px 6px; max-width: 180px; }
+h1 { font-size: 20px; margin: 0; font-weight: 600; letter-spacing: -.01em; }
+.top { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px; }
+.brand, .controls { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; min-width: 0; }
+.live { display: inline-flex; align-items: center; gap: 8px; font-size: var(--fs-small); color: var(--muted); }
+.live.stale .live-dot { background: var(--warn); box-shadow: none; }
+.scope { font: inherit; font-size: 13px; color: var(--text-2); background: transparent; border: 1px solid var(--border-strong); border-radius: var(--radius-ctl); min-height: 40px; padding: 0 10px; max-width: 200px; }
+.scope option { background: var(--surface-3); color: var(--text); }
 .mode { display: inline-flex; gap: 8px; align-items: center; cursor: pointer; }
 .mode input { accent-color: var(--codex); }
-.compare { --metric-width: 260px; --agent-width: 200px; width: calc(var(--metric-width) + var(--agent-count, 2) * var(--agent-width) + 38px); max-width: 100%; margin-inline: auto; padding: 18px; overflow-x: auto; }
-.compare table { font-size: 14px; width: calc(var(--metric-width) + var(--agent-count, 2) * var(--agent-width)); table-layout: fixed; }
-.compare th:first-child { width: var(--metric-width); }
-.compare td .note, .compare thead .note { margin-left: auto; }
-.compare caption { text-align: left; font-weight: 600; font-size: 18px; padding-bottom: 8px; }
-.compare th, .compare td { padding: 12px 16px; vertical-align: top; }
-.compare thead th { z-index: 1; }
-.compare tbody th { position: static; font-weight: 400; }
-.compare .primary { font-size: 18px; font-weight: 600; }
-@media (max-width: 600px) { .compare { --metric-width: 160px; --agent-width: 160px; } .compare .primary { font-size: 16px; } }
-.compare .note { display: block; white-space: normal; max-width: 360px; margin-top: 4px; }
-.compare .compare-footer { margin-top: 14px; max-width: none; }
-.compare tbody th:first-child { position: sticky; left: 0; z-index: 1; background: var(--surface); }
-.theme { cursor: pointer; padding: 4px 10px; }
+.theme { cursor: pointer; }
 .range { position: relative; max-width: 100%; }
 .menu { position: absolute; right: 0; top: calc(100% + 6px); z-index: 5; width: 220px; padding: 6px; background: var(--surface-3); border: 1px solid var(--border-strong); border-radius: 12px; box-shadow: 0 12px 32px rgba(0,0,0,.35); display: flex; flex-direction: column; gap: 2px; }
 .menu button { border: 0; text-align: left; min-height: 38px; padding: 0 12px; border-radius: 8px; background: transparent; color: var(--text); font: inherit; font-size: 13px; cursor: pointer; display: flex; justify-content: space-between; align-items: center; }
 .menu button:hover:not(:disabled), .menu button.active { background: var(--surface-2); }
 .menu button:disabled { color: var(--faint); cursor: not-allowed; }
 .menu .hint { font-size: 11px; color: var(--faint); }
-.updated { color: var(--muted); font-size: 12px; margin-left: auto; }
-.error { border: 1px solid var(--up); border-radius: 8px; padding: 8px 12px; margin-bottom: 16px; }
+.error { border: 1px solid var(--up); border-radius: var(--radius-ctl); padding: 8px 12px; }
 .error::before { content: "⚠ "; color: var(--up); }
-.overview { margin-bottom: 16px; }
-.overview.has-summary { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(0, 4fr); gap: 12px; align-items: stretch; }
-.summary { display: grid; grid-template-rows: repeat(2, minmax(0, 1fr)); gap: 12px; }
-.summary .tile { border-color: color-mix(in oklab, var(--codex) 40%, var(--border-strong)); }
-.summary .value { font-size: 28px; }
-.tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
-@media (max-width: 900px) { .overview.has-summary { grid-template-columns: minmax(0, 1fr); } .summary { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: auto; } }
-@media (max-width: 480px) { .summary { grid-template-columns: minmax(0, 1fr); } }
-@media (max-width: 900px) { .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-@media (max-width: 480px) { .tiles { grid-template-columns: minmax(0, 1fr); } }
-.tile, .card { background: var(--surface); border: 1px solid var(--border-strong); border-radius: 10px; }
-.tile { padding: 12px 14px; }
-.tile .label { color: var(--text-2); font-size: 12px; }
-.tile .value { font-size: 24px; font-weight: 600; margin-top: 2px; }
-.note { color: var(--muted); font-size: 12px; }
-.tile .row { display: flex; align-items: baseline; gap: 8px; }
-.tile .delta { margin-left: auto; color: var(--text-2); font-size: 12px; font-variant-numeric: tabular-nums; }
-.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, max(380px, (100% - 24px) / 3)), 1fr)); gap: 12px; }
-.card { padding: 14px 14px 10px; min-width: 0; }
+a { color: var(--tok-uncached); }
+.link { font: inherit; color: var(--tok-uncached); background: none; border: 0; padding: 0; cursor: pointer; text-decoration: underline; }
+.row-2, .kpi-grid { min-width: 0; }
+.row-3 { display: flex; flex-wrap: wrap; gap: var(--gap-grid); }
+.row-3 > .heat-card { flex: 999 1 640px; }
+.row-3 > .side { flex: 1 1 320px; }
+.card-top { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
+.card-top > div:first-child { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.card-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; min-width: 0; }
+.card .seg { background: var(--bg); }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: var(--fs-small); color: var(--text-2); }
+.legend span, .swatch-label { display: inline-flex; align-items: center; gap: 6px; }
+.sw { width: 10px; height: 10px; border-radius: 3px; flex: none; }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 12px; border-radius: 999px; background: var(--surface-2); color: var(--text-2); font-size: var(--fs-small); }
+.kpi { gap: 12px; }
+.kpi .figure { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; }
+.kpi .legend-row, .bar-row .head { display: flex; justify-content: space-between; gap: 12px; font-size: var(--fs-small); color: var(--muted); }
+.kpi .stack { display: flex; flex-direction: column; gap: 6px; }
+.spark { width: 100%; height: 36px; display: block; }
+.hits { display: flex; gap: 2px; align-items: flex-end; height: 24px; }
+.hits span { flex: 1; border-radius: 1px; min-width: 1px; }
+.note { color: var(--muted); font-size: var(--fs-small); }
+.faint { color: var(--faint); }
+.bars { display: flex; flex-direction: column; gap: 14px; }
+.bar-row { display: flex; flex-direction: column; gap: 6px; }
+.bar-row .head { font-size: 13px; color: var(--text-2); }
+.bar-row .head .num { color: var(--text); }
+.track { height: 8px; border-radius: 4px; background: var(--track); overflow: hidden; display: flex; }
+.track > span { display: block; height: 100%; }
+.track.thick { height: 10px; border-radius: 5px; }
+.model { display: flex; flex-direction: column; gap: 8px; }
+.model .head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+.model .name { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; min-width: 0; overflow-wrap: anywhere; }
+.model .cost { font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-size: 18px; font-weight: 600; }
+.model .meta { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: var(--fs-small); color: var(--muted); }
+.idle { display: flex; justify-content: space-between; align-items: center; gap: 12px; font-size: 13px; color: var(--muted); }
+.idle.first { padding-top: 14px; border-top: 1px solid var(--border); }
+.idle .sw { opacity: .45; }
+.heat-legend { display: flex; align-items: center; gap: 6px; font-size: var(--fs-tick); color: var(--faint); }
+.heat-legend i { width: 12px; height: 12px; border-radius: 3px; }
+.chart.heat { height: 250px; }
+.spikes { display: flex; flex-direction: column; gap: 10px; }
+.spike { display: flex; align-items: center; gap: 14px; padding: 12px 14px; border-radius: 12px; background: var(--surface-2); }
+.spike.top { background: var(--alert-bg); }
+.spike .factor { font-family: var(--font-mono); font-size: 15px; font-weight: 600; min-width: 64px; color: var(--warn); }
+.spike.top .factor { color: var(--claude-hi); }
+.spike div { display: flex; flex-direction: column; gap: 2px; font-size: 13px; }
+.spike div .num { font-size: var(--fs-small); color: var(--muted); }
+.agents-now { margin-top: auto; display: flex; flex-direction: column; gap: 8px; padding-top: 14px; border-top: 1px solid var(--border); }
+.agents-now div { display: flex; justify-content: space-between; gap: 12px; font-size: 13px; }
+.foot { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px; font-size: var(--fs-small); color: var(--faint); }
+.raw { display: flex; flex-direction: column; gap: var(--gap-grid); }
+.raw-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.raw-head h2 { margin: 0; font-size: var(--fs-h2); }
+.compare { --metric-width: 260px; --agent-width: 200px; width: calc(var(--metric-width) + var(--agent-count, 2) * var(--agent-width) + 38px); max-width: 100%; margin-inline: auto; padding: 18px; overflow-x: auto; }
+.compare table { font-size: 14px; width: calc(var(--metric-width) + var(--agent-count, 2) * var(--agent-width)); table-layout: fixed; }
+.compare th:first-child { width: var(--metric-width); }
+.compare caption { text-align: left; font-weight: 600; font-size: 18px; padding-bottom: 8px; }
+.compare th, .compare td { padding: 12px 16px; vertical-align: top; }
+.compare tbody th { position: static; font-weight: 400; }
+.compare .primary { font-size: 18px; font-weight: 600; }
+.compare .note { display: block; white-space: normal; max-width: 360px; margin-top: 4px; }
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 380px), 1fr)); gap: var(--gap-grid); }
+.cards .card { gap: 10px; }
 .card-head { display: flex; align-items: baseline; gap: 8px; }
-.card h2 { font-size: 14px; font-weight: 600; margin: 0; }
 .card .unit { color: var(--muted); font-size: 12px; }
-.card .toggle { margin-left: auto; font: inherit; font-size: 12px; color: var(--text-2); background: none; border: none; cursor: pointer; text-decoration: underline; }
+.card .toggle { font: inherit; font-size: 12px; color: var(--text-2); background: none; border: none; cursor: pointer; text-decoration: underline; }
 .card-actions { margin-left: auto; display: flex; align-items: center; gap: 8px; }
-.card-actions .toggle { margin-left: 0; }
 .copy { font: inherit; font-size: 12px; color: var(--text-2); background: none; border: 1px solid var(--border-strong); border-radius: 4px; padding: 2px 6px; cursor: pointer; }
-.copy-all { cursor: pointer; }
-.version { margin-top: 24px; color: var(--muted); font-size: 11px; text-align: center; }
+.card .note { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .table-wrap { overflow-x: auto; max-height: 260px; overflow-y: auto; }
 table { border-collapse: collapse; font-size: 12px; width: 100%; font-variant-numeric: tabular-nums; }
 th, td { text-align: right; padding: 3px 8px; border-bottom: 1px solid var(--grid); white-space: nowrap; }
 th:first-child, td:first-child { text-align: left; }
 th { color: var(--text-2); font-weight: 600; position: sticky; top: 0; background: var(--surface); }
-
-.chart { width:100%; height:300px; min-width:0; }
-.status {font-size:12px; color:var(--text-2)}
-.card .note { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-.chip { display: inline-flex; align-items: center; padding: 3px 10px; border-radius: 999px; background: var(--surface-2); color: var(--text-2); font-size: 12px; }
-button:focus-visible,select:focus-visible {outline:2px solid var(--codex);outline-offset:2px}
+button:focus-visible, select:focus-visible { outline: 2px solid var(--codex); outline-offset: 2px; }
 </style>
 <script defer src="/assets/echarts-6.1.0.min.js"></script>
 <script defer src="/assets/aiusage-echarts-theme.js"></script>
@@ -79,10 +107,9 @@ button:focus-visible,select:focus-visible {outline:2px solid var(--codex);outlin
 <main data-signals="window.usage.initial()"
  data-init="window.usage.restore(el)"
  data-effect="@get('/api/dashboard/events', {payload:{agent:$agent,host:$host,project:$project,range:$range,epoch:window.usage.select({agent:$agent,host:$host,project:$project,range:$range},$_sync)},retry:'always',retryMaxCount:1000,retryInterval:3000})">
-<header><h1>AI usage</h1>
-<select class="scope" id="agent" aria-label="Agent" data-bind:agent data-attr:disabled="$_compare"><option value="all">All agents</option><option value="claude">Claude Code</option><option value="codex">Codex</option></select>
-<select class="scope" id="host" aria-label="Server" data-bind:host><option value="*">All servers</option></select>
-<select class="scope" id="project" aria-label="Project" data-bind:project><option value="*">All projects</option></select>
+<header class="top">
+<div class="brand"><h1>AI usage</h1><span class="live" id="updated" aria-live="polite"><span class="live-dot" aria-hidden="true"></span><span id="updated-text">connecting…</span></span></div>
+<div class="controls">
 <div class="range" data-on:click__outside="$_more=false" data-on:keydown__window="evt.key==='Escape'&&($_more=false)">
 <div class="seg scroll" role="group" aria-label="Time range">
 <button type="button" data-on:click="$range='1h'" data-attr:aria-pressed="String($range==='1h')">1h</button>
@@ -99,16 +126,39 @@ button:focus-visible,select:focus-visible {outline:2px solid var(--codex);outlin
 <button type="button" role="menuitem" disabled title="Custom ranges are not available yet">Custom range…</button>
 </div>
 </div>
+<select class="scope" id="agent" aria-label="Agent" data-bind:agent data-attr:disabled="$_compare"><option value="all">Agents: all</option><option value="claude">Claude Code</option><option value="codex">Codex</option></select>
+<select class="scope" id="host" aria-label="Server" data-bind:host><option value="*">Servers: all</option></select>
+<select class="scope" id="project" aria-label="Project" data-bind:project><option value="*">Projects: all</option></select>
 <label class="scope mode"><input id="compare" type="checkbox" role="switch" data-bind:_compare data-on:change="if($_compare) $agent='all'; window.usage.mode($_compare)"> Compare agents</label>
-<span class="updated" id="updated" aria-live="polite">Connecting…</span>
-<button class="scope copy-all" id="copy-all" type="button" title="Copy all chart data as JSON Lines">⧉ Copy all</button>
-<button class="scope theme" id="theme" type="button">Theme</button></header>
-<div data-effect="window.usage.mode($_compare)"></div>
-<div data-effect="if($_packet) window.usage.apply(JSON.parse($_packet))"></div>
+<button class="scope theme" id="theme" type="button">Theme</button>
+</div></header>
+<div hidden data-effect="window.usage.mode($_compare)"></div>
+<div hidden data-effect="if($_packet) window.usage.apply(JSON.parse($_packet))"></div>
 <button id="resync" type="button" hidden data-on:click="$_sync++">Resynchronize</button>
 <div class="error" id="error" role="status" hidden></div>
 <section class="card compare" id="comparison" aria-label="Agent comparison" hidden data-ignore-morph></section>
-<section class="overview has-summary" id="overview" aria-label="Usage overview"><div class="summary" id="summary"></div><section class="tiles" id="tiles" aria-label="Usage by agent"></section></section>
-<section class="cards" id="cards" data-ignore-morph data-ignore></section>
-<footer class="version">AI Usage · __HOMESTACK_USAGE_VERSION__ · Datastar 1.0.4 · Apache ECharts 6.1.0 · <a href="/assets/datastar-LICENSE.md">Datastar license</a> · <a href="/assets/echarts-LICENSE.txt">ECharts license</a> · <a href="/assets/echarts-NOTICE.txt">Notices</a></footer>
+<div class="overview" id="overview" data-ignore-morph style="display:contents">
+<section class="kpi-grid" id="kpis" aria-label="Summary"></section>
+<section class="card" id="trend" aria-label="Usage over time">
+<div class="card-top"><div><h2 id="trend-title">Cost over time</h2><span class="sub" id="trend-sub"></span></div>
+<div class="card-tools"><div class="legend" id="trend-legend"></div>
+<div class="seg" role="group" aria-label="Metric"><button type="button" data-metric="cost">Cost</button><button type="button" data-metric="tokens">Tokens</button></div></div></div>
+<div class="chips" id="trend-chips"></div>
+<div class="chart tall" id="trend-chart" role="img" aria-label="Usage over time, stacked by model"></div>
+</section>
+<div class="row-2"><section class="card" id="composition" aria-label="Token composition"></section><section class="card" id="models" aria-label="Cost by model"></section></div>
+<div class="row-3">
+<section class="card heat-card" aria-label="Activity by weekday and hour">
+<div class="card-top"><div><h2>When you work</h2><span class="sub" id="heat-sub">tokens by weekday and hour · local time</span></div>
+<div class="heat-legend" aria-hidden="true">less <i style="background:var(--heat-empty)"></i><i style="background:color-mix(in srgb,var(--codex) 30%,var(--heat-empty))"></i><i style="background:color-mix(in srgb,var(--codex) 65%,var(--heat-empty))"></i><i style="background:var(--codex)"></i> more</div></div>
+<div class="chart heat" id="heat-chart" role="img" aria-label="Tokens by local weekday and hour"></div>
+</section>
+<section class="card side" id="spikes" aria-label="Usage spikes"></section>
+</div>
+</div>
+<footer class="foot"><span>AI Usage __HOMESTACK_USAGE_VERSION__ · Datastar 1.0.4 · Apache ECharts 6.1.0</span><span><a href="/assets/datastar-LICENSE.md">Datastar license</a> · <a href="/assets/echarts-LICENSE.txt">ECharts license</a> · <a href="/assets/echarts-NOTICE.txt">Notices</a> · <button class="link" id="raw-toggle" type="button" aria-controls="raw" aria-expanded="false">Show raw charts</button></span></footer>
+<section class="raw" id="raw" aria-label="Raw charts" hidden data-ignore-morph>
+<div class="raw-head"><h2>Raw charts</h2><button class="scope copy-all" id="copy-all" type="button" title="Copy all chart data as JSON Lines">⧉ Copy all</button></div>
+<div class="cards" id="cards" data-ignore></div>
+</section>
 </main></body></html>

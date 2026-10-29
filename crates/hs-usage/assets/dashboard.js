@@ -46,7 +46,7 @@
       for(const id of datasets.keys())if(!full.datasets[id])dirty.add(id);
       datasets.clear();for(const [id,d]of Object.entries(full.datasets))datasets.set(id,d);
       snapshot=full.snapshot;
-      scopeOptions("host",full.hosts,"All servers");scopeOptions("project",full.projects,"All projects");
+      scopeOptions("host",full.hosts,"Servers: all");scopeOptions("project",full.projects,"Projects: all");
       freshness(full.freshness);
     } else {
       if(!snapshot||packet.base!==snapshot) {resync();return;}
@@ -67,19 +67,17 @@
         }
       }
       snapshot=packet.snapshot;freshness(packet.freshness);
-      scopeOptions("host",packet.hosts,"All servers");scopeOptions("project",packet.projects,"All projects");
+      scopeOptions("host",packet.hosts,"Servers: all");scopeOptions("project",packet.projects,"Projects: all");
     }
     $("error").hidden=true;
     render(dirty);
   }
   function resync() {$("error").hidden=false;$("error").textContent="Synchronizing dataset versions…";$("resync").click();}
-  function freshness(f) {sourceAt=f.source_at;$("updated").textContent=`Updated ${new Date(f.source_at*1000).toLocaleTimeString()}`;}
-  const missingLabel = value => value?.state==="unavailable" ? "Not reported" : value?.state==="partial" ? "Partial data" : "No measurements";
+  function freshness(f) {sourceAt=f.source_at;const d=new Date(f.source_at*1000);$("updated-text").textContent=`live · ${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`;$("updated").classList.remove("stale");}
   function mode(value) {
-    compare=value;$("comparison").hidden=!value;$("overview").hidden=$("cards").hidden=value;
+    compare=value;$("comparison").hidden=!value;$("overview").hidden=value;$("raw-toggle").parentElement.hidden=value;if(value)$("raw").hidden=true;
     try{localStorage.setItem("comparison",String(value));}catch(_){}
     if(datasets.size)render(new Set(datasets.keys()));
-    if(!value)requestAnimationFrame(()=>widgets.forEach(w=>w.chart?.resize()));
   }
   function theme() {
     document.documentElement.dataset.theme=currentTheme;
@@ -87,6 +85,7 @@
     // Series colors are resolved from CSS tokens, so charts are redrawn after the theme rebuild.
     AIUsage.refresh();
     for(const w of widgets.values())if(w.spec)draw(w);
+    if(datasets.size)renderOverview();
   }
   function definitions() {
     const list=[], selected=Object.keys(agents).filter(a=>selection.agent==="all"||selection.agent===a);
@@ -126,6 +125,7 @@
   }
   function render(dirty) {
     if(dirty.has("all.summary"))renderSummary();
+    if(dirty.size)renderOverview();
     const definitionsNow=definitions(),ids=new Set(definitionsNow.map(s=>s.id));
     for(const [id,w]of widgets)if(!ids.has(id)){w.chart?.dispose();w.card.remove();widgets.delete(id);}
     for(const spec of definitionsNow) {
@@ -133,7 +133,7 @@
       if(!w){w=create(spec);widgets.set(spec.id,w);w.spec=spec;draw(w);}
       else if([...w.spec.sourceIds,...spec.sourceIds].some(id=>dirty.has(id))){w.spec=spec;draw(w);}
     }
-    if(dirty.has("all.spikes"))renderSpikes();
+    $("raw-toggle").textContent=`${$("raw").hidden?"Show":"Hide"} raw charts (${widgets.size})`;
   }
   function create(spec) {
     const card=el("article","card"),head=el("div","card-head"),actions=el("div","card-actions"),toggle=el("button","toggle","table"),copy=el("button","copy","⧉"),note=el("div","note"),chartHost=el("div","chart"),tableHost=el("div","table-wrap");
@@ -181,16 +181,6 @@
   }
   function renderSummary() {
     const summary=datasets.get("all.summary")?.details||{},active=Object.keys(agents).filter(a=>selection.agent==="all"||selection.agent===a);
-    const tiles=[];
-    for(const agent of active)for(const [key,label,unit]of [["cost","cost","USD"],["total","tokens","tokens"],["sessions","new sessions","count"],["cacheHit","cache hit","ratio"]]) {
-      const value=summary[agent]?.[key];const tile=el("div","tile");tile.append(el("div","label",`${agents[agent]} ${agent==="codex"&&key==="cost"?"estimated ":""}${label}`),el("div","value",format(value?.value,unit)));
-      tile.append(el("div","note",value?.value==null?missingLabel(value):value?.state==="partial"?"Partial data":""));tiles.push(tile);
-    }
-    $("tiles").replaceChildren(...tiles);$("summary").hidden=selection.agent!=="all";$("overview").classList.toggle("has-summary",selection.agent==="all");
-    const totals=[];for(const [key,title,unit]of [["cost","Total cost","USD"],["total","Total tokens","tokens"]]){const available=active.filter(a=>summary[a]?.[key]?.value!=null),missing=active.filter(a=>!available.includes(a)),tile=el("div","tile");
-      // Totals are supplied below by the backend summary; no rounded accounting in the browser.
-      const value=summary.totals?.[key];tile.append(el("div","label",title),el("div","value",format(value?.value,unit)),el("div","note",missing.length?"Partial total · unavailable: "+missing.map(a=>agents[a]).join(", "):"All agents"));totals.push(tile);}
-    $("summary").replaceChildren(...totals);
     const table=el("table"),caption=el("caption","","Agent comparison"),head=el("tr");head.append(el("th","","Metric"),...active.map(a=>el("th","",agents[a])));table.append(caption,head);
     for(const [key,title,unit,token]of [["cost","Cost","USD"],["total","Total tokens","tokens",true],["input","Uncached input tokens","tokens",true],["cached","Cached input tokens","tokens",true],["written","Cache write tokens","tokens",true],["output","Output (includes reasoning)","tokens",true],["reasoning","Reasoning (subset of output)","tokens",true],["cacheHit","Cache hit","ratio",true],["sessions","New sessions","count"],["active","Active time","seconds"],["commits","Commits","count"],["added","Lines added","count"],["removed","Lines removed","count"],["turns","Turns","count"],["turnDuration","Average turn duration","seconds"],["firstToken","Time to first token","seconds"],["firstOutput","Time to first output","seconds"],["tools","Tool calls","count"],["toolDuration","Average tool duration","seconds"]]){
       if(!token&&!active.every(a=>summary[a]?.[key]&&summary[a][key].state!=="unavailable"))continue;
@@ -198,11 +188,151 @@
     }
     $("comparison").replaceChildren(table);
   }
-  function renderSpikes() {
-    let card=$("spikes");if(!card){card=el("article","card");card.id="spikes";$("cards").append(card);}
-    const items=datasets.get("all.spikes")?.details||[];
-    card.replaceChildren(el("h2","","Usage spikes · above 2.5× preceding 7 days"),...items.slice(-6).reverse().map(v=>el("p","",`${new Date(v.time*1000).toLocaleDateString()}: ${number(v.tokens)} tokens · ${number(v.factor)}×`)));
-    if(!items.length)card.append(el("p","note","No spikes detected in the available daily data."));
+  // ---- Overview (main view). Values are backend totals; the browser only lays them out. ----
+  const F=AIUsage.fmt, css=name=>`var(${name})`;
+  const esc=v=>String(v).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"})[c]);
+  const two=n=>String(n).padStart(2,"0");
+  const chosen=()=>Object.keys(agents).filter(a=>selection.agent==="all"||selection.agent===a);
+  let metric="cost",trendChart,heatChart;
+  try{metric=localStorage.getItem("metric")==="tokens"?"tokens":"cost";}catch(_){}
+  /** Bucket times of the current range, oldest first. */
+  const buckets=range=>{const out=[];for(let t=range.start;t<range.end;t+=range.step)out.push(t);return out;};
+  const bucketLabel=step=>step<3600?`${step/60}-minute buckets`:step<86400?`${step/3600}-hour buckets`:step===86400?"daily buckets":step===604800?"weekly buckets":`${step/86400}-day buckets`;
+  function timeLabel(t,range){
+    const d=new Date(t*1000),hm=`${two(d.getHours())}:${two(d.getMinutes())}`,dm=`${two(d.getDate())}.${two(d.getMonth()+1)}`;
+    return range.end-range.start<=86400+range.step?hm:range.step<86400?`${dm} ${hm}`:dm;
+  }
+  /** Sums point lists by time; used only to draw combined sparklines and stacks. */
+  function sumPoints(lists){const m=new Map();for(const list of lists)for(const [t,v]of list||[])m.set(t,(m.get(t)||0)+v);return m;}
+  function delta(current,previous,{goodUp=false,points=false}={}){
+    if(current==null||previous==null||(!points&&!previous))return "";
+    const change=points?(current-previous)*100:(current-previous)/previous*100;
+    if(Math.abs(change)<(points?0.05:0.5))return `<span class="delta faint" title="vs previous period">±0${points?" pp":"%"}</span>`;
+    const up=change>0,text=points?`${Math.abs(change).toFixed(1)} pp`:`${Math.abs(change)>=100?Math.round(Math.abs(change)):Math.abs(change).toFixed(0)}%`;
+    return `<span class="delta ${up===goodUp?"down":"up"}" title="vs previous period of the same length">${up?"▲":"▼"} ${text}</span>`;
+  }
+  function split(key,summary){
+    const parts=chosen().map(a=>({a,v:summary[a]?.[key]?.value})),total=parts.reduce((s,p)=>s+(p.v||0),0);
+    if(!total)return "";
+    return `<div class="stack"><div class="split" aria-hidden="true">${parts.map(p=>`<span style="width:${(p.v||0)/total*100}%;background:${AIUsage.colorFor(agents[p.a])}"></span>`).join("")}</div>
+      <div class="legend-row">${parts.map(p=>`<span><span style="color:${AIUsage.colorFor(agents[p.a])}">●</span> ${agents[p.a]} ${p.v==null?"not reported":Math.round(p.v/total*100)+"%"}</span>`).join("")}</div></div>`;
+  }
+  function sparkline(points,color){
+    const values=points.map(([,v])=>v),max=Math.max(...values,0);
+    if(values.length<2||!max)return "";
+    const xy=points.map(([,v],i)=>[i*300/(points.length-1),34-v/max*30]),line=xy.map(([x,y],i)=>`${i?"L":"M"}${x.toFixed(1)} ${y.toFixed(1)}`).join(" ");
+    return `<svg class="spark" viewBox="0 0 300 36" preserveAspectRatio="none" aria-hidden="true"><path d="${line} L300 36 L0 36 Z" fill="${color}" fill-opacity=".14"></path><path d="${line}" fill="none" stroke="${color}" stroke-width="1.5" vector-effect="non-scaling-stroke"></path></svg>`;
+  }
+  function renderOverview() {
+    const summary=datasets.get("all.summary")?.details;
+    if(!summary)return;
+    const totals=summary.totals||{},previous=Object.fromEntries(Object.entries(summary.previous?.totals||{}).map(([k,v])=>[k,v.value])),range=datasets.get("all.summary").range;
+    const sel=chosen(),tokens=sel.map(a=>datasets.get(`${a}.tokens`)).filter(d=>d&&d.state!=="unavailable");
+    const category=id=>tokens.map(d=>(d.details.categories||[]).find(c=>c.id===id)?.points);
+    const lead=sel.length===1?AIUsage.colorFor(agents[sel[0]]):css("--text-2");
+    const kpi=(label,value,deltaHtml,body,title="")=>`<div class="card kpi"><div class="eyebrow" title="${esc(title)}">${label}</div><div class="figure"><span class="kpi-value">${value}</span>${deltaHtml}</div>${body}</div>`;
+    const totalSeries=sumPoints(category("total")),firstActive=Math.min(...[...totalSeries].filter(([,v])=>v>0).map(([t])=>t));
+    const live=buckets(range).filter(t=>t>=firstActive||!Number.isFinite(firstActive));
+    // Cache hit per bucket over all selected agents, drawn on a narrow scale.
+    const sums=["input","cached","written"].map(id=>sumPoints(category(id)));
+    const hits=live.map(t=>{const all=sums.reduce((n,m)=>n+(m.get(t)||0),0);return [t,all>0?(sums[1].get(t)||0)/all*100:null];});
+    const known=hits.filter(([,v])=>v!=null),low=known.reduce((m,h)=>h[1]<m[1]?h:m,[0,101]);
+    // Near-empty buckets can drop to 0%, so the scale follows the range-wide rate and lower buckets are clamped.
+    const overall=(totals.cacheHit?.value??0)*100,floor=overall>=98?98:Math.max(0,Math.floor(overall/5)*5-5);
+    const hitBars=known.length?`<div class="stack"><div class="hits" aria-hidden="true">${hits.map(([,v])=>v==null?`<span style="height:2px;background:var(--track)"></span>`:`<span style="height:${Math.max(2,Math.round((Math.max(v,floor)-floor)/(100-floor)*24))}px;background:${v<Math.max(floor,overall-1)?css("--warn"):css("--codex")}"></span>`).join("")}</div>
+      <div class="note">scale ${floor}–100% · min ${F.pct(low[1])} at ${timeLabel(low[0],range)}</div></div>`:"";
+    const output=totals.output?.value,reasoning=totals.reasoning?.value,share=output&&reasoning!=null?reasoning/output:null;
+    const outputBody=output?`<div class="stack"><div class="split" aria-hidden="true"><span style="width:${(share||0)*100}%;background:var(--tok-reasoning)"></span><span style="width:${(1-(share||0))*100}%;background:var(--tok-output)"></span></div>
+      <div class="legend-row"><span>${share==null?"reasoning not reported":`<span style="color:var(--tok-reasoning)">●</span> reasoning ${F.tokens(reasoning)} · ${Math.round(share*100)}%`}</span><span>response ${F.tokens(output-(reasoning||0))}</span></div></div>`:"";
+    const partial=key=>(totals[key]?.contributors??0)<sel.length?" (partial)":"";
+    $("kpis").innerHTML=[
+      kpi("Cost"+partial("cost"),F.cost(totals.cost?.value),delta(totals.cost?.value,previous.cost),split("cost",summary),"Codex cost is estimated from standard API prices"),
+      kpi("Tokens"+partial("total"),F.tokens(totals.total?.value),delta(totals.total?.value,previous.total),sparkline(live.map(t=>[t,totalSeries.get(t)||0]),lead)+split("total",summary)),
+      kpi("Cache hit",totals.cacheHit?.value==null?"—":F.pct(totals.cacheHit.value*100),delta(totals.cacheHit?.value,previous.cacheHit,{goodUp:true,points:true}),hitBars),
+      kpi("Output",F.tokens(output),delta(output,previous.output),outputBody,"Output includes reasoning tokens"),
+    ].join("");
+    renderTrend(range,firstActive);renderComposition(totals);renderModels();renderHeat();renderSpikes(summary,range);
+  }
+  function renderTrend(range,firstActive) {
+    const sel=chosen(),series=[];
+    for(const a of sel){
+      const d=datasets.get(`${a}.${metric==="cost"?"cost":"tokens"}`);
+      if(!d||d.state==="unavailable")continue;
+      const rows=metric==="cost"?d.series.map(s=>({model:s.dimensions.model,points:s.points})):(d.details.models||[]).map(s=>({model:s.id,points:s.points}));
+      for(const r of rows)series.push({name:`${agents[a]} · ${r.model||"?"}`,points:r.points});
+    }
+    const visible=AIUsage.nonEmpty(series.map(s=>({...s,data:s.points}))),times=buckets(range);
+    const stack=sumPoints(visible.map(s=>s.points)),first=Number.isFinite(firstActive)?firstActive:range.start;
+    const fmtShort=metric==="cost"?v=>F.cost(v):F.tokens,fmtFull=metric==="cost"?v=>F.cost(v,true):F.full;
+    $("trend-title").textContent=metric==="cost"?"Cost over time":"Tokens over time";
+    $("trend-sub").textContent=`${bucketLabel(range.step)} · stacked by model`;
+    for(const b of document.querySelectorAll("[data-metric]"))b.setAttribute("aria-pressed",String(b.dataset.metric===metric));
+    $("trend-legend").innerHTML=visible.map(s=>`<span><i class="sw" style="background:${AIUsage.colorFor(s.name)}"></i>${esc(s.name)}</span>`).join("");
+    $("trend-chips").innerHTML=first>range.start?`<span class="chip">data since ${timeLabel(first,range)}</span>`:"";
+    // Runs of at least three empty buckets inside the data span are marked as gaps.
+    const gaps=[];let run=null;
+    for(const t of times.filter(t=>t>=first&&t<range.partial_start)){if(!(stack.get(t)>0)){run=run||[t,t];run[1]=t;}else{if(run&&(run[1]-run[0])/range.step>=2)gaps.push(run);run=null;}}
+    const peak=[...stack].filter(([t])=>t>=first).reduce((m,p)=>p[1]>m[1]?p:m,[0,0]);
+    trendChart=trendChart||AIUsage.init($("trend-chart"));
+    trendChart.setOption({
+      grid:{left:8,right:8,top:36,bottom:8,containLabel:true},
+      tooltip:{trigger:"axis",formatter:AIUsage.tooltipFormatter(fmtFull)},
+      xAxis:{type:"time",min:(first-range.step/2)*1000,max:range.end*1000,axisLabel:{hideOverlap:true}},
+      yAxis:{type:"value",axisLabel:{formatter:fmtShort}},
+      // Stacks on a time axis need identical x values in every series, so all are aligned to the buckets.
+      series:visible.map((s,i)=>AIUsage.bar(s.name,(m=>times.filter(t=>t>=first).map(t=>[t*1000,m.get(t)||0]))(new Map(s.points)),s.name,{
+        id:s.name,barMaxWidth:28,
+        markPoint:i===visible.length-1&&peak[1]>0?{...AIUsage.peak(()=>`peak ${timeLabel(peak[0],range)}  ${fmtShort(peak[1])}`),data:[{coord:[peak[0]*1000,peak[1]]}]}:undefined,
+        markArea:i===0&&gaps.length?{...AIUsage.gaps([]),data:gaps.map(([a,b])=>[{xAxis:(a-range.step/2)*1000,name:`gap ${timeLabel(a,range)}–${timeLabel(b+range.step,range)}`},{xAxis:(b+range.step/2)*1000}])}:undefined,
+      })),
+    },{replaceMerge:["series"]});
+  }
+  function renderComposition(totals) {
+    const v=k=>totals[k]?.value||0,reasoning=totals.reasoning?.value;
+    const rows=[["Cached input",v("cached"),"--tok-cached"],["Uncached input",v("input"),"--tok-uncached"],["Cache write",v("written"),"--codex-lo"],
+      [reasoning==null?"Output":"Output (excl. reasoning)",v("output")-(reasoning||0),"--tok-output"],...(reasoning==null?[]:[["Reasoning",reasoning,"--tok-reasoning"]])];
+    const all=rows.reduce((s,r)=>s+r[1],0),shown=rows.filter(r=>r[1]>0);
+    const ratio=v("output")?Math.round(v("cached")/v("output")):null;
+    $("composition").innerHTML=`<div><h2>Token composition</h2>${ratio!=null?`<div class="sub">each output token comes with <b style="color:var(--text)">${F.full(ratio)}</b> cached input tokens</div>`:""}</div>
+      ${all?`<div class="bars">${shown.map(([label,n,color])=>{const p=n/all*100;return `<div class="bar-row"><div class="head"><span>${label}</span><span class="num">${F.full(n)} <span class="faint">${p<1?p.toFixed(2):p.toFixed(1)}%</span></span></div><div class="track" aria-hidden="true"><span style="width:${Math.max(0.8,p)}%;background:var(${color})"></span></div></div>`;}).join("")}</div>`:`<div class="note">No token usage in this range.</div>`}
+      ${all&&!v("written")?`<div class="note faint">Cache write: 0, hidden because there is no data in this range.</div>`:""}${reasoning==null&&all?`<div class="note faint">Reasoning is not reported by the selected agents.</div>`:""}`;
+  }
+  function renderModels() {
+    const rows=[];
+    for(const a of chosen()){
+      const cost=datasets.get(`${a}.cost`),tokens=datasets.get(`${a}.tokens`),byModel=new Map();
+      const entry=m=>{if(!byModel.has(m))byModel.set(m,{agent:a,model:m||"?",cost:null,tokens:0});return byModel.get(m);};
+      for(const s of cost?.series||[])entry(s.dimensions.model).cost=(entry(s.dimensions.model).cost||0)+s.points.reduce((x,[,v])=>x+v,0);
+      for(const s of tokens?.details?.models||[])entry(s.id).tokens+=s.points.reduce((x,[,v])=>x+v,0);
+      rows.push(...byModel.values());
+    }
+    const active=rows.filter(r=>r.cost>0||r.tokens>0).sort((x,y)=>(y.cost||0)-(x.cost||0)||y.tokens-x.tokens),idle=rows.filter(r=>!active.includes(r));
+    const max=Math.max(...active.map(r=>r.cost||0),0);
+    $("models").innerHTML=`<div><h2>Cost by model</h2><div class="sub">${active.length} of ${rows.length} models active in this range</div></div>
+      <div class="bars">${active.map(r=>{const key=`${agents[r.agent]} · ${r.model}`,color=AIUsage.colorFor(key);return `<div class="model"><div class="head"><span class="name"><i class="sw" style="background:${color}"></i>${esc(r.model)} <span class="faint">${agents[r.agent]}</span></span><span class="cost" title="${r.cost==null?"":F.cost(r.cost,true)}">${r.cost==null?"—":F.cost(r.cost)}</span></div>
+        <div class="track thick" aria-hidden="true"><span style="width:${max&&r.cost?Math.max(1,r.cost/max*100):0}%;background:${color}"></span></div>
+        <div class="meta"><span title="${F.full(r.tokens)}">${F.tokens(r.tokens)} tokens</span>${r.cost&&r.tokens?`<span>${F.cost(r.cost/r.tokens*1e6)} / 1M</span>`:""}${r.agent==="codex"?`<span>${r.cost==null?"no price":"estimated price"}</span>`:""}</div></div>`;}).join("")}
+      ${idle.map((r,i)=>`<div class="idle${i?"":" first"}"><span class="name"><i class="sw" style="background:${AIUsage.colorFor(`${agents[r.agent]} · ${r.model}`)}"></i>${esc(r.model)}</span><span class="num">—</span></div>`).join("")}</div>`;
+  }
+  function renderHeat() {
+    const activity=datasets.get("all.activity");if(!activity)return;
+    const cells=new Map();for(const s of activity.series)for(const [t,v]of s.points){const d=new Date(t*1000),key=`${(d.getDay()+6)%7},${d.getHours()}`;cells.set(key,(cells.get(key)||0)+v);}
+    const data=[];for(let day=0;day<7;day++)for(let hour=0;hour<24;hour++)data.push([hour,day,cells.get(`${day},${hour}`)||0]);
+    const days=["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
+    // The heatmap reads a separate hourly block capped at 30 days (7 at least), so its window is stated.
+    $("heat-sub").textContent=`tokens by weekday and hour · local time · last ${Math.round((activity.range.end-activity.range.start)/86400)} days`;
+    heatChart=heatChart||AIUsage.init($("heat-chart"));
+    heatChart.setOption({grid:{left:4,right:4,top:4,bottom:4,containLabel:true},tooltip:{trigger:"item",formatter:p=>`${days[p.value[1]]} ${two(p.value[0])}:00 · ${F.full(p.value[2])} tokens`},
+      xAxis:{type:"category",data:Array.from({length:24},(_,h)=>two(h)),axisLine:{show:false},axisLabel:{interval:5}},yAxis:{type:"category",inverse:true,data:days,axisLine:{show:false}},
+      visualMap:{show:false,min:0,max:Math.max(1,...data.map(v=>v[2]))},series:[{id:"heat",type:"heatmap",data}]});
+  }
+  function renderSpikes(summary,range) {
+    const items=(datasets.get("all.spikes")?.details||[]).slice().sort((a,b)=>b.factor-a.factor).slice(0,4),weekday=new Intl.DateTimeFormat("en",{weekday:"short"});
+    const now=chosen().map(a=>{const tokens=summary[a]?.total?.value,sessions=summary[a]?.sessions;
+      return `<div><span><span style="color:${AIUsage.colorFor(agents[a])}">●</span> ${agents[a]}</span><span class="${tokens?"num":"faint"}">${!tokens?"no activity":sessions?.value==null?"sessions not reported":`${F.full(sessions.value)} new sessions`}</span></div>`;}).join("");
+    $("spikes").innerHTML=`<div><h2>Usage spikes</h2><div class="sub">days above 2.5× the preceding 7-day average</div></div>
+      <div class="spikes">${items.map((v,i)=>{const d=new Date(v.time*1000);return `<div class="spike${i===0&&v.factor>=10?" top":""}"><span class="factor">×${v.factor.toFixed(1)}</span><div><span>${weekday.format(d)}, ${two(d.getDate())}.${two(d.getMonth()+1)}</span><span class="num" title="${F.full(v.tokens)} tokens">${F.tokens(v.tokens)} tokens</span></div></div>`;}).join("")||`<div class="note">No spikes in the daily data for this range.</div>`}</div>
+      <div class="agents-now"><div class="eyebrow">Agents in this range</div>${now}</div>`;
   }
   async function copyCharts(button,specs) {
     const id=snapshot,chosen=structuredClone(specs),scope={...selection},label=button.textContent;
@@ -218,7 +348,9 @@
   document.addEventListener("DOMContentLoaded",()=>{
     theme();$("theme").onclick=()=>{currentTheme=currentTheme==="dark"?"light":"dark";try{localStorage.setItem("theme",currentTheme);}catch(_){}theme();};
     $("copy-all").onclick=()=>copyCharts($("copy-all"),[...widgets.values()].map(w=>w.spec));
-    setInterval(()=>{if(lastPacket&&Date.now()-lastPacket>75000){$("error").hidden=false;$("error").textContent="Live connection interrupted. Reconnecting…";}},15000);
+    for(const b of document.querySelectorAll("[data-metric]"))b.onclick=()=>{metric=b.dataset.metric;try{localStorage.setItem("metric",metric);}catch(_){}if(datasets.size)renderOverview();};
+    $("raw-toggle").onclick=()=>{const show=$("raw").hidden;$("raw").hidden=!show;$("raw-toggle").setAttribute("aria-expanded",String(show));$("raw-toggle").textContent=`${show?"Hide":"Show"} raw charts (${widgets.size})`;if(show)$("raw").scrollIntoView({behavior:"smooth"});};
+    setInterval(()=>{if(lastPacket&&Date.now()-lastPacket>75000){$("updated").classList.add("stale");$("error").hidden=false;$("error").textContent="Live connection interrupted. Reconnecting…";}},15000);
   });
   window.addEventListener("pagehide",()=>widgets.forEach(w=>w.chart?.dispose()));
 })();
