@@ -434,7 +434,7 @@
     if(list.length&&JSON.stringify([...pick.options].map(o=>o.value))!==JSON.stringify(list.map(m=>m.key)))
       pick.replaceChildren(...list.map(m=>{const o=el("option","",m.model||"?");o.value=m.key;return o;}));
     if(current)pick.value=current.key;
-    // The table/export spec is built before the frame so a table view and Copy all stay current.
+    // The table/export spec is built before the frame so a table view and Export all stay current.
     if(current){
       const {d,agent,model}=current,codex=agent==="codex";
       v.spec={title:`Model tokens · ${agents[agent]} · ${model||"?"}`,unit:"tokens",export:{agent,model},
@@ -499,20 +499,26 @@
         return {id:s.id,name:s.label,type:"line",smooth:false,symbol:"circle",symbolSize:4,connectNulls:false,itemStyle:{color},lineStyle:{color},data:times.map(t=>[t*1000,m.has(t)?m.get(t)*100:null])};}),
     },{replaceMerge:["series"]});
   }
-  async function copyCharts(button,specs) {
+  /** Copies one chart as JSON, or downloads several as a JSON Lines file (too large for the clipboard). */
+  async function copyCharts(button,specs,download=false) {
     const id=snapshot,chosen=structuredClone(specs),scope={...selection},label=button.textContent;
     if(!id){button.textContent="Waiting for snapshot";return;}
     try {
       const response=await fetch(`/api/dashboard/export?${new URLSearchParams({snapshot:id})}`),source=await response.json();if(!response.ok)throw Error(source.error||"Export failed");
       const lines=chosen.map(chart=>JSON.stringify({chart:chart.title,unit:chart.unit,snapshot:id,selection:scope,time_boundaries:source.datasets.find(d=>d.id===chart.series[0]?.dataset)?.range,...chart.export,series:chart.series.map(s=>({name:s.label||s.id,values:s.points,...s.export})),queries:source.queries,warnings:source.warnings}));
-      await navigator.clipboard.writeText(lines.length===1?JSON.stringify(JSON.parse(lines[0]),null,2):lines.join("\n")+"\n");button.textContent="Copied";
-    }catch(error){button.textContent="Copy failed";button.title=error.message;}
+      if(download){
+        const d=new Date(),stamp=`${d.getFullYear()}${two(d.getMonth()+1)}${two(d.getDate())}-${two(d.getHours())}${two(d.getMinutes())}${two(d.getSeconds())}`;
+        const link=el("a");link.href=URL.createObjectURL(new Blob([lines.join("\n")+"\n"],{type:"application/jsonl"}));link.download=`ai-usage-${stamp}.jsonl`;
+        link.click();setTimeout(()=>URL.revokeObjectURL(link.href),0);button.textContent="Exported";
+      }
+      else{await navigator.clipboard.writeText(JSON.stringify(JSON.parse(lines[0]),null,2));button.textContent="Copied";}
+    }catch(error){button.textContent=download?"Export failed":"Copy failed";button.title=error.message;}
     setTimeout(()=>{button.textContent=label;},2200);
   }
   window.usage={initial,select,apply,restore(){theme();},debug(){return {epoch,snapshot,sourceAt,datasets,widgets,modelViews};}};
   document.addEventListener("DOMContentLoaded",()=>{
     theme();$("theme").onclick=()=>{currentTheme=currentTheme==="dark"?"light":"dark";try{localStorage.setItem("theme",currentTheme);}catch(_){}theme();};
-    $("copy-all").onclick=()=>copyCharts($("copy-all"),[...Object.values(modelViews).map(v=>v.spec).filter(Boolean),...[...widgets.values()].map(w=>w.spec)]);
+    $("export-all").onclick=()=>copyCharts($("export-all"),[...Object.values(modelViews).map(v=>v.spec).filter(Boolean),...[...widgets.values()].map(w=>w.spec)],true);
     $("model-pick").onchange=event=>{modelKey=event.target.value;try{localStorage.setItem("model",modelKey);}catch(_){}renderModelTokens();};
     for(const v of Object.values(modelViews)){
       const card=$(v.id),toggle=card.querySelector(".toggle"),copy=card.querySelector(".copy");
