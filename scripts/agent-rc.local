@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# Install as executable /etc/rc.local. Agent exporters remain in the account's
+# native Claude Code and Codex configuration files. No shell profiles or
+# additional persistent service files are used.
+set -euo pipefail
+
+account=user
+project_directory=/home/user/DEV/homestack
+
+if ((EUID != 0)); then
+    printf 'Install this boot script as /etc/rc.local and let the server boot it.\n' >&2
+    exit 1
+fi
+account_home=$(getent passwd "$account" | cut -d: -f6)
+[[ -n "$account_home" && -d "$project_directory" ]]
+
+# rc-local.service keeps these children in its cgroup after this script exits.
+# Run under the account owning the agent logins, never under root.
+# shellcheck disable=SC2016
+/usr/sbin/runuser -u "$account" -- /usr/bin/env -i \
+    HOME="$account_home" USER="$account" LOGNAME="$account" \
+    PATH="$account_home/.local/bin:$account_home/.cargo/bin:/usr/local/bin:/usr/bin:/bin" \
+    LANG=C.UTF-8 PROJECT_DIRECTORY="$project_directory" /bin/bash -c '
+    set -u
+    export OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=cumulative
+    IFS= read -r instance < /proc/sys/kernel/random/uuid
+    OTEL_RESOURCE_ATTRIBUTES="host.name=$(hostname),service.instance.id=$instance"
+    export OTEL_RESOURCE_ATTRIBUTES
+    cd "$PROJECT_DIRECTORY" || exit 1
+    # Retry network-dependent startup. Codex owns its managed daemon/updater;
+    # Claude Remote Control remains in the foreground until it stops.
+    while true; do
+        if "$HOME/.local/bin/codex" remote-control start; then
+            "$HOME/.local/bin/claude" remote-control
+        fi
+        sleep 15
+    done
+' &
+exit 0

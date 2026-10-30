@@ -1,87 +1,88 @@
 # AI usage telemetry attribution
 
-The dashboard filters usage by the `host_name` and `project` metric labels.
-Agent exporters are configured only in `~/.claude/settings.json` and
-`~/.codex/config.toml`. The shared `agent-start` executable supplies runtime
-resource attributes and cumulative metric temporality. Shell profiles contain
-only PATH wiring, with no telemetry exports or direnv project settings.
+The setup has exactly three persistent configuration/startup files:
 
-## Install for SSH and boot-time Remote Control
+1. `~/.claude/settings.json`: Claude Code exporters, machine identity,
+   cumulative metrics, native repository attribution and interactive Remote Control.
+2. `~/.codex/config.toml`: Codex log and metric exporters.
+3. `/etc/rc.local`: the single boot script, running both agents as their owner.
 
-Install both native agents in `~/.local/bin`, log in to their subscription
-accounts, and accept Claude Code's workspace trust and Remote Control consent
-interactively in the project first. Enable user linger once (an administrator
-may need to run `loginctl enable-linger USER`). Then run as the target user:
+There are no agent wrappers, PATH changes, shell-profile dependencies, user
+service files or extra environment files. Native agent binaries, authentication
+and application state remain managed by the agents themselves.
+
+## Boot and SSH
+
+The startup script source is `scripts/agent-rc.local`. Set `account` and
+`project_directory` in that script for the target machine. Install it as root:
 
 ```bash
-python3 scripts/install-agent-telemetry.py \
-  --claude-directory "$PWD" \
-  --collector-url http://otel.homestack.app:4318
+sudo install -o root -g root -m 0755 scripts/agent-rc.local /etc/rc.local
 ```
 
-The installer preserves unrelated agent settings, snapshots changed configuration
-files under `~/.local/state/homestack/agent-setup/` with private permissions,
-removes the old shell OTEL exports and Codex `--no-daemon` function, and enables
-`claude-remote-control.service` and `codex-remote-control.service`. It does not
-start or restart agents; enabled services start at the next boot. Use
-`--autostart claude`, `codex` or `none` to select which services are enabled.
-Run the installer separately for each account, including root if root is the
-intended agent account; do not install a root service for another user's agents.
+Do not overwrite an existing `/etc/rc.local` without reviewing its contents.
+On this server the file did not previously exist. The distribution already
+provides `rc-local.service` and `systemd-rc-local-generator`; an executable
+`/etc/rc.local` is automatically pulled into boot. No additional service file
+or enablement symlink is required. Installing the file does not restart running
+agents; it takes effect at the next boot.
 
-Open a new SSH login and use `claude` and `codex` normally. Both resolve through
-`~/.local/share/homestack/agents/bin/` to the same launcher used by systemd.
-Interactive Claude sessions also enable Remote Control automatically through
-`remoteControlAtStartup` in user settings.
-The native `~/.local/bin` symlinks remain untouched so agent updates still work.
-Calling those native paths directly bypasses the runtime telemetry setup.
-Herdr panes restored into an interactive login shell use the same PATH;
-existing shells and already-running backends keep their original environment.
+The script drops privileges to the account owning both agent logins and starts
+Codex's native managed Remote Control daemon, followed by Claude's Remote
+Control server in the configured repository. It retries failed network-dependent
+startup and restarts Claude if it exits. Codex's own updater manages its daemon.
+The script supplies Codex's cumulative temporality, hostname and a unique
+instance for the boot supervisor's lifetime. No fixed project is assigned to
+Codex's shared server. SSH clients use the original `codex` binary and join it
+normally, without a forced `--no-daemon`.
 
-The launcher discards inherited `OTEL_*` values, sets the current hostname and
-a fresh `service.instance.id`, requests cumulative metrics, and executes the
-native agent. Export destinations and Claude's telemetry switch stay in the two
-agent configurations. A leftover temporality default in `/etc/environment` is
-not needed or used by this launcher; removing it requires root if that file is
-root-owned. No system-wide environment changes are required for installation.
+Claude settings must include these values in their existing `env` object
+(replace `VM-HOSTNAME` with the actual hostname, not a shell expression):
 
-Claude's Remote Control service runs in the directory selected at installation.
-The launcher sets `project` from the local repository directory, including the
-main repository name for a linked worktree. Its Remote Control workers inherit
-that project; the default server mode serves sessions in that repository.
-To expose another repository, start a separate `claude remote-control` there.
-Repository identity does not depend on an `origin` remote. Do not set a fixed
-`OTEL_RESOURCE_ATTRIBUTES` in Claude settings: it would override the launcher's
-host, project and instance attributes. Claude includes `session.id` to separate
-concurrent workers within one server.
+```json
+{
+  "remoteControlAtStartup": true,
+  "env": {
+    "CLAUDE_CODE_ENABLE_TELEMETRY": "1",
+    "OTEL_METRICS_EXPORTER": "otlp",
+    "OTEL_LOGS_EXPORTER": "otlp",
+    "OTEL_EXPORTER_OTLP_PROTOCOL": "http/protobuf",
+    "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT": "http://otel.homestack.app:4318/v1/metrics",
+    "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT": "http://otel.homestack.app:4318/v1/logs",
+    "OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE": "cumulative",
+    "OTEL_METRICS_INCLUDE_REPOSITORY": "1",
+    "OTEL_RESOURCE_ATTRIBUTES": "host.name=VM-HOSTNAME"
+  }
+}
+```
 
-Codex uses its native managed app-server and updater. The boot service runs
-`codex remote-control start`; SSH clients join that same daemon without a
-forced `--no-daemon`. The native updater manages daemon recovery and updates;
-systemd retries failed boot startup. Resource attributes are inherited when the
-managed backend starts, not when another SSH client connects. The launcher's
-instance identifies that daemon/updater lifetime; an internal daemon restart
-can reset its cumulative counters within that instance.
+These native settings apply to both Remote Control workers and interactive SSH
+sessions. Claude uses `session.id` to distinguish simultaneous sessions. Native
+repository identity comes from `origin`, not from the local directory name;
+repositories without a supported `origin` have no repository attribution.
+The Collector must map `vcs.repository.name` to the dashboard's `project`
+resource attribute; the published `otel-0.1.11` image includes this mapping.
+A running older image needs a separate deployment before that filter works.
 
-A shared Codex server can serve several projects. Its process-wide resource
-must therefore carry **no `project`**; a client's current directory cannot
-relabel a running daemon. Project attribution for those sessions requires
-session-aware upstream telemetry or a separate enrichment mechanism. This setup
-keeps host/instance attribution without assigning every session to the server's
-startup directory. Independently launched backends must also use the launcher.
+A shared Codex server's resource is process-wide and therefore carries no
+project. Per-session project attribution requires upstream telemetry support
+or separate enrichment. A native internal daemon restart can reset counters
+within the boot instance; simultaneous independent Codex backends need their
+own runtime identity and are outside this shared-server setup.
 
-After reboot, inspect startup and telemetry separately:
+After reboot, inspect the boot script and native daemon:
 
 ```bash
-systemctl --user status claude-remote-control codex-remote-control
-journalctl --user -b -u claude-remote-control -u codex-remote-control
+systemctl status rc-local.service
+journalctl -b -u rc-local.service
 codex app-server daemon version
 ```
 
-Claude should show its Remote Control connection; Codex's systemd unit is
-`active (exited)` after starting the native daemon. Complete one response in
-SSH and Remote Control for each agent and inspect the new Prometheus samples.
-A successful service start alone does not prove token delivery or dashboard
-attribution. To obtain a manual Codex pairing code, run `codex remote-control pair`.
+Complete one response in SSH and Remote Control for each agent, then inspect
+new Prometheus samples. A running service alone does not prove token delivery
+or dashboard attribution. Run `codex remote-control pair` for a manual pairing
+code. Claude must already be logged in and trust the startup directory; its
+Remote Control consent must have been accepted interactively once.
 
 ## Response token export
 
@@ -164,7 +165,7 @@ and attribution limits.
 ## Claude Code request timing
 
 Claude Code reports request duration and time to first token only in its
-`api_request` log event. The installer enables its OTLP log exporter in
+`api_request` log event. Enable its OTLP log exporter in
 `~/.claude/settings.json` alongside the metric exporter.
 
 The Collector sums `duration_ms` and `ttft_ms` of those events and counts the
