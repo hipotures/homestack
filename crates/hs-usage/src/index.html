@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>AI usage</title><link rel="icon" href="data:,"><link rel="stylesheet" href="/assets/aiusage-tokens.css"><style>
+<html lang="en"><head><meta charset="utf-8"><meta name="ai-usage-version" content="__HOMESTACK_USAGE_VERSION__"><meta name="viewport" content="width=device-width, initial-scale=1"><title>AI usage</title><link rel="icon" href="data:,"><link rel="stylesheet" href="/assets/aiusage-tokens.css?v=__HOMESTACK_USAGE_VERSION__"><style>
 * { box-sizing: border-box; }
 body { font-variant-numeric: tabular-nums; overflow-x: hidden; }
 .row-2 { grid-template-columns: repeat(auto-fit, minmax(min(100%, 380px), 1fr)); }
@@ -144,10 +144,10 @@ button:focus-visible, select:focus-visible { outline: 2px solid var(--codex); ou
   .chart.tall { height: 260px; }
 }
 </style>
-<script defer src="/assets/echarts-6.1.0.min.js"></script>
-<script defer src="/assets/aiusage-echarts-theme.js"></script>
-<script defer src="/assets/dashboard.js"></script>
-<script type="module" src="/assets/datastar-1.0.4.js"></script>
+<script defer src="/assets/echarts-6.1.0.min.js?v=__HOMESTACK_USAGE_VERSION__"></script>
+<script defer src="/assets/aiusage-echarts-theme.js?v=__HOMESTACK_USAGE_VERSION__"></script>
+<script defer src="/assets/dashboard.js?v=__HOMESTACK_USAGE_VERSION__"></script>
+<script type="module" src="/assets/datastar-1.0.4.js?v=__HOMESTACK_USAGE_VERSION__"></script>
 </head><body>
 <main data-signals="window.usage.initial()"
  data-init="window.usage.restore(el)"

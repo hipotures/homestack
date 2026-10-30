@@ -31,6 +31,10 @@ use hs_model::health::{HeartbeatObservation, Liveness, LivenessStatus};
 use tracing_subscriber::EnvFilter;
 
 const PROBE_PATH: &str = "/health/heartbeat";
+const VERSION: &str = match option_env!("HOMESTACK_USAGE_VERSION") {
+    Some(version) => version,
+    None => "development",
+};
 const PAGE: &str = include_str!("index.html");
 const PRICING_URL: &str = "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json";
 #[derive(Clone)]
@@ -76,10 +80,7 @@ async fn main() -> ExitCode {
             None
         }
     };
-    let page = Bytes::from(PAGE.replace(
-        "__HOMESTACK_USAGE_VERSION__",
-        option_env!("HOMESTACK_USAGE_VERSION").unwrap_or("development"),
-    ));
+    let page = Bytes::from(PAGE.replace("__HOMESTACK_USAGE_VERSION__", VERSION));
     let dashboard = Arc::new(dashboard::Dashboard::new(
         prometheus::Prometheus::new(client, prometheus.clone()),
         pricing,

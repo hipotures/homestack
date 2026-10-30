@@ -1,6 +1,8 @@
 /* ECharts presentation bridge. Accounting and query planning belong to Rust. */
 "use strict";
 (() => {
+  const version = document.querySelector('meta[name="ai-usage-version"]').content;
+  let reloading = false;
   const agents = {claude:"Claude Code", codex:"Codex"};
   const widgets = new Map(), datasets = new Map();
   let selection, epoch = 0, snapshot, lastPacket = 0, sourceAt = 0;
@@ -30,6 +32,11 @@
     target.replaceChildren(...wanted.map(value=>{const option=el("option","",value==="*"?label:value);option.value=value;option.selected=value===current;return option;}));
   }
   function apply(packet) {
+    if(packet.kind==="version") {
+      if(packet.version!==version && !reloading) {reloading=true;window.location.reload();}
+      return;
+    }
+    if(reloading)return;
     if(packet.epoch!==epoch)return;
     lastPacket=Date.now();
     if(packet.kind==="error") {$("error").textContent="Cannot load data: "+packet.message;$("error").hidden=false;return;}

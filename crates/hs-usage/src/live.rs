@@ -8,7 +8,7 @@ use axum::{
         sse::{Event, KeepAlive},
     },
 };
-use futures_util::stream;
+use futures_util::{StreamExt, stream};
 use serde::Deserialize;
 use serde_json::json;
 use std::{convert::Infallible, sync::Arc, time::Duration};
@@ -97,6 +97,12 @@ pub async fn events(State(state): State<AppState>, Query(signals): Query<Signals
             .data(format!("signals {}", json!({"_packet":packet.to_string()})));
         Some((Ok::<_, Infallible>(event), c))
     });
+    // Announce the running build before querying dependencies, including after reconnects.
+    let version = Event::default().event("datastar-patch-signals").data(format!(
+        "signals {}",
+        json!({"_packet":json!({"kind":"version","version":crate::VERSION}).to_string()})
+    ));
+    let stream = stream::once(async move { Ok::<_, Infallible>(version) }).chain(stream);
     (
         [
             (header::CACHE_CONTROL, "no-cache, no-transform"),
