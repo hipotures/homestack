@@ -145,10 +145,9 @@
     const spec=w.spec;
     w.copy.hidden=!w.table;
     const timeRange=datasets.get(spec.series[0]?.dataset)?.range;
-    const sources=spec.sourceIds.map(id=>datasets.get(id)).filter(Boolean);
     // The time axis starts at the first bucket with data; a chip tells when that is later than the range.
     const first=firstData(spec.series),since=!spec.heat&&timeRange&&first>timeRange.start?first:null;
-    w.note.replaceChildren(...[since?el("span","chip",`data since ${sinceLabel(since,timeRange)}`):null,spec.note,sources.some(d=>d.state==="partial")?"Partial data":""].filter(Boolean).map(n=>typeof n==="string"?el("span","",n):n));
+    w.note.replaceChildren(...[since?el("span","chip",`data since ${sinceLabel(since,timeRange)}`):null,spec.note].filter(Boolean).map(n=>typeof n==="string"?el("span","",n):n));
     w.note.hidden=!w.note.childElementCount;
     w.host.hidden=w.table;
     w.tableHost.hidden=!w.table;
@@ -233,10 +232,9 @@
     const output=totals.output?.value,reasoning=totals.reasoning?.value,share=output&&reasoning!=null?reasoning/output:null;
     const outputBody=output?`<div class="stack"><div class="split" aria-hidden="true"><span style="width:${(share||0)*100}%;background:var(--tok-reasoning)"></span><span style="width:${(1-(share||0))*100}%;background:var(--tok-output)"></span></div>
       <div class="legend-row"><span>${share==null?"reasoning not reported":`<span style="color:var(--tok-reasoning)">●</span> reasoning ${F.tokens(reasoning)} · ${Math.round(share*100)}%`}</span><span>response ${F.tokens(output-(reasoning||0))}</span></div></div>`:"";
-    const partial=key=>{const n=totals[key]?.contributors??0;return n&&n<sel.length?" (partial)":"";};
     $("kpis").innerHTML=[
-      kpi("Cost"+partial("cost"),F.cost(totals.cost?.value),delta(totals.cost?.value,previous.cost),split("cost",summary),"Codex cost is estimated from standard API prices",F.cost(totals.cost?.value,true)),
-      kpi("Tokens"+partial("total"),F.tokens(totals.total?.value),delta(totals.total?.value,previous.total),sparkline(live.map(t=>[t,totalSeries.get(t)||0]),lead)+split("total",summary),"",F.full(totals.total?.value)),
+      kpi("Cost",F.cost(totals.cost?.value),delta(totals.cost?.value,previous.cost),split("cost",summary),"Codex cost is estimated from standard API prices",F.cost(totals.cost?.value,true)),
+      kpi("Tokens",F.tokens(totals.total?.value),delta(totals.total?.value,previous.total),sparkline(live.map(t=>[t,totalSeries.get(t)||0]),lead)+split("total",summary),"",F.full(totals.total?.value)),
       kpi("Cache hit",totals.cacheHit?.value==null?"—":F.pct(totals.cacheHit.value*100),delta(totals.cacheHit?.value,previous.cacheHit,{goodUp:true,points:true}),hitBars),
       kpi("Output",F.tokens(output),delta(output,previous.output),outputBody,"Output includes reasoning tokens",F.full(output)),
     ].join("");
