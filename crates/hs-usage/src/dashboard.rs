@@ -570,6 +570,8 @@ fn agent_data(
         ("firstToken", "milliseconds"),
         ("firstOutput", "milliseconds"),
         ("toolDuration", "milliseconds"),
+        ("requestDuration", "milliseconds"),
+        ("requestFirstToken", "milliseconds"),
     ] {
         let groups = raw.remove(measurement).unwrap_or_default();
         let mut d = make(
@@ -581,7 +583,16 @@ fn agent_data(
             series(groups, "kind"),
             registry.iter().any(|m| m.measurement == measurement),
         );
-        if ["turnDuration", "firstToken", "firstOutput", "toolDuration"].contains(&measurement) {
+        if [
+            "turnDuration",
+            "firstToken",
+            "firstOutput",
+            "toolDuration",
+            "requestDuration",
+            "requestFirstToken",
+        ]
+        .contains(&measurement)
+        {
             let mut sums = BTreeMap::new();
             let mut counts = BTreeMap::new();
             for s in &d.series {

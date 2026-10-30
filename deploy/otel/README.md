@@ -54,6 +54,10 @@ OTLP/HTTP on port 4318.
   Prometheus must ingest these directly through OTLP; the dashboard sums the
   pushed samples rather than treating them as cumulative counters. See
   [response export setup](../../docs/ai-telemetry.md#response-token-export).
+- Claude Code `api_request` log events become request duration and
+  time-to-first-token sums with request counts by model and effort; all other
+  Claude Code events are discarded. See
+  [Claude Code request timing](../../docs/ai-telemetry.md#claude-code-request-timing).
 - `HOMESTACK_PROMETHEUS_URL`: required base URL of the Prometheus server,
   without a path; the Collector exports to its `/api/v1/otlp/v1/metrics`
   receiver. No server is baked into the image.

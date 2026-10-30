@@ -28,6 +28,21 @@ fn selector(metrics: &[&Instrument]) -> String {
         metrics.iter().map(|m| m.name.as_str()).collect::<Vec<_>>().join("|")
     )
 }
+/// Delta gauge sums per bucket. `sum_over_time` drops `__name__`, so each
+/// instrument's name is restored as the `instrument` label.
+fn response_sums(metrics: &[&Instrument], seconds: u64) -> String {
+    let parts: Vec<String> = metrics
+        .iter()
+        .map(|m| {
+            format!(
+                "label_replace(sum_over_time({}[{seconds}s]), \"instrument\", \"{}\", \"\", \"\")",
+                selector(&[m]),
+                m.name
+            )
+        })
+        .collect();
+    format!("sum by ({GROUPS}) ({})", parts.join(" or "))
+}
 fn samples(source: &Source) -> Vec<(BTreeMap<String, String>, u64, f64)> {
     let mut out = Vec::new();
     for row in source.data["result"].as_array().into_iter().flatten() {
@@ -104,12 +119,7 @@ pub async fn block(
             let query = match kind {
                 // Histograms are read only by per-selection quantile queries.
                 Kind::Histogram => continue,
-                Kind::Response => format!(
-                    "sum by ({GROUPS}) ({})",
-                    format_args!(
-                        "label_replace(sum_over_time({sel}[{step}s]), \"instrument\", \"codex_response_token_usage\", \"\", \"\")"
-                    )
-                ),
+                Kind::Response => response_sums(&metrics, step),
                 Kind::Counter => {
                     let end = named(&format!("last_over_time({sel}[{step}s])"));
                     let before = named(&format!("last_over_time({sel}[{RETENTION}] offset {step}s)"));
@@ -140,13 +150,7 @@ pub async fn block(
             match kind {
                 Kind::Histogram => continue,
                 Kind::Response => {
-                    let query = format!(
-                        "sum by ({GROUPS}) ({})",
-                        format_args!(
-                            "label_replace(sum_over_time({sel}[{}s]), \"instrument\", \"codex_response_token_usage\", \"\", \"\")",
-                            now - boundary
-                        )
-                    );
+                    let query = response_sums(&metrics, now - boundary);
                     jobs.push(async move { prom.instant(query, now as f64, 30).await }.boxed());
                 }
                 Kind::Counter | Kind::History => {

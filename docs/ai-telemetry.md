@@ -103,6 +103,25 @@ available historical costs; the page reports that only historical data is
 available. Historical measurements retain the original turn accounting's gaps
 and attribution limits.
 
+## Claude Code request timing
+
+Claude Code reports request duration and time to first token only in its
+`api_request` log event, so its shell environment must also export logs:
+
+```bash
+export OTEL_LOGS_EXPORTER='otlp'
+export OTEL_EXPORTER_OTLP_LOGS_ENDPOINT='http://otel.homestack.app:4318/v1/logs'
+```
+
+The Collector sums `duration_ms` and `ttft_ms` of those events and counts the
+requests, by model and reasoning effort, into delta gauges:
+`claude_code.api_request.duration_ms`, `claude_code.api_request.count`,
+`claude_code.api_request.ttft_ms` and `claude_code.api_request.ttft_count`.
+Every other Claude Code event is discarded, including prompt and response
+metadata. The dashboard shows the per-bucket average (sum / count) as *API
+request duration* and *Request to first token* on the Claude Code panel. These
+are single API calls, unlike Codex's per-turn histograms, and carry no p95.
+
 ## Prometheus resource labels
 
 Prometheus must promote the resource attributes onto the usage metrics:

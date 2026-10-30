@@ -65,6 +65,34 @@ connectors:
             default_value: unknown
           - key: model_reasoning_effort
             default_value: unknown
+  # Claude Code api_request events become duration and time-to-first-token
+  # sums with request counts, so the dashboard can show averages per bucket.
+  sum/claude:
+    logs:
+      claude_code.api_request.duration_ms:
+        source_attribute: duration_ms
+        conditions:
+          - 'attributes["event.name"] == "api_request" and attributes["duration_ms"] != nil'
+        attributes: &claude-attributes
+          - key: model
+            default_value: unknown
+          - key: effort
+            default_value: unknown
+      claude_code.api_request.count:
+        source_attribute: homestack.one
+        conditions:
+          - 'attributes["event.name"] == "api_request" and attributes["duration_ms"] != nil'
+        attributes: *claude-attributes
+      claude_code.api_request.ttft_ms:
+        source_attribute: ttft_ms
+        conditions:
+          - 'attributes["event.name"] == "api_request" and attributes["ttft_ms"] != nil'
+        attributes: *claude-attributes
+      claude_code.api_request.ttft_count:
+        source_attribute: homestack.one
+        conditions:
+          - 'attributes["event.name"] == "api_request" and attributes["ttft_ms"] != nil'
+        attributes: *claude-attributes
 
 processors:
   # Compact identical resource/scope groups before summing a batch so they
@@ -88,6 +116,26 @@ processors:
         statements:
           - convert_sum_to_gauge()
           - set(name, "codex.response.token_usage")
+  transform/claude-logs:
+    error_mode: propagate
+    log_statements:
+      - context: log
+        statements:
+          # The sum connector counts requests by summing this attribute.
+          - set(attributes["homestack.one"], 1) where attributes["event.name"] == "api_request"
+  transform/claude:
+    error_mode: propagate
+    metric_statements:
+      - context: resource
+        statements:
+          - set(attributes["homestack.collector.instance"], Trim("${file:/etc/hostname}", " \t\r\n"))
+      - context: datapoint
+        statements:
+          - set(attributes["collector_instance"], resource.attributes["homestack.collector.instance"])
+          - delete_key(attributes, "effort") where attributes["effort"] == "unknown"
+      - context: metric
+        statements:
+          - convert_sum_to_gauge()
   batch:
     timeout: 5s
 
@@ -126,4 +174,12 @@ service:
     metrics/codex:
       receivers: [sum/codex]
       processors: [transform/codex]
+      exporters: [otlp_http]
+    logs/claude:
+      receivers: [otlp]
+      processors: [batch, groupbyattrs/codex, transform/claude-logs]
+      exporters: [sum/claude]
+    metrics/claude:
+      receivers: [sum/claude]
+      processors: [transform/claude]
       exporters: [otlp_http]

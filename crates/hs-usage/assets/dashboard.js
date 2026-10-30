@@ -331,7 +331,8 @@
   // ---- Agent details: shared comparison, then one panel per agent built from what it reports. ----
   let agentTab="codex";
   try{agentTab=localStorage.getItem("agentTab")||agentTab;}catch(_){}
-  const LATENCY=[["firstToken","To first token"],["firstOutput","To first output item"],["turnDuration","Turn duration"],["toolDuration","Tool duration"]];
+  // Codex reports per-turn histograms; Claude Code per-request averages from its api_request events.
+  const LATENCY=[["firstToken","To first token"],["firstOutput","To first output item"],["turnDuration","Turn duration"],["toolDuration","Tool duration"],["requestFirstToken","Request to first token","average"],["requestDuration","API request duration","average"]];
   const COUNTS=[["active","Active time","split: user / cli"],["commits","Commits","count in range"],["lines","Lines of code","added / removed"],["sessions","New sessions","started in range"],["turns","Turns","conversation turns"],["tools","Tool calls","calls · failed"]];
   const total=points=>(points||[]).reduce((s,[,v])=>s+(v||0),0);
   function miniBars(points,range,color) {
@@ -367,7 +368,7 @@
     const color=AIUsage.colorFor(agents[agent]),small=[],wide=[],placeholders=[];let activity=summary[agent]?.total?.value>0;
     // Histogram quantiles when the agent exports buckets; the Σsum/Σcount mean otherwise.
     const at=(d,q)=>`${d.details[q+"Capped"]?"≥ ":""}${F.duration(d.details[q])}`;
-    for(const [m,label]of LATENCY){const d=reported(agent,m);if(!d)continue;placeholders.push([label,"median and p95"]);
+    for(const [m,label,hint]of LATENCY){const d=reported(agent,m);if(!d)continue;placeholders.push([label,hint||"median and p95"]);
       if(d.details.p50!=null){activity=true;small.push(metricCard(label,at(d,"p50"),"p50",`<div class="note">p95 ${at(d,"p95")} · mean ${F.duration(d.total)}</div>`+miniBars(d.details.p50Timeline||[],range,color),`${F.full(Math.round(d.details.p50*1000))} ms`));}
       else if(d.total!=null){activity=true;small.push(metricCard(label,F.duration(d.total),"average",miniBars(d.series[0]?.points||[],range,color),`${F.full(Math.round(d.total*1000))} ms`));}}
     for(const [m,label,hint]of COUNTS){const d=reported(agent,m);if(!d)continue;placeholders.push([label,hint]);
