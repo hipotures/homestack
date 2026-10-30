@@ -266,7 +266,8 @@
     trendChart.setOption({
       grid:{left:8,right:8,top:36,bottom:8,containLabel:true},
       tooltip:{trigger:"axis",formatter:AIUsage.tooltipFormatter(fmtFull)},
-      xAxis:{type:"time",min:(first-range.step/2)*1000,max:range.end*1000,axisLabel:{hideOverlap:true}},
+      // Sub-daily buckets: hours as HH:MM, local midnight as a bold full date (the default shows a bare day number).
+      xAxis:{type:"time",min:(first-range.step/2)*1000,max:range.end*1000,axisLabel:{hideOverlap:true,...(range.step<86400?{rich:{day:{fontWeight:"bold"}},formatter:v=>{const d=new Date(v);return d.getHours()||d.getMinutes()?`${two(d.getHours())}:${two(d.getMinutes())}`:`{day|${two(d.getDate())}.${two(d.getMonth()+1)}}`;}}:{})}},
       yAxis:{type:"value",axisLabel:{formatter:fmtShort}},
       // Stacks on a time axis need identical x values in every series, so all are aligned to the buckets.
       series:visible.map((s,i)=>AIUsage.bar(s.name,(m=>times.filter(t=>t>=first).map(t=>[t*1000,m.get(t)||0]))(new Map(s.points)),s.name,{
