@@ -435,8 +435,9 @@
   function renderModelTokens(){
     const v=modelViews.tokens,list=[];
     for(const a of chosen()){const d=reported(a,"tokens");if(d)for(const m of d.details.models||[]){const n=total(m.points);if(n>0)list.push({key:`${a}|${m.id}`,agent:a,model:m.id,tokens:n,d});}}
-    list.sort((x,y)=>y.tokens-x.tokens);
-    const current=list.find(m=>m.key===modelKey)||list[0],pick=$("model-pick");
+    // Options stay alphabetical; without a choice the busiest model is shown.
+    list.sort((x,y)=>(x.model||"?").localeCompare(y.model||"?")||x.agent.localeCompare(y.agent));
+    const current=list.find(m=>m.key===modelKey)||list.reduce((a,m)=>m.tokens>a.tokens?m:a,list[0]),pick=$("model-pick");
     if(list.length&&JSON.stringify([...pick.options].map(o=>o.value))!==JSON.stringify(list.map(m=>m.key)))
       pick.replaceChildren(...list.map(m=>{const o=el("option","",m.model||"?");o.value=m.key;return o;}));
     if(current)pick.value=current.key;
