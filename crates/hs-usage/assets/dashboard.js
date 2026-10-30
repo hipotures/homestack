@@ -218,7 +218,9 @@
     const sel=chosen(),tokens=sel.map(a=>datasets.get(`${a}.tokens`)).filter(d=>d&&d.state!=="unavailable");
     const category=id=>tokens.map(d=>(d.details.categories||[]).find(c=>c.id===id)?.points);
     const lead=sel.length===1?AIUsage.colorFor(agents[sel[0]]):css("--text-2");
-    const kpi=(label,value,deltaHtml,body,title="",full="")=>`<div class="card kpi"><div class="eyebrow" title="${esc(title)}">${label}</div><div class="figure"><span class="kpi-value${value==="—"?" faint":""}" title="${esc(full)}">${value}</span>${deltaHtml}</div>${body}</div>`;
+    // Charts and their captions sit at the bottom of every tile so all four line up.
+    const kpi=(label,value,deltaHtml,chart,detail,title="",full="")=>`<div class="card kpi"><div class="eyebrow" title="${esc(title)}">${label}</div><div class="figure"><span class="kpi-value${value==="—"?" faint":""}" title="${esc(full)}">${value}</span>${deltaHtml}</div><div class="kpi-foot"><div class="kpi-chart">${chart}</div><div class="kpi-detail">${detail}</div></div></div>`;
+    const spark=points=>live.map(t=>[t,points.get(t)||0]);
     const totalSeries=sumPoints(category("total")),firstActive=Math.min(...[...totalSeries].filter(([,v])=>v>0).map(([t])=>t));
     const live=buckets(range).filter(t=>t>=firstActive||!Number.isFinite(firstActive));
     // Cache hit per bucket over all selected agents, drawn on a narrow scale.
@@ -227,16 +229,17 @@
     const known=hits.filter(([,v])=>v!=null),low=known.reduce((m,h)=>h[1]<m[1]?h:m,[0,101]);
     // Near-empty buckets can drop to 0%, so the scale follows the range-wide rate and lower buckets are clamped.
     const overall=(totals.cacheHit?.value??0)*100,floor=overall>=98?98:Math.max(0,Math.floor(overall/5)*5-5);
-    const hitBars=known.length?`<div class="stack"><div class="hits" aria-hidden="true">${hits.map(([,v])=>v==null?`<span style="height:2px;background:var(--track)"></span>`:`<span style="height:${Math.max(2,Math.round((Math.max(v,floor)-floor)/(100-floor)*24))}px;background:${v<Math.max(floor,overall-1)?css("--warn"):css("--tok-cached")}"></span>`).join("")}</div>
-      <div class="note">scale ${floor}–100% · min ${F.pct(low[1])} at ${timeLabel(low[0],range)}</div></div>`:"";
+    const hitBars=known.length?`<div class="hits" aria-hidden="true">${hits.map(([,v])=>v==null?`<span style="height:2px;background:var(--track)"></span>`:`<span style="height:${Math.max(2,Math.round((Math.max(v,floor)-floor)/(100-floor)*40))}px;background:${v<Math.max(floor,overall-1)?css("--warn"):css("--tok-cached")}"></span>`).join("")}</div>`:"";
+    const hitNote=known.length?`<div class="note">scale ${floor}–100% · min ${F.pct(low[1])} at ${timeLabel(low[0],range)}</div>`:"";
+    const cost=sumPoints(sel.map(a=>datasets.get(`${a}.cost`)?.details?.timeline)),outputs=sumPoints(category("output"));
     const output=totals.output?.value,reasoning=totals.reasoning?.value,share=output&&reasoning!=null?reasoning/output:null;
     const outputBody=output?`<div class="stack"><div class="split" aria-hidden="true"><span style="width:${(share||0)*100}%;background:var(--tok-reasoning)"></span><span style="width:${(1-(share||0))*100}%;background:var(--tok-output)"></span></div>
       <div class="legend-row"><span>${share==null?"reasoning not reported":`<span style="color:var(--tok-reasoning)">●</span> reasoning ${F.tokens(reasoning)} · ${Math.round(share*100)}%`}</span><span>response ${F.tokens(output-(reasoning||0))}</span></div></div>`:"";
     $("kpis").innerHTML=[
-      kpi("Cost",F.cost(totals.cost?.value),delta(totals.cost?.value,previous.cost),split("cost",summary),"Codex cost is estimated from standard API prices",F.cost(totals.cost?.value,true)),
-      kpi("Tokens",F.tokens(totals.total?.value),delta(totals.total?.value,previous.total),sparkline(live.map(t=>[t,totalSeries.get(t)||0]),lead)+split("total",summary),"",F.full(totals.total?.value)),
-      kpi("Cache hit",totals.cacheHit?.value==null?"—":F.pct(totals.cacheHit.value*100),delta(totals.cacheHit?.value,previous.cacheHit,{goodUp:true,points:true}),hitBars),
-      kpi("Output",F.tokens(output),delta(output,previous.output),outputBody,"Output includes reasoning tokens",F.full(output)),
+      kpi("Cost",F.cost(totals.cost?.value),delta(totals.cost?.value,previous.cost),sparkline(spark(cost),lead),split("cost",summary),"Codex cost is estimated from standard API prices",F.cost(totals.cost?.value,true)),
+      kpi("Tokens",F.tokens(totals.total?.value),delta(totals.total?.value,previous.total),sparkline(spark(totalSeries),lead),split("total",summary),"",F.full(totals.total?.value)),
+      kpi("Cache hit",totals.cacheHit?.value==null?"—":F.pct(totals.cacheHit.value*100),delta(totals.cacheHit?.value,previous.cacheHit,{goodUp:true,points:true}),hitBars,hitNote),
+      kpi("Output",F.tokens(output),delta(output,previous.output),sparkline(spark(outputs),getComputedStyle(document.documentElement).getPropertyValue("--tok-output").trim()),outputBody,"Output includes reasoning tokens",F.full(output)),
     ].join("");
     renderTrend(range,firstActive);renderScopes(range);renderComposition(totals);renderModels();renderHeat();renderSpikes(summary,range);renderAgents(summary,range);
   }

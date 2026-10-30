@@ -517,7 +517,10 @@ fn agent_data(
         let mut d = make(agent, "cost", "USD", selection, range, series(groups, "kind"), true);
         if prices.is_none() || !missing.is_empty() {
             d.state = Availability::Partial;
-            d.total = None;
+            // Priced models still sum to a lower-bound estimate; without a catalog there is none.
+            if prices.is_none() {
+                d.total = None;
+            }
             d.warnings.push(if prices.is_none() {
                 "Pricing unavailable; restart the service to retry the startup catalog".into()
             } else {

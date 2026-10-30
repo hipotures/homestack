@@ -42,8 +42,11 @@ a { color: var(--tok-uncached); }
 .kpi .figure, .metric .figure { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; }
 .kpi .legend-row, .bar-row .head { display: flex; justify-content: space-between; gap: 12px; font-size: var(--fs-small); color: var(--muted); }
 .kpi .stack { display: flex; flex-direction: column; gap: 6px; }
-.spark { width: 100%; height: 36px; display: block; }
-.hits { display: flex; gap: 2px; align-items: flex-end; height: 24px; }
+.kpi-foot { margin-top: auto; display: flex; flex-direction: column; gap: 10px; }
+.kpi-chart { height: 40px; }
+.kpi-detail { min-height: 34px; display: flex; flex-direction: column; justify-content: flex-end; }
+.spark { width: 100%; height: 40px; display: block; }
+.hits { display: flex; gap: 2px; align-items: flex-end; height: 40px; }
 .hits span { flex: 1; border-radius: 1px; min-width: 1px; }
 .note { color: var(--muted); font-size: var(--fs-small); }
 .faint { color: var(--faint); }
