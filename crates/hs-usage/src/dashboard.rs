@@ -738,7 +738,12 @@ fn scope_breakdown(global: &Global, selection: &Selection, prices: &Option<Value
     };
     let whole = usage(selection);
     for (label, by) in [("host_name", "host"), ("project", "project")] {
-        if (if by == "host" { &selection.host } else { &selection.project }) != "*" {
+        if (if by == "host" {
+            &selection.host
+        } else {
+            &selection.project
+        }) != "*"
+        {
             continue;
         }
         let values: BTreeSet<&String> = global
