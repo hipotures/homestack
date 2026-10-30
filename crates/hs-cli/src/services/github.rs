@@ -97,7 +97,12 @@ fn text<'a>(value: &'a Value, pointer: &str) -> Result<&'a str, String> {
 
 /// The publication of a release tag that is not yet in the registry.
 pub struct Publication {
-    pub text: String,
+    pub release: String,
+    /// Short state, such as "building" or "failed".
+    pub state: &'static str,
+    /// The running or failed job and step, when known.
+    pub detail: String,
+    pub url: String,
     /// Still on its way to the registry; false once the workflow has failed.
     pub building: bool,
 }
@@ -156,9 +161,10 @@ pub fn image_publication(
         .ok_or("GitHub returned invalid workflow runs")?;
     let Some(run) = runs.first() else {
         return Ok(Some(Publication {
-            text: format!(
-                "release {release}: publication workflow has not started; https://github.com/{repository}/actions"
-            ),
+            release: release.to_owned(),
+            state: "workflow not started",
+            detail: String::new(),
+            url: format!("https://github.com/{repository}/actions"),
             building: true,
         }));
     };
@@ -177,19 +183,18 @@ fn publication_status(release: &str, run: &Value, jobs: &Value) -> Result<Public
     let building = status != "completed" || text(run, "/conclusion")? == "success";
     let state = if status == "completed" {
         match text(run, "/conclusion")? {
-            "success" => "workflow succeeded; image not yet available in registry",
-            "failure" => "publication failed",
-            "cancelled" => "publication cancelled",
-            "timed_out" => "publication timed out",
-            "action_required" => "publication requires action",
-            other => other,
+            "success" => "built, not yet in registry",
+            "failure" => "failed",
+            "cancelled" => "cancelled",
+            "timed_out" => "timed out",
+            "action_required" => "requires action",
+            _ => "ended",
         }
     } else {
         match status {
-            "in_progress" => "publication in progress",
-            "queued" => "publication queued",
-            "waiting" | "pending" | "requested" => "publication waiting",
-            other => other,
+            "in_progress" => "building",
+            "queued" => "queued",
+            _ => "waiting",
         }
     };
     let jobs = jobs["jobs"]
@@ -215,13 +220,11 @@ fn publication_status(release: &str, run: &Value, jobs: &Value) -> Result<Public
             detail.push_str(text(step, "/name")?);
         }
     }
-    let detail = if detail.is_empty() {
-        detail
-    } else {
-        format!(" ({detail})")
-    };
     Ok(Publication {
-        text: format!("release {release}: {state}{detail}; {}", text(run, "/html_url")?),
+        release: release.to_owned(),
+        state,
+        detail,
+        url: text(run, "/html_url")?.to_owned(),
         building,
     })
 }
