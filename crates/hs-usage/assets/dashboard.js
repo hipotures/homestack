@@ -506,25 +506,23 @@
     },{replaceMerge:["series"]});
   }
   /** Copies one chart as JSON, or downloads several as a JSON Lines file (too large for the clipboard). */
-  // Effort levels from light to dark within the agent hue; an unreported effort is grey.
+  // Effort levels from light to dark within the model hue; an unreported effort is grey.
   const EFFORTS=["minimal","low","medium","high","xhigh","max"],EFFORT_SHADE=[.7,.5,.2,-.15,-.4,-.6];
   function shade(hex,f){
     const n=parseInt(hex.replace("#",""),16),mix=c=>Math.round(f>0?c+(255-c)*f:c*(1+f));
     return "#"+[n>>16&255,n>>8&255,n&255].map(c=>mix(c).toString(16).padStart(2,"0")).join("");
   }
-  const effortColor=(agent,effort)=>{const i=EFFORTS.indexOf(effort);return i<0?getComputedStyle(document.documentElement).getPropertyValue("--tok-output").trim():shade(AIUsage.colorFor(agents[agent]),EFFORT_SHADE[i]);};
+  const effortColor=(agent,model,effort)=>{const i=EFFORTS.indexOf(effort);return i<0?getComputedStyle(document.documentElement).getPropertyValue("--tok-output").trim():shade(AIUsage.colorFor(`${agents[agent]} · ${model}`),EFFORT_SHADE[i]);};
   function renderEffort(){
     const v=modelViews.effort,sel=chosen(),rows=[];
     for(const a of sel){
       const d=reported(a,"effort");if(!d)continue;
-      const by=new Map();
-      for(const s of d.series){const m=by.get(s.dimensions.effort)||new Map();for(const [t,n]of s.points)m.set(t,(m.get(t)||0)+n);by.set(s.dimensions.effort,m);}
-      for(const [effort,m]of by)if(total([...m])>0)rows.push({agent:a,effort,d,points:[...m].sort((x,y)=>x[0]-y[0])});
+      for(const s of d.series)if(total(s.points)>0)rows.push({agent:a,model:s.dimensions.model,effort:s.dimensions.effort,d,id:`${a}|${s.id}`,points:s.points});
     }
     const rank=e=>{const i=EFFORTS.indexOf(e);return i<0?EFFORTS.length:i;};
-    rows.sort((x,y)=>x.agent.localeCompare(y.agent)||rank(x.effort)-rank(y.effort));
-    const name=r=>`${sel.length>1?agents[r.agent]+" · ":""}${r.effort||"not reported"}`;
-    v.spec=rows.length?{title:"Tokens by effort",unit:"tokens",series:rows.map(r=>({id:`${r.agent}|${r.effort}`,label:name(r),points:r.points,dataset:r.d.id}))}:null;
+    rows.sort((x,y)=>x.agent.localeCompare(y.agent)||(x.model||"").localeCompare(y.model||"")||rank(x.effort)-rank(y.effort));
+    const name=r=>`${r.model||"model not reported"} · ${r.effort||"not reported"}`;
+    v.spec=rows.length?{title:"Tokens by effort",unit:"tokens",series:rows.map(r=>({id:r.id,label:name(r),points:r.points,dataset:r.d.id}))}:null;
     if(!viewFrame(v,rows.length>0))return;
     const range=rows[0].d.range,first=Math.min(...rows.flatMap(r=>r.points.filter(([,n])=>n>0).map(([t])=>t))),times=buckets(range).filter(t=>t>=first);
     const all=rows.reduce((n,r)=>n+total(r.points),0);
@@ -536,7 +534,7 @@
       tooltip:{trigger:"axis",formatter:AIUsage.tooltipFormatter(F.full)},
       xAxis:{type:"time",min:(times[0]-range.step/2)*1000,max:range.end*1000,axisLabel:{hideOverlap:true}},
       yAxis:{type:"value",minInterval:1,axisLabel:{formatter:F.tokens}},
-      series:rows.map(r=>{const m=new Map(r.points);return AIUsage.bar(name(r),times.map(t=>[t*1000,m.get(t)||0]),name(r),{id:`${r.agent}|${r.effort}`,barMaxWidth:28,itemStyle:{color:effortColor(r.agent,r.effort)}});}),
+      series:rows.map(r=>{const m=new Map(r.points);return AIUsage.bar(name(r),times.map(t=>[t*1000,m.get(t)||0]),name(r),{id:r.id,barMaxWidth:28,itemStyle:{color:effortColor(r.agent,r.model,r.effort)}});}),
     },{replaceMerge:["series"]});
   }
   async function copyCharts(button,specs,download=false) {
