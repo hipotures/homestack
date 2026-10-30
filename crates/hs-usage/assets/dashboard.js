@@ -20,7 +20,7 @@
     return out;
   }
   function select(next,sync) {
-    epoch++; selection={...next}; snapshot=undefined;
+    epoch++; selection={...next}; document.documentElement.dataset.agent=selection.agent; snapshot=undefined;
     try {for(const [key,value] of Object.entries(next))localStorage.setItem(key,value);}catch(_){}
     return epoch;
   }
@@ -176,7 +176,7 @@
   let metric="cost",trendChart,heatChart;
   try{metric=["tokens","types"].includes(localStorage.getItem("metric"))?localStorage.getItem("metric"):"cost";}catch(_){}
   // Token types stack to the total: output is drawn without its reasoning part.
-  const TYPES=[["cached","Cached input","--tok-cached"],["input","Uncached input","--tok-uncached"],["written","Cache write","--codex-lo"],["output","Output","--tok-output"],["reasoning","Reasoning","--tok-reasoning"]];
+  const TYPES=[["cached","Cached input","--tok-cached"],["input","Uncached input","--tok-uncached"],["written","Cache write","--tok-written"],["output","Output","--tok-output"],["reasoning","Reasoning","--tok-reasoning"]];
   /** Bucket times of the current range, oldest first. */
   const buckets=range=>{const out=[];for(let t=range.start;t<range.end;t+=range.step)out.push(t);return out;};
   const bucketLabel=step=>step<3600?`${step/60}-minute buckets`:step<86400?`${step/3600}-hour buckets`:step===86400?"daily buckets":step===604800?"weekly buckets":`${step/86400}-day buckets`;
@@ -221,7 +221,7 @@
     const known=hits.filter(([,v])=>v!=null),low=known.reduce((m,h)=>h[1]<m[1]?h:m,[0,101]);
     // Near-empty buckets can drop to 0%, so the scale follows the range-wide rate and lower buckets are clamped.
     const overall=(totals.cacheHit?.value??0)*100,floor=overall>=98?98:Math.max(0,Math.floor(overall/5)*5-5);
-    const hitBars=known.length?`<div class="stack"><div class="hits" aria-hidden="true">${hits.map(([,v])=>v==null?`<span style="height:2px;background:var(--track)"></span>`:`<span style="height:${Math.max(2,Math.round((Math.max(v,floor)-floor)/(100-floor)*24))}px;background:${v<Math.max(floor,overall-1)?css("--warn"):css("--codex")}"></span>`).join("")}</div>
+    const hitBars=known.length?`<div class="stack"><div class="hits" aria-hidden="true">${hits.map(([,v])=>v==null?`<span style="height:2px;background:var(--track)"></span>`:`<span style="height:${Math.max(2,Math.round((Math.max(v,floor)-floor)/(100-floor)*24))}px;background:${v<Math.max(floor,overall-1)?css("--warn"):css("--tok-cached")}"></span>`).join("")}</div>
       <div class="note">scale ${floor}–100% · min ${F.pct(low[1])} at ${timeLabel(low[0],range)}</div></div>`:"";
     const output=totals.output?.value,reasoning=totals.reasoning?.value,share=output&&reasoning!=null?reasoning/output:null;
     const outputBody=output?`<div class="stack"><div class="split" aria-hidden="true"><span style="width:${(share||0)*100}%;background:var(--tok-reasoning)"></span><span style="width:${(1-(share||0))*100}%;background:var(--tok-output)"></span></div>
@@ -246,7 +246,7 @@
       const d=datasets.get(`${a}.${metric==="cost"?"cost":"tokens"}`);
       if(!d||d.state==="unavailable")continue;
       const rows=metric==="cost"?d.series.map(s=>({model:s.dimensions.model,points:s.points})):(d.details.models||[]).map(s=>({model:s.id,points:s.points}));
-      for(const r of rows)series.push({name:`${agents[a]} · ${r.model||"?"}`,points:r.points});
+      for(const r of rows)series.push({name:r.model||"?",key:`${agents[a]} · ${r.model||"?"}`,points:r.points});
     }
     const visible=AIUsage.nonEmpty(series.map(s=>({...s,data:s.points}))),times=buckets(range);
     // Panels without any nonempty series are hidden rather than drawn empty.
@@ -256,7 +256,7 @@
     $("trend-title").textContent=metric==="cost"?"Cost over time":"Tokens over time";
     $("trend-sub").textContent=`${bucketLabel(range.step)} · stacked by ${metric==="types"?"token type":"model"}`;
     for(const b of document.querySelectorAll("[data-metric]"))b.setAttribute("aria-pressed",String(b.dataset.metric===metric));
-    $("trend-legend").innerHTML=visible.map(s=>`<span><i class="sw" style="background:${s.color||AIUsage.colorFor(s.name)}"></i>${esc(s.name)}</span>`).join("");
+    $("trend-legend").innerHTML=visible.map(s=>`<span><i class="sw" style="background:${s.color||AIUsage.colorFor(s.key||s.name)}"></i>${esc(s.name)}</span>`).join("");
     $("trend-chips").innerHTML=first>range.start?`<span class="chip">data since ${timeLabel(first,range)}</span>`:"";
     // Runs of at least three empty buckets inside the data span are marked as gaps.
     const gaps=[];let run=null;
@@ -270,7 +270,7 @@
       xAxis:{type:"time",min:(first-range.step/2)*1000,max:range.end*1000,axisLabel:{hideOverlap:true,...(range.step<86400?{rich:{day:{fontWeight:"bold"}},formatter:v=>{const d=new Date(v);return d.getHours()||d.getMinutes()?`${two(d.getHours())}:${two(d.getMinutes())}`:`{day|${two(d.getDate())}.${two(d.getMonth()+1)}}`;}}:{})}},
       yAxis:{type:"value",axisLabel:{formatter:fmtShort}},
       // Stacks on a time axis need identical x values in every series, so all are aligned to the buckets.
-      series:visible.map((s,i)=>AIUsage.bar(s.name,(m=>times.filter(t=>t>=first).map(t=>[t*1000,m.get(t)||0]))(new Map(s.points)),s.name,{
+      series:visible.map((s,i)=>AIUsage.bar(s.name,(m=>times.filter(t=>t>=first).map(t=>[t*1000,m.get(t)||0]))(new Map(s.points)),s.key||s.name,{
         id:s.name,barMaxWidth:28,...(s.color?{itemStyle:{color:s.color}}:{}),
         markPoint:i===visible.length-1&&peak[1]>0?{...AIUsage.peak(()=>`peak ${timeLabel(peak[0],range)}  ${fmtShort(peak[1])}`),data:[{coord:[peak[0]*1000,peak[1]]}]}:undefined,
         markArea:i===0&&gaps.length?{...AIUsage.gaps([]),data:gaps.map(([a,b])=>[{xAxis:(a-range.step/2)*1000,name:`gap ${timeLabel(a,range)}–${timeLabel(b+range.step,range)}`},{xAxis:(b+range.step/2)*1000}])}:undefined,
@@ -279,7 +279,7 @@
   }
   function renderComposition(totals) {
     const v=k=>totals[k]?.value||0,reasoning=totals.reasoning?.value;
-    const rows=[["Cached input",v("cached"),"--tok-cached"],["Uncached input",v("input"),"--tok-uncached"],["Cache write",v("written"),"--codex-lo"],
+    const rows=[["Cached input",v("cached"),"--tok-cached"],["Uncached input",v("input"),"--tok-uncached"],["Cache write",v("written"),"--tok-written"],
       [reasoning==null?"Output":"Output (excl. reasoning)",v("output")-(reasoning||0),"--tok-output"],...(reasoning==null?[]:[["Reasoning",reasoning,"--tok-reasoning"]])];
     const all=rows.reduce((s,r)=>s+r[1],0),shown=rows.filter(r=>r[1]>0);
     const ratio=v("output")?Math.round(v("cached")/v("output")):null;
@@ -301,7 +301,7 @@
     const max=Math.max(...active.map(r=>r.cost||0),0);
     $("models").hidden=!active.length;
     $("models").innerHTML=`<div><h2>Cost by model</h2><div class="sub">${active.length} of ${rows.length} models active in this range</div></div>
-      <div class="bars">${active.map(r=>{const key=`${agents[r.agent]} · ${r.model}`,color=AIUsage.colorFor(key);return `<div class="model"><div class="head"><span class="name"><i class="sw" style="background:${color}"></i>${esc(r.model)} <span class="faint">${agents[r.agent]}</span></span><span class="cost" title="${r.cost==null?"":F.cost(r.cost,true)}">${r.cost==null?"—":F.cost(r.cost)}</span></div>
+      <div class="bars">${active.map(r=>{const key=`${agents[r.agent]} · ${r.model}`,color=AIUsage.colorFor(key);return `<div class="model"><div class="head"><span class="name"><i class="sw" style="background:${color}"></i>${esc(r.model)}</span><span class="cost" title="${r.cost==null?"":F.cost(r.cost,true)}">${r.cost==null?"—":F.cost(r.cost)}</span></div>
         <div class="track thick" aria-hidden="true"><span style="width:${max&&r.cost?Math.max(1,r.cost/max*100):0}%;background:${color}"></span></div>
         <div class="meta"><span title="${F.full(r.tokens)}">${F.tokens(r.tokens)} tokens</span>${r.cost&&r.tokens?`<span>${F.cost(r.cost/r.tokens*1e6)} / 1M</span>`:""}${r.agent==="codex"?`<span>${r.cost==null?"no price":"estimated price"}</span>`:""}</div></div>`;}).join("")}
       ${idle.map((r,i)=>`<div class="idle${i?"":" first"}"><span class="name"><i class="sw" style="background:${AIUsage.colorFor(`${agents[r.agent]} · ${r.model}`)}"></i>${esc(r.model)}</span><span class="num">—</span></div>`).join("")}</div>`;
@@ -432,7 +432,7 @@
     list.sort((x,y)=>y.tokens-x.tokens);
     const current=list.find(m=>m.key===modelKey)||list[0],pick=$("model-pick");
     if(list.length&&JSON.stringify([...pick.options].map(o=>o.value))!==JSON.stringify(list.map(m=>m.key)))
-      pick.replaceChildren(...list.map(m=>{const o=el("option","",`${m.model||"?"} · ${agents[m.agent]}`);o.value=m.key;return o;}));
+      pick.replaceChildren(...list.map(m=>{const o=el("option","",m.model||"?");o.value=m.key;return o;}));
     if(current)pick.value=current.key;
     // The table/export spec is built before the frame so a table view and Copy all stay current.
     if(current){
@@ -468,11 +468,11 @@
   }
   function renderModelHit(){
     const v=modelViews.hit,rows=[];
-    for(const a of chosen()){const d=reported(a,"tokens");if(d)for(const m of d.details.modelCacheHit||[])rows.push({...m,name:`${agents[a]} · ${m.label||"?"}`,d});}
+    for(const a of chosen()){const d=reported(a,"tokens");if(d)for(const m of d.details.modelCacheHit||[])rows.push({...m,name:m.label||"?",colorKey:`${agents[a]} · ${m.label||"?"}`,d});}
     rows.sort((x,y)=>(y.input+y.cached+y.written)-(x.input+x.cached+x.written));
     v.spec=null;
     if(rows.length)v.spec={title:"Cache hit by model",unit:"ratio",export:{formula:"cached_input / (uncached_input + cached_input + cache_write)"},
-      series:rows.map(r=>({id:r.name,label:r.name,points:r.points,dataset:r.d.id,export:{overall:r.hit,uncached_input:r.input,cached_input:r.cached,cache_write:r.written}}))};
+      series:rows.map(r=>({id:r.name,label:r.name,colorKey:r.colorKey,points:r.points,dataset:r.d.id,export:{overall:r.hit,uncached_input:r.input,cached_input:r.cached,cache_write:r.written}}))};
     const spec=v.spec;
     if(!viewFrame(v,rows.length>0))return;
     const range=rows[0].d.range,first=Math.min(...rows.flatMap(r=>r.points.map(([t])=>t))),times=buckets(range).filter(t=>t>=first);
@@ -495,7 +495,7 @@
       }},
       xAxis:{type:"time",min:(times[0]-range.step/2)*1000,max:range.end*1000,axisLabel:{hideOverlap:true}},
       yAxis:{type:"value",min:0,max:100,interval:25,axisLabel:{formatter:v=>`${v}%`}},
-      series:spec.series.map(s=>{const m=new Map(s.points),color=AIUsage.colorFor(s.label);
+      series:spec.series.map(s=>{const m=new Map(s.points),color=AIUsage.colorFor(s.colorKey);
         return {id:s.id,name:s.label,type:"line",smooth:false,symbol:"circle",symbolSize:4,connectNulls:false,itemStyle:{color},lineStyle:{color},data:times.map(t=>[t*1000,m.has(t)?m.get(t)*100:null])};}),
     },{replaceMerge:["series"]});
   }

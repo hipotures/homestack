@@ -33,15 +33,17 @@
   --claude-hi:     #f0a084;
   --claude-lo:     #b8664c;
 
-  /* models = shades of their agent's hue */
-  --m-gpt-6-1-sol:      var(--codex);
-  --m-claude-opus-5-5:  var(--claude);
-  --m-claude-haiku-5-5: #f0b9a3;
-  --m-claude-sonnet-5-5:var(--claude-lo);
+  /* models = clearly separated tones within their agent's hue family */
+  --m-gpt-6-1-sol:      #1fae85;
+  --m-gpt-5-6-luna:     #8ee0c4;
+  --m-claude-opus-5-5:  #e0703f;
+  --m-claude-haiku-5-5: #f0b08a;
+  --m-claude-sonnet-5-5:#8f3f24;
 
   /* token kinds */
   --tok-cached:    var(--codex);
   --tok-uncached:  #7cc8b3;
+  --tok-written:   var(--codex-lo);
   --tok-output:    #6b7380;
   --tok-reasoning: #a593f0;
 
@@ -81,7 +83,6 @@
     --text: #14171c; --text-2: #3a414b; --muted: #5b6470; --faint: #737b87;
     --codex: #14936f; --codex-hi: #0f7a5c; --codex-lo: #7fd0b6;
     --claude: #c96442; --claude-hi: #a84f31; --claude-lo: #e8a58c;
-    --m-claude-haiku-5-5: #e8a58c;
     --tok-uncached: #5fb39b; --tok-output: #9aa2ad; --tok-reasoning: #7a63d9;
     --warn: #a87a12; --alert-bg: rgba(201, 100, 66, 0.08);
     color-scheme: light;
@@ -95,7 +96,6 @@
   --text: #14171c; --text-2: #3a414b; --muted: #5b6470; --faint: #737b87;
   --codex: #14936f; --codex-hi: #0f7a5c; --codex-lo: #7fd0b6;
   --claude: #c96442; --claude-hi: #a84f31; --claude-lo: #e8a58c;
-  --m-claude-haiku-5-5: #e8a58c;
   --tok-uncached: #5fb39b; --tok-output: #9aa2ad; --tok-reasoning: #7a63d9;
   --warn: #a87a12; --alert-bg: rgba(201, 100, 66, 0.08);
   color-scheme: light;
@@ -165,3 +165,7 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--codex); outline
   .seg.scroll::-webkit-scrollbar { display: none; }
   .kpi-value { font-size: 36px; }
 }
+
+/* Token kinds follow the selected agent's hue; "all" keeps the defaults. */
+:root[data-agent="claude"] { --tok-cached: #e0703f; --tok-uncached: #f0b08a; --tok-written: #8f3f24; }
+:root[data-agent="codex"] { --tok-cached: #1fae85; --tok-uncached: #8ee0c4; --tok-written: #0e5c45; }

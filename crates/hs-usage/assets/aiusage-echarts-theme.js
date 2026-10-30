@@ -30,6 +30,7 @@
   const AGENT_VAR = { codex: '--codex', 'claude code': '--claude', claude: '--claude' };
   const MODEL_VAR = {
     'gpt-6.1-sol': '--m-gpt-6-1-sol',
+    'gpt-5.6-luna': '--m-gpt-5-6-luna',
     'claude-opus-5-5': '--m-claude-opus-5-5',
     'claude-haiku-5-5': '--m-claude-haiku-5-5',
     'claude-sonnet-5-5': '--m-claude-sonnet-5-5',
