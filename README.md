@@ -276,7 +276,7 @@ homestack setup hermes env=bash app=codex --yes --non-interactive --json
   ```
 
 - For SSH and boot-time Remote Control telemetry, see [AI telemetry attribution](docs/ai-telemetry.md).
-  Two native agent configurations and one `/etc/rc.local` boot script supply telemetry.
+  Two native agent configurations and one automatically selected boot script supply telemetry.
   Prometheus must also promote the server and project resource attributes.
 
 - Select comma-separated 1-based indices or stable IDs. `0` or `all` selects the entire explicitly named category.

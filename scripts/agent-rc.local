@@ -345,9 +345,27 @@ def start_account(account):
 
 
 def main():
+    # systemd invokes generators with three output directories. Generation must
+    # only write there; agent/config work happens later in the generated service.
+    if len(sys.argv) == 4 and all(Path(arg).is_absolute() for arg in sys.argv[1:]):
+        output = Path(sys.argv[1])
+        output.mkdir(parents=True, exist_ok=True)
+        name = "homestack-agents.service"
+        (output / name).write_text(
+            "[Unit]\nDescription=HomeStack agent telemetry and Remote Control\nAfter=network.target\n\n"
+            "[Service]\nType=oneshot\nRemainAfterExit=yes\n"
+            "ExecStart=/usr/bin/python3 /etc/systemd/system-generators/homestack-agents --start\n"
+            "TimeoutStartSec=5min\n"
+        )
+        wants = output / "multi-user.target.wants"
+        wants.mkdir(exist_ok=True)
+        link = wants / name
+        if not link.is_symlink():
+            link.symlink_to("../" + name)
+        return
     if os.geteuid() != 0:
-        sys.exit("Install as executable /etc/rc.local; startup requires root to select account owners.")
-    # rc-local.service retains these children in its cgroup after this exits.
+        sys.exit("Install the boot script with the packaged installer; startup requires root.")
+    # The boot service retains these children in its cgroup after this exits.
     for account in pwd.getpwall():
         home = Path(account.pw_dir)
         if not home.is_absolute() or account.pw_shell.endswith(("/nologin", "/false")):

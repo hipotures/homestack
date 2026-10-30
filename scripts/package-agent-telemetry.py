@@ -20,7 +20,7 @@ shutil.copy2(root / 'scripts/install-agent-telemetry.py', package / 'install')
 shutil.copy2(root / 'scripts/agent-rc.local', package / 'rc.local')
 (package / 'README.txt').write_text('''HomeStack agent telemetry installer
 
-Requires Linux, Python 3.11+, Git, systemd rc-local support and sudo.
+Requires Linux, Python 3.11+, Git, systemd and sudo.
 Install/sign in to Codex and Claude Code separately; this package contains no credentials.
 Run as the account that owns the agent configurations, without sudo:
 
@@ -30,7 +30,10 @@ Run as the account that owns the agent configurations, without sudo:
 Optional Collector base URL:
   ./install --collector-url http://otel.homestack.app:4318
 
-The installer requests sudo only for /etc/rc.local. Existing agent configurations
+The installer detects rc-local support automatically. It installs /etc/rc.local
+when supported, otherwise /etc/systemd/system-generators/homestack-agents.
+The generator creates service definitions only under /run at boot.
+The installer requests sudo only for the system startup script. Existing agent configurations
 are backed up beside the originals as .bak.TIMESTAMP, with private permissions.
 TOML comments and unrelated settings are preserved. Claude JSON formatting is
 normalized; unrelated values are preserved. OTEL HTTP exporter destinations are
@@ -45,7 +48,7 @@ hostname. This installer does not fix Herdr session restoration.
 
 The package bundles tomlkit 0.13.3 with its license. No network access, pip,
 uv, virtual environment or extra dependency installation is required on targets.
-Operational configuration remains two native agent configs and /etc/rc.local;
+Operational configuration remains two native agent configs and one startup script;
 timestamped backups are intentionally retained.
 ''')
 output = root / 'tmp/homestack-agent-telemetry.tar.gz'

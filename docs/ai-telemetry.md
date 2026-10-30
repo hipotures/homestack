@@ -5,7 +5,9 @@ The setup has exactly three persistent configuration/startup files:
 1. `~/.claude/settings.json`: Claude Code exporters, machine identity,
    cumulative metrics and native repository attribution.
 2. `~/.codex/config.toml`: Codex log and metric exporters.
-3. `/etc/rc.local`: the single boot script, running both agents as their owner.
+3. One boot script, running agents as their owner: `/etc/rc.local` when the
+   system provides rc-local support, otherwise
+   `/etc/systemd/system-generators/homestack-agents`.
 
 There are no agent wrappers, PATH changes, shell-profile dependencies, user
 service files or extra environment files. Native agent binaries, authentication
@@ -30,13 +32,15 @@ cd homestack-agent-telemetry
 ./install
 ```
 
-The installer requests sudo for installing `/etc/rc.local`. Use
+The installer automatically selects rc.local or a systemd generator and requests
+sudo to install that single startup script. Use
 `--collector-url http://otel.homestack.app:4318` to select the Collector.
 It validates both configurations before writing, preserves unrelated TOML
 settings/comments and JSON values, and creates private timestamped backups
 beside both existing configs before modifying either. Missing configs are
 created. Existing HomeStack `rc.local` is also backed up; an unrelated startup
-script is refused. Existing HTTP exporter headers/TLS are preserved for the
+script is refused. If switching methods, an older HomeStack startup script is
+backed up and removed so both methods cannot run concurrently. Existing HTTP exporter headers/TLS are preserved for the
 same Collector; credentials are not silently transferred to another destination.
 No agents are restarted. Reboot when ready. Agent authentication, workspace
 trust and Herdr integration are not installed or repaired by this package.
@@ -45,7 +49,8 @@ trust and Herdr integration are not installed or repaired by this package.
 
 The startup script source is `scripts/agent-rc.local`. The same file is used
 on every server: no account name, hostname or project path is embedded in it.
-Install it as root after preparing the two native agent configurations:
+Use the packaged installer above for automatic backend selection. Only on a
+machine already providing rc-local support, manual installation is:
 
 ```bash
 sudo install -o root -g root -m 0755 scripts/agent-rc.local /etc/rc.local
@@ -53,8 +58,12 @@ sudo install -o root -g root -m 0755 scripts/agent-rc.local /etc/rc.local
 
 The script requires Python 3.11 or later and Git. It uses only the Python
 standard library. Review an existing `/etc/rc.local` before replacing it.
-The distribution's existing `rc-local.service` and `systemd-rc-local-generator`
-automatically run the executable script at boot; no additional service file
+On systems providing rc-local support, the existing `rc-local.service` runs it.
+Otherwise, the installer places the same executable in the system generator
+directory. At boot systemd calls it with runtime output directories; it writes
+a generated `homestack-agents.service` and target dependency there, under `/run`.
+That service calls the script with `--start`. Generator execution never starts
+agents or edits their configurations. No additional persistent service file
 or enablement symlink is installed. Installing the script does not restart
 running agents. Reboot after replacing an older version.
 
@@ -134,8 +143,8 @@ selects JSON transport and supplies runtime identity automatically.
 After reboot, inspect:
 
 ```bash
-systemctl status rc-local.service
-journalctl -b -u rc-local.service
+systemctl status rc-local.service homestack-agents.service
+journalctl -b -u rc-local.service -u homestack-agents.service
 codex app-server daemon version
 ```
 

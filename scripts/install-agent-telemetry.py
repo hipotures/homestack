@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install native agent telemetry settings and the single rc.local boot script."""
+"""Install native agent telemetry settings and one auto-detected boot script."""
 import argparse
 from datetime import datetime
 import json
@@ -48,8 +48,15 @@ def main():
         parser.error('Python 3.11 or later is required')
     if not shutil.which('git'):
         parser.error('Install Git first')
-    if not any(Path(p).is_file() for p in ('/usr/lib/systemd/system/rc-local.service', '/lib/systemd/system/rc-local.service')):
-        parser.error('This machine does not provide systemd rc-local.service')
+    if not shutil.which('systemctl'):
+        parser.error('This installer requires systemd')
+    rc_support = any(Path(p).is_file() for p in (
+        '/etc/systemd/system/rc-local.service', '/usr/lib/systemd/system/rc-local.service',
+        '/lib/systemd/system/rc-local.service'))
+    rc_path = Path('/etc/rc.local')
+    generator_path = Path('/etc/systemd/system-generators/homestack-agents')
+    installed = rc_path if rc_support else generator_path
+    alternative = generator_path if rc_support else rc_path
     root = Path(__file__).resolve().parent
     sys.path.insert(0, str(root / 'vendor'))
     try:
@@ -112,16 +119,18 @@ def main():
         'OTEL_METRICS_INCLUDE_REPOSITORY': '1',
     })
     new_claude = json.dumps(claude, indent=2, ensure_ascii=False) + '\n'
-    installed = Path('/etc/rc.local')
     if installed.exists() and installed.read_bytes() != boot.read_bytes():
         if b'Boot configured agents using native accounts, configs and workspace trust.' not in installed.read_bytes():
-            parser.error('/etc/rc.local already contains a different startup script; refusing to overwrite it')
+            parser.error(f'{installed} already contains a different startup script; refusing to overwrite it')
+    remove_alternative = (alternative.exists() and
+        b'Boot configured agents using native accounts, configs and workspace trust.' in alternative.read_bytes())
     for path in (codex_path, claude_path):
         if path.exists() and path.stat().st_uid != os.getuid():
             parser.error(f'{path} is owned by another account; run as its owner')
     print(f'Agent account: {__import__("pwd").getpwuid(os.getuid()).pw_name} ({home})')
     print(f'Collector: {endpoint}')
-    print(f'Will merge telemetry into {codex_path} and {claude_path}; install /etc/rc.local.')
+    print(f'Autostart: {"rc.local" if rc_support else "systemd generator"} ({installed})')
+    print(f'Will merge telemetry into {codex_path} and {claude_path}; install {installed}.')
     if args.dry_run:
         print('Dry run: configuration syntax valid; no files changed.')
         return
@@ -133,14 +142,17 @@ def main():
     for path, saved in backups.items():
         print(f'Backup: {saved}' if saved else f'New configuration: {path}')
     # Only this explicitly privileged stage writes outside the caller's home.
-    if installed.exists():
-        saved = '/etc/rc.local.bak.' + stamp
-        subprocess.run(sudo + ['install', '-o', 'root', '-g', 'root', '-m', '0600', '/etc/rc.local', saved], check=True)
-        print(f'Boot script backup: {saved}')
+    for original in [installed] + ([alternative] if remove_alternative else []):
+        if original.exists():
+            saved = str(original) + '.bak.' + stamp
+            subprocess.run(sudo + ['install', '-o', 'root', '-g', 'root', '-m', '0600', str(original), saved], check=True)
+            print(f'Boot script backup: {saved}')
     try:
         atomic_write(codex_path, new_codex)
         atomic_write(claude_path, new_claude)
-        subprocess.run(sudo + ['install', '-o', 'root', '-g', 'root', '-m', '0755', str(boot), '/etc/rc.local'], check=True)
+        subprocess.run(sudo + ['install', '-D', '-o', 'root', '-g', 'root', '-m', '0755', str(boot), str(installed)], check=True)
+        if remove_alternative:
+            subprocess.run(sudo + ['rm', '--', str(alternative)], check=True)
     except Exception:
         for path, saved in backups.items():
             if saved:
