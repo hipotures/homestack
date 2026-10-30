@@ -11,6 +11,36 @@ There are no agent wrappers, PATH changes, shell-profile dependencies, user
 service files or extra environment files. Native agent binaries, authentication
 and application state remain managed by the agents themselves.
 
+## Standalone installation package
+
+Build `tmp/homestack-agent-telemetry.tar.gz` with:
+
+```bash
+python3 scripts/package-agent-telemetry.py
+```
+
+Building requires `uv` and downloads the pinned, bundled `tomlkit` library.
+Target servers need no package download, pip or virtual environment. Extract
+and run as the account owning the agent configurations (do not prefix with sudo):
+
+```bash
+tar -xzf homestack-agent-telemetry.tar.gz
+cd homestack-agent-telemetry
+./install --dry-run
+./install
+```
+
+The installer requests sudo for installing `/etc/rc.local`. Use
+`--collector-url http://otel.homestack.app:4318` to select the Collector.
+It validates both configurations before writing, preserves unrelated TOML
+settings/comments and JSON values, and creates private timestamped backups
+beside both existing configs before modifying either. Missing configs are
+created. Existing HomeStack `rc.local` is also backed up; an unrelated startup
+script is refused. Existing HTTP exporter headers/TLS are preserved for the
+same Collector; credentials are not silently transferred to another destination.
+No agents are restarted. Reboot when ready. Agent authentication, workspace
+trust and Herdr integration are not installed or repaired by this package.
+
 ## Boot and SSH
 
 The startup script source is `scripts/agent-rc.local`. The same file is used
