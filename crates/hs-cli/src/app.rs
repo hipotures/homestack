@@ -192,8 +192,8 @@ fn help(config: &Path) -> String {
             "Check the HomeStack server instances and the configured Proxmox node.",
         ),
         (
-            "homestack update [SERVICE ...] [-y]",
-            "Update HomeStack's services (all by default) to their newest releases; asks which, -y takes all.",
+            "homestack update [SERVICE ...] [-y] [--auto]",
+            "Update HomeStack's services (all by default) to their newest releases; asks which, -y takes all. --auto waits for images still being built and applies each newest one as it is published.",
         ),
     ];
     let options: &[(&str, &str)] = &[
@@ -297,10 +297,10 @@ async fn execute(args: &Args, ctx: &mut Context, running: &Running) -> Result<Co
         }
         return Ok(0);
     }
-    if let Command::Update { services } = &args.command {
+    if let Command::Update { services, auto } = &args.command {
         // The deploy token updates the containers; no API is needed.
         let say = |line: &str| println!("{line}");
-        crate::services::homestack_update::run(&path.with_file_name("deploy.toml"), services, args.yes, &say)
+        crate::services::homestack_update::run(&path.with_file_name("deploy.toml"), services, args.yes, *auto, &say)
             .await
             .map_err(AppError::new)?;
         return Ok(0);

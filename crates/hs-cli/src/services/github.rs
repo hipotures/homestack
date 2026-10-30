@@ -95,6 +95,13 @@ fn text<'a>(value: &'a Value, pointer: &str) -> Result<&'a str, String> {
         .ok_or_else(|| "GitHub API returned an unexpected response".to_owned())
 }
 
+/// The publication of a release tag that is not yet in the registry.
+pub struct Publication {
+    pub text: String,
+    /// Still on its way to the registry; false once the workflow has failed.
+    pub building: bool,
+}
+
 /// A newer HomeStack image release that has a Git tag but is not yet in
 /// the registry. Publication status is advisory; only registry images can
 /// be deployed. This reads the latest attempt, including workflow reruns.
@@ -103,7 +110,7 @@ pub fn image_publication(
     repository: &str,
     service: &str,
     published: Option<&str>,
-) -> Result<Option<String>, String> {
+) -> Result<Option<Publication>, String> {
     let prefix = match service {
         "homestack-api" => "",
         "pangolin" => "pangolin-",
@@ -148,9 +155,12 @@ pub fn image_publication(
         .as_array()
         .ok_or("GitHub returned invalid workflow runs")?;
     let Some(run) = runs.first() else {
-        return Ok(Some(format!(
-            "release {release}: publication workflow has not started; https://github.com/{repository}/actions"
-        )));
+        return Ok(Some(Publication {
+            text: format!(
+                "release {release}: publication workflow has not started; https://github.com/{repository}/actions"
+            ),
+            building: true,
+        }));
     };
     let id = run["id"].as_u64().ok_or("GitHub returned an invalid workflow run ID")?;
     let jobs = get(
@@ -161,8 +171,10 @@ pub fn image_publication(
     Ok(Some(publication_status(release, run, &jobs)?))
 }
 
-fn publication_status(release: &str, run: &Value, jobs: &Value) -> Result<String, String> {
+fn publication_status(release: &str, run: &Value, jobs: &Value) -> Result<Publication, String> {
     let status = text(run, "/status")?;
+    // A successful workflow's image is about to appear in the registry.
+    let building = status != "completed" || text(run, "/conclusion")? == "success";
     let state = if status == "completed" {
         match text(run, "/conclusion")? {
             "success" => "workflow succeeded; image not yet available in registry",
@@ -208,10 +220,10 @@ fn publication_status(release: &str, run: &Value, jobs: &Value) -> Result<String
     } else {
         format!(" ({detail})")
     };
-    Ok(format!(
-        "release {release}: {state}{detail}; {}",
-        text(run, "/html_url")?
-    ))
+    Ok(Publication {
+        text: format!("release {release}: {state}{detail}; {}", text(run, "/html_url")?),
+        building,
+    })
 }
 
 /// The manifests of `repository` at the head of `branch` (its default

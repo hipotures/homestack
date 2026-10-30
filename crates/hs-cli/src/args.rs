@@ -77,9 +77,11 @@ pub enum Command {
     },
     Transport,
     /// Update the containers of HomeStack's services, every one when
-    /// `services` is empty, to their newest releases.
+    /// `services` is empty, to their newest releases; `auto` waits for
+    /// images still being published and applies each as it arrives.
     Update {
         services: Vec<String>,
+        auto: bool,
     },
 }
 
@@ -164,7 +166,7 @@ fn usage_of(command: &str) -> String {
         "setup" => "[--local] [--json] [-y] [--catalog CATALOG] [--dry-run] [--non-interactive] [target] [SELECTORS]",
         "repo" => "TARGET [REPOSITORY] [--json]",
         "status" => "[TARGET] [--json]",
-        "update" => "[SERVICE ...] [-y]",
+        "update" => "[SERVICE ...] [-y] [--auto]",
         _ => "[--json]",
     };
     format!("usage: homestack {command} {rest}")
@@ -540,9 +542,10 @@ pub fn parse(argv: &[String]) -> Result<Args, UsageError> {
             (words, Command::Status { target })
         }
         "update" => {
-            let words = words(name, rest, &[], &["--yes", "--help"])?;
+            let words = words(name, rest, &[], &["--yes", "--auto", "--help"])?;
             let services = words.positionals.clone();
-            (words, Command::Update { services })
+            let auto = words.flag("--auto");
+            (words, Command::Update { services, auto })
         }
         other => {
             return Err(error(
