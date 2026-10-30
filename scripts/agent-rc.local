@@ -327,7 +327,7 @@ def start_account(account):
                 time.sleep(15)
             os._exit(0)
         workers.append("codex")
-    if claude and settings.get("remoteControlAtStartup") is True:
+    if claude:
         projects = read_json(home / ".claude.json").get("projects", {})
         if directory and any(Path(p).resolve() == directory and state.get("hasTrustDialogAccepted")
                              for p, state in projects.items()):

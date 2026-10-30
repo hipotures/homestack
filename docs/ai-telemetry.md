@@ -3,7 +3,7 @@
 The setup has exactly three persistent configuration/startup files:
 
 1. `~/.claude/settings.json`: Claude Code exporters, machine identity,
-   cumulative metrics, native repository attribution and interactive Remote Control.
+   cumulative metrics and native repository attribution.
 2. `~/.codex/config.toml`: Codex log and metric exporters.
 3. `/etc/rc.local`: the single boot script, running both agents as their owner.
 
@@ -46,7 +46,11 @@ Codex can still start its shared daemon in the account's home directory.
 
 Codex's native daemon/updater manages process recovery and updates. The startup
 script retries initial Codex startup and restarts Claude's Remote Control server
-if it exits. The two agents start independently. Interactive SSH sessions use
+if it exits. The two agents start independently. Interactive Claude sessions must
+not enable Remote Control at startup: a session restored before the boot script
+runs, for example by a lingering terminal multiplexer, would otherwise claim the
+repository and block the server. Enable it manually with `/remote-control` when
+needed. Interactive SSH sessions use
 the original agent binaries with their native configurations, without wrappers,
 PATH edits or `--no-daemon` overrides.
 
@@ -94,7 +98,7 @@ The two configurations should initially enable OTLP HTTP log and metric export
 to the same Collector, using explicit `/v1/logs` and `/v1/metrics` endpoints.
 For Claude also set `CLAUDE_CODE_ENABLE_TELEMETRY=1`,
 `OTEL_METRICS_INCLUDE_REPOSITORY=1`, cumulative temporality and
-`remoteControlAtStartup=true`. Keep Codex `log_user_prompt=false`. The boot script
+`remoteControlAtStartup=false`. Keep Codex `log_user_prompt=false`. The boot script
 selects JSON transport and supplies runtime identity automatically.
 
 After reboot, inspect:
