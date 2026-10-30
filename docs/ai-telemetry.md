@@ -13,64 +13,91 @@ and application state remain managed by the agents themselves.
 
 ## Boot and SSH
 
-The startup script source is `scripts/agent-rc.local`. Set `account` and
-`project_directory` in that script for the target machine. Install it as root:
+The startup script source is `scripts/agent-rc.local`. The same file is used
+on every server: no account name, hostname or project path is embedded in it.
+Install it as root after preparing the two native agent configurations:
 
 ```bash
 sudo install -o root -g root -m 0755 scripts/agent-rc.local /etc/rc.local
 ```
 
-Do not overwrite an existing `/etc/rc.local` without reviewing its contents.
-On this server the file did not previously exist. The distribution already
-provides `rc-local.service` and `systemd-rc-local-generator`; an executable
-`/etc/rc.local` is automatically pulled into boot. No additional service file
-or enablement symlink is required. Installing the file does not restart running
-agents; it takes effect at the next boot.
+The script requires Python 3.11 or later and Git. It uses only the Python
+standard library. Review an existing `/etc/rc.local` before replacing it.
+The distribution's existing `rc-local.service` and `systemd-rc-local-generator`
+automatically run the executable script at boot; no additional service file
+or enablement symlink is installed. Installing the script does not restart
+running agents. Reboot after replacing an older version.
 
-The script drops privileges to the account owning both agent logins and starts
-Codex's native managed Remote Control daemon, followed by Claude's Remote
-Control server in the configured repository. It retries failed network-dependent
-startup and restarts Claude if it exits. Codex's own updater manages its daemon.
-The script supplies Codex's cumulative temporality, hostname and a unique
-instance for the boot supervisor's lifetime. No fixed project is assigned to
-Codex's shared server. SSH clients use the original `codex` binary and join it
-normally, without a forced `--no-daemon`.
+### Account and startup project discovery
 
-Claude settings must include these values in their existing `env` object
-(replace `VM-HOSTNAME` with the actual hostname, not a shell expression):
+The script discovers login accounts with native Claude or Codex configuration,
+drops privileges to each account before reading or changing its configuration,
+and runs only its configured agents. It resolves the actual machine hostname
+at every boot, including when a configuration was copied from another server.
 
-```json
-{
-  "remoteControlAtStartup": true,
-  "env": {
-    "CLAUDE_CODE_ENABLE_TELEMETRY": "1",
-    "OTEL_METRICS_EXPORTER": "otlp",
-    "OTEL_LOGS_EXPORTER": "otlp",
-    "OTEL_EXPORTER_OTLP_PROTOCOL": "http/protobuf",
-    "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT": "http://otel.homestack.app:4318/v1/metrics",
-    "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT": "http://otel.homestack.app:4318/v1/logs",
-    "OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE": "cumulative",
-    "OTEL_METRICS_INCLUDE_REPOSITORY": "1",
-    "OTEL_RESOURCE_ATTRIBUTES": "host.name=VM-HOSTNAME"
-  }
-}
-```
+The default project is the hostname. A main repository has the same directory
+name as the server and must already be listed as trusted in native agent state.
+The script finds it through Claude's existing `.claude.json` or the native
+Codex `projects` configuration. It does not create another workspace registry
+or trust a directory on the user's behalf. Claude additionally requires its own
+workspace trust and prior Remote Control consent. If no trusted main repository
+exists, the script reports this instead of starting Claude in an arbitrary folder;
+Codex can still start its shared daemon in the account's home directory.
 
-These native settings apply to both Remote Control workers and interactive SSH
-sessions. Claude uses `session.id` to distinguish simultaneous sessions. Native
-repository identity comes from `origin`, not from the local directory name;
-repositories without a supported `origin` have no repository attribution.
-The Collector must map `vcs.repository.name` to the dashboard's `project`
-resource attribute; the published `otel-0.1.11` image includes this mapping.
-A running older image needs a separate deployment before that filter works.
+Codex's native daemon/updater manages process recovery and updates. The startup
+script retries initial Codex startup and restarts Claude's Remote Control server
+if it exits. The two agents start independently. Interactive SSH sessions use
+the original agent binaries with their native configurations, without wrappers,
+PATH edits or `--no-daemon` overrides.
 
-A shared Codex server's resource is process-wide and therefore carries no
-project. Per-session project attribution requires upstream telemetry support
-or separate enrichment. A native internal daemon restart can reset counters
-within the boot instance; simultaneous independent Codex backends need their
-own runtime identity and are outside this shared-server setup.
+### Per-session project attribution
 
-After reboot, inspect the boot script and native daemon:
+A local OTLP/HTTP JSON receiver runs inside the **same startup script**. It
+listens only on loopback, separately for each account. At boot the script updates
+the two native exporter configurations to use that receiver and refreshes
+`host.name`. It preserves the Collector destinations inside the same two configs:
+Claude uses `HOMESTACK_OTEL_METRICS_UPSTREAM` and `HOMESTACK_OTEL_LOGS_UPSTREAM` in
+its existing `env` object; Codex retains its metrics destination in the native
+exporter's `X-Homestack-Upstream` header. That internal header is stripped before
+forwarding. No fourth configuration file or separate receiver service is needed.
+The allocated loopback port is retained in the native configs for subsequent boots.
+To change the Collector, replace the relevant native endpoint with its new remote
+URL; the next boot records it and rewrites the local route.
+
+Attribution follows two rules:
+
+- Startup and measurements without session/repository metadata use the machine's
+  hostname as both server and default project.
+- A session working in another repository uses that repository's name as project,
+  while the server remains the actual hostname.
+
+Codex records `conversation.id` in detailed telemetry and a working directory in
+its native SQLite thread metadata. The receiver reads that metadata **read-only**,
+resolves the Git repository and assigns the project separately to each log or
+metric datapoint carrying a thread ID. It does not relabel every session on the
+shared daemon when one client enters another repository. Claude's native
+repository attributes and session transcript metadata provide the same
+attribution for its logs and metrics. Git common-directory resolution keeps a
+linked worktree associated with the main repository. A mixed batch is split
+into separate resource groups; Claude datapoint labels are updated as well so
+an old process-wide project cannot override the resolved project in Prometheus.
+
+Measurements with no session metadata cannot be attributed to one repository;
+those process-wide counters retain the default project. Missing native session
+metadata or a working directory outside Git also retains the hostname default.
+The receiver reports forwarding/lookup failures with retryable HTTP errors,
+rather than claiming delivery. It adds no durable queue; the existing native
+exporter retries and Collector queue still define delivery guarantees. Agent
+metadata is read without copying or migrating SQLite databases.
+
+The two configurations should initially enable OTLP HTTP log and metric export
+to the same Collector, using explicit `/v1/logs` and `/v1/metrics` endpoints.
+For Claude also set `CLAUDE_CODE_ENABLE_TELEMETRY=1`,
+`OTEL_METRICS_INCLUDE_REPOSITORY=1`, cumulative temporality and
+`remoteControlAtStartup=true`. Keep Codex `log_user_prompt=false`. The boot script
+selects JSON transport and supplies runtime identity automatically.
+
+After reboot, inspect:
 
 ```bash
 systemctl status rc-local.service
@@ -78,11 +105,11 @@ journalctl -b -u rc-local.service
 codex app-server daemon version
 ```
 
-Complete one response in SSH and Remote Control for each agent, then inspect
-new Prometheus samples. A running service alone does not prove token delivery
-or dashboard attribution. Run `codex remote-control pair` for a manual pairing
-code. Claude must already be logged in and trust the startup directory; its
-Remote Control consent must have been accepted interactively once.
+Complete responses in the main repository and a second repository, then inspect
+new Prometheus samples. Main-project samples should have equal `host_name` and
+`project`; second-repository samples should retain that host and carry the other
+project. An active service alone does not prove token delivery or dashboard
+attribution. Use `codex remote-control pair` for a manual pairing code.
 
 ## Response token export
 

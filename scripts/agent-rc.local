@@ -1,39 +1,367 @@
-#!/usr/bin/env bash
-# Install as executable /etc/rc.local. Agent exporters remain in the account's
-# native Claude Code and Codex configuration files. No shell profiles or
-# additional persistent service files are used.
-set -euo pipefail
+#!/usr/bin/python3
+"""Boot configured agents using native accounts, configs and workspace trust."""
 
-account=user
-project_directory=/home/user/DEV/homestack
+import json
+import copy
+import http.server
+import os
+from pathlib import Path
+import pwd
+import re
+import shutil
+import socket
+import sqlite3
+import subprocess
+import sys
+import time
+import tomllib
+import uuid
+import urllib.parse
+import urllib.request
 
-if ((EUID != 0)); then
-    printf 'Install this boot script as /etc/rc.local and let the server boot it.\n' >&2
-    exit 1
-fi
-account_home=$(getent passwd "$account" | cut -d: -f6)
-[[ -n "$account_home" && -d "$project_directory" ]]
 
-# rc-local.service keeps these children in its cgroup after this script exits.
-# Run under the account owning the agent logins, never under root.
-# shellcheck disable=SC2016
-/usr/sbin/runuser -u "$account" -- /usr/bin/env -i \
-    HOME="$account_home" USER="$account" LOGNAME="$account" \
-    PATH="$account_home/.local/bin:$account_home/.cargo/bin:/usr/local/bin:/usr/bin:/bin" \
-    LANG=C.UTF-8 PROJECT_DIRECTORY="$project_directory" /bin/bash -c '
-    set -u
-    export OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=cumulative
-    IFS= read -r instance < /proc/sys/kernel/random/uuid
-    OTEL_RESOURCE_ATTRIBUTES="host.name=$(hostname),service.instance.id=$instance"
-    export OTEL_RESOURCE_ATTRIBUTES
-    cd "$PROJECT_DIRECTORY" || exit 1
-    # Retry network-dependent startup. Codex owns its managed daemon/updater;
-    # Claude Remote Control remains in the foreground until it stops.
-    while true; do
-        if "$HOME/.local/bin/codex" remote-control start; then
-            "$HOME/.local/bin/claude" remote-control
-        fi
-        sleep 15
-    done
-' &
-exit 0
+def log(message):
+    print(f"agent startup: {message}", flush=True)
+
+
+def read_json(path):
+    return json.loads(path.read_text()) if path.exists() else {}
+
+
+def repository_name(directory):
+    if not Path(directory).is_dir():
+        return None
+    result = subprocess.run(
+        ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
+        cwd=directory, text=True, capture_output=True, timeout=3, check=False,
+    )
+    if result.returncode != 0:
+        return None
+    common = Path(result.stdout.strip())
+    return common.parent.name if common.name == ".git" else common.name
+
+
+def response_project(home, record):
+    """Resolve native thread metadata read-only; no database is copied or changed."""
+    thread = next((a.get("value", {}).get("stringValue") for a in record.get("attributes", [])
+                   if a.get("key") == "conversation.id"), None)
+    if not thread:
+        return socket.gethostname()
+    databases = sorted((p for p in (home / ".codex").glob("state_*.sqlite")
+                        if p.stem.split("_")[-1].isdigit()),
+                       key=lambda p: int(p.stem.split("_")[-1]))
+    if not databases:
+        return socket.gethostname()
+    connection = sqlite3.connect(databases[-1].as_uri() + "?mode=ro", uri=True, timeout=0.2)
+    try:
+        connection.execute("PRAGMA query_only=ON")
+        row = connection.execute("SELECT cwd FROM threads WHERE id = ?", (thread,)).fetchone()
+    finally:
+        connection.close()
+    return repository_name(row[0]) if row else socket.gethostname()
+
+
+def point_project(home, record, agent, cache):
+    if agent == "codex":
+        thread = next((a.get("value", {}).get("stringValue") for a in record.get("attributes", [])
+                       if a.get("key") == "conversation.id"), None)
+        if thread not in cache:
+            cache[thread] = response_project(home, record) or socket.gethostname()
+        return cache[thread]
+    attributes = record.setdefault("attributes", [])
+    project = next((a.get("value", {}).get("stringValue") for a in attributes
+                    if a.get("key") == "vcs.repository.name"), None) or socket.gethostname()
+    session = next((a.get("value", {}).get("stringValue") for a in attributes
+                    if a.get("key") == "session.id"), None)
+    key = (session, project)
+    if key in cache:
+        project = cache[key]
+    elif session and re.fullmatch(r"[A-Za-z0-9_-]{1,100}", session):
+        for transcript in (home / ".claude/projects").glob(f"*/{session}.jsonl"):
+            with transcript.open() as source:
+                for _ in range(64):
+                    line = source.readline(16 * 1024)
+                    if not line:
+                        break
+                    try:
+                        entry = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    cwd = entry.get("cwd")
+                    if isinstance(cwd, str):
+                        detected = repository_name(cwd)
+                        if detected:
+                            project = detected
+                            break
+    cache[key] = project
+    # The resource already carries the resolved project. Remove the native
+    # repository-name input so a downstream mapper cannot relabel it again.
+    record["attributes"] = [a for a in attributes if a.get("key") not in ("project", "vcs.repository.name")]
+    record["attributes"].append({"key": "project", "value": {"stringValue": project}})
+    return project
+
+
+def project_group(source, project, scopes):
+    group = {key: copy.deepcopy(value) for key, value in source.items() if key != scopes}
+    group[scopes] = []
+    resource = group.setdefault("resource", {})
+    resource["attributes"] = [a for a in resource.get("attributes", []) if a.get("key") not in ("project", "host.name")]
+    resource["attributes"].append({"key": "host.name", "value": {"stringValue": socket.gethostname()}})
+    resource["attributes"].append({"key": "project", "value": {"stringValue": project}})
+    return group
+
+
+def enrich_logs(home, payload, agent):
+    groups = []
+    cache = {}
+    for source in payload.get("resourceLogs", []):
+        projects = {}
+        for scope in source.get("scopeLogs", []):
+            records = {}
+            for record in scope.get("logRecords", []):
+                project = point_project(home, record, agent, cache)
+                records.setdefault(project, []).append(record)
+            for project, items in records.items():
+                if project not in projects:
+                    projects[project] = project_group(source, project, "scopeLogs")
+                scoped = dict(scope)
+                scoped["logRecords"] = items
+                projects[project]["scopeLogs"].append(scoped)
+        groups.extend(projects.values())
+    payload["resourceLogs"] = groups
+    return payload
+
+
+def enrich_metrics(home, payload, agent):
+    groups = []
+    cache = {}
+    for source in payload.get("resourceMetrics", []):
+        projects = {}
+        for scope in source.get("scopeMetrics", []):
+            for metric in scope.get("metrics", []):
+                for kind in ("sum", "gauge", "histogram", "exponentialHistogram", "summary"):
+                    if kind not in metric:
+                        continue
+                    points = {}
+                    for point in metric[kind].get("dataPoints", []):
+                        project = point_project(home, point, agent, cache)
+                        points.setdefault(project, []).append(point)
+                    for project, items in points.items():
+                        if project not in projects:
+                            projects[project] = project_group(source, project, "scopeMetrics")
+                        scoped = dict(scope)
+                        instrument = {key: copy.deepcopy(value) for key, value in metric.items() if key != kind}
+                        instrument[kind] = {key: copy.deepcopy(value) for key, value in metric[kind].items()
+                                            if key != "dataPoints"}
+                        instrument[kind]["dataPoints"] = items
+                        scoped["metrics"] = [instrument]
+                        projects[project]["scopeMetrics"].append(scoped)
+        groups.extend(projects.values())
+    payload["resourceMetrics"] = groups
+    return payload
+
+
+def telemetry_relay(home, port, upstreams):
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            if self.path not in upstreams:
+                self.send_error(404)
+                return
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                if not 0 < length <= 20 * 1024 * 1024:
+                    self.send_error(413)
+                    return
+                payload = json.loads(self.rfile.read(length))
+                if self.path.endswith("/logs"):
+                    payload = enrich_logs(home, payload, self.path.split("/")[1])
+                else:
+                    payload = enrich_metrics(home, payload, self.path.split("/")[1])
+                headers = {k: v for k, v in self.headers.items() if k.lower() not in
+                           ("host", "content-length", "content-type", "connection", "accept-encoding", "x-homestack-upstream")}
+                request = urllib.request.Request(
+                    upstreams[self.path], data=json.dumps(payload).encode(),
+                    headers={**headers, "Content-Type": "application/json"}, method="POST",
+                )
+                with urllib.request.urlopen(request, timeout=10) as response:
+                    body = response.read()
+                    self.send_response(response.status)
+                    self.send_header("Content-Type", response.headers.get("Content-Type", "application/json"))
+                    self.end_headers()
+                    self.wfile.write(body)
+            except Exception as error:
+                # Return a retryable failure rather than silently dropping usage.
+                log(f"Telemetry relay: {type(error).__name__}")
+                self.send_error(503)
+
+        def log_message(self, *_):
+            pass
+
+    return http.server.ThreadingHTTPServer(("127.0.0.1", port), Handler)
+
+
+def toml_value(value):
+    if isinstance(value, dict):
+        return "{" + ", ".join(json.dumps(k) + " = " + toml_value(v) for k, v in value.items()) + "}"
+    return json.dumps(value, ensure_ascii=False)
+
+
+def write_otel(config, settings):
+    sections = re.split(r"(?m)(?=^\[)", config.read_text())
+    content = "".join(s for s in sections if not re.match(r"^\[otel(?:\.|\])", s))
+    content = content.rstrip() + "\n\n[otel]\n" + "".join(
+        f"{json.dumps(key)} = {toml_value(value)}\n" for key, value in settings.items()
+    )
+    tomllib.loads(content)
+    config.write_text(content)
+
+
+def main_project(home, codex_settings):
+    projects = read_json(home / ".claude.json").get("projects", {})
+    trusted = {p for p, state in projects.items() if state.get("hasTrustDialogAccepted")}
+    trusted.update(p for p, state in codex_settings.get("projects", {}).items()
+                   if state.get("trust_level") == "trusted")
+    roots = []
+    for directory in sorted(trusted):
+        path = Path(directory)
+        if not path.is_absolute() or path.name != socket.gethostname() or not path.is_dir():
+            continue
+        result = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=path,
+                                text=True, capture_output=True, check=False)
+        if result.returncode == 0 and Path(result.stdout.strip()).resolve() == path.resolve():
+            roots.append(path.resolve())
+    return roots[0] if roots else None
+
+
+def supervise(command, directory):
+    """Retry one native command independently of all other agents."""
+    while True:
+        try:
+            result = subprocess.run(command, cwd=directory, check=False)
+            log(f"{command[0]} exited with {result.returncode}; retrying in 15 seconds")
+        except OSError as error:
+            log(str(error))
+        time.sleep(15)
+
+
+def start_account(account):
+    # Read and modify account-owned data only after dropping privileges.
+    os.initgroups(account.pw_name, account.pw_gid)
+    os.setgid(account.pw_gid)
+    os.setuid(account.pw_uid)
+    home = Path(account.pw_dir)
+    os.environ.clear()
+    os.environ.update(
+        HOME=str(home), USER=account.pw_name, LOGNAME=account.pw_name,
+        PATH=f"{home}/.local/bin:{home}/.cargo/bin:/usr/local/bin:/usr/bin:/bin",
+        LANG="C.UTF-8",
+        OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE="cumulative",
+        OTEL_RESOURCE_ATTRIBUTES=f"host.name={socket.gethostname()},project={socket.gethostname()},service.instance.id={uuid.uuid4()}",
+    )
+    codex = shutil.which("codex")
+    claude = shutil.which("claude")
+    codex_path = home / ".codex/config.toml"
+    claude_path = home / ".claude/settings.json"
+    codex_settings = tomllib.loads(codex_path.read_text()) if codex_path.is_file() else {}
+    settings = read_json(claude_path)
+    env = settings.get("env", {})
+    directory = main_project(home, codex_settings)
+    upstreams = {}
+    port = 0
+    otel = codex_settings.get("otel", {})
+    codex_enabled = bool(codex and isinstance(otel.get("exporter"), dict)
+                         and "otlp-http" in otel["exporter"]
+                         and isinstance(otel.get("metrics_exporter"), dict)
+                         and "otlp-http" in otel["metrics_exporter"])
+    if codex_enabled:
+        exporter = otel["exporter"]["otlp-http"]
+        metrics_exporter = otel["metrics_exporter"]["otlp-http"]
+        metrics = metrics_exporter["endpoint"]
+        previous_metrics = urllib.parse.urlsplit(metrics)
+        if previous_metrics.hostname == "127.0.0.1" and previous_metrics.path == "/codex/v1/metrics":
+            metrics = metrics_exporter["headers"]["X-Homestack-Upstream"]
+        if not metrics.endswith("/v1/metrics"):
+            raise ValueError("Codex metrics endpoint must end with /v1/metrics")
+        upstreams["/codex/v1/logs"] = metrics.removesuffix("/v1/metrics") + "/v1/logs"
+        upstreams["/codex/v1/metrics"] = metrics
+        previous = urllib.parse.urlsplit(exporter["endpoint"])
+        if previous.hostname == "127.0.0.1" and previous.path == "/codex/v1/logs":
+            port = previous.port
+    claude_telemetry = bool(claude and env.get("CLAUDE_CODE_ENABLE_TELEMETRY") in ("1", "true", True))
+    if claude_telemetry:
+        for signal in ("metrics", "logs"):
+            key = f"OTEL_EXPORTER_OTLP_{signal.upper()}_ENDPOINT"
+            original = env[key]
+            route = f"/claude/v1/{signal}"
+            previous = urllib.parse.urlsplit(original)
+            saved = f"HOMESTACK_OTEL_{signal.upper()}_UPSTREAM"
+            if previous.hostname == "127.0.0.1" and previous.path == route:
+                upstreams[route] = env[saved]
+                port = port or previous.port
+            else:
+                upstreams[route] = original
+            env[saved] = upstreams[route]
+    relay = telemetry_relay(home, port, upstreams) if upstreams else None
+    if codex_enabled:
+        exporter.update(endpoint=f"http://127.0.0.1:{relay.server_port}/codex/v1/logs", protocol="json")
+        metrics_exporter.setdefault("headers", {})["X-Homestack-Upstream"] = metrics
+        metrics_exporter.update(endpoint=f"http://127.0.0.1:{relay.server_port}/codex/v1/metrics", protocol="json")
+        write_otel(codex_path, otel)
+    if claude_telemetry:
+        for signal in ("metrics", "logs"):
+            env[f"OTEL_EXPORTER_OTLP_{signal.upper()}_ENDPOINT"] = f"http://127.0.0.1:{relay.server_port}/claude/v1/{signal}"
+        env["OTEL_EXPORTER_OTLP_PROTOCOL"] = "http/json"
+        env["OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE"] = "cumulative"
+        env["OTEL_METRICS_INCLUDE_REPOSITORY"] = "1"
+        attributes = [part for part in env.get("OTEL_RESOURCE_ATTRIBUTES", "").split(",")
+                      if part and part.split("=", 1)[0] not in ("host.name", "project", "service.instance.id")
+                      and not part.split("=", 1)[0].startswith("vcs.")]
+        env["OTEL_RESOURCE_ATTRIBUTES"] = ",".join(attributes + [f"host.name={socket.gethostname()}", f"project={socket.gethostname()}"])
+        settings["env"] = env
+        claude_path.write_text(json.dumps(settings, indent=2) + "\n")
+    workers = []
+    if codex_enabled:
+        if os.fork() == 0:
+            relay.server_close()
+            while subprocess.run([codex, "remote-control", "start"], cwd=directory or home).returncode:
+                time.sleep(15)
+            os._exit(0)
+        workers.append("codex")
+    if claude and settings.get("remoteControlAtStartup") is True:
+        projects = read_json(home / ".claude.json").get("projects", {})
+        if directory and any(Path(p).resolve() == directory and state.get("hasTrustDialogAccepted")
+                             for p, state in projects.items()):
+            if os.fork() == 0:
+                if relay:
+                    relay.server_close()
+                supervise([claude, "remote-control", "--no-create-session-in-dir"], directory)
+                os._exit(0)
+            workers.append(f"claude:{directory}")
+        else:
+            log(f"{account.pw_name}: no Claude-trusted main repository named {socket.gethostname()}")
+    log(f"{account.pw_name}: started {', '.join(workers) or 'no agents'}")
+    if relay:
+        relay.serve_forever()
+
+
+def main():
+    if os.geteuid() != 0:
+        sys.exit("Install as executable /etc/rc.local; startup requires root to select account owners.")
+    # rc-local.service retains these children in its cgroup after this exits.
+    for account in pwd.getpwall():
+        home = Path(account.pw_dir)
+        if not home.is_absolute() or account.pw_shell.endswith(("/nologin", "/false")):
+            continue
+        if not any((home / path).is_file() for path in (".claude/settings.json", ".codex/config.toml")):
+            continue
+        if os.fork() == 0:
+            try:
+                start_account(account)
+            except Exception as error:
+                log(f"{account.pw_name}: {error}")
+                os._exit(1)
+            os._exit(0)
+
+
+if __name__ == "__main__":
+    main()
