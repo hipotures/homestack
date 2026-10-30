@@ -188,6 +188,12 @@ button:focus-visible, select:focus-visible { outline: 2px solid var(--codex); ou
 <div class="chips" id="trend-chips"></div>
 <div class="chart tall" id="trend-chart" role="img" aria-label="Usage over time, stacked by model"></div>
 </section>
+<section class="card" id="scopes" aria-label="Usage by server or project" hidden>
+<div class="card-top"><div><h2 id="scopes-title">Cost by project</h2><span class="sub" id="scopes-sub"></span></div>
+<div class="card-tools"><div class="seg" role="group" aria-label="Breakdown" id="scopes-by"><button type="button" data-scope-by="project">Projects</button><button type="button" data-scope-by="host">Servers</button></div></div></div>
+<div class="chips" id="scopes-chips"></div>
+<div class="chart tall" id="scopes-chart" role="img" aria-label="Usage over time, stacked by server or project"></div>
+</section>
 <div class="row-2"><section class="card" id="composition" aria-label="Token composition"></section><section class="card" id="models" aria-label="Cost by model"></section></div>
 <div class="row-2">
 <section class="card" id="model-tokens" aria-label="Token breakdown of one model over time" hidden>

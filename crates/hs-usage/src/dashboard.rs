@@ -697,6 +697,97 @@ fn summary_values(all: &[Dataset]) -> BTreeMap<String, Value> {
     values.insert("totals".into(), json!(totals));
     values
 }
+/// Cost and total tokens per server and per project, only for scopes left at "all".
+/// Each scope reuses the per-agent accounting, so Codex keeps its per-model pricing.
+/// Usage without the label is the remainder of the selection total, so stacks add up.
+fn scope_breakdown(global: &Global, selection: &Selection, prices: &Option<Value>) -> Dataset {
+    let range = &global.range;
+    let mut series = Vec::new();
+    let mut warnings = BTreeSet::new();
+    let mut usage = |scoped: &Selection| {
+        let mut cost = BTreeMap::<u64, f64>::new();
+        let mut tokens = BTreeMap::<u64, f64>::new();
+        for agent in ["claude", "codex"] {
+            if selection.agent != "all" && selection.agent != agent {
+                continue;
+            }
+            for d in agent_data(global, range, scoped, agent, prices) {
+                let (target, category) = match d.measurement.as_str() {
+                    "cost" => {
+                        warnings.extend(d.warnings);
+                        (&mut cost, None)
+                    }
+                    "tokens" => (&mut tokens, Some("total")),
+                    _ => continue,
+                };
+                for s in d
+                    .series
+                    .iter()
+                    .filter(|s| category.is_none_or(|c| s.dimensions.get("category").is_some_and(|v| v == c)))
+                {
+                    for (t, v) in &s.points {
+                        *target.entry(*t).or_default() += v;
+                    }
+                }
+            }
+        }
+        [("cost", cost), ("tokens", tokens)]
+    };
+    let whole = usage(selection);
+    for (label, by) in [("host_name", "host"), ("project", "project")] {
+        if (if by == "host" { &selection.host } else { &selection.project }) != "*" {
+            continue;
+        }
+        let values: BTreeSet<&String> = global
+            .main
+            .records
+            .iter()
+            .filter(|r| (range.start..range.end).contains(&r.time) && selected(r, selection))
+            .filter_map(|r| r.labels.get(label))
+            .collect();
+        let mut rest = whole.clone();
+        let mut scopes = Vec::new();
+        for value in values {
+            let mut scoped = selection.clone();
+            if by == "host" {
+                scoped.host = value.clone();
+            } else {
+                scoped.project = value.clone();
+            }
+            for ((metric, points), (_, remainder)) in usage(&scoped).into_iter().zip(rest.iter_mut()) {
+                for (t, v) in &points {
+                    *remainder.entry(*t).or_default() -= v;
+                }
+                scopes.push((value.clone(), metric, points));
+            }
+        }
+        for (metric, points) in rest {
+            // Floating-point residue of the subtraction is not unattributed usage.
+            let points: BTreeMap<u64, f64> = points.into_iter().filter(|(_, v)| *v > 1e-6).collect();
+            scopes.push(("(unattributed)".into(), metric, points));
+        }
+        for (scope, metric, points) in scopes {
+            if points.values().any(|v| *v > 0.) {
+                let dimensions: BTreeMap<String, String> = [
+                    ("by".into(), by.into()),
+                    ("scope".into(), scope.clone()),
+                    ("metric".into(), metric.into()),
+                ]
+                .into();
+                series.push(Series {
+                    id: hash(&dimensions),
+                    label: scope,
+                    dimensions,
+                    points: points.into_iter().collect(),
+                });
+            }
+        }
+    }
+    let mut d = make("all", "scopes", "mixed", selection, range, series, true);
+    d.total = None;
+    d.warnings = warnings.into_iter().collect();
+    d
+}
 fn sum_category(dataset: &Dataset, category: &str) -> Option<f64> {
     let rows: Vec<_> = dataset
         .series
@@ -728,6 +819,7 @@ fn normalize(
             .collect();
         values.insert("previous".into(), json!(summary_values(&datasets)));
     }
+    all.push(scope_breakdown(global, &selection, prices));
     let mut summary = make("all", "summary", "mixed", &selection, &global.range, Vec::new(), true);
     summary.state = Availability::Available;
     summary.details = json!(values);
@@ -944,7 +1036,7 @@ fn enrich(d: &mut Dataset) {
             })
             .collect();
         d.details = json!({"categories":categories.into_iter().map(|(id,p)|json!({"id":id,"label":id,"points":p.into_iter().collect::<Vec<_>>()})).collect::<Vec<_>>(),"models":models.into_iter().map(|(id,p)|json!({"id":id,"label":id,"points":p.into_iter().collect::<Vec<_>>()})).collect::<Vec<_>>(),"cacheHit":hit,"modelCacheHit":model_hit});
-    } else if !["summary", "activity", "spikes"].contains(&d.measurement.as_str()) {
+    } else if !["summary", "activity", "spikes", "scopes"].contains(&d.measurement.as_str()) {
         for s in &d.series {
             for (t, v) in &s.points {
                 *timeline.entry(*t).or_default() += v;

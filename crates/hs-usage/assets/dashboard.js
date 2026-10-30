@@ -238,7 +238,7 @@
       kpi("Cache hit",totals.cacheHit?.value==null?"—":F.pct(totals.cacheHit.value*100),delta(totals.cacheHit?.value,previous.cacheHit,{goodUp:true,points:true}),hitBars),
       kpi("Output",F.tokens(output),delta(output,previous.output),outputBody,"Output includes reasoning tokens",F.full(output)),
     ].join("");
-    renderTrend(range,firstActive);renderComposition(totals);renderModels();renderHeat();renderSpikes(summary,range);renderAgents(summary,range);
+    renderTrend(range,firstActive);renderScopes(range);renderComposition(totals);renderModels();renderHeat();renderSpikes(summary,range);renderAgents(summary,range);
   }
   function renderTrend(range,firstActive) {
     const sel=chosen(),series=[];
@@ -280,6 +280,31 @@
         markPoint:i===visible.length-1&&peak[1]>0?{...AIUsage.peak(()=>`peak ${timeLabel(peak[0],range)}  ${fmtShort(peak[1])}`),data:[{coord:[peak[0]*1000,peak[1]]}]}:undefined,
         markArea:i===0&&gaps.length?{...AIUsage.gaps([]),data:gaps.map(([a,b])=>[{xAxis:(a-range.step/2)*1000,name:`gap ${timeLabel(a,range)}–${timeLabel(b+range.step,range)}`},{xAxis:(b+range.step/2)*1000}])}:undefined,
       })),
+    },{replaceMerge:["series"]});
+  }
+  // Breakdown by the scopes left at "all"; it follows the trend metric (token types count as tokens).
+  let scopeBy="project",scopesChart;
+  try{scopeBy=localStorage.getItem("scopeBy")==="host"?"host":"project";}catch(_){}
+  function renderScopes(range) {
+    const d=datasets.get("all.scopes"),open=["project","host"].filter(k=>selection[k]==="*"),by=open.includes(scopeBy)?scopeBy:open[0];
+    const unit=metric==="cost"?"cost":"tokens",names={host:"server",project:"project"};
+    const rows=(d?.series||[]).filter(s=>s.dimensions.by===by&&s.dimensions.metric===unit).map(s=>({name:s.label,points:s.points,sum:total(s.points)})).filter(r=>r.sum>0).sort((a,b)=>b.sum-a.sum);
+    $("scopes").hidden=!rows.length;if(!rows.length)return;
+    $("scopes-by").hidden=open.length<2;
+    for(const b of document.querySelectorAll("[data-scope-by]"))b.setAttribute("aria-pressed",String(b.dataset.scopeBy===by));
+    const fmtShort=unit==="cost"?v=>F.cost(v):F.tokens,fmtFull=unit==="cost"?v=>F.cost(v,true):F.full;
+    const first=Math.min(...rows.flatMap(r=>r.points.filter(([,v])=>v>0).map(([t])=>t))),times=buckets(range).filter(t=>t>=first);
+    $("scopes-title").textContent=`${unit==="cost"?"Cost":"Tokens"} by ${names[by]}`;
+    $("scopes-sub").textContent=`${bucketLabel(range.step)} · stacked by ${names[by]}${unit==="cost"&&chosen().includes("codex")?" · Codex cost estimated":""}`;
+    $("scopes-chips").innerHTML=[first>range.start?`<span class="chip">data since ${timeLabel(first,range)}</span>`:"",...(unit==="cost"?d.warnings:[]).map(w=>`<span class="chip">${esc(w)}</span>`)].join("");
+    scopesChart=scopesChart||AIUsage.init($("scopes-chart"));
+    scopesChart.setOption({
+      grid:{left:8,right:8,top:16,bottom:36,containLabel:true},
+      legend:{type:"scroll",left:"center",right:"auto",top:"auto",bottom:0,formatter:name=>`${name}  ${fmtShort(rows.find(r=>r.name===name)?.sum||0)}`},
+      tooltip:{trigger:"axis",formatter:AIUsage.tooltipFormatter(fmtFull)},
+      xAxis:{type:"time",min:(first-range.step/2)*1000,max:range.end*1000,axisLabel:{hideOverlap:true}},
+      yAxis:{type:"value",axisLabel:{formatter:fmtShort}},
+      series:rows.map(r=>{const m=new Map(r.points);return AIUsage.bar(r.name,times.map(t=>[t*1000,m.get(t)||0]),`${by} · ${r.name}`,{id:r.name,barMaxWidth:28});}),
     },{replaceMerge:["series"]});
   }
   function renderComposition(totals) {
@@ -563,6 +588,7 @@
       toggle.onclick=()=>{v.table=!v.table;toggle.textContent=v.table?"chart":"table";if(v===modelViews.tokens)renderModelTokens();else if(v===modelViews.hit)renderModelHit();else renderEffort();if(!v.table)v.chart?.resize();};
       copy.onclick=()=>{if(v.spec)copyCharts(copy,[v.spec]);};
     }
+    for(const b of document.querySelectorAll("[data-scope-by]"))b.onclick=()=>{scopeBy=b.dataset.scopeBy;try{localStorage.setItem("scopeBy",scopeBy);}catch(_){}if(datasets.size)renderOverview();};
     for(const b of document.querySelectorAll("[data-metric]"))b.onclick=()=>{metric=b.dataset.metric;try{localStorage.setItem("metric",metric);}catch(_){}if(datasets.size)renderOverview();};
     $("agents").onclick=event=>{
       const tab=event.target.closest("[data-tab]"),goto=event.target.closest("[data-goto]");
