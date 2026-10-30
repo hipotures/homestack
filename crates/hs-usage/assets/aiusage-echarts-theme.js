@@ -160,7 +160,7 @@
 
       bar: {
         barMaxWidth: 18, barCategoryGap: '30%',
-        itemStyle: { borderRadius: [3, 3, 0, 0] },
+        // Square corners: rounding applies to every stacked segment and makes each one look capped.
         emphasis: { focus: 'series' },
       },
       line: {
