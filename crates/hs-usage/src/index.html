@@ -205,6 +205,13 @@ button:focus-visible, select:focus-visible { outline: 2px solid var(--codex); ou
 <div class="table-wrap" hidden></div>
 </section>
 </div>
+<section class="card" id="model-effort" aria-label="Tokens by reasoning effort over time" hidden>
+<div class="card-top"><div><h2>Tokens by effort</h2><span class="sub" id="model-effort-sub"></span></div>
+<div class="card-tools"><span class="card-actions"><button class="copy" type="button" hidden title="Copy data as JSON" aria-label="Copy data as JSON">⧉</button><button class="toggle" type="button">table</button></span></div></div>
+<div class="chips" id="model-effort-chips"></div>
+<div class="chart" id="model-effort-chart" role="img" aria-label="Tokens per reasoning effort level, stacked per bucket"></div>
+<div class="table-wrap" hidden></div>
+</section>
 <div class="row-3">
 <section class="card heat-card" aria-label="Activity by weekday and hour">
 <div class="card-top"><div><h2>When you work</h2><span class="sub" id="heat-sub">tokens by weekday and hour · local time</span></div>

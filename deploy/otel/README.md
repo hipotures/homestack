@@ -48,7 +48,7 @@ OTLP/HTTP on port 4318.
   only to derive Codex response token metrics; no logs are exported or stored.
   The `sum` connector selects completed-response usage, `groupbyattrs` compacts
   duplicate resource/scope groups per batch, and `transform` emits delta gauges
-  named `codex.response.token_usage` with model, token-type and
+  named `codex.response.token_usage` with model, reasoning effort (`effort`), token-type and
   `collector_instance` dimensions. The file provider reads each container's
   distinct hostname from `/etc/hostname` to isolate independent replica writers.
   Prometheus must ingest these directly through OTLP; the dashboard sums the

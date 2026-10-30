@@ -51,8 +51,9 @@ the updated AI Usage image after the new metric appears in Prometheus.
 The Collector sums only `codex.sse_event` records with
 `event.kind=response.completed` and token attributes. All other log records
 are discarded rather than forwarded or stored as logs. It groups each batch
-by resource and model, then emits `codex.response.token_usage` gauges with a
-`token_type` label: `total`, `input`, `cached_input`, `cache_write_input`,
+by resource, model and reasoning effort (the event's `model_reasoning_effort`,
+exported as `effort` like Claude Code's label), then emits
+`codex.response.token_usage` gauges with a `token_type` label: `total`, `input`, `cached_input`, `cache_write_input`,
 `output` and `reasoning_output`. Input includes cached and cache-write tokens;
 reasoning is already included in output. The event's `tool_token_count` field
 contains total response tokens, despite its name.

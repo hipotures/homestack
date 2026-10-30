@@ -114,7 +114,7 @@
   function render(dirty) {
     if(dirty.size)renderOverview();
     // Per-model views read only token datasets, so other dataset updates leave them untouched.
-    if([...dirty].some(id=>id.endsWith(".tokens")))renderModelViews();
+    if([...dirty].some(id=>id.endsWith(".tokens")||id.endsWith(".effort")))renderModelViews();
     const definitionsNow=definitions(),ids=new Set(definitionsNow.map(s=>s.id));
     for(const [id,w]of widgets)if(!ids.has(id)){w.chart?.dispose();w.card.remove();widgets.delete(id);}
     for(const spec of definitionsNow) {
@@ -405,7 +405,7 @@
   // ---- Per-model views. Categories and hit rates are Rust projections; the browser only picks and lays out. ----
   let modelKey="";
   try{modelKey=localStorage.getItem("model")||"";}catch(_){}
-  const modelViews={tokens:{id:"model-tokens",table:false,spec:null,chart:null},hit:{id:"model-hit",table:false,spec:null,chart:null}};
+  const modelViews={tokens:{id:"model-tokens",table:false,spec:null,chart:null},hit:{id:"model-hit",table:false,spec:null,chart:null},effort:{id:"model-effort",table:false,spec:null,chart:null}};
   const PARTS=TYPES.filter(([id])=>id!=="reasoning");
   const pointsOf=(d,model,category)=>d.series.find(s=>s.dimensions.model===model&&s.dimensions.category===category)?.points||[];
   const tip=(t,rows)=>`<div style="color:var(--muted);margin-bottom:4px">${new Date(t*1000).toLocaleString()}</div>${rows.join("")}`;
@@ -425,7 +425,7 @@
     v.chart=v.chart||AIUsage.init($(v.id+"-chart"));
     return true;
   }
-  function renderModelViews(){renderModelTokens();renderModelHit();}
+  function renderModelViews(){renderModelTokens();renderModelHit();renderEffort();}
   function renderModelTokens(){
     const v=modelViews.tokens,list=[];
     for(const a of chosen()){const d=reported(a,"tokens");if(d)for(const m of d.details.models||[]){const n=total(m.points);if(n>0)list.push({key:`${a}|${m.id}`,agent:a,model:m.id,tokens:n,d});}}
@@ -500,6 +500,39 @@
     },{replaceMerge:["series"]});
   }
   /** Copies one chart as JSON, or downloads several as a JSON Lines file (too large for the clipboard). */
+  // Effort levels from light to dark within the agent hue; an unreported effort is grey.
+  const EFFORTS=["minimal","low","medium","high","xhigh","max"],EFFORT_SHADE=[.7,.5,.2,-.15,-.4,-.6];
+  function shade(hex,f){
+    const n=parseInt(hex.replace("#",""),16),mix=c=>Math.round(f>0?c+(255-c)*f:c*(1+f));
+    return "#"+[n>>16&255,n>>8&255,n&255].map(c=>mix(c).toString(16).padStart(2,"0")).join("");
+  }
+  const effortColor=(agent,effort)=>{const i=EFFORTS.indexOf(effort);return i<0?getComputedStyle(document.documentElement).getPropertyValue("--tok-output").trim():shade(AIUsage.colorFor(agents[agent]),EFFORT_SHADE[i]);};
+  function renderEffort(){
+    const v=modelViews.effort,sel=chosen(),rows=[];
+    for(const a of sel){
+      const d=reported(a,"effort");if(!d)continue;
+      const by=new Map();
+      for(const s of d.series){const m=by.get(s.dimensions.effort)||new Map();for(const [t,n]of s.points)m.set(t,(m.get(t)||0)+n);by.set(s.dimensions.effort,m);}
+      for(const [effort,m]of by)if(total([...m])>0)rows.push({agent:a,effort,d,points:[...m].sort((x,y)=>x[0]-y[0])});
+    }
+    const rank=e=>{const i=EFFORTS.indexOf(e);return i<0?EFFORTS.length:i;};
+    rows.sort((x,y)=>x.agent.localeCompare(y.agent)||rank(x.effort)-rank(y.effort));
+    const name=r=>`${sel.length>1?agents[r.agent]+" · ":""}${r.effort||"not reported"}`;
+    v.spec=rows.length?{title:"Tokens by effort",unit:"tokens",series:rows.map(r=>({id:`${r.agent}|${r.effort}`,label:name(r),points:r.points,dataset:r.d.id}))}:null;
+    if(!viewFrame(v,rows.length>0))return;
+    const range=rows[0].d.range,first=Math.min(...rows.flatMap(r=>r.points.filter(([,n])=>n>0).map(([t])=>t))),times=buckets(range).filter(t=>t>=first);
+    const all=rows.reduce((n,r)=>n+total(r.points),0);
+    $("model-effort-sub").textContent=`${bucketLabel(range.step)} · ${F.full(all)} tokens · reasoning effort of each response`;
+    $("model-effort-chips").innerHTML=first>range.start?`<span class="chip">data since ${timeLabel(first,range)}</span>`:"";
+    v.chart.setOption({
+      grid:{left:8,right:8,top:16,bottom:36,containLabel:true},
+      legend:{type:"scroll",left:"center",right:"auto",top:"auto",bottom:0},
+      tooltip:{trigger:"axis",formatter:AIUsage.tooltipFormatter(F.full)},
+      xAxis:{type:"time",min:(times[0]-range.step/2)*1000,max:range.end*1000,axisLabel:{hideOverlap:true}},
+      yAxis:{type:"value",minInterval:1,axisLabel:{formatter:F.tokens}},
+      series:rows.map(r=>{const m=new Map(r.points);return AIUsage.bar(name(r),times.map(t=>[t*1000,m.get(t)||0]),name(r),{id:`${r.agent}|${r.effort}`,barMaxWidth:28,itemStyle:{color:effortColor(r.agent,r.effort)}});}),
+    },{replaceMerge:["series"]});
+  }
   async function copyCharts(button,specs,download=false) {
     const id=snapshot,chosen=structuredClone(specs),scope={...selection},label=button.textContent;
     if(!id){button.textContent="Waiting for snapshot";return;}
@@ -522,7 +555,7 @@
     $("model-pick").onchange=event=>{modelKey=event.target.value;try{localStorage.setItem("model",modelKey);}catch(_){}renderModelTokens();};
     for(const v of Object.values(modelViews)){
       const card=$(v.id),toggle=card.querySelector(".toggle"),copy=card.querySelector(".copy");
-      toggle.onclick=()=>{v.table=!v.table;toggle.textContent=v.table?"chart":"table";if(v===modelViews.tokens)renderModelTokens();else renderModelHit();if(!v.table)v.chart?.resize();};
+      toggle.onclick=()=>{v.table=!v.table;toggle.textContent=v.table?"chart":"table";if(v===modelViews.tokens)renderModelTokens();else if(v===modelViews.hit)renderModelHit();else renderEffort();if(!v.table)v.chart?.resize();};
       copy.onclick=()=>{if(v.spec)copyCharts(copy,[v.spec]);};
     }
     for(const b of document.querySelectorAll("[data-metric]"))b.onclick=()=>{metric=b.dataset.metric;try{localStorage.setItem("metric",metric);}catch(_){}if(datasets.size)renderOverview();};

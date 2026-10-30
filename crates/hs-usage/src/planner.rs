@@ -6,7 +6,7 @@ use crate::{
 use futures_util::{StreamExt, stream};
 use std::{collections::BTreeMap, sync::Arc};
 const RETENTION: &str = "600d";
-const GROUPS: &str = "instrument,host_name,project,model,type,token_type,tool,success";
+const GROUPS: &str = "instrument,host_name,project,model,effort,type,token_type,tool,success";
 #[derive(Clone, Debug)]
 pub struct Record {
     pub instrument: String,

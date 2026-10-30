@@ -18,12 +18,16 @@ connectors:
         attributes:
           - key: model
             default_value: unknown
+          - key: model_reasoning_effort
+            default_value: unknown
       codex.response.tokens.input:
         source_attribute: input_token_count
         conditions:
           - 'attributes["event.name"] == "codex.sse_event" and attributes["event.kind"] == "response.completed" and attributes["input_token_count"] != nil'
         attributes:
           - key: model
+            default_value: unknown
+          - key: model_reasoning_effort
             default_value: unknown
       codex.response.tokens.cached_input:
         source_attribute: cached_token_count
@@ -32,12 +36,16 @@ connectors:
         attributes:
           - key: model
             default_value: unknown
+          - key: model_reasoning_effort
+            default_value: unknown
       codex.response.tokens.cache_write_input:
         source_attribute: cache_write_token_count
         conditions:
           - 'attributes["event.name"] == "codex.sse_event" and attributes["event.kind"] == "response.completed" and attributes["cache_write_token_count"] != nil'
         attributes:
           - key: model
+            default_value: unknown
+          - key: model_reasoning_effort
             default_value: unknown
       codex.response.tokens.output:
         source_attribute: output_token_count
@@ -46,12 +54,16 @@ connectors:
         attributes:
           - key: model
             default_value: unknown
+          - key: model_reasoning_effort
+            default_value: unknown
       codex.response.tokens.reasoning_output:
         source_attribute: reasoning_token_count
         conditions:
           - 'attributes["event.name"] == "codex.sse_event" and attributes["event.kind"] == "response.completed" and attributes["reasoning_token_count"] != nil'
         attributes:
           - key: model
+            default_value: unknown
+          - key: model_reasoning_effort
             default_value: unknown
 
 processors:
@@ -69,6 +81,9 @@ processors:
         statements:
           - set(attributes["collector_instance"], resource.attributes["homestack.collector.instance"])
           - set(attributes["token_type"], Substring(metric.name, Len("codex.response.tokens."), Len(metric.name) - Len("codex.response.tokens.")))
+          # Same label as Claude Code's metrics; responses without an effort carry none.
+          - set(attributes["effort"], attributes["model_reasoning_effort"]) where attributes["model_reasoning_effort"] != "unknown"
+          - delete_key(attributes, "model_reasoning_effort")
       - context: metric
         statements:
           - convert_sum_to_gauge()

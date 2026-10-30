@@ -365,6 +365,8 @@ fn agent_data(
 ) -> Vec<Dataset> {
     let registry: Vec<_> = global.registry.iter().filter(|m| m.agent == agent).collect();
     let mut raw: BTreeMap<String, Groups> = BTreeMap::new();
+    // Total tokens by model and reasoning effort; "" where the agent did not report an effort.
+    let mut efforts: Groups = BTreeMap::new();
     for r in global
         .main
         .records
@@ -392,6 +394,16 @@ fn agent_data(
         } else {
             r.labels.get("type").cloned().unwrap_or_else(|| "value".into())
         };
+        if m.measurement == "tokens" && (agent != "codex" || category == "total") {
+            *efforts
+                .entry((
+                    r.labels.get("model").cloned().unwrap_or_default(),
+                    r.labels.get("effort").cloned().unwrap_or_default(),
+                ))
+                .or_default()
+                .entry(r.time)
+                .or_default() += r.value;
+        }
         let value = raw
             .entry(m.measurement.into())
             .or_default()
@@ -461,6 +473,15 @@ fn agent_data(
         registry.iter().any(|m| m.measurement == "tokens"),
     );
     tokens.total = sum_category(&tokens, "total");
+    let effort = make(
+        agent,
+        "effort",
+        "tokens",
+        selection,
+        range,
+        series(efforts, "effort"),
+        registry.iter().any(|m| m.measurement == "tokens"),
+    );
     let mut output = Vec::new();
     let mut cost = if agent == "codex" {
         let mut models: BTreeMap<String, BTreeMap<u64, f64>> = BTreeMap::new();
@@ -536,6 +557,7 @@ fn agent_data(
         tokens.warnings.push(if unattributed {"Usage samples have missing host_name/project labels. Unattributed usage cannot be assigned to this selection; choose All servers / All projects.".into()}else{"No usage matches the selected server/project. Missing data is not zero.".into()});
     }
     output.push(tokens);
+    output.push(effort);
     output.push(cost);
     for (measurement, unit) in [
         ("sessions", "count"),
