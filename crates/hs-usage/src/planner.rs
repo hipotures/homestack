@@ -168,18 +168,22 @@ pub async fn block(
                     } else {
                         now as f64
                     };
-                    let current = named(&format!(
-                        "last_over_time({sel}[{}ms])",
-                        ((end - boundary as f64) * 1000.).round().max(1.) as u64
-                    ));
+                    let window = format!("{sel}[{}ms]", ((end - boundary as f64) * 1000.).round().max(1.) as u64);
+                    let current = named(&format!("last_over_time({window})"));
                     let ttl = if kind == Kind::History && end < now as f64 {
                         21600
                     } else {
                         30
                     };
+                    // Baselines are needed only for series active in the window; retained
+                    // per-session history would otherwise grow without bound.
+                    let query = format!(
+                        "{} and {}",
+                        named(&format!("last_over_time({sel}[{RETENTION}])")),
+                        named(&format!("last_over_time({window} @ {end})"))
+                    );
                     jobs.push(async move { prom.instant(current, end, ttl).await }.boxed());
-                    let query = named(&format!("last_over_time({sel}[{RETENTION}])"));
-                    jobs.push(async move { prom.instant(query, boundary as f64, 21600).await }.boxed());
+                    jobs.push(async move { prom.instant(query, boundary as f64, ttl).await }.boxed());
                 }
             }
         }
