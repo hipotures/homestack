@@ -128,6 +128,11 @@ an old process-wide project cannot override the resolved project in Prometheus.
 Measurements with no session metadata cannot be attributed to one repository;
 those process-wide counters retain the default project. Missing native session
 metadata or a working directory outside Git also retains the hostname default.
+A Codex thread missing from the SQLite metadata is looked up again after two
+seconds, because a new thread is persisted shortly after its startup request.
+Internal helper threads (subagents, auto-review) are never persisted; they are
+attributed to the most recently updated thread within the last 15 minutes, which
+can be wrong when sessions in different repositories run concurrently.
 The receiver reports forwarding/lookup failures with retryable HTTP errors,
 rather than claiming delivery. It adds no durable queue; the existing native
 exporter retries and Collector queue still define delivery guarantees. Agent

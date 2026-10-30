@@ -56,6 +56,18 @@ def response_project(home, record):
     try:
         connection.execute("PRAGMA query_only=ON")
         row = connection.execute("SELECT cwd FROM threads WHERE id = ?", (thread,)).fetchone()
+        if not row:
+            # A new thread is persisted shortly after its startup request.
+            time.sleep(2)
+            row = connection.execute("SELECT cwd FROM threads WHERE id = ?", (thread,)).fetchone()
+        if not row:
+            # Internal helper threads (subagents, auto-review) are never
+            # persisted; attribute them to the most recently active thread.
+            row = connection.execute(
+                "SELECT cwd FROM threads WHERE COALESCE(updated_at_ms, updated_at * 1000) >= ? "
+                "ORDER BY COALESCE(updated_at_ms, updated_at * 1000) DESC LIMIT 1",
+                (int((time.time() - 15 * 60) * 1000),),
+            ).fetchone()
     finally:
         connection.close()
     return repository_name(row[0]) if row else socket.gethostname()
