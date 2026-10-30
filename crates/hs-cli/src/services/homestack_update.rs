@@ -37,6 +37,7 @@ struct Review<'a> {
     rows: Vec<Row>,
     pending: Vec<Pending<'a>>,
     building: Vec<String>,
+    problems: Vec<String>,
 }
 
 /// ANSI colors, only on a terminal and without NO_COLOR.
@@ -48,7 +49,11 @@ impl Paint {
         Self(std::io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none())
     }
     fn code(self, code: &str, text: &str) -> String {
-        if self.0 { format!("\x1b[{code}m{text}\x1b[0m") } else { text.to_owned() }
+        if self.0 {
+            format!("\x1b[{code}m{text}\x1b[0m")
+        } else {
+            text.to_owned()
+        }
     }
     fn green(self, text: &str) -> String {
         self.code("32", text)
@@ -172,7 +177,7 @@ async fn run_auto(
 ) -> Result<(), String> {
     let mut failed: Vec<(String, String)> = Vec::new();
     let mut shown: Vec<Row> = Vec::new();
-    loop {
+    let problems = loop {
         let round = review(pve, config, sources, root, true, paint).await?;
         let changed: Vec<&Row> = round
             .rows
@@ -189,7 +194,11 @@ async fn run_auto(
         let pending: Vec<Pending> = round
             .pending
             .into_iter()
-            .filter(|p| !failed.iter().any(|(id, version)| *id == p.source.manifest.id && *version == p.version))
+            .filter(|p| {
+                !failed
+                    .iter()
+                    .any(|(id, version)| *id == p.source.manifest.id && *version == p.version)
+            })
             .collect();
         show(&pending, paint, say);
         let mut applied = false;
@@ -200,20 +209,27 @@ async fn run_auto(
             applied = true;
         }
         if round.building.is_empty() {
-            break;
+            break round.problems;
         }
         if applied {
             // Updated rows are shown again in full on the next pass.
             shown.clear();
         }
         wait(&round.building, paint, say).await;
-    }
+    };
+    let mut failed: Vec<String> = failed
+        .into_iter()
+        .map(|(id, version)| format!("{id} {version}"))
+        .collect();
+    failed.extend(problems);
     if failed.is_empty() {
-        say(&format!("\n{}", paint.green("Done: no image is being published and every update is applied.")));
+        say(&format!(
+            "\n{}",
+            paint.green("Done: no image is being published and every update is applied.")
+        ));
         Ok(())
     } else {
-        let failed: Vec<String> = failed.iter().map(|(id, version)| format!("{id} {version}")).collect();
-        Err(format!("Not updated: {}", failed.join(", ")))
+        Err(format!("Updates incomplete: {}", failed.join(", ")))
     }
 }
 
@@ -251,7 +267,11 @@ async fn wait(building: &[String], paint: Paint, say: &(dyn Fn(&str) + Send + Sy
 fn line(row: &Row, width: usize, paint: Paint) -> String {
     let pad = " ".repeat(width - row.id.len());
     let indent = " ".repeat(width + 4);
-    format!("  {}{pad}  {}", paint.bold(&row.id), row.text.replace('\n', &format!("\n{indent}")))
+    format!(
+        "  {}{pad}  {}",
+        paint.bold(&row.id),
+        row.text.replace('\n', &format!("\n{indent}"))
+    )
 }
 
 fn table(rows: &[Row], say: &(dyn Fn(&str) + Send + Sync)) {
@@ -279,6 +299,7 @@ async fn review<'a>(
     let mut rows = Vec::new();
     let mut pending = Vec::new();
     let mut building = Vec::new();
+    let mut problems = Vec::new();
     for source in sources {
         let id = &source.manifest.id;
         let mut row = |text: String| rows.push(Row { id: id.clone(), text });
@@ -289,6 +310,7 @@ async fn review<'a>(
         let newest = match hs_core::registry::recent(&source.image("latest"), 1, &[]).await {
             Ok(releases) => releases.first().map(|release| tag(&release.image).to_owned()),
             Err(error) => {
+                problems.push(format!("{id}: releases unavailable: {error}"));
                 row(paint.red(&format!("releases unavailable: {error}")));
                 continue;
             }
@@ -318,9 +340,16 @@ async fn review<'a>(
                 let state = format!("{} {}{detail}", publication.release, publication.state);
                 note = format!(
                     "{}\n{}",
-                    if publication.building { paint.yellow(&state) } else { paint.red(&state) },
+                    if publication.building {
+                        paint.yellow(&state)
+                    } else {
+                        paint.red(&state)
+                    },
                     paint.link(&publication.url)
                 );
+                if !publication.building {
+                    problems.push(format!("{id} {state}"));
+                }
                 if publication.building {
                     building.push(format!("{id} {}", publication.release));
                     if wait {
@@ -330,10 +359,20 @@ async fn review<'a>(
                 }
             }
             Ok(None) => {}
-            Err(error) => note = paint.red(&format!("publication status unavailable: {error}")),
+            Err(error) => {
+                problems.push(format!("{id}: publication status unavailable: {error}"));
+                note = paint.red(&format!("publication status unavailable: {error}"));
+            }
         }
-        let note = |text: String| if note.is_empty() { text } else { format!("{text}\n{note}") };
+        let note = |text: String| {
+            if note.is_empty() {
+                text
+            } else {
+                format!("{text}\n{note}")
+            }
+        };
         let Some(newest) = newest else {
+            problems.push(format!("{id}: no published release"));
             row(note(paint.red("no published release")));
             continue;
         };
@@ -347,10 +386,18 @@ async fn review<'a>(
             .map(|i| i.ctid)
             .collect();
         if targets.is_empty() {
-            row(note(format!("{} {}", paint.green(&format!("{newest} up to date")), paint.dim(&format!("· {}", containers(deployed.len()))))));
+            row(note(format!(
+                "{} {}",
+                paint.green(&format!("{newest} up to date")),
+                paint.dim(&format!("· {}", containers(deployed.len())))
+            )));
             continue;
         }
-        row(note(paint.cyan(&format!("→ {newest} for {} of {}", targets.len(), containers(deployed.len())))));
+        row(note(paint.cyan(&format!(
+            "→ {newest} for {} of {}",
+            targets.len(),
+            containers(deployed.len())
+        ))));
         let plan = update::plan(pve, config, source, &targets, &newest, "", root).await;
         pending.push(Pending {
             source,
@@ -358,14 +405,24 @@ async fn review<'a>(
             plan,
         });
     }
-    Ok(Review { rows, pending, building })
+    Ok(Review {
+        rows,
+        pending,
+        building,
+        problems,
+    })
 }
 
 fn show(pending: &[Pending], paint: Paint, say: &(dyn Fn(&str) + Send + Sync)) {
     for (number, update) in pending.iter().enumerate() {
         say(&format!(
             "\n{}",
-            paint.bold(&format!("{}. {} → {}", number + 1, update.source.manifest.id, update.version))
+            paint.bold(&format!(
+                "{}. {} → {}",
+                number + 1,
+                update.source.manifest.id,
+                update.version
+            ))
         ));
         for line in &update.plan.lines {
             say(&format!("   {line}"));
@@ -379,7 +436,10 @@ fn show(pending: &[Pending], paint: Paint, say: &(dyn Fn(&str) + Send + Sync)) {
 /// Apply one reviewed update; false when it failed.
 async fn apply(pve: &impl Pve, update: &Pending<'_>, paint: Paint, say: &(dyn Fn(&str) + Send + Sync)) -> bool {
     let id = &update.source.manifest.id;
-    say(&format!("\n{}", paint.bold(&format!("Updating {id} to {}…", update.version))));
+    say(&format!(
+        "\n{}",
+        paint.bold(&format!("Updating {id} to {}…", update.version))
+    ));
     match update::apply(pve, update.source, &update.plan, say).await {
         Ok(_) => {
             say(&paint.green(&format!("{id} updated to {}.", update.version)));
