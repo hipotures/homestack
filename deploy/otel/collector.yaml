@@ -123,6 +123,18 @@ processors:
         statements:
           # The sum connector counts requests by summing this attribute.
           - set(attributes["homestack.one"], 1) where attributes["event.name"] == "api_request"
+          # Claude Code stamps the session's Git repository on every record
+          # (OTEL_METRICS_INCLUDE_REPOSITORY); one process serves one repository.
+          - set(resource.attributes["project"], attributes["vcs.repository.name"]) where attributes["vcs.repository.name"] != nil
+  # Native Claude Code metrics carry the repository on each datapoint. Move it
+  # to the promoted project resource attribute and drop the other vcs labels.
+  transform/claude-repository:
+    error_mode: propagate
+    metric_statements:
+      - context: datapoint
+        statements:
+          - set(resource.attributes["project"], attributes["vcs.repository.name"]) where attributes["vcs.repository.name"] != nil
+          - delete_matching_keys(attributes, "^vcs\\.")
   transform/claude:
     error_mode: propagate
     metric_statements:
@@ -165,7 +177,7 @@ service:
   pipelines:
     metrics:
       receivers: [otlp]
-      processors: [batch]
+      processors: [batch, transform/claude-repository]
       exporters: [otlp_http]
     logs/codex:
       receivers: [otlp]

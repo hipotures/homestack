@@ -1,29 +1,73 @@
 # AI usage telemetry attribution
 
 The dashboard filters usage by the `host_name` and `project` metric labels.
-Keep the global OTEL settings, including `host.name`, in the shell configuration
-and the project-specific attributes in the repository's trusted `.envrc`.
 
-## Terminal Codex sessions
+## Client configuration
 
-Codex 0.165.0 normally connects terminal clients to a shared background daemon.
-That daemon retains its startup environment. Loading `.envrc` in another
-terminal does not change the daemon's resource attributes, even when the new
-terminal client has the correct environment.
+Exactly three files configure telemetry. No shell exports, direnv files or
+launch wrappers are involved, so interactive SSH sessions, systemd user
+services, herdr-restored agents and Remote Control behave identically.
 
-Source `scripts/codex-telemetry.bash` from interactive Bash after the global
-OTEL exports. It runs terminal Codex with `--no-daemon`, preserves the resource
-attributes supplied by Bash and direnv, and gives each invocation a fresh
-`service.instance.id`. The separate instance prevents simultaneous processes
-and restarts from overwriting each other's cumulative counters.
+`/etc/environment` (part of the Gold image, no VM identity) carries the only
+setting Codex cannot read from its configuration file. Codex exports delta
+metrics unless the environment requests cumulative ones, and Prometheus
+rejects delta samples:
 
-For a stable local installation, copy the script to
-`~/.local/share/homestack/codex-telemetry.bash` and source that path from
-`~/.bashrc`. Open a new terminal in the project, let direnv load its trusted
-configuration, and run `codex`. Existing running conversations keep their
-original backend and environment; finish the active turn before reopening or
-resuming them. This launcher applies to terminal Codex, not to independently
-started IDE, desktop, remote, or managed app servers.
+```
+OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=cumulative
+```
+
+`pam_env` applies it to SSH logins and the systemd user manager reads the same
+file through `/usr/lib/environment.d/99-environment.conf`.
+
+`~/.claude/settings.json` holds Claude Code's complete configuration. Claude Code
+applies `env` inside each process at startup, independent of the parent environment:
+
+```json
+"env": {
+  "CLAUDE_CODE_ENABLE_TELEMETRY": "1",
+  "OTEL_METRICS_EXPORTER": "otlp",
+  "OTEL_LOGS_EXPORTER": "otlp",
+  "OTEL_EXPORTER_OTLP_PROTOCOL": "http/protobuf",
+  "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT": "http://otel.homestack.app:4318/v1/metrics",
+  "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT": "http://otel.homestack.app:4318/v1/logs",
+  "OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE": "cumulative",
+  "OTEL_METRICS_INCLUDE_REPOSITORY": "1",
+  "OTEL_RESOURCE_ATTRIBUTES": "host.name=VM-HOSTNAME"
+}
+```
+
+Claude Code does not detect `host.name` itself; each VM writes its own name
+there. `OTEL_METRICS_INCLUDE_REPOSITORY` (Claude Code 2.1.314, undocumented,
+off by default) stamps every metric and event with `vcs.repository.name` and
+related attributes, derived from the `origin` remote of the session's
+repository. Each session, including Remote Control workers, is a separate
+process, so several repositories on one VM are attributed correctly.
+Repositories without `origin` remain unattributed. The `session.id` attribute
+keeps concurrent sessions in separate series.
+
+`~/.codex/config.toml` holds the Codex exporters (see
+[Response token export](#response-token-export)).
+
+The Collector endpoint appears in both agent files because Codex enables
+exporters only from its configuration and Claude Code only from its
+environment. Move the Collector by changing the `otel.homestack.app` DNS
+record, not the files.
+
+Agents read these settings at process start. A running Codex app-server
+daemon, herdr server or Claude daemon keeps its original environment until it restarts.
+
+## Codex attribution limits
+
+Codex 0.166.0 normally serves every terminal and Remote Control client from
+one shared app-server daemon. Its OpenTelemetry resource is process-wide, and
+it records no repository or working-directory attribute on metrics or events.
+Codex usage therefore carries no `project`. Codex sets `host.name` only on its
+log resource, so response tokens (derived from log events) carry `host_name`,
+while native metrics such as turn counts and durations do not. Codex also sets
+no `service.instance.id`, so simultaneous Codex processes on one VM can share
+native counter series. Response tokens are unaffected because the Collector
+exports them as per-batch increments.
 
 ## Response token export
 
@@ -106,12 +150,8 @@ and attribution limits.
 ## Claude Code request timing
 
 Claude Code reports request duration and time to first token only in its
-`api_request` log event, so its shell environment must also export logs:
-
-```bash
-export OTEL_LOGS_EXPORTER='otlp'
-export OTEL_EXPORTER_OTLP_LOGS_ENDPOINT='http://otel.homestack.app:4318/v1/logs'
-```
+`api_request` log event, so its settings must also export logs
+(`OTEL_LOGS_EXPORTER` and `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT` above).
 
 The Collector sums `duration_ms` and `ttft_ms` of those events and counts the
 requests, by model and reasoning effort, into delta gauges:
@@ -133,6 +173,10 @@ otlp:
     - project
 ```
 
+The Collector sets the `project` resource attribute from Claude Code's
+`vcs.repository.name`, on native metrics and on `api_request` events, and
+drops the other `vcs.*` datapoint attributes.
+
 Prometheus already maps `service.instance.id` to its `instance` label. Without
 a unique instance, several writers can share one series, causing apparent
 counter decreases and unreliable totals. Promoting attributes only affects
@@ -148,17 +192,18 @@ For an existing promotion list, retain its entries and add `host.name` and
 `project` manually instead.
 
 Verify `/api/v1/status/config` contains the promotion list and
-`prometheus_config_last_reload_successful` is 1. After a new Codex session
-completes a model response and exports events, query:
+`prometheus_config_last_reload_successful` is 1. After a new Claude Code
+session completes a model response, query:
 
 ```promql
-group by (host_name, project, instance) (
-  codex_response_token_usage{token_type="total"}
+group by (host_name, project, session_id) (
+  claude_code_token_usage_tokens_total
 )
 ```
 
-The selected server, project and a distinct instance must appear on the
-usage metric itself. `target_info` alone does not establish that the
+The selected server and project must appear on the usage metric itself.
+For Codex, `codex_response_token_usage` carries `host_name` but no project
+(see [Codex attribution limits](#codex-attribution-limits)). `target_info` alone does not establish that the
 dashboard can filter the counters.
 
 References: [Codex CLI](https://learn.chatgpt.com/docs/developer-commands),
