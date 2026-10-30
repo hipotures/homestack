@@ -685,7 +685,10 @@ fn summary_values(all: &[Dataset]) -> BTreeMap<String, Value> {
             .values()
             .filter_map(|v| v.get(measurement).and_then(|v| v["value"].as_f64()))
             .collect();
-        totals.insert(measurement.to_owned(),json!({"value":if available.is_empty(){None}else{Some(available.iter().sum::<f64>())}}));
+        totals.insert(
+            measurement.to_owned(),
+            json!({"value":if available.is_empty(){None}else{Some(available.iter().sum::<f64>())}}),
+        );
     }
     let total = |key: &str| totals.get(key).and_then(|v: &Value| v["value"].as_f64());
     let input = total("input").unwrap_or(0.) + total("cached").unwrap_or(0.) + total("written").unwrap_or(0.);
