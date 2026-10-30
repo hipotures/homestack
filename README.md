@@ -271,12 +271,13 @@ homestack setup hermes env=bash app=codex --yes --non-interactive --json
   [[setup.items]]
   id = "exports"
   exports = [
-    "EDITOR='vim'",
+    "OTEL_METRICS_EXPORTER='otlp'",
+    "OTEL_RESOURCE_ATTRIBUTES=\"host.name=$(hostname)\"",
   ]
   ```
 
-- AI agent telemetry is configured in `/etc/environment`, `~/.codex/config.toml` and
-  `~/.claude/settings.json`, not through shell exports; see [AI telemetry attribution](docs/ai-telemetry.md).
+- For per-project Codex usage telemetry, see [AI telemetry attribution](docs/ai-telemetry.md).
+  A shared Codex daemon does not inherit a new terminal client's direnv environment;
   Prometheus must also promote the server and project resource attributes.
 
 - Select comma-separated 1-based indices or stable IDs. `0` or `all` selects the entire explicitly named category.
