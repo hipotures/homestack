@@ -463,7 +463,7 @@
       xAxis:{type:"time",min:(times[0]-range.step/2)*1000,max:range.end*1000,axisLabel:{hideOverlap:true}},
       yAxis:{type:"value",minInterval:1,axisLabel:{formatter:F.tokens}},
       // Mutually exclusive categories stack to the model's tokens; reasoning stays inside output.
-      series:PARTS.map(([id,name,color],i)=>AIUsage.bar(name,times.map(t=>[t*1000,seen(t)?maps[id].get(t)||0:null]),name,{id,barMaxWidth:28,itemStyle:{color:getComputedStyle(document.documentElement).getPropertyValue(color).trim()},markArea:i===0?areas:undefined})),
+      series:PARTS.map(([id,name,color],i)=>AIUsage.bar(name,times.map(t=>[t*1000,seen(t)?maps[id].get(t)||0:null]),name,{id,barMaxWidth:28,itemStyle:{color:getComputedStyle(document.documentElement).getPropertyValue(["cached","input","written"].includes(id)?`${color}-${agent}`:color).trim()},markArea:i===0?areas:undefined})),
     },{replaceMerge:["series"]});
   }
   function renderModelHit(){

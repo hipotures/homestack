@@ -41,9 +41,12 @@
   --m-claude-sonnet-5-5:#8f3f24;
 
   /* token kinds */
-  --tok-cached:    var(--codex);
-  --tok-uncached:  #7cc8b3;
-  --tok-written:   var(--codex-lo);
+  /* Mixed agents use a neutral blue family; a single agent switches to its own hue below. */
+  --tok-cached:    #4f86e0;
+  --tok-uncached:  #a3c3f2;
+  --tok-written:   #24477f;
+  --tok-cached-claude: #e0703f; --tok-uncached-claude: #f0b08a; --tok-written-claude: #8f3f24;
+  --tok-cached-codex:  #1fae85; --tok-uncached-codex:  #8ee0c4; --tok-written-codex:  #0e5c45;
   --tok-output:    #6b7380;
   --tok-reasoning: #a593f0;
 
@@ -83,7 +86,7 @@
     --text: #14171c; --text-2: #3a414b; --muted: #5b6470; --faint: #737b87;
     --codex: #14936f; --codex-hi: #0f7a5c; --codex-lo: #7fd0b6;
     --claude: #c96442; --claude-hi: #a84f31; --claude-lo: #e8a58c;
-    --tok-uncached: #5fb39b; --tok-output: #9aa2ad; --tok-reasoning: #7a63d9;
+    --tok-output: #9aa2ad; --tok-reasoning: #7a63d9;
     --warn: #a87a12; --alert-bg: rgba(201, 100, 66, 0.08);
     color-scheme: light;
   }
@@ -96,7 +99,7 @@
   --text: #14171c; --text-2: #3a414b; --muted: #5b6470; --faint: #737b87;
   --codex: #14936f; --codex-hi: #0f7a5c; --codex-lo: #7fd0b6;
   --claude: #c96442; --claude-hi: #a84f31; --claude-lo: #e8a58c;
-  --tok-uncached: #5fb39b; --tok-output: #9aa2ad; --tok-reasoning: #7a63d9;
+  --tok-output: #9aa2ad; --tok-reasoning: #7a63d9;
   --warn: #a87a12; --alert-bg: rgba(201, 100, 66, 0.08);
   color-scheme: light;
 }
@@ -167,5 +170,5 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--codex); outline
 }
 
 /* Token kinds follow the selected agent's hue; "all" keeps the defaults. */
-:root[data-agent="claude"] { --tok-cached: #e0703f; --tok-uncached: #f0b08a; --tok-written: #8f3f24; }
-:root[data-agent="codex"] { --tok-cached: #1fae85; --tok-uncached: #8ee0c4; --tok-written: #0e5c45; }
+:root[data-agent="claude"] { --tok-cached: var(--tok-cached-claude); --tok-uncached: var(--tok-uncached-claude); --tok-written: var(--tok-written-claude); }
+:root[data-agent="codex"] { --tok-cached: var(--tok-cached-codex); --tok-uncached: var(--tok-uncached-codex); --tok-written: var(--tok-written-codex); }

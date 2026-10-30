@@ -35,6 +35,12 @@
     'claude-haiku-5-5': '--m-claude-haiku-5-5',
     'claude-sonnet-5-5': '--m-claude-sonnet-5-5',
   };
+  // Models without a dedicated token: well-separated light, mid and dark tones of the agent hue,
+  // distinct from the dedicated model colors.
+  const EXTRA_TONES = {
+    '--claude': ['#f7d6c2', '#c2502a', '#5e2513'],
+    '--codex': ['#c6efe1', '#13866a', '#0b4535'],
+  };
   function colorFor(key) {
     const k = String(key || '').toLowerCase();
     if (MODEL_VAR[k]) return v(MODEL_VAR[k]);
@@ -46,7 +52,8 @@
       if (!rest) return v(AGENT_VAR[a]);
       let h = 0;
       for (const ch of rest) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
-      return v(AGENT_VAR[a] + ['', '-hi', '-lo'][h % 3]);
+      const tones = EXTRA_TONES[AGENT_VAR[a]];
+      return tones[h % tones.length];
     }
     return v('--muted');
   }
