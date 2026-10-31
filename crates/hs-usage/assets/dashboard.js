@@ -287,6 +287,8 @@
   }
   // Breakdown by the scopes left at "all"; it follows the trend metric (token types count as tokens).
   let scopeBy="project",scopesChart;
+  // Distinct from the agent hues; the largest scope gets the first color, unlabeled usage stays grey.
+  const SCOPE_COLORS=["#5b8def","#a78bfa","#e6c34a","#e879a6","#38bdf8","#f87171","#c4b5fd","#fde68a"];
   try{scopeBy=localStorage.getItem("scopeBy")==="host"?"host":"project";}catch(_){}
   function renderScopes(range) {
     const d=datasets.get("all.scopes"),open=["project","host"].filter(k=>selection[k]==="*"),by=open.includes(scopeBy)?scopeBy:open[0];
@@ -307,7 +309,8 @@
       tooltip:{trigger:"axis",formatter:AIUsage.tooltipFormatter(fmtFull)},
       xAxis:{type:"time",min:(first-range.step/2)*1000,max:range.end*1000,axisLabel:{hideOverlap:true}},
       yAxis:{type:"value",axisLabel:{formatter:fmtShort}},
-      series:rows.map(r=>{const m=new Map(r.points);return AIUsage.bar(r.name,times.map(t=>[t*1000,m.get(t)||0]),`${by} · ${r.name}`,{id:r.name,barMaxWidth:28});}),
+      series:rows.map(r=>{const m=new Map(r.points),color=r.name==="(unattributed)"?getComputedStyle(document.documentElement).getPropertyValue("--muted").trim():SCOPE_COLORS[rows.filter(x=>x.name!=="(unattributed)").indexOf(r)%SCOPE_COLORS.length];
+        return AIUsage.bar(r.name,times.map(t=>[t*1000,m.get(t)||0]),r.name,{id:r.name,barMaxWidth:28,itemStyle:{color}});}),
     },{replaceMerge:["series"]});
   }
   function renderComposition(totals) {
