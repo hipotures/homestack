@@ -144,7 +144,7 @@ async fn fetch_pricing(client: &reqwest::Client) -> Result<serde_json::Value, St
         "cache_read_input_token_cost",
         "cache_creation_input_token_cost",
     ];
-    let prices: serde_json::Map<String, serde_json::Value> = entries
+    let mut prices: serde_json::Map<String, serde_json::Value> = entries
         .iter()
         .filter(|(_, value)| value["litellm_provider"] == "openai")
         .map(|(name, value)| {
@@ -158,6 +158,11 @@ async fn fetch_pricing(client: &reqwest::Client) -> Result<serde_json::Value, St
     if prices.is_empty() {
         return Err("No OpenAI prices in LiteLLM catalog".to_owned());
     }
+    // Codex approval reviews run on a separate model at no charge and are absent from the catalog.
+    prices.insert(
+        "codex-auto-review".to_owned(),
+        serde_json::Value::Object(fields.iter().map(|field| ((*field).to_owned(), 0.into())).collect()),
+    );
     tracing::info!(models = prices.len(), "downloaded startup pricing catalog");
     Ok(serde_json::Value::Object(prices))
 }
