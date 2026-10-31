@@ -229,8 +229,10 @@
     const known=hits.filter(([,v])=>v!=null),low=known.reduce((m,h)=>h[1]<m[1]?h:m,[0,101]);
     // Near-empty buckets can drop to 0%, so the scale follows the range-wide rate and lower buckets are clamped.
     const overall=(totals.cacheHit?.value??0)*100,floor=overall>=98?98:Math.max(0,Math.floor(overall/5)*5-5);
-    const hitBars=known.length?`<div class="hits" aria-hidden="true">${hits.map(([,v])=>v==null?`<span style="height:2px;background:var(--track)"></span>`:`<span style="height:${Math.max(2,Math.round((Math.max(v,floor)-floor)/(100-floor)*40))}px;background:${v<Math.max(floor,overall-1)?css("--warn"):css("--tok-cached")}"></span>`).join("")}</div>`:"";
-    const hitNote=known.length?`<div class="note">scale ${floor}–100% · min ${F.pct(low[1])} at ${timeLabel(low[0],range)}</div>`:"";
+    const hitBars=known.length?`<div class="hits" title="scale ${floor}–100%" aria-hidden="true">${hits.map(([,v])=>v==null?`<span style="height:2px;background:var(--track)"></span>`:`<span style="height:${Math.max(2,Math.round((Math.max(v,floor)-floor)/(100-floor)*40))}px;background:${v<Math.max(floor,overall-1)?css("--warn"):css("--tok-cached")}"></span>`).join("")}</div>`:"";
+    const inputs=["cached","input","written"].map(k=>totals[k]?.value||0),inputAll=inputs.reduce((s,n)=>s+n,0);
+    const hitNote=inputAll?`<div class="stack"><div class="split" aria-hidden="true">${inputs.map((n,i)=>`<span style="width:${n/inputAll*100}%;background:var(${["--tok-cached","--tok-uncached","--tok-written"][i]})"></span>`).join("")}</div>
+      <div class="legend-row"><span><span style="color:var(--tok-cached)">●</span> cached ${F.pct(inputs[0]/inputAll*100)}</span>${known.length?`<span>min ${F.pct(low[1])} at ${timeLabel(low[0],range)}</span>`:""}</div></div>`:"";
     const cost=sumPoints(sel.map(a=>datasets.get(`${a}.cost`)?.details?.timeline)),outputs=sumPoints(category("output"));
     const output=totals.output?.value,reasoning=totals.reasoning?.value,share=output&&reasoning!=null?reasoning/output:null;
     const outputBody=output?`<div class="stack"><div class="split" aria-hidden="true"><span style="width:${(share||0)*100}%;background:var(--tok-reasoning)"></span><span style="width:${(1-(share||0))*100}%;background:var(--tok-output)"></span></div>
