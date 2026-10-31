@@ -539,7 +539,7 @@
         return {id:s.id,name:s.label,type:"line",smooth:false,symbol:"circle",symbolSize:4,connectNulls:false,itemStyle:{color},lineStyle:{color},data:times.map(t=>[t*1000,m.has(t)?m.get(t)*100:null])};}),
     },{replaceMerge:["series"]});
   }
-  /** Copies one chart as JSON, or downloads several as a JSON Lines file (too large for the clipboard). */
+  /** Copies one chart as JSON, or downloads all charts with shared provenance stored once. */
   // Effort levels from light to dark within the model hue; an unreported effort is grey.
   const EFFORTS=["minimal","low","medium","high","xhigh","max"],EFFORT_SHADE=[.7,.5,.2,-.15,-.4,-.6];
   function shade(hex,f){
@@ -576,13 +576,14 @@
     if(!id){button.textContent="Waiting for snapshot";return;}
     try {
       const response=await fetch(`/api/dashboard/export?${new URLSearchParams({snapshot:id})}`),source=await response.json();if(!response.ok)throw Error(source.error||"Export failed");
-      const lines=chosen.map(chart=>JSON.stringify({chart:chart.title,unit:chart.unit,snapshot:id,selection:scope,time_boundaries:source.datasets.find(d=>d.id===chart.series[0]?.dataset)?.range,...chart.export,series:chart.series.map(s=>({name:s.label||s.id,values:s.points,...s.export})),queries:source.queries,warnings:source.warnings}));
+      const shared={snapshot:id,selection:scope,freshness:source.freshness,queries:source.queries,warnings:source.warnings};
+      const charts=chosen.map(chart=>({chart:chart.title,unit:chart.unit,time_boundaries:source.datasets.find(d=>d.id===chart.series[0]?.dataset)?.range,...chart.export,series:chart.series.map(s=>({name:s.label||s.id,values:s.points,...s.export}))}));
       if(download){
         const d=new Date(),stamp=`${d.getFullYear()}${two(d.getMonth()+1)}${two(d.getDate())}-${two(d.getHours())}${two(d.getMinutes())}${two(d.getSeconds())}`;
-        const link=el("a");link.href=URL.createObjectURL(new Blob([lines.join("\n")+"\n"],{type:"application/jsonl"}));link.download=`ai-usage-${stamp}.jsonl`;
+        const link=el("a");link.href=URL.createObjectURL(new Blob([JSON.stringify({format:"ai-usage",version:1,...shared,charts})+"\n"],{type:"application/json"}));link.download=`ai-usage-${stamp}.json`;
         link.click();setTimeout(()=>URL.revokeObjectURL(link.href),0);button.textContent="Exported";
       }
-      else{await navigator.clipboard.writeText(JSON.stringify(JSON.parse(lines[0]),null,2));button.textContent="Copied";}
+      else{await navigator.clipboard.writeText(JSON.stringify({...shared,...charts[0]},null,2));button.textContent="Copied";}
     }catch(error){button.textContent=download?"Export failed":"Copy failed";button.title=error.message;}
     setTimeout(()=>{button.textContent=label;},2200);
   }
