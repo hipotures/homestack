@@ -403,7 +403,7 @@
   }
   /** Cards for every measurement this agent reports; returns placeholders for the empty state too. */
   function agentPanel(agent,summary,range) {
-    const color=AIUsage.colorFor(agents[agent]),small=[],wide=[],placeholders=[];let activity=summary[agent]?.total?.value>0;
+    const color=AIUsage.colorFor(agents[agent]),small=[],wide=[],placeholders=[];let activity=["total","cost"].some(key=>summary[agent]?.[key]?.value>0);
     // Histogram quantiles when the agent exports buckets; the Σsum/Σcount mean otherwise.
     const at=(d,q)=>`${d.details[q+"Capped"]?"≥ ":""}${F.duration(d.details[q])}`;
     for(const [m,label,hint]of LATENCY){const d=reported(agent,m);if(!d)continue;placeholders.push([label,hint||"median and p95"]);
@@ -416,7 +416,7 @@
       const failed=m==="tools"?total(d.details.failures):0;
       const note=m==="active"&&kinds.length?kinds.map(([k,v])=>`${esc(k)} ${F.duration(v)}`).join(" · "):m==="lines"?"added / removed":m==="tools"?`${F.full(failed)} failed`:"";
       small.push(metricCard(label,value,note,miniBars(d.details.timeline,range,color),m==="active"?`${F.full(Math.round(sum))} s`:F.full(sum)));}
-    const turn=reported(agent,"turnDuration");if(turn&&turn.details.total_seconds)wide.push(workCard(turn,range));
+    const turn=reported(agent,"turnDuration");if(turn&&turn.details.total_seconds){activity=true;wide.push(workCard(turn,range));}
     const tools=reported(agent,"tools");if(tools?.details.ranking?.length){activity=true;wide.push(toolsCard(tools,color));}
     return {activity,count:placeholders.length,html:small.length||wide.length?`${small.length?`<div class="kpi-grid metrics">${small.join("")}</div>`:""}${wide.length?`<div class="row-2">${wide.join("")}</div>`:""}`:"",placeholders};
   }
@@ -436,7 +436,9 @@
     const tabs=both?`<div class="tabs" role="tablist" aria-label="Agent">${sel.map(a=>`<button type="button" role="tab" data-tab="${a}" aria-selected="${a===agent}" style="--tab-color:${AIUsage.colorFor(agents[a])}"><i style="background:${AIUsage.colorFor(agents[a])}"></i>${agents[a]} <span class="count">${panels[a].count} metrics</span></button>`).join("")}</div>`
       :`<h2 class="agent-title"><i style="background:${AIUsage.colorFor(agents[agent])}"></i>${agents[agent]} · agent metrics</h2>`;
     const longer=["90d","180d","1y","all"].includes(selection.range);
-    const body=panel.activity&&panel.html?panel.html:`<div class="card empty"><div><h3>No ${agents[agent]} activity in this range</h3><p>${panel.placeholders.length?"When there is activity, these metrics appear here:":`${agents[agent]} reports no agent-specific metrics.`}</p></div>
+    const emptyTitle=panel.activity?`No ${agents[agent]} agent-specific metrics in this range`:`No ${agents[agent]} activity in this range`;
+    const emptyNote=panel.activity?"Token usage or cost is available above. Timing, session and tool metrics are reported separately; none are available for the selected range and filters.":panel.placeholders.length?"When agent-specific metrics are reported for the selected range and filters, they appear here:":`${agents[agent]} reports no agent-specific metrics.`;
+    const body=panel.html||`<div class="card empty"><div><h3>${emptyTitle}</h3><p>${emptyNote}</p></div>
       <div class="placeholders">${panel.placeholders.map(([label,hint])=>`<div><span class="eyebrow">${label}</span><span class="num">—</span><span>${hint}</span></div>`).join("")}</div>${longer?"":`<div><button type="button" class="link" data-goto="90d">Show the last 90 days</button></div>`}</div>`;
     const latency=LATENCY.map(([m])=>reported(agent,m)).filter(d=>d?.total!=null),quantiles=latency.some(d=>d.details.p50!=null);
     $("agents").innerHTML=`${compare}<div class="agent-bar" role="${both?"":"group"}">${tabs}${chip?`<span class="chip">${chip}</span>`:""}</div><div ${both?`role="tabpanel"`:""} class="agents">${body}</div>${latency.length&&panel.activity?`<p class="note faint" style="margin:0">${quantiles?"Durations are p50 with p95 below, approximated from the histogram buckets; ≥ marks a value in the open top bucket. Bars show p50 per bucket.":"Durations are averages (Σ sum / Σ count) of the duration histograms."}</p>`:""}`;
