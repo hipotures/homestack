@@ -1,0 +1,7 @@
+#!/bin/sh
+# Refuse a commit that CI would reject for formatting. Enable once per clone:
+#   git config core.hooksPath .githooks
+if ! cargo fmt --all --check >/dev/null 2>&1; then
+    echo "pre-commit: Rust code is not formatted; run 'cargo fmt --all' and commit again." >&2
+    exit 1
+fi
