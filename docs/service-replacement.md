@@ -11,7 +11,7 @@ The manifest decides whether a service has a home:
 
 - Empty `persistence` with `state_model: stateless` creates only a disposable
   root filesystem. No home volume is allocated or mounted. The current
-  `.homestack/homestack-api.yaml` uses this mode; its configuration, certificate
+  `.homestack/services/homestack-api/service.yaml` uses this mode; its configuration, certificate
   and PVE token are supplied again from the desktop after replacement.
 - Non-empty `persistence` attaches a separate Proxmox-managed `mp0` at
   `/home/app` before first start. A service with `state_model: local` requires

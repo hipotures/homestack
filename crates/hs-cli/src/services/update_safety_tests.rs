@@ -246,6 +246,7 @@ async fn stale_schema3_review_is_rejected_before_resolving_or_writing_environmen
     source.manifest.schema3 = Some(super::super::schema3::Contract {
         inputs: vec![],
         always_numbered: false,
+        homestack_telemetry: false,
         configuration: None,
     });
     // This root has no saved environment: reaching its resolver would produce

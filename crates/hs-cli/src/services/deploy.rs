@@ -126,14 +126,14 @@ impl Source {
             API_IMAGE
                 if self.repository != "hipotures/homestack"
                     || self.manifest.id != "homestack-api"
-                    || self.path != ".homestack/homestack-api.yaml" =>
+                    || self.path != ".homestack/services/homestack-api/service.yaml" =>
             {
                 Some("API initialization requires the canonical HomeStack API manifest from hipotures/homestack.")
             }
             SITE_IMAGE
                 if self.repository != "hipotures/homestack"
                     || self.manifest.id != "pangolin"
-                    || self.path != ".homestack/pangolin-site.yaml" =>
+                    || self.path != ".homestack/services/pangolin/service.yaml" =>
             {
                 Some("Site initialization requires the canonical Pangolin Site manifest from hipotures/homestack.")
             }
@@ -411,7 +411,12 @@ fn valid_domain(text: &str) -> bool {
 }
 
 pub(super) fn description(source: &Source, image: &str, digest: &str) -> String {
-    let telemetry = if source.manifest.schema3.is_some() {
+    let telemetry = if source
+        .manifest
+        .schema3
+        .as_ref()
+        .is_some_and(|contract| !contract.homestack_telemetry)
+    {
         String::new()
     } else {
         match &source.manifest.healthcheck {
@@ -1091,7 +1096,11 @@ fn port(manifest: &Manifest, name: &str) -> Option<u16> {
 
 /// Pass the manifest's heartbeat interval to the HTTP service before starting it.
 pub(super) async fn set_heartbeat(pve: &impl Pve, node: &str, ctid: u32, manifest: &Manifest) -> Result<(), String> {
-    if manifest.schema3.is_some() {
+    if manifest
+        .schema3
+        .as_ref()
+        .is_some_and(|contract| !contract.homestack_telemetry)
+    {
         return Ok(());
     }
     if let Some(Healthcheck::Http { heartbeat_seconds, .. }) = &manifest.healthcheck {

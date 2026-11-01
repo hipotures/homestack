@@ -1,0 +1,14 @@
+schema: 3
+service: homestack-api
+# Running instances use about 20 MiB of memory and under 100 MiB of root.
+resources:
+  cores: 1
+  memory: 256M
+  swap: 0M
+  rootfs: 256M
+deployment:
+  hostname: hs-api
+  # Independent API instances, one per node; clients switch between them.
+  instances: 3
+  placement: spread
+  state_model: stateless

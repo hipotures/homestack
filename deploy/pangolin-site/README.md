@@ -58,7 +58,7 @@ Telemetry reads `/proc/self/status` only when requested; nothing runs in
 between.
 
 New deployments and reviewed updates record `status-port 8080` through the
-HTTP healthcheck in `.homestack/pangolin-site.yaml`. Existing containers need
+HTTP healthcheck in `.homestack/services/pangolin/service.yaml`. Existing containers need
 an explicit image update to obtain the new executable and metadata; status
 discovery does not change their configurations. Use Site image 0.18.2 or later.
 

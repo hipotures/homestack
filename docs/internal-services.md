@@ -6,8 +6,13 @@ Metrics is the standalone generic read-only Prometheus MCP service, exposed at
 external TLS/authentication. See [Metrics](../deploy/metrics/README.md) for the
 read-only API boundary, resources, transport, and independent image releases.
 
-The repository declares two portable schema-1 services:
-`.homestack/homestack-api.yaml` and `.homestack/pangolin-site.yaml`.
+The repository declares two portable schema-3 internal services:
+`.homestack/services/homestack-api/` and `.homestack/services/pangolin/`.
+Each directory contains `service.yaml`, `defaults.yaml` and `inputs.yaml`.
+Both services have empty application inputs; their dedicated initialization
+continues to supply API configuration and Site credentials. Both declare
+`runtime.telemetry: homestack` to retain native status discovery and heartbeat
+configuration independently of their image names.
 HomeStack API and new Pangolin Site connectors initialize through common service
 deployment. No existing internal container is adopted or modified.
 
@@ -84,8 +89,8 @@ settings give it, as the review lists, before replacing the image.
 
 The service browser and review/apply worker use
 `services/deploy.rs::{survey,plan,apply}` and the scoped PVE deploy token.
-The canonical [API manifest](../.homestack/homestack-api.yaml) declares empty
-`persistence` and `state_model: stateless`: new instances have a disposable
+The canonical [API manifest](../.homestack/services/homestack-api/service.yaml) declares empty
+`persistence`, with `state_model: stateless` in its adjacent `defaults.yaml`: new instances have a disposable
 root only, with no `mp0` or persistent-home selector. It defaults to three
 independent instances spread across nodes, a 256M root and 256M memory.
 Review can select multiple nodes; each selected node gets one independent API.
@@ -234,7 +239,7 @@ sizes, scoped deploy token, unprivileged LXC, disposable rootfs and a separate
 persistent `mp0` at `/home/app`, with the common `HomeStack service
 pangolin` identity (manifest id `pangolin`), repository, manifest revision, image and digest. The
 legacy Step 8 description and tag are not used. Only the canonical
-`.homestack/pangolin-site.yaml` of `hipotures/homestack` is initialized;
+`.homestack/services/pangolin/service.yaml` of `hipotures/homestack` is initialized;
 another manifest id, path or repository using the Site image is refused. One
 instance is deployed per review. The operator must choose Site image `0.18.2`
 or later, with native HTTP health and telemetry. Environment must be

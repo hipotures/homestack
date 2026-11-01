@@ -16,6 +16,7 @@ pub const PROMETHEUS: &str = "HOMESTACK_PROMETHEUS_URL";
 pub struct Contract {
     pub inputs: Vec<Input>,
     pub always_numbered: bool,
+    pub homestack_telemetry: bool,
     pub configuration: Option<Configuration>,
 }
 
@@ -175,7 +176,7 @@ pub fn parse(service: &str, defaults: &str, inputs: &str, directory: &str) -> Re
     keys(
         &service["runtime"],
         "service.runtime",
-        &["ports", "healthcheck", "configuration"],
+        &["ports", "healthcheck", "configuration", "telemetry"],
     )?;
     if let Some(fields) = inputs["inputs"].as_array() {
         for (index, input) in fields.iter().enumerate() {
@@ -192,6 +193,11 @@ pub fn parse(service: &str, defaults: &str, inputs: &str, directory: &str) -> Re
             "inputs.inputs",
         )?,
         always_numbered: false,
+        homestack_telemetry: match service["runtime"].get("telemetry") {
+            None => false,
+            Some(value) if value.as_str() == Some("homestack") => true,
+            Some(_) => return Err("service.runtime.telemetry: expected homestack".into()),
+        },
         configuration: service["runtime"]
             .get("configuration")
             .cloned()
@@ -214,6 +220,7 @@ pub fn parse(service: &str, defaults: &str, inputs: &str, directory: &str) -> Re
     let mut runtime = service["runtime"].clone();
     let runtime_map = runtime.as_object_mut().ok_or("service.runtime: expected a mapping")?;
     runtime_map.remove("configuration");
+    runtime_map.remove("telemetry");
     runtime_map.insert(
         "resources".into(),
         defaults
@@ -249,6 +256,14 @@ pub fn parse(service: &str, defaults: &str, inputs: &str, directory: &str) -> Re
             .collect::<Vec<_>>()
             .join("; "));
     }
+    if contract.homestack_telemetry
+        && !matches!(
+            checked.manifest.as_ref().and_then(|m| m.healthcheck.as_ref()),
+            Some(super::manifest::Healthcheck::Http { .. })
+        )
+    {
+        return Err("service.runtime.telemetry: homestack requires an HTTP healthcheck".into());
+    }
 
     let mut displayed = legacy;
     displayed["schema"] = json!(3);
@@ -258,6 +273,9 @@ pub fn parse(service: &str, defaults: &str, inputs: &str, directory: &str) -> Re
     }
     if let Some(configuration) = service["runtime"].get("configuration") {
         displayed["runtime"]["configuration"] = configuration.clone();
+    }
+    if let Some(telemetry) = service["runtime"].get("telemetry") {
+        displayed["runtime"]["telemetry"] = telemetry.clone();
     }
     displayed["inputs"] = inputs["inputs"].clone();
     checked.document = YamlLoader::load_from_str(&displayed.to_string())

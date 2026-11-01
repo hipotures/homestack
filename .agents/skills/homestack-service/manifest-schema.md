@@ -268,7 +268,11 @@ unchanged.
 `service.yaml` requires `schema: 3`, `id` equal to the directory name, `name`,
 `image: {repository: REGISTRY/PATH}`, `runtime`, `persistence` and `exposure`.
 Runtime supports the same `ports` and `healthcheck` fields as schema 1, plus
-optional structured configuration delivery below. Resources belong only in
+optional structured configuration delivery below. Optional
+`runtime.telemetry: homestack` declares the native HomeStack status endpoint
+on the HTTP healthcheck port and enables injection of
+`HOMESTACK_HEARTBEAT_SECONDS` from that healthcheck. It requires an HTTP
+healthcheck; omit it for applications without the native telemetry contract. Resources belong only in
 defaults. Empty persistence/exposure can be `{}` or null. Nonempty sections
 follow schema-1 rules. The image owns its command, runtime user and writable
 directories; no arbitrary commands, hooks or directory preparation are
