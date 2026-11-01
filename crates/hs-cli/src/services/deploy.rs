@@ -743,6 +743,9 @@ pub async fn plan(
         Err(error) => plan.problems.push(error),
     }
     if let Some(contract) = &manifest.schema3 {
+        if let Err(error) = hs_deploy::devices::require_deploy_token_access(&contract.devices) {
+            plan.problems.push(error);
+        }
         match contract.values(&choice.application, config).and_then(|values| {
             let environment = contract.resolve(&values)?;
             if plan.environment.iter().any(|(key, _)| contract.owns_environment(key)) {
@@ -1497,6 +1500,7 @@ async fn run(
         return Err("The plan has problems; review it again".to_owned());
     }
     if let Some(contract) = &source.manifest.schema3 {
+        hs_deploy::devices::require_deploy_token_access(&contract.devices)?;
         let expected = contract.resolve(&plan.application)?;
         if expected.iter().any(|entry| !plan.environment.contains(entry)) {
             return Err("Application configuration changed since Review".into());

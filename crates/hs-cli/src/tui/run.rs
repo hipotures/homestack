@@ -1232,13 +1232,6 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
                             decide = Some(sender);
                             let updates = updates.clone();
                             let deploy_toml = deploy_toml(ctx);
-                            let prefix = installing.bridge(&mut app, &updates);
-                            let sounds = config::load(&config::default_path(&ctx.home, ctx.config_home.as_deref()))
-                                .map(|loaded| Sounds::from_table(loaded.client.sounds.as_ref())).unwrap_or_default();
-                            let device_access = crate::services::device_pve::Access {
-                                system: Arc::clone(&ctx.system), home: ctx.home.clone(), prefix, sounds,
-                                stop: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-                            };
                             tokio::spawn(async move {
                                 let told = updates.clone();
                                 let tell = move |progress: Progress| {
@@ -1247,7 +1240,7 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
                                 let say = move |line: &str| {
                                     let _ = updates.send(Update::Log(line.trim().to_owned()));
                                 };
-                                super::reinstall::work(Some(device_access), deploy_toml, start, &mut decisions, &tell, &say).await;
+                                super::reinstall::work(deploy_toml, start, &mut decisions, &tell, &say).await;
                             });
                         }
                         Request::UpdateApi => {

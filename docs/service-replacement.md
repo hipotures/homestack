@@ -209,11 +209,13 @@ and `read_only`. Existing valid device mappings survive replacement even
 when attached manually. Manifest declarations override the matching slots;
 removing a declaration does not detach an existing device.
 
-Review lists the effective devices. The stopped holder keeps their mappings
-and the persistent volume, and device restoration is verified before the
-holder is removed. Root SSH authentication is needed for device writes:
-Proxmox restricts them to `root@pam`. HomeStack uses `pvesh` for these fields
-and the deploy token for ordinary container operations. Failure to configure
-the holder's devices stops replacement before the original is destroyed.
-Paths must exist on the selected node; cross-node hardware migration is not
-implemented.
+Review lists the effective devices. The reconstruction code retains device
+mappings through the holder and verifies restoration, but Proxmox restricts
+device writes to `root@pam`. The scoped deploy API token cannot perform those
+writes. Creation and image replacement involving devices are therefore blocked
+before any holder is created or the original container is changed. Root API
+session support is not implemented. There is no SSH access path.
+
+Existing containers keep their manually configured devices and can continue
+running. Paths must exist on the selected node; cross-node hardware migration
+is not implemented.

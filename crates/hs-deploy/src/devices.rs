@@ -135,3 +135,13 @@ pub fn merged(existing: &Devices, declared: &Devices) -> Result<Devices, String>
     validate(&devices)?;
     Ok(devices)
 }
+
+/// The scoped deploy API token cannot pass Proxmox's root@pam-only device check.
+/// Refuse before creating a holder or changing the original container.
+pub fn require_deploy_token_access(devices: &Devices) -> Result<(), String> {
+    if devices.is_empty() {
+        Ok(())
+    } else {
+        Err("Device passthrough cannot be configured with the deploy API token: Proxmox requires a root@pam API session. Image replacement was not started; the existing container, data and devices are unchanged.".into())
+    }
+}

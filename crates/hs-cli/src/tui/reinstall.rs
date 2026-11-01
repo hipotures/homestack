@@ -223,7 +223,6 @@ fn strings(value: &Value) -> Vec<String> {
 /// then reinstall the servers one at a time with the image; each line of
 /// `hs-deploy` goes to `say`.
 pub async fn work(
-    device_access: Option<crate::services::device_pve::Access>,
     deploy_toml: PathBuf,
     start: Start,
     decisions: &mut mpsc::UnboundedReceiver<Decision>,
@@ -232,7 +231,7 @@ pub async fn work(
 ) {
     let parameters = &start.parameters;
     if parameters.get("service").is_some() {
-        common_work(device_access, &deploy_toml, &start, decisions, progress, say).await;
+        common_work(&deploy_toml, &start, decisions, progress, say).await;
         return;
     }
     let image = parameters["image"].as_str().unwrap_or_default().to_owned();
@@ -436,7 +435,6 @@ pub(crate) async fn common_source(repository: &str, id: &str) -> Result<crate::s
 }
 
 async fn common_work(
-    device_access: Option<crate::services::device_pve::Access>,
     path: &Path,
     start: &Start,
     decisions: &mut mpsc::UnboundedReceiver<Decision>,
@@ -456,7 +454,7 @@ async fn common_work(
             return Err("Selected image does not belong to this service".to_owned());
         }
         let config = DeployConfig::load(path)?;
-        let pve = crate::services::device_pve::DevicePve::new(&config, device_access)?;
+        let pve = hs_deploy::deploy::deploy_client(&config)?;
         let plan = update::plan(
             &pve,
             &config,

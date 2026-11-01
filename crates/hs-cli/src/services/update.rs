@@ -472,7 +472,7 @@ async fn review(
                 return Err("Home must have backup=1 for the selected backup".to_owned());
             }
         }
-        effective_devices(source, &target)?;
+        hs_deploy::devices::require_deploy_token_access(&effective_devices(source, &target)?)?;
         preflight(pve, config, &target, &plan.backup_storage).await?;
         let reviewed = reviewed_state(pve, &target, &plan.image, &plan.digest)
             .await
@@ -524,6 +524,9 @@ pub async fn apply(
 ) -> Result<Vec<String>, String> {
     if !plan.problems.is_empty() {
         return Err("Resolve the review problems first".to_owned());
+    }
+    for target in &plan.targets {
+        hs_deploy::devices::require_deploy_token_access(&effective_devices(source, target)?)?;
     }
     if source.manifest.schema3.is_some() {
         for target in &plan.targets {
@@ -917,6 +920,7 @@ async fn one(
     bootstrap: Option<&ApiBootstrap>,
     say: &(dyn Fn(&str) + Send + Sync),
 ) -> Result<Vec<String>, String> {
+    hs_deploy::devices::require_deploy_token_access(&effective_devices(source, target)?)?;
     let (ctid, node) = (target.ctid, target.node.as_str());
     if deploy::initializing(&target.description) {
         return Err(format!(
