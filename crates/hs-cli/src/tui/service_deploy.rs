@@ -10,9 +10,9 @@ use std::sync::atomic::Ordering;
 use std::sync::mpsc::Receiver;
 use std::time::Duration;
 
+use crate::services::device_pve::{Access as DeviceAccess, DevicePve};
 use hs_deploy::config::DeployConfig;
 use hs_deploy::node::show_size;
-use hs_pve::PveClient;
 use serde_json::Value;
 
 use super::install::{Check, Event, Found, Mark, Setting};
@@ -47,7 +47,7 @@ const SWAP: &str = "Swap (MiB)";
 
 struct Session {
     config: DeployConfig,
-    pve: PveClient,
+    pve: DevicePve,
     cluster: Cluster,
     instances: Vec<Instance>,
     settings: Vec<Setting>,
@@ -383,7 +383,16 @@ fn connect(
         "Reading the cluster, the instances and the releases".to_owned(),
     ));
     let config = DeployConfig::load(&setup.token_dir.join("deploy.toml"))?;
-    let pve = hs_deploy::deploy::deploy_client(&config)?;
+    let pve = DevicePve::new(
+        &config,
+        Some(DeviceAccess {
+            system: std::sync::Arc::clone(&setup.system),
+            home: setup.home.clone(),
+            prefix: setup.ssh_prefix.clone(),
+            sounds: setup.sounds.clone(),
+            stop: std::sync::Arc::clone(&setup.stop),
+        }),
+    )?;
     let cluster = setup.handle.block_on(deploy::survey(&config, &pve, source))?;
     if cluster.releases.is_empty() {
         return Err(format!(
@@ -1464,6 +1473,11 @@ fn new_sections(source: &Source, plan: &deploy::Plan) -> Vec<(String, Vec<String
             i.cores,
             i.memory_mib
         ));
+    }
+    if let Some(contract) = &source.manifest.schema3 {
+        for (slot, device) in &contract.devices {
+            lines.push(format!("Device {slot}: {}", device.property()));
+        }
     }
     if let Some(resolved) = &plan.resolved {
         lines.push(format!(

@@ -6,6 +6,7 @@ pub mod acme;
 pub mod config;
 pub mod console;
 pub mod deploy;
+pub mod devices;
 pub mod dns;
 pub mod node;
 pub mod ovh;

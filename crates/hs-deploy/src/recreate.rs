@@ -46,13 +46,14 @@ fn text<'a>(cfg: &'a Value, key: &str) -> &'a str {
     cfg[key].as_str().unwrap_or_default()
 }
 
-/// The mount-point keys whose volumes must survive, sorted. Bind mounts,
-/// devices and unused volumes are refused: nothing here can carry them.
+/// The mount-point keys whose volumes must survive, sorted. Bind mounts
+/// and unused volumes are refused. Device mappings are kept as configuration.
 pub fn mounts(cfg: &Value) -> Result<Vec<String>, String> {
+    crate::devices::read(cfg)?;
     let mut keys = Vec::new();
     for (key, value) in cfg.as_object().ok_or("Invalid container configuration")? {
-        if key.starts_with("unused") || key.starts_with("dev") {
-            return Err(format!("{key}: unused volumes and devices are not supported yet"));
+        if key.starts_with("unused") {
+            return Err(format!("{key}: unused volumes are not supported yet"));
         }
         if key.strip_prefix("mp").is_some_and(|n| n.parse::<u32>().is_ok()) {
             let volume = value.as_str().unwrap_or_default().split(',').next().unwrap_or_default();
@@ -181,8 +182,10 @@ async fn put(pve: &impl Pve, node: &str, ctid: u32, cfg: &Value, fields: &[(Stri
     Ok(())
 }
 
-fn kept(cfg: &Value, keep: &[&str]) -> Vec<(String, String)> {
-    keep.iter()
+fn kept(cfg: &Value, keep: &[&str]) -> Result<Vec<(String, String)>, String> {
+    let mut fields: Vec<_> = keep
+        .iter()
+        .filter(|key| !crate::devices::valid_slot(key))
         .filter_map(|key| {
             let value = cfg.get(*key)?;
             Some((
@@ -190,7 +193,9 @@ fn kept(cfg: &Value, keep: &[&str]) -> Vec<(String, String)> {
                 value.as_str().map_or_else(|| value.to_string(), str::to_owned),
             ))
         })
-        .collect()
+        .collect();
+    fields.extend(crate::devices::fields(&crate::devices::read(cfg)?));
+    Ok(fields)
 }
 
 /// Make the holder (stopped, never started, no network) and copy the kept
@@ -211,6 +216,7 @@ async fn prepare_holder(
         node::create(
             pve,
             &NewContainer {
+                devices: Default::default(),
                 searchdomain: None,
                 swap_mib: 0,
                 node,
@@ -234,7 +240,10 @@ async fn prepare_holder(
         .await?;
     }
     let cfg = config(pve, node, id).await?;
-    let mut fields = kept(old, r.keep);
+    let devices = crate::devices::merged(&crate::devices::read(old)?, &r.spec.devices)?;
+    let mut fields = kept(old, r.keep)?;
+    fields.retain(|(key, _)| !crate::devices::valid_slot(key));
+    fields.extend(crate::devices::fields(&devices));
     let note = if r.note.is_empty() {
         String::new()
     } else {
@@ -337,7 +346,10 @@ async fn finish(pve: &impl Pve, r: &Replace<'_>, say: &impl Fn(&str)) -> Result<
         move_volume(pve, node, id, ctid, &key, say).await?;
     }
     let new = config(pve, node, ctid).await?;
-    let mut fields = kept(&held, r.keep);
+    let devices = crate::devices::merged(&crate::devices::read(&held)?, &r.spec.devices)?;
+    let mut fields = kept(&held, r.keep)?;
+    fields.retain(|(key, _)| !crate::devices::valid_slot(key));
+    fields.extend(crate::devices::fields(&devices));
     for (key, value) in &mut fields {
         if key == "env" {
             *value = node::merge_env(&node::parse_env(text(&new, "env")), &node::parse_env(value), &[]);
@@ -345,6 +357,9 @@ async fn finish(pve: &impl Pve, r: &Replace<'_>, say: &impl Fn(&str)) -> Result<
     }
     if !fields.is_empty() {
         put(pve, node, ctid, &new, &fields).await?;
+    }
+    if crate::devices::read(&config(pve, node, ctid).await?)? != devices {
+        return Err(format!("CT {ctid}: device restoration failed; holder retained"));
     }
     remove_bare(pve, node, id, say).await
 }
@@ -369,7 +384,7 @@ pub async fn replace(pve: &impl Pve, r: &Replace<'_>, say: &impl Fn(&str)) -> Re
         }
         let keys = mounts(&cfg)?;
         match holder {
-            None if keys.is_empty() && r.keep.is_empty() => {
+            None if keys.is_empty() && r.keep.is_empty() && crate::devices::read(&cfg)?.is_empty() => {
                 stop(pve, node, ctid, r.graceful, say).await?;
                 remove_bare(pve, node, ctid, say).await?;
             }
@@ -497,6 +512,7 @@ mod tests {
 
     fn spec(description: &str) -> NewContainer<'_> {
         NewContainer {
+            devices: Default::default(),
             searchdomain: None,
             swap_mib: 0,
             node: "pve3",
@@ -517,6 +533,7 @@ mod tests {
         }
     }
 
+    const DEVICE: &str = "path=/dev/serial/by-id/usb-test,uid=0,gid=0,mode=0660,deny-write=0";
     const HOME: &str = "local-lvm:vm-120-disk-1,mp=/home/app,backup=1,size=8G";
 
     async fn finished(node: &Node) {
@@ -539,12 +556,16 @@ mod tests {
         assert!(cfg["mp0"].as_str().unwrap().starts_with("local-lvm:vm-120-"));
         assert_eq!(cfg["env"], "IMAGE=new\0PATH=/bin\0SECRET=kept");
         assert_eq!(cfg["features"], "nesting=1");
+        assert_eq!(
+            crate::devices::read(cfg).unwrap(),
+            crate::devices::read(&json!({"dev0": DEVICE})).unwrap()
+        );
     }
 
     #[tokio::test]
     async fn home_moves_through_the_holder_and_back() {
         let old = json!({"hostname":"app", "description":"old", "rootfs":"local-lvm:vm-120-disk-0,size=4G",
-            "mp0":HOME, "env":"PATH=/bin\0SECRET=kept", "features":"nesting=1", "digest":"d",
+            "mp0":HOME, "dev0": DEVICE, "env":"PATH=/bin\0SECRET=kept", "features":"nesting=1", "digest":"d",
             "net0":"name=eth0,bridge=vmbr0,ip=192.0.2.10/24,hwaddr=02:00:00:00:00:10"});
         finished(&Node(Mutex::new(BTreeMap::from([(120, (old, true))])))).await;
     }
@@ -554,7 +575,7 @@ mod tests {
         // The old container is gone; only the ready holder keeps the home.
         let holder = json!({"hostname":holder_name(120), "description":format!("{HOLDER} 120\n{READY}"),
             "rootfs":"local-lvm:vm-999999-disk-0,size=4G", "mp0":"local-lvm:vm-999999-disk-1,mp=/home/app,backup=1,size=8G",
-            "env":"PATH=/bin\0SECRET=kept", "features":"nesting=1", "digest":"d"});
+            "dev0": DEVICE, "env":"PATH=/bin\0SECRET=kept", "features":"nesting=1", "digest":"d"});
         finished(&Node(Mutex::new(BTreeMap::from([(HOLDER_ID, (holder, false))])))).await;
     }
 

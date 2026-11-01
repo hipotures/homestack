@@ -200,3 +200,20 @@ between storages of the same type. The CTID, address and MAC stay. A running
 service starts again on the target node and its health check must pass. A move
 made in Proxmox itself needs nothing from HomeStack: the container is where
 Proxmox shows it.
+
+## Device passthrough
+
+Schema-3 services can declare `runtime.devices` keyed by `dev0` through
+`dev255`, with a device `path`, optional `uid`, `gid`, quoted octal `mode`
+and `read_only`. Existing valid device mappings survive replacement even
+when attached manually. Manifest declarations override the matching slots;
+removing a declaration does not detach an existing device.
+
+Review lists the effective devices. The stopped holder keeps their mappings
+and the persistent volume, and device restoration is verified before the
+holder is removed. Root SSH authentication is needed for device writes:
+Proxmox restricts them to `root@pam`. HomeStack uses `pvesh` for these fields
+and the deploy token for ordinary container operations. Failure to configure
+the holder's devices stops replacement before the original is destroyed.
+Paths must exist on the selected node; cross-node hardware migration is not
+implemented.

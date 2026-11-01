@@ -1611,6 +1611,12 @@ async fn run(
             node::ensure_image(pve, &node, &plan.template_storage, &plan.image, &|line| say(line)).await?
         };
         let spec = NewContainer {
+            devices: source
+                .manifest
+                .schema3
+                .as_ref()
+                .map(|contract| contract.devices.clone())
+                .unwrap_or_default(),
             node: &node,
             ctid,
             hostname: &instance.hostname,

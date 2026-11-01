@@ -94,13 +94,12 @@ async fn safe_config(pve: &impl Pve, instance: &Instance, cfg: &Value) -> Result
             (k.starts_with("mp") && *k != "mp0")
                 || (k.starts_with("net") && *k != "net0")
                 || k.starts_with("unused")
-                || k.starts_with("dev")
                 || *k == "hookscript"
         })
         .collect();
     if !extra.is_empty() {
         return Err(CoreError::Refused(format!(
-            "Extra disks, networks, devices or hooks require manual review: {}",
+            "Extra disks, networks or hooks require manual review: {}",
             extra.join(", ")
         )));
     }
@@ -122,6 +121,7 @@ async fn safe_config(pve: &impl Pve, instance: &Instance, cfg: &Value) -> Result
             "Custom LXC configuration requires manual review".to_owned(),
         ));
     }
+    hs_deploy::devices::read(cfg).map_err(CoreError::Refused)?;
     let base = format!("/nodes/{}/lxc/{}", instance.node, instance.ctid);
     let status = pve.get(&format!("{base}/status/current"), &[]).await?;
     if status["ha"]["managed"].as_u64() != Some(0) && status["ha"]["managed"].as_bool() != Some(false) {
@@ -372,6 +372,17 @@ pub async fn plan(
             ),
             String::new(),
         ]);
+        if let Ok(devices) = effective_devices(source, target) {
+            for (slot, device) in devices {
+                let action = if target.devices.get(&slot) == Some(&device) {
+                    "preserve"
+                } else {
+                    "configure"
+                };
+                plan.lines
+                    .push(format!("Device {slot}: {action} {}", device.property()));
+            }
+        }
         if target.held {
             plan.lines.push(format!(
                 "An earlier update stopped while CT {} was gone; its home waits in CT {}.",
@@ -461,6 +472,7 @@ async fn review(
                 return Err("Home must have backup=1 for the selected backup".to_owned());
             }
         }
+        effective_devices(source, &target)?;
         preflight(pve, config, &target, &plan.backup_storage).await?;
         let reviewed = reviewed_state(pve, &target, &plan.image, &plan.digest)
             .await
@@ -469,6 +481,14 @@ async fn review(
         plan.targets.push(target);
     }
     Ok(())
+}
+
+fn effective_devices(source: &Source, target: &Instance) -> Result<hs_deploy::devices::Devices, String> {
+    let declared = source.manifest.schema3.as_ref().map(|contract| &contract.devices);
+    match declared {
+        Some(declared) => hs_deploy::devices::merged(&target.devices, declared),
+        None => Ok(target.devices.clone()),
+    }
 }
 
 async fn image_matches(plan: &Plan) -> Result<(), String> {
@@ -990,7 +1010,9 @@ async fn one(
             .collect::<Vec<_>>()
             .join("\n")
     );
+    let devices = effective_devices(source, target)?;
     let spec = node::NewContainer {
+        devices: devices.clone(),
         searchdomain: None,
         swap_mib: 0,
         node,
@@ -1029,6 +1051,7 @@ async fn one(
         ),
         (new.hostname != target.hostname, "hostname"),
         (new.mac != target.mac, "MAC address"),
+        (new.devices != devices, "device passthrough configuration"),
         (!node::same_net(&new.network, &target.network), "network configuration"),
         (
             !same_home(&new, target),

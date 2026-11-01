@@ -557,6 +557,7 @@ pub async fn apply(config: &DeployConfig, only: &[String], say: &impl Fn(&str)) 
         )
         .await?;
         let spec = NewContainer {
+            devices: Default::default(),
             searchdomain: None,
             swap_mib: 0,
             node: &instance.node,

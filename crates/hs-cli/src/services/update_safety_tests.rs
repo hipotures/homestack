@@ -180,6 +180,7 @@ async fn stale_review_refuses_every_mutation() {
     for (key, value) in [
         ("lxc", json!([["lxc.mount.entry", "/unsafe"]])),
         ("memory", json!(1024)),
+        ("dev0", json!("path=/dev/ttyUSB0,uid=0,gid=0,mode=0660")),
         ("cores", json!(2)),
         ("onboot", json!(1)),
         (
@@ -247,6 +248,7 @@ async fn stale_schema3_review_is_rejected_before_resolving_or_writing_environmen
         inputs: vec![],
         always_numbered: false,
         homestack_telemetry: false,
+        devices: Default::default(),
         configuration: None,
     });
     // This root has no saved environment: reaching its resolver would produce

@@ -46,6 +46,12 @@ async fn storages(pve: &impl Pve, node: &str) -> Result<Vec<Value>, String> {
 }
 
 fn movable(instance: &Instance) -> Result<(), String> {
+    if !instance.devices.is_empty() {
+        return Err(format!(
+            "CT {} has node-local passthrough devices; cross-node migration requires a separate hardware placement plan",
+            instance.ctid
+        ));
+    }
     if deploy::initializing(&instance.description) {
         return Err(format!(
             "CT {} is still initializing; finish its deployment first",

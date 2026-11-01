@@ -314,6 +314,44 @@ follow schema-1 rules, including the optional `persistence.mount`. The image own
 directories; no arbitrary commands, hooks or directory preparation are
 accepted from the manifest.
 
+**Device passthrough.**
+
+Optional `runtime.devices` maps Proxmox slots `dev0` through `dev255` to
+structured device mappings. Each entry requires `path`, an absolute device
+path below `/dev` without traversal, whitespace or property separators.
+Optional `uid` and `gid` are nonnegative 32-bit integers, `mode` is a quoted
+octal string (`"0660"`), and `read_only` is a boolean (default false).
+Omitted UID/GID/mode use Proxmox defaults. Unknown fields, duplicate paths,
+invalid slots and invalid types are rejected. No raw LXC directives or commands
+are accepted. For example:
+
+```yaml
+runtime:
+  devices:
+    dev0:
+      path: /dev/serial/by-id/usb-EXAMPLE-if00-port0
+      uid: 0
+      gid: 0
+      mode: "0660"
+      read_only: false
+```
+
+Creation attaches the declared devices before startup. Image replacement
+preserves all existing valid `devN` mappings, including manually attached
+ones; declared slots apply the manifest's settings. Review lists the effective
+mappings. A stopped holder retains them through interruption alongside the
+persistent volume; their restoration is verified before removing the holder.
+Removing a declaration does not unplug an existing device.
+
+[Proxmox restricts device writes to `root@pam`](https://github.com/proxmox/pve-container/blob/master/src/PVE/LXC.pm). The CLI opens the normal
+root SSH connection to a configured Proxmox endpoint on the first device
+write, and uses `pvesh` solely for device fields with a configuration digest.
+Other operations continue through the scoped deploy token. The effective
+mappings are validated on the stopped holder before deleting the original
+container. Device paths refer to hardware on the selected node; they do not
+move hardware between nodes. Cross-node migration of device-bearing
+containers is refused pending a separate hardware placement plan.
+
 `defaults.yaml` requires `schema: 3`, `service: <id>`, `resources` with the
 schema-1 size/core fields, and `deployment` with the schema-1 fields.
 `deployment.instance_naming` optionally selects `always-numbered` or

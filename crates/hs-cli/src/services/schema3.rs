@@ -17,6 +17,7 @@ pub struct Contract {
     pub inputs: Vec<Input>,
     pub always_numbered: bool,
     pub homestack_telemetry: bool,
+    pub devices: hs_deploy::devices::Devices,
     pub configuration: Option<Configuration>,
 }
 
@@ -176,7 +177,7 @@ pub fn parse(service: &str, defaults: &str, inputs: &str, directory: &str) -> Re
     keys(
         &service["runtime"],
         "service.runtime",
-        &["ports", "healthcheck", "configuration", "telemetry"],
+        &["ports", "healthcheck", "configuration", "telemetry", "devices"],
     )?;
     if let Some(fields) = inputs["inputs"].as_array() {
         for (index, input) in fields.iter().enumerate() {
@@ -193,6 +194,12 @@ pub fn parse(service: &str, defaults: &str, inputs: &str, directory: &str) -> Re
             "inputs.inputs",
         )?,
         always_numbered: false,
+        devices: service["runtime"]
+            .get("devices")
+            .cloned()
+            .map(|v| decode(v, "service.runtime.devices"))
+            .transpose()?
+            .unwrap_or_default(),
         homestack_telemetry: match service["runtime"].get("telemetry") {
             None => false,
             Some(value) if value.as_str() == Some("homestack") => true,
@@ -221,6 +228,7 @@ pub fn parse(service: &str, defaults: &str, inputs: &str, directory: &str) -> Re
     let runtime_map = runtime.as_object_mut().ok_or("service.runtime: expected a mapping")?;
     runtime_map.remove("configuration");
     runtime_map.remove("telemetry");
+    runtime_map.remove("devices");
     runtime_map.insert(
         "resources".into(),
         defaults
@@ -276,6 +284,9 @@ pub fn parse(service: &str, defaults: &str, inputs: &str, directory: &str) -> Re
     }
     if let Some(telemetry) = service["runtime"].get("telemetry") {
         displayed["runtime"]["telemetry"] = telemetry.clone();
+    }
+    if let Some(devices) = service["runtime"].get("devices") {
+        displayed["runtime"]["devices"] = devices.clone();
     }
     displayed["inputs"] = inputs["inputs"].clone();
     checked.document = YamlLoader::load_from_str(&displayed.to_string())
@@ -414,6 +425,7 @@ impl Input {
 
 impl Contract {
     fn validate(&self) -> Result<(), String> {
+        hs_deploy::devices::validate(&self.devices).map_err(|error| format!("runtime.devices: {error}"))?;
         if self.inputs.len() > 64 {
             return Err("inputs.inputs: at most 64 fields".into());
         }

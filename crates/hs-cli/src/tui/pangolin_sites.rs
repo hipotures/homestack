@@ -1223,6 +1223,7 @@ async fn deploy_node(
     if n.container == CtStep::Create {
         let ostemplate = node::ensure_image(pve, name, &plan.template, &ctx.image, say).await?;
         let spec = NewContainer {
+            devices: Default::default(),
             searchdomain: None,
             swap_mib: 0,
             node: name,

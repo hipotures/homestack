@@ -29,7 +29,7 @@ pub fn image_file(reference: &str) -> Result<String, String> {
     Ok(format!("{name}_{tag}.tar"))
 }
 
-pub(crate) async fn wait(pve: &impl Pve, upid: &Value, what: &str) -> Result<(), String> {
+pub async fn wait(pve: &impl Pve, upid: &Value, what: &str) -> Result<(), String> {
     let upid = upid.as_str().ok_or_else(|| format!("{what}: Proxmox gave no task"))?;
     let result = wait_task(pve, upid, &TaskWait::up_to(TASK_LIMIT), &NoObserver)
         .await
@@ -242,6 +242,7 @@ pub fn show_size(mib: u32) -> String {
 
 /// What a new container gets.
 pub struct NewContainer<'a> {
+    pub devices: crate::devices::Devices,
     pub node: &'a str,
     pub ctid: u32,
     pub hostname: &'a str,
@@ -284,6 +285,8 @@ pub async fn create(pve: &impl Pve, spec: &NewContainer<'_>, say: &impl Fn(&str)
 
 /// Start creation separately so a caller can journal the task before waiting.
 pub async fn create_task(pve: &impl Pve, spec: &NewContainer<'_>) -> Result<Value, String> {
+    crate::devices::validate(&spec.devices)?;
+    let devices = crate::devices::fields(&spec.devices);
     let ctid = spec.ctid.to_string();
     let rootfs = format!("{}:{}", spec.storage, gib(spec.disk_mib));
     let memory = spec.memory_mib.to_string();
@@ -314,6 +317,7 @@ pub async fn create_task(pve: &impl Pve, spec: &NewContainer<'_>) -> Result<Valu
     if let Some(mp0) = &spec.mp0 {
         form.push(("mp0", mp0.as_str()));
     }
+    form.extend(devices.iter().map(|(key, value)| (key.as_str(), value.as_str())));
     pve.post(&format!("/nodes/{}/lxc", spec.node), &form)
         .await
         .map_err(|e| format!("create CT {}: {e}", spec.ctid))
