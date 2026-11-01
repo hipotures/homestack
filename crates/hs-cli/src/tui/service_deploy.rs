@@ -414,9 +414,10 @@ fn connect(
             .and_then(|i| i.searchdomain.clone())
             .or_else(|| local.map(|dns| dns.zone.clone()))
             .unwrap_or_else(|| config.domain.clone()),
+        // The Local DNS server only takes record updates; containers resolve
+        // through the deployment network's nameserver.
         nameserver: first
             .and_then(|i| i.nameserver.clone())
-            .or_else(|| local.map(|dns| dns.server.clone()))
             .or_else(|| config.nameserver.map(|ip| ip.to_string()))
             .unwrap_or_default(),
     };
