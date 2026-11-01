@@ -124,10 +124,10 @@ pub fn validate_stage(cfg: &Value, ctid: u32) -> Result<(), String> {
         }
     }
     for key in ["rootfs", "mp0"] {
-        if let Some(property) = cfg[key].as_str() {
-            if !volume(property).contains(&format!("-{HOLDER_ID}-")) || property.starts_with('/') {
-                return Err("Root image staging volume ownership is unproven".into());
-            }
+        if let Some(property) = cfg[key].as_str()
+            && (!volume(property).contains(&format!("-{HOLDER_ID}-")) || property.starts_with('/'))
+        {
+            return Err("Root image staging volume ownership is unproven".into());
         }
     }
     if cfg["mp0"].as_str().is_some_and(|property| {
@@ -234,10 +234,10 @@ pub async fn replace(pve: &impl Pve, spec: &NewContainer<'_>, say: &(impl Fn(&st
         ]);
         if let Some(entries) = cfg["lxc"].as_array() {
             for entry in entries {
-                if let (Some(key), Some(value)) = (entry[0].as_str(), entry[1].as_str()) {
-                    if values.contains_key(key) {
-                        values.insert(key.to_owned(), value.to_owned());
-                    }
+                if let (Some(key), Some(value)) = (entry[0].as_str(), entry[1].as_str())
+                    && values.contains_key(key)
+                {
+                    values.insert(key.to_owned(), value.to_owned());
                 }
             }
         }
