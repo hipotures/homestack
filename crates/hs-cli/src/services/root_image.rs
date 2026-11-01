@@ -1,9 +1,9 @@
 //! Replace only the root disk of a device-bearing CT; never rewrite devN or mp0.
 use hs_core::pve::Pve;
 use hs_deploy::node::{self, NewContainer};
+use hs_deploy::recreate::HOLDER_ID;
 use serde_json::Value;
 
-pub const STAGING_ID: u32 = 999_998;
 pub const OLD: &str = "root-image-old ";
 const NEW: &str = "root-image-new ";
 const IMAGE_PATH: &str = "/.homestack-root-image";
@@ -125,7 +125,7 @@ pub fn validate_stage(cfg: &Value, ctid: u32) -> Result<(), String> {
     }
     for key in ["rootfs", "mp0"] {
         if let Some(property) = cfg[key].as_str() {
-            if !volume(property).contains(&format!("-{STAGING_ID}-")) || property.starts_with('/') {
+            if !volume(property).contains(&format!("-{HOLDER_ID}-")) || property.starts_with('/') {
                 return Err("Root image staging volume ownership is unproven".into());
             }
         }
@@ -161,7 +161,7 @@ pub async fn replace(pve: &impl Pve, spec: &NewContainer<'_>, say: &(impl Fn(&st
         .as_array()
         .ok_or("Cluster inventory unavailable")?
         .iter()
-        .find(|item| item["vmid"].as_u64() == Some(u64::from(STAGING_ID)));
+        .find(|item| item["vmid"].as_u64() == Some(u64::from(HOLDER_ID)));
     if staged.is_some_and(|item| item["node"] != node || item["pool"] != spec.pool || item["type"] != "lxc") {
         return Err("Root image staging CTID is already in use elsewhere".into());
     }
@@ -173,7 +173,7 @@ pub async fn replace(pve: &impl Pve, spec: &NewContainer<'_>, say: &(impl Fn(&st
         .as_array()
         .ok_or("Node container inventory unavailable")?
         .iter()
-        .any(|item| item["vmid"].as_u64() == Some(u64::from(STAGING_ID)));
+        .any(|item| item["vmid"].as_u64() == Some(u64::from(HOLDER_ID)));
     if !stage_exists {
         if let Some(old) = old_root(&original)? {
             if volume(text(&original, "rootfs")) != volume(old) && temporary_fields(&original, id)?.is_empty() {
@@ -188,7 +188,7 @@ pub async fn replace(pve: &impl Pve, spec: &NewContainer<'_>, say: &(impl Fn(&st
             &NewContainer {
                 devices: Default::default(),
                 node,
-                ctid: STAGING_ID,
+                ctid: HOLDER_ID,
                 hostname: &name,
                 ostemplate: spec.ostemplate,
                 pool: spec.pool,
@@ -209,7 +209,7 @@ pub async fn replace(pve: &impl Pve, spec: &NewContainer<'_>, say: &(impl Fn(&st
         )
         .await?;
     }
-    let mut staged = config(pve, node, STAGING_ID).await?;
+    let mut staged = config(pve, node, HOLDER_ID).await?;
     validate_stage(&staged, id)?;
     // The manifest tree SHA binds its content; a docs-only repository commit
     // does not change the staged image or the reviewed service contract.
@@ -220,7 +220,7 @@ pub async fn replace(pve: &impl Pve, spec: &NewContainer<'_>, say: &(impl Fn(&st
             .map(str::to_owned)
             .collect::<Vec<_>>()
     };
-    if revision(text(&staged, "description")) != revision(&description) || running(pve, node, STAGING_ID).await? {
+    if revision(text(&staged, "description")) != revision(&description) || running(pve, node, HOLDER_ID).await? {
         return Err("Root image staging revision changed; review again".into());
     }
     // Raw runtime identity cannot be rewritten by the deploy token. Refuse an
@@ -256,12 +256,12 @@ pub async fn replace(pve: &impl Pve, spec: &NewContainer<'_>, say: &(impl Fn(&st
         put(
             pve,
             node,
-            STAGING_ID,
+            HOLDER_ID,
             &staged,
             &[("rootfs", &placeholder), ("mp0", &image_mount)],
         )
         .await?;
-        staged = config(pve, node, STAGING_ID).await?;
+        staged = config(pve, node, HOLDER_ID).await?;
         validate_stage(&staged, id)?;
     }
     if old_root(&original)?.is_none() {
@@ -297,7 +297,7 @@ pub async fn replace(pve: &impl Pve, spec: &NewContainer<'_>, say: &(impl Fn(&st
         let to = id.to_string();
         let upid = pve
             .post(
-                &format!("/nodes/{node}/lxc/{STAGING_ID}/move_volume"),
+                &format!("/nodes/{node}/lxc/{HOLDER_ID}/move_volume"),
                 &[
                     ("volume", "mp0"),
                     ("target-vmid", &to),
@@ -360,14 +360,14 @@ pub async fn replace(pve: &impl Pve, spec: &NewContainer<'_>, say: &(impl Fn(&st
         put(pve, node, id, &original, &[("delete", &key)]).await?;
         original = config(pve, node, id).await?;
     }
-    let staged = config(pve, node, STAGING_ID).await?;
+    let staged = config(pve, node, HOLDER_ID).await?;
     validate_stage(&staged, id)?;
     if staged.get("mp0").is_some() {
         return Err("Staging still holds the transferred image; cleanup refused".into());
     }
     let upid = pve
         .delete(
-            &format!("/nodes/{node}/lxc/{STAGING_ID}"),
+            &format!("/nodes/{node}/lxc/{HOLDER_ID}"),
             &[("purge", "0"), ("destroy-unreferenced-disks", "0")],
         )
         .await

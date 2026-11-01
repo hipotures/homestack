@@ -211,7 +211,7 @@ New deployments declaring devices require attachment authorization not available
 to that token and are refused before creating a container.
 
 Existing device-bearing containers update through the Proxmox API by switching
-only their root disk. A stopped staging CT (`999998`) unpacks the new OCI image;
+only their root disk. A stopped staging CT (`999999`) unpacks the new OCI image;
 its image volume is reassigned to the original CT through reserved `mp255`,
 then becomes `rootfs`. The original CTID, `devN`, network and persistent `mp0`
 remain in place. No SSH connection or device-field writes occur.

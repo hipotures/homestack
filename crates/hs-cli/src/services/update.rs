@@ -773,7 +773,7 @@ async fn reviewed_state(pve: &impl Pve, target: &Instance, image: &str, digest: 
     let resources = resources
         .as_array()
         .ok_or_else(|| CoreError::Refused("Cluster inventory unavailable".to_owned()))?;
-    for id in [target.ctid, recreate::HOLDER_ID, root_image::STAGING_ID] {
+    for id in [target.ctid, recreate::HOLDER_ID] {
         let matches: Vec<_> = resources
             .iter()
             .filter(|r| r["vmid"].as_u64() == Some(u64::from(id)))
@@ -810,12 +810,12 @@ async fn reviewed_state(pve: &impl Pve, target: &Instance, image: &str, digest: 
     let mut root_image_operation = target.description.lines().any(|line| line.starts_with(root_image::OLD));
     let mut recovery_operation = None;
     let mut power = original_power(target).map_err(CoreError::Refused)?;
-    for id in [target.ctid, recreate::HOLDER_ID, root_image::STAGING_ID] {
+    for id in [target.ctid, recreate::HOLDER_ID] {
         if !list.iter().any(|item| item["vmid"].as_u64() == Some(u64::from(id))) {
             continue;
         }
         let cfg = pve.get(&format!("/nodes/{}/lxc/{id}/config", target.node), &[]).await?;
-        if id == root_image::STAGING_ID {
+        if id == recreate::HOLDER_ID && root_image::owner(text(&cfg, "description")).is_some() {
             root_image_operation = true;
             root_image::validate_stage(&cfg, target.ctid).map_err(CoreError::Refused)?;
             let status = pve

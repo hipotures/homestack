@@ -59,7 +59,7 @@ impl Pve for Fake {
         let field = |key| form.iter().find(|(name, _)| *name == key).unwrap().1;
         if path == "/nodes/pve2/lxc" {
             let id: u32 = field("vmid").parse().unwrap();
-            assert_eq!(id, STAGING_ID);
+            assert_eq!(id, HOLDER_ID);
             assert!(!state.cts.contains_key(&id));
             let mut cfg = json!({"digest":"d","env":"PATH=/bin\0IMAGE=new","entrypoint":"/init","ostype":"unmanaged","arch":"amd64"});
             for (key, value) in form {
@@ -80,7 +80,7 @@ impl Pve for Fake {
             assert!(!state.running);
             let from: u32 = path.split('/').nth(4).unwrap().parse().unwrap();
             let to: u32 = field("target-vmid").parse().unwrap();
-            assert_eq!((from, to), (STAGING_ID, 120));
+            assert_eq!((from, to), (HOLDER_ID, 120));
             let value = state
                 .cts
                 .get_mut(&from)
@@ -129,7 +129,7 @@ impl Pve for Fake {
     async fn delete(&self, path: &str, _: &[(&str, &str)]) -> Result<Value, PveError> {
         let mut state = self.0.lock().unwrap();
         let id: u32 = path.split('/').nth(4).unwrap().parse().unwrap();
-        assert_eq!(id, STAGING_ID, "the original CT is never destroyed");
+        assert_eq!(id, HOLDER_ID, "the original CT is never destroyed");
         assert!(state.cts[&id].get("mp0").is_none());
         state.cts.remove(&id);
         Self::after(&mut state)
