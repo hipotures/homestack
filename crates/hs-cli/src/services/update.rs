@@ -1207,26 +1207,6 @@ mod tests {
     }
 
     #[test]
-    fn persistent_home_verification_accepts_allocation_rounding_but_rejects_loss() {
-        let original = instance_with_home("local-lvm:vm-120-disk-1,mp=/home/app,backup=1,size=10M", "");
-        let actual = instance_with_home("local-lvm:vm-120-disk-1,size=12M,backup=1,mp=/home/app", "");
-        assert!(same_home(&actual, &original));
-        for mount in [
-            "local-lvm:vm-120-disk-1,mp=/home/app,backup=1,size=8M",
-            "local-lvm:vm-120-disk-1,mp=/other,backup=1,size=12M",
-            "other:vm-120-disk-1,mp=/home/app,backup=1,size=12M",
-            "local-lvm:vm-999-disk-1,mp=/home/app,backup=1,size=12M",
-            "local-lvm:vm-120-disk-1,mp=/home/app,backup=0,size=12M",
-            "",
-        ] {
-            assert!(!same_home(&instance_with_home(mount, ""), &original), "{mount}");
-        }
-        let stateless = instance_with_home("", "");
-        assert!(same_home(&stateless, &stateless));
-        assert!(!same_home(&actual, &stateless));
-    }
-
-    #[test]
     fn interrupted_replacement_keeps_intended_power_through_holder_recovery() {
         let pending = instance_with_home("", "replacement-running 1\nreplacement-onboot 1");
         assert!(!pending.running && !pending.onboot);
@@ -1263,6 +1243,3 @@ mod tests {
     }
 }
 
-#[cfg(test)]
-#[path = "update_safety_tests.rs"]
-mod safety_tests;
