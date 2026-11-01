@@ -347,8 +347,10 @@ JSON files under the active XDG HomeStack profile's `services/` directory
 (normally `$XDG_CONFIG_HOME/homestack/services/`). Names are hashes of source
 repository, service ID, deployment hostname and domain. Files contain typed
 nonsecret values, generated keys and the combined source revision. Directory/file modes are
-0700/0600. Missing or invalid configuration for existing instances is an
-explicit error: restore the private file before maintenance or update.
+0700/0600. Services with `inputs: []` require no local selections file;
+updates resolve their static configuration directly from the manifest. For
+services with application inputs, missing or invalid configuration for existing
+instances is an explicit error: restore the private file before maintenance or update.
 Do not commit these files or copy their values into PVE descriptions or logs.
 
 Review shows image and linux/amd64 digests. The existing published numeric

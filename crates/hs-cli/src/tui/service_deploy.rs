@@ -309,8 +309,7 @@ fn switch_deployment(
     if session.naming.hostname == hostname && session.naming.domain == domain {
         return Ok(false);
     }
-    let saved = crate::services::selections::load(&setup.token_dir, source, &hostname, &domain, true)?
-        .ok_or("Private application selections are unavailable")?;
+    let saved = crate::services::selections::load(&setup.token_dir, source, &hostname, &domain, true)?;
     let previous = session.settings.clone();
     restore(&mut session.settings, &previous, answers);
     session.shown = lifecycle::shown_environment(source, target);
@@ -350,8 +349,8 @@ fn switch_deployment(
         }
         if let Some(input) = &setting.application_input {
             let value = saved
-                .values
-                .get(&input.id)
+                .as_ref()
+                .and_then(|saved| saved.values.get(&input.id))
                 .or(input.default.as_ref())
                 .map(crate::services::schema3::display)
                 .unwrap_or_default();

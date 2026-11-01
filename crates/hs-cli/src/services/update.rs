@@ -541,11 +541,14 @@ fn application_environment(
     source: &Source,
     target: &Instance,
 ) -> Result<Vec<(String, String)>, String> {
+    let contract = source.manifest.schema3.as_ref().ok_or("Expected schema 3")?;
+    if contract.inputs.is_empty() {
+        return contract.resolve(&Default::default());
+    }
     let hostname = super::selections::base_name(&target.hostname);
     let domain = target.searchdomain.as_deref().unwrap_or_default();
     let saved = super::selections::load(root, source, hostname, domain, true)?
         .ok_or("Private application selections are unavailable")?;
-    let contract = source.manifest.schema3.as_ref().ok_or("Expected schema 3")?;
     let mut values = saved.values;
     let missing: Vec<&str> = contract
         .inputs

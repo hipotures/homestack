@@ -38,6 +38,14 @@ pub fn load(
     domain: &str,
     required: bool,
 ) -> Result<Option<Saved>, String> {
+    let contract = source
+        .manifest
+        .schema3
+        .as_ref()
+        .ok_or("Application selections require schema 3")?;
+    if contract.inputs.is_empty() {
+        return Ok(None);
+    }
     let path = path(root, source, hostname, domain);
     if let Some(parent) = path.parent() {
         match std::fs::symlink_metadata(parent) {
@@ -82,9 +90,6 @@ pub fn load(
     // Values are checked against the current manifest where they are used
     // (Review and image replacement), not here: a value the manifest no
     // longer accepts must still reach the form so the operator can fix it.
-    if source.manifest.schema3.is_none() {
-        return Err("Application selections require schema 3".into());
-    }
     Ok(Some(saved))
 }
 
@@ -101,6 +106,9 @@ pub fn save(
         .as_ref()
         .ok_or("Application selections require schema 3")?;
     contract.resolve(values)?;
+    if contract.inputs.is_empty() {
+        return Ok(());
+    }
     // HomeStack's own settings are read from it each time, never kept here.
     let values: BTreeMap<String, Value> = values
         .iter()
