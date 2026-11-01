@@ -230,8 +230,8 @@ guest application RAM usage. Missing files are null with a read error.
 LXC filesystem measurements use a nested namespace init PID found in the cgroup
 subtree. `/proc/PID/mountinfo` supplies actual mounts, filesystem type and source.
 `statvfs` reports total/used/free/available bytes and inodes for data directory
-mounts, including `/` and an independently mounted `/home/app`. Kernel/runtime
-mounts are excluded. Missing `/home/app` is explicitly `mounted: false`. A bind
+mounts, including `/` and the persistent home at whatever path it is mounted.
+Kernel/runtime mounts are excluded. A bind
 mount reports backing filesystem capacity, not the size of the directory.
 Guest paths are confined to a pinned root using `openat2` with `IN_ROOT` and
 `NO_MAGICLINKS`. No guest executable or namespace entry is required.

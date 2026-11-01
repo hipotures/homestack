@@ -36,7 +36,7 @@ fn unescape(s: &str) -> Result<String, String> {
 }
 
 fn data_mount(mount: &str, kind: &str) -> bool {
-    if mount == "/" || mount == "/home/app" {
+    if mount == "/" {
         return true;
     }
     if ["/proc", "/sys", "/dev", "/run"]
@@ -167,10 +167,6 @@ fn lxc_inner(group: &Path, trace: &mut Trace) -> Result<Value, String> {
         }
         trace.record(&format!("statvfs:{source_path}"), 0, started, &record);
         results.push(record);
-    }
-    if !results.iter().any(|r| r["mount"] == "/home/app") {
-        results.push(json!({"mount": "/home/app", "mounted": false, "total_bytes": null,
-            "used_bytes": null, "free_bytes": null, "available_bytes": null, "error": "not_mounted"}));
     }
     Ok(json!({"source": "proc_mountinfo_statvfs", "init_pid": pid, "filesystems": results, "error": null}))
 }
