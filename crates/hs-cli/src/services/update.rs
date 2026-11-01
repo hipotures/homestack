@@ -1242,4 +1242,3 @@ mod tests {
         assert!(!permit(&perms, "/vms/120", "VM.Console"));
     }
 }
-
