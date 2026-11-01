@@ -211,13 +211,6 @@ async fn stale_review_refuses_every_mutation() {
         assert!(apply(&fake, &source(), &plan, &|_| {}).await.is_err(), "{state}");
         assert!(fake.writes.lock().unwrap().is_empty());
     }
-    // Device authorization is checked before a holder or any other mutation.
-    let fake = fake();
-    fake.containers.lock().unwrap().get_mut(&120).unwrap()["dev0"] = json!("path=/dev/ttyUSB0,mode=0660");
-    let plan = review(&fake).await;
-    let error = apply(&fake, &source(), &plan, &|_| {}).await.unwrap_err();
-    assert!(error.contains("root@pam API session"), "{error}");
-    assert!(fake.writes.lock().unwrap().is_empty());
 }
 #[tokio::test]
 async fn unchanged_and_reviewed_holder_recovery_preserve_home() {

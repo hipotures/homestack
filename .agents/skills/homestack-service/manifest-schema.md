@@ -336,21 +336,23 @@ runtime:
       read_only: false
 ```
 
-Creation attaches the declared devices before startup. Image replacement
-preserves all existing valid `devN` mappings, including manually attached
-ones; declared slots apply the manifest's settings. Review lists the effective
-mappings. A stopped holder retains them through interruption alongside the
-persistent volume; their restoration is verified before removing the holder.
-Removing a declaration does not unplug an existing device.
+Image updates preserve existing valid `devN` mappings, including manually
+attached ones. Each declared slot must already match its actual path, UID/GID,
+mode and read-only setting (omitted UID/GID/mode use Proxmox defaults). Removing
+a declaration does not unplug an existing device. Review lists the retained
+mappings. The API token cannot add or change device mappings: attach or change
+them in Proxmox before updating the manifest. Creating a new deployment with
+device declarations is refused because it would require new device attachment.
 
-[Proxmox restricts device writes to `root@pam`](https://github.com/proxmox/pve-container/blob/master/src/PVE/LXC.pm).
-The current deploy API token cannot configure passthrough. HomeStack refuses
-creation or image replacement involving devices during Review, before creating
-a holder or modifying the original container. No SSH connection is opened.
-Using these declarations for deployment requires explicit root@pam API session
-support, which is not implemented. Existing containers can continue running
-with devices attached manually in Proxmox. Device paths are local to a node;
-cross-node migration requires a separate hardware placement plan.
+For device-bearing containers, HomeStack unpacks the OCI image in a stopped
+staging container, transfers the new root volume through Proxmox's disk API,
+and switches the original container's `rootfs`. Its CTID, device configuration,
+network and persistent volume stay in place. The previous disposable root is
+identified before the switch and removed only after verification; interrupted
+operations resume from configuration metadata and staged volumes. No SSH or
+root login is used. Images that change raw LXC runtime identity are refused
+before stopping the original container. Device paths are local to the selected
+node; cross-node migration requires a separate hardware placement plan.
 
 `defaults.yaml` requires `schema: 3`, `service: <id>`, `resources` with the
 schema-1 size/core fields, and `deployment` with the schema-1 fields.

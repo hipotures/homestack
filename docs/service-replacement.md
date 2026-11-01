@@ -205,17 +205,21 @@ Proxmox shows it.
 
 Schema-3 services can declare `runtime.devices` keyed by `dev0` through
 `dev255`, with a device `path`, optional `uid`, `gid`, quoted octal `mode`
-and `read_only`. Existing valid device mappings survive replacement even
-when attached manually. Manifest declarations override the matching slots;
-removing a declaration does not detach an existing device.
+and `read_only`. For image updates, declarations must match the devices already
+attached in Proxmox. The deploy token cannot add or change device mappings.
+New deployments declaring devices require attachment authorization not available
+to that token and are refused before creating a container.
 
-Review lists the effective devices. The reconstruction code retains device
-mappings through the holder and verifies restoration, but Proxmox restricts
-device writes to `root@pam`. The scoped deploy API token cannot perform those
-writes. Creation and image replacement involving devices are therefore blocked
-before any holder is created or the original container is changed. Root API
-session support is not implemented. There is no SSH access path.
+Existing device-bearing containers update through the Proxmox API by switching
+only their root disk. A stopped staging CT (`999998`) unpacks the new OCI image;
+its image volume is reassigned to the original CT through reserved `mp255`,
+then becomes `rootfs`. The original CTID, `devN`, network and persistent `mp0`
+remain in place. No SSH connection or device-field writes occur.
 
-Existing containers keep their manually configured devices and can continue
-running. Paths must exist on the selected node; cross-node hardware migration
-is not implemented.
+The pending operation records the exact previous disposable root in configuration
+metadata. Only its identified volume can be removed during cleanup; `/config`
+or another persistent mount is never transferred or deleted. Interrupted stages
+resume from the staged volume and original CT configuration, with the same
+reviewed-state checks. A new image that changes raw LXC runtime identity is
+refused before the original CT is stopped. Cross-node hardware migration is
+not implemented.

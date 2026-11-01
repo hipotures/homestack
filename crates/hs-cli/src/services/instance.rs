@@ -116,6 +116,9 @@ pub fn note(instance: &Instance) -> String {
 /// `ctid` on `node` from its configuration; `running` from the node.
 pub fn parse(ctid: u32, node: &str, pool: &str, cfg: &Value, running: bool) -> Result<Instance, String> {
     let description = text(cfg, "description").to_owned();
+    if super::root_image::owner(&description).is_some() {
+        return Err("Root image staging is not a deployed service instance".into());
+    }
     let service = hs_core::registry::deployed_service(cfg)
         .ok_or_else(|| format!("CT {ctid} is not a service HomeStack deployed"))?;
     let held = recreate::holder_of(&description).is_some();

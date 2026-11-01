@@ -57,6 +57,14 @@ pub fn validate(devices: &Devices) -> Result<(), String> {
 }
 
 impl Device {
+    pub fn same_access(&self, other: &Self) -> bool {
+        self.path == other.path
+            && self.uid.unwrap_or(0) == other.uid.unwrap_or(0)
+            && self.gid.unwrap_or(0) == other.gid.unwrap_or(0)
+            && self.mode.as_deref().unwrap_or("0660") == other.mode.as_deref().unwrap_or("0660")
+            && self.read_only == other.read_only
+    }
+
     pub fn property(&self) -> String {
         let mut parts = vec![format!("path={}", self.path)];
         if let Some(uid) = self.uid {
@@ -136,12 +144,12 @@ pub fn merged(existing: &Devices, declared: &Devices) -> Result<Devices, String>
     Ok(devices)
 }
 
-/// The scoped deploy API token cannot pass Proxmox's root@pam-only device check.
-/// Refuse before creating a holder or changing the original container.
+/// New device attachment requires Proxmox root@pam authorization. Existing
+/// mappings can be retained by switching only the root disk through the API.
 pub fn require_deploy_token_access(devices: &Devices) -> Result<(), String> {
     if devices.is_empty() {
         Ok(())
     } else {
-        Err("Device passthrough cannot be configured with the deploy API token: Proxmox requires a root@pam API session. Image replacement was not started; the existing container, data and devices are unchanged.".into())
+        Err("New device attachment requires root@pam in Proxmox. The deploy token cannot create device mappings; existing matching mappings are preserved during image updates through the API.".into())
     }
 }

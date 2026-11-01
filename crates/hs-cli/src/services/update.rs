@@ -16,6 +16,7 @@ use sha2::{Digest, Sha256};
 
 use super::deploy::{self, Source};
 use super::instance::{self, Instance};
+use super::root_image;
 
 /// Configuration the new container keeps from the old one.
 const KEEP: &[&str] = &[
@@ -85,16 +86,18 @@ async fn safe_config(pve: &impl Pve, instance: &Instance, cfg: &Value) -> Result
             "Replacement requires an unprivileged container".to_owned(),
         ));
     }
+    let temporary = root_image::temporary_fields(cfg, instance.ctid).map_err(CoreError::Refused)?;
     let extra: Vec<&str> = cfg
         .as_object()
         .ok_or_else(|| CoreError::Refused("Container configuration is unreadable".to_owned()))?
         .keys()
         .map(String::as_str)
         .filter(|k| {
-            (k.starts_with("mp") && *k != "mp0")
-                || (k.starts_with("net") && *k != "net0")
-                || k.starts_with("unused")
-                || *k == "hookscript"
+            !temporary.iter().any(|key| key == k)
+                && ((k.starts_with("mp") && *k != "mp0")
+                    || (k.starts_with("net") && *k != "net0")
+                    || k.starts_with("unused")
+                    || *k == "hookscript")
         })
         .collect();
     if !extra.is_empty() {
@@ -472,7 +475,7 @@ async fn review(
                 return Err("Home must have backup=1 for the selected backup".to_owned());
             }
         }
-        hs_deploy::devices::require_deploy_token_access(&effective_devices(source, &target)?)?;
+        effective_devices(source, &target)?;
         preflight(pve, config, &target, &plan.backup_storage).await?;
         let reviewed = reviewed_state(pve, &target, &plan.image, &plan.digest)
             .await
@@ -484,11 +487,20 @@ async fn review(
 }
 
 fn effective_devices(source: &Source, target: &Instance) -> Result<hs_deploy::devices::Devices, String> {
-    let declared = source.manifest.schema3.as_ref().map(|contract| &contract.devices);
-    match declared {
-        Some(declared) => hs_deploy::devices::merged(&target.devices, declared),
-        None => Ok(target.devices.clone()),
+    if let Some(contract) = &source.manifest.schema3 {
+        for (slot, declared) in &contract.devices {
+            if !target
+                .devices
+                .get(slot)
+                .is_some_and(|attached| attached.same_access(declared))
+            {
+                return Err(format!(
+                    "Device {slot} must already be attached with the declared path and permissions in Proxmox; the deploy token cannot change device mappings. Existing container unchanged."
+                ));
+            }
+        }
     }
+    Ok(target.devices.clone())
 }
 
 async fn image_matches(plan: &Plan) -> Result<(), String> {
@@ -499,7 +511,7 @@ async fn image_matches(plan: &Plan) -> Result<(), String> {
     Ok(())
 }
 
-async fn task(pve: &impl Pve, upid: &Value, what: &str) -> Result<(), String> {
+pub(super) async fn wait_task(pve: &impl Pve, upid: &Value, what: &str) -> Result<(), String> {
     let upid = upid.as_str().ok_or_else(|| format!("{what}: Proxmox gave no task"))?;
     let result = hs_core::tasks::wait_task(
         pve,
@@ -524,9 +536,6 @@ pub async fn apply(
 ) -> Result<Vec<String>, String> {
     if !plan.problems.is_empty() {
         return Err("Resolve the review problems first".to_owned());
-    }
-    for target in &plan.targets {
-        hs_deploy::devices::require_deploy_token_access(&effective_devices(source, target)?)?;
     }
     if source.manifest.schema3.is_some() {
         for target in &plan.targets {
@@ -682,6 +691,7 @@ async fn restore_autostart(pve: &impl Pve, node: &str, ctid: u32, enabled: bool)
 /// Keep only a digest in the plan: configuration can contain application secrets.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Reviewed {
+    root_image: bool,
     fingerprint: [u8; 32],
     recovery_operation: Option<String>,
     power: (bool, bool),
@@ -763,7 +773,7 @@ async fn reviewed_state(pve: &impl Pve, target: &Instance, image: &str, digest: 
     let resources = resources
         .as_array()
         .ok_or_else(|| CoreError::Refused("Cluster inventory unavailable".to_owned()))?;
-    for id in [target.ctid, recreate::HOLDER_ID] {
+    for id in [target.ctid, recreate::HOLDER_ID, root_image::STAGING_ID] {
         let matches: Vec<_> = resources
             .iter()
             .filter(|r| r["vmid"].as_u64() == Some(u64::from(id)))
@@ -797,17 +807,59 @@ async fn reviewed_state(pve: &impl Pve, target: &Instance, image: &str, digest: 
         ));
     }
     let mut states = Vec::new();
+    let mut root_image_operation = target.description.lines().any(|line| line.starts_with(root_image::OLD));
     let mut recovery_operation = None;
     let mut power = original_power(target).map_err(CoreError::Refused)?;
-    for id in [target.ctid, recreate::HOLDER_ID] {
+    for id in [target.ctid, recreate::HOLDER_ID, root_image::STAGING_ID] {
         if !list.iter().any(|item| item["vmid"].as_u64() == Some(u64::from(id))) {
             continue;
         }
         let cfg = pve.get(&format!("/nodes/{}/lxc/{id}/config", target.node), &[]).await?;
+        if id == root_image::STAGING_ID {
+            root_image_operation = true;
+            root_image::validate_stage(&cfg, target.ctid).map_err(CoreError::Refused)?;
+            let status = pve
+                .get(&format!("/nodes/{}/lxc/{id}/status/current", target.node), &[])
+                .await?;
+            if status["status"] != "stopped" {
+                return Err(CoreError::Refused(
+                    "Root image staging container must remain stopped".into(),
+                ));
+            }
+            let description = text(&cfg, "description");
+            let op = operation(description)
+                .map_err(CoreError::Refused)?
+                .ok_or_else(|| CoreError::Refused("Root image staging operation is missing".into()))?;
+            if recovery_operation.as_ref().is_some_and(|current| current != &op)
+                || !description.lines().any(|line| line == format!("image {image}"))
+                || !description.lines().any(|line| line == format!("digest {digest}"))
+            {
+                return Err(CoreError::Refused(
+                    "Root image staging release or operation differs from the target".into(),
+                ));
+            }
+            let mut original = target.clone();
+            original.description = description.into();
+            power = original_power(&original).map_err(CoreError::Refused)?;
+            recovery_operation = Some(op);
+            states.push(
+                json!({"id": id, "running": false, "config": configuration_identity(cfg).map_err(CoreError::Refused)?}),
+            );
+            continue;
+        }
         let mut subject = target.clone();
         subject.ctid = id;
         let running = safe_config(pve, &subject, &cfg).await?;
-        recreate::mounts(&cfg).map_err(CoreError::Refused)?;
+        let mut volume_check = cfg.clone();
+        for key in root_image::temporary_fields(&cfg, target.ctid).map_err(CoreError::Refused)? {
+            if key.starts_with("unused") {
+                volume_check
+                    .as_object_mut()
+                    .ok_or_else(|| CoreError::Refused("Invalid configuration".into()))?
+                    .remove(&key);
+            }
+        }
+        recreate::mounts(&volume_check).map_err(CoreError::Refused)?;
         let description = text(&cfg, "description");
         let op = operation(description).map_err(CoreError::Refused)?;
         if id == recreate::HOLDER_ID {
@@ -896,6 +948,7 @@ async fn reviewed_state(pve: &impl Pve, target: &Instance, image: &str, digest: 
     }))
     .map_err(|_| CoreError::Refused("Cannot bind replacement configuration".to_owned()))?;
     Ok(Reviewed {
+        root_image: root_image_operation,
         fingerprint: Sha256::digest(bytes).into(),
         recovery_operation,
         power,
@@ -920,7 +973,6 @@ async fn one(
     bootstrap: Option<&ApiBootstrap>,
     say: &(dyn Fn(&str) + Send + Sync),
 ) -> Result<Vec<String>, String> {
-    hs_deploy::devices::require_deploy_token_access(&effective_devices(source, target)?)?;
     let (ctid, node) = (target.ctid, target.node.as_str());
     if deploy::initializing(&target.description) {
         return Err(format!(
@@ -983,7 +1035,7 @@ async fn one(
             )
             .await
             .map_err(|e| format!("pull on {node}: {e}"))?;
-        task(pve, &upid, &format!("pull on {node}")).await?;
+        wait_task(pve, &upid, &format!("pull on {node}")).await?;
         image_matches(plan).await?;
     }
     let untouched = !target.held && target.description.trim_end() != description.trim_end();
@@ -1002,7 +1054,7 @@ async fn one(
             )
             .await
             .map_err(|e| format!("backup CT {ctid}: {e}"))?;
-        task(pve, &upid, &format!("backup CT {ctid}")).await?;
+        wait_task(pve, &upid, &format!("backup CT {ctid}")).await?;
     }
     say(&format!("{node}: CT {ctid} · Replace"));
     let previous = instance::note(target);
@@ -1035,17 +1087,21 @@ async fn one(
         tag: Some(node::SERVER_TAG),
         mp0: None,
     };
-    recreate::replace(
-        pve,
-        &recreate::Replace {
-            spec,
-            graceful: true,
-            keep: KEEP,
-            note: &note,
-        },
-        &|line| say(line),
-    )
-    .await?;
+    if devices.is_empty() && !reviewed.root_image {
+        recreate::replace(
+            pve,
+            &recreate::Replace {
+                spec,
+                graceful: true,
+                keep: KEEP,
+                note: &note,
+            },
+            &|line| say(line),
+        )
+        .await?;
+    } else {
+        root_image::replace(pve, &spec, say).await?;
+    }
     let new = instance::read_on(pve, node, ctid).await?;
     let differences: Vec<&str> = [
         (new.held, "persistent volumes still in holder"),
