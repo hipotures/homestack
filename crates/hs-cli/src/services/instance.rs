@@ -47,6 +47,15 @@ pub struct Instance {
     pub held: bool,
 }
 
+impl Instance {
+    /// Where `mp0` is mounted, as Proxmox has it; `None` without a home or
+    /// when its `mp=` option is missing or ambiguous.
+    #[must_use]
+    pub fn home_path(&self) -> Option<&str> {
+        super::manifest::mount_path(&self.home_mount)
+    }
+}
+
 fn text<'a>(cfg: &'a Value, key: &str) -> &'a str {
     cfg[key].as_str().unwrap_or_default()
 }

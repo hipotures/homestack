@@ -353,9 +353,10 @@ pub async fn plan(
                 "  Volumes    none".to_owned()
             } else {
                 format!(
-                    "  Home       {} · {} · /home/app",
+                    "  Home       {} · {} · {}",
                     target.home_volume,
-                    node::show_size(target.home_mib)
+                    node::show_size(target.home_mib),
+                    target.home_path().unwrap_or("unknown mount")
                 )
             },
             format!("  Network    {} · MAC {}", target.address, target.mac),
@@ -429,6 +430,7 @@ async fn review(
                 "CT {ctid}: the service requires its persistent home volume (mp0)"
             ));
         }
+        same_mount(source, &target)?;
         if target.home_volume.is_empty()
             && let Some(config) = &plan.api_config
         {
@@ -567,6 +569,29 @@ fn application_environment(
     contract.resolve(&values)
 }
 
+/// The existing home stays where it is mounted: a manifest that moved the
+/// mount needs a separately designed migration of that data, and a home
+/// without one clear mount path is not replaced at all.
+fn same_mount(source: &Source, target: &Instance) -> Result<(), String> {
+    if target.home_volume.is_empty() {
+        return Ok(());
+    }
+    let actual = target.home_path().ok_or_else(|| {
+        format!(
+            "CT {}: its home has no single mount path; inspect mp0 before replacement",
+            target.ctid
+        )
+    })?;
+    match &source.manifest.persistence {
+        Some(persistence) if persistence.mount != actual => Err(format!(
+            "CT {}: its home is mounted at {actual}, the manifest declares {}; \
+             replacement never relocates persistent data",
+            target.ctid, persistence.mount
+        )),
+        _ => Ok(()),
+    }
+}
+
 /// Distinguish a reviewed reinstall from a root already made by that operation.
 /// The temporary holder carries the operation through interrupted replacement.
 const REPLACEMENT_OPERATION: &str = "replacement-operation ";
@@ -589,7 +614,8 @@ fn original_power(target: &Instance) -> Result<(bool, bool), String> {
 }
 
 /// PVE can reorder mount options and report the allocated size after moving a
-/// volume. Verify the mount settings and refuse a smaller persistent home.
+/// volume. Verify the mount settings, including exactly one unchanged mount
+/// path, and refuse a smaller persistent home.
 fn same_home(new: &Instance, target: &Instance) -> bool {
     let options = |mount: &str| -> std::collections::BTreeMap<String, String> {
         mount
@@ -604,7 +630,9 @@ fn same_home(new: &Instance, target: &Instance) -> bool {
         && new.home_storage == target.home_storage
         && new.home_mib >= target.home_mib
         && options(&new.home_mount) == options(&target.home_mount)
-        && (new.home_volume.is_empty() || new.home_volume.contains(&format!("-{}-", target.ctid)))
+        && new.home_path() == target.home_path()
+        && (new.home_volume.is_empty()
+            || (new.home_path().is_some() && new.home_volume.contains(&format!("-{}-", target.ctid))))
 }
 
 async fn restore_autostart(pve: &impl Pve, node: &str, ctid: u32, enabled: bool) -> Result<(), String> {
@@ -885,6 +913,7 @@ async fn one(
     if current != *reviewed {
         return Err(format!("CT {ctid} changed since review; review again"));
     }
+    same_mount(source, target)?;
     // Every read/authorization check precedes the first environment or PVE write.
     if source.manifest.schema3.is_some() {
         let environment = application_environment(&plan.selection_root, source, target)?;
@@ -1003,7 +1032,7 @@ async fn one(
         (!node::same_net(&new.network, &target.network), "network configuration"),
         (
             !same_home(&new, target),
-            "home storage, mount options, ownership or size",
+            "home storage, mount path or options, ownership or size",
         ),
     ]
     .into_iter()

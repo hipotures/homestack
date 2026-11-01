@@ -659,7 +659,7 @@ impl Plan {
             lines.push("Turn on rule evaluation for the resource".to_owned());
         }
         lines.push(
-            "Other access policies of an existing resource, the container, disks and /home/app are preserved."
+            "Other access policies of an existing resource, the container, its disks and persistent volume are preserved."
                 .to_owned(),
         );
         lines
@@ -739,7 +739,7 @@ pub(super) async fn apply(
             save_target(&api, plan, resource)?;
         }
         lines.push(format!(
-            "https://{} routed through {} to {}:{}; container and /home/app preserved",
+            "https://{} routed through {} to {}:{}; container and persistent volume preserved",
             plan.domain, plan.site.name, plan.address, plan.body["port"]
         ));
         for (path, priority) in bypass.missing.iter().zip(bypass.priority..) {

@@ -395,6 +395,14 @@ pub async fn workspace_home_usage(pve: &impl Pve, node: &str, vmid: u32, status:
     usage
 }
 
+/// The mount path of a container's `mp0`: its single `mp=` option,
+/// absolute and not `/`; `None` when missing or repeated.
+fn home_mount_path(mp0: &str) -> Option<&str> {
+    let mut paths = mp0.split(',').skip(1).filter_map(|part| part.strip_prefix("mp="));
+    let path = paths.next().filter(|path| path.starts_with('/') && *path != "/")?;
+    paths.next().is_none().then_some(path)
+}
+
 /// The size of a disk option (`size=32G`), when it has one.
 fn sized(option: &str) -> HomeUsage {
     #[allow(
@@ -750,7 +758,7 @@ pub async fn global_status(
         if shared_home.is_some() {
             home = last
                 .get(&item.vmid)
-                .and_then(|mounts| crate::service_status::last_home(mounts, false, item.vmid, None));
+                .and_then(|mounts| crate::service_status::last_home(mounts, None, item.vmid, None));
         }
         if node_online && shared_home.is_none() {
             let status = item.status.as_deref().unwrap_or("unknown");
@@ -758,7 +766,7 @@ pub async fn global_status(
             if (status != "running" || usage.used_bytes.is_none())
                 && let Some(previous) = last
                     .get(&item.vmid)
-                    .and_then(|mounts| crate::service_status::last_home(mounts, false, item.vmid, usage.size_bytes))
+                    .and_then(|mounts| crate::service_status::last_home(mounts, None, item.vmid, usage.size_bytes))
             {
                 usage = previous;
             }
@@ -896,11 +904,14 @@ pub async fn global_status(
         } else {
             "VM"
         };
+        // The persistent home is mp0, wherever its one mp= option mounts it;
+        // never another filesystem of the container.
+        let home_path = container_config
+            .as_ref()
+            .and_then(|config| home_mount_path(config["mp0"].as_str()?).map(str::to_owned));
         let mut home = container_config.as_ref().and_then(|config| {
             let mount = config["mp0"].as_str()?;
-            if !mount.split(',').any(|part| part == "mp=/home/app") {
-                return None;
-            }
+            home_path.as_ref()?;
             Some(HomeUsage {
                 size_bytes: parse_disk_size_gb(mount).map(|gib| (gib * 1024.0_f64.powi(3)) as u64),
                 // PVE's LXC disk/maxdisk counters describe rootfs, not mp0.
@@ -924,7 +935,7 @@ pub async fn global_status(
             && let (Some(home), Some(previous)) = (
                 &mut home,
                 last.get(&item.vmid)
-                    .and_then(|mounts| crate::service_status::last_home(mounts, container, item.vmid, None)),
+                    .and_then(|mounts| crate::service_status::last_home(mounts, home_path.as_deref(), item.vmid, None)),
             )
         {
             *home = previous;
@@ -935,7 +946,9 @@ pub async fn global_status(
             None
         };
         if let Some(measured) = &measured {
-            if let (Some(home), Some(space)) = (&mut home, &measured.home) {
+            if let (Some(home), Some(space)) =
+                (&mut home, home_path.as_ref().and_then(|path| measured.mounts.get(path)))
+            {
                 *home = space.clone();
             }
             if measured.root.is_some() {

@@ -10,8 +10,29 @@ use yaml_rust2::{Yaml, YamlLoader};
 
 /// The largest manifest file read.
 pub const MAX_BYTES: u64 = 64 * 1024;
-/// The only persistent mount schema 1 allows.
-pub const MOUNT: &str = "/home/app";
+/// The persistent mount when `persistence.mount` is omitted.
+pub const DEFAULT_MOUNT: &str = "/home/app";
+/// Trees a persistent volume must never cover or sit inside: the system,
+/// kernel interfaces and runtime state the image and Proxmox depend on.
+const SYSTEM_TREES: [&str; 16] = [
+    "/bin", "/boot", "/dev", "/etc", "/lib", "/lib32", "/lib64", "/libx32", "/proc", "/run", "/sbin", "/sys", "/tmp",
+    "/usr", "/var/run", "/var/tmp",
+];
+/// Shared top-level directories a volume would hide entirely; a directory
+/// below them (`/var/lib/app`, `/srv/app`) is allowed.
+const SHARED_DIRECTORIES: [&str; 11] = [
+    "/home",
+    "/media",
+    "/mnt",
+    "/opt",
+    "/root",
+    "/srv",
+    "/var",
+    "/var/cache",
+    "/var/lib",
+    "/var/lock",
+    "/var/log",
+];
 /// The top-level sections, in the order they are shown.
 pub const SECTIONS: [&str; 8] = [
     "schema",
@@ -69,6 +90,8 @@ pub enum Healthcheck {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Persistence {
+    /// The absolute path `mp0` is mounted at inside the container.
+    pub mount: String,
     pub size_mib: u32,
     pub directories: Vec<String>,
     pub mappings: Vec<Mapping>,
@@ -340,6 +363,32 @@ fn valid_absolute(text: &str) -> bool {
     text.strip_prefix('/').is_some_and(valid_relative)
 }
 
+/// A persistent mount path: absolute and canonical (no empty, `.` or `..`
+/// components, no trailing `/`), at most 255 bytes, each component of
+/// `[A-Za-z0-9._-]` starting with a letter, digit or `_` (nothing Proxmox's
+/// `mp=` option syntax could misread), never `/`, inside a system tree or one
+/// of the shared top-level directories itself.
+#[must_use]
+pub fn valid_mount(text: &str) -> bool {
+    text.len() <= 255
+        && valid_absolute(text)
+        && text[1..].split('/').all(|part| {
+            part.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_')
+                && part.bytes().all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
+        })
+        && !SYSTEM_TREES.iter().any(|tree| within(text, tree))
+        && !SHARED_DIRECTORIES.contains(&text)
+}
+
+/// The path option `mp=` of a Proxmox mount-point value, when it has
+/// exactly one.
+#[must_use]
+pub fn mount_path(option: &str) -> Option<&str> {
+    let mut paths = option.split(',').skip(1).filter_map(|part| part.strip_prefix("mp="));
+    let path = paths.next()?;
+    paths.next().is_none().then_some(path)
+}
+
 fn within(path: &str, directory: &str) -> bool {
     path == directory || path.strip_prefix(directory).is_some_and(|rest| rest.starts_with('/'))
 }
@@ -602,12 +651,21 @@ fn persistence_of(check: &mut Check, value: &Yaml) -> Option<Option<Persistence>
     }
     let path = vec!["persistence".to_owned()];
     let fields = check.mapping(value, &path, &["mount", "size", "directories", "mappings"])?;
-    let mount = check
-        .required(fields, &path, "mount")
-        .and_then(|value| check.string(value, &at(&path, "mount")));
-    if mount.as_deref().is_some_and(|mount| mount != MOUNT) {
-        check.fail(&at(&path, "mount"), format!("must be exactly {MOUNT}"));
-    }
+    let mount = match field(fields, "mount") {
+        None => Some(DEFAULT_MOUNT.to_owned()),
+        Some(value) => match check.string(value, &at(&path, "mount")) {
+            Some(mount) if valid_mount(&mount) => Some(mount),
+            Some(_) => {
+                check.fail(
+                    &at(&path, "mount"),
+                    "expected a canonical absolute path of [A-Za-z0-9._-] components, \
+                     not /, a system directory or a shared top-level directory",
+                );
+                None
+            }
+            None => None,
+        },
+    };
     let size_mib = check
         .required(fields, &path, "size")
         .and_then(|value| check.size(value, &at(&path, "size"), 1..=16_384 * 1024));
@@ -637,12 +695,12 @@ fn persistence_of(check: &mut Check, value: &Yaml) -> Option<Option<Persistence>
             let source = check
                 .required(pair, &at_entry, "source")
                 .and_then(|value| check.string(value, &at(&at_entry, "source")));
-            if let Some(source) = &source
-                && (!valid_absolute(source) || within(source, MOUNT))
+            if let (Some(source), Some(mount)) = (&source, &mount)
+                && (!valid_absolute(source) || within(source, mount) || within(mount, source))
             {
                 check.fail(
                     &at(&at_entry, "source"),
-                    format!("expected an absolute path outside {MOUNT}"),
+                    format!("expected an absolute path outside {mount} that does not contain it"),
                 );
             }
             let destination = check
@@ -661,8 +719,8 @@ fn persistence_of(check: &mut Check, value: &Yaml) -> Option<Option<Persistence>
             }
         }
     }
-    mount?;
     Some(Some(Persistence {
+        mount: mount?,
         size_mib: size_mib?,
         directories,
         mappings,

@@ -49,7 +49,9 @@ not change what the application does.
    [image-build-preflight.md](image-build-preflight.md): the lightest runtime
    the application actually works on without substantial code changes.
 4. Decide whether the service has durable state (see Persistence below). If
-   it has, put all of it under `/home/app/<directory>`; if not, leave `persistence:`
+   it has, put all of it under the persistent mount (`/home/app/<directory>` by
+   default, or the image's own state directory such as `/config` set as
+   `persistence.mount`); if not, leave `persistence:`
    empty and make sure the service starts on a fresh root.
 5. Implement the health endpoints and the telemetry endpoint on the existing
    HTTP listener (see below).
@@ -78,7 +80,12 @@ runtime documentation and Review. They do not imply a persistent home.
 
 The root filesystem is disposable: HomeStack recreates it from the image on
 every update. Durable data lives only on the optional home volume mounted at
-`/home/app`.
+`persistence.mount`: `/home/app` by default, or another absolute path such as
+`/config` when the upstream image already keeps its state there. Use a
+custom path to deploy such an image unchanged; never to add a second volume.
+The validation rules are in [manifest-schema.md](manifest-schema.md#persistent-mount-path).
+An existing container keeps the mount path it was deployed with: changing
+`mount` later makes HomeStack refuse its image updates instead of moving data.
 
 **Stateless service** (writes nothing it needs later, e.g. an API whose data
 lives elsewhere): leave `persistence:` empty in the manifest. HomeStack
@@ -90,18 +97,19 @@ fine; anything that must survive an update is not.
 with the volume size and directories.
 
 - Prefer the application's own setting (an environment variable or config key
-  pointing at `/home/app/data`) over symlinks. If a path cannot be configured,
+  pointing at `/home/app/data`, or the mount path you declared) over symlinks. If a path cannot be configured,
   have the entrypoint link it into the mount, and check the link never hides
   or replaces existing data.
 - SQLite databases and their `-wal`/`-shm` files stay together inside the
   mount; never copy a live database with `cp`, use the SQLite backup API.
-- Keep `/home/app` an empty directory in the image; nothing baked there
+- Keep the mount path a real, empty directory in the image (not a symlink);
+  nothing baked there
   survives the mount. Do not declare `VOLUME` and do not mount anything in the
   image.
 - In the entrypoint, create the needed directories with `mkdir -p` after the
   mount is present; never reinitialise, overwrite or migrate away existing
   data.
-- Refuse to start when `/home/app` is a symlink or not a mounted volume, unless
+- Refuse to start when the mount path is a symlink or not a mounted volume, unless
   an explicit opt-in for throwaway tests is set.
 - The LXC is unprivileged: run as container root or a fixed service user that
   owns its directories; never fix permissions with world-writable modes.

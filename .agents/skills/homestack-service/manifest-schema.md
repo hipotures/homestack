@@ -74,11 +74,11 @@ until the manifest is fixed. Unknown keys are never ignored silently.
 | `runtime.healthcheck.expected_status` | integer | `http` only | 100–599 |
 | `runtime.healthcheck.heartbeat_seconds` | integer | no (default `60`), `http` only | heartbeat interval, 10–3600; passed to the container as `HOMESTACK_HEARTBEAT_SECONDS`; health fails after three missed beats |
 | `persistence` | mapping or empty | yes | empty: no home volume, the service is stateless |
-| `persistence.mount` | string | yes | exactly `/home/app` |
+| `persistence.mount` | string | no (default `/home/app`) | absolute path where the home volume (`mp0`) is mounted inside the container; see [Persistent mount path](#persistent-mount-path) |
 | `persistence.size` | size | yes | default size of a new home volume, at least `1M` |
 | `persistence.directories` | list of strings | no | relative paths inside the mount, no `..`, no leading `/`, no duplicates |
 | `persistence.mappings` | list | no | application paths the image itself redirects into the mount; metadata for review only |
-| `persistence.mappings[].source` | string | yes | absolute path inside the container, outside `/home/app` |
+| `persistence.mappings[].source` | string | yes | absolute path inside the container, outside the mount and not containing it |
 | `persistence.mappings[].destination` | string | yes | relative path inside the mount; must be one of `persistence.directories` or below one |
 | `deployment.hostname` | string | no (default the `id`) | DNS label `^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`; the instances' host name: alone for one instance, `<hostname>-1`, `<hostname>-2`… for several; the domain is chosen at deployment |
 | `deployment.instances` | integer | yes | production instances one deployment creates, 1–16 |
@@ -152,6 +152,41 @@ are not releases. Published release tags are immutable. The image must be
 pullable anonymously by the Proxmox node (a public package). The Git tag that
 produced release `X.Y.Z` is `<id>-X.Y.Z`.
 
+## Persistent mount path
+
+`persistence.mount` names where the one HomeStack-managed persistent volume
+(`mp0`) is mounted. Omitted, it is `/home/app`, which existing manifests and
+the HomeStack API and Pangolin Site keep using (both require it). Another
+path suits an upstream image that already keeps its state elsewhere, without
+changing its `ENTRYPOINT` or `CMD`:
+
+```yaml
+persistence:
+  mount: /config
+  size: 10G
+```
+
+HomeStack then attaches `mp0: <allocated volume>,mp=/config,backup=1`. There
+is still exactly one persistent volume; no bind mounts, symlinks or extra
+mount points are added.
+
+The path must be absolute and canonical: no `/` alone, no trailing `/`, no
+empty, `.` or `..` components, at most 255 bytes, and each component of
+`[A-Za-z0-9._-]` starting with a letter, digit or `_` (so nothing in it can be
+read as another Proxmox mount option). It must not be inside `/bin`, `/boot`,
+`/dev`, `/etc`, `/lib`, `/lib32`, `/lib64`, `/libx32`, `/proc`, `/run`,
+`/sbin`, `/sys`, `/tmp`, `/usr`, `/var/run` or `/var/tmp`, and must not be
+one of the shared directories `/home`, `/media`, `/mnt`, `/opt`, `/root`,
+`/srv`, `/var`, `/var/cache`, `/var/lib`, `/var/lock` or `/var/log` itself
+(a directory below them, such as `/var/lib/app`, is allowed).
+
+The mount path of an existing container never changes. When a manifest
+declares a different `mount` than an existing container's `mp0` has, image
+updates of that container are refused before anything changes; moving the
+data needs a separately designed migration. Replacing the image keeps the
+original volume with its mount path and options (see
+`docs/service-replacement.md`).
+
 ## What never goes in a manifest
 
 Nodes, CTIDs, IP addresses, storage IDs, host paths, the domain, Pangolin
@@ -162,12 +197,13 @@ inputs or private settings.
 
 - It runs as a Proxmox OCI application container (unprivileged LXC): one
   `linux/amd64` image whose `ENTRYPOINT`/`CMD` starts the service.
-- With a non-empty `persistence`: `/home/app` exists in the image as an empty directory.
-  HomeStack attaches the home volume there before the first start; the image
+- With a non-empty `persistence`: the mount path (`persistence.mount`,
+  default `/home/app`) exists in the image as a real, empty directory, not a
+  symlink. HomeStack attaches the home volume there before the first start; the image
   never mounts anything itself. At start the image creates the declared
   `persistence.directories` if they are missing and never resets, overwrites
   or migrates away existing data. Everything that must survive replacing the
-  container lives under `/home/app`.
+  container lives under the mount path.
 - With an empty `persistence`: the service starts on a fresh root with only the
   image and the settings supplied at deployment.
 - The rest of the root filesystem is disposable.
@@ -274,7 +310,7 @@ on the HTTP healthcheck port and enables injection of
 `HOMESTACK_HEARTBEAT_SECONDS` from that healthcheck. It requires an HTTP
 healthcheck; omit it for applications without the native telemetry contract. Resources belong only in
 defaults. Empty persistence/exposure can be `{}` or null. Nonempty sections
-follow schema-1 rules. The image owns its command, runtime user and writable
+follow schema-1 rules, including the optional `persistence.mount`. The image owns its command, runtime user and writable
 directories; no arbitrary commands, hooks or directory preparation are
 accepted from the manifest.
 

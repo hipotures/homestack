@@ -781,11 +781,14 @@ fn settings(
             check_root,
         ),
     ]);
-    if let Some(home) = home {
+    if let (Some(home), Some(persistence)) = (home, &manifest.persistence) {
         settings.push(checked(
             setting(
                 HOME,
-                "The home volume at /home/app, a number with M or G; it keeps the service's data and only grows.",
+                &format!(
+                    "The home volume mounted at {}, a number with M or G; it keeps the service's data and only grows.",
+                    persistence.mount
+                ),
                 Vec::new(),
                 false,
                 Some(home),
@@ -1445,7 +1448,7 @@ fn new_sections(source: &Source, plan: &deploy::Plan) -> Vec<(String, Vec<String
             lines.push(format!("CT {}: resume initialization", i.ctid));
         }
         let home = if i.home_mib > 0 {
-            format!(" + home {}", show_size(i.home_mib))
+            format!(" + home {} at {}", show_size(i.home_mib), i.home_path)
         } else {
             String::new()
         };

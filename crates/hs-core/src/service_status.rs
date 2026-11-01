@@ -29,7 +29,7 @@ const QUERY: &str = concat!(
     r#" or hs_pve_memory_events_total{event="oom_kill"}"#,
     r#" or hs_pve_pressure_stall_ratio{stall="some",window="10s"}"#,
     r#" or last_over_time({__name__=~"hs_pve_filesystem_(total|used|available)_bytes|hs_pve_filesystem_read_success_ratio","#,
-    r#"type="lxc",mount=~"/|/home/app"}[1h])"#,
+    r#"type="lxc"}[1h])"#,
     r#" or proxmox_vm_uptime_seconds"#,
     r#" or label_replace(time() - timestamp(hs_pve_memory_usage_bytes), "derived", "age", "", "")"#,
     r#" or label_replace(hs_pve_memory_usage_bytes * 0 + on (node) group_left () max by (node) (hs_pve_agent_interval_seconds), "derived", "interval", "", "")"#,
@@ -38,12 +38,13 @@ const QUERY: &str = concat!(
     r#" or label_replace(sum by (node, vmid, operation) (irate(hs_pve_io_operations_total[5m])), "derived", "io_ops_rate", "", "")"#,
 );
 
-/// A machine's measurement and, for a container, the `/` and `/home/app`
-/// space in it; a VM's space comes from its guest agent.
+/// A machine's measurement and, for a container, the space of `/` and of
+/// each other data filesystem the agent read, by mount path; a VM's space
+/// comes from its guest agent.
 pub struct Measured {
     pub telemetry: ContainerTelemetry,
     pub root: Option<HomeUsage>,
-    pub home: Option<HomeUsage>,
+    pub mounts: BTreeMap<String, HomeUsage>,
 }
 
 #[derive(Deserialize)]
@@ -188,18 +189,18 @@ pub async fn last_space(prometheus: &Url, vmids: &[u32]) -> BTreeMap<u32, BTreeM
         .collect()
 }
 
-/// The last `/home/app` of a container; of VM `vmid` its `HS_HOME_<vmid>`
-/// virtiofs share, measured on the host, or else the guest filesystem
-/// within 15 % of its home disk's `size`.
+/// The last space of a container's home at `home_path`, its `mp0` mount
+/// path; of VM `vmid` its `HS_HOME_<vmid>` virtiofs share, measured on the
+/// host, or else the guest filesystem within 15 % of its home disk's `size`.
 #[must_use]
 pub fn last_home(
     mounts: &BTreeMap<String, HomeUsage>,
-    container: bool,
+    container_home: Option<&str>,
     vmid: u32,
     size: Option<u64>,
 ) -> Option<HomeUsage> {
-    if container {
-        return mounts.get("/home/app").cloned();
+    if let Some(home_path) = container_home {
+        return mounts.get(home_path).cloned();
     }
     if let Some(share) = mounts.get(&format!("virtiofs:HS_HOME_{vmid}")) {
         return Some(share.clone());
@@ -271,7 +272,15 @@ fn measured(samples: &Samples) -> Option<Measured> {
             },
         },
         root: space(samples, "/"),
-        home: space(samples, "/home/app"),
+        mounts: samples
+            .0
+            .iter()
+            .filter_map(|(_, labels, _)| labels.get("mount"))
+            .filter(|mount| *mount != "/")
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .filter_map(|mount| space(samples, mount).map(|usage| (mount.clone(), usage)))
+            .collect(),
     })
 }
 

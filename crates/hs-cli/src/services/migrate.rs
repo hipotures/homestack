@@ -58,6 +58,12 @@ fn movable(instance: &Instance) -> Result<(), String> {
             instance.ctid
         ));
     }
+    if !instance.home_volume.is_empty() && instance.home_path().is_none() {
+        return Err(format!(
+            "CT {}: its home mount path is missing or ambiguous; inspect mp0 first",
+            instance.ctid
+        ));
+    }
     Ok(())
 }
 
@@ -139,9 +145,10 @@ pub async fn plan(pve: &impl Pve, target: &Target) -> Result<Plan, String> {
     ));
     if !instance.home_volume.is_empty() {
         lines.push(format!(
-            "Home {} ({}) → {}",
+            "Home {} ({}, at {}) → {}",
             instance.home_volume,
             hs_deploy::node::show_size(instance.home_mib),
+            instance.home_path().unwrap_or("unknown mount"),
             target.storage
         ));
     }
@@ -199,6 +206,7 @@ pub async fn apply(
         || storage_of(&after.root_volume) != target.storage
         || after.home_volume.is_empty() != before.home_volume.is_empty()
         || (!before.home_volume.is_empty() && storage_of(&after.home_volume) != target.storage)
+        || after.home_path() != before.home_path()
     {
         return Err(format!(
             "CT {ctid} on {} differs from the container that moved",

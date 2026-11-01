@@ -56,11 +56,15 @@ Run the built image with exactly the cores, memory, swap, rootfs and home
 volume size you intend to declare, unprivileged:
 
 1. If Incus (or LXD) is available, run the OCI image as a system container
-   with those limits and a separate volume at `/home/app` for stateful
+   with those limits and a separate volume at the persistent mount path
+   (`persistence.mount`, default `/home/app`) for stateful
    services. This is closest to the Proxmox LXC.
 2. Otherwise use the local OCI runtime (`podman run` / `docker run`) with
-   `--cpus`, `--memory`, `--memory-swap` and a volume for `/home/app`, and
-   state that it was not an LXC test.
+   `--cpus`, `--memory`, `--memory-swap` and a volume for the mount path, and
+   state that it was not an LXC test. An OCI runtime test shows that the
+   application reads and writes its state through that path and keeps it in a
+   new container on the same volume; it does not prove the Proxmox LXC
+   replacement, which moves the original `mp0` through the holder and back.
 
 Ask the owner before installing a container runtime. If a tool or permission
 is missing, report what was not tested; never report a test that did not run.
@@ -76,7 +80,8 @@ Check:
    of concurrent ones and the expected error paths.
 3. Stop and start again; for a stateful service, a fresh container with the
    same home volume keeps its data unchanged.
-4. A stateful service refuses to start without a mounted `/home/app`.
+4. A stateful service refuses to start without its mounted persistent path,
+   and the path is a real directory in the image, not a symlink.
 5. A stateless service starts on a fresh root with only its deployment
    settings.
 

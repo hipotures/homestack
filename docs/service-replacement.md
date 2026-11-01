@@ -14,13 +14,32 @@ The manifest decides whether a service has a home:
   `.homestack/services/homestack-api/service.yaml` uses this mode; its configuration, certificate
   and PVE token are supplied again from the desktop after replacement.
 - Non-empty `persistence` attaches a separate Proxmox-managed `mp0` at
-  `/home/app` before first start. A service with `state_model: local` requires
+  `persistence.mount` (default `/home/app`, or another validated absolute
+  path such as `/config`) before first start. A service with `state_model: local` requires
   it. All durable application files, including SQLite databases and their
   WAL/SHM files, must live there. The current Pangolin Site manifest uses this
   mode for its Site credential and data.
 
 Replacement reassigns the original persistent home to the new root. It never
 allocates a substitute home or initializes a new one for an existing service.
+
+The mount path is part of the home's identity:
+
+- Deployment verifies that the created `mp0` is a volume owned by the new CTID
+  on the chosen storage with exactly one `mp=` option at the manifest's path.
+- Review refuses an image update when the container's actual `mp0` path
+  differs from the manifest's `persistence.mount` or is missing or ambiguous.
+  The data is never relocated or remounted; a changed path needs a separately
+  designed migration.
+- The holder moves `mp0` with its options unchanged. After replacement the
+  new container must have the same storage, the same single mount path and
+  options, a size not smaller than before and a volume owned by its CTID; the
+  replacement container is created without `mp0`, so no new volume can be
+  substituted.
+- Migration refuses a home without one clear mount path and verifies the path
+  is unchanged on the target node.
+- Removal accepts only an `mp0` storage volume at a valid persistent mount
+  path.
 Explicit service deletion has different semantics, described below.
 
 ## Same-CTID replacement
@@ -161,8 +180,8 @@ removal command for its configured instances.
 PVE renames a volume when it moves, so the home's volume ID changes between
 `vm-<ctid>-disk-N` names as ownership moves through the holder and back. The
 container overview reads its IP from `net0` and home capacity from `mp0`.
-Home free space comes from the PVE agent's fresh `/home/app` measurement in
-Prometheus; otherwise it stays unknown, because PVE's `disk`/`maxdisk`
+Home free space comes from the PVE agent's fresh measurement of the filesystem
+at `mp0`'s mount path (from the container's configuration) in Prometheus; otherwise it stays unknown, because PVE's `disk`/`maxdisk`
 counters describe the root filesystem.
 
 API configuration and task evidence verify the volume moves, not guest file

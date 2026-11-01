@@ -264,7 +264,10 @@ pub async fn plan(pve: &impl Pve, pool: &str, repository: &str, service: &str, c
             }
         }
         if environment && target.running {
-            changes.push("  restarts to read its environment; /home/app is untouched".to_owned());
+            changes.push(match target.home_path() {
+                Some(path) => format!("  restarts to read its environment; {path} is untouched"),
+                None => "  restarts to read its environment".to_owned(),
+            });
         }
         if !changes.is_empty() {
             plan.lines

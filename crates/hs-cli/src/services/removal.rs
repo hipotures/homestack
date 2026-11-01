@@ -8,7 +8,7 @@ use hs_deploy::recreate;
 use serde_json::Value;
 
 use super::instance::{self, Instance};
-use super::manifest::MOUNT;
+use super::manifest::valid_mount;
 
 /// Exact configuration (including PVE's digest), storage
 /// configuration and volume attributes reviewed for irreversible deletion.
@@ -211,8 +211,9 @@ fn safe_config(cfg: &Value) -> Result<(), String> {
                 return Err("Ambiguous mount options".to_owned());
             }
         }
-        if key == "mp0" && options.get("mp") != Some(&MOUNT) {
-            return Err(format!("mp0 is not the persistent home at {MOUNT}"));
+        // Duplicate options were refused above: this is the only mp= path.
+        if key == "mp0" && !options.get("mp").is_some_and(|path| valid_mount(path)) {
+            return Err("mp0 is not mounted at a valid persistent home path".to_owned());
         }
     }
     if hs_deploy::node::extract_hwaddr(text(cfg, "net0")?).is_none() {

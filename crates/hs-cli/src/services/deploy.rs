@@ -1,8 +1,9 @@
 //! Deploying instances of a manifest-defined service, through the deploy
 //! token only: each instance is an independent unprivileged container made
 //! from a published release of the manifest's image, with its own new
-//! Proxmox volume at `/home/app` (`mp0`) before its first start. Its
-//! description records the service, so Proxmox alone tells what is deployed.
+//! Proxmox volume (`mp0`) at the manifest's `persistence.mount` before its
+//! first start. Its description records the service, so Proxmox alone tells
+//! what is deployed.
 //!
 //! Nothing changes before the operator applies a reviewed [`Plan`]. Nothing
 //! here stops, replaces or removes a container or a volume.
@@ -20,7 +21,7 @@ use hs_deploy::node::{self, NewContainer};
 use serde_json::Value;
 
 use super::dns::Dns;
-use super::manifest::{Healthcheck, MOUNT, Manifest};
+use super::manifest::{DEFAULT_MOUNT, Healthcheck, Manifest};
 
 /// How long a started instance may take to pass its health check.
 const HEALTH_LIMIT: Duration = Duration::from_secs(180);
@@ -242,6 +243,8 @@ pub struct NewInstance {
     pub root_mib: u32,
     pub home_storage: String,
     pub home_mib: u32,
+    /// Where `mp0` is mounted; empty without persistence.
+    pub home_path: String,
     /// Non-secret observed identity of an interrupted API initialization.
     pub resume: Option<Resume>,
 }
@@ -804,6 +807,15 @@ pub async fn plan(
             problems.push("API environment is supplied by authenticated bootstrap; leave Environment empty".to_owned());
         }
     }
+    // Both runtimes keep their state in /home/app; their images expect nothing else.
+    if (source.is_api() || source.is_site())
+        && manifest
+            .persistence
+            .as_ref()
+            .is_some_and(|persistence| persistence.mount != DEFAULT_MOUNT)
+    {
+        problems.push(format!("The HomeStack API and Site keep their home at {DEFAULT_MOUNT}"));
+    }
     if source.is_site() {
         if choice.placements.len() > 1 {
             problems.push("Deploy one Site connector at a time; each gets its own Site and credential".to_owned());
@@ -978,6 +990,11 @@ pub async fn plan(
             root_mib,
             home_storage: storage.clone(),
             home_mib,
+            home_path: manifest
+                .persistence
+                .as_ref()
+                .map(|persistence| persistence.mount.clone())
+                .unwrap_or_default(),
             resume: None,
         };
         match free(pve, ctid).await {
@@ -1198,8 +1215,8 @@ fn home_volume(mount: &str) -> &str {
 }
 
 /// Check what Proxmox made: the root disk and the home volume on the
-/// chosen storages, the home mounted at `/home/app`, unprivileged; the
-/// volume IDs and the MAC address.
+/// chosen storages, the home mounted exactly once at the manifest's mount
+/// path, unprivileged; the volume IDs and the MAC address.
 fn verify(instance: &NewInstance, config: &Value) -> Result<(String, String, String), String> {
     let ctid = instance.ctid;
     let (root, _) = volume(
@@ -1231,8 +1248,14 @@ fn verify(instance: &NewInstance, config: &Value) -> Result<(String, String, Str
                 instance.home_storage
             ));
         }
-        if !options.contains(&("mp", MOUNT)) {
-            return Err(format!("CT {ctid}: mp0 is not mounted at {MOUNT}"));
+        // Exactly one mp= option, at the planned path: never the first of several.
+        if options.iter().filter(|(key, _)| *key == "mp").count() != 1
+            || !options.contains(&("mp", instance.home_path.as_str()))
+        {
+            return Err(format!(
+                "CT {ctid}: mp0 is not mounted exactly at {}",
+                instance.home_path
+            ));
         }
     }
     if config["unprivileged"].as_u64() != Some(1) {
@@ -1242,7 +1265,10 @@ fn verify(instance: &NewInstance, config: &Value) -> Result<(String, String, Str
         .as_str()
         .and_then(node::extract_hwaddr)
         .ok_or_else(|| format!("CT {ctid} has no MAC address"))?;
-    let home = mounted.map_or_else(|| "none".to_owned(), |(home, _)| format!("{home} at {MOUNT}"));
+    let home = mounted.map_or_else(
+        || "none".to_owned(),
+        |(home, _)| format!("{home} at {}", instance.home_path),
+    );
     Ok((root.to_owned(), home, mac))
 }
 
@@ -1605,9 +1631,10 @@ async fn run(
             // The manifest decides: an empty persistence has no home.
             mp0: (instance.home_mib > 0).then(|| {
                 format!(
-                    "{}:{},mp={MOUNT},backup=1",
+                    "{}:{},mp={},backup=1",
                     instance.home_storage,
-                    node::gib(instance.home_mib)
+                    node::gib(instance.home_mib),
+                    instance.home_path
                 )
             }),
         };
@@ -1660,7 +1687,10 @@ async fn run(
                 let online = initialize_site(pve, site, instance, original_mount, manifest, say)
                     .await
                     .map_err(|error| format!("CT {ctid}: Site initialization failed: {error}"))?;
-                format!("{online}; its credential in {MOUNT}/pangolin-site verified")
+                format!(
+                    "{online}; its credential in {}/pangolin-site verified",
+                    instance.home_path
+                )
             };
             let after = pve
                 .get(&format!("/nodes/{node}/lxc/{ctid}/config"), &[])
