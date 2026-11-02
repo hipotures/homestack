@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use super::definitions::{Entry, Params, application_children};
 use super::files::{FileItem, file_plan_item};
 use super::text::repository;
-use super::{BACKUP_PATHS, HERDR_UNIT_PATH, Settings, Target, json_of};
+use super::{HERDR_UNIT_PATH, Settings, Target, json_of};
 use crate::AppError;
 
 /// Credentials are copied last, after everything that may need them.
@@ -65,17 +65,7 @@ impl Plan {
             Params::Environment { profile } => json!({"profile": profile}),
             Params::Exports { exports } => json!({"exports": exports}),
             Params::Repository { repository } => json!({"repository": repository}),
-            Params::Backup => {
-                let mut extra = json!({
-                    "destinations": BACKUP_PATHS.iter().map(|path| format!("~/{path}")).collect::<Vec<_>>(),
-                    "timer": "backup.timer",
-                    "create_configuration_if_missing": "~/.config/bk/backup.yaml",
-                });
-                if !self.target.local {
-                    extra["restricted_authorized_keys"] = json!("~/.ssh/authorized_keys");
-                }
-                extra
-            }
+            Params::Unavailable => json!({}),
             Params::Herdr => json!({
                 "destinations": [format!("~/{HERDR_UNIT_PATH}")],
                 "service": "herdr.service", "update": "before every service start",
@@ -150,11 +140,7 @@ pub fn write_paths(settings: &Settings, entry: &Entry) -> Vec<String> {
         .into_iter()
         .map(str::to_owned)
         .collect(),
-        Params::Backup => BACKUP_PATHS
-            .iter()
-            .chain(&[super::AUTHORIZED_KEYS_PATH, ".config/bk/backup.yaml"])
-            .map(|path| (*path).to_owned())
-            .collect(),
+        Params::Unavailable => Vec::new(),
         Params::Herdr => vec![HERDR_UNIT_PATH.to_owned()],
         Params::Repository { repository } => {
             let prefix = format!("{}/", settings.guest_home());
@@ -314,8 +300,11 @@ pub fn build_plan(
     unattended: bool,
     include_configs: bool,
 ) -> Result<Plan, AppError> {
-    if target.local && entries.iter().any(|entry| !matches!(entry.params, Params::Backup)) {
-        return Err(AppError::new("Local Setup currently supports only the Backup category"));
+    if let Some(entry) = entries.iter().find(|entry| matches!(entry.params, Params::Unavailable)) {
+        return Err(AppError::new(format!("{} cannot be installed yet", entry.label)));
+    }
+    if target.local && !entries.is_empty() {
+        return Err(AppError::new("Desktop setup has no installable items"));
     }
     let entries = if include_configs {
         expand_config_entries(entries)

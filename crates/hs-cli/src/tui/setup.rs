@@ -608,20 +608,6 @@ pub fn clean_line(identity: Option<&str>, message: &str) -> String {
     format!("{prefix}{}", value.chars().take(500).collect::<String>())
 }
 
-/// The details of a backup over SSH (Python `_backup_retrieval_details`).
-fn backup_retrieval_details(vmid: u32) -> Vec<String> {
-    vec![
-        "Restricted SSH retrieval: two desktop ED25519 key pairs (private + .pub)".to_owned(),
-        format!("Archive key: ~/.ssh/homestack/backup/vm{vmid}-bk-archive"),
-        format!("Status key: ~/.ssh/homestack/backup/vm{vmid}-bk-status"),
-        "Generate missing pairs; repair missing public keys; reuse valid pairs without rotation.".to_owned(),
-        "Install only public keys in guest ~/.ssh/authorized_keys; preserve unrelated entries.".to_owned(),
-        "Forced commands: cat of ~/backup/backup.tgz or ~/backup/status.json only; no shell or forwarding.".to_owned(),
-        "Create missing ~/.config/bk/backup.yaml with default destination ~/backup".to_owned(),
-        "Private keys stay on the desktop. Existing backup configuration and data remain unchanged.".to_owned(),
-    ]
-}
-
 fn strings(value: &Value) -> Vec<String> {
     value
         .as_array()
@@ -1443,21 +1429,6 @@ impl SetupBox {
         lines
     }
 
-    fn backup_details(&self) -> Vec<String> {
-        if self.target.local {
-            return [
-                "Install ~/.local/bin/bk and the backup.service / backup.timer user units.",
-                "Enable the nightly user timer. No SSH keys or authorized_keys changes.",
-                "Create missing ~/.config/bk/backup.yaml with default destination ~/backup",
-                "Run bk edit to select sources. The configuration always backs itself up.",
-                "Existing backup configuration and data remain unchanged.",
-            ]
-            .map(str::to_owned)
-            .to_vec();
-        }
-        backup_retrieval_details(self.target.vmid)
-    }
-
     /// Python `_value_lines`.
     fn value_lines(desired: &toml::Value, live: &Value) -> Vec<String> {
         let state = live["state"].as_str();
@@ -1625,10 +1596,6 @@ impl SetupBox {
             } else {
                 "Configuration: no managed options".to_owned()
             });
-        }
-        if matches!(entry.params, Params::Backup) {
-            lines.push(String::new());
-            lines.extend(self.backup_details());
         }
         let changed = strings(&live["changed_since_apply"]);
         if !changed.is_empty() {
@@ -2067,8 +2034,7 @@ impl SetupBox {
                     Some("unavailable") => "Blocked: configuration path is unavailable",
                     _ => "Inspect and patch declared value",
                 },
-                Params::Backup if self.target.local => "Reconcile local BK assets and user timer",
-                Params::Backup => "Reconcile BK assets, user timer and restricted SSH retrieval keys",
+                Params::Unavailable => "Not available yet",
                 Params::Herdr => {
                     "Install if missing; enable user service and linger; preserve running sessions; register desktop profile"
                 }
@@ -2097,9 +2063,6 @@ impl SetupBox {
                     entry.depends_on.join(", ")
                 }
             ));
-            if matches!(entry.params, Params::Backup) {
-                lines.extend(self.backup_details());
-            }
             if let Params::Structured { key, value, .. } = &entry.params {
                 lines.push(format!("Desired key: {}", key.join(".")));
                 lines.push("Desired value:".to_owned());

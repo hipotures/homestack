@@ -119,7 +119,7 @@ pub const MENU: [&str; 7] = [
     "Check this desktop",
     "Settings",
     "Help: every key",
-    "Set up this desktop (backup)",
+    "Set up this desktop",
     "Update API containers",
     "Quit",
 ];

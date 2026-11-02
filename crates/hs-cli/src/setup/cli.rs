@@ -13,7 +13,7 @@ use super::catalog::{
     Catalog, Github, discover_repositories, github_identity, load_catalog, parse_assignments, save_snapshot,
     select_entries,
 };
-use super::definitions::{SetupConfig, parse_setup};
+use super::definitions::{Params, SetupConfig, parse_setup};
 use super::engine::{Connection, Observer, execute_plan, inspect_workspace_state};
 use super::plan::{build_plan, expand_config_entries};
 use super::repo::{inspect_repository, resolve_repository_argument, rotate_repository_key, setup_repository};
@@ -262,8 +262,8 @@ pub fn open_workspace(
     connect(system, home, loaded, settings, target)
 }
 
-/// `setup --local` (Python `local_configuration`): the desktop's own
-/// account, only the Backup items, no repositories.
+/// Desktop setup: the desktop's own account, only the items listed for it
+/// (currently none installable), no repositories.
 pub fn local_settings(mut settings: Settings) -> Result<Settings, AppError> {
     let uid = rustix::process::getuid().as_raw();
     let (name, _) =
@@ -271,7 +271,10 @@ pub fn local_settings(mut settings: Settings) -> Result<Settings, AppError> {
     settings.user = name;
     settings.uid = uid;
     settings.gid = rustix::process::getgid().as_raw();
-    settings.setup.items.retain(|entry| entry.handler == "backup");
+    settings
+        .setup
+        .items
+        .retain(|entry| matches!(entry.params, Params::Unavailable));
     let groups: Vec<String> = settings.setup.items.iter().map(|entry| entry.group.clone()).collect();
     settings.setup.groups.retain(|group| groups.contains(&group.id));
     Ok(settings)
@@ -348,9 +351,7 @@ pub async fn run(
         if target_arg.as_deref().is_some_and(|text| text.contains('=')) {
             tokens.insert(0, target_arg.take().unwrap_or_default());
         } else if !matches!(target_arg.as_deref(), None | Some("list" | "status")) {
-            return Err(AppError::new(
-                "--local does not accept a workspace target; use setup --local app=bk",
-            ));
+            return Err(AppError::new("--local does not accept a workspace target"));
         }
     }
     let load = |settings: &Settings| {
@@ -434,7 +435,7 @@ pub async fn run(
     let (entries, catalog_id) = if tokens.is_empty() {
         if unattended || setup.dry_run {
             return Err(AppError::new(
-                "No actions selected. Run setup list, then specify env=bash, app=codex,bk or another selector",
+                "No actions selected. Run setup list, then specify env=bash, app=codex,claude or another selector",
             ));
         }
         (Vec::new(), None)

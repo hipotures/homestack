@@ -3,7 +3,7 @@
     Credentials, Backup, Repositories (24). STATE is what `setup status`
     reads over one ssh session (the security key may ask, box 03). The items
     come from the catalog (`setup list`); ticked items go to the plan.
-    `setup --local backup=bk` is Menu › Backup on this desktop.
+    `setup --local` is Menu › Set up this desktop.
 ╭┌Menu┐─²cluster ─────────────────────── 10:58:05 ────────────────── hs.example.net ────────────────┌‹ Preset: auto ›┐─╮
 │ NODE  STATE     SERVER                    CT   WORKSPACES                  ╭─ gold & certificate ───────────────────╮│
 │ pve1  ● online  ● api1.hs.example.net     115  4, 2 running                │ gold  112 hs-gold  pve1  ○ stopped     ││

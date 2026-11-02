@@ -14,7 +14,7 @@ HomeStack lets you treat your workspace operating system as cattle while keeping
 - **No permanent Proxmox root access** — Root access (via SSH or an authenticated [Herdr](https://herdr.dev) pane) is used only when installing or uninstalling HomeStack. Day-to-day operations run from the desktop client against lightweight `homestack-server` LXC containers that use least-privilege Proxmox API tokens.
 - **Full-screen TUI & scriptable CLI** — Manage workspaces, inspect storage capacity, start/stop Gold, add SSH keys, run rolling API server updates, and provision tools interactively with keyboard and mouse—or script everything with `--yes` and `--json`.
 - **Hardware-key SSH by default** — Generates isolated OpenSSH aliases under `~/.ssh/config.d/homestack/` with per-workspace `known_hosts` files (`StrictHostKeyChecking accept-new`), keeping your main `~/.ssh/known_hosts` clean across root refreshes and workspace recreations.
-- **Unified workspace setup (`homestack setup`)** — Provision shell profiles (`bash`, `zsh`, `fish`, `nu`), coding agents and toolchains (`codex`, `claude`, `opencode`, `hermes`, `pi`, `herdr`, `rust`), dotfiles, structured config patches (`toml`, `json`, `yaml`), GitHub repositories with per-workspace deploy keys, and nightly `bk` backups over a single SSH `ControlMaster` session.
+- **Unified workspace setup (`homestack setup`)** — Provision shell profiles (`bash`, `zsh`, `fish`, `nu`), coding agents and toolchains (`codex`, `claude`, `opencode`, `hermes`, `pi`, `herdr`, `rust`), dotfiles, structured config patches (`toml`, `json`, `yaml`), and GitHub repositories with per-workspace deploy keys over a single SSH `ControlMaster` session.
 
 ---
 
@@ -249,7 +249,6 @@ homestack setup hermes e=1 a=1,2
 homestack setup hermes env=1 app=1 --catalog CATALOG_ID --dry-run
 homestack setup hermes env=bash app=codex,opencode --yes
 homestack setup hermes repo=hipotures/homestack --yes
-homestack setup hermes app=bk --yes
 homestack setup 200 env=bash app=codex --dry-run
 homestack setup hermes env=bash app=codex --yes --non-interactive --json
 ```
@@ -260,9 +259,8 @@ homestack setup hermes env=bash app=codex --yes --non-interactive --json
 | :--- | :--- | :--- |
 | **Files** | `files`, `f` | User-defined `[[setup.items]]` files and directories (`path = "~/notes/"`). |
 | **Environment** | `env`, `e` | `bash`, `zsh`, `fish`, `nu` (shell startup configs with pre-apply backups; Bash keeps a marked block in existing files), `exports` (only the `export` lines of `~/.bashrc`). |
-| **Applications** | `app`, `a` | `codex`, `claude`, `herdr`, `opencode`, `opencode-v2`, `pi`, `hermes`, `rust`, plus custom `[[setup.items]]`. |
+| **Applications** | `app`, `a` | `codex`, `claude`, `herdr`, `opencode`, `opencode-v2`, `pi`, `hermes`, `rust`, `git`, `bk` (listed but not installable yet; bk lives in scriptoza), plus custom `[[setup.items]]`. |
 | **Credentials** | `cred`, `c` | Explicit credential/file items (always executed last after all other groups). |
-| **Backup** | `backup`, `b` | `bk` (nightly `systemd --user` archive backup + restricted desktop retrieval keys). |
 | **Repositories** | `repo`, `r` | Repositories discovered from GitHub (`[repo] owner`) or explicitly named (`repo=owner/name`). |
 
 - Bash keeps the existing lines of `~/.bashrc` and the login file: the HomeStack block between `# >>> homestack >>>` and `# <<< homestack <<<` is replaced (or put first, replacing the unmarked block an earlier setup left at the top). Exports changes nothing but its lines: each one replaces every `export KEY=` line of its key or is appended:
@@ -325,38 +323,6 @@ Service IP allocation checks current and pending static IPv4 settings on all LXC
 Setup state lives inside the workspace's persistent home at `~/.local/state/homestack/setup.json`, so destroying a workspace and its home cleanly removes its setup state. Copying or restoring the home to another workspace preserves its setup history even when the VMID changes. Setup verifies the current target independently; the next recorded action updates the registry's workspace metadata. Before overwriting any existing declared path, HomeStack creates an operation snapshot under `~/.local/state/homestack/YYYYMMDD_HHMMSS/` containing pre-change files, SHA-256 metadata (`snapshot.json`), and `setup.before.json`.
 
 </details>
-
----
-
-## BK Workspace & Local Backup (`app=bk`)
-
-HomeStack includes **BK**, a lightweight archive backup manager with a `systemd --user` nightly timer (`03:15`, `Persistent=true`) and restricted desktop SSH retrieval keys.
-
-```bash
-# Install BK in a workspace (survives homestack refresh inside persistent /home)
-homestack setup WORKSPACE app=bk
-
-# Or install BK locally for the current desktop user
-homestack setup --local app=bk
-homestack setup --local status
-```
-
-- **Files installed:** `~/.local/bin/bk`, `~/.config/systemd/user/backup.service`, `~/.config/systemd/user/backup.timer`, and an initial `~/.config/bk/backup.yaml` (never overwrites an existing config):
-  ```yaml
-  version: 1
-  destination: "/home/user/backup"
-  retention: 7
-  respect_gitignore: true
-  sources:
-    - "/home/user/.config/bk/backup.yaml"
-  ```
-- **Inside the workspace:** Run `bk edit` to choose backed-up paths, `bk run` for an immediate backup, and `bk status` to inspect the latest run and retained archives.
-- **Restricted desktop retrieval keys:** For workspaces, Setup generates two passphrase-free Ed25519 key pairs on the desktop (`~/.ssh/homestack/backup/vm<VMID>-bk-archive` and `vm<VMID>-bk-status`) and installs restricted `authorized_keys` entries in the workspace that force `/usr/bin/cat --` on `/home/<USER>/backup/backup.tgz` or `/home/<USER>/backup/status.json` (no shell, no PTY, no port forwarding):
-  ```bash
-  ssh -T -F /dev/null -o BatchMode=yes -o IdentitiesOnly=yes \
-    -o IdentityAgent=none -o ControlMaster=no -o ControlPath=none \
-    -i ~/.ssh/homestack/backup/vm200-bk-status USER@WORKSPACE_IP x
-  ```
 
 ---
 

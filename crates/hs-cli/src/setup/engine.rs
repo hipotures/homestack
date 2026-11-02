@@ -9,7 +9,6 @@ use std::path::Path;
 
 use serde_json::{Map, Value, json};
 
-use super::backup;
 use super::catalog::github_json;
 use super::definitions::{Entry, Params};
 use super::documents;
@@ -657,14 +656,7 @@ fn inspect_item(
                 item["backup_paths"] = json!(p.backup_paths);
             }
         }
-        Params::Backup => {
-            if let (Some(item), Value::Object(found)) = (
-                item.as_object_mut(),
-                backup::inspect(workspace, settings, target.vmid, true)?,
-            ) {
-                item.extend(found);
-            }
-        }
+        Params::Unavailable => item["state"] = json!("unavailable"),
         Params::Herdr => {
             if let (Some(item), Value::Object(found)) = (
                 item.as_object_mut(),
@@ -710,7 +702,8 @@ pub fn backup_paths_for_entry(settings: &Settings, entry: &Entry, state: &Value)
             .iter()
             .map(|path| path.get(2..).unwrap_or_default().trim_end_matches('/').to_owned())
             .collect(),
-        Params::Backup | Params::Herdr => strings(&state["snapshot_paths"]),
+        Params::Herdr => strings(&state["snapshot_paths"]),
+        Params::Unavailable => Vec::new(),
         Params::Repository { .. } => {
             let repository = &state["repository"];
             let actions = strings(&state["actions"]);
@@ -746,13 +739,6 @@ fn record_entry_state(
             .flatten()
             .filter_map(|path| path.as_str().map(str::to_owned))
             .collect(),
-        Params::Backup => {
-            let mut paths: Vec<String> = super::BACKUP_PATHS.iter().map(|p| (*p).to_owned()).collect();
-            if !plan.target.local {
-                paths.push(super::AUTHORIZED_KEYS_PATH.to_owned());
-            }
-            paths
-        }
         Params::Herdr => vec![super::HERDR_UNIT_PATH.to_owned()],
         _ => Vec::new(),
     };
@@ -881,7 +867,7 @@ pub fn preflight_entry(
             }
             Ok(json!({"installed": installed, "ready": installed}))
         }
-        Params::Backup => backup::inspect(workspace, settings, target.vmid, true),
+        Params::Unavailable => Err(AppError::new(format!("{} cannot be installed yet", entry.label))),
         Params::Herdr => herdr::preflight(workspace, settings, system, target, unattended),
         Params::Repository { repository } => {
             let metadata = github_json(system, &[&format!("repos/{repository}")], false)?;
@@ -1050,9 +1036,7 @@ fn apply_entry(
                 )
             }
         }
-        Params::Backup => backup::apply(workspace, settings, plan.target.vmid, state, &mut |message| {
-            observer.activity(Some(id), message);
-        }),
+        Params::Unavailable => Err(AppError::new(format!("{} cannot be installed yet", entry.label))),
         Params::Herdr => herdr::apply(
             workspace,
             settings,

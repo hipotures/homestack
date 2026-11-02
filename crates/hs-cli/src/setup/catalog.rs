@@ -13,7 +13,7 @@ use super::definitions::{Entry, Params, app_file_entries, config_entries, config
 use super::files::file_plan_item;
 use super::plan::write_paths;
 use super::text::{py_repr, repository};
-use super::{BACKUP_PATHS, Settings, json_of, sha256_hex};
+use super::{Settings, json_of, sha256_hex};
 use crate::AppError;
 use crate::system::System;
 
@@ -64,13 +64,6 @@ impl Catalog {
                     }
                     Params::Environment { .. } | Params::Exports { .. } => {
                         location = write_paths(settings, entry)
-                            .iter()
-                            .map(|path| format!("~/{path}"))
-                            .collect::<Vec<_>>()
-                            .join(", ");
-                    }
-                    Params::Backup => {
-                        location = BACKUP_PATHS
                             .iter()
                             .map(|path| format!("~/{path}"))
                             .collect::<Vec<_>>()
@@ -269,6 +262,7 @@ pub fn load_catalog(settings: &Settings, repositories: Option<Discover<'_>>) -> 
             Params::File { path, .. } => {
                 file_plan_item(settings, path).map_or_else(|_| "invalid".to_owned(), |item| item.status)
             }
+            Params::Unavailable => "unavailable: not available yet".to_owned(),
             _ => "guest state unknown".to_owned(),
         };
         availability.insert(entry.id.clone(), state);

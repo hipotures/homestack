@@ -656,18 +656,12 @@ fn removed(style: &Style, value: &Value) -> String {
 /// Python `show_destroy_result`.
 #[must_use]
 pub fn destroy_result(result: &Value, style: &Style) -> String {
-    let mut local = vec![
+    let local = vec![
         row("VM deleted", check(style, &result["vm_deleted"])),
         row("Persistent home deleted", check(style, &result["home_deleted"])),
         row("Local SSH config", removed(style, &result["ssh_config_removed"])),
         row("Local known_hosts", removed(style, &result["ssh_known_hosts_removed"])),
     ];
-    if let Some(left) = result["backup_keys_left"].as_array().filter(|left| !left.is_empty()) {
-        local.push(row(
-            "BK keys left",
-            style.paint(&left.iter().map(text).collect::<Vec<_>>().join("\n"), Color::Yellow),
-        ));
-    }
     let sections = vec![
         vec![
             row("VMID", text(&result["vmid"])),

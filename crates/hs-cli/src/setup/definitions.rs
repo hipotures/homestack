@@ -105,7 +105,8 @@ pub enum Params {
     Repository {
         repository: String,
     },
-    Backup,
+    /// Listed but not installable yet.
+    Unavailable,
     Herdr,
     /// One managed leaf of an application's configuration document.
     Structured {
@@ -205,7 +206,7 @@ impl Entry {
             Params::Repository { repository } => {
                 data.insert("repository".into(), Value::String(repository.clone()));
             }
-            Params::Backup | Params::Herdr => {}
+            Params::Unavailable | Params::Herdr => {}
             Params::Structured {
                 application,
                 config,
@@ -409,10 +410,10 @@ pub fn defaults() -> Vec<Entry> {
         Entry::new(
             "bk",
             "app",
-            "backup",
-            "BK",
-            "Install the persistent-home BK backup tool and nightly user timer.",
-            Params::Backup,
+            "unavailable",
+            "bk",
+            "bk backup tool from scriptoza; installation is not available yet.",
+            Params::Unavailable,
         ),
     ]);
     items
@@ -930,7 +931,7 @@ fn parse_item(data: &Table, groups: &[Group], config_paths: &mut Vec<String>) ->
         Some("exports") => &["exports"],
         Some("application") => &APPLICATION_FIELDS,
         Some("repository") => &["repository"],
-        Some("backup" | "herdr") => &[],
+        Some("unavailable" | "herdr") => &[],
         _ => &["\0"],
     };
     let (Some(handler), Some(group)) = (handler, group) else {
@@ -1010,7 +1011,7 @@ fn parse_item(data: &Table, groups: &[Group], config_paths: &mut Vec<String>) ->
                 repository: text.clone(),
             }
         }
-        "backup" => Params::Backup,
+        "unavailable" => Params::Unavailable,
         "herdr" => Params::Herdr,
         _ => {
             let empty = Value::Array(Vec::new());

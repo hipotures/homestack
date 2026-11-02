@@ -3,7 +3,6 @@
 //! Python HomeStack does. The program run on the workspace
 //! (`guest/setup_guest.py`) is Python's, sent unchanged.
 
-pub mod backup;
 pub mod catalog;
 pub mod cli;
 pub mod definitions;
@@ -22,14 +21,6 @@ use std::path::PathBuf;
 
 use definitions::SetupConfig;
 
-/// BK's files in the home (Python `backup.MANAGED_ASSETS`).
-pub const BACKUP_PATHS: [&str; 3] = [
-    ".local/bin/bk",
-    ".config/systemd/user/backup.service",
-    ".config/systemd/user/backup.timer",
-];
-/// The guest file BK's retrieval keys go into.
-pub const AUTHORIZED_KEYS_PATH: &str = ".ssh/authorized_keys";
 /// Herdr's user unit (Python `setup_herdr.UNIT_PATH`).
 pub const HERDR_UNIT_PATH: &str = ".config/systemd/user/herdr.service";
 
@@ -91,7 +82,7 @@ pub struct Target {
     pub ip: String,
     pub user: String,
     pub home: String,
-    /// `setup --local`: the desktop's own user, no SSH.
+    /// Desktop setup: the desktop's own user, no SSH.
     pub local: bool,
 }
 

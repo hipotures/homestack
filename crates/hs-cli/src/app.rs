@@ -922,21 +922,6 @@ fn merge(target: &mut Value, extra: Value) {
     }
 }
 
-/// The BK retrieval key files of `vmid` still on the desktop
-/// (`backup.retrieval_key_paths`); their cleanup arrives with BK in phase
-/// 14d, so they are listed, not removed.
-#[must_use]
-pub fn backup_keys_left(home: &Path, vmid: u32) -> Vec<String> {
-    let directory = home.join(".ssh").join("homestack").join("backup");
-    ["archive", "status"]
-        .iter()
-        .flat_map(|role| [format!("vm{vmid}-bk-{role}"), format!("vm{vmid}-bk-{role}.pub")])
-        .map(|name| directory.join(name))
-        .filter(|path| path.symlink_metadata().is_ok())
-        .map(|path| path.display().to_string())
-        .collect()
-}
-
 /// What `homestack transport` reports: every server's state and
 /// configuration version, and the Proxmox node the servers are set to.
 pub async fn transport_report(client: &Client) -> Result<Value, AppError> {
@@ -1112,15 +1097,13 @@ pub fn after_refresh(home: &Path, user: &str, vmid: u32, result: &mut Value) -> 
 }
 
 /// The desktop's part of `destroy` once the VM is verified absent, in
-/// Python's order: BK keys (listed), SSH config, `known_hosts`.
+/// Python's order: SSH config, `known_hosts`.
 pub fn after_destroy(home: &Path, vmid: u32, result: &mut Value) -> Result<(), AppError> {
     let name = view::text(&result["name"]);
     let local = (|| -> Result<Value, AppError> {
-        let left = backup_keys_left(home, vmid);
         let removed = local_ssh::remove_local_ssh_config(home, vmid)?;
         let forgotten = forget_known_hosts(home, vmid)?;
         Ok(json!({
-            "backup_keys_left": left,
             "ssh_config_removed": removed.iter().map(|path| path.display().to_string()).collect::<Vec<_>>(),
             "ssh_known_hosts_removed": forgotten,
         }))

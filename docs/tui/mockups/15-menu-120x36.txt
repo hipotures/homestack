@@ -1,7 +1,7 @@
 15  Menu (m or Esc), over the main screen (120 x 36)
     Things used rarely live here, not on the screen. Check the servers is
-    `transport` (26), Check this desktop is `discover` (25), Backup on this
-    desktop is `setup --local backup=bk`. Reconfigure and Uninstall open the
+    `transport` (26), Check this desktop is `discover` (25), Set up this
+    desktop is `setup --local`. Reconfigure and Uninstall open the
     install screen (02–08, 18). Options: presets, colours, client.toml path.
     The screen behind the menu is dimmed in the TUI.
 
@@ -19,7 +19,7 @@
 │ 204  data-play     pve2 ● running 10.0.0│                                       │││ pve3  local-lvm         2.9T free│
 │ 205  scratch       pve1 ○ stopped —     │   ▶ Check the servers                 │││ █████░░░░░░░░░░░░░░░░░░░░░ 18%   │
 │ 206  ml-lab        pve3 ● running 10.0.0│     Check this desktop                │││                                  │
-│ 207  docs-site     pve1 ● running 10.0.0│     Backup on this desktop…           │││ snippets  local, all nodes       │
+│ 207  docs-site     pve1 ● running 10.0.0│     Set up this desktop…              │││ snippets  local, all nodes       │
 │ 208  api-proto     pve2 ○ stopped —     │     Reconfigure HomeStack…            │││ servers   local-lvm, local-zfs   │
 │ 209  db-test       pve3 ● running 10.0.0│     Uninstall HomeStack…              │││                                  │
 │ 210  ci-runner     pve1 ● running 10.0.0│     Options                           ││╰──────────────────────── 3 nodes ─╯

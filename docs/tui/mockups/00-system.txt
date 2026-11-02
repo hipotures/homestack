@@ -196,6 +196,6 @@ The only boxes over the screen are for things that stop everything:
   setup VMID [selectors]     └sEtup┘ (23)
   setup list                 the items in └sEtup┘ (the catalog)
   setup status VMID          the STATE column in └sEtup┘
-  setup --local backup=bk    Menu › Backup on this desktop
+  setup --local              Menu › Set up this desktop
   repo VMID [OWNER/REPO]     └sEtup┘ › Repositories (24)
   --json, -y                 CLI only; the TUI always shows the plan
