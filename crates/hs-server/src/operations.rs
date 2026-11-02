@@ -9,10 +9,12 @@
 
 use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::future::Future;
+use std::panic::AssertUnwindSafe;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, SystemTime};
 
+use futures_util::FutureExt;
 use hs_core::CoreError;
 use hs_core::lease;
 use hs_core::tasks::Observer;
@@ -489,7 +491,25 @@ impl OpsState {
                 job.state = JobState::Running;
                 job.started_at = Some(timestamp(SystemTime::now()));
             });
-            let outcome = operation.execute(&ctx, &planned, &handle).await;
+            // A panic must still end the job and release its leases: a job left
+            // Running keeps this instance's own leases valid until they expire.
+            let outcome = match AssertUnwindSafe(operation.execute(&ctx, &planned, &handle))
+                .catch_unwind()
+                .await
+            {
+                Ok(outcome) => outcome,
+                Err(panic) => {
+                    let detail = panic
+                        .downcast_ref::<&str>()
+                        .map(|s| (*s).to_owned())
+                        .or_else(|| panic.downcast_ref::<String>().cloned())
+                        .unwrap_or_default();
+                    tracing::error!(job = %job_id, panic = %detail, "job panicked");
+                    Err(OpFailure::Core(CoreError::Failed(
+                        "The operation stopped on an internal error; see the server log.".to_owned(),
+                    )))
+                }
+            };
             state.release_leases(&ctx, &job_id, &planned.targets).await;
             handle.update(|job| {
                 job.finished_at = Some(timestamp(SystemTime::now()));
