@@ -105,7 +105,7 @@ pub async fn run(
         let left = next(started).ok_or_else(|| fail("no answer"))?;
         match tokio::time::timeout(left, socket.next()).await {
             Ok(Some(Ok(message))) => {
-                output.push_str(&String::from_utf8_lossy(&message.into_data()));
+                append(&mut output, message).map_err(|closed| fail(&closed))?;
                 if output.starts_with("OK") {
                     output.clear();
                     break;
@@ -124,7 +124,7 @@ pub async fn run(
     while !output.contains("# ") {
         let left = next(started).ok_or_else(|| fail("no shell prompt"))?;
         match tokio::time::timeout(left, socket.next()).await {
-            Ok(Some(Ok(message))) => output.push_str(&String::from_utf8_lossy(&message.into_data())),
+            Ok(Some(Ok(message))) => append(&mut output, message).map_err(|closed| fail(&closed))?,
             Ok(Some(Err(e))) => return Err(fail(&e.to_string())),
             Ok(None) | Err(_) => return Err(fail("no shell prompt")),
         }
@@ -143,7 +143,7 @@ pub async fn run(
         }
         let left = next(started).ok_or_else(|| fail("the script did not finish"))?;
         match tokio::time::timeout(left, socket.next()).await {
-            Ok(Some(Ok(message))) => output.push_str(&String::from_utf8_lossy(&message.into_data())),
+            Ok(Some(Ok(message))) => append(&mut output, message).map_err(|closed| fail(&closed))?,
             Ok(Some(Err(e))) => return Err(fail(&e.to_string())),
             Ok(None) | Err(_) => return Err(fail("the script did not finish")),
         }
@@ -184,6 +184,22 @@ fn through_marker(output: &str, until: &str) -> Option<String> {
         }
     }
     None
+}
+
+/// Add a data frame's text to `output`. Pings and pongs are not output
+/// (tungstenite answers pings itself); a close frame ends the console with
+/// the reason Proxmox gave.
+fn append(output: &mut String, message: Message) -> Result<(), String> {
+    match message {
+        Message::Text(text) => output.push_str(&text),
+        Message::Binary(data) => output.push_str(&String::from_utf8_lossy(&data)),
+        Message::Ping(_) | Message::Pong(_) | Message::Frame(_) => {}
+        Message::Close(None) => return Err("closed".to_owned()),
+        Message::Close(Some(frame)) => {
+            return Err(format!("closed ({}: {})", u16::from(frame.code), frame.reason));
+        }
+    }
+    Ok(())
 }
 
 /// The system roots and the optional `[pve] ca_file`, as for the API.
