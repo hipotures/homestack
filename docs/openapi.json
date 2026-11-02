@@ -102,7 +102,7 @@
           "config"
         ],
         "summary": "What the server's Proxmox token can do with the stored configuration.",
-        "description": "Asks Proxmox (`GET /access/permissions`) for the token's privileges on\nevery ACL path the operations need, then lists per operation what is\nrequired and what is missing. Changes need privileges on the instance's\npool (`HOMESTACK_PVE_POOL`). `installation` says which of the objects\n`deploy/pve/homestack-pve.sh install` makes the token can see.",
+        "description": "Asks Proxmox (`GET /access/permissions`) for the token's privileges on\nevery ACL path the operations need, then lists per operation what is\nrequired and what is missing. Changes need privileges on the instance's\npool (`HOMESTACK_PVE_POOL`). `installation` says which of the objects\nthe HomeStack installer makes the token can see.",
         "operationId": "capabilities",
         "responses": {
           "200": {
@@ -1779,7 +1779,7 @@
           },
           "installation": {
             "$ref": "#/components/schemas/Installation",
-            "description": "What `deploy/pve/homestack-pve.sh install` makes, as far as the token\ncan see it."
+            "description": "What the HomeStack installer makes, as far as the token\ncan see it."
           },
           "operations": {
             "type": "array",

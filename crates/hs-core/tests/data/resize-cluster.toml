@@ -1,6 +1,6 @@
 # The cluster of crates/hs-core/tests/resize.rs and
-# crates/hs-server/tests/resize.rs: the pools and tokens of
-# deploy/pve/homestack-pve.sh install, and running workspaces with the disk
+# crates/hs-server/tests/resize.rs: the pools and tokens of the HomeStack
+# installer, and running workspaces with the disk
 # layouts `resize` supports.
 #
 # 200  Ubuntu cloud image: root ext4 on sda1, the last partition (after the

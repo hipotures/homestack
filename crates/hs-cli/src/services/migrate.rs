@@ -136,8 +136,8 @@ pub async fn plan(pve: &impl Pve, target: &Target) -> Result<Plan, String> {
             if permissions[&path][*privilege].as_u64().is_none_or(|value| value > 1) {
                 problems.push(format!(
                     "The deploy token lacks {privilege} on {path}. Review permissions with the updated HomeStack \
-                     installer (Settings > General > Reinstall HomeStack) or deploy/pve/homestack-pve.sh install \
-                     --dry-run using the configured storage selections. Apply the reviewed plan; verify the \
+                     installer (Settings > General > Reinstall HomeStack) with the configured storage selections. \
+                     Apply the reviewed plan; verify the \
                      container's pool and both user and privilege-separated token ACLs."
                 ));
             }

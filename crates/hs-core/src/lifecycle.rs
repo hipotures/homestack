@@ -244,7 +244,7 @@ async fn require_bridge_use(pve: &impl Pve, gold: u32, gold_cfg: &VmConfig) -> R
         Ok(())
     } else {
         Err(CoreError::Refused(format!(
-            "The server's Proxmox token lacks SDN.Use on {path}, the bridge of Gold's net0; run deploy/pve/homestack-pve.sh install"
+            "The server's Proxmox token lacks SDN.Use on {path}, the bridge of Gold's net0; reinstall HomeStack (Settings > General > Reinstall HomeStack)"
         )))
     }
 }
@@ -427,7 +427,7 @@ pub async fn plan_create(
     });
     if !pool_exists {
         return Err(CoreError::Refused(format!(
-            "pool {pool} does not exist, or the token lacks Pool.Audit on it; run deploy/pve/homestack-pve.sh install"
+            "pool {pool} does not exist, or the token lacks Pool.Audit on it; reinstall HomeStack (Settings > General > Reinstall HomeStack)"
         )));
     }
 

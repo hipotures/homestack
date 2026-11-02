@@ -12,7 +12,7 @@
 //! `scripts/check.sh --live` runs it, with the rules of `live_refresh.rs`:
 //! a free VMID in 240–249, the test token, pool `homestack-test`, the test
 //! Gold 248, and the vendor snippets of this commit on Gold's node
-//! (`deploy/pve/homestack-pve.sh install`). Whatever happens, the VM is
+//! (installed by the desktop installer). Whatever happens, the VM is
 //! destroyed at the end.
 
 mod process;

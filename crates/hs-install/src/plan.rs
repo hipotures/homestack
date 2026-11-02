@@ -1,6 +1,5 @@
-//! The plan of an install or uninstall: what would change, in order. The
-//! rules are those of `deploy/pve/homestack-pve.sh` (phase 4b): HomeStack
-//! owns its user, tokens, roles, pools, ACL entries and vendor snippets;
+//! The plan of an install or uninstall: what would change, in order.
+//! HomeStack owns its user, tokens, roles, pools, ACL entries and vendor snippets;
 //! everything else is only checked.
 
 use std::collections::{BTreeMap, BTreeSet};

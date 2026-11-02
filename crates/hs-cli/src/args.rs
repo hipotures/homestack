@@ -4,7 +4,7 @@
 use std::path::PathBuf;
 
 /// The options of `install` and `uninstall` (phase 13c): how to reach root
-/// on a node once, and the choices of `homestack-pve.sh`.
+/// on a node once, and the installation choices.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct InstallArgs {
     /// `USER@HOST` of a root SSH login.

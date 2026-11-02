@@ -94,7 +94,7 @@ impl From<PveClientConfig> for PveSettings {
 }
 
 /// The pool this instance changes workspaces in and Gold's pool (phase 4b,
-/// decision 9), as `deploy/pve/homestack-pve.sh` makes them.
+/// decision 9), as the desktop installer makes them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Pools {
     pub workspaces: String,

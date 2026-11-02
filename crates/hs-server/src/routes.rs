@@ -292,7 +292,7 @@ pub async fn config_version(State(state): State<AppState>) -> Json<ConfigVersion
 /// every ACL path the operations need, then lists per operation what is
 /// required and what is missing. Changes need privileges on the instance's
 /// pool (`HOMESTACK_PVE_POOL`). `installation` says which of the objects
-/// `deploy/pve/homestack-pve.sh install` makes the token can see.
+/// the HomeStack installer makes the token can see.
 #[utoipa::path(
     get,
     path = "/v1/capabilities",

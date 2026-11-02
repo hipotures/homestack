@@ -1,7 +1,6 @@
 //! Installing and removing HomeStack in Proxmox VE from the desktop
-//! (phase 13c, `docs/migration/phase-13c.md`): what `deploy/pve/homestack-pve.sh`
-//! did on a node, driven through a root shell reached once over SSH or a
-//! Herdr pane.
+//! (phase 13c, `docs/migration/phase-13c.md`), driven through a root shell
+//! reached once over SSH or a Herdr pane.
 //!
 //! The crate does no I/O of its own: every command to the node goes through
 //! [`root::Root`], and the only thing written on the desktop is the secret

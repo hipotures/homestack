@@ -286,13 +286,13 @@ fn check(item: InstallationItem, status: InstallationStatus, detail: impl Into<S
     }
 }
 
-/// What of `deploy/pve/homestack-pve.sh install` the token can see: both
+/// What of the HomeStack installation the token can see: both
 /// pools (`GET /pools`, which lists the pools with `Pool.Audit`), Gold in
 /// its pool, and the snippets, which it cannot see.
 pub async fn installation(pve: &impl Pve, config: &Config, pool: &str, gold_pool: &str) -> Installation {
     use InstallationItem::{GoldInPool, GoldPool, Pool, Snippets};
     use InstallationStatus::{Missing, Ok, Unknown};
-    const INSTALL: &str = "run deploy/pve/homestack-pve.sh install on a node";
+    const INSTALL: &str = "reinstall HomeStack (Settings > General > Reinstall HomeStack)";
     let mut checks = Vec::new();
     match pve.get("/pools", &[]).await {
         Err(error) => {
@@ -357,7 +357,7 @@ pub async fn installation(pve: &impl Pve, config: &Config, pool: &str, gold_pool
         Unknown,
         format!(
             "Listing snippets needs Datastore.Allocate on /storage/{}, which the server does not get; \
-             deploy/pve/homestack-pve.sh status checks them on every node",
+             the desktop installer checks them on every node",
             config.cloud_init.snippet_storage
         ),
     ));

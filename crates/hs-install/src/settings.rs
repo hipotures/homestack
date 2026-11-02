@@ -1,5 +1,4 @@
-//! What the user chose for an install or uninstall (the options of
-//! `homestack-pve.sh`).
+//! What the user chose for an install or uninstall.
 
 use std::path::PathBuf;
 

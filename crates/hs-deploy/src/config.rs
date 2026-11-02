@@ -44,7 +44,7 @@ pub struct DeployConfig {
 #[serde(deny_unknown_fields)]
 pub struct PveSection {
     pub endpoints: Vec<Url>,
-    /// `homestack@pve!deploy` (`homestack-pve.sh install`).
+    /// `homestack@pve!deploy`, made by the desktop installer.
     pub deploy_token_file: PathBuf,
     #[serde(default)]
     pub ca_file: Option<PathBuf>,

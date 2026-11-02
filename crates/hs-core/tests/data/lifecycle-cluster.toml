@@ -1,6 +1,6 @@
 # The cluster of crates/hs-core/tests/lifecycle.rs and
-# crates/hs-server/tests/lifecycle.rs: what deploy/pve/homestack-pve.sh
-# install makes, plus a workspace outside the pool (150) and an alien VM in it (160).
+# crates/hs-server/tests/lifecycle.rs: what the HomeStack installer
+# makes, plus a workspace outside the pool (150) and an alien VM in it (160).
 [pve]
 version = { release = "9.2", version = "9.2.21", repoid = "4f6e0ac86f9e8c7f" }
 

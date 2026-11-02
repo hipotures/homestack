@@ -1,8 +1,7 @@
 # Proxmox installer permissions
 
-Both `deploy/pve/homestack-pve.sh` (`ROLE_PRIVS`) and the desktop installer's
-`crates/hs-install/src/plan.rs` (`ROLES`) reconcile exact privilege lists.
-They must agree: a manual privilege addition alone is removed by the next
+The desktop installer (`crates/hs-install/src/plan.rs`, `ROLES`) reconciles
+exact privilege lists: a manual privilege addition alone is removed by the next
 installation unless it is included in these definitions. Review the generated
 commands before applying a plan. Extra privileges are deliberately removed;
 required privileges are retained on subsequent runs. Existing tokens are reused,
@@ -67,35 +66,24 @@ operation and does not require granting them `HomeStackDeployTemplates`.
 `HomeStackCluster` supplies `Sys.Audit` at `/` for cluster quorum, without VM
 administration privileges.
 
-The Rust production installer also grants the server token `HomeStack` and
+The production installation also grants the server token `HomeStack` and
 `HomeStackGold` on `homestack-test`, and the shared `HomeStackDeploy` role on
 `homestack-service`. Consequently additions to that shared role also apply to
-the server token's service-pool authority, including `VM.Console`. The shell
-installer does not assign that role to the server token. These existing token
-scope differences are retained; the role privilege lists now agree. The test
+the server token's service-pool authority, including `VM.Console`. The test
 token receives neither deploy-template privileges nor the deploy role.
 
-The test Gold scopes also differ intentionally: the desktop installer selects a
-separate Gold in `homestack-test` and grants its test token both workspace and
-Gold roles there. The standalone script uses the Gold in `homestack-gold`,
-including for `--test`; its test token has `HomeStack` on `homestack-test` and
-`HomeStackGold` on `homestack-gold`. Neither path gives the test token the deploy
-role. The desktop's optional Gold selection and tag-based adoption are separate
-from the standalone script's required Gold workflow.
+A test installation uses a separate Gold in `homestack-test` and grants its test
+token both workspace and Gold roles there.
 
-Both installers check `homestack-ws`, `homestack-lock` and `homestack-server`
+The installer checks `homestack-ws`, `homestack-lock` and `homestack-server`
 against `registered-tags` and `user-tag-access`, plus `homestack-test` for a test
 installation. A registered or disallowed server tag must stop preflight before
 any changes; `user-allow=existing` retains the warning that each tag must already
 exist. No tag policy or runtime privileges are changed by these checks.
 
-Credential filenames are specific to each entry point. The desktop writes
-`pve-token` (server), `pve-token-test` and `pve-token-deploy` in its selected local
-configuration directory. The standalone script writes
-`homestack-pve-token-{server,test,deploy}` in `--token-dir` on the node running
-it. Their credential content format agrees, but neither installer promises
-interchangeable artifact paths. Existing tokens are reused without writing a
-new secret file; filename parity is not a reason to rotate them.
+The desktop writes `pve-token` (server), `pve-token-test` and `pve-token-deploy`
+in its selected local configuration directory. Existing tokens are reused
+without writing a new secret file.
 
 The installer itself runs administrative `pveum`/`pvesh` commands through the
 owner's root access. Creating users, roles, pools, tokens, ACLs and snippets, or
@@ -137,9 +125,7 @@ updated installer plan and both user/token ACLs, without replacing tokens.
 ## Permission repair and verification
 
 Use **Settings > General > Reinstall HomeStack** to review the desktop plan with
-saved selections. For the standalone script, use `install --dry-run` with the
-same `--storages`, `--snippet-storage`, `--service-storages`, `--template-storage`
-and, where needed, `--gold`/`--test` selections. Apply only the reviewed plan.
+saved selections. Apply only the reviewed plan.
 Existing tokens and their secrets are retained.
 
 An owner can inspect effective rights without retrieving a token secret:

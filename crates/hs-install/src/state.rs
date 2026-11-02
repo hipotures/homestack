@@ -1,4 +1,4 @@
-//! What `homestack-pve.sh load_state` reads from the cluster.
+//! What the installer reads from the cluster.
 
 use std::collections::{BTreeMap, BTreeSet};
 

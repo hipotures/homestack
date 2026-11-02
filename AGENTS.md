@@ -42,7 +42,7 @@ Temporary diagnostics are permitted; do not automatically turn them into permane
 
 Keep only narrowly justified, high-value permanent checks for serious data-integrity or security risks, such as persistent home preservation, destructive disk selection, authorization boundaries and critical recovery. These exceptions do not justify broad suites. Remove low-value tests and obsolete test-only fixtures, dependencies and registrations instead of ignoring them or replacing them with equivalent tests. Do not modify production behavior to eliminate tests.
 
-The retained ordinary Rust checks protect home/root separation during refresh, rollback and process restart, disk selection and stale resize plans, pool/alien destruction boundaries, and API bearer authorization. The two build-cleanup Python checks protect application binaries and E2E artifacts from deletion. Existing installer shell checks and all E2E/live checks remain intact. These narrow safeguards are intentional exceptions, not a template for routine test creation.
+The retained ordinary Rust checks protect home/root separation during refresh, rollback and process restart, disk selection and stale resize plans, pool/alien destruction boundaries, and API bearer authorization. The two build-cleanup Python checks protect application binaries and E2E artifacts from deletion. All E2E/live checks remain intact. These narrow safeguards are intentional exceptions, not a template for routine test creation.
 
 # Local Rust builds and verification
 

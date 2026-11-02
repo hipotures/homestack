@@ -73,7 +73,7 @@ pub struct Capabilities {
     /// Configuration the ACL paths were derived from.
     pub config_version: String,
     pub operations: Vec<OperationCapability>,
-    /// What `deploy/pve/homestack-pve.sh install` makes, as far as the token
+    /// What the HomeStack installer makes, as far as the token
     /// can see it.
     pub installation: Installation,
 }
