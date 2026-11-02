@@ -385,7 +385,7 @@ fn connect(
     let config = DeployConfig::load(&setup.token_dir.join("deploy.toml"))?;
     let pve = hs_deploy::deploy::deploy_client(&config)?;
     let cluster = setup.handle.block_on(deploy::survey(&config, &pve, source))?;
-    if cluster.releases.is_empty() {
+    if cluster.releases.is_empty() && source.manifest.resources.is_some() {
         return Err(format!(
             "{} has no published release (a numeric X.Y.Z tag); dev images are not offered.",
             source.manifest.image_repository
