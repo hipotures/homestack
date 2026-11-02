@@ -88,7 +88,7 @@
 
   /* ---------- range → bucket size (≈ 30–90 points per chart) ---------- */
   const RANGES = {
-    '1h':   { label: '1h',       bucket: '2m',  ms: 2 * 60e3,        axis: 'HH:mm' },
+    '1h':   { label: '1h',       bucket: '1m',  ms: 60e3,            axis: 'HH:mm' },
     '24h':  { label: '24h',      bucket: '30m', ms: 30 * 60e3,       axis: 'HH:mm' },
     '7d':   { label: '7d',       bucket: '3h',  ms: 3 * 3600e3,      axis: 'ddd HH:mm' },
     '30d':  { label: '30d',      bucket: '12h', ms: 12 * 3600e3,     axis: 'D MMM' },

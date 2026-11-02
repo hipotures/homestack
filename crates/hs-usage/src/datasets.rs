@@ -42,7 +42,7 @@ impl Selection {
     pub fn timing(&self) -> Result<Option<(u64, u64)>, String> {
         const DAY: u64 = 86400;
         match self.range.as_str() {
-            "1h" => Ok(Some((3600, 120))),
+            "1h" => Ok(Some((3600, 60))),
             "24h" => Ok(Some((DAY, 1800))),
             "7d" => Ok(Some((7 * DAY, 10800))),
             "30d" => Ok(Some((30 * DAY, 43200))),
