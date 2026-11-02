@@ -2848,11 +2848,17 @@ def archive_candidates(paths: Paths) -> list[ArchivePair]:
         if not log.is_file() or log.is_symlink():
             continue
         pairs.append(ArchivePair(archive=archive, log=log, stamp=match.group(0)[len("backup-") : -len(".tgz")]))
-    def sort_key(pair: ArchivePair) -> tuple[str, int]:
+    # Archive names carry local wall-clock time, which repeats or jumps across
+    # DST and time-zone changes; the archive's mtime orders them reliably.
+    def sort_key(pair: ArchivePair) -> tuple[int, str, int]:
+        try:
+            written = pair.archive.stat().st_mtime_ns
+        except OSError as exc:
+            raise BKError(f"cannot inspect archive {pair.archive}: {exc}") from exc
         match = ARCHIVE_RE.fullmatch(pair.archive.name)
         if match is None:  # pragma: no cover - candidates were already matched
-            return (pair.archive.name, 0)
-        return (match.group("stamp"), int(match.group("collision") or 0))
+            return (written, pair.archive.name, 0)
+        return (written, match.group("stamp"), int(match.group("collision") or 0))
 
     return sorted(pairs, key=sort_key)
 
