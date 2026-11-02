@@ -836,6 +836,9 @@ fn settings(
             check_swap,
         ));
     }
+    if manifest.resources.is_none() {
+        settings.retain(|s| ![CORES, MEMORY, ROOT, SWAP].contains(&s.title.as_str()));
+    }
     settings.push(Setting {
         list: true,
         check: Some(check_entry),
