@@ -836,9 +836,6 @@ fn settings(
             check_swap,
         ));
     }
-    if manifest.resources.is_none() {
-        settings.retain(|s| ![CORES, MEMORY, ROOT, SWAP].contains(&s.title.as_str()));
-    }
     settings.push(Setting {
         list: true,
         check: Some(check_entry),
@@ -863,6 +860,24 @@ fn settings(
             let shown: Vec<String> = automatic.iter().map(u32::to_string).collect();
             format!("auto: {}", shown.join(", "))
         });
+    }
+    // Without resources nothing is created: the service is only published.
+    if manifest.resources.is_none() {
+        settings.retain(|s| [NODES, HOSTNAME, DOMAIN].contains(&s.title.as_str()));
+        for setting in &mut settings {
+            match setting.title.as_str() {
+                NODES => {
+                    setting.multiple = false;
+                    setting.picked.truncate(1);
+                    setting.note = "The node the service runs on; its Pangolin Site connector routes to it.".into();
+                }
+                HOSTNAME => {
+                    setting.note = "The service's host name; with the domain, the address Pangolin routes to.".into();
+                }
+                DOMAIN => setting.note = "The domain of the service's address.".into(),
+                _ => {}
+            }
+        }
     }
     settings
 }
@@ -1078,6 +1093,9 @@ fn review(
     answers: &[Answer],
     tell: &(dyn Fn(Event) + Send + Sync),
 ) -> Review {
+    if source.manifest.resources.is_none() {
+        return review_published(setup, source, s, answers);
+    }
     let chosen = chosen(&s.settings, answers, s.instances.len());
     let attach_requested = service_pangolin::requested(&s.settings, answers);
     let mut sections = Vec::new();
@@ -1329,6 +1347,76 @@ fn review(
             record,
         })),
     )
+}
+
+/// Review a service without resources: only its Pangolin resource, routed
+/// to `<hostname>.<domain>` through the Site connector on the chosen node.
+fn review_published(setup: &Setup, source: &Source, s: &Session, answers: &[Answer]) -> Review {
+    let chosen = chosen(&s.settings, answers, s.instances.len());
+    let mut sections = Vec::new();
+    let mut problems = Vec::new();
+    let (mut attach, mut record) = (None, None);
+    let node = match chosen.deploy.placements.as_slice() {
+        [placement] => placement.split_once(':').map_or(placement.as_str(), |(node, _)| node),
+        _ => "",
+    };
+    if node.is_empty() {
+        problems.push("Choose the node the service runs on".to_owned());
+    } else if !service_pangolin::requested(&s.settings, answers) {
+        problems.push("Attach Pangolin: a service without resources is only published through it".to_owned());
+    } else {
+        let address = format!("{}.{}", chosen.deploy.hostname, chosen.deploy.domain);
+        let checked = site_on(setup, s, node).and_then(|site| {
+            let pangolin = s.context().ok_or("The Pangolin context is unavailable")?;
+            service_pangolin::review_existing(
+                source,
+                pangolin,
+                &setup.stop,
+                address,
+                &site,
+                service_pangolin::selected_domain(&s.settings, answers),
+            )
+        });
+        match checked {
+            Ok(checked) => {
+                sections.push(("Pangolin attachment".to_owned(), checked.lines()));
+                match public_record(setup, s, checked.domain()) {
+                    Ok(missing) => {
+                        sections.push(("Public DNS".to_owned(), missing.lines()));
+                        record = Some(missing);
+                    }
+                    Err(error) => problems.push(error),
+                }
+                attach = Some(checked);
+            }
+            Err(error) => problems.push(error),
+        }
+    }
+    (
+        sections,
+        problems.clone(),
+        Reviewed::Change(Box::new(Changes {
+            problems,
+            application: None,
+            update: None,
+            change: None,
+            create: None,
+            attach,
+            record,
+        })),
+    )
+}
+
+/// The Pangolin Site of the running connector container on `node`.
+fn site_on(setup: &Setup, s: &Session, node: &str) -> Result<String, String> {
+    let connectors = setup
+        .handle
+        .block_on(instance::of_service(&s.pve, "hipotures/homestack", "pangolin"))?;
+    let connector = connectors
+        .iter()
+        .find(|i| i.node == node && i.running)
+        .ok_or_else(|| format!("No running Pangolin Site connector on {node}"))?;
+    Ok(deploy::site_name(&connector.hostname, connector.ctid))
 }
 
 /// Apply the reviewed changes in order: sizes and environment, the image,

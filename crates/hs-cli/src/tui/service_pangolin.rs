@@ -49,15 +49,21 @@ struct Catalog {
     domains: Vec<Domain>,
 }
 
-pub(super) struct Plan {
+/// The HomeStack container a resource routes to.
+struct Container {
     ctid: u32,
     node: String,
-    address: String,
-    repository: String,
-    service: String,
     /// The existing container's reviewed identity; `None` for an instance
     /// this deployment creates before attaching.
     existing: Option<Instance>,
+}
+
+pub(super) struct Plan {
+    /// `None`: a service without resources, reached at `address` only.
+    container: Option<Container>,
+    address: String,
+    repository: String,
+    service: String,
     /// The resource's full domain.
     domain: String,
     domain_id: String,
@@ -504,30 +510,63 @@ pub(super) fn review(
     created: &[NewInstance],
     selected_domain: &str,
 ) -> Result<Plan, String> {
-    let exposure = source
-        .manifest
-        .pangolin
-        .as_ref()
-        .ok_or("The service manifest declares no Pangolin exposure")?;
-    let (ctid, node, address, existing) = match (instances, created) {
+    let (container, address) = match (instances, created) {
         ([instance], []) => {
             if !instance.running || instance.held || instance.address.parse::<std::net::IpAddr>().is_err() {
                 return Err("Select a running instance with a known IP address".to_owned());
             }
             (
-                instance.ctid,
-                instance.node.clone(),
+                Container {
+                    ctid: instance.ctid,
+                    node: instance.node.clone(),
+                    existing: Some(instance.clone()),
+                },
                 instance.address.clone(),
-                Some(instance.clone()),
             )
         }
-        ([], [new]) => (new.ctid, new.node.clone(), new.address.clone(), None),
+        ([], [new]) => (
+            Container {
+                ctid: new.ctid,
+                node: new.node.clone(),
+                existing: None,
+            },
+            new.address.clone(),
+        ),
         _ => {
             return Err(
                 "Publishing needs exactly one instance: select one existing instance or create one new".to_owned(),
             );
         }
     };
+    plan(source, pangolin, stop, Some(container), address, None, selected_domain)
+}
+
+/// Route a service without resources to `address` through the Site whose niceId is `site`.
+pub(super) fn review_existing(
+    source: &Source,
+    pangolin: &Pangolin,
+    stop: &AtomicBool,
+    address: String,
+    site: &str,
+    selected_domain: &str,
+) -> Result<Plan, String> {
+    plan(source, pangolin, stop, None, address, Some(site), selected_domain)
+}
+
+fn plan(
+    source: &Source,
+    pangolin: &Pangolin,
+    stop: &AtomicBool,
+    container: Option<Container>,
+    address: String,
+    site: Option<&str>,
+    selected_domain: &str,
+) -> Result<Plan, String> {
+    let exposure = source
+        .manifest
+        .pangolin
+        .as_ref()
+        .ok_or("The service manifest declares no Pangolin exposure")?;
     let port = source
         .manifest
         .ports
@@ -539,11 +578,19 @@ pub(super) fn review(
     let catalog = api.catalog()?;
     let (domain_id, base_domain, domain) = full_domain(&catalog, &exposure.subdomain, selected_domain)?;
     let resource = catalog.resources.iter().find(|r| r.domain == domain).cloned();
-    let site = catalog
-        .sites
-        .first()
-        .cloned()
-        .ok_or("Pangolin has no online Sites; start a Site connector first")?;
+    let site = match site {
+        Some(name) => catalog
+            .sites
+            .iter()
+            .find(|s| s.nice == name)
+            .cloned()
+            .ok_or_else(|| format!("Pangolin Site {name} is not online"))?,
+        None => catalog
+            .sites
+            .first()
+            .cloned()
+            .ok_or("Pangolin has no online Sites; start a Site connector first")?,
+    };
     api.validate(resource.as_ref(), &site)?;
     let previous = match &resource {
         Some(resource) => api.target(resource.id)?,
@@ -598,12 +645,10 @@ pub(super) fn review(
     body["hcHealthyThreshold"] = json!(1);
     body["hcUnhealthyThreshold"] = json!(3);
     Ok(Plan {
-        ctid,
-        node,
+        container,
         address,
         repository: source.repository.clone(),
         service: source.manifest.id.clone(),
-        existing,
         domain,
         domain_id,
         base_domain,
@@ -630,8 +675,15 @@ impl Plan {
     pub(super) fn lines(&self) -> Vec<String> {
         let mut lines = vec![
             format!(
-                "https://{} → Site {} (ID {}) → http://{}:{} · CT {} on {}",
-                self.domain, self.site.name, self.site.id, self.address, self.body["port"], self.ctid, self.node
+                "https://{} → Site {} (ID {}) → http://{}:{}{}",
+                self.domain,
+                self.site.name,
+                self.site.id,
+                self.address,
+                self.body["port"],
+                self.container
+                    .as_ref()
+                    .map_or_else(String::new, |c| format!(" · CT {} on {}", c.ctid, c.node))
             ),
             match (&self.resource, &self.previous) {
                 (None, _) => "Create the resource with Pangolin's default access policy (Pangolin login)".to_owned(),
@@ -658,10 +710,12 @@ impl Plan {
         if self.bypass.enable {
             lines.push("Turn on rule evaluation for the resource".to_owned());
         }
-        lines.push(
+        lines.push(if self.container.is_some() {
             "Other access policies of an existing resource, the container, its disks and persistent volume are preserved."
-                .to_owned(),
-        );
+                .to_owned()
+        } else {
+            "Other access policies of an existing resource are preserved; the service itself is not touched.".to_owned()
+        });
         lines
     }
 }
@@ -672,96 +726,108 @@ pub(super) async fn apply(
     stop: &AtomicBool,
     plan: &Plan,
 ) -> Result<Vec<String>, String> {
-    let now = instance::read(pve, plan.ctid).await?;
-    if now.repository != plan.repository
-        || now.service != plan.service
-        || now.address != plan.address
-        || plan
-            .existing
-            .as_ref()
-            .is_some_and(|known| now.mac != known.mac || now.home_volume != known.home_volume)
-        || !now.running
-        || now.held
-    {
-        return Err("The selected container changed since review; review again".to_owned());
+    if let Some(container) = &plan.container {
+        let now = instance::read(pve, container.ctid).await?;
+        if now.repository != plan.repository
+            || now.service != plan.service
+            || now.address != plan.address
+            || container
+                .existing
+                .as_ref()
+                .is_some_and(|known| now.mac != known.mac || now.home_volume != known.home_volume)
+            || !now.running
+            || now.held
+        {
+            return Err("The selected container changed since review; review again".to_owned());
+        }
     }
-    tokio::task::block_in_place(|| {
-        let api = Api::open(pangolin, stop)?;
-        let catalog = api.catalog()?;
-        if !catalog
-            .domains
-            .iter()
-            .any(|d| d.id == plan.domain_id && d.base == plan.base_domain)
-        {
-            return Err("The selected Pangolin domain changed since review; review again".into());
-        }
-        let listed = catalog.resources.iter().find(|r| r.domain == plan.domain);
-        if listed != plan.resource.as_ref()
-            || !catalog.sites.contains(&plan.site)
-            || plan.resource.as_ref().map(|r| api.target(r.id)).transpose()?.flatten() != plan.previous
-        {
-            return Err("Pangolin routing changed since review; review again".to_owned());
-        }
-        api.validate(plan.resource.as_ref(), &plan.site)?;
-        let mut lines = Vec::new();
-        let resource = match (&plan.resource, &plan.create) {
-            (Some(resource), _) => resource.id,
-            (None, Some(create)) => {
-                let path = format!("/v1/org/{}/resource", api.ctx.organization);
-                // Never retry a mutation: a lost response may still mean it was applied.
-                let (status, response) = api
-                    .client()
-                    .request("PUT", &path, Some(&create.to_string()), Probe::Organization)
-                    .map_err(|_| "Pangolin resource creation outcome is unknown; review again".to_owned())?;
-                let created = serde_json::from_slice::<Value>(&response).unwrap_or_default();
-                if ![200, 201].contains(&status)
-                    || created["success"] != true
-                    || created["data"]["fullDomain"] != plan.domain.as_str()
-                {
-                    return Err(match status {
-                        403 => "The HomeStack key may not create resources (createResource); refresh Step 7".to_owned(),
-                        _ => format!(
-                            "Pangolin did not create resource {} (HTTP {status}); review again",
-                            plan.domain
-                        ),
-                    });
-                }
-                lines.push(format!("Resource {} created", plan.domain));
-                id(&created["data"], "resourceId")?
+    tokio::task::block_in_place(|| route(pangolin, stop, plan))
+}
+
+/// Create or reuse the reviewed resource, its target and its bypass rules.
+fn route(pangolin: &Pangolin, stop: &AtomicBool, plan: &Plan) -> Result<Vec<String>, String> {
+    let api = Api::open(pangolin, stop)?;
+    let catalog = api.catalog()?;
+    if !catalog
+        .domains
+        .iter()
+        .any(|d| d.id == plan.domain_id && d.base == plan.base_domain)
+    {
+        return Err("The selected Pangolin domain changed since review; review again".into());
+    }
+    let listed = catalog.resources.iter().find(|r| r.domain == plan.domain);
+    if listed != plan.resource.as_ref()
+        || !catalog.sites.contains(&plan.site)
+        || plan.resource.as_ref().map(|r| api.target(r.id)).transpose()?.flatten() != plan.previous
+    {
+        return Err("Pangolin routing changed since review; review again".to_owned());
+    }
+    api.validate(plan.resource.as_ref(), &plan.site)?;
+    let mut lines = Vec::new();
+    let resource = match (&plan.resource, &plan.create) {
+        (Some(resource), _) => resource.id,
+        (None, Some(create)) => {
+            let path = format!("/v1/org/{}/resource", api.ctx.organization);
+            // Never retry a mutation: a lost response may still mean it was applied.
+            let (status, response) = api
+                .client()
+                .request("PUT", &path, Some(&create.to_string()), Probe::Organization)
+                .map_err(|_| "Pangolin resource creation outcome is unknown; review again".to_owned())?;
+            let created = serde_json::from_slice::<Value>(&response).unwrap_or_default();
+            if ![200, 201].contains(&status)
+                || created["success"] != true
+                || created["data"]["fullDomain"] != plan.domain.as_str()
+            {
+                return Err(match status {
+                    403 => "The HomeStack key may not create resources (createResource); refresh Step 7".to_owned(),
+                    _ => format!(
+                        "Pangolin did not create resource {} (HTTP {status}); review again",
+                        plan.domain
+                    ),
+                });
             }
-            (None, None) => return Err("The reviewed plan has no resource".to_owned()),
-        };
-        let bypass = api.bypass(Some(resource), &plan.bypass_paths)?;
-        if plan.resource.is_some() && bypass != plan.bypass {
-            return Err("Pangolin rules changed since review; review again".to_owned());
+            lines.push(format!("Resource {} created", plan.domain));
+            id(&created["data"], "resourceId")?
         }
-        if !plan.target_unchanged() {
-            save_target(&api, plan, resource)?;
+        (None, None) => return Err("The reviewed plan has no resource".to_owned()),
+    };
+    let bypass = api.bypass(Some(resource), &plan.bypass_paths)?;
+    if plan.resource.is_some() && bypass != plan.bypass {
+        return Err("Pangolin rules changed since review; review again".to_owned());
+    }
+    if !plan.target_unchanged() {
+        save_target(&api, plan, resource)?;
+    }
+    lines.push(format!(
+        "https://{} routed through {} to {}:{}{}",
+        plan.domain,
+        plan.site.name,
+        plan.address,
+        plan.body["port"],
+        if plan.container.is_some() {
+            "; container and persistent volume preserved"
+        } else {
+            ""
         }
-        lines.push(format!(
-            "https://{} routed through {} to {}:{}; container and persistent volume preserved",
-            plan.domain, plan.site.name, plan.address, plan.body["port"]
-        ));
-        for (path, priority) in bypass.missing.iter().zip(bypass.priority..) {
-            let rule =
-                json!({"action": "ACCEPT", "match": "PATH", "value": path, "priority": priority, "enabled": true});
-            api.mutate("PUT", &format!("/v1/resource/{resource}/rule"), &rule)?;
-            lines.push(format!("{path} bypasses Pangolin login"));
-        }
-        if bypass.enable {
-            api.mutate(
-                "POST",
-                &format!("/v1/resource/{resource}"),
-                &json!({"applyRules": true}),
-            )?;
-            lines.push("Rule evaluation turned on".to_owned());
-        }
-        let saved = api.bypass(Some(resource), &plan.bypass_paths)?;
-        if !saved.missing.is_empty() || saved.enable {
-            return Err("Saved Pangolin rules do not match the review; inspect the resource rules".to_owned());
-        }
-        Ok(lines)
-    })
+    ));
+    for (path, priority) in bypass.missing.iter().zip(bypass.priority..) {
+        let rule = json!({"action": "ACCEPT", "match": "PATH", "value": path, "priority": priority, "enabled": true});
+        api.mutate("PUT", &format!("/v1/resource/{resource}/rule"), &rule)?;
+        lines.push(format!("{path} bypasses Pangolin login"));
+    }
+    if bypass.enable {
+        api.mutate(
+            "POST",
+            &format!("/v1/resource/{resource}"),
+            &json!({"applyRules": true}),
+        )?;
+        lines.push("Rule evaluation turned on".to_owned());
+    }
+    let saved = api.bypass(Some(resource), &plan.bypass_paths)?;
+    if !saved.missing.is_empty() || saved.enable {
+        return Err("Saved Pangolin rules do not match the review; inspect the resource rules".to_owned());
+    }
+    Ok(lines)
 }
 
 /// Create or update the backend target, then verify it reads back as reviewed.
