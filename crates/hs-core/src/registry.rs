@@ -136,6 +136,12 @@ impl Registry {
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|_| "Cannot construct registry client")?;
+        // Docker Hub serves its registry API on a separate host.
+        let host = if host == "docker.io" {
+            "registry-1.docker.io"
+        } else {
+            host
+        };
         let mut base = Url::parse(&format!("https://{host}")).map_err(|_| "Invalid registry host")?;
         if !secure_url(&base) || base.path() != "/" || base.query().is_some() {
             return Err("Invalid registry host".to_owned());
