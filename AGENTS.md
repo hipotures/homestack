@@ -15,6 +15,8 @@ Resolve compilation failures before declaring completion; never claim a failed b
 
 Commit only changes for the current task. Never commit secrets, private keys, runtime credentials or unrelated local changes. Never force-push or rewrite history. If a push is rejected, stop and report it.
 
+Long-running daemons and loops log a failed cycle and continue with the next one; only startup errors end the process.
+
 Use English for all repository content, including code, comments, documentation, configuration descriptions and commit messages. Conversation may use another language. Use `uv pip`, never `pip`.
 
 # Instruction Conflict Resolution
