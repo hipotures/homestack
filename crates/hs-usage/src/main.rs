@@ -200,6 +200,21 @@ fn settings(env: impl Fn(&str) -> Option<String>) -> Result<(url::Url, Duration,
     Ok((prometheus, Duration::from_secs(seconds), listen, history_end))
 }
 
+/// Weak ETag of an embedded asset, hashed once per asset for the process lifetime.
+fn asset_etag(plain: &'static [u8]) -> String {
+    static ETAGS: std::sync::LazyLock<Mutex<std::collections::HashMap<usize, String>>> =
+        std::sync::LazyLock::new(Mutex::default);
+    let mut etags = ETAGS.lock().unwrap_or_else(PoisonError::into_inner);
+    etags
+        .entry(plain.as_ptr() as usize)
+        .or_insert_with(|| {
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            plain.hash(&mut hasher);
+            format!("W/\"{:016x}\"", hasher.finish())
+        })
+        .clone()
+}
+
 /// Versioned vendor assets are embedded in the Alpine binary, including gzip representations.
 async fn asset(Path(name): Path<String>, headers: HeaderMap) -> Response {
     let gzip = headers
@@ -224,9 +239,7 @@ async fn asset(Path(name): Path<String>, headers: HeaderMap) -> Response {
         _ => return StatusCode::NOT_FOUND.into_response(),
     };
     let vendor = !compressed.is_empty();
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    plain.hash(&mut hasher);
-    let etag = format!("W/\"{:016x}\"", hasher.finish());
+    let etag = asset_etag(plain);
     let unchanged = headers
         .get(header::IF_NONE_MATCH)
         .and_then(|v| v.to_str().ok())

@@ -25,6 +25,8 @@ pub struct Snapshot {
     pub projects: Vec<String>,
     pub warnings: Vec<String>,
     pub source_freshness: Value,
+    /// Estimated cache footprint, measured once when the snapshot is built.
+    pub bytes: usize,
 }
 impl Snapshot {
     pub fn full(&self) -> Value {
@@ -211,22 +213,38 @@ impl Dashboard {
                 }
             }
             let range = (global.range.start, global.range.partial_start, global.range.step);
-            for histogram in global.registry.iter().filter(|m| m.kind == registry::Kind::Histogram) {
-                let value = planner::quantiles(&self.prom, histogram, &matchers.join(","), range, timestamp).await?;
+            let matchers = matchers.join(",");
+            let histograms: Vec<_> = global
+                .registry
+                .iter()
+                .filter(|m| m.kind == registry::Kind::Histogram)
+                .collect();
+            let values = futures_util::future::try_join_all(
+                histograms
+                    .iter()
+                    .map(|histogram| planner::quantiles(&self.prom, histogram, &matchers, range, timestamp)),
+            )
+            .await?;
+            for (histogram, value) in histograms.into_iter().zip(values) {
                 quantiles.insert(histogram.measurement.to_owned(), value);
             }
         }
         let mut snapshot = normalize(&global, selection, &self.prices, timestamp, &quantiles);
         snapshot.generated_ms = started.elapsed().as_millis();
-        let snapshot = Arc::new(snapshot);
-        if snapshot.full().to_string().len() > 512 * 1024 {
+        let full = snapshot.full().to_string().len();
+        if full > 512 * 1024 {
             return Err("Normalized view exceeds the 512 KiB dataset budget".into());
         }
+        snapshot.bytes = full * 3
+            + snapshot
+                .sources
+                .iter()
+                .map(|s| s.data.to_string().len() * 4)
+                .sum::<usize>();
+        let snapshot = Arc::new(snapshot);
         // Exact exports are bounded shared snapshots, never per-browser histories.
         cache.snapshots.push_back(Arc::clone(&snapshot));
-        while cache.snapshots.len() > 12
-            || cache.snapshots.iter().map(|s| snapshot_bytes(s)).sum::<usize>() > 8 * 1024 * 1024
-        {
+        while cache.snapshots.len() > 12 || cache.snapshots.iter().map(|s| s.bytes).sum::<usize>() > 8 * 1024 * 1024 {
             cache.snapshots.pop_front();
         }
         Ok(snapshot)
@@ -287,14 +305,6 @@ fn global_bytes(g: &Global) -> usize {
         + g.main.records.len() * 512
         + g.hourly.records.len() * 512
         + g.daily.records.len() * 512
-}
-fn snapshot_bytes(snapshot: &Snapshot) -> usize {
-    snapshot.full().to_string().len() * 3
-        + snapshot
-            .sources
-            .iter()
-            .map(|s| s.data.to_string().len() * 4)
-            .sum::<usize>()
 }
 fn selected(record: &Record, selection: &Selection) -> bool {
     (selection.host == "*" || record.labels.get("host_name") == Some(&selection.host))
@@ -982,6 +992,7 @@ fn normalize(
         projects: projects.into_iter().collect(),
         warnings,
         source_freshness: json!({"usage":block_freshness(&global.main),"hourly":block_freshness(&global.hourly),"daily":block_freshness(&global.daily)}),
+        bytes: 0,
     }
 }
 
