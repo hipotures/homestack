@@ -2646,11 +2646,13 @@ def materialize_plan(
     run_directory: Path,
     log_lines: list[str] | None = None,
     progress: BackupProgress | None = None,
-) -> tuple[Path, list[str]]:
+) -> tuple[Path, list[Path]]:
+    """Stage the plan; return the payload and the unstable files that were skipped."""
     payload = run_directory / "payload"
     payload.mkdir(mode=0o700)
     if log_lines is None:
         log_lines = []
+    skipped: list[Path] = []
     for source_plan in plan.sources:
         root = payload / f"{source_plan.index:04d}" / source_label(source_plan.source)
         for entry in source_plan.entries:
@@ -2699,6 +2701,7 @@ def materialize_plan(
                         if entry.source_path == source_plan.source:
                             raise
                         log_lines.append(f"WARNING: Skipped unstable file after 5 attempts: {entry.source_path}")
+                        skipped.append(entry.source_path)
                         became_sqlite = False
                     if became_sqlite:
                         sidecar_paths = {
@@ -2742,7 +2745,7 @@ def materialize_plan(
         ],
     }
     atomic_write_bytes(run_directory / "manifest.json", (json.dumps(manifest, indent=2) + "\n").encode("utf-8"))
-    return payload, log_lines
+    return payload, skipped
 
 
 def directory_identity(path: Path, label: str) -> tuple[int, int]:
@@ -3196,7 +3199,7 @@ def run_backup(
                         total=plan.input_bytes,
                         byte_progress=True,
                     )
-                payload, _ = materialize_plan(plan, run_directory, details, progress)
+                payload, skipped = materialize_plan(plan, run_directory, details, progress)
                 manifest = run_directory / "manifest.json"
                 if not manifest.is_file():
                     raise BKError("staging manifest was not created")
@@ -3275,6 +3278,13 @@ def run_backup(
                 # retention is deterministic and reflected in status.json.
                 status = make_status(paths, config, "ok", started, finished, duration, None)
                 status["retained_successful_archives"] = retained
+                if skipped:
+                    status["warning"] = (
+                        f"{len(skipped)} unstable file(s) changed during every copy attempt and are "
+                        "not in this backup; see its log"
+                    )
+                    status["skipped_count"] = len(skipped)
+                    status["skipped"] = [str(path) for path in skipped[:100]]
                 write_status(paths, status)
                 if progress is not None:
                     progress.stage("Backup ready", total=1)
