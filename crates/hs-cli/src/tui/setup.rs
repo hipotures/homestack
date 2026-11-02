@@ -2368,6 +2368,10 @@ impl SetupBox {
         let state = match &file.manifest {
             Err(_) => ("invalid".to_owned(), tone),
             Ok(checked) if checked.manifest.is_none() => ("errors".to_owned(), tone),
+            // No container is ever created: the service is only published.
+            Ok(checked) if checked.manifest.as_ref().is_some_and(|m| m.resources.is_none()) => {
+                ("pangolin only".to_owned(), Tone::Plain)
+            }
             Ok(checked) => {
                 let found = instances(
                     &self.services,
