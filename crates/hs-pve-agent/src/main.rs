@@ -655,12 +655,20 @@ fn run() -> Result<(), String> {
         let started = Instant::now();
         let name = current.lock().unwrap_or_else(PoisonError::into_inner).clone();
         let mode = &config.modes[&name];
-        let report = collect(&config, (&name, mode), &selection, &mut cache)?;
-        write_snapshot(&config.snapshot_path, &report)?;
-        if let Some(exporter) = exporter.as_mut()
-            && let Err(error) = exporter.export(&report)
-        {
-            eprintln!("OTLP export failed: {error}; the next cycle will export the latest measurements");
+        // A failed cycle is retried at the next interval: restarting would drop
+        // the filesystem cache and counter state and force a full guest sweep.
+        match collect(&config, (&name, mode), &selection, &mut cache) {
+            Ok(report) => {
+                if let Err(error) = write_snapshot(&config.snapshot_path, &report) {
+                    eprintln!("snapshot write failed: {error}; the next cycle will write it again");
+                }
+                if let Some(exporter) = exporter.as_mut()
+                    && let Err(error) = exporter.export(&report)
+                {
+                    eprintln!("OTLP export failed: {error}; the next cycle will export the latest measurements");
+                }
+            }
+            Err(error) => eprintln!("collection failed: {error}; the next cycle will collect again"),
         }
         // A switch starts the next cycle at once, in the new mode.
         if let Some(remaining) = Duration::from_secs(mode.interval_seconds).checked_sub(started.elapsed()) {
