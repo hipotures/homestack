@@ -757,7 +757,13 @@ fn settings(
                 "CPU cores of each container.",
                 Vec::new(),
                 false,
-                Some(first.map_or(resources.cores, |i| i.cores).to_string()),
+                Some(
+                    first
+                        .map(|i| i.cores)
+                        .or(resources.map(|r| r.cores))
+                        .map(|v| v.to_string())
+                        .unwrap_or_default(),
+                ),
             ),
             check_cores,
         ),
@@ -767,7 +773,13 @@ fn settings(
                 "Memory of each container, without swap.",
                 Vec::new(),
                 false,
-                Some(first.map_or(resources.memory_mib, |i| i.memory_mib).to_string()),
+                Some(
+                    first
+                        .map(|i| i.memory_mib)
+                        .or(resources.map(|r| r.memory_mib))
+                        .map(|v| v.to_string())
+                        .unwrap_or_default(),
+                ),
             ),
             check_memory,
         ),
@@ -777,7 +789,12 @@ fn settings(
                 "The root disk, a number with M or G; it holds the image and no data. It only grows.",
                 Vec::new(),
                 false,
-                Some(first.map_or_else(|| show_mib(resources.rootfs_mib), |i| show_size(i.root_mib))),
+                Some(
+                    first
+                        .map(|i| show_size(i.root_mib))
+                        .or(resources.map(|r| show_mib(r.rootfs_mib)))
+                        .unwrap_or_default(),
+                ),
             ),
             check_root,
         ),
@@ -814,7 +831,7 @@ fn settings(
                 "Swap limit per new container, in MiB; zero disables swap.",
                 Vec::new(),
                 false,
-                Some(manifest.resources.swap_mib.to_string()),
+                Some(manifest.resources.map(|r| r.swap_mib.to_string()).unwrap_or_default()),
             ),
             check_swap,
         ));

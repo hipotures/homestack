@@ -711,7 +711,7 @@ pub async fn plan(
         template_storage: config.template_storage.clone(),
         pool: config.pool.clone(),
         domain: choice.domain.trim().to_owned(),
-        swap_mib: manifest.resources.swap_mib,
+        swap_mib: manifest.resources.map_or(0, |r| r.swap_mib),
         ..Plan::default()
     };
     match choice.nameserver.trim() {

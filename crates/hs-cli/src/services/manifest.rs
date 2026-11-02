@@ -51,7 +51,8 @@ pub struct Manifest {
     pub id: String,
     pub name: String,
     pub image_repository: String,
-    pub resources: Resources,
+    /// `None`: an empty `resources`.
+    pub resources: Option<Resources>,
     pub ports: Vec<Port>,
     pub healthcheck: Option<Healthcheck>,
     /// `None`: an empty `persistence`, no home volume.
@@ -505,14 +506,16 @@ fn image_of(check: &mut Check, value: &Yaml) -> Option<String> {
     Some(repository)
 }
 
-type Runtime = (Resources, Vec<Port>, Option<Healthcheck>);
+type Runtime = (Option<Resources>, Vec<Port>, Option<Healthcheck>);
 
 fn runtime_of(check: &mut Check, value: &Yaml) -> Option<Runtime> {
     let path = vec!["runtime".to_owned()];
     let runtime = check.mapping(value, &path, &["resources", "ports", "healthcheck"])?;
-    let resources = check
-        .required(runtime, &path, "resources")
-        .and_then(|value| resources_of(check, value, &at(&path, "resources")));
+    let resources = match check.required(runtime, &path, "resources") {
+        Some(Yaml::Null) => Some(None),
+        Some(value) => resources_of(check, value, &at(&path, "resources")).map(Some),
+        None => None,
+    };
     let ports = match field(runtime, "ports") {
         None => Some(Vec::new()),
         Some(value) => ports_of(check, value, &at(&path, "ports")),
