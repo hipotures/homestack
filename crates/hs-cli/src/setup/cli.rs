@@ -449,6 +449,21 @@ pub async fn run(
         };
         select_entries(&settings, &tokens, setup.catalog.as_deref(), &github)?
     };
+    if target_arg.as_deref() == Some(ALL) {
+        if entries.is_empty() {
+            return Err(AppError::new("setup ALL needs selectors, for example app=herdr"));
+        }
+        let batch = Batch {
+            args,
+            setup,
+            loaded,
+            client,
+            entries: &entries,
+            catalog_id,
+            unattended,
+        };
+        return run_all(&batch, ctx, settings).await;
+    }
     // The selection is checked before even the read-only resolution.
     let target = match (&local_target, &target_arg) {
         (Some(target), _) => target.clone(),
@@ -544,6 +559,199 @@ pub async fn run(
         }
     }
     Ok(if result["ok"] == Value::Bool(true) { 0 } else { 1 })
+}
+
+/// The target of a setup on every running workspace.
+const ALL: &str = "ALL";
+
+/// What `setup ALL` was asked for.
+struct Batch<'a> {
+    args: &'a Args,
+    setup: &'a Setup,
+    loaded: &'a Loaded,
+    client: &'a Client,
+    entries: &'a [super::definitions::Entry],
+    catalog_id: Option<String>,
+    unattended: bool,
+}
+
+/// One workspace of `setup ALL`: what it needs, and its open connection
+/// when it needs something.
+struct Row {
+    vmid: u32,
+    name: String,
+    result: String,
+    pending: Option<(Target, Box<dyn Workspace>)>,
+}
+
+/// `setup ALL SELECTORS`: every running workspace (role WS) is connected to
+/// once (one touch each) and inspected; the table says which need the
+/// selected items. Without `--dry-run`, only those get the setup, over the
+/// connection already open.
+async fn run_all(batch: &Batch<'_>, ctx: &mut Context, mut settings: Settings) -> Result<i32, AppError> {
+    let json_mode = batch.args.json;
+    let system = Arc::clone(&ctx.system);
+    let status = batch.client.get("/v1/status").await.map_err(client_error)?;
+    let mut machines: Vec<(u32, String, String)> = status["workspaces"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|entry| entry["role"] == json!("WS"))
+        .filter_map(|entry| {
+            let vmid = u32::try_from(entry["vmid"].as_u64()?).ok()?;
+            Some((
+                vmid,
+                entry["name"].as_str().unwrap_or_default().to_owned(),
+                entry["status"].as_str().unwrap_or_default().to_owned(),
+            ))
+        })
+        .collect();
+    machines.sort_by_key(|(vmid, _, _)| *vmid);
+    if !json_mode {
+        ctx.console.out(&format!(
+            "SSH: one connection per running workspace; touch your {} for each.\n",
+            key_label(system.as_ref(), batch.loaded)
+        ));
+    }
+    let mut rows = Vec::new();
+    for (vmid, name, state) in machines {
+        let mut row = Row {
+            vmid,
+            name: name.clone(),
+            result: String::new(),
+            pending: None,
+        };
+        if state != "running" {
+            row.result = format!("skipped: {}", if state.is_empty() { "unknown" } else { &state });
+            rows.push(row);
+            continue;
+        }
+        if !json_mode {
+            ctx.console.out(&format!("{vmid} {name}: connecting\n"));
+        }
+        let inspected = async {
+            let target = resolve_target(batch.client, &mut settings, &vmid.to_string()).await?;
+            let mut workspace = open_workspace(&system, &ctx.home, batch.loaded, &settings, &target)?;
+            let state = inspect_workspace_state(workspace.as_mut(), &settings, &target, batch.entries)?;
+            Ok::<_, AppError>((target, workspace, state))
+        }
+        .await;
+        match inspected {
+            Err(error) => row.result = format!("failed: {error}"),
+            Ok((target, workspace, state)) => {
+                let needed: Vec<String> = state["items"]
+                    .as_object()
+                    .into_iter()
+                    .flat_map(|items| items.values())
+                    .filter(|item| item["ready"] != json!(true))
+                    .map(|item| {
+                        format!(
+                            "{} ({})",
+                            item["label"].as_str().unwrap_or_default(),
+                            item["state"].as_str().unwrap_or_default()
+                        )
+                    })
+                    .collect();
+                if needed.is_empty() {
+                    row.result = "up to date".to_owned();
+                } else {
+                    row.result = format!("update: {}", needed.join(", "));
+                    row.pending = Some((target, workspace));
+                }
+            }
+        }
+        rows.push(row);
+    }
+    let table = |rows: &[Row]| -> String {
+        let width = rows.iter().map(|row| row.name.len()).max().unwrap_or(0);
+        rows.iter()
+            .map(|row| format!("  {:<7} {:<width$}  {}\n", row.vmid, row.name, row.result))
+            .collect()
+    };
+    let summary = |rows: &[Row]| -> Value {
+        json!(
+            rows.iter()
+                .map(|row| json!({"vmid": row.vmid, "name": row.name, "result": row.result}))
+                .collect::<Vec<_>>()
+        )
+    };
+    let pending = rows.iter().filter(|row| row.pending.is_some()).count();
+    if batch.setup.dry_run || pending == 0 {
+        if json_mode {
+            let text = serde_json::to_string_pretty(
+                &json!({"ok": true, "dry_run": batch.setup.dry_run, "workspaces": summary(&rows)}),
+            )
+            .unwrap_or_default();
+            ctx.console.out(&format!("{text}\n"));
+        } else {
+            ctx.console.out(&table(&rows));
+            ctx.console.out(if pending == 0 {
+                "Nothing to update.\n"
+            } else {
+                "Dry run: no changes.\n"
+            });
+        }
+        return Ok(0);
+    }
+    if !batch.args.yes {
+        if json_mode || !ctx.stdin_tty || batch.setup.non_interactive {
+            let text = serde_json::to_string_pretty(&json!({"ok": false, "confirmation_required": true,
+                "workspaces": summary(&rows), "message": "No changes made. Re-run with --yes to update them."}))
+            .unwrap_or_default();
+            ctx.console.out(&format!("{text}\n"));
+            return Ok(3);
+        }
+        ctx.console.out(&table(&rows));
+        if !confirm(ctx, &format!("Update {pending} workspace(s)?")) {
+            ctx.console.out("Cancelled. No changes were made.\n");
+            return Ok(0);
+        }
+    }
+    let mut ok = true;
+    for row in &mut rows {
+        let Some((target, mut workspace)) = row.pending.take() else {
+            continue;
+        };
+        let plan = build_plan(
+            &settings,
+            &target,
+            batch.entries,
+            batch.catalog_id.clone(),
+            batch.unattended,
+            true,
+        )?;
+        if !json_mode {
+            ctx.console.out(&format!("{} {}:\n", row.vmid, row.name));
+        }
+        let result = {
+            let mut printer = Printer {
+                console: ctx.console.as_mut(),
+                json: json_mode,
+                sounds: Sounds::from_table(batch.loaded.client.sounds.as_ref()),
+            };
+            execute_plan(
+                &settings,
+                system.as_ref(),
+                &plan,
+                Connection::Open(workspace.as_mut()),
+                &mut printer,
+            )
+        };
+        let done = result["ok"] == json!(true);
+        ok &= done;
+        row.result = if done {
+            "updated".to_owned()
+        } else {
+            "failed during update".to_owned()
+        };
+    }
+    if json_mode {
+        let text = serde_json::to_string_pretty(&json!({"ok": ok, "workspaces": summary(&rows)})).unwrap_or_default();
+        ctx.console.out(&format!("{text}\n"));
+    } else {
+        ctx.console.out(&table(&rows));
+    }
+    Ok(i32::from(!ok))
 }
 
 /// Rich's `Confirm.ask(question, default=False)`.

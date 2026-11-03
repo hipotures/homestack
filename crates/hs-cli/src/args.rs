@@ -163,7 +163,9 @@ fn usage_of(command: &str) -> String {
         "uninstall" => {
             "[--ssh USER@HOST | --herdr NAME] [--identity FILE] [--test] [--snippet-storage ID] [--gold VMID] [--token-dir DIR] [--json] [-y]"
         }
-        "setup" => "[--local] [--json] [-y] [--catalog CATALOG] [--dry-run] [--non-interactive] [target] [SELECTORS]",
+        "setup" => {
+            "[--local] [--json] [-y] [--catalog CATALOG] [--dry-run] [--non-interactive] [target|ALL] [SELECTORS]"
+        }
         "repo" => "TARGET [REPOSITORY] [--json]",
         "status" => "[TARGET] [--json]",
         "update" => "[SERVICE ...] [-y] [--auto]",
