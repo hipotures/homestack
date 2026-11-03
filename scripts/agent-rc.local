@@ -356,6 +356,33 @@ def start_account(account):
         relay.serve_forever()
 
 
+def schedule_agents():
+    """Queue work after cloud-init without blocking its rc-local prerequisite."""
+    unit = "homestack-agent-processes.service"
+    state = subprocess.run(
+        ["systemctl", "show", unit, "--property=ActiveState", "--value"],
+        text=True, capture_output=True, check=True,
+    ).stdout.strip()
+    if state in ("active", "activating", "reloading"):
+        log(f"{unit}: already {state}")
+        return
+    homes = sorted({account.pw_dir for account in pwd.getpwall()
+                    if Path(account.pw_dir).is_absolute()
+                    and not account.pw_shell.endswith(("/nologin", "/false"))})
+    mounts = " ".join(json.dumps(home, ensure_ascii=False) for home in homes)
+    subprocess.run([
+        "systemd-run", "--unit=" + unit, "--no-block", "--collect",
+        "--description=HomeStack agent telemetry and Remote Control",
+        "--property=Type=forking", "--property=RemainAfterExit=yes",
+        "--property=GuessMainPID=no", "--property=TimeoutStartSec=5min",
+        "--property=Wants=network-online.target",
+        "--property=After=cloud-final.service network-online.target",
+        "--property=RequiresMountsFor=" + mounts,
+        "/usr/bin/python3", str(Path(__file__).resolve()), "--run-agents",
+    ], check=True)
+    log(f"{unit}: queued after cloud-final.service and home mounts")
+
+
 def main():
     # systemd invokes generators with three output directories. Generation must
     # only write there; agent/config work happens later in the generated service.
@@ -377,7 +404,10 @@ def main():
         return
     if os.geteuid() != 0:
         sys.exit("Install the boot script with the packaged installer; startup requires root.")
-    # The boot service retains these children in its cgroup after this exits.
+    if sys.argv[1:] != ["--run-agents"]:
+        schedule_agents()
+        return
+    # The transient worker retains these children in its cgroup after this exits.
     for account in pwd.getpwall():
         home = Path(account.pw_dir)
         if not home.is_absolute() or account.pw_shell.endswith(("/nologin", "/false")):

@@ -79,6 +79,18 @@ agents or edits their configurations. No additional persistent service file
 or enablement symlink is installed. Installing the script does not restart
 running agents. Reboot after replacing an older version.
 
+Both startup methods queue a transient `homestack-agent-processes.service`
+without waiting for it. That worker is ordered after `cloud-final.service` and
+requires the login accounts' home mounts through `RequiresMountsFor`. This is
+necessary on the first boot after root replacement: HomeStack mounts the
+persistent home during cloud-init's final stage. The dispatcher must not wait
+for that stage, because cloud-init itself is ordered after `rc-local.service`
+and `multi-user.target`. The worker is not pulled into either target, so it
+does not create an ordering cycle. Ordinary reboots use the same ordering.
+Starting the dispatcher again leaves an already queued/running worker intact.
+Inspect the worker with `systemctl status homestack-agent-processes.service`
+and `journalctl -u homestack-agent-processes.service`.
+
 ### Account and startup project discovery
 
 The script discovers login accounts with native Claude or Codex configuration,
