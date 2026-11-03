@@ -97,7 +97,7 @@ impl Setup {
 
     fn command(&self) -> Install {
         match self.mode {
-            Mode::Install | Mode::Sites | Mode::Service => Install::Install,
+            Mode::Install | Mode::Sites | Mode::Service | Mode::Snippets => Install::Install,
             Mode::Uninstall => Install::Uninstall,
         }
     }
@@ -138,6 +138,7 @@ pub fn spawn(
         match setup.mode {
             Mode::Sites => super::pangolin_sites::work(&setup, &commands, &tell),
             Mode::Service => super::service_deploy::work(&setup, &commands, &tell),
+            Mode::Snippets => super::snippet_update::work(&setup, &commands, &tell),
             Mode::Install | Mode::Uninstall => work(&setup, &commands, &tell),
         }
     })
@@ -261,7 +262,7 @@ fn survey(setup: &Setup, session: &mut Session, tell: &(dyn Fn(Event) + Send + S
             check.extend(install_check(&review));
             first = Some((answers, Some(domain), review));
         }
-        Mode::Uninstall | Mode::Sites | Mode::Service => match session.plan(&setup.settings()) {
+        Mode::Uninstall | Mode::Sites | Mode::Service | Mode::Snippets => match session.plan(&setup.settings()) {
             Ok(plan) => {
                 check.push(if plan.steps.is_empty() {
                     (

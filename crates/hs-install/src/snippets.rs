@@ -166,3 +166,68 @@ pub fn remove(root: &mut dyn Root, local: &str, node: &Node, path: &str) -> Resu
     }
     Ok(())
 }
+
+/// How a vendor snippet on a node compares with the one this build carries.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SnippetState {
+    Same,
+    Differs,
+    Missing,
+    /// The node is offline or does not answer; its snippets are unknown.
+    Unknown(String),
+}
+
+/// One vendor snippet on one node.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SnippetStatus {
+    pub node: Node,
+    pub name: &'static str,
+    pub path: String,
+    pub state: SnippetState,
+}
+
+/// Compare the vendor snippets on every node holding `storage` with this
+/// build's. Nothing is changed.
+pub fn snippet_status(
+    root: &mut dyn Root,
+    access: &crate::probe::Access,
+    storage: &str,
+) -> Result<(String, Vec<SnippetStatus>), InstallError> {
+    let state = State::load(root, &access.topology)?;
+    if !state.storages.contains_key(storage) {
+        return Err(InstallError::failed(format!(
+            "the configured snippet storage {storage} does not exist in Proxmox"
+        )));
+    }
+    let mut paths = BTreeMap::new();
+    for (name, _) in SNIPPETS {
+        paths.insert(name, path(root, storage, name)?);
+    }
+    let mut found = Vec::new();
+    for node in nodes_of(&state, storage) {
+        let sums = if node.online {
+            sums_on(root, &state.local_node, &node, &paths)
+                .map_err(|_| format!("{} does not answer over SSH (root@{})", node.name, node.ip))
+        } else {
+            Err(format!("{} is offline", node.name))
+        };
+        for (name, text) in SNIPPETS {
+            let path = paths.get(name).cloned().unwrap_or_default();
+            let state = match &sums {
+                Err(why) => SnippetState::Unknown(why.clone()),
+                Ok(sums) => match sums.get(&path) {
+                    None => SnippetState::Missing,
+                    Some(found) if *found == sum(text) => SnippetState::Same,
+                    Some(_) => SnippetState::Differs,
+                },
+            };
+            found.push(SnippetStatus {
+                node: node.clone(),
+                name,
+                path,
+                state,
+            });
+        }
+    }
+    Ok((state.local_node, found))
+}

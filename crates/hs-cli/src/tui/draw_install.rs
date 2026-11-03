@@ -167,7 +167,7 @@ pub(super) fn buttons(install: &Install) -> Vec<Control> {
         Stage::Check => vec![
             Control::key(match install.mode {
                 Mode::Install | Mode::Sites | Mode::Service => "&Settings Enter",
-                Mode::Uninstall => "&Review Enter",
+                Mode::Uninstall | Mode::Snippets => "&Review Enter",
             }),
             Control::key("back Esc"),
         ],
@@ -192,6 +192,11 @@ pub(super) fn buttons(install: &Install) -> Vec<Control> {
                     Control::named("D", "deploy", KeyCode::Char('d')).enabled(ready),
                     back,
                 ],
+                Mode::Snippets => vec![
+                    scroll,
+                    Control::named("W", "write", KeyCode::Char('w')).enabled(ready),
+                    back,
+                ],
                 Mode::Uninstall => {
                     let (remove, cancel) = if install.remove_focused {
                         ("▶Remove Enter", "cancel")
@@ -203,6 +208,7 @@ pub(super) fn buttons(install: &Install) -> Vec<Control> {
             }
         }
         Stage::Run => vec![Control::key("stop Esc").muted()],
+        Stage::Done if install.mode == Mode::Snippets => vec![Control::key("close Enter")],
         Stage::Done if install.ok && matches!(install.mode, Mode::Sites | Mode::Service) => {
             vec![Control::key("close Enter")]
         }
@@ -286,6 +292,11 @@ fn access(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
         }
         Mode::Service => {
             "The deploy token reads the cluster. Nothing changes until you press Deploy in the review step."
+        }
+        Mode::Snippets => {
+            "Root on one node compares the Cloud-Init vendor snippets on every node with this build's. Only the \
+             snippets that differ or are missing are written, when you press Write in the review step; nothing \
+             else in Proxmox changes."
         }
     };
     let mut y = inner.y + 1;
@@ -1006,6 +1017,7 @@ fn review(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
                 Mode::Sites => "Problems (they keep the deployment from starting)",
                 Mode::Uninstall => "Problems (they keep the removal from starting)",
                 Mode::Install => "Problems (they keep the install from starting)",
+                Mode::Snippets => "Problems (they keep the snippets from being written)",
             }
             .to_owned(),
             bold.fg(palette.error),
@@ -1083,6 +1095,8 @@ fn done(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
         (false, Mode::Uninstall) => ("The uninstall did not finish.", text.fg(palette.error)),
         (true, Mode::Sites) => ("Every Site connector runs and is online.", text.fg(palette.ok)),
         (false, Mode::Sites) => ("The Site connectors are not all online.", text.fg(palette.error)),
+        (true, Mode::Snippets) => ("The reviewed snippets are written.", text.fg(palette.ok)),
+        (false, Mode::Snippets) => ("Not every snippet was written.", text.fg(palette.error)),
         (true, Mode::Service) => ("The reviewed service operation completed.", text.fg(palette.ok)),
         (false, Mode::Service) => (
             "The service operation did not finish; inspect the journal.",

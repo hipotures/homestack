@@ -29,6 +29,7 @@ mod service_pangolin;
 pub mod setup;
 pub mod setup_work;
 pub mod shell;
+pub mod snippet_update;
 pub mod state;
 pub mod theme;
 

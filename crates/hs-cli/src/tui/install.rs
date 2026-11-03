@@ -20,6 +20,8 @@ pub enum Mode {
     Sites,
     /// The first deployment of a manifest-defined service (deploy token).
     Service,
+    /// The vendor snippets on the nodes, written where they differ.
+    Snippets,
 }
 
 impl Mode {
@@ -31,6 +33,7 @@ impl Mode {
             Self::Uninstall => &["access", "check", "review", "remove"],
             Self::Sites => &["access", "settings", "review", "deploy"],
             Self::Service => &["settings", "review", "deploy"],
+            Self::Snippets => &["access", "check", "review", "write"],
         }
     }
 }
@@ -344,6 +347,7 @@ impl Install {
             Mode::Uninstall => "HomeStack uninstall".to_owned(),
             Mode::Sites => "Pangolin Site connectors".to_owned(),
             Mode::Service => format!("{} Deployment", self.subject.as_deref().unwrap_or("Service")),
+            Mode::Snippets => "Cloud-Init snippets".to_owned(),
         }
     }
     #[must_use]
@@ -405,7 +409,7 @@ impl Install {
             (Stage::Review, Mode::Sites) => 2,
             (Stage::Settings, _) => 2,
             (Stage::Review, Mode::Install) => 3,
-            (Stage::Review, Mode::Uninstall) => 2,
+            (Stage::Review, Mode::Uninstall | Mode::Snippets) => 2,
             (Stage::Run | Stage::Done, _) => steps - 1,
         };
         (at, steps)
@@ -510,7 +514,7 @@ impl Install {
                 // in the log and one Esc back); the uninstall shows the check.
                 self.stage = match self.mode {
                     Mode::Install | Mode::Sites | Mode::Service => Stage::Settings,
-                    Mode::Uninstall => Stage::Check,
+                    Mode::Uninstall | Mode::Snippets => Stage::Check,
                 };
                 if choose_pangolin_domain
                     && let Some(row) = self
@@ -599,6 +603,10 @@ impl Install {
                 }
                 // Back to the Pangolin wizard; root is let go.
                 KeyCode::Enter | KeyCode::Esc if self.ok && self.mode == Mode::Sites => {
+                    (true, Some(Request::Install(Command::Cancel)))
+                }
+                // The snippet update ends here, written or not; root is let go.
+                KeyCode::Enter | KeyCode::Esc if self.mode == Mode::Snippets => {
                     (true, Some(Request::Install(Command::Cancel)))
                 }
                 KeyCode::Enter | KeyCode::Esc | KeyCode::Char('o') if self.ok => (true, Some(Request::Installed)),
@@ -782,11 +790,15 @@ impl Install {
                 self.stage = Stage::Settings;
                 None
             }
-            Mode::Uninstall | Mode::Sites | Mode::Service => {
+            Mode::Uninstall | Mode::Sites | Mode::Service | Mode::Snippets => {
                 self.stage = Stage::Review;
                 self.reviewed = false;
                 self.remove_focused = false;
-                self.busy = Some("Reading what would be removed".to_owned());
+                self.busy = Some(if self.mode == Mode::Snippets {
+                    "Listing the snippets to write".to_owned()
+                } else {
+                    "Reading what would be removed".to_owned()
+                });
                 Some(Request::Install(Command::Review {
                     answers: Vec::new(),
                     domain: None,
@@ -1148,7 +1160,8 @@ impl Install {
                 self.stage = Stage::Settings;
                 self.removing = false;
             }
-            (Mode::Uninstall, KeyCode::Esc) => self.stage = Stage::Check,
+            (Mode::Uninstall | Mode::Snippets, KeyCode::Esc) => self.stage = Stage::Check,
+            (Mode::Snippets, KeyCode::Char('w' | 'W')) if ready => return apply(self),
             (_, KeyCode::Down) => self.scroll += 1,
             (_, KeyCode::Up) => self.scroll = self.scroll.saturating_sub(1),
             (Mode::Service, KeyCode::Delete) if self.removing && ready => return apply(self),

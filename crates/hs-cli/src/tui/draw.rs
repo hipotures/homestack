@@ -2125,8 +2125,15 @@ fn draw_settings(buf: &mut Buffer, area: Rect, app: &App, section: usize, themes
             lines.push(Vec::new());
             let (item, style) = unfocused_item(palette, "Reinstall HomeStack", selected == Some(2), selected.is_some());
             lines.push(vec![(item, style)]);
+            let (item, style) = unfocused_item(
+                palette,
+                "Update Cloud-Init snippets",
+                selected == Some(3),
+                selected.is_some(),
+            );
+            lines.push(vec![(item, style)]);
             lines.push(Vec::new());
-            let (item, style) = unfocused_item(palette, "Uninstall HomeStack", selected == Some(3), selected.is_some());
+            let (item, style) = unfocused_item(palette, "Uninstall HomeStack", selected == Some(4), selected.is_some());
             lines.push(vec![(item, style.fg(palette.error))]);
         }
         (MACHINES, _) => {}
@@ -2248,10 +2255,10 @@ fn draw_settings(buf: &mut Buffer, area: Rect, app: &App, section: usize, themes
                 }
             }
         }
-        // Reinstall and Uninstall, each after a blank line, under the sort
-        // rows and an open list.
+        // Reinstall and the snippet update after a blank line, Uninstall
+        // after another, under the sort rows and an open list.
         let open = if sorting.is_some() { SORT_KEYS.len() } else { 0 };
-        for (option, gap) in [(2, 3), (3, 5)] {
+        for (option, gap) in [(2, 3), (3, 4), (4, 6)] {
             let y = y + gap + u16::try_from(open).unwrap_or(0);
             if y < inner.bottom() {
                 super::chrome::register(Rect::new(x, y, width, 1), super::chrome::Hit::GeneralOption(option));

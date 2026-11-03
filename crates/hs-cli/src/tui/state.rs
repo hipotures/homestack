@@ -2552,13 +2552,15 @@ impl App {
                 }
                 self.overlay = Some(Overlay::System { index });
             }
-            // The two sort levels, Reinstall, then Uninstall.
+            // The two sort levels, Reinstall, the snippet update, then
+            // Uninstall.
             Overlay::General { mut index } => {
                 match code {
-                    KeyCode::Down | KeyCode::Tab => index = (index + 1) % 4,
-                    KeyCode::Up => index = (index + 3) % 4,
+                    KeyCode::Down | KeyCode::Tab => index = (index + 1) % 5,
+                    KeyCode::Up => index = (index + 4) % 5,
                     KeyCode::Enter if index == 2 => return self.open_install(super::install::Mode::Install, false),
-                    KeyCode::Enter if index == 3 => return self.open_install(super::install::Mode::Uninstall, false),
+                    KeyCode::Enter if index == 3 => return self.open_install(super::install::Mode::Snippets, false),
+                    KeyCode::Enter if index == 4 => return self.open_install(super::install::Mode::Uninstall, false),
                     KeyCode::Enter | KeyCode::Right | KeyCode::Char(' ') if index < 2 => {
                         self.overlay = Some(Overlay::Sort {
                             level: index,
