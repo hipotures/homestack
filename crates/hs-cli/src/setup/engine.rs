@@ -50,15 +50,10 @@ pub trait Observer {
     fn terminal(&mut self, operation: &mut dyn FnMut()) {
         operation();
     }
-    /// Run Herdr's desktop registration (`herdr machine add`), which may
-    /// ask for the touch of a security key.
     /// Whether the user asked to stop: checked before each item is checked
     /// or applied (Python raises from `progress`).
     fn cancelled(&mut self) -> bool {
         false
-    }
-    fn register_desktop(&mut self, argv: &[String]) -> Result<crate::system::Output, AppError> {
-        super::herdr::register_desktop(argv, &crate::touch::Sounds::disabled())
     }
 }
 
@@ -364,23 +359,6 @@ pub fn inspect_workspace_state(
     target: &Target,
     entries: &[Entry],
 ) -> Result<Value, AppError> {
-    inspect_workspace_state_with(
-        workspace,
-        settings,
-        &crate::system::RealSystem::default(),
-        target,
-        entries,
-    )
-}
-
-/// [`inspect_workspace_state`] with the desktop's commands given.
-pub fn inspect_workspace_state_with(
-    workspace: &mut dyn Workspace,
-    settings: &Settings,
-    system: &dyn System,
-    target: &Target,
-    entries: &[Entry],
-) -> Result<Value, AppError> {
     let entries = expand_config_entries(entries);
     require_tool(workspace, settings, "python3", &[])?;
     verify_identity(workspace, settings, target)?;
@@ -501,7 +479,7 @@ pub fn inspect_workspace_state_with(
                 item["will_overwrite"] = json!(live.is_some_and(|live| truthy(&live["exists"])));
                 Ok(())
             }
-            _ => inspect_item(workspace, settings, system, target, entry, &record, &remote, &mut item),
+            _ => inspect_item(workspace, settings, entry, &record, &remote, &mut item),
         };
         if let Err(error) = outcome {
             item["state"] = json!("unavailable");
@@ -522,8 +500,6 @@ pub fn inspect_workspace_state_with(
 fn inspect_item(
     workspace: &mut dyn Workspace,
     settings: &Settings,
-    system: &dyn System,
-    target: &Target,
     entry: &Entry,
     record: &Value,
     remote: &HashMap<String, Value>,
@@ -658,10 +634,7 @@ fn inspect_item(
         }
         Params::Unavailable => item["state"] = json!("unavailable"),
         Params::Herdr => {
-            if let (Some(item), Value::Object(found)) = (
-                item.as_object_mut(),
-                herdr::inspect(workspace, settings, system, target)?,
-            ) {
+            if let (Some(item), Value::Object(found)) = (item.as_object_mut(), herdr::inspect(workspace, settings)?) {
                 item.extend(found);
             }
         }
@@ -763,7 +736,6 @@ pub fn preflight_entry(
     target: &Target,
     system: &dyn System,
     entry: &Entry,
-    unattended: bool,
 ) -> Result<Value, AppError> {
     match &entry.params {
         Params::File { .. } => {
@@ -868,7 +840,7 @@ pub fn preflight_entry(
             Ok(json!({"installed": installed, "ready": installed}))
         }
         Params::Unavailable => Err(AppError::new(format!("{} cannot be installed yet", entry.label))),
-        Params::Herdr => herdr::preflight(workspace, settings, system, target, unattended),
+        Params::Herdr => herdr::preflight(workspace, settings),
         Params::Repository { repository } => {
             let metadata = github_json(system, &[&format!("repos/{repository}")], false)?;
             let same = metadata["full_name"].as_str().unwrap_or_default().to_lowercase() == repository.to_lowercase();
@@ -1037,16 +1009,7 @@ fn apply_entry(
             }
         }
         Params::Unavailable => Err(AppError::new(format!("{} cannot be installed yet", entry.label))),
-        Params::Herdr => herdr::apply(
-            workspace,
-            settings,
-            system,
-            &plan.target,
-            state,
-            observer,
-            id,
-            plan.unattended,
-        ),
+        Params::Herdr => herdr::apply(workspace, settings, state, observer, id),
         Params::Repository { .. } => {
             observer.activity(Some(id), "Configure repository");
             let result = repo::setup_repository(settings, system, workspace, &state["repository"], &mut |message| {
@@ -1219,7 +1182,7 @@ fn run_plan(
                 }
                 documents[&config.path].clone()
             }
-            _ => preflight_entry(workspace, settings, &plan.target, system, entry, plan.unattended),
+            _ => preflight_entry(workspace, settings, &plan.target, system, entry),
         };
         match state {
             Ok(state) => {

@@ -26,7 +26,7 @@ use crate::setup::engine::{Connection, Observer, execute_plan};
 use crate::setup::plan::Plan;
 use crate::setup::workspace::{LocalWorkspace, Workspace};
 use crate::setup::{Settings, Target};
-use crate::system::{Output, System};
+use crate::system::System;
 
 /// The terminal, lent to the worker: the TUI shows `banner` once it has
 /// left the screen, sends on `go`, and takes the screen back when `done`
@@ -106,12 +106,10 @@ pub fn with_terminal<T>(tell: &Tell, banner: Vec<String>, operation: impl FnOnce
 }
 
 /// The run as the box shows it (Python's `progress`, `activity`,
-/// `terminal`, `desktop_command`).
+/// `terminal`).
 pub struct Watcher {
     pub tell: Tell,
     pub cancel: Arc<AtomicBool>,
-    pub system: Arc<dyn System>,
-    pub ssh_prefix: Vec<String>,
 }
 
 impl Observer for Watcher {
@@ -125,32 +123,6 @@ impl Observer for Watcher {
 
     fn terminal(&mut self, operation: &mut dyn FnMut()) {
         with_terminal(&self.tell, Vec::new(), operation);
-    }
-
-    fn register_desktop(&mut self, argv: &[String]) -> Result<Output, AppError> {
-        if self.cancelled() {
-            return Err(AppError::new("Cancelled before desktop Herdr registration"));
-        }
-        if self.ssh_prefix.is_empty() {
-            return Err(AppError::new(
-                "Desktop Herdr registration needs the TUI SSH prompt bridge; close and reopen setup",
-            ));
-        }
-        let mut command = self.ssh_prefix.clone();
-        command.extend_from_slice(argv);
-        self.system
-            .run_until(&command, &self.cancel, std::time::Duration::from_secs(300))
-            .map_err(|error| {
-                AppError::new(match error.kind() {
-                    std::io::ErrorKind::Interrupted => {
-                        "Desktop Herdr registration cancelled; guest service remains configured"
-                    }
-                    std::io::ErrorKind::TimedOut => {
-                        "Desktop Herdr registration timed out; guest service remains configured"
-                    }
-                    _ => "Could not run desktop Herdr registration; guest service remains configured",
-                })
-            })
     }
 
     fn cancelled(&mut self) -> bool {
@@ -260,19 +232,15 @@ fn open(start: &Start, tell: &Tell) -> Result<(Session, Catalog, Value), AppErro
         })
         .unwrap_or_else(|| Err(AppError::new("Setup was closed before the connection")))
     };
-    let system = start.system.as_ref();
-    let (session, state) = startup(tell, settings, target, &catalog, &connecting, connect, |session| {
-        session.inspect(system)
-    })?;
+    let (session, state) = startup(tell, settings, target, &catalog, &connecting, connect, Session::inspect)?;
     Ok((session, catalog, state))
 }
 
 impl Session {
-    fn inspect(&mut self, system: &dyn System) -> Result<Value, AppError> {
-        crate::setup::engine::inspect_workspace_state_with(
+    fn inspect(&mut self) -> Result<Value, AppError> {
+        crate::setup::engine::inspect_workspace_state(
             self.workspace.as_mut(),
             &self.settings,
-            system,
             &self.target,
             &self.entries,
         )
@@ -306,7 +274,7 @@ fn run(start: &Start, tell: &Tell, cancel: &Arc<AtomicBool>, commands: &Receiver
         match command {
             Command::Close => {}
             Command::Quit => return,
-            Command::Reopen => match session.inspect(system) {
+            Command::Reopen => match session.inspect() {
                 Ok(state) => tell(Event::Ready {
                     settings: Box::new(session.settings.clone()),
                     target: Box::new(session.target.clone()),
@@ -332,14 +300,14 @@ fn run(start: &Start, tell: &Tell, cancel: &Arc<AtomicBool>, commands: &Receiver
                 }
                 tell(Event::Services(repository, found));
             }
-            Command::Refresh => match session.inspect(system) {
+            Command::Refresh => match session.inspect() {
                 Ok(state) => tell(Event::State(state)),
                 Err(error) => tell(Event::Notice(format!("State refresh failed: {}", error.0), true)),
             },
             Command::Catalog => {
                 catalog = catalog_with_repositories(system, &session.settings);
                 session.entries.clone_from(&catalog.entries);
-                let state = match session.inspect(system) {
+                let state = match session.inspect() {
                     Ok(state) => Some(state),
                     Err(error) => {
                         tell(Event::Notice(format!("State refresh failed: {}", error.0), true));
@@ -359,8 +327,6 @@ fn run(start: &Start, tell: &Tell, cancel: &Arc<AtomicBool>, commands: &Receiver
                 let mut watcher = Watcher {
                     tell: Arc::clone(tell),
                     cancel: Arc::clone(cancel),
-                    system: Arc::clone(&start.system),
-                    ssh_prefix: start.ssh_prefix.clone(),
                 };
                 let result = execute_plan(
                     &session.settings,
@@ -370,7 +336,7 @@ fn run(start: &Start, tell: &Tell, cancel: &Arc<AtomicBool>, commands: &Receiver
                     &mut watcher,
                 );
                 tell(Event::Activity(None, "Refresh workspace state".to_owned()));
-                let state = match session.inspect(system) {
+                let state = match session.inspect() {
                     Ok(state) => {
                         tell(Event::Activity(None, "Workspace state refreshed".to_owned()));
                         Some(state)

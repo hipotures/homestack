@@ -70,8 +70,7 @@ impl Catalog {
                             .join(", ");
                     }
                     Params::Herdr => {
-                        location =
-                            "~/.local/bin/herdr, ~/.config/systemd/user/herdr.service; desktop profile".to_owned();
+                        location = "~/.local/bin/herdr, ~/.config/systemd/user/herdr.service".to_owned();
                     }
                     _ => {}
                 }

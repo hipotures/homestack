@@ -163,12 +163,7 @@ pub(super) fn setup_box(buf: &mut Buffer, area: Rect, app: &App, setup: &SetupBo
             }
             scrollbar(buf, area, palette, Scrolls::SetupReview, scroll, height, all.len());
         }
-        Stage::Running {
-            lines,
-            finished,
-            title,
-            auth_wait,
-        } => running(buf, inner, app, (lines, *finished, title, *auth_wait), setup.frame),
+        Stage::Running { lines, finished, title } => running(buf, inner, app, (lines, *finished, title), setup.frame),
         Stage::Tree => tree_stage(buf, inner, app, setup),
     }
     if let Some(notice) = &setup.notice {
@@ -192,13 +187,7 @@ pub(super) fn setup_box(buf: &mut Buffer, area: Rect, app: &App, setup: &SetupBo
 
 /// The run (Python `Execution`): the title, the step with its spinner, the
 /// activity, the result at the end.
-fn running(
-    buf: &mut Buffer,
-    inner: Rect,
-    app: &App,
-    (lines, finished, title, auth_wait): (&[String], bool, &str, bool),
-    frame: usize,
-) {
+fn running(buf: &mut Buffer, inner: Rect, app: &App, (lines, finished, title): (&[String], bool, &str), frame: usize) {
     let spinner = SPINNER[frame % SPINNER.len()];
     let palette = &app.palette;
     let text = text_style(palette);
@@ -212,27 +201,7 @@ fn running(
         text.add_modifier(Modifier::BOLD),
     );
     let mut top = inner.y + 2;
-    if !finished && auth_wait {
-        // Python bright and dim: the frame of the spinner alternates the colour.
-        let bright = frame % 16 < 8;
-        let colour = if bright { palette.warning } else { palette.accent };
-        let rows = [
-            (
-                format!("{spinner} YubiKey · SSH authentication"),
-                text.fg(colour).add_modifier(Modifier::BOLD),
-            ),
-            (
-                "  Touch your YubiKey/security key if it flashes.".to_owned(),
-                text.add_modifier(Modifier::BOLD),
-            ),
-            ("  Connecting desktop Herdr".to_owned(), text.fg(palette.muted)),
-        ];
-        for (line, style) in rows {
-            write(buf, inner.x + 1, top, inner.width.saturating_sub(2), &line, style);
-            top += 1;
-        }
-        top += 1;
-    } else if !finished {
+    if !finished {
         let step = lines.last().cloned().unwrap_or_else(|| "Preparing setup".to_owned());
         write(
             buf,

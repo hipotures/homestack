@@ -61,7 +61,6 @@ pub fn settings_of(home: &Path, state_home: Option<&Path>, loaded: &Loaded) -> R
             identity_files: loaded.client.workspace_ssh.identity_files.clone(),
             identities_only: loaded.client.workspace_ssh.identities_only,
         },
-        desktop_profiles: true,
     })
 }
 
@@ -308,7 +307,6 @@ pub fn catalog_with_repositories(system: &dyn System, settings: &Settings) -> Ca
 struct Printer<'a> {
     console: &'a mut dyn crate::system::Console,
     json: bool,
-    sounds: Sounds,
 }
 
 impl Observer for Printer<'_> {
@@ -319,10 +317,6 @@ impl Observer for Printer<'_> {
         } else {
             self.console.out(&line);
         }
-    }
-
-    fn register_desktop(&mut self, argv: &[String]) -> Result<crate::system::Output, AppError> {
-        super::herdr::register_desktop(argv, &self.sounds)
     }
 }
 
@@ -531,7 +525,6 @@ pub async fn run(
         let mut printer = Printer {
             console: ctx.console.as_mut(),
             json: json_mode,
-            sounds: Sounds::from_table(loaded.client.sounds.as_ref()),
         };
         execute_plan(
             &settings,
@@ -590,8 +583,6 @@ struct Row {
 /// selected items. Without `--dry-run`, only those get the setup, over the
 /// connection already open.
 async fn run_all(batch: &Batch<'_>, ctx: &mut Context, mut settings: Settings) -> Result<i32, AppError> {
-    // Desktop Herdr profiles belong to the desktop, not to this batch.
-    settings.desktop_profiles = false;
     let json_mode = batch.args.json;
     let system = Arc::clone(&ctx.system);
     let status = batch.client.get("/v1/status").await.map_err(client_error)?;
@@ -730,7 +721,6 @@ async fn run_all(batch: &Batch<'_>, ctx: &mut Context, mut settings: Settings) -
             let mut printer = Printer {
                 console: ctx.console.as_mut(),
                 json: json_mode,
-                sounds: Sounds::from_table(batch.loaded.client.sounds.as_ref()),
             };
             execute_plan(
                 &settings,

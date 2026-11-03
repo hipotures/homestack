@@ -69,9 +69,6 @@ impl Plan {
             Params::Herdr => json!({
                 "destinations": [format!("~/{HERDR_UNIT_PATH}")],
                 "service": "herdr.service", "update": "before every service start",
-                "desktop_label": self.target.name,
-                "desktop_ssh_target": format!("{}@{}", self.target.user, self.target.name),
-                "security_key_touch": "Desktop registration may require separate SSH authentication",
             }),
             Params::Application(p) => json!({
                 "interpreter": p.interpreter, "interaction": p.interaction,

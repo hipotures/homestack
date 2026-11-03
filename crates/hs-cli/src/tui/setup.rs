@@ -16,7 +16,6 @@ use crate::services::manifest::{Checked, SECTIONS};
 use crate::setup::catalog::Catalog;
 use crate::setup::definitions::{ConfigFile, Entry, Params, app_file_entries, application_children, config_entry_id};
 use crate::setup::engine::truthy;
-use crate::setup::herdr::AUTH_NOTICE;
 use crate::setup::plan::{Plan, build_plan, write_paths};
 use crate::setup::{Settings, Target, json_of};
 
@@ -88,8 +87,6 @@ pub enum Stage {
         lines: Vec<String>,
         finished: bool,
         title: String,
-        /// Desktop Herdr authentication is under way.
-        auth_wait: bool,
     },
 }
 
@@ -1723,11 +1720,6 @@ impl SetupBox {
                     ]
                     .map(str::to_owned),
                 );
-                lines.push(format!("Desktop label: {}", self.target.name));
-                lines.push(
-                    "Desktop registration opens separate SSH authentication; touch your YubiKey/security key if prompted."
-                        .to_owned(),
-                );
             }
             Params::Repository { repository } => {
                 let (owner, name) = repository.split_once('/').unwrap_or_default();
@@ -2035,9 +2027,7 @@ impl SetupBox {
                     _ => "Inspect and patch declared value",
                 },
                 Params::Unavailable => "Not available yet",
-                Params::Herdr => {
-                    "Install if missing; enable user service and linger; preserve running sessions; register desktop profile"
-                }
+                Params::Herdr => "Install if missing; enable user service and linger; preserve running sessions",
                 Params::Environment { .. } if truthy(&live["changed_since_apply"]) => {
                     "Back up modified shell files; overwrite configuration"
                 }
@@ -2099,24 +2089,16 @@ impl SetupBox {
             lines,
             finished: false,
             title: "Setup running".to_owned(),
-            auth_wait: false,
         };
         Ask::Execute
     }
 
     /// Python `append_activity`.
     pub fn activity(&mut self, identity: Option<&str>, message: &str) {
-        if let Stage::Running {
-            lines,
-            finished,
-            auth_wait,
-            ..
-        } = &mut self.stage
-        {
+        if let Stage::Running { lines, .. } = &mut self.stage {
             let line = clean_line(identity, message);
             if !line.is_empty() {
                 lines.push(line);
-                *auth_wait = !*finished && identity == Some("herdr") && message == AUTH_NOTICE;
             }
         }
     }
@@ -2150,13 +2132,7 @@ impl SetupBox {
         }
         "connected".clone_into(&mut self.ssh_status);
         self.rebuild();
-        if let Stage::Running {
-            lines,
-            finished,
-            title,
-            auth_wait,
-        } = &mut self.stage
-        {
+        if let Stage::Running { lines, finished, title } = &mut self.stage {
             let status = if result["ok"] == true {
                 "Setup finished"
             } else if rows
@@ -2168,7 +2144,6 @@ impl SetupBox {
                 "Setup stopped"
             };
             *finished = true;
-            *auth_wait = false;
             status.clone_into(title);
             lines.push(String::new());
             lines.push(status.to_owned());
