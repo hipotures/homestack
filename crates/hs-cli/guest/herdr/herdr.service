@@ -6,9 +6,6 @@ Type=simple
 ExitType=cgroup
 WorkingDirectory=%h
 Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
-# A local ssh-agent (ssh-agent.socket) puts an empty agent into the user
-# manager's environment; the panes get the attached client's agent instead.
-UnsetEnvironment=SSH_AUTH_SOCK
 ExecStart=%h/.local/bin/herdr server
 TimeoutStartSec=5min
 Restart=on-failure
