@@ -62,6 +62,9 @@ pub struct Settings {
     pub state_home: PathBuf,
     /// `[workspace_ssh]` keys: what the desktop's alias of a workspace uses.
     pub keys: Keys,
+    /// Herdr setup checks and adds the desktop's Herdr profile of the
+    /// workspace; `setup ALL` leaves the profiles alone.
+    pub desktop_profiles: bool,
 }
 
 impl Settings {

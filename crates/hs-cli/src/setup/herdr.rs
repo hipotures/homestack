@@ -238,7 +238,8 @@ pub fn inspect(
         ),
     )?;
     let lingering = linger.code == 0 && linger.stdout.trim() == "yes";
-    let this_machine = is_this_machine(system, target);
+    // No desktop profile is wanted: the machine itself, or `setup ALL`.
+    let this_machine = !settings.desktop_profiles || is_this_machine(system, target);
     let profile = if this_machine {
         None
     } else {
@@ -339,6 +340,9 @@ pub fn connect_desktop(
     id: &str,
     unattended: bool,
 ) -> Result<(), AppError> {
+    if !settings.desktop_profiles {
+        return Ok(());
+    }
     if is_this_machine(system, target) {
         observer.activity(
             Some(id),

@@ -61,6 +61,7 @@ pub fn settings_of(home: &Path, state_home: Option<&Path>, loaded: &Loaded) -> R
             identity_files: loaded.client.workspace_ssh.identity_files.clone(),
             identities_only: loaded.client.workspace_ssh.identities_only,
         },
+        desktop_profiles: true,
     })
 }
 
@@ -589,6 +590,8 @@ struct Row {
 /// selected items. Without `--dry-run`, only those get the setup, over the
 /// connection already open.
 async fn run_all(batch: &Batch<'_>, ctx: &mut Context, mut settings: Settings) -> Result<i32, AppError> {
+    // Desktop Herdr profiles belong to the desktop, not to this batch.
+    settings.desktop_profiles = false;
     let json_mode = batch.args.json;
     let system = Arc::clone(&ctx.system);
     let status = batch.client.get("/v1/status").await.map_err(client_error)?;
