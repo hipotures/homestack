@@ -13,13 +13,30 @@
   // Tooltips and tables show full precision; cards use the short AIUsage.fmt forms.
   const format = (v,unit) => v == null ? "—" : unit === "USD" ? AIUsage.fmt.cost(v,true) : unit === "ratio" ? AIUsage.fmt.pct(v*100,2) : unit === "seconds" ? `${AIUsage.fmt.full(Math.round(v*1000)/1000)} s` : AIUsage.fmt.full(Math.round(v*100)/100);
   function initial() {
-    const out={agent:"all",host:"*",project:"*",range:"24h",_more:false,_sync:0,_packet:""};
+    const out={agent:"all",host:"*",project:"*",range:"24h",_more:false,_sync:0,_packet:"",_from:"",_to:""};
     try {for(const key of ["agent","host","project","range"]) out[key]=localStorage.getItem(key)||out[key];}catch(_){}
     if(!["all","claude","codex"].includes(out.agent))out.agent="all";
-    if(!Object.keys(AIUsage.RANGES).includes(out.range))out.range="24h";
+    const span=CUSTOM.exec(out.range);
+    if(!span&&!Object.keys(AIUsage.RANGES).includes(out.range))out.range="24h";
+    // The date fields show the remembered custom span, or the last seven local days.
+    const now=Date.now()/1000;
+    [out._from,out._to]=span?[localDay(+span[1]),localDay(+span[2]-1)]:[localDay(now-6*86400),localDay(now)];
+    $("range-from").max=$("range-to").max=localDay(now);
     // Scope options must exist before Datastar binds a remembered selection.
     for(const key of ["host","project"])if(out[key]!=="*"){const o=el("option","",out[key]);o.value=out[key];$(key).append(o);}
     return out;
+  }
+  const CUSTOM=/^custom:(\d+):(\d+)$/,pad=n=>String(n).padStart(2,"0");
+  const localDay=t=>{const d=new Date(t*1000);return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;};
+  /** Inclusive local days to the server's half-open `custom:START:END`, or "" when invalid. */
+  function custom(from,to) {
+    if(!/^\d{4}-\d\d-\d\d$/.test(from)||!/^\d{4}-\d\d-\d\d$/.test(to))return "";
+    const start=new Date(from+"T00:00"),end=new Date(to+"T00:00");end.setDate(end.getDate()+1);
+    return end>start&&end-start<=600*86400e3?`custom:${start/1000}:${end/1000}`:"";
+  }
+  function rangeLabel(range) {
+    const span=CUSTOM.exec(range),day=t=>{const d=new Date(t*1000);return `${pad(d.getDate())}.${pad(d.getMonth()+1)}`;};
+    return span?`${day(+span[1])}–${day(+span[2]-1)}`:({"180d":"180 days","1y":"1 year","all":"All"}[range]||"More");
   }
   function select(next,sync) {
     epoch++; selection={...next}; document.documentElement.dataset.agent=selection.agent; snapshot=undefined;
@@ -435,7 +452,7 @@
     const chip=!panel.activity?"no data in this range":Number.isFinite(first)&&first>range.start?`data since ${timeLabel(first,range)}${range.end-range.start>86400+range.step?` · axis trimmed to ${days} ${days===1?"day":"days"}`:""}`:"";
     const tabs=both?`<div class="tabs" role="tablist" aria-label="Agent">${sel.map(a=>`<button type="button" role="tab" data-tab="${a}" aria-selected="${a===agent}" style="--tab-color:${AIUsage.colorFor(agents[a])}"><i style="background:${AIUsage.colorFor(agents[a])}"></i>${agents[a]} <span class="count">${panels[a].count} metrics</span></button>`).join("")}</div>`
       :`<h2 class="agent-title"><i style="background:${AIUsage.colorFor(agents[agent])}"></i>${agents[agent]} · agent metrics</h2>`;
-    const longer=["90d","180d","1y","all"].includes(selection.range);
+    const longer=["90d","180d","1y","all"].includes(selection.range)||CUSTOM.test(selection.range);
     const emptyTitle=panel.activity?`No ${agents[agent]} agent-specific metrics in this range`:`No ${agents[agent]} activity in this range`;
     const emptyNote=panel.activity?"Token usage or cost is available above. Timing, session and tool metrics are reported separately; none are available for the selected range and filters.":panel.placeholders.length?"When agent-specific metrics are reported for the selected range and filters, they appear here:":`${agents[agent]} reports no agent-specific metrics.`;
     const body=panel.html||`<div class="card empty"><div><h3>${emptyTitle}</h3><p>${emptyNote}</p></div>
@@ -589,7 +606,7 @@
     }catch(error){button.textContent=download?"Export failed":"Copy failed";button.title=error.message;}
     setTimeout(()=>{button.textContent=label;},2200);
   }
-  window.usage={initial,select,apply,restore(){theme();},debug(){return {epoch,snapshot,sourceAt,datasets,widgets,modelViews};}};
+  window.usage={initial,select,apply,custom,rangeLabel,restore(){theme();},debug(){return {epoch,snapshot,sourceAt,datasets,widgets,modelViews};}};
   document.addEventListener("DOMContentLoaded",()=>{
     theme();$("theme").onclick=()=>{currentTheme=currentTheme==="dark"?"light":"dark";try{localStorage.setItem("theme",currentTheme);}catch(_){}theme();};
     $("export-all").onclick=()=>copyCharts($("export-all"),[...Object.values(modelViews).map(v=>v.spec).filter(Boolean),...[...widgets.values()].map(w=>w.spec)],true);

@@ -38,21 +38,57 @@ impl Selection {
         Ok(())
     }
     /// Range length and bucket in seconds, aiming at 30-90 points per chart; must match
-    /// `AIUsage.RANGES` in `aiusage-echarts-theme.js`. `None` is "all", sized by [`all_timing`].
-    pub fn timing(&self) -> Result<Option<(u64, u64)>, String> {
+    /// `AIUsage.RANGES` in `aiusage-echarts-theme.js`. "all" is sized by [`all_timing`];
+    /// `custom:START:END` is a half-open span of Unix seconds sized by [`custom_step`].
+    pub fn timing(&self) -> Result<Timing, String> {
         const DAY: u64 = 86400;
+        let fixed = |seconds, step| Ok(Timing::Fixed { seconds, step });
         match self.range.as_str() {
-            "1h" => Ok(Some((3600, 60))),
-            "24h" => Ok(Some((DAY, 1800))),
-            "7d" => Ok(Some((7 * DAY, 10800))),
-            "30d" => Ok(Some((30 * DAY, 43200))),
-            "90d" => Ok(Some((90 * DAY, DAY))),
-            "180d" => Ok(Some((180 * DAY, 3 * DAY))),
-            "1y" => Ok(Some((365 * DAY, 7 * DAY))),
-            "all" => Ok(None),
-            _ => Err("Unknown time range".into()),
+            "1h" => fixed(3600, 60),
+            "24h" => fixed(DAY, 1800),
+            "7d" => fixed(7 * DAY, 10800),
+            "30d" => fixed(30 * DAY, 43200),
+            "90d" => fixed(90 * DAY, DAY),
+            "180d" => fixed(180 * DAY, 3 * DAY),
+            "1y" => fixed(365 * DAY, 7 * DAY),
+            "all" => Ok(Timing::All),
+            custom => {
+                let mut parts = custom.strip_prefix("custom:").ok_or("Unknown time range")?.split(':');
+                let mut next = || {
+                    parts
+                        .next()
+                        .and_then(|p| p.parse::<u64>().ok())
+                        .ok_or("Invalid custom range")
+                };
+                let (start, end) = (next()?, next()?);
+                if parts.next().is_some() || end < start + 3600 || end - start > 600 * DAY {
+                    return Err("Custom range must span one hour to 600 days".into());
+                }
+                Ok(Timing::Custom { start, end })
+            }
         }
     }
+}
+pub enum Timing {
+    Fixed { seconds: u64, step: u64 },
+    All,
+    Custom { start: u64, end: u64 },
+}
+/// Smallest bucket giving at most 80 points for a custom span.
+pub fn custom_step(span: u64) -> u64 {
+    let steps = [
+        1800,
+        3600,
+        10800,
+        21600,
+        43200,
+        86400,
+        3 * 86400,
+        7 * 86400,
+        14 * 86400,
+        30 * 86400,
+    ];
+    steps.into_iter().find(|s| span / s <= 80).unwrap_or(91 * 86400)
 }
 /// "all" spans from the first retained sample; the bucket is the smallest step giving at most
 /// 80 points, as `AIUsage.bucketFor` does. One extra step keeps the first sample inside the

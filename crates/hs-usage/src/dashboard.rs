@@ -1,6 +1,6 @@
 //! Shared snapshot construction, normalization, pricing, and bounded export retention.
 use crate::{
-    datasets::{Availability, Dataset, Selection, Series, TimeRange, hash},
+    datasets::{Availability, Dataset, Selection, Series, TimeRange, Timing, hash},
     planner::{self, Block, Record},
     prometheus::{Prometheus, Source, now},
     registry::{self, Instrument},
@@ -83,11 +83,25 @@ impl Dashboard {
     pub async fn snapshot(&self, selection: Selection) -> Result<Arc<Snapshot>, String> {
         selection.validate()?;
         let started = Instant::now();
-        let timestamp = now();
+        let current = now();
         let all = selection.range == "all";
-        let (seconds, step) = match selection.timing()? {
-            Some(timing) => timing,
-            None => crate::datasets::all_timing(timestamp.saturating_sub(self.first_sample(timestamp).await?)),
+        // A custom range is planned as if "now" were its end; its buckets stay UTC-aligned.
+        let (timestamp, seconds, step) = match selection.timing()? {
+            Timing::Fixed { seconds, step } => (current, seconds, step),
+            Timing::All => {
+                let (seconds, step) =
+                    crate::datasets::all_timing(current.saturating_sub(self.first_sample(current).await?));
+                (current, seconds, step)
+            }
+            Timing::Custom { start, end } => {
+                let timestamp = end.min(current);
+                let step = crate::datasets::custom_step(end - start);
+                (
+                    timestamp,
+                    (timestamp / step * step).saturating_sub(start / step * step).max(step),
+                    step,
+                )
+            }
         };
         let boundary = timestamp / step * step;
         // This short, bounded shared cache also singleflights global misses; builds never overlap.
@@ -96,7 +110,7 @@ impl Dashboard {
             .snapshots
             .iter()
             .rev()
-            .find(|s| s.selection == selection && timestamp.saturating_sub(s.checked) < 30)
+            .find(|s| s.selection == selection && current.saturating_sub(s.checked) < 30)
         {
             return Ok(Arc::clone(s));
         }
@@ -230,6 +244,7 @@ impl Dashboard {
             }
         }
         let mut snapshot = normalize(&global, selection, &self.prices, timestamp, &quantiles);
+        snapshot.checked = current;
         snapshot.generated_ms = started.elapsed().as_millis();
         let full = snapshot.full().to_string().len();
         if full > 512 * 1024 {

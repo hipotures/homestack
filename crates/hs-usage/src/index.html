@@ -19,6 +19,10 @@ h1 { font-size: 20px; margin: 0; font-weight: 600; letter-spacing: -.01em; }
 .menu button:hover:not(:disabled), .menu button.active { background: var(--surface-2); }
 .menu button:disabled { color: var(--faint); cursor: not-allowed; }
 .menu .hint { font-size: 11px; color: var(--faint); }
+.menu .custom { display: grid; gap: 6px; margin-top: 4px; padding: 8px 6px 2px; border-top: 1px solid var(--border); }
+.menu .custom label { display: grid; grid-template-columns: 40px 1fr; align-items: center; font-size: 12px; color: var(--muted); }
+.menu input[type=date] { font: inherit; font-size: 13px; color: var(--text); background: transparent; border: 1px solid var(--border-strong); border-radius: 8px; min-height: 34px; padding: 0 8px; }
+.menu .custom .apply { justify-content: center; min-height: 34px; background: var(--surface-2); }
 .error { border: 1px solid var(--up); border-radius: var(--radius-ctl); padding: 8px 12px; }
 .error::before { content: "⚠ "; color: var(--up); }
 a { color: var(--tok-uncached); }
@@ -165,13 +169,16 @@ button:focus-visible, select:focus-visible { outline: 2px solid var(--codex); ou
 <button type="button" data-on:click="$range='7d'" data-attr:aria-pressed="String($range==='7d')">7d</button>
 <button type="button" data-on:click="$range='30d'" data-attr:aria-pressed="String($range==='30d')">30d</button>
 <button type="button" id="range-90d" data-on:click="$range='90d'" data-attr:aria-pressed="String($range==='90d')">90d</button>
-<button type="button" id="range-more" aria-haspopup="menu" data-on:click="$_more=!$_more" data-attr:aria-expanded="String($_more)" data-attr:aria-pressed="String(['180d','1y','all'].includes($range))" data-text="({'180d':'180 days','1y':'1 year','all':'All'}[$range]||'More')+' ▾'">More ▾</button>
+<button type="button" id="range-more" aria-haspopup="menu" data-on:click="$_more=!$_more" data-attr:aria-expanded="String($_more)" data-attr:aria-pressed="String(!['1h','24h','7d','30d','90d'].includes($range))" data-text="window.usage.rangeLabel($range)+' ▾'">More ▾</button>
 </div>
 <div class="menu" role="menu" data-show="$_more" style="display:none">
 <button type="button" role="menuitem" data-on:click="$range='180d';$_more=false" data-class:active="$range==='180d'">180 days</button>
 <button type="button" role="menuitem" data-on:click="$range='1y';$_more=false" data-class:active="$range==='1y'">1 year</button>
 <button type="button" role="menuitem" data-on:click="$range='all';$_more=false" data-class:active="$range==='all'">All <span class="hint">retained history</span></button>
-<button type="button" role="menuitem" disabled title="Custom ranges are not available yet">Custom range…</button>
+<div class="custom" role="group" aria-label="Custom range"><span class="hint">Custom range · local days</span>
+<label>From <input type="date" id="range-from" data-bind:_from></label>
+<label>To <input type="date" id="range-to" data-bind:_to></label>
+<button type="button" class="apply" data-attr:disabled="!window.usage.custom($_from,$_to)" data-on:click="$range=window.usage.custom($_from,$_to)||$range;$_more=false" data-class:active="$range===window.usage.custom($_from,$_to)">Apply</button></div>
 </div>
 </div>
 <select class="scope" id="agent" aria-label="Agent" data-bind:agent><option value="all">Agents: all</option><option value="claude">Claude Code</option><option value="codex">Codex</option></select>
