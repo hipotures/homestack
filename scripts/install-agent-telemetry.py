@@ -134,7 +134,10 @@ def main():
     if args.dry_run:
         print('Dry run: configuration syntax valid; no files changed.')
         return
-    sudo = [] if os.geteuid() == 0 else ['sudo']
+    install_boot = (not installed.exists() or installed.read_bytes() != boot.read_bytes()
+                    or stat.S_IMODE(installed.stat().st_mode) != 0o755
+                    or installed.stat().st_uid != 0 or installed.stat().st_gid != 0)
+    sudo = [] if os.geteuid() == 0 or not (install_boot or remove_alternative) else ['sudo']
     if sudo:
         subprocess.run(sudo + ['-v'], check=True)
     stamp = datetime.now().strftime('%Y%m%d-%H%M%S-%f')
@@ -142,7 +145,7 @@ def main():
     for path, saved in backups.items():
         print(f'Backup: {saved}' if saved else f'New configuration: {path}')
     # Only this explicitly privileged stage writes outside the caller's home.
-    for original in [installed] + ([alternative] if remove_alternative else []):
+    for original in ([installed] if install_boot else []) + ([alternative] if remove_alternative else []):
         if original.exists():
             saved = str(original) + '.bak.' + stamp
             subprocess.run(sudo + ['install', '-o', 'root', '-g', 'root', '-m', '0600', str(original), saved], check=True)
@@ -150,7 +153,8 @@ def main():
     try:
         atomic_write(codex_path, new_codex)
         atomic_write(claude_path, new_claude)
-        subprocess.run(sudo + ['install', '-D', '-o', 'root', '-g', 'root', '-m', '0755', str(boot), str(installed)], check=True)
+        if install_boot:
+            subprocess.run(sudo + ['install', '-D', '-o', 'root', '-g', 'root', '-m', '0755', str(boot), str(installed)], check=True)
         if remove_alternative:
             subprocess.run(sudo + ['rm', '--', str(alternative)], check=True)
     except Exception:

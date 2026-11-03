@@ -346,6 +346,14 @@ pub fn defaults() -> Vec<Entry> {
             app(Application::new(CLAUDE_RECIPE).non_interactive(&["curl"], "claude --version")),
         ),
         Entry::new(
+            "agent-telemetry",
+            "app",
+            "application",
+            "Agent telemetry",
+            "Configure Claude Code and Codex OTEL exporters and install their boot script. Requires uv and sudo when the boot script needs installing. Collector: http://otel.homestack.app:4318. Existing settings are backed up; agents are not restarted. Reboot to activate the relay.",
+            app(super::telemetry::application()),
+        ),
+        Entry::new(
             "herdr",
             "app",
             "herdr",

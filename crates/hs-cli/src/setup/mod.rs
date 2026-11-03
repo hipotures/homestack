@@ -14,6 +14,7 @@ pub mod herdr;
 pub mod plan;
 pub mod repo;
 pub mod show;
+mod telemetry;
 pub mod text;
 pub mod workspace;
 

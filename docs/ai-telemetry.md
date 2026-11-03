@@ -15,6 +15,18 @@ and application state remain managed by the agents themselves.
 
 ## Standalone installation package
 
+The HomeStack setup Applications menu includes **Agent telemetry**
+(`app=agent-telemetry`). It runs the same installer bundled into the CLI,
+configures both native exporters, and installs the boot script. The target
+requires Python 3.11+, Git, systemd and `uv`; `uv pip` downloads the pinned
+`tomlkit` dependency into a private temporary directory under
+`~/.cache/homestack/`, removed when installation finishes. This application uses
+the `http://otel.homestack.app:4318` Collector; use the standalone installer's
+`--collector-url` option for another destination. The installer requires
+sudo only when the system boot script needs changing. It does not restart
+running agents; reboot to activate the relay. Installing or updating Claude
+Code or Codex alone does not configure telemetry.
+
 Build `tmp/homestack-agent-telemetry.tar.gz` with:
 
 ```bash
