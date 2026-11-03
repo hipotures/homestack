@@ -64,6 +64,14 @@ fn systemctl(workspace: &mut dyn Workspace, settings: &Settings, arguments: &str
     .code)
 }
 
+/// Whether the workspace is the machine HomeStack runs on: its Herdr is
+/// local, so no desktop profile is needed.
+fn is_this_machine(system: &dyn System, target: &Target) -> bool {
+    system
+        .run(&["hostname", "-I"].map(str::to_owned))
+        .is_ok_and(|output| output.code == 0 && output.stdout.split_whitespace().any(|ip| ip == target.ip))
+}
+
 /// The desktop profile of this workspace (`herdr machine list`), if any.
 pub fn desktop_profile(system: &dyn System, settings: &Settings, target: &Target) -> Result<Option<Value>, AppError> {
     let output = system
@@ -230,10 +238,16 @@ pub fn inspect(
         ),
     )?;
     let lingering = linger.code == 0 && linger.stdout.trim() == "yes";
-    let profile = desktop_profile(system, settings, target)?;
-    let connected = profile
-        .as_ref()
-        .is_some_and(|p| p["label"] == json!(target.name) && p["enabled"] == json!(true));
+    let this_machine = is_this_machine(system, target);
+    let profile = if this_machine {
+        None
+    } else {
+        desktop_profile(system, settings, target)?
+    };
+    let connected = this_machine
+        || profile
+            .as_ref()
+            .is_some_and(|p| p["label"] == json!(target.name) && p["enabled"] == json!(true));
     let deferred = !sessions.is_empty() && !active;
     let ready = installed
         && !changed
@@ -242,14 +256,25 @@ pub fn inspect(
         && connected
         && sessions.iter().any(|s| s == "default")
         && (active || deferred);
+    let missing: Vec<&str> = [
+        (changed, "service unit differs"),
+        (!enabled, "service not enabled"),
+        (!lingering, "linger off"),
+        (!connected, "desktop Herdr profile missing"),
+        (!sessions.iter().any(|s| s == "default"), "no default session"),
+        (!active && !deferred, "service not running"),
+    ]
+    .into_iter()
+    .filter_map(|(missing, what)| missing.then_some(what))
+    .collect();
     let state = if ready && deferred {
-        "configured; service starts after VM reboot"
+        "configured; service starts after VM reboot".to_owned()
     } else if ready {
-        "configured"
+        "configured".to_owned()
     } else if installed {
-        "needs setup"
+        format!("needs setup: {}", missing.join(", "))
     } else {
-        "not installed"
+        "not installed".to_owned()
     };
     let unit_exists = truthy(&unit["exists"]);
     Ok(json!({
@@ -258,7 +283,7 @@ pub fn inspect(
         "snapshot_paths": if changed && unit_exists { vec![HERDR_UNIT_PATH] } else { Vec::new() },
         "service_enabled": enabled, "service_active": active, "linger": lingering,
         "running_sessions": sessions, "desktop_profile": connected,
-        "desktop_profile_exists": profile.is_some(),
+        "desktop_profile_exists": this_machine || profile.is_some(),
         "detail": if deferred { "Existing Herdr server left running; the user service is enabled for the next VM boot" } else { "" },
     }))
 }
@@ -314,6 +339,13 @@ pub fn connect_desktop(
     id: &str,
     unattended: bool,
 ) -> Result<(), AppError> {
+    if is_this_machine(system, target) {
+        observer.activity(
+            Some(id),
+            "This is the machine HomeStack runs on; no desktop Herdr profile needed",
+        );
+        return Ok(());
+    }
     // Read again after the guest's setup: a concurrent edit is kept.
     if let Some(profile) = desktop_profile(system, settings, target)? {
         let profile_id = profile["id"].as_str().unwrap_or_default().to_owned();
