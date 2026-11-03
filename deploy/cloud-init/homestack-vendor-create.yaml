@@ -127,6 +127,24 @@ runcmd:
       done
       echo 'HomeStack: ensured SSH keys from Cloud-Init'
 
+      # Persistent SSH host keys: the home keeps a root-only copy of the
+      # keys of the workspace's first root, and every later root (refresh)
+      # gets them back, so the host keeps its identity. Only a directory
+      # root made counts; the user cannot plant keys.
+      host_keys="$home_path/.homestack-ssh-host-keys"
+      if [ -d "$host_keys" ] && [ ! -L "$host_keys" ] && [ "$(stat -c %u:%a "$host_keys")" = "0:700" ] \
+          && [ -n "$(find "$host_keys" -maxdepth 1 -name 'ssh_host_*_key' -user 0 -type f)" ]; then
+          rm -f /etc/ssh/ssh_host_*_key /etc/ssh/ssh_host_*_key.pub
+          cp -p "$host_keys"/ssh_host_*_key "$host_keys"/ssh_host_*_key.pub /etc/ssh/
+          systemctl try-restart ssh.service
+          echo 'HomeStack: restored the SSH host keys from the persistent home'
+      else
+          rm -rf -- "$host_keys"
+          install -d -m 700 -o root -g root "$host_keys"
+          cp -p /etc/ssh/ssh_host_*_key /etc/ssh/ssh_host_*_key.pub "$host_keys"/
+          echo 'HomeStack: saved the SSH host keys to the persistent home'
+      fi
+
       if [ -f "$home_path/.config/systemd/user/herdr.service" ]; then
           loginctl enable-linger "$user_name"
       fi
