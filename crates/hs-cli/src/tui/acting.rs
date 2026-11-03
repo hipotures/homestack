@@ -333,10 +333,7 @@ impl App {
                     ),
                     Field::choice(
                         "Gold",
-                        self.golds()
-                            .iter()
-                            .map(|entry| format!("{} ({})", entry.vmid, entry.name.as_deref().unwrap_or("unnamed")))
-                            .collect(),
+                        self.golds().iter().map(|entry| gold_label(entry)).collect(),
                         "The source VM to clone; ← → or a click on ‹ › to choose.",
                     ),
                 ]
@@ -412,7 +409,20 @@ impl App {
                     Field::choice("Storage", storages, "The storage on the target node."),
                 ]
             }
-            Kind::Refresh | Kind::Destroy | Kind::Start | Kind::Stop | Kind::Reinstall => Vec::new(),
+            Kind::Refresh => {
+                let here = entry.as_ref().map(|entry| entry.node.as_str()).unwrap_or_default();
+                let golds = self.golds();
+                let mut gold = Field::choice(
+                    "Gold",
+                    golds.iter().map(|entry| gold_label(entry)).collect(),
+                    "The new root is a copy of this Gold's; it must be on the workspace's node.",
+                );
+                if let Input::Choice { index, .. } = &mut gold.input {
+                    *index = golds.iter().position(|entry| entry.node == here).unwrap_or(0);
+                }
+                vec![gold]
+            }
+            Kind::Destroy | Kind::Start | Kind::Stop | Kind::Reinstall => Vec::new(),
         };
         let mut action = Action {
             kind,
@@ -556,7 +566,15 @@ impl App {
                 }
                 json!({"vmid": vmid, "target_node": node, "target_storage": storage, "service": service})
             }
-            Kind::Refresh | Kind::Destroy | Kind::Start | Kind::Stop => json!({"vmid": vmid}),
+            Kind::Refresh => {
+                let gold_vmid = value("Gold")
+                    .split_whitespace()
+                    .next()
+                    .and_then(|vmid| vmid.parse::<u32>().ok())
+                    .ok_or("No Gold VM is available; add a Gold VM to the Gold pool.")?;
+                json!({"vmid": vmid, "gold_vmid": gold_vmid})
+            }
+            Kind::Destroy | Kind::Start | Kind::Stop => json!({"vmid": vmid}),
             Kind::Reinstall => self.reinstall_parameters(form)?,
         };
         Ok(Start {
@@ -1137,4 +1155,14 @@ impl App {
         let service = entry.service.as_ref().filter(|_| entry.role == "CT")?;
         Some((service.repository.clone(), service.id.clone()))
     }
+}
+
+/// `VMID (name) on NODE`, the choice of a Gold VM; the VMID comes first.
+fn gold_label(entry: &StatusEntry) -> String {
+    format!(
+        "{} ({}) on {}",
+        entry.vmid,
+        entry.name.as_deref().unwrap_or("unnamed"),
+        entry.node
+    )
 }

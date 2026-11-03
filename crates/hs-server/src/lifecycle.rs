@@ -13,8 +13,9 @@
 //! `workspace.created` or `workspace.destroyed`.
 //!
 //! `{"operation": "workspace.refresh", "parameters": {"vmid": 240}}` replaces
-//! the root with a copy of Gold's, or, when the VM's description holds the
-//! journal of an interrupted refresh, recovers it; `"force": true` attaches
+//! the root with a copy of Gold's (`gold_vmid`, or the configured Gold), or,
+//! when the VM's description holds the journal of an interrupted refresh,
+//! recovers it; `"force": true` attaches
 //! the new root of such a journal even when the VM disagrees with it, without
 //! deleting any volume (decision 4). Events `workspace.refreshed` and
 //! `workspace.refresh_recovered`.
@@ -217,6 +218,7 @@ impl Operation for Destroy {
 #[serde(deny_unknown_fields)]
 struct RefreshParameters {
     vmid: u32,
+    gold_vmid: Option<u32>,
     #[serde(default)]
     force: bool,
 }
@@ -233,12 +235,13 @@ impl Operation for Refresh {
     fn plan<'a>(&'a self, ctx: &'a OpContext, parameters: &'a Value) -> BoxFuture<'a, Result<Planned, OpFailure>> {
         Box::pin(async move {
             let parameters: RefreshParameters = serde_json::from_value(parameters.clone())
-                .map_err(|_| OpFailure::invalid("workspace.refresh takes vmid and optionally force."))?;
+                .map_err(|_| OpFailure::invalid("workspace.refresh takes vmid and optionally gold_vmid and force."))?;
             let summary = plan_refresh(
                 ctx.pve.as_ref(),
                 config(ctx)?,
                 &ctx.pools.workspaces,
                 parameters.vmid,
+                parameters.gold_vmid,
                 parameters.force,
             )
             .await

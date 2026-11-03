@@ -248,7 +248,7 @@ async fn describe(pve: &PveClient, text: &str) -> TestResult {
 
 async fn interrupt(sim: &PveSim, pve: &PveClient, op: &str, occurrence: u32, applied: bool) -> TestResult {
     let cfg = config()?;
-    let plan = plan_refresh(pve, &cfg, POOL, 200, false).await?;
+    let plan = plan_refresh(pve, &cfg, POOL, 200, None, false).await?;
     let mut hang = fault(op, occurrence);
     hang.hang = true;
     hang.applied = applied;
@@ -282,7 +282,7 @@ async fn recovery_rejects_journal_that_targets_persistent_home() -> TestResult {
     journal.new_root_volume = HOME.to_owned();
     let payload = base64_json(&journal)?;
     describe(&pve, &format!("<!-- homestack-journal: {payload} -->")).await?;
-    match plan_refresh(&pve, &config()?, POOL, 200, false).await {
+    match plan_refresh(&pve, &config()?, POOL, 200, None, false).await {
         Err(CoreError::Unusable(message)) => assert!(message.contains("staged root identity"), "{message}"),
         other => return Err(format!("expected the identity refusal, got {other:?}").into()),
     }
@@ -300,7 +300,7 @@ async fn failed_verification_restores_old_root_and_deletes_only_new_root() -> Te
     stop(&pve).await?;
     let before = vm_config(&pve).await?;
     let cfg = config()?;
-    let plan = plan_refresh(&pve, &cfg, POOL, 200, false).await?;
+    let plan = plan_refresh(&pve, &cfg, POOL, 200, None, false).await?;
     sim.inject_fault(fault(&format!("get{{path={}}}", path("agent/get-host-name")), 1))?;
     let error = refresh_workspace(&pve, &cfg, POOL, &plan, &quick(), &NoObserver)
         .await
@@ -317,7 +317,7 @@ async fn failed_verification_restores_old_root_and_deletes_only_new_root() -> Te
 async fn running_workspace_gets_golds_root_and_keeps_its_home() -> TestResult {
     let (sim, pve) = workspace().await?;
     let cfg = config()?;
-    let plan = plan_refresh(&pve, &cfg, POOL, 200, false).await?;
+    let plan = plan_refresh(&pve, &cfg, POOL, 200, None, false).await?;
     assert_eq!(plan["gold_root_volume"], "local-lvm:vm-101-disk-0");
     assert_eq!(plan["ip"], "192.0.2.200");
     assert!(
@@ -332,7 +332,7 @@ async fn running_workspace_gets_golds_root_and_keeps_its_home() -> TestResult {
     assert_eq!(result["host_key_changed"], true);
     assert_refreshed(&sim, &pve, "running", "running").await?;
     // A second refresh works on the result of the first.
-    let plan = plan_refresh(&pve, &cfg, POOL, 200, false).await?;
+    let plan = plan_refresh(&pve, &cfg, POOL, 200, None, false).await?;
     refresh_workspace(&pve, &cfg, POOL, &plan, &quick(), &NoObserver).await?;
     let after = vm_config(&pve).await?;
     assert_eq!(root(&after), "local-lvm:vm-200-disk-0");

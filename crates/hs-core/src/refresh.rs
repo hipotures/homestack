@@ -667,15 +667,16 @@ fn replacement_root_bytes(gold_disk_config: &str) -> Result<u64, CoreError> {
 /// `build_refresh_plan` for a workspace in `pool`. With a journal in the
 /// VM's description the plan is `mode="recover"` and lists every way the VM
 /// disagrees with it; that is refused unless `force` (rule 5 of decision 4).
-/// `force` without a journal is refused.
+/// `force` without a journal is refused. The root is copied from `gold`, or
+/// from the configured Gold when it is `None`.
 pub async fn plan_refresh(
     pve: &impl Pve,
     cfg: &Config,
     pool: &str,
     vmid: u32,
+    gold: Option<u32>,
     force: bool,
 ) -> Result<Value, CoreError> {
-    let gold = crate::gold::configured_gold(cfg)?;
     require_pool(pve, vmid, pool).await?;
     let resource = cluster_vm_resources(pve)
         .await?
@@ -731,28 +732,26 @@ pub async fn plan_refresh(
         ));
     }
 
+    let gold = match gold {
+        Some(gold) => gold,
+        None => crate::gold::configured_gold(cfg)?,
+    };
     let info = resolve_existing_workspace(pve, cfg, vmid).await?;
     let (ip, cidr, gateway) = parse_ipconfig0(info.vm_config.get("ipconfig0").map(String::as_str).unwrap_or_default())?;
-    if info.node != cfg.node.as_str() {
-        return Err(CoreError::Refused(format!(
-            "Refresh currently requires workspace VM {vmid} on Gold node {}; it is on {}. Migrate it back first.",
-            cfg.node, info.node
-        )));
-    }
-    let root_storage = info.root_storage.clone().unwrap_or_default();
-    resolve_homestack_storage(cfg, &info.node, Some(&root_storage))?;
     let gold_resource = cluster_vm_resources(pve)
         .await?
         .into_iter()
         .find(|r| r.vmid == gold)
-        .ok_or_else(|| CoreError::Failed(format!("Gold VM {gold} does not exist")))?;
-    if gold_resource.node != cfg.node.as_str() {
-        return Err(CoreError::Failed(format!(
-            "Gold VM {gold} is on {}, expected configured node {}",
-            py_repr(Some(&gold_resource.node)),
-            py_repr(Some(cfg.node.as_str()))
+        .ok_or_else(|| CoreError::Refused(format!("Gold VM {gold} does not exist")))?;
+    if info.node != gold_resource.node {
+        return Err(CoreError::Refused(format!(
+            "Refresh requires workspace VM {vmid} on the node of Gold VM {gold}, {}; it is on {}. \
+             Choose a Gold on {} or migrate the workspace first.",
+            gold_resource.node, info.node, info.node
         )));
     }
+    let root_storage = info.root_storage.clone().unwrap_or_default();
+    resolve_homestack_storage(cfg, &info.node, Some(&root_storage))?;
     let gold_cfg = vm_config(pve, &gold_resource.node, gold).await?;
     require_gold_tag(gold, &gold_cfg)?;
     let disk_cfg = gold_cfg
@@ -801,7 +800,6 @@ pub async fn refresh_workspace(
     timing: &LifecycleTiming,
     observer: &impl Observer,
 ) -> Result<Value, CoreError> {
-    crate::gold::configured_gold(cfg)?;
     let vmid = vmid_of(plan)?;
     let node = text(plan, "node")?;
     require_pool(pve, vmid, pool).await?;
