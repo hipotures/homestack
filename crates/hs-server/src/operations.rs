@@ -171,12 +171,7 @@ fn digest(operation: &str, parameters: &Value, config_version: Option<&str>, pla
     let mut summary = planned.summary.clone();
     // Free space changes with unrelated writes. Admission is checked again
     // when replanning and immediately before allocation; required bytes stay signed.
-    let capacity_paths: &[&str] = match operation {
-        "workspace.migrate" => &["/capacity"],
-        "workspace.create" => &["/capacity/target", "/capacity/source_clone"],
-        _ => &[],
-    };
-    for path in capacity_paths {
+    for path in ["/capacity", "/capacity/target", "/capacity/source_clone"] {
         if let Some(capacity) = summary.pointer_mut(path).and_then(Value::as_object_mut) {
             capacity.remove("available_bytes");
         }
