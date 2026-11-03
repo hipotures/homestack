@@ -33,7 +33,7 @@ fn check(session: &Session) -> Found {
                 SnippetState::Missing => (Mark::Add, "missing: will be written".to_owned()),
                 SnippetState::Unknown(why) => (Mark::Note, format!("not checked: {why}")),
             };
-            (mark, format!("{} on {}", snippet.name, snippet.node.name), state)
+            (mark, snippet.node.name.clone(), format!("{} {state}", snippet.name))
         })
         .collect();
     Found {
