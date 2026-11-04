@@ -345,3 +345,20 @@ probe remain unverified without real accounts. The tested missing-account
 blocker is not evidence of successful candidate installation/activation.
 Claude's SDK initialization without credentials was verified separately in
 Task 2. Proxmox LXC replacement and authenticated peak memory remain untested.
+
+### Recovering an unqueued tag publication
+
+If a pushed Agent Accounts tag did not start its release run, dispatch the
+existing `ci.yml` workflow on the current default branch with
+`agent_accounts_release_tag` set to that existing annotated tag. The checks and
+image job both check out the tagged commit, verify the annotated tag resolves
+to that exact commit, and preserve the immutable numeric image version and
+source revision. Other service images are skipped for this recovery request.
+Existing image admission still refuses overwriting any published release.
+Leaving the input empty preserves the ordinary development-image workflow.
+
+For Task 3, the SSH transport stopped authenticating. The already-configured
+GitHub HTTPS credential synchronized the same upstream without changing Git
+configuration. Tag `agent-accounts-0.1.2` was pushed normally, but GitHub did not
+queue a tag run; the narrow dispatch recovery path was added to finish that
+publication without moving the tag or choosing another version manually.
