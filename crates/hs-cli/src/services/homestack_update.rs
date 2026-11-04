@@ -166,7 +166,7 @@ pub async fn run(
 
 /// `--auto`: apply every ready update, then wait for releases still being
 /// published until none is left. A release that cannot be applied is not
-/// retried. After the first table only changed rows are printed again.
+/// retried. On a terminal the service table is refreshed in place.
 async fn run_auto(
     pve: &impl Pve,
     config: &DeployConfig,
@@ -176,21 +176,10 @@ async fn run_auto(
     say: &(dyn Fn(&str) + Send + Sync),
 ) -> Result<(), String> {
     let mut failed: Vec<(String, String)> = Vec::new();
-    let mut shown: Vec<Row> = Vec::new();
+    let mut status = StatusTable::new();
     let problems = loop {
         let round = review(pve, config, sources, root, true, paint).await?;
-        let changed: Vec<&Row> = round
-            .rows
-            .iter()
-            .filter(|row| !shown.iter().any(|old| old.id == row.id && old.text == row.text))
-            .collect();
-        if !changed.is_empty() {
-            let width = round.rows.iter().map(|row| row.id.len()).max().unwrap_or(0);
-            for row in changed {
-                say(&line(row, width, paint));
-            }
-        }
-        shown = round.rows;
+        status.render(round.rows, paint, say);
         let pending: Vec<Pending> = round
             .pending
             .into_iter()
@@ -200,20 +189,17 @@ async fn run_auto(
                     .any(|(id, version)| *id == p.source.manifest.id && *version == p.version)
             })
             .collect();
+        if !pending.is_empty() {
+            status.finish();
+        }
         show(&pending, paint, say);
-        let mut applied = false;
         for update in &pending {
             if !update.plan.problems.is_empty() || !apply(pve, update, paint, say).await {
                 failed.push((update.source.manifest.id.clone(), update.version.clone()));
             }
-            applied = true;
         }
         if round.building.is_empty() {
             break round.problems;
-        }
-        if applied {
-            // Updated rows are shown again in full on the next pass.
-            shown.clear();
         }
         wait(&round.building, paint, say).await;
     };
@@ -236,7 +222,7 @@ async fn run_auto(
 /// Wait one poll interval; a terminal shows a spinner and a countdown.
 async fn wait(building: &[String], paint: Paint, say: &(dyn Fn(&str) + Send + Sync)) {
     let what = building.join(", ");
-    if !paint.0 {
+    if !std::io::stdout().is_terminal() {
         say(&format!("Waiting for {what}; checking again in {} s", POLL.as_secs()));
         tokio::time::sleep(POLL).await;
         return;
@@ -244,24 +230,92 @@ async fn wait(building: &[String], paint: Paint, say: &(dyn Fn(&str) + Send + Sy
     const FRAMES: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
     let start = Instant::now();
     let mut stdout = std::io::stdout();
-    say("");
+    let mut previous = String::new();
     for frame in FRAMES.iter().cycle() {
         let elapsed = start.elapsed();
         if elapsed >= POLL {
             break;
         }
         let left = (POLL - elapsed).as_secs() + 1;
-        let _ = write!(
-            stdout,
-            "\r\x1b[2K{} Waiting for {what} {}",
+        clear_lines(&mut stdout, &previous);
+        previous = format!(
+            "{} Waiting for {what} {}",
             paint.yellow(&frame.to_string()),
             paint.dim(&format!("· next check in {left} s"))
         );
+        let _ = writeln!(stdout, "{previous}");
         let _ = stdout.flush();
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
-    let _ = write!(stdout, "\r\x1b[2K\x1b[1A");
+    clear_lines(&mut stdout, &previous);
     let _ = stdout.flush();
+}
+
+/// The cursor stays immediately below the live table, including while polling.
+struct StatusTable {
+    terminal: bool,
+    rows: Vec<Row>,
+    rendered: String,
+}
+
+impl StatusTable {
+    fn new() -> Self {
+        Self {
+            terminal: std::io::stdout().is_terminal(),
+            rows: Vec::new(),
+            rendered: String::new(),
+        }
+    }
+
+    fn render(&mut self, rows: Vec<Row>, paint: Paint, say: &(dyn Fn(&str) + Send + Sync)) {
+        let width = rows.iter().map(|row| row.id.len()).max().unwrap_or(0);
+        if self.terminal {
+            let mut stdout = std::io::stdout().lock();
+            clear_lines(&mut stdout, &self.rendered);
+            self.rendered = rows
+                .iter()
+                .map(|row| line(row, width, paint))
+                .collect::<Vec<_>>()
+                .join("\n");
+            if !self.rendered.is_empty() {
+                let _ = writeln!(stdout, "{}", self.rendered);
+            }
+            let _ = stdout.flush();
+        } else {
+            for row in &rows {
+                if !self.rows.iter().any(|old| old.id == row.id && old.text == row.text) {
+                    say(&line(row, width, paint));
+                }
+            }
+        }
+        self.rows = rows;
+    }
+
+    /// Leave the current table in the transcript before deployment logs begin.
+    fn finish(&mut self) {
+        self.rendered.clear();
+        self.rows.clear();
+    }
+}
+
+/// Clear a block printed with a trailing newline, accounting for wrapped lines
+/// and terminal resizing. Colors and OSC hyperlinks occupy no screen columns.
+fn clear_lines(stdout: &mut impl Write, text: &str) {
+    if text.is_empty() {
+        return;
+    }
+    static ESCAPES: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\))").unwrap()
+    });
+    let (columns, height) = crossterm::terminal::size().unwrap_or((80, 24));
+    let columns = usize::from(columns.max(1));
+    let plain = ESCAPES.replace_all(text, "");
+    let lines: usize = plain
+        .split('\n')
+        .map(|line| ratatui::text::Text::raw(line).width().max(1).div_ceil(columns))
+        .sum();
+    let lines = lines.min(usize::from(height.saturating_sub(1)));
+    let _ = write!(stdout, "\r\x1b[{lines}A\x1b[J");
 }
 
 fn line(row: &Row, width: usize, paint: Paint) -> String {
