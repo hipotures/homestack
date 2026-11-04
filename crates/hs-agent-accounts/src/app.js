@@ -42,7 +42,8 @@ function button(parent, label, action) {
   return element;
 }
 function label(limit, provider) {
-  const duration = limit.window_minutes === 300 ? '5-hour' : limit.window_minutes === 10080 ? '7-day' : limit.window_minutes ? `${limit.window_minutes} min` : '';
+  const m = limit.window_minutes;
+  const duration = !m ? '' : m % 1440 === 0 ? `${m / 1440}-day` : m % 60 === 0 ? `${m / 60}-hour` : `${m}-minute`;
   const name = limit.label && limit.label !== duration && limit.label.toLowerCase() !== provider ? limit.label : '';
   return [duration, name].filter(Boolean).join(' · ') || limit.id;
 }
