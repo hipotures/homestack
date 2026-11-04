@@ -34,6 +34,9 @@ fn account(value: &Value) -> Result<Account> {
     })
 }
 impl Provider for Codex {
+    fn bundled_version(&self) -> Option<&'static str> {
+        Some("0.166.0")
+    }
     fn id(&self) -> &'static str {
         "codex"
     }
@@ -44,10 +47,12 @@ impl Provider for Codex {
             "subscription_limits",
             "account_statistics",
             "runtime_version",
+            "runtime_updates",
         ]
     }
-    fn probe<'a>(&'a self, ctx: &'a Context, p: &'a Profile, binary: &'a Path) -> ProbeFuture<'a, Snapshot> {
+    fn probe<'a>(&'a self, ctx: &'a Context, p: &'a Profile, binary: Option<&'a Path>) -> ProbeFuture<'a, Snapshot> {
         Box::pin(async move {
+            let binary = binary.ok_or_else(|| Failure::new("runtime_failure", "Managed runtime is unavailable"))?;
             let mut child = start(ctx, p, binary).await?;
             let result = async {
                 let mut identity = account(&child.rpc("account/read", json!({"refreshToken":false})).await?)?;

@@ -69,8 +69,9 @@ REST resources are under `/api/v1`: `providers`, `profiles`, `runtimes`,
 POST authentication/limits/statistics returns an operation ID. Unsupported
 provider statistics return an explicit unsupported-capability operation error. Read
 `operations/<id>` or subscribe to `operations/<id>/events` for progress.
-Operations are in-memory with sanitized completed summaries in SQLite;
-authentication must be restarted after service restart.
+Active operations are in-memory. Sanitized terminal summaries and runtime
+operations are persisted in SQLite; authentication must be restarted after
+service restart.
 
 Mutation requests require `Content-Type: application/json`. Profile creation
 accepts `provider` and `display_name`; PATCH accepts `enabled`; DELETE requires
@@ -89,9 +90,9 @@ served by Rust from embedded static assets.
 - `AGENT_ACCOUNTS_BUNDLED_RUNTIMES`: image seed directory, default
   `/opt/agent-accounts`; used only for a provider's first installation.
 
-Every invocation uses the pinned absolute binary, an environment allowlist,
-profile-specific HOME and CODEX_HOME, file credential storage and disabled
-Codex startup update checks. Inherited API keys, host login overrides, proxy
+Every account invocation uses the pinned absolute binary, an environment
+allowlist, profile-specific HOME and provider configuration, file credential
+storage for Codex and disabled provider update behavior. Inherited API keys, host login overrides, proxy
 credentials, session variables and telemetry settings are not forwarded.
 
 ## Releases and verification
@@ -184,3 +185,163 @@ form and cancellation, with no page errors or horizontal overflow. All disabled
 profiles survived service restart and were then deleted through the API.
 Authenticated-account coexistence, account identity confirmation and genuine
 Claude quota values remain unverified because no credentials were imported.
+
+## Runtime upgrades
+
+The image's initial Codex/Claude pins seed shared versioned installations only
+when that provider has no persisted pin. Startup checks each pinned binary's
+reported version. A missing or mismatched pin is a startup error; image refresh
+never silently chooses the image's newer bundled version. A per-home file lock
+prevents two service processes from sharing credentials and running probes.
+
+Open **Provider runtimes**, click **Check available version**, then **Upgrade**
+when a newer stable version is available. Checking versions installs nothing.
+An upgrade stages an official versioned musl download, validates its official
+SHA-256 and reported version, and performs an account-limits probe using one
+enabled authenticated profile. Only then does one SQLite transaction activate
+the pin and store the real measurement. Candidate verification excludes other
+operations for that provider and uses the same global process-slot limit.
+
+Failure, cancellation, missing verification credentials or an incompatible SDK
+keeps the previous working pin. The UI shows the blocker/rollback result.
+The active and previous installation remain available; older installations
+are retired only after successful activation. Interrupted staging is removed
+at startup, without automatically resuming an upgrade. Interrupted operations
+remain visible; inspect the active pin if the process stopped during completion.
+A runtime upgrade never copies or replaces profile credentials.
+
+REST operations:
+
+- POST `runtimes/<provider>/check` with `{}` checks the official stable release.
+- POST `runtimes/<provider>/upgrade` with `{"version":"X.Y.Z"}` explicitly
+  selects a stable vendor release. The UI selects the discovered latest version.
+- Both return operation IDs; GET/SSE progress uses the ordinary operations API.
+- Candidate downloads are limited to 512 MiB, metadata to 2 MiB. The upgrade
+  deadline is ten minutes; the real quota-probe deadline remains 60 seconds.
+
+Claude invocations set both `DISABLE_AUTOUPDATER=1` and `DISABLE_UPDATES=1`.
+Codex invocations set `check_for_update_on_startup=false`. Neither adapter
+invokes a vendor updater or resolves binaries from a profile's PATH.
+The SDK itself stays pinned to the service image and changes with a service
+release; an incompatible CLI candidate cannot pass its usage verification.
+
+## Telemetry and account health
+
+Set the schema-3 **Collector metrics URL** input to the existing HomeStack
+Collector's HTTP(S) `/v1/metrics` endpoint. It becomes
+`OTEL_EXPORTER_OTLP_METRICS_ENDPOINT`. No Collector, Prometheus or authentication
+service is deployed by Agent Accounts. Native `runtime.telemetry: homestack`
+declares the separate status endpoint; it does not supply an OTLP destination.
+Existing deployments must provide this new manifest input before refresh.
+For direct disposable runs the variable can be omitted to disable export.
+
+Rust exports OTLP/HTTP JSON every 60 seconds, with a three-second export timeout
+and bounded responses. Export failures are logged by category and the next
+cycle continues. No credential values or account emails enter metrics. Labels
+are provider, profile ID, account scope and limit window; runtime version is
+used only on runtime metrics. The resource service name is `agent-accounts`.
+
+Metrics include:
+
+- `agent_account_limit_used_percent` and
+  `agent_account_limit_reset_timestamp_seconds`, using actual observation times.
+- `agent_account_enabled`, `agent_account_authenticated`,
+  `agent_account_measurement_stale`, and
+  `agent_account_last_success_timestamp_seconds`.
+- `agent_account_probe_failures_total` and
+  `agent_account_probe_duration_seconds`.
+- `agent_account_alert` with bounded `condition` values for authentication
+  expiry/reauthentication, repeated failures, unreachable provider and stale data.
+- `agent_account_runtime_version_info`,
+  `agent_account_runtime_verified_timestamp_seconds`,
+  `agent_account_runtime_upgrade_failed`, and
+  `agent_account_runtime_verification_failed`.
+
+Use `agent_account_alert` for account alerts: disabled profiles explicitly emit
+zero for these conditions. Raw authentication and stale gauges remain factual
+when a profile is disabled; consumers deriving their own alerts must filter on
+`agent_account_enabled`. Repeated failure means at least three consecutive
+failed probes. Unknown quotas and missing success/reset timestamps are omitted,
+not exported as zero. Last successful values retain their observation time;
+failure or an elapsed reset marks them stale. Nothing infers fresh availability
+from a percentage or timestamp. Readiness depends on local operations and
+remains independent of provider/Collector availability.
+
+## Adapter boundary
+
+`Provider` implementations declare capabilities and return structured account
+metadata and scoped snapshots. Unsupported operations have an explicit default
+error; adapters need not implement authentication, limits, statistics or a
+runtime they do not support. Optional bundled runtime metadata belongs to the
+adapter. Add statically registered adapters without a dynamic plugin loader.
+Vendor release/download mechanics are isolated in the small runtime module;
+a new vendor's updater needs its own verified source implementation before
+advertising the runtime-updates capability.
+
+The scheduler, database, API, UI operations and metrics consume common models.
+Authentication URL/code state is transient; only sanitized operation summaries
+are persisted. Account statistics, subscription quota windows and any future
+instance/session measurements stay separate. Remote discovery, distributed
+App Servers and session monitoring are not implemented.
+
+## Operational limitations
+
+Pangolin protects the external administrative interface. Anyone with direct
+management-network access to the internal HTTP listener can manage profiles;
+restrict that network accordingly. No separate application login is required.
+Profiles are isolated process/configuration environments within one trusted
+service user, not independently sandboxed tenants. There is no generic shell,
+file, PTY or App Server RPC endpoint, and probes never submit user tools/prompts.
+
+The application supports only Linux amd64 images at present. Provider network
+access uses the sanitized environment; inherited proxy credentials, API keys
+and host-agent sessions are intentionally unavailable. Subscription quota
+availability and identity fields depend on the provider/account permissions.
+Claude's experimental SDK API and provider CLI login text may change. Failures
+stay confined to the affected adapter and retain prior successful data.
+
+History is retained until profile deletion; monitor persistent-volume space.
+The UI shows the latest stored history, not an independently audited provider
+billing record. Resource defaults were checked with startup, login initiation
+and unauthenticated helper initialization. Authenticated-probe peaks and two
+simultaneous authenticated Claude probes have not been measured. Raise memory
+if the real workload requires it.
+
+### Task 3 verification evidence
+
+Host and static musl builds and focused Clippy with warnings denied passed.
+The final production image was 786,377,053 bytes unpacked and reported about
+7.1 MiB Rust-process RSS after the final checks. Its binary SHA-256 matched
+the compiled artifact. All checks used disposable rootless Podman containers,
+1 CPU, 1 GiB RAM and no swap; no production LXC or account files were accessed.
+
+Both official stable-version checks succeeded: Codex 0.166.0 and Claude Code
+2.1.318. Checking versions left the pins unchanged. Explicit upgrade requests
+without an enabled authenticated account returned `verification_blocked` and
+kept both pins. The pins, latest-version metadata and disabled profiles survived
+container replacement with the same persistent volume. Another service process
+using that home was refused by the instance lock.
+
+The running Codex command used its persistent pinned path and explicitly
+passed disabled startup update checks and file credential storage. The actual
+Claude login child's executable, HOME and CLAUDE_CONFIG_DIR matched the selected
+profile and pin, and both update-disable variables were 1. Cancelling that flow
+and deleting its profile left no CLI/helper process.
+
+A temporary instance of the existing HomeStack Collector 0.1.10 image accepted
+and forwarded the application's real OTLP/HTTP JSON batches to a disposable
+receiver. Disabled-profile alert points were all zero. Unauthenticated profiles
+produced no invented quota-percentage metric. These checks did not deploy or
+modify a production Collector or the `ai-usage` service.
+
+With container networking disabled, an official release check failed with
+`network_failure` while readiness remained `pass`. Desktop and mobile Chromium
+checks verified runtime-version discovery, current-version upgrade disabling,
+progress and error reporting, with no page errors or horizontal overflow.
+
+Successful authenticated quota retrieval, activation of a newer runtime after a
+real account probe, and rollback following a failed authenticated candidate
+probe remain unverified without real accounts. The tested missing-account
+blocker is not evidence of successful candidate installation/activation.
+Claude's SDK initialization without credentials was verified separately in
+Task 2. Proxmox LXC replacement and authenticated peak memory remain untested.

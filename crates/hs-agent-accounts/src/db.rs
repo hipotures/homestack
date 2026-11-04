@@ -38,7 +38,7 @@ impl Database {
         self.0
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .query_row("SELECT 1", [], |r| r.get::<_, i64>(0))
+            .query_row("SELECT COUNT(*) FROM profiles", [], |r| r.get::<_, i64>(0))
             .is_ok()
     }
     pub fn profiles(&self) -> Result<Vec<Profile>> {
@@ -119,5 +119,91 @@ impl Database {
         let db = self.0.lock().unwrap_or_else(PoisonError::into_inner);
         db.execute("INSERT OR REPLACE INTO operations(id,summary) SELECT ?1,?2 WHERE ?3 IS NULL OR EXISTS(SELECT 1 FROM profiles WHERE id=?3)", params![op.id,safe.to_string(),op.profile_id]).map_err(error)?;
         Ok(())
+    }
+    pub fn read_operation(&self, id: &str) -> Result<Operation> {
+        let s: Option<String> = self
+            .0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .query_row("SELECT summary FROM operations WHERE id=?", [id], |r| r.get(0))
+            .optional()
+            .map_err(error)?;
+        serde_json::from_str(&s.ok_or_else(|| Failure::new("not_found", "Operation not found"))?).map_err(error)
+    }
+    pub fn interrupt_operations(&self) -> Result<()> {
+        let db = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut q = db
+            .prepare("SELECT summary FROM operations WHERE json_extract(summary,'$.finished_at') IS NULL")
+            .map_err(error)?;
+        let rows = q
+            .query_map([], |r| r.get::<_, String>(0))
+            .map_err(error)?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(error)?;
+        drop(q);
+        for row in rows {
+            let mut op: Operation = serde_json::from_str(&row).map_err(error)?;
+            op.status = "interrupted".into();
+            op.finished_at = Some(now());
+            op.message = "Service restarted; unverified candidates were not activated; inspect the active pin".into();
+            op.error = Some(Failure::new("interrupted", "Operation interrupted by service restart"));
+            db.execute(
+                "UPDATE operations SET summary=?2 WHERE id=?1",
+                params![op.id, serde_json::to_string(&op).map_err(error)?],
+            )
+            .map_err(error)?;
+            if op.kind == "upgrade" {
+                let data: Option<String> = db
+                    .query_row("SELECT data FROM runtimes WHERE provider=?", [&op.provider], |r| {
+                        r.get(0)
+                    })
+                    .optional()
+                    .map_err(error)?;
+                if let Some(data) = data {
+                    let mut runtime: Runtime = serde_json::from_str(&data).map_err(error)?;
+                    runtime.last_error = op.error.clone();
+                    runtime.last_result = Some(op.message.clone());
+                    db.execute(
+                        "UPDATE runtimes SET data=?2 WHERE provider=?1",
+                        params![runtime.provider, serde_json::to_string(&runtime).map_err(error)?],
+                    )
+                    .map_err(error)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub fn activate_runtime(&self, runtime: &Runtime, profile: &Profile, snapshot: &Snapshot) -> Result<()> {
+        let mut p = profile.clone();
+        p.snapshot = Some(snapshot.clone());
+        p.account = Some(snapshot.account.clone());
+        p.last_success = Some(snapshot.observed_at);
+        p.last_attempt = Some(now());
+        p.updated_at = now();
+        p.error = None;
+        p.failures = 0;
+        let mut db = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        let tx = db.transaction().map_err(error)?;
+        tx.execute(
+            "UPDATE runtimes SET data=?2 WHERE provider=?1",
+            params![runtime.provider, serde_json::to_string(runtime).map_err(error)?],
+        )
+        .map_err(error)?;
+        tx.execute(
+            "UPDATE profiles SET data=?2 WHERE id=?1",
+            params![p.id, serde_json::to_string(&p).map_err(error)?],
+        )
+        .map_err(error)?;
+        tx.execute(
+            "INSERT INTO history(profile_id,observed_at,data) VALUES(?1,?2,?3)",
+            params![
+                p.id,
+                snapshot.observed_at,
+                serde_json::to_string(snapshot).map_err(error)?
+            ],
+        )
+        .map_err(error)?;
+        tx.commit().map_err(error)
     }
 }

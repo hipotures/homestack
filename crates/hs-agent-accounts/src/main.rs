@@ -3,6 +3,8 @@ mod db;
 mod model;
 mod process;
 mod providers;
+mod runtime;
+mod telemetry;
 
 use app::Context;
 use axum::{
@@ -50,12 +52,24 @@ fn setting(name: &str, default: u64, min: u64, max: u64) -> std::result::Result<
 async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     rustix::process::umask(rustix::fs::Mode::from_bits_truncate(0o077));
     let root = PathBuf::from(std::env::var("AGENT_ACCOUNTS_HOME").unwrap_or_else(|_| "/home/app".into()));
+    let otlp_endpoint = telemetry::endpoint()?;
     let ctx = Context::open(
         root,
         setting("AGENT_ACCOUNTS_INTERVAL_SECONDS", 300, 60, 3600)?,
         setting("AGENT_ACCOUNTS_PROBE_CONCURRENCY", 1, 1, 2)? as usize,
         setting("HOMESTACK_HEARTBEAT_SECONDS", 60, 1, 3600)?,
     )?;
+    for provider in &ctx.providers {
+        if let Some(runtime) = ctx.db.runtime(provider.id())? {
+            let binary = ctx.binary(provider.id())?;
+            process::bounded(
+                &ctx.shutdown,
+                15,
+                runtime::verify_version(&ctx, provider.id(), &binary, &runtime.version),
+            )
+            .await?;
+        }
+    }
     let app = Router::new()
         .route("/", get(|| async { axum::response::Html(include_str!("index.html")) }))
         .route(
@@ -78,6 +92,8 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         .route("/api/v1/profiles/{id}/history", get(history))
         .route("/api/v1/profiles/{id}/statistics", post(statistics))
         .route("/api/v1/runtimes", get(runtimes))
+        .route("/api/v1/runtimes/{provider}/check", post(check_runtime))
+        .route("/api/v1/runtimes/{provider}/upgrade", post(upgrade_runtime))
         .route("/api/v1/operations/{id}", get(operation).delete(cancel_operation))
         .route("/api/v1/operations/{id}/events", get(events))
         .route("/api/v1/health", get(api_health))
@@ -92,6 +108,9 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         tokio::net::TcpListener::bind(std::env::var("HOMESTACK_LISTEN").unwrap_or_else(|_| "0.0.0.0:8080".into()))
             .await?;
     let addr = listener.local_addr()?;
+    if let Some(endpoint) = otlp_endpoint {
+        tokio::spawn(telemetry::run(ctx.clone(), endpoint));
+    }
     tokio::spawn(ctx.clone().scheduler());
     tokio::spawn(ctx.clone().heartbeat(addr));
     eprintln!("Agent Accounts listening on {addr}");
@@ -146,7 +165,18 @@ async fn browser_boundary(req: axum::extract::Request, next: Next) -> Response {
             return StatusCode::UNSUPPORTED_MEDIA_TYPE.into_response();
         }
     }
+    let api_request = req.uri().path().starts_with("/api/");
     let mut response = next.run(req).await;
+    if api_request
+        && response.status().is_client_error()
+        && !response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .is_some_and(|v| v == "application/json")
+    {
+        let status = response.status();
+        response = (status,Json(json!({"error":{"code":"invalid_input","message":"Invalid API request; check the route, JSON body and input types"}}))).into_response();
+    }
     let h = response.headers_mut();
     h.insert(header::CACHE_CONTROL, header::HeaderValue::from_static("no-store"));
     h.insert("x-content-type-options", header::HeaderValue::from_static("nosniff"));
@@ -180,6 +210,7 @@ struct Edit {
     enabled: bool,
 }
 async fn edit(State(c): State<Arc<Context>>, Path(id): Path<String>, Json(v): Json<Edit>) -> Result<Json<Profile>> {
+    c.db.profile(&id)?;
     c.cancel_profile(&id);
     let lock = c.lock(&id);
     let _guard = lock.lock().await;
@@ -212,6 +243,7 @@ async fn delete_profile(
             "Confirm permanent deletion of this profile and all its history",
         ));
     }
+    c.db.profile(&id)?;
     c.cancel_profile(&id);
     let lock = c.lock(&id);
     let _guard = lock.lock().await;
@@ -220,6 +252,7 @@ async fn delete_profile(
     c.db.save(&p, None)?;
     c.delete_files(&id)?;
     c.db.delete(&id)?;
+    c.locks.lock().unwrap_or_else(PoisonError::into_inner).remove(&id);
     c.jobs
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
@@ -283,15 +316,31 @@ async fn statistics(State(c): State<Arc<Context>>, Path(id): Path<String>) -> Re
     let p = c.db.profile(&id)?;
     Ok(accepted(c.begin(&p, "statistics")?))
 }
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Upgrade {
+    version: String,
+}
+async fn check_runtime(
+    State(c): State<Arc<Context>>,
+    Path(provider): Path<String>,
+) -> Result<(StatusCode, Json<Operation>)> {
+    Ok(accepted(c.runtime_operation(&provider, None)?))
+}
+async fn upgrade_runtime(
+    State(c): State<Arc<Context>>,
+    Path(provider): Path<String>,
+    Json(v): Json<Upgrade>,
+) -> Result<(StatusCode, Json<Operation>)> {
+    Ok(accepted(c.runtime_operation(&provider, Some(v.version))?))
+}
 async fn runtimes(State(c): State<Arc<Context>>) -> Result<Json<Vec<Runtime>>> {
-    let rs = c
-        .providers
-        .iter()
-        .map(|p| {
-            c.db.runtime(p.id())
-                .and_then(|r| r.ok_or_else(|| Failure::new("runtime_failure", "Runtime pin missing")))
-        })
-        .collect::<Result<Vec<_>>>()?;
+    let mut rs = Vec::new();
+    for provider in &c.providers {
+        if let Some(runtime) = c.db.runtime(provider.id())? {
+            rs.push(runtime);
+        }
+    }
     Ok(Json(rs))
 }
 async fn operation(State(c): State<Arc<Context>>, Path(id): Path<String>) -> Result<Json<Operation>> {
@@ -329,11 +378,17 @@ async fn events(
     Ok(Sse::new(stream).keep_alive(axum::response::sse::KeepAlive::default()))
 }
 async fn api_health(State(c): State<Arc<Context>>) -> Result<Json<Value>> {
-    Ok(Json(json!({"database_ready":c.db.ready(),"profiles":c.profiles()?})))
+    Ok(Json(
+        json!({"database_ready":c.db.ready(),"profiles":c.profiles()?,"alerts":c.profiles()?.iter().map(|p|json!({"profile_id":p.id,"conditions":telemetry::conditions(&c,p)})).collect::<Vec<_>>()}),
+    ))
 }
 fn health(c: &Context, ready: bool) -> Response {
     let (live, age, count) = c.liveness();
-    let pass = live && (!ready || c.db.ready());
+    let local_runtimes = c
+        .providers
+        .iter()
+        .all(|p| p.bundled_version().is_none() || c.binary(p.id()).is_ok());
+    let pass = live && (!ready || (c.db.ready() && local_runtimes));
     let status = if pass { "pass" } else { "fail" };
     (if pass {StatusCode::OK}else{StatusCode::SERVICE_UNAVAILABLE},[(header::CONTENT_TYPE,"application/health+json")],Json(json!({"status":status,"checks":{"heartbeat:age":[{"status":if live{"pass"}else{"fail"},"observedValue":age,"observedUnit":"s"}],"heartbeat:count":[{"status":if live{"pass"}else{"fail"},"observedValue":count}],"database:connection":[{"status":if c.db.ready(){"pass"}else{"fail"}}]}}))).into_response()
 }

@@ -21,3 +21,13 @@ inputs:
     target:
       type: environment
       variable: AGENT_ACCOUNTS_PROBE_CONCURRENCY
+  - id: otlp_metrics_url
+    label: Collector metrics URL
+    description: Existing HomeStack Collector HTTP OTLP endpoint including /v1/metrics.
+    type: url
+    required: true
+    allowed_schemes: [http, https]
+    regex: '^https?://[^/?#]+/v1/metrics$'
+    target:
+      type: environment
+      variable: OTEL_EXPORTER_OTLP_METRICS_ENDPOINT

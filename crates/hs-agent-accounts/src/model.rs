@@ -59,6 +59,10 @@ pub struct Profile {
     pub last_attempt: Option<i64>,
     pub error: Option<Failure>,
     pub failures: u64,
+    #[serde(default)]
+    pub total_failures: u64,
+    #[serde(default)]
+    pub probe_duration_seconds: Option<f64>,
     pub snapshot: Option<Snapshot>,
     pub created_at: i64,
     pub updated_at: i64,
@@ -93,7 +97,7 @@ impl std::fmt::Display for Failure {
 impl std::error::Error for Failure {}
 pub type Result<T> = std::result::Result<T, Failure>;
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Operation {
     pub id: String,
     pub profile_id: Option<String>,
@@ -107,6 +111,8 @@ pub struct Operation {
     pub error: Option<Failure>,
     pub started_at: i64,
     pub finished_at: Option<i64>,
+    #[serde(default)]
+    pub result: Option<Value>,
 }
 impl Operation {
     pub fn terminal(&self) -> bool {
@@ -122,4 +128,8 @@ pub struct Runtime {
     pub latest_version: Option<String>,
     pub checked_at: Option<i64>,
     pub last_result: Option<String>,
+    #[serde(default)]
+    pub last_error: Option<Failure>,
+    #[serde(default)]
+    pub verified_at: Option<i64>,
 }

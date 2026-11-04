@@ -10,7 +10,7 @@ use std::{
     sync::{Arc, Mutex, PoisonError},
     time::{Duration, Instant},
 };
-use tokio::sync::{Mutex as AsyncMutex, Semaphore};
+use tokio::sync::{Mutex as AsyncMutex, RwLock, Semaphore};
 use tokio_util::sync::CancellationToken;
 
 pub struct Job {
@@ -20,10 +20,12 @@ pub struct Job {
 }
 pub struct Context {
     pub root: PathBuf,
+    _instance_lock: std::fs::File,
     pub db: Database,
     pub providers: Vec<Arc<dyn Provider>>,
     pub jobs: Mutex<HashMap<String, Job>>,
     pub locks: Mutex<HashMap<String, Arc<AsyncMutex<()>>>>,
+    pub gates: HashMap<String, Arc<RwLock<()>>>,
     pub slots: Semaphore,
     pub interval: u64,
     pub heartbeat_seconds: u64,
@@ -57,13 +59,41 @@ impl Context {
         for name in ["profiles", "database", "state", "runtimes"] {
             process::directory(&root.join(name))?;
         }
+        let instance_lock = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(root.join("state/service.lock"))
+            .map_err(|_| Failure::new("storage_failure", "Cannot open service instance lock"))?;
+        rustix::fs::flock(&instance_lock, rustix::fs::FlockOperation::NonBlockingLockExclusive)
+            .map_err(|_| Failure::new("busy", "Another Agent Accounts process owns this persistent home"))?;
+        for entry in std::fs::read_dir(root.join("state"))
+            .map_err(|_| Failure::new("storage_failure", "Cannot inspect runtime staging"))?
+        {
+            let entry = entry.map_err(|_| Failure::new("storage_failure", "Cannot inspect runtime staging"))?;
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name
+                .strip_prefix("runtime-")
+                .is_some_and(|s| uuid::Uuid::parse_str(s).is_ok())
+                && entry.file_type().is_ok_and(|t| t.is_dir() && !t.is_symlink())
+            {
+                std::fs::remove_dir_all(entry.path())
+                    .map_err(|_| Failure::new("storage_failure", "Cannot remove interrupted runtime staging"))?;
+            }
+        }
         let db = Database::open(&root.join("database/accounts.db"))?;
         let ctx = Arc::new(Self {
             root,
+            _instance_lock: instance_lock,
             db,
             providers: providers::registered(),
             jobs: Mutex::new(HashMap::new()),
             locks: Mutex::new(HashMap::new()),
+            gates: providers::registered()
+                .iter()
+                .map(|p| (p.id().to_owned(), Arc::new(RwLock::new(()))))
+                .collect(),
             slots: Semaphore::new(concurrency),
             interval,
             heartbeat_seconds,
@@ -72,7 +102,11 @@ impl Context {
         });
         for provider in &ctx.providers {
             ctx.seed(provider.id())?;
+            if provider.bundled_version().is_some() {
+                ctx.binary(provider.id())?;
+            }
         }
+        ctx.db.interrupt_operations()?;
         for p in ctx.db.profiles()? {
             if p.deleting {
                 ctx.delete_files(&p.id)?;
@@ -92,10 +126,8 @@ impl Context {
         if self.db.runtime(provider)?.is_some() {
             return Ok(());
         }
-        let version = match provider {
-            "codex" => "0.166.0",
-            "claude" => "2.1.318",
-            _ => return Err(Failure::unsupported()),
+        let Some(version) = self.provider(provider)?.bundled_version() else {
+            return Ok(());
         };
         let source = PathBuf::from(
             std::env::var("AGENT_ACCOUNTS_BUNDLED_RUNTIMES").unwrap_or_else(|_| "/opt/agent-accounts".into()),
@@ -112,6 +144,8 @@ impl Context {
             latest_version: None,
             checked_at: None,
             last_result: None,
+            last_error: None,
+            verified_at: None,
         })
     }
     pub fn binary(&self, provider: &str) -> Result<PathBuf> {
@@ -173,6 +207,8 @@ impl Context {
             last_attempt: None,
             error: None,
             failures: 0,
+            total_failures: 0,
+            probe_duration_seconds: None,
             snapshot: None,
             created_at: now(),
             updated_at: now(),
@@ -193,7 +229,8 @@ impl Context {
             .unwrap_or_else(PoisonError::into_inner)
             .get(id)
             .map(|j| j.value.clone())
-            .ok_or_else(|| Failure::new("not_found", "Operation not found"))
+            .map(Ok)
+            .unwrap_or_else(|| self.db.read_operation(id))
     }
     pub fn submit_code(&self, profile: &str, code: String) -> Result<()> {
         if code.is_empty() || code.len() > 4096 || code.chars().any(char::is_control) {
@@ -254,6 +291,7 @@ impl Context {
             error: None,
             started_at: now(),
             finished_at: None,
+            result: None,
         };
         let cancel = self.shutdown.child_token();
         let (codes, receiver) = tokio::sync::mpsc::channel(1);
@@ -270,9 +308,12 @@ impl Context {
         let id = op.id.clone();
         let profile = p.id.clone();
         let kind = kind.to_owned();
+        let provider_id = p.provider.clone();
         tokio::spawn(async move {
             // Keep the code receiver owned by the selected operation, never by a global terminal.
             let result = process::bounded(&cancel, if kind == "authentication" { 600 } else { 90 }, async {
+                let gate = ctx.gates.get(&provider_id).cloned().ok_or_else(Failure::unsupported)?;
+                let _provider_guard = gate.read().await;
                 let lock = ctx.lock(&profile);
                 let _guard = lock.lock().await;
                 let _slot = ctx
@@ -298,19 +339,37 @@ impl Context {
                         .await?;
                     p.account = Some(account);
                     p.auth_status = "authenticated".into();
-                    p.error = None;
+                    p.error = Some(Failure::new(
+                        "stale_measurement",
+                        "Authentication completed; awaiting a fresh usage check",
+                    ));
                     p.updated_at = now();
                     ctx.db.save(&p, None)?;
                     Ok(None)
                 } else if kind == "statistics" {
                     let value = provider.statistics(&ctx, &p).await?;
-                    ctx.update_operation(&id, |o| o.message = value.to_string());
+                    ctx.update_operation(&id, |o| o.result = Some(value));
                     Ok(None)
                 } else {
                     p.last_attempt = Some(now());
                     ctx.db.save(&p, None)?;
-                    let binary = ctx.binary(&p.provider)?;
-                    let result = process::bounded(&cancel, 60, provider.probe(&ctx, &p, &binary)).await;
+                    let binary = ctx
+                        .db
+                        .runtime(&p.provider)?
+                        .map(|_| ctx.binary(&p.provider))
+                        .transpose()?;
+                    let started = Instant::now();
+                    let result = process::bounded(&cancel, 60, async {
+                        let first = provider.probe(&ctx, &p, binary.as_deref()).await;
+                        if first.as_ref().is_err_and(|e| e.code == "network_failure") {
+                            tokio::time::sleep(Duration::from_secs(2)).await;
+                            provider.probe(&ctx, &p, binary.as_deref()).await
+                        } else {
+                            first
+                        }
+                    })
+                    .await;
+                    p.probe_duration_seconds = Some(started.elapsed().as_secs_f64());
                     match result {
                         Ok(snapshot) => {
                             p.auth_status = "authenticated".into();
@@ -321,10 +380,15 @@ impl Context {
                             p.snapshot = Some(snapshot.clone());
                             p.updated_at = now();
                             ctx.db.save(&p, Some(&snapshot))?;
+                            if let Some(mut runtime) = ctx.db.runtime(&p.provider)? {
+                                runtime.verified_at = Some(now());
+                                ctx.db.save_runtime(&runtime)?;
+                            }
                             Ok(Some(snapshot))
                         }
                         Err(e) => {
                             p.failures = p.failures.saturating_add(1);
+                            p.total_failures = p.total_failures.saturating_add(1);
                             if e.code == "reauthentication_required" || e.code == "authentication_expired" {
                                 p.auth_status = e.code.clone();
                             }
@@ -407,6 +471,9 @@ impl Context {
                         if p.enabled
                             && !p.deleting
                             && p.auth_status == "authenticated"
+                            && self
+                                .provider(&p.provider)
+                                .is_ok_and(|adapter| adapter.capabilities().contains(&"subscription_limits"))
                             && p.last_attempt.is_none_or(|t| now() - t >= self.interval as i64)
                         {
                             let _ = self.begin(&p, "probe");

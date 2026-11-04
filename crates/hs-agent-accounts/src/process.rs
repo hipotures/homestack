@@ -217,6 +217,17 @@ impl Process {
                     let msg = value["error"]["message"].as_str().unwrap_or("").to_lowercase();
                     return Err(if value["error"]["code"].as_i64() == Some(-32601) {
                         Failure::unsupported()
+                    } else if msg.contains("expired") || msg.contains("revoked") {
+                        Failure::new("authentication_expired", "Provider authentication expired")
+                    } else if msg.contains("timed out") || msg.contains("timeout") {
+                        Failure::new("probe_timeout", "Provider request timed out")
+                    } else if ["network", "connect", "dns", "resolve", "transport"]
+                        .iter()
+                        .any(|s| msg.contains(s))
+                    {
+                        Failure::new("network_failure", "Provider network request failed")
+                    } else if msg.contains("429") || msg.contains("rate limit") {
+                        Failure::new("rate_limit_exhausted", "Provider reported an exhausted rate limit")
                     } else if msg.contains("auth") || msg.contains("login") || msg.contains("401") {
                         Failure::new("reauthentication_required", "Provider requires authentication")
                     } else {

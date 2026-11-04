@@ -55,11 +55,24 @@ fn window(id: &str, label: &str, minutes: Option<i64>, v: &Value, model: Option<
     }
 }
 impl Provider for Claude {
+    fn bundled_version(&self) -> Option<&'static str> {
+        Some("2.1.318")
+    }
+    fn capabilities(&self) -> Vec<&'static str> {
+        vec![
+            "authentication",
+            "account_information",
+            "subscription_limits",
+            "runtime_version",
+            "runtime_updates",
+        ]
+    }
     fn id(&self) -> &'static str {
         "claude"
     }
-    fn probe<'a>(&'a self, ctx: &'a Context, p: &'a Profile, binary: &'a Path) -> ProbeFuture<'a, Snapshot> {
+    fn probe<'a>(&'a self, ctx: &'a Context, p: &'a Profile, binary: Option<&'a Path>) -> ProbeFuture<'a, Snapshot> {
         Box::pin(async move {
+            let binary = binary.ok_or_else(|| Failure::new("runtime_failure", "Managed runtime is unavailable"))?;
             let mut account = identity(ctx, p, binary).await?;
             let root = process::prepare(&ctx.root, &p.id)?;
             let mut command = process::command(Path::new("/usr/bin/node"), &root, "claude");

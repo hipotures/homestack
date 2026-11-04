@@ -1,15 +1,166 @@
 'use strict';
-const $=s=>document.querySelector(s);let selectedOperation=null;let source=null;
-async function api(path,method='GET',body){const r=await fetch('/api/v1'+path,{method,headers:{'Content-Type':'application/json'},...(body!==undefined?{body:JSON.stringify(body)}:{})});if(!r.ok){const v=await r.json().catch(()=>({}));throw Error(v.error?.message||`Request failed (${r.status})`)}const text=await r.text();return text?JSON.parse(text):null}
-function node(tag,text,cls){const n=document.createElement(tag);if(text!==undefined)n.textContent=text;if(cls)n.className=cls;return n}
-function time(t){return t?new Date(t*1000).toLocaleString():'Unknown'}
-function notice(e){$('#notice').textContent=e.message||e}
-function button(parent,label,action){const b=node('button',label);b.type='button';b.onclick=async()=>{b.disabled=true;try{await action()}catch(e){notice(e)}finally{b.disabled=false}};parent.append(b);return b}
-async function refresh(){const ps=await api('/profiles');$('#profiles').replaceChildren();if(!ps.length)$('#profiles').append(node('p','No profiles yet. Add an account to begin.'));for(const p of ps){const card=node('article',undefined,'card');card.append(node('span',p.provider.toUpperCase(),'muted'),node('h2',p.display_name));card.append(node('span',p.enabled?'Enabled':'Disabled','badge'));card.append(node('p',p.account?.email||'Account not identified','muted'));card.append(node('p',`${p.auth_status.replaceAll('_',' ')}${p.account?.plan?' · '+p.account.plan:''}`));if(p.snapshot){for(const l of p.snapshot.limits){const q=node('div',undefined,'quota');const duration=l.window_minutes===300?'5-hour':l.window_minutes===10080?'7-day':l.window_minutes?`${l.window_minutes} min`:l.id;q.append(node('div',`${l.label} · ${duration}: ${l.used_percent==null?'Unknown':l.used_percent.toFixed(1)+'%'}`));if(l.used_percent!=null){const bar=node('progress');bar.max=100;bar.value=Math.min(100,l.used_percent);q.append(bar)}q.append(node('div','Reset: '+time(l.resets_at),'muted'));card.append(q)}}else card.append(node('p','Usage unavailable','muted'));card.append(node('p','Last successful check: '+time(p.last_success),'muted'));if(p.stale&&p.enabled)card.append(node('p','Stale — awaiting a successful check','error'));if(p.error)card.append(node('p',p.error.message,'error'));const actions=node('div',undefined,'actions');button(actions,p.account?'Reauthenticate':'Authenticate',async()=>showOperation(await api(`/profiles/${p.id}/authentication`,'POST',{})));button(actions,p.enabled?'Disable':'Enable',async()=>{await api(`/profiles/${p.id}`,'PATCH',{enabled:!p.enabled});await refresh()});button(actions,'Check now',async()=>showOperation(await api(`/profiles/${p.id}/limits`,'POST',{})));button(actions,'Details',async()=>{$('#detail-content').textContent=JSON.stringify({profile:p,history:await api(`/profiles/${p.id}/history`)},null,2);$('#details').showModal()});button(actions,'Delete',async()=>{if(confirm(`Permanently delete "${p.display_name}"? This removes credentials, configuration and all local history.`)){await api(`/profiles/${p.id}`,'DELETE',{confirm:true});await refresh()}});card.append(actions);$('#profiles').append(card)}const rs=await api('/runtimes');$('#runtimes').replaceChildren(...rs.map(r=>node('p',`${r.provider}: ${r.version} · latest: ${r.latest_version||'not checked'}`)))}
-function showOperation(op){selectedOperation=op;$('#operation h2').textContent=op.kind==='authentication'?'Authentication':'Usage check';if(!$('#operation').open)$('#operation').showModal();source?.close();updateOperation(op);if(!op.finished_at){source=new EventSource(`/api/v1/operations/${op.id}/events`);source.addEventListener('operation',e=>updateOperation(JSON.parse(e.data)));source.onerror=()=>{$('#progress').textContent='Progress connection interrupted. Reopen the operation or refresh.'}}}
-function updateOperation(op){selectedOperation=op;$('#progress').textContent=op.message;$('#auth-url').hidden=!op.authorization_url;if(op.authorization_url)$('#auth-url').href=op.authorization_url;$('#device-code').textContent=op.user_code||'';$('#code-form').hidden=!op.accepts_code;$('#cancel-operation').hidden=!!op.finished_at;if(op.finished_at){source?.close();refresh().catch(notice)}}
-$('#cancel-operation').onclick=()=>selectedOperation&&api(`/operations/${selectedOperation.id}`,'DELETE',{}).catch(notice);
-$('#code-form').onsubmit=async e=>{e.preventDefault();if(!selectedOperation?.profile_id)return;try{await api(`/profiles/${selectedOperation.profile_id}/authentication/code`,'POST',{code:$('#auth-code').value});$('#auth-code').value='';$('#code-form').hidden=true}catch(e){notice(e)}};
-$('#add').onclick=()=>$('#add-dialog').showModal();document.querySelectorAll('[data-close]').forEach(b=>b.onclick=()=>b.closest('dialog').close());
-$('#create').onsubmit=async e=>{e.preventDefault();try{const v=Object.fromEntries(new FormData(e.target));const p=await api('/profiles','POST',v);$('#add-dialog').close();e.target.reset();await refresh();showOperation(await api(`/profiles/${p.id}/authentication`,'POST',{}))}catch(e){notice(e)}};
-(async()=>{const ps=await api('/providers');for(const p of ps){const o=node('option',p.id);o.value=p.id;$('#providers').append(o)}await refresh()})().catch(notice);setInterval(()=>refresh().catch(notice),15000);
+const $ = selector => document.querySelector(selector);
+let selectedOperation = null;
+let source = null;
+const providerCapabilities = new Map();
+async function api(path, method = 'GET', body) {
+  const response = await fetch('/api/v1' + path, {
+    method, headers: { 'Content-Type': 'application/json' },
+    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+  });
+  if (!response.ok) {
+    const value = await response.json().catch(() => ({}));
+    throw Error(value.error?.message || `Request failed (${response.status})`);
+  }
+  const text = await response.text();
+  return text ? JSON.parse(text) : null;
+}
+function node(tag, text, className) {
+  const element = document.createElement(tag);
+  if (text !== undefined) element.textContent = text;
+  if (className) element.className = className;
+  return element;
+}
+const time = value => value ? new Date(value * 1000).toLocaleString() : 'Unknown';
+const notice = error => { $('#notice').textContent = error.message || error; };
+function button(parent, label, action) {
+  const element = node('button', label);
+  element.type = 'button';
+  element.onclick = async () => {
+    element.disabled = true;
+    try { await action(); } catch (error) { notice(error); }
+    finally { element.disabled = false; }
+  };
+  parent.append(element);
+  return element;
+}
+function label(limit) {
+  const duration = limit.window_minutes === 300 ? '5-hour' : limit.window_minutes === 10080 ? '7-day' : limit.window_minutes ? `${limit.window_minutes} min` : limit.id;
+  return `${limit.label} · ${duration}`;
+}
+async function details(profile) {
+  const content = $('#detail-content');
+  content.replaceChildren();
+  for (const [title, value] of [
+    ['Profile', profile.display_name], ['Provider', profile.provider],
+    ['Account', profile.account?.email || 'Not identified'],
+    ['Plan', profile.account?.plan || 'Unknown'], ['Authentication', profile.auth_status.replaceAll('_', ' ')],
+    ['Monitoring', profile.enabled ? 'Enabled' : 'Disabled'], ['Last successful check', time(profile.last_success)],
+    ['Measurement scope', 'Account'], ['Profile ID', profile.id],
+  ]) content.append(node('p', `${title}: ${value}`));
+  if (profile.snapshot?.reset_credits) content.append(node('p', `Available earned resets: ${profile.snapshot.reset_credits.availableCount ?? 'Unknown'}`));
+  const history = await api(`/profiles/${profile.id}/history`);
+  content.append(node('h3', 'Recent successful checks'));
+  if (!history.length) content.append(node('p', 'No successful measurements yet.', 'muted'));
+  for (const snapshot of history.slice(0, 20)) {
+    content.append(node('p', `${time(snapshot.observed_at)} · ${snapshot.account.email || 'Account'} · ${snapshot.limits.map(l => `${label(l)} ${l.used_percent == null ? 'unknown' : l.used_percent + '%'}`).join(', ')}`, 'muted'));
+  }
+  if (profile.error) content.append(node('p', profile.error.message, 'error'));
+  $('#details').showModal();
+}
+async function refresh() {
+  const profiles = await api('/profiles');
+  $('#profiles').replaceChildren();
+  if (!profiles.length) $('#profiles').append(node('p', 'No profiles yet. Add an account to begin.'));
+  for (const profile of profiles) {
+    const card = node('article', undefined, 'card');
+    card.append(node('span', profile.provider.toUpperCase(), 'muted'), node('h2', profile.display_name));
+    card.append(node('span', profile.enabled ? 'Enabled' : 'Disabled', 'badge'));
+    card.append(node('p', profile.account?.email || 'Account not identified', 'muted'));
+    card.append(node('p', `${profile.auth_status.replaceAll('_', ' ')}${profile.account?.plan ? ' · ' + profile.account.plan : ''}`));
+    if (profile.snapshot) {
+      if (profile.snapshot.account.email && profile.snapshot.account.email !== profile.account?.email) card.append(node('p', `Previous measurement account: ${profile.snapshot.account.email}`, 'error'));
+      for (const limit of profile.snapshot.limits) {
+        const quota = node('div', undefined, 'quota');
+        quota.append(node('div', `${label(limit)}: ${limit.used_percent == null ? 'Unknown' : limit.used_percent.toFixed(1) + '%'}`));
+        if (limit.used_percent != null) {
+          const bar = node('progress'); bar.max = 100; bar.value = Math.min(100, limit.used_percent); quota.append(bar);
+        }
+        quota.append(node('div', 'Reset: ' + time(limit.resets_at), 'muted'));
+        if (limit.exhausted) quota.append(node('p', 'Provider reports an exhausted limit', 'error'));
+        card.append(quota);
+      }
+    } else card.append(node('p', 'Usage unavailable', 'muted'));
+    card.append(node('p', 'Last successful check: ' + time(profile.last_success), 'muted'));
+    if (profile.stale && profile.enabled) card.append(node('p', 'Stale — awaiting a successful check', 'error'));
+    if (profile.error && profile.enabled) card.append(node('p', profile.error.message, 'error'));
+    const actions = node('div', undefined, 'actions');
+    button(actions, profile.account ? 'Reauthenticate' : 'Authenticate', async () => showOperation(await api(`/profiles/${profile.id}/authentication`, 'POST', {})));
+    button(actions, profile.enabled ? 'Disable' : 'Enable', async () => { await api(`/profiles/${profile.id}`, 'PATCH', { enabled: !profile.enabled }); await refresh(); });
+    button(actions, 'Check now', async () => showOperation(await api(`/profiles/${profile.id}/limits`, 'POST', {}))).disabled = !profile.enabled;
+    button(actions, 'Details', () => details(profile));
+    if (providerCapabilities.get(profile.provider)?.includes('account_statistics')) button(actions, 'Account statistics', async () => showOperation(await api(`/profiles/${profile.id}/statistics`, 'POST', {}))).disabled = !profile.enabled;
+    button(actions, 'Delete', async () => {
+      if (confirm(`Permanently delete "${profile.display_name}"? This removes credentials, configuration and all local history.`)) {
+        await api(`/profiles/${profile.id}`, 'DELETE', { confirm: true }); await refresh();
+      }
+    });
+    card.append(actions); $('#profiles').append(card);
+  }
+  const runtimes = await api('/runtimes');
+  $('#runtimes').replaceChildren();
+  for (const runtime of runtimes) {
+    const row = node('article', undefined, 'runtime');
+    row.append(node('h3', runtime.provider), node('p', `Pinned: ${runtime.version} · latest: ${runtime.latest_version || 'not checked'}`));
+    row.append(node('p', `Last version check: ${time(runtime.checked_at)} · Usage verification: ${time(runtime.verified_at)}`, 'muted'));
+    if (runtime.previous_version) row.append(node('p', `Previous working version retained: ${runtime.previous_version}`, 'muted'));
+    if (runtime.last_result) row.append(node('p', runtime.last_result, runtime.last_error ? 'error' : 'muted'));
+    const actions = node('div', undefined, 'actions');
+    button(actions, 'Check available version', async () => showOperation(await api(`/runtimes/${runtime.provider}/check`, 'POST', {})));
+    button(actions, 'Upgrade', async () => showOperation(await api(`/runtimes/${runtime.provider}/upgrade`, 'POST', { version: runtime.latest_version }))).disabled = !runtime.latest_version || compareVersions(runtime.latest_version, runtime.version) <= 0;
+    row.append(actions); $('#runtimes').append(row);
+  }
+}
+function compareVersions(a, b) {
+  const left = a.split('.').map(Number), right = b.split('.').map(Number);
+  for (let i = 0; i < 3; i++) if (left[i] !== right[i]) return left[i] - right[i];
+  return 0;
+}
+function showOperation(operation) {
+  selectedOperation = operation;
+  $('#operation h2').textContent = ({ authentication: 'Authentication', probe: 'Usage check', upgrade: 'Runtime upgrade', update_check: 'Available runtime version', statistics: 'Account statistics' })[operation.kind] || 'Operation';
+  if (!$('#operation').open) $('#operation').showModal();
+  source?.close(); updateOperation(operation);
+  if (!operation.finished_at) {
+    source = new EventSource(`/api/v1/operations/${operation.id}/events`);
+    source.addEventListener('operation', event => updateOperation(JSON.parse(event.data)));
+    source.onerror = () => { $('#progress').textContent = 'Progress connection interrupted. Reopen the operation or refresh.'; };
+  }
+}
+function updateOperation(operation) {
+  selectedOperation = operation;
+  $('#progress').textContent = operation.message;
+  $('#operation-result').textContent = operation.result ? JSON.stringify(operation.result, null, 2) : '';
+  $('#auth-url').hidden = !operation.authorization_url;
+  if (operation.authorization_url) $('#auth-url').href = operation.authorization_url;
+  $('#device-code').textContent = operation.user_code || '';
+  $('#code-form').hidden = !operation.accepts_code;
+  $('#cancel-operation').hidden = !!operation.finished_at;
+  if (operation.finished_at) { source?.close(); refresh().catch(notice); }
+}
+$('#cancel-operation').onclick = () => selectedOperation && api(`/operations/${selectedOperation.id}`, 'DELETE', {}).catch(notice);
+$('#code-form').onsubmit = async event => {
+  event.preventDefault(); if (!selectedOperation?.profile_id) return;
+  try {
+    await api(`/profiles/${selectedOperation.profile_id}/authentication/code`, 'POST', { code: $('#auth-code').value });
+    $('#auth-code').value = ''; $('#code-form').hidden = true;
+  } catch (error) { notice(error); }
+};
+$('#add').onclick = () => $('#add-dialog').showModal();
+document.querySelectorAll('[data-close]').forEach(button => { button.onclick = () => button.closest('dialog').close(); });
+$('#create').onsubmit = async event => {
+  event.preventDefault();
+  try {
+    const profile = await api('/profiles', 'POST', Object.fromEntries(new FormData(event.target)));
+    $('#add-dialog').close(); event.target.reset(); await refresh();
+    showOperation(await api(`/profiles/${profile.id}/authentication`, 'POST', {}));
+  } catch (error) { notice(error); }
+};
+(async () => {
+  for (const provider of await api('/providers')) {
+    providerCapabilities.set(provider.id, provider.capabilities);
+    const option = node('option', provider.id); option.value = provider.id; $('#providers').append(option);
+  }
+  await refresh();
+})().catch(notice);
+setInterval(() => refresh().catch(notice), 15000);
