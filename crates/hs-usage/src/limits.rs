@@ -5,7 +5,7 @@ use crate::{
 };
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, sync::Arc};
-const SELECTOR: &str = "{__name__=~\"agent_account_limit_(used_percent|reset_timestamp_seconds|window_minutes|exhausted)|agent_account_(enabled|measurement_stale|last_success_timestamp_seconds)\"}";
+const SELECTOR: &str = "{__name__=~\"agent_account_limit_(used_percent|reset_timestamp_seconds|window_minutes|exhausted_ratio)|agent_account_(enabled_ratio|measurement_stale_ratio|last_success_timestamp_seconds)\"}";
 pub async fn read(
     prom: &Prometheus,
     selection: &Selection,
@@ -24,19 +24,24 @@ pub async fn read(
         format!(r#"{},provider="{}"}}"#, SELECTOR.trim_end_matches('}'), selection.agent)
     };
     // Preserve short exhaustion observations when a long view uses coarse buckets.
-    let history_query = ["used_percent", "exhausted", "reset_timestamp_seconds", "window_minutes"]
-        .into_iter()
-        .map(|name| {
-            let metric = format!("agent_account_limit_{name}");
-            let aggregate = if matches!(name, "used_percent" | "exhausted") {
-                "max_over_time"
-            } else {
-                "last_over_time"
-            };
-            format!(r#"label_replace({aggregate}({metric}{provider}[{step}s]),"__name__","{metric}","","")"#)
-        })
-        .collect::<Vec<_>>()
-        .join(" or ");
+    let history_query = [
+        "used_percent",
+        "exhausted_ratio",
+        "reset_timestamp_seconds",
+        "window_minutes",
+    ]
+    .into_iter()
+    .map(|name| {
+        let metric = format!("agent_account_limit_{name}");
+        let aggregate = if matches!(name, "used_percent" | "exhausted_ratio") {
+            "max_over_time"
+        } else {
+            "last_over_time"
+        };
+        format!(r#"label_replace({aggregate}({metric}{provider}[{step}s]),"__name__","{metric}","","")"#)
+    })
+    .collect::<Vec<_>>()
+    .join(" or ");
     let history = prom
         .read(
             "/api/v1/query_range",
@@ -96,6 +101,7 @@ pub async fn read(
             let window = labels["window"].as_str().unwrap_or("");
             let value=windows.entry((provider.into(),profile.into(),window.into())).or_insert_with(||json!({"agent":provider,"profile":profile,"window":window,"label":labels["window_label"].as_str().unwrap_or(window),"group":labels["model"].as_str().unwrap_or(""),"history":{},"current":{}}));
             let name = metric.trim_start_matches("agent_account_limit_");
+            let name = if name == "exhausted_ratio" { "exhausted" } else { name };
             if live {
                 if let Some((_, v)) = points.last() {
                     value["current"][name] = json!(v);
@@ -108,8 +114,8 @@ pub async fn read(
     for ((provider, profile, _), value) in &mut windows {
         let account = accounts.get(&(provider.clone(), profile.clone()));
         let fresh = account.is_some_and(|a| {
-            a.get("agent_account_enabled") == Some(&1.0)
-                && a.get("agent_account_measurement_stale") == Some(&0.0)
+            a.get("agent_account_enabled_ratio") == Some(&1.0)
+                && a.get("agent_account_measurement_stale_ratio") == Some(&0.0)
                 && a.get("agent_account_last_success_timestamp_seconds")
                     .is_some_and(|t| *t <= timestamp as f64 && timestamp as f64 - *t <= 900.0)
         });

@@ -27,3 +27,10 @@ covered default unchecked controls, exhaustion markers, hourly/weekly windows,
 future-axis removal on uncheck, provider filtering, fresh current resets and the
 Antigravity empty state. Browser checks included desktop and a 390-pixel viewport.
 This verification used fixtures, not live provider exhaustion or production data.
+
+Prometheus OTLP unit translation appends `_ratio` to the dimensionless enabled,
+stale and exhausted gauges. Queries use those translated names; normalized
+exhaustion data is exposed as `exhausted`. A focused check with an actual local
+Prometheus OTLP receiver, compiled AI Usage and Chromium confirmed fresh 5-hour
+areas on 1h/24h, weekly areas on 7d and future reset boundaries. Samples at 30%
+and 65% utilization with an explicit false exhaustion flag produced no markers.
