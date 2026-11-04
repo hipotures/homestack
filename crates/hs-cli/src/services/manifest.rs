@@ -318,7 +318,7 @@ fn valid_port_name(text: &str) -> bool {
 }
 
 /// A DNS label: `^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`
-fn valid_subdomain(text: &str) -> bool {
+pub(crate) fn valid_subdomain(text: &str) -> bool {
     (1..=63).contains(&text.len())
         && text
             .bytes()

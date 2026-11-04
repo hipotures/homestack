@@ -28,6 +28,25 @@ root and 4 GiB persistent home. The workload is short-lived authentication and
 quota reads, with one provider operation at a time by default, at most two.
 These defaults are not a claim of measured production capacity.
 
+## Local and public addresses
+
+In the HomeStack deployment form, **Hostname** and **Domain** set the container's
+local DNS address. Public HTTPS naming is configured separately:
+
+- **Pangolin subdomain** is the public prefix, initially `agent-accounts` from
+  the manifest; change it to `limits` for a different public name.
+- **Pangolin domain** selects a base domain verified in Pangolin. With a prefix
+  `limits` and base `apps.example.com`, the public URL is
+  `https://limits.apps.example.com`.
+- Review explicitly shows **Public URL** and the backend address before Apply.
+
+The public name is saved per named deployment under the active HomeStack
+profile's private `publications/` directory and restored when reopening the
+form. A saved domain that is no longer verified is retained as an invalid
+selection until the operator chooses a current domain; it is never silently
+replaced by another available domain. Publishing a different name does not
+delete an existing Pangolin resource or its DNS record.
+
 ## Persistent storage
 
 All state lives below `AGENT_ACCOUNTS_HOME` (default `/home/app`):

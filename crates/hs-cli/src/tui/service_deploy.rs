@@ -366,6 +366,13 @@ fn switch_deployment(
             }
         }
     }
+    service_pangolin::restore_publication(
+        &setup.token_dir,
+        source,
+        &session.naming.hostname,
+        &session.naming.domain,
+        &mut session.settings,
+    )?;
     session.original_settings = session.settings.clone();
     Ok(true)
 }
@@ -490,6 +497,13 @@ fn connect(
     {
         service_pangolin::set_domains(&mut settings, domains);
     }
+    service_pangolin::restore_publication(
+        &setup.token_dir,
+        source,
+        &naming.hostname,
+        &naming.domain,
+        &mut settings,
+    )?;
     let original_settings = settings.clone();
     match kept {
         Some((previous, answers)) => restore(&mut settings, &previous, &answers),
@@ -723,8 +737,8 @@ fn settings(
         checked(
             setting(
                 HOSTNAME,
-                "The instances' name: alone for one instance, numbered (-1, -2…) for several. It is the \
-                 container's host name and, with the domain, its name in the local DNS.",
+                "The local container name: alone for one instance, numbered (-1, -2…) for several. It is the \
+                 container's host name and, with Domain, its local DNS name. Set the public name under Pangolin subdomain.",
                 Vec::new(),
                 false,
                 Some(naming.hostname.clone()),
@@ -734,7 +748,7 @@ fn settings(
         checked(
             setting(
                 DOMAIN,
-                "The DNS domain of the names, also the containers' search domain.",
+                "Local DNS domain and container search domain. The public HTTPS domain is selected separately under Pangolin domain.",
                 Vec::new(),
                 false,
                 Some(naming.domain.clone()),
@@ -1313,7 +1327,7 @@ fn review(
                         .as_ref()
                         .map(|plan| plan.instances.as_slice())
                         .unwrap_or_default(),
-                    service_pangolin::selected_domain(&s.settings, answers),
+                    service_pangolin::selected_name(&s.settings, answers)?,
                 )
             });
         match checked {
@@ -1374,7 +1388,7 @@ fn review_published(setup: &Setup, source: &Source, s: &Session, answers: &[Answ
                 &setup.stop,
                 address,
                 &site,
-                service_pangolin::selected_domain(&s.settings, answers),
+                service_pangolin::selected_name(&s.settings, answers)?,
             )
         });
         match checked {
@@ -1539,7 +1553,12 @@ async fn apply(
                     None => Err("The Pangolin context is unavailable; review again".to_owned()),
                 };
                 match result {
-                    Ok(done) => lines.extend(done),
+                    Ok(done) => {
+                        lines.extend(done);
+                        if let Err(error) = service_pangolin::remember(&setup.token_dir, source, &plan) {
+                            return fail(lines, error);
+                        }
+                    }
                     Err(error) => return fail(lines, error),
                 }
             }

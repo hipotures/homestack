@@ -3,6 +3,11 @@
 //! add the manifest's login-bypass path rules.
 //! This reads Proxmox and changes only Pangolin routing through Step 7.
 
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use std::io::{Read, Write};
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::time::Instant;
 
@@ -22,6 +27,140 @@ use crate::services::{
 /// The title of the Pangolin setting.
 pub(super) const ACTION: &str = "Pangolin";
 pub(super) const DOMAIN: &str = "Pangolin domain";
+pub(super) const SUBDOMAIN: &str = "Pangolin subdomain";
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct Publication {
+    domain: String,
+    subdomain: String,
+    hostname: String,
+    local_domain: String,
+}
+
+fn check_subdomain(value: &str) -> Result<(), String> {
+    if crate::services::manifest::valid_subdomain(value.trim()) {
+        Ok(())
+    } else {
+        Err("A public DNS label: a-z, 0-9 and inner -, up to 63 characters".into())
+    }
+}
+
+pub(super) fn selected_name(settings: &[Setting], answers: &[Answer]) -> Result<Publication, String> {
+    let text = |title: &str| {
+        settings
+            .iter()
+            .position(|s| s.title == title)
+            .and_then(|i| match answers.get(i) {
+                Some(Answer::Text(value)) => Some(value.trim().to_owned()),
+                _ => None,
+            })
+            .ok_or_else(|| format!("Set {title} before publishing"))
+    };
+    let subdomain = text(SUBDOMAIN)?;
+    check_subdomain(&subdomain)?;
+    Ok(Publication {
+        domain: selected_domain(settings, answers).into(),
+        subdomain,
+        hostname: text("Hostname")?,
+        local_domain: text("Domain")?,
+    })
+}
+
+fn publication_path(root: &Path, source: &Source, hostname: &str, domain: &str) -> PathBuf {
+    let mut identity = Sha256::new();
+    for value in [&source.repository, &source.manifest.id, hostname, domain] {
+        identity.update((value.len() as u64).to_be_bytes());
+        identity.update(value.as_bytes());
+    }
+    let hash: String = identity.finalize().iter().map(|b| format!("{b:02x}")).collect();
+    root.join("publications").join(format!("{hash}.json"))
+}
+
+fn load_publication(root: &Path, source: &Source, hostname: &str, domain: &str) -> Result<Option<Publication>, String> {
+    let path = publication_path(root, source, hostname, domain);
+    let file = match std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32)
+        .open(path)
+    {
+        Ok(file) => file,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err("Cannot read the saved public hostname".into()),
+    };
+    let meta = file
+        .metadata()
+        .map_err(|_| "Cannot inspect the saved public hostname")?;
+    if !meta.is_file()
+        || meta.uid() != rustix::process::getuid().as_raw()
+        || meta.permissions().mode() & 0o077 != 0
+        || meta.len() > 4096
+    {
+        return Err("Saved public hostname must be a small owner-only file".into());
+    }
+    let mut bytes = Vec::new();
+    file.take(4097)
+        .read_to_end(&mut bytes)
+        .map_err(|_| "Cannot read the saved public hostname")?;
+    let saved: Publication = serde_json::from_slice(&bytes).map_err(|_| "Invalid saved public hostname")?;
+    if saved.hostname != hostname || saved.local_domain != domain {
+        return Err("Saved public hostname belongs to another deployment".into());
+    }
+    check_subdomain(&saved.subdomain)?;
+    Ok(Some(saved))
+}
+
+pub(super) fn restore_publication(
+    root: &Path,
+    source: &Source,
+    hostname: &str,
+    domain: &str,
+    settings: &mut [Setting],
+) -> Result<(), String> {
+    let Some(saved) = load_publication(root, source, hostname, domain)? else {
+        return Ok(());
+    };
+    for setting in settings {
+        if setting.title == SUBDOMAIN {
+            setting.text = Some(saved.subdomain.clone());
+        }
+        if setting.title == DOMAIN {
+            let index = match setting.choices.iter().position(|(name, _)| name == &saved.domain) {
+                Some(index) => index,
+                None => {
+                    setting
+                        .choices
+                        .push((saved.domain.clone(), "Saved domain; verify when attaching".into()));
+                    setting.choices.len() - 1
+                }
+            };
+            setting.picked = vec![index];
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn remember(root: &Path, source: &Source, plan: &Plan) -> Result<(), String> {
+    use std::os::unix::fs::DirBuilderExt;
+    let path = publication_path(root, source, &plan.publication.hostname, &plan.publication.local_domain);
+    let write = || -> Result<(), Box<dyn std::error::Error>> {
+        let parent = path.parent().ok_or("Invalid public hostname path")?;
+        std::fs::DirBuilder::new().recursive(true).mode(0o700).create(parent)?;
+        let meta = std::fs::symlink_metadata(parent)?;
+        if !meta.is_dir() || meta.uid() != rustix::process::getuid().as_raw() || meta.permissions().mode() & 0o077 != 0
+        {
+            return Err("Public hostname directory must be private".into());
+        }
+        let mut file = tempfile::NamedTempFile::new_in(parent)?;
+        file.as_file().set_permissions(std::fs::Permissions::from_mode(0o600))?;
+        file.write_all(&serde_json::to_vec(&plan.publication)?)?;
+        file.as_file().sync_all()?;
+        file.persist(&path)?;
+        std::fs::File::open(parent)?.sync_all()?;
+        Ok(())
+    };
+    write().map_err(|_| "Published successfully, but cannot save the public hostname locally".into())
+}
 const PAGE: usize = 100;
 
 #[derive(Clone, PartialEq)]
@@ -68,6 +207,7 @@ pub(super) struct Plan {
     domain: String,
     domain_id: String,
     base_domain: String,
+    publication: Publication,
     /// The existing resource; `None` when Apply creates it from `create`.
     resource: Option<Resource>,
     create: Option<Value>,
@@ -121,11 +261,10 @@ pub(super) fn settings(source: &Source) -> Vec<Setting> {
         title: ACTION.to_owned(),
         note: format!(
             "Enter attaches: it connects to Pangolin and reads its verified domains; once attached, Enter \
-             refreshes them. Attached, the deployment reuses or creates the Pangolin HTTP resource {sub} on \
+             refreshes them. Attached, the deployment reuses or creates the Pangolin HTTP resource on the chosen public subdomain and \
              the selected Pangolin domain, routes it through an online Site to one instance (the selected \
              one, or the one this deployment creates) on its {port} port and monitors its health check. \
              Without attaching, no Pangolin request is made.",
-            sub = exposure.subdomain,
             port = exposure.port,
         ),
         choices: vec![
@@ -143,10 +282,17 @@ pub(super) fn settings(source: &Source) -> Vec<Setting> {
     };
     let mut domain = action.clone();
     domain.title = DOMAIN.to_owned();
-    domain.note = "Enter chooses a verified domain; it attaches Pangolin first if needed.".to_owned();
+    domain.note = "Public base domain verified in Pangolin. Independent of the container's local Domain. Enter attaches Pangolin first if needed.".to_owned();
     domain.choices.clear();
     domain.picked.clear();
-    vec![action, domain]
+    let mut subdomain = action.clone();
+    subdomain.title = SUBDOMAIN.into();
+    subdomain.note = "Public hostname prefix, such as limits. Together with Pangolin domain it forms the public HTTPS address. Independent of the container's Hostname.".into();
+    subdomain.choices.clear();
+    subdomain.picked.clear();
+    subdomain.text = Some(exposure.subdomain.clone());
+    subdomain.check = Some(check_subdomain);
+    vec![action, subdomain, domain]
 }
 
 /// Load verified domains with the same organization-scoped key used for routing.
@@ -186,11 +332,22 @@ pub(super) fn set_domains(settings: &mut [Setting], domains: Vec<String>) {
         .and_then(|i| setting.choices.get(*i))
         .map(|(value, _)| value.clone());
     setting.choices = domains.into_iter().map(|name| (name, String::new())).collect();
-    setting.picked = selected
-        .and_then(|value| setting.choices.iter().position(|(name, _)| *name == value))
-        .or_else(|| (setting.choices.len() == 1).then_some(0))
-        .into_iter()
-        .collect();
+    setting.picked = match selected {
+        Some(value) => {
+            let index = match setting.choices.iter().position(|(name, _)| name == &value) {
+                Some(index) => index,
+                None => {
+                    setting
+                        .choices
+                        .push((value, "Previously selected; no longer verified".into()));
+                    setting.choices.len() - 1
+                }
+            };
+            vec![index]
+        }
+        None if setting.choices.len() == 1 => vec![0],
+        None => Vec::new(),
+    };
 }
 
 struct Api<'a> {
@@ -508,7 +665,7 @@ pub(super) fn review(
     stop: &AtomicBool,
     instances: &[Instance],
     created: &[NewInstance],
-    selected_domain: &str,
+    publication: Publication,
 ) -> Result<Plan, String> {
     let (container, address) = match (instances, created) {
         ([instance], []) => {
@@ -538,7 +695,7 @@ pub(super) fn review(
             );
         }
     };
-    plan(source, pangolin, stop, Some(container), address, None, selected_domain)
+    plan(source, pangolin, stop, Some(container), address, None, publication)
 }
 
 /// Route a service without resources to `address` through the Site whose niceId is `site`.
@@ -548,9 +705,9 @@ pub(super) fn review_existing(
     stop: &AtomicBool,
     address: String,
     site: &str,
-    selected_domain: &str,
+    publication: Publication,
 ) -> Result<Plan, String> {
-    plan(source, pangolin, stop, None, address, Some(site), selected_domain)
+    plan(source, pangolin, stop, None, address, Some(site), publication)
 }
 
 fn plan(
@@ -560,7 +717,7 @@ fn plan(
     container: Option<Container>,
     address: String,
     site: Option<&str>,
-    selected_domain: &str,
+    publication: Publication,
 ) -> Result<Plan, String> {
     let exposure = source
         .manifest
@@ -576,7 +733,12 @@ fn plan(
         .port;
     let api = Api::open(pangolin, stop)?;
     let catalog = api.catalog()?;
-    let (domain_id, base_domain, domain) = full_domain(&catalog, &exposure.subdomain, selected_domain)?;
+    check_subdomain(&publication.subdomain)?;
+    let (domain_id, base_domain, domain) = full_domain(&catalog, &publication.subdomain, &publication.domain)?;
+    let publication = Publication {
+        domain: base_domain.clone(),
+        ..publication
+    };
     let resource = catalog.resources.iter().find(|r| r.domain == domain).cloned();
     let site = match site {
         Some(name) => catalog
@@ -600,7 +762,7 @@ fn plan(
     let create = resource.is_none().then(|| {
         json!({
             "name": exposure.name,
-            "subdomain": exposure.subdomain,
+            "subdomain": publication.subdomain,
             "domainId": domain_id,
             "mode": "http",
         })
@@ -652,6 +814,7 @@ fn plan(
         domain,
         domain_id,
         base_domain,
+        publication,
         resource,
         create,
         site,
@@ -674,6 +837,7 @@ impl Plan {
 
     pub(super) fn lines(&self) -> Vec<String> {
         let mut lines = vec![
+            format!("Public URL: https://{}", self.domain),
             format!(
                 "https://{} → Site {} (ID {}) → http://{}:{}{}",
                 self.domain,
