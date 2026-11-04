@@ -75,10 +75,16 @@ impl Provider for Codex {
                     if let Some(c) = b.get("credits").filter(|v| !v.is_null()) {
                         credits.insert(id.clone(), c.clone());
                     }
+                    // The reached type names the bucket, not a window: a plain rate limit belongs to its
+                    // full windows; credit or workspace exhaustion, or no full window, blocks them all.
+                    let reached = b["rateLimitReachedType"].as_str();
+                    let full = |win: &Value| win["usedPercent"].as_f64().is_some_and(|v| v >= 100.0);
+                    let any_full = ["primary", "secondary"].iter().any(|w| full(&b[*w]));
                     for w in ["primary", "secondary"] {
                         let Some(win) = b.get(w).filter(|v| !v.is_null()) else {
                             continue;
                         };
+                        let exhausted = reached.map(|kind| kind != "rate_limit_reached" || !any_full || full(win));
                         limits.push(Limit {
                             id: format!("{id}/{w}"),
                             label: b["limitName"].as_str().unwrap_or(&id).into(),
@@ -86,7 +92,7 @@ impl Provider for Codex {
                             window_minutes: win["windowDurationMins"].as_i64(),
                             used_percent: win["usedPercent"].as_f64().filter(|v| v.is_finite() && *v >= 0.0),
                             resets_at: win["resetsAt"].as_i64(),
-                            exhausted: b.get("rateLimitReachedType").filter(|v| !v.is_null()).map(|_| true),
+                            exhausted: exhausted.filter(|e| *e),
                         });
                     }
                 }

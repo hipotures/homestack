@@ -106,7 +106,7 @@ async function refresh() {
         line.append(node('span', label(limit, profile.provider)), node('span', percent(limit.used_percent), 'num'));
         quota.append(line);
         if (limit.used_percent != null) {
-          const bar = node('div', undefined, limit.used_percent >= 100 ? 'bar full' : 'bar'), fill = node('span');
+          const bar = node('div', undefined, 'bar'), fill = node('span');
           fill.style.width = `${Math.min(100, limit.used_percent)}%`; bar.append(fill); quota.append(bar);
         }
         quota.append(node('span', 'Resets ' + time(limit.resets_at), 'meta'));

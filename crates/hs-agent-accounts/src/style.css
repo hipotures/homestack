@@ -26,7 +26,6 @@ p { margin: 0; }
 .quota-line .num { font-size: 13px; color: var(--text-2); white-space: nowrap; }
 .bar { height: 6px; border-radius: 3px; background: var(--track); overflow: hidden; }
 .bar > span { display: block; height: 100%; background: var(--agent, var(--heat)); border-radius: 3px; }
-.bar.full > span { background: var(--up); }
 .meta { font-size: var(--fs-small); color: var(--faint); }
 .warn { font-size: var(--fs-small); color: var(--warn); }
 
