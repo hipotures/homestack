@@ -478,6 +478,7 @@ jobs:
         if: steps.publication.outputs.publish == 'true'
         env:
           RUSTFLAGS: "-C target-feature=+crt-static"
+          AGENT_ACCOUNTS_VERSION: ${{ steps.tag.outputs.tag }}
         run: |
           python3 scripts/cargo.py build --release --locked --target x86_64-unknown-linux-musl -p hs-agent-accounts --bin homestack-agent-accounts
           ! readelf -l target/x86_64-unknown-linux-musl/release/homestack-agent-accounts | grep -q INTERP

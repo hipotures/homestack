@@ -25,6 +25,11 @@ use std::{
     time::Duration,
 };
 
+const VERSION: &str = match option_env!("AGENT_ACCOUNTS_VERSION") {
+    Some(version) => version,
+    None => "development",
+};
+
 impl IntoResponse for Failure {
     fn into_response(self) -> Response {
         let status = match self.code.as_str() {
@@ -70,8 +75,18 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             .await?;
         }
     }
+    let page = include_str!("index.html").replace("__AGENT_ACCOUNTS_VERSION__", VERSION);
     let app = Router::new()
-        .route("/", get(|| async { axum::response::Html(include_str!("index.html")) }))
+        .route("/", get(move || async move { axum::response::Html(page) }))
+        .route(
+            "/tokens.css",
+            get(|| async {
+                (
+                    [(header::CONTENT_TYPE, "text/css")],
+                    include_str!("../../hs-usage/assets/aiusage-tokens.css"),
+                )
+            }),
+        )
         .route(
             "/app.js",
             get(|| async { ([(header::CONTENT_TYPE, "text/javascript")], include_str!("app.js")) }),

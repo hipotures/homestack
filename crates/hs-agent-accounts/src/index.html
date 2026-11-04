@@ -1,1 +1,47 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Agent Accounts</title><link rel="stylesheet" href="/style.css"><script src="/app.js" defer></script></head><body><header><div><h1>Agent Accounts</h1><p>Subscription accounts, isolated profiles.</p></div><button id="add">Add account</button></header><main><p id="notice" role="status"></p><section id="profiles" class="grid"></section><details><summary>Provider runtimes</summary><div id="runtimes"></div></details></main><dialog id="add-dialog"><form id="create"><h2>Add account</h2><label>Provider<select name="provider" id="providers"></select></label><label>Display name<input name="display_name" required maxlength="80"></label><footer><button type="button" data-close>Cancel</button><button>Create profile</button></footer></form></dialog><dialog id="operation"><h2>Authentication</h2><p id="progress"></p><pre id="operation-result"></pre><a id="auth-url" target="_blank" rel="noopener noreferrer" hidden>Open authorization page</a><div class="code-row"><p id="device-code"></p><button type="button" id="copy-code" hidden>Copy code</button></div><form id="code-form" hidden><label>Authorization code<input id="auth-code" autocomplete="off" maxlength="4096"></label><button>Submit code</button></form><footer><button id="cancel-operation">Cancel operation</button><button data-close>Close</button></footer></dialog><dialog id="details" class="wide"><h2>Account details</h2><div id="detail-content"></div><footer><button data-close>Close</button></footer></dialog></body></html>
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Agent Accounts</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/tokens.css?v=__AGENT_ACCOUNTS_VERSION__">
+<link rel="stylesheet" href="/style.css?v=__AGENT_ACCOUNTS_VERSION__">
+<script src="/app.js?v=__AGENT_ACCOUNTS_VERSION__" defer></script>
+</head>
+<body>
+<main>
+<header class="top">
+  <div class="brand"><h1>Agent Accounts</h1><span class="sub">Subscription accounts, isolated profiles</span></div>
+  <button id="add" class="primary" type="button">Add account</button>
+</header>
+<p id="notice" class="error" role="status"></p>
+<section id="profiles" class="grid"></section>
+<section class="card">
+  <div class="card-head"><h2>Provider runtimes</h2><span class="sub">Pinned CLI versions shared by all profiles</span></div>
+  <div id="runtimes" class="runtimes"></div>
+</section>
+<footer class="foot"><span id="versions">Agent Accounts __AGENT_ACCOUNTS_VERSION__</span></footer>
+</main>
+<dialog id="add-dialog"><form id="create">
+  <h2>Add account</h2>
+  <label>Provider<select name="provider" id="providers"></select></label>
+  <label>Display name<input name="display_name" required maxlength="80"></label>
+  <footer><button type="button" data-close>Cancel</button><button class="primary">Create profile</button></footer>
+</form></dialog>
+<dialog id="operation">
+  <h2>Authentication</h2>
+  <p id="progress"></p>
+  <pre id="operation-result"></pre>
+  <a id="auth-url" target="_blank" rel="noopener noreferrer" hidden>Open authorization page</a>
+  <div class="code-row"><p id="device-code"></p><button type="button" id="copy-code" hidden>Copy code</button></div>
+  <form id="code-form" hidden><label>Authorization code<input id="auth-code" autocomplete="off" maxlength="4096"></label><button class="primary">Submit code</button></form>
+  <footer><button id="cancel-operation" type="button">Cancel operation</button><button type="button" data-close>Close</button></footer>
+</dialog>
+<dialog id="details" class="wide">
+  <h2>Account details</h2>
+  <div id="detail-content"></div>
+  <footer><button type="button" data-close>Close</button></footer>
+</dialog>
+</body>
+</html>
