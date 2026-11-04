@@ -314,26 +314,43 @@ pub fn discover(system: &dyn System, repository: &str, branch: Option<&str>) -> 
         if discovery.files.len() + groups.len() > MAX_FILES {
             return Err(format!("More than {MAX_FILES} service definitions"));
         }
-        for group in groups {
+        // Each `gh api` call costs about half a second: read the services,
+        // and the three members of each, side by side.
+        let read = |group: &Value| {
             let id = group["path"].as_str().unwrap_or_default();
             let directory = format!(".homestack/services/{id}");
-            let manifest = (|| {
-                let members = read_tree(system, &base, &group, &directory)?;
-                if members.iter().filter_map(|m| m["path"].as_str()).any(|name| {
-                    name.ends_with(".yaml") && !["service.yaml", "defaults.yaml", "inputs.yaml"].contains(&name)
-                }) {
-                    return Err(format!("{directory}: unexpected YAML member"));
-                }
-                let mut texts = Vec::new();
-                for name in ["service.yaml", "defaults.yaml", "inputs.yaml"] {
-                    let member = members
-                        .iter()
-                        .find(|entry| entry["path"] == name)
-                        .ok_or_else(|| format!("{directory}/{name}: missing member"))?;
-                    texts.push(read_regular(system, &base, member).map_err(|e| format!("{directory}/{name}: {e}"))?);
-                }
-                super::schema3::parse(&texts[0], &texts[1], &texts[2], id)
-            })();
+            let members = read_tree(system, &base, group, &directory)?;
+            if members.iter().filter_map(|m| m["path"].as_str()).any(|name| {
+                name.ends_with(".yaml") && !["service.yaml", "defaults.yaml", "inputs.yaml"].contains(&name)
+            }) {
+                return Err(format!("{directory}: unexpected YAML member"));
+            }
+            let texts = std::thread::scope(|scope| {
+                ["service.yaml", "defaults.yaml", "inputs.yaml"]
+                    .map(|name| {
+                        let (members, directory, base) = (&members, &directory, &base);
+                        scope.spawn(move || {
+                            let member = members
+                                .iter()
+                                .find(|entry| entry["path"] == name)
+                                .ok_or_else(|| format!("{directory}/{name}: missing member"))?;
+                            read_regular(system, base, member).map_err(|e| format!("{directory}/{name}: {e}"))
+                        })
+                    })
+                    .map(|reading| reading.join().unwrap_or_else(|_| Err("reading panicked".to_owned())))
+            });
+            let [service, defaults, inputs] = texts;
+            super::schema3::parse(&service?, &defaults?, &inputs?, id)
+        };
+        let manifests: Vec<_> = std::thread::scope(|scope| {
+            let readings: Vec<_> = groups.iter().map(|group| scope.spawn(|| read(group))).collect();
+            readings
+                .into_iter()
+                .map(|reading| reading.join().unwrap_or_else(|_| Err("reading panicked".to_owned())))
+                .collect()
+        });
+        for (group, manifest) in groups.iter().zip(manifests) {
+            let directory = format!(".homestack/services/{}", group["path"].as_str().unwrap_or_default());
             discovery.files.push(ManifestFile {
                 path: format!("{directory}/service.yaml"),
                 // The immutable directory tree binds all three component blobs.
