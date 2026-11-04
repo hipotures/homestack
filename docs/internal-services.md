@@ -87,6 +87,15 @@ asking, and without a terminal it only reviews. Updating a schema-3 service
 sets the environment its saved Application configuration and HomeStack's
 settings give it, as the review lists, before replacing the image.
 
+The TUI's **Update image** form reads GitHub Release titles for the image
+versions offered by the registry. A published release whose title contains
+`DO NOT USE` is marked in red in **Published** and annotated in the image
+selector. Selecting it also displays the maintainer's warning title. For a
+service `ai-usage`, the metadata belongs to Git tag `ai-usage-X.Y.Z`; API
+release tags are numeric. Draft releases do not mark images. These warnings
+are advisory: they do not rename tags, change image references or prevent an
+operator from reviewing an explicitly selected version.
+
 The service browser and review/apply worker use
 `services/deploy.rs::{survey,plan,apply}` and the scoped PVE deploy token.
 The canonical [API manifest](../.homestack/services/homestack-api/service.yaml) declares empty

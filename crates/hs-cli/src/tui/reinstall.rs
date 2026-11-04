@@ -31,9 +31,21 @@ pub struct Image {
     pub made: String,
     /// When it was made (RFC 3339), to compare.
     pub created: Option<String>,
+    /// Maintainer warning from a published GitHub release title.
+    pub warning: Option<String>,
 }
 
 impl Image {
+    #[must_use]
+    pub fn label(&self) -> String {
+        format!(
+            "{}  {}{}",
+            self.tag(),
+            self.made,
+            if self.warning.is_some() { "  DO NOT USE" } else { "" }
+        )
+    }
+
     /// The tag alone: `0.2.0`.
     #[must_use]
     pub fn tag(&self) -> &str {
@@ -189,6 +201,7 @@ pub async fn read(deploy_toml: &Path, vmids: &[u32], offset: i64) -> Result<Imag
                 .unwrap_or_else(|| "—".to_owned()),
             image: published.image,
             created: published.created,
+            warning: None,
         })
         .collect();
     let servers = chosen
@@ -205,6 +218,7 @@ pub async fn read(deploy_toml: &Path, vmids: &[u32], offset: i64) -> Result<Imag
                         image,
                         made: "—".to_owned(),
                         created: None,
+                        warning: None,
                     })
             }),
         })
@@ -399,6 +413,20 @@ async fn common_images(path: &Path, ids: &[u32], offset: i64, timing: &mut Timin
             found
         }
     };
+    let image_names: Vec<String> = found.iter().map(|image| image.image.clone()).collect();
+    let warning_repository = repository.clone();
+    let warning_service = service.clone();
+    let warnings = tokio::task::spawn_blocking(move || {
+        crate::services::github::image_warnings(
+            &crate::system::RealSystem::default(),
+            &warning_repository,
+            &warning_service,
+            &image_names,
+        )
+    })
+    .await
+    .map_err(|error| format!("Could not read release warnings: {error}"))??;
+    timing.took("release warnings");
     let published: Vec<Image> = found
         .into_iter()
         .map(|r| Image {
@@ -407,6 +435,7 @@ async fn common_images(path: &Path, ids: &[u32], offset: i64, timing: &mut Timin
                 .as_deref()
                 .and_then(|t| local_time(t, offset))
                 .unwrap_or_else(|| "—".to_owned()),
+            warning: warnings.get(&r.image).cloned(),
             image: r.image,
             created: r.created,
         })
@@ -425,6 +454,7 @@ async fn common_images(path: &Path, ids: &[u32], offset: i64, timing: &mut Timin
                         image: target.image.clone(),
                         made: "—".to_owned(),
                         created: None,
+                        warning: None,
                     }),
             ),
         })

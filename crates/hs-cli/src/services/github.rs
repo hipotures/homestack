@@ -3,6 +3,7 @@
 //! files, each bounded by [`MAX_BYTES`]. Read only.
 
 use serde_json::Value;
+use std::collections::BTreeMap;
 
 use super::manifest::{Checked, MAX_BYTES, Manifest, parse};
 use crate::system::System;
@@ -256,6 +257,55 @@ fn graphql(system: &dyn System, query: &str, fields: &[(&str, &str)]) -> Result<
         return Err(format!("GitHub request failed: {reason}"));
     }
     Ok(answer["data"].clone())
+}
+
+/// Warning titles for the exact image versions offered by the registry.
+/// Release metadata never renames a Git tag or changes an image reference.
+pub fn image_warnings(
+    system: &dyn System,
+    repository: &str,
+    service: &str,
+    images: &[String],
+) -> Result<BTreeMap<String, String>, String> {
+    if images.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+    let (owner, name) = repository.split_once('/').ok_or("Repository must be OWNER/NAME")?;
+    let prefix = if service == "homestack-api" {
+        String::new()
+    } else {
+        format!("{service}-")
+    };
+    let mut variables = String::new();
+    let mut releases = String::new();
+    let mut tags = Vec::new();
+    for (index, image) in images.iter().enumerate() {
+        let (_, _, version) = hs_core::registry::split(image).ok_or("Invalid image reference")?;
+        variables.push_str(&format!(",$tag{index}:String!"));
+        releases.push_str(&format!("r{index}:release(tagName:$tag{index}){{name isDraft}} "));
+        tags.push((format!("tag{index}"), format!("{prefix}{version}")));
+    }
+    let query =
+        format!("query($owner:String!,$name:String!{variables}){{repository(owner:$owner,name:$name){{{releases}}}}}");
+    let mut fields = vec![("owner", owner), ("name", name)];
+    fields.extend(tags.iter().map(|(key, value)| (key.as_str(), value.as_str())));
+    let data = graphql(system, &query, &fields)?;
+    if data["repository"].is_null() {
+        return Err(format!("{repository} was not found"));
+    }
+    let mut warnings = BTreeMap::new();
+    for (index, image) in images.iter().enumerate() {
+        let release = &data["repository"][format!("r{index}")];
+        if release["isDraft"] == true {
+            continue;
+        }
+        if let Some(title) = release["name"].as_str()
+            && title.to_ascii_uppercase().contains("DO NOT USE")
+        {
+            warnings.insert(image.clone(), title.to_owned());
+        }
+    }
+    Ok(warnings)
 }
 
 /// A tree entry's Git mode as the octal text Git writes: `040000`, `100644`.

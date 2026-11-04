@@ -2862,6 +2862,12 @@ fn reinstall_lines(
         Some(Ok(images)) => images,
     };
     lines.push((String::new(), text));
+    if let Some(warning) = images.published.get(chosen).and_then(|image| image.warning.as_deref()) {
+        for line in wrap(warning, width) {
+            lines.push((line, text.fg(app.palette.error).add_modifier(Modifier::BOLD)));
+        }
+        lines.push((String::new(), text));
+    }
     if let Some(resume) = &images.resume {
         lines.push((
             "Interrupted update".to_owned(),
@@ -2938,7 +2944,9 @@ fn reinstall_lines(
         } else {
             String::new()
         };
-        let (marker, style) = if index == chosen && newer {
+        let (marker, style) = if image.warning.is_some() {
+            (if index == chosen { "› " } else { "  " }, text.fg(app.palette.error))
+        } else if index == chosen && newer {
             ("› ", text.fg(app.palette.warning).add_modifier(Modifier::BOLD))
         } else if index == chosen {
             ("› ", text.add_modifier(Modifier::BOLD))
@@ -2947,7 +2955,7 @@ fn reinstall_lines(
         } else {
             ("  ", muted)
         };
-        lines.push((format!("{marker}{}  {}{note}", image.tag(), image.made), style));
+        lines.push((format!("{marker}{}{note}", image.label()), style));
     }
 }
 

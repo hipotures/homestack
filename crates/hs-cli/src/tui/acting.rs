@@ -665,11 +665,7 @@ impl App {
             if images.resume.is_some() {
                 *note = "↵ reviews the interrupted update; confirmation resumes it.".to_owned();
             }
-            *options = images
-                .published
-                .iter()
-                .map(|image| format!("{}  {}", image.tag(), image.made))
-                .collect();
+            *options = images.published.iter().map(|image| image.label()).collect();
             *index = 0;
         }
         self.images = Some(images);
