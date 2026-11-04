@@ -27,7 +27,7 @@
   };
 
   /* ---------- series colors: agent → hue, model → shade ---------- */
-  const AGENT_VAR = { codex: '--codex', 'claude code': '--claude', claude: '--claude' };
+  const AGENT_VAR = { antigravity: '--tok-reasoning', codex: '--codex', 'claude code': '--claude', claude: '--claude' };
   const MODEL_VAR = {
     'gpt-6.1-sol': '--m-gpt-6-1-sol',
     'gpt-5.6-luna': '--m-gpt-5-6-luna',
@@ -38,6 +38,7 @@
   // Models without a dedicated token: well-separated light, mid and dark tones of the agent hue,
   // distinct from the dedicated model colors.
   const EXTRA_TONES = {
+    '--tok-reasoning': ['#d4c3f1', '#9c80cc', '#6f51a0'],
     '--claude': ['#f7d6c2', '#c2502a', '#5e2513'],
     '--codex': ['#c6efe1', '#13866a', '#0b4535'],
   };

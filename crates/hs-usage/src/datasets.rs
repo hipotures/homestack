@@ -26,7 +26,7 @@ impl Default for Selection {
 }
 impl Selection {
     pub fn validate(&self) -> Result<(), String> {
-        if !["all", "claude", "codex"].contains(&self.agent.as_str()) {
+        if !["all", "claude", "codex", "antigravity"].contains(&self.agent.as_str()) {
             return Err("Unknown agent".into());
         }
         self.timing()?;

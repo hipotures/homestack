@@ -3,7 +3,7 @@
 (() => {
   const version = document.querySelector('meta[name="ai-usage-version"]').content;
   let reloading = false;
-  const agents = {claude:"Claude Code", codex:"Codex"};
+  const agents = {claude:"Claude Code", codex:"Codex", antigravity:"Antigravity"};
   const widgets = new Map(), datasets = new Map();
   let selection, epoch = 0, snapshot, lastPacket = 0, sourceAt = 0;
   let currentTheme = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
@@ -15,7 +15,7 @@
   function initial() {
     const out={agent:"all",host:"*",project:"*",range:"24h",_more:false,_sync:0,_packet:"",_from:"",_to:""};
     try {for(const key of ["agent","host","project","range"]) out[key]=localStorage.getItem(key)||out[key];}catch(_){}
-    if(!["all","claude","codex"].includes(out.agent))out.agent="all";
+    if(!["all","claude","codex","antigravity"].includes(out.agent))out.agent="all";
     const span=CUSTOM.exec(out.range);
     if(!span&&!Object.keys(AIUsage.RANGES).includes(out.range))out.range="24h";
     // The date fields show the remembered custom span, or the last seven local days.
@@ -262,6 +262,44 @@
     ].join("");
     renderTrend(range,firstActive);renderScopes(range);renderComposition(totals);renderModels();renderHeat();renderSpikes(summary,range);renderAgents(summary,range);
   }
+  function quotaOverlay(range) {
+    const enabledEvents=$("limit-events").checked,enabledPeriods=$("limit-periods").checked;
+    const dataset=datasets.get("all.limits"),windows=dataset?.details?.windows||[],events=[],areas=[];
+    let end=range.end;
+    const weekly=range.end-range.start-range.step>=7*86400;
+    const now=Date.now()/1000;
+    for(const w of windows){
+      if(!chosen().includes(w.agent))continue;
+      const history=w.history||{},current=w.current;
+      const minutesAt=t=>{let v=null;for(const [at,n]of history.window_minutes||[])if(at<=t)v=n;return v;};
+      const relevant=m=>m>0&&(weekly?m===10080:m<1440);
+      const who=`${agents[w.agent]} · ${w.profile.slice(0,8)}${w.group?" · "+w.group:""}`;
+      const resets=new Map(history.reset_timestamp_seconds||[]),used=new Map(history.used_percent||[]),exhausted=new Map(history.exhausted||[]);
+      if(enabledEvents){
+        let wasFull=false,previous=0,previousReset=null;
+        for(const t of [...new Set([...used.keys(),...exhausted.keys()])].sort((a,b)=>a-b)){
+          const full=(used.get(t)??0)>=100||exhausted.get(t)===1,reset=resets.get(t);
+          if(full&&(!wasFull||(reset!=null&&previousReset!=null&&reset!==previousReset)||t-previous>(dataset?.details?.sample_step||300)*1.5)&&t>=range.start&&t<=range.end)events.push({xAxis:t*1000,name:`${who} · ${w.label} · limit exhausted (observed)`,lineStyle:{color:AIUsage.colorFor(agents[w.agent])}});
+          wasFull=full;previous=t;previousReset=reset;
+        }
+      }
+      if(enabledPeriods){
+        const periods=new Map();
+        for(const [t,reset]of resets){const minutes=minutesAt(t);if(relevant(minutes)&&reset>=range.start&&reset-minutes*60<=range.end)periods.set(reset,{reset,minutes,live:false});}
+        if(current&&relevant(current.window_minutes)&&current.reset_timestamp_seconds>now&&current.reset_timestamp_seconds<=now+current.window_minutes*60+3600){
+          const reset=current.reset_timestamp_seconds;periods.set(reset,{reset,minutes:current.window_minutes,live:true});end=Math.max(end,reset);
+        }
+        for(const {reset,minutes,live}of periods.values()){
+          const until=live?reset:Math.min(reset,range.end),start=Math.max(range.start,reset-minutes*60);
+          if(until<=start)continue;
+          areas.push([{name:`${who} · ${minutes===10080?"7-day":minutes/60+"-hour"} reset ${new Date(reset*1000).toLocaleString()}`,xAxis:start*1000,label:{formatter:`${agents[w.agent]} · ${w.profile.slice(0,6)} · ${minutes===10080?"7d":minutes/60+"h"} → ${timeLabel(reset,range)}`},itemStyle:{color:AIUsage.colorFor(agents[w.agent]),opacity:.07}},{xAxis:until*1000}]);
+        }
+      }
+    }
+    const active=enabledEvents||enabledPeriods,note=$("limit-note");note.hidden=!active;
+    note.textContent=dataset?.state==="unavailable"?"Quota telemetry unavailable. "+(dataset.warnings||[]).join(" "):!windows.length?"No account quota telemetry for this agent. Missing data is not zero.":`Account-wide limits; host and project filters do not apply. Markers show sampled exhaustion, not exact request failures. ${weekly?"Weekly":"Hourly"} windows are shaded.${enabledPeriods&&!areas.length?" No matching fresh reset or historical window metadata.":""}${enabledEvents&&!events.length?" No exhaustion observed in this range.":""}`;
+    return {events,areas,end};
+  }
   function renderTrend(range,firstActive) {
     const sel=chosen(),series=[];
     if(metric==="types"){
@@ -276,9 +314,9 @@
       for(const r of rows)series.push({name:r.model||"?",key:`${agents[a]} · ${r.model||"?"}`,points:r.points});
     }
     const visible=AIUsage.nonEmpty(series.map(s=>({...s,data:s.points}))),times=buckets(range);
-    // Panels without any nonempty series are hidden rather than drawn empty.
-    $("trend").hidden=!visible.length;if(!visible.length)return;
-    const stack=sumPoints(visible.map(s=>s.points)),first=Number.isFinite(firstActive)?firstActive:range.start;
+    const overlay=quotaOverlay(range);
+    $("trend").hidden=false;
+    const stack=sumPoints(visible.map(s=>s.points)),first=($("limit-events").checked||$("limit-periods").checked)?range.start:Number.isFinite(firstActive)?firstActive:range.start;
     const fmtShort=metric==="cost"?v=>F.cost(v):F.tokens,fmtFull=metric==="cost"?v=>F.cost(v,true):F.full;
     $("trend-title").textContent=metric==="cost"?"Cost over time":"Tokens over time";
     $("trend-sub").textContent=`${bucketLabel(range.step)} · stacked by ${metric==="types"?"token type":"model"}`;
@@ -294,14 +332,17 @@
       grid:{left:8,right:8,top:36,bottom:8,containLabel:true},
       tooltip:{trigger:"axis",formatter:AIUsage.tooltipFormatter(fmtFull)},
       // Sub-daily buckets: hours as HH:MM, local midnight as a bold full date (the default shows a bare day number).
-      xAxis:{type:"time",min:(first-range.step/2)*1000,max:range.end*1000,axisLabel:{hideOverlap:true,...(range.step<86400?{rich:{day:{fontWeight:"bold"}},formatter:v=>{const d=new Date(v);return d.getHours()||d.getMinutes()?`${two(d.getHours())}:${two(d.getMinutes())}`:`{day|${two(d.getDate())}.${two(d.getMonth()+1)}}`;}}:{})}},
+      xAxis:{type:"time",min:(first-range.step/2)*1000,max:overlay.end*1000,axisLabel:{hideOverlap:true,...(range.step<86400?{rich:{day:{fontWeight:"bold"}},formatter:v=>{const d=new Date(v);return d.getHours()||d.getMinutes()?`${two(d.getHours())}:${two(d.getMinutes())}`:`{day|${two(d.getDate())}.${two(d.getMonth()+1)}}`;}}:{})}},
       yAxis:{type:"value",axisLabel:{formatter:fmtShort}},
       // Stacks on a time axis need identical x values in every series, so all are aligned to the buckets.
-      series:visible.map((s,i)=>AIUsage.bar(s.name,(m=>times.filter(t=>t>=first).map(t=>[t*1000,m.get(t)||0]))(new Map(s.points)),s.key||s.name,{
+      series:[...visible.map((s,i)=>AIUsage.bar(s.name,(m=>times.filter(t=>t>=first).map(t=>[t*1000,m.get(t)||0]))(new Map(s.points)),s.key||s.name,{
         id:s.name,barMaxWidth:28,...(s.color?{itemStyle:{color:s.color}}:{}),
         markPoint:i===visible.length-1&&peak[1]>0?{...AIUsage.peak(()=>`peak ${timeLabel(peak[0],range)}  ${fmtShort(peak[1])}`),data:[{coord:[peak[0]*1000,peak[1]]}]}:undefined,
         markArea:i===0&&gaps.length?{...AIUsage.gaps([]),data:gaps.map(([a,b])=>[{xAxis:(a-range.step/2)*1000,name:`gap ${timeLabel(a,range)}–${timeLabel(b+range.step,range)}`},{xAxis:(b+range.step/2)*1000}])}:undefined,
-      })),
+      })), {id:"quota-overlay",type:"line",data:[],showSymbol:false,silent:false,
+        markLine:{symbol:["none","none"],lineStyle:{type:"dashed",width:1.5},label:{show:false},tooltip:{formatter:p=>esc(p.name)},data:overlay.events},
+        markArea:{silent:false,label:{show:true,position:"insideTopRight",distance:8,color:css("--muted"),fontSize:10,overflow:"truncate",width:210},tooltip:{formatter:p=>esc(p.name)},data:overlay.areas}
+      }],
     },{replaceMerge:["series"]});
   }
   // Breakdown by the scopes left at "all"; it follows the trend metric (token types count as tokens).
@@ -608,6 +649,7 @@
   }
   window.usage={initial,select,apply,custom,rangeLabel,restore(){theme();},debug(){return {epoch,snapshot,sourceAt,datasets,widgets,modelViews};}};
   document.addEventListener("DOMContentLoaded",()=>{
+    for(const id of ["limit-events","limit-periods"]){$(id).checked=false;$(id).onchange=()=>{if(datasets.size)renderOverview();};}
     theme();$("theme").onclick=()=>{currentTheme=currentTheme==="dark"?"light":"dark";try{localStorage.setItem("theme",currentTheme);}catch(_){}theme();};
     $("export-all").onclick=()=>copyCharts($("export-all"),[...Object.values(modelViews).map(v=>v.spec).filter(Boolean),...[...widgets.values()].map(w=>w.spec)],true);
     $("model-pick").onchange=event=>{modelKey=event.target.value;try{localStorage.setItem("model",modelKey);}catch(_){}renderModelTokens();};

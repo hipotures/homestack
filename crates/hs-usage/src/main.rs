@@ -10,6 +10,7 @@
 
 mod dashboard;
 mod datasets;
+mod limits;
 mod live;
 mod planner;
 mod prometheus;

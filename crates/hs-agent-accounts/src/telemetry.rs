@@ -131,6 +131,25 @@ fn payload(ctx: &Context) -> Result<Value> {
             for window in &snapshot.limits {
                 let mut ls = labels.clone();
                 ls.push(("window", window.id.clone()));
+                ls.push(("window_label", window.label.clone()));
+                ls.push(("model", window.model.clone().unwrap_or_default()));
+                metrics.gauge(
+                    "agent_account_limit_window_minutes",
+                    "min",
+                    window.window_minutes.map(|v| v as f64),
+                    &ls,
+                    snapshot.observed_at,
+                );
+                metrics.gauge(
+                    "agent_account_limit_exhausted",
+                    "1",
+                    window
+                        .exhausted
+                        .or_else(|| window.used_percent.map(|v| v >= 100.0))
+                        .map(|v| f64::from(u8::from(v))),
+                    &ls,
+                    snapshot.observed_at,
+                );
                 metrics.gauge(
                     "agent_account_limit_used_percent",
                     "%",

@@ -244,6 +244,17 @@ impl Dashboard {
             }
         }
         let mut snapshot = normalize(&global, selection, &self.prices, timestamp, &quantiles);
+        let quota = crate::limits::read(&self.prom, &snapshot.selection, &global.range, timestamp).await;
+        let limits = match quota {
+            Ok((dataset, sources)) => {
+                snapshot.sources.extend(sources);
+                dataset
+            }
+            Err(error) => crate::limits::unavailable(&snapshot.selection, &global.range, error),
+        };
+        snapshot.source_freshness["limits"] = json!({"checked_at":current});
+        snapshot.id = hash(&(&snapshot.id, &limits.version));
+        Arc::make_mut(&mut snapshot.datasets).insert(limits.id.clone(), limits);
         snapshot.checked = current;
         snapshot.generated_ms = started.elapsed().as_millis();
         let full = snapshot.full().to_string().len();
@@ -660,7 +671,7 @@ fn agent_data(
 /// Per-agent range totals and cross-agent totals shared by KPIs, comparison and deltas.
 fn summary_values(all: &[Dataset]) -> BTreeMap<String, Value> {
     let mut values: BTreeMap<String, Value> = BTreeMap::new();
-    for agent in ["claude", "codex"] {
+    for agent in ["claude", "codex", "antigravity"] {
         let mut v = BTreeMap::new();
         for d in all.iter().filter(|d| d.agent == agent) {
             v.insert(
@@ -735,7 +746,7 @@ fn scope_breakdown(global: &Global, selection: &Selection, prices: &Option<Value
     let mut usage = |scoped: &Selection| {
         let mut cost = BTreeMap::<u64, f64>::new();
         let mut tokens = BTreeMap::<u64, f64>::new();
-        for agent in ["claude", "codex"] {
+        for agent in ["claude", "codex", "antigravity"] {
             if selection.agent != "all" && selection.agent != agent {
                 continue;
             }
@@ -838,14 +849,14 @@ fn normalize(
 ) -> Snapshot {
     // Comparison and total tiles use these same datasets, never independent accounting queries.
     let mut all = Vec::new();
-    for agent in ["claude", "codex"] {
+    for agent in ["claude", "codex", "antigravity"] {
         if selection.agent == "all" || selection.agent == agent {
             all.extend(agent_data(global, &global.range, &selection, agent, prices));
         }
     }
     let mut values = summary_values(&all);
     if let Some(previous) = &global.previous {
-        let datasets: Vec<_> = ["claude", "codex"]
+        let datasets: Vec<_> = ["claude", "codex", "antigravity"]
             .into_iter()
             .filter(|agent| selection.agent == "all" || selection.agent == *agent)
             .flat_map(|agent| agent_data(global, previous, &selection, agent, prices))

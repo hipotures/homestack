@@ -416,3 +416,9 @@ cancellation left only the service and init processes. Observed memory was about
 75 MB while waiting for authorization and 28 MB after cancellation. This is not
 Proxmox LXC evidence. Browser consent, persisted authenticated restart, full
 account quota retrieval in Alpine and visual browser assessment remain unverified.
+
+AI Usage quota overlays consume `agent_account_limit_window_minutes` and
+`agent_account_limit_exhausted` alongside the existing utilization and reset gauges.
+All four carry the same provider/profile/window labels plus `window_label` and
+`model`. Exhaustion is the provider flag when supplied, otherwise utilization at
+least 100%; false is exported explicitly to clear previous observations.

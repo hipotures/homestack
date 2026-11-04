@@ -150,6 +150,10 @@ button:focus-visible, select:focus-visible { outline: 2px solid var(--codex); ou
   .metric .kpi-value { font-size: 30px; }
   .chart.tall { height: 260px; }
 }
+
+.limit-controls { display:flex;flex-wrap:wrap;gap:12px 24px;margin-top:12px; }
+.limit-controls label { display:flex;align-items:center;gap:8px;font-size:13px;color:var(--muted); }
+.limit-controls input { width:16px;height:16px;accent-color:var(--codex); }
 </style>
 <script defer src="/assets/echarts-6.1.0.min.js?v=__HOMESTACK_USAGE_VERSION__"></script>
 <script defer src="/assets/aiusage-echarts-theme.js?v=__HOMESTACK_USAGE_VERSION__"></script>
@@ -181,7 +185,7 @@ button:focus-visible, select:focus-visible { outline: 2px solid var(--codex); ou
 <button type="button" class="apply" data-attr:disabled="!window.usage.custom($_from,$_to)" data-on:click="$range=window.usage.custom($_from,$_to)||$range;$_more=false" data-class:active="$range===window.usage.custom($_from,$_to)">Apply</button></div>
 </div>
 </div>
-<select class="scope" id="agent" aria-label="Agent" data-bind:agent><option value="all">Agents: all</option><option value="claude">Claude Code</option><option value="codex">Codex</option></select>
+<select class="scope" id="agent" aria-label="Agent" data-bind:agent><option value="all">Agents: all</option><option value="claude">Claude Code</option><option value="codex">Codex</option><option value="antigravity">Antigravity</option></select>
 <select class="scope" id="host" aria-label="Server" data-bind:host><option value="*">Servers: all</option></select>
 <select class="scope" id="project" aria-label="Project" data-bind:project><option value="*">Projects: all</option></select>
 <button class="scope theme" id="theme" type="button">Theme</button>
@@ -197,6 +201,8 @@ button:focus-visible, select:focus-visible { outline: 2px solid var(--codex); ou
 <div class="seg" role="group" aria-label="Metric"><button type="button" data-metric="cost">Cost</button><button type="button" data-metric="tokens">Tokens</button><button type="button" data-metric="types">Token types</button></div></div></div>
 <div class="chips" id="trend-chips"></div>
 <div class="chart tall" id="trend-chart" role="img" aria-label="Usage over time, stacked by model"></div>
+<div class="limit-controls"><label><input type="checkbox" id="limit-events"> Limit exhaustion markers</label><label><input type="checkbox" id="limit-periods"> Quota windows and resets</label></div>
+<p class="note faint" id="limit-note" hidden></p>
 </section>
 <section class="card" id="scopes" aria-label="Usage by server or project" hidden>
 <div class="card-top"><div><h2 id="scopes-title">Cost by project</h2><span class="sub" id="scopes-sub"></span></div>
