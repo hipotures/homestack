@@ -232,6 +232,12 @@ async fn asset(Path(name): Path<String>, headers: HeaderMap) -> Response {
             include_bytes!("../assets/echarts-6.1.0.min.js.gz"),
         ),
         "dashboard.js" => (include_bytes!("../assets/dashboard.js"), &[]),
+        "favicon.ico" => (include_bytes!("../assets/favicon.ico"), &[]),
+        "favicon-32.png" => (include_bytes!("../assets/favicon-32.png"), &[]),
+        "favicon-180.png" => (include_bytes!("../assets/favicon-180.png"), &[]),
+        "favicon-192.png" => (include_bytes!("../assets/favicon-192.png"), &[]),
+        "favicon-512.png" => (include_bytes!("../assets/favicon-512.png"), &[]),
+        "manifest.webmanifest" => (include_bytes!("../assets/manifest.webmanifest"), &[]),
         "aiusage-echarts-theme.js" => (include_bytes!("../assets/aiusage-echarts-theme.js"), &[]),
         "aiusage-tokens.css" => (include_bytes!("../assets/aiusage-tokens.css"), &[]),
         "datastar-LICENSE.md" => (include_bytes!("../assets/datastar-LICENSE.md"), &[]),
@@ -260,6 +266,12 @@ async fn asset(Path(name): Path<String>, headers: HeaderMap) -> Response {
             "text/javascript; charset=utf-8"
         } else if name.ends_with(".css") {
             "text/css; charset=utf-8"
+        } else if name.ends_with(".png") {
+            "image/png"
+        } else if name.ends_with(".ico") {
+            "image/x-icon"
+        } else if name.ends_with(".webmanifest") {
+            "application/manifest+json"
         } else {
             "text/plain; charset=utf-8"
         })
