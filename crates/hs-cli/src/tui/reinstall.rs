@@ -344,10 +344,25 @@ async fn common_images(path: &Path, ids: &[u32], offset: i64) -> Result<Option<I
         return Err("Select the containers of one service at a time".to_owned());
     }
     let (repository, service) = (targets[0].repository.clone(), targets[0].service.clone());
-    let source = common_source(&repository, &service).await?;
     let installed: Vec<String> = targets.iter().map(|t| t.image.clone()).collect();
-    let published: Vec<Image> = hs_core::registry::recent(&source.image("latest"), OFFERED, &installed)
-        .await?
+    // The image repository the container records spares the manifest reads
+    // on GitHub; the manifest names it only when that repository is gone.
+    let recorded = hs_core::registry::split(&targets[0].image).map(|(host, path, _)| format!("{host}/{path}:latest"));
+    let found = match recorded {
+        Some(image) => hs_core::registry::recent(&image, OFFERED, &installed)
+            .await
+            .ok()
+            .filter(|found| !found.is_empty()),
+        None => None,
+    };
+    let found = match found {
+        Some(found) => found,
+        None => {
+            let source = common_source(&repository, &service).await?;
+            hs_core::registry::recent(&source.image("latest"), OFFERED, &installed).await?
+        }
+    };
+    let published: Vec<Image> = found
         .into_iter()
         .map(|r| Image {
             made: r
