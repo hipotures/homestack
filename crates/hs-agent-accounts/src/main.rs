@@ -79,6 +79,35 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let app = Router::new()
         .route("/", get(move || async move { axum::response::Html(page) }))
         .route(
+            "/favicon.ico",
+            get(|| async { ([(header::CONTENT_TYPE, "image/x-icon")], include_bytes!("../assets/favicon.ico").as_slice()) }),
+        )
+        .route(
+            "/favicon-32.png",
+            get(|| async { ([(header::CONTENT_TYPE, "image/png")], include_bytes!("../assets/favicon-32.png").as_slice()) }),
+        )
+        .route(
+            "/favicon-180.png",
+            get(|| async { ([(header::CONTENT_TYPE, "image/png")], include_bytes!("../assets/favicon-180.png").as_slice()) }),
+        )
+        .route(
+            "/favicon-192.png",
+            get(|| async { ([(header::CONTENT_TYPE, "image/png")], include_bytes!("../assets/favicon-192.png").as_slice()) }),
+        )
+        .route(
+            "/favicon-512.png",
+            get(|| async { ([(header::CONTENT_TYPE, "image/png")], include_bytes!("../assets/favicon-512.png").as_slice()) }),
+        )
+        .route(
+            "/manifest.webmanifest",
+            get(|| async {
+                (
+                    [(header::CONTENT_TYPE, "application/manifest+json")],
+                    r##"{"name":"Agent Accounts","icons":[{"src":"/favicon-192.png","sizes":"192x192","type":"image/png"},{"src":"/favicon-512.png","sizes":"512x512","type":"image/png"}]}"##,
+                )
+            }),
+        )
+        .route(
             "/tokens.css",
             get(|| async {
                 (

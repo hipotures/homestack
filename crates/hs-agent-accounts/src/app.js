@@ -92,8 +92,8 @@ async function refresh() {
     const card = node('article', undefined, `card provider-${profile.provider}`);
     const identity = node('div', undefined, 'identity');
     identity.append(node('span', profile.provider, 'eyebrow agent'), node('h2', profile.display_name));
-    if (profile.account?.email && profile.account.email !== profile.display_name) identity.append(node('span', profile.account.email, 'sub'));
-    else if (!profile.account?.email) identity.append(node('span', 'Account not identified', 'sub'));
+    const email = profile.account?.email;
+    identity.append(node('span', !email ? 'Account not identified' : email !== profile.display_name ? email : '', 'sub slot'));
     const pills = node('div', undefined, 'pills');
     pills.append(node('span', profile.enabled ? 'Enabled' : 'Disabled', profile.enabled ? 'pill' : 'pill off'));
     pills.append(node('span', profile.auth_status.replaceAll('_', ' '), 'pill'));
@@ -111,14 +111,15 @@ async function refresh() {
           fill.style.width = `${Math.min(100, limit.used_percent)}%`; bar.append(fill); quota.append(bar);
         }
         quota.append(node('span', 'Resets ' + time(limit.resets_at), 'meta'));
-        if (limit.exhausted) quota.append(node('span', 'Provider reports an exhausted limit', 'warn'));
+        quota.append(node('span', limit.exhausted ? 'Provider reports an exhausted limit' : '', 'warn slot'));
         quotas.append(quota);
       }
       card.append(quotas);
     } else card.append(node('p', 'Usage unavailable', 'sub'));
-    card.append(node('span', 'Last successful check ' + time(profile.last_success), 'meta'));
-    if (profile.stale && profile.enabled) card.append(node('p', 'Stale — awaiting a successful check', 'warn'));
-    if (profile.error && profile.enabled) card.append(node('p', profile.error.message, 'error'));
+    const foot = node('div', undefined, 'card-foot');
+    foot.append(node('span', 'Last successful check ' + time(profile.last_success), 'meta'));
+    if (profile.stale && profile.enabled) foot.append(node('p', 'Stale — awaiting a successful check', 'warn'));
+    if (profile.error && profile.enabled) foot.append(node('p', profile.error.message, 'error'));
     const actions = node('div', undefined, 'actions'), group = node('div', undefined, 'seg');
     button(group, 'Check now', async () => showOperation(await api(`/profiles/${profile.id}/limits`, 'POST', {}))).disabled = !profile.enabled;
     button(group, 'Details', () => details(profile));
@@ -133,7 +134,7 @@ async function refresh() {
         await api(`/profiles/${profile.id}`, 'DELETE', { confirm: true }); await refresh();
       }
     }).classList.add('danger');
-    card.append(actions); $('#profiles').append(card);
+    foot.append(actions); card.append(foot); $('#profiles').append(card);
   }
   const runtimes = await api('/runtimes');
   $('#runtimes').replaceChildren();

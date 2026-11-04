@@ -46,7 +46,9 @@ label { display: grid; gap: 6px; font-size: var(--fs-small); color: var(--muted)
 .seg button:hover:not(:disabled) { color: var(--text); background: var(--surface-3); }
 .seg button:disabled { color: var(--faint); }
 .seg button.primary { color: var(--text); background: var(--surface-3); }
-.card > .actions { flex-direction: column; align-items: flex-start; gap: 6px; }
+.card-foot { margin-top: auto; display: flex; flex-direction: column; gap: 12px; }
+.card-foot > .actions { flex-direction: column; align-items: flex-start; gap: 6px; margin-top: 0; padding-top: 0; }
+.slot { min-height: 1.45em; }
 .more { display: flex; flex-wrap: wrap; gap: 2px; margin-left: -8px; }
 .more button { border: 0; min-height: 30px; padding: 0 8px; color: var(--muted); white-space: nowrap; }
 .more button:hover:not(:disabled) { color: var(--text); background: transparent; }
