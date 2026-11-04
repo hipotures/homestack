@@ -296,8 +296,6 @@
         }
       }
     }
-    const active=enabledEvents||enabledPeriods,note=$("limit-note");note.hidden=!active;
-    note.textContent=dataset?.state==="unavailable"?"Quota telemetry unavailable. "+(dataset.warnings||[]).join(" "):!windows.length?"No account quota telemetry for this agent. Missing data is not zero.":`Account-wide limits; host and project filters do not apply. Markers show sampled exhaustion, not exact request failures. ${weekly?"Weekly":"Hourly"} windows are shaded.${enabledPeriods&&!areas.length?" No matching fresh reset or historical window metadata.":""}${enabledEvents&&!events.length?" No exhaustion observed in this range.":""}`;
     return {events,areas,end};
   }
   function renderTrend(range,firstActive) {

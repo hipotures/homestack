@@ -16,7 +16,7 @@ windows require recorded duration metadata; absent metadata is not inferred from
 window names. Stale current measurements do not extend the plot into the future.
 
 The overlay uses bounded shared query caches and snapshot/export provenance.
-Quota query failures or excessive cardinality disable the overlay with a message
+Quota query failures or excessive cardinality disable the overlay
 without removing the ordinary usage charts. Antigravity is selectable, with usage
 reported as unavailable until a telemetry adapter is defined for its instruments.
 No token counts or prices are invented for it.
