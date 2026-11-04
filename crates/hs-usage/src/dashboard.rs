@@ -517,6 +517,9 @@ fn agent_data(
         registry.iter().any(|m| m.measurement == "tokens"),
     );
     tokens.total = sum_category(&tokens, "total");
+    if agent == "antigravity" {
+        tokens.warnings.push("Token counts come from Antigravity CLI's internal per-invocation transcript schema, verified with 1.5.0. Unavailable or invalid observations are omitted. Thinking tokens and subscription costs are not reported separately.".into());
+    }
     let effort = make(
         agent,
         "effort",
@@ -613,6 +616,7 @@ fn agent_data(
         ("lines", "count"),
         ("tools", "count"),
         ("turns", "count"),
+        ("invocations", "count"),
         ("turnDuration", "milliseconds"),
         ("firstToken", "milliseconds"),
         ("firstOutput", "milliseconds"),
@@ -690,7 +694,7 @@ fn summary_values(all: &[Dataset]) -> BTreeMap<String, Value> {
                 for category in ["total", "input", "cached", "written", "output", "reasoning"] {
                     v.insert(
                         category.into(),
-                        json!({"value":sum_category(d,category),"state":if agent=="claude" && category=="reasoning"{Availability::Unavailable}else{d.state.clone()}}),
+                        json!({"value":sum_category(d,category),"state":if agent!="codex" && category=="reasoning"{Availability::Unavailable}else{d.state.clone()}}),
                     );
                 }
                 let input = sum_category(d, "input").unwrap_or(0.)

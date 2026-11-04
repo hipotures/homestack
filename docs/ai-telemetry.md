@@ -1,6 +1,6 @@
 # AI usage telemetry attribution
 
-The setup has exactly three persistent configuration/startup files:
+The setup uses the following persistent configuration and scripts:
 
 1. `~/.claude/settings.json`: Claude Code exporters, machine identity,
    cumulative metrics and native repository attribution.
@@ -8,6 +8,9 @@ The setup has exactly three persistent configuration/startup files:
 3. One boot script, running agents as their owner: `/etc/rc.local` when the
    system provides rc-local support, otherwise
    `/etc/systemd/system-generators/homestack-agents`.
+4. `~/.gemini/config/hooks.json`: Antigravity CLI passive telemetry hooks.
+5. `~/.local/lib/homestack/agy-telemetry.py`: the Python standard-library
+   exporter used by those hooks.
 
 There are no agent wrappers, PATH changes, shell-profile dependencies, user
 service files or extra environment files. Native agent binaries, authentication
@@ -17,7 +20,8 @@ and application state remain managed by the agents themselves.
 
 The HomeStack setup Applications menu includes **Agent telemetry**
 (`app=agent-telemetry`). It runs the same installer bundled into the CLI,
-configures both native exporters, and installs the boot script. The target
+configures both native exporters and Antigravity hooks, and installs the boot
+script. The target
 requires Python 3.11+, Git, systemd and `uv`; `uv pip` downloads the pinned
 `tomlkit` dependency into a private temporary directory under
 `~/.cache/homestack/`, removed when installation finishes. This application uses
@@ -26,6 +30,57 @@ the `http://otel.homestack.app:4318` Collector; use the standalone installer's
 sudo only when the system boot script needs changing. It does not restart
 running agents; reboot to activate the relay. Installing or updating Claude
 Code or Codex alone does not configure telemetry.
+
+## Antigravity CLI
+
+Antigravity CLI 1.5.0 has no native OTLP exporter. Its account-level
+**Enable Telemetry** setting controls Google's data collection, not export to
+HomeStack. The installer merges a `homestack-telemetry` entry into
+`~/.gemini/config/hooks.json`, preserving other hooks. It registers only
+`PostToolUse`, `PostInvocation` and `Stop`. Python 3.11+ and Git are sufficient;
+there is no OpenTelemetry SDK or virtual environment to maintain.
+
+The hooks return passive JSON immediately and detach network export, including
+the inherited output pipes. Failed exports are dropped and logged to syslog;
+they never change agent permissions, inject instructions or continue a turn.
+The exporter sends OTLP/HTTP JSON logs directly to the configured Collector's
+`/v1/logs`, with `service.name=antigravity-cli`, host and repository attribution
+(the first Git workspace's common directory name, including worktrees).
+Prompts, responses, tool arguments, errors and conversation IDs are not exported.
+
+The Collector batches these logs into delta gauges: `agy.token_usage`,
+`agy.invocations`, `agy.tools` and `agy.turns`. AI Usage discovers their
+Prometheus names (`agy_token_usage`, `agy_invocations`, `agy_tools`, `agy_turns`)
+and includes them in Antigravity token charts, activity, model/project/server
+breakdowns and agent details. Tool calls include success/failure; a stopped
+execution counts as a turn only when `fullyIdle` is true. Stop metrics retain
+the reported `termination_reason`. This installation stores metrics, not traces.
+Deploy the new Collector and AI Usage images before expecting dashboard data.
+The hook encodes the metric dimensions into a single `agy.dimensions` attribute
+for aggregation; the Collector restores individual labels afterward. This avoids
+the pinned sum connector multiplying source values by its attribute count.
+
+The documented hook payload does not include token usage. For each
+`PostInvocation`, the exporter reads a bounded 4 MiB tail of the local
+`transcriptPath`, selecting only the completed `MODEL` row whose `step_index`
+equals `initialNumSteps`. It never substitutes the previous response if the
+current row is missing. The internal transcript schema was checked with 1.5.0:
+`input_tokens` is uncached input, `cache_read_tokens` is cached input, and
+`output_tokens` is output. Cache creation is included only if explicitly
+reported. Missing/invalid counters are omitted, and a missing observation is
+not zero usage. This internal schema may change with an AGY update; recheck
+it after upgrading. Thinking tokens and subscription costs are not estimated.
+No historical transcript backfill or export retry is performed.
+
+Account quota history continues to come from the existing **Agent Accounts**
+Antigravity profile. The hooks do not run `/usage` a second time. Sign in and
+enable that profile to populate the Limits view.
+
+References: [official hook contract](https://antigravity.google/docs/hooks/),
+[native OTLP feature request](https://github.com/google-antigravity/antigravity-cli/issues/366),
+and [SigNoz hook monitoring guide](https://signoz.io/docs/antigravity-cli-monitoring/).
+
+## Package build and installation
 
 Build `tmp/homestack-agent-telemetry.tar.gz` with:
 
@@ -47,9 +102,9 @@ cd homestack-agent-telemetry
 The installer automatically selects rc.local or a systemd generator and requests
 sudo to install that single startup script. Use
 `--collector-url http://otel.homestack.app:4318` to select the Collector.
-It validates both configurations before writing, preserves unrelated TOML
+It validates all configurations before writing, preserves unrelated TOML
 settings/comments and JSON values, and creates private timestamped backups
-beside both existing configs before modifying either. Missing configs are
+beside existing configs before modifying them. Missing configs are
 created. Existing HomeStack `rc.local` is also backed up; an unrelated startup
 script is refused. If switching methods, an older HomeStack startup script is
 backed up and removed so both methods cannot run concurrently. Existing HTTP exporter headers/TLS are preserved for the

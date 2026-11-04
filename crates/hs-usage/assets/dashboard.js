@@ -432,7 +432,7 @@
   try{agentTab=localStorage.getItem("agentTab")||agentTab;}catch(_){}
   // Codex reports per-turn histograms; Claude Code per-request averages from its api_request events.
   const LATENCY=[["firstToken","To first token"],["firstOutput","To first output item"],["turnDuration","Turn duration"],["toolDuration","Tool duration"],["requestFirstToken","Request to first token","average"],["requestDuration","API request duration","average"]];
-  const COUNTS=[["active","Active time","split: user / cli"],["commits","Commits","count in range"],["lines","Lines of code","added / removed"],["sessions","New sessions","started in range"],["turns","Turns","conversation turns"],["tools","Tool calls","calls · failed"]];
+  const COUNTS=[["active","Active time","split: user / cli"],["commits","Commits","count in range"],["lines","Lines of code","added / removed"],["sessions","New sessions","started in range"],["turns","Turns","conversation turns"],["invocations","Model invocations","completed in range"],["tools","Tool calls","calls · failed"]];
   const total=points=>(points||[]).reduce((s,[,v])=>s+(v||0),0);
   function miniBars(points,range,color) {
     const first=Math.min(...points.filter(([,v])=>v>0).map(([t])=>t));

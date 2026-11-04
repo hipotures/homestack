@@ -18,10 +18,11 @@ subprocess.run(['uv', 'pip', 'install', '--target', str(package / 'vendor'), '--
 shutil.copy2(root / 'scripts/install-agent-telemetry.py', package / 'install')
 (package / 'install').chmod(0o755)
 shutil.copy2(root / 'scripts/agent-rc.local', package / 'rc.local')
+shutil.copy2(root / 'scripts/agy-telemetry.py', package / 'agy-telemetry.py')
 (package / 'README.txt').write_text('''HomeStack agent telemetry installer
 
 Requires Linux, Python 3.11+, Git, systemd and sudo.
-Install/sign in to Codex and Claude Code separately; this package contains no credentials.
+Install/sign in to Codex, Claude Code and Antigravity CLI separately; this package contains no credentials.
 Run as the account that owns the agent configurations, without sudo:
 
   ./install --dry-run
@@ -48,7 +49,12 @@ hostname. This installer does not fix Herdr session restoration.
 
 The package bundles tomlkit 0.13.3 with its license. No network access, pip,
 uv, virtual environment or extra dependency installation is required on targets.
-Operational configuration remains two native agent configs and one startup script;
+Antigravity uses passive hooks in ~/.gemini/config/hooks.json and a bundled
+Python standard-library exporter in ~/.local/lib/homestack/agy-telemetry.py.
+It sends tool/turn/model-call observations and per-invocation transcript token
+counts to the Collector. It does not send prompts, tool arguments or responses.
+Quota monitoring remains the responsibility of Agent Accounts.
+Operational configuration includes three agent configs and the startup/hook scripts;
 timestamped backups are intentionally retained.
 ''')
 output = root / 'tmp/homestack-agent-telemetry.tar.gz'

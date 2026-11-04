@@ -1,4 +1,4 @@
-//! `homestack-usage`: charts of Claude Code and Codex usage from Prometheus.
+//! `homestack-usage`: charts of Claude Code, Codex and Antigravity usage from Prometheus.
 //!
 //! | Variable | Meaning |
 //! | --- | --- |

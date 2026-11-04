@@ -9,6 +9,32 @@ receivers:
 # Response usage is exported as delta gauges. Prometheus stores each pushed
 # batch once; the dashboard sums samples instead of differencing counters.
 connectors:
+  sum/agy:
+    logs:
+      agy.token_usage:
+        source_attribute: token_count
+        conditions:
+          - 'attributes["event.name"] == "agy.token_usage" and attributes["token_count"] != nil'
+        # The pinned sum connector increments once per configured attribute.
+        # Group by one encoded map, then restore dimensions in transform/agy.
+        attributes: &agy-attributes
+          - key: agy.dimensions
+            default_value: '{}'
+      agy.invocations:
+        source_attribute: homestack.one
+        conditions:
+          - 'attributes["event.name"] == "agy.PostInvocation"'
+        attributes: *agy-attributes
+      agy.tools:
+        source_attribute: homestack.one
+        conditions:
+          - 'attributes["event.name"] == "agy.PostToolUse"'
+        attributes: *agy-attributes
+      agy.turns:
+        source_attribute: homestack.one
+        conditions:
+          - 'attributes["event.name"] == "agy.Stop" and attributes["fully_idle"] == true'
+        attributes: *agy-attributes
   sum/codex:
     logs:
       codex.response.tokens.total:
@@ -95,6 +121,20 @@ connectors:
         attributes: *claude-attributes
 
 processors:
+  transform/agy:
+    error_mode: propagate
+    metric_statements:
+      - context: resource
+        statements:
+          - set(attributes["homestack.collector.instance"], Trim("${file:/etc/hostname}", " \t\r\n"))
+      - context: datapoint
+        statements:
+          - set(attributes["collector_instance"], resource.attributes["homestack.collector.instance"])
+          - merge_maps(attributes, ParseJSON(attributes["agy.dimensions"]), "upsert")
+          - delete_key(attributes, "agy.dimensions")
+      - context: metric
+        statements:
+          - convert_sum_to_gauge()
   # Compact identical resource/scope groups before summing a batch so they
   # cannot produce several samples for the same series at the same millisecond.
   groupbyattrs/codex: {}
@@ -182,4 +222,12 @@ service:
     metrics/claude:
       receivers: [sum/claude]
       processors: [transform/claude]
+      exporters: [otlp_http]
+    logs/agy:
+      receivers: [otlp]
+      processors: [batch, groupbyattrs/codex]
+      exporters: [sum/agy]
+    metrics/agy:
+      receivers: [sum/agy]
+      processors: [transform/agy]
       exporters: [otlp_http]

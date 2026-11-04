@@ -5,6 +5,7 @@ from datetime import datetime
 import json
 import os
 from pathlib import Path
+import shlex
 import shutil
 import stat
 import subprocess
@@ -70,11 +71,17 @@ def main():
     home = Path.home()
     codex_path = home / '.codex/config.toml'
     claude_path = home / '.claude/settings.json'
+    agy_path = home / '.gemini/config/hooks.json'
+    agy_script = home / '.local/lib/homestack/agy-telemetry.py'
+    agy_source = root / 'agy-telemetry.py'
     boot = root / 'rc.local'
     if not boot.is_file():
         parser.error('Missing packaged rc.local')
     compile(boot.read_text(), str(boot), 'exec')
-    # Parse and construct BOTH results before changing either configuration.
+    if not agy_source.is_file():
+        parser.error('Missing packaged agy-telemetry.py')
+    compile(agy_source.read_text(), str(agy_source), 'exec')
+    # Parse and construct every result before changing any configuration.
     old_codex = codex_path.read_text() if codex_path.exists() else ''
     codex = tomlkit.parse(old_codex)
     otel = codex.setdefault('otel', tomlkit.table())
@@ -119,18 +126,30 @@ def main():
         'OTEL_METRICS_INCLUDE_REPOSITORY': '1',
     })
     new_claude = json.dumps(claude, indent=2, ensure_ascii=False) + '\n'
+    agy = json.loads(agy_path.read_text()) if agy_path.exists() else {}
+    if not isinstance(agy, dict):
+        parser.error('Antigravity hooks must be a JSON object')
+    hooks = {'enabled': True}
+    for event in ('PostToolUse', 'PostInvocation', 'Stop'):
+        handler = {'type': 'command', 'command': shlex.join([
+            '/usr/bin/python3', str(agy_script), event, '--endpoint', endpoint + '/v1/logs']), 'timeout': 10}
+        hooks[event] = [{'matcher': '*', 'hooks': [handler]}] if event == 'PostToolUse' else [handler]
+    agy['homestack-telemetry'] = hooks
+    new_agy = json.dumps(agy, indent=2, ensure_ascii=False) + '\n'
+    configurations = {codex_path: new_codex, claude_path: new_claude,
+                      agy_path: new_agy, agy_script: agy_source.read_text()}
     if installed.exists() and installed.read_bytes() != boot.read_bytes():
         if b'Boot configured agents using native accounts, configs and workspace trust.' not in installed.read_bytes():
             parser.error(f'{installed} already contains a different startup script; refusing to overwrite it')
     remove_alternative = (alternative.exists() and
         b'Boot configured agents using native accounts, configs and workspace trust.' in alternative.read_bytes())
-    for path in (codex_path, claude_path):
+    for path in configurations:
         if path.exists() and path.stat().st_uid != os.getuid():
             parser.error(f'{path} is owned by another account; run as its owner')
     print(f'Agent account: {__import__("pwd").getpwuid(os.getuid()).pw_name} ({home})')
     print(f'Collector: {endpoint}')
     print(f'Autostart: {"rc.local" if rc_support else "systemd generator"} ({installed})')
-    print(f'Will merge telemetry into {codex_path} and {claude_path}; install {installed}.')
+    print(f'Will merge telemetry into {codex_path}, {claude_path} and {agy_path}; install {agy_script} and {installed}.')
     if args.dry_run:
         print('Dry run: configuration syntax valid; no files changed.')
         return
@@ -141,7 +160,7 @@ def main():
     if sudo:
         subprocess.run(sudo + ['-v'], check=True)
     stamp = datetime.now().strftime('%Y%m%d-%H%M%S-%f')
-    backups = {p: backup(p, stamp) for p in (codex_path, claude_path)}
+    backups = {p: backup(p, stamp) for p in configurations}
     for path, saved in backups.items():
         print(f'Backup: {saved}' if saved else f'New configuration: {path}')
     # Only this explicitly privileged stage writes outside the caller's home.
@@ -151,8 +170,8 @@ def main():
             subprocess.run(sudo + ['install', '-o', 'root', '-g', 'root', '-m', '0600', str(original), saved], check=True)
             print(f'Boot script backup: {saved}')
     try:
-        atomic_write(codex_path, new_codex)
-        atomic_write(claude_path, new_claude)
+        for path, data in configurations.items():
+            atomic_write(path, data)
         if install_boot:
             subprocess.run(sudo + ['install', '-D', '-o', 'root', '-g', 'root', '-m', '0755', str(boot), str(installed)], check=True)
         if remove_alternative:

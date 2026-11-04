@@ -58,6 +58,11 @@ OTLP/HTTP on port 4318.
   time-to-first-token sums with request counts by model and effort; all other
   Claude Code events are discarded. See
   [Claude Code request timing](../../docs/ai-telemetry.md#claude-code-request-timing).
+- Antigravity CLI passive hook logs become `agy.token_usage`, `agy.invocations`,
+  `agy.tools` and `agy.turns` delta gauges. The standard-library hook exporter
+  reads only the current invocation's completed transcript row for token counts;
+  no prompts, responses or tool arguments are sent. See
+  [Antigravity CLI setup and limitations](../../docs/ai-telemetry.md#antigravity-cli).
 - `HOMESTACK_PROMETHEUS_URL`: required base URL of the Prometheus server,
   without a path; the Collector exports to its `/api/v1/otlp/v1/metrics`
   receiver. No server is baked into the image.
