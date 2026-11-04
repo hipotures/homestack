@@ -41,9 +41,11 @@ input, select { width: 100%; min-height: 38px; padding: 0 10px; background: tran
 select option { background: var(--surface-3); }
 label { display: grid; gap: 6px; font-size: var(--fs-small); color: var(--muted); }
 .actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin-top: auto; padding-top: 4px; }
-.seg { display: inline-flex; flex-wrap: wrap; gap: 2px; padding: 3px; background: var(--surface-2); border-radius: var(--radius-ctl); }
-.seg button { border: 0; min-height: 30px; padding: 0 11px; border-radius: var(--radius-pill); color: var(--muted); }
+.controls { display: flex; gap: 10px; }
+.seg { display: inline-flex; flex-wrap: wrap; gap: 2px; padding: 3px; border: 1px solid var(--border-strong); border-radius: var(--radius-ctl); }
+.seg button { border: 0; min-height: 30px; padding: 0 11px; border-radius: var(--radius-pill); color: var(--text-2); }
 .seg button:hover:not(:disabled) { color: var(--text); background: var(--surface-3); }
+.seg button:disabled { color: var(--faint); }
 .seg button.primary { color: var(--text); background: var(--surface-3); }
 button.danger { border: 0; color: var(--faint); padding: 0 6px; }
 button.danger:hover { color: var(--up); background: transparent; }
@@ -55,7 +57,6 @@ a { color: var(--tok-uncached); overflow-wrap: anywhere; }
 .runtimes { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 380px), 1fr)); gap: var(--gap-grid); }
 .runtime { background: var(--surface-2); border-radius: 12px; padding: 16px; display: flex; flex-direction: column; gap: 8px; }
 .runtime .actions { margin-top: 4px; justify-content: flex-start; }
-.runtime .seg { background: var(--surface); }
 
 /* messages and footer */
 .error { color: var(--up); font-size: var(--fs-small); }

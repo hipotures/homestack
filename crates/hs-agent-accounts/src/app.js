@@ -202,6 +202,18 @@ $('#create').onsubmit = async event => {
     showOperation(await api(`/profiles/${profile.id}/authentication`, 'POST', {}));
   } catch (error) { notice(error); }
 };
+let currentTheme = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+try { currentTheme = localStorage.getItem('theme') || currentTheme; } catch {}
+function theme() {
+  document.documentElement.dataset.theme = currentTheme;
+  $('#theme').textContent = currentTheme === 'dark' ? '☀ Light' : '☾ Dark';
+}
+$('#theme').onclick = () => {
+  currentTheme = currentTheme === 'dark' ? 'light' : 'dark';
+  try { localStorage.setItem('theme', currentTheme); } catch {}
+  theme();
+};
+theme();
 (async () => {
   for (const provider of await api('/providers')) {
     providerCapabilities.set(provider.id, provider.capabilities);
