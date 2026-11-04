@@ -104,7 +104,8 @@ impl Dashboard {
             }
         };
         let boundary = timestamp / step * step;
-        // This short, bounded shared cache also singleflights global misses; builds never overlap.
+        // Hold the cache lock through the entire snapshot build, including quota reads
+        // and normalization. Concurrent misses must share the completed snapshot.
         let mut cache = self.cache.lock().await;
         if let Some(s) = cache
             .snapshots
@@ -215,43 +216,36 @@ impl Dashboard {
             }
             global
         };
-        drop(cache);
-        let quantile_read = async {
-            let mut quantiles = BTreeMap::new();
-            if matches!(selection.agent.as_str(), "all" | "codex") {
-                let mut matchers = Vec::new();
-                for (label, value) in [("host_name", &selection.host), ("project", &selection.project)] {
-                    if value != "*" {
-                        matchers.push(format!(
-                            "{label}=\"{}\"",
-                            value.replace('\\', "\\\\").replace('"', "\\\"")
-                        ));
-                    }
-                }
-                let range = (global.range.start, global.range.partial_start, global.range.step);
-                let matchers = matchers.join(",");
-                let histograms: Vec<_> = global
-                    .registry
-                    .iter()
-                    .filter(|m| m.kind == registry::Kind::Histogram)
-                    .collect();
-                let values = futures_util::future::try_join_all(
-                    histograms
-                        .iter()
-                        .map(|histogram| planner::quantiles(&self.prom, histogram, &matchers, range, timestamp)),
-                )
-                .await?;
-                for (histogram, value) in histograms.into_iter().zip(values) {
-                    quantiles.insert(histogram.measurement.to_owned(), value);
+        let mut quantiles = BTreeMap::new();
+        if matches!(selection.agent.as_str(), "all" | "codex") {
+            let mut matchers = Vec::new();
+            for (label, value) in [("host_name", &selection.host), ("project", &selection.project)] {
+                if value != "*" {
+                    matchers.push(format!(
+                        "{label}=\"{}\"",
+                        value.replace('\\', "\\\\").replace('"', "\\\"")
+                    ));
                 }
             }
-            Ok::<_, String>(quantiles)
-        };
-        let (quantiles, quota) = tokio::join!(
-            quantile_read,
-            crate::limits::read(&self.prom, &selection, &global.range, timestamp)
-        );
-        let mut snapshot = normalize(&global, selection, &self.prices, timestamp, &quantiles?);
+            let range = (global.range.start, global.range.partial_start, global.range.step);
+            let matchers = matchers.join(",");
+            let histograms: Vec<_> = global
+                .registry
+                .iter()
+                .filter(|m| m.kind == registry::Kind::Histogram)
+                .collect();
+            let values = futures_util::future::try_join_all(
+                histograms
+                    .iter()
+                    .map(|histogram| planner::quantiles(&self.prom, histogram, &matchers, range, timestamp)),
+            )
+            .await?;
+            for (histogram, value) in histograms.into_iter().zip(values) {
+                quantiles.insert(histogram.measurement.to_owned(), value);
+            }
+        }
+        let mut snapshot = normalize(&global, selection, &self.prices, timestamp, &quantiles);
+        let quota = crate::limits::read(&self.prom, &snapshot.selection, &global.range, timestamp).await;
         let limits = match quota {
             Ok((dataset, sources)) => {
                 snapshot.sources.extend(sources);
@@ -275,7 +269,6 @@ impl Dashboard {
                 .map(|s| s.data.to_string().len() * 4)
                 .sum::<usize>();
         let snapshot = Arc::new(snapshot);
-        let mut cache = self.cache.lock().await;
         // Exact exports are bounded shared snapshots, never per-browser histories.
         cache.snapshots.push_back(Arc::clone(&snapshot));
         while cache.snapshots.len() > 12 || cache.snapshots.iter().map(|s| s.bytes).sum::<usize>() > 8 * 1024 * 1024 {

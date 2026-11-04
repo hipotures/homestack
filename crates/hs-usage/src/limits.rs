@@ -42,27 +42,30 @@ pub async fn read(
     })
     .collect::<Vec<_>>()
     .join(" or ");
-    let history = prom.read(
-        "/api/v1/query_range",
-        vec![
-            ("query".into(), history_query),
-            ("start".into(), range.start.to_string()),
-            ("end".into(), timestamp.to_string()),
-            ("step".into(), step.to_string()),
-            ("timeout".into(), "20s".into()),
-        ],
-        30,
-    );
-    let current = prom.read(
-        "/api/v1/query",
-        vec![
-            ("query".into(), current_query),
-            ("time".into(), timestamp.to_string()),
-            ("timeout".into(), "20s".into()),
-        ],
-        30,
-    );
-    let (history, current) = tokio::try_join!(history, current)?;
+    let history = prom
+        .read(
+            "/api/v1/query_range",
+            vec![
+                ("query".into(), history_query),
+                ("start".into(), range.start.to_string()),
+                ("end".into(), timestamp.to_string()),
+                ("step".into(), step.to_string()),
+                ("timeout".into(), "20s".into()),
+            ],
+            30,
+        )
+        .await?;
+    let current = prom
+        .read(
+            "/api/v1/query",
+            vec![
+                ("query".into(), current_query),
+                ("time".into(), timestamp.to_string()),
+                ("timeout".into(), "20s".into()),
+            ],
+            30,
+        )
+        .await?;
     let mut windows = BTreeMap::<(String, String, String), Value>::new();
     let mut accounts = BTreeMap::<(String, String), BTreeMap<String, f64>>::new();
     for (source, live) in [(&history, false), (&current, true)] {
