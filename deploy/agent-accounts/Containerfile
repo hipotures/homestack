@@ -7,6 +7,12 @@ RUN curl -fsSL "https://github.com/openai/codex/releases/download/rust-v${CODEX_
     && mkdir /runtime && tar -xzf /codex.tar.gz -C /runtime \
     && mv /runtime/codex-x86_64-unknown-linux-musl /runtime/codex \
     && /runtime/codex --version
+FROM runtime-download AS antigravity-download
+ARG ANTIGRAVITY_VERSION=1.5.0
+ARG ANTIGRAVITY_SHA256=feab046295c80f156a8e1d39135c362f3f4e7397259b2999b4725134b3dde955
+RUN curl -fsSL "https://github.com/google-antigravity/antigravity-cli/releases/download/${ANTIGRAVITY_VERSION}/agy_cli_linux_x64_musl.tar.gz" -o /agy.tar.gz \
+    && echo "${ANTIGRAVITY_SHA256}  /agy.tar.gz" | sha256sum -c - \
+    && tar -xzf /agy.tar.gz -C /runtime antigravity && /runtime/antigravity --version
 FROM docker.io/library/alpine:3.24.2@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6 AS claude-download
 RUN apk add --no-cache curl
 ARG CLAUDE_VERSION=2.1.318
@@ -20,10 +26,11 @@ COPY claude-probe/package*.json ./
 RUN npm ci --omit=optional --ignore-scripts && npm cache clean --force
 COPY claude-probe/probe.mjs ./probe.mjs
 FROM docker.io/library/alpine:3.24.2@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6
-RUN apk add --no-cache ca-certificates tini nodejs bash libgcc libstdc++ ripgrep \
+RUN apk add --no-cache ca-certificates util-linux-misc tini nodejs bash libgcc libstdc++ ripgrep \
     && addgroup -g 10001 app && adduser -D -u 10001 -G app app \
     && mkdir -p /home/app && chown app:app /home/app && chmod 0700 /home/app
 COPY --from=runtime-download /runtime/codex /opt/agent-accounts/codex
+COPY --from=antigravity-download /runtime/antigravity /opt/agent-accounts/antigravity
 COPY --from=claude-download /claude /opt/agent-accounts/claude
 COPY --from=helper /helper /opt/agent-accounts/claude-probe
 COPY --chmod=0755 homestack-agent-accounts /usr/local/bin/homestack-agent-accounts

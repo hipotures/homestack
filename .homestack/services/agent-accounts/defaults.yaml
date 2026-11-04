@@ -4,7 +4,7 @@ resources:
   cores: 1
   memory: 1G
   swap: 0M
-  rootfs: 1G
+  rootfs: 2G
 deployment:
   hostname: agent-accounts
   instances: 1

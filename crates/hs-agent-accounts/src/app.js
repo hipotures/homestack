@@ -3,6 +3,7 @@ const $ = selector => document.querySelector(selector);
 let selectedOperation = null;
 let source = null;
 const providerCapabilities = new Map();
+const quotaGroups = new Map();
 async function api(path, method = 'GET', body) {
   const response = await fetch('/api/v1' + path, {
     method, headers: { 'Content-Type': 'application/json' },
@@ -98,13 +99,26 @@ async function refresh() {
     pills.append(node('span', profile.enabled ? 'Enabled' : 'Disabled', profile.enabled ? 'pill' : 'pill off'));
     pills.append(node('span', profile.auth_status.replaceAll('_', ' '), 'pill'));
     if (profile.account?.plan) pills.append(node('span', profile.account.plan, 'pill'));
-    card.append(identity, pills);
+    const header = node('div', undefined, 'profile-head');
+    header.append(identity);
+    const groups = profile.provider === 'antigravity' ? [...new Set((profile.snapshot?.limits || []).map(l => l.model).filter(Boolean))] : [];
+    let selectedGroup = quotaGroups.get(profile.id);
+    if (!groups.includes(selectedGroup)) selectedGroup = groups.find(g => g === 'Gemini 4 Argon') || groups[0];
+    if (groups.length) {
+      const select = node('select');
+      select.setAttribute('aria-label', 'Quota group');
+      for (const group of groups) { const option = node('option', group === 'Claude and GPT models' ? 'Claude & GPT' : group === 'Gemini Models' ? 'Gemini' : group); option.value = group; select.append(option); }
+      select.value = selectedGroup;
+      select.onchange = () => { quotaGroups.set(profile.id, select.value); refresh().catch(notice); };
+      header.append(select);
+    }
+    card.append(header, pills);
     if (profile.snapshot) {
       if (profile.snapshot.account.email && profile.snapshot.account.email !== profile.account?.email) card.append(node('p', `Previous measurement account: ${profile.snapshot.account.email}`, 'error'));
       const quotas = node('div', undefined, 'quotas');
-      for (const limit of profile.snapshot.limits) {
+      for (const limit of profile.snapshot.limits.filter(l => !groups.length || l.model === selectedGroup)) {
         const quota = node('div', undefined, 'quota'), line = node('div', undefined, 'quota-line');
-        line.append(node('span', label(limit, profile.provider)), node('span', percent(limit.used_percent), 'num'));
+        line.append(node('span', profile.provider === 'antigravity' ? label({...limit, label: ''}, profile.provider) : label(limit, profile.provider)), node('span', percent(limit.used_percent), 'num'));
         quota.append(line);
         if (limit.used_percent != null) {
           const bar = node('div', undefined, 'bar'), fill = node('span');

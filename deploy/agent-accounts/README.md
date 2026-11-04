@@ -381,3 +381,38 @@ GitHub HTTPS credential synchronized the same upstream without changing Git
 configuration. Tag `agent-accounts-0.1.2` was pushed normally, but GitHub did not
 queue a tag run; the narrow dispatch recovery path was added to finish that
 publication without moving the tag or choosing another version manually.
+
+
+## Antigravity provider
+
+Antigravity bundles the official 1.5.0 Linux x64 musl executable, verified against
+its release archive SHA-256 digest. It is statically linked and adds approximately
+208 MiB of unpacked runtime data. Runtime updates use the official GitHub release
+metadata and archive digest, with the same candidate verification and activation
+workflow as the other providers.
+
+Google subscription sign-in runs `antigravity acp --login` through util-linux
+`script`, with terminal echo disabled. The UI displays the Google OAuth PKCE URL
+and accepts the authorization code or final redirect URL. Each profile has its own
+HOME and file-based credential storage; no desktop keyring or D-Bus is configured.
+Credentials stay under the persistent profile home. Successful sign-in still
+requires the account owner to complete Google's browser authorization.
+
+The provider reads the subscription plan from ACP `session/new` response metadata
+`_meta.antigravity.tier.name`. The account email is currently unavailable through
+this integration and is shown as unidentified. Quotas come from the structured
+`command.data.groups` in `-p /usage --output-format json`, with remaining fractions
+converted to used percentages. All groups are stored; the card selects one group
+at a time and defaults to Gemini 4 Argon when present. The selection does not
+change the CLI model or consume model inference tokens.
+
+The default rootfs is 2 GiB to leave space for the additional bundled runtime.
+
+Local verification used the production Containerfile in a rootless Podman OCI
+container limited to one CPU, 1 GiB RAM and no swap, with disposable storage
+explicitly enabled. The unpacked image measured 1,008,823,211 bytes. API profile
+creation, Google PKCE URL and code prompt delivery, and cancellation passed;
+cancellation left only the service and init processes. Observed memory was about
+75 MB while waiting for authorization and 28 MB after cancellation. This is not
+Proxmox LXC evidence. Browser consent, persisted authenticated restart, full
+account quota retrieval in Alpine and visual browser assessment remain unverified.

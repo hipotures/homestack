@@ -1,4 +1,4 @@
-//! Two shared, pinned vendor installations. Candidate verification never changes the active pin.
+//! Shared, pinned vendor installations. Candidate verification never changes the active pin.
 use crate::{
     app::{Context, Job},
     model::*,
@@ -56,6 +56,16 @@ async fn text(url: &str) -> Result<String> {
 }
 async fn metadata(provider: &str, selected: Option<&str>) -> Result<Value> {
     match provider {
+        "antigravity" => {
+            let tail = selected.map_or("latest".into(), |v| format!("tags/{v}"));
+            serde_json::from_str(
+                &text(&format!(
+                    "https://api.github.com/repos/google-antigravity/antigravity-cli/releases/{tail}"
+                ))
+                .await?,
+            )
+            .map_err(|_| failure("Invalid Antigravity release metadata"))
+        }
         "codex" => {
             let tail = selected.map_or("latest".into(), |v| format!("tags/rust-v{v}"));
             serde_json::from_str(&text(&format!("https://api.github.com/repos/openai/codex/releases/{tail}")).await?)
@@ -88,6 +98,8 @@ async fn metadata(provider: &str, selected: Option<&str>) -> Result<Value> {
 fn release_version(provider: &str, value: &Value) -> Result<String> {
     let v = if provider == "codex" {
         value["tag_name"].as_str().and_then(|s| s.strip_prefix("rust-v"))
+    } else if provider == "antigravity" {
+        value["tag_name"].as_str()
     } else {
         value["version"].as_str()
     }
@@ -135,18 +147,30 @@ async fn candidate(ctx: &Context, provider: &str, selected: &str, stage: &Path) 
         return Err(failure("Downloaded release does not match the selected version"));
     }
     let path = stage.join(provider);
-    if provider == "codex" {
+    if matches!(provider, "codex" | "antigravity") {
+        let asset_name = if provider == "codex" {
+            "codex-x86_64-unknown-linux-musl.tar.gz"
+        } else {
+            "agy_cli_linux_x64_musl.tar.gz"
+        };
+        let extracted = if provider == "codex" {
+            "codex-x86_64-unknown-linux-musl"
+        } else {
+            "antigravity"
+        };
         let asset = data["assets"]
             .as_array()
-            .and_then(|a| a.iter().find(|v| v["name"] == "codex-x86_64-unknown-linux-musl.tar.gz"))
-            .ok_or_else(|| failure("Codex release has no official musl archive"))?;
+            .and_then(|a| a.iter().find(|v| v["name"] == asset_name))
+            .ok_or_else(|| failure("Release has no official musl archive"))?;
         let digest = asset["digest"]
             .as_str()
             .and_then(|s| s.strip_prefix("sha256:"))
-            .ok_or_else(|| failure("Codex archive digest is unavailable"))?;
-        let url = format!(
-            "https://github.com/openai/codex/releases/download/rust-v{selected}/codex-x86_64-unknown-linux-musl.tar.gz"
-        );
+            .ok_or_else(|| failure("Runtime archive digest is unavailable"))?;
+        let url = if provider == "codex" {
+            format!("https://github.com/openai/codex/releases/download/rust-v{selected}/{asset_name}")
+        } else {
+            format!("https://github.com/google-antigravity/antigravity-cli/releases/download/{selected}/{asset_name}")
+        };
         let archive = stage.join("runtime.tar.gz");
         download(&url, &archive, digest).await?;
         let mut command = tokio::process::Command::new("/bin/tar");
@@ -156,7 +180,7 @@ async fn candidate(ctx: &Context, provider: &str, selected: &str, stage: &Path) 
             .arg(&archive)
             .arg("-C")
             .arg(stage)
-            .arg("codex-x86_64-unknown-linux-musl")
+            .arg(extracted)
             .kill_on_drop(true)
             .process_group(0);
         let mut child = process::Process::spawn(command)?;
@@ -164,13 +188,12 @@ async fn candidate(ctx: &Context, provider: &str, selected: &str, stage: &Path) 
             .child
             .wait()
             .await
-            .map_err(|_| failure("Cannot extract Codex archive"))?;
+            .map_err(|_| failure("Cannot extract runtime archive"))?;
         child.finish().await;
         if !status.success() {
-            return Err(failure("Codex archive extraction failed"));
+            return Err(failure("Runtime archive extraction failed"));
         }
-        std::fs::rename(stage.join("codex-x86_64-unknown-linux-musl"), &path)
-            .map_err(|_| failure("Cannot stage Codex binary"))?;
+        std::fs::rename(stage.join(extracted), &path).map_err(|_| failure("Cannot stage runtime binary"))?;
         std::fs::remove_file(archive).map_err(|_| failure("Cannot remove downloaded archive"))?;
     } else {
         let digest = data["platforms"]["linux-x64-musl"]["checksum"]

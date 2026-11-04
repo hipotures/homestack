@@ -1,3 +1,4 @@
+pub mod antigravity;
 pub mod claude;
 pub mod codex;
 use crate::{app::Context, model::*};
@@ -33,5 +34,9 @@ pub trait Provider: Send + Sync {
     }
 }
 pub fn registered() -> Vec<Arc<dyn Provider>> {
-    vec![Arc::new(codex::Codex), Arc::new(claude::Claude)]
+    vec![
+        Arc::new(codex::Codex),
+        Arc::new(claude::Claude),
+        Arc::new(antigravity::Antigravity),
+    ]
 }
