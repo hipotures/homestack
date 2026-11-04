@@ -21,7 +21,14 @@ function node(tag, text, className) {
   if (className) element.className = className;
   return element;
 }
-const time = value => value ? new Date(value * 1000).toLocaleString() : 'Unknown';
+const pad = number => String(number).padStart(2, '0');
+function time(value) {
+  if (!value) return 'Unknown';
+  const d = new Date(value * 1000);
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+const percent = value => value == null ? 'unknown' : `${value.toFixed(1)}% used · ${Math.max(0, 100 - value).toFixed(1)}% left`;
+function setText(element, text) { if (element.textContent !== text) element.textContent = text; }
 const notice = error => { $('#notice').textContent = error.message || error; };
 function button(parent, label, action) {
   const element = node('button', label);
@@ -45,15 +52,30 @@ async function details(profile) {
     ['Profile', profile.display_name], ['Provider', profile.provider],
     ['Account', profile.account?.email || 'Not identified'],
     ['Plan', profile.account?.plan || 'Unknown'], ['Authentication', profile.auth_status.replaceAll('_', ' ')],
-    ['Monitoring', profile.enabled ? 'Enabled' : 'Disabled'], ['Last successful check', time(profile.last_success)],
+    ['Monitoring', profile.enabled ? 'Enabled' : 'Disabled'],
     ['Measurement scope', 'Account'], ['Profile ID', profile.id],
   ]) content.append(node('p', `${title}: ${value}`));
   if (profile.snapshot?.reset_credits) content.append(node('p', `Available earned resets: ${profile.snapshot.reset_credits.availableCount ?? 'Unknown'}`));
   const history = await api(`/profiles/${profile.id}/history`);
   content.append(node('h3', 'Recent successful checks'));
   if (!history.length) content.append(node('p', 'No successful measurements yet.', 'muted'));
-  for (const snapshot of history.slice(0, 20)) {
-    content.append(node('p', `${time(snapshot.observed_at)} · ${snapshot.account.email || 'Account'} · ${snapshot.limits.map(l => `${label(l)} ${l.used_percent == null ? 'unknown' : l.used_percent + '%'}`).join(', ')}`, 'muted'));
+  const recent = history.slice(0, 20);
+  if (recent.length) {
+    const columns = [...new Set(recent.flatMap(snapshot => snapshot.limits.map(label)))];
+    const table = node('table', undefined, 'history'), head = node('tr');
+    for (const title of ['Checked', ...columns]) head.append(node('th', title));
+    table.append(head);
+    for (const snapshot of recent) {
+      const row = node('tr');
+      row.append(node('td', time(snapshot.observed_at)));
+      for (const column of columns) {
+        const limit = snapshot.limits.find(l => label(l) === column);
+        row.append(node('td', limit?.used_percent == null ? '—' : `${limit.used_percent.toFixed(1)}% used`));
+      }
+      if (snapshot.account.email && snapshot.account.email !== profile.account?.email) row.append(node('td', snapshot.account.email, 'error'));
+      table.append(row);
+    }
+    content.append(table);
   }
   if (profile.error) content.append(node('p', profile.error.message, 'error'));
   $('#details').showModal();
@@ -72,7 +94,7 @@ async function refresh() {
       if (profile.snapshot.account.email && profile.snapshot.account.email !== profile.account?.email) card.append(node('p', `Previous measurement account: ${profile.snapshot.account.email}`, 'error'));
       for (const limit of profile.snapshot.limits) {
         const quota = node('div', undefined, 'quota');
-        quota.append(node('div', `${label(limit)}: ${limit.used_percent == null ? 'Unknown' : limit.used_percent.toFixed(1) + '%'}`));
+        quota.append(node('div', `${label(limit)}: ${percent(limit.used_percent)}`));
         if (limit.used_percent != null) {
           const bar = node('progress'); bar.max = 100; bar.value = Math.min(100, limit.used_percent); quota.append(bar);
         }
@@ -129,15 +151,22 @@ function showOperation(operation) {
 }
 function updateOperation(operation) {
   selectedOperation = operation;
-  $('#progress').textContent = operation.message;
-  $('#operation-result').textContent = operation.result ? JSON.stringify(operation.result, null, 2) : '';
+  setText($('#progress'), operation.message);
+  setText($('#operation-result'), operation.result ? JSON.stringify(operation.result, null, 2) : '');
   $('#auth-url').hidden = !operation.authorization_url;
-  if (operation.authorization_url) $('#auth-url').href = operation.authorization_url;
-  $('#device-code').textContent = operation.user_code || '';
+  if (operation.authorization_url && $('#auth-url').href !== operation.authorization_url) $('#auth-url').href = operation.authorization_url;
+  setText($('#device-code'), operation.user_code || '');
+  $('#copy-code').hidden = !operation.user_code;
   $('#code-form').hidden = !operation.accepts_code;
   $('#cancel-operation').hidden = !!operation.finished_at;
   if (operation.finished_at) { source?.close(); refresh().catch(notice); }
 }
+$('#copy-code').onclick = async () => {
+  const code = $('#device-code');
+  try { await navigator.clipboard.writeText(code.textContent); $('#copy-code').textContent = 'Copied'; }
+  catch { getSelection().selectAllChildren(code); $('#copy-code').textContent = 'Selected — press Ctrl+C'; }
+  setTimeout(() => { $('#copy-code').textContent = 'Copy code'; }, 2000);
+};
 $('#cancel-operation').onclick = () => selectedOperation && api(`/operations/${selectedOperation.id}`, 'DELETE', {}).catch(notice);
 $('#code-form').onsubmit = async event => {
   event.preventDefault(); if (!selectedOperation?.profile_id) return;
