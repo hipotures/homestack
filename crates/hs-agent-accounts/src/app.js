@@ -123,11 +123,12 @@ async function refresh() {
     button(group, 'Check now', async () => showOperation(await api(`/profiles/${profile.id}/limits`, 'POST', {}))).disabled = !profile.enabled;
     button(group, 'Details', () => details(profile));
     if (providerCapabilities.get(profile.provider)?.includes('account_statistics')) button(group, 'Statistics', async () => showOperation(await api(`/profiles/${profile.id}/statistics`, 'POST', {}))).disabled = !profile.enabled;
-    button(group, profile.account ? 'Reauthenticate' : 'Authenticate', async () => showOperation(await api(`/profiles/${profile.id}/authentication`, 'POST', {})));
-    button(group, profile.enabled ? 'Disable' : 'Enable', async () => { await api(`/profiles/${profile.id}`, 'PATCH', { enabled: !profile.enabled }); await refresh(); });
     group.firstChild.classList.add('primary');
-    actions.append(group);
-    button(actions, 'Delete', async () => {
+    const more = node('div', undefined, 'more');
+    button(more, profile.account ? 'Reauthenticate' : 'Authenticate', async () => showOperation(await api(`/profiles/${profile.id}/authentication`, 'POST', {})));
+    button(more, profile.enabled ? 'Disable' : 'Enable', async () => { await api(`/profiles/${profile.id}`, 'PATCH', { enabled: !profile.enabled }); await refresh(); });
+    actions.append(group, more);
+    button(more, 'Delete', async () => {
       if (confirm(`Permanently delete "${profile.display_name}"? This removes credentials, configuration and all local history.`)) {
         await api(`/profiles/${profile.id}`, 'DELETE', { confirm: true }); await refresh();
       }

@@ -41,13 +41,16 @@ select option { background: var(--surface-3); }
 label { display: grid; gap: 6px; font-size: var(--fs-small); color: var(--muted); }
 .actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin-top: auto; padding-top: 4px; }
 .controls { display: flex; gap: 10px; }
-.seg { display: inline-flex; flex-wrap: wrap; gap: 2px; padding: 3px; border: 1px solid var(--border-strong); border-radius: var(--radius-ctl); }
+.seg { display: inline-flex; flex-wrap: nowrap; white-space: nowrap; gap: 2px; padding: 3px; border: 1px solid var(--border-strong); border-radius: var(--radius-ctl); }
 .seg button { border: 0; min-height: 30px; padding: 0 11px; border-radius: var(--radius-pill); color: var(--text-2); }
 .seg button:hover:not(:disabled) { color: var(--text); background: var(--surface-3); }
 .seg button:disabled { color: var(--faint); }
 .seg button.primary { color: var(--text); background: var(--surface-3); }
-button.danger { border: 0; color: var(--faint); padding: 0 6px; }
-button.danger:hover { color: var(--up); background: transparent; }
+.card > .actions { flex-direction: column; align-items: flex-start; gap: 6px; }
+.more { display: flex; flex-wrap: wrap; gap: 2px; margin-left: -8px; }
+.more button { border: 0; min-height: 30px; padding: 0 8px; color: var(--muted); white-space: nowrap; }
+.more button:hover:not(:disabled) { color: var(--text); background: transparent; }
+.more button.danger:hover { color: var(--up); }
 .link { border: 0; min-height: 0; padding: 0; color: var(--tok-uncached); text-decoration: underline; }
 .link:hover:not(:disabled) { background: none; }
 a { color: var(--tok-uncached); overflow-wrap: anywhere; }
@@ -84,4 +87,4 @@ pre:empty { display: none; }
 .history th { color: var(--muted); font-weight: 600; font-size: var(--fs-small); border-bottom: 1px solid var(--border); }
 .history td { font-family: var(--font-mono); color: var(--text-2); }
 button:focus-visible, a:focus-visible { outline: 2px solid var(--codex); outline-offset: 2px; }
-@media (max-width: 640px) { .actions { flex-direction: column; align-items: stretch; } .seg { justify-content: stretch; } .seg button { flex: 1; } }
+@media (max-width: 640px) { .seg { flex-wrap: wrap; } }
