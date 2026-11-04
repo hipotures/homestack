@@ -1586,7 +1586,13 @@ pub async fn run(ctx: &mut Context, options: super::Options) -> Result<i32, AppE
                     app.set_storage_json(result);
                 }
                 Update::Servers(servers) => app.set_servers(servers),
-                Update::Images(targets, images) => app.set_images(&targets, images),
+                Update::Images(targets, images) => {
+                    if let Ok(images) = &images {
+                        let names: Vec<&str> = images.servers.iter().map(|server| server.name.as_str()).collect();
+                        app.log(&clock.now(), &format!("images for {}: {}", names.join(", "), images.timing));
+                    }
+                    app.set_images(&targets, images);
+                }
                 Update::Defaults(pool, gold_pool, home, network) => {
                     app.pool = pool;
                     app.gold_pool = gold_pool;

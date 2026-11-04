@@ -59,6 +59,33 @@ pub struct Images {
     pub common: Option<(String, String)>,
     /// The recorded containers of an interrupted update, shown in the selector.
     pub resume: Option<String>,
+    /// How long each source took, for the log: `proxmox 0.4 s, registry 2.5 s`.
+    pub timing: String,
+}
+
+/// Time spent on each source while reading the images.
+#[derive(Default)]
+struct Timing(Vec<(&'static str, std::time::Duration)>, Option<std::time::Instant>);
+
+impl Timing {
+    fn start(&mut self) {
+        self.1 = Some(std::time::Instant::now());
+    }
+
+    /// `source` took the time since the last start.
+    fn took(&mut self, source: &'static str) {
+        if let Some(started) = self.1.replace(std::time::Instant::now()) {
+            self.0.push((source, started.elapsed()));
+        }
+    }
+
+    fn text(&self) -> String {
+        self.0
+            .iter()
+            .map(|(source, took)| format!("{source} {:.1} s", took.as_secs_f64()))
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
 }
 
 impl Images {
@@ -118,7 +145,9 @@ pub fn local_time(created: &str, offset: i64) -> Option<String> {
 /// The containers `vmids` (instances of `deploy_toml`), the image each was
 /// made from, and the images published lately, times shifted by `offset`.
 pub async fn read(deploy_toml: &Path, vmids: &[u32], offset: i64) -> Result<Images, String> {
-    if let Some(images) = common_images(deploy_toml, vmids, offset).await? {
+    let mut timing = Timing::default();
+    timing.start();
+    if let Some(images) = common_images(deploy_toml, vmids, offset, &mut timing).await? {
         return Ok(images);
     }
     let summary = deploy_toml.with_file_name("integrations/pangolin-sites.toml");
@@ -133,6 +162,7 @@ pub async fn read(deploy_toml: &Path, vmids: &[u32], offset: i64) -> Result<Imag
     }
     let config = DeployConfig::load(deploy_toml)?;
     let made = hs_deploy::deploy::images(&config).await?;
+    timing.took("proxmox");
     let mut chosen = Vec::new();
     for vmid in vmids {
         let instance = config
@@ -147,8 +177,9 @@ pub async fn read(deploy_toml: &Path, vmids: &[u32], offset: i64) -> Result<Imag
         chosen.push((*vmid, instance.name.clone(), image));
     }
     let current: Vec<String> = chosen.iter().filter_map(|(_, _, image)| image.clone()).collect();
-    let published: Vec<Image> = hs_core::registry::recent(&config.image, OFFERED, &current)
-        .await?
+    let found = hs_core::registry::recent(&config.image, OFFERED, &current).await?;
+    timing.took("registry");
+    let published: Vec<Image> = found
         .into_iter()
         .map(|published| Image {
             made: published
@@ -183,6 +214,7 @@ pub async fn read(deploy_toml: &Path, vmids: &[u32], offset: i64) -> Result<Imag
         published,
         common: None,
         resume: None,
+        timing: timing.text(),
     })
 }
 
@@ -324,7 +356,7 @@ pub async fn work(
 
 /// The images of service containers, when the first of `ids` is one: the
 /// service's identity comes from the container's description in Proxmox.
-async fn common_images(path: &Path, ids: &[u32], offset: i64) -> Result<Option<Images>, String> {
+async fn common_images(path: &Path, ids: &[u32], offset: i64, timing: &mut Timing) -> Result<Option<Images>, String> {
     use crate::services::instance;
     let Some(first) = ids.first() else { return Ok(None) };
     let config = DeployConfig::load(path)?;
@@ -337,6 +369,7 @@ async fn common_images(path: &Path, ids: &[u32], offset: i64) -> Result<Option<I
     for id in &ids[1..] {
         targets.push(instance::read(&pve, *id).await?);
     }
+    timing.took("proxmox");
     if targets
         .iter()
         .any(|t| (&t.repository, &t.service) != (&targets[0].repository, &targets[0].service))
@@ -355,11 +388,15 @@ async fn common_images(path: &Path, ids: &[u32], offset: i64) -> Result<Option<I
             .filter(|found| !found.is_empty()),
         None => None,
     };
+    timing.took("registry");
     let found = match found {
         Some(found) => found,
         None => {
             let source = common_source(&repository, &service).await?;
-            hs_core::registry::recent(&source.image("latest"), OFFERED, &installed).await?
+            timing.took("github");
+            let found = hs_core::registry::recent(&source.image("latest"), OFFERED, &installed).await?;
+            timing.took("manifest registry");
+            found
         }
     };
     let published: Vec<Image> = found
@@ -409,6 +446,7 @@ async fn common_images(path: &Path, ids: &[u32], offset: i64) -> Result<Option<I
         published,
         common: Some((repository, service)),
         resume: (!held.is_empty()).then(|| held.join(", ")),
+        timing: timing.text(),
     }))
 }
 
