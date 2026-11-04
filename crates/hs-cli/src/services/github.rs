@@ -121,6 +121,7 @@ pub fn image_publication(
         "otel" => "otel-",
         "ai-usage" => "ai-usage-",
         "metrics" => "metrics-",
+        "agent-accounts" => "agent-accounts-",
         _ => return Ok(None),
     };
     let base = format!("repos/{repository}");

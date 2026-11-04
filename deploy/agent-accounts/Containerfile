@@ -1,0 +1,19 @@
+FROM docker.io/library/alpine:3.24.2@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6 AS runtime-download
+RUN apk add --no-cache curl tar
+ARG CODEX_VERSION=0.166.0
+ARG CODEX_SHA256=a0bf572d2f93f056c6712a6da348e96078dc84f3885fd7be67807ef389cb3978
+RUN curl -fsSL "https://github.com/openai/codex/releases/download/rust-v${CODEX_VERSION}/codex-x86_64-unknown-linux-musl.tar.gz" -o /codex.tar.gz \
+    && echo "${CODEX_SHA256}  /codex.tar.gz" | sha256sum -c - \
+    && mkdir /runtime && tar -xzf /codex.tar.gz -C /runtime \
+    && mv /runtime/codex-x86_64-unknown-linux-musl /runtime/codex \
+    && /runtime/codex --version
+FROM docker.io/library/alpine:3.24.2@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6
+RUN apk add --no-cache ca-certificates tini \
+    && addgroup -g 10001 app && adduser -D -u 10001 -G app app \
+    && mkdir -p /home/app && chown app:app /home/app && chmod 0700 /home/app
+COPY --from=runtime-download /runtime/codex /opt/agent-accounts/codex
+COPY --chmod=0755 homestack-agent-accounts /usr/local/bin/homestack-agent-accounts
+ENV HOMESTACK_LISTEN=0.0.0.0:8080
+USER 10001:10001
+EXPOSE 8080
+ENTRYPOINT ["/sbin/tini", "-g", "--", "/usr/local/bin/homestack-agent-accounts"]

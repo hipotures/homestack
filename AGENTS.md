@@ -118,3 +118,10 @@ This future system is not yet specified. Do not build it, redesign E2E, create p
 - CI checks must succeed before publication. The package is attached to a GitHub Release, then the signed APT archive is rebuilt and published at `https://hipotures.github.io/homestack/apt/` through GitHub Pages. Ordinary branch pushes run checks only.
 - Documentation-only changes need no package release. APT publisher/bootstrap-only changes can republish the archive through the separate `Publish signed APT repository` workflow without creating a new package version.
 - Keep the archive private key only in the maintainer key store and the `APT_SIGNING_KEY` Actions secret. Commit only public keys and fingerprints. Never log or publish private signing material. Clients use the repository-scoped `Signed-By` keyring.
+
+# Agent Accounts image releases
+
+- Agent Accounts (`crates/hs-agent-accounts/`, `deploy/agent-accounts/`) has an independent image release line: annotated tag `agent-accounts-X.Y.Z` publishes `ghcr.io/hipotures/homestack-agent-accounts:X.Y.Z` as `linux/amd64`.
+- After building, manually verifying, reviewing, committing and pushing image-affecting changes, run `python3 scripts/tag-image.py --service agent-accounts`. It chooses the next patch, starting at `0.1.0`, on clean, pushed HEAD. Never move tags or overwrite published versions.
+- Ordinary branch pushes run checks only. Manifest-only and documentation-only changes need no image release. CLI/SDK versions are separate pinned build inputs.
+- The owner authorized versioned SQLite schema migrations for the initial three-task Agent Accounts implementation; this exception does not change other services or the general migration policy.

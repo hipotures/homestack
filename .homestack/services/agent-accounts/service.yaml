@@ -1,0 +1,26 @@
+schema: 3
+id: agent-accounts
+name: Agent Accounts
+image:
+  repository: ghcr.io/hipotures/homestack-agent-accounts
+runtime:
+  telemetry: homestack
+  ports:
+    - name: http
+      port: 8080
+      protocol: tcp
+  healthcheck:
+    type: http
+    port: http
+    path: /health/ready
+    expected_status: 200
+    heartbeat_seconds: 60
+persistence:
+  mount: /home/app
+  size: 4G
+  directories: [profiles, database, state, runtimes]
+exposure:
+  pangolin:
+    port: http
+    name: Agent Accounts
+    subdomain: agent-accounts

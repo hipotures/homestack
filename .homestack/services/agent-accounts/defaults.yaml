@@ -1,0 +1,12 @@
+schema: 3
+service: agent-accounts
+resources:
+  cores: 1
+  memory: 1G
+  swap: 0M
+  rootfs: 1G
+deployment:
+  hostname: agent-accounts
+  instances: 1
+  placement: single
+  state_model: local

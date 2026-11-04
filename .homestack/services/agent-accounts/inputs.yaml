@@ -1,0 +1,23 @@
+schema: 3
+service: agent-accounts
+inputs:
+  - id: interval_seconds
+    label: Usage check interval
+    description: Seconds between enabled profile usage checks.
+    type: integer
+    default: 300
+    min: 60
+    max: 3600
+    target:
+      type: environment
+      variable: AGENT_ACCOUNTS_INTERVAL_SECONDS
+  - id: probe_concurrency
+    label: Concurrent probes
+    description: Maximum simultaneous provider operations.
+    type: integer
+    default: 1
+    min: 1
+    max: 2
+    target:
+      type: environment
+      variable: AGENT_ACCOUNTS_PROBE_CONCURRENCY

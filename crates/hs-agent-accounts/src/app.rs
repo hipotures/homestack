@@ -1,0 +1,414 @@
+use crate::{
+    db::Database,
+    model::*,
+    process,
+    providers::{self, Provider},
+};
+use std::{
+    collections::HashMap,
+    path::PathBuf,
+    sync::{Arc, Mutex, PoisonError},
+    time::{Duration, Instant},
+};
+use tokio::sync::{Mutex as AsyncMutex, Semaphore};
+use tokio_util::sync::CancellationToken;
+
+pub struct Job {
+    pub value: Operation,
+    pub cancel: CancellationToken,
+}
+pub struct Context {
+    pub root: PathBuf,
+    pub db: Database,
+    pub providers: Vec<Arc<dyn Provider>>,
+    pub jobs: Mutex<HashMap<String, Job>>,
+    pub locks: Mutex<HashMap<String, Arc<AsyncMutex<()>>>>,
+    pub slots: Semaphore,
+    pub interval: u64,
+    pub heartbeat_seconds: u64,
+    pub heartbeat: Mutex<(Instant, u64)>,
+    pub shutdown: CancellationToken,
+}
+impl Context {
+    pub fn open(root: PathBuf, interval: u64, concurrency: usize, heartbeat_seconds: u64) -> Result<Arc<Self>> {
+        process::directory(&root)?;
+        let canonical = root
+            .canonicalize()
+            .map_err(|_| Failure::new("storage_failure", "Cannot resolve persistent storage"))?;
+        if canonical != root {
+            return Err(Failure::new(
+                "storage_failure",
+                "Persistent storage must not contain symlinks",
+            ));
+        }
+        if std::env::var("AGENT_ACCOUNTS_EPHEMERAL").as_deref() != Ok("1") {
+            let mounted = std::fs::read_to_string("/proc/self/mountinfo")
+                .unwrap_or_default()
+                .lines()
+                .any(|l| l.split_whitespace().nth(4) == root.to_str());
+            if !mounted {
+                return Err(Failure::new(
+                    "storage_failure",
+                    "Persistent storage must be mounted; AGENT_ACCOUNTS_EPHEMERAL=1 permits disposable local checks",
+                ));
+            }
+        }
+        for name in ["profiles", "database", "state", "runtimes"] {
+            process::directory(&root.join(name))?;
+        }
+        let db = Database::open(&root.join("database/accounts.db"))?;
+        let ctx = Arc::new(Self {
+            root,
+            db,
+            providers: providers::registered(),
+            jobs: Mutex::new(HashMap::new()),
+            locks: Mutex::new(HashMap::new()),
+            slots: Semaphore::new(concurrency),
+            interval,
+            heartbeat_seconds,
+            heartbeat: Mutex::new((Instant::now(), 0)),
+            shutdown: CancellationToken::new(),
+        });
+        for provider in &ctx.providers {
+            ctx.seed(provider.id())?;
+        }
+        for p in ctx.db.profiles()? {
+            if p.deleting {
+                ctx.delete_files(&p.id)?;
+                ctx.db.delete(&p.id)?;
+            }
+        }
+        Ok(ctx)
+    }
+    pub fn provider(&self, id: &str) -> Result<Arc<dyn Provider>> {
+        self.providers
+            .iter()
+            .find(|p| p.id() == id)
+            .cloned()
+            .ok_or_else(Failure::unsupported)
+    }
+    pub fn seed(&self, provider: &str) -> Result<()> {
+        if self.db.runtime(provider)?.is_some() {
+            return Ok(());
+        }
+        let version = match provider {
+            "codex" => "0.166.0",
+            _ => return Err(Failure::unsupported()),
+        };
+        let source = PathBuf::from(
+            std::env::var("AGENT_ACCOUNTS_BUNDLED_RUNTIMES").unwrap_or_else(|_| "/opt/agent-accounts".into()),
+        )
+        .join(provider);
+        let target = self.root.join("runtimes").join(provider).join(version);
+        process::directory(&target)?;
+        std::fs::copy(source, target.join(provider))
+            .map_err(|_| Failure::new("runtime_failure", "Bundled runtime is missing or cannot be installed"))?;
+        self.db.save_runtime(&Runtime {
+            provider: provider.into(),
+            version: version.into(),
+            previous_version: None,
+            latest_version: None,
+            checked_at: None,
+            last_result: None,
+        })
+    }
+    pub fn binary(&self, provider: &str) -> Result<PathBuf> {
+        let runtime = self
+            .db
+            .runtime(provider)?
+            .ok_or_else(|| Failure::new("runtime_failure", "No runtime pin is configured"))?;
+        let path = self
+            .root
+            .join("runtimes")
+            .join(provider)
+            .join(runtime.version)
+            .join(provider);
+        if !path.is_file() || path.is_symlink() {
+            return Err(Failure::new("runtime_failure", "Pinned runtime is missing"));
+        }
+        Ok(path)
+    }
+    pub fn lock(&self, id: &str) -> Arc<AsyncMutex<()>> {
+        self.locks
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .entry(id.into())
+            .or_insert_with(|| Arc::new(AsyncMutex::new(())))
+            .clone()
+    }
+    pub fn profiles(&self) -> Result<Vec<Profile>> {
+        let mut ps = self.db.profiles()?;
+        for p in &mut ps {
+            p.stale = self.stale(p);
+        }
+        Ok(ps)
+    }
+    pub fn stale(&self, p: &Profile) -> bool {
+        p.error.is_some()
+            || p.last_success.is_none_or(|t| now() - t > (self.interval * 2) as i64)
+            || p.snapshot
+                .as_ref()
+                .is_some_and(|s| s.limits.iter().any(|l| l.resets_at.is_some_and(|t| t <= now())))
+    }
+    pub fn create(&self, provider: &str, name: &str) -> Result<Profile> {
+        self.provider(provider)?;
+        let name = name.trim();
+        if name.is_empty() || name.chars().count() > 80 || name.chars().any(char::is_control) {
+            return Err(Failure::new(
+                "invalid_input",
+                "Display name must contain 1–80 printable characters",
+            ));
+        }
+        let p = Profile {
+            id: uuid::Uuid::new_v4().to_string(),
+            provider: provider.into(),
+            display_name: name.into(),
+            enabled: true,
+            deleting: false,
+            auth_status: "unauthenticated".into(),
+            account: None,
+            last_success: None,
+            last_attempt: None,
+            error: None,
+            failures: 0,
+            snapshot: None,
+            created_at: now(),
+            updated_at: now(),
+            stale: true,
+        };
+        process::prepare(&self.root, &p.id)?;
+        self.db.save(&p, None)?;
+        Ok(p)
+    }
+    pub fn update_operation(&self, id: &str, f: impl FnOnce(&mut Operation)) {
+        if let Some(j) = self.jobs.lock().unwrap_or_else(PoisonError::into_inner).get_mut(id) {
+            f(&mut j.value);
+        }
+    }
+    pub fn operation(&self, id: &str) -> Result<Operation> {
+        self.jobs
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(id)
+            .map(|j| j.value.clone())
+            .ok_or_else(|| Failure::new("not_found", "Operation not found"))
+    }
+    pub fn cancel_profile(&self, id: &str) {
+        for j in self.jobs.lock().unwrap_or_else(PoisonError::into_inner).values() {
+            if j.value.profile_id.as_deref() == Some(id) && !j.value.terminal() {
+                j.cancel.cancel();
+            }
+        }
+    }
+    pub fn begin(self: &Arc<Self>, p: &Profile, kind: &str) -> Result<Operation> {
+        let mut jobs = self.jobs.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(j) = jobs
+            .values()
+            .find(|j| j.value.profile_id.as_deref() == Some(&p.id) && !j.value.terminal())
+        {
+            if j.value.kind == kind {
+                return Ok(j.value.clone());
+            }
+            return Err(Failure::new(
+                "busy",
+                "This profile already has an operation in progress",
+            ));
+        }
+        if jobs.values().filter(|j| !j.value.terminal()).count() >= 32 {
+            return Err(Failure::new("busy", "Operation queue is full"));
+        }
+        if jobs.len() >= 128 {
+            jobs.retain(|_, j| !j.value.terminal() || now() - j.value.finished_at.unwrap_or(now()) < 600);
+        }
+        if jobs.len() >= 256 {
+            return Err(Failure::new("busy", "Operation history is full; retry shortly"));
+        }
+        let op = Operation {
+            id: uuid::Uuid::new_v4().to_string(),
+            profile_id: Some(p.id.clone()),
+            provider: p.provider.clone(),
+            kind: kind.into(),
+            status: "queued".into(),
+            message: "Waiting for a process slot".into(),
+            authorization_url: None,
+            user_code: None,
+            accepts_code: false,
+            error: None,
+            started_at: now(),
+            finished_at: None,
+        };
+        let cancel = self.shutdown.child_token();
+        jobs.insert(
+            op.id.clone(),
+            Job {
+                value: op.clone(),
+                cancel: cancel.clone(),
+            },
+        );
+        drop(jobs);
+        let ctx = self.clone();
+        let id = op.id.clone();
+        let profile = p.id.clone();
+        let kind = kind.to_owned();
+        tokio::spawn(async move {
+            let result = process::bounded(&cancel, if kind == "authentication" { 600 } else { 90 }, async {
+                let lock = ctx.lock(&profile);
+                let _guard = lock.lock().await;
+                let _slot = ctx
+                    .slots
+                    .acquire()
+                    .await
+                    .map_err(|_| Failure::new("cancelled", "Service is stopping"))?;
+                let mut p = ctx.db.profile(&profile)?;
+                if p.deleting {
+                    return Err(Failure::new("not_found", "Profile is being deleted"));
+                }
+                if kind != "authentication" && !p.enabled {
+                    return Err(Failure::new("disabled", "Profile is disabled"));
+                }
+                ctx.update_operation(&id, |o| {
+                    o.status = "running".into();
+                    o.message = "Contacting provider".into();
+                });
+                let provider = ctx.provider(&p.provider)?;
+                if kind == "authentication" {
+                    let account = provider.authenticate(ctx.clone(), p.clone(), id.clone()).await?;
+                    p.account = Some(account);
+                    p.auth_status = "authenticated".into();
+                    p.error = None;
+                    p.updated_at = now();
+                    ctx.db.save(&p, None)?;
+                    Ok(None)
+                } else if kind == "statistics" {
+                    let value = provider.statistics(&ctx, &p).await?;
+                    ctx.update_operation(&id, |o| o.message = value.to_string());
+                    Ok(None)
+                } else {
+                    p.last_attempt = Some(now());
+                    ctx.db.save(&p, None)?;
+                    let binary = ctx.binary(&p.provider)?;
+                    let result = process::bounded(&cancel, 60, provider.probe(&ctx, &p, &binary)).await;
+                    match result {
+                        Ok(snapshot) => {
+                            p.auth_status = "authenticated".into();
+                            p.account = Some(snapshot.account.clone());
+                            p.last_success = Some(snapshot.observed_at);
+                            p.error = None;
+                            p.failures = 0;
+                            p.snapshot = Some(snapshot.clone());
+                            p.updated_at = now();
+                            ctx.db.save(&p, Some(&snapshot))?;
+                            Ok(Some(snapshot))
+                        }
+                        Err(e) => {
+                            p.failures = p.failures.saturating_add(1);
+                            if e.code == "reauthentication_required" || e.code == "authentication_expired" {
+                                p.auth_status = e.code.clone();
+                            }
+                            p.error = Some(e.clone());
+                            p.updated_at = now();
+                            ctx.db.save(&p, None)?;
+                            Err(e)
+                        }
+                    }
+                }
+            })
+            .await;
+            let success = result.is_ok();
+            ctx.update_operation(&id, |o| {
+                o.finished_at = Some(now());
+                o.authorization_url = None;
+                o.user_code = None;
+                o.accepts_code = false;
+                match &result {
+                    Ok(_) => {
+                        o.status = "succeeded".into();
+                        if o.kind != "statistics" {
+                            o.message = "Completed".into();
+                        }
+                    }
+                    Err(e) => {
+                        o.status = if e.code == "cancelled" { "cancelled" } else { "failed" }.into();
+                        o.message = e.message.clone();
+                        o.error = Some(e.clone());
+                    }
+                }
+            });
+            if let Ok(op) = ctx.operation(&id) {
+                let _ = ctx.db.operation(&op);
+            }
+            if success
+                && kind == "authentication"
+                && let Ok(p) = ctx.db.profile(&profile)
+                && p.enabled
+            {
+                let _ = ctx.begin(&p, "probe");
+            }
+        });
+        Ok(op)
+    }
+    pub fn delete_files(&self, id: &str) -> Result<()> {
+        let path = process::profile_dir(&self.root, id)?;
+        if path.exists() {
+            std::fs::remove_dir_all(path).map_err(|_| {
+                Failure::new(
+                    "storage_failure",
+                    "Cannot remove profile files; deletion will resume on restart",
+                )
+            })?;
+        }
+        Ok(())
+    }
+    pub async fn scheduler(self: Arc<Self>) {
+        let mut timer = tokio::time::interval(Duration::from_secs(5));
+        timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            tokio::select! {_=self.shutdown.cancelled()=>break,_=timer.tick()=>{}};
+            match self.db.profiles() {
+                Ok(ps) => {
+                    for p in ps {
+                        if p.enabled
+                            && !p.deleting
+                            && p.auth_status == "authenticated"
+                            && p.last_attempt.is_none_or(|t| now() - t >= self.interval as i64)
+                        {
+                            let _ = self.begin(&p, "probe");
+                        }
+                    }
+                }
+                Err(e) => eprintln!("Scheduler cycle failed: {}", e.code),
+            }
+        }
+    }
+    pub async fn heartbeat(self: Arc<Self>, mut addr: std::net::SocketAddr) {
+        if addr.ip().is_unspecified() {
+            addr.set_ip(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
+        }
+        let Ok(client) = reqwest::Client::builder()
+            .no_proxy()
+            .timeout(Duration::from_secs(2))
+            .build()
+        else {
+            return;
+        };
+        let mut timer = tokio::time::interval(Duration::from_secs(self.heartbeat_seconds));
+        loop {
+            tokio::select! {_=self.shutdown.cancelled()=>break,_=timer.tick()=>{}};
+            if client
+                .get(format!("http://{addr}/health/heartbeat"))
+                .send()
+                .await
+                .is_ok_and(|r| r.status().is_success())
+            {
+                let mut h = self.heartbeat.lock().unwrap_or_else(PoisonError::into_inner);
+                h.0 = Instant::now();
+                h.1 = h.1.saturating_add(1);
+            }
+        }
+    }
+    pub fn liveness(&self) -> (bool, u64, u64) {
+        let h = self.heartbeat.lock().unwrap_or_else(PoisonError::into_inner);
+        let age = h.0.elapsed().as_secs();
+        (age <= self.heartbeat_seconds * 3, age, h.1)
+    }
+}
