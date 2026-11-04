@@ -300,34 +300,50 @@ async fn review<'a>(
     let mut pending = Vec::new();
     let mut building = Vec::new();
     let mut problems = Vec::new();
-    for source in sources {
+    // Each service asks the registry and GitHub; the services are asked side by side.
+    let checks = futures_util::future::join_all(sources.iter().map(|source| {
+        let deployed = instances.iter().any(|i| i.service == source.manifest.id);
+        async move {
+            if !deployed {
+                return None;
+            }
+            let newest = hs_core::registry::recent(&source.image("latest"), 1, &[])
+                .await
+                .map(|releases| releases.first().map(|release| tag(&release.image).to_owned()));
+            let Ok(published) = newest.clone() else {
+                return Some((newest, Ok(None)));
+            };
+            let service = source.manifest.id.clone();
+            let publication = tokio::task::spawn_blocking(move || {
+                github::image_publication(
+                    &crate::system::RealSystem::default(),
+                    REPOSITORY,
+                    &service,
+                    published.as_deref(),
+                )
+            })
+            .await
+            .map_err(|error| error.to_string())
+            .and_then(|result| result);
+            Some((newest, publication))
+        }
+    }))
+    .await;
+    for (source, check) in sources.iter().zip(checks) {
         let id = &source.manifest.id;
         let mut row = |text: String| rows.push(Row { id: id.clone(), text });
         let deployed: Vec<&instance::Instance> = instances.iter().filter(|i| &i.service == id).collect();
-        if deployed.is_empty() {
+        let Some((newest, publication)) = check else {
             continue;
-        }
-        let newest = match hs_core::registry::recent(&source.image("latest"), 1, &[]).await {
-            Ok(releases) => releases.first().map(|release| tag(&release.image).to_owned()),
+        };
+        let newest = match newest {
+            Ok(newest) => newest,
             Err(error) => {
                 problems.push(format!("{id}: releases unavailable: {error}"));
                 row(paint.red(&format!("releases unavailable: {error}")));
                 continue;
             }
         };
-        let service = id.clone();
-        let published = newest.clone();
-        let publication = tokio::task::spawn_blocking(move || {
-            github::image_publication(
-                &crate::system::RealSystem::default(),
-                REPOSITORY,
-                &service,
-                published.as_deref(),
-            )
-        })
-        .await
-        .map_err(|error| error.to_string())
-        .and_then(|result| result);
         // The newest release on its way, or failed, is noted before the published one.
         let mut note = String::new();
         match publication {
