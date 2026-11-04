@@ -1,8 +1,7 @@
 //! Read a repository's service manifests through `gh` without cloning it:
-//! the default branch's commit, the `.homestack` tree and the `*.yaml`
-//! blobs in it, each bounded by [`MAX_BYTES`]. Read only.
+//! one GraphQL request reads the branch's commit and the `.homestack`
+//! files, each bounded by [`MAX_BYTES`]. Read only.
 
-use base64::Engine;
 use serde_json::Value;
 
 use super::manifest::{Checked, MAX_BYTES, Manifest, parse};
@@ -229,39 +228,121 @@ fn publication_status(release: &str, run: &Value, jobs: &Value) -> Result<Public
     })
 }
 
+/// `gh api graphql` with `fields` as string variables: the answer's `data`.
+fn graphql(system: &dyn System, query: &str, fields: &[(&str, &str)]) -> Result<Value, String> {
+    if system.which("gh").is_none() {
+        return Err("Required local command 'gh' was not found".to_owned());
+    }
+    let mut argv: Vec<String> = ["gh", "api", "graphql", "--hostname", "github.com", "-f"]
+        .map(str::to_owned)
+        .to_vec();
+    argv.push(format!("query={query}"));
+    for (name, value) in fields {
+        argv.push("-f".to_owned());
+        argv.push(format!("{name}={value}"));
+    }
+    let output = system
+        .run(&argv)
+        .map_err(|error| format!("Could not run gh: {error}"))?;
+    if output.code != 0 {
+        let reason = output.stderr.lines().next().unwrap_or("no details").trim().to_owned();
+        return Err(format!("GitHub request failed: {reason}"));
+    }
+    let answer: Value =
+        serde_json::from_str(&output.stdout).map_err(|_| "GitHub API returned invalid JSON".to_owned())?;
+    if let Some(error) = answer["errors"].as_array().and_then(|errors| errors.first()) {
+        let reason = error["message"].as_str().unwrap_or("no details");
+        return Err(format!("GitHub request failed: {reason}"));
+    }
+    Ok(answer["data"].clone())
+}
+
+/// A tree entry's Git mode as the octal text Git writes: `040000`, `100644`.
+fn mode(entry: &Value) -> String {
+    entry["mode"]
+        .as_u64()
+        .map(|mode| format!("{mode:06o}"))
+        .unwrap_or_default()
+}
+
+/// The entries of a tree entry that GraphQL read with it.
+fn children(entry: &Value) -> Vec<Value> {
+    entry["object"]["entries"].as_array().cloned().unwrap_or_default()
+}
+
+/// The text of a regular file entry, bounded by [`MAX_BYTES`].
+fn file_text(entry: &Value) -> Result<String, String> {
+    if !matches!(mode(entry).as_str(), "100644" | "100755") || entry["type"] != "blob" {
+        return Err("not a regular file; symlinks are refused".into());
+    }
+    let blob = &entry["object"];
+    let size = blob["byteSize"].as_u64().ok_or("GitHub did not report the file size")?;
+    if size > MAX_BYTES {
+        return Err(format!("{size} bytes; the limit is {MAX_BYTES}"));
+    }
+    if blob["isBinary"] == true {
+        return Err("not UTF-8 text".to_owned());
+    }
+    match blob["text"].as_str() {
+        Some(text) if blob["isTruncated"] != true => Ok(text.to_owned()),
+        _ => Err("GitHub returned an unexpected file".to_owned()),
+    }
+}
+
 /// The manifests of `repository` at the head of `branch` (its default
-/// branch; read from GitHub when the catalog did not say).
+/// branch; read from GitHub when the catalog did not say). One GraphQL
+/// request reads the commit and every `.homestack` file needed.
 pub fn discover(system: &dyn System, repository: &str, branch: Option<&str>) -> Result<Discovery, String> {
-    let base = format!("repos/{repository}");
-    let branch = match branch.filter(|branch| !branch.is_empty()) {
-        Some(branch) => branch.to_owned(),
-        None => {
-            let repo = get(system, &base)?.ok_or_else(|| format!("{repository} was not found"))?;
-            text(&repo, "/default_branch")?.to_owned()
-        }
+    let (owner, name) = repository
+        .split_once('/')
+        .ok_or_else(|| format!("{repository} is not OWNER/NAME"))?;
+    let branch = branch.filter(|branch| !branch.is_empty());
+    // `.homestack`, its files and `services`, each service and its files.
+    let entry = |inner: &str| format!("entries{{name mode type oid object{{...B{inner}}}}}");
+    let services = entry(&format!(" ... on Tree{{{}}}", entry("")));
+    let homestack = entry(&format!(" ... on Tree{{{services}}}"));
+    let target = format!(
+        "target{{... on Commit{{oid file(path:\".homestack\"){{mode type object{{... on Tree{{{homestack}}}}}}}}}}}"
+    );
+    let (head, variables) = match branch {
+        Some(_) => (format!("ref(qualifiedName:$ref){{name {target}}}"), ",$ref:String!"),
+        None => (format!("defaultBranchRef{{name {target}}}"), ""),
     };
-    let head = get(system, &format!("{base}/branches/{}", segment(&branch)))?
-        .ok_or_else(|| format!("Branch {branch} of {repository} was not found"))?;
-    let commit = text(&head, "/commit/sha")?.to_owned();
-    let root = get(
-        system,
-        &format!("{base}/git/trees/{}", text(&head, "/commit/commit/tree/sha")?),
-    )?
-    .ok_or_else(|| "The commit's tree was not found".to_owned())?;
+    let query = format!(
+        "query($owner:String!,$name:String!{variables}){{repository(owner:$owner,name:$name){{{head}}}}} \
+         fragment B on Blob{{byteSize isBinary isTruncated text}}"
+    );
+    let qualified = branch.map(|branch| format!("refs/heads/{branch}"));
+    let mut fields = vec![("owner", owner), ("name", name)];
+    if let Some(qualified) = &qualified {
+        fields.push(("ref", qualified));
+    }
+    let data = graphql(system, &query, &fields)?;
+    let found = &data["repository"];
+    if found.is_null() {
+        return Err(format!("{repository} was not found"));
+    }
+    let head = &found[if branch.is_some() { "ref" } else { "defaultBranchRef" }];
+    if head.is_null() {
+        return Err(match branch {
+            Some(branch) => format!("Branch {branch} of {repository} was not found"),
+            None => format!("{repository} has no default branch"),
+        });
+    }
     let mut discovery = Discovery {
         repository: repository.to_owned(),
-        branch,
-        commit,
+        branch: text(head, "/name")?.to_owned(),
+        commit: text(head, "/target/oid")?.to_owned(),
         problem: None,
         files: Vec::new(),
     };
-    let entries = |tree: &Value| tree["tree"].as_array().cloned().unwrap_or_default();
-    let Some(directory) = entries(&root).into_iter().find(|entry| entry["path"] == ".homestack") else {
+    let directory = &head["target"]["file"];
+    if directory.is_null() {
         return Ok(discovery);
-    };
-    match (directory["mode"].as_str(), directory["type"].as_str()) {
-        (Some("040000"), Some("tree")) => {}
-        (Some("120000"), _) => {
+    }
+    match (mode(directory).as_str(), directory["type"].as_str()) {
+        ("040000", Some("tree")) => {}
+        ("120000", _) => {
             discovery.problem = Some(".homestack is a symlink; symlinks are refused".to_owned());
             return Ok(discovery);
         }
@@ -270,13 +351,12 @@ pub fn discover(system: &dyn System, repository: &str, branch: Option<&str>) -> 
             return Ok(discovery);
         }
     }
-    let tree = get(system, &format!("{base}/git/trees/{}", text(&directory, "/sha")?))?
-        .ok_or_else(|| "The .homestack tree was not found".to_owned())?;
-    let mut candidates: Vec<Value> = entries(&tree)
-        .into_iter()
-        .filter(|entry| entry["path"].as_str().is_some_and(|name| name.ends_with(".yaml")))
+    let tree = children(directory);
+    let mut candidates: Vec<&Value> = tree
+        .iter()
+        .filter(|entry| entry["name"].as_str().is_some_and(|name| name.ends_with(".yaml")))
         .collect();
-    candidates.sort_by(|a, b| a["path"].as_str().cmp(&b["path"].as_str()));
+    candidates.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
     if candidates.len() > MAX_FILES {
         discovery.problem = Some(format!(
             "{} manifest files; only the first {MAX_FILES} were read",
@@ -285,76 +365,50 @@ pub fn discover(system: &dyn System, repository: &str, branch: Option<&str>) -> 
         candidates.truncate(MAX_FILES);
     }
     for entry in candidates {
-        let path = format!(".homestack/{}", entry["path"].as_str().unwrap_or_default());
-        let blob = entry["sha"].as_str().unwrap_or_default().to_owned();
-        let manifest = match (entry["mode"].as_str(), entry["type"].as_str()) {
-            (Some("120000"), _) => Err("symlinks are refused".to_owned()),
-            (Some("100644" | "100755"), Some("blob")) => match entry["size"].as_u64() {
-                Some(size) if size > MAX_BYTES => Err(format!("{size} bytes; the limit is {MAX_BYTES}")),
-                Some(_) => read_blob(system, &base, &blob).and_then(|text| parse(&text)),
-                None => Err("GitHub did not report the file size".to_owned()),
-            },
-            _ => Err("not a regular file".to_owned()),
-        };
         discovery.files.push(ManifestFile {
-            path,
-            blob,
-            manifest,
+            path: format!(".homestack/{}", entry["name"].as_str().unwrap_or_default()),
+            blob: entry["oid"].as_str().unwrap_or_default().to_owned(),
+            manifest: file_text(entry).and_then(|text| parse(&text)),
             releases: None,
         });
     }
-    if let Some(services) = entries(&tree).into_iter().find(|entry| entry["path"] == "services") {
-        let groups = match read_tree(system, &base, &services, ".homestack/services") {
-            Ok(groups) => groups,
-            Err(error) => {
-                discovery.problem = Some(error);
-                Vec::new()
-            }
+    if let Some(services) = tree.iter().find(|entry| entry["name"] == "services") {
+        let groups = if mode(services) == "040000" && services["type"] == "tree" {
+            children(services)
+        } else {
+            discovery.problem = Some(".homestack/services: expected a real directory; symlinks are refused".to_owned());
+            Vec::new()
         };
         if discovery.files.len() + groups.len() > MAX_FILES {
             return Err(format!("More than {MAX_FILES} service definitions"));
         }
-        // Each `gh api` call costs about half a second: read the services,
-        // and the three members of each, side by side.
-        let read = |group: &Value| {
-            let id = group["path"].as_str().unwrap_or_default();
+        for group in &groups {
+            let id = group["name"].as_str().unwrap_or_default();
             let directory = format!(".homestack/services/{id}");
-            let members = read_tree(system, &base, group, &directory)?;
-            if members.iter().filter_map(|m| m["path"].as_str()).any(|name| {
-                name.ends_with(".yaml") && !["service.yaml", "defaults.yaml", "inputs.yaml"].contains(&name)
-            }) {
-                return Err(format!("{directory}: unexpected YAML member"));
-            }
-            let texts = std::thread::scope(|scope| {
-                ["service.yaml", "defaults.yaml", "inputs.yaml"]
-                    .map(|name| {
-                        let (members, directory, base) = (&members, &directory, &base);
-                        scope.spawn(move || {
-                            let member = members
-                                .iter()
-                                .find(|entry| entry["path"] == name)
-                                .ok_or_else(|| format!("{directory}/{name}: missing member"))?;
-                            read_regular(system, base, member).map_err(|e| format!("{directory}/{name}: {e}"))
-                        })
-                    })
-                    .map(|reading| reading.join().unwrap_or_else(|_| Err("reading panicked".to_owned())))
-            });
-            let [service, defaults, inputs] = texts;
-            super::schema3::parse(&service?, &defaults?, &inputs?, id)
-        };
-        let manifests: Vec<_> = std::thread::scope(|scope| {
-            let readings: Vec<_> = groups.iter().map(|group| scope.spawn(|| read(group))).collect();
-            readings
-                .into_iter()
-                .map(|reading| reading.join().unwrap_or_else(|_| Err("reading panicked".to_owned())))
-                .collect()
-        });
-        for (group, manifest) in groups.iter().zip(manifests) {
-            let directory = format!(".homestack/services/{}", group["path"].as_str().unwrap_or_default());
+            let manifest = (|| {
+                if mode(group) != "040000" || group["type"] != "tree" {
+                    return Err(format!("{directory}: expected a real directory; symlinks are refused"));
+                }
+                let members = children(group);
+                if members.iter().filter_map(|m| m["name"].as_str()).any(|name| {
+                    name.ends_with(".yaml") && !["service.yaml", "defaults.yaml", "inputs.yaml"].contains(&name)
+                }) {
+                    return Err(format!("{directory}: unexpected YAML member"));
+                }
+                let mut texts = Vec::new();
+                for name in ["service.yaml", "defaults.yaml", "inputs.yaml"] {
+                    let member = members
+                        .iter()
+                        .find(|entry| entry["name"] == name)
+                        .ok_or_else(|| format!("{directory}/{name}: missing member"))?;
+                    texts.push(file_text(member).map_err(|e| format!("{directory}/{name}: {e}"))?);
+                }
+                super::schema3::parse(&texts[0], &texts[1], &texts[2], id)
+            })();
             discovery.files.push(ManifestFile {
                 path: format!("{directory}/service.yaml"),
                 // The immutable directory tree binds all three component blobs.
-                blob: group["sha"].as_str().unwrap_or_default().to_owned(),
+                blob: group["oid"].as_str().unwrap_or_default().to_owned(),
                 manifest,
                 releases: None,
             });
@@ -385,47 +439,4 @@ pub fn discover(system: &dyn System, repository: &str, branch: Option<&str>) -> 
         }
     }
     Ok(discovery)
-}
-
-fn read_blob(system: &dyn System, base: &str, sha: &str) -> Result<String, String> {
-    let blob = get(system, &format!("{base}/git/blobs/{sha}"))?.ok_or_else(|| "The file was not found".to_owned())?;
-    if blob["encoding"] != "base64" || blob["size"].as_u64().is_none_or(|size| size > MAX_BYTES) {
-        return Err("GitHub returned an unexpected file".to_owned());
-    }
-    let packed: String = text(&blob, "/content")?
-        .chars()
-        .filter(|c| !c.is_ascii_whitespace())
-        .collect();
-    let bytes = base64::engine::general_purpose::STANDARD
-        .decode(packed)
-        .map_err(|_| "GitHub returned invalid file content".to_owned())?;
-    if bytes.len() as u64 > MAX_BYTES {
-        return Err(format!("larger than {MAX_BYTES} bytes"));
-    }
-    String::from_utf8(bytes).map_err(|_| "not UTF-8 text".to_owned())
-}
-
-fn read_tree(system: &dyn System, base: &str, entry: &Value, path: &str) -> Result<Vec<Value>, String> {
-    if entry["mode"] != "040000" || entry["type"] != "tree" {
-        return Err(format!("{path}: expected a real directory; symlinks are refused"));
-    }
-    let tree = get(system, &format!("{base}/git/trees/{}", text(entry, "/sha")?))?
-        .ok_or_else(|| format!("{path}: tree unavailable"))?;
-    if tree["truncated"] == true {
-        return Err(format!("{path}: truncated tree"));
-    }
-    tree["tree"]
-        .as_array()
-        .cloned()
-        .ok_or_else(|| format!("{path}: invalid tree"))
-}
-
-fn read_regular(system: &dyn System, base: &str, entry: &Value) -> Result<String, String> {
-    if !matches!(entry["mode"].as_str(), Some("100644" | "100755")) || entry["type"] != "blob" {
-        return Err("not a regular file; symlinks are refused".into());
-    }
-    if entry["size"].as_u64().is_none_or(|size| size > MAX_BYTES) {
-        return Err(format!("missing size or larger than {MAX_BYTES} bytes"));
-    }
-    read_blob(system, base, text(entry, "/sha")?)
 }
