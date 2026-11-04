@@ -273,7 +273,7 @@
       const history=w.history||{},current=w.current;
       const minutesAt=t=>{let v=null;for(const [at,n]of history.window_minutes||[])if(at<=t)v=n;return v;};
       const relevant=m=>m>0&&(weekly?m===10080:m<1440);
-      const who=`${agents[w.agent]} · ${w.profile.slice(0,8)}${w.group?" · "+w.group:""}`;
+      const who=`${agents[w.agent]}${w.group?" · "+w.group:""}`;
       const resets=new Map(history.reset_timestamp_seconds||[]),used=new Map(history.used_percent||[]),exhausted=new Map(history.exhausted||[]);
       if(enabledEvents){
         let wasFull=false,previous=0,previousReset=null;
@@ -285,16 +285,25 @@
       }
       if(enabledPeriods){
         const periods=new Map();
-        for(const [t,reset]of resets){const minutes=minutesAt(t);if(relevant(minutes)&&reset>=range.start&&reset-minutes*60<=range.end)periods.set(reset,{reset,minutes,live:false});}
+        for(const [t,reset]of resets){const minutes=minutesAt(t);if(relevant(minutes)&&reset<=now&&reset>=range.start&&reset-minutes*60<=range.end)periods.set(reset,{reset,minutes,live:false});}
         if(current&&relevant(current.window_minutes)&&current.reset_timestamp_seconds>now&&current.reset_timestamp_seconds<=now+current.window_minutes*60+3600){
           const reset=current.reset_timestamp_seconds;periods.set(reset,{reset,minutes:current.window_minutes,live:true});end=Math.max(end,reset);
         }
         for(const {reset,minutes,live}of periods.values()){
           const until=live?reset:Math.min(reset,range.end),start=Math.max(range.start,reset-minutes*60);
           if(until<=start)continue;
-          areas.push([{name:`${who} · ${minutes===10080?"7-day":minutes/60+"-hour"} reset ${new Date(reset*1000).toLocaleString()}`,xAxis:start*1000,label:{formatter:`${agents[w.agent]} · ${w.profile.slice(0,6)} · ${minutes===10080?"7d":minutes/60+"h"} → ${timeLabel(reset,range)}`},itemStyle:{color:AIUsage.colorFor(agents[w.agent]),opacity:.07}},{xAxis:until*1000}]);
+          areas.push([{name:`${who} · ${minutes===10080?"7-day":minutes/60+"-hour"} reset ${new Date(reset*1000).toLocaleString()}`,xAxis:start*1000,label:{formatter:`${timeLabel(reset,range)} · ${agents[w.agent]}${w.group?" · "+w.group.replace("Claude and GPT models","Claude & GPT").replace("Gemini Models","Gemini"):""} · ${minutes===10080?"7d":minutes/60+"h"}`},itemStyle:{color:AIUsage.colorFor(agents[w.agent]),opacity:.07}},{xAxis:until*1000}]);
         }
       }
+    }
+    const labelWidth=Math.max(120,Math.min(300,$("trend-chart").clientWidth-40));
+    const labelSpan=(end-range.start)*labelWidth/Math.max(1,$("trend-chart").clientWidth-80),lanes=[];
+    for(const area of [...areas].sort((a,b)=>a[1].xAxis-b[1].xAxis)){
+      const edge=area[1].xAxis/1000;
+      let lane=lanes.findIndex(right=>right<edge-labelSpan);
+      if(lane<0)lane=lanes.length;
+      lanes[lane]=edge;
+      Object.assign(area[0].label,{offset:[0,lane*18],width:labelWidth});
     }
     return {events,areas,end};
   }
@@ -321,9 +330,6 @@
     for(const b of document.querySelectorAll("[data-metric]"))b.setAttribute("aria-pressed",String(b.dataset.metric===metric));
     $("trend-legend").innerHTML=visible.map(s=>`<span><i class="sw" style="background:${s.color||AIUsage.colorFor(s.key||s.name)}"></i>${esc(s.name)}</span>`).join("");
     $("trend-chips").innerHTML=first>range.start?`<span class="chip">data since ${timeLabel(first,range)}</span>`:"";
-    // Runs of at least three empty buckets inside the data span are marked as gaps.
-    const gaps=[];let run=null;
-    for(const t of times.filter(t=>t>=first&&t<range.partial_start)){if(!(stack.get(t)>0)){run=run||[t,t];run[1]=t;}else{if(run&&(run[1]-run[0])/range.step>=2)gaps.push(run);run=null;}}
     const peak=[...stack].filter(([t])=>t>=first).reduce((m,p)=>p[1]>m[1]?p:m,[0,0]);
     trendChart=trendChart||AIUsage.init($("trend-chart"));
     trendChart.setOption({
@@ -336,7 +342,6 @@
       series:[...visible.map((s,i)=>AIUsage.bar(s.name,(m=>times.filter(t=>t>=first).map(t=>[t*1000,m.get(t)||0]))(new Map(s.points)),s.key||s.name,{
         id:s.name,barMaxWidth:28,...(s.color?{itemStyle:{color:s.color}}:{}),
         markPoint:i===visible.length-1&&peak[1]>0?{...AIUsage.peak(()=>`peak ${timeLabel(peak[0],range)}  ${fmtShort(peak[1])}`),data:[{coord:[peak[0]*1000,peak[1]]}]}:undefined,
-        markArea:i===0&&gaps.length?{...AIUsage.gaps([]),data:gaps.map(([a,b])=>[{xAxis:(a-range.step/2)*1000,name:`gap ${timeLabel(a,range)}–${timeLabel(b+range.step,range)}`},{xAxis:(b+range.step/2)*1000}])}:undefined,
       })), {id:"quota-overlay",type:"line",data:[],showSymbol:false,silent:false,
         markLine:{symbol:["none","none"],lineStyle:{type:"dashed",width:1.5},label:{show:false},tooltip:{formatter:p=>esc(p.name)},data:overlay.events},
         markArea:{silent:false,label:{show:true,position:"insideTopRight",distance:8,color:css("--muted"),fontSize:10,overflow:"truncate",width:210},tooltip:{formatter:p=>esc(p.name)},data:overlay.areas}

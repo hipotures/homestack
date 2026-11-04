@@ -8,7 +8,7 @@ next reset. Unchecking the window control restores the ordinary time axis.
 
 Quota data comes from Agent Accounts Prometheus gauges, independently of token
 telemetry. Host and project filters do not scope account-wide quota observations;
-the agent filter does. Each marker identifies the provider, profile and window.
+the agent filter does. Each marker identifies the provider, model group and window.
 It is a sampled exhaustion observation, not an exact provider request failure.
 Maximum utilization/exhaustion over each query interval preserves brief observed
 exhaustion in long views; reset and duration use the last observation. Historical
@@ -34,3 +34,13 @@ exhaustion data is exposed as `exhausted`. A focused check with an actual local
 Prometheus OTLP receiver, compiled AI Usage and Chromium confirmed fresh 5-hour
 areas on 1h/24h, weekly areas on 7d and future reset boundaries. Samples at 30%
 and 65% utilization with an explicit false exhaustion flag produced no markers.
+
+Reset labels use separate rows when their text would overlap and omit internal
+profile identifiers. Superseded future reset estimates are not shaded; only the
+fresh current reset extends the axis. Idle activity gaps have no shading or labels.
+Quota history/current queries run concurrently, alongside per-selection quantiles.
+The global-build cache lock is released before these reads so unrelated agent
+selections are not serialized behind them. Temporary Chromium checks covered five
+overlapping windows without label collisions. A delayed local Prometheus fixture
+confirmed two 0.6-second quota reads and independent selections each complete in
+approximately 0.61 seconds; this is not a production latency measurement.

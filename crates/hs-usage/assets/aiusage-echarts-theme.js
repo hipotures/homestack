@@ -231,10 +231,6 @@
       ...extra,
     };
   }
-  /** visible gap in activity, e.g. [['01:08','01:16']] */
-  function gaps(ranges, label = 'gap') {
-    return { silent: true, data: ranges.map(([a, b]) => [{ xAxis: a, name: label }, { xAxis: b }]) };
-  }
   /** peak marker with a compact label */
   function peak(formatter = (p) => p.value) {
     return {
@@ -266,5 +262,5 @@
   }
 
   global.AIUsage = { THEME, build, register, init, refresh, colorFor, fmt, RANGES, bucketFor,
-                     bar, area, gaps, peak, nonEmpty, tooltipFormatter };
+                     bar, area, peak, nonEmpty, tooltipFormatter };
 })(window);
