@@ -10,8 +10,11 @@ Choose the published image version, persistent storage and Pangolin domain.
 Pangolin provides external HTTPS and authentication. Internal HTTP uses port
 8080. Keep direct access restricted to the management network.
 
-The image uses Alpine 3.24.2 and the official Codex 0.166.0 musl binary,
-verified against its release SHA-256. Tini reaps subprocess descendants. The
+The image uses Alpine 3.24.2, official Codex 0.166.0 and Claude Code 2.1.318
+musl binaries verified against release SHA-256 values, and Claude Agent SDK
+0.3.318. Node.js runs only the short-lived usage helper. Bash, libgcc,
+libstdc++ and ripgrep cover the documented Claude musl dependencies.
+Tini reaps subprocess descendants. The
 Rust service runs as UID/GID 10001. HomeStack must preserve ownership of the
 persistent mount. Nothing baked into `/home/app` is required for initialization.
 
@@ -48,7 +51,7 @@ resumes at startup. Other profiles remain independent.
 
 ## Providers and API
 
-The initial provider is Codex. Device authentication uses the official App
+Supported providers are Codex and Claude Code. Device authentication uses the official App
 Server protocol. Open the URL and enter the device code shown by the UI;
 no pasted authorization code is required. The provider owns token persistence
 and renewal. API-key accounts are not subscription-monitoring profiles.
@@ -63,7 +66,8 @@ passing never implies zero usage or restored availability.
 REST resources are under `/api/v1`: `providers`, `profiles`, `runtimes`,
 `operations`, and `health`. Profile subresources include `authentication`,
 `limits`, `history` (latest 100 stored snapshots), and `statistics`.
-POST authentication/limits/statistics returns an operation ID. Read
+POST authentication/limits/statistics returns an operation ID. Unsupported
+provider statistics return an explicit unsupported-capability operation error. Read
 `operations/<id>` or subscribe to `operations/<id>/events` for progress.
 Operations are in-memory with sanitized completed summaries in SQLite;
 authentication must be restarted after service restart.
@@ -71,7 +75,9 @@ authentication must be restarted after service restart.
 Mutation requests require `Content-Type: application/json`. Profile creation
 accepts `provider` and `display_name`; PATCH accepts `enabled`; DELETE requires
 `{"confirm":true}`. No arbitrary RPC, command, file or terminal interface exists.
-The UI is served by Rust from embedded static assets.
+Claude code submission uses POST `profiles/<id>/authentication/code` with
+`{"code":"..."}` only while that selected profile awaits input. The UI is
+served by Rust from embedded static assets.
 
 ## Configuration
 
@@ -114,3 +120,67 @@ the disposable profile removed. No actual account authentication or successful
 quota reading was performed; credentials were not imported. These checks are
 OCI evidence, not a Proxmox LXC replacement test. Probe memory under an
 authenticated workload remains unmeasured.
+
+## Claude adapter and experimental dependency
+
+Claude subscription login uses the official `claude auth login --claudeai`
+command. Version 2.1.318 supports ordinary stdin/stdout, including URL display
+and pasted authorization codes; no PTY or general terminal endpoint is needed.
+The selected profile supplies HOME, CLAUDE_CONFIG_DIR and XDG directories.
+`claude auth status --json` must report that exact configuration directory.
+Cloud/API-key environment overrides and parent Claude session variables are
+not inherited. Both DISABLE_AUTOUPDATER and DISABLE_UPDATES are set to 1.
+
+The short-lived ESM helper is packaged with a dependency lockfile. Its stdin
+request is `{version:1,id,binary}`; its stdout reply has the same version/ID,
+`ok`, and either account-limit data or a categorized error. Only Rust selects
+the binary, launches the process, enforces deadlines and stores observations.
+The helper has a 45-second abort timer within Rust's 60-second probe budget.
+
+The SDK `query()` input is an async iterator that never yields a user message.
+After initialization, it invokes
+`usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET({skipBehaviors:true})`
+and closes the query. It disables tools, hooks, project/local settings,
+filesystem/account MCP connections, IDE integration and session persistence.
+This control method is experimental and isolated behind the Claude adapter;
+an incompatible change becomes a provider failure, not a service crash.
+
+SDK 0.3.318 plan utilization is already 0–100. Five-hour, seven-day,
+OAuth-app, Opus/Sonnet and model-scoped windows are retained when supplied.
+Optional extra spending uses a valid used/limit ratio or the supplied percent.
+Session totals and local transcript analysis are deliberately not collected.
+Missing fields are unknown. No active conversation is required.
+
+Provider references:
+
+- https://learn.chatgpt.com/docs/app-server
+- https://github.com/openai/codex/blob/rust-v0.166.0/codex-rs/app-server-protocol/src/protocol/v2/account.rs
+- https://code.claude.com/docs/en/authentication
+- https://code.claude.com/docs/en/setup
+- https://github.com/pingdotgg/t3code/blob/main/apps/server/src/provider/ClaudeProvider.ts
+- https://github.com/pingdotgg/t3code/blob/main/apps/server/src/provider/claudeUsageLimits.ts
+- The installed `@anthropic-ai/claude-agent-sdk` 0.3.318 `sdk.d.ts` is the
+  authoritative signature/percentage reference for this helper.
+
+### Task 2 verification evidence
+
+The production image built successfully and was 785,872,222 bytes unpacked.
+It ran under rootless Podman with the declared 1 CPU / 1 GiB / no-swap limits
+and the Task 1 persistent volume. Codex's pin survived and Claude's pin was
+seeded independently. Two Claude profiles and one Codex profile coexisted.
+Both Claude `auth status` calls reported their selected configuration directory;
+neither was logged in. Claude login produced a URL and pasted-code prompt,
+and cancellation left only Tini and the Rust service running.
+
+Invoked directly with an isolated unauthenticated profile, the packaged SDK
+helper returned protocol version 1 and its request ID, exited successfully in
+0.87 seconds, and reported `rate_limits_available=false`. No prompt was
+submitted, no unavailable quota was replaced with zero, and no helper/CLI
+process remained. This proves initialization and termination without a login,
+not authenticated subscription retrieval or token-accounting behavior.
+
+A Chromium mobile check verified both-provider cards, the Claude URL/code
+form and cancellation, with no page errors or horizontal overflow. All disabled
+profiles survived service restart and were then deleted through the API.
+Authenticated-account coexistence, account identity confirmation and genuine
+Claude quota values remain unverified because no credentials were imported.

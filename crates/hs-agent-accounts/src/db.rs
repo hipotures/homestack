@@ -116,14 +116,8 @@ impl Database {
         let mut safe = serde_json::to_value(op).map_err(error)?;
         safe["authorization_url"] = serde_json::Value::Null;
         safe["user_code"] = serde_json::Value::Null;
-        self.0
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .execute(
-                "INSERT OR REPLACE INTO operations(id,summary) VALUES(?1,?2)",
-                params![op.id, safe.to_string()],
-            )
-            .map_err(error)?;
+        let db = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        db.execute("INSERT OR REPLACE INTO operations(id,summary) SELECT ?1,?2 WHERE ?3 IS NULL OR EXISTS(SELECT 1 FROM profiles WHERE id=?3)", params![op.id,safe.to_string(),op.profile_id]).map_err(error)?;
         Ok(())
     }
 }

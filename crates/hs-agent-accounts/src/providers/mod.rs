@@ -1,3 +1,4 @@
+pub mod claude;
 pub mod codex;
 use crate::{app::Context, model::*};
 use serde_json::{Value, json};
@@ -14,7 +15,13 @@ pub trait Provider: Send + Sync {
         ]
     }
     fn probe<'a>(&'a self, ctx: &'a Context, p: &'a Profile, binary: &'a Path) -> ProbeFuture<'a, Snapshot>;
-    fn authenticate<'a>(&'a self, ctx: Arc<Context>, p: Profile, op: String) -> ProbeFuture<'a, Account>;
+    fn authenticate<'a>(
+        &'a self,
+        ctx: Arc<Context>,
+        p: Profile,
+        op: String,
+        codes: tokio::sync::mpsc::Receiver<String>,
+    ) -> ProbeFuture<'a, Account>;
     fn statistics<'a>(&'a self, _ctx: &'a Context, _p: &'a Profile) -> ProbeFuture<'a, Value> {
         Box::pin(async { Err(Failure::unsupported()) })
     }
@@ -23,5 +30,5 @@ pub trait Provider: Send + Sync {
     }
 }
 pub fn registered() -> Vec<Arc<dyn Provider>> {
-    vec![Arc::new(codex::Codex)]
+    vec![Arc::new(codex::Codex), Arc::new(claude::Claude)]
 }

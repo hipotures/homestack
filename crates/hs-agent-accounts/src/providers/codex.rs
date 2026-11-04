@@ -103,7 +103,13 @@ impl Provider for Codex {
             result
         })
     }
-    fn authenticate<'a>(&'a self, ctx: Arc<Context>, p: Profile, op: String) -> ProbeFuture<'a, Account> {
+    fn authenticate<'a>(
+        &'a self,
+        ctx: Arc<Context>,
+        p: Profile,
+        op: String,
+        _codes: tokio::sync::mpsc::Receiver<String>,
+    ) -> ProbeFuture<'a, Account> {
         Box::pin(async move {
             let binary = ctx.binary("codex")?;
             let mut child = start(&ctx, &p, &binary).await?;

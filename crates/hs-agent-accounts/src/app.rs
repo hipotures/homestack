@@ -16,6 +16,7 @@ use tokio_util::sync::CancellationToken;
 pub struct Job {
     pub value: Operation,
     pub cancel: CancellationToken,
+    pub codes: tokio::sync::mpsc::Sender<String>,
 }
 pub struct Context {
     pub root: PathBuf,
@@ -93,6 +94,7 @@ impl Context {
         }
         let version = match provider {
             "codex" => "0.166.0",
+            "claude" => "2.1.318",
             _ => return Err(Failure::unsupported()),
         };
         let source = PathBuf::from(
@@ -193,6 +195,22 @@ impl Context {
             .map(|j| j.value.clone())
             .ok_or_else(|| Failure::new("not_found", "Operation not found"))
     }
+    pub fn submit_code(&self, profile: &str, code: String) -> Result<()> {
+        if code.is_empty() || code.len() > 4096 || code.chars().any(char::is_control) {
+            return Err(Failure::new(
+                "invalid_input",
+                "Authorization code must be one printable line",
+            ));
+        }
+        let jobs = self.jobs.lock().unwrap_or_else(PoisonError::into_inner);
+        let job = jobs
+            .values()
+            .find(|j| j.value.profile_id.as_deref() == Some(profile) && j.value.accepts_code && !j.value.terminal())
+            .ok_or_else(|| Failure::new("busy", "This profile is not waiting for an authorization code"))?;
+        job.codes
+            .try_send(code)
+            .map_err(|_| Failure::new("busy", "An authorization code is already being processed"))
+    }
     pub fn cancel_profile(&self, id: &str) {
         for j in self.jobs.lock().unwrap_or_else(PoisonError::into_inner).values() {
             if j.value.profile_id.as_deref() == Some(id) && !j.value.terminal() {
@@ -238,11 +256,13 @@ impl Context {
             finished_at: None,
         };
         let cancel = self.shutdown.child_token();
+        let (codes, receiver) = tokio::sync::mpsc::channel(1);
         jobs.insert(
             op.id.clone(),
             Job {
                 value: op.clone(),
                 cancel: cancel.clone(),
+                codes,
             },
         );
         drop(jobs);
@@ -251,6 +271,7 @@ impl Context {
         let profile = p.id.clone();
         let kind = kind.to_owned();
         tokio::spawn(async move {
+            // Keep the code receiver owned by the selected operation, never by a global terminal.
             let result = process::bounded(&cancel, if kind == "authentication" { 600 } else { 90 }, async {
                 let lock = ctx.lock(&profile);
                 let _guard = lock.lock().await;
@@ -272,7 +293,9 @@ impl Context {
                 });
                 let provider = ctx.provider(&p.provider)?;
                 if kind == "authentication" {
-                    let account = provider.authenticate(ctx.clone(), p.clone(), id.clone()).await?;
+                    let account = provider
+                        .authenticate(ctx.clone(), p.clone(), id.clone(), receiver)
+                        .await?;
                     p.account = Some(account);
                     p.auth_status = "authenticated".into();
                     p.error = None;
@@ -315,6 +338,20 @@ impl Context {
             })
             .await;
             let success = result.is_ok();
+            if kind == "authentication"
+                && let Err(error) = &result
+                && error.code != "cancelled"
+            {
+                let lock = ctx.lock(&profile);
+                let _guard = lock.lock().await;
+                if let Ok(mut p) = ctx.db.profile(&profile)
+                    && !p.deleting
+                {
+                    p.error = Some(error.clone());
+                    p.updated_at = now();
+                    let _ = ctx.db.save(&p, None);
+                }
+            }
             ctx.update_operation(&id, |o| {
                 o.finished_at = Some(now());
                 o.authorization_url = None;

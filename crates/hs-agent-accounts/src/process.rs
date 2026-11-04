@@ -52,6 +52,7 @@ pub fn command(binary: &Path, profile: &Path, provider: &str) -> tokio::process:
         .env("XDG_DATA_HOME", profile.join("home/.local/share"))
         .env("TMPDIR", profile.join("tmp"))
         .env("LANG", "C.UTF-8")
+        .env("BROWSER", "/bin/false")
         .env("TERM", "dumb")
         .env("CODEX_HOME", profile.join("codex"))
         .env("CLAUDE_CONFIG_DIR", profile.join("claude"))
@@ -132,8 +133,16 @@ impl Process {
         }
     }
     pub async fn finish(&mut self) {
-        self.kill_group();
-        let _ = self.child.wait().await;
+        if let Some(id) = self.child.id().and_then(|id| rustix::process::Pid::from_raw(id as i32)) {
+            let _ = rustix::process::kill_process_group(id, rustix::process::Signal::TERM);
+        }
+        if tokio::time::timeout(Duration::from_secs(2), self.child.wait())
+            .await
+            .is_err()
+        {
+            self.kill_group();
+            let _ = self.child.wait().await;
+        }
     }
     pub async fn send(&mut self, value: &Value) -> Result<()> {
         let mut bytes =
@@ -143,6 +152,31 @@ impl Process {
             .write_all(&bytes)
             .await
             .map_err(|_| Failure::new("runtime_failure", "Runtime input closed"))
+    }
+    pub async fn chunk(&mut self) -> Result<Vec<u8>> {
+        let buf = self
+            .output
+            .fill_buf()
+            .await
+            .map_err(|_| Failure::new("runtime_failure", "Cannot read runtime output"))?;
+        let count = buf.len().min(8192);
+        let bytes = buf[..count].to_vec();
+        self.output.consume(count);
+        Ok(bytes)
+    }
+    pub async fn document(&mut self) -> Result<Value> {
+        let mut bytes = Vec::new();
+        loop {
+            let chunk = self.chunk().await?;
+            if chunk.is_empty() {
+                break;
+            }
+            if bytes.len() + chunk.len() > 512 * 1024 {
+                return Err(Failure::new("protocol_failure", "Runtime response exceeds size limit"));
+            }
+            bytes.extend(chunk);
+        }
+        serde_json::from_slice(&bytes).map_err(|_| Failure::new("protocol_failure", "Invalid runtime JSON document"))
     }
     pub async fn read(&mut self) -> Result<Value> {
         // Bound a single line without allowing read_line to allocate without limit.

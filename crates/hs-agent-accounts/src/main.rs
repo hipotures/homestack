@@ -250,8 +250,19 @@ async fn cancel_auth(State(c): State<Arc<Context>>, Path(id): Path<String>) -> R
     c.cancel_profile(&id);
     Ok(StatusCode::ACCEPTED)
 }
-async fn submit_code() -> Result<StatusCode> {
-    Err(Failure::unsupported())
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AuthorizationCode {
+    code: String,
+}
+async fn submit_code(
+    State(c): State<Arc<Context>>,
+    Path(id): Path<String>,
+    Json(v): Json<AuthorizationCode>,
+) -> Result<StatusCode> {
+    c.db.profile(&id)?;
+    c.submit_code(&id, v.code)?;
+    Ok(StatusCode::NO_CONTENT)
 }
 async fn probe(State(c): State<Arc<Context>>, Path(id): Path<String>) -> Result<(StatusCode, Json<Operation>)> {
     let p = c.db.profile(&id)?;
