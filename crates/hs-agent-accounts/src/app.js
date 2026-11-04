@@ -94,7 +94,7 @@ async function refresh() {
     const identity = node('div', undefined, 'identity');
     identity.append(node('span', profile.provider, 'eyebrow agent'), node('h2', profile.display_name));
     const email = profile.account?.email;
-    identity.append(node('span', !email ? 'Account not identified' : email !== profile.display_name ? email : '', 'sub slot'));
+    identity.append(node('span', email && email !== profile.display_name ? email : '', 'sub slot'));
     const pills = node('div', undefined, 'pills');
     pills.append(node('span', profile.enabled ? 'Enabled' : 'Disabled', profile.enabled ? 'pill' : 'pill off'));
     pills.append(node('span', profile.auth_status.replaceAll('_', ' '), 'pill'));
@@ -116,7 +116,9 @@ async function refresh() {
     if (profile.snapshot) {
       if (profile.snapshot.account.email && profile.snapshot.account.email !== profile.account?.email) card.append(node('p', `Previous measurement account: ${profile.snapshot.account.email}`, 'error'));
       const quotas = node('div', undefined, 'quotas');
-      for (const limit of profile.snapshot.limits.filter(l => !groups.length || l.model === selectedGroup)) {
+      const visibleLimits = profile.snapshot.limits.filter(l => !groups.length || l.model === selectedGroup);
+      if (profile.provider === 'antigravity') visibleLimits.sort((a, b) => (a.window_minutes ?? Infinity) - (b.window_minutes ?? Infinity));
+      for (const limit of visibleLimits) {
         const quota = node('div', undefined, 'quota'), line = node('div', undefined, 'quota-line');
         line.append(node('span', profile.provider === 'antigravity' ? label({...limit, label: ''}, profile.provider) : label(limit, profile.provider)), node('span', percent(limit.used_percent), 'num'));
         quota.append(line);
