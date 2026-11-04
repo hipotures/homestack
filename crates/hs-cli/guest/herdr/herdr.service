@@ -6,6 +6,9 @@ Type=simple
 ExitType=cgroup
 WorkingDirectory=%h
 Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+# Initialize agent indirection before restoring panes; never inherit a local empty agent.
+Environment=SSH_AUTH_SOCK=%h/.config/herdr/herdr.sock.agent
+ExecStartPre=/usr/bin/rm -f %h/.config/herdr/herdr.sock.agent
 ExecStart=%h/.local/bin/herdr server
 TimeoutStartSec=5min
 Restart=on-failure
