@@ -304,12 +304,14 @@ fn clear_lines(stdout: &mut impl Write, text: &str) {
     if text.is_empty() {
         return;
     }
-    static ESCAPES: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
-        regex::Regex::new(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\))").unwrap()
+    static ESCAPES: std::sync::LazyLock<Option<regex::Regex>> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\))").ok()
     });
     let (columns, height) = crossterm::terminal::size().unwrap_or((80, 24));
     let columns = usize::from(columns.max(1));
-    let plain = ESCAPES.replace_all(text, "");
+    let plain = ESCAPES.as_ref().map_or(std::borrow::Cow::Borrowed(text), |escapes| {
+        escapes.replace_all(text, "")
+    });
     let lines: usize = plain
         .split('\n')
         .map(|line| ratatui::text::Text::raw(line).width().max(1).div_ceil(columns))
